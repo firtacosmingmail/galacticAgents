@@ -2,7 +2,8 @@ import { GalacticClient } from './client.js';
 import { useAppStore } from '../state/store.js';
 
 export const TOKEN_KEY = 'galactic.token';
-export const LAST_EVENT_KEY = 'galactic.lastEventId';
+/** Written by earlier builds; removed on start so a stale value can never be sent (P0-12). */
+const LEGACY_LAST_EVENT_KEY = 'galactic.lastEventId';
 
 const storage = {
   get(key: string): string | null {
@@ -59,22 +60,22 @@ export function forgetToken(): void {
   storage.remove(TOKEN_KEY);
 }
 
-export function savedLastEventId(): number | undefined {
-  const raw = storage.get(LAST_EVENT_KEY);
-  const n = raw === null ? NaN : Number(raw);
-  return Number.isInteger(n) && n >= 0 ? n : undefined;
-}
-
-/** Starts the resumable client wired to the store. Returns a stop function. */
+/**
+ * Starts the resumable client wired to the store. Returns a stop function.
+ *
+ * `lastEventId` and `logId` live in the client only (P0-12): the world is derived from the stream
+ * and is not persisted, so a fresh page load must take a snapshot — resuming from a persisted seq
+ * would replay only the tail onto an empty world. Reconnects within the page's life still resume
+ * exactly from the last applied seq.
+ */
 export function startSession(token: string): () => void {
+  storage.remove(LEGACY_LAST_EVENT_KEY);
   const store = useAppStore.getState();
   const client = new GalacticClient({
     url: wsUrl(),
     token,
-    ...(savedLastEventId() !== undefined ? { lastEventId: savedLastEventId() } : {}),
     onMessage: (m) => useAppStore.getState().apply(m),
     onStatus: (status, detail) => useAppStore.getState().setStatus(status, detail),
-    onLastEventId: (seq) => storage.set(LAST_EVENT_KEY, String(seq)),
   });
   store.setStatus('connecting');
   client.connect();

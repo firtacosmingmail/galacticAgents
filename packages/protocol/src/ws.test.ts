@@ -10,6 +10,10 @@ describe('websocket message schemas', () => {
       token: 't',
     });
     expect(ClientMessage.parse({ type: 'hello', token: 't', lastEventId: 41 }).type).toBe('hello');
+    expect(
+      ClientMessage.parse({ type: 'hello', token: 't', lastEventId: 41, logId: 'log-1' }).type,
+    ).toBe('hello');
+    expect(ClientMessage.safeParse({ type: 'hello', token: 't', logId: '' }).success).toBe(false);
     expect(ClientMessage.safeParse({ type: 'hello', token: '' }).success).toBe(false);
     expect(ClientMessage.safeParse({ type: 'hello', token: 't', lastEventId: -1 }).success).toBe(
       false,
@@ -19,6 +23,7 @@ describe('websocket message schemas', () => {
   it('parses snapshot, event, caught_up and error frames', () => {
     const snapshot = {
       type: 'snapshot',
+      logId: 'log-1',
       seq: 3,
       agents: [d.agent],
       bodies: [d.body, d.moon],

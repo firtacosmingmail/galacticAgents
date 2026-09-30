@@ -41,7 +41,7 @@ const dropAllConnections = () => {
   for (const c of app.gateway.wss.clients) c.terminate();
 };
 
-function makeClient(lastEventId?: number) {
+function makeClient(resume?: { lastEventId: number; logId: string }) {
   const seqs: number[] = [];
   const statuses: ConnectionStatus[] = [];
   const messages: ServerMessage[] = [];
@@ -55,7 +55,7 @@ function makeClient(lastEventId?: number) {
   const client = new GalacticClient({
     url: wsUrl,
     token: TOKEN,
-    ...(lastEventId !== undefined ? { lastEventId } : {}),
+    ...(resume ?? {}),
     onMessage: (m) => {
       messages.push(m);
       if (m.type === 'event') seqs.push(m.seq);
@@ -129,17 +129,17 @@ describe('resume and gap', () => {
     c.client.close();
   });
 
-  it('a new page load resumes from the persisted lastEventId and gets exactly the missed events', async () => {
+  it('a new client given the previous lastEventId and logId gets exactly the missed events', async () => {
     const first = makeClient();
     first.client.connect();
     await first.waitFor(() => first.client.status === 'live');
     emit(12);
     await first.waitFor(() => first.seqs.length === 12);
     first.client.close(); // tab killed
-    const persisted = first.client.lastEventId!;
-    expect(persisted).toBe(12);
+    const persisted = { lastEventId: first.client.lastEventId!, logId: first.client.logId! };
+    expect(persisted).toEqual({ lastEventId: 12, logId: log.logId });
 
-    emit(8); // happened while the page was gone
+    emit(8); // happened while the client was gone
     const second = makeClient(persisted);
     second.client.connect();
     await second.waitFor(() => second.client.status === 'live');
@@ -152,7 +152,7 @@ describe('resume and gap', () => {
   });
 
   it('falls back to a snapshot when too much was missed, never replaying already-applied seqs', async () => {
-    const stale = makeClient(1);
+    const stale = makeClient({ lastEventId: 1, logId: log.logId });
     emit(1500); // more than maxReplay (1000)
     stale.client.connect();
     await stale.waitFor(() => stale.client.status === 'live');
@@ -162,5 +162,16 @@ describe('resume and gap', () => {
     await stale.waitFor(() => stale.seqs.length === 3);
     expect(stale.seqs).toEqual([1501, 1502, 1503]);
     stale.client.close();
+  });
+
+  it('gets a snapshot instead of a replay when its state came from another log (P0-15)', async () => {
+    emit(5);
+    const c = makeClient({ lastEventId: 2, logId: 'the-database-that-was-deleted' });
+    c.client.connect();
+    await c.waitFor(() => c.client.status === 'live');
+    expect(c.messages.map((m) => m.type)).toEqual(['snapshot']);
+    expect(c.client.logId).toBe(log.logId);
+    expect(c.client.lastEventId).toBe(5);
+    c.client.close();
   });
 });

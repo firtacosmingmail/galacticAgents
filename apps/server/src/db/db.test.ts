@@ -42,6 +42,31 @@ describe('migrations', () => {
     );
   });
 
+  it('0002 rebuilds events with AUTOINCREMENT and keeps existing rows and ids (P0-15)', () => {
+    const db = openDatabase(':memory:', { migrate: false });
+    const all = loadMigrations();
+    migrate(db, all.slice(0, 1));
+    const insert = db.prepare("INSERT INTO events (at, type, payload) VALUES ('t', 'x', '{}')");
+    insert.run();
+    insert.run();
+    insert.run();
+    db.prepare('DELETE FROM events WHERE id = 3').run();
+    expect(Number(insert.run().lastInsertRowid)).toBe(3); // the old schema reuses the id
+    expect(migrate(db, all).applied).toEqual(all.slice(1).map((m) => m.version));
+    const ids = (db.prepare('SELECT id FROM events ORDER BY id').all() as { id: number }[]).map(
+      (r) => r.id,
+    );
+    expect(ids).toEqual([1, 2, 3]);
+    db.prepare('DELETE FROM events WHERE id = 3').run();
+    expect(Number(insert.run().lastInsertRowid)).toBe(4); // never again
+    expect(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'events'").get()).toMatchObject({
+      sql: expect.stringContaining('AUTOINCREMENT'),
+    });
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'events_type'").get(),
+    ).toBeTruthy();
+  });
+
   it('opens a file database in WAL mode with foreign keys on', () => {
     const dir = mkdtempSync(join(tmpdir(), 'galactic-db-'));
     dirs.push(dir);

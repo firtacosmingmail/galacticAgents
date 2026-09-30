@@ -19,15 +19,15 @@ The Node/TypeScript server that will own the agents. Phase 0 delivers its founda
 
 | Route                     | Purpose                                                                                       |
 | ------------------------- | --------------------------------------------------------------------------------------------- |
-| `GET /health`             | `{ok, name, version, protocolVersion, seq, token?}`                                           |
+| `GET /health`             | `{ok, name, version, protocolVersion, logId, seq, token?}`                                    |
 | `POST /dev/events`        | Appends one protocol-validated event under the one write rule; returns `{seq}`. Bearer token. |
 | `GET /dev/events?since=N` | `{seq, events}` — the log after `N`. Bearer token.                                            |
 | `GET /*`                  | The built web app when `GALACTIC_WEB_DIR` is set (SPA fallback to `index.html`).              |
 
 ## WebSocket protocol (`/ws`, TECHNOLOGY §6.3)
 
-1. Client sends `hello{token, lastEventId?}` as the first frame (5 s timeout).
-2. Server answers with `snapshot{seq, agents, bodies, projects, tasks, questions, proposals, statuses}` when `lastEventId` is absent, ahead of the log, pruned away, or more than `maxReplay` (10 000) events behind; otherwise with every `event{seq, at, event}` since `lastEventId` followed by `caught_up{seq}`.
+1. Client sends `hello{token, lastEventId?, logId?}` as the first frame (5 s timeout). `logId` is the identity of the log the client's state came from (from its snapshot).
+2. Server answers with `snapshot{logId, seq, agents, bodies, projects, tasks, questions, proposals, statuses}` when `lastEventId` is absent, `logId` is absent or not this log's (the database was deleted or replaced), `lastEventId` is ahead of the log, pruned away, or more than `maxReplay` (10 000) events behind; otherwise with every `event{seq, at, event}` since `lastEventId` followed by `caught_up{seq}`.
 3. Then the live stream of `event{seq, at, event}` in strict `seq` order. `ping` → `pong`. Anything else closes the socket with 4002 (`protocol_violation`); a bad token closes with 4401 (`unauthorized`); a client whose socket buffer exceeds 4 MB is terminated (it reconnects and catches up).
 
 Subscribing to the log and reading the snapshot/replay happen in the same synchronous tick, so nothing can be committed in between; `lastSent` drops anything already covered.
@@ -35,11 +35,12 @@ Subscribing to the log and reading the snapshot/replay happen in the same synchr
 ## Persistence (TECHNOLOGY §6)
 
 - `better-sqlite3` in WAL mode, foreign keys on. Migrations are numbered SQL files in `src/db/migrations/` (copied to `dist/` on build); `schema_migrations` records what ran; re-running is a no-op.
-- Two streams: `events(id = rowid = seq, at, type, payload)` and `transcript_chunks(agent_id, seq, at, chunk)` (filled from Phase 1).
+- Two streams: `events(id = rowid = seq, AUTOINCREMENT so a seq is never reused; at, type, payload)` and `transcript_chunks(agent_id, seq, at, chunk)` (filled from Phase 1).
+- The log has an identity: `settings.log_id`, generated when the database is created and exposed as `EventLog.logId`, `snapshot.logId` and `/health.logId`.
 - `EventLog.runCommand(fn)` is the one write rule: `fn` mutates the tables and `emit`s events; both are committed in one transaction (nested calls join it), `seq = rowid`, and subscribers are notified after the outermost commit, strictly in order — also when a subscriber runs a command of its own while being notified: its events are committed at once but published after the current batch (drain loop). A throw anywhere leaves neither rows nor events. `agent.output` is refused here — it belongs to the transcript stream.
 
 ## Tests
 
 `pnpm --filter @galactic/server test` — config, security helpers, HTTP/upgrade refusals, migrations and table round-trips, the event log (rollback, ordering, nesting, subscriber isolation) and the stream (snapshot, exact replay, `caught_up`, duplicates, protocol violations, slow consumer, dev routes).
 
-The **resume and gap test (P0-10)** lives in `apps/web/src/client/resume.test.ts` because it exercises the real web client against this real server in-process: it emits events, terminates every socket mid-stream (repeatedly), lets events land during the reconnect, restarts the client from a persisted `lastEventId`, and asserts that every `seq` was seen exactly once and in order; it also checks the snapshot fallback when too much was missed. Run it with `pnpm --filter @galactic/web test`. A Playwright smoke through a real browser is left for when a browser is available in CI.
+The **resume and gap test (P0-10)** lives in `apps/web/src/client/resume.test.ts` because it exercises the real web client against this real server in-process: it emits events, terminates every socket mid-stream (repeatedly), lets events land during the reconnect, starts a new client from the previous one's `lastEventId` + `logId`, and asserts that every `seq` was seen exactly once and in order; it also checks the snapshot fallback when too much was missed. Run it with `pnpm --filter @galactic/web test`. A Playwright smoke through a real browser is left for when a browser is available in CI.

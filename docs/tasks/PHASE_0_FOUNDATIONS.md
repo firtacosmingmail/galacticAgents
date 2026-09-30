@@ -86,7 +86,7 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 
 ### P0-09 — Web skeleton with resumable client
 - **Status:** done (2026-09-30) · **Depends on:** P0-01, P0-03 (start), P0-08 (finish) · **Parallel with:** P0-08
-- Vite + React 19 + TS; Zustand store derived purely from the event stream; WS client with token entry, automatic reconnect and `lastEventId` persistence (in memory + `localStorage`); a bare page listing the snapshot and printing events as they arrive.
+- Vite + React 19 + TS; Zustand store derived purely from the event stream; WS client with token entry, automatic reconnect and `lastEventId` persistence (in memory + `localStorage` — the `localStorage` part was reverted by P0-12); a bare page listing the snapshot and printing events as they arrive.
 - **Acceptance:** page connects, shows the snapshot, prints a fake event emitted by the server.
 
 ### P0-10 — Resume and gap test

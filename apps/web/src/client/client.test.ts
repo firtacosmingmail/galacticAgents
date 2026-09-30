@@ -9,8 +9,10 @@ const idle = (seq: number): ServerMessage => ({
   at: '2026-09-30T10:00:00.000Z',
   event: { type: 'agent.idle', agentId: 'a' },
 });
-const snapshot = (seq: number): ServerMessage => ({
+const LOG = 'log-a';
+const snapshot = (seq: number, logId = LOG): ServerMessage => ({
   type: 'snapshot',
+  logId,
   seq,
   agents: [],
   bodies: [],
@@ -21,7 +23,7 @@ const snapshot = (seq: number): ServerMessage => ({
   statuses: [],
 });
 
-function setup(lastEventId?: number) {
+function setup(lastEventId?: number, logId = LOG) {
   const received: ServerMessage[] = [];
   const statuses: ConnectionStatus[] = [];
   const persisted: number[] = [];
@@ -29,7 +31,7 @@ function setup(lastEventId?: number) {
   const client = new GalacticClient({
     url: 'ws://test/ws',
     token: 'tok',
-    ...(lastEventId !== undefined ? { lastEventId } : {}),
+    ...(lastEventId !== undefined ? { lastEventId, logId } : {}),
     onMessage: (m) => received.push(m),
     onStatus: (s) => statuses.push(s),
     onLastEventId: (seq) => persisted.push(seq),
@@ -73,7 +75,7 @@ describe('GalacticClient', () => {
     const t = setup(41);
     t.client.connect();
     t.socket().serverOpens();
-    expect(t.socket().hello).toEqual({ type: 'hello', token: 'tok', lastEventId: 41 });
+    expect(t.socket().hello).toEqual({ type: 'hello', token: 'tok', lastEventId: 41, logId: LOG });
     t.socket().serverSends(idle(42));
     expect(t.client.status).toBe('catching_up');
     t.socket().serverSends({ type: 'caught_up', seq: 42 });
@@ -98,6 +100,23 @@ describe('GalacticClient', () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     t.socket().serverOpens();
     expect(t.socket().hello.lastEventId).toBe(11);
+    expect(t.socket().hello.logId).toBe(LOG);
+  });
+
+  it('takes a snapshot from a new log as the new baseline and resumes from it afterwards', () => {
+    const t = setup(41);
+    t.client.connect();
+    t.socket().serverOpens();
+    t.socket().serverSends(snapshot(3, 'log-b')); // the server decided we cannot replay
+    expect(t.client.logId).toBe('log-b');
+    expect(t.client.lastEventId).toBe(3);
+    expect(t.persisted).toEqual([3]);
+    t.socket().serverSends(idle(4));
+    expect(t.received.map((m) => m.type)).toEqual(['snapshot', 'event']);
+    t.socket().serverCloses(1006);
+    t.timers.shift()!();
+    t.socket().serverOpens();
+    expect(t.socket().hello).toEqual({ type: 'hello', token: 'tok', lastEventId: 4, logId: 'log-b' });
   });
 
   it('reconnects with growing backoff when the server drops the connection', () => {

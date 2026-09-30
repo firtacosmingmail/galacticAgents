@@ -9,8 +9,10 @@ export const CLOSE_UNAUTHORIZED = 4401;
 export interface ClientOptions {
   url: string;
   token: string;
-  /** The last `seq` this client applied, if it has state to resume from. */
+  /** The last `seq` this client applied, if it has state to resume from … */
   lastEventId?: number;
+  /** … and the identity of the log it applied it from (`snapshot.logId`); both or neither. */
+  logId?: string;
   onMessage: (message: ServerMessage) => void;
   onStatus?: (status: ConnectionStatus, detail?: string) => void;
   /** Called whenever `lastEventId` advances (persist it for the next page load). */
@@ -34,14 +36,21 @@ export class GalacticClient {
   private closedByUser = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private _lastEventId: number | undefined;
+  private _logId: string | undefined;
   private _status: ConnectionStatus = 'idle';
 
   constructor(private readonly opts: ClientOptions) {
     this._lastEventId = opts.lastEventId;
+    this._logId = opts.logId;
   }
 
   get lastEventId(): number | undefined {
     return this._lastEventId;
+  }
+
+  /** The log the applied state belongs to; set by the first snapshot. */
+  get logId(): string | undefined {
+    return this._logId;
   }
 
   get status(): ConnectionStatus {
@@ -74,7 +83,13 @@ export class GalacticClient {
     this.socket = socket;
 
     socket.onopen = () => {
-      const hello = { type: 'hello', token: this.opts.token, lastEventId: this._lastEventId };
+      // Resume only when we know which log our state came from; otherwise ask for a snapshot.
+      const resume = this._logId !== undefined && this._lastEventId !== undefined;
+      const hello = {
+        type: 'hello',
+        token: this.opts.token,
+        ...(resume ? { lastEventId: this._lastEventId, logId: this._logId } : {}),
+      };
       socket.send(JSON.stringify(hello));
       this.setStatus('catching_up');
     };
@@ -109,6 +124,9 @@ export class GalacticClient {
   private handle(message: ServerMessage, socket: WebSocket): void {
     switch (message.type) {
       case 'snapshot':
+        // A snapshot replaces whatever we had, possibly from another log: accept its seq as is.
+        this._logId = message.logId;
+        this._lastEventId = undefined;
         this.advance(message.seq);
         this.opts.onMessage(message);
         this.attempt = 0;

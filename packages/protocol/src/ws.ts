@@ -6,11 +6,16 @@ import { EventEnvelope } from './events.js';
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
 // ---------------------------------------------------------------------------
 
-/** First frame the client sends. `lastEventId` is the last `seq` it applied, if any. */
+/**
+ * First frame the client sends. `lastEventId` is the last `seq` it applied, if any, and `logId`
+ * the identity of the log it applied it from (from the snapshot); a replay is only possible when
+ * both are given and `logId` matches the server's, otherwise the client gets a snapshot.
+ */
 export const HelloMessage = z.object({
   type: z.literal('hello'),
   token: z.string().min(1),
   lastEventId: z.number().int().nonnegative().optional(),
+  logId: z.string().min(1).optional(),
 });
 export type HelloMessage = z.infer<typeof HelloMessage>;
 
@@ -22,6 +27,8 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 /** Full current state, sent when the client has no usable `lastEventId`. */
 export const SnapshotMessage = z.object({
   type: z.literal('snapshot'),
+  /** Identity of the event log; generated when the database is created, sent back in `hello`. */
+  logId: z.string().min(1),
   /** The `seq` of the last event folded into this snapshot; the stream continues from seq + 1. */
   seq: z.number().int().nonnegative(),
   agents: z.array(Agent),
@@ -79,6 +86,7 @@ export const HealthResponse = z.object({
   name: z.literal('galactic-agents'),
   version: z.string(),
   protocolVersion: z.number().int(),
+  logId: z.string().optional(),
   seq: z.number().int().nonnegative(),
   token: z.string().optional(),
 });

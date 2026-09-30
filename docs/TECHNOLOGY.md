@@ -206,9 +206,10 @@ The status store (§4) and the task/project states are projections over `events`
 
 ### 6.3 WebSocket protocol (defined in Phase 0, used by every client from Phase 1)
 
-1. Client opens the socket and sends `hello{token, lastEventId?}` as the **first frame** (browsers cannot set headers on a WebSocket upgrade).
-2. Server replies with `snapshot{seq, agents, bodies, projects, tasks, questions, proposals, statuses}` when `lastEventId` is absent or too old to replay, otherwise with the `events` since `lastEventId` followed by `caught_up{seq}`.
-3. Thereafter a single ordered stream of `{seq, event}`; the client derives all state from it and remembers `seq` for the next reconnect. Transcript chunks are a separate, subscribable stream per agent.
+1. Client opens the socket and sends `hello{token, lastEventId?, logId?}` as the **first frame** (browsers cannot set headers on a WebSocket upgrade). `logId` is the identity of the log its state came from.
+2. Server replies with `snapshot{logId, seq, agents, bodies, projects, tasks, questions, proposals, statuses}` when `lastEventId` is absent, `logId` is not this log's (database deleted or replaced), or `lastEventId` is too old to replay; otherwise with the `events` since `lastEventId` followed by `caught_up{seq}`.
+3. Thereafter a single ordered stream of `{seq, event}`; the client derives all state from it and remembers `seq` + `logId` for the next reconnect. `seq` is never reused (`AUTOINCREMENT`). Transcript chunks are a separate, subscribable stream per agent.
+4. The derived state lives in memory only. A client that has no state (a fresh page load) sends no `lastEventId` and takes a snapshot; resuming from a persisted `seq` onto an empty world would replay only the tail (P0-12). Persisting the world together with its `seq` + `logId` is possible later (a phone PWA), never `seq` alone.
 
 A phone that slept reconnects with its last `seq` and catches up instead of reloading everything; answers given offline are sent with the question's version so an "already answered by …" reply is possible.
 

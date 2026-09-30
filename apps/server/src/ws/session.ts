@@ -51,7 +51,7 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
 
     // 2. Snapshot or replay.
     const since = hello.lastEventId;
-    if (since !== undefined && log.canReplayFrom(since)) {
+    if (since !== undefined && log.canReplayFrom(since, hello.logId)) {
       lastSent = since;
       for (const envelope of log.eventsSince(since)) {
         lastSent = envelope.seq;

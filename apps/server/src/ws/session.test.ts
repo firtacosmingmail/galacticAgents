@@ -20,7 +20,8 @@ beforeEach(async () => {
 afterEach(() => t.stop());
 
 /** Opens an authenticated socket and resolves once `n` server messages arrived. */
-function open(lastEventId?: number) {
+/** `logId` null: send no logId at all (a client that never took a snapshot). */
+function open(lastEventId?: number, logId: string | null = log.logId) {
   const ws = new WebSocket(t.wsUrl);
   const messages: ServerMessage[] = [];
   const waiters: { n: number; resolve: () => void }[] = [];
@@ -32,7 +33,11 @@ function open(lastEventId?: number) {
     }
   });
   const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
-  ws.on('open', () => ws.send(JSON.stringify({ type: 'hello', token: TEST_TOKEN, lastEventId })));
+  ws.on('open', () =>
+    ws.send(
+      JSON.stringify({ type: 'hello', token: TEST_TOKEN, lastEventId, logId: logId ?? undefined }),
+    ),
+  );
   const upTo = (n: number) =>
     new Promise<ServerMessage[]>((resolve) => {
       if (messages.length >= n) resolve(messages);
@@ -51,6 +56,7 @@ describe('websocket stream', () => {
     const [first] = await c.upTo(1);
     expect(first).toMatchObject({
       type: 'snapshot',
+      logId: log.logId,
       seq: 1,
       bodies: [fx.body],
       agents: [],
@@ -97,6 +103,16 @@ describe('websocket stream', () => {
     const ahead = open(999);
     expect((await ahead.upTo(1))[0]).toMatchObject({ type: 'snapshot', seq: 150 });
     ahead.ws.close();
+  });
+
+  it('falls back to a snapshot when the client resumes from another log (P0-15)', async () => {
+    for (let i = 1; i <= 5; i++) emit(i);
+    const other = open(2, 'a-log-that-was-deleted');
+    expect((await other.upTo(1))[0]).toMatchObject({ type: 'snapshot', seq: 5 });
+    other.ws.close();
+    const none = open(2, null);
+    expect((await none.upTo(1))[0]).toMatchObject({ type: 'snapshot', seq: 5 });
+    none.ws.close();
   });
 
   it('never duplicates or skips an event committed around the hello', async () => {

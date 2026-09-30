@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
 import { Event, isTranscriptEvent, type EventEnvelope, type Snapshot } from '@galactic/protocol';
 import { tables, type Tables } from '../db/tables.js';
@@ -17,6 +18,13 @@ export interface CommandOutcome<T> {
 
 export type Subscriber = (envelope: EventEnvelope) => void;
 
+function db_get(db: Database, key: string): string | undefined {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value;
+}
+
 export interface EventLogOptions {
   /** Clock, injectable for tests. Must return an ISO timestamp. */
   now?: () => string;
@@ -34,6 +42,12 @@ export interface EventLogOptions {
  */
 export class EventLog {
   readonly tables: Tables;
+  /**
+   * Identity of this log, generated once when the database is created and kept in `settings`.
+   * A client may only resume (`hello{lastEventId, logId}`) against the log it took its state
+   * from; a deleted or replaced database gives it a snapshot instead of an unrelated replay.
+   */
+  readonly logId: string;
   private readonly now: () => string;
   private readonly onSubscriberError: (error: unknown, envelope: EventEnvelope) => void;
   readonly maxReplay: number;
@@ -62,6 +76,15 @@ export class EventLog {
     );
     this.selectMax = db.prepare('SELECT COALESCE(MAX(id), 0) AS seq FROM events');
     this.selectMin = db.prepare('SELECT COALESCE(MIN(id), 0) AS seq FROM events');
+    this.logId = this.loadLogId();
+  }
+
+  private loadLogId(): string {
+    const row = db_get(this.db, 'log_id');
+    if (row) return row;
+    const id = randomUUID();
+    this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('log_id', id);
+    return id;
   }
 
   /** Runs `fn` under the one write rule. Nested calls join the outer transaction. */
@@ -158,10 +181,11 @@ export class EventLog {
   }
 
   /**
-   * Whether a client that last saw `since` can be caught up by replay: the events after it are
-   * still in the log and there are not too many of them.
+   * Whether a client that last saw `since` of the log `logId` can be caught up by replay: it is
+   * this log, the events after `since` are still in it and there are not too many of them.
    */
-  canReplayFrom(since: number): boolean {
+  canReplayFrom(since: number, logId?: string): boolean {
+    if (logId !== this.logId) return false;
     const oldest = this.oldestSeq();
     const current = this.currentSeq();
     if (since > current) return false;
@@ -172,6 +196,7 @@ export class EventLog {
   /** The current state of every table, consistent with the `seq` it reports. */
   snapshot(): Snapshot {
     return this.db.transaction(() => ({
+      logId: this.logId,
       seq: this.currentSeq(),
       agents: this.tables.agents.all(),
       bodies: this.tables.bodies.all(),

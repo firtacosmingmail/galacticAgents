@@ -194,19 +194,42 @@ describe('EventLog readers', () => {
     expect(log.eventsSince(6).map((e) => e.seq)).toEqual([7, 8]);
     expect(log.eventsSince(0, 3).map((e) => e.seq)).toEqual([1, 2, 3]);
     expect(log.eventsSince(8)).toEqual([]);
-    expect(log.canReplayFrom(8)).toBe(true);
-    expect(log.canReplayFrom(3)).toBe(true);
-    expect(log.canReplayFrom(2)).toBe(false); // 6 missed > maxReplay 5
-    expect(log.canReplayFrom(9)).toBe(false); // ahead of the log
+    expect(log.canReplayFrom(8, log.logId)).toBe(true);
+    expect(log.canReplayFrom(3, log.logId)).toBe(true);
+    expect(log.canReplayFrom(2, log.logId)).toBe(false); // 6 missed > maxReplay 5
+    expect(log.canReplayFrom(9, log.logId)).toBe(false); // ahead of the log
     log.db.prepare('DELETE FROM events WHERE id <= 4').run(); // simulate retention pruning
     expect(log.oldestSeq()).toBe(5);
-    expect(log.canReplayFrom(4)).toBe(true);
-    expect(log.canReplayFrom(3)).toBe(false);
+    expect(log.canReplayFrom(4, log.logId)).toBe(true);
+    expect(log.canReplayFrom(3, log.logId)).toBe(false);
+  });
+
+  it('has a stable identity and refuses to replay for another log (P0-15)', () => {
+    const db = openDatabase(':memory:');
+    const log = new EventLog(db);
+    expect(log.logId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(new EventLog(db).logId).toBe(log.logId); // persisted in settings
+    expect(new EventLog(openDatabase(':memory:')).logId).not.toBe(log.logId);
+    log.runCommand(({ emit }) => emit({ type: 'agent.idle', agentId: 'a' }));
+    expect(log.canReplayFrom(1, log.logId)).toBe(true);
+    expect(log.canReplayFrom(1, 'some-other-log')).toBe(false);
+    expect(log.canReplayFrom(1)).toBe(false);
+    expect(log.snapshot().logId).toBe(log.logId);
+  });
+
+  it('never reuses a seq, even after the newest event is deleted (P0-15)', () => {
+    const log = fresh();
+    log.runCommand(({ emit }) => emit({ type: 'agent.idle', agentId: 'a' }));
+    log.runCommand(({ emit }) => emit({ type: 'agent.idle', agentId: 'b' }));
+    log.db.prepare('DELETE FROM events WHERE id = 2').run();
+    const out = log.runCommand(({ emit }) => emit({ type: 'agent.idle', agentId: 'c' }));
+    expect(out.events[0]?.seq).toBe(3);
   });
 
   it('builds a snapshot consistent with its seq', () => {
     const log = fresh();
     expect(log.snapshot()).toEqual({
+      logId: log.logId,
       seq: 0,
       agents: [],
       bodies: [],

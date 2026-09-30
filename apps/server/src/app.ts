@@ -46,6 +46,7 @@ export function buildApp(opts: AppOptions): App {
       version: SERVER_VERSION,
       protocolVersion: PROTOCOL_VERSION,
       seq: opts.log?.currentSeq() ?? 0,
+      ...(opts.log ? { logId: opts.log.logId } : {}),
     };
     // The token is handed only to same-machine callers from an allowed (or no) Origin, so the
     // local web page can pick it up without pasting; remote clients (Phase 7) paste or scan it.
