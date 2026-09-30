@@ -10,7 +10,7 @@
     "dev": "pnpm --filter @galactic/protocol build && concurrently -n protocol,server,web -c blue,green,magenta \"pnpm --filter @galactic/protocol dev\" \"pnpm --filter @galactic/server dev\" \"pnpm --filter @galactic/web dev\"",
     "build": "pnpm -r build",
     "test": "pnpm build:deps && pnpm -r test",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm --filter @galactic/protocol build && pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

@@ -132,6 +132,7 @@ export const status: StatusRecord = {
   agentId: 'a-steward-1',
   state: 'working',
   currentActivity: 'Editing src/session.ts',
+  startedAt: NOW,
   lastEventAt: NOW,
   progress: { done: 2, total: 5 },
   costSoFar: { usd: 0.42, inputTokens: 12_000, outputTokens: 3_000 },

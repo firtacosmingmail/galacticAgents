@@ -19,6 +19,10 @@ import type {
  * `touch()` for it: output keeps the agent alive and marks it working. A rebuild from the log
  * alone cannot see output, so an agent that only ever printed is `starting` after a rebuild
  * until its next logged event; every other transition has a logged event.
+ *
+ * Two rules keep the records honest (P1-17, P1-25): an ended record is a sink — only a new
+ * `agent.spawned` (a resume) moves it again — and a diff goes out only when something changed:
+ * the wall clock is not re-sent every tick; clients extrapolate it from `startedAt`.
  */
 
 export interface StatusStoreOptions {
@@ -147,18 +151,14 @@ export class StatusStore {
     this.ticker.unref?.();
   }
 
-  /** One ticker pass: stalled detection and wall-clock refresh for live agents. */
+  /** One ticker pass: stall detection. Only a record that changed is marked for the next diff. */
   tick(now: number = this.now()): void {
     for (const entry of this.entries.values()) {
       const { record } = entry;
-      if (!LIVE.has(record.state)) continue;
-      if (record.state === 'working' || record.state === 'starting') {
-        const threshold = this.opts.stallThresholdMs(entry.runtime);
-        if (now - entry.lastEventAt >= threshold) {
-          record.state = 'stalled';
-        }
-      }
-      record.caps = this.caps(entry, now);
+      if (record.state !== 'working' && record.state !== 'starting') continue;
+      const threshold = this.opts.stallThresholdMs(entry.runtime);
+      if (now - entry.lastEventAt < threshold) continue;
+      entry.record = { ...record, state: 'stalled', caps: this.caps(entry, now) };
       this.mark(record.agentId);
     }
   }
@@ -201,6 +201,7 @@ export class StatusStore {
         record: {
           agentId,
           state: 'starting',
+          startedAt: new Date(at).toISOString(),
           lastEventAt: new Date(at).toISOString(),
           caps: { wallClockMs: { used: 0, limit: 1 }, toolCalls: { used: 0, limit: 1 } },
         },
@@ -218,6 +219,9 @@ export class StatusStore {
 
   private apply(entry: Entry, event: Extract<Event, { agentId: Id }>, at: number): void {
     const paused = entry.record.state === 'paused';
+    // An ended record is a sink (P1-17): the runtime logs one terminal event per agent, and a
+    // straggler in an older log must not move a finished agent to `stopped`.
+    if (ENDED.has(entry.record.state) && event.type !== 'agent.spawned') return;
     switch (event.type) {
       case 'agent.spawned':
         entry.runtime = event.runtime;
@@ -226,6 +230,7 @@ export class StatusStore {
         entry.beforePause = undefined;
         this.update(entry, at, {
           state: 'starting',
+          startedAt: new Date(at).toISOString(),
           currentActivity: undefined,
           pendingQuestionId: undefined,
           progress: undefined,

@@ -9,13 +9,16 @@ import type { Cost, PermissionAction, Progress } from '@galactic/protocol';
  */
 export type FakeStep =
   | { kind: 'output'; text: string; output?: 'text' | 'tool' | 'thinking'; delayMs?: number }
+  /** A tool call, through the runtime's permission gate like every other (allow runs it at once). */
   | { kind: 'tool_call'; toolName: string; input?: unknown; delayMs?: number }
   | { kind: 'progress'; summary: string; progress?: Progress; delayMs?: number }
   /** A clarification question; the answer is echoed as output and the turn continues. */
   | { kind: 'ask'; text: string; options?: string[] }
   /**
-   * A permission request. An answer of `allow`/`yes`/`y` performs the tool call (an
-   * `agent.tool_call` follows); anything else skips it with an output line.
+   * A tool call the scenario expects the gate to question (a destructive command, a push, …).
+   * Same path as `tool_call` — the gate decides — with the question text and the action the
+   * permission card shows when the gate has no better ones. An answer of `allow`/`yes`/`y`
+   * performs the call (an `agent.tool_call` follows); anything else skips it with an output line.
    */
   | {
       kind: 'permission';

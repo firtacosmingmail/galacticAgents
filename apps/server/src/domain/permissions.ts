@@ -5,6 +5,7 @@ import {
   type PermissionAction,
   type PermissionDecision,
   type PermissionPolicy,
+  type ToolCall,
 } from '@galactic/protocol';
 
 /**
@@ -18,11 +19,6 @@ import {
  * Anything the engine cannot classify — an unknown tool, a path it cannot resolve — is `ask`:
  * the conservative behaviour the working agreements call for. An LLM never takes part in this.
  */
-
-export interface ToolCallRequest {
-  toolName: string;
-  input?: unknown;
-}
 
 export interface PolicyContext {
   /** The project's workspace root; everything under it is "inside" (SPEC §3.5). */
@@ -43,6 +39,8 @@ export interface Classification {
 
 export interface PolicyVerdict extends Classification {
   decision: PermissionDecision;
+  /** The category that produced `decision` (the strictest one); absent when nothing was recognised. */
+  dominant?: PermissionAction;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,12 +73,15 @@ export function decide(policy: PermissionPolicy, actions: PermissionAction[]): P
 /** Classifies the call and decides it under `policy` in one go. */
 export function evaluate(
   policy: PermissionPolicy,
-  call: ToolCallRequest,
+  call: ToolCall,
   ctx: PolicyContext,
 ): PolicyVerdict {
   const classification = classifyToolCall(call, ctx);
-  const decision = classification.alwaysAllow ? 'allow' : decide(policy, classification.actions);
-  return { ...classification, decision };
+  if (classification.alwaysAllow) return { ...classification, decision: 'allow' };
+  const decision = decide(policy, classification.actions);
+  const rules = resolvePolicy(policy).rules;
+  const dominant = classification.actions.find((a) => (rules[a] ?? 'ask') === decision);
+  return { ...classification, decision, ...(dominant ? { dominant } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +113,7 @@ const PATH_FIELDS = ['file_path', 'notebook_path', 'path', 'directory', 'cwd'];
 /** Fields that carry a glob; only absolute / `~` / `..`-leading ones name a location. */
 const GLOB_FIELDS = ['pattern', 'glob'];
 
-export function classifyToolCall(call: ToolCallRequest, ctx: PolicyContext): Classification {
+export function classifyToolCall(call: ToolCall, ctx: PolicyContext): Classification {
   const input = isRecord(call.input) ? call.input : {};
   const name = call.toolName;
 

@@ -1,12 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
-import {
-  Event,
-  isTranscriptEvent,
-  type EventEnvelope,
-  type Snapshot,
-  type StatusRecord,
-} from '@galactic/protocol';
+import { Event, isTranscriptEvent, type EventEnvelope, type Snapshot } from '@galactic/protocol';
 import { tables, type Tables } from '../db/tables.js';
 
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
@@ -37,9 +31,14 @@ export interface EventLogOptions {
   onSubscriberError?: (error: unknown, envelope: EventEnvelope) => void;
   /** Above this many missed events a reconnecting client gets a snapshot instead of a replay. */
   maxReplay?: number;
-  /** The status store's records for `snapshot.statuses` (P1-05); none before the runtime exists. */
-  statuses?: () => StatusRecord[];
 }
+
+/**
+ * The domain tables at one `seq`. The wire `Snapshot` adds the status records, a projection the
+ * runtime owns (TECHNOLOGY §4): `ws/snapshot.ts` assembles the two, so the domain log never
+ * depends on the runtime layer.
+ */
+export type TableSnapshot = Omit<Snapshot, 'statuses'>;
 
 /**
  * The event bus and the one write rule (TECHNOLOGY §6.1): `runCommand` runs the domain mutation
@@ -58,7 +57,6 @@ export class EventLog {
   private readonly now: () => string;
   private readonly onSubscriberError: (error: unknown, envelope: EventEnvelope) => void;
   readonly maxReplay: number;
-  private readonly statuses: () => StatusRecord[];
   private readonly subscribers = new Set<Subscriber>();
   private readonly insertEvent: Statement;
   private readonly selectSince: Statement;
@@ -78,7 +76,6 @@ export class EventLog {
     this.now = opts.now ?? (() => new Date().toISOString());
     this.onSubscriberError = opts.onSubscriberError ?? (() => {});
     this.maxReplay = opts.maxReplay ?? 10_000;
-    this.statuses = opts.statuses ?? (() => []);
     this.insertEvent = db.prepare('INSERT INTO events (at, type, payload) VALUES (?, ?, ?)');
     this.selectSince = db.prepare(
       'SELECT id, at, type, payload FROM events WHERE id > ? ORDER BY id LIMIT ?',
@@ -203,7 +200,7 @@ export class EventLog {
   }
 
   /** The current state of every table, consistent with the `seq` it reports. */
-  snapshot(): Snapshot {
+  snapshot(): TableSnapshot {
     return this.db.transaction(() => ({
       logId: this.logId,
       seq: this.currentSeq(),
@@ -213,8 +210,6 @@ export class EventLog {
       tasks: this.tables.tasks.all(),
       questions: this.tables.questions.all(),
       proposals: this.tables.proposals.all(),
-      // The server-owned projection (TECHNOLOGY §4); folded synchronously after each commit.
-      statuses: this.statuses(),
     }))();
   }
 }

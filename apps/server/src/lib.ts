@@ -14,14 +14,15 @@ export {
   isInsideWorkspace,
   type PolicyContext,
   type PolicyVerdict,
-  type ToolCallRequest,
 } from './domain/permissions.js';
 export { createSessionHandler } from './ws/session.js';
 export { WsGateway, send, type SessionHandler } from './ws/gateway.js';
 export {
   ProcessSupervisor,
+  INHERITED_ENV,
   isAlive,
   signalGroup,
+  type ProcessOutcome,
   type ProcessSpec,
   type ManagedProcess,
   type StopProcessOptions,
@@ -35,11 +36,15 @@ export {
   type ProcessRecord,
   type ProcessStore,
 } from './runtime/process-store.js';
-export { EventQueue, collect } from './runtime/event-queue.js';
+export { EventQueue } from './lib/event-queue.js';
 export { TranscriptPipeline, type TranscriptListener } from './runtime/transcripts.js';
-export { redactSecrets, containsSecret, REDACTION_RULES } from './runtime/redact.js';
+export { redactSecrets, redactEvent, containsSecret, REDACTION_RULES } from './runtime/redact.js';
 export { AgentRuntime, type SpawnRequest, type SpawnResult } from './runtime/agent-runtime.js';
 export { AgentInbox, type InboxMessage } from './runtime/inbox.js';
+export { createPermissionGate, type GateOptions } from './runtime/permission-gate.js';
+export { createAgent, recordSpawned } from './domain/agents.js';
+export { openQuestion, answerQuestion, openQuestionsOf } from './domain/questions.js';
+export { buildSnapshot } from './ws/snapshot.js';
 export { CapsEnforcer, DEFAULT_CAPS, type CapUsage } from './runtime/caps.js';
 export { StatusStore, type StatusListener } from './runtime/status-store.js';
 export { composeRuntime, STALL_THRESHOLDS_MS, type ComposedRuntime } from './runtime/compose.js';

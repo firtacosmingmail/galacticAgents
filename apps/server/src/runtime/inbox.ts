@@ -30,7 +30,12 @@ export interface InboxHooks {
   interrupt: () => Promise<void> | void;
   now?: () => string;
   onError?: (error: unknown) => void;
+  /** Delivered messages kept for `history()`; older ones drop (the log keeps `message.sent`). */
+  history?: number;
 }
+
+/** Default size of the in-memory delivery history. */
+export const DEFAULT_INBOX_HISTORY = 200;
 
 export type InboxState = 'working' | 'idle' | 'paused' | 'ended';
 
@@ -41,12 +46,14 @@ export class AgentInbox {
   private isPaused = false;
   private delivering = false;
   private readonly now: () => string;
+  private readonly historySize: number;
 
   constructor(
     readonly agentId: Id,
     private readonly hooks: InboxHooks,
   ) {
     this.now = hooks.now ?? (() => new Date().toISOString());
+    this.historySize = hooks.history ?? DEFAULT_INBOX_HISTORY;
   }
 
   get currentState(): InboxState {
@@ -58,7 +65,7 @@ export class AgentInbox {
     return [...this.queue];
   }
 
-  /** Messages already handed to the adapter, oldest first. */
+  /** The most recent messages handed to the adapter, oldest first (bounded; see `history` hook). */
   history(): InboxMessage[] {
     return [...this.delivered];
   }
@@ -67,10 +74,10 @@ export class AgentInbox {
    * Queues a message. Delivered at once when the agent is idle; with `interrupt`, the current
    * turn is cancelled and the message jumps the queue.
    */
-  enqueue(text: string, opts: { sender: Actor; interrupt?: boolean }): InboxMessage {
+  enqueue(text: string, opts: { sender: Actor; interrupt?: boolean; id?: string }): InboxMessage {
     if (this.state === 'ended') throw new Error(`agent ${this.agentId} has ended`);
     const message: InboxMessage = {
-      id: randomUUID(),
+      id: opts.id ?? randomUUID(),
       agentId: this.agentId,
       text,
       sender: opts.sender,
@@ -139,6 +146,7 @@ export class AgentInbox {
         (this.hooks.onError ?? (() => {}))(error);
       }
       this.delivered.push(message);
+      if (this.delivered.length > this.historySize) this.delivered.shift();
       this.delivering = false;
       // An idle report may have arrived while the delivery was in flight.
       this.pump();

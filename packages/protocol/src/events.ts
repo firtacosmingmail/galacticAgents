@@ -124,6 +124,27 @@ export const AgentEvent = z.discriminatedUnion('type', [
 export type AgentEvent = z.infer<typeof AgentEvent>;
 
 // ---------------------------------------------------------------------------
+// message.* — what the user, a supervisor or the system sends to an agent (P1-22)
+// ---------------------------------------------------------------------------
+
+/**
+ * A message queued for an agent by the runtime's inbox: the user's chat line to a brain, a
+ * supervisor's instruction to a Steward, a system notice. Logged so a restart can re-deliver
+ * what was still queued (P1-14) and so a brain's mailbox (Phase 2) is fed from the log like
+ * everything else. Delivery is not a separate event: the next `agent.*` events of the agent
+ * are its trace.
+ */
+export const MessageSent = z.object({
+  type: z.literal('message.sent'),
+  messageId: Id,
+  agentId: Id,
+  sender: Actor,
+  text: z.string(),
+  /** Asked to cancel the current turn and go first. */
+  interrupt: z.boolean(),
+});
+
+// ---------------------------------------------------------------------------
 // question.* (SPEC §2.6, TECHNOLOGY §5.3)
 // ---------------------------------------------------------------------------
 
@@ -268,6 +289,7 @@ export const Event = z.discriminatedUnion('type', [
   AgentFinished,
   AgentFailed,
   AgentStopped,
+  MessageSent,
   QuestionOpened,
   QuestionEscalated,
   QuestionAnswered,

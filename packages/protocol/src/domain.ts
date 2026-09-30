@@ -121,11 +121,15 @@ export const Proposal = z.object({
 });
 export type Proposal = z.infer<typeof Proposal>;
 
+/** A tool call an agent wants to make, as the permission gate and the permission card see it. */
+export const ToolCall = z.object({ toolName: z.string(), input: z.unknown().optional() });
+export type ToolCall = z.infer<typeof ToolCall>;
+
 /** What a question is about: the text the agent asked plus optional choices or the tool call awaiting permission. */
 export const QuestionContext = z.object({
   text: z.string().min(1),
   options: z.array(z.string()).optional(),
-  toolCall: z.object({ toolName: z.string(), input: z.unknown().optional() }).optional(),
+  toolCall: ToolCall.optional(),
   permissionAction: PermissionAction.optional(),
 });
 export type QuestionContext = z.infer<typeof QuestionContext>;
@@ -169,10 +173,13 @@ export const StatusRecord = z.object({
   agentId: Id,
   state: AgentState,
   currentActivity: z.string().optional(),
+  /** When the current session started (`agent.spawned`); clients derive the running wall clock from it. */
+  startedAt: Timestamp,
   lastEventAt: Timestamp,
   pendingQuestionId: Id.optional(),
   progress: Progress.optional(),
   costSoFar: Cost.optional(),
+  /** `wallClockMs.used` is as of `lastEventAt` for a live agent; the client extrapolates from `startedAt`. */
   caps: z.object({ wallClockMs: CapUsage, toolCalls: CapUsage }),
 });
 export type StatusRecord = z.infer<typeof StatusRecord>;

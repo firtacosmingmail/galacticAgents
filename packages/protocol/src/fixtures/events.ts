@@ -65,6 +65,15 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
   },
   'agent.stopped': { type: 'agent.stopped', ...steward, by: waykeeper },
 
+  'message.sent': {
+    type: 'message.sent',
+    messageId: 'm-1',
+    ...steward,
+    sender: waykeeper,
+    text: 'Also update the changelog when you are done.',
+    interrupt: false,
+  },
+
   'question.opened': { type: 'question.opened', question: d.question },
   'question.escalated': {
     type: 'question.escalated',

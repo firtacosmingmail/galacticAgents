@@ -1,3 +1,5 @@
+import type { AgentEvent } from '@galactic/protocol';
+
 /**
  * Secret redaction (TECHNOLOGY §8, corner case 30; P1-06). Known secret shapes are replaced
  * before a transcript chunk is persisted and before anything is sent to a client. The list is
@@ -87,4 +89,58 @@ export function containsSecret(text: string, rules: RedactionRule[] = REDACTION_
     r.pattern.lastIndex = 0;
     return hit;
   });
+}
+
+/** Every string an agent event carries can hold a printed secret; redact them like output. */
+export function redactEvent<T extends AgentEvent>(event: T): T {
+  switch (event.type) {
+    case 'agent.output':
+      return { ...event, text: redactSecrets(event.text) };
+    case 'agent.tool_call':
+      return {
+        ...event,
+        ...(event.input !== undefined ? { input: redactValue(event.input) } : {}),
+      };
+    case 'agent.needs_input':
+      return {
+        ...event,
+        question: {
+          ...event.question,
+          text: redactSecrets(event.question.text),
+          ...(event.question.options
+            ? { options: event.question.options.map((o) => redactSecrets(o)) }
+            : {}),
+          ...(event.question.toolCall
+            ? {
+                toolCall: {
+                  ...event.question.toolCall,
+                  ...(event.question.toolCall.input !== undefined
+                    ? { input: redactValue(event.question.toolCall.input) }
+                    : {}),
+                },
+              }
+            : {}),
+        },
+      };
+    case 'agent.progress':
+      return { ...event, summary: redactSecrets(event.summary) };
+    case 'agent.finished':
+      return {
+        ...event,
+        ...(event.result !== undefined ? { result: redactSecrets(event.result) } : {}),
+      };
+    case 'agent.failed':
+      return { ...event, error: redactSecrets(event.error) };
+    default:
+      return event;
+  }
+}
+
+function redactValue(value: unknown): unknown {
+  if (typeof value === 'string') return redactSecrets(value);
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactValue(v)]));
+  }
+  return value;
 }

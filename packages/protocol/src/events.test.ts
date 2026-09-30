@@ -12,7 +12,7 @@ import { events } from './fixtures/events.js';
 /** Compile-time exhaustiveness: every member of the union must be handled here. */
 function classify(
   e: Event,
-): 'agent' | 'question' | 'proposal' | 'body' | 'project' | 'task' | 'control' {
+): 'agent' | 'message' | 'question' | 'proposal' | 'body' | 'project' | 'task' | 'control' {
   switch (e.type) {
     case 'agent.created':
     case 'agent.spawned':
@@ -28,6 +28,8 @@ function classify(
     case 'agent.failed':
     case 'agent.stopped':
       return 'agent';
+    case 'message.sent':
+      return 'message';
     case 'question.opened':
     case 'question.escalated':
     case 'question.answered':

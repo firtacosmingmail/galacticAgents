@@ -108,12 +108,17 @@ export class CapsEnforcer {
   }
 
   /**
-   * Whether one more tool call would go over the cap: lets a permission hook (P1-09) refuse the
-   * call before it runs instead of stopping the agent after it ran.
+   * Pre-flight for the permission gate (P1-18): whether one more tool call fits under the cap.
+   * When it does not, the cap is hit right here — the call is refused *and* the agent is stopped
+   * — so an agent whose every call is refused cannot spin. The refusal reason is meant for the
+   * agent (the hook's deny message).
    */
-  wouldExceed(agentId: Id): boolean {
+  reserveToolCall(agentId: Id): { ok: true } | { ok: false; reason: string } {
     const entry = this.tracked.get(agentId);
-    return entry !== undefined && entry.toolCalls + 1 > entry.caps.maxToolCalls;
+    if (!entry || entry.toolCalls + 1 <= entry.caps.maxToolCalls) return { ok: true };
+    const reason = `tool-call cap: ${entry.toolCalls} calls made, limit ${entry.caps.maxToolCalls}`;
+    this.hit(agentId, entry, reason);
+    return { ok: false, reason };
   }
 
   usage(agentId: Id): CapUsage | undefined {

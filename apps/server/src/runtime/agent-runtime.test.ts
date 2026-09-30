@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Agent, EventEnvelope, StatusRecord } from '@galactic/protocol';
+import type { Agent, Event, EventEnvelope, StatusRecord } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { SCENARIOS, type FakeScenario } from '../adapters/fake/scenario.js';
 import { openDatabase, type Database } from '../db/database.js';
@@ -30,7 +30,9 @@ function make(
     speed?: number;
     maxConcurrentAgents?: number;
     stallMs?: number;
+    inboxHistory?: number;
     scenarios?: Record<string, FakeScenario>;
+    onError?: (error: unknown, context: string) => void;
   } = {},
 ): Rig {
   const db = openDatabase(':memory:');
@@ -58,6 +60,8 @@ function make(
       maxConcurrentAgents: opts.maxConcurrentAgents ?? 4,
       defaults: { maxWallClockMs: 60_000, maxToolCalls: 100 },
     },
+    ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
+    ...(opts.onError ? { onError: opts.onError } : {}),
   });
   const rig: Rig = {
     db,
@@ -173,10 +177,10 @@ describe('AgentRuntime — routing', () => {
         { kind: 'progress', summary: `set ${KEY}` },
         {
           kind: 'permission',
-          toolName: 'Write',
-          input: { file_path: '.env', content: `KEY=${KEY}` },
-          permissionAction: 'edit_workspace',
-          text: `write ${KEY}?`,
+          toolName: 'Bash',
+          input: { command: `curl -H "Authorization: Bearer ${KEY}" https://api.example.com` },
+          permissionAction: 'network',
+          text: `call the API with ${KEY}?`,
         },
         { kind: 'finish', result: `done with ${KEY}` },
       ],
@@ -233,19 +237,108 @@ describe('AgentRuntime — inbox (P1-07)', () => {
     expect(history[1]!.id).toBe(m1.id);
     expect(history[2]!.id).toBe(m2.id);
     expect(rig.eventsOf(agent.id).includes('agent.finished')).toBe(false); // the long job was cut short
+    // Every message is in the log as message.sent, in send order, with the inbox's ids (P1-22).
+    const sent = rig.events
+      .filter((e) => e.event.type === 'message.sent')
+      .map((e) => e.event as Extract<Event, { type: 'message.sent' }>);
+    expect(sent.map((m) => [m.messageId, m.text, m.sender.type, m.interrupt])).toEqual([
+      [m1.id, 'first', 'user', false],
+      [m2.id, 'second', 'agent', false],
+      [history[0]!.id, 'urgent', 'user', true],
+    ]);
+    expect(rig.eventsOf(agent.id).filter((t) => t === 'message.sent')).toHaveLength(3);
+    // The adapter was never handed a message mid-turn: no delivery errors.
+    expect(history.every((m) => m.error === undefined && m.deliveredAt !== undefined)).toBe(true);
+  });
+
+  it('keeps a bounded delivery history; the log has the rest', async () => {
+    const rig = make({ inboxHistory: 2 });
+    const agent = await spawnOk(rig, req('scenario:echo'));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'idle');
+    for (const text of ['one', 'two', 'three']) {
+      rig.runtime.send(agent.id, text, { sender: USER });
+      await rig.waitFor(() =>
+        rig.runtime
+          .inbox(agent.id)!
+          .history()
+          .some((m) => m.text === text),
+      );
+    }
+    expect(
+      rig.runtime
+        .inbox(agent.id)!
+        .history()
+        .map((m) => m.text),
+    ).toEqual(['two', 'three']);
+    expect(rig.events.filter((e) => e.event.type === 'message.sent')).toHaveLength(3);
   });
 });
 
 describe('AgentRuntime — questions, pause, stop', () => {
-  it('answers a clarification through the runtime and logs question.answered', async () => {
+  it('a question opens a row with agent.needs_input; the answer closes it and logs question.answered', async () => {
     const rig = make();
     const agent = await spawnOk(rig, req('scenario:asks'));
     await rig.waitFor(() => rig.status(agent.id)?.state === 'waiting_for_input');
     const questionId = rig.status(agent.id)!.pendingQuestionId!;
+    // The row and `question.opened` land in the same command as `agent.needs_input` (P1-23).
+    const types = rig.events.map((e) => e.event.type);
+    expect(types.indexOf('question.opened')).toBe(types.indexOf('agent.needs_input') + 1);
+    expect(rig.log.tables.questions.get(questionId)).toMatchObject({
+      id: questionId,
+      kind: 'clarification',
+      originAgentId: agent.id,
+      holder: { type: 'user' },
+      status: 'open',
+      context: { text: 'Which date format should the export use?' },
+      version: 0,
+    });
     await rig.runtime.answer(questionId, 'ISO 8601', USER);
     await rig.waitFor(() => rig.eventsOf(agent.id).includes('agent.finished'));
-    expect(rig.events.map((e) => e.event.type)).toContain('question.answered');
+    const answered = rig.events.find((e) => e.event.type === 'question.answered')!.event;
+    expect(answered).toMatchObject({
+      questionId,
+      answer: 'ISO 8601',
+      answeredBy: USER,
+      version: 1,
+    });
+    expect(rig.log.tables.questions.get(questionId)).toMatchObject({
+      status: 'answered',
+      answer: 'ISO 8601',
+      answeredBy: { type: 'user' },
+      version: 1,
+    });
     await expect(rig.runtime.answer(questionId, 'again', USER)).rejects.toThrow(/no open question/);
+  });
+
+  it('the session ref lands on the row in the same command as agent.spawned', async () => {
+    const rig = make();
+    const seen: (string | undefined)[] = [];
+    rig.log.subscribe((e) => {
+      if (e.event.type === 'agent.spawned')
+        seen.push(rig.log.tables.agents.get(e.event.agentId)?.sessionRef);
+    });
+    const agent = await spawnOk(rig, req('scenario:echo'));
+    expect(seen).toEqual([agent.sessionRef]);
+    expect(agent.sessionRef).toMatch(/^fake:echo:/);
+  });
+
+  it('drops a straggler from an ended agent and reports an event for an unknown one', async () => {
+    const errors: string[] = [];
+    const rig = make({ onError: (_e, context) => errors.push(context) });
+    const before = rig.events.length;
+    // An event about an agent nobody spawned: rejected at the door, reported once.
+    rig.adapter.events.push({ type: 'agent.idle', agentId: 'a-stranger' });
+    await sleep(20);
+    expect(rig.events.length).toBe(before);
+    expect(errors).toEqual(['routing agent.idle']);
+    const agent = await spawnOk(rig, req('scenario:happy'));
+    await rig.waitFor(() => rig.eventsOf(agent.id).includes('agent.finished'));
+    const after = rig.events.length;
+    rig.adapter.events.push({ type: 'agent.stopped', agentId: agent.id, by: USER });
+    await sleep(20);
+    expect(rig.events.length).toBe(after); // one terminal event, the straggler is gone
+    expect(errors).toEqual(['routing agent.idle']); // and it was expected, not an error
+    expect(rig.status(agent.id)?.state).toBe('finished');
   });
 
   it('pause records control.pause, holds delivery, resume delivers', async () => {
@@ -281,42 +374,41 @@ describe('AgentRuntime — questions, pause, stop', () => {
 });
 
 describe('AgentRuntime — hard caps (P1-02)', () => {
-  it('refuses a spawn over the concurrency cap with the reason in agent.failed', async () => {
+  it('refuses a spawn over the concurrency cap before writing anything', async () => {
     const rig = make({ maxConcurrentAgents: 1, speed: 1 });
     const first = await spawnOk(rig, req('scenario:long'));
+    const before = rig.events.length;
     const second = await rig.runtime.spawn(req('scenario:long'));
     expect(second).toEqual({ ok: false, reason: 'concurrency cap: 1 of 1 agents already running' });
-    const failed = rig.events.find((e) => e.event.type === 'agent.failed')!.event;
-    expect(failed).toMatchObject({
-      type: 'agent.failed',
-      reason: 'cap',
-      error: 'concurrency cap: 1 of 1 agents already running',
-    });
-    expect(rig.log.tables.agents.all()).toHaveLength(2); // the refused agent exists, as failed
+    expect(rig.events).toHaveLength(before); // no row, no body, no event for the refused spawn
+    expect(rig.log.tables.agents.all()).toHaveLength(1);
+    expect(rig.log.tables.bodies.all()).toHaveLength(1);
     await rig.runtime.stop(first.id, USER);
     await rig.waitFor(() => rig.eventsOf(first.id).includes('agent.stopped'));
     expect((await rig.runtime.spawn(req('scenario:echo'))).ok).toBe(true);
   });
 
-  it('a tool-call cap stops the agent gracefully and fails it with reason cap', async () => {
+  it('a tool-call cap refuses the call, stops the agent and fails it with reason cap — one terminal event', async () => {
     const rig = make({ speed: 1 });
     const agent = await spawnOk(rig, req('scenario:happy', { caps: { maxToolCalls: 2 } }));
     await rig.waitFor(() => rig.eventsOf(agent.id).includes('agent.failed'));
+    await sleep(50); // a straggling agent.stopped would land here
     const types = rig.eventsOf(agent.id);
-    expect(types.filter((t) => t === 'agent.tool_call')).toHaveLength(3); // the third one tripped it
+    expect(types.filter((t) => t === 'agent.tool_call')).toHaveLength(2); // the third was refused
     expect(types.at(-1)).toBe('agent.failed');
-    expect(types).toContain('agent.stopped');
-    expect(types).not.toContain('agent.finished');
+    expect(
+      types.filter((t) => ['agent.finished', 'agent.failed', 'agent.stopped'].includes(t)),
+    ).toEqual(['agent.failed']);
     const failed = rig.events.find((e) => e.event.type === 'agent.failed')!.event as {
       error: string;
       reason: string;
     };
-    expect(failed).toMatchObject({ reason: 'cap', error: 'tool-call cap: 3 calls, limit 2' });
-    await sleep(20);
+    expect(failed).toMatchObject({ reason: 'cap', error: 'tool-call cap: 2 calls made, limit 2' });
     expect(rig.status(agent.id)).toMatchObject({
       state: 'failed',
-      currentActivity: 'tool-call cap: 3 calls, limit 2',
+      currentActivity: 'tool-call cap: 2 calls made, limit 2',
     });
+    expect(rig.runtime.liveAgents()).toEqual([]);
   });
 
   it('a wall-clock cap fails the agent with reason cap', async () => {

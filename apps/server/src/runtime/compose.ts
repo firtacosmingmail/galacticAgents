@@ -31,6 +31,8 @@ export interface ComposeOptions {
   /** How often stalls are checked and wall clocks refreshed. */
   tickMs?: number;
   flushMs?: number;
+  /** Delivered messages kept per inbox for inspection. */
+  inboxHistory?: number;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
 }
@@ -45,9 +47,7 @@ export interface ComposedRuntime {
 }
 
 export function composeRuntime(db: Database, opts: ComposeOptions = {}): ComposedRuntime {
-  // The log needs the store for snapshots and the store needs the log's tables: a late binding.
-  const late: { store?: StatusStore } = {};
-  const log = new EventLog(db, { ...(opts.log ?? {}), statuses: () => late.store?.all() ?? [] });
+  const log = new EventLog(db, opts.log ?? {});
   const defaultCaps = opts.caps?.defaults ?? DEFAULT_CAPS;
   const statuses = new StatusStore({
     capsOf: (id) => log.tables.agents.get(id)?.caps,
@@ -58,7 +58,6 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.tickMs !== undefined ? { tickMs: opts.tickMs } : {}),
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'status store') } : {}),
   });
-  late.store = statuses;
   // Rebuild from the log, then fold every later commit in seq order.
   statuses.rebuild(log.eventsSince(0, Number.MAX_SAFE_INTEGER));
   log.subscribe((envelope) => statuses.fold(envelope));
@@ -75,6 +74,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     transcripts,
     statuses,
     caps: { ...(opts.caps ?? {}), defaults: defaultCaps },
+    ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.onError ? { onError: opts.onError } : {}),
   });

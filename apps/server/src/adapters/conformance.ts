@@ -15,7 +15,9 @@ import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
  * (log, status store, transcripts, inbox, caps) exactly as production wires it. It is the bar
  * for "this runtime is supported": spawn → output → clarification answered → permission answered
  * → pause/resume → interrupt → finish with cost; stop from every state; a session resumed after
- * the adapter went away; stall detection.
+ * the adapter went away; stall detection. Two invariants are checked on every run: one terminal
+ * event per agent (P1-17) and no message handed to the adapter mid-turn (P1-19: the adapter
+ * keeps no queue; a delivery it rejects shows up as an inbox error).
  *
  * A target supplies a fresh adapter per test and the prompts that make its agent do each thing
  * (scenario names for the fake adapter, natural-language instructions for a real one). The fake
@@ -129,6 +131,18 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       if (!id) throw new Error(`no pending question on ${agentId}`);
       return id;
     };
+    const TERMINAL = ['agent.finished', 'agent.failed', 'agent.stopped'];
+    /** After an agent ended: exactly one terminal event, and it stays that way. */
+    const expectOneTerminal = async (agentId: string) => {
+      await new Promise((r) => setTimeout(r, 100));
+      expect(typesOf(agentId).filter((t) => TERMINAL.includes(t))).toHaveLength(1);
+    };
+    /** The inbox never had a delivery refused (the adapter was only ever sent while idle). */
+    const expectCleanDeliveries = (agentId: string) => {
+      const inbox = rig.composed.runtime.inbox(agentId);
+      if (!inbox) return; // ended: the runtime forgot the session, the log has the messages
+      expect(inbox.history().filter((m) => m.error !== undefined)).toEqual([]);
+    };
 
     it('spawns, streams output and tool calls, finishes with a result', async () => {
       const agent = await spawn(target.prompts.finish);
@@ -147,6 +161,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       await waitState(agent.id, 'finished');
       if (target.metered) expect(status(agent.id)?.costSoFar?.usd).toBeGreaterThan(0);
       expect(rig.composed.runtime.liveAgents()).toEqual([]);
+      await expectOneTerminal(agent.id);
     });
 
     it('asks a clarification question, waits, and continues with the answer', async () => {
@@ -162,9 +177,17 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       const before = typesOf(agent.id).length;
       await new Promise((r) => setTimeout(r, 50));
       expect(typesOf(agent.id).length).toBe(before); // blocked, no busy-waiting events
-      await rig.composed.runtime.answer(pendingQuestion(agent.id), 'the first option', USER);
+      const questionId = pendingQuestion(agent.id);
+      // The server owns the question: a row was opened with the event (P1-23).
+      expect(rig.composed.log.tables.questions.get(questionId)).toMatchObject({
+        status: 'open',
+        kind: 'clarification',
+        originAgentId: agent.id,
+      });
+      await rig.composed.runtime.answer(questionId, 'the first option', USER);
       await waitFor(() => typesOf(agent.id).includes('agent.finished'), 'finish after the answer');
       expect(rig.events.map((e) => e.event.type)).toContain('question.answered');
+      expect(rig.composed.log.tables.questions.get(questionId)?.status).toBe('answered');
     });
 
     it('requests a permission with the tool call attached; allow runs it', async () => {
@@ -235,6 +258,8 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       expect(text.indexOf('gamma')).toBeLessThan(text.indexOf('alpha'));
       expect(text.indexOf('alpha')).toBeLessThan(text.indexOf('beta'));
       expect(typesOf(agent.id)).not.toContain('agent.finished');
+      expectCleanDeliveries(agent.id);
+      expect(typesOf(agent.id).filter((t) => t === 'message.sent')).toHaveLength(3);
     });
 
     it('echoes a message sent while idle', async () => {
@@ -249,6 +274,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         () => typesOf(agent.id).filter((t) => t === 'agent.idle').length >= 2,
         'idle again',
       );
+      expectCleanDeliveries(agent.id);
     });
 
     describe('stop from every state', () => {
@@ -261,6 +287,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         expect(typesOf(agentId).length).toBe(n);
         expect(typesOf(agentId)).not.toContain('agent.finished');
         expect(rig.composed.runtime.liveAgents().map((a) => a.id)).not.toContain(agentId);
+        await expectOneTerminal(agentId);
       };
 
       it('while working', async () => {

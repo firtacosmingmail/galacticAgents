@@ -297,4 +297,48 @@ describe('StatusStore — stall detection', () => {
     store.tick(T0 + 40_000);
     expect(store.get('a-2')!.state).toBe('stalled');
   });
+
+  it('marks only records that changed: a stall check that finds nothing sends nothing (P1-25)', async () => {
+    const { store } = make();
+    const batches: StatusRecord[][] = [];
+    store.subscribe((records) => batches.push(records));
+    store.fold({ seq: 1, at: at(0), event: spawned });
+    store.fold({
+      seq: 2,
+      at: at(100),
+      event: { type: 'agent.progress', agentId: 'a-1', summary: 'go' },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(batches).toHaveLength(1);
+    store.tick(T0 + 200); // no stall yet: nothing dirty
+    await new Promise((r) => setTimeout(r, 30));
+    expect(batches).toHaveLength(1);
+    store.tick(T0 + 500); // stalled: one diff, with the clock as of the tick
+    await new Promise((r) => setTimeout(r, 30));
+    expect(batches).toHaveLength(2);
+    expect(batches[1]).toEqual([
+      expect.objectContaining({
+        state: 'stalled',
+        startedAt: at(0),
+        caps: expect.objectContaining({ wallClockMs: { used: 500, limit: 60_000 } }),
+      }),
+    ]);
+  });
+});
+
+describe('StatusStore — ended records are a sink (P1-17)', () => {
+  it('ignores any event after a terminal one except a new agent.spawned', () => {
+    const { store } = make();
+    store.rebuild(
+      log([
+        spawned,
+        { type: 'agent.failed', agentId: 'a-1', error: 'tool-call cap', reason: 'cap' },
+        { type: 'agent.stopped', agentId: 'a-1', by: { type: 'system' } },
+        { type: 'agent.progress', agentId: 'a-1', summary: 'ghost' },
+      ]),
+    );
+    expect(store.get('a-1')).toMatchObject({ state: 'failed', currentActivity: 'tool-call cap' });
+    store.fold({ seq: 5, at: at(5000), event: spawned });
+    expect(store.get('a-1')).toMatchObject({ state: 'starting', startedAt: at(5000) });
+  });
 });

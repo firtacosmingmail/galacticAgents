@@ -198,6 +198,8 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
       return next;
     case 'agent.output':
       return next; // transcript traffic never reaches this stream
+    case 'message.sent':
+      return next; // the inbox is runtime state; a chat view (Phase 2.5) will fold these
 
     case 'control.stop':
     case 'control.cancel':

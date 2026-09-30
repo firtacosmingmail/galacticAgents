@@ -1,20 +1,30 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   AgentEvent as AgentEventSchema,
-  DEFAULT_PERMISSION_POLICY,
   type AgentEvent,
+  type GateVerdict,
   type SpawnOptions,
 } from '@galactic/protocol';
-import { collect } from '../../runtime/event-queue.js';
+import { collect } from '../../test/collect.js';
 import { FakeAdapter } from './fake-adapter.js';
 import { SCENARIOS, scenarioFromPrompt, type FakeScenario } from './scenario.js';
 
-const spawnOpts = (prompt: string, agentId = 'a-1'): SpawnOptions => ({
+/** A gate that allows everything except what the scenario marks as a permission step. */
+const gate = (verdict: (toolName: string, input: unknown) => GateVerdict) => ({
+  check: (call: { toolName: string; input?: unknown }) => verdict(call.toolName, call.input),
+});
+const ASK_DESTRUCTIVE = gate((tool, input) =>
+  tool === 'Bash' && /rm -rf|git push/.test(String((input as { command?: string })?.command))
+    ? { decision: 'ask', action: 'destructive', reasons: ['destructive command'] }
+    : { decision: 'allow' },
+);
+
+const spawnOpts = (prompt: string, agentId = 'a-1', g = ASK_DESTRUCTIVE): SpawnOptions => ({
   agentId,
   role: 'steward',
   cwd: '/tmp',
   prompt,
-  permissionPolicy: DEFAULT_PERMISSION_POLICY,
+  gate: g,
   caps: { maxWallClockMs: 60_000, maxToolCalls: 100 },
 });
 
@@ -79,38 +89,35 @@ describe('FakeAdapter — scenarios and turns', () => {
     expect(scenarioFromPrompt('  scenario:Happy rest').name).toBe('happy');
   });
 
-  it('queues messages sent while working and delivers them in order after idle', async () => {
+  it('keeps no queue: a message sent mid-turn is rejected, one sent at idle starts a turn', async () => {
     const slow: FakeScenario = { steps: [{ kind: 'output', text: 'working', delayMs: 80 }] };
     const { adapter, events } = makeAdapter({ speed: 1, scenarios: { slow } });
     const { sessionId } = await adapter.spawn(spawnOpts('scenario:slow'));
+    await sleep(10);
+    await expect(adapter.send(sessionId, 'too early')).rejects.toThrow(/mid-turn/);
+    await events.waitFor(has('agent.idle'));
     await adapter.send(sessionId, 'first');
-    await adapter.send(sessionId, 'second');
-    await events.waitFor((e) => e.filter((x) => x.type === 'agent.idle').length === 3);
+    await events.waitFor((e) => e.filter((x) => x.type === 'agent.idle').length === 2);
     expect(events.items.map((e) => (e.type === 'agent.output' ? e.text : e.type))).toEqual([
       'working',
       'agent.idle',
       'received: first',
       'agent.idle',
-      'received: second',
-      'agent.idle',
     ]);
   });
 
-  it('an interrupting message cancels the turn and arrives first', async () => {
+  it('an interrupting message cancels the turn and starts its own', async () => {
     const { adapter, events } = makeAdapter({ speed: 1 });
     const { sessionId } = await adapter.spawn(spawnOpts('scenario:long'));
     await events.waitFor(has('agent.progress'));
-    await adapter.send(sessionId, 'later');
     await adapter.send(sessionId, 'urgent', { interrupt: true });
-    await events.waitFor((e) => e.filter((x) => x.type === 'agent.idle').length === 3);
+    await events.waitFor((e) => e.filter((x) => x.type === 'agent.idle').length === 2);
     const afterInterrupt = events.items.slice(
       events.items.findIndex((e) => e.type === 'agent.idle'),
     );
     expect(afterInterrupt.map((e) => (e.type === 'agent.output' ? e.text : e.type))).toEqual([
       'agent.idle',
       'received: urgent',
-      'agent.idle',
-      'received: later',
       'agent.idle',
     ]);
     expect(events.items.some((e) => e.type === 'agent.finished')).toBe(false);
@@ -162,7 +169,7 @@ describe('FakeAdapter — questions', () => {
     expect(q).toMatchObject({
       kind: 'permission',
       question: {
-        text: 'May I run Bash?',
+        text: 'May I run Bash? destructive command',
         toolCall: { toolName: 'Bash', input: { command: 'rm -rf dist' } },
         permissionAction: 'destructive',
       },
@@ -186,9 +193,36 @@ describe('FakeAdapter — questions', () => {
     await events.waitFor(has('agent.finished'));
     expect(events.items[2]).toMatchObject({
       type: 'agent.output',
-      text: 'permission denied for Bash, skipping',
+      text: 'permission denied for Bash (answered no), skipping',
     });
     expect(events.items.filter((e) => e.type === 'agent.tool_call')).toHaveLength(1);
+  });
+
+  it('the gate decides: allow runs a permission step without asking, deny skips it with the reason', async () => {
+    const allowAll = gate(() => ({ decision: 'allow' }));
+    const { adapter, events } = makeAdapter();
+    await adapter.spawn(spawnOpts('scenario:permission', 'a-1', allowAll));
+    await events.waitFor(has('agent.finished'));
+    expect(types(events.items)).not.toContain('agent.needs_input');
+    expect(events.items[1]).toMatchObject({
+      type: 'agent.tool_call',
+      input: { command: 'rm -rf dist' },
+    });
+
+    const denyRm = gate((tool, input) =>
+      /rm -rf/.test(String((input as { command?: string })?.command))
+        ? { decision: 'deny', reason: 'tool-call cap: 2 calls made, limit 2' }
+        : { decision: 'allow' },
+    );
+    const second = makeAdapter();
+    await second.adapter.spawn(spawnOpts('scenario:permission', 'a-2', denyRm));
+    await second.events.waitFor(has('agent.finished'));
+    expect(types(second.events.items)).not.toContain('agent.needs_input');
+    expect(second.events.items[1]).toMatchObject({
+      type: 'agent.output',
+      text: 'permission denied for Bash (tool-call cap: 2 calls made, limit 2), skipping',
+    });
+    expect(second.events.items.filter((e) => e.type === 'agent.tool_call')).toHaveLength(1);
   });
 });
 

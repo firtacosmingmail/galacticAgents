@@ -8,33 +8,41 @@ import {
   type AgentEvent,
   type AgentRole,
   type AgentRuntime as RuntimeName,
-  type Body,
   type Event,
   type Id,
   type PermissionPolicy,
   type SpawnHandle,
+  type SpawnOptions,
   type ToolDefinition,
 } from '@galactic/protocol';
-import type { EventLog } from '../domain/event-log.js';
+import type { CommandContext, EventLog } from '../domain/event-log.js';
+import { createAgent, recordSpawned } from '../domain/agents.js';
+import { answerQuestion, openQuestion } from '../domain/questions.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
-import { redactSecrets } from './redact.js';
+import { createPermissionGate } from './permission-gate.js';
+import { redactEvent } from './redact.js';
 import type { StatusStore } from './status-store.js';
 import type { TranscriptPipeline } from './transcripts.js';
 
 /**
  * The agent runtime: what ties an adapter's session to the rest of the server (P1-02, P1-05,
- * P1-07; TECHNOLOGY §3.4, §4, §6.2). For every agent it owns the inbox, the caps, the adapter
- * session, and the routing of the adapter's events:
+ * P1-07; TECHNOLOGY §3.4, §4, §6.2). For every agent it owns the inbox, the caps, the permission
+ * gate, the adapter session, and the routing of the adapter's events:
  *
  *   agent.output  → transcript pipeline (redacted, batched) + status store `touch()`
  *   everything else → the event log (one write rule), whose subscribers include the status
  *                     store and, later, the brains' mailboxes
  *
- * `agent.spawned` is emitted here, not by adapters (they do not know bodies). Phase 2's
- * `spawnAgent` command will call `spawn()` after creating the rows; in Phase 1 `spawn()` also
- * creates the agent row (and a procedural asteroid when no body is given) so the ops console can
- * run standalone agents.
+ * Invariants the runtime enforces on the way to the log (P1-17):
+ *   - every agent gets exactly one terminal event (`finished` | `failed` | `stopped`); a cap
+ *     stop ends in `agent.failed(reason: cap)` and the adapter's own `agent.stopped` is folded
+ *     into it, whichever arrives first;
+ *   - events for an agent the runtime does not know (never spawned here, or already ended) never
+ *     reach the log — the adapter is reporting a session the server no longer owns.
+ *
+ * `agent.spawned` is emitted here, not by adapters (they do not know bodies). The agent row is
+ * created by `domain/agents.ts`; Phase 2's `spawnAgent` command composes the same functions.
  */
 
 export interface SpawnRequest {
@@ -65,9 +73,14 @@ export interface AgentRuntimeOptions {
   transcripts: TranscriptPipeline;
   statuses: StatusStore;
   caps?: { maxConcurrentAgents?: number; defaults?: AgentCaps };
+  /** Delivered messages kept per inbox for inspection; the log has the full history. */
+  inboxHistory?: number;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
 }
+
+const TERMINAL = new Set<AgentEvent['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
+type Terminal = 'agent.finished' | 'agent.failed' | 'agent.stopped';
 
 interface Live {
   agent: Agent;
@@ -81,18 +94,22 @@ interface Live {
   questions: Set<Id>;
   paused: boolean;
   idle: boolean;
-  /** A terminal event (finished, failed, stopped) was routed. */
-  ended: boolean;
-  /** Which one; `agent.stopped` may be the tail of a cap stop, the other two are the agent's own verdict. */
-  terminal: 'agent.finished' | 'agent.failed' | 'agent.stopped' | undefined;
+  /** A cap was hit: the stop under way ends in `agent.failed(cap)` with this reason. */
+  capStop: string | undefined;
+  /** The one terminal event routed for this agent. */
+  terminal: Terminal | undefined;
 }
 
 const SYSTEM: Actor = { type: 'system' };
+/** How many ended agent ids are remembered so a straggling event is told apart from a stranger. */
+const ENDED_MEMORY = 1_000;
 
 export class AgentRuntime {
   private readonly adapters = new Map<RuntimeName, AgentAdapter>();
   private readonly live = new Map<Id, Live>();
   private readonly byQuestion = new Map<Id, Id>();
+  /** Recently ended agents, oldest first. */
+  private readonly ended = new Set<Id>();
   private readonly now: () => string;
   private readonly onError: (error: unknown, context: string) => void;
   private readonly pumps: Promise<void>[] = [];
@@ -119,7 +136,7 @@ export class AgentRuntime {
 
   /** Agents with a live adapter session. */
   liveAgents(): Agent[] {
-    return [...this.live.values()].filter((l) => !l.ended).map((l) => l.agent);
+    return [...this.live.values()].map((l) => l.agent);
   }
 
   inbox(agentId: Id): AgentInbox | undefined {
@@ -127,37 +144,45 @@ export class AgentRuntime {
   }
 
   /**
-   * Creates the agent (row + `agent.spawned`) and starts its session. Refused, with the reason
-   * in an `agent.failed(reason: cap)` event, when the concurrency cap is reached; refused with a
-   * plain error when the runtime is unknown.
+   * Creates the agent (row + `agent.spawned`) and starts its session. Refused before anything is
+   * written when the runtime is unknown or the concurrency cap is reached: a refused spawn
+   * leaves no row, no body and no event behind — the reason goes back to the caller.
    */
   async spawn(req: SpawnRequest): Promise<SpawnResult> {
     if (this.disposed) throw new Error('runtime disposed');
     const adapter = this.adapters.get(req.runtime);
     if (!adapter) return { ok: false, reason: `no adapter for runtime ${req.runtime}` };
-
-    const agent = this.createAgent(req);
     const gate = this.caps.canSpawn();
-    if (!gate.ok) {
-      this.record({ type: 'agent.failed', agentId: agent.id, error: gate.reason, reason: 'cap' });
-      return { ok: false, reason: gate.reason };
-    }
+    if (!gate.ok) return { ok: false, reason: gate.reason };
+
+    const agent = this.opts.log.runCommand((ctx) =>
+      createAgent(ctx, {
+        role: req.role,
+        runtime: req.runtime,
+        caps: this.caps.resolve(req.caps),
+        now: this.now(),
+        ...(req.bodyId ? { bodyId: req.bodyId } : {}),
+        ...(req.supervisorId ? { supervisorId: req.supervisorId } : {}),
+        ...(req.taskId ? { taskId: req.taskId } : {}),
+        ...(req.projectId ? { projectId: req.projectId } : {}),
+        ...(req.agentId ? { agentId: req.agentId } : {}),
+      }),
+    ).value;
     return this.start(agent, req, adapter, (opts) => adapter.spawn(opts));
   }
 
   /** Re-opens a saved session (P1-14): the agent row exists, the adapter resumes from its ref. */
   async resume(agent: Agent, req: Omit<SpawnRequest, 'role' | 'runtime'>): Promise<SpawnResult> {
+    if (this.disposed) throw new Error('runtime disposed');
     const adapter = this.adapters.get(agent.runtime);
     if (!adapter) return { ok: false, reason: `no adapter for runtime ${agent.runtime}` };
     if (!adapter.resumeSession || !agent.sessionRef) {
       return { ok: false, reason: `runtime ${agent.runtime} cannot resume sessions` };
     }
     const gate = this.caps.canSpawn();
-    if (!gate.ok) {
-      this.record({ type: 'agent.failed', agentId: agent.id, error: gate.reason, reason: 'cap' });
-      return { ok: false, reason: gate.reason };
-    }
+    if (!gate.ok) return { ok: false, reason: gate.reason };
     const ref = agent.sessionRef;
+    this.ended.delete(agent.id);
     return this.start(
       agent,
       { ...req, role: agent.role, runtime: agent.runtime },
@@ -170,7 +195,7 @@ export class AgentRuntime {
     agent: Agent,
     req: SpawnRequest,
     adapter: AgentAdapter,
-    open: (opts: Parameters<AgentAdapter['spawn']>[0]) => Promise<SpawnHandle>,
+    open: (opts: SpawnOptions) => Promise<SpawnHandle>,
   ): Promise<SpawnResult> {
     const caps = agent.caps;
     // Registered before the adapter runs: whatever it emits before the handle comes back is
@@ -181,28 +206,35 @@ export class AgentRuntime {
       handle: undefined,
       early: [],
       inbox: new AgentInbox(agent.id, {
-        deliver: (m) => adapter.send(this.session(live), m.text),
+        deliver: (m) => adapter.send(this.session(live), m.text, { interrupt: m.interrupt }),
         interrupt: () => adapter.interrupt(this.session(live)),
         now: this.now,
         onError: (e) => this.onError(e, `inbox ${agent.id}`),
+        ...(this.opts.inboxHistory !== undefined ? { history: this.opts.inboxHistory } : {}),
       }),
       questions: new Set(),
       paused: false,
       idle: false,
-      ended: false,
+      capStop: undefined,
       terminal: undefined,
     };
     this.live.set(agent.id, live);
     this.caps.track(agent.id, caps);
+    const gate = createPermissionGate({
+      agentId: agent.id,
+      policy: req.permissionPolicy ?? DEFAULT_PERMISSION_POLICY,
+      workspace: req.workspace ?? req.cwd,
+      cwd: req.cwd,
+      caps: this.caps,
+    });
     let handle: SpawnHandle;
     try {
       handle = await open({
         agentId: agent.id,
         role: agent.role,
         cwd: req.cwd,
-        workspace: req.workspace ?? req.cwd,
         prompt: req.prompt,
-        permissionPolicy: req.permissionPolicy ?? DEFAULT_PERMISSION_POLICY,
+        gate,
         caps,
         ...(req.tools ? { tools: req.tools } : {}),
         ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}),
@@ -210,31 +242,21 @@ export class AgentRuntime {
       });
     } catch (error) {
       const message = (error as Error).message;
-      this.live.delete(agent.id);
-      this.caps.release(agent.id);
       this.record({ type: 'agent.failed', agentId: agent.id, error: message, reason: 'runtime' });
+      this.end(live, 'agent.failed');
       return { ok: false, reason: message };
     }
-    if (handle.sessionRef && handle.sessionRef !== agent.sessionRef) {
-      agent = this.opts.log.runCommand(({ tables }) =>
-        tables.agents.upsert({ ...agent, sessionRef: handle.sessionRef!, updatedAt: this.now() }),
-      ).value;
-      live.agent = agent;
-    }
     live.handle = handle;
-    this.record({
-      type: 'agent.spawned',
-      agentId: agent.id,
-      role: agent.role,
-      runtime: agent.runtime,
-      bodyId: agent.bodyId,
-      ...(handle.sessionRef ? { sessionRef: handle.sessionRef } : {}),
-      ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
-      ...(agent.taskId ? { taskId: agent.taskId } : {}),
-      ...(agent.projectId ? { projectId: agent.projectId } : {}),
-    });
+    // The row's session ref and `agent.spawned` in one transaction (one write rule).
+    try {
+      live.agent = this.opts.log.runCommand((ctx) =>
+        recordSpawned(ctx, live.agent, handle.sessionRef, this.now()),
+      ).value;
+    } catch (error) {
+      this.onError(error, `record agent.spawned ${agent.id}`);
+    }
     for (const event of live.early.splice(0)) this.route(event);
-    return { ok: true, agent };
+    return { ok: true, agent: live.agent };
   }
 
   private session(live: Live): string {
@@ -242,9 +264,22 @@ export class AgentRuntime {
     return live.handle.sessionId;
   }
 
-  /** Queues a message; delivered when the agent is idle, or now with `interrupt`. */
+  /**
+   * Queues a message; delivered when the agent is idle, or now with `interrupt`. Logged as
+   * `message.sent` (P1-22) before it is queued, so a restart knows what was still pending.
+   */
   send(agentId: Id, text: string, opts: { sender: Actor; interrupt?: boolean }): InboxMessage {
-    return this.must(agentId).inbox.enqueue(text, opts);
+    const live = this.must(agentId);
+    const messageId = `m-${randomUUID()}`;
+    this.record({
+      type: 'message.sent',
+      messageId,
+      agentId,
+      sender: opts.sender,
+      text,
+      interrupt: opts.interrupt ?? false,
+    });
+    return live.inbox.enqueue(text, { ...opts, id: messageId });
   }
 
   async answer(questionId: Id, answer: string, by: Actor): Promise<void> {
@@ -256,7 +291,7 @@ export class AgentRuntime {
     await live.adapter.answer(questionId, answer);
     live.questions.delete(questionId);
     this.byQuestion.delete(questionId);
-    this.record({ type: 'question.answered', questionId, answer, answeredBy: by, version: 0 });
+    this.command((ctx) => answerQuestion(ctx, questionId, answer, by, this.now()));
   }
 
   async pause(agentId: Id, by: Actor): Promise<void> {
@@ -284,7 +319,7 @@ export class AgentRuntime {
 
   async stop(agentId: Id, by: Actor): Promise<void> {
     const live = this.live.get(agentId);
-    if (!live || live.ended || !live.handle) return;
+    if (!live || !live.handle) return;
     this.record({ type: 'control.stop', target: { kind: 'agent', id: agentId }, by });
     await live.adapter.stop(live.handle.sessionId);
   }
@@ -305,50 +340,22 @@ export class AgentRuntime {
 
   private must(agentId: Id): Live {
     const live = this.live.get(agentId);
-    if (!live || live.ended) throw new Error(`agent ${agentId} is not running`);
+    if (!live) throw new Error(`agent ${agentId} is not running`);
     return live;
-  }
-
-  private createAgent(req: SpawnRequest): Agent {
-    const now = this.now();
-    const id = req.agentId ?? `a-${randomUUID()}`;
-    return this.opts.log.runCommand(({ tables, emit }) => {
-      let bodyId = req.bodyId;
-      if (!bodyId) {
-        // Phase 1 convenience: a standalone agent gets a procedural asteroid of its own.
-        const body: Body = {
-          id: `b-${randomUUID()}`,
-          kind: 'asteroid',
-          name: `Asteroid ${id.slice(2, 10)}`,
-        };
-        tables.bodies.insert(body);
-        emit({ type: 'body.created', body });
-        bodyId = body.id;
-      }
-      const agent: Agent = {
-        id,
-        role: req.role,
-        runtime: req.runtime,
-        bodyId,
-        caps: this.caps.resolve(req.caps),
-        createdAt: now,
-        updatedAt: now,
-        ...(req.supervisorId ? { supervisorId: req.supervisorId } : {}),
-        ...(req.taskId ? { taskId: req.taskId } : {}),
-        ...(req.projectId ? { projectId: req.projectId } : {}),
-      };
-      tables.agents.insert(agent);
-      emit({ type: 'agent.created', agent });
-      return agent;
-    }).value;
   }
 
   /** Appends an event under the one write rule; the status store sees it as a log subscriber. */
   private record(event: Event): void {
+    this.command(({ emit }) => emit(event));
+  }
+
+  /** Runs a domain command; a failure is reported, never thrown into the adapter's stream. */
+  private command<T>(fn: (ctx: CommandContext) => T): T | undefined {
     try {
-      this.opts.log.runCommand(({ emit }) => emit(event));
+      return this.opts.log.runCommand(fn).value;
     } catch (error) {
-      this.onError(error, `record ${event.type}`);
+      this.onError(error, 'command');
+      return undefined;
     }
   }
 
@@ -369,7 +376,18 @@ export class AgentRuntime {
 
   private route(raw: AgentEvent): void {
     const live = this.live.get(raw.agentId);
-    if (live && !live.handle) {
+    if (!live) {
+      // A straggler from an agent that already ended (its `agent.stopped` after a cap failure,
+      // output after a crash) is expected and dropped; a stranger is an adapter bug.
+      if (!this.ended.has(raw.agentId)) {
+        this.onError(
+          new Error(`${raw.type} for unknown agent ${raw.agentId}`),
+          `routing ${raw.type}`,
+        );
+      }
+      return;
+    }
+    if (!live.handle) {
       live.early.push(raw);
       return;
     }
@@ -377,13 +395,30 @@ export class AgentRuntime {
     if (event.type === 'agent.output') {
       this.opts.transcripts.append(event.agentId, event.kind, event.text);
       this.opts.statuses.touch(event.agentId);
-      if (live && !live.paused) live.idle = false;
+      if (!live.paused) live.idle = false;
       return;
     }
-    this.record(event);
+    if (TERMINAL.has(event.type)) {
+      this.terminal(live, event as Extract<AgentEvent, { type: Terminal }>);
+      return;
+    }
+    if (event.type === 'agent.needs_input') {
+      // The question row and the event in one transaction: the server owns questions (§5.3).
+      this.command((ctx) => {
+        ctx.emit(event);
+        openQuestion(ctx, {
+          id: event.questionId,
+          kind: event.kind,
+          originAgentId: event.agentId,
+          context: event.question,
+          now: this.now(),
+        });
+      });
+    } else {
+      this.record(event);
+    }
     // Caps after the log so a tripping tool call precedes the stop it causes.
     this.caps.onEvent(event);
-    if (!live) return;
     switch (event.type) {
       case 'agent.idle':
         live.idle = true;
@@ -401,19 +436,36 @@ export class AgentRuntime {
         live.idle = false;
         if (!live.paused) live.inbox.working();
         return;
-      case 'agent.finished':
-      case 'agent.failed':
-      case 'agent.stopped':
-        this.end(live, event.type);
-        return;
       default:
         return;
     }
   }
 
-  private end(live: Live, terminal: Live['terminal']): void {
-    if (live.ended) return;
-    live.ended = true;
+  /** The one terminal event: the adapter's verdict, or `failed(cap)` when a cap stop is under way. */
+  private terminal(live: Live, event: Extract<AgentEvent, { type: Terminal }>): void {
+    if (live.terminal) return;
+    if (live.capStop && event.type === 'agent.stopped') {
+      this.failForCap(live);
+      return;
+    }
+    this.record(event);
+    this.caps.onEvent(event);
+    this.end(live, event.type);
+  }
+
+  private failForCap(live: Live): void {
+    if (live.terminal) return;
+    this.record({
+      type: 'agent.failed',
+      agentId: live.agent.id,
+      error: live.capStop ?? 'cap',
+      reason: 'cap',
+    });
+    this.end(live, 'agent.failed');
+  }
+
+  private end(live: Live, terminal: Terminal): void {
+    if (live.terminal) return;
     live.terminal = terminal;
     live.inbox.ended();
     for (const q of live.questions) this.byQuestion.delete(q);
@@ -421,12 +473,22 @@ export class AgentRuntime {
     this.caps.release(live.agent.id);
     // The log and the status store keep the history; the runtime forgets the session.
     this.live.delete(live.agent.id);
+    this.ended.add(live.agent.id);
+    if (this.ended.size > ENDED_MEMORY) {
+      const oldest = this.ended.values().next().value;
+      if (oldest !== undefined) this.ended.delete(oldest);
+    }
   }
 
-  /** Called by the caps enforcer: stop the agent, then report the cap. */
+  /**
+   * Called by the caps enforcer: graceful stop, then `agent.failed(reason: cap)` — once,
+   * whichever comes first: the adapter's `agent.stopped` (folded by `terminal()`) or the stop
+   * call resolving. A verdict already on the wire (`finished`/`failed`) wins.
+   */
   async onCapHit(agentId: Id, reason: string): Promise<void> {
     const live = this.live.get(agentId);
-    if (!live || live.ended || !live.handle) return;
+    if (!live || live.terminal || !live.handle) return;
+    live.capStop = reason;
     live.inbox.ended();
     this.record({ type: 'control.stop', target: { kind: 'agent', id: agentId }, by: SYSTEM });
     try {
@@ -434,63 +496,6 @@ export class AgentRuntime {
     } catch (error) {
       this.onError(error, `cap stop ${agentId}`);
     }
-    // A verdict that was already on the wire wins: the agent finished (or failed) on its own.
-    if (live.terminal === 'agent.finished' || live.terminal === 'agent.failed') return;
-    this.record({ type: 'agent.failed', agentId, error: reason, reason: 'cap' });
-    this.end(live, 'agent.failed');
+    this.failForCap(live);
   }
-}
-
-/** Every string an agent event carries can hold a printed secret; redact them like output. */
-export function redactEvent<T extends AgentEvent>(event: T): T {
-  switch (event.type) {
-    case 'agent.output':
-      return { ...event, text: redactSecrets(event.text) };
-    case 'agent.tool_call':
-      return {
-        ...event,
-        ...(event.input !== undefined ? { input: redactValue(event.input) } : {}),
-      };
-    case 'agent.needs_input':
-      return {
-        ...event,
-        question: {
-          ...event.question,
-          text: redactSecrets(event.question.text),
-          ...(event.question.options
-            ? { options: event.question.options.map((o) => redactSecrets(o)) }
-            : {}),
-          ...(event.question.toolCall
-            ? {
-                toolCall: {
-                  ...event.question.toolCall,
-                  ...(event.question.toolCall.input !== undefined
-                    ? { input: redactValue(event.question.toolCall.input) }
-                    : {}),
-                },
-              }
-            : {}),
-        },
-      };
-    case 'agent.progress':
-      return { ...event, summary: redactSecrets(event.summary) };
-    case 'agent.finished':
-      return {
-        ...event,
-        ...(event.result !== undefined ? { result: redactSecrets(event.result) } : {}),
-      };
-    case 'agent.failed':
-      return { ...event, error: redactSecrets(event.error) };
-    default:
-      return event;
-  }
-}
-
-function redactValue(value: unknown): unknown {
-  if (typeof value === 'string') return redactSecrets(value);
-  if (Array.isArray(value)) return value.map(redactValue);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactValue(v)]));
-  }
-  return value;
 }

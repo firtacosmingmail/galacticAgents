@@ -4,12 +4,15 @@ import type {
   AgentAdapter,
   AgentEvent,
   Id,
+  PermissionAction,
+  PermissionGate,
   SendOptions,
   SpawnHandle,
   SpawnOptions,
   StopOptions,
+  ToolCall,
 } from '@galactic/protocol';
-import { EventQueue } from '../../runtime/event-queue.js';
+import { EventQueue } from '../../lib/event-queue.js';
 import {
   echo,
   scenarioFromPrompt,
@@ -22,8 +25,12 @@ import {
  * The fake adapter (P1-03): an in-process `AgentAdapter` that runs scripted scenarios instead of
  * a model. It exists so the runtime, the status store, the conformance suite (P1-04) and the ops
  * console (P1-11) can be built and exercised without Claude installed, and so every adapter
- * behaviour has a deterministic reference: questions block the turn until answered, messages
- * queue until idle unless they interrupt, pause holds the turn, stop is interrupt-then-stopped.
+ * behaviour has a deterministic reference: questions block the turn until answered, every tool
+ * call goes through the runtime's permission gate (allow runs it, ask blocks it behind a
+ * permission question, deny skips it), pause holds the turn, stop is interrupt-then-stopped.
+ *
+ * Like every adapter it keeps no message queue (P1-19): `send()` starts a turn and rejects a
+ * message that arrives mid-turn without `interrupt`; the runtime's inbox is what waits for idle.
  *
  * Session refs are `fake:<scenario>:<sessionId>:<nextStep>`; `resumeSession` continues from the step after
  * the last one completed when the adapter was given the same `sessionStore` (an in-process
@@ -42,7 +49,6 @@ type Ended = 'finished' | 'failed' | 'stopped';
 
 interface PendingQuestion {
   id: Id;
-  step: Extract<FakeStep, { kind: 'ask' | 'permission' }>;
   resolve: (answer: string | undefined) => void;
 }
 
@@ -60,7 +66,6 @@ class Signal {
 class FakeSession {
   readonly sessionId = randomUUID();
   readonly signal = new Signal();
-  readonly inbox: string[] = [];
   /** Index of the next scenario step to run (only meaningful during the first turn). */
   stepIndex: number;
   messageCount = 0;
@@ -78,6 +83,7 @@ class FakeSession {
     readonly agentId: Id,
     readonly scenarioName: string,
     readonly scenario: FakeScenario,
+    readonly gate: PermissionGate,
     startAt: number,
   ) {
     this.stepIndex = startAt;
@@ -113,7 +119,7 @@ export class FakeAdapter implements AgentAdapter {
 
   async spawn(opts: SpawnOptions): Promise<SpawnHandle> {
     const { name, scenario } = scenarioFromPrompt(opts.prompt, this.scenarios);
-    return this.start(opts.agentId, name, scenario, 0);
+    return this.start(opts, name, scenario, 0);
   }
 
   async resumeSession(sessionRef: string, opts: SpawnOptions): Promise<SpawnHandle> {
@@ -123,12 +129,17 @@ export class FakeAdapter implements AgentAdapter {
     const scenario = this.scenarios[name];
     if (!scenario) throw new Error(`unknown fake scenario in session ref: ${name}`);
     const startAt = this.sessionStore.get(sessionRef) ?? Number(m[3]);
-    return this.start(opts.agentId, name, scenario, startAt);
+    return this.start(opts, name, scenario, startAt);
   }
 
-  private start(agentId: Id, name: string, scenario: FakeScenario, startAt: number): SpawnHandle {
+  private start(
+    opts: SpawnOptions,
+    name: string,
+    scenario: FakeScenario,
+    startAt: number,
+  ): SpawnHandle {
     if (this.disposed) throw new Error('adapter disposed');
-    const session = new FakeSession(agentId, name, scenario, startAt);
+    const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt);
     this.sessions.set(session.sessionId, session);
     const ref = session.sessionRef;
     this.sessionStore.set(ref, startAt);
@@ -140,14 +151,19 @@ export class FakeAdapter implements AgentAdapter {
   async send(sessionId: string, message: string, opts: SendOptions = {}): Promise<void> {
     const session = this.session(sessionId);
     if (session.ended) throw new Error(`session ${sessionId} has ${session.ended}`);
-    if (opts.interrupt) {
-      session.inbox.unshift(message);
-      if (session.turn) this.cancelTurn(session);
-      else this.deliverNext(session);
-      return;
+    if (session.turn) {
+      if (!opts.interrupt) {
+        throw new Error(
+          `session ${sessionId} is mid-turn: the runtime delivers messages only when idle`,
+        );
+      }
+      this.cancelTurn(session);
+      await session.turnDone;
+      if (session.ended) throw new Error(`session ${sessionId} has ${session.ended}`);
     }
-    session.inbox.push(message);
-    if (!session.turn) this.deliverNext(session);
+    session.messageCount++;
+    const steps = session.scenario.onMessage?.(message, session.messageCount) ?? echo(message);
+    void this.runTurn(session, steps, 0, undefined);
   }
 
   async answer(questionId: Id, answer: string): Promise<void> {
@@ -226,14 +242,6 @@ export class FakeAdapter implements AgentAdapter {
     session.signal.fire();
   }
 
-  private deliverNext(session: FakeSession): void {
-    const message = session.inbox.shift();
-    if (message === undefined || session.ended) return;
-    session.messageCount++;
-    const steps = session.scenario.onMessage?.(message, session.messageCount) ?? echo(message);
-    void this.runTurn(session, steps, 0, undefined);
-  }
-
   /**
    * Runs one turn. `trackRef` is set for the first (scenario) turn so the session's progress is
    * saved after every step for `resumeSession`.
@@ -265,10 +273,7 @@ export class FakeAdapter implements AgentAdapter {
       } finally {
         session.turn = undefined;
       }
-      if (!session.ended) {
-        this.emit({ type: 'agent.idle', agentId: session.agentId });
-        this.deliverNext(session);
-      }
+      if (!session.ended) this.emit({ type: 'agent.idle', agentId: session.agentId });
     })();
     session.turnDone = done;
     return done;
@@ -316,8 +321,7 @@ export class FakeAdapter implements AgentAdapter {
       case 'tool_call':
         await this.delay(session, step.delayMs, turn);
         if (turn.cancelled) return 'cancelled';
-        this.emit({ type: 'agent.tool_call', agentId, toolName: step.toolName, input: step.input });
-        return 'next';
+        return this.toolCall(session, turn, { toolName: step.toolName, input: step.input });
       case 'progress':
         await this.delay(session, step.delayMs, turn);
         if (turn.cancelled) return 'cancelled';
@@ -339,7 +343,7 @@ export class FakeAdapter implements AgentAdapter {
       case 'idle':
         return 'idle';
       case 'ask': {
-        const answer = await this.askQuestion(session, step, {
+        const answer = await this.askQuestion(session, 'clarification', {
           text: step.text,
           ...(step.options ? { options: step.options } : {}),
         });
@@ -349,32 +353,18 @@ export class FakeAdapter implements AgentAdapter {
         this.emit({ type: 'agent.output', agentId, kind: 'text', text: `answer: ${answer}` });
         return 'next';
       }
-      case 'permission': {
-        const answer = await this.askQuestion(session, step, {
-          text: step.text ?? `May I run ${step.toolName}?`,
-          toolCall: { toolName: step.toolName, input: step.input },
-          permissionAction: step.permissionAction,
-        });
-        if (answer === undefined) return 'cancelled';
+      case 'permission':
         await this.holdWhilePaused(session, turn);
         if (turn.cancelled) return 'cancelled';
-        if (/^(allow|yes|y|ok)$/i.test(answer.trim())) {
-          this.emit({
-            type: 'agent.tool_call',
-            agentId,
-            toolName: step.toolName,
-            input: step.input,
-          });
-        } else {
-          this.emit({
-            type: 'agent.output',
-            agentId,
-            kind: 'text',
-            text: `permission denied for ${step.toolName}, skipping`,
-          });
-        }
-        return 'next';
-      }
+        return this.toolCall(
+          session,
+          turn,
+          { toolName: step.toolName, input: step.input },
+          {
+            ...(step.text !== undefined ? { text: step.text } : {}),
+            action: step.permissionAction,
+          },
+        );
       case 'finish':
         await this.delay(session, step.delayMs, turn);
         if (turn.cancelled) return 'cancelled';
@@ -401,20 +391,65 @@ export class FakeAdapter implements AgentAdapter {
     }
   }
 
+  /**
+   * One tool call through the runtime's gate, the way a real adapter's permission hook does it:
+   * `allow` runs it (an `agent.tool_call` follows), `ask` blocks behind a permission question and
+   * runs it on `allow`/`yes`, `deny` skips it with an output line carrying the reason.
+   */
+  private async toolCall(
+    session: FakeSession,
+    turn: { cancelled: boolean },
+    call: ToolCall,
+    ask: { text?: string; action?: PermissionAction } = {},
+  ): Promise<'next' | 'cancelled'> {
+    const agentId = session.agentId;
+    const run = () =>
+      this.emit({ type: 'agent.tool_call', agentId, toolName: call.toolName, input: call.input });
+    const skip = (why: string) =>
+      this.emit({
+        type: 'agent.output',
+        agentId,
+        kind: 'text',
+        text: `permission denied for ${call.toolName} (${why}), skipping`,
+      });
+    const verdict = session.gate.check(call);
+    if (verdict.decision === 'allow') {
+      run();
+      return 'next';
+    }
+    if (verdict.decision === 'deny') {
+      skip(verdict.reason);
+      return 'next';
+    }
+    const action = verdict.action ?? ask.action;
+    const why = verdict.reasons.length > 0 ? ` ${verdict.reasons.join('; ')}` : '';
+    const answer = await this.askQuestion(session, 'permission', {
+      text: ask.text ?? `May I run ${call.toolName}?${why}`,
+      toolCall: call,
+      ...(action ? { permissionAction: action } : {}),
+    });
+    if (answer === undefined) return 'cancelled';
+    await this.holdWhilePaused(session, turn);
+    if (turn.cancelled) return 'cancelled';
+    if (/^(allow|yes|y|ok)$/i.test(answer.trim())) run();
+    else skip('answered no');
+    return 'next';
+  }
+
   private askQuestion(
     session: FakeSession,
-    step: Extract<FakeStep, { kind: 'ask' | 'permission' }>,
+    kind: 'clarification' | 'permission',
     question: Extract<AgentEvent, { type: 'agent.needs_input' }>['question'],
   ): Promise<string | undefined> {
     const id = `q-${randomUUID()}`;
     return new Promise((resolve) => {
-      session.pending = { id, step, resolve };
+      session.pending = { id, resolve };
       this.byQuestion.set(id, session);
       this.emit({
         type: 'agent.needs_input',
         agentId: session.agentId,
         questionId: id,
-        kind: step.kind === 'ask' ? 'clarification' : 'permission',
+        kind,
         question,
       });
     });

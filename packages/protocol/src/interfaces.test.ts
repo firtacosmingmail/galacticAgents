@@ -74,7 +74,7 @@ describe('interfaces', () => {
       role: 'steward',
       cwd: '/tmp',
       prompt: 'hi',
-      permissionPolicy: { rules: {} },
+      gate: { check: () => ({ decision: 'allow' }) },
       caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
     });
     expect(handle.sessionId).toBe('s-a-1');

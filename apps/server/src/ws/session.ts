@@ -4,6 +4,7 @@ import type { EventLog } from '../domain/event-log.js';
 import type { StatusStore } from '../runtime/status-store.js';
 import type { TranscriptPipeline } from '../runtime/transcripts.js';
 import { CLOSE_PROTOCOL_VIOLATION, send, type SessionHandler } from './gateway.js';
+import { buildSnapshot } from './snapshot.js';
 
 export interface SessionOptions {
   /** Bytes queued on a socket before the connection is dropped as a slow consumer. */
@@ -88,7 +89,7 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
       if (statuses.length > 0) send(socket, { type: 'status', statuses });
       opts.log?.info(`ws session resumed from ${since}, replayed up to ${lastSent}`);
     } else {
-      const snapshot = log.snapshot();
+      const snapshot = buildSnapshot(log, opts.statuses);
       lastSent = snapshot.seq;
       send(socket, { type: 'snapshot', ...snapshot });
       opts.log?.info(`ws session started with snapshot at ${snapshot.seq}`);
