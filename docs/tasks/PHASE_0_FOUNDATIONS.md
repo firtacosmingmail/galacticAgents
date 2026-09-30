@@ -1,7 +1,7 @@
 # Phase 0 — Foundations
 
-**Current task:** P0-08 — WebSocket protocol: hello, snapshot, resume, stream, P0-09 — Web skeleton with resumable client · **Task status:** in progress, in progress
-**Phase status:** in progress (7/11 done)
+**Current task:** P0-09 — Web skeleton with resumable client · **Task status:** in progress
+**Phase status:** in progress (8/11 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -79,7 +79,7 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 - **Acceptance:** a test throws inside a command and verifies neither the row nor the event exists; subscribers receive events strictly in `seq` order.
 
 ### P0-08 — WebSocket protocol: hello, snapshot, resume, stream
-- **Status:** in progress · **Depends on:** P0-05, P0-07 · **Parallel with:** P0-09
+- **Status:** done (2026-09-30) · **Depends on:** P0-05, P0-07 · **Parallel with:** P0-09
 - First-frame `hello{token, lastEventId?}` handling; reply with `snapshot` (when no/old `lastEventId`) or `events since`; then the live `{seq, event}` stream; per-connection backpressure; close on protocol violation.
 - **Acceptance:** integration test: connect, receive snapshot, receive live events; reconnect with `lastEventId` and receive exactly the missed events.
 
