@@ -14,9 +14,13 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@galactic/protocol": "workspace:*"
+    "@galactic/protocol": "workspace:*",
+    "fastify": "^5.12.5",
+    "ws": "^8.22.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/ws": "^8.18.2",
     "tsx": "^4.23.15"
   }
 }

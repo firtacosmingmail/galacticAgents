@@ -1,4 +1,27 @@
-import { PROTOCOL_VERSION } from '@galactic/protocol';
+import { loadConfig } from './config/config.js';
+import { buildApp } from './app.js';
+import { send } from './ws/gateway.js';
 
-// Placeholder entry point; P0-05 replaces it with the Fastify + ws server.
-console.log(`GalacticAgents Mission Control (protocol v${PROTOCOL_VERSION})`);
+// Entry point. P0-08 replaces the placeholder session handler with the snapshot/stream protocol.
+const { config, tokenGenerated } = loadConfig();
+
+const app = buildApp({
+  config,
+  logger: true,
+  onSession(socket) {
+    send(socket, { type: 'error', code: 'internal', message: 'stream not implemented yet' });
+    socket.close(1011);
+  },
+});
+
+const port = await app.listen();
+console.log(`GalacticAgents Mission Control listening on http://${config.host}:${port}`);
+if (tokenGenerated) {
+  console.log(`Token (generated, stored in ${config.configPath}): ${config.token}`);
+}
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    void app.close().then(() => process.exit(0));
+  });
+}
