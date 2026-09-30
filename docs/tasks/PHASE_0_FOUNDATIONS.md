@@ -1,6 +1,6 @@
 # Phase 0 — Foundations
 
-**Current task:** P0-07 — Event bus with the one-write rule · **Task status:** todo
+**Current task:** P0-07 — Event bus with the one-write rule · **Task status:** in progress
 **Phase status:** in progress (6/11 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -74,7 +74,7 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 - **Acceptance:** fresh DB migrates from zero; re-running is a no-op; a test inserts and reads each table.
 
 ### P0-07 — Event bus with the one-write rule
-- **Status:** todo · **Depends on:** P0-03, P0-06 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P0-03, P0-06 · **Parallel with:** —
 - `runCommand(fn)` wrapper: opens a transaction, runs the domain mutation, inserts the event(s), commits, then publishes to in-memory subscribers with `seq = rowid`. `eventsSince(seq)` reader. Snapshot builder skeleton (reads current tables).
 - **Acceptance:** a test throws inside a command and verifies neither the row nor the event exists; subscribers receive events strictly in `seq` order.
 
