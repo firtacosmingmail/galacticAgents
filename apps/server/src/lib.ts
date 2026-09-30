@@ -18,3 +18,21 @@ export {
 } from './domain/permissions.js';
 export { createSessionHandler } from './ws/session.js';
 export { WsGateway, send, type SessionHandler } from './ws/gateway.js';
+export {
+  ProcessSupervisor,
+  isAlive,
+  signalGroup,
+  type ProcessSpec,
+  type ManagedProcess,
+  type StopProcessOptions,
+  type RestartPolicy,
+  type ExitInfo,
+  type ReconcileResult,
+} from './runtime/supervisor.js';
+export {
+  MemoryProcessStore,
+  SqliteProcessStore,
+  type ProcessRecord,
+  type ProcessStore,
+} from './runtime/process-store.js';
+export { EventQueue, collect } from './runtime/event-queue.js';
