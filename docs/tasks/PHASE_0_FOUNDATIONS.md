@@ -1,7 +1,7 @@
 # Phase 0 — Foundations
 
-**Current task:** P0-09 — Web skeleton with resumable client · **Task status:** in progress
-**Phase status:** in progress (8/11 done)
+**Current task:** P0-10 — Resume and gap test, P0-11 — Dev ergonomics and `galactic start` · **Task status:** todo, todo
+**Phase status:** in progress (9/11 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -84,7 +84,7 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 - **Acceptance:** integration test: connect, receive snapshot, receive live events; reconnect with `lastEventId` and receive exactly the missed events.
 
 ### P0-09 — Web skeleton with resumable client
-- **Status:** in progress · **Depends on:** P0-01, P0-03 (start), P0-08 (finish) · **Parallel with:** P0-08
+- **Status:** done (2026-09-30) · **Depends on:** P0-01, P0-03 (start), P0-08 (finish) · **Parallel with:** P0-08
 - Vite + React 19 + TS; Zustand store derived purely from the event stream; WS client with token entry, automatic reconnect and `lastEventId` persistence (in memory + `localStorage`); a bare page listing the snapshot and printing events as they arrive.
 - **Acceptance:** page connects, shows the snapshot, prints a fake event emitted by the server.
 
