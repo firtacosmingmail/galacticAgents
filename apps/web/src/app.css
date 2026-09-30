@@ -1,0 +1,110 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #0b0e17;
+  color: #e6e9f2;
+}
+body {
+  margin: 0;
+}
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+h1 {
+  margin: 0 0 4px;
+  font-size: 1.6rem;
+}
+h2 {
+  font-size: 1.1rem;
+  margin: 24px 0 8px;
+}
+.muted {
+  color: #8b93a7;
+}
+.error {
+  color: #ff7b7b;
+}
+.status {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #222840;
+}
+.spacer {
+  flex: 1;
+}
+.pill {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #2a3150;
+  font-size: 0.85rem;
+}
+.pill-live {
+  background: #1f6f4a;
+}
+.pill-connecting,
+.pill-catching_up {
+  background: #6b5d1f;
+}
+.pill-disconnected,
+.pill-unauthorized {
+  background: #7a2a2a;
+}
+button {
+  background: #3b4bd8;
+  color: white;
+  border: 0;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.secondary {
+  background: #2a3150;
+}
+.token-form {
+  display: grid;
+  gap: 8px;
+  max-width: 480px;
+  margin-top: 24px;
+}
+.token-form input {
+  padding: 8px;
+  font-family: monospace;
+}
+.counts {
+  display: flex;
+  gap: 24px;
+  margin: 0;
+}
+.counts dt {
+  color: #8b93a7;
+  font-size: 0.8rem;
+}
+.counts dd {
+  margin: 0;
+  font-size: 1.4rem;
+}
+.items {
+  padding-left: 18px;
+}
+.items em {
+  color: #8b93a7;
+}
+.log ol {
+  padding-left: 28px;
+  font-size: 0.9rem;
+}
+.log li {
+  margin: 4px 0;
+}
+.payload {
+  color: #b7c0d8;
+  word-break: break-all;
+}
