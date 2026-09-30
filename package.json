@@ -18,7 +18,7 @@
     "galactic": "node apps/server/bin/galactic.mjs"
   },
   "engines": {
-    "node": ">=22",
+    "node": ">=22.12",
     "pnpm": ">=10"
   },
   "devDependencies": {
