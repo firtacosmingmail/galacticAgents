@@ -1,7 +1,7 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** wave 2b — P1-17 … P1-27 (review follow-ups, in parallel) · **Task status:** in progress
-**Phase status:** in progress (9/27 done)
+**Current task:** wave 3 — P1-09 (next to pick; not claimed) · **Task status:** todo
+**Phase status:** in progress (20/27 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -135,66 +135,66 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Note (P1-21):** the refused-spawn half is done — a spawn over the concurrency cap writes nothing. The inbox history is bounded since P1-22 (`message.sent` is in the log). What remains is the retention of ended status records.
 
 ### P1-17 — One terminal event per agent (added 2026-09-30, review R1)
-- **Status:** in progress · **Depends on:** P1-02, P1-05 · **Parallel with:** P1-18 … P1-27
+- **Status:** done (2026-09-30) · **Depends on:** P1-02, P1-05 · **Parallel with:** P1-18 … P1-27
 - The runtime logs exactly one of `agent.finished` / `agent.failed` / `agent.stopped` per agent: a cap stop is flagged on the live entry and the adapter's `agent.stopped` is folded into `agent.failed(reason: cap)` whichever arrives first; a straggler from an ended agent is dropped; an event for an agent the runtime never spawned is reported through `onError` and never logged. The status store treats an ended record as a sink (only a new `agent.spawned` moves it).
 - **Acceptance:** the tool-call cap test sees `agent.failed` alone; the conformance suite asserts one terminal event after every finish and every stop; a replayed log with two terminals keeps the first.
 - **Done:** `agent-runtime.ts` (`terminal()`, `failForCap()`, `ended` memory), `status-store.ts` (`apply` sink rule), tests.
 
 ### P1-18 — Permission gate handed to adapters (added 2026-09-30, review R2)
-- **Status:** in progress · **Depends on:** P1-10, P1-02 · **Parallel with:** P1-17, P1-19 …
+- **Status:** done (2026-09-30) · **Depends on:** P1-10, P1-02 · **Parallel with:** P1-17, P1-19 …
 - `SpawnOptions.gate: PermissionGate` replaces `permissionPolicy` (and `workspace`): `check(toolCall) → {allow} | {deny, reason} | {ask, action?, reasons}`, built per spawn by `runtime/permission-gate.ts` from the project's policy and the caps (`reserveToolCall()` pre-flight; a refused call trips the cap). `ToolCall` joins the protocol; `PolicyVerdict.dominant` names the category behind a decision. The fake adapter runs every `tool_call` and `permission` step through the gate like a real hook would.
 - **Acceptance:** with the default policy the `permission` scenario asks and `allow` runs the call; with an allow-all gate it runs without asking; a deny skips it with the reason; the cap test's third call is refused before it runs.
 - **Done:** `packages/protocol/src/adapter.ts`, `domain.ts` (`ToolCall`), `runtime/permission-gate.ts`, `caps.ts`, fake adapter, TECHNOLOGY §3.1.
 
 ### P1-19 — Send contract: the runtime owns the queue (added 2026-09-30, review R3)
-- **Status:** in progress · **Depends on:** P1-07, P1-03 · **Parallel with:** P1-17 …
+- **Status:** done (2026-09-30) · **Depends on:** P1-07, P1-03 · **Parallel with:** P1-17 …
 - `AgentAdapter.send` = start a turn now; the runtime's inbox guarantees the session is idle (or was just interrupted, `opts.interrupt`); adapters keep no queue and may reject a mid-turn message. The fake adapter's inbox is gone; the conformance suite asserts no delivery was ever refused.
 - **Acceptance:** fake-adapter test "keeps no queue"; conformance green; TECHNOLOGY §3.4 and the PLAN say the same thing.
 - **Done:** `packages/protocol/src/adapter.ts` docs, `fake-adapter.ts`, `conformance.ts`, docs.
 
 ### P1-20 — Supervisor reports outcomes, not agent events (added 2026-09-30, review R4)
-- **Status:** in progress · **Depends on:** P1-01 · **Parallel with:** P1-17 …
+- **Status:** done (2026-09-30) · **Depends on:** P1-01 · **Parallel with:** P1-17 …
 - `ProcessSupervisor.events` is gone. A process's fate reaches the adapter through `ProcessSpec.onOutcome(ProcessOutcome)` (`start_failed` · `crashed` · `exited` · `stopped{by}` · `restarting{attempt, maxRestarts}`), plus `SupervisorOptions.onOutcome` for logging and tests; the adapter is the one emitter of `agent.*` for its session and decides the verdict.
 - **Acceptance:** supervisor tests assert outcomes; a clean exit is `exited`, never a crash; a stop reports exactly one outcome.
 - **Done:** `runtime/supervisor.ts`, tests, TECHNOLOGY §3.4.
 
 ### P1-21 — Layering and the one-write rule in the runtime (added 2026-09-30, review R5–R7)
-- **Status:** in progress · **Depends on:** P1-02, P1-05 · **Parallel with:** P1-17 …
+- **Status:** done (2026-09-30) · **Depends on:** P1-02, P1-05 · **Parallel with:** P1-17 …
 - Concurrency gate before any write (a refused spawn leaves no row, body or event); the session ref and `agent.spawned` in one command (`domain/agents.ts: recordSpawned`); agent-row creation in `domain/agents.ts`; `redactEvent` in `redact.ts`; `EventLog.snapshot()` returns the tables and `ws/snapshot.ts` adds the status records (no late binding in `compose.ts`); `EventQueue` in `src/lib/`, `collect()` in `src/test/`.
 - **Acceptance:** runtime test "the session ref lands on the row in the same command as agent.spawned"; refused-spawn test sees no new events; `event-log.test.ts` snapshot has no `statuses`.
 - **Done:** as listed.
 
 ### P1-22 — `message.sent` event (added 2026-09-30, review R8)
-- **Status:** in progress · **Depends on:** P1-07 · **Parallel with:** P1-17 …
+- **Status:** done (2026-09-30) · **Depends on:** P1-07 · **Parallel with:** P1-17 …
 - `message.sent{messageId, agentId, sender, text, interrupt}` in the protocol, recorded by `AgentRuntime.send` before the message is queued, so a restart knows what was still pending (P1-14) and the Phase 2 mailbox reads it from the log. The in-memory delivery history is bounded (`inboxHistory`, default 200). The web reducer treats it as seq-only until the chat view (Phase 2.5).
 - **Acceptance:** the inbox test finds every message in the log with the inbox's ids and in send order; history bounded test.
 - **Done:** `packages/protocol/src/events.ts`, `agent-runtime.ts`, `inbox.ts`, `apps/web/src/state/reduce.ts`, TECHNOLOGY §6.2.
 
 ### P1-23 — Question rows opened with `agent.needs_input` (added 2026-09-30, review R9)
-- **Status:** in progress · **Depends on:** P1-05 · **Parallel with:** P1-17 …
+- **Status:** done (2026-09-30) · **Depends on:** P1-05 · **Parallel with:** P1-17 …
 - `domain/questions.ts`: `openQuestion` inserts the `Question` row (holder `user` in Phase 1) and emits `question.opened` in the same command as `agent.needs_input`; `answerQuestion` closes the row, bumps `version` and emits `question.answered`. Holder routing and escalation stay with Phase 2.
 - **Acceptance:** runtime test sees `question.opened` right after `agent.needs_input` and the row `open` → `answered` with `version` 0 → 1; conformance checks the row.
 - **Done:** as listed.
 
 ### P1-24 — Child environment allow-list (added 2026-09-30, review R10)
-- **Status:** in progress · **Depends on:** P1-01 · **Parallel with:** P1-17 …
+- **Status:** done (2026-09-30) · **Depends on:** P1-01 · **Parallel with:** P1-17 …
 - Children inherit `INHERITED_ENV` (PATH, HOME, locale, proxies, `CLAUDE_CONFIG_DIR`, …) plus the spec's `env`; `SupervisorOptions.inheritEnv` extends the list. The server's token and any API keys never reach an agent unless a spec passes them (bare mode).
 - **Acceptance:** supervisor test: a server-only variable is absent in the child, an extended one present, a spec `undefined` removes an inherited one.
 - **Done:** `runtime/supervisor.ts`, TECHNOLOGY §8.
 
 ### P1-25 — Status diffs only when something changed (added 2026-09-30, review R11)
-- **Status:** in progress · **Depends on:** P1-05 · **Parallel with:** P1-17 …
+- **Status:** done (2026-09-30) · **Depends on:** P1-05 · **Parallel with:** P1-17 …
 - `StatusRecord.startedAt`; the ticker marks only real stall transitions; `caps.wallClockMs.used` is as of the record's last change and clients extrapolate from `startedAt`.
 - **Acceptance:** status-store test: a tick that finds no stall sends nothing; a stall sends one diff.
 - **Done:** `packages/protocol/src/domain.ts`, `runtime/status-store.ts`, TECHNOLOGY §4.
 
 ### P1-26 — `pnpm typecheck` builds the protocol first (added 2026-09-30, review R12)
-- **Status:** in progress · **Depends on:** — · **Parallel with:** P1-17 …
+- **Status:** done (2026-09-30) · **Depends on:** — · **Parallel with:** P1-17 …
 - The root `typecheck` script builds `@galactic/protocol` before `pnpm -r typecheck`, like `test` does, so a stale `dist/` cannot produce phantom errors.
 - **Done:** `package.json`.
 
 ### P1-27 — Boundary-aware transcript redaction (added 2026-09-30, review R13)
-- **Status:** in progress · **Depends on:** P1-06 · **Parallel with:** P1-17 …
+- **Status:** done (2026-09-30) · **Depends on:** P1-06 · **Parallel with:** P1-17 …
 - The pipeline matches the previous chunk's tail together with the new text; a secret that starts in the previous chunk has its head moved into the new one before both are redacted; the newest chunk of every agent is held for `holdMs` (250 ms) so its successor can complete a split secret; an explicit `flush()` takes everything.
 - **Acceptance:** a key split over two and over three chunks never reaches the rows or the subscribers in any part; the hold test.
 - **Done:** `runtime/transcripts.ts`, tests.
