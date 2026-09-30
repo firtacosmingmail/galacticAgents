@@ -67,7 +67,12 @@ export const AgentProgress = z.object({
   progress: Progress.optional(),
 });
 
-export const AgentIdle = z.object({ type: z.literal('agent.idle'), ...agentBase });
+/** A turn ended and the agent waits for its next message. Runtimes that meter per turn report the running cost here. */
+export const AgentIdle = z.object({
+  type: z.literal('agent.idle'),
+  ...agentBase,
+  cost: Cost.optional(),
+});
 export const AgentStalled = z.object({
   type: z.literal('agent.stalled'),
   ...agentBase,

@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import { ClientMessage, type EventEnvelope, type HelloMessage } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
+import type { StatusStore } from '../runtime/status-store.js';
 import type { TranscriptPipeline } from '../runtime/transcripts.js';
 import { CLOSE_PROTOCOL_VIOLATION, send, type SessionHandler } from './gateway.js';
 
@@ -10,6 +11,8 @@ export interface SessionOptions {
   log?: { info: (msg: string) => void; warn: (msg: string) => void };
   /** The per-agent transcript stream (P1-06); without it, subscriptions are refused. */
   transcripts?: TranscriptPipeline;
+  /** The status store (P1-05): its batched diffs go out as `status` messages. */
+  statuses?: StatusStore;
 }
 
 /**
@@ -26,12 +29,15 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
   return (socket: WebSocket, hello: HelloMessage) => {
     let lastSent = 0;
     let unsubscribe: (() => void) | undefined;
+    let unsubscribeStatus: (() => void) | undefined;
     /** Transcript subscriptions of this socket, one per agent. */
     const transcriptSubs = new Map<string, () => void>();
 
     const teardown = () => {
       unsubscribe?.();
       unsubscribe = undefined;
+      unsubscribeStatus?.();
+      unsubscribeStatus = undefined;
       for (const off of transcriptSubs.values()) off();
       transcriptSubs.clear();
     };
@@ -58,6 +64,10 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
 
     // 1. Subscribe first, then read: same tick, so nothing is missed.
     unsubscribe = log.subscribe(deliver);
+    unsubscribeStatus = opts.statuses?.subscribe((statuses) => {
+      if (socket.bufferedAmount > maxBuffered) return; // the events path drops the socket
+      send(socket, { type: 'status', statuses });
+    });
 
     // 2. Snapshot or replay.
     const since = hello.lastEventId;

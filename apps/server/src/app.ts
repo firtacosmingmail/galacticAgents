@@ -7,6 +7,7 @@ import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
 import type { EventLog } from './domain/event-log.js';
+import type { StatusStore } from './runtime/status-store.js';
 import type { TranscriptPipeline } from './runtime/transcripts.js';
 import { SERVER_VERSION } from './version.js';
 
@@ -20,6 +21,8 @@ export interface AppOptions {
   webDir?: string;
   /** The transcript stream (P1-06): enables `transcript.subscribe` on the socket. */
   transcripts?: TranscriptPipeline;
+  /** The status store (P1-05): its diffs are pushed to every socket. */
+  statuses?: StatusStore;
   logger?: boolean;
 }
 
@@ -83,6 +86,7 @@ export function buildApp(opts: AppOptions): App {
       ? createSessionHandler(opts.log, {
           log: logSink,
           ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
+          ...(opts.statuses ? { statuses: opts.statuses } : {}),
         })
       : () => {
           throw new Error('buildApp needs either onSession or log');

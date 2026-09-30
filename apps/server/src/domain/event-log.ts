@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
-import { Event, isTranscriptEvent, type EventEnvelope, type Snapshot } from '@galactic/protocol';
+import {
+  Event,
+  isTranscriptEvent,
+  type EventEnvelope,
+  type Snapshot,
+  type StatusRecord,
+} from '@galactic/protocol';
 import { tables, type Tables } from '../db/tables.js';
 
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
@@ -31,6 +37,8 @@ export interface EventLogOptions {
   onSubscriberError?: (error: unknown, envelope: EventEnvelope) => void;
   /** Above this many missed events a reconnecting client gets a snapshot instead of a replay. */
   maxReplay?: number;
+  /** The status store's records for `snapshot.statuses` (P1-05); none before the runtime exists. */
+  statuses?: () => StatusRecord[];
 }
 
 /**
@@ -50,6 +58,7 @@ export class EventLog {
   private readonly now: () => string;
   private readonly onSubscriberError: (error: unknown, envelope: EventEnvelope) => void;
   readonly maxReplay: number;
+  private readonly statuses: () => StatusRecord[];
   private readonly subscribers = new Set<Subscriber>();
   private readonly insertEvent: Statement;
   private readonly selectSince: Statement;
@@ -69,6 +78,7 @@ export class EventLog {
     this.now = opts.now ?? (() => new Date().toISOString());
     this.onSubscriberError = opts.onSubscriberError ?? (() => {});
     this.maxReplay = opts.maxReplay ?? 10_000;
+    this.statuses = opts.statuses ?? (() => []);
     this.insertEvent = db.prepare('INSERT INTO events (at, type, payload) VALUES (?, ?, ?)');
     this.selectSince = db.prepare(
       'SELECT id, at, type, payload FROM events WHERE id > ? ORDER BY id LIMIT ?',
@@ -203,8 +213,8 @@ export class EventLog {
       tasks: this.tables.tasks.all(),
       questions: this.tables.questions.all(),
       proposals: this.tables.proposals.all(),
-      // The status store is a Phase 1 projection; until then nothing is running.
-      statuses: [],
+      // The server-owned projection (TECHNOLOGY §4); folded synchronously after each commit.
+      statuses: this.statuses(),
     }))();
   }
 }
