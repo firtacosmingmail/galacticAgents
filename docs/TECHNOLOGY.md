@@ -144,6 +144,13 @@ The `AgentAdapter` interface: `spawn(opts)`, `send(sessionId, message)` (enqueue
 
 The UI, the status store and the supervisor brains only ever see these events. Adding a new runtime means adding one adapter, nothing else — including for the brains, which never import a runtime module directly.
 
+Two refinements decided while building the fake adapter and the supervisor (P1-01, P1-03):
+
+- **`agent.spawned` is emitted by the server's runtime layer**, not by adapters, when `spawn()` / `resumeSession()` resolves: it carries the body, supervisor, task and project ids the adapter never sees, plus the `sessionRef` from the handle. Every other `agent.*` event comes from the adapter (or from the process supervisor for what only it can know: `agent.failed(reason: crash)` on an unexpected exit, `agent.failed(reason: runtime)` when the command cannot start, `agent.stopped` after a completed stop sequence; a clean exit is the adapter's to interpret as `agent.finished`).
+- **`agent.paused` / `agent.resumed` / `agent.stopped` emitted by an adapter carry `by: {type: system}`**: the adapter interface has no actor. Who asked is recorded by the matching `control.*` event the runtime appends first (decision 11b), so the log always has both.
+
+The **process supervisor** (`apps/server/src/runtime/supervisor.ts`) is the one place that spawns and kills child processes: each in its own process group (killed by group, corner case 4), stdio captured, restart policy off by default, and one graceful stop sequence — the runtime's interrupt hook (SIGINT to the group by default) → wait for the turn to end with a timeout → SIGTERM → SIGKILL (corner case 8b). Its PID table is the `agent_processes` table (migration 0003): runtime bookkeeping that never appears in a snapshot and has no events. On startup `reconcile()` treats every `running` row as a previous server life: a still-running orphan is killed by group (nothing can re-attach to a live process, corner case 3), and both dead and orphaned rows become `interrupted` for the resume path (P1-14) to respawn from `agents.sessionRef`.
+
 ---
 
 ## 4. Supervision without interruption (status store)
