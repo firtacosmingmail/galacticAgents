@@ -1,0 +1,32 @@
+{
+  "name": "galactic-agents",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Mission Control for the AI coding agents running on your computer, through a solar-system interface.",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n protocol,server,web -c blue,green,magenta \"pnpm --filter @galactic/protocol dev\" \"pnpm --filter @galactic/server dev\" \"pnpm --filter @galactic/web dev\"",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.3",
+    "concurrently": "^10.0.5",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.9.9",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.2"
+  },
+  "packageManager": "pnpm@10.34.6"
+}

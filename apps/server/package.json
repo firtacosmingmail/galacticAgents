@@ -1,0 +1,22 @@
+{
+  "name": "@galactic/server",
+  "version": "0.0.1",
+  "private": true,
+  "description": "GalacticAgents Mission Control server: agent runtime, adapters, brains, SQLite persistence and the WebSocket API.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@galactic/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
+  }
+}

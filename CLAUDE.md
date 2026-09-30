@@ -4,13 +4,13 @@ Local application that manages the AI coding agents running on the user's comput
 
 ## Read these first
 
-| Doc | What it is |
-|---|---|
-| `docs/SPEC.md` | **What** the product does. Source of truth. §7 holds every product decision (1–20); §8 the open questions. |
-| `docs/TECHNOLOGY.md` | **With what**: stack, adapter layer, brain runtime, persistence, protocol, security. §7 defines the shared vocabulary (`packages/protocol`). |
-| `docs/IMPLEMENTATION_PLAN.md` | **In which order**: phases 0–8 with exit criteria, plus the corner-case list. |
-| `docs/tasks/README.md` | The task board: phase table, ID scheme, statuses. |
-| `docs/tasks/PHASE_*.md` | One file per phase: purpose, references, design notes, execution order, tasks. |
+| Doc                           | What it is                                                                                                                                   |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/SPEC.md`                | **What** the product does. Source of truth. §7 holds every product decision (1–20); §8 the open questions.                                   |
+| `docs/TECHNOLOGY.md`          | **With what**: stack, adapter layer, brain runtime, persistence, protocol, security. §7 defines the shared vocabulary (`packages/protocol`). |
+| `docs/IMPLEMENTATION_PLAN.md` | **In which order**: phases 0–8 with exit criteria, plus the corner-case list.                                                                |
+| `docs/tasks/README.md`        | The task board: phase table, ID scheme, statuses.                                                                                            |
+| `docs/tasks/PHASE_*.md`       | One file per phase: purpose, references, design notes, execution order, tasks.                                                               |
 
 When the docs disagree, `SPEC.md` wins on product behaviour and `TECHNOLOGY.md` on technical design; fix the other doc in the same commit.
 
@@ -44,13 +44,13 @@ Rules: nothing outside `apps/server/src/adapters` imports a runtime SDK; nothing
 
 Tasks are managed in `docs/tasks/`. Every unit of work is a task with an ID like `P1-03` (Phase 2.5 uses `P25-nn`).
 
-1. **Pick.** Open the phase file for the current phase. Choose the next task following the *Execution order* table: a task may start only when everything in its *Depends on* list is `done`; tasks in the same wave may run in parallel (e.g. as separate agents or worktrees). Prefer the lowest-numbered eligible task unless the phase file says otherwise.
+1. **Pick.** Open the phase file for the current phase. Choose the next task following the _Execution order_ table: a task may start only when everything in its _Depends on_ list is `done`; tasks in the same wave may run in parallel (e.g. as separate agents or worktrees). Prefer the lowest-numbered eligible task unless the phase file says otherwise.
 2. **Claim.** In the phase file, set the task's **Status** to `in progress`, update the **Current task** and **Task status** lines at the top of the file (when several tasks run in parallel, list them all), and update the phase row in `docs/tasks/README.md`. Commit: `P1-03: start <title>`.
-3. **Prepare.** Read the *References* listed in the phase file for that task (the SPEC/TECHNOLOGY/PLAN sections), the *Design notes* of the phase, and any `docs/tasks/notes/` file the task points at.
+3. **Prepare.** Read the _References_ listed in the phase file for that task (the SPEC/TECHNOLOGY/PLAN sections), the _Design notes_ of the phase, and any `docs/tasks/notes/` file the task points at.
 4. **Implement.** Work in small commits prefixed with the task ID (`P1-03: add graceful stop sequence`). Tests accompany code (Vitest); the acceptance criteria in the task are the definition of done. If the task reveals a product or technical decision, record it: product → `SPEC.md` §7 (new numbered decision) or §8 (open question); technical → `TECHNOLOGY.md`; then reflect it in `IMPLEMENTATION_PLAN.md` if the plan changes. Never leave the three docs inconsistent.
 5. **Discover.** New work found on the way becomes a new task appended to the phase file (next free number, "(added <date>)"), never an unbounded extension of the current one.
 6. **Finish.** Set **Status** to `done (<YYYY-MM-DD>)`, update the phase status count, set **Current task** to the next task (or `—` if the phase is complete), update `docs/tasks/README.md`, and write the notes file if the task requires one. Commit: `P1-03: done — <one line>`.
-7. **Phase exit.** When every task is done, verify the phase's *Exit criteria* explicitly, record the result in the phase file (`Phase status: done (<date>)`), and move **Current task** of the next phase to its first wave.
+7. **Phase exit.** When every task is done, verify the phase's _Exit criteria_ explicitly, record the result in the phase file (`Phase status: done (<date>)`), and move **Current task** of the next phase to its first wave.
 
 Statuses: `todo` → `in progress` → `done (<date>)`; also `blocked (<reason>)` and `dropped (<reason>)`.
 

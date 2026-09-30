@@ -1,0 +1,26 @@
+{
+  "name": "@galactic/protocol",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The single vocabulary shared by the GalacticAgents server and web client: zod schemas for the domain and event models, the AgentAdapter and DomainCommands interfaces.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}
