@@ -1,0 +1,30 @@
+# dependencies and builds
+node_modules/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# runtime data
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+.galactic/
+
+# secrets and local config
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
