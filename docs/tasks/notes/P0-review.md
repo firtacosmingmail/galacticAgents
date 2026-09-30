@@ -1,5 +1,7 @@
 # Phase 0 review (2026-09-30)
 
+**Resolution (same day):** every item below was implemented as P0-12 … P0-18 in `PHASE_0_FOUNDATIONS.md` — R1 → P0-12, R2 → P0-13, R3 → P0-14, R4 → P0-15, R5 + R6 → P0-16, hygiene → P0-17, R7 + R8 + R9 → P0-18 (decisions in `TECHNOLOGY.md` §3.4, §4, §6.2). The exit criteria were re-checked (see the phase file). The one thing left for a human is the single click-through in a real browser noted there.
+
 Reviewed at commit `cd98ecd`. Verified on a fresh clone: `pnpm install --frozen-lockfile`, `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check` and `pnpm test` (37 + 41 + 18) all green; web suite run 5× without flakes; `galactic start` serves the built page, `/health` withholds the token from a foreign `Origin`, a bad `Host` gets 403, `POST /dev/events` appends and refuses `agent.output`. `better-sqlite3@13` really does ship prebuilds, so no install script is needed.
 
 Overall the phase is in good shape: the protocol package is the single vocabulary as intended, the one-write rule is real (nested commands join the transaction, a throw rolls back rows and events), the security checks are tested, and the resume test exercises the real client against the real server. The items below are what should change before Phase 1 builds on it.

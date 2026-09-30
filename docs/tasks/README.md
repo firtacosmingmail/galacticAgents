@@ -6,7 +6,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 
 | Phase | File | Status | Tasks | Current task |
 |---|---|---|---|---|
-| 0 — Foundations | `PHASE_0_FOUNDATIONS.md` | reopened (2026-09-30) | 11/18 | P0-12 … P0-18 (review follow-ups) |
+| 0 — Foundations | `PHASE_0_FOUNDATIONS.md` | done (2026-09-30) | 18/18 | — |
 | 1 — Agent runtime and adapters | `PHASE_1_AGENT_RUNTIME.md` | not started | 0/14 | P1-01, P1-03, P1-08, P1-10 (wave 1) |
 | 2 — Hierarchy | `PHASE_2_HIERARCHY.md` | not started | 0/19 | — |
 | 2.5 — Minimal side panel | `PHASE_2.5_MINIMAL_PANEL.md` | not started | 0/9 | — |
