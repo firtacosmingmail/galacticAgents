@@ -7,7 +7,7 @@
   "main": "dist/lib.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-migrations.mjs",
-    "dev": "tsx watch src/index.ts",
+    "dev": "GALACTIC_DEV=1 tsx watch src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "test": "vitest run",

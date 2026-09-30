@@ -119,7 +119,12 @@ describe('event page', () => {
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
     const s2 = FakeWebSocket.instances[1]!;
     await act(async () => s2.serverOpens());
-    expect(s2.hello).toEqual({ type: 'hello', token: 'tok-from-health', lastEventId: 4, logId: 'log-a' });
+    expect(s2.hello).toEqual({
+      type: 'hello',
+      token: 'tok-from-health',
+      lastEventId: 4,
+      logId: 'log-a',
+    });
 
     // The tab is killed and reopened: the new page has no world, so it must not resume.
     first.unmount();

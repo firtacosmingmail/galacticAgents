@@ -63,7 +63,9 @@ describe('migrations', () => {
       sql: expect.stringContaining('AUTOINCREMENT'),
     });
     expect(
-      db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'events_type'").get(),
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'events_type'")
+        .get(),
     ).toBeTruthy();
   });
 

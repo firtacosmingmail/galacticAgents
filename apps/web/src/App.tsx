@@ -104,22 +104,40 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
   const lastError = useAppStore((s) => s.lastError);
   const [busy, setBusy] = useState(false);
 
-  const emitFake = async () => {
+  const setLastError = (e: string | undefined) => useAppStore.setState({ lastError: e });
+  const devPost = async (path: string, body?: unknown) => {
     setBusy(true);
     try {
-      await fetch('/dev/events', {
+      const res = await fetch(path, {
         method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          type: 'agent.progress',
-          agentId: 'a-demo',
-          summary: `Fake progress from the browser at ${new Date().toLocaleTimeString()}`,
-        }),
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
+      if (!res.ok) {
+        const hint =
+          res.status === 404
+            ? ' (dev routes are off: start with `pnpm dev` or `galactic start --dev`)'
+            : '';
+        setLastError(`${path} failed: ${res.status}${hint}`);
+      } else {
+        setLastError(undefined);
+      }
+    } catch (e) {
+      setLastError(`${path} failed: ${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
   };
+  const emitFake = () =>
+    devPost('/dev/events', {
+      type: 'agent.progress',
+      agentId: 'a-demo',
+      summary: `Fake progress from the browser at ${new Date().toLocaleTimeString()}`,
+    });
+  const seed = () => devPost('/dev/seed');
 
   return (
     <section className="status">
@@ -130,6 +148,13 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
       <span className="spacer" />
       <button onClick={emitFake} disabled={busy || status !== 'live'}>
         Emit fake event
+      </button>
+      <button
+        onClick={seed}
+        disabled={busy || status !== 'live'}
+        title="Creates a demo planet + project"
+      >
+        Seed demo project
       </button>
       <button onClick={onForget} className="secondary">
         Forget token

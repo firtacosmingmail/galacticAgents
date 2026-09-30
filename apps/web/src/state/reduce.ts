@@ -102,6 +102,8 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
         tasks: patch(next.tasks, event.taskId, { state: event.to, updatedAt: at }),
       };
 
+    case 'body.created':
+      return { ...next, bodies: { ...next.bodies, [event.body.id]: event.body } };
     case 'body.assigned':
       return { ...next, bodies: patch(next.bodies, event.bodyId, { host: event.host }) };
     case 'body.freed': {

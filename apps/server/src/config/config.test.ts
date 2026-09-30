@@ -49,6 +49,12 @@ describe('loadConfig', () => {
     ]);
   });
 
+  it('enables the dev routes only with GALACTIC_DEV (P0-16)', () => {
+    expect(loadConfig({ GALACTIC_HOME: home }).config.dev).toBe(false);
+    expect(loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '1' }).config.dev).toBe(true);
+    expect(loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '0' }).config.dev).toBe(false);
+  });
+
   it('rejects an invalid port', () => {
     expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_PORT: 'abc' })).toThrow(/Invalid port/);
   });

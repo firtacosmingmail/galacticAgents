@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
 import { AgentRole, AgentRuntime, QuestionKind, WorkState } from './enums.js';
-import { Actor, Cost, Host, Progress, Project, Proposal, Question, Task } from './domain.js';
+import { Actor, Body, Cost, Host, Progress, Project, Proposal, Question, Task } from './domain.js';
 
 // ---------------------------------------------------------------------------
 // agent.* — emitted by adapters, normalised (TECHNOLOGY §3.4)
@@ -156,6 +156,8 @@ export const ProposalParked = z.object({
 // body.* (SPEC §3.4, decision 9)
 // ---------------------------------------------------------------------------
 
+/** A body that did not exist in the catalogue before: a procedural asteroid, a task's body. */
+export const BodyCreated = z.object({ type: z.literal('body.created'), body: Body });
 export const BodyAssigned = z.object({ type: z.literal('body.assigned'), bodyId: Id, host: Host });
 export const BodyMoved = z.object({
   type: z.literal('body.moved'),
@@ -249,6 +251,7 @@ export const Event = z.discriminatedUnion('type', [
   ProposalEdited,
   ProposalRejected,
   ProposalParked,
+  BodyCreated,
   BodyAssigned,
   BodyMoved,
   BodyFreed,

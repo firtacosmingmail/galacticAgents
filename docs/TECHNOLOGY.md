@@ -231,7 +231,7 @@ galactic-agents/
   docs/            SPEC.md, TECHNOLOGY.md, IMPLEMENTATION_PLAN.md
 ```
 
-Three workspaces instead of five: adapters and brains live inside the server until a second consumer exists (extraction is cheap; a `server ↔ brains` dependency cycle is not). `packages/protocol` is the **single vocabulary**: `Body{id, kind, parentId?, host?: {kind: project|task, id}}`, `Project{…, workspace, repoPath?, parentProjectId?}`, `Task{…, projectId?, bodyId, worktreePath?, branch?, blockedBy[]}`, `Agent{…, role, runtime, sessionRef, supervisorId, bodyId}`, `Proposal`, `Question` (§5.3, with a `version` bumped on every holder change or answer), `StatusRecord` (§4), the `agent.*` / `question.*` / `proposal.*` / `project.*` / `task.*` / `body.*` events.
+Three workspaces instead of five: adapters and brains live inside the server until a second consumer exists (extraction is cheap; a `server ↔ brains` dependency cycle is not). `packages/protocol` is the **single vocabulary**: `Body{id, kind, parentId?, host?: {kind: project|task, id}}`, `Project{…, workspace, repoPath?, parentProjectId?}`, `Task{…, projectId?, bodyId, worktreePath?, branch?, blockedBy[]}`, `Agent{…, role, runtime, sessionRef, supervisorId, bodyId}`, `Proposal`, `Question` (§5.3, with a `version` bumped on every holder change or answer), `StatusRecord` (§4), the `agent.*` / `question.*` / `proposal.*` / `project.*` / `task.*` / `body.*` (`created` for a body that was not in the seeded catalogue — a procedural asteroid, a task's body — then `assigned` / `moved` / `freed`) / `control.*` events.
 
 ---
 
@@ -239,7 +239,8 @@ Three workspaces instead of five: adapters and brains live inside the server unt
 
 - The server can start processes on your machine. It must require a bearer token even on localhost, sent in the first WebSocket frame (§6.3) or an `Authorization` header for REST, and it must bind to `127.0.0.1` by default; Tailscale Serve terminates TLS and forwards to it.
 - **`Host` allow-list** (`localhost`, `127.0.0.1`, the `*.ts.net` name) and an **`Origin` check** on every WebSocket upgrade, so a web page in the same browser cannot reach the server via DNS rebinding or cross-origin sockets.
-- The token is printed once by `galactic start` and pasted (or scanned as a QR code) into the phone PWA; Tailscale identity headers may replace it for remote clients in Phase 7.
+- The token is printed once by `galactic start` and pasted (or scanned as a QR code) into the phone PWA; Tailscale identity headers may replace it for remote clients in Phase 7. `GET /health` hands it out only to a loopback caller whose `Origin` is absent or a loopback name: a reverse proxy connects from loopback too, but carries the remote page's `Origin`.
+- Development-only routes (`/dev/*`) exist only with `GALACTIC_DEV=1`; they never write domain rows without the matching events, so a replaying client and a snapshotting one always agree.
 - Permission requests from agents follow the per-project policy table (SPEC §3.6); anything not auto-allowed is surfaced to the user and never auto-approved for a remote client unless explicitly configured.
 - Known secret patterns (API keys, tokens) are redacted from transcripts before persisting and before sending to any client.
 - Store API keys in the OS keychain or a `.env` outside the repo; never send them to the browser.

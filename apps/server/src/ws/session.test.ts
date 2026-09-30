@@ -4,7 +4,7 @@ import type { EventEnvelope, ServerMessage } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { openDatabase } from '../db/database.js';
 import { EventLog } from '../domain/event-log.js';
-import { connectWs, startTestApp, TEST_TOKEN } from '../test/harness.js';
+import { connectWs, startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
 import { CLOSE_PROTOCOL_VIOLATION } from './gateway.js';
 
 let log: EventLog;
@@ -215,5 +215,44 @@ describe('dev routes', () => {
 
     const list = await fetch(`${t.baseUrl}/dev/events?since=0`, { headers });
     expect(await list.json()).toEqual({ seq: 1, events: [{ seq: 1, at: fx.NOW, event: idle(1) }] });
+  });
+
+  it('refuses domain events on /dev/events; /dev/seed writes rows and events together (P0-16)', async () => {
+    const headers = { authorization: `Bearer ${TEST_TOKEN}`, 'content-type': 'application/json' };
+    const domain = await fetch(`${t.baseUrl}/dev/events`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type: 'body.freed', bodyId: 'b-earth' }),
+    });
+    expect(domain.status).toBe(400);
+    expect(await domain.json()).toMatchObject({ error: 'not_a_demo_event' });
+
+    const seeded = await fetch(`${t.baseUrl}/dev/seed`, {
+      method: 'POST',
+      headers: { authorization: headers.authorization },
+    });
+    expect(seeded.status).toBe(200);
+    const { seq, projectId } = (await seeded.json()) as { seq: number; projectId: string };
+    expect(seq).toBe(3);
+    // A resuming client and a snapshotting client agree.
+    const replayed = log.eventsSince(0).map((e) => e.event.type);
+    expect(replayed).toEqual(['body.created', 'project.created', 'body.assigned']);
+    const snapshot = log.snapshot();
+    expect(snapshot.projects.map((p) => p.id)).toEqual([projectId]);
+    expect(snapshot.bodies[0]?.host).toEqual({ kind: 'project', id: projectId });
+  });
+
+  it('does not exist without GALACTIC_DEV (P0-16)', async () => {
+    const prod = await startTestApp({ log, config: testConfig({ dev: false }) });
+    try {
+      const headers = { authorization: `Bearer ${TEST_TOKEN}` };
+      expect((await fetch(`${prod.baseUrl}/dev/events?since=0`, { headers })).status).toBe(404);
+      expect((await fetch(`${prod.baseUrl}/dev/seed`, { method: 'POST', headers })).status).toBe(
+        404,
+      );
+      expect((await fetch(`${prod.baseUrl}/health`)).status).toBe(200);
+    } finally {
+      await prod.stop();
+    }
   });
 });

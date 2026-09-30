@@ -38,6 +38,7 @@ function classify(
     case 'proposal.rejected':
     case 'proposal.parked':
       return 'proposal';
+    case 'body.created':
     case 'body.assigned':
     case 'body.moved':
     case 'body.freed':

@@ -36,6 +36,18 @@ describe('health endpoint', () => {
     expect(body.token).toBeUndefined();
   });
 
+  it('hands the token to the local page, not to an allowed remote Origin (P0-16)', async () => {
+    const local = await fetch(`${t.baseUrl}/health`, {
+      headers: { origin: 'http://localhost:5173' },
+    });
+    expect(HealthResponse.parse(await local.json()).token).toBe(TEST_TOKEN);
+    // *.ts.net is in the allow-list (a Tailscale Serve proxy also connects from loopback).
+    const remote = await fetch(`${t.baseUrl}/health`, {
+      headers: { origin: 'https://mymac.tail1234.ts.net' },
+    });
+    expect(HealthResponse.parse(await remote.json()).token).toBeUndefined();
+  });
+
   it('refuses a wrong Host header', async () => {
     // fetch() silently drops a custom Host header, so use http.request.
     const status = await new Promise<number | undefined>((resolve, reject) => {

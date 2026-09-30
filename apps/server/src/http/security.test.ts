@@ -4,6 +4,7 @@ import {
   isAllowedHost,
   isAllowedOrigin,
   isLoopback,
+  isLoopbackOrigin,
   tokenMatches,
 } from './security.js';
 
@@ -42,6 +43,16 @@ describe('security helpers', () => {
     expect(isLoopback('::ffff:127.0.0.1')).toBe(true);
     expect(isLoopback('100.64.0.1')).toBe(false);
     expect(isLoopback(undefined)).toBe(false);
+  });
+
+  it('recognises a loopback Origin, never an allowed remote one (P0-16)', () => {
+    expect(isLoopbackOrigin(undefined)).toBe(true);
+    expect(isLoopbackOrigin('http://localhost:5173')).toBe(true);
+    expect(isLoopbackOrigin('http://127.0.0.1:4321')).toBe(true);
+    expect(isLoopbackOrigin('http://[::1]:4321')).toBe(true);
+    expect(isLoopbackOrigin('https://mymac.tail1234.ts.net')).toBe(false);
+    expect(isLoopbackOrigin('null')).toBe(false);
+    expect(isLoopbackOrigin('file:///x')).toBe(false);
   });
 
   it('compares tokens', () => {

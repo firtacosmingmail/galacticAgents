@@ -15,7 +15,7 @@ pnpm test             # every package's Vitest suite, incl. the resume/gap test
 pnpm start            # = galactic start: serves the built web app, prints URL + token, opens the browser
 ```
 
-`galactic start` flags: `--no-open`, `--port <n>`. The server binds `127.0.0.1:4321` by default and keeps its config, token and SQLite database in `~/.galactic/` (`GALACTIC_HOME` overrides the folder; `GALACTIC_PORT`, `GALACTIC_TOKEN`, `GALACTIC_ALLOWED_HOSTS` override single settings).
+`galactic start` flags: `--no-open`, `--port <n>`, `--dev` (enables the `/dev/*` demo routes behind the page's **Emit fake event** / **Seed demo project** buttons; `pnpm dev` enables them by itself). The server binds `127.0.0.1:4321` by default and keeps its config, token and SQLite database in `~/.galactic/` (`GALACTIC_HOME` overrides the folder; `GALACTIC_PORT`, `GALACTIC_TOKEN`, `GALACTIC_ALLOWED_HOSTS` override single settings).
 
 The token is generated on first start and printed by `galactic start`. The page opened on the same machine picks it up from `/health` automatically; on another device (Phase 7) you paste it.
 
@@ -25,7 +25,7 @@ The token is generated on first start and printed by `galactic start`. The page 
 pnpm dev              # protocol (tsc --watch) + server (tsx watch) + web (vite) with hot reload
 ```
 
-Open <http://localhost:5173>. Vite proxies `/ws`, `/health` and `/dev` to the server on `127.0.0.1:4321`, so the browser talks to a single origin. Press **Emit fake event** on the page to append an event through `POST /dev/events` and watch it arrive over the stream.
+Open <http://localhost:5173>. Vite proxies `/ws`, `/health` and `/dev` to the server on `127.0.0.1:4321`, so the browser talks to a single origin. Press **Emit fake event** on the page to append an event through `POST /dev/events` and watch it arrive over the stream; **Seed demo project** creates a planet with a project on it through a proper command, so reloading the page (which always takes a fresh snapshot) shows it again.
 
 Other scripts: `pnpm lint`, `pnpm format`, `pnpm typecheck` (includes the tests), `pnpm -r test:watch`.
 

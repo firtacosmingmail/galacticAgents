@@ -43,7 +43,7 @@ export class FakeWebSocket {
     this.readyState = FakeWebSocket.CLOSED;
     this.onclose?.({ code, reason });
   }
-  get hello(): { type: string; token: string; lastEventId?: number } {
+  get hello(): { type: string; token: string; lastEventId?: number; logId?: string } {
     return JSON.parse(this.sent[0] ?? '{}');
   }
 }

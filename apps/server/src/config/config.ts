@@ -20,6 +20,8 @@ export interface ServerConfig {
   token: string;
   /** Host names accepted in `Host` and `Origin` headers; `*.ts.net` style wildcards allowed. */
   allowedHosts: string[];
+  /** `GALACTIC_DEV=1`: enables the `/dev/*` routes (`pnpm dev` sets it; `galactic start --dev` opts in). */
+  dev: boolean;
   /** `~/.galactic` (or `$GALACTIC_HOME`): config, database, logs. */
   dataDir: string;
   configPath: string;
@@ -83,6 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       port,
       token,
       allowedHosts,
+      dev: env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true',
       dataDir,
       configPath,
       dbPath: env['GALACTIC_DB'] ?? join(dataDir, 'galactic.sqlite'),

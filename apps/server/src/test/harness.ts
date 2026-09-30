@@ -17,6 +17,7 @@ export function testConfig(
     port: 0,
     token: TEST_TOKEN,
     allowedHosts: ['localhost', '127.0.0.1', '[::1]', '*.ts.net'],
+    dev: true,
     dataDir,
     configPath: join(dataDir, 'config.json'),
     dbPath: join(dataDir, 'galactic.sqlite'),

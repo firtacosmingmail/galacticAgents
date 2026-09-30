@@ -5,7 +5,7 @@ The Node/TypeScript server that will own the agents. Phase 0 delivers its founda
 ## Run
 
 - `pnpm dev` (from the repo root) runs it with `tsx watch`; `galactic start` runs the built `dist/index.js` and serves `apps/web/dist`.
-- Environment: `GALACTIC_HOME` (data folder, default `~/.galactic`), `GALACTIC_PORT` (default 4321), `GALACTIC_TOKEN`, `GALACTIC_ALLOWED_HOSTS` (comma-separated, `*.ts.net` wildcards allowed), `GALACTIC_DB`, `GALACTIC_WEB_DIR`, `GALACTIC_LOG=silent`.
+- Environment: `GALACTIC_HOME` (data folder, default `~/.galactic`), `GALACTIC_PORT` (default 4321), `GALACTIC_TOKEN`, `GALACTIC_ALLOWED_HOSTS` (comma-separated, `*.ts.net` wildcards allowed), `GALACTIC_DB`, `GALACTIC_WEB_DIR`, `GALACTIC_LOG=silent`, `GALACTIC_DEV=1` (enables `/dev/*`).
 - `~/.galactic/config.json` (mode 0600) holds `token`, and optionally `port` and `allowedHosts`.
 
 ## Security (TECHNOLOGY §8)
@@ -13,16 +13,18 @@ The Node/TypeScript server that will own the agents. Phase 0 delivers its founda
 - Binds `127.0.0.1` only. A bearer token is required even on localhost: as the first WebSocket frame (`hello{token}`) or as `Authorization: Bearer …` on `/dev/*`.
 - Every HTTP request and every WebSocket upgrade must carry an allowed `Host` (`localhost`, `127.0.0.1`, `[::1]`, plus configured names) — the DNS-rebinding guard.
 - A WebSocket upgrade with a foreign `Origin` is refused with 403; a missing `Origin` (non-browser client) is allowed and protected by the token alone.
-- `GET /health` returns the token only to loopback callers with an allowed (or no) `Origin`, so the local page never needs pasting.
+- `GET /health` returns the token only to loopback callers whose `Origin` is absent or itself a loopback name (`localhost`, `127.0.0.1`, `[::1]`), so the local page never needs pasting. A page reaching the server through a reverse proxy (Tailscale Serve, Phase 7) also connects from loopback but with its own `Origin`: it pastes the token.
+- `/dev/*` exists only with `GALACTIC_DEV=1` (`pnpm dev` sets it; `galactic start --dev` opts in).
 
 ## HTTP
 
-| Route                     | Purpose                                                                                       |
-| ------------------------- | --------------------------------------------------------------------------------------------- |
-| `GET /health`             | `{ok, name, version, protocolVersion, logId, seq, token?}`                                    |
-| `POST /dev/events`        | Appends one protocol-validated event under the one write rule; returns `{seq}`. Bearer token. |
-| `GET /dev/events?since=N` | `{seq, events}` — the log after `N`. Bearer token.                                            |
-| `GET /*`                  | The built web app when `GALACTIC_WEB_DIR` is set (SPA fallback to `index.html`).              |
+| Route                     | Purpose                                                                                                                                                                                                           |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`             | `{ok, name, version, protocolVersion, logId, seq, token?}`                                                                                                                                                        |
+| `POST /dev/events`        | Appends one protocol-validated `agent.*` event under the one write rule; returns `{seq}`. Domain events are refused (400): they would leave snapshot and replay disagreeing. Bearer token, `GALACTIC_DEV=1` only. |
+| `POST /dev/seed`          | Creates a demo planet with a project on it — rows and events in one command; returns `{seq, projectId, name}`. Bearer token, `GALACTIC_DEV=1` only.                                                               |
+| `GET /dev/events?since=N` | `{seq, events}` — the log after `N`. Bearer token, `GALACTIC_DEV=1` only.                                                                                                                                         |
+| `GET /*`                  | The built web app when `GALACTIC_WEB_DIR` is set (SPA fallback to `index.html`).                                                                                                                                  |
 
 ## WebSocket protocol (`/ws`, TECHNOLOGY §6.3)
 

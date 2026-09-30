@@ -51,6 +51,26 @@ export function isAllowedOrigin(
   return isAllowedHost(url.host, allowedHosts);
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * Whether an `Origin`, if present, names this machine itself. Used for handing the token to the
+ * local page: a reverse proxy (Tailscale Serve, Phase 7) connects from loopback too, but carries
+ * the remote page's `Origin`, which is an allowed host and still must not get the token.
+ */
+export function isLoopbackOrigin(origin: string | undefined): boolean {
+  if (origin === undefined) return true;
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  const hostname = hostnameOf(url.host);
+  return hostname !== undefined && LOOPBACK_HOSTS.has(hostname);
+}
+
 /** True for connections coming from the same machine. */
 export function isLoopback(remoteAddress: string | undefined): boolean {
   if (!remoteAddress) return false;

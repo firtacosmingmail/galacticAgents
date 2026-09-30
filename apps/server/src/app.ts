@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { PROTOCOL_VERSION, type HealthResponse } from '@galactic/protocol';
 import type { ServerConfig } from './config/config.js';
-import { isAllowedHost, isAllowedOrigin, isLoopback } from './http/security.js';
+import { isAllowedHost, isLoopback, isLoopbackOrigin } from './http/security.js';
 import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
@@ -13,7 +13,7 @@ export interface AppOptions {
   config: ServerConfig;
   /** Explicit session handler; defaults to the resumable stream over `log`. */
   onSession?: SessionHandler;
-  /** The event log; enables the stream handler, `/health.seq` and the `/dev/*` routes. */
+  /** The event log; enables the stream handler, `/health.seq` and (with `config.dev`) `/dev/*`. */
   log?: EventLog;
   /** A built web app (apps/web/dist) to serve at `/`; `galactic start` sets it. */
   webDir?: string;
@@ -48,12 +48,10 @@ export function buildApp(opts: AppOptions): App {
       seq: opts.log?.currentSeq() ?? 0,
       ...(opts.log ? { logId: opts.log.logId } : {}),
     };
-    // The token is handed only to same-machine callers from an allowed (or no) Origin, so the
-    // local web page can pick it up without pasting; remote clients (Phase 7) paste or scan it.
-    if (
-      isLoopback(req.socket.remoteAddress) &&
-      isAllowedOrigin(req.headers.origin, config.allowedHosts)
-    ) {
+    // The token is handed only to same-machine callers whose Origin (if any) is this machine, so
+    // the local web page can pick it up without pasting. A remote page reaching us through a
+    // reverse proxy (Phase 7) also arrives from loopback but with its own Origin: it pastes.
+    if (isLoopback(req.socket.remoteAddress) && isLoopbackOrigin(req.headers.origin)) {
       body.token = config.token;
     }
     return body;
@@ -74,7 +72,7 @@ export function buildApp(opts: AppOptions): App {
     info: (m: string) => fastify.log.info(m),
     warn: (m: string) => fastify.log.warn(m),
   };
-  if (opts.log) registerDevRoutes(fastify, config, opts.log);
+  if (opts.log && config.dev) registerDevRoutes(fastify, config, opts.log);
 
   const onSession =
     opts.onSession ??

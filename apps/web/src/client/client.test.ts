@@ -116,7 +116,12 @@ describe('GalacticClient', () => {
     t.socket().serverCloses(1006);
     t.timers.shift()!();
     t.socket().serverOpens();
-    expect(t.socket().hello).toEqual({ type: 'hello', token: 'tok', lastEventId: 4, logId: 'log-b' });
+    expect(t.socket().hello).toEqual({
+      type: 'hello',
+      token: 'tok',
+      lastEventId: 4,
+      logId: 'log-b',
+    });
   });
 
   it('reconnects with growing backoff when the server drops the connection', () => {

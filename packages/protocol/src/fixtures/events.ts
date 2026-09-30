@@ -98,6 +98,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
   'proposal.rejected': { type: 'proposal.rejected', proposalId: 'pr-1', reason: 'not now' },
   'proposal.parked': { type: 'proposal.parked', proposalId: 'pr-1', reason: 'no free planet' },
 
+  'body.created': { type: 'body.created', body: d.moon },
   'body.assigned': {
     type: 'body.assigned',
     bodyId: 'b-luna',

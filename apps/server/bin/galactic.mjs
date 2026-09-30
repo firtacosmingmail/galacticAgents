@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // `galactic start` — starts Mission Control serving the built web app, prints the URL and the
 // token, and opens the browser. Run `pnpm build` first (or use `pnpm dev` for hot reload).
+// `--dev` enables the `/dev/*` demo routes the Phase 0 page's buttons use.
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -13,7 +14,7 @@ const webDir = resolve(here, '../../web/dist');
 const [command = 'start', ...flags] = process.argv.slice(2);
 
 if (command !== 'start') {
-  console.error(`usage: galactic start [--no-open] [--port <n>]`);
+  console.error(`usage: galactic start [--no-open] [--port <n>] [--dev]`);
   process.exit(2);
 }
 for (const [name, path] of [
@@ -30,6 +31,7 @@ const env = { ...process.env, GALACTIC_WEB_DIR: webDir, GALACTIC_LOG: env_log() 
 const portFlag = flags.indexOf('--port');
 if (portFlag !== -1 && flags[portFlag + 1]) env.GALACTIC_PORT = flags[portFlag + 1];
 const noOpen = flags.includes('--no-open');
+if (flags.includes('--dev')) env.GALACTIC_DEV = '1'; // enables /dev/* (demo events, seed)
 
 const child = spawn(process.execPath, [serverEntry], {
   env,

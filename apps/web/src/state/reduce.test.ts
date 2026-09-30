@@ -12,6 +12,7 @@ const env = (seq: number, event: EventEnvelope['event']): EventEnvelope => ({
 describe('applySnapshot', () => {
   it('indexes every collection by id and takes the seq', () => {
     const w = applySnapshot({
+      logId: 'log-a',
       seq: 7,
       agents: [fx.agent],
       bodies: [fx.body, fx.moon],
@@ -59,16 +60,7 @@ describe('applyEvent', () => {
 
   it('moves hosts between bodies', () => {
     let w = applySnapshot({
-      ...applySnapshot({
-        seq: 0,
-        agents: [],
-        bodies: [fx.body, fx.moon, fx.asteroid],
-        projects: [],
-        tasks: [],
-        questions: [],
-        proposals: [],
-        statuses: [],
-      }),
+      logId: 'log-a',
       seq: 0,
       agents: [],
       bodies: [fx.body, fx.moon, fx.asteroid],
@@ -93,6 +85,14 @@ describe('applyEvent', () => {
       env(3, { type: 'body.assigned', bodyId: 'b-earth', host: { kind: 'project', id: 'p-9' } }),
     );
     expect(w.bodies['b-earth']?.host).toEqual({ kind: 'project', id: 'p-9' });
+    const fresh = { id: 'b-new', kind: 'asteroid', name: 'Vesta-7' } as const;
+    w = applyEvent(w, env(4, { type: 'body.created', body: fresh }));
+    expect(w.bodies['b-new']).toEqual(fresh);
+    w = applyEvent(
+      w,
+      env(5, { type: 'body.assigned', bodyId: 'b-new', host: { kind: 'task', id: 't-7' } }),
+    );
+    expect(w.bodies['b-new']?.host).toEqual({ kind: 'task', id: 't-7' });
   });
 
   it('tracks questions and proposals', () => {
@@ -111,6 +111,7 @@ describe('applyEvent', () => {
 
   it('updates known status records from agent events and ignores unknown agents', () => {
     let w = applySnapshot({
+      logId: 'log-a',
       seq: 0,
       agents: [fx.agent],
       bodies: [],
