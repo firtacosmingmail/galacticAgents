@@ -1,7 +1,7 @@
 # Phase 0 — Foundations
 
-**Current task:** P0-01 — Monorepo scaffold and tooling · **Task status:** in progress
-**Phase status:** in progress (0/11 done)
+**Current task:** P0-02 — Protocol: domain model schemas, P0-03 — Protocol: event model schemas, P0-05 — Server skeleton with auth and origin checks · **Task status:** todo, todo, todo
+**Phase status:** in progress (1/11 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -44,7 +44,7 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 ## Tasks
 
 ### P0-01 — Monorepo scaffold and tooling
-- **Status:** in progress · **Depends on:** — · **Parallel with:** —
+- **Status:** done (2026-09-30) · **Depends on:** — · **Parallel with:** —
 - pnpm workspace with `apps/server`, `apps/web`, `packages/protocol`; shared `tsconfig.base.json`; ESLint + Prettier; Vitest configured in all three packages; root `pnpm dev` script that starts server and web together (e.g. via `concurrently`); `.gitignore` covering `node_modules`, `dist`, `*.sqlite*`, `.env`.
 - **Acceptance:** `pnpm install && pnpm -r build && pnpm -r test` pass on an empty codebase; `pnpm dev` starts both processes.
 
