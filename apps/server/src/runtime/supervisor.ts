@@ -1,8 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { uptime } from 'node:os';
 import { basename } from 'node:path';
-import type { Actor, AgentEvent, Id } from '@galactic/protocol';
-import { EventQueue } from './event-queue.js';
+import type { Actor, Id } from '@galactic/protocol';
 import { MemoryProcessStore, type ProcessRecord, type ProcessStore } from './process-store.js';
 
 /**
@@ -19,14 +18,73 @@ import { MemoryProcessStore, type ProcessRecord, type ProcessStore } from './pro
  * SIGTERM is never the first signal (corner case 8b). Killing by group takes the agent's own
  * children (shells, dev servers, watchers) with it (corner case 4).
  *
- * The supervisor speaks the normalised event vocabulary for what only it can know: a crash is
- * `agent.failed(reason: crash)`, a spawn error `agent.failed(reason: runtime)`, a completed stop
- * `agent.stopped`. A clean exit (code 0) is the adapter's to interpret (`agent.finished`), so it
- * emits nothing. Hard caps (P1-02) sit on top of this class.
+ * The supervisor reports what only it can know as `ProcessOutcome`s (a crash, a start failure,
+ * a completed stop, a clean exit, a restart) through the spec's `onOutcome` hook — never as
+ * `agent.*` events: the adapter that owns the session is the one emitter for it (P1-20) and
+ * decides the verdict, so a process exit and the runtime's own final message can never race
+ * each other into the log. Hard caps (P1-02) sit on top of this class.
+ *
+ * Children get a small allow-listed environment (P1-24; TECHNOLOGY §8): the server's own
+ * variables — its token, any API keys — are not theirs unless the spec passes them explicitly.
  */
 
 export type RestartPolicy =
   { mode: 'off' } | { mode: 'on-crash'; maxRestarts: number; backoffMs: number };
+
+/** What the supervisor learned about a process; the adapter turns it into an `agent.*` event. */
+export type ProcessOutcome =
+  /** The command never started (ENOENT, EACCES, bad cwd). */
+  | { kind: 'start_failed'; agentId: Id; error: string }
+  /** Unrequested exit with a non-zero code or a signal. */
+  | { kind: 'crashed'; agentId: Id; exit: ExitInfo }
+  /** Unrequested clean exit (code 0), or an exit the runtime announced with `expectExit()`. */
+  | { kind: 'exited'; agentId: Id; exit: ExitInfo }
+  /** A stop sequence completed. */
+  | { kind: 'stopped'; agentId: Id; exit: ExitInfo; by: Actor }
+  /** The restart policy is respawning after a crash. */
+  | { kind: 'restarting'; agentId: Id; exit: ExitInfo; attempt: number; maxRestarts: number };
+
+/**
+ * Variables a child inherits from the server. Enough for a CLI to find its binaries, its home
+ * (Claude Code's login lives there), its locale and any proxy; nothing that authenticates the
+ * server itself. Extend per spec with `env`, or per supervisor with `inheritEnv`.
+ */
+export const INHERITED_ENV: readonly string[] = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TERM',
+  'COLORTERM',
+  'TZ',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_CACHE_HOME',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'CLAUDE_CONFIG_DIR',
+  // Windows
+  'SYSTEMROOT',
+  'COMSPEC',
+  'PATHEXT',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'USERPROFILE',
+];
 
 export interface ProcessSpec {
   agentId: Id;
@@ -34,9 +92,12 @@ export interface ProcessSpec {
   args?: string[];
   /** Per-agent working directory: the Steward's worktree, or the project workspace for brains. */
   cwd: string;
+  /** Added to the allow-listed inheritance; `undefined` removes an inherited variable. */
   env?: Record<string, string | undefined>;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  /** What happened to the process, for the adapter to report. */
+  onOutcome?: (outcome: ProcessOutcome) => void;
   /** Off by default: a crashed agent is reported, not silently respawned. */
   restart?: RestartPolicy;
   /**
@@ -93,12 +154,8 @@ export interface StopProcessOptions {
   graceMs?: number;
   /** Step 3 timeout: how long after SIGTERM before SIGKILL. */
   termMs?: number;
+  /** Who asked; carried on the `stopped` outcome. */
   by?: Actor;
-  /**
-   * Emit nothing: the caller (caps, adapter) reports the outcome itself. The default emits
-   * `agent.stopped`.
-   */
-  silent?: boolean;
 }
 
 export interface ReconcileResult {
@@ -114,6 +171,10 @@ export interface SupervisorOptions {
   defaults?: { graceMs?: number; termMs?: number };
   /** Called when a stdio callback or the restart policy throws. */
   onError?: (error: unknown, agentId: Id) => void;
+  /** Every outcome of every process, after the spec's own hook (logging, tests). */
+  onOutcome?: (outcome: ProcessOutcome) => void;
+  /** Extra variable names children inherit from the server, on top of `INHERITED_ENV`. */
+  inheritEnv?: string[];
   /** Identity check for `reconcile()`; defaults to `ps`. Tests inject one. */
   processName?: (pid: number) => string | undefined;
 }
@@ -246,13 +307,14 @@ export function bootTime(): string {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export class ProcessSupervisor {
-  readonly events = new EventQueue<AgentEvent>();
   private readonly procs = new Map<Id, Managed>();
   private readonly store: ProcessStore;
   private readonly now: () => string;
   private readonly graceMs: number;
   private readonly termMs: number;
   private readonly onError: (error: unknown, agentId: Id) => void;
+  private readonly onOutcome: (outcome: ProcessOutcome) => void;
+  private readonly inherited: readonly string[];
   private readonly nameOf: (pid: number) => string | undefined;
   private readonly bootAt = bootTime();
   private disposed = false;
@@ -263,7 +325,28 @@ export class ProcessSupervisor {
     this.graceMs = opts.defaults?.graceMs ?? 10_000;
     this.termMs = opts.defaults?.termMs ?? 5_000;
     this.onError = opts.onError ?? (() => {});
+    this.onOutcome = opts.onOutcome ?? (() => {});
+    this.inherited = [...INHERITED_ENV, ...(opts.inheritEnv ?? [])];
     this.nameOf = opts.processName ?? processName;
+  }
+
+  /** The environment a child gets: the allow-listed inheritance plus the spec's own variables. */
+  childEnv(spec: ProcessSpec): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const name of this.inherited) {
+      const value = process.env[name];
+      if (value !== undefined) env[name] = value;
+    }
+    for (const [name, value] of Object.entries(spec.env ?? {})) {
+      if (value === undefined) delete env[name];
+      else env[name] = value;
+    }
+    return env;
+  }
+
+  private report(managed: Managed, outcome: ProcessOutcome): void {
+    this.safely(managed.spec, () => managed.spec.onOutcome?.(outcome));
+    this.safely(managed.spec, () => this.onOutcome(outcome));
   }
 
   get(agentId: Id): ManagedProcess | undefined {
@@ -281,7 +364,7 @@ export class ProcessSupervisor {
 
   /**
    * Spawns the child in its own process group and resolves once it is running. A spawn failure
-   * (command not found, bad cwd) rejects and emits `agent.failed(reason: runtime)`.
+   * (command not found, bad cwd) rejects and reports a `start_failed` outcome.
    */
   async spawn(spec: ProcessSpec): Promise<ManagedProcess> {
     const managed = this.adopt(spec);
@@ -304,7 +387,7 @@ export class ProcessSupervisor {
   /**
    * Synchronous spawn for callers that must hand the child over at once (the SDK's
    * `spawnClaudeCodeProcess` hook). The process is registered and watched immediately; a start
-   * failure surfaces as `agent.failed(reason: runtime)` and settles `exited`.
+   * failure surfaces as a `start_failed` outcome and settles `exited`.
    */
   adopt(spec: ProcessSpec): ManagedProcess {
     if (this.disposed) throw new Error('supervisor disposed');
@@ -323,7 +406,7 @@ export class ProcessSupervisor {
   private launch(spec: ProcessSpec): ChildProcess {
     return spawn(spec.command, spec.args ?? [], {
       cwd: spec.cwd,
-      env: { ...process.env, ...(spec.env ?? {}) },
+      env: this.childEnv(spec),
       // Own process group (setsid): the group kill takes the agent's own children along.
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -350,15 +433,10 @@ export class ProcessSupervisor {
       // The process never started (ENOENT, EACCES, bad cwd): no `exit` will follow.
       if (managed.child !== child || managed.exit) return;
       const message = `could not start ${spec.command}: ${error.message}`;
-      this.events.push({
-        type: 'agent.failed',
-        agentId: spec.agentId,
-        error: message,
-        reason: 'runtime',
-      });
       managed.settleExit({ code: null, signal: null, at: this.now() });
       this.record(managed, 'exited', managed.exit);
       this.procs.delete(spec.agentId);
+      this.report(managed, { kind: 'start_failed', agentId: spec.agentId, error: message });
     });
     child.once('exit', (code, signal) => {
       // stdio may still drain after `exit`; wait for `close` briefly so output precedes the verdict.
@@ -379,16 +457,19 @@ export class ProcessSupervisor {
 
   private onExit(managed: Managed, child: ChildProcess, info: ExitInfo): void {
     if (managed.child !== child) return; // a restart already replaced it
-    const requested = managed.state === 'stopping' || managed.isExitExpected;
+    const stopping = managed.state === 'stopping';
+    const requested = stopping || managed.isExitExpected;
     const crashed = !requested && (info.code !== 0 || info.signal !== null);
     const policy = managed.spec.restart ?? { mode: 'off' };
 
     if (crashed && policy.mode === 'on-crash' && managed.restarts < policy.maxRestarts) {
       this.record(managed, 'exited', info);
-      this.events.push({
-        type: 'agent.progress',
+      this.report(managed, {
+        kind: 'restarting',
         agentId: managed.agentId,
-        summary: `restarting after crash (${describeExit(info)}), attempt ${managed.restarts + 1}/${policy.maxRestarts}`,
+        exit: info,
+        attempt: managed.restarts + 1,
+        maxRestarts: policy.maxRestarts,
       });
       managed.restarting = sleep(policy.backoffMs).then(() => this.restart(managed, info));
       return;
@@ -396,15 +477,10 @@ export class ProcessSupervisor {
 
     managed.settleExit(info);
     this.record(managed, 'exited', info);
-    if (crashed) {
-      this.events.push({
-        type: 'agent.failed',
-        agentId: managed.agentId,
-        error: `process ${describeExit(info)}`,
-        reason: 'crash',
-      });
-    }
-    // A requested stop emits `agent.stopped` from `stop()`, which knows who asked.
+    if (crashed) this.report(managed, { kind: 'crashed', agentId: managed.agentId, exit: info });
+    else if (!stopping)
+      this.report(managed, { kind: 'exited', agentId: managed.agentId, exit: info });
+    // A requested stop reports `stopped` from `stop()`, which knows who asked.
   }
 
   private async restart(managed: Managed, previous: ExitInfo): Promise<void> {
@@ -469,9 +545,12 @@ export class ProcessSupervisor {
   }
 
   private finishStop(managed: Managed, opts: StopProcessOptions): ExitInfo | undefined {
-    if (!opts.silent) {
-      this.events.push({ type: 'agent.stopped', agentId: managed.agentId, by: opts.by ?? SYSTEM });
-    }
+    this.report(managed, {
+      kind: 'stopped',
+      agentId: managed.agentId,
+      exit: managed.exit!,
+      by: opts.by ?? SYSTEM,
+    });
     return managed.exit;
   }
 
@@ -531,11 +610,10 @@ export class ProcessSupervisor {
     return this.store.get(agentId);
   }
 
-  /** Stops every live process (graceful, silent unless `by` is given) and closes the stream. */
-  async dispose(opts: StopProcessOptions = { silent: true }): Promise<void> {
+  /** Stops every live process (graceful). */
+  async dispose(opts: StopProcessOptions = {}): Promise<void> {
     this.disposed = true;
     await Promise.all(this.list().map((p) => this.stop(p.agentId, opts)));
-    this.events.close();
   }
 
   private record(managed: Managed, status: ProcessRecord['status'], exit?: ExitInfo): void {
@@ -557,10 +635,6 @@ export class ProcessSupervisor {
       this.onError(error, managed.agentId);
     }
   }
-}
-
-function describeExit(info: ExitInfo): string {
-  return info.signal ? `killed by ${info.signal}` : `exited with code ${info.code}`;
 }
 
 /** Resolves `true` when `p` settles within `ms`, `false` on timeout. */

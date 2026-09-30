@@ -1,10 +1,15 @@
 import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentEvent } from '@galactic/protocol';
 import { openDatabase } from '../db/database.js';
-import { collect } from './event-queue.js';
 import { MemoryProcessStore, SqliteProcessStore } from './process-store.js';
-import { ProcessSupervisor, bootTime, isAlive, type ProcessSpec } from './supervisor.js';
+import {
+  INHERITED_ENV,
+  ProcessSupervisor,
+  bootTime,
+  isAlive,
+  type ProcessOutcome,
+  type ProcessSpec,
+} from './supervisor.js';
 
 const NODE = process.execPath;
 const node = (script: string, extra: Partial<ProcessSpec> = {}): ProcessSpec => ({
@@ -31,18 +36,52 @@ async function eventually(check: () => boolean, ms = 3_000): Promise<void> {
   }
 }
 
+/** Outcomes reported so far, with a way to wait for one (the supervisor has no event stream). */
+function outcomes() {
+  const items: ProcessOutcome[] = [];
+  const watchers = new Set<() => void>();
+  return {
+    items,
+    push: (o: ProcessOutcome) => {
+      items.push(o);
+      for (const w of [...watchers]) w();
+    },
+    waitFor(predicate: (items: ProcessOutcome[]) => boolean, timeoutMs = 5_000) {
+      if (predicate(items)) return Promise.resolve(items);
+      return new Promise<ProcessOutcome[]>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          watchers.delete(check);
+          reject(new Error(`timed out; outcomes: ${JSON.stringify(items)}`));
+        }, timeoutMs);
+        const check = () => {
+          if (!predicate(items)) return;
+          clearTimeout(timer);
+          watchers.delete(check);
+          resolve(items);
+        };
+        watchers.add(check);
+      });
+    },
+  };
+}
+
 const supervisors: ProcessSupervisor[] = [];
 function makeSupervisor(opts: ConstructorParameters<typeof ProcessSupervisor>[0] = {}) {
-  const s = new ProcessSupervisor({ defaults: { graceMs: 300, termMs: 300 }, ...opts });
+  const events = outcomes();
+  const s = new ProcessSupervisor({
+    defaults: { graceMs: 300, termMs: 300 },
+    onOutcome: events.push,
+    ...opts,
+  });
   supervisors.push(s);
-  return { s, events: collect<AgentEvent>(s.events) };
+  return { s, events };
 }
 afterEach(async () => {
   for (const s of supervisors.splice(0)) await s.dispose();
 });
 
 describe('ProcessSupervisor — spawn and exit detection', () => {
-  it('captures stdio and emits nothing for a clean exit', async () => {
+  it('captures stdio and reports a clean exit as `exited`, never as a crash', async () => {
     const { s, events } = makeSupervisor();
     const out: string[] = [];
     const proc = await s.spawn(
@@ -52,22 +91,19 @@ describe('ProcessSupervisor — spawn and exit detection', () => {
     const exit = await proc.exited;
     expect(exit.code).toBe(0);
     expect(out.join('')).toContain('hello');
-    await sleep(20);
-    expect(events.items).toEqual([]);
+    await events.waitFor((e) => e.length === 1);
+    expect(events.items).toEqual([
+      { kind: 'exited', agentId: 'a-1', exit: expect.objectContaining({ code: 0, signal: null }) },
+    ]);
     expect(s.processRecord('a-1')).toMatchObject({ agentId: 'a-1', status: 'exited', exitCode: 0 });
   });
 
-  it('reports a non-zero exit as agent.failed(reason: crash)', async () => {
+  it('reports a non-zero exit as a crash', async () => {
     const { s, events } = makeSupervisor();
     await s.spawn(node(`process.exit(3)`));
-    await events.waitFor((e) => e.some((x) => x.type === 'agent.failed'));
+    await events.waitFor((e) => e.some((x) => x.kind === 'crashed'));
     expect(events.items).toEqual([
-      {
-        type: 'agent.failed',
-        agentId: 'a-1',
-        reason: 'crash',
-        error: 'process exited with code 3',
-      },
+      { kind: 'crashed', agentId: 'a-1', exit: expect.objectContaining({ code: 3, signal: null }) },
     ]);
     expect(s.processRecord('a-1')).toMatchObject({ status: 'exited', exitCode: 3 });
   });
@@ -76,23 +112,22 @@ describe('ProcessSupervisor — spawn and exit detection', () => {
     const { s, events } = makeSupervisor();
     const proc = await s.spawn(node(LOITER([])));
     process.kill(proc.pid, 'SIGKILL');
-    await events.waitFor((e) => e.some((x) => x.type === 'agent.failed'));
+    await events.waitFor((e) => e.some((x) => x.kind === 'crashed'));
     expect(events.items[0]).toMatchObject({
-      type: 'agent.failed',
-      reason: 'crash',
-      error: 'process killed by SIGKILL',
+      kind: 'crashed',
+      exit: { code: null, signal: 'SIGKILL' },
     });
     expect(s.processRecord('a-1')).toMatchObject({ status: 'exited', signal: 'SIGKILL' });
     expect(s.get('a-1')?.state).toBe('exited');
   });
 
-  it('rejects and emits agent.failed(reason: runtime) when the command cannot start', async () => {
+  it('rejects and reports `start_failed` when the command cannot start', async () => {
     const { s, events } = makeSupervisor();
     await expect(
       s.spawn({ agentId: 'a-1', command: 'galactic-no-such-binary', cwd: process.cwd() }),
     ).rejects.toThrow(/could not start galactic-no-such-binary/);
     expect(events.items).toEqual([
-      expect.objectContaining({ type: 'agent.failed', reason: 'runtime' }),
+      expect.objectContaining({ kind: 'start_failed', error: expect.stringContaining('ENOENT') }),
     ]);
     expect(s.get('a-1')).toBeUndefined();
   });
@@ -131,7 +166,9 @@ describe('ProcessSupervisor — graceful stop', () => {
     const exit = await s.stop('a-1', { by: { type: 'user' } });
     expect(exit).toMatchObject({ code: 0, signal: null });
     expect(out.join('')).toContain('got SIGINT');
-    expect(events.items).toEqual([{ type: 'agent.stopped', agentId: 'a-1', by: { type: 'user' } }]);
+    expect(events.items).toEqual([
+      expect.objectContaining({ kind: 'stopped', agentId: 'a-1', by: { type: 'user' } }),
+    ]);
     expect(proc.state).toBe('exited');
     expect(s.processRecord('a-1')).toMatchObject({ status: 'exited', exitCode: 0 });
   });
@@ -145,7 +182,7 @@ describe('ProcessSupervisor — graceful stop', () => {
     expect(exit?.signal).toBe('SIGTERM');
     expect(out.join('')).toContain('ignored SIGINT');
     expect(events.items).toEqual([
-      { type: 'agent.stopped', agentId: 'a-1', by: { type: 'system' } },
+      expect.objectContaining({ kind: 'stopped', agentId: 'a-1', by: { type: 'system' } }),
     ]);
   });
 
@@ -228,12 +265,14 @@ describe('ProcessSupervisor — graceful stop', () => {
     expect(live.state).toBe('exited');
   });
 
-  it('silent stops emit nothing', async () => {
+  it('a stop reports exactly one outcome, and the spec hook sees it before the supervisor hook', async () => {
     const { s, events } = makeSupervisor();
-    await s.spawn(node(LOITER([])));
-    await s.stop('a-1', { silent: true });
+    const order: string[] = [];
+    await s.spawn(node(LOITER([]), { onOutcome: (o) => order.push(`spec:${o.kind}`) }));
+    await s.stop('a-1');
     await sleep(20);
-    expect(events.items).toEqual([]);
+    expect(events.items.map((o) => o.kind)).toEqual(['stopped']);
+    expect(order).toEqual(['spec:stopped']);
   });
 });
 
@@ -251,13 +290,9 @@ describe('ProcessSupervisor — restart policy', () => {
     const proc = await s.spawn(
       node(`process.exit(1)`, { restart: { mode: 'on-crash', maxRestarts: 2, backoffMs: 10 } }),
     );
-    await events.waitFor((e) => e.some((x) => x.type === 'agent.failed'));
-    expect(events.items.map((e) => e.type)).toEqual([
-      'agent.progress',
-      'agent.progress',
-      'agent.failed',
-    ]);
-    expect(events.items[0]).toMatchObject({ summary: expect.stringContaining('attempt 1/2') });
+    await events.waitFor((e) => e.some((x) => x.kind === 'crashed'));
+    expect(events.items.map((e) => e.kind)).toEqual(['restarting', 'restarting', 'crashed']);
+    expect(events.items[0]).toMatchObject({ attempt: 1, maxRestarts: 2 });
     expect(proc.restarts).toBe(2);
     expect(proc.state).toBe('exited');
   });
@@ -268,7 +303,7 @@ describe('ProcessSupervisor — restart policy', () => {
       node(`process.exit(1)`, { restart: { mode: 'on-crash', maxRestarts: 1, backoffMs: 10 } }),
     );
     const exited = proc.exited;
-    await events.waitFor((e) => e.some((x) => x.type === 'agent.failed'));
+    await events.waitFor((e) => e.some((x) => x.kind === 'crashed'));
     await expect(exited).resolves.toMatchObject({ code: 1 });
     expect(proc.restarts).toBe(1);
   });
@@ -278,13 +313,13 @@ describe('ProcessSupervisor — restart policy', () => {
     const proc = await s.spawn(
       node(`process.exit(1)`, { restart: { mode: 'on-crash', maxRestarts: 5, backoffMs: 150 } }),
     );
-    await events.waitFor((e) => e.some((x) => x.type === 'agent.progress'));
+    await events.waitFor((e) => e.some((x) => x.kind === 'restarting'));
     const exit = await s.stop('a-1');
     expect(exit).toMatchObject({ code: 1 });
     await sleep(300);
     expect(proc.state).toBe('exited');
     expect(proc.restarts).toBe(0);
-    expect(events.items.map((e) => e.type)).toEqual(['agent.progress', 'agent.stopped']);
+    expect(events.items.map((e) => e.kind)).toEqual(['restarting', 'stopped']);
   });
 
   it('does not respawn after a requested stop', async () => {
@@ -300,12 +335,12 @@ describe('ProcessSupervisor — restart policy', () => {
     await s.stop('a-1');
     await sleep(50);
     expect(proc.restarts).toBe(0);
-    expect(events.items.map((e) => e.type)).toEqual(['agent.stopped']);
+    expect(events.items.map((e) => e.kind)).toEqual(['stopped']);
   });
 });
 
 describe('ProcessSupervisor — adopt and expected exits', () => {
-  it('adopt() registers synchronously and reports a start failure as agent.failed(runtime)', async () => {
+  it('adopt() registers synchronously and reports a start failure as `start_failed`', async () => {
     const { s, events } = makeSupervisor();
     const proc = s.adopt({
       agentId: 'a-1',
@@ -313,8 +348,8 @@ describe('ProcessSupervisor — adopt and expected exits', () => {
       cwd: process.cwd(),
     });
     expect(proc.state).toBe('running');
-    await events.waitFor((e) => e.some((x) => x.type === 'agent.failed'));
-    expect(events.items[0]).toMatchObject({ type: 'agent.failed', reason: 'runtime' });
+    await events.waitFor((e) => e.some((x) => x.kind === 'start_failed'));
+    expect(events.items[0]).toMatchObject({ kind: 'start_failed' });
     await expect(proc.exited).resolves.toMatchObject({ code: null, signal: null });
     expect(s.get('a-1')).toBeUndefined();
   });
@@ -341,7 +376,7 @@ describe('ProcessSupervisor — adopt and expected exits', () => {
     process.kill(proc.pid, 'SIGTERM');
     await proc.exited;
     await sleep(20);
-    expect(events.items).toEqual([]);
+    expect(events.items.map((o) => o.kind)).toEqual(['exited']);
     expect(proc.exit?.signal).toBe('SIGTERM');
   });
 });
@@ -464,15 +499,44 @@ describe('ProcessSupervisor — persisted PID table and reconciliation', () => {
   });
 });
 
+describe('ProcessSupervisor — child environment (P1-24)', () => {
+  it('children inherit only the allow-list plus the spec env', async () => {
+    const { s } = makeSupervisor({ inheritEnv: ['GALACTIC_TEST_OK'] });
+    process.env['GALACTIC_TEST_SECRET'] = 'server-only';
+    process.env['GALACTIC_TEST_OK'] = 'shared';
+    try {
+      const out: string[] = [];
+      const proc = await s.spawn(
+        node(`console.log(JSON.stringify(process.env))`, {
+          env: { GALACTIC_SPEC: 'yes', PATH: undefined },
+          onStdout: (c) => out.push(c),
+        }),
+      );
+      await proc.exited;
+      await eventually(() => out.join('').includes('}'));
+      const env = JSON.parse(out.join('')) as Record<string, string>;
+      expect(env['GALACTIC_TEST_SECRET']).toBeUndefined();
+      expect(env['GALACTIC_TEST_OK']).toBe('shared');
+      expect(env['GALACTIC_SPEC']).toBe('yes');
+      expect(env['PATH']).toBeUndefined();
+      expect(env['HOME']).toBe(process.env['HOME']);
+      expect(INHERITED_ENV).not.toContain('ANTHROPIC_API_KEY');
+    } finally {
+      delete process.env['GALACTIC_TEST_SECRET'];
+      delete process.env['GALACTIC_TEST_OK'];
+    }
+  });
+});
+
 describe('ProcessSupervisor — dispose', () => {
-  it('stops every live process and ends the event stream', async () => {
+  it('stops every live process, reporting each stop', async () => {
     const { s, events } = makeSupervisor();
     await s.spawn(node(LOITER([]), { agentId: 'a-1' }));
     await s.spawn(node(LOITER(['SIGINT']), { agentId: 'a-2' }));
     await s.dispose();
     expect(s.list().every((p) => p.state === 'exited')).toBe(true);
     await sleep(20);
-    expect(events.items).toEqual([]);
+    expect(events.items.map((o) => o.kind).sort()).toEqual(['stopped', 'stopped']);
     await expect(s.spawn(node(LOITER([]), { agentId: 'a-3' }))).rejects.toThrow(/disposed/);
   });
 });
