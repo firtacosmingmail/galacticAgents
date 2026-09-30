@@ -3,6 +3,7 @@ import { Id, Timestamp } from './primitives.js';
 import { AgentRole, AgentRuntime, QuestionKind, WorkState } from './enums.js';
 import {
   Actor,
+  Agent,
   Body,
   Cost,
   Host,
@@ -19,6 +20,13 @@ import {
 // ---------------------------------------------------------------------------
 
 const agentBase = { agentId: Id };
+
+/**
+ * The agent row exists (TECHNOLOGY §6.2: every mutation is fully described by its events, so a
+ * replaying client can build the same `agents` table as a snapshotting one). Emitted by the
+ * command that creates the row, before `agent.spawned`.
+ */
+export const AgentCreated = z.object({ type: z.literal('agent.created'), agent: Agent });
 
 export const AgentSpawned = z.object({
   type: z.literal('agent.spawned'),
@@ -98,7 +106,7 @@ export const AgentFailed = z.object({
 
 export const AgentStopped = z.object({ type: z.literal('agent.stopped'), ...agentBase, by: Actor });
 
-/** Everything an adapter may emit. */
+/** Everything an adapter (or the runtime, for `agent.spawned`) may emit about a running agent. */
 export const AgentEvent = z.discriminatedUnion('type', [
   AgentSpawned,
   AgentOutput,
@@ -247,6 +255,7 @@ export const ControlReopen = z.object({ type: z.literal('control.reopen'), ...co
 
 /** Every event that can appear in the `events` log and on the WebSocket stream. */
 export const Event = z.discriminatedUnion('type', [
+  AgentCreated,
   AgentSpawned,
   AgentOutput,
   AgentToolCall,

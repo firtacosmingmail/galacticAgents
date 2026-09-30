@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Agent, EventEnvelope, StatusRecord } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
+import { SCENARIOS, type FakeScenario } from '../adapters/fake/scenario.js';
 import { openDatabase, type Database } from '../db/database.js';
 import { EventLog } from '../domain/event-log.js';
 import { AgentRuntime, type SpawnRequest } from './agent-runtime.js';
@@ -24,7 +25,14 @@ interface Rig {
 }
 
 const rigs: Rig[] = [];
-function make(opts: { speed?: number; maxConcurrentAgents?: number; stallMs?: number } = {}): Rig {
+function make(
+  opts: {
+    speed?: number;
+    maxConcurrentAgents?: number;
+    stallMs?: number;
+    scenarios?: Record<string, FakeScenario>;
+  } = {},
+): Rig {
   const db = openDatabase(':memory:');
   const log = new EventLog(db);
   const events: EventEnvelope[] = [];
@@ -37,7 +45,10 @@ function make(opts: { speed?: number; maxConcurrentAgents?: number; stallMs?: nu
   });
   log.subscribe((e) => statuses.fold(e));
   const transcripts = new TranscriptPipeline(db, { flushMs: 10 });
-  const adapter = new FakeAdapter({ speed: opts.speed ?? 0 });
+  const adapter = new FakeAdapter({
+    speed: opts.speed ?? 0,
+    scenarios: { ...SCENARIOS, ...(opts.scenarios ?? {}) },
+  });
   const runtime = new AgentRuntime({
     log,
     adapters: [adapter],
@@ -117,7 +128,11 @@ describe('AgentRuntime — routing', () => {
     });
     // A procedural asteroid was created for the standalone agent, with its event.
     expect(rig.log.tables.bodies.get(agent.bodyId)).toMatchObject({ kind: 'asteroid' });
-    expect(rig.events[0]!.event.type).toBe('body.created');
+    expect(rig.events.slice(0, 2).map((e) => e.event.type)).toEqual([
+      'body.created',
+      'agent.created',
+    ]);
+    // Everything the adapter emitted before the handle came back was held until agent.spawned.
     expect(rig.eventsOf(agent.id)).toEqual([
       'agent.spawned',
       'agent.tool_call',
@@ -143,6 +158,40 @@ describe('AgentRuntime — routing', () => {
       caps: { toolCalls: { used: 3, limit: 100 } },
     });
     expect(rig.runtime.liveAgents()).toEqual([]);
+    expect(rig.runtime.inbox(agent.id)).toBeUndefined(); // the runtime forgets ended sessions
+  });
+
+  it('redacts secrets in event payloads before they reach the log or the status store', async () => {
+    const KEY = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+    const leaky: FakeScenario = {
+      steps: [
+        {
+          kind: 'tool_call',
+          toolName: 'Bash',
+          input: { command: `export ANTHROPIC_API_KEY=${KEY}` },
+        },
+        { kind: 'progress', summary: `set ${KEY}` },
+        {
+          kind: 'permission',
+          toolName: 'Write',
+          input: { file_path: '.env', content: `KEY=${KEY}` },
+          permissionAction: 'edit_workspace',
+          text: `write ${KEY}?`,
+        },
+        { kind: 'finish', result: `done with ${KEY}` },
+      ],
+    };
+    const rig = make({ scenarios: { leaky } });
+    const agent = await spawnOk(rig, req('scenario:leaky'));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'waiting_for_input');
+    await rig.runtime.answer(rig.status(agent.id)!.pendingQuestionId!, 'allow', USER);
+    await rig.waitFor(() => rig.eventsOf(agent.id).includes('agent.finished'));
+    await sleep(20);
+    const logged = JSON.stringify(rig.log.eventsSince(0));
+    expect(logged).not.toContain(KEY);
+    expect(logged).toContain('[redacted:');
+    expect(JSON.stringify(rig.statuses.all())).not.toContain(KEY);
+    expect(rig.status(agent.id)?.currentActivity).toBe('done with [redacted:anthropic-key]');
   });
 
   it('refuses an unknown runtime without creating anything', async () => {

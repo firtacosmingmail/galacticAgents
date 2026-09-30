@@ -18,6 +18,7 @@ import {
 import type { EventLog } from '../domain/event-log.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
+import { redactSecrets } from './redact.js';
 import type { StatusStore } from './status-store.js';
 import type { TranscriptPipeline } from './transcripts.js';
 
@@ -71,13 +72,19 @@ export interface AgentRuntimeOptions {
 interface Live {
   agent: Agent;
   adapter: AgentAdapter;
-  handle: SpawnHandle;
+  /** Set once the adapter's `spawn`/`resumeSession` resolved. */
+  handle: SpawnHandle | undefined;
+  /** Events the adapter emitted before the handle came back: routed after `agent.spawned`. */
+  early: AgentEvent[];
   inbox: AgentInbox;
   /** Question ids currently open for this agent (adapter-assigned). */
   questions: Set<Id>;
   paused: boolean;
   idle: boolean;
+  /** A terminal event (finished, failed, stopped) was routed. */
   ended: boolean;
+  /** Which one; `agent.stopped` may be the tail of a cap stop, the other two are the agent's own verdict. */
+  terminal: 'agent.finished' | 'agent.failed' | 'agent.stopped' | undefined;
 }
 
 const SYSTEM: Actor = { type: 'system' };
@@ -166,12 +173,34 @@ export class AgentRuntime {
     open: (opts: Parameters<AgentAdapter['spawn']>[0]) => Promise<SpawnHandle>,
   ): Promise<SpawnResult> {
     const caps = agent.caps;
+    // Registered before the adapter runs: whatever it emits before the handle comes back is
+    // buffered and routed after `agent.spawned`, and counts against the caps from the start.
+    const live: Live = {
+      agent,
+      adapter,
+      handle: undefined,
+      early: [],
+      inbox: new AgentInbox(agent.id, {
+        deliver: (m) => adapter.send(this.session(live), m.text),
+        interrupt: () => adapter.interrupt(this.session(live)),
+        now: this.now,
+        onError: (e) => this.onError(e, `inbox ${agent.id}`),
+      }),
+      questions: new Set(),
+      paused: false,
+      idle: false,
+      ended: false,
+      terminal: undefined,
+    };
+    this.live.set(agent.id, live);
+    this.caps.track(agent.id, caps);
     let handle: SpawnHandle;
     try {
       handle = await open({
         agentId: agent.id,
         role: agent.role,
         cwd: req.cwd,
+        workspace: req.workspace ?? req.cwd,
         prompt: req.prompt,
         permissionPolicy: req.permissionPolicy ?? DEFAULT_PERMISSION_POLICY,
         caps,
@@ -181,6 +210,8 @@ export class AgentRuntime {
       });
     } catch (error) {
       const message = (error as Error).message;
+      this.live.delete(agent.id);
+      this.caps.release(agent.id);
       this.record({ type: 'agent.failed', agentId: agent.id, error: message, reason: 'runtime' });
       return { ok: false, reason: message };
     }
@@ -188,24 +219,9 @@ export class AgentRuntime {
       agent = this.opts.log.runCommand(({ tables }) =>
         tables.agents.upsert({ ...agent, sessionRef: handle.sessionRef!, updatedAt: this.now() }),
       ).value;
+      live.agent = agent;
     }
-    const live: Live = {
-      agent,
-      adapter,
-      handle,
-      inbox: new AgentInbox(agent.id, {
-        deliver: (m) => adapter.send(handle.sessionId, m.text),
-        interrupt: () => adapter.interrupt(handle.sessionId),
-        now: this.now,
-        onError: (e) => this.onError(e, `inbox ${agent.id}`),
-      }),
-      questions: new Set(),
-      paused: false,
-      idle: false,
-      ended: false,
-    };
-    this.live.set(agent.id, live);
-    this.caps.track(agent.id, caps);
+    live.handle = handle;
     this.record({
       type: 'agent.spawned',
       agentId: agent.id,
@@ -217,7 +233,13 @@ export class AgentRuntime {
       ...(agent.taskId ? { taskId: agent.taskId } : {}),
       ...(agent.projectId ? { projectId: agent.projectId } : {}),
     });
+    for (const event of live.early.splice(0)) this.route(event);
     return { ok: true, agent };
+  }
+
+  private session(live: Live): string {
+    if (!live.handle) throw new Error(`agent ${live.agent.id} has no session yet`);
+    return live.handle.sessionId;
   }
 
   /** Queues a message; delivered when the agent is idle, or now with `interrupt`. */
@@ -229,10 +251,12 @@ export class AgentRuntime {
     const agentId = this.byQuestion.get(questionId);
     if (!agentId) throw new Error(`no open question ${questionId}`);
     const live = this.must(agentId);
+    // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
+    // an answer in the log that the agent never saw.
+    await live.adapter.answer(questionId, answer);
     live.questions.delete(questionId);
     this.byQuestion.delete(questionId);
     this.record({ type: 'question.answered', questionId, answer, answeredBy: by, version: 0 });
-    await live.adapter.answer(questionId, answer);
   }
 
   async pause(agentId: Id, by: Actor): Promise<void> {
@@ -241,7 +265,7 @@ export class AgentRuntime {
     this.record({ type: 'control.pause', target: { kind: 'agent', id: agentId }, by });
     live.paused = true;
     live.inbox.paused();
-    await live.adapter.pause(live.handle.sessionId);
+    await live.adapter.pause(this.session(live));
   }
 
   async resumeAgent(agentId: Id, by: Actor): Promise<void> {
@@ -249,18 +273,18 @@ export class AgentRuntime {
     if (!live.paused) return;
     this.record({ type: 'control.resume', target: { kind: 'agent', id: agentId }, by });
     live.paused = false;
-    await live.adapter.resume(live.handle.sessionId);
+    await live.adapter.resume(this.session(live));
     live.inbox.resumed(live.idle);
   }
 
   async interrupt(agentId: Id): Promise<void> {
     const live = this.must(agentId);
-    await live.adapter.interrupt(live.handle.sessionId);
+    await live.adapter.interrupt(this.session(live));
   }
 
   async stop(agentId: Id, by: Actor): Promise<void> {
     const live = this.live.get(agentId);
-    if (!live || live.ended) return;
+    if (!live || live.ended || !live.handle) return;
     this.record({ type: 'control.stop', target: { kind: 'agent', id: agentId }, by });
     await live.adapter.stop(live.handle.sessionId);
   }
@@ -268,9 +292,12 @@ export class AgentRuntime {
   /** Stops every live agent (graceful) and closes the adapters. */
   async dispose(): Promise<void> {
     this.disposed = true;
-    await Promise.all(this.liveAgents().map((a) => this.stop(a.id, SYSTEM)));
-    await Promise.all([...this.adapters.values()].map((a) => a.dispose()));
-    await Promise.all(this.pumps);
+    const stops = await Promise.allSettled(this.liveAgents().map((a) => this.stop(a.id, SYSTEM)));
+    for (const s of stops) if (s.status === 'rejected') this.onError(s.reason, 'dispose stop');
+    const disposals = await Promise.allSettled([...this.adapters.values()].map((a) => a.dispose()));
+    for (const d of disposals)
+      if (d.status === 'rejected') this.onError(d.reason, 'dispose adapter');
+    await Promise.allSettled(this.pumps);
     this.caps.dispose();
   }
 
@@ -311,6 +338,7 @@ export class AgentRuntime {
         ...(req.projectId ? { projectId: req.projectId } : {}),
       };
       tables.agents.insert(agent);
+      emit({ type: 'agent.created', agent });
       return agent;
     }).value;
   }
@@ -326,23 +354,35 @@ export class AgentRuntime {
 
   private async pump(adapter: AgentAdapter): Promise<void> {
     try {
-      for await (const event of adapter.events) this.route(event);
+      for await (const event of adapter.events) {
+        try {
+          this.route(event);
+        } catch (error) {
+          // One bad event must not stop the stream: the next ones still reach the log.
+          this.onError(error, `routing ${event.type} of ${event.agentId}`);
+        }
+      }
     } catch (error) {
       this.onError(error, `events of ${adapter.runtime}`);
     }
   }
 
-  private route(event: AgentEvent): void {
-    const live = this.live.get(event.agentId);
+  private route(raw: AgentEvent): void {
+    const live = this.live.get(raw.agentId);
+    if (live && !live.handle) {
+      live.early.push(raw);
+      return;
+    }
+    const event = redactEvent(raw);
     if (event.type === 'agent.output') {
       this.opts.transcripts.append(event.agentId, event.kind, event.text);
       this.opts.statuses.touch(event.agentId);
       if (live && !live.paused) live.idle = false;
       return;
     }
-    // Caps first: a tool-call over the limit stops the agent before its event is even logged.
-    this.caps.onEvent(event);
     this.record(event);
+    // Caps after the log so a tripping tool call precedes the stop it causes.
+    this.caps.onEvent(event);
     if (!live) return;
     switch (event.type) {
       case 'agent.idle':
@@ -364,22 +404,29 @@ export class AgentRuntime {
       case 'agent.finished':
       case 'agent.failed':
       case 'agent.stopped':
-        live.ended = true;
-        live.inbox.ended();
-        for (const q of live.questions) this.byQuestion.delete(q);
-        live.questions.clear();
-        this.caps.release(event.agentId);
+        this.end(live, event.type);
         return;
       default:
         return;
     }
   }
 
+  private end(live: Live, terminal: Live['terminal']): void {
+    if (live.ended) return;
+    live.ended = true;
+    live.terminal = terminal;
+    live.inbox.ended();
+    for (const q of live.questions) this.byQuestion.delete(q);
+    live.questions.clear();
+    this.caps.release(live.agent.id);
+    // The log and the status store keep the history; the runtime forgets the session.
+    this.live.delete(live.agent.id);
+  }
+
   /** Called by the caps enforcer: stop the agent, then report the cap. */
   async onCapHit(agentId: Id, reason: string): Promise<void> {
     const live = this.live.get(agentId);
-    if (!live || live.ended) return;
-    live.ended = true;
+    if (!live || live.ended || !live.handle) return;
     live.inbox.ended();
     this.record({ type: 'control.stop', target: { kind: 'agent', id: agentId }, by: SYSTEM });
     try {
@@ -387,6 +434,63 @@ export class AgentRuntime {
     } catch (error) {
       this.onError(error, `cap stop ${agentId}`);
     }
+    // A verdict that was already on the wire wins: the agent finished (or failed) on its own.
+    if (live.terminal === 'agent.finished' || live.terminal === 'agent.failed') return;
     this.record({ type: 'agent.failed', agentId, error: reason, reason: 'cap' });
+    this.end(live, 'agent.failed');
   }
+}
+
+/** Every string an agent event carries can hold a printed secret; redact them like output. */
+export function redactEvent<T extends AgentEvent>(event: T): T {
+  switch (event.type) {
+    case 'agent.output':
+      return { ...event, text: redactSecrets(event.text) };
+    case 'agent.tool_call':
+      return {
+        ...event,
+        ...(event.input !== undefined ? { input: redactValue(event.input) } : {}),
+      };
+    case 'agent.needs_input':
+      return {
+        ...event,
+        question: {
+          ...event.question,
+          text: redactSecrets(event.question.text),
+          ...(event.question.options
+            ? { options: event.question.options.map((o) => redactSecrets(o)) }
+            : {}),
+          ...(event.question.toolCall
+            ? {
+                toolCall: {
+                  ...event.question.toolCall,
+                  ...(event.question.toolCall.input !== undefined
+                    ? { input: redactValue(event.question.toolCall.input) }
+                    : {}),
+                },
+              }
+            : {}),
+        },
+      };
+    case 'agent.progress':
+      return { ...event, summary: redactSecrets(event.summary) };
+    case 'agent.finished':
+      return {
+        ...event,
+        ...(event.result !== undefined ? { result: redactSecrets(event.result) } : {}),
+      };
+    case 'agent.failed':
+      return { ...event, error: redactSecrets(event.error) };
+    default:
+      return event;
+  }
+}
+
+function redactValue(value: unknown): unknown {
+  if (typeof value === 'string') return redactSecrets(value);
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactValue(v)]));
+  }
+  return value;
 }

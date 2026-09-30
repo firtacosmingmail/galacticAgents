@@ -94,7 +94,7 @@ describe('StatusStore — folding', () => {
       'working',
       'idle',
       'paused',
-      'working',
+      'idle', // resume restores what the agent was doing before the pause
       'stalled',
       'finished',
     ]);

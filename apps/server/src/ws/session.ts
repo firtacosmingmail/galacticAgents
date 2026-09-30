@@ -48,16 +48,21 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
       socket.close(code, error);
     };
 
+    /** True when the socket can take more; otherwise it is cut as a slow consumer. */
+    const ready = (): boolean => {
+      if (socket.bufferedAmount <= maxBuffered) return true;
+      // A close frame would only queue behind the unread backlog: cut the connection instead.
+      // The client reconnects with its lastEventId and catches up (or gets a snapshot), and
+      // re-subscribes its transcripts with `since`.
+      opts.log?.warn(`dropping slow consumer (${socket.bufferedAmount} bytes queued)`);
+      teardown();
+      socket.terminate();
+      return false;
+    };
+
     const deliver = (envelope: EventEnvelope) => {
       if (envelope.seq <= lastSent) return;
-      if (socket.bufferedAmount > maxBuffered) {
-        // A close frame would only queue behind the unread backlog: cut the connection instead.
-        // The client reconnects with its lastEventId and catches up (or gets a snapshot).
-        opts.log?.warn(`dropping slow consumer (${socket.bufferedAmount} bytes queued)`);
-        teardown();
-        socket.terminate();
-        return;
-      }
+      if (!ready()) return;
       lastSent = envelope.seq;
       send(socket, { type: 'event', ...envelope });
     };
@@ -65,8 +70,7 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
     // 1. Subscribe first, then read: same tick, so nothing is missed.
     unsubscribe = log.subscribe(deliver);
     unsubscribeStatus = opts.statuses?.subscribe((statuses) => {
-      if (socket.bufferedAmount > maxBuffered) return; // the events path drops the socket
-      send(socket, { type: 'status', statuses });
+      if (ready()) send(socket, { type: 'status', statuses });
     });
 
     // 2. Snapshot or replay.
@@ -78,6 +82,10 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
         send(socket, { type: 'event', ...envelope });
       }
       send(socket, { type: 'caught_up', seq: lastSent });
+      // Records are server-owned (TECHNOLOGY §4): a replaying client cannot derive them, so it
+      // gets the current set right after the replay, like a snapshot would have carried it.
+      const statuses = opts.statuses?.all() ?? [];
+      if (statuses.length > 0) send(socket, { type: 'status', statuses });
       opts.log?.info(`ws session resumed from ${since}, replayed up to ${lastSent}`);
     } else {
       const snapshot = log.snapshot();
@@ -124,8 +132,7 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
           transcriptSubs.set(
             agentId,
             opts.transcripts.subscribe(agentId, since ?? 0, (chunks) => {
-              if (socket.bufferedAmount > maxBuffered) return; // the events path drops the socket
-              send(socket, { type: 'transcript', agentId, chunks });
+              if (ready()) send(socket, { type: 'transcript', agentId, chunks });
             }),
           );
           break;

@@ -68,9 +68,9 @@ export class TranscriptPipeline {
 
   /** Redacts and buffers one piece of output. Returns the chunk as it will be stored and sent. */
   append(agentId: Id, kind: TranscriptChunk['kind'], text: string): TranscriptChunk {
-    if (this.disposed) throw new Error('transcript pipeline disposed');
     const seq = this.allocateSeq(agentId);
     const chunk: TranscriptChunk = { agentId, seq, at: this.now(), kind, text: this.redact(text) };
+    if (this.disposed) return chunk; // shutting down: dropped, never an exception for the caller
     let pending = this.buffer.get(agentId);
     if (!pending) {
       pending = [];
@@ -85,6 +85,18 @@ export class TranscriptPipeline {
   /** The persisted chunks of an agent with `seq > since`, in order. */
   read(agentId: Id, since = 0, limit = 1_000): TranscriptChunk[] {
     return (this.selectSince.all(agentId, since, limit) as Row[]).map(fromRow);
+  }
+
+  /** Every persisted chunk after `since`, paged. */
+  private readAll(agentId: Id, since: number): TranscriptChunk[] {
+    const out: TranscriptChunk[] = [];
+    let cursor = since;
+    for (;;) {
+      const page = this.read(agentId, cursor, 1_000);
+      out.push(...page);
+      if (page.length < 1_000) return out;
+      cursor = page[page.length - 1]!.seq;
+    }
   }
 
   /** The last `seq` an agent has, persisted or buffered; 0 for an unknown agent. */
@@ -106,7 +118,7 @@ export class TranscriptPipeline {
       cursor = fresh[fresh.length - 1]!.seq;
       listener(fresh);
     };
-    const backlog = [...this.read(agentId, since), ...(this.buffer.get(agentId) ?? [])];
+    const backlog = [...this.readAll(agentId, since), ...(this.buffer.get(agentId) ?? [])];
     if (backlog.length > 0) this.notify(forward, backlog);
     let set = this.listeners.get(agentId);
     if (!set) {
@@ -138,7 +150,7 @@ export class TranscriptPipeline {
       })();
     } catch (error) {
       this.onError(error);
-      // Subscribers still get the batch: what they see is what the log will show once writable.
+      // Subscribers still get the batch; the rows are lost (a full disk is a Phase 8 concern).
     }
     for (const [agentId, chunks] of batches) {
       for (const listener of this.listeners.get(agentId) ?? []) this.notify(listener, chunks);

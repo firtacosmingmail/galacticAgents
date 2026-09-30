@@ -16,8 +16,9 @@ import type {
  * written back: the log is the truth, this is a view of it.
  *
  * `agent.output` never enters the log (it goes to the transcript pipeline), so the runtime calls
- * `touch()` for it: output keeps the agent alive and marks it working, but a rebuild from the log
- * alone gives the same states, since every state transition has a logged event.
+ * `touch()` for it: output keeps the agent alive and marks it working. A rebuild from the log
+ * alone cannot see output, so an agent that only ever printed is `starting` after a rebuild
+ * until its next logged event; every other transition has a logged event.
  */
 
 export interface StatusStoreOptions {
@@ -42,6 +43,8 @@ interface Entry {
   spawnedAt: number;
   lastEventAt: number;
   toolCalls: number;
+  /** What the agent was doing when it was paused; restored on resume. */
+  beforePause: AgentState | undefined;
 }
 
 const LIVE: ReadonlySet<AgentState> = new Set([
@@ -109,14 +112,16 @@ export class StatusStore {
     const at = Date.parse(envelope.at);
     if (event.type === 'question.answered') {
       for (const e of this.entries.values()) {
-        if (e.record.pendingQuestionId === event.questionId) {
-          this.update(e, at, { state: 'working', pendingQuestionId: undefined });
-          if (broadcast) this.mark(e.record.agentId);
-        }
+        if (e.record.pendingQuestionId !== event.questionId) continue;
+        const state = e.record.state;
+        const keep = state === 'paused' || ENDED.has(state);
+        this.update(e, at, { ...(keep ? {} : { state: 'working' }), pendingQuestionId: undefined });
+        if (e.beforePause === 'waiting_for_input') e.beforePause = 'working';
+        if (broadcast) this.mark(e.record.agentId);
       }
       return;
     }
-    if (!event.type.startsWith('agent.')) return;
+    if (!event.type.startsWith('agent.') || event.type === 'agent.created') return;
     const agentEvent = event as Extract<Event, { agentId: Id }>;
     const entry = this.entryFor(agentEvent.agentId, event, at);
     this.apply(entry, agentEvent, at);
@@ -203,6 +208,7 @@ export class StatusStore {
         spawnedAt: at,
         lastEventAt: at,
         toolCalls: 0,
+        beforePause: undefined,
       };
       entry.record.caps = this.caps(entry, at);
       this.entries.set(agentId, entry);
@@ -217,6 +223,7 @@ export class StatusStore {
         entry.runtime = event.runtime;
         entry.spawnedAt = at;
         entry.toolCalls = 0;
+        entry.beforePause = undefined;
         this.update(entry, at, {
           state: 'starting',
           currentActivity: undefined,
@@ -259,13 +266,17 @@ export class StatusStore {
         this.update(entry, at, paused ? {} : { state: 'stalled' });
         return;
       case 'agent.paused':
+        if (!paused) entry.beforePause = entry.record.state;
         this.update(entry, at, { state: 'paused' });
         return;
-      case 'agent.resumed':
-        this.update(entry, at, {
-          state: entry.record.pendingQuestionId ? 'waiting_for_input' : 'working',
-        });
+      case 'agent.resumed': {
+        const restored = entry.record.pendingQuestionId
+          ? 'waiting_for_input'
+          : (entry.beforePause ?? 'working');
+        entry.beforePause = undefined;
+        this.update(entry, at, { state: restored === 'stalled' ? 'working' : restored });
         return;
+      }
       case 'agent.finished':
         this.update(entry, at, {
           state: 'finished',
@@ -335,6 +346,7 @@ function describeTool(toolName: string, input: unknown): string {
   if (input && typeof input === 'object') {
     const i = input as Record<string, unknown>;
     const detail = i['command'] ?? i['file_path'] ?? i['pattern'] ?? i['path'] ?? i['url'];
+    // Events reach the store redacted (AgentRuntime); a rebuild reads the same redacted log.
     if (typeof detail === 'string') return `${toolName}: ${detail.slice(0, 120)}`;
   }
   return toolName;

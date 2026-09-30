@@ -107,6 +107,15 @@ export class CapsEnforcer {
     }
   }
 
+  /**
+   * Whether one more tool call would go over the cap: lets a permission hook (P1-09) refuse the
+   * call before it runs instead of stopping the agent after it ran.
+   */
+  wouldExceed(agentId: Id): boolean {
+    const entry = this.tracked.get(agentId);
+    return entry !== undefined && entry.toolCalls + 1 > entry.caps.maxToolCalls;
+  }
+
   usage(agentId: Id): CapUsage | undefined {
     const entry = this.tracked.get(agentId);
     if (!entry) return undefined;

@@ -14,6 +14,7 @@ function classify(
   e: Event,
 ): 'agent' | 'question' | 'proposal' | 'body' | 'project' | 'task' | 'control' {
   switch (e.type) {
+    case 'agent.created':
     case 'agent.spawned':
     case 'agent.output':
     case 'agent.tool_call':
@@ -76,10 +77,10 @@ describe('event schemas', () => {
     }
   });
 
-  it('agent.* events are also valid AgentEvents, other events are not', () => {
+  it('agent.* events about a running agent are AgentEvents; agent.created and the rest are not', () => {
     for (const type of EVENT_TYPES) {
       const ok = AgentEvent.safeParse(events[type]).success;
-      expect(ok, type).toBe(type.startsWith('agent.'));
+      expect(ok, type).toBe(type.startsWith('agent.') && type !== 'agent.created');
     }
   });
 

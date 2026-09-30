@@ -1,7 +1,7 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** wave 2 — P1-02, P1-04, P1-05, P1-06, P1-07 (all claimed 2026-09-30) · **Task status:** in progress
-**Phase status:** in progress (4/14 done)
+**Current task:** wave 3 — P1-09 (next to pick; not claimed) · **Task status:** todo
+**Phase status:** in progress (9/16 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -38,7 +38,7 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 | 1 (parallel) | P1-01, P1-03, P1-08, P1-10 | Process supervisor, fake adapter, SDK spike and policy engine are independent. |
 | 2 (parallel) | P1-02, P1-04, P1-05, P1-06, P1-07 | Caps need the supervisor; conformance suite needs the fake adapter; status store, transcripts and inbox need the bus + fake adapter. |
 | 3 | P1-09 | Real adapter needs the spike, supervisor, inbox and policy engine. |
-| 4 (parallel) | P1-11, P1-13, P1-14 | Ops console, README, restart recovery. |
+| 4 (parallel) | P1-11, P1-13, P1-14, P1-15, P1-16 | Ops console, README, restart recovery (+ the two review follow-ups). |
 | 5 | P1-12 | Conformance + resume against the real adapter, last. |
 
 ## Tasks
@@ -50,9 +50,10 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** `apps/server/src/runtime/supervisor.ts` (+ `process-store.ts`, `event-queue.ts`, migration 0003 `agent_processes`). `spawn()`/`adopt()` (synchronous, for the SDK's `spawnClaudeCodeProcess`), `stop()` = interrupt hook → `turnEnded()`/exit within `graceMs` → SIGTERM → SIGKILL, `expectExit()` for runtime-initiated exits, restart policy off by default, `reconcile()` kills a live orphan only when the pid is from this boot and still runs the recorded command. Decisions recorded in `TECHNOLOGY.md` §3.4.
 
 ### P1-02 — Hard caps
-- **Status:** in progress · **Depends on:** P1-01 · **Parallel with:** P1-04, P1-05, P1-06, P1-07
+- **Status:** done (2026-09-30) · **Depends on:** P1-01 · **Parallel with:** P1-04, P1-05, P1-06, P1-07
 - Per-agent wall-clock and tool-call caps (from `Agent.caps`, defaults from settings); global max concurrent agents (spawn refused with a clear reason); cap hit → graceful stop + `agent.failed(reason: cap)`.
 - **Acceptance:** tests for each cap; the refusal reason is visible in the event payload.
+- **Done:** `apps/server/src/runtime/caps.ts` + `agent-runtime.ts` (`onCapHit`): wall-clock timer, tool-call counter (`wouldExceed()` for a pre-flight refusal in P1-09), concurrency gate; a hit records `control.stop`, runs the adapter's graceful stop, then `agent.failed(reason: cap)` — unless the agent's own `finished`/`failed` arrived first. Stewards-per-Waykeeper and spawns-per-hour come with Phase 2.
 
 ### P1-03 — Fake adapter
 - **Status:** done (2026-09-30) · **Depends on:** P0-04 · **Parallel with:** P1-01, P1-08, P1-10
@@ -61,24 +62,28 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** `apps/server/src/adapters/fake/` — scripted `FakeStep`s, named scenarios (`echo`, `happy`, `asks`, `permission`, `stalls`, `fails`, `long`, `full`) picked by a `scenario:<name>` prompt, `speed` knob (0 = instantaneous), session refs `fake:<scenario>:<sessionId>:<step>` with an injectable progress map for in-process restarts. `agent.spawned` is the runtime layer's (TECHNOLOGY §3.4), every other event is covered by a test.
 
 ### P1-04 — Adapter conformance suite
-- **Status:** in progress · **Depends on:** P1-03 · **Parallel with:** P1-02, P1-05, P1-06, P1-07
+- **Status:** done (2026-09-30) · **Depends on:** P1-03 · **Parallel with:** P1-02, P1-05, P1-06, P1-07
 - Vitest suite parameterised by adapter: spawn → output → clarification question answered → permission request answered → pause/resume → interrupt → finish with cost; stop from every state; `resumeSession` round trip; stall detection. Runs against the fake adapter in CI.
 - **Acceptance:** suite green on the fake adapter; documented as the bar for any future adapter.
+- **Done:** `apps/server/src/adapters/conformance.ts` (`describeAdapterConformance(target)`), run through `composeRuntime` so the whole runtime is under test; `fake-adapter.conformance.test.ts` is the CI target. P1-12 adds the `claude-sdk` target (tagged, local-only); P1-13 documents it.
 
 ### P1-05 — Status store projection
-- **Status:** in progress · **Depends on:** P0-07, P1-03 · **Parallel with:** P1-02, P1-04, P1-06, P1-07
+- **Status:** done (2026-09-30) · **Depends on:** P0-07, P1-03 · **Parallel with:** P1-02, P1-04, P1-06, P1-07
 - Fold `agent.*` events into `StatusRecord`s (state, `current_activity`, `last_event_at`, `pending_question`, `progress`, `cost_so_far`, caps used); per-runtime silence threshold → `stalled`; rebuild from `events` on startup; batched diff broadcast (≈10 Hz) as `status.*` messages over the WS stream. This is the **only** implementation of the projection (TECHNOLOGY §4, decided with P0-18): the web client stores the records it receives (`snapshot.statuses`, then the status messages) and never derives them from `agent.*` itself — `apps/web/src/state/reduce.ts` already treats those events as seq-only.
 - **Acceptance:** replaying a recorded event log yields identical records; a silent agent turns `stalled` after the threshold and back to `working` on the next event.
+- **Done:** `apps/server/src/runtime/status-store.ts` (fold, `touch()` for output, `rebuild()`, ticker for stalls + wall clock, 10 Hz diffs), wired in `runtime/compose.ts` and pushed as `status` messages by `ws/session.ts` (also after a replay's `caught_up`); `agent.created{agent}` added to the protocol so replay and snapshot agree on `agents`. Web store keeps the records as received.
 
 ### P1-06 — Transcript pipeline and secret redaction
-- **Status:** in progress · **Depends on:** P0-07 · **Parallel with:** P1-02, P1-04, P1-05, P1-07
+- **Status:** done (2026-09-30) · **Depends on:** P0-07 · **Parallel with:** P1-02, P1-04, P1-05, P1-07
 - `agent.output` batched into `transcript_chunks` (≈10 Hz writes); redaction of known secret patterns (API keys, bearer tokens, `sk-…`, AWS keys) before persisting and before sending; per-agent subscribable transcript stream over WS (separate from the `events` stream); retention hook (no-op in v1).
 - **Acceptance:** a chunk containing a fake key is stored and sent redacted; transcript subscription delivers chunks in `seq` order.
+- **Done:** `apps/server/src/runtime/redact.ts` (shape-based rules) + `transcripts.ts` (10 Hz batches, per-agent seq across restarts, paged history, per-subscription cursor, `prune()` hook); `transcript.subscribe/unsubscribe` + `transcript` messages in the protocol and the session handler. The runtime also redacts the strings of every other agent event.
 
 ### P1-07 — Per-agent inbox (send queue)
-- **Status:** in progress · **Depends on:** P1-01, P1-03 · **Parallel with:** P1-02, P1-04, P1-05, P1-06
+- **Status:** done (2026-09-30) · **Depends on:** P1-01, P1-03 · **Parallel with:** P1-02, P1-04, P1-05, P1-06
 - `send()` enqueues; delivery on `agent.idle`; `interrupt: true` cancels the current turn and delivers immediately; every message records `sender` (user / supervisor id / system).
 - **Acceptance:** two messages sent while working are delivered in order after idle; an interrupt message arrives first.
+- **Done:** `apps/server/src/runtime/inbox.ts`, owned by the runtime (adapters only ever get `send()` when idle): FIFO, interrupt-first, held while paused, `sender` and delivery time on every message, failed deliveries kept in the history with their error.
 
 ### P1-08 — Claude SDK adapter spike (answers SPEC §8 questions 1–2)
 - **Status:** done (2026-09-30) · **Depends on:** P0-04 · **Parallel with:** P1-01, P1-03, P1-10
@@ -116,6 +121,16 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Status:** todo · **Depends on:** P1-01, P1-09 · **Parallel with:** P1-11, P1-13
 - Graceful shutdown handler (SIGINT/SIGTERM on the server): interrupt every agent, persist session refs, exit. Startup: reconcile PID table, respawn interrupted agents via `resumeSession` where the adapter supports it, deliver any answer given meanwhile as the first message, mark the rest `interrupted`.
 - **Acceptance:** kill -9 and clean restart both recover a fake-adapter agent; state visible in the ops console as `interrupted → working`.
+
+### P1-15 — Restart recovery: `agent.interrupted` event and shutdown semantics (added 2026-09-30)
+- **Status:** todo · **Depends on:** P1-14 design · **Parallel with:** P1-14
+- Found in the wave 2 review. The status store has an `interrupted` state but no event maps to it, and a graceful shutdown today ends every agent with `control.stop{by: system}` + `agent.stopped`, indistinguishable from a user stop. Add `agent.interrupted{agentId, reason}` to the protocol (emitted by the shutdown path and by `reconcile()` for dead/orphaned rows), fold it in the status store and the web reducer, and make P1-14's resume path key off it. Decide and record in `SPEC.md` §7 whether a resumed agent's wall-clock cap restarts from zero (today it does).
+- **Acceptance:** after `kill -9` + restart the fake agent shows `interrupted → working`; after a clean shutdown the log has `agent.interrupted`, not `agent.stopped`.
+
+### P1-16 — Retention of ended status records and inbox histories (added 2026-09-30)
+- **Status:** todo · **Depends on:** P1-05 · **Parallel with:** P1-11
+- Found in the wave 2 review. Ended agents stay in the status store (and in every snapshot) and the runtime keeps no bounded history of delivered messages. Add a retention rule (keep ended records for the decision-4 period, then drop from the store; keep inbox history in the log or cap it) and stop creating a procedural asteroid for a spawn refused by the concurrency cap.
+- **Acceptance:** a long-running server with thousands of finished agents keeps `snapshot.statuses` bounded; a refused spawn leaves no orphan body.
 
 ## Exit criteria (from the plan)
 

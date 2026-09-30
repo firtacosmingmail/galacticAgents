@@ -28,12 +28,26 @@ const port = await app.listen();
 // `galactic start` watches for this line to print its banner and open the browser.
 console.log(`GalacticAgents Mission Control listening on http://${config.host}:${port}`);
 
+let shuttingDown = false;
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, () => {
+  process.on(signal, () => {
+    if (shuttingDown) {
+      console.error('second signal: exiting now');
+      process.exit(1);
+    }
+    shuttingDown = true;
     // Graceful shutdown: agents are interrupted and their sessions saved (P1-14 completes this).
+    // A hard deadline keeps one stuck stop from holding the process open.
+    const deadline = setTimeout(() => {
+      console.error('shutdown deadline reached: exiting');
+      process.exit(1);
+    }, 15_000);
+    deadline.unref();
     void composed
       .dispose()
+      .catch((error) => console.error('[runtime] dispose:', error))
       .then(() => app.close())
+      .catch((error) => console.error('[server] close:', error))
       .then(() => process.exit(0));
   });
 }

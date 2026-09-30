@@ -172,7 +172,19 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     // Status records are a server-owned projection (TECHNOLOGY §4, decision recorded with P0-18):
     // the client receives them in the snapshot and, from P1-05, as status messages, and never
     // folds `agent.*` events itself — two implementations of one projection would drift.
+    case 'agent.created':
+      // The row itself (P1-05 follow-up): a replaying client keeps `agents` in step with a snapshot.
+      return { ...next, agents: { ...next.agents, [event.agent.id]: event.agent } };
     case 'agent.spawned':
+      return event.sessionRef
+        ? {
+            ...next,
+            agents: patch(next.agents, event.agentId, {
+              sessionRef: event.sessionRef,
+              updatedAt: at,
+            }),
+          }
+        : next;
     case 'agent.progress':
     case 'agent.tool_call':
     case 'agent.needs_input':

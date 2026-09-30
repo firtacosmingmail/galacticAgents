@@ -7,6 +7,7 @@ const waykeeper = { type: 'agent', id: 'a-waykeeper-1' } as const;
 
 /** One valid fixture per event type. The type of this map keeps it exhaustive. */
 export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
+  'agent.created': { type: 'agent.created', agent: d.agent },
   'agent.spawned': {
     type: 'agent.spawned',
     ...steward,

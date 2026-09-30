@@ -19,6 +19,8 @@ export interface InboxMessage {
   interrupt: boolean;
   queuedAt: string;
   deliveredAt?: string;
+  /** Set when the adapter refused the message; it is kept in the history, not retried. */
+  error?: string;
 }
 
 export interface InboxHooks {
@@ -110,6 +112,10 @@ export class AgentInbox {
     if (this.state === 'ended') return;
     this.isPaused = false;
     if (idle !== undefined) this.state = idle ? 'idle' : 'working';
+    // An interrupt queued during the pause still means "cancel the turn" once work resumes.
+    if (this.state === 'working' && this.queue[0]?.interrupt) {
+      void this.safely(() => this.hooks.interrupt());
+    }
     this.pump();
   }
 
@@ -124,11 +130,19 @@ export class AgentInbox {
     const message = this.queue.shift()!;
     this.delivering = true;
     this.state = 'working';
-    void this.safely(() => this.hooks.deliver(message)).then(() => {
-      this.delivering = false;
-      message.deliveredAt = this.now();
+    void (async () => {
+      try {
+        await this.hooks.deliver(message);
+        message.deliveredAt = this.now();
+      } catch (error) {
+        message.error = (error as Error).message;
+        (this.hooks.onError ?? (() => {}))(error);
+      }
       this.delivered.push(message);
-    });
+      this.delivering = false;
+      // An idle report may have arrived while the delivery was in flight.
+      this.pump();
+    })();
   }
 
   private async safely(fn: () => Promise<void> | void): Promise<void> {

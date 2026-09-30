@@ -98,6 +98,37 @@ describe('AgentInbox', () => {
     expect(inbox.currentState).toBe('ended');
   });
 
+  it('an idle report during an in-flight delivery is not lost', async () => {
+    const delivered: string[] = [];
+    let release: (() => void) | undefined;
+    const inbox = new AgentInbox('a-1', {
+      deliver: (m) => {
+        delivered.push(m.text);
+        return new Promise<void>((r) => (release = r)); // the adapter accepts slowly
+      },
+      interrupt: () => {},
+    });
+    inbox.idle();
+    inbox.enqueue('A', { sender: USER });
+    inbox.enqueue('B', { sender: USER });
+    await tick();
+    expect(delivered).toEqual(['A']);
+    inbox.idle(); // arrives while A's delivery is still pending
+    release!();
+    await tick();
+    await tick();
+    expect(delivered).toEqual(['A', 'B']);
+  });
+
+  it('an interrupt queued while paused fires when work resumes', async () => {
+    const { inbox, interrupts } = make();
+    inbox.paused();
+    inbox.enqueue('urgent', { sender: USER, interrupt: true });
+    expect(interrupts()).toBe(0);
+    inbox.resumed(false);
+    expect(interrupts()).toBe(1);
+  });
+
   it('a failing deliver hook is reported, not thrown', async () => {
     const errors: unknown[] = [];
     const inbox = new AgentInbox('a-1', {
@@ -111,5 +142,8 @@ describe('AgentInbox', () => {
     inbox.enqueue('x', { sender: USER });
     await tick();
     expect(errors).toHaveLength(1);
+    expect(inbox.history().map((m) => [m.text, m.error, m.deliveredAt])).toEqual([
+      ['x', 'adapter gone', undefined],
+    ]);
   });
 });

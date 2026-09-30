@@ -21,6 +21,8 @@ export interface SpawnOptions {
   role: AgentRole;
   /** Working directory: the Steward's git worktree, or the project workspace for brains. */
   cwd: string;
+  /** The project workspace root the permission policy measures "inside" against; defaults to `cwd`. */
+  workspace?: string;
   prompt: string;
   tools?: ToolDefinition[];
   systemPrompt?: string;

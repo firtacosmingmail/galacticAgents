@@ -116,11 +116,12 @@ describe('TranscriptPipeline', () => {
     expect(p.append('a-1', 'text', 'next').seq).toBe(5);
   });
 
-  it('dispose flushes and refuses further appends', () => {
+  it('dispose flushes; later appends are dropped, not thrown', () => {
     const { db, p } = make();
     p.append('a-1', 'text', 'last words');
     p.dispose();
     expect(db.prepare('SELECT COUNT(*) AS n FROM transcript_chunks').get()).toEqual({ n: 1 });
-    expect(() => p.append('a-1', 'text', 'x')).toThrow(/disposed/);
+    expect(p.append('a-1', 'text', 'x').seq).toBe(2);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM transcript_chunks').get()).toEqual({ n: 1 });
   });
 });
