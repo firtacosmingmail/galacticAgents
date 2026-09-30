@@ -1,5 +1,7 @@
-# dependencies and builds
+# dependencies and builds (pnpm only: other package managers' lockfiles are never committed)
 node_modules/
+package-lock.json
+yarn.lock
 dist/
 build/
 .turbo/

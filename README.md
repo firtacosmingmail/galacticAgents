@@ -9,11 +9,13 @@ Read `docs/SPEC.md` (what), `docs/TECHNOLOGY.md` (with what) and `docs/IMPLEMENT
 Requirements: Node 22 LTS and pnpm 10 (`corepack enable` or `npm i -g pnpm`). No native toolchain is needed: `better-sqlite3` ships prebuilt binaries (its install script is intentionally not run).
 
 ```sh
-pnpm install          # workspace: packages/protocol, apps/server, apps/web
+pnpm install          # workspace: packages/protocol, apps/server, apps/web (npm/yarn are refused)
 pnpm build            # protocol → server → web (also copies SQL migrations)
-pnpm test             # every package's Vitest suite, incl. the resume/gap test
+pnpm test             # builds protocol + server first, then every package's Vitest suite, incl. the resume/gap test
 pnpm start            # = galactic start: serves the built web app, prints URL + token, opens the browser
 ```
+
+Workspace packages are consumed from their `dist/` (`@galactic/protocol` by everything, `@galactic/server` by the web tests), so `pnpm dev` and `pnpm test` build what they need first; `pnpm -r test` alone assumes a prior `pnpm build`.
 
 `galactic start` flags: `--no-open`, `--port <n>`, `--dev` (enables the `/dev/*` demo routes behind the page's **Emit fake event** / **Seed demo project** buttons; `pnpm dev` enables them by itself). The server binds `127.0.0.1:4321` by default and keeps its config, token and SQLite database in `~/.galactic/` (`GALACTIC_HOME` overrides the folder; `GALACTIC_PORT`, `GALACTIC_TOKEN`, `GALACTIC_ALLOWED_HOSTS` override single settings).
 
@@ -22,7 +24,7 @@ The token is generated on first start and printed by `galactic start`. The page 
 ## Development
 
 ```sh
-pnpm dev              # protocol (tsc --watch) + server (tsx watch) + web (vite) with hot reload
+pnpm dev              # builds the protocol once, then protocol (tsc --watch) + server (tsx watch, GALACTIC_DEV=1) + web (vite) with hot reload
 ```
 
 Open <http://localhost:5173>. Vite proxies `/ws`, `/health` and `/dev` to the server on `127.0.0.1:4321`, so the browser talks to a single origin. Press **Emit fake event** on the page to append an event through `POST /dev/events` and watch it arrive over the stream; **Seed demo project** creates a planet with a project on it through a proper command, so reloading the page (which always takes a fresh snapshot) shows it again.

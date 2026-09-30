@@ -10,8 +10,8 @@ export interface AppState {
   /** The most recent events, newest first, for the event page. */
   log: EventEnvelope[];
   status: ConnectionStatus;
-  statusDetail?: string;
-  lastError?: string;
+  statusDetail?: string | undefined;
+  lastError?: string | undefined;
   apply: (message: ServerMessage) => void;
   setStatus: (status: ConnectionStatus, detail?: string) => void;
   reset: () => void;

@@ -50,9 +50,18 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
   };
 }
 
-function patch<T>(map: Record<Id, T>, id: Id, changes: Partial<T>): Record<Id, T> {
+/** Applies `changes` to a known item; an `undefined` value means "unchanged", never "cleared". */
+function patch<T extends object>(
+  map: Record<Id, T>,
+  id: Id,
+  changes: { [K in keyof T]?: T[K] | undefined },
+): Record<Id, T> {
   const current = map[id];
-  return current ? { ...map, [id]: { ...current, ...changes } } : map;
+  if (!current) return map;
+  const defined = Object.fromEntries(
+    Object.entries(changes).filter(([, v]) => v !== undefined),
+  ) as Partial<T>;
+  return { ...map, [id]: { ...current, ...defined } };
 }
 
 function setStatus(

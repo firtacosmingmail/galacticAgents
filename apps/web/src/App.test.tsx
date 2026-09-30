@@ -86,6 +86,27 @@ describe('event page', () => {
     expect(localStorage.getItem('galactic.lastEventId')).toBeNull();
   });
 
+  it('forgets a refused token, re-discovers once, then asks for a paste (P0-17)', async () => {
+    localStorage.setItem('galactic.token', 'stale-token');
+    render(<App />);
+    await screen.findByText('connecting');
+    const s1 = FakeWebSocket.instances[0]!;
+    await act(async () => s1.serverOpens());
+    expect(s1.hello.token).toBe('stale-token');
+    await act(async () => s1.serverCloses(4401, 'unauthorized'));
+    // dropped and re-discovered from /health
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const s2 = FakeWebSocket.instances[1]!;
+    await act(async () => s2.serverOpens());
+    expect(s2.hello.token).toBe('tok-from-health');
+    expect(localStorage.getItem('galactic.token')).toBe('tok-from-health');
+    // refused again: no loop, the paste form appears
+    await act(async () => s2.serverCloses(4401, 'unauthorized'));
+    await screen.findByLabelText(/Paste the token/);
+    expect(localStorage.getItem('galactic.token')).toBeNull();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
   it('shows the whole world again after a page reload, and resumes within a page life (P0-12)', async () => {
     const snapshot = {
       type: 'snapshot' as const,

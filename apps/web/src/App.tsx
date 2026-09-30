@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { PROTOCOL_VERSION } from '@galactic/protocol';
 import { useAppStore } from './state/store.js';
 import {
@@ -19,9 +19,11 @@ export function App() {
     }
   });
   const [discovering, setDiscovering] = useState(token === undefined);
+  // How many refused tokens this page life may still recover from by re-discovering (P0-17).
+  const rediscoveries = useRef(1);
 
   useEffect(() => {
-    if (token !== undefined) return;
+    if (token !== undefined || !discovering) return;
     let cancelled = false;
     void discoverToken().then((found) => {
       if (cancelled) return;
@@ -31,12 +33,24 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, discovering]);
 
   useEffect(() => {
     if (!token) return;
     return startSession(token);
   }, [token]);
+
+  // A token the server refuses (config reset, another machine's token) is forgotten so the page
+  // does not sit on "unauthorized": once per page life it re-discovers the current token from
+  // `/health`; a second refusal falls through to the paste form.
+  const status = useAppStore((s) => s.status);
+  useEffect(() => {
+    if (status !== 'unauthorized' || !token) return;
+    forgetToken();
+    useAppStore.getState().reset();
+    setDiscovering(rediscoveries.current-- > 0);
+    setToken(undefined);
+  }, [status, token]);
 
   if (!token) {
     return (

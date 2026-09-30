@@ -5,9 +5,11 @@
   "description": "Mission Control for the AI coding agents running on your computer, through a solar-system interface.",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n protocol,server,web -c blue,green,magenta \"pnpm --filter @galactic/protocol dev\" \"pnpm --filter @galactic/server dev\" \"pnpm --filter @galactic/web dev\"",
+    "preinstall": "npx only-allow pnpm",
+    "build:deps": "pnpm --filter @galactic/protocol --filter @galactic/server build",
+    "dev": "pnpm --filter @galactic/protocol build && concurrently -n protocol,server,web -c blue,green,magenta \"pnpm --filter @galactic/protocol dev\" \"pnpm --filter @galactic/server dev\" \"pnpm --filter @galactic/web dev\"",
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
+    "test": "pnpm build:deps && pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -16,7 +18,8 @@
     "galactic": "node apps/server/bin/galactic.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "pnpm": ">=10"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

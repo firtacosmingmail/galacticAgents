@@ -231,7 +231,7 @@ galactic-agents/
   docs/            SPEC.md, TECHNOLOGY.md, IMPLEMENTATION_PLAN.md
 ```
 
-Three workspaces instead of five: adapters and brains live inside the server until a second consumer exists (extraction is cheap; a `server ↔ brains` dependency cycle is not). `packages/protocol` is the **single vocabulary**: `Body{id, kind, parentId?, host?: {kind: project|task, id}}`, `Project{…, workspace, repoPath?, parentProjectId?}`, `Task{…, projectId?, bodyId, worktreePath?, branch?, blockedBy[]}`, `Agent{…, role, runtime, sessionRef, supervisorId, bodyId}`, `Proposal`, `Question` (§5.3, with a `version` bumped on every holder change or answer), `StatusRecord` (§4), the `agent.*` / `question.*` / `proposal.*` / `project.*` / `task.*` / `body.*` (`created` for a body that was not in the seeded catalogue — a procedural asteroid, a task's body — then `assigned` / `moved` / `freed`) / `control.*` events.
+Three workspaces instead of five: adapters and brains live inside the server until a second consumer exists (extraction is cheap; a `server ↔ brains` dependency cycle is not). `packages/protocol` is the **single vocabulary**: `Body{id, kind, parentId?, host?: {kind: project|task, id}}`, `Project{…, workspace, repoPath?, parentProjectId?}`, `Task{…, projectId?, bodyId, worktreePath?, branch?, blockedBy[]}`, `Agent{…, role, runtime, sessionRef?, supervisorId?, bodyId, taskId?, projectId?, caps}`, `Proposal`, `Question` (§5.3, with a `version` bumped on every holder change or answer), `StatusRecord` (§4), the `agent.*` / `question.*` / `proposal.*` / `project.*` / `task.*` / `body.*` (`created` for a body that was not in the seeded catalogue — a procedural asteroid, a task's body — then `assigned` / `moved` / `freed`) / `control.*` events.
 
 ---
 

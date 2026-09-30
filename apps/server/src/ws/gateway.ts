@@ -53,6 +53,9 @@ export class WsGateway {
 
   /** Wire this to the HTTP server's `upgrade` event. */
   handleUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
+    // A raw socket without an error listener would turn an EPIPE during `deny()` into an
+    // uncaught exception; `ws` installs its own listener once `handleUpgrade` takes over.
+    socket.on('error', (err) => this.opts.log?.warn(`ws upgrade socket error: ${err.message}`));
     const url = new URL(req.url ?? '/', 'http://placeholder');
     if (url.pathname !== this.path) {
       this.deny(socket, 404, 'Not Found');
@@ -84,6 +87,7 @@ export class WsGateway {
       });
     }, HELLO_TIMEOUT_MS);
 
+    socket.once('close', () => clearTimeout(timer));
     socket.once('message', (data) => {
       clearTimeout(timer);
       let parsed: ReturnType<typeof ClientMessage.safeParse>;

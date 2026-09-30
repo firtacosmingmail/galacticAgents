@@ -11,7 +11,7 @@ export class FakeWebSocket {
 
   readyState = FakeWebSocket.CONNECTING;
   sent: string[] = [];
-  closeCalls: { code?: number; reason?: string }[] = [];
+  closeCalls: { code?: number | undefined; reason?: string | undefined }[] = [];
   onopen: ((ev: unknown) => void) | null = null;
   onmessage: ((ev: { data: string }) => void) | null = null;
   onclose: ((ev: { code: number; reason: string }) => void) | null = null;

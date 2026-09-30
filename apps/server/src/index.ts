@@ -15,11 +15,12 @@ const app = buildApp({
   ...(webDir ? { webDir } : {}),
 });
 
-const port = await app.listen();
-console.log(`GalacticAgents Mission Control listening on http://${config.host}:${port}`);
 if (tokenGenerated) {
   console.log(`Token generated and stored in ${config.configPath}`);
 }
+const port = await app.listen();
+// `galactic start` watches for this line to print its banner and open the browser.
+console.log(`GalacticAgents Mission Control listening on http://${config.host}:${port}`);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
