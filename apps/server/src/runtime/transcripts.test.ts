@@ -12,6 +12,7 @@ function make(opts: ConstructorParameters<typeof TranscriptPipeline>[1] = {}) {
   let t = 0;
   const p = new TranscriptPipeline(db, {
     flushMs: 20,
+    holdMs: 0,
     now: () => `2026-09-30T10:00:${String(t++).padStart(2, '0')}.000Z`,
     ...opts,
   });
@@ -80,10 +81,10 @@ describe('TranscriptPipeline', () => {
   it('continues the seq of an agent after a restart (new pipeline, same database)', async () => {
     const db = openDatabase(':memory:');
     dbs.push(db);
-    const first = new TranscriptPipeline(db, { flushMs: 5 });
+    const first = new TranscriptPipeline(db, { flushMs: 5, holdMs: 0 });
     first.append('a-1', 'text', 'before');
     first.dispose();
-    const second = new TranscriptPipeline(db, { flushMs: 5 });
+    const second = new TranscriptPipeline(db, { flushMs: 5, holdMs: 0 });
     pipes.push(second);
     expect(second.append('a-1', 'text', 'after').seq).toBe(2);
     second.flush();
@@ -95,7 +96,7 @@ describe('TranscriptPipeline', () => {
 
   it('forces a flush when the buffer is full and survives a listener that throws', async () => {
     const errors: unknown[] = [];
-    const { db, p } = make({ maxBuffered: 5, onError: (e) => errors.push(e) });
+    const { db, p } = make({ maxBuffered: 5, holdMs: 0, onError: (e) => errors.push(e) });
     const good: number[] = [];
     p.subscribe('a-1', 0, () => {
       throw new Error('bad listener');
@@ -123,5 +124,55 @@ describe('TranscriptPipeline', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM transcript_chunks').get()).toEqual({ n: 1 });
     expect(p.append('a-1', 'text', 'x').seq).toBe(2);
     expect(db.prepare('SELECT COUNT(*) AS n FROM transcript_chunks').get()).toEqual({ n: 1 });
+  });
+
+  describe('boundary-aware redaction (P1-27)', () => {
+    it('catches a key split over two chunks: the head moves to the second chunk, both redacted', async () => {
+      const { db, p } = make();
+      const received: TranscriptChunk[][] = [];
+      p.subscribe('a-1', 0, (chunks) => received.push(chunks));
+      const head = FAKE_KEY.slice(0, 18);
+      const tail = FAKE_KEY.slice(18);
+      const first = p.append('a-1', 'text', `export ANTHROPIC_KEY="${head}`);
+      const second = p.append('a-1', 'text', `${tail}"\n`);
+      expect(first.text).toBe('export ANTHROPIC_KEY="');
+      expect(second.text).toBe('[redacted:anthropic-key]"\n');
+      await sleep(60);
+      const rows = db.prepare('SELECT chunk FROM transcript_chunks ORDER BY seq').all() as {
+        chunk: string;
+      }[];
+      expect(rows.map((r) => r.chunk)).not.toContain(head);
+      expect(JSON.stringify(rows)).not.toContain(head);
+      expect(JSON.stringify(received)).not.toContain(head);
+      expect(received.flat().map((c) => c.seq)).toEqual([1, 2]);
+    });
+
+    it('a key split over three chunks is still one redaction', () => {
+      const { p } = make();
+      const parts = [FAKE_KEY.slice(0, 10), FAKE_KEY.slice(10, 25), FAKE_KEY.slice(25)];
+      p.append('a-1', 'text', `key: ${parts[0]}`);
+      p.append('a-1', 'text', parts[1]!);
+      const last = p.append('a-1', 'text', `${parts[2]} done`);
+      p.flush();
+      const texts = p.read('a-1').map((c) => c.text);
+      expect(texts).toEqual(['key: ', '', '[redacted:anthropic-key] done']);
+      expect(last.text).toBe('[redacted:anthropic-key] done');
+      expect(texts.join('')).not.toContain(FAKE_KEY.slice(0, 10));
+    });
+
+    it('holds the newest chunk of an agent for holdMs so the next delta can complete a secret', async () => {
+      const { db, p } = make({ holdMs: 80 });
+      p.append('a-1', 'text', 'one');
+      p.append('a-1', 'text', 'two');
+      await sleep(40);
+      const count = () =>
+        (db.prepare('SELECT COUNT(*) AS n FROM transcript_chunks').get() as { n: number }).n;
+      expect(count()).toBe(1); // 'two' is held, 'one' went out
+      await sleep(100);
+      expect(count()).toBe(2); // the hold expired and the timer flushed it
+      p.append('a-1', 'text', 'three');
+      p.flush(); // an explicit flush takes everything
+      expect(count()).toBe(3);
+    });
   });
 });
