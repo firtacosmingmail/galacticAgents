@@ -1,6 +1,6 @@
 # Phase 0 — Foundations
 
-**Current task:** P0-10 — Resume and gap test, P0-11 — Dev ergonomics and `galactic start` · **Task status:** todo, todo
+**Current task:** P0-10 — Resume and gap test, P0-11 — Dev ergonomics and `galactic start` · **Task status:** in progress, in progress
 **Phase status:** in progress (9/11 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -89,12 +89,12 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 - **Acceptance:** page connects, shows the snapshot, prints a fake event emitted by the server.
 
 ### P0-10 — Resume and gap test
-- **Status:** todo · **Depends on:** P0-08, P0-09 · **Parallel with:** P0-11
+- **Status:** in progress · **Depends on:** P0-08, P0-09 · **Parallel with:** P0-11
 - Automated test (Vitest + a headless WS client, and a Playwright smoke if cheap) that emits N events, drops the connection mid-stream, reconnects, and asserts the client saw every `seq` exactly once.
 - **Acceptance:** test in CI; documented in `apps/server/README.md`.
 
 ### P0-11 — Dev ergonomics and `galactic start`
-- **Status:** todo · **Depends on:** P0-08, P0-09 · **Parallel with:** P0-10
+- **Status:** in progress · **Depends on:** P0-08, P0-09 · **Parallel with:** P0-10
 - `galactic start` script (bin) that starts the server, prints the URL + token, opens the browser; `pnpm dev` with hot reload; root `README.md` quickstart.
 - **Acceptance:** a fresh clone reaches the event page in under five minutes following the README.
 
