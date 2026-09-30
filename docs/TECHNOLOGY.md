@@ -207,7 +207,7 @@ The status store (§4) and the task/project states are projections over `events`
 ### 6.3 WebSocket protocol (defined in Phase 0, used by every client from Phase 1)
 
 1. Client opens the socket and sends `hello{token, lastEventId?}` as the **first frame** (browsers cannot set headers on a WebSocket upgrade).
-2. Server replies with `snapshot{seq, agents, bodies, projects, tasks, questions, proposals}` when `lastEventId` is absent or too old to replay, otherwise with the `events` since `lastEventId`.
+2. Server replies with `snapshot{seq, agents, bodies, projects, tasks, questions, proposals, statuses}` when `lastEventId` is absent or too old to replay, otherwise with the `events` since `lastEventId` followed by `caught_up{seq}`.
 3. Thereafter a single ordered stream of `{seq, event}`; the client derives all state from it and remembers `seq` for the next reconnect. Transcript chunks are a separate, subscribable stream per agent.
 
 A phone that slept reconnects with its last `seq` and catches up instead of reloading everything; answers given offline are sent with the question's version so an "already answered by …" reply is possible.
@@ -230,7 +230,7 @@ galactic-agents/
   docs/            SPEC.md, TECHNOLOGY.md, IMPLEMENTATION_PLAN.md
 ```
 
-Three workspaces instead of five: adapters and brains live inside the server until a second consumer exists (extraction is cheap; a `server ↔ brains` dependency cycle is not). `packages/protocol` is the **single vocabulary**: `Body{id, kind, parentId?, host?: {kind: project|task, id}}`, `Project{…, workspace, repoPath?, parentProjectId?}`, `Task{…, projectId?, bodyId, worktreePath?, branch?, blockedBy[]}`, `Agent{…, role, runtime, sessionRef, supervisorId, bodyId}`, `Proposal`, `Question` (§5.3), `StatusRecord` (§4), the `agent.*` / `question.*` / `proposal.*` / `project.*` / `task.*` / `body.*` events.
+Three workspaces instead of five: adapters and brains live inside the server until a second consumer exists (extraction is cheap; a `server ↔ brains` dependency cycle is not). `packages/protocol` is the **single vocabulary**: `Body{id, kind, parentId?, host?: {kind: project|task, id}}`, `Project{…, workspace, repoPath?, parentProjectId?}`, `Task{…, projectId?, bodyId, worktreePath?, branch?, blockedBy[]}`, `Agent{…, role, runtime, sessionRef, supervisorId, bodyId}`, `Proposal`, `Question` (§5.3, with a `version` bumped on every holder change or answer), `StatusRecord` (§4), the `agent.*` / `question.*` / `proposal.*` / `project.*` / `task.*` / `body.*` events.
 
 ---
 
