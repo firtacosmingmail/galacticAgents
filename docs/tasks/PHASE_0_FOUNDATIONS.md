@@ -1,6 +1,6 @@
 # Phase 0 — Foundations
 
-**Current task:** P0-04 — Protocol: `AgentAdapter` and `DomainCommands` interfaces, P0-06 — SQLite layer and migrations · **Task status:** todo, todo
+**Current task:** P0-04 — Protocol: `AgentAdapter` and `DomainCommands` interfaces, P0-06 — SQLite layer and migrations · **Task status:** in progress, in progress
 **Phase status:** in progress (4/11 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -59,7 +59,7 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 - **Acceptance:** exhaustive `switch` over the union compiles; fixtures for every event type parse.
 
 ### P0-04 — Protocol: `AgentAdapter` and `DomainCommands` interfaces
-- **Status:** todo · **Depends on:** P0-02, P0-03 · **Parallel with:** P0-06
+- **Status:** in progress · **Depends on:** P0-02, P0-03 · **Parallel with:** P0-06
 - `AgentAdapter`: `spawn(opts{cwd, prompt, tools?, systemPrompt?, permissionPolicy, caps})`, `send(sessionId, message, {interrupt?})`, `answer(questionId, answer)`, `interrupt`, `pause`, `resume`, `stop`, `resumeSession?(sessionRef)`, `events: AsyncIterable<AgentEvent>`. `DomainCommands`: the command surface brain tools and panel actions will call (create/assign/spawn/close/control…), typed but unimplemented (Phase 2 implements).
 - **Acceptance:** interfaces exported; a no-op implementation of each type-checks.
 
@@ -69,7 +69,7 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 - **Acceptance:** connection with wrong token, wrong `Host`, or foreign `Origin` is refused (tests); health endpoint answers with the token.
 
 ### P0-06 — SQLite layer and migrations
-- **Status:** todo · **Depends on:** P0-02 · **Parallel with:** P0-04
+- **Status:** in progress · **Depends on:** P0-02 · **Parallel with:** P0-04
 - `better-sqlite3` in WAL mode; migrations folder + tiny runner (numbered SQL files, `schema_migrations` table); migration 0001 creates domain tables (bodies, projects, tasks, agents, proposals, questions, settings), `events(rowid, at, type, payload)`, `transcript_chunks(agentId, seq, chunk)`.
 - **Acceptance:** fresh DB migrates from zero; re-running is a no-op; a test inserts and reads each table.
 
