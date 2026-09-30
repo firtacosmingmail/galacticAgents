@@ -1,6 +1,6 @@
 # Phase 0 — Foundations
 
-**Current task:** P0-02 — Protocol: domain model schemas, P0-03 — Protocol: event model schemas, P0-05 — Server skeleton with auth and origin checks · **Task status:** todo, todo, todo
+**Current task:** P0-02 — Protocol: domain model schemas, P0-03 — Protocol: event model schemas · **Task status:** in progress, in progress
 **Phase status:** in progress (1/11 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -49,12 +49,12 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 - **Acceptance:** `pnpm install && pnpm -r build && pnpm -r test` pass on an empty codebase; `pnpm dev` starts both processes.
 
 ### P0-02 — Protocol: domain model schemas
-- **Status:** todo · **Depends on:** P0-01 · **Parallel with:** P0-03, P0-05
+- **Status:** in progress · **Depends on:** P0-01 · **Parallel with:** P0-03, P0-05
 - zod schemas + inferred types for `Body`, `Project`, `Task`, `Agent`, `Proposal`, `Question`, `StatusRecord`, `PermissionPolicy`, and the enums: body kinds, agent roles/states (`starting, working, waiting_for_input, idle, stalled, paused, interrupted, finished, failed, stopped`), task/project states (`SPEC.md` §4.4), question kinds (`clarification | permission`), proposal states (`pending | approved | edited | rejected | parked`). Field lists as in `IMPLEMENTATION_PLAN.md` Phase 0.
 - **Acceptance:** schemas exported from the package root; a test parses a fixture of each type and rejects one invalid example each.
 
 ### P0-03 — Protocol: event model schemas
-- **Status:** todo · **Depends on:** P0-01 · **Parallel with:** P0-02, P0-05
+- **Status:** in progress · **Depends on:** P0-01 · **Parallel with:** P0-02, P0-05
 - Discriminated union of all events: `agent.*` (spawned, output, tool_call, needs_input, progress, idle, stalled, paused, resumed, finished, failed, stopped), `question.*` (opened, escalated, answered, reassigned), `proposal.*` (created, approved, edited, rejected, parked), `body.*` (assigned, moved, freed), `project.*`, `task.*`, `control.*` (stop, cancel, pause, resume, edit, close, archive, pin, reopen); envelope `{seq, at, event}`; the `hello` / `snapshot` WS message schemas.
 - **Acceptance:** exhaustive `switch` over the union compiles; fixtures for every event type parse.
 
