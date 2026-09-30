@@ -1,7 +1,7 @@
 # Phase 0 — Foundations
 
-**Current task:** P0-05 — Server skeleton with auth and origin checks · **Task status:** in progress
-**Phase status:** in progress (3/11 done)
+**Current task:** P0-04 — Protocol: `AgentAdapter` and `DomainCommands` interfaces, P0-06 — SQLite layer and migrations · **Task status:** todo, todo
+**Phase status:** in progress (4/11 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -64,7 +64,7 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 - **Acceptance:** interfaces exported; a no-op implementation of each type-checks.
 
 ### P0-05 — Server skeleton with auth and origin checks
-- **Status:** in progress · **Depends on:** P0-01 · **Parallel with:** P0-02, P0-03
+- **Status:** done (2026-09-30) · **Depends on:** P0-01 · **Parallel with:** P0-02, P0-03
 - Fastify app bound to `127.0.0.1` on a configurable port; config loader (env + `~/.galactic/config.json`); token generated on first start, stored in config, printed once; `Host` allow-list (`localhost`, `127.0.0.1`, configurable `*.ts.net`); `Origin` check on WS upgrade; `ws` server attached; health endpoint.
 - **Acceptance:** connection with wrong token, wrong `Host`, or foreign `Origin` is refused (tests); health endpoint answers with the token.
 
