@@ -4,7 +4,7 @@ import type { AgentEvent } from '@galactic/protocol';
 import { openDatabase } from '../db/database.js';
 import { collect } from './event-queue.js';
 import { MemoryProcessStore, SqliteProcessStore } from './process-store.js';
-import { ProcessSupervisor, isAlive, type ProcessSpec } from './supervisor.js';
+import { ProcessSupervisor, bootTime, isAlive, type ProcessSpec } from './supervisor.js';
 
 const NODE = process.execPath;
 const node = (script: string, extra: Partial<ProcessSpec> = {}): ProcessSpec => ({
@@ -186,6 +186,19 @@ describe('ProcessSupervisor — graceful stop', () => {
     expect(Date.now() - started).toBeLessThan(3_000);
   });
 
+  it('does not lose a turn end reported from inside the interrupt hook', async () => {
+    const { s } = makeSupervisor();
+    const out: string[] = [];
+    await s.spawn(
+      node(LOITER(['SIGINT']), { onStdout: (c) => out.push(c), interrupt: (p) => p.turnEnded() }),
+    );
+    await eventually(() => out.join('').includes('ready'));
+    const started = Date.now();
+    const exit = await s.stop('a-1', { graceMs: 5_000, termMs: 100 });
+    expect(exit?.signal).toBe('SIGTERM');
+    expect(Date.now() - started).toBeLessThan(2_500);
+  });
+
   it('kills orphaned grandchildren with the process group', async () => {
     const { s } = makeSupervisor();
     const out: string[] = [];
@@ -249,6 +262,31 @@ describe('ProcessSupervisor — restart policy', () => {
     expect(proc.state).toBe('exited');
   });
 
+  it('keeps one `exited` promise across restarts', async () => {
+    const { s, events } = makeSupervisor();
+    const proc = await s.spawn(
+      node(`process.exit(1)`, { restart: { mode: 'on-crash', maxRestarts: 1, backoffMs: 10 } }),
+    );
+    const exited = proc.exited;
+    await events.waitFor((e) => e.some((x) => x.type === 'agent.failed'));
+    await expect(exited).resolves.toMatchObject({ code: 1 });
+    expect(proc.restarts).toBe(1);
+  });
+
+  it('a stop that lands during a restart wins and produces no crash events', async () => {
+    const { s, events } = makeSupervisor();
+    const proc = await s.spawn(
+      node(`process.exit(1)`, { restart: { mode: 'on-crash', maxRestarts: 5, backoffMs: 150 } }),
+    );
+    await events.waitFor((e) => e.some((x) => x.type === 'agent.progress'));
+    const exit = await s.stop('a-1');
+    expect(exit).toMatchObject({ code: 1 });
+    await sleep(300);
+    expect(proc.state).toBe('exited');
+    expect(proc.restarts).toBe(0);
+    expect(events.items.map((e) => e.type)).toEqual(['agent.progress', 'agent.stopped']);
+  });
+
   it('does not respawn after a requested stop', async () => {
     const { s, events } = makeSupervisor();
     const out: string[] = [];
@@ -266,10 +304,53 @@ describe('ProcessSupervisor — restart policy', () => {
   });
 });
 
+describe('ProcessSupervisor — adopt and expected exits', () => {
+  it('adopt() registers synchronously and reports a start failure as agent.failed(runtime)', async () => {
+    const { s, events } = makeSupervisor();
+    const proc = s.adopt({
+      agentId: 'a-1',
+      command: 'galactic-no-such-binary',
+      cwd: process.cwd(),
+    });
+    expect(proc.state).toBe('running');
+    await events.waitFor((e) => e.some((x) => x.type === 'agent.failed'));
+    expect(events.items[0]).toMatchObject({ type: 'agent.failed', reason: 'runtime' });
+    await expect(proc.exited).resolves.toMatchObject({ code: null, signal: null });
+    expect(s.get('a-1')).toBeUndefined();
+  });
+
+  it('adopt() returns a live child the caller can hand to a runtime', async () => {
+    const { s } = makeSupervisor();
+    const out: string[] = [];
+    const proc = s.adopt(
+      node(`process.stdin.on('data', (d) => { console.log('got ' + d); process.exit(0); })`, {
+        onStdout: (c) => out.push(c),
+      }),
+    );
+    await sleep(50);
+    proc.write('ping\n');
+    await proc.exited;
+    expect(out.join('')).toContain('got ping');
+    expect(s.processRecord('a-1')).toMatchObject({ pid: proc.pid, status: 'exited', exitCode: 0 });
+  });
+
+  it('an exit the runtime announced with expectExit() is not a crash', async () => {
+    const { s, events } = makeSupervisor();
+    const proc = await s.spawn(node(LOITER([])));
+    proc.expectExit();
+    process.kill(proc.pid, 'SIGTERM');
+    await proc.exited;
+    await sleep(20);
+    expect(events.items).toEqual([]);
+    expect(proc.exit?.signal).toBe('SIGTERM');
+  });
+});
+
 describe('ProcessSupervisor — persisted PID table and reconciliation', () => {
   it('marks dead rows interrupted and kills live orphans on startup', async () => {
     const store = new MemoryProcessStore();
     // A process from a "previous server life" that is gone.
+    const meta = { command: NODE, bootAt: bootTime() };
     const gone = spawn(NODE, ['-e', 'process.exit(0)']);
     await new Promise((r) => gone.once('exit', r));
     store.upsert({
@@ -277,6 +358,7 @@ describe('ProcessSupervisor — persisted PID table and reconciliation', () => {
       pid: gone.pid!,
       startedAt: '2026-09-30T00:00:00.000Z',
       status: 'running',
+      meta,
     });
     // A live orphan in its own group, nobody supervising it.
     const orphan = spawn(NODE, ['-e', 'setInterval(() => {}, 1000)'], {
@@ -290,6 +372,29 @@ describe('ProcessSupervisor — persisted PID table and reconciliation', () => {
       pid: orphan.pid!,
       startedAt: '2026-09-30T00:00:00.000Z',
       status: 'running',
+      meta,
+    });
+    // A live process whose pid was recycled by something else: must not be killed.
+    const stranger = spawn(NODE, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    stranger.unref();
+    await new Promise((r) => stranger.once('spawn', r));
+    store.upsert({
+      agentId: 'reused',
+      pid: stranger.pid!,
+      startedAt: '2026-09-30T00:00:00.000Z',
+      status: 'running',
+      meta: { command: '/usr/bin/claude', bootAt: bootTime() },
+    });
+    // A live pid recorded in a previous boot: never the same process.
+    store.upsert({
+      agentId: 'oldboot',
+      pid: stranger.pid!,
+      startedAt: '2026-09-30T00:00:00.000Z',
+      status: 'running',
+      meta: { command: NODE, bootAt: '2020-01-01T00:00:00.000Z' },
     });
     // A row without a pid (a runtime that spawns its own process).
     store.upsert({ agentId: 'nopid', startedAt: '2026-09-30T00:00:00.000Z', status: 'running' });
@@ -304,9 +409,11 @@ describe('ProcessSupervisor — persisted PID table and reconciliation', () => {
 
     const { s } = makeSupervisor({ store, now: () => '2026-09-30T01:00:00.000Z' });
     const result = s.reconcile();
-    expect(result).toEqual({ dead: ['dead', 'nopid'], orphans: ['orphan'] });
+    expect(result).toEqual({ dead: ['dead', 'reused', 'oldboot', 'nopid'], orphans: ['orphan'] });
     await eventually(() => !isAlive(orphan.pid!));
-    for (const id of ['dead', 'orphan', 'nopid']) {
+    expect(isAlive(stranger.pid!)).toBe(true);
+    process.kill(stranger.pid!, 'SIGKILL');
+    for (const id of ['dead', 'orphan', 'nopid', 'reused', 'oldboot']) {
       expect(store.get(id)).toMatchObject({
         status: 'interrupted',
         endedAt: '2026-09-30T01:00:00.000Z',
@@ -335,7 +442,7 @@ describe('ProcessSupervisor — persisted PID table and reconciliation', () => {
       pid: proc.pid,
       startedAt: '2026-09-30T02:00:00.000Z',
       status: 'running',
-      meta: { runtime: 'fake' },
+      meta: { runtime: 'fake', command: NODE, bootAt: expect.any(String) },
     });
     expect(store.running().map((r) => r.agentId)).toEqual(['a-1']);
     await proc.exited;

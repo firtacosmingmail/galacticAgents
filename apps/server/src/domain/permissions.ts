@@ -37,6 +37,8 @@ export interface Classification {
   actions: PermissionAction[];
   /** One human-readable line per finding, for the permission card. */
   reasons: string[];
+  /** Set for tools that only touch the agent's own bookkeeping: allowed whatever the policy. */
+  alwaysAllow?: true;
 }
 
 export interface PolicyVerdict extends Classification {
@@ -77,7 +79,8 @@ export function evaluate(
   ctx: PolicyContext,
 ): PolicyVerdict {
   const classification = classifyToolCall(call, ctx);
-  return { ...classification, decision: decide(policy, classification.actions) };
+  const decision = classification.alwaysAllow ? 'allow' : decide(policy, classification.actions);
+  return { ...classification, decision };
 }
 
 // ---------------------------------------------------------------------------
@@ -106,12 +109,14 @@ const HARMLESS_TOOLS = new Set([
 ]);
 /** Input fields that carry a path, in the order the Claude Code tools use them. */
 const PATH_FIELDS = ['file_path', 'notebook_path', 'path', 'directory', 'cwd'];
+/** Fields that carry a glob; only absolute / `~` / `..`-leading ones name a location. */
+const GLOB_FIELDS = ['pattern', 'glob'];
 
 export function classifyToolCall(call: ToolCallRequest, ctx: PolicyContext): Classification {
   const input = isRecord(call.input) ? call.input : {};
   const name = call.toolName;
 
-  if (HARMLESS_TOOLS.has(name)) return { actions: ['read_workspace'], reasons: [] };
+  if (HARMLESS_TOOLS.has(name)) return { actions: [], reasons: [], alwaysAllow: true };
   if (NETWORK_TOOLS.has(name)) {
     return { actions: ['network'], reasons: [`${name} reaches the network`] };
   }
@@ -131,12 +136,27 @@ function classifyPaths(
   ctx: PolicyContext,
 ): Classification {
   const paths = PATH_FIELDS.map((f) => input[f]).filter((v): v is string => typeof v === 'string');
+  for (const f of GLOB_FIELDS) {
+    const g = input[f];
+    if (typeof g === 'string' && looksLikeLocation(g)) paths.push(g);
+  }
   const outside = paths.filter((p) => !isInsideWorkspace(p, ctx));
   if (outside.length === 0) return { actions: [inside], reasons: [] };
   return {
     actions: ['outside_workspace'],
     reasons: outside.map((p) => `${tool} on ${p}: outside the workspace`),
   };
+}
+
+function looksLikeLocation(p: string): boolean {
+  return (
+    p.startsWith('/') ||
+    p.startsWith('~') ||
+    p === '..' ||
+    p.startsWith('../') ||
+    p.includes('/../') ||
+    p.endsWith('/..')
+  );
 }
 
 // --- shell commands ---------------------------------------------------------
@@ -147,99 +167,126 @@ interface CommandRule {
   reason: string;
 }
 
-/** Word-boundary helper for command names: start of segment or after `sudo`/`env`/whitespace. */
-const cmd = (name: string) => `(?:^|\\s)(?:sudo\\s+|env\\s+\\S+=\\S+\\s+)*${name}(?=\\s|$)`;
+/** Case-insensitive: the dev machine's file system is, so `RM` runs `rm`. */
+const re = (src: string) => new RegExp(src, 'i');
+
+/**
+ * Word-boundary helper for command names: start of segment or after whitespace, with the usual
+ * transparent prefixes (`sudo`, `env X=1`, `nohup`, `time`, `nice`, `timeout 30`, `xargs`,
+ * `exec`) skipped so the real command is still seen.
+ */
+const PREFIX =
+  '(?:sudo\\s+(?:-\\S+\\s+)*|env\\s+(?:\\S+=\\S+\\s+)*|nohup\\s+|time\\s+|nice\\s+(?:-n\\s*\\d+\\s+)?|timeout\\s+(?:-\\S+\\s+)*\\d+\\S*\\s+|xargs\\s+(?:-\\S+\\s+)*|exec\\s+|command\\s+|builtin\\s+)*';
+const cmd = (name: string) => `(?:^|\\s)${PREFIX}${name}(?=\\s|$)`;
+/** git's global options (`-c k=v`, `-C dir`, `--no-pager`, …) sit between `git` and the subcommand. */
+const GIT_OPTS = '(?:\\s+(?:-[cC]\\s+\\S+|--[\\w-]+(?:=\\S+)?|-\\S+))*';
+const git = (sub: string) => cmd('git') + GIT_OPTS + '\\s+' + sub;
+
+/**
+ * Commands whose real payload is a string the engine cannot see (a shell `-c`, an interpreter
+ * one-liner, `eval`). Unclassifiable → `ask`.
+ */
+const OPAQUE_RULES: { pattern: RegExp; reason: string }[] = [
+  {
+    pattern: re(cmd('(?:sh|bash|zsh|dash|fish|ksh|csh|tcsh)') + '(?:\\s+-\\S+)*\\s+-\\S*c'),
+    reason: 'shell -c hides the command it runs',
+  },
+  {
+    pattern: re(cmd('(?:node|bun|deno)') + '(?:\\s+-\\S+)*\\s+(?:-e|-p|--eval|--print|eval)'),
+    reason: 'inline script hides what it does',
+  },
+  {
+    pattern: re(
+      cmd('(?:python[23]?|perl|ruby|php|osascript|lua|Rscript)') + '(?:\\s+-\\S+)*\\s+-[cer]',
+    ),
+    reason: 'inline script hides what it does',
+  },
+  { pattern: re(cmd('eval')), reason: 'eval hides the command it runs' },
+];
 
 const DESTRUCTIVE_RULES: CommandRule[] = [
-  { action: 'destructive', pattern: new RegExp(cmd('rm')), reason: 'rm deletes files' },
-  { action: 'destructive', pattern: new RegExp(cmd('rmdir')), reason: 'rmdir deletes directories' },
-  { action: 'destructive', pattern: new RegExp(cmd('unlink')), reason: 'unlink deletes files' },
-  { action: 'destructive', pattern: new RegExp(cmd('shred')), reason: 'shred destroys files' },
+  { action: 'destructive', pattern: re(cmd('rm')), reason: 'rm deletes files' },
+  { action: 'destructive', pattern: re(cmd('rmdir')), reason: 'rmdir deletes directories' },
+  { action: 'destructive', pattern: re(cmd('unlink')), reason: 'unlink deletes files' },
+  { action: 'destructive', pattern: re(cmd('shred')), reason: 'shred destroys files' },
   {
     action: 'destructive',
-    pattern: new RegExp(cmd('find') + '.*\\s-delete(?=\\s|$)'),
+    pattern: re(cmd('find') + '.*\\s-delete(?=\\s|$)'),
     reason: 'find -delete deletes files',
   },
   {
     action: 'destructive',
-    pattern: new RegExp(
-      cmd('git') + '\\s+branch\\s+(?:.*\\s)?(?:-[a-zA-Z]*[dD]|--delete)(?=\\s|$)',
-    ),
+    pattern: re(git('branch\\s+(?:.*\\s)?(?:-[a-zA-Z]*[dD]|--delete)(?=\\s|$)')),
     reason: 'git branch delete',
   },
   {
     action: 'destructive',
-    pattern: new RegExp(cmd('git') + '\\s+push\\s+(?:.*\\s)?(?:--delete|-d)(?=\\s|$)'),
+    pattern: re(git('push\\s+(?:.*\\s)?(?:--delete|-d)(?=\\s|$)')),
     reason: 'git push --delete removes a remote branch',
   },
   {
     action: 'destructive',
-    pattern: new RegExp(
-      cmd('git') + '\\s+push(?:\\s+\\S+)*\\s+(?:--force(?:-with-lease)?|-f|\\+\\S+)(?=\\s|$)',
-    ),
+    pattern: re(git('push(?:\\s+\\S+)*\\s+(?:--force(?:-with-lease)?|-f|\\+\\S+)(?=\\s|$)')),
     reason: 'git push --force',
   },
   {
     action: 'destructive',
-    pattern: new RegExp(cmd('git') + '\\s+reset\\s+(?:.*\\s)?--hard'),
+    pattern: re(git('reset\\s+(?:.*\\s)?--(?:hard|merge)')),
     reason: 'git reset --hard discards changes',
   },
   {
     action: 'destructive',
-    pattern: new RegExp(cmd('git') + '\\s+clean\\b'),
+    pattern: re(git('clean\\b')),
     reason: 'git clean deletes untracked files',
   },
   {
     action: 'destructive',
-    pattern: new RegExp(cmd('git') + '\\s+(?:checkout|restore)\\s+(?:--\\s+)?\\.(?=\\s|$)'),
-    reason: 'git checkout/restore . discards changes',
+    pattern: re(git('checkout(?!\\s+(?:-[bB]|--orphan)(?=\\s|$))\\s+\\S')),
+    reason: 'git checkout overwrites working-tree files',
   },
   {
     action: 'destructive',
-    pattern: new RegExp(cmd('git') + '\\s+(?:stash\\s+(?:drop|clear)|worktree\\s+remove)\\b'),
+    pattern: re(
+      git('restore(?![^|]*--staged)\\b') + '|' + git('restore[^|]*(?:--worktree|\\s-[a-zA-Z]*W)'),
+    ),
+    reason: 'git restore discards working-tree changes',
+  },
+  {
+    action: 'destructive',
+    pattern: re(git('(?:stash\\s+(?:drop|clear)|worktree\\s+(?:remove|prune))\\b')),
     reason: 'git stash drop / worktree remove',
   },
   {
     action: 'destructive',
-    pattern: new RegExp(
-      cmd('git') + '\\s+(?:tag|remote)\\s+(?:.*\\s)?(?:-d|--delete|rm|remove)(?=\\s|$)',
-    ),
+    pattern: re(git('(?:tag|remote)\\s+(?:.*\\s)?(?:-d|--delete|rm|remove)(?=\\s|$)')),
     reason: 'git tag/remote delete',
   },
   {
     action: 'destructive',
-    pattern: /(?:^|\s)--force(?:-with-lease)?(?=\s|$)/,
+    pattern: re('(?:^|\\s)--force(?:-with-lease)?(?=\\s|$)'),
     reason: '--force operation',
   },
-  { action: 'destructive', pattern: new RegExp(cmd('dd')), reason: 'dd overwrites devices/files' },
-  { action: 'destructive', pattern: new RegExp(cmd('mkfs(?:\\.\\w+)?')), reason: 'mkfs' },
-  { action: 'destructive', pattern: new RegExp(cmd('truncate')), reason: 'truncate empties files' },
+  { action: 'destructive', pattern: re(cmd('dd')), reason: 'dd overwrites devices/files' },
+  { action: 'destructive', pattern: re(cmd('mkfs(?:\\.\\w+)?')), reason: 'mkfs' },
+  { action: 'destructive', pattern: re(cmd('truncate')), reason: 'truncate empties files' },
   {
     action: 'destructive',
-    pattern: /\bDROP\s+(?:TABLE|DATABASE|SCHEMA)\b/i,
+    pattern: re('\\bDROP\\s+(?:TABLE|DATABASE|SCHEMA)\\b'),
     reason: 'SQL DROP',
   },
 ];
 
 const PUSH_RULES: CommandRule[] = [
+  { action: 'push', pattern: re(git('push\\b')), reason: 'git push leaves the machine' },
+  { action: 'push', pattern: re(git('send-email\\b')), reason: 'git send-email' },
   {
     action: 'push',
-    pattern: new RegExp(cmd('git') + '\\s+push\\b'),
-    reason: 'git push leaves the machine',
-  },
-  {
-    action: 'push',
-    pattern: new RegExp(cmd('git') + '\\s+send-email\\b'),
-    reason: 'git send-email',
-  },
-  {
-    action: 'push',
-    pattern: new RegExp(cmd('(?:npm|pnpm|yarn|cargo|twine|gem)') + '\\s+publish\\b'),
+    pattern: re(cmd('(?:npm|pnpm|yarn|cargo|twine|gem)') + '\\s+publish\\b'),
     reason: 'package publish leaves the machine',
   },
   {
     action: 'push',
-    pattern: new RegExp(
+    pattern: re(
       cmd('gh') +
         '\\s+(?:pr|release|repo|issue)\\s+(?:create|merge|delete|edit|close|comment|push)\\b',
     ),
@@ -247,14 +294,14 @@ const PUSH_RULES: CommandRule[] = [
   },
   {
     action: 'push',
-    pattern: new RegExp(
+    pattern: re(
       cmd('(?:scp|rsync|sftp)') + '.*\\S+@\\S+:|' + cmd('(?:scp|rsync)') + '.*\\s\\S+:\\S+',
     ),
     reason: 'copy to a remote host',
   },
   {
     action: 'push',
-    pattern: new RegExp(cmd('docker') + '\\s+push\\b'),
+    pattern: re(cmd('docker') + '\\s+push\\b'),
     reason: 'docker push leaves the machine',
   },
 ];
@@ -262,43 +309,39 @@ const PUSH_RULES: CommandRule[] = [
 const NETWORK_RULES: CommandRule[] = [
   {
     action: 'network',
-    pattern: new RegExp(cmd('(?:curl|wget|http|https|xh|aria2c)')),
+    pattern: re(cmd('(?:curl|wget|http|https|xh|aria2c)')),
     reason: 'HTTP client',
   },
-  { action: 'network', pattern: /https?:\/\//, reason: 'URL in command' },
+  { action: 'network', pattern: re('https?://'), reason: 'URL in command' },
   {
     action: 'network',
-    pattern: new RegExp(
+    pattern: re(
       cmd('(?:npm|pnpm|yarn|bun)') +
         '\\s+(?:i|install|ci|add|update|up|upgrade|dlx|create|exec|x|link)\\b',
     ),
     reason: 'package install',
   },
+  { action: 'network', pattern: re(cmd('(?:npx|pnpx|bunx)')), reason: 'npx may download packages' },
   {
     action: 'network',
-    pattern: new RegExp(cmd('(?:npx|pnpx|bunx)')),
-    reason: 'npx may download packages',
-  },
-  {
-    action: 'network',
-    pattern: new RegExp(
+    pattern: re(
       cmd('(?:pip3?|pipx|uv|poetry|conda|pipenv)') + '\\s+(?:install|add|sync|download)\\b',
     ),
     reason: 'python package install',
   },
   {
     action: 'network',
-    pattern: new RegExp(cmd('cargo') + '\\s+(?:install|add|fetch|update|search)\\b'),
+    pattern: re(cmd('cargo') + '\\s+(?:install|add|fetch|update|search)\\b'),
     reason: 'cargo fetch/install',
   },
   {
     action: 'network',
-    pattern: new RegExp(cmd('go') + '\\s+(?:get|install|mod\\s+download)\\b'),
+    pattern: re(cmd('go') + '\\s+(?:get|install|mod\\s+download)\\b'),
     reason: 'go get',
   },
   {
     action: 'network',
-    pattern: new RegExp(
+    pattern: re(
       cmd('(?:brew|apt|apt-get|dnf|yum|pacman|apk|snap|port|choco|winget)') +
         '\\s+(?:install|upgrade|update|add|remove|uninstall|purge)\\b',
     ),
@@ -306,25 +349,23 @@ const NETWORK_RULES: CommandRule[] = [
   },
   {
     action: 'network',
-    pattern: new RegExp(
-      cmd('git') + '\\s+(?:clone|fetch|pull|ls-remote|submodule\\s+update|remote\\s+update)\\b',
-    ),
+    pattern: re(git('(?:clone|fetch|pull|ls-remote|submodule\\s+update|remote\\s+update)\\b')),
     reason: 'git talks to a remote',
   },
   {
     action: 'network',
-    pattern: new RegExp(cmd('(?:ssh|telnet|nc|ncat|netcat|nmap|ftp|sftp|scp|rsync)')),
+    pattern: re(cmd('(?:ssh|telnet|nc|ncat|netcat|nmap|ftp|sftp|scp|rsync)')),
     reason: 'remote connection',
   },
   {
     action: 'network',
-    pattern: new RegExp(cmd('docker') + '\\s+(?:pull|login|build)\\b'),
+    pattern: re(cmd('docker') + '\\s+(?:pull|login|build)\\b'),
     reason: 'docker pulls images',
   },
-  { action: 'network', pattern: new RegExp(cmd('gh')), reason: 'gh talks to GitHub' },
+  { action: 'network', pattern: re(cmd('gh')), reason: 'gh talks to GitHub' },
   {
     action: 'network',
-    pattern: new RegExp(cmd('(?:mail|sendmail|mutt)')),
+    pattern: re(cmd('(?:mail|sendmail|mutt)')),
     reason: 'mail leaves the machine',
   },
 ];
@@ -332,38 +373,42 @@ const NETWORK_RULES: CommandRule[] = [
 const ESCAPE_RULES: CommandRule[] = [
   {
     action: 'outside_workspace',
-    pattern: /(?:^|\s)sudo(?=\s|$)/,
+    pattern: re('(?:^|\\s)sudo(?=\\s|$)'),
     reason: 'sudo escapes the workspace sandbox',
   },
   {
     action: 'outside_workspace',
-    pattern: /(?:^|\s)(?:su|doas)(?=\s|$)/,
+    pattern: re('(?:^|\\s)(?:su|doas)(?=\\s|$)'),
     reason: 'privilege change',
   },
   {
     action: 'outside_workspace',
-    pattern: new RegExp(cmd('(?:chmod|chown|chgrp)') + '.*\\s-[a-zA-Z]*R'),
+    pattern: re(cmd('(?:chmod|chown|chgrp)') + '.*\\s-[a-zA-Z]*R'),
     reason: 'recursive ownership/mode change',
   },
   {
     action: 'outside_workspace',
-    pattern: new RegExp(cmd('(?:crontab|launchctl|systemctl|reboot|shutdown|halt|poweroff)')),
+    pattern: re(cmd('(?:crontab|launchctl|systemctl|reboot|shutdown|halt|poweroff)')),
     reason: 'system service or power control',
   },
   {
     action: 'outside_workspace',
-    pattern: new RegExp(cmd('(?:kill|killall|pkill)')),
+    pattern: re(cmd('(?:kill|killall|pkill)')),
     reason: 'signals to other processes',
   },
 ];
 
 const ALL_RULES = [...DESTRUCTIVE_RULES, ...PUSH_RULES, ...NETWORK_RULES, ...ESCAPE_RULES];
 
-/** Splits a shell line into simple commands on `&&`, `||`, `;`, `|`, newlines and subshell parens. */
+/**
+ * Splits a shell line into simple commands on `&&`, `||`, `;`, `|`, newlines, subshell and group
+ * delimiters, and strips the spellings that hide a command name from a naive match: a leading
+ * backslash (`\rm`, the alias bypass) and leading `(`/`{`.
+ */
 export function splitCommand(command: string): string[] {
   return command
-    .split(/\s*(?:&&|\|\||;|\||\n|\$\(|\)|`)\s*/)
-    .map((s) => s.trim())
+    .split(/\s*(?:&&|\|\||;|\||\n|\$\(|\(|\)|\{|\}|`)\s*/)
+    .map((s) => s.replace(/(^|\s)\\+(?=\S)/g, '$1').trim())
     .filter(Boolean);
 }
 
@@ -373,52 +418,102 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   const trimmed = command.trim();
   if (trimmed === '') return { actions: [], reasons: ['empty command'] };
 
+  // `cd` changes where the later segments resolve relative paths from.
+  let cwd = resolvePath(ctx.cwd ?? ctx.workspace, ctx, ctx.workspace);
+  let opaque = false;
+
   for (const segment of splitCommand(trimmed)) {
-    for (const rule of ALL_RULES) {
+    const here: PolicyContext = { ...ctx, cwd };
+    // Quotes are stripped for matching so `"rm -rf x"` inside a wrapper still trips the rule.
+    const bare = segment.replace(/["'`]/g, ' ');
+    for (const rule of OPAQUE_RULES) {
       if (rule.pattern.test(segment)) {
+        opaque = true;
+        reasons.push(`${rule.reason}: ${segment}`);
+      }
+    }
+    for (const rule of ALL_RULES) {
+      if (rule.pattern.test(segment) || rule.pattern.test(bare)) {
         actions.add(rule.action);
         reasons.push(`${rule.reason}: ${segment}`);
       }
     }
-    for (const p of pathsInCommand(segment)) {
-      if (!isInsideWorkspace(p, ctx)) {
+    const { paths, unresolvable } = pathsInCommand(segment);
+    for (const p of paths) {
+      if (!isInsideWorkspace(p, here)) {
         actions.add('outside_workspace');
         reasons.push(`${p}: outside the workspace`);
       }
     }
+    for (const p of unresolvable) {
+      actions.add('outside_workspace');
+      reasons.push(`${p}: cannot tell where it points`);
+    }
+    const cd = /^(?:cd|pushd)(?:\s+(.*))?$/i.exec(segment);
+    if (cd) {
+      const target = cd[1]?.trim();
+      if (target === undefined || target === '' || target === '~') {
+        cwd = ctx.home ?? homedir();
+      } else if (target === '-' || unresolvable.length > 0 || /[$`]/.test(target)) {
+        actions.add('outside_workspace');
+        reasons.push(`cd ${target}: cannot tell where it leads`);
+      } else {
+        cwd = resolvePath(target.replace(/^["']|["']$/g, ''), ctx, cwd);
+      }
+      if (!isInsideWorkspace(cwd, ctx)) {
+        actions.add('outside_workspace');
+        reasons.push(`${segment}: leaves the workspace`);
+      }
+    }
   }
+  if (opaque) return { actions: [], reasons };
   if (actions.size === 0) actions.add('run_workspace');
   return { actions: [...actions], reasons };
 }
 
+export interface CommandPaths {
+  /** Path-looking tokens: absolute, `~`, `$HOME`/`$PWD`-based, or relative with a `..`. */
+  paths: string[];
+  /** Tokens with a shell variable or substitution the engine cannot expand lexically. */
+  unresolvable: string[];
+}
+
 /**
- * Path-looking tokens of a command segment: absolute paths, `~` paths and relative paths that
- * contain a `/` or a `..`. Option values (`--out=/tmp/x`) and redirections count too. Plain words
- * are not paths, so `ls foo` never escapes; `ls ../foo` is checked.
+ * Path-looking tokens of a command segment. Option values (`--out=/tmp/x`) and redirections
+ * count too. Plain words are not paths, so `ls foo` never escapes; `ls ../foo` is checked.
+ * `$HOME` and `$PWD` are expanded; any other `$VAR` or backtick inside a path-like token makes
+ * it unresolvable.
  */
-export function pathsInCommand(segment: string): string[] {
-  const out: string[] = [];
+export function pathsInCommand(segment: string): CommandPaths {
+  const paths: string[] = [];
+  const unresolvable: string[] = [];
   for (const raw of segment.split(/\s+/)) {
     let token = raw.replace(/^[<>]+/, '').replace(/^["']|["']$/g, '');
     const eq = token.indexOf('=');
     if (eq > 0 && token.startsWith('-')) token = token.slice(eq + 1);
     if (token.startsWith('-')) continue;
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token)) continue; // URLs are the network rules' business
-    if (
-      token.startsWith('/') ||
-      token.startsWith('~') ||
-      token === '..' ||
-      token.startsWith('../') ||
-      token.includes('/../') ||
-      token.endsWith('/..')
-    ) {
-      out.push(token);
+    token = token
+      .replace(/^\$\{?HOME\}?(?=\/|$)/, '~')
+      .replace(/^\$\{?PWD\}?(?=\/|$)/, '.')
+      .replace(/^"?\$\{?HOME\}?"?(?=\/)/, '~');
+    if (/[$`]/.test(token)) {
+      if (token.includes('/') || /^\$\{?(?:HOME|PWD|TMPDIR|TMP|TEMP)\}?/.test(token)) {
+        unresolvable.push(raw);
+      }
+      continue;
     }
+    if (looksLikeLocation(token)) paths.push(token);
   }
-  return out;
+  return { paths, unresolvable };
 }
 
 // --- paths ------------------------------------------------------------------
+
+/** `p` made absolute: `~` expanded, relative paths resolved from `from`. */
+function resolvePath(p: string, ctx: PolicyContext, from: string): string {
+  return resolve(expandHome(from, ctx), expandHome(p, ctx));
+}
 
 /**
  * Whether `p` (absolute, `~`-prefixed or relative to `ctx.cwd`) resolves inside `ctx.workspace`.
@@ -427,7 +522,7 @@ export function pathsInCommand(segment: string): string[] {
 export function isInsideWorkspace(p: string, ctx: PolicyContext): boolean {
   const workspace = resolve(expandHome(ctx.workspace, ctx));
   const cwd = ctx.cwd ? resolve(expandHome(ctx.cwd, ctx)) : workspace;
-  const target = resolve(cwd, expandHome(p, ctx));
+  const target = resolvePath(p, ctx, cwd);
   const rel = relative(workspace, target);
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }

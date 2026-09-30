@@ -37,7 +37,7 @@ describe('FakeAdapter — scenarios and turns', () => {
   it('runs the happy scenario to a finish with cost, every event valid', async () => {
     const { adapter, events } = makeAdapter();
     const handle = await adapter.spawn(spawnOpts('scenario:happy'));
-    expect(handle.sessionRef).toBe('fake:happy:0');
+    expect(handle.sessionRef).toBe(`fake:happy:${handle.sessionId}:0`);
     await events.waitFor(has('agent.finished'));
     await sleep(5);
     expect(types(events.items)).toEqual([
@@ -325,8 +325,8 @@ describe('FakeAdapter — resumeSession', () => {
     const first = makeAdapter({ sessionStore });
     const handle = await first.adapter.spawn(spawnOpts('scenario:full'));
     await first.events.waitFor(has('agent.needs_input'));
-    expect(handle.sessionRef).toBe('fake:full:0');
-    expect(sessionStore.get('fake:full:0')).toBe(3);
+    expect(handle.sessionRef).toBe(`fake:full:${handle.sessionId}:0`);
+    expect(sessionStore.get(handle.sessionRef!)).toBe(3);
     await first.adapter.dispose(); // the "server" goes away mid-question
 
     const second = makeAdapter({ sessionStore });
@@ -334,7 +334,7 @@ describe('FakeAdapter — resumeSession', () => {
       handle.sessionRef!,
       spawnOpts('scenario:full'),
     );
-    expect(resumed.sessionRef).toBe('fake:full:3');
+    expect(resumed.sessionRef).toBe(`fake:full:${resumed.sessionId}:3`);
     await second.events.waitFor(has('agent.needs_input'));
     await sleep(5);
     expect(types(second.events.items)).toEqual(['agent.needs_input']);
@@ -356,16 +356,34 @@ describe('FakeAdapter — resumeSession', () => {
 
   it('starts from the ref’s own step with a fresh store, and rejects foreign refs', async () => {
     const { adapter, events } = makeAdapter();
-    await adapter.resumeSession('fake:happy:8', spawnOpts('x'));
+    await adapter.resumeSession('fake:happy:0000-01d-5e55:8', spawnOpts('x'));
     await events.waitFor(has('agent.finished'));
     await sleep(5);
     expect(types(events.items)).toEqual(['agent.finished']);
     await expect(adapter.resumeSession('claude:abc', spawnOpts('x'))).rejects.toThrow(
       /not a fake session ref/,
     );
-    await expect(adapter.resumeSession('fake:zzz:0', spawnOpts('x'))).rejects.toThrow(
+    await expect(adapter.resumeSession('fake:zzz:abc:0', spawnOpts('x'))).rejects.toThrow(
       /unknown fake scenario/,
     );
+  });
+});
+
+describe('FakeAdapter — session refs are per session', () => {
+  it('two agents on the same scenario do not share progress', async () => {
+    const sessionStore = new Map<string, number>();
+    const { adapter, events } = makeAdapter({ sessionStore });
+    const a = await adapter.spawn(spawnOpts('scenario:asks', 'a-1'));
+    const b = await adapter.spawn(spawnOpts('scenario:asks', 'a-2'));
+    await events.waitFor((e) => e.filter((x) => x.type === 'agent.needs_input').length === 2);
+    const qa = events.items.find(
+      (e) => e.type === 'agent.needs_input' && e.agentId === 'a-1',
+    ) as Extract<AgentEvent, { type: 'agent.needs_input' }>;
+    await adapter.answer(qa.questionId, 'US');
+    await events.waitFor((e) => e.some((x) => x.type === 'agent.finished' && x.agentId === 'a-1'));
+    expect(a.sessionRef).not.toBe(b.sessionRef);
+    expect(sessionStore.get(a.sessionRef!)).toBe(4);
+    expect(sessionStore.get(b.sessionRef!)).toBe(1);
   });
 });
 

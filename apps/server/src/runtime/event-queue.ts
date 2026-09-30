@@ -49,8 +49,10 @@ export class EventQueue<T> implements AsyncIterable<T> {
           this.waiting = resolve;
         });
       },
+      // A consumer that breaks out of `for await` detaches; the producer keeps running and a
+      // later iteration sees what was pushed meanwhile. Only `close()` ends the stream.
       return: (): Promise<IteratorResult<T>> => {
-        this.close();
+        this.waiting = undefined;
         return Promise.resolve({ value: undefined, done: true });
       },
     };

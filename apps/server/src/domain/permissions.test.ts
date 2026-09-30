@@ -93,7 +93,15 @@ describe('SPEC §3.6 row 1 — read, run tests/builds, edit inside the workspace
       ],
       ['Bash', { command: 'mkdir -p out && cp a.txt out/b.txt' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'cd ../t1 && pnpm test' }, ['run_workspace'], 'allow'],
-      ['TodoWrite', { todos: [] }, ['read_workspace'], 'allow'],
+      ['TodoWrite', { todos: [] }, [], 'allow'],
+      ['Bash', { command: 'timeout 30 pnpm test' }, ['run_workspace'], 'allow'],
+      ['Bash', { command: 'git -c core.pager=cat log --oneline' }, ['run_workspace'], 'allow'],
+      ['Bash', { command: 'git checkout -b feature/x' }, ['run_workspace'], 'allow'],
+      ['Bash', { command: 'git restore --staged src/a.ts' }, ['run_workspace'], 'allow'],
+      ['Bash', { command: 'find . -name "*.ts" | xargs grep TODO' }, ['run_workspace'], 'allow'],
+      ['Bash', { command: 'echo $PATH' }, ['run_workspace'], 'allow'],
+      ['Bash', { command: 'cat $PWD/package.json' }, ['run_workspace'], 'allow'],
+      ['Bash', { command: 'cd src && cd .. && pnpm test' }, ['run_workspace'], 'allow'],
     ]);
   });
 });
@@ -116,7 +124,40 @@ describe('SPEC §3.6 row 2 — destructive actions: ask', () => {
       ['Bash', { command: 'git worktree remove ../t2' }, ['destructive'], 'ask'],
       ['Bash', { command: 'pnpm install --force' }, ['destructive', 'network'], 'ask'],
       ['Bash', { command: 'pnpm test && rm -rf node_modules' }, ['destructive'], 'ask'],
+      // spellings that hide the command name
+      ['Bash', { command: '\\rm -rf dist' }, ['destructive'], 'ask'],
+      ['Bash', { command: '(rm -rf dist)' }, ['destructive'], 'ask'],
+      ['Bash', { command: '{ rm -rf dist; }' }, ['destructive'], 'ask'],
+      ['Bash', { command: 'RM -rf dist' }, ['destructive'], 'ask'],
+      ['Bash', { command: 'Git Push --Force' }, ['destructive', 'push'], 'ask'],
+      ['Bash', { command: 'find . -name "*.log" | xargs rm' }, ['destructive'], 'ask'],
+      ['Bash', { command: 'exec rm -rf dist' }, ['destructive'], 'ask'],
+      // git global options between git and the subcommand
+      ['Bash', { command: 'git -c x=y push' }, ['push'], 'ask'],
+      ['Bash', { command: 'git -C . push origin main' }, ['push'], 'ask'],
+      ['Bash', { command: 'git --no-pager push' }, ['push'], 'ask'],
+      ['Bash', { command: 'git -c core.x=1 reset --hard' }, ['destructive'], 'ask'],
+      ['Bash', { command: 'git checkout -- src' }, ['destructive'], 'ask'],
+      ['Bash', { command: 'git checkout main' }, ['destructive'], 'ask'],
+      ['Bash', { command: 'git restore src/index.ts' }, ['destructive'], 'ask'],
+      ['Bash', { command: 'git restore --staged --worktree src' }, ['destructive'], 'ask'],
+      ['Bash', { command: 'git worktree prune' }, ['destructive'], 'ask'],
     ]);
+  });
+
+  it('asks for wrapped or quoted commands it cannot see into', () => {
+    check([
+      ['Bash', { command: 'bash -c "rm -rf dist"' }, [], 'ask'],
+      ['Bash', { command: "sh -lc 'git push --force'" }, [], 'ask'],
+      ['Bash', { command: 'eval "rm -rf dist"' }, [], 'ask'],
+      ['Bash', { command: "node -e \"require('fs').rmSync('/', {recursive: true})\"" }, [], 'ask'],
+      ['Bash', { command: 'python3 -c "import shutil; shutil.rmtree(\'dist\')"' }, [], 'ask'],
+      ['Bash', { command: 'perl -e \'unlink glob "*"\'' }, [], 'ask'],
+      ['Bash', { command: 'ruby -e "puts 1"' }, [], 'ask'],
+      ['Bash', { command: 'osascript -e \'tell app "Finder" to empty trash\'' }, [], 'ask'],
+    ]);
+    // Even without the opaque rule, quoted payloads trip the ordinary rules.
+    expect(classifyCommand('echo "rm -rf /"', ctx).actions).toContain('destructive');
   });
 });
 
@@ -136,6 +177,23 @@ describe('SPEC §3.6 row 3 — anything outside the workspace: ask', () => {
       ['Bash', { command: 'kill -9 1234' }, ['outside_workspace'], 'ask'],
       ['Bash', { command: 'echo hi > /tmp/x' }, ['outside_workspace'], 'ask'],
       ['Bash', { command: 'node --prefix=/opt/tool run' }, ['outside_workspace'], 'ask'],
+      // shell variables in paths
+      ['Bash', { command: 'cat $HOME/.ssh/id_rsa' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cat "$HOME"/.zshrc' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cat ${HOME}/.netrc' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cat $SOME_DIR/secret' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cat $TMPDIR' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cat `pwd`/../../../x' }, ['outside_workspace'], 'ask'],
+      // stateful cd
+      ['Bash', { command: 'cd .. && cd .. && cd .. && cat .env' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cd && ls' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cd ~ && ls' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cd - && ls' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cd /tmp; ls' }, ['outside_workspace'], 'ask'],
+      ['Bash', { command: 'cd $DIR && ls' }, ['outside_workspace'], 'ask'],
+      ['Glob', { pattern: '/etc/**' }, ['outside_workspace'], 'ask'],
+      ['Glob', { pattern: '../../../**/*.env' }, ['outside_workspace'], 'ask'],
+      ['Grep', { pattern: 'password', glob: '~/**' }, ['outside_workspace'], 'ask'],
     ]);
   });
 
@@ -298,7 +356,7 @@ describe('isInsideWorkspace', () => {
 
 describe('command parsing', () => {
   it('splits on shell operators', () => {
-    expect(splitCommand('a && b || c; d | e\nf $(g) `h`')).toEqual([
+    expect(splitCommand('a && b || c; d | e\nf $(g) `h` (i) { j; } \\k')).toEqual([
       'a',
       'b',
       'c',
@@ -307,12 +365,20 @@ describe('command parsing', () => {
       'f',
       'g',
       'h',
+      'i',
+      'j',
+      'k',
     ]);
   });
   it('extracts path-like tokens only', () => {
     expect(
       pathsInCommand('cat /etc/hosts ~/x ../y src/z plain --out=/tmp/o > /var/log/q https://a/b'),
-    ).toEqual(['/etc/hosts', '~/x', '../y', '/tmp/o', '/var/log/q']);
+    ).toEqual({ paths: ['/etc/hosts', '~/x', '../y', '/tmp/o', '/var/log/q'], unresolvable: [] });
+    expect(pathsInCommand('cat $HOME/a ${PWD}/b $X/c $Y `pwd`/d')).toEqual({
+      paths: ['~/a'], // `$PWD/b` resolves to `./b`, a plain relative path: inside
+
+      unresolvable: ['$X/c', '`pwd`/d'],
+    });
   });
   it('reports every reason it found', () => {
     const c = classifyCommand('rm -rf /tmp/x && git push --force', ctx);
@@ -323,6 +389,9 @@ describe('command parsing', () => {
     expect(classifyToolCall({ toolName: 'Read', input: 'nope' }, ctx).actions).toEqual([
       'read_workspace',
     ]);
+    expect(
+      evaluate({ rules: { read_workspace: 'ask' } }, { toolName: 'TodoWrite' }, ctx).decision,
+    ).toBe('allow');
     expect(classifyToolCall({ toolName: 'Bash', input: null }, ctx).actions).toEqual([]);
   });
 });

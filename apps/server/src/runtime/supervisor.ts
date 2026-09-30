@@ -1,4 +1,6 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { uptime } from 'node:os';
+import { basename } from 'node:path';
 import type { Actor, AgentEvent, Id } from '@galactic/protocol';
 import { EventQueue } from './event-queue.js';
 import { MemoryProcessStore, type ProcessRecord, type ProcessStore } from './process-store.js';
@@ -39,7 +41,8 @@ export interface ProcessSpec {
   restart?: RestartPolicy;
   /**
    * Runtime-specific "end the current turn" for the graceful stop (the SDK's `interrupt()`, a
-   * Ctrl-C on a PTY). Default: SIGINT to the process group.
+   * Ctrl-C on a PTY). Default: SIGINT to the process group. May call `turnEnded()` at once when
+   * there is no turn to end.
    */
   interrupt?: (proc: ManagedProcess) => void | Promise<void>;
   /** Anything the adapter wants persisted next to the pid. */
@@ -64,12 +67,23 @@ export interface ManagedProcess {
   readonly exit: ExitInfo | undefined;
   /** How many times the restart policy respawned this agent. */
   readonly restarts: number;
-  /** Resolves when the process has exited (also after a restart: it is the latest process). */
+  /**
+   * Resolves once the agent's process is gone for good: after the last exit, when no restart
+   * follows. One promise for the lifetime of the agent, restarts included.
+   */
   readonly exited: Promise<ExitInfo>;
   /** Writes to the child's stdin. */
   write(data: string): void;
-  /** The runtime reports the current turn ended; unblocks step 2 of a running graceful stop. */
+  /**
+   * The runtime reports the current turn ended (or that there is none); unblocks step 2 of a
+   * graceful stop, whether it is already waiting or about to.
+   */
   turnEnded(): void;
+  /**
+   * The runtime is about to end this process itself (the SDK closing stdin, a clean shutdown):
+   * the coming exit is not a crash and gets no `agent.failed`.
+   */
+  expectExit(): void;
   /** Sends a signal to the whole process group. */
   signal(sig: NodeJS.Signals): void;
 }
@@ -88,7 +102,7 @@ export interface StopProcessOptions {
 }
 
 export interface ReconcileResult {
-  /** Rows that were `running` but whose process is gone: marked `interrupted`. */
+  /** Rows that were `running` but whose process is gone (or whose pid now belongs to someone else): marked `interrupted`. */
   dead: Id[];
   /** Rows whose process still ran without a supervisor: killed by group, marked `interrupted`. */
   orphans: Id[];
@@ -100,9 +114,13 @@ export interface SupervisorOptions {
   defaults?: { graceMs?: number; termMs?: number };
   /** Called when a stdio callback or the restart policy throws. */
   onError?: (error: unknown, agentId: Id) => void;
+  /** Identity check for `reconcile()`; defaults to `ps`. Tests inject one. */
+  processName?: (pid: number) => string | undefined;
 }
 
 const SYSTEM: Actor = { type: 'system' };
+/** How long after `exit` to wait for stdio to drain (`close`) before settling. */
+const DRAIN_MS = 250;
 
 class Managed implements ManagedProcess {
   state: ProcessState = 'running';
@@ -111,10 +129,14 @@ class Managed implements ManagedProcess {
   child: ChildProcess;
   pid: number;
   startedAt: string;
-  exited: Promise<ExitInfo>;
+  readonly exited: Promise<ExitInfo>;
+  /** Set while the restart policy is between exit and the new child. */
+  restarting: Promise<void> | undefined;
   private resolveExit!: (info: ExitInfo) => void;
-  /** Resolved by `turnEnded()`; replaced when a stop sequence starts waiting. */
   private turnWaiters: (() => void)[] = [];
+  /** Bumped by `turnEnded()`; a stop compares it to the value it saw when it started. */
+  private turnsEnded = 0;
+  private exitExpected = false;
 
   constructor(
     readonly agentId: Id,
@@ -123,20 +145,19 @@ class Managed implements ManagedProcess {
     startedAt: string,
   ) {
     this.child = child;
-    this.pid = child.pid!;
+    this.pid = child.pid ?? -1;
     this.startedAt = startedAt;
     this.exited = new Promise((r) => (this.resolveExit = r));
   }
 
-  /** A restart replaces the child; the exit promise starts over. */
+  /** A restart replaces the child; the lifetime `exited` promise stays. */
   replaceChild(child: ChildProcess, startedAt: string): void {
     this.child = child;
-    this.pid = child.pid!;
+    this.pid = child.pid ?? -1;
     this.startedAt = startedAt;
-    this.state = 'running';
     this.exit = undefined;
     this.restarts++;
-    this.exited = new Promise((r) => (this.resolveExit = r));
+    this.exitExpected = false;
   }
 
   settleExit(info: ExitInfo): void {
@@ -150,22 +171,36 @@ class Managed implements ManagedProcess {
   }
 
   turnEnded(): void {
-    const waiters = this.turnWaiters.splice(0);
-    for (const w of waiters) w();
+    this.turnsEnded++;
+    for (const w of this.turnWaiters.splice(0)) w();
   }
 
-  /** Resolves on `turnEnded()`; the caller races it against exit and the timeout. */
-  waitTurnEnd(): Promise<void> {
+  /** Resolves on the next `turnEnded()` after `since`, or at once if one already happened. */
+  waitTurnEnd(since: number): Promise<void> {
+    if (this.turnsEnded > since) return Promise.resolve();
     return new Promise((resolve) => this.turnWaiters.push(resolve));
   }
 
+  get turnMark(): number {
+    return this.turnsEnded;
+  }
+
+  expectExit(): void {
+    this.exitExpected = true;
+  }
+
+  get isExitExpected(): boolean {
+    return this.exitExpected;
+  }
+
   signal(sig: NodeJS.Signals): void {
-    signalGroup(this.pid, sig);
+    if (this.pid > 1) signalGroup(this.pid, sig);
   }
 }
 
 /** Sends `sig` to the whole process group; falls back to the pid alone if the group is gone. */
 export function signalGroup(pid: number, sig: NodeJS.Signals): boolean {
+  if (pid <= 1) return false;
   try {
     process.kill(-pid, sig);
     return true;
@@ -179,14 +214,33 @@ export function signalGroup(pid: number, sig: NodeJS.Signals): boolean {
   }
 }
 
-/** Whether a process with this pid exists (signal 0). */
+/** Whether a process with this pid exists and is ours to signal (signal 0). */
 export function isAlive(pid: number): boolean {
+  if (pid <= 1) return false;
   try {
     process.kill(pid, 0);
     return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  } catch {
+    return false;
   }
+}
+
+/** The executable name of a live process, via `ps` (macOS and Linux). */
+export function processName(pid: number): string | undefined {
+  try {
+    const out = execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out === '' ? undefined : basename(out.split(/\s+/)[0]!);
+  } catch {
+    return undefined;
+  }
+}
+
+/** When this machine booted (ISO); pids are only comparable within one boot. */
+export function bootTime(): string {
+  return new Date(Date.now() - uptime() * 1000).toISOString();
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -199,6 +253,8 @@ export class ProcessSupervisor {
   private readonly graceMs: number;
   private readonly termMs: number;
   private readonly onError: (error: unknown, agentId: Id) => void;
+  private readonly nameOf: (pid: number) => string | undefined;
+  private readonly bootAt = bootTime();
   private disposed = false;
 
   constructor(opts: SupervisorOptions = {}) {
@@ -207,6 +263,7 @@ export class ProcessSupervisor {
     this.graceMs = opts.defaults?.graceMs ?? 10_000;
     this.termMs = opts.defaults?.termMs ?? 5_000;
     this.onError = opts.onError ?? (() => {});
+    this.nameOf = opts.processName ?? processName;
   }
 
   get(agentId: Id): ManagedProcess | undefined {
@@ -227,12 +284,35 @@ export class ProcessSupervisor {
    * (command not found, bad cwd) rejects and emits `agent.failed(reason: runtime)`.
    */
   async spawn(spec: ProcessSpec): Promise<ManagedProcess> {
+    const managed = this.adopt(spec);
+    const child = managed.child;
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        child.removeListener('spawn', onSpawn);
+        reject(new Error(`could not start ${spec.command}: ${error.message}`));
+      };
+      const onSpawn = () => {
+        child.removeListener('error', onError);
+        resolve();
+      };
+      child.once('error', onError);
+      child.once('spawn', onSpawn);
+    });
+    return managed;
+  }
+
+  /**
+   * Synchronous spawn for callers that must hand the child over at once (the SDK's
+   * `spawnClaudeCodeProcess` hook). The process is registered and watched immediately; a start
+   * failure surfaces as `agent.failed(reason: runtime)` and settles `exited`.
+   */
+  adopt(spec: ProcessSpec): ManagedProcess {
     if (this.disposed) throw new Error('supervisor disposed');
     const existing = this.procs.get(spec.agentId);
     if (existing && existing.state !== 'exited') {
       throw new Error(`agent ${spec.agentId} already has a running process (pid ${existing.pid})`);
     }
-    const child = await this.launch(spec);
+    const child = this.launch(spec);
     const managed = new Managed(spec.agentId, spec, child, this.now());
     this.procs.set(spec.agentId, managed);
     this.record(managed, 'running');
@@ -240,32 +320,13 @@ export class ProcessSupervisor {
     return managed;
   }
 
-  private launch(spec: ProcessSpec): Promise<ChildProcess> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(spec.command, spec.args ?? [], {
-        cwd: spec.cwd,
-        env: { ...process.env, ...(spec.env ?? {}) },
-        // Own process group (setsid): the group kill takes the agent's own children along.
-        detached: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      const onError = (error: Error) => {
-        child.removeListener('spawn', onSpawn);
-        const message = `could not start ${spec.command}: ${error.message}`;
-        this.events.push({
-          type: 'agent.failed',
-          agentId: spec.agentId,
-          error: message,
-          reason: 'runtime',
-        });
-        reject(new Error(message));
-      };
-      const onSpawn = () => {
-        child.removeListener('error', onError);
-        resolve(child);
-      };
-      child.once('error', onError);
-      child.once('spawn', onSpawn);
+  private launch(spec: ProcessSpec): ChildProcess {
+    return spawn(spec.command, spec.args ?? [], {
+      cwd: spec.cwd,
+      env: { ...process.env, ...(spec.env ?? {}) },
+      // Own process group (setsid): the group kill takes the agent's own children along.
+      detached: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
   }
 
@@ -276,10 +337,35 @@ export class ProcessSupervisor {
     child.stdout?.on('data', (chunk: string) => this.safely(spec, () => spec.onStdout?.(chunk)));
     child.stderr?.on('data', (chunk: string) => this.safely(spec, () => spec.onStderr?.(chunk)));
     child.stdin?.on('error', () => {}); // EPIPE after the child died is not an error for us
-    child.once('error', (error) => this.onError(error, spec.agentId));
+    let started = false;
+    child.once('spawn', () => {
+      started = true;
+      if (child.pid !== undefined) {
+        managed.pid = child.pid;
+        this.record(managed, 'running');
+      }
+    });
+    child.once('error', (error) => {
+      if (started) return this.onError(error, spec.agentId);
+      // The process never started (ENOENT, EACCES, bad cwd): no `exit` will follow.
+      if (managed.child !== child || managed.exit) return;
+      const message = `could not start ${spec.command}: ${error.message}`;
+      this.events.push({
+        type: 'agent.failed',
+        agentId: spec.agentId,
+        error: message,
+        reason: 'runtime',
+      });
+      managed.settleExit({ code: null, signal: null, at: this.now() });
+      this.record(managed, 'exited', managed.exit);
+      this.procs.delete(spec.agentId);
+    });
     child.once('exit', (code, signal) => {
-      // `exit` fires when the process ends; stdio may still drain, which the callbacks handle.
-      this.onExit(managed, child, { code, signal, at: this.now() });
+      // stdio may still drain after `exit`; wait for `close` briefly so output precedes the verdict.
+      const closed = new Promise<void>((r) => child.once('close', () => r()));
+      void withTimeout(closed, DRAIN_MS).then(() =>
+        this.onExit(managed, child, { code, signal, at: this.now() }),
+      );
     });
   }
 
@@ -293,7 +379,7 @@ export class ProcessSupervisor {
 
   private onExit(managed: Managed, child: ChildProcess, info: ExitInfo): void {
     if (managed.child !== child) return; // a restart already replaced it
-    const requested = managed.state === 'stopping';
+    const requested = managed.state === 'stopping' || managed.isExitExpected;
     const crashed = !requested && (info.code !== 0 || info.signal !== null);
     const policy = managed.spec.restart ?? { mode: 'off' };
 
@@ -304,7 +390,7 @@ export class ProcessSupervisor {
         agentId: managed.agentId,
         summary: `restarting after crash (${describeExit(info)}), attempt ${managed.restarts + 1}/${policy.maxRestarts}`,
       });
-      void sleep(policy.backoffMs).then(() => this.restart(managed, info));
+      managed.restarting = sleep(policy.backoffMs).then(() => this.restart(managed, info));
       return;
     }
 
@@ -322,18 +408,21 @@ export class ProcessSupervisor {
   }
 
   private async restart(managed: Managed, previous: ExitInfo): Promise<void> {
-    if (this.disposed || managed.state === 'stopping') {
-      managed.settleExit(previous);
-      return;
-    }
     try {
-      const child = await this.launch(managed.spec);
+      if (this.disposed || managed.state === 'stopping') {
+        managed.settleExit(previous);
+        return;
+      }
+      // `launch` is synchronous, so no stop can slip in between the check above and the new child.
+      const child = this.launch(managed.spec);
       managed.replaceChild(child, this.now());
       this.record(managed, 'running');
       this.watch(managed, child);
     } catch (error) {
       this.onError(error, managed.agentId);
       managed.settleExit(previous);
+    } finally {
+      managed.restarting = undefined;
     }
   }
 
@@ -347,10 +436,14 @@ export class ProcessSupervisor {
     if (managed.state === 'exited') return managed.exit;
     if (managed.state === 'stopping') return managed.exited;
     managed.state = 'stopping';
+    if (managed.restarting) await managed.restarting; // lets the restart path see `stopping`
+    if (managed.exit) return this.finishStop(managed, opts);
     const graceMs = opts.graceMs ?? this.graceMs;
     const termMs = opts.termMs ?? this.termMs;
 
-    // 1. Ask the runtime to end the turn.
+    // 1. Ask the runtime to end the turn. The waiter is registered first so a hook that reports
+    //    the turn end synchronously is not missed.
+    const turnOrExit = Promise.race([managed.waitTurnEnd(managed.turnMark), managed.exited]);
     try {
       if (managed.spec.interrupt) await managed.spec.interrupt(managed);
       else managed.signal('SIGINT');
@@ -358,11 +451,10 @@ export class ProcessSupervisor {
       this.onError(error, agentId);
     }
     // 2. Wait for the turn to end (or the process to exit) within the grace period.
-    const turnOrExit = Promise.race([managed.waitTurnEnd(), managed.exited]);
     const turnEnded = await withTimeout(turnOrExit, graceMs);
     if (managed.exit) return this.finishStop(managed, opts);
-    // The turn ended cleanly (or never will): the runtime may shut down on its own — give it a
-    // moment before terminating, but only if it signalled the turn end.
+    // The turn ended cleanly: the runtime may shut down on its own — give it a moment before
+    // terminating, but only if it signalled the turn end.
     if (turnEnded) {
       const gone = await withTimeout(managed.exited, Math.min(termMs, 1_000));
       if (gone) return this.finishStop(managed, opts);
@@ -388,6 +480,7 @@ export class ProcessSupervisor {
     const managed = this.procs.get(agentId);
     if (!managed || managed.state === 'exited') return managed?.exit;
     managed.state = 'stopping';
+    if (managed.restarting) await managed.restarting;
     managed.signal('SIGKILL');
     return managed.exited;
   }
@@ -396,13 +489,15 @@ export class ProcessSupervisor {
    * Startup reconciliation (corner cases 3 and 4). Every `running` row belongs to a previous
    * server life: nothing can re-attach to a live process, so a still-running orphan is killed
    * by group and both kinds are marked `interrupted` for the resume path to respawn from their
-   * session refs.
+   * session refs. A pid is only trusted when the row comes from this boot and the live process
+   * still runs the recorded command — pids are recycled, and killing a stranger is worse than
+   * leaving an orphan.
    */
   reconcile(): ReconcileResult {
     const result: ReconcileResult = { dead: [], orphans: [] };
     for (const row of this.store.running()) {
       if (this.procs.has(row.agentId)) continue; // ours, this life
-      if (row.pid !== undefined && isAlive(row.pid)) {
+      if (row.pid !== undefined && this.isOurs(row)) {
         signalGroup(row.pid, 'SIGKILL');
         result.orphans.push(row.agentId);
       } else {
@@ -411,6 +506,24 @@ export class ProcessSupervisor {
       this.store.upsert({ ...row, status: 'interrupted', endedAt: this.now() });
     }
     return result;
+  }
+
+  private isOurs(row: ProcessRecord): boolean {
+    const pid = row.pid!;
+    if (!isAlive(pid)) return false;
+    const rowBoot = row.meta?.['bootAt'];
+    if (
+      typeof rowBoot === 'string' &&
+      Math.abs(Date.parse(rowBoot) - Date.parse(this.bootAt)) > 60_000
+    ) {
+      return false; // recorded in a previous boot: the pid cannot be the same process
+    }
+    const command = row.meta?.['command'];
+    if (typeof command !== 'string') return false;
+    const live = this.nameOf(pid);
+    const name = basename(command);
+    // Linux truncates `comm` to 15 characters.
+    return live !== undefined && (live === name || (live.length >= 15 && name.startsWith(live)));
   }
 
   /** The persisted row for an agent (running, exited or interrupted). */
@@ -428,16 +541,16 @@ export class ProcessSupervisor {
   private record(managed: Managed, status: ProcessRecord['status'], exit?: ExitInfo): void {
     const rec: ProcessRecord = {
       agentId: managed.agentId,
-      pid: managed.pid,
       startedAt: managed.startedAt,
       status,
+      meta: { ...(managed.spec.meta ?? {}), command: managed.spec.command, bootAt: this.bootAt },
     };
+    if (managed.pid > 0) rec.pid = managed.pid;
     if (exit) {
       rec.endedAt = exit.at;
       if (exit.code !== null) rec.exitCode = exit.code;
       if (exit.signal !== null) rec.signal = exit.signal;
     }
-    if (managed.spec.meta) rec.meta = managed.spec.meta;
     try {
       this.store.upsert(rec);
     } catch (error) {

@@ -25,7 +25,7 @@ import {
  * behaviour has a deterministic reference: questions block the turn until answered, messages
  * queue until idle unless they interrupt, pause holds the turn, stop is interrupt-then-stopped.
  *
- * Session refs are `fake:<scenario>:<nextStep>`; `resumeSession` continues from the step after
+ * Session refs are `fake:<scenario>:<sessionId>:<nextStep>`; `resumeSession` continues from the step after
  * the last one completed when the adapter was given the same `sessionStore` (an in-process
  * restart, P1-14), and from the ref's step otherwise.
  */
@@ -71,6 +71,8 @@ class FakeSession {
   pending: PendingQuestion | undefined;
   /** Resolves when the current turn loop has exited. */
   turnDone: Promise<void> = Promise.resolve();
+  /** Set by the first `stop()`; later calls share it. */
+  stopping: Promise<void> | undefined;
 
   constructor(
     readonly agentId: Id,
@@ -82,7 +84,7 @@ class FakeSession {
   }
 
   get sessionRef(): string {
-    return `fake:${this.scenarioName}:${this.stepIndex}`;
+    return `fake:${this.scenarioName}:${this.sessionId}:${this.stepIndex}`;
   }
 }
 
@@ -115,12 +117,12 @@ export class FakeAdapter implements AgentAdapter {
   }
 
   async resumeSession(sessionRef: string, opts: SpawnOptions): Promise<SpawnHandle> {
-    const m = /^fake:([a-z0-9_-]+):(\d+)$/i.exec(sessionRef);
+    const m = /^fake:([a-z0-9_-]+):([0-9a-f-]+):(\d+)$/i.exec(sessionRef);
     if (!m) throw new Error(`not a fake session ref: ${sessionRef}`);
-    const name = m[1]!;
+    const name = m[1]!.toLowerCase();
     const scenario = this.scenarios[name];
     if (!scenario) throw new Error(`unknown fake scenario in session ref: ${name}`);
-    const startAt = this.sessionStore.get(sessionRef) ?? Number(m[2]);
+    const startAt = this.sessionStore.get(sessionRef) ?? Number(m[3]);
     return this.start(opts.agentId, name, scenario, startAt);
   }
 
@@ -182,13 +184,17 @@ export class FakeAdapter implements AgentAdapter {
 
   async stop(sessionId: string, _opts: StopOptions = {}): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (!session || session.ended) return;
+    if (!session) return;
+    if (session.stopping) return session.stopping;
+    if (session.ended) return;
     session.ended = 'stopped';
     if (session.turn) this.cancelTurn(session);
     session.paused = false;
     session.signal.fire();
-    await session.turnDone;
-    this.emit({ type: 'agent.stopped', agentId: session.agentId, by: SYSTEM });
+    session.stopping = session.turnDone.then(() => {
+      this.emit({ type: 'agent.stopped', agentId: session.agentId, by: SYSTEM });
+    });
+    return session.stopping;
   }
 
   async dispose(): Promise<void> {
@@ -271,16 +277,28 @@ export class FakeAdapter implements AgentAdapter {
   /** Waits `ms` (scaled), holding while paused and returning early when cancelled or ended. */
   private async delay(session: FakeSession, ms: number | undefined, turn: { cancelled: boolean }) {
     let remaining = (ms ?? session.scenario.stepDelayMs ?? 0) * this.speed;
-    while (remaining > 0 && !turn.cancelled && !session.ended) {
-      while (session.paused && !turn.cancelled && !session.ended) await session.signal.wait();
-      if (turn.cancelled || session.ended) return;
+    while ((remaining > 0 || session.paused) && !turn.cancelled && !session.ended) {
+      await this.holdWhilePaused(session, turn);
+      if (turn.cancelled || session.ended || remaining <= 0) return;
       const started = Date.now();
-      await Promise.race([
-        new Promise<void>((r) => setTimeout(r, remaining)),
-        session.signal.wait(),
-      ]);
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          new Promise<void>((r) => {
+            timer = setTimeout(r, remaining);
+          }),
+          session.signal.wait(),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
       remaining -= Date.now() - started;
     }
+  }
+
+  /** Nothing is emitted while paused: every step waits here right before it emits. */
+  private async holdWhilePaused(session: FakeSession, turn: { cancelled: boolean }) {
+    while (session.paused && !turn.cancelled && !session.ended) await session.signal.wait();
   }
 
   private async execute(
@@ -314,6 +332,8 @@ export class FakeAdapter implements AgentAdapter {
         await this.delay(session, step.ms, turn);
         return 'next';
       case 'stall':
+        await this.holdWhilePaused(session, turn);
+        if (turn.cancelled) return 'cancelled';
         this.emit({ type: 'agent.stalled', agentId, silentForMs: step.silentForMs });
         return 'next';
       case 'idle':
@@ -324,6 +344,8 @@ export class FakeAdapter implements AgentAdapter {
           ...(step.options ? { options: step.options } : {}),
         });
         if (answer === undefined) return 'cancelled';
+        await this.holdWhilePaused(session, turn);
+        if (turn.cancelled) return 'cancelled';
         this.emit({ type: 'agent.output', agentId, kind: 'text', text: `answer: ${answer}` });
         return 'next';
       }
@@ -334,6 +356,8 @@ export class FakeAdapter implements AgentAdapter {
           permissionAction: step.permissionAction,
         });
         if (answer === undefined) return 'cancelled';
+        await this.holdWhilePaused(session, turn);
+        if (turn.cancelled) return 'cancelled';
         if (/^(allow|yes|y|ok)$/i.test(answer.trim())) {
           this.emit({
             type: 'agent.tool_call',
@@ -363,6 +387,8 @@ export class FakeAdapter implements AgentAdapter {
         });
         return 'ended';
       case 'fail':
+        await this.holdWhilePaused(session, turn);
+        if (turn.cancelled) return 'cancelled';
         session.ended = 'failed';
         this.emit({
           type: 'agent.failed',
