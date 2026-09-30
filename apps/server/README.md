@@ -36,7 +36,7 @@ Subscribing to the log and reading the snapshot/replay happen in the same synchr
 
 - `better-sqlite3` in WAL mode, foreign keys on. Migrations are numbered SQL files in `src/db/migrations/` (copied to `dist/` on build); `schema_migrations` records what ran; re-running is a no-op.
 - Two streams: `events(id = rowid = seq, at, type, payload)` and `transcript_chunks(agent_id, seq, at, chunk)` (filled from Phase 1).
-- `EventLog.runCommand(fn)` is the one write rule: `fn` mutates the tables and `emit`s events; both are committed in one transaction (nested calls join it), `seq = rowid`, and subscribers are notified after the outermost commit, strictly in order. A throw anywhere leaves neither rows nor events. `agent.output` is refused here — it belongs to the transcript stream.
+- `EventLog.runCommand(fn)` is the one write rule: `fn` mutates the tables and `emit`s events; both are committed in one transaction (nested calls join it), `seq = rowid`, and subscribers are notified after the outermost commit, strictly in order — also when a subscriber runs a command of its own while being notified: its events are committed at once but published after the current batch (drain loop). A throw anywhere leaves neither rows nor events. `agent.output` is refused here — it belongs to the transcript stream.
 
 ## Tests
 

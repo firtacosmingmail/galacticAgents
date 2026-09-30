@@ -195,7 +195,7 @@ Enforced by the process supervisor, not by prompts, from Phase 1: per-agent wall
 
 ### 6.1 One write rule
 
-Every command (a brain tool, a panel action, an adapter event fold) performs its **domain mutation and its event insert in one `better-sqlite3` transaction**; the event ID is the `events` rowid (monotonic, server-assigned); in-memory subscribers are notified **after commit**. A crash can therefore never leave the domain tables and the event log disagreeing. Clients never trust their own timestamps for ordering.
+Every command (a brain tool, a panel action, an adapter event fold) performs its **domain mutation and its event insert in one `better-sqlite3` transaction**; the event ID is the `events` rowid (monotonic, server-assigned); in-memory subscribers are notified **after commit**, strictly in `seq` order even when a subscriber runs a command of its own while being notified (its events are committed at once and published after the current batch). A crash can therefore never leave the domain tables and the event log disagreeing. Clients never trust their own timestamps for ordering.
 
 ### 6.2 Two streams
 

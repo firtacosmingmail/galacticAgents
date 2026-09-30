@@ -42,9 +42,11 @@ export class EventLog {
   private readonly selectSince: Statement;
   private readonly selectMax: Statement;
   private readonly selectMin: Statement;
-  /** Events committed but not yet published (only non-empty inside a command). */
+  /** Events committed but not yet published (only non-empty inside a command or while publishing). */
   private pending: EventEnvelope[] = [];
   private depth = 0;
+  /** True while subscribers are being notified; commands run by a subscriber queue behind the batch. */
+  private publishing = false;
 
   constructor(
     readonly db: Database,
@@ -91,7 +93,9 @@ export class EventLog {
       })();
       this.pending.push(...mine);
     } catch (error) {
-      if (this.depth === 1) this.pending = [];
+      // A failed outermost command drops what its nested commands queued; events queued by an
+      // enclosing publish loop are already committed and stay.
+      if (this.depth === 1 && !this.publishing) this.pending = [];
       throw error;
     } finally {
       this.depth--;
@@ -101,17 +105,28 @@ export class EventLog {
     return { value, events: mine };
   }
 
+  /**
+   * Notifies subscribers strictly in `seq` order. A subscriber may run a command of its own while
+   * being notified (a projection reacting to an event, a brain mailbox); its events are committed
+   * at once but published only after the current batch, so no subscriber ever sees a later `seq`
+   * before an earlier one.
+   */
   private publish(): void {
-    const batch = this.pending;
-    this.pending = [];
-    for (const envelope of batch) {
-      for (const subscriber of this.subscribers) {
-        try {
-          subscriber(envelope);
-        } catch (error) {
-          this.onSubscriberError(error, envelope);
+    if (this.publishing) return; // the outer drain loop picks up what was just queued
+    this.publishing = true;
+    try {
+      while (this.pending.length > 0) {
+        const envelope = this.pending.shift()!;
+        for (const subscriber of [...this.subscribers]) {
+          try {
+            subscriber(envelope);
+          } catch (error) {
+            this.onSubscriberError(error, envelope);
+          }
         }
       }
+    } finally {
+      this.publishing = false;
     }
   }
 

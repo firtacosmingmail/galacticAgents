@@ -84,6 +84,55 @@ describe('EventLog.runCommand', () => {
     expect(log.eventsSince(0).map((e) => e.seq)).toEqual(expected);
   });
 
+  it('a subscriber that runs a command keeps the order strict for every subscriber (P0-13)', () => {
+    const log = fresh();
+    const a: number[] = [];
+    const b: number[] = [];
+    log.subscribe((e) => {
+      a.push(e.seq);
+      // A projection reacting to the first event with a command of its own.
+      if (e.seq === 1) {
+        const out = log.runCommand(({ emit }) => emit({ type: 'agent.idle', agentId: 'reaction' }));
+        expect(out.events[0]?.seq).toBe(3); // committed at once …
+        expect(b).toEqual([]); // … but not yet published: B has not even seen 1
+      }
+    });
+    log.subscribe((e) => b.push(e.seq));
+    log.runCommand(({ emit }) => {
+      emit({ type: 'agent.idle', agentId: 'x' });
+      emit({ type: 'agent.idle', agentId: 'y' });
+    });
+    expect(a).toEqual([1, 2, 3]);
+    expect(b).toEqual([1, 2, 3]);
+    expect(log.eventsSince(0).map((e) => e.event)).toMatchObject([
+      { agentId: 'x' },
+      { agentId: 'y' },
+      { agentId: 'reaction' },
+    ]);
+  });
+
+  it('a command that fails inside a subscriber does not lose the rest of the batch', () => {
+    const log = fresh();
+    const seen: number[] = [];
+    log.subscribe((e) => {
+      seen.push(e.seq);
+      if (e.seq === 1) {
+        expect(() =>
+          log.runCommand(({ emit }) => {
+            emit({ type: 'agent.idle', agentId: 'doomed' });
+            throw new Error('boom');
+          }),
+        ).toThrow('boom');
+      }
+    });
+    log.runCommand(({ emit }) => {
+      emit({ type: 'agent.idle', agentId: 'x' });
+      emit({ type: 'agent.idle', agentId: 'y' });
+    });
+    expect(seen).toEqual([1, 2]);
+    expect(log.currentSeq()).toBe(2);
+  });
+
   it('a failing subscriber does not stop the others or the command', () => {
     const errors: unknown[] = [];
     const log = fresh({ onSubscriberError: (e: unknown) => errors.push(e) });
