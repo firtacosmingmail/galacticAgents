@@ -6,7 +6,7 @@ Read `docs/SPEC.md` (what), `docs/TECHNOLOGY.md` (with what) and `docs/IMPLEMENT
 
 ## Quickstart
 
-Requirements: Node 22 LTS and pnpm 10 (`corepack enable` or `npm i -g pnpm`).
+Requirements: Node 22 LTS and pnpm 10 (`corepack enable` or `npm i -g pnpm`). No native toolchain is needed: `better-sqlite3` ships prebuilt binaries (its install script is intentionally not run).
 
 ```sh
 pnpm install          # workspace: packages/protocol, apps/server, apps/web
