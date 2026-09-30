@@ -194,3 +194,14 @@ export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
     push: 'ask',
   },
 };
+
+/** One batch-written piece of an agent's transcript (TECHNOLOGY §6.2), redacted before it is stored. */
+export const TranscriptChunk = z.object({
+  agentId: Id,
+  /** Per-agent, strictly increasing; the transcript stream is resumed from it. */
+  seq: z.number().int().positive(),
+  at: Timestamp,
+  kind: z.enum(['text', 'tool', 'thinking']),
+  text: z.string(),
+});
+export type TranscriptChunk = z.infer<typeof TranscriptChunk>;

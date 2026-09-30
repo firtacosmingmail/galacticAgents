@@ -1,5 +1,15 @@
 import { z } from 'zod';
-import { Agent, Body, Project, Proposal, Question, StatusRecord, Task } from './domain.js';
+import { Id } from './primitives.js';
+import {
+  Agent,
+  Body,
+  Project,
+  Proposal,
+  Question,
+  StatusRecord,
+  Task,
+  TranscriptChunk,
+} from './domain.js';
 import { EventEnvelope } from './events.js';
 
 // ---------------------------------------------------------------------------
@@ -21,7 +31,30 @@ export type HelloMessage = z.infer<typeof HelloMessage>;
 
 export const PingMessage = z.object({ type: z.literal('ping') });
 
-export const ClientMessage = z.discriminatedUnion('type', [HelloMessage, PingMessage]);
+/**
+ * Transcripts are a second, per-agent stream (TECHNOLOGY §6.2): a client subscribes to the
+ * agents it is looking at and receives chunks with `seq > since` (persisted history first, then
+ * live batches), always in `seq` order.
+ */
+export const TranscriptSubscribeMessage = z.object({
+  type: z.literal('transcript.subscribe'),
+  agentId: Id,
+  since: z.number().int().nonnegative().optional(),
+});
+export type TranscriptSubscribeMessage = z.infer<typeof TranscriptSubscribeMessage>;
+
+export const TranscriptUnsubscribeMessage = z.object({
+  type: z.literal('transcript.unsubscribe'),
+  agentId: Id,
+});
+export type TranscriptUnsubscribeMessage = z.infer<typeof TranscriptUnsubscribeMessage>;
+
+export const ClientMessage = z.discriminatedUnion('type', [
+  HelloMessage,
+  PingMessage,
+  TranscriptSubscribeMessage,
+  TranscriptUnsubscribeMessage,
+]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 /** Full current state, sent when the client has no usable `lastEventId`. */
@@ -58,6 +91,7 @@ export const ErrorCode = z.enum([
   'bad_hello',
   'protocol_violation',
   'slow_consumer',
+  'unsupported',
   'internal',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
@@ -71,12 +105,32 @@ export type ErrorMessage = z.infer<typeof ErrorMessage>;
 
 export const PongMessage = z.object({ type: z.literal('pong') });
 
+/**
+ * A batch of status records (TECHNOLOGY §4): the server-owned projection, sent as diffs at
+ * ≈10 Hz after the snapshot. A record replaces the client's copy for that agent.
+ */
+export const StatusMessage = z.object({
+  type: z.literal('status'),
+  statuses: z.array(StatusRecord).min(1),
+});
+export type StatusMessage = z.infer<typeof StatusMessage>;
+
+/** A batch of transcript chunks for one subscribed agent, in `seq` order. */
+export const TranscriptMessage = z.object({
+  type: z.literal('transcript'),
+  agentId: Id,
+  chunks: z.array(TranscriptChunk),
+});
+export type TranscriptMessage = z.infer<typeof TranscriptMessage>;
+
 export const ServerMessage = z.discriminatedUnion('type', [
   SnapshotMessage,
   EventMessage,
   CaughtUpMessage,
   ErrorMessage,
   PongMessage,
+  StatusMessage,
+  TranscriptMessage,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 

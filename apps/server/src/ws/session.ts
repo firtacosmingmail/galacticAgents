@@ -1,12 +1,15 @@
 import type { WebSocket } from 'ws';
 import { ClientMessage, type EventEnvelope, type HelloMessage } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
+import type { TranscriptPipeline } from '../runtime/transcripts.js';
 import { CLOSE_PROTOCOL_VIOLATION, send, type SessionHandler } from './gateway.js';
 
 export interface SessionOptions {
   /** Bytes queued on a socket before the connection is dropped as a slow consumer. */
   maxBufferedBytes?: number;
   log?: { info: (msg: string) => void; warn: (msg: string) => void };
+  /** The per-agent transcript stream (P1-06); without it, subscriptions are refused. */
+  transcripts?: TranscriptPipeline;
 }
 
 /**
@@ -23,10 +26,18 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
   return (socket: WebSocket, hello: HelloMessage) => {
     let lastSent = 0;
     let unsubscribe: (() => void) | undefined;
+    /** Transcript subscriptions of this socket, one per agent. */
+    const transcriptSubs = new Map<string, () => void>();
 
-    const fail = (code: number, error: 'protocol_violation', message: string) => {
+    const teardown = () => {
       unsubscribe?.();
       unsubscribe = undefined;
+      for (const off of transcriptSubs.values()) off();
+      transcriptSubs.clear();
+    };
+
+    const fail = (code: number, error: 'protocol_violation', message: string) => {
+      teardown();
       send(socket, { type: 'error', code: error, message });
       socket.close(code, error);
     };
@@ -37,8 +48,7 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
         // A close frame would only queue behind the unread backlog: cut the connection instead.
         // The client reconnects with its lastEventId and catches up (or gets a snapshot).
         opts.log?.warn(`dropping slow consumer (${socket.bufferedAmount} bytes queued)`);
-        unsubscribe?.();
-        unsubscribe = undefined;
+        teardown();
         socket.terminate();
         return;
       }
@@ -66,7 +76,7 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
       opts.log?.info(`ws session started with snapshot at ${snapshot.seq}`);
     }
 
-    // 3. Live: only ping is allowed from the client for now; anything else is a violation.
+    // 3. Live: pings and transcript subscriptions; anything else is a violation.
     socket.on('message', (data) => {
       let parsed: ReturnType<typeof ClientMessage.safeParse>;
       try {
@@ -90,16 +100,34 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
             'hello must be the first frame only',
           );
           break;
+        case 'transcript.subscribe': {
+          const { agentId, since } = parsed.data;
+          if (!opts.transcripts) {
+            send(socket, {
+              type: 'error',
+              code: 'unsupported',
+              message: 'transcripts unavailable',
+            });
+            break;
+          }
+          transcriptSubs.get(agentId)?.();
+          transcriptSubs.set(
+            agentId,
+            opts.transcripts.subscribe(agentId, since ?? 0, (chunks) => {
+              if (socket.bufferedAmount > maxBuffered) return; // the events path drops the socket
+              send(socket, { type: 'transcript', agentId, chunks });
+            }),
+          );
+          break;
+        }
+        case 'transcript.unsubscribe':
+          transcriptSubs.get(parsed.data.agentId)?.();
+          transcriptSubs.delete(parsed.data.agentId);
+          break;
       }
     });
 
-    socket.on('close', () => {
-      unsubscribe?.();
-      unsubscribe = undefined;
-    });
-    socket.on('error', () => {
-      unsubscribe?.();
-      unsubscribe = undefined;
-    });
+    socket.on('close', teardown);
+    socket.on('error', teardown);
   };
 }

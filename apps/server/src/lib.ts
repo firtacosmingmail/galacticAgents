@@ -36,3 +36,5 @@ export {
   type ProcessStore,
 } from './runtime/process-store.js';
 export { EventQueue, collect } from './runtime/event-queue.js';
+export { TranscriptPipeline, type TranscriptListener } from './runtime/transcripts.js';
+export { redactSecrets, containsSecret, REDACTION_RULES } from './runtime/redact.js';

@@ -155,6 +155,8 @@ export class GalacticClient {
         if (message.code === 'unauthorized') this.setStatus('unauthorized', message.message);
         return;
       case 'pong':
+      case 'status':
+      case 'transcript':
         this.opts.onMessage(message);
         return;
     }

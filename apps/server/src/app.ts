@@ -7,6 +7,7 @@ import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
 import type { EventLog } from './domain/event-log.js';
+import type { TranscriptPipeline } from './runtime/transcripts.js';
 import { SERVER_VERSION } from './version.js';
 
 export interface AppOptions {
@@ -17,6 +18,8 @@ export interface AppOptions {
   log?: EventLog;
   /** A built web app (apps/web/dist) to serve at `/`; `galactic start` sets it. */
   webDir?: string;
+  /** The transcript stream (P1-06): enables `transcript.subscribe` on the socket. */
+  transcripts?: TranscriptPipeline;
   logger?: boolean;
 }
 
@@ -77,7 +80,10 @@ export function buildApp(opts: AppOptions): App {
   const onSession =
     opts.onSession ??
     (opts.log
-      ? createSessionHandler(opts.log, { log: logSink })
+      ? createSessionHandler(opts.log, {
+          log: logSink,
+          ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
+        })
       : () => {
           throw new Error('buildApp needs either onSession or log');
         });
