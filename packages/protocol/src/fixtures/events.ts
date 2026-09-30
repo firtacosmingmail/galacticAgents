@@ -34,8 +34,8 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     type: 'agent.needs_input',
     ...steward,
     questionId: 'q-1',
+    kind: 'clarification',
     question: {
-      kind: 'clarification',
       text: 'Keep the legacy cookie name?',
       options: ['yes', 'no'],
     },

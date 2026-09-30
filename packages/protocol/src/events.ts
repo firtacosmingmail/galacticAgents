@@ -1,7 +1,18 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
 import { AgentRole, AgentRuntime, QuestionKind, WorkState } from './enums.js';
-import { Actor, Body, Cost, Host, Progress, Project, Proposal, Question, Task } from './domain.js';
+import {
+  Actor,
+  Body,
+  Cost,
+  Host,
+  Progress,
+  Project,
+  Proposal,
+  Question,
+  QuestionContext,
+  Task,
+} from './domain.js';
 
 // ---------------------------------------------------------------------------
 // agent.* — emitted by adapters, normalised (TECHNOLOGY §3.4)
@@ -37,15 +48,16 @@ export const AgentToolCall = z.object({
   input: z.unknown().optional(),
 });
 
+/**
+ * The agent is blocked on a question. A permission question carries the tool call and the
+ * policy action it maps to, so the policy engine (P1-10) can decide without asking the LLM.
+ */
 export const AgentNeedsInput = z.object({
   type: z.literal('agent.needs_input'),
   ...agentBase,
   questionId: Id,
-  question: z.object({
-    kind: QuestionKind,
-    text: z.string(),
-    options: z.array(z.string()).optional(),
-  }),
+  kind: QuestionKind,
+  question: QuestionContext,
 });
 
 export const AgentProgress = z.object({

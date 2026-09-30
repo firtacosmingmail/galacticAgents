@@ -109,7 +109,7 @@ describe('applyEvent', () => {
     expect(w.proposals['pr-1']?.state).toBe('parked');
   });
 
-  it('updates known status records from agent events and ignores unknown agents', () => {
+  it('keeps status records exactly as the server sent them: agent.* events only advance seq', () => {
     let w = applySnapshot({
       logId: 'log-a',
       seq: 0,
@@ -122,15 +122,10 @@ describe('applyEvent', () => {
       statuses: [fx.status],
     });
     w = applyEvent(w, env(1, ev['agent.needs_input']));
-    expect(w.statuses['a-steward-1']).toMatchObject({
-      state: 'waiting_for_input',
-      pendingQuestionId: 'q-1',
-    });
     w = applyEvent(w, env(2, ev['agent.finished']));
-    expect(w.statuses['a-steward-1']).toMatchObject({ state: 'finished', costSoFar: { usd: 1.2 } });
-    const same = applyEvent(w, env(3, { type: 'agent.idle', agentId: 'unknown' }));
-    expect(same.statuses).toEqual(w.statuses);
-    expect(same.seq).toBe(3);
+    w = applyEvent(w, env(3, { type: 'agent.idle', agentId: 'unknown' }));
+    expect(w.statuses).toEqual({ [fx.status.agentId]: fx.status });
+    expect(w.seq).toBe(3);
   });
 
   it('accepts every event type without throwing', () => {

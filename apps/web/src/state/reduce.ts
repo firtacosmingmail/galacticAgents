@@ -64,23 +64,10 @@ function patch<T extends object>(
   return { ...map, [id]: { ...current, ...defined } };
 }
 
-function setStatus(
-  state: WorldState,
-  agentId: Id,
-  at: string,
-  changes: Partial<Omit<StatusRecord, 'agentId'>>,
-): WorldState {
-  const current = state.statuses[agentId];
-  if (!current) return state; // Phase 1 pushes status records; until then only known ones update
-  return {
-    ...state,
-    statuses: { ...state.statuses, [agentId]: { ...current, ...changes, lastEventAt: at } },
-  };
-}
-
 /**
  * Folds one event into the world. Pure: returns a new state, never mutates.
- * Phase 0 covers the structural events; Phase 1–2 refine agent and question handling.
+ * Phase 0 covers the structural events; Phase 2 completes the domain events and adds the
+ * replay-vs-snapshot conformance test that keeps this reducer and the server's commands agreeing.
  */
 export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope): WorldState {
   const next = { ...state, seq };
@@ -182,41 +169,21 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
         proposals: patch(next.proposals, event.proposalId, { state: 'parked', updatedAt: at }),
       };
 
+    // Status records are a server-owned projection (TECHNOLOGY §4, decision recorded with P0-18):
+    // the client receives them in the snapshot and, from P1-05, as status messages, and never
+    // folds `agent.*` events itself — two implementations of one projection would drift.
     case 'agent.spawned':
-      return setStatus(next, event.agentId, at, { state: 'starting' });
     case 'agent.progress':
-      return setStatus(next, event.agentId, at, {
-        state: 'working',
-        currentActivity: event.summary,
-        ...(event.progress ? { progress: event.progress } : {}),
-      });
     case 'agent.tool_call':
-      return setStatus(next, event.agentId, at, {
-        state: 'working',
-        currentActivity: event.toolName,
-      });
     case 'agent.needs_input':
-      return setStatus(next, event.agentId, at, {
-        state: 'waiting_for_input',
-        pendingQuestionId: event.questionId,
-      });
     case 'agent.idle':
-      return setStatus(next, event.agentId, at, { state: 'idle' });
     case 'agent.stalled':
-      return setStatus(next, event.agentId, at, { state: 'stalled' });
     case 'agent.paused':
-      return setStatus(next, event.agentId, at, { state: 'paused' });
     case 'agent.resumed':
-      return setStatus(next, event.agentId, at, { state: 'working' });
     case 'agent.finished':
-      return setStatus(next, event.agentId, at, {
-        state: 'finished',
-        ...(event.cost ? { costSoFar: event.cost } : {}),
-      });
     case 'agent.failed':
-      return setStatus(next, event.agentId, at, { state: 'failed', currentActivity: event.error });
     case 'agent.stopped':
-      return setStatus(next, event.agentId, at, { state: 'stopped' });
+      return next;
     case 'agent.output':
       return next; // transcript traffic never reaches this stream
 

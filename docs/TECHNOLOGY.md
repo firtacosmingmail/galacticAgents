@@ -138,7 +138,7 @@ For CLIs with no machine protocol, spawn them under `node-pty`, stream the termi
 
 Every adapter emits the same normalised events (schemas in `packages/protocol`) into the server's event bus:
 
-`agent.spawned · agent.output(text/tool/thinking) · agent.tool_call · agent.needs_input(question: {kind, text, options}) · agent.progress(summary) · agent.idle · agent.stalled · agent.paused · agent.resumed · agent.finished(result, cost) · agent.failed(error) · agent.stopped`
+`agent.spawned · agent.output(text/tool/thinking) · agent.tool_call · agent.needs_input(questionId, kind, question: QuestionContext{text, options?, toolCall?, permissionAction?}) · agent.progress(summary) · agent.idle · agent.stalled · agent.paused · agent.resumed · agent.finished(result, cost) · agent.failed(error) · agent.stopped`
 
 The `AgentAdapter` interface: `spawn(opts)`, `send(sessionId, message)` (enqueued; delivered when the agent is idle, or immediately with `interrupt: true`), `answer(questionId, answer)`, `interrupt`, `pause`, `resume`, `stop`, `resumeSession?(sessionRef)`, plus the `events` stream. `spawn(opts)` accepts `tools` and `systemPrompt` so the same adapter runs the brains.
 
@@ -151,7 +151,7 @@ The UI, the status store and the supervisor brains only ever see these events. A
 The spec's requirement — supervisors know statuses without interrupting — is solved by **never asking the agent**. Instead:
 
 1. Each adapter's event stream is folded into a per-agent **status record**: `state ∈ {starting, working, waiting_for_input, idle, stalled, paused, interrupted, finished, failed, stopped}`, `current_activity` (last tool call or a rolling LLM-written one-liner), `last_event_at`, `pending_question`, `progress` (task-level checklist if the agent reports one), `cost_so_far`, `caps` (used vs. limit). `stalled` is set by a per-runtime silence threshold, never by killing.
-2. The status store is an in-memory **projection** of the event log, rebuildable from it on startup and pushed to the UI over WebSocket as batched diffs (≈10 Hz, never per token).
+2. The status store is an in-memory **projection** of the event log, rebuildable from it on startup and pushed to the UI over WebSocket as batched diffs (≈10 Hz, never per token). **The projection has one implementation, in the server** (P1-05): clients receive status records in the `snapshot` and as status messages afterwards and never fold `agent.*` events into records themselves — a second implementation in the web client would drift from the server's and make a resuming client disagree with a snapshotting one (decided with P0-18).
 3. The Harmonizer and Waykeepers get a `get_agent_status(agent_id)` / `list_supervised_agents()` **tool** that reads the store. Reading it costs nothing to the supervised agent.
 4. Task and project states (SPEC §4.4) are derived in the server from agent states and open questions — no LLM call needed for the basic status views.
 5. Optional cheap summariser: every N events (or on idle), a small model turns the recent event window into a human sentence ("Refactoring auth module, 3 files edited, running tests"). This drives both the panel text and the satellite animation choice (gathering / transporting / building). The raw last event is always shown next to the summary so a lying summary is visible.
@@ -203,6 +203,11 @@ Every command (a brain tool, a panel action, an adapter event fold) performs its
 - `transcript_chunks(agentId, seq, chunk)` — agent output (text, tool calls, thinking), written in batches (≈10 Hz), pruned by retention policy, redacted for known secret patterns **before** persisting and before sending to the UI.
 
 The status store (§4) and the task/project states are projections over `events`; they are rebuilt on startup and never written back as truth.
+
+Two consequences for the client, decided with P0-18:
+
+- **Domain state is derived twice by design** — the server's commands mutate the tables, the web client's reducer folds the same events — so the two must agree or a resuming client and a snapshotting one would show different worlds. Every command therefore emits events that fully describe its mutation (`body.created` for a new body, `project.created` with the whole project, …), and P2-01 adds a **conformance test**: replaying a recorded event log through the client reducer must equal the server's snapshot at every `seq`. Status records are exempt: they are server-owned (§4).
+- **The per-project `PermissionPolicy`** (SPEC §3.6, decision 7) is stored in a `permission_policy` JSON column on `projects` (validated by the protocol schema; absent = default policy), added by migration with P2-01 and exposed as `Project.permissionPolicy?`. It is never parked in `meta`.
 
 ### 6.3 WebSocket protocol (defined in Phase 0, used by every client from Phase 1)
 

@@ -47,8 +47,8 @@ The full Steward → Waykeeper → Harmonizer → user loop, working through the
 
 ### P2-01 — Domain commands
 - **Status:** todo · **Depends on:** P0-07, P0-04 · **Parallel with:** —
-- Implement `DomainCommands` as transactional commands: projects (create, set workspace, set state, close, archive, pin, reopen), tasks (create, edit, set state, move, close, archive, reopen), agents (register, set supervisor/body, set state), proposals (create, approve, edit, reject, park), questions (open, escalate, answer, reassign), control actions; every command emits its event(s); snapshot builder completed for all tables.
-- **Acceptance:** each command has a test asserting the row change and the emitted event; invalid transitions are rejected.
+- Implement `DomainCommands` as transactional commands: projects (create, set workspace, set state, close, archive, pin, reopen), tasks (create, edit, set state, move, close, archive, reopen), agents (register, set supervisor/body, set state), proposals (create, approve, edit, reject, park), questions (open, escalate, answer, reassign), control actions; every command emits its event(s) and they fully describe the mutation (a new body → `body.created`); snapshot builder completed for all tables. Migration 0003 adds `projects.permission_policy` (JSON, validated by `PermissionPolicy`) and the protocol gains `Project.permissionPolicy?` (TECHNOLOGY §6.2, decided with P0-18).
+- **Acceptance:** each command has a test asserting the row change and the emitted event; invalid transitions are rejected; a **conformance test** replays a recorded event log through the web client's reducer and asserts equality with the server's snapshot at every `seq` (statuses excluded — server-owned).
 
 ### P2-02 — Body catalogue and assignment
 - **Status:** todo · **Depends on:** P2-01 · **Parallel with:** P2-03, P2-05, P2-06, P2-14, P2-15

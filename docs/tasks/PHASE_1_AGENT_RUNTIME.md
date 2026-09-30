@@ -65,7 +65,7 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 
 ### P1-05 — Status store projection
 - **Status:** todo · **Depends on:** P0-07, P1-03 · **Parallel with:** P1-02, P1-04, P1-06, P1-07
-- Fold `agent.*` events into `StatusRecord`s (state, `current_activity`, `last_event_at`, `pending_question`, `progress`, `cost_so_far`, caps used); per-runtime silence threshold → `stalled`; rebuild from `events` on startup; batched diff broadcast (≈10 Hz) as `status.*` messages over the WS stream.
+- Fold `agent.*` events into `StatusRecord`s (state, `current_activity`, `last_event_at`, `pending_question`, `progress`, `cost_so_far`, caps used); per-runtime silence threshold → `stalled`; rebuild from `events` on startup; batched diff broadcast (≈10 Hz) as `status.*` messages over the WS stream. This is the **only** implementation of the projection (TECHNOLOGY §4, decided with P0-18): the web client stores the records it receives (`snapshot.statuses`, then the status messages) and never derives them from `agent.*` itself — `apps/web/src/state/reduce.ts` already treats those events as seq-only.
 - **Acceptance:** replaying a recorded event log yields identical records; a silent agent turns `stalled` after the threshold and back to `working` on the next event.
 
 ### P1-06 — Transcript pipeline and secret redaction
