@@ -1,6 +1,6 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** — (phase not started; first task will be P1-01 / P1-03 / P1-10 in parallel) · **Task status:** —
+**Current task:** wave 1 — P1-01, P1-03, P1-08, P1-10 (next to pick; none claimed yet) · **Task status:** todo
 **Phase status:** not started (0/14 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.

@@ -1,7 +1,7 @@
 # Phase 0 — Foundations
 
-**Current task:** P0-10 — Resume and gap test, P0-11 — Dev ergonomics and `galactic start` · **Task status:** in progress, in progress
-**Phase status:** in progress (9/11 done)
+**Current task:** — · **Task status:** —
+**Phase status:** done (2026-09-30) (11/11 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -89,15 +89,26 @@ An empty but *correctly shaped* monorepo: server and web share one vocabulary (`
 - **Acceptance:** page connects, shows the snapshot, prints a fake event emitted by the server.
 
 ### P0-10 — Resume and gap test
-- **Status:** in progress · **Depends on:** P0-08, P0-09 · **Parallel with:** P0-11
+- **Status:** done (2026-09-30) · **Depends on:** P0-08, P0-09 · **Parallel with:** P0-11
 - Automated test (Vitest + a headless WS client, and a Playwright smoke if cheap) that emits N events, drops the connection mid-stream, reconnects, and asserts the client saw every `seq` exactly once.
 - **Acceptance:** test in CI; documented in `apps/server/README.md`.
 
 ### P0-11 — Dev ergonomics and `galactic start`
-- **Status:** in progress · **Depends on:** P0-08, P0-09 · **Parallel with:** P0-10
+- **Status:** done (2026-09-30) · **Depends on:** P0-08, P0-09 · **Parallel with:** P0-10
 - `galactic start` script (bin) that starts the server, prints the URL + token, opens the browser; `pnpm dev` with hot reload; root `README.md` quickstart.
 - **Acceptance:** a fresh clone reaches the event page in under five minutes following the README.
 
 ## Exit criteria (from the plan)
 
 `pnpm dev` starts server + web; a fake event emitted on the server appears in the browser; killing and restarting the web page resumes from `lastEventId` with no gaps or duplicates (tested).
+
+## Exit criteria check (2026-09-30)
+
+| Criterion | Result | How it was verified |
+|---|---|---|
+| `pnpm dev` starts server + web | ✅ | `concurrently` runs `tsc --watch` (protocol), `tsx watch` (server) and `vite` (web); `/health` and `/ws` answered through the Vite proxy on port 5173 with an allowed `Origin`, a foreign `Origin` was refused with 403. |
+| A fake event emitted on the server appears in the browser | ✅ (headless) | `POST /dev/events` → the event arrived on the proxied WebSocket; `apps/web/src/App.test.tsx` renders the page under jsdom, receives the snapshot and prints a live `agent.progress` event. Not yet clicked through in a real browser — do it once on the Mac: `pnpm dev`, open <http://localhost:5173>, press **Emit fake event**. |
+| Killing and restarting the web page resumes from `lastEventId` with no gaps or duplicates (tested) | ✅ | `apps/web/src/client/resume.test.ts` (P0-10): mid-stream terminations (single and repeated), a fresh client resuming from the persisted seq, and the snapshot fallback — every `seq` exactly once, in order; run 6× without flakes. `pnpm -r test`: 37 + 41 + 18 tests green. |
+
+Notes for Phase 1: the status store projection (`statuses` in the snapshot) is empty until P1-05; `agent.output` is refused by the event log and must go to `transcript_chunks` (P1-06); `Agent` gained `taskId` / `projectId`, `Question` a `version`, and the stream a `caught_up` frame — all recorded in `packages/protocol` and `TECHNOLOGY.md` §6.3/§7.
+
