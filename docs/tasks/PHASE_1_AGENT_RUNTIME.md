@@ -1,6 +1,6 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** wave 2 — P1-02, P1-04, P1-05, P1-06, P1-07 (next to pick; none claimed yet) · **Task status:** todo
+**Current task:** wave 2 — P1-02, P1-04, P1-05, P1-06, P1-07 (all claimed 2026-09-30) · **Task status:** in progress
 **Phase status:** in progress (4/14 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -50,7 +50,7 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** `apps/server/src/runtime/supervisor.ts` (+ `process-store.ts`, `event-queue.ts`, migration 0003 `agent_processes`). `spawn()`/`adopt()` (synchronous, for the SDK's `spawnClaudeCodeProcess`), `stop()` = interrupt hook → `turnEnded()`/exit within `graceMs` → SIGTERM → SIGKILL, `expectExit()` for runtime-initiated exits, restart policy off by default, `reconcile()` kills a live orphan only when the pid is from this boot and still runs the recorded command. Decisions recorded in `TECHNOLOGY.md` §3.4.
 
 ### P1-02 — Hard caps
-- **Status:** todo · **Depends on:** P1-01 · **Parallel with:** P1-04, P1-05, P1-06, P1-07
+- **Status:** in progress · **Depends on:** P1-01 · **Parallel with:** P1-04, P1-05, P1-06, P1-07
 - Per-agent wall-clock and tool-call caps (from `Agent.caps`, defaults from settings); global max concurrent agents (spawn refused with a clear reason); cap hit → graceful stop + `agent.failed(reason: cap)`.
 - **Acceptance:** tests for each cap; the refusal reason is visible in the event payload.
 
@@ -61,22 +61,22 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** `apps/server/src/adapters/fake/` — scripted `FakeStep`s, named scenarios (`echo`, `happy`, `asks`, `permission`, `stalls`, `fails`, `long`, `full`) picked by a `scenario:<name>` prompt, `speed` knob (0 = instantaneous), session refs `fake:<scenario>:<sessionId>:<step>` with an injectable progress map for in-process restarts. `agent.spawned` is the runtime layer's (TECHNOLOGY §3.4), every other event is covered by a test.
 
 ### P1-04 — Adapter conformance suite
-- **Status:** todo · **Depends on:** P1-03 · **Parallel with:** P1-02, P1-05, P1-06, P1-07
+- **Status:** in progress · **Depends on:** P1-03 · **Parallel with:** P1-02, P1-05, P1-06, P1-07
 - Vitest suite parameterised by adapter: spawn → output → clarification question answered → permission request answered → pause/resume → interrupt → finish with cost; stop from every state; `resumeSession` round trip; stall detection. Runs against the fake adapter in CI.
 - **Acceptance:** suite green on the fake adapter; documented as the bar for any future adapter.
 
 ### P1-05 — Status store projection
-- **Status:** todo · **Depends on:** P0-07, P1-03 · **Parallel with:** P1-02, P1-04, P1-06, P1-07
+- **Status:** in progress · **Depends on:** P0-07, P1-03 · **Parallel with:** P1-02, P1-04, P1-06, P1-07
 - Fold `agent.*` events into `StatusRecord`s (state, `current_activity`, `last_event_at`, `pending_question`, `progress`, `cost_so_far`, caps used); per-runtime silence threshold → `stalled`; rebuild from `events` on startup; batched diff broadcast (≈10 Hz) as `status.*` messages over the WS stream. This is the **only** implementation of the projection (TECHNOLOGY §4, decided with P0-18): the web client stores the records it receives (`snapshot.statuses`, then the status messages) and never derives them from `agent.*` itself — `apps/web/src/state/reduce.ts` already treats those events as seq-only.
 - **Acceptance:** replaying a recorded event log yields identical records; a silent agent turns `stalled` after the threshold and back to `working` on the next event.
 
 ### P1-06 — Transcript pipeline and secret redaction
-- **Status:** todo · **Depends on:** P0-07 · **Parallel with:** P1-02, P1-04, P1-05, P1-07
+- **Status:** in progress · **Depends on:** P0-07 · **Parallel with:** P1-02, P1-04, P1-05, P1-07
 - `agent.output` batched into `transcript_chunks` (≈10 Hz writes); redaction of known secret patterns (API keys, bearer tokens, `sk-…`, AWS keys) before persisting and before sending; per-agent subscribable transcript stream over WS (separate from the `events` stream); retention hook (no-op in v1).
 - **Acceptance:** a chunk containing a fake key is stored and sent redacted; transcript subscription delivers chunks in `seq` order.
 
 ### P1-07 — Per-agent inbox (send queue)
-- **Status:** todo · **Depends on:** P1-01, P1-03 · **Parallel with:** P1-02, P1-04, P1-05, P1-06
+- **Status:** in progress · **Depends on:** P1-01, P1-03 · **Parallel with:** P1-02, P1-04, P1-05, P1-06
 - `send()` enqueues; delivery on `agent.idle`; `interrupt: true` cancels the current turn and delivers immediately; every message records `sender` (user / supervisor id / system).
 - **Acceptance:** two messages sent while working are delivered in order after idle; an interrupt message arrives first.
 
