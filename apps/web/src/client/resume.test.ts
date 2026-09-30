@@ -20,6 +20,7 @@ beforeEach(async () => {
       port: 0,
       token: TOKEN,
       allowedHosts: ['localhost', '127.0.0.1'],
+      dev: false,
       dataDir: '',
       configPath: '',
       dbPath: ':memory:',
