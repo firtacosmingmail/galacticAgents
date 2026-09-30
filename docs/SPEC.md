@@ -243,6 +243,6 @@ On first run the application checks that the Claude Code runtime is installed an
 
 | Date | Question | Owner |
 |---|---|---|
-| 2026-09-30 | Which authentication does the TypeScript Agent SDK support for the Harmonizer/Waykeeper brains under a subscription login (decision 17)? If only an API key, the brains bill the key while Stewards use the subscription. | Verify in Phase 1 |
-| 2026-09-30 | Does the Claude SDK path report cost per session reliably enough for the cost meter, or do caps count only time and tool calls in v1? | Verify in Phase 1 |
+| 2026-09-30 | Which authentication does the TypeScript Agent SDK support for the Harmonizer/Waykeeper brains under a subscription login (decision 17)? If only an API key, the brains bill the key while Stewards use the subscription. | **Answered 2026-09-30 (P1-08):** the SDK spawns its bundled Claude Code and uses the same login as the `claude` binary; in-process brains with custom tools run under the subscription, no API key. `--bare` is the exception: it needs an API key, so the opt-in is refused when none is configured. See `docs/tasks/notes/P1-08-sdk-spike.md`. |
+| 2026-09-30 | Does the Claude SDK path report cost per session reliably enough for the cost meter, or do caps count only time and tool calls in v1? | **Answered 2026-09-30 (P1-08):** every turn's result carries a cumulative `total_cost_usd` (an estimate, notional under a subscription) plus token usage; the cost meter shows it, caps stay wall-clock + tool calls (decision 18), Phase 8 budgets use the estimate. |
 | 2026-09-30 | When a Waykeeper cannot merge a Steward's branch, does the user resolve the conflict by hand in the repo, or does the Waykeeper spawn a "merge" Steward? | Decide in Phase 2 |

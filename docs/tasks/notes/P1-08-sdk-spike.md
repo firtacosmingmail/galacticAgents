@@ -1,0 +1,34 @@
+# P1-08 — Claude Agent SDK spike (2026-09-30)
+
+Script: `docs/tasks/notes/P1-08-sdk-spike.mjs` (`node docs/tasks/notes/P1-08-sdk-spike.mjs [steps…]`, steps `auth tools permission hook ask resume interrupt stream bare spawn`). SDK `@anthropic-ai/claude-agent-sdk@0.3.285` (pinned in `apps/server`, corner case 8), which bundles its own Claude Code CLI (`@anthropic-ai/claude-agent-sdk-<platform>/claude`, 2.1.x). Run in a Linux sandbox logged in with a claude.ai OAuth login (`claude auth status` → `authMethod: oauth_token`, `apiProvider: firstParty`), model `claude-sonnet-4-5`. **One step is left for the dev machine:** re-run `auth tools` under Cosmin's own subscription once after `pnpm install` — the sandbox login is the same kind (OAuth, first party), so no surprise is expected, but decision 17 deserves a check on the real account.
+
+## Answers to SPEC §8
+
+1. **Auth for in-process brains under the subscription login — yes.** `query()` spawns the bundled CLI, which reads the same credentials as the `claude` binary (`~/.claude`), so a query with `systemPrompt` + in-process tools (`createSdkMcpServer` / `tool()`) runs under the OAuth login with no API key in the environment (`ANTHROPIC_API_KEY` unset, `CLAUDE_CODE_OAUTH_TOKEN` unset). The tool handler ran in the server process and its result reached the model (`tools` step). Brains and Stewards therefore bill the same subscription; corner case 34's "show brain cost separately" is moot.
+2. **Cost per session — reported, cumulative, an estimate.** Every `result` message carries `total_cost_usd`, `usage` (main loop) and `modelUsage` (everything, incl. subagents). In a streaming-input session each result carries the running total of the whole `query()` call, and a resumed session continues from the total its transcript saved (`resume` step: 0.0158 → 0.0205 after one more short turn). Good enough for the cost meter and for Phase 8 budgets; it is an estimate, not a bill, and under a subscription it is notional. Caps stay wall-clock + tool calls (decision 18).
+
+## Findings that shape P1-09
+
+- **One long-lived `query()` per agent, streaming input.** `prompt` accepts an `AsyncIterable<SDKUserMessage>`: the adapter's inbox yields a message when the agent is idle; every delivered message produces its own `result` (turn end = `agent.idle`). `stream` step: four messages, one interrupted, one session id throughout.
+- **`interrupt()` ends the current turn, not the session.** The interrupted turn yields `result{subtype: 'error_during_execution', is_error: true}`, the tool in flight is rejected ("The user doesn't want to proceed…"), the next message runs normally. In single-prompt mode the iteration then *throws* `Claude Code returned an error result` after that result — the adapter must treat an error result that follows its own `interrupt()` as "turn cancelled", not as `agent.failed`.
+- **Permission callback is not called for everything.** With `permissionMode: 'default'`, `canUseTool` fires only for what Claude Code itself would prompt for (`rm -rf` yes, `echo` no). To run every tool call through the policy engine (P1-10) use a **`PreToolUse` hook**: it sees every call and can return `permissionDecision: 'allow' | 'deny' | 'ask'`; `'ask'` routes the call to `canUseTool` with `decisionReason` set (`hook` step). Design: hook → `evaluate(policy, call)` → `allow` returns allow, `deny` returns deny with the reasons, `ask` returns ask; `canUseTool` then opens the `agent.needs_input(kind: permission)` question and blocks until `answer()` (the `signal` aborts it on interrupt). `canUseTool` gets `title`, `displayName`, `description`, `blockedPath`, `toolUseID` — useful for the permission card.
+- **`AskUserQuestion` surfaces through `canUseTool`** with `toolName: 'AskUserQuestion'`, `input.questions[{question, header, options[{label, description}], multiSelect}]` and `options.requiresUserInteraction`. Answering = `{behavior: 'allow', updatedInput: {...input, answers: {[question]: label}}}`; the tool result tells the model the answers (`ask` step). → `agent.needs_input(kind: clarification)` with `options` = the labels; the answer is written back as `answers`.
+- **Deny with a message works** (`permission` step): `{behavior: 'deny', message}` becomes the tool result and lands in `result.permission_denials`.
+- **Session ids.** Pass `sessionId: randomUUID()` per spawn (the child inherits `CLAUDE_CODE_SESSION_ID` when the server itself runs under Claude Code and would reuse that id otherwise); `resume: <id>` re-opens it in a new process (`resume` step, the codeword survived). `sessionRef` = the SDK session id.
+- **Own process group.** `spawnClaudeCodeProcess(opts)` lets the supervisor (P1-01) spawn the CLI itself with `detached: true` and record the pid; the SDK passes `command`, `args`, `cwd`, `env`, `signal` (`spawn` step). Args seen: `--output-format stream-json --verbose --input-format stream-json --model … --permission-mode default --session-id=…`.
+- **`--bare` is reachable** (`extraArgs: { bare: null }`) but under the OAuth login it fails with `Authentication error`: bare mode needs an API key, as TECHNOLOGY §3.1 predicted. Keep it opt-in and refuse the option when no `ANTHROPIC_API_KEY` is set.
+- **Noise to filter:** `system/status`, `system/thinking_tokens`, `system/commands_changed`, `system/post_turn_summary`, `system/task_summary`, `active_goal`, `autocompact_state`, `rate_limit_event`; `includePartialMessages: false` keeps `stream_event`s out. `settingSources: []` gives the SDK tools only (22–23) vs 72 with the user's settings — Stewards want the repository context (decision 17), so they should keep `settingSources: ['project']` at least; brains want `[]`.
+- Every `result` carries `num_turns`, `duration_ms`, `permission_denials`, `session_id`; an `init` system message carries `session_id`, `model`, `tools`, `permissionMode`.
+
+## What the adapter (P1-09) will look like
+
+```
+spawn(opts)  → query({ prompt: inbox(sessionId), options: { cwd, sessionId, systemPrompt?, mcpServers: {galactic: sdkServer(tools)},
+                permissionMode: 'default', hooks: { PreToolUse: [policyHook] }, canUseTool: questionBridge,
+                spawnClaudeCodeProcess: supervisor.spawnHook(agentId), includePartialMessages: false, extraArgs: bare ? {bare: null} : {} } })
+messages    → assistant text/thinking → agent.output; tool_use → agent.tool_call (+ agent.progress from the tool name);
+               result{success} → agent.idle (or agent.finished when the inbox is closed); result{error} after interrupt() → agent.idle;
+               other errors / process exit → agent.failed
+interrupt   → query.interrupt();  stop → interrupt, wait for the result, close the inbox (stdin EOF), supervisor.stop()
+resumeSession(ref) → same, with `resume: ref` and no `sessionId`
+```

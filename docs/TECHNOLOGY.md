@@ -117,7 +117,12 @@ Spawn options (per SPEC §3.5–3.6 and decision 17):
 - Clarification questions: the `AskUserQuestion` tool becomes `agent.needs_input(kind: "clarification")`.
 - Graceful stop: `interrupt()` and wait for the turn to end before terminating (SIGTERM alone leaves an in-progress turn and any pending permission unanswered).
 
-*Verify in Phase 1:* which authentication the TypeScript SDK supports under a subscription login for in-process brains, and whether cost is reported per session reliably (SPEC §8).
+*Verified in Phase 1 (P1-08, `docs/tasks/notes/P1-08-sdk-spike.md`):* the SDK bundles its own Claude Code binary and reads the same login as the `claude` CLI, so in-process brains with custom tools run under the subscription; cost is reported per turn as a cumulative estimate (SPEC §8, both answered). What the spike fixed about the adapter's shape:
+
+- **One long-lived `query()` per agent with streaming input.** The inbox (P1-07) is the `AsyncIterable` prompt; each delivered message ends in a `result` (→ `agent.idle`). `query.interrupt()` cancels the current turn only: that turn ends with an error result the adapter maps to `agent.idle`, and the next message runs in the same session. `sessionRef` is the SDK session id, assigned by the adapter (`sessionId`) and re-opened with `resume`.
+- **Every tool call goes through the policy engine via a `PreToolUse` hook** (the `canUseTool` callback alone fires only for what Claude Code would prompt for itself). The hook answers `allow`/`deny` from the policy table and `ask` for the rest; `ask` lands in `canUseTool`, which opens `agent.needs_input(kind: permission)` and blocks until the answer. `AskUserQuestion` arrives in the same callback and is answered through `updatedInput.answers` → `agent.needs_input(kind: clarification)`.
+- **The supervisor spawns the CLI** through `spawnClaudeCodeProcess`, so the SDK session is a child in its own process group with a row in the PID table like any other runtime.
+- **`bare` needs an API key** (no subscription login in bare mode); the option is refused without one.
 
 ### 3.2 Later: the ACP adapter for other runtimes
 
