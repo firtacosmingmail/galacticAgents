@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import fastifyStatic from '@fastify/static';
 import { PROTOCOL_VERSION, type HealthResponse } from '@galactic/protocol';
 import type { ServerConfig } from './config/config.js';
 import { isAllowedHost, isAllowedOrigin, isLoopback } from './http/security.js';
@@ -14,6 +15,8 @@ export interface AppOptions {
   onSession?: SessionHandler;
   /** The event log; enables the stream handler, `/health.seq` and the `/dev/*` routes. */
   log?: EventLog;
+  /** A built web app (apps/web/dist) to serve at `/`; `galactic start` sets it. */
+  webDir?: string;
   logger?: boolean;
 }
 
@@ -54,6 +57,17 @@ export function buildApp(opts: AppOptions): App {
     }
     return body;
   });
+
+  if (opts.webDir) {
+    void fastify.register(fastifyStatic, { root: opts.webDir, wildcard: false });
+    fastify.setNotFoundHandler((req, reply) => {
+      // Single-page app: unknown GET paths load the page; API-shaped paths stay 404.
+      if (req.method === 'GET' && !req.url.startsWith('/dev/') && !req.url.startsWith('/health')) {
+        return reply.sendFile('index.html');
+      }
+      return reply.code(404).send({ error: 'not_found' });
+    });
+  }
 
   const logSink = {
     info: (m: string) => fastify.log.info(m),

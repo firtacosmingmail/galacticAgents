@@ -4,7 +4,7 @@
   "private": true,
   "description": "GalacticAgents Mission Control server: agent runtime, adapters, brains, SQLite persistence and the WebSocket API.",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/lib.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-migrations.mjs",
     "dev": "tsx watch src/index.ts",
@@ -14,6 +14,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@fastify/static": "^10.1.5",
     "@galactic/protocol": "workspace:*",
     "fastify": "^5.12.5",
     "ws": "^8.22.0",
@@ -23,5 +24,18 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/ws": "^8.18.2",
     "tsx": "^4.23.15"
-  }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/lib.d.ts",
+      "import": "./dist/lib.js"
+    }
+  },
+  "bin": {
+    "galactic": "./bin/galactic.mjs"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ]
 }
