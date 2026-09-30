@@ -127,10 +127,11 @@ export class StatusStore {
   touch(agentId: Id, at: number = this.now()): void {
     const entry = this.entries.get(agentId);
     if (!entry || ENDED.has(entry.record.state)) return;
-    const stalled = entry.record.state === 'stalled';
+    const state = entry.record.state;
     entry.lastEventAt = Math.max(entry.lastEventAt, at);
-    // Dirty per chunk, sent per flush: the 100 ms batch is what keeps this off the per-token path.
-    this.update(entry, at, stalled ? { state: 'working' } : {});
+    // Output means work: a starting or stalled agent is working again. Dirty per chunk, sent per
+    // flush: the 100 ms batch is what keeps this off the per-token path.
+    this.update(entry, at, state === 'stalled' || state === 'starting' ? { state: 'working' } : {});
     this.mark(agentId);
   }
 

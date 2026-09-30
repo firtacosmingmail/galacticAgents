@@ -28,6 +28,8 @@ export interface ComposeOptions {
   log?: EventLogOptions;
   caps?: { maxConcurrentAgents?: number; defaults?: AgentCaps };
   stallThresholdMs?: (runtime: RuntimeName | undefined) => number;
+  /** How often stalls are checked and wall clocks refreshed. */
+  tickMs?: number;
   flushMs?: number;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
@@ -53,6 +55,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     stallThresholdMs:
       opts.stallThresholdMs ?? ((runtime) => (runtime ? STALL_THRESHOLDS_MS[runtime] : 60_000)),
     ...(opts.flushMs !== undefined ? { flushMs: opts.flushMs } : {}),
+    ...(opts.tickMs !== undefined ? { tickMs: opts.tickMs } : {}),
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'status store') } : {}),
   });
   late.store = statuses;
