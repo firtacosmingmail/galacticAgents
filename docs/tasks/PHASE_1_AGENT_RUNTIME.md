@@ -1,7 +1,7 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** wave 1 — P1-01, P1-03, P1-08, P1-10 (all claimed 2026-09-30) · **Task status:** in progress
-**Phase status:** in progress (0/14 done)
+**Current task:** wave 2 — P1-02, P1-04, P1-05, P1-06, P1-07 (next to pick; none claimed yet) · **Task status:** todo
+**Phase status:** in progress (4/14 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -44,9 +44,10 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 ## Tasks
 
 ### P1-01 — Process supervisor
-- **Status:** in progress · **Depends on:** P0-07 · **Parallel with:** P1-03, P1-08, P1-10
+- **Status:** done (2026-09-30) · **Depends on:** P0-07 · **Parallel with:** P1-03, P1-08, P1-10
 - Spawn child processes in their own process group; capture stdio; detect exit/crash; restart policy (off by default); per-agent working directory; **graceful stop** sequence (interrupt → wait for turn end with timeout → terminate → kill); persisted PID/session table (`agents.sessionRef`, pid, startedAt); startup reconciliation against live processes (mark dead ones `interrupted`).
 - **Acceptance:** tests spawn a script child, kill it, see `agent.failed`; stop sequence verified with a child that ignores the first signal; orphaned children of a killed agent are gone after group kill.
+- **Done:** `apps/server/src/runtime/supervisor.ts` (+ `process-store.ts`, `event-queue.ts`, migration 0003 `agent_processes`). `spawn()`/`adopt()` (synchronous, for the SDK's `spawnClaudeCodeProcess`), `stop()` = interrupt hook → `turnEnded()`/exit within `graceMs` → SIGTERM → SIGKILL, `expectExit()` for runtime-initiated exits, restart policy off by default, `reconcile()` kills a live orphan only when the pid is from this boot and still runs the recorded command. Decisions recorded in `TECHNOLOGY.md` §3.4.
 
 ### P1-02 — Hard caps
 - **Status:** todo · **Depends on:** P1-01 · **Parallel with:** P1-04, P1-05, P1-06, P1-07
@@ -54,9 +55,10 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Acceptance:** tests for each cap; the refusal reason is visible in the event payload.
 
 ### P1-03 — Fake adapter
-- **Status:** in progress · **Depends on:** P0-04 · **Parallel with:** P1-01, P1-08, P1-10
+- **Status:** done (2026-09-30) · **Depends on:** P0-04 · **Parallel with:** P1-01, P1-08, P1-10
 - Implements `AgentAdapter` with scriptable scenarios: output stream, tool calls, a clarification question, a permission request, idle, stall (silence), pause/resume, finish with cost, fail, stop, `resumeSession` from a fake session ref. Deterministic timing knobs for tests.
 - **Acceptance:** every event type in `TECHNOLOGY.md` §3.4 can be produced on demand; used by the ops console in dev mode without Claude installed.
+- **Done:** `apps/server/src/adapters/fake/` — scripted `FakeStep`s, named scenarios (`echo`, `happy`, `asks`, `permission`, `stalls`, `fails`, `long`, `full`) picked by a `scenario:<name>` prompt, `speed` knob (0 = instantaneous), session refs `fake:<scenario>:<sessionId>:<step>` with an injectable progress map for in-process restarts. `agent.spawned` is the runtime layer's (TECHNOLOGY §3.4), every other event is covered by a test.
 
 ### P1-04 — Adapter conformance suite
 - **Status:** todo · **Depends on:** P1-03 · **Parallel with:** P1-02, P1-05, P1-06, P1-07
@@ -79,9 +81,10 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Acceptance:** two messages sent while working are delivered in order after idle; an interrupt message arrives first.
 
 ### P1-08 — Claude SDK adapter spike (answers SPEC §8 questions 1–2)
-- **Status:** in progress · **Depends on:** P0-04 · **Parallel with:** P1-01, P1-03, P1-10
+- **Status:** done (2026-09-30) · **Depends on:** P0-04 · **Parallel with:** P1-01, P1-03, P1-10
 - Throwaway script exercising the TypeScript Agent SDK: authentication under the subscription login (in-process), custom tools + system prompt, permission callback shape, how `AskUserQuestion` surfaces, `resume` by session id, cost in the final result, interrupt behaviour, whether `bare` is exposed. Record findings and update `SPEC.md` §8 (answer or keep open) and `TECHNOLOGY.md` §3.1 if reality differs.
 - **Acceptance:** a short findings note in `docs/tasks/notes/P1-08-sdk-spike.md`; SPEC §8 rows 1–2 resolved or refined.
+- **Done:** note + script (`P1-08-sdk-spike.mjs`), SDK pinned at 0.3.285, SPEC §8 rows 1–2 answered, TECHNOLOGY §3.1 carries the adapter shape (streaming input, `PreToolUse` hook + `canUseTool`, `spawnClaudeCodeProcess`, `bare` needs an API key). Ran in a cloud sandbox under an OAuth login; **one follow-up for Cosmin:** run `node docs/tasks/notes/P1-08-sdk-spike.mjs auth tools` once on the dev machine after `pnpm install` to confirm the same under his own subscription.
 
 ### P1-09 — Claude SDK adapter implementation
 - **Status:** todo · **Depends on:** P1-08, P1-01, P1-07, P1-10 · **Parallel with:** —
@@ -89,9 +92,10 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Acceptance:** manual run on the dev machine passes every step of the exit criteria; unit tests with the SDK mocked for the event mapping.
 
 ### P1-10 — Permission policy engine
-- **Status:** in progress · **Depends on:** P0-02 · **Parallel with:** P1-01, P1-03, P1-08
+- **Status:** done (2026-09-30) · **Depends on:** P0-02 · **Parallel with:** P1-01, P1-03, P1-08
 - Pure function `evaluate(policy, action) → allow | ask`: inside/outside workspace path checks, destructive command patterns (`rm -rf`, branch deletes, force ops), network/install patterns, `git push`; defaults per `SPEC.md` §3.6; per-project override merged over the global default.
 - **Acceptance:** table-driven tests for each row of the SPEC table, including path traversal outside the workspace.
+- **Done:** `apps/server/src/domain/permissions.ts` — `classifyToolCall` / `classifyCommand` → `PermissionAction[]`, `decide` (strictest wins, nothing recognised → `ask`), `resolvePolicy` (project over default), `evaluate`. Shell commands are split on operators with a stateful `cd`, quoted/wrapped payloads (`sh -c`, `node -e`, `eval`, …) and unexpandable `$VAR` paths are `ask`, git global options are skipped, case-insensitive. Reviewed with bypass probes as table rows.
 
 ### P1-11 — Ops console page
 - **Status:** todo · **Depends on:** P0-09, P1-05, P1-06, P1-07 · **Parallel with:** P1-13, P1-14
