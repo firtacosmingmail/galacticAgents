@@ -15,7 +15,6 @@ export const CLOSE_UNAUTHORIZED = 4401;
 export const CLOSE_BAD_HELLO = 4400;
 export const CLOSE_HELLO_TIMEOUT = 4408;
 export const CLOSE_PROTOCOL_VIOLATION = 4002;
-export const CLOSE_SLOW_CONSUMER = 4003;
 
 export const HELLO_TIMEOUT_MS = 5_000;
 

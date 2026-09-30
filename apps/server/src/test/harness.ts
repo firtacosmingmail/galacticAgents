@@ -27,11 +27,7 @@ export function testConfig(
 
 export async function startTestApp(opts: Partial<AppOptions> = {}) {
   const config = opts.config ?? testConfig();
-  const app = buildApp({
-    onSession: () => {},
-    ...opts,
-    config,
-  });
+  const app = buildApp({ ...opts, config });
   const port = await app.listen();
   return {
     app,
