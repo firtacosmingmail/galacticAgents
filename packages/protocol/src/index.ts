@@ -12,3 +12,5 @@ export * from './enums.js';
 export * from './domain.js';
 export * from './events.js';
 export * from './ws.js';
+export * from './adapter.js';
+export * from './commands.js';
