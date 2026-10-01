@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Id, Question, Task } from '@galactic/protocol';
 import type { BrainDefinition } from '../definition.js';
-import { WAKE_RULES, type WakeRules } from '../wake.js';
 import { brainDefinition, brainHarness, tool, type BrainHarness } from './index.js';
 
 /**
@@ -17,20 +16,6 @@ afterEach(async () => {
 });
 
 // -- the tiny brains ---------------------------------------------------------------------------
-
-/**
- * Today's wake table does not wake a brain when a question it asked itself is answered (a
- * Steward's answer reaches it through the adapter; a brain is not blocked). These brains add
- * that rule through `wakeRules`; P2-08/P2-10 should make it part of `WAKE_RULES`.
- */
-const answered = WAKE_RULES['question.answered']!;
-const wakeRules: WakeRules = {
-  ...WAKE_RULES,
-  'question.answered': {
-    wakes: (e, s) => s.question(e.questionId)?.originAgentId === s.brainId || answered.wakes(e, s),
-    describe: answered.describe,
-  },
-};
 
 const createTask = tool(
   'create_task',
@@ -70,11 +55,10 @@ const answerQuestion = tool('answer_question', async (input, ctx) => {
 const harmonizer: BrainDefinition = brainDefinition(
   'harmonizer',
   [createTask, ask('ask_user'), answerQuestion],
-  { systemPrompt: 'You are the Harmonizer of the example.', wakeRules },
+  { systemPrompt: 'You are the Harmonizer of the example.' },
 );
 const waykeeper: BrainDefinition = brainDefinition('waykeeper', [createTask, ask('escalate')], {
   systemPrompt: 'You are the Waykeeper of the example.',
-  wakeRules,
 });
 
 /** The id and answer out of a prompt line like `user answered q-…: "ISO 8601"`. */

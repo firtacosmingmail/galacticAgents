@@ -225,3 +225,26 @@ describe('question resolutions reach every past holder (wave-2 review)', () => {
     expect(wakeLine(answered, permission)).toBeUndefined();
   });
 });
+
+describe('the asker hears its own question resolve (wave 3)', () => {
+  it('wakes the brain that asked, on answer and on cancel, whatever the kind', () => {
+    const own = { ...d.question, originAgentId: BRAIN, holder: { type: 'user' as const } };
+    const s = { ...scope({ supervises: () => false }), question: () => own };
+    const answered: Event = {
+      type: 'question.answered',
+      questionId: own.id,
+      answer: 'ISO 8601',
+      answeredBy: { type: 'user' },
+      version: 1,
+    };
+    const cancelled: Event = {
+      type: 'question.cancelled',
+      questionId: own.id,
+      agentId: BRAIN,
+      reason: 'withdrawn',
+      version: 1,
+    };
+    expect(wakeLine(answered, s)).toBeDefined();
+    expect(wakeLine(cancelled, s)).toBeDefined();
+  });
+});

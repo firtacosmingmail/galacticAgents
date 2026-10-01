@@ -62,8 +62,13 @@ function concerns(q: Question | undefined, scope: WakeScope): q is Question {
   return isBrain(q.holder, scope) || scope.supervises(q.originAgentId);
 }
 
-/** The brain held a clarification at some point (`holders` on its answer or cancellation). */
+/**
+ * The brain held a clarification at some point (`holders` on its answer or cancellation), or
+ * asked the question itself (the Harmonizer's `ask_user`, a Waykeeper's own question) — the asker
+ * waits for the answer like any holder.
+ */
 function heldBefore(holders: readonly Id[] | undefined, scope: WakeScope, q: Question | undefined) {
+  if (q?.originAgentId === scope.brainId) return true;
   return (q === undefined || q.kind === 'clarification') && (holders ?? []).includes(scope.brainId);
 }
 
