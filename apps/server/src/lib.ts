@@ -63,3 +63,17 @@ export {
   CLAUDE_PASS_ENV,
   type ClaudeSdkAdapterOptions,
 } from './adapters/claude-sdk/index.js';
+export {
+  Workspaces,
+  WorkspaceMeta,
+  stewardsSerialised,
+  workspaceMeta,
+  branchName,
+  slugify,
+  type WorkspaceInfo,
+  type WorkspacesOptions,
+  type WorktreeInfo,
+  type MergeResult,
+  type MergeConflict,
+} from './workspace/workspaces.js';
+export { gitRunner, GitError, SAFE_GIT_CONFIG, type Git } from './workspace/git.js';
