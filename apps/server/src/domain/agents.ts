@@ -5,9 +5,9 @@ import type {
   AgentPlacement,
   AgentRole,
   AgentRuntime,
-  Body,
   Id,
 } from '@galactic/protocol';
+import { createAsteroid } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 
@@ -40,17 +40,7 @@ export interface CreateAgentInput {
 /** Inserts the agent row (and, when no body is given, its procedural asteroid). */
 export function createAgent(ctx: CommandContext, input: CreateAgentInput): Agent {
   const id = input.agentId ?? `a-${randomUUID()}`;
-  let bodyId = input.bodyId;
-  if (!bodyId) {
-    const body: Body = {
-      id: `b-${randomUUID()}`,
-      kind: 'asteroid',
-      name: `Asteroid ${id.slice(2, 10)}`,
-    };
-    ctx.tables.bodies.insert(body);
-    ctx.emit({ type: 'body.created', body });
-    bodyId = body.id;
-  }
+  const bodyId = input.bodyId ?? createAsteroid(ctx).id;
   const agent: Agent = {
     id,
     role: input.role,

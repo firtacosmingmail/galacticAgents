@@ -50,7 +50,7 @@ describe('websocket stream', () => {
   it('sends a snapshot on a fresh hello, then live events in order', async () => {
     log.runCommand(({ tables, emit }) => {
       tables.bodies.insert(fx.body);
-      emit({ type: 'body.freed', bodyId: 'b-earth' });
+      emit({ type: 'body.freed', bodyId: 'b-kepler' });
     });
     const c = open();
     const [first] = await c.upTo(1);
@@ -58,7 +58,7 @@ describe('websocket stream', () => {
       type: 'snapshot',
       logId: log.logId,
       seq: 1,
-      bodies: [fx.body],
+      bodies: [...log.tables.bodies.all().filter((b) => b.id !== fx.body.id), fx.body],
       agents: [],
       statuses: [],
     });
@@ -239,7 +239,7 @@ describe('dev routes', () => {
     expect(replayed).toEqual(['body.created', 'project.created', 'body.assigned']);
     const snapshot = log.snapshot();
     expect(snapshot.projects.map((p) => p.id)).toEqual([projectId]);
-    expect(snapshot.bodies[0]?.host).toEqual({ kind: 'project', id: projectId });
+    expect(snapshot.bodies.at(-1)?.host).toEqual({ kind: 'project', id: projectId });
   });
 
   it('does not exist without GALACTIC_DEV (P0-16)', async () => {

@@ -3,6 +3,7 @@ import type {
   Agent,
   AgentCaps,
   Body,
+  BodyOccupancy,
   Host,
   PermissionPolicy,
   Project,
@@ -15,7 +16,7 @@ import type {
 import type {
   AgentRole,
   AgentRuntime,
-  BodyKind,
+  WorkBodyKind,
   QuestionKind,
   TaskPriority,
   WorkState,
@@ -35,7 +36,7 @@ export interface CreateProjectInput {
   parentProjectId?: Id;
   /** The body to host it on; the server picks a free one of `kind` when absent. */
   bodyId?: Id;
-  kind?: Exclude<BodyKind, 'asteroid'>;
+  kind?: Exclude<WorkBodyKind, 'asteroid'>;
   permissionPolicy?: PermissionPolicy;
   /** Default `approved`: a project is created when its proposal is approved (decision 3). */
   state?: Extract<WorkState, 'proposed' | 'approved'>;
@@ -78,6 +79,23 @@ export type AgentPlacement = Partial<
   Pick<Agent, 'supervisorId' | 'bodyId' | 'taskId' | 'projectId'>
 >;
 
+/**
+ * What a new project needs a body for (P2-02, decision 10): a planet, or a moon — of its parent
+ * project's planet for a sub-project, else preferably of a planet without a Waykeeper.
+ */
+export type BodyRequest = { kind: 'planet' } | { kind: 'moon'; parentProjectId?: Id };
+
+/**
+ * The catalogue's answer to a `BodyRequest`: a free body, or why there is none. "No free planet"
+ * lists every occupied planet and its occupant (decision 16: the refusal offers downsizing or
+ * closing a completed project early, and the proposal is parked). "No free moon" for a
+ * sub-project means it stays a task on the planet (SPEC §3.2).
+ */
+export type BodyChoice =
+  | { ok: true; body: Body }
+  | { ok: false; reason: 'no_free_planet'; occupied: BodyOccupancy[] }
+  | { ok: false; reason: 'no_free_moon'; planetId?: Id; occupied: BodyOccupancy[] };
+
 /** Reopening finished work (decision 11b): the old body if it is still free, else `bodyId`. */
 export interface ReopenInput {
   bodyId?: Id;
@@ -85,7 +103,7 @@ export interface ReopenInput {
 
 export interface CreateProposalInput {
   requestText: string;
-  kind: BodyKind;
+  kind: WorkBodyKind;
   proposedBody: ProposedBody;
   workspace: string;
   rationale: string;
@@ -164,6 +182,12 @@ export interface DomainCommands {
   assignBody(bodyId: Id, host: Host): Promise<CommandResult<Body>>;
   moveHost(host: Host, toBodyId: Id): Promise<CommandResult<Body>>;
   freeBody(bodyId: Id): Promise<CommandResult<Body>>;
+  /** The free, unreserved planets in catalogue order (P2-02; deterministic, no judgement). */
+  freePlanets(): Promise<Body[]>;
+  /** The free, unreserved moons (of one planet, or all) in catalogue order. */
+  freeMoons(planetId?: Id): Promise<Body[]>;
+  /** Which body a new project would get under decision 10; changes nothing. */
+  chooseBody(request: BodyRequest): Promise<BodyChoice>;
 
   // agents
   spawnAgent(input: SpawnAgentInput): Promise<CommandResult<Agent>>;

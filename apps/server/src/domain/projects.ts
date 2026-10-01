@@ -8,15 +8,8 @@ import {
   type Project,
   type ReopenInput,
 } from '@galactic/protocol';
-import {
-  bodyOf,
-  checkAssignable,
-  checkSubProjectBody,
-  firstFreeBody,
-  occupy,
-  place,
-  release,
-} from './bodies.js';
+import { bodyOf, checkAssignable, checkSubProjectBody, occupy, place, release } from './bodies.js';
+import { chooseBody, describeRefusal, type ChooseOptions } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, checkTransition, setProjectState } from './states.js';
@@ -76,7 +69,27 @@ function checkNothingActive(ctx: CommandContext, projectId: Id, tasks: boolean):
   }
 }
 
-export function createProject(ctx: CommandContext, input: CreateProjectInput): Project {
+/**
+ * The catalogue's body for a project created without one (decision 10): a sub-project gets a
+ * moon of its parent's planet, an independent project a planet or (with `kind: 'moon'`) a moon.
+ * Nothing free is a `conflict` naming the occupants; P2-09 parks the proposal from `chooseBody`.
+ */
+function pickBody(ctx: CommandContext, input: CreateProjectInput, opts: ChooseOptions) {
+  if (input.kind !== undefined && input.kind !== 'planet' && input.kind !== 'moon') {
+    throw new DomainError('invalid', `a project lives on a planet or a moon, not a ${input.kind}`);
+  }
+  const choice = input.parentProjectId
+    ? chooseBody(ctx, { kind: 'moon', parentProjectId: input.parentProjectId }, opts)
+    : chooseBody(ctx, input.kind === 'moon' ? { kind: 'moon' } : { kind: 'planet' }, opts);
+  if (!choice.ok) throw new DomainError('conflict', describeRefusal(choice));
+  return choice.body;
+}
+
+export function createProject(
+  ctx: CommandContext,
+  input: CreateProjectInput,
+  opts: ChooseOptions = {},
+): Project {
   if (!input.workspace.trim()) throw new DomainError('invalid', 'a project needs a workspace');
   const parent = input.parentProjectId
     ? checkParent(ctx, undefined, input.parentProjectId)
@@ -85,8 +98,7 @@ export function createProject(ctx: CommandContext, input: CreateProjectInput): P
   const host = hostOf(id);
   const body = input.bodyId
     ? must(ctx.tables.bodies.get(input.bodyId), 'body', input.bodyId)
-    : firstFreeBody(ctx, input.kind ?? 'planet');
-  if (!body) throw new DomainError('conflict', `no free ${input.kind ?? 'planet'}`);
+    : pickBody(ctx, input, opts);
   checkAssignable(body, host);
   checkSubProjectBody(body, parent?.bodyId);
   const project: Project = {
@@ -194,7 +206,8 @@ export function reopenProject(
   }
   const host = hostOf(projectId);
   const old = must(ctx.tables.bodies.get(current.bodyId), 'body', current.bodyId);
-  const oldIsFree = !old.host || (old.host.kind === 'project' && old.host.id === projectId);
+  const oldIsFree =
+    (!old.host && !old.movedTo) || (old.host?.kind === 'project' && old.host.id === projectId);
   if (oldIsFree && (!input.bodyId || input.bodyId === old.id)) {
     occupy(ctx, old, host);
   } else {

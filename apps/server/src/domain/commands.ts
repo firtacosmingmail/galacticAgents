@@ -5,6 +5,7 @@ import {
   type Agent,
   type AgentPlacement,
   type AnswerQuestionInput,
+  type BodyRequest,
   type CommandResult,
   type ControlAction,
   type ControlTarget,
@@ -23,7 +24,8 @@ import {
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { recordSpawned, updateAgent } from './agents.js';
-import { assignBody, freeBody, moveHost } from './bodies.js';
+import { assignBody, freeBody, moveHost, sweepMarkers } from './bodies.js';
+import { chooseBody, freeMoons, freePlanets, type ChooseOptions } from './catalogue.js';
 import { recordControl } from './control.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext, EventLog } from './event-log.js';
@@ -78,6 +80,8 @@ export interface CommandsOptions {
   agents?: AgentControl;
   /** Question routing (P2-03); default: the log alone (liveness from lifecycle events). */
   questions?: QuestionRouting;
+  /** Whether an agent still runs (the status store), for decision 10's Waykeeper-less planets. */
+  isRunning?: (agentId: Id) => boolean;
 }
 
 const ENDINGS = new Set(['agent.finished', 'agent.failed', 'agent.stopped', 'agent.interrupted']);
@@ -93,11 +97,13 @@ export class Commands implements DomainCommands {
   private readonly log: EventLog;
   private readonly agents: AgentControl | undefined;
   private readonly questions: QuestionRouting;
+  private readonly choose: ChooseOptions;
 
   constructor(opts: CommandsOptions) {
     this.log = opts.log;
     this.agents = opts.agents;
     this.questions = opts.questions ?? logRouting(opts.log);
+    this.choose = opts.isRunning ? { isRunning: opts.isRunning } : {};
   }
 
   private run<T>(fn: (ctx: CommandContext) => T): Promise<CommandResult<T>> {
@@ -142,7 +148,7 @@ export class Commands implements DomainCommands {
   // -- projects and tasks ----------------------------------------------------------------------
 
   createProject(input: CreateProjectInput) {
-    return this.run((ctx) => createProject(ctx, input));
+    return this.run((ctx) => createProject(ctx, input, this.choose));
   }
   updateProject(projectId: Id, changes: ProjectChanges) {
     return this.run((ctx) => updateProject(ctx, projectId, changes));
@@ -197,6 +203,22 @@ export class Commands implements DomainCommands {
   }
   freeBody(bodyId: Id) {
     return this.run((ctx) => freeBody(ctx, bodyId));
+  }
+  freePlanets() {
+    return Promise.resolve(freePlanets(this.log));
+  }
+  freeMoons(planetId?: Id) {
+    return Promise.resolve(freeMoons(this.log, planetId));
+  }
+  chooseBody(request: BodyRequest) {
+    return Promise.resolve(chooseBody(this.log, request, this.choose));
+  }
+  /**
+   * The retention sweep for "moved to …" markers (decision 15), by the log's clock. A system job:
+   * P2-13's scheduler calls it with the retention setting.
+   */
+  sweepMarkers(retentionMs?: number) {
+    return this.run((ctx) => sweepMarkers(ctx, retentionMs));
   }
 
   // -- agents ----------------------------------------------------------------------------------

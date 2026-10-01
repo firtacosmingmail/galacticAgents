@@ -3,7 +3,7 @@ import type { Actor, Agent, Event, Question } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
-import { BODIES, world } from '../test/world.js';
+import { world } from '../test/world.js';
 import { createAgent } from './agents.js';
 import { Commands } from './commands.js';
 import { DomainError } from './errors.js';
@@ -28,7 +28,7 @@ function boot() {
     flushMs: 10,
   });
   lives.push(composed);
-  for (const body of BODIES) composed.log.tables.bodies.insert(body);
+  // The body catalogue is seeded by migration 0005.
   return composed;
 }
 

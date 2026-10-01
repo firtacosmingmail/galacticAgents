@@ -90,6 +90,7 @@ const bodies: Mapper<Body> = {
     name: b.name,
     host_kind: b.host?.kind ?? null,
     host_id: b.host?.id ?? null,
+    moved_to: json(b.movedTo),
     meta: json(b.meta),
   }),
   fromRow: (r) => ({
@@ -100,6 +101,7 @@ const bodies: Mapper<Body> = {
     host: r['host_kind']
       ? { kind: r['host_kind'] as 'project' | 'task', id: r['host_id'] as Id }
       : undefined,
+    movedTo: parse(r['moved_to']),
     meta: parse(r['meta']),
   }),
 };
@@ -294,6 +296,7 @@ export function tables(db: Database): Tables {
       'name',
       'host_kind',
       'host_id',
+      'moved_to',
       'meta',
     ]),
     projects: new Table(db, projects, [

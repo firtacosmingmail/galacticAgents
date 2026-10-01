@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Actor, Id } from '@galactic/protocol';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
-import { BODIES } from '../test/world.js';
 import type { BrainDefinition, BrainTool } from './definition.js';
 import type { BrainRunner, SessionResetPolicy } from './runner.js';
 import { callTool, scriptedBrains, type BrainScript } from './testing/scripted-brain.js';
@@ -55,7 +54,7 @@ async function boot(
     onError: (e, ctx) => errors.push(`${ctx}: ${(e as Error).message}`),
   });
   lives.push(composed);
-  for (const body of BODIES) composed.log.tables.bodies.insert(body);
+  // The body catalogue is seeded by migration 0005.
   const project = (await composed.commands.createProject({ name: 'CSV', workspace: '/w/csv' }))
     .value;
   const taskIds: Id[] = [];

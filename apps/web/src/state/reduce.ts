@@ -106,16 +106,20 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'body.freed': {
       const body = next.bodies[event.bodyId];
       if (!body) return next;
-      const { host: _host, ...freed } = body;
+      const { host: _host, movedTo: _marker, ...freed } = body;
       return { ...next, bodies: { ...next.bodies, [event.bodyId]: freed } };
     }
     case 'body.moved': {
+      // The old body shows "moved to …" (P2-02, decision 15) until `body.freed`; a task that
+      // joined a project lives on the project's body without hosting it (`intoProjectId`).
       let bodies = next.bodies;
       const from = bodies[event.fromBodyId];
       if (from) {
-        const { host: _host, ...freed } = from;
-        bodies = { ...bodies, [event.fromBodyId]: freed };
+        const { host: _host, ...rest } = from;
+        const movedTo = { bodyId: event.toBodyId, host: event.host, at };
+        bodies = { ...bodies, [event.fromBodyId]: { ...rest, movedTo } };
       }
+      if (event.intoProjectId) return { ...next, bodies };
       return { ...next, bodies: patch(bodies, event.toBodyId, { host: event.host }) };
     }
 

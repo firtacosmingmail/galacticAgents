@@ -136,6 +136,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     host: { kind: 'task', id: 't-2' },
     fromBodyId: 'b-ast-1',
     toBodyId: 'b-luna',
+    intoProjectId: 'p-1',
   },
   'body.freed': { type: 'body.freed', bodyId: 'b-ast-1' },
 

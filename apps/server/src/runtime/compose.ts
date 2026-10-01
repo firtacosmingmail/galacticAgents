@@ -1,4 +1,9 @@
-import type { AgentAdapter, AgentCaps, AgentRuntime as RuntimeName } from '@galactic/protocol';
+import {
+  ENDED_STATES,
+  type AgentAdapter,
+  type AgentCaps,
+  type AgentRuntime as RuntimeName,
+} from '@galactic/protocol';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
@@ -114,7 +119,15 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
 
-  const commands = new Commands({ log, agents: runtime, questions });
+  const commands = new Commands({
+    log,
+    agents: runtime,
+    questions,
+    isRunning: (id) => {
+      const status = statuses.get(id);
+      return status !== undefined && !ENDED_STATES.has(status.state);
+    },
+  });
   const queries = createBrainQueries({ tables: log.tables, status: (id) => statuses.get(id) });
   return {
     log,
