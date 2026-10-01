@@ -7,7 +7,7 @@ import type {
   AgentRuntime,
   Id,
 } from '@galactic/protocol';
-import { createAsteroid } from './catalogue.js';
+import { EARTH_ID, createAsteroid, type Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 
@@ -59,10 +59,94 @@ export function createAgent(ctx: CommandContext, input: CreateAgentInput): Agent
   return agent;
 }
 
+/** What the hierarchy rules look at: an agent's role and placement (a row, or one to be). */
+export type Placed = Pick<Agent, 'role'> &
+  Partial<Pick<Agent, 'id' | 'supervisorId' | 'taskId' | 'projectId'>>;
+
 /**
- * Moves an agent in the hierarchy (P2-01): a new supervisor (an orphaned Steward re-parented, a
- * promotion hand-over), body, task or project. Unchanged fields are dropped; nothing left is a
- * no-op. A supervisor must exist, and no agent may end up supervising itself through the chain.
+ * The supervisor the hierarchy prescribes for `agent` (P2-20; SPEC §2, decision 6), as a
+ * predicate on candidate agents plus a description for refusals. A Waykeeper answers to the
+ * Harmonizer — or, for a sub-project, to its parent project's Waykeeper (SPEC §3.2); a project
+ * Steward to its project's Waykeeper; an asteroid Steward to the Harmonizer. Undefined for the
+ * Harmonizer, who answers to the user alone.
+ */
+function prescribedSupervisor(
+  ctx: Reader,
+  agent: Placed,
+): { matches: (s: Agent) => boolean; what: string } | undefined {
+  const waykeeperOf = (projectId: Id) => ({
+    matches: (s: Agent) => s.role === 'waykeeper' && s.projectId === projectId,
+    what: `the Waykeeper of project ${projectId}`,
+  });
+  const harmonizer = { matches: (s: Agent) => s.role === 'harmonizer', what: 'the Harmonizer' };
+  switch (agent.role) {
+    case 'harmonizer':
+      return undefined;
+    case 'waykeeper': {
+      const project = must(ctx.tables.projects.get(agent.projectId!), 'project', agent.projectId!);
+      return project.parentProjectId ? waykeeperOf(project.parentProjectId) : harmonizer;
+    }
+    case 'steward': {
+      const task = must(ctx.tables.tasks.get(agent.taskId!), 'task', agent.taskId!);
+      return task.projectId ? waykeeperOf(task.projectId) : harmonizer;
+    }
+  }
+}
+
+/**
+ * The placement invariants (P2-20; SPEC §2, decisions 6, 24), checked by `spawnAgent` before a
+ * session opens and by `updateAgent` on the row it would write:
+ * - the Harmonizer has no supervisor, task or project (and lives on Earth: `spawnAgent` puts it
+ *   there, `updateAgent` never moves it);
+ * - a Waykeeper runs a project and no task; a Steward runs a task, and its `projectId` is the
+ *   task's project (absent for an asteroid task);
+ * - a Waykeeper or Steward always has a supervisor, and it is the one the hierarchy prescribes:
+ *   matched by role and project (any Harmonizer; the Waykeeper of that project), not by liveness —
+ *   an orphan's questions go to the next living supervisor (P2-03), its row keeps its supervisor.
+ */
+export function checkPlacement(ctx: Reader, agent: Placed): void {
+  const who = agent.id ? `agent ${agent.id}` : `the new ${agent.role}`;
+  if (agent.role === 'harmonizer') {
+    if (agent.supervisorId) throw new DomainError('invalid', 'the Harmonizer has no supervisor');
+    if (agent.taskId || agent.projectId) {
+      throw new DomainError('invalid', 'the Harmonizer runs no task or project');
+    }
+    return;
+  }
+  if (agent.role === 'waykeeper') {
+    if (!agent.projectId) throw new DomainError('invalid', 'a Waykeeper needs a project');
+    if (agent.taskId) throw new DomainError('invalid', 'a Waykeeper runs a project, not a task');
+  } else {
+    if (!agent.taskId) throw new DomainError('invalid', 'a Steward needs a task');
+    const task = must(ctx.tables.tasks.get(agent.taskId), 'task', agent.taskId);
+    if (task.projectId !== agent.projectId) {
+      throw new DomainError(
+        'invalid',
+        task.projectId
+          ? `${who}'s task ${task.id} belongs to project ${task.projectId}`
+          : `${who}'s task ${task.id} is a standalone task, outside any project`,
+      );
+    }
+  }
+  const rule = prescribedSupervisor(ctx, agent)!;
+  if (!agent.supervisorId) {
+    throw new DomainError('invalid', `${who} needs a supervisor: ${rule.what}`);
+  }
+  const supervisor = must(ctx.tables.agents.get(agent.supervisorId), 'agent', agent.supervisorId);
+  if (!rule.matches(supervisor)) {
+    throw new DomainError(
+      'invalid',
+      `${who} answers to ${rule.what}, not to ${supervisor.role} ${supervisor.id}`,
+    );
+  }
+}
+
+/**
+ * Moves an agent in the hierarchy (P2-01): a new supervisor (a promotion hand-over, a resumed
+ * Waykeeper), body, task or project. Unchanged fields are dropped; nothing left is a no-op. A
+ * supervisor must exist, and no agent may end up supervising itself through the chain. A change
+ * of supervisor, task or project must leave the row within the placement invariants
+ * (`checkPlacement`, P2-20); the Harmonizer never leaves Earth.
  */
 export function updateAgent(ctx: CommandContext, agentId: Id, changes: AgentPlacement): Agent {
   const current = must(ctx.tables.agents.get(agentId), 'agent', agentId);
@@ -85,7 +169,14 @@ export function updateAgent(ctx: CommandContext, agentId: Id, changes: AgentPlac
     must(ctx.tables.projects.get(defined.projectId), 'project', defined.projectId);
   }
   if (Object.keys(defined).length === 0) return current;
-  const agent = ctx.tables.agents.upsert({ ...current, ...defined, updatedAt: ctx.now });
+  if (current.role === 'harmonizer' && defined.bodyId && defined.bodyId !== EARTH_ID) {
+    throw new DomainError('invalid', 'the Harmonizer lives on Earth');
+  }
+  const next = { ...current, ...defined };
+  if ('supervisorId' in defined || 'taskId' in defined || 'projectId' in defined) {
+    checkPlacement(ctx, next);
+  }
+  const agent = ctx.tables.agents.upsert({ ...next, updatedAt: ctx.now });
   ctx.emit({ type: 'agent.updated', agentId, changes: defined });
   return agent;
 }

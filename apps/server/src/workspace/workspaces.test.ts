@@ -239,8 +239,11 @@ describe('worktrees and merges', () => {
     expect(git(dir, 'branch', '--list', wa.branch)).toBe('');
     expect(w.tables.tasks.get(a.id)!.meta).toMatchObject({
       worktree: { removed: true },
-      merge: { fastForward: true },
+      merge: { branch: wa.branch, fastForward: true },
     });
+    // The merged task forgets its removed worktree and deleted branch (P2-20).
+    expect(w.tables.tasks.get(a.id)).not.toHaveProperty('worktreePath');
+    expect(w.tables.tasks.get(a.id)).not.toHaveProperty('branch');
 
     const head = git(dir, 'rev-parse', 'HEAD');
     const conflict = await spaces.mergeTask(b.id);
@@ -347,6 +350,8 @@ describe('worktrees and merges', () => {
     });
     expect(existsSync(wa.path)).toBe(false);
     expect(git(dir, 'branch', '--list', wa.branch)).toBe('');
+    expect(w.tables.tasks.get(a.id)).not.toHaveProperty('worktreePath');
+    expect(w.tables.tasks.get(a.id)).not.toHaveProperty('branch');
   });
 
   it('works in a sub-folder of a repository: the Steward gets the same sub-folder', async () => {

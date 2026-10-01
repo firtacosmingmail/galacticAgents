@@ -128,6 +128,53 @@ describe('updateProject', () => {
   });
 });
 
+describe('clearing project fields (P2-20)', () => {
+  it('detaches a sub-project and drops a policy and repo path with an explicit null', () => {
+    const { run, tables } = world();
+    const parent = run((ctx) => createProject(ctx, input)).value;
+    const sub = run((ctx) =>
+      createProject(ctx, {
+        name: 'Writer',
+        workspace: '/w/writer',
+        repoPath: '/w/writer',
+        parentProjectId: parent.id,
+        permissionPolicy: { rules: { network: 'allow' } },
+      }),
+    ).value;
+    expect(sub.bodyId).toBe('b-phobos');
+    const { events } = run((ctx) =>
+      updateProject(ctx, sub.id, { parentProjectId: null, permissionPolicy: null, repoPath: null }),
+    );
+    expect(events).toEqual([
+      {
+        type: 'project.updated',
+        projectId: sub.id,
+        changes: { parentProjectId: null, permissionPolicy: null, repoPath: null },
+      },
+    ]);
+    const row = tables.projects.get(sub.id)!;
+    for (const key of ['parentProjectId', 'permissionPolicy', 'repoPath']) {
+      expect(row).not.toHaveProperty(key);
+    }
+    // Detached, it is an independent project on its moon (decision 10) and can be re-attached.
+    expect(row.bodyId).toBe('b-phobos');
+    run((ctx) => updateProject(ctx, sub.id, { parentProjectId: parent.id }));
+    expect(tables.projects.get(sub.id)?.parentProjectId).toBe(parent.id);
+  });
+
+  it('ignores clearing an absent field and refuses clearing a required one', () => {
+    const { run } = world();
+    const p = run((ctx) => createProject(ctx, input)).value;
+    expect(run((ctx) => updateProject(ctx, p.id, { parentProjectId: null })).events).toEqual([]);
+    expect(() => run((ctx) => updateProject(ctx, p.id, { workspace: null } as never))).toThrow(
+      /cannot be cleared/,
+    );
+    expect(() => run((ctx) => updateProject(ctx, p.id, { bodyId: null } as never))).toThrow(
+      /cannot be cleared/,
+    );
+  });
+});
+
 describe('project states', () => {
   it('follows the transition table and records who asked', () => {
     const { run, tables } = world();

@@ -8,6 +8,7 @@ import { createAgent } from './agents.js';
 import { Commands } from './commands.js';
 import { DomainError } from './errors.js';
 import { EventLog } from './event-log.js';
+import { projectHierarchy, spawnHarmonizer } from '../test/hierarchy.js';
 
 /**
  * The `DomainCommands` surface (P2-01) over a real runtime with the fake adapter: domain
@@ -55,10 +56,12 @@ describe('Commands', () => {
       await commands.createProject({ name: 'CSV', workspace: '/w/csv', permissionPolicy: policy })
     ).value;
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
+    const { waykeeper } = await projectHierarchy(commands, project.id);
     const { value: agent, events } = await commands.spawnAgent({
       role: 'steward',
       runtime: 'fake',
       taskId: task.id,
+      supervisorId: waykeeper.id,
       prompt: 'scenario:echo',
     });
     expect(agent).toMatchObject({
@@ -81,11 +84,13 @@ describe('Commands', () => {
     const { commands } = boot();
     const task = (await commands.createTask({ description: 'flaky' })).value;
     await commands.updateTask(task.id, { worktreePath: '/w/scratch/t' });
+    const harmonizer = await spawnHarmonizer(commands);
     await expect(
       commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: harmonizer.id,
         cwd: '/x',
         prompt: 'x',
       }),
@@ -97,10 +102,12 @@ describe('Commands', () => {
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
     await commands.updateTask(task.id, { worktreePath: '/w/csv/.galactic/worktrees/t' });
+    const { waykeeper } = await projectHierarchy(commands, project.id);
     const { value } = await commands.spawnAgent({
       role: 'steward',
       runtime: 'fake',
       taskId: task.id,
+      supervisorId: waykeeper.id,
       prompt: 'x',
     });
     expect(value.meta).toMatchObject({ cwd: '/w/csv/.galactic/worktrees/t', workspace: '/w/csv' });
@@ -109,10 +116,12 @@ describe('Commands', () => {
   it("lets a standalone task's Steward name its working directory", async () => {
     const { commands } = boot();
     const task = (await commands.createTask({ description: 'flaky' })).value;
+    const harmonizer = await spawnHarmonizer(commands);
     const { value } = await commands.spawnAgent({
       role: 'steward',
       runtime: 'fake',
       taskId: task.id,
+      supervisorId: harmonizer.id,
       cwd: '/w/scratch',
       prompt: 'x',
     });
@@ -125,12 +134,14 @@ describe('Commands', () => {
     const { commands, log } = boot();
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
+    const { waykeeper } = await projectHierarchy(commands, project.id);
     const seq = log.currentSeq();
     await expect(
       commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: waykeeper.id,
         prompt: 'x',
         cwd: '/etc',
       }),
@@ -145,7 +156,13 @@ describe('Commands', () => {
       commands.spawnAgent({ role: 'harmonizer', runtime: 'fake', prompt: 'x' }),
     ).rejects.toThrow(/working directory/);
     await expect(
-      commands.spawnAgent({ role: 'steward', runtime: 'acp', taskId: task.id, prompt: 'x' }),
+      commands.spawnAgent({
+        role: 'steward',
+        runtime: 'acp',
+        taskId: task.id,
+        supervisorId: waykeeper.id,
+        prompt: 'x',
+      }),
     ).rejects.toMatchObject({ code: 'conflict' });
     expect(log.currentSeq()).toBe(seq);
   });
@@ -155,11 +172,13 @@ describe('Commands', () => {
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
     const task = (await commands.createTask({ description: 'export', projectId: project.id }))
       .value;
+    const { waykeeper } = await projectHierarchy(commands, project.id);
     const agent = (
       await commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: waykeeper.id,
         prompt: 'scenario:asks',
       })
     ).value;
@@ -181,11 +200,13 @@ describe('Commands', () => {
   it('pauses, resumes and stops agents through the runtime, as agent controls', async () => {
     const { commands, statuses } = boot();
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const harmonizer = await spawnHarmonizer(commands);
     const agent = (
       await commands.spawnAgent({
         role: 'waykeeper',
         runtime: 'fake',
         projectId: project.id,
+        supervisorId: harmonizer.id,
         prompt: 'scenario:long',
       })
     ).value;
@@ -207,11 +228,13 @@ describe('Commands', () => {
   it('records an adapter event on the row too: agent.spawned keeps its session ref', async () => {
     const { commands, log } = boot();
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w' })).value;
+    const harmonizer = await spawnHarmonizer(commands);
     const agent = (
       await commands.spawnAgent({
         role: 'waykeeper',
         runtime: 'fake',
         projectId: project.id,
+        supervisorId: harmonizer.id,
         prompt: 'x',
       })
     ).value;
@@ -239,11 +262,13 @@ describe('Commands', () => {
     const { commands, log } = boot();
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w' })).value;
     const task = (await commands.createTask({ description: 'x', projectId: project.id })).value;
+    const { waykeeper } = await projectHierarchy(commands, project.id);
     const agent = (
       await commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: waykeeper.id,
         prompt: 'scenario:asks',
       })
     ).value;
@@ -259,15 +284,122 @@ describe('Commands', () => {
   it('refuses agent commands without a runtime', async () => {
     const log = new EventLog(openDatabase(':memory:'));
     const commands = new Commands({ log });
-    const project = (await commands.createProject({ name: 'CSV', workspace: '/w' })).value;
     await expect(
+      commands.spawnAgent({ role: 'harmonizer', runtime: 'fake', cwd: '/w/hq', prompt: 'x' }),
+    ).rejects.toThrow(/no agent runtime/);
+  });
+});
+
+describe('spawnAgent placement invariants (P2-20)', () => {
+  it('puts the one Harmonizer on Earth without occupying it, and refuses a second while it runs', async () => {
+    const { commands, log, statuses } = boot();
+    const bodies = log.tables.bodies.all().length;
+    const { value: harmonizer, events } = await commands.spawnAgent({
+      role: 'harmonizer',
+      runtime: 'fake',
+      cwd: '/w/hq',
+      prompt: 'x',
+    });
+    expect(harmonizer.bodyId).toBe('b-earth');
+    expect(harmonizer.supervisorId).toBeUndefined();
+    // Placing an agent on a body is not hosting work: no asteroid, no assignment, Earth stays bare.
+    expect(log.tables.bodies.all()).toHaveLength(bodies);
+    expect(log.tables.bodies.get('b-earth')?.host).toBeUndefined();
+    expect(events.map((e) => e.type)).not.toContain('body.assigned');
+
+    const seq = log.currentSeq();
+    const second = { role: 'harmonizer', runtime: 'fake', cwd: '/w/hq', prompt: 'x' } as const;
+    await expect(commands.spawnAgent(second)).rejects.toMatchObject({
+      code: 'conflict',
+      message: expect.stringMatching(/already running/),
+    });
+    expect(log.currentSeq()).toBe(seq);
+    // Once it has ended, a new Harmonizer may start (P2-16 resumes rather than replaces).
+    await commands.stopAgent(harmonizer.id, USER);
+    await until(() => statuses.get(harmonizer.id)?.state === 'stopped');
+    expect((await commands.spawnAgent(second)).value.bodyId).toBe('b-earth');
+  });
+
+  it('refuses a Harmonizer with a supervisor, a task or a project', async () => {
+    const { commands, log } = boot();
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const { harmonizer } = await projectHierarchy(commands, project.id);
+    await commands.stopAgent(harmonizer.id, USER);
+    const seq = log.currentSeq();
+    const base = { role: 'harmonizer', runtime: 'fake', prompt: 'x' } as const;
+    await expect(
+      commands.spawnAgent({ ...base, cwd: '/w/hq', supervisorId: harmonizer.id }),
+    ).rejects.toThrow(/no supervisor/);
+    await expect(commands.spawnAgent({ ...base, projectId: project.id })).rejects.toThrow(
+      /no task or project/,
+    );
+    expect(log.currentSeq()).toBe(seq);
+  });
+
+  it('spawns a Waykeeper or Steward only under the supervisor the hierarchy prescribes', async () => {
+    const { commands, log } = boot();
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const sub = (
+      await commands.createProject({
+        name: 'Writer',
+        workspace: '/w/writer',
+        parentProjectId: project.id,
+      })
+    ).value;
+    const other = (await commands.createProject({ name: 'Other', workspace: '/w/o' })).value;
+    const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
+    const flaky = (await commands.createTask({ description: 'flaky' })).value;
+    const { harmonizer, waykeeper } = await projectHierarchy(commands, project.id);
+    const otherWaykeeper = (
+      await commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: other.id,
+        supervisorId: harmonizer.id,
+        prompt: 'x',
+      })
+    ).value;
+    const seq = log.currentSeq();
+    const waykeeperOf = (projectId: string, supervisorId?: string) =>
       commands.spawnAgent({
         role: 'waykeeper',
         runtime: 'fake',
-        projectId: project.id,
+        projectId,
+        ...(supervisorId ? { supervisorId } : {}),
         prompt: 'x',
-      }),
-    ).rejects.toThrow(/no agent runtime/);
+      });
+    const stewardOf = (taskId: string, supervisorId?: string) =>
+      commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId,
+        ...(supervisorId ? { supervisorId } : {}),
+        ...(taskId === flaky.id ? { cwd: '/w/scratch' } : {}),
+        prompt: 'x',
+      });
+    // Always a supervisor.
+    await expect(waykeeperOf(other.id)).rejects.toThrow(/needs a supervisor: the Harmonizer/);
+    await expect(stewardOf(task.id)).rejects.toThrow(/needs a supervisor: the Waykeeper/);
+    await expect(stewardOf(flaky.id)).rejects.toThrow(/needs a supervisor: the Harmonizer/);
+    // A Waykeeper answers to the Harmonizer; a sub-project's to the parent project's Waykeeper.
+    await expect(waykeeperOf(other.id, waykeeper.id)).rejects.toThrow(/answers to the Harmonizer/);
+    await expect(waykeeperOf(sub.id, harmonizer.id)).rejects.toThrow(
+      new RegExp(`answers to the Waykeeper of project ${project.id}`),
+    );
+    await expect(waykeeperOf(sub.id, otherWaykeeper.id)).rejects.toThrow(/Waykeeper of project/);
+    // A project Steward to its project's Waykeeper; an asteroid Steward to the Harmonizer.
+    await expect(stewardOf(task.id, harmonizer.id)).rejects.toThrow(/Waykeeper of project/);
+    await expect(stewardOf(task.id, otherWaykeeper.id)).rejects.toThrow(/Waykeeper of project/);
+    await expect(stewardOf(flaky.id, waykeeper.id)).rejects.toThrow(/answers to the Harmonizer/);
+    await expect(stewardOf(task.id, 'a-nobody')).rejects.toThrow(/no agent a-nobody/);
+    expect(log.currentSeq()).toBe(seq);
+
+    const subWaykeeper = (await waykeeperOf(sub.id, waykeeper.id)).value;
+    expect(subWaykeeper).toMatchObject({ supervisorId: waykeeper.id, projectId: sub.id });
+    // Room under the default concurrency cap of 4 (supervisors are matched by role and project,
+    // not liveness: a stopped agent still names its supervisor).
+    await commands.stopAgent(otherWaykeeper.id, USER);
+    expect((await stewardOf(flaky.id, harmonizer.id)).value.supervisorId).toBe(harmonizer.id);
   });
 });
 
@@ -278,11 +410,13 @@ describe('Commands.control on tasks and projects (P2-14)', () => {
     const { commands, statuses } = composed;
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
+    const harmonizer = await spawnHarmonizer(commands);
     const waykeeper = (
       await commands.spawnAgent({
         role: 'waykeeper',
         runtime: 'fake',
         projectId: project.id,
+        supervisorId: harmonizer.id,
         prompt: 'scenario:long',
       })
     ).value;
@@ -300,7 +434,7 @@ describe('Commands.control on tasks and projects (P2-14)', () => {
         statuses.get(waykeeper.id)?.state === 'working' &&
         statuses.get(steward.id)?.state === 'working',
     );
-    return { ...composed, project, task, waykeeper, steward };
+    return { ...composed, project, task, harmonizer, waykeeper, steward };
   }
 
   it('a pause holds against a user-held question, and resume finds the task paused (review fix)', async () => {
@@ -308,11 +442,13 @@ describe('Commands.control on tasks and projects (P2-14)', () => {
     const { commands, log, statuses } = composed;
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
     const task = (await commands.createTask({ description: 'clean', projectId: project.id })).value;
+    const { waykeeper } = await projectHierarchy(commands, project.id);
     const steward = (
       await commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: waykeeper.id,
         prompt: 'scenario:permission',
       })
     ).value;
@@ -376,14 +512,14 @@ describe('Commands.control on tasks and projects (P2-14)', () => {
   });
 
   it('cancelling a project stops its agents; the body is freed when retention archives it', async () => {
-    const { commands, log, statuses, runtime, project, task, waykeeper, steward } =
+    const { commands, log, statuses, runtime, project, task, harmonizer, waykeeper, steward } =
       await hierarchy();
     const target = { kind: 'project', id: project.id } as const;
     const { events } = await commands.control(target, { action: 'cancel' }, USER);
     expect(events.filter((e) => e.type === 'agent.stopped')).toHaveLength(2);
     expect(statuses.get(waykeeper.id)?.state).toBe('stopped');
     expect(statuses.get(steward.id)?.state).toBe('stopped');
-    expect(runtime.liveAgents()).toEqual([]);
+    expect(runtime.liveAgents().map((a) => a.id)).toEqual([harmonizer.id]);
     expect(log.tables.projects.get(project.id)?.state).toBe('failed');
     expect(log.tables.tasks.get(task.id)?.state).toBe('failed');
     // Retained: the body still hosts the project until the archival job runs.

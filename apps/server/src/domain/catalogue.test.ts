@@ -4,6 +4,7 @@ import { openDatabase } from '../db/database.js';
 import { loadMigrations, migrate } from '../db/migrate.js';
 import { tables as openTables } from '../db/tables.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
+import { spawnHarmonizer, spawnWaykeeper } from '../test/hierarchy.js';
 import { world } from '../test/world.js';
 import { createAgent } from './agents.js';
 import { assignBody, freeBody, moveHost, sweepMarkers, DEFAULT_RETENTION_MS } from './bodies.js';
@@ -409,14 +410,8 @@ describe('the catalogue through DomainCommands', () => {
     expect(ids(await commands.freeMoons('b-mars'))).toEqual(['b-phobos', 'b-deimos']);
     const mars = (await commands.createProject({ name: 'A', workspace: '/w/a' })).value;
     expect(ids(await commands.freePlanets())).not.toContain('b-mars');
-    const wk = (
-      await commands.spawnAgent({
-        role: 'waykeeper',
-        runtime: 'fake',
-        projectId: mars.id,
-        prompt: 'scenario:long',
-      })
-    ).value;
+    const harmonizer = await spawnHarmonizer(commands);
+    const wk = await spawnWaykeeper(commands, mars.id, harmonizer.id, 'scenario:long');
     expect(await commands.chooseBody({ kind: 'moon' })).toMatchObject({ body: { id: 'b-io' } });
     await commands.stopAgent(wk.id, USER);
     const end = Date.now() + 3000;

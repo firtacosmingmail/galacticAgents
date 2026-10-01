@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import {
+  CLEARABLE_PROJECT_FIELDS,
   PermissionPolicy,
+  applyChanges,
   type Actor,
   type CreateProjectInput,
   type Host,
   type Id,
   type Project,
+  type ProjectChanges,
   type ReopenInput,
 } from '@galactic/protocol';
 import { bodyOf, checkAssignable, checkSubProjectBody, occupy, place, release } from './bodies.js';
@@ -13,6 +16,7 @@ import { chooseBody, describeRefusal, type ChooseOptions } from './catalogue.js'
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, checkTransition, setProjectState } from './states.js';
+import { effectiveChanges } from './changes.js';
 
 /**
  * Project commands (P2-01; SPEC §2.7, §3, decision 11, 11b). A project lives on a planet or moon
@@ -20,7 +24,7 @@ import { FINISHED_WORK, checkTransition, setProjectState } from './states.js';
  * frees the body, reopen brings the work back on its old body when that is still free.
  */
 
-export type ProjectChanges = Partial<Omit<Project, 'id' | 'createdAt' | 'updatedAt' | 'state'>>;
+export type { ProjectChanges };
 
 const hostOf = (projectId: Id): Host => ({ kind: 'project', id: projectId });
 
@@ -121,7 +125,9 @@ export function createProject(
 
 /**
  * Edits a project's fields (name, workspace, repo path, policy, pin, parent). Its body changes
- * only by `moveHost` and its state only by the state commands.
+ * only by `moveHost` and its state only by the state commands. An explicit `null` clears a
+ * clearable field (P2-20): `parentProjectId` detaches a sub-project (its moon then hosts an
+ * independent project, decision 10), `permissionPolicy` falls back to the global default.
  */
 export function updateProject(
   ctx: CommandContext,
@@ -129,9 +135,7 @@ export function updateProject(
   changes: ProjectChanges,
 ): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
-  const defined = Object.fromEntries(
-    Object.entries(changes).filter(([, v]) => v !== undefined),
-  ) as ProjectChanges;
+  const defined = effectiveChanges(current, changes, CLEARABLE_PROJECT_FIELDS, 'project');
   if ('bodyId' in defined && defined.bodyId !== current.bodyId) {
     throw new DomainError('invalid', 'a project changes body by moving, not by an update');
   }
@@ -146,7 +150,10 @@ export function updateProject(
   }
   if (defined.permissionPolicy) defined.permissionPolicy = parsePolicy(defined.permissionPolicy);
   if (Object.keys(defined).length === 0) return current;
-  const project = ctx.tables.projects.upsert({ ...current, ...defined, updatedAt: ctx.now });
+  const project = ctx.tables.projects.upsert({
+    ...applyChanges(current, defined),
+    updatedAt: ctx.now,
+  });
   ctx.emit({ type: 'project.updated', projectId, changes: defined });
   return project;
 }

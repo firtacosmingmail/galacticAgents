@@ -123,12 +123,18 @@ describe('replay vs snapshot conformance', () => {
     });
     const flaky = (await commands.createTask({ description: 'Fix the flaky test' })).value;
 
-    // --- agents through the runtime: spawn, a question answered, re-parenting
+    // --- agents through the runtime: the Harmonizer on Earth (P2-20), a Waykeeper under it, a
+    // question answered, a promoted Steward handed over
+    const harmonizer = (
+      await commands.spawnAgent({ role: 'harmonizer', runtime: 'fake', cwd: '/w/hq', prompt: 'x' })
+    ).value;
+    expect(harmonizer.bodyId).toBe('b-earth');
     const waykeeper = (
       await commands.spawnAgent({
         role: 'waykeeper',
         runtime: 'fake',
         projectId: project.id,
+        supervisorId: harmonizer.id,
         prompt: 'scenario:long',
       })
     ).value;
@@ -146,6 +152,7 @@ describe('replay vs snapshot conformance', () => {
         role: 'steward',
         runtime: 'fake',
         taskId: flaky.id,
+        supervisorId: harmonizer.id,
         cwd: '/w/scratch',
         prompt: 'scenario:long',
       })
@@ -158,7 +165,13 @@ describe('replay vs snapshot conformance', () => {
       by: USER,
       version: 0,
     });
-    await commands.updateAgent(asteroidSteward.id, { supervisorId: waykeeper.id });
+    // A standalone task joins the project (its Steward flies, its asteroid shows "moved to …");
+    // its Steward is handed over to the project's Waykeeper in one update.
+    await commands.moveTask(flaky.id, project.id, USER);
+    await commands.updateAgent(asteroidSteward.id, {
+      projectId: project.id,
+      supervisorId: waykeeper.id,
+    });
 
     // --- questions opened outside a live session: escalated, reassigned, answered, cancelled
     const held = (
@@ -168,14 +181,12 @@ describe('replay vs snapshot conformance', () => {
         context: { text: 'Snappy or zstd?' },
       })
     ).value;
-    // Routed to the asteroid Steward's new supervisor on open (P2-03); up to the user, and back.
+    // Routed to the Steward's new supervisor on open (P2-03); up to the Harmonizer, and back.
     await commands.escalateQuestion(held.id, { type: 'agent', id: waykeeper.id });
     await commands.reassignQuestion(held.id, { type: 'agent', id: waykeeper.id }, 'hand back');
     await commands.answerQuestion({ questionId: held.id, answer: 'zstd', by: USER, version: 2 });
 
-    // --- moves: a standalone task joins the project (its Steward flies, its asteroid shows
-    // "moved to …"), the sub-project moves (Phobos shows the marker)
-    await commands.moveTask(flaky.id, project.id, USER);
+    // --- moves: the sub-project moves (Phobos shows the marker)
     await commands.moveHost({ kind: 'project', id: sub.id }, 'b-deimos');
     // --- the catalogue picks bodies: a planet and an independent moon
     const loose = (await commands.createProject({ name: 'Loose', workspace: '/w/loose' })).value;
@@ -212,6 +223,12 @@ describe('replay vs snapshot conformance', () => {
     await commands.sweepMarkers(7 * DAY);
     await commands.reopenProject(sub.id, USER, { bodyId: 'b-phobos' });
 
+    // --- clearing optional fields with an explicit null (P2-20): the merged task forgets its
+    // worktree, the sub-project is detached, the project drops its policy and repo path
+    await commands.updateTask(parse.id, { worktreePath: null, branch: null });
+    await commands.updateProject(sub.id, { parentProjectId: null });
+    await commands.updateProject(project.id, { permissionPolicy: null, repoPath: null });
+
     // --- a standalone task archived by the panel, its asteroid freed and taken, reopened elsewhere
     const chore = (await commands.createTask({ description: 'Rotate logs' })).value;
     await commands.control({ kind: 'task', id: chore.id }, { action: 'cancel' }, USER);
@@ -222,8 +239,8 @@ describe('replay vs snapshot conformance', () => {
     await commands.closeTask(chore.id, USER);
     await commands.control({ kind: 'task', id: chore.id }, { action: 'archive' }, USER);
 
-    // --- a question whose holder stops moves to the user (P2-03); left open when its own agent
-    // stops, it is cancelled with the stop
+    // --- a question whose holder stops moves to the next living supervisor, the Harmonizer
+    // (P2-03); left open when its own agent stops, it is cancelled with the stop
     const orphan = (
       await commands.openQuestion({
         kind: 'clarification',
@@ -234,7 +251,10 @@ describe('replay vs snapshot conformance', () => {
     expect(orphan.holder).toEqual({ type: 'agent', id: waykeeper.id });
     await commands.stopAgent(waykeeper.id, USER);
     await until(() => statuses.get(waykeeper.id)?.state === 'stopped');
-    expect(log.tables.questions.get(orphan.id)?.holder).toEqual(USER);
+    expect(log.tables.questions.get(orphan.id)?.holder).toEqual({
+      type: 'agent',
+      id: harmonizer.id,
+    });
     await commands.stopAgent(asteroidSteward.id, USER);
 
     // Every event type this scenario was meant to cover was really logged.
@@ -293,6 +313,21 @@ describe('replay vs snapshot conformance', () => {
       expect(tables(world), `at seq ${checkpoint.seq}`).toEqual(tables(applySnapshot(checkpoint)));
     }
     expect(tables(world)).toEqual(tables(applySnapshot({ ...log.snapshot(), statuses: [] })));
+    // The cleared fields are gone on both sides, not left behind as `null` or stale values.
+    for (const key of ['permissionPolicy', 'repoPath'] as const) {
+      expect(world.projects[project.id]).not.toHaveProperty(key);
+    }
+    expect(world.projects[sub.id]).not.toHaveProperty('parentProjectId');
+    expect(world.tasks[parse.id]).not.toHaveProperty('worktreePath');
+    expect(world.tasks[parse.id]).not.toHaveProperty('branch');
+    const cleared = recorded.find(
+      (e) => e.event.type === 'task.updated' && e.event.changes.worktreePath === null,
+    );
+    expect(cleared?.event).toEqual({
+      type: 'task.updated',
+      taskId: parse.id,
+      changes: { worktreePath: null, branch: null },
+    });
     // The summary counts the client computes are the server's (P2-15).
     expect(summaryOf(world)).toEqual(summarize(log.snapshot()));
   });
