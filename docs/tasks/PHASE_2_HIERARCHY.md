@@ -1,7 +1,7 @@
 # Phase 2 — The hierarchy: Harmonizer, Waykeepers, Stewards
 
-**Current task:** P2-04, P2-07, P2-20 (wave 3, branch `p2-wave3-permissions-harness`) · **Task status:** in progress
-**Phase status:** in progress (7/20 done) — on branch `phase-2`
+**Current task:** wave 4 next — P2-08, P2-10 (after `p2-wave3-permissions-harness` is merged into `phase-2`) · **Task status:** todo
+**Phase status:** in progress (10/21 done) — on branch `phase-2`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -38,7 +38,7 @@ The full Steward → Waykeeper → Harmonizer → user loop, working through the
 | 1 | P2-01 | Domain commands underpin everything. |
 | 2 (parallel) | P2-02, P2-03, P2-05, P2-06, P2-14, P2-15 | Catalogue, questions, worktrees, brain runner, control actions and state derivation are independent given P2-01. |
 | 3 (parallel) | P2-04, P2-07, P2-20 | Permission routing, fake-LLM harness, placement invariants (P2-20 needed only P2-02; P2-17 moved to wave 5, 2026-10-01: it depends on P2-10). |
-| 4 (parallel) | P2-08, P2-10 | Harmonizer and Waykeeper brains (share the runner; can be built side by side). |
+| 4 (parallel) | P2-08, P2-10, P2-21 | Harmonizer and Waykeeper brains (share the runner; can be built side by side); the remote policy floor. |
 | 5 (parallel) | P2-09, P2-11, P2-12, P2-13, P2-17 | Proposal flow, Steward lifecycle, promotion/moves, closure/retention, extra caps. |
 | 6 (parallel) | P2-16, P2-18 | Hierarchy resume; ops console extensions. |
 | 7 | P2-19 | End-to-end exit run + kill -9 drill. |
@@ -63,7 +63,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** tests for double answer, orphaned holder, escalation chain for a project Steward and for an asteroid Steward (Harmonizer as supervisor).
 
 ### P2-04 — Permission routing
-- **Status:** in progress · **Depends on:** P2-03, P1-10 · **Parallel with:** P2-07, P2-17
+- **Status:** done (2026-10-01) · **Depends on:** P2-03, P1-10 · **Parallel with:** P2-07, P2-17
 - `needs_input(kind: permission)` → evaluate the project's policy; allow → answer immediately; ask → `Question(kind: permission, holder: user)` straight to the inbox, never to a brain mailbox; remote-client flag respected (never auto-approve for remote unless configured).
 - **Acceptance:** tests: allowed action never creates a question; asked action creates a user-held question; brain mailboxes never receive permission questions.
 
@@ -78,7 +78,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** unit tests (with P2-07 harness) for coalescing two simultaneous events into one turn, re-entrancy prevention, and that a brain's own tool side effects don't wake it mid-turn.
 
 ### P2-07 — Scripted fake-LLM harness for brains
-- **Status:** in progress · **Depends on:** P2-06 · **Parallel with:** P2-04, P2-17
+- **Status:** done (2026-10-01) · **Depends on:** P2-06 · **Parallel with:** P2-04, P2-17
 - A fake "LLM" that, given a turn prompt, replays scripted tool calls; lets brain tool contracts, question routing, proposal flows and wake coalescing be tested deterministically without Claude.
 - **Acceptance:** used by P2-06, P2-08, P2-10 tests; runs in CI.
 
@@ -106,6 +106,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 ### P2-12 — Promotion and moves
 - **Status:** todo · **Depends on:** P2-09, P2-02 · **Parallel with:** P2-11, P2-13
 - `propose_promotion` / `request_promotion` → proposal; approval: pause the Steward if mid-task, create/assign the new body, `body.moved` (drives the satellite flight in Phase 4), spawn a Waykeeper if promoted to moon/planet, hand over or resume the Steward, old body in `moved` state for the retention period then freed, permanent link in history; "task added to an existing project" moves an asteroid task onto the project body the same way.
+- Hand-overs (from the wave-3 review): `moveTask` and attaching or detaching a sub-project (`parentProjectId`) re-parent the agents in the same command — the moved task's Steward gets the project and its Waykeeper as supervisor, a detached sub-project's Waykeeper the Harmonizer — so SPEC decision 32 holds at every commit.
 - **Acceptance:** tests: asteroid → moon promotion with a mid-task Steward; task moved into project; old body freed after retention.
 
 ### P2-13 — Closure, retention and archival
@@ -144,9 +145,14 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** exit criteria met; notes committed.
 
 ### P2-20 — Hierarchy placement invariants and clearable fields (added 2026-10-01)
-- **Status:** in progress · **Depends on:** P2-02 · **Parallel with:** P2-04, P2-07
+- **Status:** done (2026-10-01) · **Depends on:** P2-02 · **Parallel with:** P2-04, P2-07
 - From the P2-01 review (`docs/tasks/notes/P2-wave1-review.md`, findings 7 and 9). `spawnAgent` puts the Harmonizer on Earth (HQ), not a fresh asteroid; a Steward or Waykeeper always has a supervisor; a Waykeeper's supervisor is the Harmonizer (or, for a sub-project, the planet's Waykeeper); `updateAgent` never gives the Harmonizer a supervisor and keeps `taskId` and `projectId` in agreement. Decide how an optional field is cleared (detaching a sub-project, dropping a project's policy, a task's worktree after merge): an explicit `null` in `project.updated` / `task.updated` folded by both the commands and the web reducer, or a dedicated event; record it in TECHNOLOGY §6.2.
 - **Acceptance:** tests for each invariant; the conformance test covers clearing a field.
+
+### P2-21 — Remote floor on every policy write (added 2026-10-01)
+- **Status:** todo · **Depends on:** P2-04 · **Parallel with:** P2-08, P2-10
+- From the wave-3 review (`docs/tasks/notes/P2-wave3-review.md`, finding 4). P2-04 floors a remote client's chosen policy at the global default only on `POST /api/agents`; since the gate reads `project.permissionPolicy` live, any other write (a WS or REST project edit, a Harmonizer tool acting on a remote user's message, P2-18's panel) would loosen running agents at once. Route every `permissionPolicy` write through one function that applies `noLooserThan` unless the request is local or `autoApproveRemote` is set, and carry the request's origin (local/remote) to the command surface.
+- **Acceptance:** tests: a remote project edit cannot loosen the policy; a local one can; a Harmonizer tool acting for a remote message is floored.
 
 ## Exit criteria (from the plan)
 
