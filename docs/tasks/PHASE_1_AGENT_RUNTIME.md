@@ -1,7 +1,7 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** wave 3 — P1-09 (claimed 2026-10-01) · **Task status:** in progress
-**Phase status:** in progress (20/27 done)
+**Current task:** wave 4 — P1-11, P1-13, P1-14, P1-15, P1-16 (next to pick; none claimed yet) · **Task status:** todo
+**Phase status:** in progress (21/27 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -66,7 +66,7 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Status:** done (2026-09-30) · **Depends on:** P1-03 · **Parallel with:** P1-02, P1-05, P1-06, P1-07
 - Vitest suite parameterised by adapter: spawn → output → clarification question answered → permission request answered → pause/resume → interrupt → finish with cost; stop from every state; `resumeSession` round trip; stall detection. Runs against the fake adapter in CI.
 - **Acceptance:** suite green on the fake adapter; documented as the bar for any future adapter.
-- **Done:** `apps/server/src/adapters/conformance.ts` (`describeAdapterConformance(target)`), run through `composeRuntime` so the whole runtime is under test; `fake-adapter.conformance.test.ts` is the CI target. P1-12 adds the `claude-sdk` target (tagged, local-only); P1-13 documents it.
+- **Done:** `apps/server/src/adapters/conformance.ts` (`describeAdapterConformance(target)`), run through `composeRuntime` so the whole runtime is under test; `fake-adapter.conformance.test.ts` is the CI target. `claude-sdk.conformance.test.ts` is the real target (P1-09/P1-12, `GALACTIC_REAL_CLAUDE=1`), with `jobEnd: 'idle'` for a long-lived session; P1-13 documents it.
 
 ### P1-05 — Status store projection
 - **Status:** done (2026-09-30) · **Depends on:** P0-07, P1-03 · **Parallel with:** P1-02, P1-04, P1-06, P1-07
@@ -93,10 +93,11 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** note + script (`P1-08-sdk-spike.mjs`), SDK pinned at 0.3.285, SPEC §8 rows 1–2 answered, TECHNOLOGY §3.1 carries the adapter shape (streaming input, `PreToolUse` hook + `canUseTool`, `spawnClaudeCodeProcess`, `bare` needs an API key). Ran in a cloud sandbox under an OAuth login; **one follow-up for Cosmin:** run `node docs/tasks/notes/P1-08-sdk-spike.mjs auth tools` once on the dev machine after `pnpm install` to confirm the same under his own subscription.
 
 ### P1-09 — Claude SDK adapter implementation
-- **Status:** in progress · **Depends on:** P1-08, P1-01, P1-07, P1-10 · **Parallel with:** —
+- **Status:** done (2026-10-01) · **Depends on:** P1-08, P1-01, P1-07, P1-10 · **Parallel with:** —
 - `spawn(opts)` with cwd, prompt, optional tools/system prompt (for Phase 2 brains), subscription login, `bare` opt-in; `PreToolUse` hook → `opts.gate.check(toolCall)` (P1-18: the runtime's gate, never the policy itself) → `allow` runs, `deny` refuses with the reason, `ask` → `needs_input(kind: permission)` (blocks the tool call until answered); `AskUserQuestion` → `needs_input(kind: clarification)`; the supervisor's `onOutcome` (P1-20) is mapped by the adapter to `agent.failed(crash|runtime)` / `agent.stopped`; `send()` starts a turn (the runtime's inbox guarantees idle, P1-19); streaming output/tool calls/thinking → `agent.output` / `agent.tool_call`; final result → `agent.finished(cost)`; `resumeSession(sessionRef)`; `interrupt`, `pause` (hold delivery + interrupt), `resume`, `stop` via the supervisor's graceful sequence.
 - **Acceptance:** manual run on the dev machine passes every step of the exit criteria; unit tests with the SDK mocked for the event mapping.
 - **Read first:** `docs/tasks/notes/P1-wave2b-changes.md` — the interfaces this task builds on (`SpawnOptions.gate`, the `send` contract, `ProcessOutcome`, the one-terminal-event invariant) changed in wave 2b.
+- **Done:** `apps/server/src/adapters/claude-sdk/` — `claude-sdk-adapter.ts` (one streaming-input `query()` per session; `PreToolUse` → gate, `canUseTool` → permission / `AskUserQuestion` questions; CLI spawned by the supervisor via `spawnClaudeCodeProcess` with `ProcessOutcome` mapped to the one terminal event; SIGSTOP/SIGCONT pause; graceful stop; `resumeSession`; brain tools as an in-process MCP server), `sdk-surface.ts` (the slice of the SDK used, lazily loaded — the only import of the SDK), `json-schema-to-zod.ts`, `fake-sdk.ts` (scripted SDK for the 20 unit tests), `claude-sdk.conformance.test.ts` (the P1-12 target, runs with `GALACTIC_REAL_CLAUDE=1`). Registered in `index.ts` with a SQLite-backed supervisor that reconciles its PID table on start. Decisions in `TECHNOLOGY.md` §3.1 (job end = `agent.idle`, pause = SIGSTOP, env pass-through). Verified against the real SDK in a cloud sandbox under an OAuth login: `scripts/sdk-smoke.ts` (spawn → idle → message, clarification, two permissions, pause/resume during a 20 s shell loop, stop mid-turn in 1.5 s, resume by session ref) and the conformance suite (11/11). **For Cosmin:** `pnpm --filter @galactic/server exec tsx scripts/sdk-smoke.ts` on the Mac is the manual acceptance run under the subscription login.
 
 ### P1-10 — Permission policy engine
 - **Status:** done (2026-09-30) · **Depends on:** P0-02 · **Parallel with:** P1-01, P1-03, P1-08

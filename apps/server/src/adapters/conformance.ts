@@ -45,8 +45,14 @@ export interface ConformanceTarget {
     /** Falls silent for longer than `stallThresholdMs` while working, then carries on. */
     stall?: string;
   };
-  /** Whether `agent.finished` carries a cost. */
+  /** Whether `agent.finished` (or the idle that ends a job, see `jobEnd`) carries a cost. */
   metered: boolean;
+  /**
+   * How a job ends for this runtime. A scripted or process-per-job runtime finishes
+   * (`agent.finished`); a long-lived session (the Claude SDK) reports `agent.idle` after the
+   * job and waits for the next message — the Waykeeper closes the task later. Default `finished`.
+   */
+  jobEnd?: 'finished' | 'idle';
   /** Whether `resumeSession` is supported (PTY adapters: no). */
   resumable: boolean;
   /** Silence threshold for the stall test. */
@@ -65,6 +71,8 @@ interface Rig {
 export function describeAdapterConformance(target: ConformanceTarget): void {
   const timeoutMs = target.timeoutMs ?? 5_000;
   const USER = { type: 'user' } as const;
+  const jobEnd = target.jobEnd ?? 'finished';
+  const JOB_END = `agent.${jobEnd}` as const;
 
   describe(`adapter conformance — ${target.name}`, () => {
     let rig: Rig;
@@ -144,24 +152,26 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       expect(inbox.history().filter((m) => m.error !== undefined)).toEqual([]);
     };
 
-    it('spawns, streams output and tool calls, finishes with a result', async () => {
+    it(`spawns, streams output and tool calls, ends the job with ${JOB_END}`, async () => {
       const agent = await spawn(target.prompts.finish);
       expect(typesOf(agent.id)[0]).toBe('agent.spawned');
-      await waitFor(() => typesOf(agent.id).includes('agent.finished'), 'agent.finished');
+      await waitFor(() => typesOf(agent.id).includes(JOB_END), JOB_END);
       const types = typesOf(agent.id);
       expect(types).toContain('agent.tool_call');
-      expect(types.at(-1)).toBe('agent.finished');
+      expect(types.at(-1)).toBe(JOB_END);
       expect(types).not.toContain('agent.output'); // output never enters the log
       expect(transcript(agent.id).length).toBeGreaterThan(0);
-      const finished = rig.events.find((e) => e.event.type === 'agent.finished')!.event as {
+      const end = rig.events.find((e) => e.event.type === JOB_END)!.event as {
         cost?: { usd?: number };
         result?: string;
       };
-      if (target.metered) expect(finished.cost?.usd).toBeGreaterThan(0);
-      await waitState(agent.id, 'finished');
+      if (target.metered) expect(end.cost?.usd).toBeGreaterThan(0);
+      await waitState(agent.id, jobEnd);
       if (target.metered) expect(status(agent.id)?.costSoFar?.usd).toBeGreaterThan(0);
-      expect(rig.composed.runtime.liveAgents()).toEqual([]);
-      await expectOneTerminal(agent.id);
+      if (jobEnd === 'finished') {
+        expect(rig.composed.runtime.liveAgents()).toEqual([]);
+        await expectOneTerminal(agent.id);
+      }
     });
 
     it('asks a clarification question, waits, and continues with the answer', async () => {
@@ -185,7 +195,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         originAgentId: agent.id,
       });
       await rig.composed.runtime.answer(questionId, 'the first option', USER);
-      await waitFor(() => typesOf(agent.id).includes('agent.finished'), 'finish after the answer');
+      await waitFor(() => typesOf(agent.id).includes(JOB_END), 'job end after the answer');
       expect(rig.events.map((e) => e.event.type)).toContain('question.answered');
       expect(rig.composed.log.tables.questions.get(questionId)?.status).toBe('answered');
     });
@@ -202,7 +212,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       expect(q.question.permissionAction).toBeTruthy();
       const callsBefore = typesOf(agent.id).filter((t) => t === 'agent.tool_call').length;
       await rig.composed.runtime.answer(pendingQuestion(agent.id), 'allow', USER);
-      await waitFor(() => typesOf(agent.id).includes('agent.finished'), 'finish after allow');
+      await waitFor(() => typesOf(agent.id).includes(JOB_END), 'job end after allow');
       expect(typesOf(agent.id).filter((t) => t === 'agent.tool_call').length).toBeGreaterThan(
         callsBefore,
       );
@@ -223,7 +233,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       await rig.composed.runtime.resumeAgent(agent.id, USER);
       await waitFor(() => typesOf(agent.id).includes('agent.resumed'), 'agent.resumed');
       await waitFor(
-        () => typesOf(agent.id).includes('agent.finished'),
+        () => typesOf(agent.id).includes(JOB_END),
         'finish after resume',
         timeoutMs * 3,
       );
@@ -322,14 +332,16 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         await expectStopped(agent.id);
       });
 
-      it('after it finished is a no-op', async () => {
-        const agent = await spawn(target.prompts.finish);
-        await waitFor(() => typesOf(agent.id).includes('agent.finished'), 'agent.finished');
-        const n = rig.events.length;
-        await rig.composed.runtime.stop(agent.id, USER);
-        await new Promise((r) => setTimeout(r, 50));
-        expect(rig.events.length).toBe(n);
-      });
+      if (jobEnd === 'finished') {
+        it('after it finished is a no-op', async () => {
+          const agent = await spawn(target.prompts.finish);
+          await waitFor(() => typesOf(agent.id).includes('agent.finished'), 'agent.finished');
+          const n = rig.events.length;
+          await rig.composed.runtime.stop(agent.id, USER);
+          await new Promise((r) => setTimeout(r, 50));
+          expect(rig.events.length).toBe(n);
+        });
+      }
     });
 
     if (target.resumable) {
@@ -367,7 +379,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
           'the first option',
           USER,
         );
-        await waitFor(() => typesOf(agent.id).includes('agent.finished'), 'finish after resume');
+        await waitFor(() => typesOf(agent.id).includes(JOB_END), 'job end after resume');
         await old.dispose();
       });
     }
