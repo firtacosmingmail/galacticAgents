@@ -6,7 +6,11 @@ import {
   INHERITED_ENV,
   ProcessSupervisor,
   bootTime,
+  commandName,
   isAlive,
+  parseLstart,
+  processName,
+  processStartTime,
   type ProcessOutcome,
   type ProcessSpec,
 } from './supervisor.js';
@@ -405,7 +409,7 @@ describe('ProcessSupervisor — persisted PID table and reconciliation', () => {
     store.upsert({
       agentId: 'orphan',
       pid: orphan.pid!,
-      startedAt: '2026-09-30T00:00:00.000Z',
+      startedAt: new Date().toISOString(), // the start-time check compares with `ps -o lstart=`
       status: 'running',
       meta,
     });
@@ -457,6 +461,101 @@ describe('ProcessSupervisor — persisted PID table and reconciliation', () => {
     expect(store.get('done')?.status).toBe('exited');
     // Running again finds nothing to do.
     expect(s.reconcile()).toEqual({ dead: [], orphans: [] });
+  });
+
+  const strays: number[] = [];
+  /** A detached process nobody supervises, like a CLI left behind by a crashed server. */
+  async function strayProcess() {
+    const child = spawn(NODE, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+    await new Promise((r) => child.once('spawn', r));
+    strays.push(child.pid!);
+    return { pid: child.pid!, startedAt: new Date().toISOString() };
+  }
+  afterEach(() => {
+    for (const pid of strays.splice(0)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // gone
+      }
+    }
+  });
+
+  it('reads the command name from the whole `comm` (macOS paths with spaces) and the start time', () => {
+    expect(commandName('/Applications/Claude Code.app/Contents/MacOS/claude\n')).toBe('claude');
+    expect(commandName('/Users/c/Library/Application Support/x/claude')).toBe('claude');
+    expect(commandName('node')).toBe('node');
+    expect(parseLstart('Thu Oct  1 10:00:00 2026')).toBe(new Date(2026, 9, 1, 10, 0, 0).getTime());
+    expect(parseLstart('garbage')).toBeUndefined();
+    // The real probe on this very process.
+    expect(processName(process.pid)).toBeDefined();
+    const started = processStartTime(process.pid);
+    expect(started).toBeDefined();
+    expect(Math.abs(started! - (Date.now() - process.uptime() * 1000))).toBeLessThan(3_000);
+  });
+
+  it('a recycled pid with the right name but another start time is not killed', async () => {
+    const store = new MemoryProcessStore();
+    const stranger = await strayProcess();
+    store.upsert({
+      agentId: 'recycled',
+      pid: stranger.pid,
+      startedAt: stranger.startedAt,
+      status: 'running',
+      meta: { command: '/usr/local/bin/claude', bootAt: bootTime() },
+    });
+    const { s } = makeSupervisor({
+      store,
+      probe: {
+        name: () => 'claude', // the user's own interactive `claude` now has this pid
+        startTime: () => Date.parse(stranger.startedAt) + 3_600_000,
+      },
+    });
+    expect(s.reconcile()).toEqual({ dead: ['recycled'], orphans: [] });
+    await sleep(100);
+    expect(isAlive(stranger.pid)).toBe(true);
+    expect(store.get('recycled')?.status).toBe('interrupted');
+  });
+
+  it('a CLI under a path with spaces and the recorded start time is recognised and killed', async () => {
+    const store = new MemoryProcessStore();
+    const orphan = await strayProcess();
+    const command = '/Users/cosmin/Library/Application Support/Claude/claude-code/claude';
+    store.upsert({
+      agentId: 'orphan',
+      pid: orphan.pid,
+      startedAt: orphan.startedAt,
+      status: 'running',
+      meta: { command, bootAt: bootTime() },
+    });
+    const { s } = makeSupervisor({
+      store,
+      probe: {
+        name: () => commandName(`${command}\n`), // what macOS `ps -o comm=` prints
+        startTime: () => Date.parse(orphan.startedAt) + 800, // lstart is truncated to seconds
+      },
+    });
+    expect(s.reconcile()).toEqual({ dead: [], orphans: ['orphan'] });
+    await eventually(() => !isAlive(orphan.pid));
+  });
+
+  it('falls back to name + boot when the start time cannot be read', async () => {
+    const store = new MemoryProcessStore();
+    const orphan = await strayProcess();
+    store.upsert({
+      agentId: 'orphan',
+      pid: orphan.pid,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      status: 'running',
+      meta: { command: NODE, bootAt: bootTime() },
+    });
+    const { s } = makeSupervisor({ store, probe: { startTime: () => undefined } });
+    expect(s.reconcile()).toEqual({ dead: [], orphans: ['orphan'] });
+    await eventually(() => !isAlive(orphan.pid));
   });
 
   it('leaves this life’s own processes alone', async () => {

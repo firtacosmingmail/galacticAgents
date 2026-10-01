@@ -175,9 +175,27 @@ export interface SupervisorOptions {
   onOutcome?: (outcome: ProcessOutcome) => void;
   /** Extra variable names children inherit from the server, on top of `INHERITED_ENV`. */
   inheritEnv?: string[];
-  /** Identity check for `reconcile()`; defaults to `ps`. Tests inject one. */
-  processName?: (pid: number) => string | undefined;
+  /** Identity checks for `reconcile()`; defaults to `ps` and `kill(…, 0)`. Tests inject one. */
+  probe?: Partial<ProcessProbe>;
 }
+
+/**
+ * How `reconcile()` looks at a process it did not start in this life. Each method answers
+ * `undefined`/`false` when it cannot tell; the defaults work on macOS and Linux.
+ */
+export interface ProcessProbe {
+  /** Whether a process with this pid exists (signal 0). */
+  alive(pid: number): boolean;
+  /** Whether a process group with this id still has members (signal 0 to `-pgid`). */
+  groupAlive(pgid: number): boolean;
+  /** Executable name (basename of the whole `ps -o comm=`). */
+  name(pid: number): string | undefined;
+  /** Start time in epoch ms (`ps -o lstart=`), `undefined` when unreadable. */
+  startTime(pid: number): number | undefined;
+}
+
+/** How far a row's `startedAt` may be from the process's own start time (`lstart` has 1 s resolution). */
+export const START_TIME_TOLERANCE_MS = 5_000;
 
 const SYSTEM: Actor = { type: 'system' };
 /** How long after `exit` to wait for stdio to drain (`close`) before settling. */
@@ -286,18 +304,64 @@ export function isAlive(pid: number): boolean {
   }
 }
 
-/** The executable name of a live process, via `ps` (macOS and Linux). */
-export function processName(pid: number): string | undefined {
+/** Whether the process group `pgid` still has members (signal 0 to the group). */
+export function isGroupAlive(pgid: number): boolean {
+  if (pgid <= 1) return false;
   try {
-    const out = execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: the group exists but is not ours to signal — it still has members.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function ps(field: string, pid: number): string | undefined {
+  try {
+    const out = execFileSync('ps', ['-o', `${field}=`, '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      // A fixed locale keeps `lstart` in the C format (`Wed Oct  1 10:00:00 2026`).
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
     }).trim();
-    return out === '' ? undefined : basename(out.split(/\s+/)[0]!);
+    return out === '' ? undefined : out;
   } catch {
     return undefined;
   }
 }
+
+/**
+ * The executable name of a live process, via `ps` (macOS and Linux). macOS prints the full path
+ * in `comm`, which may contain spaces, so the whole trimmed output is the path.
+ */
+export function processName(pid: number): string | undefined {
+  const out = ps('comm', pid);
+  return out === undefined ? undefined : commandName(out);
+}
+
+/** `ps -o comm=` output → executable name: the basename of the whole trimmed line. */
+export function commandName(psComm: string): string {
+  return basename(psComm.trim());
+}
+
+/** `ps -o lstart=` output (`Wed Oct  1 10:00:00 2026`, local time) → epoch ms. */
+export function parseLstart(psLstart: string): number | undefined {
+  const ms = Date.parse(psLstart.trim().replace(/\s+/g, ' '));
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+/** When a live process started, in epoch ms (`ps -o lstart=`: local time, 1 s resolution). */
+export function processStartTime(pid: number): number | undefined {
+  const out = ps('lstart', pid);
+  return out === undefined ? undefined : parseLstart(out);
+}
+
+export const DEFAULT_PROBE: ProcessProbe = {
+  alive: isAlive,
+  groupAlive: isGroupAlive,
+  name: processName,
+  startTime: processStartTime,
+};
 
 /** When this machine booted (ISO); pids are only comparable within one boot. */
 export function bootTime(): string {
@@ -315,7 +379,7 @@ export class ProcessSupervisor {
   private readonly onError: (error: unknown, agentId: Id) => void;
   private readonly onOutcome: (outcome: ProcessOutcome) => void;
   private readonly inherited: readonly string[];
-  private readonly nameOf: (pid: number) => string | undefined;
+  private readonly probe: ProcessProbe;
   private readonly bootAt = bootTime();
   private disposed = false;
 
@@ -327,7 +391,7 @@ export class ProcessSupervisor {
     this.onError = opts.onError ?? (() => {});
     this.onOutcome = opts.onOutcome ?? (() => {});
     this.inherited = [...INHERITED_ENV, ...(opts.inheritEnv ?? [])];
-    this.nameOf = opts.processName ?? processName;
+    this.probe = { ...DEFAULT_PROBE, ...(opts.probe ?? {}) };
   }
 
   /** The environment a child gets: the allow-listed inheritance plus the spec's own variables. */
@@ -587,22 +651,37 @@ export class ProcessSupervisor {
     return result;
   }
 
-  private isOurs(row: ProcessRecord): boolean {
-    const pid = row.pid!;
-    if (!isAlive(pid)) return false;
+  /** Recorded in a previous boot: the pid cannot be the same process. */
+  private fromOtherBoot(row: ProcessRecord): boolean {
     const rowBoot = row.meta?.['bootAt'];
-    if (
+    return (
       typeof rowBoot === 'string' &&
       Math.abs(Date.parse(rowBoot) - Date.parse(this.bootAt)) > 60_000
-    ) {
-      return false; // recorded in a previous boot: the pid cannot be the same process
-    }
+    );
+  }
+
+  /**
+   * The live process behind `row.pid` is the one we started: same boot, same command name and,
+   * when `ps` can tell, the same start time — a recycled pid that now belongs to the user's own
+   * interactive `claude` has the right name but another start time. When the start time cannot
+   * be read, name + boot decide as before.
+   */
+  private isOurs(row: ProcessRecord): boolean {
+    const pid = row.pid!;
+    if (!this.probe.alive(pid)) return false;
+    if (this.fromOtherBoot(row)) return false;
     const command = row.meta?.['command'];
     if (typeof command !== 'string') return false;
-    const live = this.nameOf(pid);
+    const live = this.probe.name(pid);
     const name = basename(command);
     // Linux truncates `comm` to 15 characters.
-    return live !== undefined && (live === name || (live.length >= 15 && name.startsWith(live)));
+    const sameName =
+      live !== undefined && (live === name || (live.length >= 15 && name.startsWith(live)));
+    if (!sameName) return false;
+    const started = this.probe.startTime(pid);
+    const recorded = Date.parse(row.startedAt);
+    if (started === undefined || Number.isNaN(recorded)) return true;
+    return Math.abs(started - recorded) <= START_TIME_TOLERANCE_MS;
   }
 
   /** The persisted row for an agent (running, exited or interrupted). */
