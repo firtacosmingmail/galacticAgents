@@ -138,14 +138,43 @@ export class Commands implements DomainCommands {
       });
   }
 
+  /**
+   * The events an agent-level effect by `by` caused on `agentIds` (logged since `since`): the
+   * runtime's `control.*{agent}` and the agents' paused / resumed / stopped carrying `by`. Nothing
+   * else the agents or anyone did meanwhile — a brain's mailbox drops a tool call's events as its
+   * own, so over-reporting here would swallow other actors' events (wave-2 review).
+   */
+  private effectEvents(since: number, agentIds: readonly Id[], by: Actor): Event[] {
+    const sameActor = (a: Actor | undefined) => a?.type === by.type && a.id === by.id;
+    return this.log
+      .eventsSince(since, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter((e) => {
+        if (e.type.startsWith('control.')) {
+          const c = e as { target: ControlTarget; by: Actor };
+          return c.target.kind === 'agent' && agentIds.includes(c.target.id) && sameActor(c.by);
+        }
+        // A stop ends the agent once; the adapter may report it as the system's, whoever asked.
+        if (e.type === 'agent.stopped') return agentIds.includes(e.agentId);
+        if (e.type === 'agent.paused' || e.type === 'agent.resumed') {
+          return agentIds.includes(e.agentId) && sameActor(e.by);
+        }
+        return false;
+      });
+  }
+
   private async agentCommand(
     agentId: Id,
+    by: Actor,
     fn: (runtime: AgentControl) => Promise<void>,
   ): Promise<CommandResult<Agent>> {
     must(this.log.tables.agents.get(agentId), 'agent', agentId);
     const since = this.log.currentSeq();
     await fn(this.runtime());
-    return { value: this.log.tables.agents.get(agentId)!, events: this.eventsOf(since, agentId) };
+    return {
+      value: this.log.tables.agents.get(agentId)!,
+      events: this.effectEvents(since, [agentId], by),
+    };
   }
 
   // -- projects and tasks ----------------------------------------------------------------------
@@ -288,13 +317,13 @@ export class Commands implements DomainCommands {
     return this.run((ctx) => updateAgent(ctx, agentId, changes));
   }
   stopAgent(agentId: Id, by: Actor) {
-    return this.agentCommand(agentId, (r) => r.stop(agentId, by));
+    return this.agentCommand(agentId, by, (r) => r.stop(agentId, by));
   }
   pauseAgent(agentId: Id, by: Actor) {
-    return this.agentCommand(agentId, (r) => r.pause(agentId, by));
+    return this.agentCommand(agentId, by, (r) => r.pause(agentId, by));
   }
   resumeAgent(agentId: Id, by: Actor) {
-    return this.agentCommand(agentId, (r) => r.resumeAgent(agentId, by));
+    return this.agentCommand(agentId, by, (r) => r.resumeAgent(agentId, by));
   }
 
   /**
@@ -386,7 +415,7 @@ export class Commands implements DomainCommands {
   ): Promise<CommandResult<void>> {
     if (target.kind === 'agent') {
       const run = (fn: (r: AgentControl) => Promise<void>) =>
-        this.agentCommand(target.id, fn).then((r) => ({ value: undefined, events: r.events }));
+        this.agentCommand(target.id, by, fn).then((r) => ({ value: undefined, events: r.events }));
       switch (action.action) {
         case 'stop':
         case 'cancel':
@@ -408,10 +437,10 @@ export class Commands implements DomainCommands {
           .map((a) => a.id)
           .filter((id) => live.has(id))
       : [];
-    const since = this.log.currentSeq();
-    await this.run((ctx) =>
+    const own = await this.run((ctx) =>
       recordControl(ctx, target, action, by, { isLive: (id) => live.has(id) }),
     );
+    const since = this.log.currentSeq();
     if (effect && affected.length > 0) {
       const runtime = this.runtime();
       const call = (id: Id) =>
@@ -432,19 +461,7 @@ export class Commands implements DomainCommands {
         );
       }
     }
-    const events = this.log
-      .eventsSince(since, Number.MAX_SAFE_INTEGER)
-      .map((e) => e.event)
-      .filter((e) => {
-        // This command's events: the domain ones, and the affected agents' own; not whatever
-        // other agents logged meanwhile.
-        if ('agentId' in e) return affected.includes(e.agentId);
-        if (e.type.startsWith('control.')) {
-          const t = (e as { target: ControlTarget }).target;
-          return t.kind !== 'agent' || affected.includes(t.id);
-        }
-        return true;
-      });
+    const events = [...own.events, ...this.effectEvents(since, affected, by)];
     return { value: undefined, events };
   }
 }

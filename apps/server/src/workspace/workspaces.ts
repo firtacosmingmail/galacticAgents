@@ -418,10 +418,10 @@ export class Workspaces {
     const { task, project, meta } = this.gitTask(taskId);
     const baseBranch = meta.baseBranch!;
     const repoRoot = meta.repoRoot ?? project.workspace;
-    const root = join(project.workspace, WORKTREES_DIR, task.id);
+    const root = worktreeRoot(project.workspace, task.id);
     const sub = relative(repoRoot, project.workspace);
     const path = sub ? join(root, sub) : root;
-    const branch = task.branch ?? branchName(task);
+    const branch = task.branch ? checkBranch(task.branch) : branchName(task);
 
     await this.serial(repoRoot, async () => {
       await this.git(repoRoot, ['worktree', 'prune']);
@@ -480,13 +480,13 @@ export class Workspaces {
     if (!task.branch || !task.worktreePath) {
       throw new DomainError('invalid', `task ${taskId} has no worktree to merge`);
     }
-    const branch = task.branch;
+    const branch = checkBranch(task.branch);
     const baseBranch =
       (task.meta?.['worktree'] as { baseBranch?: string } | undefined)?.baseBranch ??
       meta.baseBranch!;
     const repoRoot = meta.repoRoot ?? project.workspace;
-    const root =
-      (task.meta?.['worktree'] as { root?: string } | undefined)?.root ?? task.worktreePath;
+    // Never a stored path: task fields are writable through `updateTask` (wave-2 review).
+    const root = worktreeRoot(project.workspace, task.id);
     const cwd = project.workspace;
 
     const result = await this.serial(repoRoot, async (): Promise<MergeResult> => {
@@ -624,9 +624,8 @@ export class Workspaces {
   ): Promise<{ removed: boolean; files?: string[] }> {
     const { task, project, meta } = this.gitTask(taskId);
     const repoRoot = meta.repoRoot ?? project.workspace;
-    const root =
-      (task.meta?.['worktree'] as { root?: string } | undefined)?.root ?? task.worktreePath;
-    if (!root) return { removed: false };
+    const root = worktreeRoot(project.workspace, task.id);
+    if (!task.worktreePath && !existsSync(root)) return { removed: false };
     const out = await this.serial(repoRoot, async () => {
       if (await this.isWorktree(repoRoot, root)) {
         const pending = await this.changes(root, true);
@@ -635,7 +634,9 @@ export class Workspaces {
       }
       await this.git(repoRoot, ['worktree', 'prune']);
       if (opts.deleteBranch && task.branch) {
-        await this.git(repoRoot, ['branch', '-D', task.branch], { allowFailure: true });
+        await this.git(repoRoot, ['branch', '-D', checkBranch(task.branch)], {
+          allowFailure: true,
+        });
       }
       return { removed: true };
     });
@@ -717,4 +718,29 @@ export class Workspaces {
     });
     return next;
   }
+}
+
+/** Where a task's worktree lives: derived, never read back from a stored field. */
+export function worktreeRoot(workspace: string, taskId: Id): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(taskId)) {
+    throw new DomainError('invalid', `task id ${JSON.stringify(taskId)} cannot name a worktree`);
+  }
+  return join(workspace, WORKTREES_DIR, taskId);
+}
+
+/**
+ * A stored branch name the server will pass to git: ours (`galactic/…`) and a valid ref name, so
+ * a value written through `updateTask` can never be read by git as an option or another ref.
+ */
+export function checkBranch(branch: string): string {
+  const ok =
+    /^galactic\/[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch) &&
+    !branch.includes('..') &&
+    !branch.includes('//') &&
+    !branch.endsWith('/') &&
+    !branch.endsWith('.') &&
+    !branch.endsWith('.lock');
+  if (!ok)
+    throw new DomainError('invalid', `branch ${JSON.stringify(branch)} is not a galactic/ branch`);
+  return branch;
 }

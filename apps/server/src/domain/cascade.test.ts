@@ -3,6 +3,7 @@ import type { Actor, Agent, AgentRole, Event, Id } from '@galactic/protocol';
 import { world } from '../test/world.js';
 import { agentsOf, concernedSupervisors, retentionDue } from './cascade.js';
 import { recordControl } from './control.js';
+import { openQuestion } from './questions.js';
 import type { CommandContext } from './event-log.js';
 import { createProject } from './projects.js';
 import { setTaskState } from './states.js';
@@ -63,6 +64,24 @@ describe('applyControlState (through recordControl)', () => {
     expect(tables.tasks.get(t1.id)?.state).toBe('paused');
     run((ctx) => recordControl(ctx, target, { action: 'resume' }, USER));
     expect(tables.tasks.get(t1.id)?.state).toBe('approved');
+  });
+
+  it('pausing a task blocked on the user keeps it paused, and resume brings it back blocked', () => {
+    const { run, tables, t1 } = setup();
+    run((ctx) =>
+      openQuestion(ctx, {
+        id: 'q-u',
+        kind: 'permission',
+        originAgentId: 'a-s1',
+        context: { text: 'May I push?' },
+      }),
+    );
+    run((ctx) => setTaskState(ctx, t1.id, 'blocked_on_user'));
+    const target = { kind: 'task', id: t1.id } as const;
+    run((ctx) => recordControl(ctx, target, { action: 'pause' }, USER));
+    expect(tables.tasks.get(t1.id)?.state).toBe('paused');
+    run((ctx) => recordControl(ctx, target, { action: 'resume' }, USER));
+    expect(tables.tasks.get(t1.id)?.state).not.toBe('paused');
   });
 
   it('cancelling a task fails it by the user; a proposed one is archived; finished work refuses', () => {

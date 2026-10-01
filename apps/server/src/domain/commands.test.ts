@@ -4,6 +4,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { concernedSupervisors } from './cascade.js';
+import { createAgent } from './agents.js';
 import { Commands } from './commands.js';
 import { DomainError } from './errors.js';
 import { EventLog } from './event-log.js';
@@ -302,6 +303,28 @@ describe('Commands.control on tasks and projects (P2-14)', () => {
     return { ...composed, project, task, waykeeper, steward };
   }
 
+  it('a pause holds against a user-held question, and resume finds the task paused (review fix)', async () => {
+    const composed = boot(1);
+    const { commands, log, statuses } = composed;
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const task = (await commands.createTask({ description: 'clean', projectId: project.id })).value;
+    const steward = (
+      await commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        prompt: 'scenario:permission',
+      })
+    ).value;
+    await until(() => log.tables.tasks.get(task.id)?.state === 'blocked_on_user');
+    const target = { kind: 'task', id: task.id } as const;
+    await commands.control(target, { action: 'pause' }, USER);
+    await until(() => statuses.get(steward.id)?.state === 'paused');
+    expect(log.tables.tasks.get(task.id)?.state).toBe('paused');
+    await commands.control(target, { action: 'resume' }, USER);
+    await until(() => log.tables.tasks.get(task.id)?.state === 'blocked_on_user');
+  });
+
   it('pausing a task pauses its Steward and wakes its Waykeeper; resume undoes both', async () => {
     const { commands, log, statuses, task, waykeeper, steward } = await hierarchy();
     const target = { kind: 'task', id: task.id } as const;
@@ -391,5 +414,60 @@ describe('Commands.control on tasks and projects (P2-14)', () => {
       commands.control({ kind: 'task', id: task.id }, { action: 'resume' }, USER),
     ).rejects.toThrow(/not paused/);
     expect(statuses.get(steward.id)?.state).toBe('working');
+  });
+});
+
+describe('Commands.control result (wave-2 review)', () => {
+  it('returns only what the call caused, never another actor’s events logged meanwhile', async () => {
+    const log = new EventLog(openDatabase(':memory:'));
+    const agentId = 'a-steward-x';
+    const userPause = (taskId: string) =>
+      log.runCommand(({ emit }) =>
+        emit({ type: 'control.pause', target: { kind: 'task', id: taskId }, by: USER }),
+      );
+    let other = '';
+    const agents = {
+      spawn: () => Promise.reject(new Error('unused')),
+      stop: () => Promise.resolve(),
+      resumeAgent: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      hasQuestion: () => false,
+      liveAgents: () => [log.tables.agents.get(agentId)!],
+      pause: (id: string, by: Actor) => {
+        userPause(other); // someone else, while the runtime call is under way
+        log.runCommand(({ emit }) => {
+          emit({ type: 'control.pause', target: { kind: 'agent', id }, by });
+          emit({ type: 'agent.paused', agentId: id, by });
+        });
+        return Promise.resolve();
+      },
+    };
+    const commands = new Commands({ log, agents });
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w' })).value;
+    const a = (await commands.createTask({ description: 'a', projectId: project.id })).value;
+    other = (await commands.createTask({ description: 'b', projectId: project.id })).value.id;
+    log.runCommand((ctx) =>
+      createAgent(ctx, {
+        agentId,
+        role: 'steward',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+        bodyId: project.bodyId,
+        taskId: a.id,
+      }),
+    );
+    const brain: Actor = { type: 'agent', id: 'a-brain' };
+    const { events } = await commands.control(
+      { kind: 'task', id: a.id },
+      { action: 'pause' },
+      brain,
+    );
+    expect(events.map((e) => e.type)).toEqual([
+      'control.pause',
+      'task.state_changed',
+      'control.pause',
+      'agent.paused',
+    ]);
+    expect(events.some((e) => 'target' in e && e.target.id === other)).toBe(false);
   });
 });

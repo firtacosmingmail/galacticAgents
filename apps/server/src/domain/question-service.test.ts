@@ -424,3 +424,20 @@ describe('question service — over the log alone (no runtime)', () => {
     );
   });
 });
+
+describe('question service — wave-2 review fixes', () => {
+  it('a brain session reset keeps the questions it holds (same agent, new session)', async () => {
+    const h = await hierarchy();
+    const steward = await h.steward();
+    const q = await questionOf(h, steward);
+    expect(q.holder).toEqual(as(h.waykeeper));
+    const renewed = await h.runtime.renewSession(h.waykeeper.id, 'scenario:echo');
+    expect(renewed.ok).toBe(true);
+    expect(h.log.tables.questions.get(q.id)).toMatchObject({
+      status: 'open',
+      holder: as(h.waykeeper),
+    });
+    expect(allEvents(h).some((e) => e.type === 'question.reassigned')).toBe(false);
+    expect(h.log.tables.tasks.get(h.task.id)?.state).not.toBe('blocked_on_user');
+  });
+});

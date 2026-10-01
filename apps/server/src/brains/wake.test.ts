@@ -39,6 +39,7 @@ describe('WAKE_RULES', () => {
         'message.sent',
         'question.opened',
         'question.answered',
+        'question.cancelled',
         'question.escalated',
         'question.reassigned',
         'proposal.approved',
@@ -186,5 +187,41 @@ describe('control wake-ups through concernedSupervisors (P2-14 seam)', () => {
     expect(wakeLine(pauseSub, wkScope)).toBeDefined();
     expect(wakeLine(pauseSolo, hScope)).toBeDefined();
     expect(wakeLine(pauseSolo, wkScope)).toBeUndefined();
+  });
+});
+
+describe('question resolutions reach every past holder (wave-2 review)', () => {
+  it('wakes an earlier holder on answer and on cancel, never for a permission question', () => {
+    const s = scope({ supervises: () => false });
+    const clarification = {
+      ...d.question,
+      kind: 'clarification' as const,
+      holder: { type: 'user' as const },
+    };
+    const withQ = { ...s, question: () => clarification };
+    const answered: Extract<Event, { type: 'question.answered' }> = {
+      type: 'question.answered',
+      questionId: clarification.id,
+      answer: 'yes',
+      answeredBy: { type: 'user' },
+      version: 3,
+      holders: [BRAIN],
+    };
+    const cancelled: Event = {
+      type: 'question.cancelled',
+      questionId: clarification.id,
+      agentId: 'a-steward-1',
+      reason: 'agent stopped',
+      version: 3,
+      holders: [BRAIN],
+    };
+    expect(wakeLine(answered, withQ)).toBeDefined();
+    expect(wakeLine(cancelled, withQ)).toContain('withdrawn');
+    expect(wakeLine({ ...answered, holders: [] }, withQ)).toBeUndefined();
+    const permission = {
+      ...withQ,
+      question: () => ({ ...clarification, kind: 'permission' as const }),
+    };
+    expect(wakeLine(answered, permission)).toBeUndefined();
   });
 });

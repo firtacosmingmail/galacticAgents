@@ -92,6 +92,11 @@ export interface AnswerInput {
   version?: number;
   /** Every agent that held the question (P2-03), carried on the event for their mailboxes. */
   holders?: Id[];
+  /**
+   * The answer already reached the agent through its adapter, after the full check: record it as
+   * long as the question is open, even if its holder moved meanwhile — the agent has seen it.
+   */
+  delivered?: boolean;
 }
 
 /**
@@ -128,6 +133,7 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
  */
 export function checkAnswer(current: Question, input: AnswerInput): void {
   checkOpen(current);
+  if (input.delivered) return;
   if (input.version !== undefined && input.version !== current.version) {
     throw new DomainError(
       'stale',

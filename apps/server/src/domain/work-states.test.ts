@@ -44,9 +44,9 @@ describe('task state derivation', () => {
     ['question beats paused', { agents: [ag('paused')], userQuestions: 1 }, 'blocked_on_user'],
     ['question beats idle', { agents: [ag('idle')], userQuestions: 2 }, 'blocked_on_user'],
     [
-      'question beats an explicit pause',
+      'an explicit pause holds against a question (decision 29; resume must find it paused)',
       { current: 'paused', held: true, agents: [ag('paused')], userQuestions: 1 },
-      'blocked_on_user',
+      'paused',
     ],
     [
       'question beats awaiting closure',

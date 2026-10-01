@@ -90,8 +90,10 @@ function latestEnded(f: WorkFacts): Derived {
 const sticky: Rule = { name: 'sticky state', when: (f) => STICKY.has(f.current), then: 'keep' };
 const blocked: Rule = {
   name: 'user-held question',
-  // An explicit failure (a cancel) is not reopened by a question left behind.
-  when: (f) => f.userQuestions > 0 && !(f.held && f.current === 'failed'),
+  // An explicit failure (a cancel) is not reopened by a question left behind, and an explicit
+  // pause holds against one: the user paused the work on purpose, and resume must find it paused.
+  when: (f) =>
+    f.userQuestions > 0 && !(f.held && (f.current === 'failed' || f.current === 'paused')),
   then: 'blocked_on_user',
 };
 const held: Rule = { name: 'explicit state', when: (f) => f.held, then: 'keep' };

@@ -62,6 +62,11 @@ function concerns(q: Question | undefined, scope: WakeScope): q is Question {
   return isBrain(q.holder, scope) || scope.supervises(q.originAgentId);
 }
 
+/** The brain held a clarification at some point (`holders` on its answer or cancellation). */
+function heldBefore(holders: readonly Id[] | undefined, scope: WakeScope, q: Question | undefined) {
+  return (q === undefined || q.kind === 'clarification') && (holders ?? []).includes(scope.brainId);
+}
+
 function targets(target: ControlTarget, scope: WakeScope): boolean {
   switch (target.kind) {
     case 'agent':
@@ -116,9 +121,17 @@ export const WAKE_RULES: WakeRules = {
       `${who({ type: 'agent', id: e.question.originAgentId }, s)} asked ${e.question.id} ` +
       `(held by ${who(e.question.holder, s)}): ${quote(e.question.context.text)}`,
   },
+  // Every agent that ever held the question learns it was resolved (SPEC decision 26), so no
+  // level keeps waiting; permission questions never had an agent holder.
   'question.answered': {
-    wakes: (e, s) => concerns(s.question(e.questionId), s),
+    wakes: (e, s) =>
+      heldBefore(e.holders, s, s.question(e.questionId)) || concerns(s.question(e.questionId), s),
     describe: (e, s) => `${who(e.answeredBy, s)} answered ${e.questionId}: ${quote(e.answer)}`,
+  },
+  'question.cancelled': {
+    wakes: (e, s) =>
+      heldBefore(e.holders, s, s.question(e.questionId)) || concerns(s.question(e.questionId), s),
+    describe: (e) => `${e.questionId} was withdrawn (${e.reason})`,
   },
   'question.escalated': {
     wakes: (e, s) =>

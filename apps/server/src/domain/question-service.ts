@@ -261,9 +261,11 @@ export function endAgentQuestions(
   agentId: Id,
   how: string,
   routing: QuestionRouting,
+  opts: { keepHeld?: boolean } = {},
 ): void {
   cancelQuestionsOf(ctx, agentId, `agent ${how}`, (q) => holdersNow(ctx, q, routing));
-  rerouteHeldBy(ctx, agentId, routing, `holder ${agentId} ${how}`);
+  // A session reset replaces the session, not the agent: the questions it holds stay with it.
+  if (!opts.keepHeld) rerouteHeldBy(ctx, agentId, routing, `holder ${agentId} ${how}`);
 }
 
 /**

@@ -156,10 +156,20 @@ export function registerAgentRoutes(
           await commands.control(body.target, body.action as ControlAction, USER);
           return { ok: true, seq: log.currentSeq() } satisfies ControlResponse;
         } catch (error) {
-          if (error instanceof DomainError && error.code === 'not_found') {
+          if (!(error instanceof DomainError)) {
+            // Not a refusal: a bug or a runtime failure, never reported as a conflict.
+            req.log.error(error);
+            return reply.code(500).send({ error: 'internal' });
+          }
+          if (error.code === 'not_found') {
             return reply.code(404).send({ error: 'not_found', message: error.message });
           }
-          return reply.code(409).send(refusal('rejected', (error as Error).message));
+          if (error.code === 'invalid') {
+            return reply
+              .code(400)
+              .send({ error: 'invalid', message: redactSecrets(error.message) });
+          }
+          return reply.code(409).send(refusal('rejected', error.message));
         }
       });
     }

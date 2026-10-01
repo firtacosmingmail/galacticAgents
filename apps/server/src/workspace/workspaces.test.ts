@@ -396,4 +396,22 @@ describe('worktrees and merges', () => {
     const t = (await commands.createTask({ description: 'An asteroid' })).value;
     await expect(spaces.createWorktree(t.id)).rejects.toThrow(/standalone/);
   });
+
+  it('never hands git a stored branch or path it did not make (wave-2 review)', async () => {
+    const { project: p } = await project('Planted values');
+    const t = await task(p.id, 'Planted');
+    await spaces.createWorktree(t.id);
+    for (const branch of ['--upload-pack=touch /tmp/x', 'main', 'galactic/../main']) {
+      await commands.updateTask(t.id, { branch });
+      await expect(spaces.mergeTask(t.id)).rejects.toThrow(/not a galactic\/ branch/);
+    }
+    const stored = w.tables.tasks.get(t.id)!.meta?.['worktree'] as Record<string, unknown>;
+    await commands.updateTask(t.id, {
+      branch: branchName(t),
+      meta: { worktree: { ...stored, root: '/etc' } },
+    });
+    // The stored root is ignored: the worktree is found where the server made it.
+    const merged = await spaces.mergeTask(t.id);
+    expect(merged).toMatchObject({ ok: true });
+  });
 });

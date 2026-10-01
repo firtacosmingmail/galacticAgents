@@ -17,7 +17,7 @@ import {
 } from '@galactic/protocol';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { createAgent, recordSpawned } from '../domain/agents.js';
-import { answerQuestion, cancelQuestion } from '../domain/questions.js';
+import { answerQuestion, cancelQuestion, checkAnswer } from '../domain/questions.js';
 import {
   endAgentQuestions,
   holdersNow,
@@ -432,10 +432,12 @@ export class AgentRuntime {
     const { adapter, spec, mailbox } = live;
     const sessionId = live.handle.sessionId;
     const pending = live.inbox.pending().map((m) => m.id);
+    // Same agent row, new session: its held questions stay with it (it lives on).
     this.recordEnd(
       live,
       { type: 'agent.interrupted', agentId, reason, pending },
       'agent.interrupted',
+      { keepHeld: true },
     );
     try {
       await adapter.stop(sessionId);
@@ -473,6 +475,10 @@ export class AgentRuntime {
     if (live.answering.has(questionId)) {
       throw new DomainError('stale', `question ${questionId} is already being answered`);
     }
+    // The full check before the agent sees anything; afterwards the record only needs it open.
+    const current = this.opts.log.tables.questions.get(questionId);
+    if (!current) throw new Error(`no open question ${questionId}`);
+    checkAnswer(current, { questionId, answer, answeredBy: by });
     // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
     // an answer in the log that the agent never saw.
     live.answering.add(questionId);
@@ -490,6 +496,7 @@ export class AgentRuntime {
         answer,
         answeredBy: by,
         holders: holdersNow(ctx, questionId, this.questions),
+        delivered: true,
       }),
     );
   }
@@ -906,11 +913,16 @@ export class AgentRuntime {
    * Logs how the agent ended, cancels its open questions and re-routes the ones it held (P2-03)
    * in the same command, then forgets it.
    */
-  private recordEnd(live: Live, event: Event, terminal: Terminal): void {
+  private recordEnd(
+    live: Live,
+    event: Event,
+    terminal: Terminal,
+    opts: { keepHeld?: boolean } = {},
+  ): void {
     if (live.terminal) return;
     this.command((ctx) => {
       ctx.emit(event);
-      endAgentQuestions(ctx, live.agent.id, terminal.slice('agent.'.length), this.questions);
+      endAgentQuestions(ctx, live.agent.id, terminal.slice('agent.'.length), this.questions, opts);
     });
     this.end(live, terminal);
   }

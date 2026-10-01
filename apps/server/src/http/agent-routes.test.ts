@@ -220,6 +220,12 @@ describe('POST /api/control (P2-14)', () => {
     ).toBe(404);
     const refused = await call('/api/control', { target, action: { action: 'reopen' } });
     expect(refused.status).toBe(409);
+    // A domain refusal of the input itself is a 400, not a conflict (wave-2 review).
+    const bad = await call('/api/control', {
+      target,
+      action: { action: 'edit', changes: { bodyId: 'b-x' } },
+    });
+    expect(bad.status).toBe(400);
     expect(refused.body['message']).toMatch(/not finished/);
     expect(
       (await call('/api/control', { target, action: { action: 'stop' } }, 'wrong')).status,
