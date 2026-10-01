@@ -60,6 +60,22 @@ describe('/api agent routes (P1-11)', () => {
     ).toBe(401);
   });
 
+  it('needs the token on percent-encoded paths too (P1-28)', async () => {
+    for (const path of ['/%61pi/runtimes', '/ap%69/runtimes', '/%64ev/events', '/de%76/events']) {
+      const res = await fetch(`${t.baseUrl}${path}`);
+      expect([401, 404], path).toContain(res.status);
+    }
+    const spawn = await fetch(`${t.baseUrl}/%61pi/agents`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ runtime: 'fake', prompt: 'scenario:echo', cwd: '/tmp' }),
+    });
+    expect([401, 404]).toContain(spawn.status);
+    expect(composed.runtime.liveAgents()).toHaveLength(0);
+    const dev = await fetch(`${t.baseUrl}/%64ev/seed`, { method: 'POST' });
+    expect([401, 404]).toContain(dev.status);
+  });
+
   it('describes the runtimes, policies and caps for the spawn form', async () => {
     const { status, body } = await call('/api/runtimes');
     expect(status).toBe(200);

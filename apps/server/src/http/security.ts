@@ -80,6 +80,25 @@ export function isLoopback(remoteAddress: string | undefined): boolean {
 }
 
 /** Constant-time token comparison. */
+/**
+ * An `onRequest` hook that refuses a request without `Authorization: Bearer <token>` (P1-28).
+ * Added inside an encapsulated plugin, so it runs for exactly the routes registered there —
+ * matched on the decoded route, never on the raw URL (`/%61pi/…` once skipped a URL-prefix
+ * check).
+ */
+export function bearerGuard(config: { token: string }) {
+  return async (
+    req: { headers: { authorization?: string | undefined } },
+    reply: { code(n: number): { send(body: unknown): unknown } },
+  ) => {
+    const header = req.headers.authorization ?? '';
+    const presented = header.startsWith('Bearer ') ? header.slice(7) : undefined;
+    if (!tokenMatches(presented, config.token)) {
+      return reply.code(401).send({ error: 'unauthorized' });
+    }
+  };
+}
+
 export function tokenMatches(presented: string | undefined, expected: string): boolean {
   if (!presented || presented.length !== expected.length) return false;
   let diff = 0;
