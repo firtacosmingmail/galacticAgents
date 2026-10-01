@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Actor } from '@galactic/protocol';
 import { world } from '../test/world.js';
-import { createAgent, updateAgent } from './agents.js';
+import { createAgent } from './agents.js';
 import { DomainError } from './errors.js';
 import {
   answerQuestion,
@@ -205,26 +205,6 @@ describe('reassignQuestion', () => {
     expect(() =>
       run((ctx) => reassignQuestion(ctx, 'q-1', { type: 'agent', id: 'a-x' }, 'x')),
     ).toThrow(/no agent a-x/);
-  });
-});
-
-describe('updateAgent', () => {
-  it('re-parents an agent with agent.updated, dropping unchanged fields', () => {
-    const { run, tables, steward, waykeeper, harmonizer } = hierarchy();
-    const { events } = run((ctx) =>
-      updateAgent(ctx, steward.id, { supervisorId: harmonizer.id, bodyId: steward.bodyId }),
-    );
-    expect(events).toEqual([
-      { type: 'agent.updated', agentId: steward.id, changes: { supervisorId: harmonizer.id } },
-    ]);
-    expect(tables.agents.get(steward.id)?.supervisorId).toBe(harmonizer.id);
-    expect(
-      run((ctx) => updateAgent(ctx, steward.id, { supervisorId: harmonizer.id })).events,
-    ).toEqual([]);
-    expect(() =>
-      run((ctx) => updateAgent(ctx, harmonizer.id, { supervisorId: waykeeper.id })),
-    ).toThrow(/supervise itself/);
-    expect(() => run((ctx) => updateAgent(ctx, steward.id, { bodyId: 'b-x' }))).toThrow(/no body/);
   });
 });
 

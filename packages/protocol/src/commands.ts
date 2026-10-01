@@ -21,7 +21,13 @@ import type {
   TaskPriority,
   WorkState,
 } from './enums.js';
-import type { AgentEvent, ControlTarget, Event } from './events.js';
+import type {
+  AgentEvent,
+  ControlTarget,
+  Event,
+  ProjectChanges,
+  TaskChanges,
+} from './events.js';
 import type { ToolDefinition } from './adapter.js';
 import type { Id } from './primitives.js';
 
@@ -156,20 +162,16 @@ export interface CommandResult<T> {
 export interface DomainCommands {
   // projects and tasks
   createProject(input: CreateProjectInput): Promise<CommandResult<Project>>;
-  updateProject(
-    projectId: Id,
-    changes: Partial<Omit<Project, 'id' | 'createdAt' | 'updatedAt' | 'state'>>,
-  ): Promise<CommandResult<Project>>;
+  /** `null` clears a clearable field (`ProjectChanges`, P2-20). */
+  updateProject(projectId: Id, changes: ProjectChanges): Promise<CommandResult<Project>>;
   setProjectState(projectId: Id, state: WorkState): Promise<CommandResult<Project>>;
   closeProject(projectId: Id, by: Actor): Promise<CommandResult<Project>>;
   archiveProject(projectId: Id, by: Actor): Promise<CommandResult<Project>>;
   pinProject(projectId: Id, pinned: boolean): Promise<CommandResult<Project>>;
   reopenProject(projectId: Id, by: Actor, input?: ReopenInput): Promise<CommandResult<Project>>;
   createTask(input: CreateTaskInput): Promise<CommandResult<Task>>;
-  updateTask(
-    taskId: Id,
-    changes: Partial<Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'state'>>,
-  ): Promise<CommandResult<Task>>;
+  /** `null` clears a clearable field (`TaskChanges`, P2-20). */
+  updateTask(taskId: Id, changes: TaskChanges): Promise<CommandResult<Task>>;
   setTaskState(taskId: Id, state: WorkState): Promise<CommandResult<Task>>;
   closeTask(taskId: Id, by: Actor): Promise<CommandResult<Task>>;
   archiveTask(taskId: Id, by: Actor): Promise<CommandResult<Task>>;

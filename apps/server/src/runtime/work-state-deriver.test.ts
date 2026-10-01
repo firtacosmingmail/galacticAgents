@@ -5,6 +5,7 @@ import { openDatabase, type Database } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
 import { EventLog } from '../domain/event-log.js';
 import { setTaskState } from '../domain/states.js';
+import { projectHierarchy, spawnHarmonizer } from '../test/hierarchy.js';
 import { DEFAULT_CAPS } from './caps.js';
 import { composeRuntime, type ComposedRuntime } from './compose.js';
 
@@ -85,11 +86,13 @@ describe('work state derivation through the runtime', () => {
     const c = boot(freshDb(), { speed: 5 }); // `long` runs ~5 s: the Waykeeper stays alive
     const { project, task } = await projectWithTask(c);
     const { log, commands } = c;
+    const harmonizer = await spawnHarmonizer(commands);
     const waykeeper = (
       await commands.spawnAgent({
         role: 'waykeeper',
         runtime: 'fake',
         projectId: project.id,
+        supervisorId: harmonizer.id,
         prompt: 'scenario:long',
       })
     ).value;
@@ -107,8 +110,9 @@ describe('work state derivation through the runtime', () => {
       'the question',
     );
     let question = log.tables.questions.all().find((q) => q.originAgentId === steward.id)!;
-    if (question.holder.type !== 'user') {
-      // Held by the Waykeeper (P2-03 routing): not the user's to answer, so not blocked on user.
+    while (question.holder.type !== 'user') {
+      // Held by the Waykeeper, then the Harmonizer (P2-03 routing): not the user's to answer, so
+      // not blocked on user.
       expect(log.tables.tasks.get(task.id)!.state).toBe('in_progress');
       question = (await commands.escalateQuestion(question.id, question.holder)).value;
     }
@@ -153,12 +157,14 @@ describe('work state derivation through the runtime', () => {
 
   it('a failed Steward fails its task; a new Steward takes it up again', async () => {
     const c = boot(freshDb());
-    const { task } = await projectWithTask(c);
+    const { project, task } = await projectWithTask(c);
+    const { waykeeper } = await projectHierarchy(c.commands, project.id);
     const first = (
       await c.commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: waykeeper.id,
         prompt: 'scenario:fails',
       })
     ).value;
@@ -169,6 +175,7 @@ describe('work state derivation through the runtime', () => {
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: waykeeper.id,
         prompt: 'scenario:happy',
       })
     ).value;
@@ -238,11 +245,13 @@ describe('work state derivation through the runtime', () => {
     const db = freshDb();
     const c = boot(db);
     const { project, task } = await projectWithTask(c);
+    const { waykeeper } = await projectHierarchy(c.commands, project.id);
     const steward = (
       await c.commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: waykeeper.id,
         prompt: 'scenario:happy',
       })
     ).value;
@@ -304,11 +313,13 @@ describe('work state derivation through the runtime', () => {
     const sessions = new Map<string, number>();
     const first = boot(db, { speed: 5, sessions });
     const { project, task } = await projectWithTask(first);
+    const { waykeeper } = await projectHierarchy(first.commands, project.id);
     const steward = (
       await first.commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: waykeeper.id,
         prompt: 'scenario:long',
       })
     ).value;

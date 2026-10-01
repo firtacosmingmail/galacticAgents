@@ -10,7 +10,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
-import { summarize, type SystemSummary } from '@galactic/protocol';
+import { applyChanges, summarize, type SystemSummary } from '@galactic/protocol';
 
 /** Everything the page knows, derived from the stream only (TECHNOLOGY §6.3). */
 export interface WorldState {
@@ -51,18 +51,19 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
   };
 }
 
-/** Applies `changes` to a known item; an `undefined` value means "unchanged", never "cleared". */
+/**
+ * Applies `changes` to a known item with the server's patch rule (`applyChanges`, P2-20): an
+ * `undefined` value means "unchanged", an explicit `null` (a clearable field of `project.updated`
+ * or `task.updated`) means "cleared".
+ */
 function patch<T extends object>(
   map: Record<Id, T>,
   id: Id,
-  changes: { [K in keyof T]?: T[K] | undefined },
+  changes: { [K in keyof T]?: T[K] | null | undefined },
 ): Record<Id, T> {
   const current = map[id];
   if (!current) return map;
-  const defined = Object.fromEntries(
-    Object.entries(changes).filter(([, v]) => v !== undefined),
-  ) as Partial<T>;
-  return { ...map, [id]: { ...current, ...defined } };
+  return { ...map, [id]: applyChanges(current, changes) };
 }
 
 /**

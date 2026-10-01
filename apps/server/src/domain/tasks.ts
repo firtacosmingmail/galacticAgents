@@ -1,5 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import type { Actor, CreateTaskInput, Host, Id, ReopenInput, Task } from '@galactic/protocol';
+import {
+  CLEARABLE_TASK_FIELDS,
+  applyChanges,
+  type Actor,
+  type CreateTaskInput,
+  type Host,
+  type Id,
+  type ReopenInput,
+  type Task,
+  type TaskChanges,
+} from '@galactic/protocol';
 import {
   bodyOf,
   checkAssignable,
@@ -13,6 +23,7 @@ import {
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, setTaskState } from './states.js';
+import { effectiveChanges } from './changes.js';
 
 /**
  * Task commands (P2-01; SPEC §2.7, §3.1, §3.4, decisions 9, 11, 11b). A project task lives on its
@@ -21,7 +32,7 @@ import { FINISHED_WORK, setTaskState } from './states.js';
  * a project leaves its asteroid and lives on the project's body from then on.
  */
 
-export type TaskChanges = Partial<Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'state'>>;
+export type { TaskChanges };
 
 const hostOf = (taskId: Id): Host => ({ kind: 'task', id: taskId });
 
@@ -85,9 +96,7 @@ export function createTask(ctx: CommandContext, input: CreateTaskInput): Task {
  */
 export function updateTask(ctx: CommandContext, taskId: Id, changes: TaskChanges): Task {
   const current = must(ctx.tables.tasks.get(taskId), 'task', taskId);
-  const defined = Object.fromEntries(
-    Object.entries(changes).filter(([, v]) => v !== undefined),
-  ) as TaskChanges;
+  const defined = effectiveChanges(current, changes, CLEARABLE_TASK_FIELDS, 'task');
   if ('bodyId' in defined && defined.bodyId !== current.bodyId) {
     throw new DomainError('invalid', 'a task changes body by moving, not by an update');
   }
@@ -101,7 +110,7 @@ export function updateTask(ctx: CommandContext, taskId: Id, changes: TaskChanges
   }
   if (defined.blockedBy) checkBlockers(ctx, taskId, defined.blockedBy);
   if (Object.keys(defined).length === 0) return current;
-  const task = ctx.tables.tasks.upsert({ ...current, ...defined, updatedAt: ctx.now });
+  const task = ctx.tables.tasks.upsert({ ...applyChanges(current, defined), updatedAt: ctx.now });
   ctx.emit({ type: 'task.updated', taskId, changes: defined });
   return task;
 }

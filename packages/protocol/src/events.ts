@@ -7,6 +7,7 @@ import {
   Body,
   Cost,
   Host,
+  PermissionPolicy,
   Progress,
   Project,
   Proposal,
@@ -282,10 +283,56 @@ export const BodyFreed = z.object({ type: z.literal('body.freed'), bodyId: Id })
 // ---------------------------------------------------------------------------
 
 export const ProjectCreated = z.object({ type: z.literal('project.created'), project: Project });
+/**
+ * What `project.updated` / `task.updated` may change (P2-20; TECHNOLOGY §6.2). A key that is
+ * absent (or `undefined`) is unchanged; an explicit `null` clears an optional field — detaching a
+ * sub-project (`parentProjectId`), dropping the policy, forgetting a merged task's worktree. Only
+ * the fields listed here are clearable; the server's commands and the web reducer fold the same
+ * changes with `applyChanges`, so replaying the log rebuilds the server's rows.
+ */
+export const ProjectChanges = Project.omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  state: true,
+})
+  .extend({
+    repoPath: z.string().nullable(),
+    parentProjectId: Id.nullable(),
+    permissionPolicy: PermissionPolicy.nullable(),
+  })
+  .partial();
+export type ProjectChanges = z.infer<typeof ProjectChanges>;
+
+export const TaskChanges = Task.omit({ id: true, createdAt: true, updatedAt: true, state: true })
+  .extend({ worktreePath: z.string().nullable(), branch: z.string().nullable() })
+  .partial();
+export type TaskChanges = z.infer<typeof TaskChanges>;
+
+/** The fields an explicit `null` clears, per row kind (everything else must not be `null`). */
+export const CLEARABLE_PROJECT_FIELDS = ['repoPath', 'parentProjectId', 'permissionPolicy'] as const;
+export const CLEARABLE_TASK_FIELDS = ['worktreePath', 'branch'] as const;
+
+/**
+ * Folds `changes` into `current` (P2-20): `undefined` leaves a field unchanged, `null` removes it,
+ * anything else replaces it. Pure; the one patch rule the server and the client share.
+ */
+export function applyChanges<T extends object>(
+  current: T,
+  changes: { readonly [key: string]: unknown },
+): T {
+  const next = { ...current } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(changes)) {
+    if (value === null) delete next[key];
+    else if (value !== undefined) next[key] = value;
+  }
+  return next as T;
+}
+
 export const ProjectUpdated = z.object({
   type: z.literal('project.updated'),
   projectId: Id,
-  changes: Project.omit({ id: true, createdAt: true, updatedAt: true, state: true }).partial(),
+  changes: ProjectChanges,
 });
 export const ProjectStateChanged = z.object({
   type: z.literal('project.state_changed'),
@@ -299,7 +346,7 @@ export const TaskCreated = z.object({ type: z.literal('task.created'), task: Tas
 export const TaskUpdated = z.object({
   type: z.literal('task.updated'),
   taskId: Id,
-  changes: Task.omit({ id: true, createdAt: true, updatedAt: true, state: true }).partial(),
+  changes: TaskChanges,
 });
 export const TaskStateChanged = z.object({
   type: z.literal('task.state_changed'),

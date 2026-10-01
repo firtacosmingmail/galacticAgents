@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Actor, Id } from '@galactic/protocol';
 import { openDatabase } from '../db/database.js';
+import { createAgent } from '../domain/agents.js';
+import { EARTH_ID } from '../domain/catalogue.js';
+import { DEFAULT_CAPS } from '../runtime/caps.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import type { BrainDefinition, BrainTool } from './definition.js';
 import type { BrainRunner, SessionResetPolicy } from './runner.js';
@@ -68,9 +71,13 @@ async function boot(
     systemPrompt: 'You are the Waykeeper of a test project.',
     tools,
   };
+  // The Waykeeper's supervisor (P2-20): a Harmonizer row, without a session of its own.
+  const harmonizer = composed.log.runCommand((ctx) =>
+    createAgent(ctx, { role: 'harmonizer', runtime: 'fake', caps: DEFAULT_CAPS, bodyId: EARTH_ID }),
+  ).value;
   const brain = await composed.startBrain(
     definition,
-    { runtime: 'fake', projectId: project.id },
+    { runtime: 'fake', projectId: project.id, supervisorId: harmonizer.id },
     opts,
   );
   await brain.settled();
