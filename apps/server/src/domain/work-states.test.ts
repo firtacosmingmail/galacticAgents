@@ -62,9 +62,17 @@ describe('task state derivation', () => {
     // ended agents: the latest one speaks
     ['Steward failed', { agents: [ag('failed', 4)] }, 'failed'],
     ['interrupted by a restart', { agents: [ag('interrupted', 4)] }, 'interrupted'],
-    ['failed, then a retry finished', { agents: [ag('failed', 4), ag('finished', 8)] }, 'awaiting_closure'],
+    [
+      'failed, then a retry finished',
+      { agents: [ag('failed', 4), ag('finished', 8)] },
+      'awaiting_closure',
+    ],
     ['finished, then a retry failed', { agents: [ag('finished', 4), ag('failed', 8)] }, 'failed'],
-    ['failed, retry running', { current: 'failed', agents: [ag('failed', 4), ag('running')] }, 'in_progress'],
+    [
+      'failed, retry running',
+      { current: 'failed', agents: [ag('failed', 4), ag('running')] },
+      'in_progress',
+    ],
     ['stopped: no opinion', { agents: [ag('stopped', 4)] }, 'in_progress'],
     ['stopped after a failure', { agents: [ag('failed', 2), ag('stopped', 4)] }, 'in_progress'],
     // sticky states are never left by derivation
@@ -80,14 +88,26 @@ describe('task state derivation', () => {
       { current: 'failed', held: true, userQuestions: 1 },
       'failed',
     ],
-    ['reopened (approved) holds', { current: 'approved', held: true, agents: [ag('finished', 3)] }, 'approved'],
+    [
+      'reopened (approved) holds',
+      { current: 'approved', held: true, agents: [ag('finished', 3)] },
+      'approved',
+    ],
   ];
   it.each(rows)('%s', (_name, over, expected) => {
     expect(deriveTaskState(facts(over))).toBe(expected);
   });
 
   it('every derived change from a non-sticky state is in the transition table', () => {
-    const phases: AgentPhase[] = ['running', 'idle', 'paused', 'finished', 'failed', 'stopped', 'interrupted'];
+    const phases: AgentPhase[] = [
+      'running',
+      'idle',
+      'paused',
+      'finished',
+      'failed',
+      'stopped',
+      'interrupted',
+    ];
     for (const current of WorkState.options) {
       for (const phase of phases) {
         for (const userQuestions of [0, 1]) {
@@ -115,21 +135,49 @@ describe('project state derivation', () => {
     ['Waykeeper planning', { current: 'approved', agents: [ag('running')] }, 'in_progress'],
     ['Waykeeper idle, plan approved', { agents: [ag('idle')], tasks: ['approved'] }, 'in_progress'],
     ['a task running', { agents: [ag('idle')], tasks: ['in_progress', 'approved'] }, 'in_progress'],
-    ['a user-held question anywhere', { agents: [ag('idle')], tasks: ['in_progress'], userQuestions: 1 }, 'blocked_on_user'],
+    [
+      'a user-held question anywhere',
+      { agents: [ag('idle')], tasks: ['in_progress'], userQuestions: 1 },
+      'blocked_on_user',
+    ],
     [
       'a task awaiting closure waits on the Waykeeper',
       { agents: [ag('idle')], tasks: ['awaiting_closure', 'completed'] },
       'in_progress',
     ],
-    ['every task closed', { agents: [ag('idle')], tasks: ['completed', 'archived'] }, 'awaiting_closure'],
-    ['all closed, Waykeeper still working', { agents: [ag('running')], tasks: ['completed'] }, 'in_progress'],
+    [
+      'every task closed',
+      { agents: [ag('idle')], tasks: ['completed', 'archived'] },
+      'awaiting_closure',
+    ],
+    [
+      'all closed, Waykeeper still working',
+      { agents: [ag('running')], tasks: ['completed'] },
+      'in_progress',
+    ],
     ['work paused', { agents: [ag('idle')], tasks: ['paused', 'completed'] }, 'paused'],
     ['Waykeeper paused', { agents: [ag('paused')], tasks: ['completed'] }, 'paused'],
-    ['running beats paused', { agents: [ag('idle')], tasks: ['paused', 'in_progress'] }, 'in_progress'],
-    ['interrupted by a restart', { agents: [ag('interrupted', 5)], tasks: ['interrupted'] }, 'interrupted'],
-    ['a failed task: no opinion', { agents: [ag('idle')], tasks: ['failed', 'completed'] }, 'in_progress'],
+    [
+      'running beats paused',
+      { agents: [ag('idle')], tasks: ['paused', 'in_progress'] },
+      'in_progress',
+    ],
+    [
+      'interrupted by a restart',
+      { agents: [ag('interrupted', 5)], tasks: ['interrupted'] },
+      'interrupted',
+    ],
+    [
+      'a failed task: no opinion',
+      { agents: [ag('idle')], tasks: ['failed', 'completed'] },
+      'in_progress',
+    ],
     ['only moved tasks: no opinion', { agents: [ag('idle')], tasks: ['moved'] }, 'in_progress'],
-    ['completed is sticky', { current: 'completed', agents: [ag('running')], userQuestions: 1 }, 'completed'],
+    [
+      'completed is sticky',
+      { current: 'completed', agents: [ag('running')], userQuestions: 1 },
+      'completed',
+    ],
     ['archived is sticky', { current: 'archived', tasks: ['in_progress'] }, 'archived'],
     ['explicit pause holds', { current: 'paused', held: true, tasks: ['in_progress'] }, 'paused'],
   ];

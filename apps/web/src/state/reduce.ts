@@ -10,6 +10,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
+import { summarize, type SystemSummary } from '@galactic/protocol';
 
 /** Everything the page knows, derived from the stream only (TECHNOLOGY §6.3). */
 export interface WorldState {
@@ -230,4 +231,16 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'control.reopen':
       return next; // panel actions are recorded for supervisors; their effects arrive as domain events
   }
+}
+
+/**
+ * The system summary counts (P2-15) of a folded world: the same pure function the server uses,
+ * over the same rows, so the badge never disagrees with the server's view.
+ */
+export function summaryOf(world: WorldState): SystemSummary {
+  return summarize({
+    questions: Object.values(world.questions),
+    tasks: Object.values(world.tasks),
+    projects: Object.values(world.projects),
+  });
 }

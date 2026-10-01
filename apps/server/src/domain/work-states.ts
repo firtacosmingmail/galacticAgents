@@ -15,13 +15,7 @@ import type { WorkState } from '@galactic/protocol';
  * wait blocks on the user is the question's holder, not the agent's state).
  */
 export type AgentPhase =
-  | 'running'
-  | 'idle'
-  | 'paused'
-  | 'finished'
-  | 'failed'
-  | 'stopped'
-  | 'interrupted';
+  'running' | 'idle' | 'paused' | 'finished' | 'failed' | 'stopped' | 'interrupted';
 
 export const ENDED_PHASES: ReadonlySet<AgentPhase> = new Set<AgentPhase>([
   'finished',
@@ -148,7 +142,10 @@ export const PROJECT_RULES: readonly Rule[] = [
 ];
 
 /** Evaluates a rule table: the first matching rule's state, or the current one for `keep`. */
-export function derive(rules: readonly Rule[], facts: WorkFacts): { state: WorkState; rule: string } {
+export function derive(
+  rules: readonly Rule[],
+  facts: WorkFacts,
+): { state: WorkState; rule: string } {
   for (const rule of rules) {
     if (!rule.when(facts)) continue;
     const out = typeof rule.then === 'function' ? rule.then(facts) : rule.then;

@@ -225,7 +225,10 @@ export class WorkStateDeriver {
       ids.add(id);
       const a = this.agents.get(id);
       if (!a) continue;
-      agents.push({ phase: a.phase, ...(a.endedSeq !== undefined ? { endedSeq: a.endedSeq } : {}) });
+      agents.push({
+        phase: a.phase,
+        ...(a.endedSeq !== undefined ? { endedSeq: a.endedSeq } : {}),
+      });
       started = Math.max(started, a.startedSeq);
     }
     return { agents, started, ids };
@@ -234,8 +237,9 @@ export class WorkStateDeriver {
   private userQuestions(agentIds: ReadonlySet<Id>): number {
     return this.log.tables.questions
       .all()
-      .filter((q) => q.status === 'open' && q.holder.type === 'user' && agentIds.has(q.originAgentId))
-      .length;
+      .filter(
+        (q) => q.status === 'open' && q.holder.type === 'user' && agentIds.has(q.originAgentId),
+      ).length;
   }
 
   private isHeld(kind: 'task' | 'project', id: Id, started: number): boolean {
@@ -297,10 +301,10 @@ export class WorkStateDeriver {
   }
 }
 
-function placement(agent: {
-  taskId?: Id | undefined;
-  projectId?: Id | undefined;
-}): { taskId?: Id; projectId?: Id } {
+function placement(agent: { taskId?: Id | undefined; projectId?: Id | undefined }): {
+  taskId?: Id;
+  projectId?: Id;
+} {
   return {
     ...(agent.taskId ? { taskId: agent.taskId } : {}),
     ...(agent.projectId ? { projectId: agent.projectId } : {}),

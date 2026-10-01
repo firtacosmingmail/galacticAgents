@@ -76,8 +76,7 @@ async function projectWithTask(c: ComposedRuntime) {
   const project = (
     await c.commands.createProject({ name: 'CSV', workspace: '/w/csv', bodyId: 'b-mars' })
   ).value;
-  const task = (await c.commands.createTask({ description: 'Parse', projectId: project.id }))
-    .value;
+  const task = (await c.commands.createTask({ description: 'Parse', projectId: project.id })).value;
   return { project, task };
 }
 
@@ -260,7 +259,9 @@ describe('work state derivation through the runtime', () => {
     const again = boot(db);
     expect(again.log.currentSeq()).toBe(seq);
     expect(
-      again.log.eventsSince(0, Number.MAX_SAFE_INTEGER).filter((e) => e.event.type.endsWith('.state_changed')),
+      again.log
+        .eventsSince(0, Number.MAX_SAFE_INTEGER)
+        .filter((e) => e.event.type.endsWith('.state_changed')),
     ).toEqual(changes);
   });
 
@@ -283,7 +284,13 @@ describe('work state derivation through the runtime', () => {
       }),
     ).value;
     bare.runCommand((ctx) =>
-      ctx.emit({ type: 'agent.spawned', agentId: row.id, role: 'steward', runtime: 'fake', bodyId: 'b-mars' }),
+      ctx.emit({
+        type: 'agent.spawned',
+        agentId: row.id,
+        role: 'steward',
+        runtime: 'fake',
+        bodyId: 'b-mars',
+      }),
     );
     expect(bare.tables.tasks.get(made.task.id)!.state).toBe('approved');
 
