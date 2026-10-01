@@ -342,3 +342,44 @@ describe('StatusStore — ended records are a sink (P1-17)', () => {
     expect(store.get('a-1')).toMatchObject({ state: 'starting', startedAt: at(5000) });
   });
 });
+
+describe('StatusStore — retention of ended records (P1-16)', () => {
+  const ended = (id: string, atMs: number): EventEnvelope[] => [
+    { seq: 1, at: at(atMs), event: { ...spawned, agentId: id, type: 'agent.spawned' } },
+    { seq: 2, at: at(atMs + 1), event: { type: 'agent.finished', agentId: id } },
+  ];
+
+  it('drops ended records past the retention period and announces them', async () => {
+    const { store, setNow } = make({ retainEndedMs: 10_000, flushMs: 5 });
+    const removedSeen: string[] = [];
+    store.subscribe((_records, removed) => removedSeen.push(...removed));
+    for (const e of ended('old', 0)) store.fold(e);
+    for (const e of ended('fresh', 8_000)) store.fold(e);
+    store.fold({ seq: 3, at: at(9_000), event: { ...spawned, agentId: 'live' } });
+    setNow(12_000);
+    expect(store.prune()).toEqual(['old']);
+    expect(store.all().map((r) => r.agentId)).toEqual(['fresh', 'live']);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(removedSeen).toEqual(['old']);
+    setNow(30_000);
+    store.tick(); // the ticker prunes too; live agents are never dropped
+    expect(store.all().map((r) => r.agentId)).toEqual(['live']);
+  });
+
+  it('keeps at most maxEnded ended records, oldest dropped first', () => {
+    const { store } = make({ maxEnded: 2, retainEndedMs: 1e9 });
+    for (let i = 0; i < 5; i++) for (const e of ended(`a-${i}`, i * 1000)) store.fold(e);
+    expect(store.prune()).toEqual(['a-0', 'a-1', 'a-2']);
+    expect(store.all().map((r) => r.agentId)).toEqual(['a-3', 'a-4']);
+  });
+
+  it('a rebuild from the log brings a dropped record back only until the next prune', () => {
+    const { store, setNow } = make({ retainEndedMs: 10_000 });
+    store.rebuild(ended('old', 0));
+    setNow(20_000);
+    expect(store.prune()).toEqual(['old']);
+    store.rebuild(ended('old', 0));
+    expect(store.get('old')?.state).toBe('finished');
+    expect(store.prune()).toEqual(['old']);
+  });
+});

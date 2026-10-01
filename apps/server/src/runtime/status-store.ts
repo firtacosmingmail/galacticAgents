@@ -35,11 +35,20 @@ export interface StatusStoreOptions {
   flushMs?: number;
   /** How often the wall clock of live agents is refreshed and stalls are checked. */
   tickMs?: number;
+  /**
+   * Retention of ended records (P1-16): an ended agent's record is dropped once it is older
+   * than this, and the oldest ended records go first when more than `maxEnded` have piled up.
+   * Dropped records are announced to subscribers so clients forget them too; the log keeps the
+   * history. Default: 24 h and 500.
+   */
+  retainEndedMs?: number;
+  maxEnded?: number;
   now?: () => number;
   onError?: (error: unknown) => void;
 }
 
-export type StatusListener = (records: StatusRecord[]) => void;
+/** A batch of changed records plus the ids of records dropped by retention. */
+export type StatusListener = (records: StatusRecord[], removed: Id[]) => void;
 
 interface Entry {
   record: StatusRecord;
@@ -65,6 +74,9 @@ export class StatusStore {
   private readonly entries = new Map<Id, Entry>();
   private readonly listeners = new Set<StatusListener>();
   private readonly dirty = new Set<Id>();
+  private readonly removed = new Set<Id>();
+  private readonly retainEndedMs: number;
+  private readonly maxEnded: number;
   private readonly flushMs: number;
   private readonly tickMs: number;
   private readonly now: () => number;
@@ -75,6 +87,8 @@ export class StatusStore {
   constructor(private readonly opts: StatusStoreOptions) {
     this.flushMs = opts.flushMs ?? 100;
     this.tickMs = opts.tickMs ?? 1_000;
+    this.retainEndedMs = opts.retainEndedMs ?? 24 * 60 * 60 * 1_000;
+    this.maxEnded = opts.maxEnded ?? 500;
     this.now = opts.now ?? Date.now;
     this.onError = opts.onError ?? (() => {});
   }
@@ -161,6 +175,28 @@ export class StatusStore {
       entry.record = { ...record, state: 'stalled', caps: this.caps(entry, now) };
       this.mark(record.agentId);
     }
+    this.prune(now);
+  }
+
+  /** Retention (P1-16): drops ended records past their time or beyond the cap, oldest first. */
+  prune(now: number = this.now()): Id[] {
+    const ended = [...this.entries.values()]
+      .filter((e) => ENDED.has(e.record.state))
+      .sort((a, b) => a.lastEventAt - b.lastEventAt);
+    const dropped: Id[] = [];
+    const overflow = Math.max(0, ended.length - this.maxEnded);
+    ended.forEach((entry, i) => {
+      if (i < overflow || now - entry.lastEventAt >= this.retainEndedMs) {
+        dropped.push(entry.record.agentId);
+      }
+    });
+    for (const id of dropped) {
+      this.entries.delete(id);
+      this.dirty.delete(id);
+      this.removed.add(id);
+    }
+    if (dropped.length > 0) this.scheduleFlush();
+    return dropped;
   }
 
   /** Sends pending diffs now. */
@@ -169,15 +205,17 @@ export class StatusStore {
       clearTimeout(this.flushTimer);
       this.flushTimer = undefined;
     }
-    if (this.dirty.size === 0) return;
+    if (this.dirty.size === 0 && this.removed.size === 0) return;
     const records = [...this.dirty]
       .map((id) => this.entries.get(id))
       .filter((e): e is Entry => e !== undefined)
       .map((e) => ({ ...e.record }));
+    const removed = [...this.removed];
     this.dirty.clear();
+    this.removed.clear();
     for (const listener of [...this.listeners]) {
       try {
-        listener(records);
+        listener(records, removed);
       } catch (error) {
         this.onError(error);
       }
@@ -343,7 +381,7 @@ export class StatusStore {
   }
 
   private scheduleFlush(): void {
-    if (this.flushTimer || this.dirty.size === 0) return;
+    if (this.flushTimer || (this.dirty.size === 0 && this.removed.size === 0)) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = undefined;
       this.flush();

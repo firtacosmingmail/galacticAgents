@@ -49,6 +49,7 @@ export const useAppStore = create<AppState>((set) => ({
           // Server-owned records (TECHNOLOGY §4): each one replaces the copy for its agent.
           const statuses = { ...s.world.statuses };
           for (const record of message.statuses) statuses[record.agentId] = record;
+          for (const id of message.removed ?? []) delete statuses[id];
           return { world: { ...s.world, statuses } };
         }
         case 'transcript': {

@@ -30,6 +30,9 @@ export interface ComposeOptions {
   stallThresholdMs?: (runtime: RuntimeName | undefined) => number;
   /** How often stalls are checked and wall clocks refreshed. */
   tickMs?: number;
+  /** Retention of ended status records (P1-16). */
+  retainEndedMs?: number;
+  maxEnded?: number;
   flushMs?: number;
   /** Delivered messages kept per inbox for inspection. */
   inboxHistory?: number;
@@ -63,6 +66,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       opts.stallThresholdMs ?? ((runtime) => (runtime ? STALL_THRESHOLDS_MS[runtime] : 60_000)),
     ...(opts.flushMs !== undefined ? { flushMs: opts.flushMs } : {}),
     ...(opts.tickMs !== undefined ? { tickMs: opts.tickMs } : {}),
+    ...(opts.retainEndedMs !== undefined ? { retainEndedMs: opts.retainEndedMs } : {}),
+    ...(opts.maxEnded !== undefined ? { maxEnded: opts.maxEnded } : {}),
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'status store') } : {}),
   });
   // Rebuild from the log, then fold every later commit in seq order.

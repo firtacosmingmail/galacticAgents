@@ -70,8 +70,9 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
 
     // 1. Subscribe first, then read: same tick, so nothing is missed.
     unsubscribe = log.subscribe(deliver);
-    unsubscribeStatus = opts.statuses?.subscribe((statuses) => {
-      if (ready()) send(socket, { type: 'status', statuses });
+    unsubscribeStatus = opts.statuses?.subscribe((statuses, removed) => {
+      if (!ready()) return;
+      send(socket, { type: 'status', statuses, ...(removed.length > 0 ? { removed } : {}) });
     });
 
     // 2. Snapshot or replay.

@@ -109,10 +109,16 @@ export const PongMessage = z.object({ type: z.literal('pong') });
  * A batch of status records (TECHNOLOGY §4): the server-owned projection, sent as diffs at
  * ≈10 Hz after the snapshot. A record replaces the client's copy for that agent.
  */
-export const StatusMessage = z.object({
-  type: z.literal('status'),
-  statuses: z.array(StatusRecord).min(1),
-});
+export const StatusMessage = z
+  .object({
+    type: z.literal('status'),
+    statuses: z.array(StatusRecord),
+    /** Agents whose ended record the server dropped (retention, P1-16): forget them. */
+    removed: z.array(Id).optional(),
+  })
+  .refine((m) => m.statuses.length > 0 || (m.removed?.length ?? 0) > 0, {
+    message: 'a status message carries records or removals',
+  });
 export type StatusMessage = z.infer<typeof StatusMessage>;
 
 /** A batch of transcript chunks for one subscribed agent, in `seq` order. */
