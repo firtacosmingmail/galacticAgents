@@ -4,6 +4,7 @@ import type {
   AgentAdapter,
   AgentEvent,
   Cost,
+  GateVerdict,
   Id,
   PermissionGate,
   SendOptions,
@@ -23,11 +24,15 @@ import {
   loadSdk,
   type SdkCanUseToolOptions,
   type SdkContentBlock,
+  type SdkHookOutput,
   type SdkMessage,
   type SdkPermissionResult,
   type SdkQuery,
   type SdkQueryOptions,
+  type SdkRateLimitEvent,
+  type SdkResultMessage,
   type SdkSurface,
+  type SdkUsage,
   type SdkUserMessage,
 } from './sdk-surface.js';
 
@@ -48,9 +53,19 @@ import {
  * which the adapter maps to the session's single terminal event: `crashed`/`start_failed` →
  * `agent.failed`, `stopped` → `agent.stopped`, `exited` → `agent.finished`.
  *
+ * The gate is asked once per `toolUseId`: the hook's verdict is remembered and `canUseTool`
+ * reuses it (an `ask` goes to the user, an `allow` runs without a second check), and
+ * `agent.tool_call` is emitted once per `toolUseId`. A gate that throws denies the call.
+ *
  * Pause is `SIGSTOP` on the process group and resume `SIGCONT`: the turn in flight freezes in
  * place (tool, shell children and all) instead of being cancelled, which is what "pause" means
- * on the panel; `stop()` sends `SIGCONT` first so a paused agent can still be stopped gracefully.
+ * on the panel. `stop()` and `interrupt()` send `SIGCONT` first so a paused agent can still be
+ * stopped or interrupted. The CLI's own timers (tool timeouts, API request timeouts) keep
+ * counting while it is frozen, so a long pause can end the frozen tool call in a timeout.
+ *
+ * `AskUserQuestion` with several questions asks them one after another (one
+ * `agent.needs_input` each); a `multiSelect` question takes the answer text as given — the user
+ * types one or more labels separated by commas.
  */
 
 export interface ClaudeSdkAdapterOptions {
@@ -67,6 +82,11 @@ export interface ClaudeSdkAdapterOptions {
   graceMs?: number;
   /** Longest tool-result excerpt kept in the transcript. */
   maxToolResultChars?: number;
+  /**
+   * When the message stream ends while the CLI still runs, how long to wait for its exit to
+   * arrive before failing the session and stopping the process (default 2 s).
+   */
+  streamEndGraceMs?: number;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -154,6 +174,10 @@ class Session {
   pending: PendingQuestion | undefined;
   lastCost: Cost | undefined;
   lastResult: string | undefined;
+  /** The `PreToolUse` hook's verdict per `toolUseId`, reused by `canUseTool` (one gate check per call). */
+  readonly verdicts = new Map<string, GateVerdict>();
+  /** `toolUseId`s already reported as `agent.tool_call`. Cleared at every turn end. */
+  readonly toolCalls = new Set<string>();
   /** Resolves when the message loop has exited. */
   loopDone: Promise<void> = Promise.resolve();
   stopDone: Promise<void> | undefined;
@@ -164,6 +188,8 @@ class Session {
     readonly sessionId: string,
     readonly agentId: Id,
     readonly gate: PermissionGate,
+    /** Opened with `resume` (the CLI must report this same session id). */
+    readonly resumed: boolean,
   ) {}
 
   turnEnd(): Promise<void> {
@@ -173,11 +199,15 @@ class Session {
 
   closeTurn(): void {
     this.turnOpen = false;
+    this.verdicts.clear();
+    this.toolCalls.clear();
     for (const w of this.turnWaiters.splice(0)) w();
   }
 }
 
 const SYSTEM: Actor = { type: 'system' };
+/** How many ended sessions are remembered for "session … has stopped" errors. */
+const ENDED_MEMORY = 256;
 
 export class ClaudeSdkAdapter implements AgentAdapter {
   readonly runtime = 'claude-sdk' as const;
@@ -185,14 +215,18 @@ export class ClaudeSdkAdapter implements AgentAdapter {
   private readonly sessions = new Map<string, Session>();
   private readonly byAgent = new Map<Id, Session>();
   private readonly byQuestion = new Map<Id, Session>();
+  /** Ended sessions (freed from the maps above) → how they ended; bounded. */
+  private readonly ended = new Map<string, NonNullable<Session['terminal']>>();
   private sdkPromise: Promise<SdkSurface> | undefined;
   private readonly onError: (error: unknown, context: string) => void;
   private readonly maxToolResultChars: number;
+  private readonly streamEndGraceMs: number;
   private disposed = false;
 
   constructor(private readonly opts: ClaudeSdkAdapterOptions) {
     this.onError = opts.onError ?? (() => {});
     this.maxToolResultChars = opts.maxToolResultChars ?? 2_000;
+    this.streamEndGraceMs = opts.streamEndGraceMs ?? 2_000;
   }
 
   private sdk(): Promise<SdkSurface> {
@@ -224,7 +258,8 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     }
     const sdk = await this.sdk();
     const sessionId = resume ?? randomUUID();
-    const session = new Session(sessionId, opts.agentId, opts.gate);
+    const session = new Session(sessionId, opts.agentId, opts.gate, resume !== undefined);
+    this.ended.delete(sessionId);
     this.sessions.set(sessionId, session);
     this.byAgent.set(opts.agentId, session);
 
@@ -267,7 +302,8 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         : {}),
       ...(opts.bare ? { extraArgs: { bare: null } } : {}),
       env: this.env(),
-      stderr: (data) => this.onError(new Error(data.trim()), `stderr ${opts.agentId}`),
+      // No SDK `stderr` callback: the supervisor captures the CLI's stderr (`onStderr`), so
+      // every line is reported once.
       hooks: { PreToolUse: [{ hooks: [(input) => this.preToolUse(session, input)] }] },
       canUseTool: (toolName, input, o) => this.canUseTool(session, toolName, input, o),
       spawnClaudeCodeProcess: (o) => this.spawnProcess(session, o),
@@ -330,14 +366,21 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         const line = chunk.trim();
         if (line) this.onError(new Error(line.slice(0, 500)), `cli stderr ${session.agentId}`);
       },
+      // The supervisor's graceful stop, step 1 (raced with the grace period, so a wedged CLI
+      // that never answers the interrupt still reaches SIGTERM).
       interrupt: async (proc) => {
-        if (session.paused) proc.signal('SIGCONT');
-        if (!session.turnOpen) {
-          proc.turnEnded();
-          return;
+        if (session.paused) {
+          proc.signal('SIGCONT');
+          session.paused = false;
         }
-        session.interrupting = true;
-        await session.query?.interrupt().catch(() => {});
+        if (session.turnOpen) {
+          session.interrupting = true;
+          await session.query?.interrupt().catch(() => {});
+          await session.turnEnd();
+        }
+        // No turn left: close the input so the CLI exits on stdin EOF before any SIGTERM.
+        session.inbox.close();
+        proc.turnEnded();
       },
       onOutcome: (outcome) => this.onOutcome(session, outcome),
     });
@@ -386,7 +429,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         }
         return;
       case 'restarting':
-        this.emit({
+        this.emit(session, {
           type: 'agent.progress',
           agentId: session.agentId,
           summary: `restarting claude after a crash (${outcome.attempt}/${outcome.maxRestarts})`,
@@ -399,47 +442,74 @@ export class ClaudeSdkAdapter implements AgentAdapter {
 
   private async consume(session: Session): Promise<void> {
     const query = session.query!;
+    let failure: string | undefined;
     try {
       for await (const message of query) this.onMessage(session, message as SdkMessage);
-      // The stream ended: the input was closed (stop) or the CLI went away; the outcome decides.
+      // The stream ended: the input was closed (stop) or the CLI went away.
     } catch (error) {
-      // After `interrupt()` in single-prompt mode the SDK throws on the error result; with
-      // streaming input the loop normally ends only when the child exits. Either way the
-      // process outcome (or the stop in progress) carries the terminal event; an error here
-      // with a live process is a genuine failure.
-      const message = (error as Error).message;
-      if (!session.stopping && !session.interrupting && session.process?.state === 'running') {
-        this.onError(error, `query ${session.agentId}`);
-        session.process.expectExit();
-        this.terminal(session, {
-          type: 'agent.failed',
-          agentId: session.agentId,
-          error: message,
-          reason: 'runtime',
-        });
-      }
+      // With streaming input the loop should end only when the child exits; a throw — also
+      // one while interrupting — leaves a CLI nobody reads from.
+      failure = (error as Error).message;
+      if (!session.stopping) this.onError(error, `query ${session.agentId}`);
     } finally {
       session.closeTurn();
-      if (!session.process) {
-        // No child ever reported (the SDK ran without our spawner): end the session here.
-        this.terminal(
-          session,
-          session.stopping
-            ? { type: 'agent.stopped', agentId: session.agentId, by: SYSTEM }
+    }
+    if (!session.process) {
+      // No child ever reported (the SDK ran without our spawner): end the session here.
+      this.terminal(
+        session,
+        session.stopping
+          ? { type: 'agent.stopped', agentId: session.agentId, by: SYSTEM }
+          : failure !== undefined
+            ? { type: 'agent.failed', agentId: session.agentId, error: failure, reason: 'runtime' }
             : {
                 type: 'agent.finished',
                 agentId: session.agentId,
                 ...(session.lastResult !== undefined ? { result: session.lastResult } : {}),
                 ...(session.lastCost ? { cost: session.lastCost } : {}),
               },
-        );
-      }
+      );
+      return;
     }
+    // The process outcome carries the terminal event when the CLI exits; give that exit a
+    // moment to arrive (the stream may end a little before the supervisor settles it).
+    const proc = session.process;
+    if (session.terminal || session.stopping) return;
+    if (proc.state !== 'exited') await settlesWithin(proc.exited, this.streamEndGraceMs);
+    if (session.terminal || session.stopping || proc.state === 'exited') return;
+    // The loop is over but the CLI still runs: nothing will ever end this session otherwise.
+    this.terminal(session, {
+      type: 'agent.failed',
+      agentId: session.agentId,
+      error: failure ?? 'the claude message stream ended while the CLI was still running',
+      reason: 'runtime',
+      ...(session.lastCost ? { cost: session.lastCost } : {}),
+    });
+    session.stopping = true;
+    await this.opts.supervisor
+      .stop(session.agentId, { graceMs: this.opts.graceMs ?? 10_000, by: SYSTEM })
+      .catch((error: unknown) => this.onError(error, `stop ${session.agentId}`));
   }
 
   private onMessage(session: Session, message: SdkMessage): void {
     const agentId = session.agentId;
     switch (message.type) {
+      case 'system': {
+        const m = message as { subtype?: string; session_id?: unknown };
+        if (
+          m.subtype === 'init' &&
+          typeof m.session_id === 'string' &&
+          m.session_id !== session.sessionId
+        ) {
+          this.onError(
+            new Error(
+              `claude reported session ${m.session_id}, expected ${session.sessionId}${session.resumed ? ' (resume)' : ''}`,
+            ),
+            `init ${agentId}`,
+          );
+        }
+        return;
+      }
       case 'assistant': {
         const m = message as Extract<SdkMessage, { type: 'assistant' }>;
         for (const block of m.message.content)
@@ -453,7 +523,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
           if (block.type !== 'tool_result') continue;
           const text = toolResultText(block.content);
           if (text) {
-            this.emit({
+            this.emit(session, {
               type: 'agent.output',
               agentId,
               kind: 'tool',
@@ -463,30 +533,41 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         }
         return;
       }
+      case 'rate_limit_event': {
+        const summary = rateLimitSummary(message as SdkRateLimitEvent);
+        // Only inside a turn: a progress event marks the agent working.
+        if (summary && session.turnOpen)
+          this.emit(session, { type: 'agent.progress', agentId, summary });
+        return;
+      }
       case 'result': {
-        const m = message as Extract<SdkMessage, { type: 'result' }>;
+        const m = message as SdkResultMessage;
         const cost = costOf(m);
         if (cost) session.lastCost = cost;
-        if (m.subtype === 'success') {
+        // `is_error` also flags API, auth and prompt-too-long failures reported as `success`.
+        const failed = m.subtype !== 'success' || m.is_error === true;
+        if (!failed) {
           if (m.result !== undefined) session.lastResult = m.result;
         } else if (!session.interrupting && !session.stopping) {
-          this.emit({
+          const what = m.subtype === 'success' ? 'an error' : m.subtype;
+          const detail = m.errors?.length ? m.errors.join('; ') : (m.result ?? '');
+          this.emit(session, {
             type: 'agent.output',
             agentId,
             kind: 'text',
-            text: `turn ended with ${m.subtype}${m.errors?.length ? `: ${m.errors.join('; ')}` : ''}`,
+            text: `turn ended with ${what}${detail ? `: ${detail}` : ''}`,
           });
         }
         session.interrupting = false;
         session.closeTurn();
         session.process?.turnEnded();
         if (!session.stopping && !session.terminal) {
-          this.emit({ type: 'agent.idle', agentId, ...(cost ? { cost } : {}) });
+          this.emit(session, { type: 'agent.idle', agentId, ...(cost ? { cost } : {}) });
         }
         return;
       }
       default:
-        return; // init, status, rate limits, hooks, compaction …: not transcript
+        return; // status, hooks, compaction …: not transcript
     }
   }
 
@@ -500,11 +581,16 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     switch (block.type) {
       case 'text':
         if (block.text)
-          this.emit({ type: 'agent.output', agentId, kind: 'text', text: prefix + block.text });
+          this.emit(session, {
+            type: 'agent.output',
+            agentId,
+            kind: 'text',
+            text: prefix + block.text,
+          });
         return;
       case 'thinking':
         if (block.thinking)
-          this.emit({
+          this.emit(session, {
             type: 'agent.output',
             agentId,
             kind: 'thinking',
@@ -521,51 +607,54 @@ export class ClaudeSdkAdapter implements AgentAdapter {
 
   // --- permissions -------------------------------------------------------------
 
+  /** `agent.tool_call` once per `toolUseId`, whichever of the hook and `canUseTool` lets it run. */
+  private toolCall(
+    session: Session,
+    toolName: string,
+    toolUseId: string | undefined,
+    input: unknown,
+  ): void {
+    if (toolUseId !== undefined) {
+      if (session.toolCalls.has(toolUseId)) return;
+      session.toolCalls.add(toolUseId);
+    }
+    this.emit(session, {
+      type: 'agent.tool_call',
+      agentId: session.agentId,
+      toolName,
+      ...(toolUseId !== undefined ? { toolUseId } : {}),
+      input,
+    });
+  }
+
   private async preToolUse(
     session: Session,
     input: { tool_name?: string; tool_input?: unknown; tool_use_id?: string },
-  ) {
+  ): Promise<SdkHookOutput> {
     const toolName = input.tool_name ?? 'unknown';
-    if (toolName === 'AskUserQuestion') return {}; // a question, not a permission: canUseTool handles it
-    const call: ToolCall = { toolName, input: input.tool_input };
-    const verdict = session.gate.check(call);
-    switch (verdict.decision) {
-      case 'allow':
-        this.emit({
-          type: 'agent.tool_call',
-          agentId: session.agentId,
-          toolName,
-          ...(input.tool_use_id ? { toolUseId: input.tool_use_id } : {}),
-          input: input.tool_input,
-        });
-        return {
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse' as const,
-            permissionDecision: 'allow' as const,
-          },
-        };
-      case 'deny':
-        this.emit({
-          type: 'agent.output',
-          agentId: session.agentId,
-          kind: 'text',
-          text: `permission denied for ${toolName}: ${verdict.reason}`,
-        });
-        return {
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse' as const,
-            permissionDecision: 'deny' as const,
-            permissionDecisionReason: verdict.reason,
-          },
-        };
-      case 'ask':
-        return {
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse' as const,
-            permissionDecision: 'ask' as const,
-            permissionDecisionReason: verdict.reasons.join('; ') || 'policy: ask the user',
-          },
-        };
+    try {
+      if (toolName === 'AskUserQuestion') return {}; // a question, not a permission: canUseTool handles it
+      const verdict = session.gate.check({ toolName, input: input.tool_input });
+      if (input.tool_use_id !== undefined) session.verdicts.set(input.tool_use_id, verdict);
+      switch (verdict.decision) {
+        case 'allow':
+          this.toolCall(session, toolName, input.tool_use_id, input.tool_input);
+          return hookDecision('allow');
+        case 'deny':
+          this.emit(session, {
+            type: 'agent.output',
+            agentId: session.agentId,
+            kind: 'text',
+            text: `permission denied for ${toolName}: ${verdict.reason}`,
+          });
+          return hookDecision('deny', verdict.reason);
+        case 'ask':
+          return hookDecision('ask', verdict.reasons.join('; ') || 'policy: ask the user');
+      }
+    } catch (error) {
+      // Fail closed: a hook that throws would most likely let the CLI run the tool.
+      this.onError(error, `PreToolUse ${session.agentId}`);
+      return hookDecision('deny', `permission check failed: ${(error as Error).message}`);
     }
   }
 
@@ -575,80 +664,87 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     input: Record<string, unknown>,
     options: SdkCanUseToolOptions,
   ): Promise<SdkPermissionResult> {
-    if (toolName === 'AskUserQuestion') return this.askUserQuestion(session, input, options);
-    const call: ToolCall = { toolName, input };
-    const verdict = session.gate.check(call);
-    if (verdict.decision === 'allow') {
-      this.emit({
-        type: 'agent.tool_call',
-        agentId: session.agentId,
-        toolName,
-        ...(options.toolUseID ? { toolUseId: options.toolUseID } : {}),
-        input,
-      });
-      return { behavior: 'allow', updatedInput: input };
+    try {
+      if (toolName === 'AskUserQuestion')
+        return await this.askUserQuestion(session, input, options);
+      const call: ToolCall = { toolName, input };
+      const id = options.toolUseID;
+      // The hook already asked the gate about this call: reuse its verdict (one check, one
+      // reservation against the tool-call cap). Without one, ask the gate here.
+      const remembered = id !== undefined ? session.verdicts.get(id) : undefined;
+      if (id !== undefined) session.verdicts.delete(id);
+      const verdict = remembered ?? session.gate.check(call);
+      if (verdict.decision === 'allow') {
+        this.toolCall(session, toolName, id, input);
+        return { behavior: 'allow', updatedInput: input };
+      }
+      if (verdict.decision === 'deny') {
+        return { behavior: 'deny', message: verdict.reason };
+      }
+      const why =
+        verdict.reasons.length > 0 ? verdict.reasons.join('; ') : (options.decisionReason ?? '');
+      const text = options.title ?? `May ${toolName} run?${why ? ` (${why})` : ''}`;
+      const answer = await this.ask(
+        session,
+        'permission',
+        {
+          text,
+          toolCall: call,
+          ...(verdict.action ? { permissionAction: verdict.action } : {}),
+        },
+        options.signal,
+      );
+      if (answer === undefined) return interruptedBeforeAnswer();
+      if (/^(allow|yes|y|ok|approve|approved)$/i.test(answer.trim())) {
+        this.toolCall(session, toolName, id, input);
+        return { behavior: 'allow', updatedInput: input };
+      }
+      return { behavior: 'deny', message: `The user refused: ${answer}` };
+    } catch (error) {
+      this.onError(error, `canUseTool ${session.agentId}`);
+      return { behavior: 'deny', message: `permission check failed: ${(error as Error).message}` };
     }
-    if (verdict.decision === 'deny') {
-      return { behavior: 'deny', message: verdict.reason };
-    }
-    const why =
-      verdict.reasons.length > 0 ? verdict.reasons.join('; ') : (options.decisionReason ?? '');
-    const text = options.title ?? `May ${toolName} run?${why ? ` (${why})` : ''}`;
-    const answer = await this.ask(
-      session,
-      'permission',
-      {
-        text,
-        toolCall: call,
-        ...(verdict.action ? { permissionAction: verdict.action } : {}),
-      },
-      options.signal,
-    );
-    if (answer === undefined)
-      return {
-        behavior: 'deny',
-        message: 'The turn was interrupted before the user answered.',
-        interrupt: true,
-      };
-    if (/^(allow|yes|y|ok|approve|approved)$/i.test(answer.trim())) {
-      this.emit({
-        type: 'agent.tool_call',
-        agentId: session.agentId,
-        toolName,
-        ...(options.toolUseID ? { toolUseId: options.toolUseID } : {}),
-        input,
-      });
-      return { behavior: 'allow', updatedInput: input };
-    }
-    return { behavior: 'deny', message: `The user refused: ${answer}` };
   }
 
+  /**
+   * One `agent.needs_input(clarification)` per question, in order; the answers are keyed by the
+   * question text as the tool expects. A `multiSelect` answer is passed as typed (labels
+   * separated by commas).
+   */
   private async askUserQuestion(
     session: Session,
     input: Record<string, unknown>,
     options: SdkCanUseToolOptions,
   ): Promise<SdkPermissionResult> {
     const questions =
-      (input['questions'] as { question: string; options?: { label: string }[] }[] | undefined) ??
+      (input['questions'] as
+        { question: string; options?: { label: string }[]; multiSelect?: boolean }[] | undefined) ??
       [];
-    const first = questions[0];
-    const text = first?.question ?? 'The agent has a question.';
-    const labels = first?.options?.map((o) => o.label) ?? [];
-    const answer = await this.ask(
-      session,
-      'clarification',
-      { text, ...(labels.length ? { options: labels } : {}) },
-      options.signal,
-    );
-    if (answer === undefined)
-      return {
-        behavior: 'deny',
-        message: 'The turn was interrupted before the user answered.',
-        interrupt: true,
-      };
-    const answers = Object.fromEntries(
-      questions.map((q, i) => [q.question, i === 0 ? answer : answer]),
-    );
+    if (questions.length === 0) {
+      const answer = await this.ask(
+        session,
+        'clarification',
+        { text: 'The agent has a question.' },
+        options.signal,
+      );
+      if (answer === undefined) return interruptedBeforeAnswer();
+      return { behavior: 'allow', updatedInput: { ...input, answers: {} } };
+    }
+    const answers: Record<string, string> = {};
+    for (const q of questions) {
+      const labels = q.options?.map((o) => o.label) ?? [];
+      const text = q.multiSelect
+        ? `${q.question} (one or more: separate the labels with commas)`
+        : q.question;
+      const answer = await this.ask(
+        session,
+        'clarification',
+        { text, ...(labels.length ? { options: labels } : {}) },
+        options.signal,
+      );
+      if (answer === undefined) return interruptedBeforeAnswer();
+      answers[q.question] = answer;
+    }
     return { behavior: 'allow', updatedInput: { ...input, answers } };
   }
 
@@ -658,6 +754,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     question: Extract<AgentEvent, { type: 'agent.needs_input' }>['question'],
     signal: AbortSignal,
   ): Promise<string | undefined> {
+    if (signal.aborted || session.terminal) return Promise.resolve(undefined);
     const id = `q-${randomUUID()}`;
     return new Promise((resolve) => {
       const done = (answer: string | undefined) => {
@@ -670,7 +767,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
       signal.addEventListener('abort', onAbort, { once: true });
       session.pending = { id, resolve: done };
       this.byQuestion.set(id, session);
-      this.emit({
+      this.emit(session, {
         type: 'agent.needs_input',
         agentId: session.agentId,
         questionId: id,
@@ -705,8 +802,10 @@ export class ClaudeSdkAdapter implements AgentAdapter {
   }
 
   async interrupt(sessionId: string): Promise<void> {
-    const session = this.session(sessionId);
-    if (!session.turnOpen || session.terminal) return;
+    const session = this.live(sessionId);
+    if (!session || !session.turnOpen || session.terminal) return;
+    // A frozen CLI cannot read the control request: thaw it first.
+    if (session.paused) this.thaw(session);
     session.interrupting = true;
     session.pending?.resolve(undefined);
     try {
@@ -717,19 +816,26 @@ export class ClaudeSdkAdapter implements AgentAdapter {
   }
 
   async pause(sessionId: string): Promise<void> {
-    const session = this.session(sessionId);
-    if (session.terminal || session.paused) return;
+    const session = this.live(sessionId);
+    if (!session || session.terminal || session.paused) return;
+    if (!session.process || session.process.state === 'exited') {
+      throw new Error(`cannot pause session ${sessionId}: no claude process to freeze`);
+    }
     session.paused = true;
-    session.process?.signal('SIGSTOP');
-    this.emit({ type: 'agent.paused', agentId: session.agentId, by: SYSTEM });
+    session.process.signal('SIGSTOP');
+    this.emit(session, { type: 'agent.paused', agentId: session.agentId, by: SYSTEM });
   }
 
   async resume(sessionId: string): Promise<void> {
-    const session = this.session(sessionId);
-    if (session.terminal || !session.paused) return;
+    const session = this.live(sessionId);
+    if (!session || session.terminal || !session.paused) return;
+    this.thaw(session);
+  }
+
+  private thaw(session: Session): void {
     session.paused = false;
     session.process?.signal('SIGCONT');
-    this.emit({ type: 'agent.resumed', agentId: session.agentId, by: SYSTEM });
+    this.emit(session, { type: 'agent.resumed', agentId: session.agentId, by: SYSTEM });
   }
 
   async stop(sessionId: string, opts: StopOptions = {}): Promise<void> {
@@ -740,7 +846,8 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     session.stopDone = (async () => {
       session.pending?.resolve(undefined);
       if (session.process) {
-        // The supervisor runs the sequence: our interrupt hook → turn end → SIGTERM → SIGKILL.
+        // The supervisor runs the sequence: our interrupt hook (turn end, then the input is
+        // closed so the CLI can exit on its own) → SIGTERM → SIGKILL.
         await this.opts.supervisor.stop(session.agentId, {
           graceMs: opts.graceMs ?? this.opts.graceMs ?? 10_000,
           by: SYSTEM,
@@ -769,13 +876,26 @@ export class ClaudeSdkAdapter implements AgentAdapter {
 
   private session(sessionId: string): Session {
     const s = this.sessions.get(sessionId);
-    if (!s) throw new Error(`unknown claude-sdk session ${sessionId}`);
-    return s;
+    if (s) return s;
+    const ended = this.ended.get(sessionId);
+    if (ended) throw new Error(`session ${sessionId} has ${ended}`);
+    throw new Error(`unknown claude-sdk session ${sessionId}`);
   }
 
-  private emit(event: AgentEvent): void {
-    const session = this.byAgent.get(event.agentId);
-    if (session?.terminal) return; // one terminal event per session, nothing after it
+  /** The session, or `undefined` for one that already ended (control calls are no-ops then). */
+  private live(sessionId: string): Session | undefined {
+    if (!this.sessions.has(sessionId) && this.ended.has(sessionId)) return undefined;
+    return this.session(sessionId);
+  }
+
+  /** Whether this session is still the agent's current one (a resume replaces it). */
+  private current(session: Session): boolean {
+    return this.byAgent.get(session.agentId) === session;
+  }
+
+  private emit(session: Session, event: AgentEvent): void {
+    // One terminal event per session and nothing after it; a replaced session is silent.
+    if (session.terminal || !this.current(session)) return;
     this.events.push(event);
   }
 
@@ -784,7 +904,8 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     event: Extract<AgentEvent, { type: 'agent.finished' | 'agent.failed' | 'agent.stopped' }>,
   ): void {
     if (session.terminal) return;
-    this.events.push(event);
+    // A session replaced by a same-agent resume must not end the new one.
+    if (this.current(session)) this.events.push(event);
     session.terminal =
       event.type === 'agent.finished'
         ? 'finished'
@@ -797,12 +918,65 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     this.forget(session);
   }
 
+  /** Frees an ended session; only a bounded "how it ended" note stays for error messages. */
   private forget(session: Session): void {
     this.byQuestion.forEach((s, id) => {
       if (s === session) this.byQuestion.delete(id);
     });
-    // The session object stays reachable for `stop()`/`send()` error messages until disposed.
+    if (this.sessions.get(session.sessionId) === session) this.sessions.delete(session.sessionId);
+    if (this.current(session)) this.byAgent.delete(session.agentId);
+    if (session.terminal) {
+      this.ended.set(session.sessionId, session.terminal);
+      if (this.ended.size > ENDED_MEMORY) this.ended.delete(this.ended.keys().next().value!);
+    }
   }
+
+  /** Live session count (tests: ended sessions are freed). */
+  get sessionCount(): number {
+    return this.sessions.size;
+  }
+}
+
+function hookDecision(decision: 'allow' | 'deny' | 'ask', reason?: string): SdkHookOutput {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: decision,
+      ...(reason !== undefined ? { permissionDecisionReason: reason } : {}),
+    },
+  };
+}
+
+function interruptedBeforeAnswer(): SdkPermissionResult {
+  return {
+    behavior: 'deny',
+    message: 'The turn was interrupted before the user answered.',
+    interrupt: true,
+  };
+}
+
+/** A readable progress line for a subscription rate-limit event; none while all is well. */
+function rateLimitSummary(m: SdkRateLimitEvent): string | undefined {
+  const info = m.rate_limit_info;
+  if (!info || info.status === 'allowed') return undefined;
+  const which = info.rateLimitType ? `${info.rateLimitType.replace(/_/g, ' ')} ` : '';
+  const until =
+    info.resetsAt !== undefined
+      ? ` until ${new Date(info.resetsAt * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')}`
+      : '';
+  if (info.status === 'rejected') return `waiting on the ${which}rate limit${until}`;
+  const used =
+    info.utilization !== undefined ? ` (${Math.round(info.utilization * 100)}% used)` : '';
+  return `close to the ${which}rate limit${used}`;
+}
+
+/** Resolves `true` when `p` settles within `ms`, `false` otherwise. */
+function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<boolean>((r) => {
+    timer = setTimeout(() => r(false), ms);
+  });
+  return Promise.race([p.then(() => true), timeout]).finally(() => clearTimeout(timer));
 }
 
 function userMessage(sessionId: string, text: string): SdkUserMessage {
@@ -814,15 +988,26 @@ function userMessage(sessionId: string, text: string): SdkUserMessage {
   };
 }
 
-function costOf(m: {
-  total_cost_usd?: number;
-  usage?: { input_tokens?: number; output_tokens?: number };
-}): Cost | undefined {
+/**
+ * The protocol's `Cost` has one input count, so prompt-cache reads and writes are folded into
+ * `inputTokens` (they are input the model processed; most of a long session's input is cached).
+ */
+function costOf(m: { total_cost_usd?: number; usage?: SdkUsage }): Cost | undefined {
   if (m.total_cost_usd === undefined && !m.usage) return undefined;
+  const u = m.usage;
+  const input =
+    u &&
+    (u.input_tokens !== undefined ||
+      u.cache_read_input_tokens !== undefined ||
+      u.cache_creation_input_tokens !== undefined)
+      ? (u.input_tokens ?? 0) +
+        (u.cache_read_input_tokens ?? 0) +
+        (u.cache_creation_input_tokens ?? 0)
+      : undefined;
   return {
     ...(m.total_cost_usd !== undefined ? { usd: m.total_cost_usd } : {}),
-    ...(m.usage?.input_tokens !== undefined ? { inputTokens: m.usage.input_tokens } : {}),
-    ...(m.usage?.output_tokens !== undefined ? { outputTokens: m.usage.output_tokens } : {}),
+    ...(input !== undefined ? { inputTokens: input } : {}),
+    ...(u?.output_tokens !== undefined ? { outputTokens: u.output_tokens } : {}),
   };
 }
 

@@ -53,10 +53,31 @@ export interface SdkResultMessage {
   is_error: boolean;
   session_id: string;
   total_cost_usd?: number;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: SdkUsage;
   num_turns?: number;
   result?: string;
   errors?: string[];
+}
+
+export interface SdkUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+/** Subscription rate-limit state (`SDKRateLimitEvent`). */
+export interface SdkRateLimitEvent {
+  type: 'rate_limit_event';
+  rate_limit_info: {
+    status: 'allowed' | 'allowed_warning' | 'rejected';
+    /** Unix seconds. */
+    resetsAt?: number;
+    rateLimitType?: string;
+    /** 0..1. */
+    utilization?: number;
+  };
+  session_id?: string;
 }
 
 /** Anything else the stream carries (status, rate limits, hooks, …) is ignored by type name. */
@@ -67,7 +88,12 @@ export interface SdkOtherMessage {
 }
 
 export type SdkMessage =
-  SdkSystemInit | SdkAssistantMessage | SdkUserMessage | SdkResultMessage | SdkOtherMessage;
+  | SdkSystemInit
+  | SdkAssistantMessage
+  | SdkUserMessage
+  | SdkResultMessage
+  | SdkRateLimitEvent
+  | SdkOtherMessage;
 
 export type SdkPermissionResult =
   | { behavior: 'allow'; updatedInput: Record<string, unknown> }

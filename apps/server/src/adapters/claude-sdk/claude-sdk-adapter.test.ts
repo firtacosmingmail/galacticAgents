@@ -10,7 +10,7 @@ import type {
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
 import { collect } from '../../test/collect.js';
 import { ClaudeSdkAdapter } from './claude-sdk-adapter.js';
-import { FakeSdk, type FakeScript } from './fake-sdk.js';
+import { FakeSdk, type FakeScript, type FakeSdkOptions } from './fake-sdk.js';
 import { jsonSchemaToZodShape } from './json-schema-to-zod.js';
 import type { ZodTypeAny } from 'zod';
 
@@ -48,20 +48,37 @@ const spawnOpts = (prompt: string, extra: Partial<SpawnOptions> = {}): SpawnOpti
 const rigs: { adapter: ClaudeSdkAdapter; supervisor: ProcessSupervisor }[] = [];
 function make(
   script: FakeScript,
-  opts: { spawnChild?: boolean; env?: Record<string, string | undefined> } = {},
+  opts: {
+    spawnChild?: boolean;
+    env?: Record<string, string | undefined>;
+    fake?: Omit<FakeSdkOptions, 'script' | 'spawnChild'>;
+  } = {},
 ) {
-  const sdk = new FakeSdk({ script, ...(opts.spawnChild === false ? { spawnChild: false } : {}) });
+  const sdk = new FakeSdk({
+    script,
+    ...(opts.spawnChild === false ? { spawnChild: false } : {}),
+    ...opts.fake,
+  });
   const supervisor = new ProcessSupervisor({ defaults: { graceMs: 500, termMs: 300 } });
+  const errors: { error: unknown; context: string }[] = [];
   const adapter = new ClaudeSdkAdapter({
     supervisor,
     sdk,
     graceMs: 500,
+    streamEndGraceMs: 150,
+    onError: (error, context) => errors.push({ error, context }),
     ...(opts.env ? { env: opts.env } : {}),
   });
   const events = collect<AgentEvent>(adapter.events);
   rigs.push({ adapter, supervisor });
-  return { sdk, supervisor, adapter, events };
+  return { sdk, supervisor, adapter, events, errors };
 }
+
+type NeedsInput = Extract<AgentEvent, { type: 'agent.needs_input' }>;
+const questions = (events: AgentEvent[]) =>
+  events.filter((e): e is NeedsInput => e.type === 'agent.needs_input');
+const procStat = (pid: number) =>
+  execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim();
 afterEach(async () => {
   for (const r of rigs.splice(0)) {
     await r.adapter.dispose();
@@ -474,5 +491,334 @@ describe('ClaudeSdkAdapter — without a child process (pure in-process SDK)', (
     await adapter.stop(h.sessionId);
     await events.waitFor(has('agent.stopped'));
     expect(types(events.items)).toEqual(['agent.output', 'agent.idle', 'agent.stopped']);
+  });
+});
+
+describe('ClaudeSdkAdapter — the gate, once per toolUseId (P1-30)', () => {
+  it('an asked call is checked once and reported as one tool_call', async () => {
+    const seen: ToolCall[] = [];
+    const { adapter, events } = make(() => [
+      { tool: 'Bash', input: { command: 'rm -rf dist' } },
+      { text: 'done' },
+    ]);
+    await adapter.spawn(
+      spawnOpts('x', {
+        gate: gate({ Bash: { decision: 'ask', action: 'destructive', reasons: ['rm'] } }, seen),
+      }),
+    );
+    await events.waitFor(has('agent.needs_input'));
+    await adapter.answer(questions(events.items)[0]!.questionId, 'allow');
+    await events.waitFor(has('agent.idle'));
+    expect(seen).toHaveLength(1);
+    expect(events.items.filter((e) => e.type === 'agent.tool_call')).toHaveLength(1);
+  });
+
+  it('a hook allow is reused when the CLI also calls canUseTool: no second check or tool_call', async () => {
+    const seen: ToolCall[] = [];
+    const { adapter, events } = make(
+      () => [
+        { tool: 'Read', input: { file_path: 'a' } },
+        { tool: 'Read', input: { file_path: 'b' } },
+      ],
+      { fake: { canUseToolAfterAllow: true } },
+    );
+    await adapter.spawn(spawnOpts('x', { gate: gate({ Read: { decision: 'allow' } }, seen) }));
+    await events.waitFor(has('agent.idle'));
+    expect(seen).toHaveLength(2); // one per call, not two
+    const calls = events.items.filter((e) => e.type === 'agent.tool_call');
+    expect(calls.map((c) => (c as { toolUseId?: string }).toolUseId)).toEqual([
+      'toolu_1_Read',
+      'toolu_1_Read_2',
+    ]);
+  });
+
+  it('a gate that throws denies the call (hook) and reports the error', async () => {
+    const throwing: PermissionGate = {
+      check() {
+        throw new Error('policy table corrupt');
+      },
+    };
+    const { adapter, events, errors } = make(() => [
+      { tool: 'Bash', input: { command: 'ls' }, result: 'ran' },
+      { text: 'after' },
+    ]);
+    await adapter.spawn(spawnOpts('x', { gate: throwing }));
+    await events.waitFor(has('agent.idle'));
+    expect(events.items.some((e) => e.type === 'agent.tool_call')).toBe(false);
+    expect(events.items.some((e) => e.type === 'agent.needs_input')).toBe(false);
+    expect(events.items.find((e) => e.type === 'agent.output' && e.kind === 'tool')).toMatchObject({
+      text: expect.stringContaining('permission check failed: policy table corrupt'),
+    });
+    expect(errors.map((e) => e.context)).toContain('PreToolUse a-1');
+  });
+
+  it('canUseTool without a hook verdict asks the gate itself, and a throwing gate denies there too', async () => {
+    const seen: ToolCall[] = [];
+    let explode = false;
+    const g: PermissionGate = {
+      check(call) {
+        seen.push(call);
+        if (explode) throw new Error('boom');
+        return { decision: 'allow' };
+      },
+    };
+    const { adapter, events, sdk } = make(() => [{ delayMs: 200 }]);
+    await adapter.spawn(spawnOpts('x', { gate: g }));
+    const canUseTool = sdk.calls[0]!.options.canUseTool!;
+    const signal = new AbortController().signal;
+    await expect(canUseTool('Read', { file_path: 'a' }, { signal })).resolves.toEqual({
+      behavior: 'allow',
+      updatedInput: { file_path: 'a' },
+    });
+    expect(seen).toHaveLength(1);
+    explode = true;
+    await expect(canUseTool('Read', { file_path: 'b' }, { signal })).resolves.toMatchObject({
+      behavior: 'deny',
+      message: expect.stringContaining('boom'),
+    });
+    await events.waitFor(has('agent.idle'));
+    expect(events.items.filter((e) => e.type === 'agent.tool_call')).toHaveLength(1);
+  });
+});
+
+describe('ClaudeSdkAdapter — the query loop ends with the CLI alive (P1-32)', () => {
+  it('a stream that throws mid-turn fails the session and stops the CLI', async () => {
+    const { adapter, events, supervisor } = make(() => [
+      { text: 'working' },
+      { throwStream: 'socket hang up' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.failed'));
+    expect(events.items.at(-1)).toMatchObject({
+      type: 'agent.failed',
+      reason: 'runtime',
+      error: 'socket hang up',
+    });
+    await supervisor.get('a-1')!.exited;
+    await sleep(50);
+    expect(types(events.items)).toEqual(['agent.output', 'agent.failed']);
+    expect(adapter.sessionCount).toBe(0);
+  });
+
+  it('a stream that throws while interrupting fails the session instead of wedging it', async () => {
+    const { adapter, events, supervisor } = make(() => [{ delayMs: 2_000 }], {
+      fake: { throwOnInterrupt: true },
+    });
+    const h = await adapter.spawn(spawnOpts('x'));
+    await sleep(30);
+    await adapter.interrupt(h.sessionId);
+    await events.waitFor(has('agent.failed'));
+    expect(events.items.at(-1)).toMatchObject({ type: 'agent.failed', reason: 'runtime' });
+    await supervisor.get('a-1')!.exited;
+    await expect(adapter.send(h.sessionId, 'more')).rejects.toThrow(/has failed/);
+  });
+
+  it('a stop whose interrupt never settles still ends the CLI and reports agent.stopped', async () => {
+    const { adapter, events, supervisor, sdk } = make(() => [{ delayMs: 5_000 }], {
+      fake: { wedgeOnInterrupt: true },
+    });
+    const h = await adapter.spawn(spawnOpts('x'));
+    await sleep(30);
+    const started = Date.now();
+    await adapter.stop(h.sessionId, { graceMs: 200 });
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(sdk.interrupts).toBe(1);
+    expect(types(events.items)).toEqual(['agent.stopped']);
+    expect(supervisor.get('a-1')?.state).toBe('exited');
+  });
+});
+
+describe('ClaudeSdkAdapter — mapping gaps (P1-36)', () => {
+  it('AskUserQuestion with several questions asks each in turn and collects every answer', async () => {
+    const { adapter, events } = make(() => [
+      {
+        askUsers: [
+          { question: 'Which format?', options: ['ISO', 'US'] },
+          { question: 'Which fields?', options: ['date', 'time', 'zone'], multiSelect: true },
+        ],
+      },
+      { text: 'ok' },
+    ]);
+    await adapter.spawn(spawnOpts('ask me'));
+    await events.waitFor((e) => questions(e).length === 1);
+    const [q1] = questions(events.items);
+    expect(q1).toMatchObject({
+      kind: 'clarification',
+      question: { text: 'Which format?', options: ['ISO', 'US'] },
+    });
+    await adapter.answer(q1!.questionId, 'US');
+    await events.waitFor((e) => questions(e).length === 2);
+    const q2 = questions(events.items)[1]!;
+    expect(q2.question).toEqual({
+      text: 'Which fields? (one or more: separate the labels with commas)',
+      options: ['date', 'time', 'zone'],
+    });
+    await adapter.answer(q2.questionId, 'date, zone');
+    await events.waitFor(has('agent.idle'));
+    const result = events.items.find((e) => e.type === 'agent.output' && e.kind === 'tool');
+    expect(result).toMatchObject({
+      text: expect.stringContaining(
+        JSON.stringify({ 'Which format?': 'US', 'Which fields?': 'date, zone' }),
+      ),
+    });
+  });
+
+  it('interrupt() while paused thaws the CLI first (agent.resumed), then ends the turn', async () => {
+    const { adapter, events, supervisor } = make(() => [{ delayMs: 2_000 }, { text: 'never' }]);
+    const h = await adapter.spawn(spawnOpts('x'));
+    await sleep(30);
+    await adapter.pause(h.sessionId);
+    const pid = supervisor.get('a-1')!.pid;
+    await sleep(30);
+    expect(procStat(pid)).toMatch(/^T/);
+    await adapter.interrupt(h.sessionId);
+    await events.waitFor(has('agent.idle'));
+    expect(types(events.items)).toEqual(['agent.paused', 'agent.resumed', 'agent.idle']);
+    expect(procStat(pid)).not.toMatch(/^T/);
+    await adapter.resume(h.sessionId); // already running: no second agent.resumed
+    expect(types(events.items).filter((t) => t === 'agent.resumed')).toHaveLength(1);
+  });
+
+  it('pause is refused when there is no process to freeze', async () => {
+    const { adapter, events } = make(() => [{ delayMs: 200 }], { spawnChild: false });
+    const h = await adapter.spawn(spawnOpts('x'));
+    await expect(adapter.pause(h.sessionId)).rejects.toThrow(/no claude process to freeze/);
+    await events.waitFor(has('agent.idle'));
+    expect(events.items.some((e) => e.type === 'agent.paused')).toBe(false);
+  });
+
+  it('a stop while paused clears the pause: the CLI exits on its own after SIGCONT', async () => {
+    const { adapter, events, supervisor } = make(() => [{ text: 'hi' }]);
+    const h = await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    await adapter.pause(h.sessionId);
+    await adapter.stop(h.sessionId);
+    expect(types(events.items)).toEqual([
+      'agent.output',
+      'agent.idle',
+      'agent.paused',
+      'agent.stopped',
+    ]);
+    expect(supervisor.get('a-1')?.exit).toMatchObject({ code: 0, signal: null });
+  });
+
+  it('a success result with is_error: true is reported as an errored turn, then idle', async () => {
+    const { adapter, events } = make(() => [
+      { text: 'trying' },
+      { resultIsError: 'Prompt is too long' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(events.items.slice(1)).toEqual([
+      {
+        type: 'agent.output',
+        agentId: 'a-1',
+        kind: 'text',
+        text: 'turn ended with an error: Prompt is too long',
+      },
+      expect.objectContaining({ type: 'agent.idle' }),
+    ]);
+  });
+
+  it('the cost counts prompt-cache reads and writes as input tokens', async () => {
+    const { adapter, events } = make(() => [{ text: 'hi' }], {
+      fake: {
+        usage: {
+          input_tokens: 10,
+          cache_read_input_tokens: 1_000,
+          cache_creation_input_tokens: 200,
+          output_tokens: 5,
+        },
+      },
+    });
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(events.items.at(-1)).toMatchObject({
+      type: 'agent.idle',
+      cost: { usd: 0.01, inputTokens: 1_210, outputTokens: 5 },
+    });
+  });
+
+  it('a rate_limit_event becomes a readable agent.progress (nothing while allowed)', async () => {
+    const { adapter, events } = make(() => [
+      { rateLimit: { status: 'allowed' } },
+      { rateLimit: { status: 'allowed_warning', rateLimitType: 'five_hour', utilization: 0.92 } },
+      { rateLimit: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1_790_000_000 } },
+      { text: 'done' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(
+      events.items
+        .filter((e) => e.type === 'agent.progress')
+        .map((e) => (e as { summary: string }).summary),
+    ).toEqual([
+      'close to the five hour rate limit (92% used)',
+      'waiting on the five hour rate limit until 2026-09-21T14:13:20Z',
+    ]);
+  });
+
+  it('an idle stop closes the input: the CLI exits on stdin EOF, no SIGTERM', async () => {
+    const { adapter, events, supervisor, sdk } = make(() => [{ text: 'hi' }]);
+    const h = await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    await adapter.stop(h.sessionId);
+    expect(sdk.inputClosed).toBe(1);
+    expect(supervisor.get('a-1')?.exit).toMatchObject({ code: 0, signal: null });
+    expect(types(events.items)).toEqual(['agent.output', 'agent.idle', 'agent.stopped']);
+  });
+
+  it('ended sessions are freed; their late calls are no-ops or say how they ended', async () => {
+    const { adapter, events } = make(() => [{ text: 'hi' }]);
+    const h = await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(adapter.sessionCount).toBe(1);
+    await adapter.stop(h.sessionId);
+    expect(adapter.sessionCount).toBe(0);
+    await adapter.interrupt(h.sessionId);
+    await adapter.pause(h.sessionId);
+    await adapter.resume(h.sessionId);
+    await adapter.stop(h.sessionId);
+    await expect(adapter.send(h.sessionId, 'x')).rejects.toThrow(/has stopped/);
+    await expect(adapter.send('nope', 'x')).rejects.toThrow(/unknown claude-sdk session/);
+  });
+
+  it('after a same-agent resume, the old session’s late events are dropped', async () => {
+    const { adapter, events } = make(
+      (m) => (m === 'old' ? [{ delayMs: 200 }, { text: 'stale' }] : [{ text: 'fresh' }]),
+      { spawnChild: false },
+    );
+    await adapter.spawn(spawnOpts('old'));
+    await adapter.resumeSession('11111111-2222-3333-4444-555555555555', spawnOpts('new'));
+    await events.waitFor(has('agent.idle'));
+    await sleep(300);
+    expect(events.items).toEqual([
+      { type: 'agent.output', agentId: 'a-1', kind: 'text', text: 'fresh' },
+      expect.objectContaining({ type: 'agent.idle' }),
+    ]);
+  });
+
+  it('a resumed session whose init reports another session id is reported via onError', async () => {
+    const { adapter, events, errors } = make(() => [{ text: 'hi' }], {
+      fake: { initSessionId: '99999999-0000-0000-0000-000000000000' },
+    });
+    await adapter.resumeSession('11111111-2222-3333-4444-555555555555', spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(errors).toEqual([
+      {
+        error: expect.objectContaining({
+          message:
+            'claude reported session 99999999-0000-0000-0000-000000000000, expected 11111111-2222-3333-4444-555555555555 (resume)',
+        }),
+        context: 'init a-1',
+      },
+    ]);
+  });
+
+  it('stderr is reported once, by the supervisor capture only', async () => {
+    const { adapter, events, sdk } = make(() => [{ text: 'hi' }]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(sdk.calls[0]!.options.stderr).toBeUndefined();
   });
 });

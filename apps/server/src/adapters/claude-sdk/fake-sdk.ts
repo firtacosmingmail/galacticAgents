@@ -6,8 +6,10 @@ import type {
   SdkPermissionResult,
   SdkQuery,
   SdkQueryOptions,
+  SdkRateLimitEvent,
   SdkStreamingPrompt,
   SdkSurface,
+  SdkUsage,
   SdkUserMessage,
 } from './sdk-surface.js';
 
@@ -24,9 +26,23 @@ export type FakeAction =
   | { text: string }
   | { thinking: string }
   | { tool: string; input: Record<string, unknown>; result?: string; isError?: boolean }
-  | { askUser: { question: string; options?: string[] } }
+  | { askUser: FakeQuestion }
+  /** One `AskUserQuestion` call carrying several questions. */
+  | { askUsers: FakeQuestion[] }
   | { delayMs: number }
-  | { resultError: 'error_max_turns' | 'error_during_execution'; errors?: string[] };
+  | { resultError: 'error_max_turns' | 'error_during_execution'; errors?: string[] }
+  /** A `result` with `subtype: 'success'` but `is_error: true` (API, auth, prompt too long). */
+  | { resultIsError: string }
+  /** A subscription `rate_limit_event`. */
+  | { rateLimit: SdkRateLimitEvent['rate_limit_info'] }
+  /** The message iterator throws (the CLI keeps running). */
+  | { throwStream: string };
+
+export interface FakeQuestion {
+  question: string;
+  options?: string[];
+  multiSelect?: boolean;
+}
 
 export type FakeScript = (message: string, turn: number) => FakeAction[];
 
@@ -34,8 +50,18 @@ export interface FakeSdkOptions {
   script: FakeScript;
   /** Cost reported per turn; cumulative like the real SDK. */
   costPerTurn?: number;
+  /** Usage reported on each result (default 10 in / 5 out). */
+  usage?: SdkUsage;
   /** When false, no child is spawned (a pure in-process SDK). Default true. */
   spawnChild?: boolean;
+  /** Also call `canUseTool` after the hook said `allow` (the real CLI may). */
+  canUseToolAfterAllow?: boolean;
+  /** `interrupt()` never settles and the turn goes on (a wedged CLI). */
+  wedgeOnInterrupt?: boolean;
+  /** After `interrupt()` the message iterator throws instead of ending the turn (the CLI keeps running). */
+  throwOnInterrupt?: boolean;
+  /** `system/init` reports this session id instead of the requested one. */
+  initSessionId?: string;
 }
 
 export interface FakeSdkCall {
@@ -55,6 +81,10 @@ export class FakeSdk implements SdkSurface {
     handler: (i: Record<string, unknown>) => Promise<unknown>;
   }[] = [];
   readonly children: ChildProcess[] = [];
+  /** How many times `query.interrupt()` was called, over all queries. */
+  interrupts = 0;
+  /** How many prompts were closed by the adapter (the CLI then sees stdin EOF). */
+  inputClosed = 0;
 
   constructor(private readonly opts: FakeSdkOptions) {}
 
@@ -113,17 +143,72 @@ export class FakeSdk implements SdkSurface {
     out.push({
       type: 'system',
       subtype: 'init',
-      session_id: sessionId,
+      session_id: this.opts.initSessionId ?? sessionId,
       model: options.model ?? 'fake',
       tools: [],
     });
+
+    const usage = this.opts.usage ?? { input_tokens: 10, output_tokens: 5 };
+    /** Waits until the turn is interrupted, forever when the fake is wedged. */
+    let onInterrupt: (() => void) | undefined;
+
+    const askUser = async (id: string, questions: FakeQuestion[]): Promise<boolean> => {
+      const input = {
+        questions: questions.map((q) => ({
+          question: q.question,
+          header: 'Q',
+          options: (q.options ?? []).map((label) => ({ label, description: '' })),
+          multiSelect: q.multiSelect ?? false,
+        })),
+      };
+      out.push({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input }] },
+        parent_tool_use_id: null,
+        session_id: sessionId,
+      });
+      await out.drained(); // the real SDK reads its stream in order: the message lands before the request
+      const verdict: SdkPermissionResult = canUseTool
+        ? await canUseTool('AskUserQuestion', input, { signal: abort.signal, toolUseID: id })
+        : { behavior: 'allow', updatedInput: input };
+      if (interrupted) return false;
+      const answers =
+        verdict.behavior === 'allow'
+          ? (verdict.updatedInput['answers'] as Record<string, string> | undefined)
+          : undefined;
+      out.push({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: id,
+              content: answers ? `The user answered: ${JSON.stringify(answers)}` : 'denied',
+              is_error: !answers,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        session_id: sessionId,
+      });
+      return true;
+    };
 
     const runTurn = async (text: string) => {
       turn++;
       interrupted = false;
       const actions = this.opts.script(text, turn);
+      const seen = new Map<string, number>();
+      /** Unique per call, like the real ids: `toolu_<turn>_<tool>` and `_2`, `_3`… for repeats. */
+      const toolUseId = (name: string) => {
+        const n = (seen.get(name) ?? 0) + 1;
+        seen.set(name, n);
+        return `toolu_${turn}_${name}${n > 1 ? `_${n}` : ''}`;
+      };
       let errored:
         { subtype: 'error_max_turns' | 'error_during_execution'; errors?: string[] } | undefined;
+      let isError: string | undefined;
       for (const action of actions) {
         if (interrupted) break;
         if ('text' in action) {
@@ -141,61 +226,32 @@ export class FakeSdk implements SdkSurface {
             session_id: sessionId,
           });
         } else if ('delayMs' in action) {
-          await sleep(action.delayMs);
+          await Promise.race([sleep(action.delayMs), new Promise<void>((r) => (onInterrupt = r))]);
+          onInterrupt = undefined;
         } else if ('resultError' in action) {
           errored = {
             subtype: action.resultError,
             ...(action.errors ? { errors: action.errors } : {}),
           };
           break;
+        } else if ('resultIsError' in action) {
+          isError = action.resultIsError;
+          break;
+        } else if ('rateLimit' in action) {
+          out.push({
+            type: 'rate_limit_event',
+            rate_limit_info: action.rateLimit,
+            session_id: sessionId,
+          });
+        } else if ('throwStream' in action) {
+          out.fail(new Error(action.throwStream));
+          return;
         } else if ('askUser' in action) {
-          const id = `toolu_${turn}_ask`;
-          const input = {
-            questions: [
-              {
-                question: action.askUser.question,
-                header: 'Q',
-                options: (action.askUser.options ?? []).map((label) => ({
-                  label,
-                  description: '',
-                })),
-                multiSelect: false,
-              },
-            ],
-          };
-          out.push({
-            type: 'assistant',
-            message: { content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input }] },
-            parent_tool_use_id: null,
-            session_id: sessionId,
-          });
-          await out.drained(); // the real SDK reads its stream in order: the message lands before the request
-          const verdict: SdkPermissionResult = canUseTool
-            ? await canUseTool('AskUserQuestion', input, { signal: abort.signal, toolUseID: id })
-            : { behavior: 'allow', updatedInput: input };
-          if (interrupted) break;
-          const answers =
-            verdict.behavior === 'allow'
-              ? (verdict.updatedInput['answers'] as Record<string, string> | undefined)
-              : undefined;
-          out.push({
-            type: 'user',
-            message: {
-              role: 'user',
-              content: [
-                {
-                  type: 'tool_result',
-                  tool_use_id: id,
-                  content: answers ? `The user answered: ${JSON.stringify(answers)}` : 'denied',
-                  is_error: !answers,
-                },
-              ],
-            },
-            parent_tool_use_id: null,
-            session_id: sessionId,
-          });
+          if (!(await askUser(toolUseId('AskUserQuestion'), [action.askUser]))) break;
+        } else if ('askUsers' in action) {
+          if (!(await askUser(toolUseId('AskUserQuestion'), action.askUsers))) break;
         } else if ('tool' in action) {
-          const id = `toolu_${turn}_${action.tool}`;
+          const id = toolUseId(action.tool);
           out.push({
             type: 'assistant',
             message: {
@@ -222,7 +278,10 @@ export class FakeSdk implements SdkSurface {
             decision = h.hookSpecificOutput?.permissionDecision ?? 'allow';
             reason = h.hookSpecificOutput?.permissionDecisionReason ?? '';
           }
-          if (decision === 'ask' && canUseTool) {
+          if (
+            canUseTool &&
+            (decision === 'ask' || (decision === 'allow' && this.opts.canUseToolAfterAllow))
+          ) {
             const v = await canUseTool(action.tool, action.input, {
               signal: abort.signal,
               toolUseID: id,
@@ -257,13 +316,17 @@ export class FakeSdk implements SdkSurface {
       }
       cost += this.opts.costPerTurn ?? 0.01;
       if (interrupted) {
+        if (this.opts.throwOnInterrupt) {
+          out.fail(new Error('Claude Code returned an error result: interrupted'));
+          return;
+        }
         out.push({
           type: 'result',
           subtype: 'error_during_execution',
           is_error: true,
           session_id: sessionId,
           total_cost_usd: cost,
-          usage: { input_tokens: 10, output_tokens: 5 },
+          usage,
           errors: ['interrupted'],
         });
       } else if (errored) {
@@ -275,6 +338,17 @@ export class FakeSdk implements SdkSurface {
           total_cost_usd: cost,
           ...(errored.errors ? { errors: errored.errors } : {}),
         });
+      } else if (isError !== undefined) {
+        out.push({
+          type: 'result',
+          subtype: 'success',
+          is_error: true,
+          session_id: sessionId,
+          total_cost_usd: cost,
+          usage,
+          num_turns: 1,
+          result: isError,
+        });
       } else {
         const lastText = [...actions]
           .reverse()
@@ -285,7 +359,7 @@ export class FakeSdk implements SdkSurface {
           is_error: false,
           session_id: sessionId,
           total_cost_usd: cost,
-          usage: { input_tokens: 10, output_tokens: 5 },
+          usage,
           num_turns: 1,
           ...(lastText !== undefined ? { result: lastText } : {}),
         });
@@ -303,9 +377,14 @@ export class FakeSdk implements SdkSurface {
         }
       } finally {
         // Prompt closed: stdin EOF, then the abort signal, like the real transport.
+        this.inputClosed++;
         if (child) {
           child.stdin?.end();
-          await sleep(50);
+          // Give the CLI a moment to exit on EOF (more than a loaded test machine needs).
+          if (child.exitCode === null && child.signalCode === null) {
+            const c = child;
+            await Promise.race([sleep(500), new Promise((r) => c.once('exit', r))]);
+          }
           abort.abort();
           if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
         } else {
@@ -318,7 +397,10 @@ export class FakeSdk implements SdkSurface {
     return {
       [Symbol.asyncIterator]: iterable,
       interrupt: async () => {
+        this.interrupts++;
+        if (this.opts.wedgeOnInterrupt) return new Promise<never>(() => {});
         interrupted = true;
+        onInterrupt?.();
         return { still_queued: [] };
       },
     };
@@ -328,8 +410,10 @@ export class FakeSdk implements SdkSurface {
 /** Minimal push queue for the fake's message stream. */
 class Queue<T> implements AsyncIterable<T> {
   private readonly items: T[] = [];
-  private waiting: ((r: IteratorResult<T>) => void) | undefined;
+  private waiting:
+    { resolve: (r: IteratorResult<T>) => void; reject: (e: Error) => void } | undefined;
   private closed = false;
+  private error: Error | undefined;
   private drainWaiters: (() => void)[] = [];
   /** Resolves once the consumer has pulled everything pushed so far. */
   drained(): Promise<void> {
@@ -341,7 +425,7 @@ class Queue<T> implements AsyncIterable<T> {
     if (this.waiting) {
       const w = this.waiting;
       this.waiting = undefined;
-      w({ value: item, done: false });
+      w.resolve({ value: item, done: false });
     } else this.items.push(item);
   }
   close(): void {
@@ -349,7 +433,18 @@ class Queue<T> implements AsyncIterable<T> {
     if (this.waiting) {
       const w = this.waiting;
       this.waiting = undefined;
-      w({ value: undefined, done: true });
+      w.resolve({ value: undefined, done: true });
+    }
+  }
+  /** The consumer's next read (after what is queued) throws `error`. */
+  fail(error: Error): void {
+    if (this.closed) return;
+    this.error = error;
+    this.closed = true;
+    if (this.waiting) {
+      const w = this.waiting;
+      this.waiting = undefined;
+      w.reject(error);
     }
   }
   [Symbol.asyncIterator](): AsyncIterator<T> {
@@ -360,9 +455,10 @@ class Queue<T> implements AsyncIterable<T> {
           if (this.items.length === 0) for (const w of this.drainWaiters.splice(0)) w();
           return Promise.resolve({ value, done: false });
         }
+        if (this.error) return Promise.reject(this.error);
         if (this.closed) return Promise.resolve({ value: undefined, done: true });
-        return new Promise((resolve) => {
-          this.waiting = resolve;
+        return new Promise((resolve, reject) => {
+          this.waiting = { resolve, reject };
         });
       },
     };
