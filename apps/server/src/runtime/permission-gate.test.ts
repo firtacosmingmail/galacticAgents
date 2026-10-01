@@ -131,3 +131,50 @@ describe('createPermissionGate', () => {
     expect(gate.check(read, { reserve: false })).toEqual({ decision: 'allow' });
   });
 });
+
+describe('createPermissionGate — live policy and refusals (P2-04)', () => {
+  const rm = { toolName: 'Bash', input: { command: 'rm -rf dist' } };
+
+  it('reads a policy function on every check, so a changed table applies to the next call', () => {
+    let policy: unknown = DEFAULT_PERMISSION_POLICY;
+    const gate = createPermissionGate({ ...base, policy: () => policy, caps: caps() });
+    expect(gate.check(push)).toMatchObject({ decision: 'ask', action: 'push' });
+    policy = { rules: { push: 'allow' } };
+    expect(gate.check(push)).toEqual({ decision: 'allow' });
+    policy = { rules: { push: 'nonsense' } };
+    expect(gate.check(read)).toMatchObject({ decision: 'ask' }); // invalid table: every action asks
+  });
+
+  it('tells onDeny about policy refusals but not about a cap refusal', () => {
+    const denials: unknown[] = [];
+    const c = caps(1);
+    const gate = createPermissionGate({
+      ...base,
+      policy: { rules: { destructive: 'deny' } },
+      caps: c,
+      onDeny: (call, verdict, action) => denials.push({ call, reason: verdict.reason, action }),
+    });
+    expect(gate.check(rm)).toMatchObject({ decision: 'deny' });
+    expect(denials).toEqual([{ call: rm, reason: expect.any(String), action: 'destructive' }]);
+    c.onEvent({ type: 'agent.tool_call', agentId: 'a-1', toolName: 'Read', input: {} });
+    expect(gate.check(read)).toMatchObject({ decision: 'deny', reason: /tool-call cap/ });
+    expect(denials).toHaveLength(1);
+  });
+
+  it('decide() gives the same verdict without reserving a call or calling onDeny', () => {
+    let told = 0;
+    const gate = createPermissionGate({
+      ...base,
+      policy: { rules: { destructive: 'deny' } },
+      caps: caps(1),
+      onDeny: () => told++,
+    });
+    expect(gate.decide(rm)).toMatchObject({
+      verdict: { decision: 'deny' },
+      action: 'destructive',
+    });
+    expect(gate.decide(push)).toMatchObject({ verdict: { decision: 'ask' }, action: 'push' });
+    expect(told).toBe(0);
+    expect(gate.check(read)).toEqual({ decision: 'allow' }); // the one call is still available
+  });
+});

@@ -13,6 +13,7 @@ import {
   decide,
   evaluate,
   isInsideWorkspace,
+  noLooserThan,
   pathsInCommand,
   resolvePolicy,
   splitCommand,
@@ -707,5 +708,21 @@ describe('P1-30 — review R3 bypasses', () => {
     expect(evaluate(policy, { toolName: 'Task', input: { prompt: 'x' } }, wctx).decision).toBe(
       'allow',
     );
+  });
+});
+
+describe('noLooserThan (P2-04: a remote client cannot set up auto-approvals)', () => {
+  it('keeps each category at the stricter of the policy and the global default', () => {
+    const floored = noLooserThan({
+      rules: { network: 'allow', push: 'allow', edit_workspace: 'ask', destructive: 'deny' },
+    });
+    expect(floored.rules).toMatchObject({
+      network: 'ask',
+      push: 'ask',
+      edit_workspace: 'ask',
+      destructive: 'deny',
+      read_workspace: 'allow',
+    });
+    expect(noLooserThan(DEFAULT_PERMISSION_POLICY)).toEqual(DEFAULT_PERMISSION_POLICY);
   });
 });

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
-import { AgentRole, AgentRuntime, QuestionKind, WorkState } from './enums.js';
+import { AgentRole, AgentRuntime, PermissionAction, QuestionKind, WorkState } from './enums.js';
 import {
   Actor,
   Agent,
@@ -13,6 +13,7 @@ import {
   Question,
   QuestionContext,
   Task,
+  ToolCall,
 } from './domain.js';
 
 // ---------------------------------------------------------------------------
@@ -230,6 +231,30 @@ export const QuestionReassigned = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// permission.* (SPEC §3.6, decision 7; P2-04)
+// ---------------------------------------------------------------------------
+
+/**
+ * The project's policy table decided a tool call without the user (P2-04): `allow` answered a
+ * permission request at once, `deny` refused it (or the gate refused the call before any request
+ * existed). `questionId` is the adapter's request the decision answered; absent when the gate
+ * refused the call outright. No question row is ever opened for it. `decidedBy` is always the
+ * system: an LLM never decides a permission.
+ */
+export const PermissionDecided = z.object({
+  type: z.literal('permission.decided'),
+  agentId: Id,
+  questionId: Id.optional(),
+  toolCall: ToolCall,
+  decision: z.enum(['allow', 'deny']),
+  /** The category that produced the decision, when one was recognised. */
+  action: PermissionAction.optional(),
+  /** Why, for a denial (the policy line, a check failure). */
+  reason: z.string().optional(),
+  decidedBy: Actor,
+});
+
+// ---------------------------------------------------------------------------
 // proposal.* (SPEC §3.3, decision 16)
 // ---------------------------------------------------------------------------
 
@@ -364,6 +389,7 @@ export const Event = z.discriminatedUnion('type', [
   QuestionAnswered,
   QuestionReassigned,
   QuestionCancelled,
+  PermissionDecided,
   ProposalCreated,
   ProposalApproved,
   ProposalEdited,

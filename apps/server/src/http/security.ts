@@ -79,6 +79,22 @@ export function isLoopback(remoteAddress: string | undefined): boolean {
   return a === '::1';
 }
 
+/**
+ * Whether a request comes from a remote client (P2-04; TECHNOLOGY §8): anything but a loopback
+ * connection whose `Origin`, if any, is this machine and that carries no Tailscale identity. A
+ * reverse proxy (Tailscale Serve, Phase 7) connects from loopback, so its `Origin` or identity
+ * headers are what give it away. Fails towards "remote": the stricter rules then apply.
+ */
+export function isRemoteRequest(req: {
+  socket: { remoteAddress?: string | undefined };
+  headers: Record<string, string | string[] | undefined>;
+}): boolean {
+  const origin = req.headers['origin'];
+  if (Array.isArray(origin)) return true;
+  if (req.headers['tailscale-user-login'] !== undefined) return true;
+  return !(isLoopback(req.socket.remoteAddress) && isLoopbackOrigin(origin));
+}
+
 /** Constant-time token comparison. */
 /**
  * An `onRequest` hook that refuses a request without `Authorization: Bearer <token>` (P1-28).

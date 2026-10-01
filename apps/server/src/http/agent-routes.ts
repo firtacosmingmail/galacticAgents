@@ -19,7 +19,8 @@ import type { Commands } from '../domain/commands.js';
 import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
-import { bearerGuard } from './security.js';
+import { noLooserThan } from '../domain/permissions.js';
+import { bearerGuard, isRemoteRequest } from './security.js';
 
 /**
  * The agent control surface the ops console uses (P1-11; TECHNOLOGY §2.2 "a small REST
@@ -97,7 +98,11 @@ export function registerAgentRoutes(
         prompt: body.prompt,
         cwd: body.cwd,
         ...(body.workspace ? { workspace: body.workspace } : {}),
-        permissionPolicy: PERMISSION_POLICY_PRESETS[body.policy],
+        // A remote client never sets up auto-approvals unless the server allows it (P2-04).
+        permissionPolicy:
+          isRemoteRequest(req) && !config.autoApproveRemote
+            ? noLooserThan(PERMISSION_POLICY_PRESETS[body.policy])
+            : PERMISSION_POLICY_PRESETS[body.policy],
         ...(body.caps ? { caps: compact(body.caps) } : {}),
         ...(body.bare ? { bare: true } : {}),
       });

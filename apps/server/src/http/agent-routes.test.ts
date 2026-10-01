@@ -90,6 +90,33 @@ describe('/api agent routes (P1-11)', () => {
     });
   });
 
+  it("floors a remote client's policy at the global default unless configured (P2-04)", async () => {
+    const spawn = async (headers: Record<string, string>) => {
+      const res = await fetch(`${t.baseUrl}/api/agents`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${TEST_TOKEN}`,
+          'content-type': 'application/json',
+          ...headers,
+        },
+        body: JSON.stringify({
+          runtime: 'fake',
+          prompt: 'scenario:echo',
+          cwd: '/tmp',
+          policy: 'trusting',
+        }),
+      });
+      const id = ((await res.json()) as { agentId: string }).agentId;
+      return composed.log.tables.agents.get(id)?.meta?.['permissionPolicy'] as
+        { rules: Record<string, string> } | undefined;
+    };
+    const local = await spawn({});
+    expect(local?.rules['network']).toBe('allow');
+    const remote = await spawn({ origin: 'https://mymac.tail1234.ts.net' });
+    expect(remote?.rules['network']).toBe('ask');
+    expect(remote?.rules['edit_workspace']).toBe('allow');
+  });
+
   it('spawns, messages, pauses, resumes and stops an agent', async () => {
     const spawned = await call('/api/agents', {
       runtime: 'fake',

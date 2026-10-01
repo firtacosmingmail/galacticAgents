@@ -25,6 +25,7 @@ beforeEach(async () => {
       configPath: '',
       dbPath: ':memory:',
       projectsRoot: '/tmp/galactic-projects-unused',
+      autoApproveRemote: false,
     },
     log,
   });

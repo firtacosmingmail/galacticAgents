@@ -223,6 +223,8 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'message.sent':
     case 'message.delivered':
       return next; // the inbox is runtime state; a chat view (Phase 2.5) will fold these
+    case 'permission.decided':
+      return next; // the policy answered without the user: no question row (P2-04)
 
     case 'control.stop':
     case 'control.cancel':

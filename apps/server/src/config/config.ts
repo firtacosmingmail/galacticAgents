@@ -12,6 +12,11 @@ export const ConfigFile = z.object({
   allowedHosts: z.array(z.string().min(1)).optional(),
   /** Where new project folders are created (SPEC §3.5); absolute or `~/…`. */
   projectsRoot: z.string().min(1).optional(),
+  /**
+   * Let a remote client (Phase 7: the phone PWA through Tailscale Serve) set up auto-approvals:
+   * spawn under a policy looser than the global default. Off unless set (TECHNOLOGY §8, P2-04).
+   */
+  autoApproveRemote: z.boolean().optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -33,6 +38,13 @@ export interface ServerConfig {
    * Default `~/GalacticProjects`; `GALACTIC_PROJECTS_ROOT` or `projectsRoot` in the file override it.
    */
   projectsRoot: string;
+  /**
+   * Whether a request from a remote client may loosen the permission table (P2-04; TECHNOLOGY §8:
+   * "never auto-approved for a remote client unless explicitly configured"). Default `false`: a
+   * remote spawn runs under a policy no looser than the global default in any category.
+   * `autoApproveRemote` in the file or `GALACTIC_AUTO_APPROVE_REMOTE=1` turns it on.
+   */
+  autoApproveRemote: boolean;
 }
 
 export interface LoadedConfig {
@@ -106,6 +118,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       configPath,
       dbPath: env['GALACTIC_DB'] ?? join(dataDir, 'galactic.sqlite'),
       projectsRoot: resolve(projectsRoot),
+      autoApproveRemote:
+        env['GALACTIC_AUTO_APPROVE_REMOTE'] !== undefined
+          ? env['GALACTIC_AUTO_APPROVE_REMOTE'] === '1' ||
+            env['GALACTIC_AUTO_APPROVE_REMOTE'] === 'true'
+          : (file.autoApproveRemote ?? false),
     },
     tokenGenerated,
   };
