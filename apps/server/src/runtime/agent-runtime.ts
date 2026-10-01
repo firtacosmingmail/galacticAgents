@@ -10,9 +10,11 @@ import {
   type AgentRuntime as RuntimeName,
   type Event,
   type Id,
+  type PermissionAction,
   type PermissionPolicy,
   type SpawnHandle,
   type SpawnOptions,
+  type ToolCall,
   type ToolDefinition,
 } from '@galactic/protocol';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
@@ -29,8 +31,8 @@ import {
 import { DomainError } from '../domain/errors.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
-import { createPermissionGate } from './permission-gate.js';
-import { redactEvent } from './redact.js';
+import { createPermissionGate, type RuntimeGate } from './permission-gate.js';
+import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
 import type { TranscriptPipeline } from './transcripts.js';
 
@@ -120,6 +122,10 @@ interface Live {
   handle: SpawnHandle | undefined;
   /** Events the adapter emitted before the handle came back: routed after `agent.spawned`. */
   early: AgentEvent[];
+  /** The one place this agent's permissions are decided (P2-04): the adapter's hooks and ours. */
+  gate: RuntimeGate;
+  /** `permission.decided` events made before the handle came back: logged after `agent.spawned`. */
+  decisions: Event[];
   inbox: AgentInbox;
   /** Question ids currently open for this agent (adapter-assigned). */
   questions: Set<Id>;
@@ -274,11 +280,29 @@ export class AgentRuntime {
     const caps = agent.caps;
     // Registered before the adapter runs: whatever it emits before the handle comes back is
     // buffered and routed after `agent.spawned`, and counts against the caps from the start.
+    // The project's table as of each check (P2-04): a changed policy applies to the next call.
+    const gate = createPermissionGate({
+      agentId: agent.id,
+      policy: () => this.policyOf(agent.id, req),
+      workspace: req.workspace ?? req.cwd,
+      cwd: req.cwd,
+      caps: this.caps,
+      ...(req.tools ? { serverTools: req.tools.map((t) => t.name) } : {}),
+      onDeny: (call, verdict, action) =>
+        this.permissionDecided(live, {
+          toolCall: call,
+          decision: 'deny',
+          reason: verdict.reason,
+          action,
+        }),
+    });
     const live: Live = {
       agent,
       adapter,
       handle: undefined,
       early: [],
+      gate,
+      decisions: [],
       inbox: new AgentInbox(agent.id, {
         deliver: async (m) => {
           // The agent is busy from the moment it has the message (P1-33): a pause/resume or a
@@ -307,14 +331,6 @@ export class AgentRuntime {
     };
     this.live.set(agent.id, live);
     this.caps.track(agent.id, caps);
-    const gate = createPermissionGate({
-      agentId: agent.id,
-      policy: req.permissionPolicy ?? DEFAULT_PERMISSION_POLICY,
-      workspace: req.workspace ?? req.cwd,
-      cwd: req.cwd,
-      caps: this.caps,
-      ...(req.tools ? { serverTools: req.tools.map((t) => t.name) } : {}),
-    });
     let handle: SpawnHandle;
     try {
       handle = await open({
@@ -356,6 +372,7 @@ export class AgentRuntime {
     } catch (error) {
       this.onError(error, `record agent.spawned ${agent.id}`);
     }
+    for (const event of live.decisions.splice(0)) this.record(event);
     for (const event of live.early.splice(0)) this.route(event);
     if (live.pendingCap && !live.terminal) void this.onCapHit(agent.id, live.pendingCap);
     return { ok: true, agent: live.agent };
@@ -773,6 +790,89 @@ export class AgentRuntime {
     return live;
   }
 
+  /**
+   * The policy an agent's permissions are decided under now (decision 22): its project's table
+   * (the global default when the project has none), read on every check so a change applies to
+   * the next tool call; an agent outside any project keeps the policy it was spawned with.
+   */
+  private policyOf(agentId: Id, req: SpawnRequest): PermissionPolicy {
+    const { tables } = this.opts.log;
+    const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
+    const project = projectId ? tables.projects.get(projectId) : undefined;
+    if (project) return project.permissionPolicy ?? DEFAULT_PERMISSION_POLICY;
+    return req.permissionPolicy ?? DEFAULT_PERMISSION_POLICY;
+  }
+
+  /**
+   * Permission routing (P2-04; SPEC §2.6, decision 7): a permission request is decided by the
+   * agent's gate — the same decision the adapter's hook got — before any question exists. `allow`
+   * and `deny` answer the adapter at once and log `permission.decided{decidedBy: system}`; no
+   * question row is opened, so nothing waits on the user and nothing reaches a brain. `ask` (and
+   * a request without a tool call, which nothing can judge) returns `false`: the caller opens the
+   * user-held question. Decided on the raw call — the redacted one is what the log keeps.
+   */
+  private rulePermission(
+    live: Live,
+    raw: Extract<AgentEvent, { type: 'agent.needs_input' }>,
+    event: Extract<AgentEvent, { type: 'agent.needs_input' }>,
+  ): boolean {
+    const call = raw.question.toolCall;
+    if (!call) return false;
+    const { verdict, action } = live.gate.decide(call);
+    if (verdict.decision === 'ask') {
+      // The card shows the category the policy asks about when the adapter did not name one.
+      const asked = verdict.action ?? action;
+      if (!event.question.permissionAction && asked) event.question.permissionAction = asked;
+      return false;
+    }
+    this.permissionDecided(
+      live,
+      {
+        toolCall: event.question.toolCall ?? call,
+        decision: verdict.decision,
+        action,
+        ...(verdict.decision === 'deny' ? { reason: verdict.reason } : {}),
+      },
+      event.questionId,
+    );
+    live.idle = false;
+    if (!live.paused) live.inbox.working();
+    const answer = verdict.decision === 'allow' ? 'allow' : `deny: ${verdict.reason}`;
+    void live.adapter
+      .answer(event.questionId, answer)
+      .catch((error: unknown) => this.onError(error, `permission answer ${event.questionId}`));
+    return true;
+  }
+
+  /** Logs a decision the policy made without the user (P2-04), with the tool input redacted. */
+  private permissionDecided(
+    live: Live,
+    d: {
+      toolCall: ToolCall;
+      decision: 'allow' | 'deny';
+      action: PermissionAction | undefined;
+      reason?: string;
+    },
+    questionId?: Id,
+  ): void {
+    if (live.terminal) return;
+    const event: Event = {
+      type: 'permission.decided',
+      agentId: live.agent.id,
+      ...(questionId ? { questionId } : {}),
+      toolCall: {
+        toolName: d.toolCall.toolName,
+        ...(d.toolCall.input !== undefined ? { input: redactValue(d.toolCall.input) } : {}),
+      },
+      decision: d.decision,
+      ...(d.action ? { action: d.action } : {}),
+      ...(d.reason ? { reason: redactSecrets(d.reason) } : {}),
+      decidedBy: SYSTEM,
+    };
+    if (!live.handle) live.decisions.push(event);
+    else this.record(event);
+  }
+
   /** Appends an event under the one write rule; the status store sees it as a log subscriber. */
   private record(event: Event): void {
     this.command(({ emit }) => emit(event));
@@ -831,6 +931,14 @@ export class AgentRuntime {
     const event = redactEvent(raw);
     if (TERMINAL.has(event.type)) {
       this.terminal(live, event as Extract<AgentEvent, { type: Terminal }>);
+      return;
+    }
+    if (
+      event.type === 'agent.needs_input' &&
+      event.kind === 'permission' &&
+      raw.type === 'agent.needs_input' &&
+      this.rulePermission(live, raw, event)
+    ) {
       return;
     }
     if (event.type === 'agent.needs_input') {
