@@ -34,7 +34,35 @@ export type FakeStep =
   /** Ends the turn early: `agent.idle`, then wait for the next message. */
   | { kind: 'idle' }
   | { kind: 'finish'; result?: string; cost?: Cost; delayMs?: number }
-  | { kind: 'fail'; error: string; reason: 'cap' | 'crash' | 'runtime' | 'unknown'; cost?: Cost };
+  | { kind: 'fail'; error: string; reason: 'cap' | 'crash' | 'runtime' | 'unknown'; cost?: Cost }
+  /**
+   * A scripted stretch of the turn (P2-07): `run` performs tool calls and output through `io`,
+   * in order, and reads each tool's result before deciding the next call — what a model does
+   * between two tool results. The step ends when `run` settles. When the turn is cancelled
+   * (interrupt, stop) the next `io` call rejects with `FakeTurnCancelled` and the turn ends.
+   */
+  | { kind: 'script'; run: (io: FakeTurnIO) => Promise<void> };
+
+/** What a `script` step may do inside the turn. */
+export interface FakeTurnIO {
+  /** One tool call through the runtime's gate, exactly as a `tool_call` step; resolves to what happened. */
+  toolCall(toolName: string, input?: unknown): Promise<FakeToolResult>;
+  output(text: string, kind?: 'text' | 'tool' | 'thinking'): void;
+}
+
+export type FakeToolResult =
+  /** The call ran. A server tool's handler value is `output` (its text form is `text`). */
+  | { status: 'ran'; output?: unknown; text?: string }
+  /** The gate denied it, or a permission question was answered no. */
+  | { status: 'denied'; reason: string };
+
+/** Rejects an `io` call made after the turn was cancelled. */
+export class FakeTurnCancelled extends Error {
+  constructor() {
+    super('the fake turn was cancelled');
+    this.name = 'FakeTurnCancelled';
+  }
+}
 
 export interface FakeScenario {
   /** Steps of the first turn, driven by the prompt. */
