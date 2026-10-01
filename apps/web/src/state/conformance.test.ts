@@ -164,7 +164,7 @@ describe('replay vs snapshot conformance', () => {
     });
     await commands.updateAgent(asteroidSteward.id, { supervisorId: waykeeper.id });
 
-    // --- questions opened outside a live session: reassigned, escalated, answered, cancelled
+    // --- questions opened outside a live session: escalated, reassigned, answered, cancelled
     const held = (
       await commands.openQuestion({
         kind: 'clarification',
@@ -172,12 +172,9 @@ describe('replay vs snapshot conformance', () => {
         context: { text: 'Snappy or zstd?' },
       })
     ).value;
-    await commands.reassignQuestion(
-      held.id,
-      { type: 'agent', id: waykeeper.id },
-      'route to supervisor',
-    );
+    // Routed to the asteroid Steward's new supervisor on open (P2-03); up to the user, and back.
     await commands.escalateQuestion(held.id, { type: 'agent', id: waykeeper.id });
+    await commands.reassignQuestion(held.id, { type: 'agent', id: waykeeper.id }, 'hand back');
     await commands.answerQuestion({ questionId: held.id, answer: 'zstd', by: USER, version: 2 });
 
     // --- moves: a standalone task joins the project (its Steward flies), the project moves
@@ -219,15 +216,20 @@ describe('replay vs snapshot conformance', () => {
     await commands.closeTask(chore.id, USER);
     await commands.control({ kind: 'task', id: chore.id }, { action: 'archive' }, USER);
 
-    // --- a question left open when its agent stops is cancelled with the stop
-    await commands.openQuestion({
-      kind: 'clarification',
-      originAgentId: asteroidSteward.id,
-      context: { text: 'Keep the old flag?' },
-    });
-    await commands.stopAgent(asteroidSteward.id, USER);
+    // --- a question whose holder stops moves to the user (P2-03); left open when its own agent
+    // stops, it is cancelled with the stop
+    const orphan = (
+      await commands.openQuestion({
+        kind: 'clarification',
+        originAgentId: asteroidSteward.id,
+        context: { text: 'Keep the old flag?' },
+      })
+    ).value;
+    expect(orphan.holder).toEqual({ type: 'agent', id: waykeeper.id });
     await commands.stopAgent(waykeeper.id, USER);
     await until(() => statuses.get(waykeeper.id)?.state === 'stopped');
+    expect(log.tables.questions.get(orphan.id)?.holder).toEqual(USER);
+    await commands.stopAgent(asteroidSteward.id, USER);
 
     // Every event type this scenario was meant to cover was really logged.
     const types = new Set(recorded.map((e) => e.event.type));
