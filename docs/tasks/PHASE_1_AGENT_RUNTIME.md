@@ -37,7 +37,7 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 |---|---|---|
 | 1 (parallel) | P1-01, P1-03, P1-08, P1-10 | Process supervisor, fake adapter, SDK spike and policy engine are independent. |
 | 2 (parallel) | P1-02, P1-04, P1-05, P1-06, P1-07 | Caps need the supervisor; conformance suite needs the fake adapter; status store, transcripts and inbox need the bus + fake adapter. |
-| 2b (review) | P1-17 … P1-27 | Follow-ups of the wave 2 review (`notes/P1-wave2-review.md`); done before P1-09 so the real adapter builds on the final interfaces. |
+| 2b (review) | P1-17 … P1-27 | Follow-ups of the wave 2 review (`notes/P1-wave2-review.md`); done before P1-09 so the real adapter builds on the final interfaces. What changed, for whoever continues: `notes/P1-wave2b-changes.md`. |
 | 3 | P1-09 | Real adapter needs the spike, supervisor, inbox, policy engine and the gate (P1-18). |
 | 4 (parallel) | P1-11, P1-13, P1-14, P1-15, P1-16 | Ops console, README, restart recovery (+ the two review follow-ups). |
 | 5 | P1-12 | Conformance + resume against the real adapter, last. |
@@ -96,6 +96,7 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Status:** todo · **Depends on:** P1-08, P1-01, P1-07, P1-10 · **Parallel with:** —
 - `spawn(opts)` with cwd, prompt, optional tools/system prompt (for Phase 2 brains), subscription login, `bare` opt-in; `PreToolUse` hook → `opts.gate.check(toolCall)` (P1-18: the runtime's gate, never the policy itself) → `allow` runs, `deny` refuses with the reason, `ask` → `needs_input(kind: permission)` (blocks the tool call until answered); `AskUserQuestion` → `needs_input(kind: clarification)`; the supervisor's `onOutcome` (P1-20) is mapped by the adapter to `agent.failed(crash|runtime)` / `agent.stopped`; `send()` starts a turn (the runtime's inbox guarantees idle, P1-19); streaming output/tool calls/thinking → `agent.output` / `agent.tool_call`; final result → `agent.finished(cost)`; `resumeSession(sessionRef)`; `interrupt`, `pause` (hold delivery + interrupt), `resume`, `stop` via the supervisor's graceful sequence.
 - **Acceptance:** manual run on the dev machine passes every step of the exit criteria; unit tests with the SDK mocked for the event mapping.
+- **Read first:** `docs/tasks/notes/P1-wave2b-changes.md` — the interfaces this task builds on (`SpawnOptions.gate`, the `send` contract, `ProcessOutcome`, the one-terminal-event invariant) changed in wave 2b.
 
 ### P1-10 — Permission policy engine
 - **Status:** done (2026-09-30) · **Depends on:** P0-02 · **Parallel with:** P1-01, P1-03, P1-08
