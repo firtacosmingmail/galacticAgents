@@ -1,7 +1,7 @@
 # Phase 2 — The hierarchy: Harmonizer, Waykeepers, Stewards
 
-**Current task:** P2-01 (wave 1, branch `p2-wave1-domain-commands`) · **Task status:** in progress
-**Phase status:** in progress (0/19 done) — on branch `phase-2`
+**Current task:** wave 2 next — P2-02, P2-03, P2-05, P2-06, P2-14, P2-15 (after `p2-wave1-domain-commands` is merged into `phase-2`) · **Task status:** todo
+**Phase status:** in progress (1/20 done) — on branch `phase-2`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -43,11 +43,13 @@ The full Steward → Waykeeper → Harmonizer → user loop, working through the
 | 6 (parallel) | P2-16, P2-18 | Hierarchy resume; ops console extensions. |
 | 7 | P2-19 | End-to-end exit run + kill -9 drill. |
 
+P2-20 (added 2026-10-01) runs with wave 4: it needs the Earth/HQ body from P2-02 and is used by P2-08 and P2-11.
+
 ## Tasks
 
 ### P2-01 — Domain commands
-- **Status:** in progress · **Depends on:** P0-07, P0-04 · **Parallel with:** —
-- Implement `DomainCommands` as transactional commands: projects (create, set workspace, set state, close, archive, pin, reopen), tasks (create, edit, set state, move, close, archive, reopen), agents (register, set supervisor/body, set state), proposals (create, approve, edit, reject, park), questions (open, escalate, answer, reassign), control actions; every command emits its event(s) and they fully describe the mutation (a new body → `body.created`); snapshot builder completed for all tables. Migration 0003 adds `projects.permission_policy` (JSON, validated by `PermissionPolicy`) and the protocol gains `Project.permissionPolicy?` (TECHNOLOGY §6.2, decided with P0-18).
+- **Status:** done (2026-10-01) · **Depends on:** P0-07, P0-04 · **Parallel with:** —
+- Implement `DomainCommands` as transactional commands: projects (create, set workspace, set state, close, archive, pin, reopen), tasks (create, edit, set state, move, close, archive, reopen), agents (register, set supervisor/body, set state), proposals (create, approve, edit, reject, park), questions (open, escalate, answer, reassign), control actions; every command emits its event(s) and they fully describe the mutation (a new body → `body.created`); snapshot builder completed for all tables. Migration 0004 (0003 went to P1-01's `agent_processes`) adds `projects.permission_policy` (JSON, validated by `PermissionPolicy`) and the protocol gains `Project.permissionPolicy?` (TECHNOLOGY §6.2, decided with P0-18).
 - **Acceptance:** each command has a test asserting the row change and the emitted event; invalid transitions are rejected; a **conformance test** replays a recorded event log through the web client's reducer and asserts equality with the server's snapshot at every `seq` (statuses excluded — server-owned).
 
 ### P2-02 — Body catalogue and assignment
@@ -139,6 +141,11 @@ The full Steward → Waykeeper → Harmonizer → user loop, working through the
 - **Status:** todo · **Depends on:** all Phase 2 tasks · **Parallel with:** —
 - Run the exit criteria script ("build a CLI that converts CSV to Parquet") for real: related-work check, proposal with workspace, body, Waykeeper plan approved once, Stewards in worktrees, one supervisor-answered and one escalated clarification, one permission request, merged branches, closure request accepted; `kill -9` the server mid-way and confirm automatic resume. Record the run and any spec deviations in `docs/tasks/notes/P2-19-exit-run.md`; update SPEC/TECH if decisions changed.
 - **Acceptance:** exit criteria met; notes committed.
+
+### P2-20 — Hierarchy placement invariants and clearable fields (added 2026-10-01)
+- **Status:** todo · **Depends on:** P2-02 · **Parallel with:** P2-08, P2-10
+- From the P2-01 review (`docs/tasks/notes/P2-wave1-review.md`, findings 7 and 9). `spawnAgent` puts the Harmonizer on Earth (HQ), not a fresh asteroid; a Steward or Waykeeper always has a supervisor; a Waykeeper's supervisor is the Harmonizer (or, for a sub-project, the planet's Waykeeper); `updateAgent` never gives the Harmonizer a supervisor and keeps `taskId` and `projectId` in agreement. Decide how an optional field is cleared (detaching a sub-project, dropping a project's policy, a task's worktree after merge): an explicit `null` in `project.updated` / `task.updated` folded by both the commands and the web reducer, or a dedicated event; record it in TECHNOLOGY §6.2.
+- **Acceptance:** tests for each invariant; the conformance test covers clearing a field.
 
 ## Exit criteria (from the plan)
 
