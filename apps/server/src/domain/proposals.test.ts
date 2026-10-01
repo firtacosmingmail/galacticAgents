@@ -27,10 +27,15 @@ describe('proposals', () => {
     ).toThrow(/proposed body is a moon/);
     expect(() =>
       run((ctx) =>
-        createProposal(ctx, { ...input, proposedBody: { kind: 'planet', bodyId: 'b-x', name: 'x' } }),
+        createProposal(ctx, {
+          ...input,
+          proposedBody: { kind: 'planet', bodyId: 'b-x', name: 'x' },
+        }),
       ),
     ).toThrow(/no body b-x/);
-    expect(() => run((ctx) => createProposal(ctx, { ...input, workspace: '' }))).toThrow(/workspace/);
+    expect(() => run((ctx) => createProposal(ctx, { ...input, workspace: '' }))).toThrow(
+      /workspace/,
+    );
   });
 
   it('edits (size, body, workspace) and approves an edited proposal', () => {
@@ -38,7 +43,12 @@ describe('proposals', () => {
     const p = run((ctx) => createProposal(ctx, input)).value;
     const changes = {
       kind: 'moon' as const,
-      proposedBody: { kind: 'moon' as const, bodyId: 'b-phobos', parentId: 'b-mars', name: 'Phobos' },
+      proposedBody: {
+        kind: 'moon' as const,
+        bodyId: 'b-phobos',
+        parentId: 'b-mars',
+        name: 'Phobos',
+      },
     };
     const edited = run((ctx) => decideProposal(ctx, p.id, { decision: 'edit', changes }));
     expect(edited.events).toEqual([{ type: 'proposal.edited', proposalId: p.id, changes }]);
@@ -54,9 +64,9 @@ describe('proposals', () => {
   it('keeps a rejected proposal as a draft that can be edited, never decided as it is', () => {
     const { run } = world();
     const p = run((ctx) => createProposal(ctx, input)).value;
-    expect(run((ctx) => decideProposal(ctx, p.id, { decision: 'reject', reason: 'later' })).events).toEqual([
-      { type: 'proposal.rejected', proposalId: p.id, reason: 'later' },
-    ]);
+    expect(
+      run((ctx) => decideProposal(ctx, p.id, { decision: 'reject', reason: 'later' })).events,
+    ).toEqual([{ type: 'proposal.rejected', proposalId: p.id, reason: 'later' }]);
     expect(() => run((ctx) => decideProposal(ctx, p.id, { decision: 'approve' }))).toThrow(
       /rejected; it cannot be approved/,
     );
@@ -69,9 +79,10 @@ describe('proposals', () => {
   it('parks, un-parks by approval, and never decides an approved proposal again', () => {
     const { run } = world();
     const p = run((ctx) => createProposal(ctx, input)).value;
-    expect(run((ctx) => decideProposal(ctx, p.id, { decision: 'park', reason: 'no free planet' })).events).toEqual([
-      { type: 'proposal.parked', proposalId: p.id, reason: 'no free planet' },
-    ]);
+    expect(
+      run((ctx) => decideProposal(ctx, p.id, { decision: 'park', reason: 'no free planet' }))
+        .events,
+    ).toEqual([{ type: 'proposal.parked', proposalId: p.id, reason: 'no free planet' }]);
     expect(() =>
       run((ctx) => decideProposal(ctx, p.id, { decision: 'park', reason: 'again' })),
     ).toThrow(/parked; it cannot be parked/);

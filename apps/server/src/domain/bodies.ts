@@ -83,7 +83,8 @@ function rehome(ctx: CommandContext, host: Host, bodyId: Id): void {
     ctx.tables.projects.upsert({ ...project, bodyId, updatedAt: ctx.now });
     ctx.emit({ type: 'project.updated', projectId: host.id, changes: { bodyId } });
     for (const task of ctx.tables.tasks.all()) {
-      if (task.projectId === host.id && task.bodyId === project.bodyId) setTaskBody(ctx, task.id, bodyId);
+      if (task.projectId === host.id && task.bodyId === project.bodyId)
+        setTaskBody(ctx, task.id, bodyId);
     }
   } else {
     setTaskBody(ctx, host.id, bodyId);
@@ -104,7 +105,12 @@ function setTaskBody(ctx: CommandContext, taskId: Id, bodyId: Id): void {
 export function moveAgents(ctx: CommandContext, host: Host, fromBodyId: Id, toBodyId: Id): Agent[] {
   const projectTasks =
     host.kind === 'project'
-      ? new Set(ctx.tables.tasks.all().filter((t) => t.projectId === host.id).map((t) => t.id))
+      ? new Set(
+          ctx.tables.tasks
+            .all()
+            .filter((t) => t.projectId === host.id)
+            .map((t) => t.id),
+        )
       : new Set<Id>();
   const works = (a: Agent) =>
     host.kind === 'project'

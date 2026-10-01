@@ -65,9 +65,10 @@ function patch<T extends object>(
 }
 
 /**
- * Folds one event into the world. Pure: returns a new state, never mutates.
- * Phase 0 covers the structural events; Phase 2 completes the domain events and adds the
- * replay-vs-snapshot conformance test that keeps this reducer and the server's commands agreeing.
+ * Folds one event into the world. Pure: returns a new state, never mutates. The server's domain
+ * commands emit events that fully describe their mutations and stamp rows with the event's `at`
+ * (P2-01), so folding them here builds exactly the server's tables — `conformance.test.ts`
+ * replays a recorded log and checks it against the server's snapshot at every commit.
  */
 export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope): WorldState {
   const next = { ...state, seq };
@@ -184,8 +185,14 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'agent.created':
       // The row itself (P1-05 follow-up): a replaying client keeps `agents` in step with a snapshot.
       return { ...next, agents: { ...next.agents, [event.agent.id]: event.agent } };
+    case 'agent.updated':
+      return {
+        ...next,
+        agents: patch(next.agents, event.agentId, { ...event.changes, updatedAt: at }),
+      };
     case 'agent.spawned':
-      return event.sessionRef
+      // The server stores a new session ref only (a resume under the same ref changes nothing).
+      return event.sessionRef && next.agents[event.agentId]?.sessionRef !== event.sessionRef
         ? {
             ...next,
             agents: patch(next.agents, event.agentId, {

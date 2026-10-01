@@ -67,7 +67,8 @@ export interface AgentControl {
   pause(agentId: Id, by: Actor): Promise<void>;
   resumeAgent(agentId: Id, by: Actor): Promise<void>;
   answer(questionId: Id, answer: string, by: Actor): Promise<void>;
-  liveAgents(): Agent[];
+  /** Whether a live session asked the question and takes its answer through the adapter. */
+  hasQuestion(questionId: Id): boolean;
 }
 
 export interface CommandsOptions {
@@ -196,29 +197,38 @@ export class Commands implements DomainCommands {
    * Spawns an agent where the hierarchy puts it (decision 24): a Steward in its task's worktree
    * (or the project workspace until P2-05 creates worktrees) on the task's body, a Waykeeper in
    * its project's workspace on the project's body, both under the project's permission policy.
-   * Only an agent outside any project (the Harmonizer) names its own working directory.
+   * Only an agent outside any project names its own working directory: the Harmonizer, and the
+   * Steward of a standalone task without a worktree (SPEC §3.5: a related project's workspace or
+   * a scratch folder, chosen by the Harmonizer).
    */
   async spawnAgent(input: SpawnAgentInput): Promise<CommandResult<Agent>> {
     const { tables } = this.log;
-    const task = input.taskId ? must(tables.tasks.get(input.taskId), 'task', input.taskId) : undefined;
+    const task = input.taskId
+      ? must(tables.tasks.get(input.taskId), 'task', input.taskId)
+      : undefined;
     const projectId = input.projectId ?? task?.projectId;
-    const project = projectId ? must(tables.projects.get(projectId), 'project', projectId) : undefined;
+    const project = projectId
+      ? must(tables.projects.get(projectId), 'project', projectId)
+      : undefined;
     if (task?.projectId && input.projectId && task.projectId !== input.projectId) {
       throw new DomainError('invalid', `task ${task.id} belongs to project ${task.projectId}`);
     }
-    if (input.role === 'steward' && !task) throw new DomainError('invalid', 'a Steward needs a task');
+    if (input.role === 'steward' && !task)
+      throw new DomainError('invalid', 'a Steward needs a task');
     if (input.role === 'waykeeper' && !project) {
       throw new DomainError('invalid', 'a Waykeeper needs a project');
     }
     if (input.role === 'harmonizer' && input.supervisorId) {
       throw new DomainError('invalid', 'the Harmonizer has no supervisor');
     }
-    if (input.supervisorId) must(tables.agents.get(input.supervisorId), 'agent', input.supervisorId);
-    if (input.cwd && (task || project)) {
+    if (input.supervisorId)
+      must(tables.agents.get(input.supervisorId), 'agent', input.supervisorId);
+    if (input.cwd && project) {
       throw new DomainError('invalid', 'an agent of a project runs in its workspace or worktree');
     }
     const cwd = task?.worktreePath ?? project?.workspace ?? input.cwd;
-    if (!cwd) throw new DomainError('invalid', 'an agent outside a project needs a working directory');
+    if (!cwd)
+      throw new DomainError('invalid', 'an agent outside a project needs a working directory');
     const bodyId = input.role === 'steward' ? task?.bodyId : project?.bodyId;
 
     const since = this.log.currentSeq();
@@ -291,16 +301,22 @@ export class Commands implements DomainCommands {
 
   /**
    * First answer wins (SPEC §2.6): refused with "already answered by …" when someone was first or
-   * the question changed since `version`. A live agent gets the answer through its adapter
-   * before the log records it, so the log never holds an answer the agent did not receive.
+   * the question changed since `version`. A question a live session asked gets the answer through
+   * its adapter before the log records it, so the log never holds an answer the agent did not
+   * receive; any other open question is answered in the log alone.
    */
   async answerQuestion(input: AnswerQuestionInput) {
     const { questionId } = input;
-    const answer = { questionId, answer: input.answer, answeredBy: input.by, ...(input.version !== undefined ? { version: input.version } : {}) };
+    const answer = {
+      questionId,
+      answer: input.answer,
+      answeredBy: input.by,
+      ...(input.version !== undefined ? { version: input.version } : {}),
+    };
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
     checkAnswer(question, answer);
-    const live = this.agents?.liveAgents().some((a) => a.id === question.originAgentId);
-    if (!live) return this.run((ctx) => answerQuestion(ctx, answer));
+    if (!this.agents?.hasQuestion(questionId))
+      return this.run((ctx) => answerQuestion(ctx, answer));
     const since = this.log.currentSeq();
     await this.agents!.answer(questionId, input.answer, input.by);
     const after = must(this.log.tables.questions.get(questionId), 'question', questionId);
@@ -323,7 +339,11 @@ export class Commands implements DomainCommands {
    * A panel action (decision 11b). On an agent: stop/cancel, pause and resume through the runtime
    * (which records `control.*` itself). On a task or project: recorded with its domain effect.
    */
-  async control(target: ControlTarget, action: ControlAction, by: Actor): Promise<CommandResult<void>> {
+  async control(
+    target: ControlTarget,
+    action: ControlAction,
+    by: Actor,
+  ): Promise<CommandResult<void>> {
     if (target.kind === 'agent') {
       const run = (fn: (r: AgentControl) => Promise<void>) =>
         this.agentCommand(target.id, fn).then((r) => ({ value: undefined, events: r.events }));

@@ -276,7 +276,7 @@ export const ProjectStateChanged = z.object({
   type: z.literal('project.state_changed'),
   projectId: Id,
   from: WorkState,
-  to: WorkState,  /** Who asked for it; absent for a derived change (P2-15). */
+  to: WorkState /** Who asked for it; absent for a derived change (P2-15). */,
   by: Actor.optional(),
 });
 
@@ -290,7 +290,7 @@ export const TaskStateChanged = z.object({
   type: z.literal('task.state_changed'),
   taskId: Id,
   from: WorkState,
-  to: WorkState,  /** Who asked for it; absent for a derived change (P2-15). */
+  to: WorkState /** Who asked for it; absent for a derived change (P2-15). */,
   by: Actor.optional(),
 });
 

@@ -28,7 +28,10 @@ const hostOf = (taskId: Id): Host => ({ kind: 'task', id: taskId });
 function openProject(ctx: CommandContext, projectId: Id) {
   const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
   if (project.state === 'archived') {
-    throw new DomainError('invalid_transition', `project ${projectId} is archived; reopen it first`);
+    throw new DomainError(
+      'invalid_transition',
+      `project ${projectId} is archived; reopen it first`,
+    );
   }
   return project;
 }
@@ -48,7 +51,8 @@ export function createTask(ctx: CommandContext, input: CreateTaskInput): Task {
   let bodyId: Id;
   let asteroid;
   if (input.projectId) {
-    if (input.bodyId) throw new DomainError('invalid', 'a project task lives on its project’s body');
+    if (input.bodyId)
+      throw new DomainError('invalid', 'a project task lives on its project’s body');
     bodyId = openProject(ctx, input.projectId).bodyId;
   } else {
     asteroid = input.bodyId
@@ -130,13 +134,19 @@ export function pinTask(ctx: CommandContext, taskId: Id, pinned: boolean): Task 
  * Reopens a finished task as `approved`. A project task needs its project to be open; a
  * standalone one gets its old asteroid back if it is free, else `input.bodyId` or a fresh one.
  */
-export function reopenTask(ctx: CommandContext, taskId: Id, by: Actor, input: ReopenInput = {}): Task {
+export function reopenTask(
+  ctx: CommandContext,
+  taskId: Id,
+  by: Actor,
+  input: ReopenInput = {},
+): Task {
   const current = must(ctx.tables.tasks.get(taskId), 'task', taskId);
   if (!['completed', 'archived', 'failed'].includes(current.state)) {
     throw new DomainError('invalid_transition', `task ${taskId} is ${current.state}, not finished`);
   }
   if (current.projectId) {
-    if (input.bodyId) throw new DomainError('invalid', 'a project task lives on its project’s body');
+    if (input.bodyId)
+      throw new DomainError('invalid', 'a project task lives on its project’s body');
     openProject(ctx, current.projectId);
     return setTaskState(ctx, taskId, 'approved', by);
   }
@@ -161,7 +171,10 @@ export function reopenTask(ctx: CommandContext, taskId: Id, by: Actor, input: Re
 export function moveTask(ctx: CommandContext, taskId: Id, toProjectId: Id, _by: Actor): Task {
   const current = must(ctx.tables.tasks.get(taskId), 'task', taskId);
   if (current.projectId) {
-    throw new DomainError('invalid', `task ${taskId} already belongs to project ${current.projectId}`);
+    throw new DomainError(
+      'invalid',
+      `task ${taskId} already belongs to project ${current.projectId}`,
+    );
   }
   const project = openProject(ctx, toProjectId);
   const old = bodyOf(ctx, hostOf(taskId));
@@ -171,7 +184,11 @@ export function moveTask(ctx: CommandContext, taskId: Id, toProjectId: Id, _by: 
     bodyId: project.bodyId,
     updatedAt: ctx.now,
   });
-  ctx.emit({ type: 'task.updated', taskId, changes: { projectId: toProjectId, bodyId: project.bodyId } });
+  ctx.emit({
+    type: 'task.updated',
+    taskId,
+    changes: { projectId: toProjectId, bodyId: project.bodyId },
+  });
   if (old) release(ctx, old);
   moveAgents(ctx, hostOf(taskId), current.bodyId, project.bodyId);
   return task;

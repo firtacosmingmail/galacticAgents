@@ -82,7 +82,7 @@ export function updateAgent(ctx: CommandContext, agentId: Id, changes: AgentPlac
     ),
   ) as AgentPlacement;
   if (defined.supervisorId) {
-    for (let id: Id | undefined = defined.supervisorId; id; ) {
+    for (let id: Id | undefined = defined.supervisorId; id;) {
       if (id === agentId) {
         throw new DomainError('invalid', `agent ${agentId} would supervise itself`);
       }

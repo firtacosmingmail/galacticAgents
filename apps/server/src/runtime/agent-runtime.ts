@@ -369,6 +369,11 @@ export class AgentRuntime {
     return live.inbox.enqueue(text, { ...opts, id: messageId });
   }
 
+  /** Whether a live session asked `questionId` and waits for its answer through the adapter. */
+  hasQuestion(questionId: Id): boolean {
+    return this.byQuestion.has(questionId);
+  }
+
   async answer(questionId: Id, answer: string, by: Actor): Promise<void> {
     const agentId = this.byQuestion.get(questionId);
     if (!agentId) throw new Error(`no open question ${questionId}`);
@@ -530,11 +535,7 @@ export class AgentRuntime {
             ? { type: 'agent.stopped', agentId: record.agentId, by: stoppedBy }
             : { type: 'agent.interrupted', agentId: record.agentId, reason: 'server restarted' },
         );
-        cancelQuestionsOf(
-          ctx,
-          record.agentId,
-          stoppedBy ? 'agent stopped' : 'agent interrupted',
-        );
+        cancelQuestionsOf(ctx, record.agentId, stoppedBy ? 'agent stopped' : 'agent interrupted');
       });
     }
     for (const record of this.opts.statuses.all()) {

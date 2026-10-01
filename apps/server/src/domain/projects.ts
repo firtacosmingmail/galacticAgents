@@ -25,12 +25,14 @@ const hostOf = (projectId: Id): Host => ({ kind: 'project', id: projectId });
 
 function parsePolicy(policy: unknown): PermissionPolicy {
   const parsed = PermissionPolicy.safeParse(policy);
-  if (!parsed.success) throw new DomainError('invalid', `invalid permission policy: ${parsed.error.message}`);
+  if (!parsed.success)
+    throw new DomainError('invalid', `invalid permission policy: ${parsed.error.message}`);
   return parsed.data;
 }
 
 function checkParent(ctx: CommandContext, projectId: Id | undefined, parentId: Id): void {
-  if (parentId === projectId) throw new DomainError('invalid', 'a project cannot be its own parent');
+  if (parentId === projectId)
+    throw new DomainError('invalid', 'a project cannot be its own parent');
   must(ctx.tables.projects.get(parentId), 'project', parentId);
 }
 
@@ -66,7 +68,11 @@ export function createProject(ctx: CommandContext, input: CreateProjectInput): P
  * Edits a project's fields (name, workspace, repo path, policy, pin, parent). Its body changes
  * only by `moveHost` and its state only by the state commands.
  */
-export function updateProject(ctx: CommandContext, projectId: Id, changes: ProjectChanges): Project {
+export function updateProject(
+  ctx: CommandContext,
+  projectId: Id,
+  changes: ProjectChanges,
+): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
   const defined = Object.fromEntries(
     Object.entries(changes).filter(([, v]) => v !== undefined),
@@ -137,7 +143,10 @@ export function reopenProject(
 ): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
   if (!['completed', 'archived', 'failed'].includes(current.state)) {
-    throw new DomainError('invalid_transition', `project ${projectId} is ${current.state}, not finished`);
+    throw new DomainError(
+      'invalid_transition',
+      `project ${projectId} is ${current.state}, not finished`,
+    );
   }
   const host = hostOf(projectId);
   const old = must(ctx.tables.bodies.get(current.bodyId), 'body', current.bodyId);
@@ -146,7 +155,10 @@ export function reopenProject(
     occupy(ctx, old, host);
   } else {
     if (!input.bodyId) {
-      throw new DomainError('conflict', `${old.name} is taken; reopen project ${projectId} on another body`);
+      throw new DomainError(
+        'conflict',
+        `${old.name} is taken; reopen project ${projectId} on another body`,
+      );
     }
     const body = must(ctx.tables.bodies.get(input.bodyId), 'body', input.bodyId);
     checkAssignable(body, host);

@@ -106,9 +106,7 @@ describe('updateProject', () => {
     const { run } = world();
     const p = run((ctx) => createProject(ctx, input)).value;
     expect(run((ctx) => updateProject(ctx, p.id, {})).events).toEqual([]);
-    expect(() => run((ctx) => updateProject(ctx, p.id, { bodyId: 'b-jupiter' }))).toThrow(
-      /moving/,
-    );
+    expect(() => run((ctx) => updateProject(ctx, p.id, { bodyId: 'b-jupiter' }))).toThrow(/moving/);
     expect(() => run((ctx) => updateProject(ctx, p.id, { parentProjectId: p.id }))).toThrow(
       /own parent/,
     );
@@ -125,7 +123,13 @@ describe('project states', () => {
     const p = run((ctx) => createProject(ctx, input)).value;
     const { events } = run((ctx) => setProjectState(ctx, p.id, 'in_progress', USER));
     expect(events).toEqual([
-      { type: 'project.state_changed', projectId: p.id, from: 'approved', to: 'in_progress', by: USER },
+      {
+        type: 'project.state_changed',
+        projectId: p.id,
+        from: 'approved',
+        to: 'in_progress',
+        by: USER,
+      },
     ]);
     expect(tables.projects.get(p.id)?.state).toBe('in_progress');
     expect(run((ctx) => setProjectState(ctx, p.id, 'in_progress')).events).toEqual([]);

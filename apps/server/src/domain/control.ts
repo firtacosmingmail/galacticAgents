@@ -2,7 +2,13 @@ import type { Actor, ControlAction, ControlTarget, Event, TaskPriority } from '@
 import { TaskPriority as TaskPrioritySchema } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
-import { archiveProject, closeProject, pinProject, reopenProject, updateProject } from './projects.js';
+import {
+  archiveProject,
+  closeProject,
+  pinProject,
+  reopenProject,
+  updateProject,
+} from './projects.js';
 import { archiveTask, closeTask, pinTask, reopenTask, updateTask } from './tasks.js';
 
 /**
@@ -79,7 +85,10 @@ export function recordControl(
 }
 
 /** What the panel may edit (SPEC §4.3): a task's description and priority, a project's name. */
-function taskEdit(changes: Record<string, unknown>): { description?: string; priority?: TaskPriority } {
+function taskEdit(changes: Record<string, unknown>): {
+  description?: string;
+  priority?: TaskPriority;
+} {
   const out: { description?: string; priority?: TaskPriority } = {};
   for (const [key, value] of Object.entries(changes)) {
     if (key === 'description' && typeof value === 'string') out.description = value;

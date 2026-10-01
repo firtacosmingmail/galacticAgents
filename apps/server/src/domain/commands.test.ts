@@ -61,8 +61,17 @@ describe('Commands', () => {
       taskId: task.id,
       prompt: 'scenario:echo',
     });
-    expect(agent).toMatchObject({ role: 'steward', bodyId: project.bodyId, taskId: task.id, projectId: project.id });
-    expect(agent.meta).toMatchObject({ cwd: '/w/csv', workspace: '/w/csv', permissionPolicy: policy });
+    expect(agent).toMatchObject({
+      role: 'steward',
+      bodyId: project.bodyId,
+      taskId: task.id,
+      projectId: project.id,
+    });
+    expect(agent.meta).toMatchObject({
+      cwd: '/w/csv',
+      workspace: '/w/csv',
+      permissionPolicy: policy,
+    });
     expect(events.map((e) => e.type).slice(0, 2)).toEqual(['agent.created', 'agent.spawned']);
     expect(runtime.liveAgents().map((a) => a.id)).toContain(agent.id);
     expect(log.tables.agents.get(agent.id)?.bodyId).toBe(project.bodyId);
@@ -73,8 +82,28 @@ describe('Commands', () => {
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
     await commands.updateTask(task.id, { worktreePath: '/w/csv/.galactic/worktrees/t' });
-    const { value } = await commands.spawnAgent({ role: 'steward', runtime: 'fake', taskId: task.id, prompt: 'x' });
+    const { value } = await commands.spawnAgent({
+      role: 'steward',
+      runtime: 'fake',
+      taskId: task.id,
+      prompt: 'x',
+    });
     expect(value.meta).toMatchObject({ cwd: '/w/csv/.galactic/worktrees/t', workspace: '/w/csv' });
+  });
+
+  it("lets a standalone task's Steward name its working directory", async () => {
+    const { commands } = boot();
+    const task = (await commands.createTask({ description: 'flaky' })).value;
+    const { value } = await commands.spawnAgent({
+      role: 'steward',
+      runtime: 'fake',
+      taskId: task.id,
+      cwd: '/w/scratch',
+      prompt: 'x',
+    });
+    expect(value).toMatchObject({ bodyId: task.bodyId, taskId: task.id });
+    expect(value.meta).toMatchObject({ cwd: '/w/scratch' });
+    expect(value.projectId).toBeUndefined();
   });
 
   it('refuses spawns the hierarchy does not allow (decision 24), before anything is written', async () => {
@@ -83,17 +112,23 @@ describe('Commands', () => {
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
     const seq = log.currentSeq();
     await expect(
-      commands.spawnAgent({ role: 'steward', runtime: 'fake', taskId: task.id, prompt: 'x', cwd: '/etc' }),
+      commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        prompt: 'x',
+        cwd: '/etc',
+      }),
     ).rejects.toThrow(/workspace or worktree/);
-    await expect(commands.spawnAgent({ role: 'steward', runtime: 'fake', prompt: 'x' })).rejects.toThrow(
-      /needs a task/,
-    );
-    await expect(commands.spawnAgent({ role: 'waykeeper', runtime: 'fake', prompt: 'x' })).rejects.toThrow(
-      /needs a project/,
-    );
-    await expect(commands.spawnAgent({ role: 'harmonizer', runtime: 'fake', prompt: 'x' })).rejects.toThrow(
-      /working directory/,
-    );
+    await expect(
+      commands.spawnAgent({ role: 'steward', runtime: 'fake', prompt: 'x' }),
+    ).rejects.toThrow(/needs a task/);
+    await expect(
+      commands.spawnAgent({ role: 'waykeeper', runtime: 'fake', prompt: 'x' }),
+    ).rejects.toThrow(/needs a project/);
+    await expect(
+      commands.spawnAgent({ role: 'harmonizer', runtime: 'fake', prompt: 'x' }),
+    ).rejects.toThrow(/working directory/);
     await expect(
       commands.spawnAgent({ role: 'steward', runtime: 'acp', taskId: task.id, prompt: 'x' }),
     ).rejects.toMatchObject({ code: 'conflict' });
@@ -103,9 +138,15 @@ describe('Commands', () => {
   it('answers a live agent through its adapter, first answer wins', async () => {
     const { commands, log } = boot();
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
-    const task = (await commands.createTask({ description: 'export', projectId: project.id })).value;
+    const task = (await commands.createTask({ description: 'export', projectId: project.id }))
+      .value;
     const agent = (
-      await commands.spawnAgent({ role: 'steward', runtime: 'fake', taskId: task.id, prompt: 'scenario:asks' })
+      await commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        prompt: 'scenario:asks',
+      })
     ).value;
     await until(() => log.tables.questions.all().some((q) => q.originAgentId === agent.id));
     const question = log.tables.questions.all().find((q) => q.originAgentId === agent.id)!;
@@ -126,7 +167,12 @@ describe('Commands', () => {
     const { commands, statuses } = boot();
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
     const agent = (
-      await commands.spawnAgent({ role: 'waykeeper', runtime: 'fake', projectId: project.id, prompt: 'scenario:long' })
+      await commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: project.id,
+        prompt: 'scenario:long',
+      })
     ).value;
     await until(() => statuses.get(agent.id)?.state === 'working');
     const target = { kind: 'agent', id: agent.id } as const;
@@ -138,7 +184,9 @@ describe('Commands', () => {
     await commands.resumeAgent(agent.id, USER);
     const stopped = await commands.control(target, { action: 'stop' }, USER);
     expect(stopped.events.map((e) => e.type)).toContain('agent.stopped');
-    await expect(commands.control(target, { action: 'archive' }, USER)).rejects.toThrow(/cannot be given/);
+    await expect(commands.control(target, { action: 'archive' }, USER)).rejects.toThrow(
+      /cannot be given/,
+    );
   });
 
   it('refuses agent commands without a runtime', async () => {
@@ -147,7 +195,12 @@ describe('Commands', () => {
     for (const body of BODIES) log.tables.bodies.insert(body);
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w' })).value;
     await expect(
-      commands.spawnAgent({ role: 'waykeeper', runtime: 'fake', projectId: project.id, prompt: 'x' }),
+      commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: project.id,
+        prompt: 'x',
+      }),
     ).rejects.toThrow(/no agent runtime/);
   });
 });

@@ -66,15 +66,17 @@ export interface SpawnAgentInput {
   tools?: ToolDefinition[];
   systemPrompt?: string;
   /**
-   * Working directory of an agent outside any project (the Harmonizer). An agent with a task or
-   * project runs in the task's worktree or the project's workspace and may not override it
-   * (decision 24).
+   * Working directory of an agent outside any project: the Harmonizer, or the Steward of a
+   * standalone task (SPEC §3.5). An agent of a project runs in its task's worktree or the
+   * project's workspace and may not override it (decision 24).
    */
   cwd?: string;
 }
 
 /** Where an agent sits in the hierarchy; what `updateAgent` may change. */
-export type AgentPlacement = Partial<Pick<Agent, 'supervisorId' | 'bodyId' | 'taskId' | 'projectId'>>;
+export type AgentPlacement = Partial<
+  Pick<Agent, 'supervisorId' | 'bodyId' | 'taskId' | 'projectId'>
+>;
 
 /** Reopening finished work (decision 11b): the old body if it is still free, else `bodyId`. */
 export interface ReopenInput {

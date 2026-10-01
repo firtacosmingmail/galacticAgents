@@ -42,7 +42,9 @@ describe('createTask', () => {
 
   it('gives a standalone task a fresh asteroid: body.created, task.created, body.assigned', () => {
     const { run, tables } = world();
-    const { value, types, events } = run((ctx) => createTask(ctx, { description: 'Fix flaky test' }));
+    const { value, types, events } = run((ctx) =>
+      createTask(ctx, { description: 'Fix flaky test' }),
+    );
     expect(types).toEqual(['body.created', 'task.created', 'body.assigned']);
     const body = tables.bodies.get(value.bodyId);
     expect(body).toMatchObject({ kind: 'asteroid', host: { kind: 'task', id: value.id } });
@@ -60,7 +62,9 @@ describe('createTask', () => {
     ).value;
     expect(b.blockedBy).toEqual([a.id]);
     expect(() =>
-      run((ctx) => createTask(ctx, { description: 'c', projectId: project.id, blockedBy: ['t-x'] })),
+      run((ctx) =>
+        createTask(ctx, { description: 'c', projectId: project.id, blockedBy: ['t-x'] }),
+      ),
     ).toThrow(/no task t-x/);
   });
 
@@ -74,9 +78,9 @@ describe('createTask', () => {
     );
     run((ctx) => closeProject(ctx, project.id, USER));
     run((ctx) => archiveProject(ctx, project.id, USER));
-    expect(() => run((ctx) => createTask(ctx, { description: 'x', projectId: project.id }))).toThrow(
-      /archived/,
-    );
+    expect(() =>
+      run((ctx) => createTask(ctx, { description: 'x', projectId: project.id })),
+    ).toThrow(/archived/);
     expect(() => run((ctx) => createTask(ctx, { description: '  ' }))).toThrow(/description/);
   });
 });
@@ -99,7 +103,9 @@ describe('updateTask', () => {
     expect(() => run((ctx) => updateTask(ctx, t.id, { bodyId: 'b-jupiter' }))).toThrow(/moving/);
     expect(() => run((ctx) => updateTask(ctx, t.id, { projectId: 'p-x' }))).toThrow(/moving/);
     expect(() => run((ctx) => updateTask(ctx, t.id, { blockedBy: [t.id] }))).toThrow(/itself/);
-    expect(run((ctx) => updateTask(ctx, t.id, { description: undefined } as never)).events).toEqual([]);
+    expect(run((ctx) => updateTask(ctx, t.id, { description: undefined } as never)).events).toEqual(
+      [],
+    );
   });
 
   it('pins', () => {
@@ -164,12 +170,22 @@ describe('moveTask', () => {
     const { run, tables, project } = withProject();
     const st = run((ctx) => createTask(ctx, { description: 'b' })).value;
     const steward = run((ctx) =>
-      createAgent(ctx, { role: 'steward', runtime: 'fake', caps: CAPS, bodyId: st.bodyId, taskId: st.id }),
+      createAgent(ctx, {
+        role: 'steward',
+        runtime: 'fake',
+        caps: CAPS,
+        bodyId: st.bodyId,
+        taskId: st.id,
+      }),
     ).value;
     const { value, events } = run((ctx) => moveTask(ctx, st.id, project.id, USER));
     expect(value).toMatchObject({ projectId: project.id, bodyId: project.bodyId });
     expect(events).toEqual([
-      { type: 'task.updated', taskId: st.id, changes: { projectId: project.id, bodyId: project.bodyId } },
+      {
+        type: 'task.updated',
+        taskId: st.id,
+        changes: { projectId: project.id, bodyId: project.bodyId },
+      },
       { type: 'body.freed', bodyId: st.bodyId },
       { type: 'agent.updated', agentId: steward.id, changes: { bodyId: project.bodyId } },
     ]);

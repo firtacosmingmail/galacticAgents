@@ -90,7 +90,8 @@ export function decideProposal(
       const changes = Object.fromEntries(
         Object.entries(decision.changes).filter(([, v]) => v !== undefined),
       ) as typeof decision.changes;
-      if (Object.keys(changes).length === 0) throw new DomainError('invalid', 'an edit changes something');
+      if (Object.keys(changes).length === 0)
+        throw new DomainError('invalid', 'an edit changes something');
       checkShape(ctx, { ...current, ...changes });
       const proposal = save({ ...changes, state: 'edited' });
       ctx.emit({ type: 'proposal.edited', proposalId, changes });

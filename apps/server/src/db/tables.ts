@@ -9,7 +9,8 @@ const parse = <T>(v: unknown): T | undefined =>
   typeof v === 'string' ? (JSON.parse(v) as T) : undefined;
 const opt = <T>(v: unknown): T | undefined => (v === null ? undefined : (v as T));
 const flag = (v: boolean | undefined): number | null => (v === undefined ? null : v ? 1 : 0);
-const unflag = (v: unknown): boolean | undefined => (v === null || v === undefined ? undefined : v === 1);
+const unflag = (v: unknown): boolean | undefined =>
+  v === null || v === undefined ? undefined : v === 1;
 
 /** Strips `undefined` values so parsed objects compare equal to their fixtures. */
 function compact<T extends object>(o: T): T {

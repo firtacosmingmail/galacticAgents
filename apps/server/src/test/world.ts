@@ -29,7 +29,11 @@ export function world() {
   /** Runs a command and returns its value plus the event types it appended. */
   const run = <T>(fn: (ctx: CommandContext) => T) => {
     const out = log.runCommand(fn);
-    return { value: out.value, events: out.events.map((e) => e.event), types: out.events.map((e) => e.event.type) };
+    return {
+      value: out.value,
+      events: out.events.map((e) => e.event),
+      types: out.events.map((e) => e.event.type),
+    };
   };
   return { log, tables: log.tables, seen, run };
 }

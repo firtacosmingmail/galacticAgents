@@ -19,7 +19,12 @@ function hierarchy() {
   const w = world();
   const agent = (role: 'harmonizer' | 'waykeeper' | 'steward', supervisorId?: string) =>
     w.run((ctx) =>
-      createAgent(ctx, { role, runtime: 'fake', caps: CAPS, ...(supervisorId ? { supervisorId } : {}) }),
+      createAgent(ctx, {
+        role,
+        runtime: 'fake',
+        caps: CAPS,
+        ...(supervisorId ? { supervisorId } : {}),
+      }),
     ).value;
   const harmonizer = agent('harmonizer');
   const waykeeper = agent('waykeeper', harmonizer.id);
@@ -41,12 +46,28 @@ describe('answerQuestion', () => {
   it('lets the holding supervisor answer, logged with answeredBy and a bumped version', () => {
     const { run, tables, asWaykeeper } = hierarchy();
     const { value, events } = run((ctx) =>
-      answerQuestion(ctx, { questionId: 'q-1', answer: 'snappy', answeredBy: asWaykeeper, version: 0 }),
+      answerQuestion(ctx, {
+        questionId: 'q-1',
+        answer: 'snappy',
+        answeredBy: asWaykeeper,
+        version: 0,
+      }),
     );
-    expect(value).toMatchObject({ status: 'answered', answer: 'snappy', answeredBy: asWaykeeper, version: 1 });
+    expect(value).toMatchObject({
+      status: 'answered',
+      answer: 'snappy',
+      answeredBy: asWaykeeper,
+      version: 1,
+    });
     expect(tables.questions.get('q-1')).toEqual(value);
     expect(events).toEqual([
-      { type: 'question.answered', questionId: 'q-1', answer: 'snappy', answeredBy: asWaykeeper, version: 1 },
+      {
+        type: 'question.answered',
+        questionId: 'q-1',
+        answer: 'snappy',
+        answeredBy: asWaykeeper,
+        version: 1,
+      },
     ]);
   });
 
@@ -55,19 +76,26 @@ describe('answerQuestion', () => {
     run((ctx) => answerQuestion(ctx, { questionId: 'q-1', answer: 'snappy', answeredBy: USER }));
     let error: unknown;
     try {
-      run((ctx) => answerQuestion(ctx, { questionId: 'q-1', answer: 'zstd', answeredBy: asWaykeeper }));
+      run((ctx) =>
+        answerQuestion(ctx, { questionId: 'q-1', answer: 'zstd', answeredBy: asWaykeeper }),
+      );
     } catch (e) {
       error = e;
     }
     expect(error).toBeInstanceOf(DomainError);
-    expect(error).toMatchObject({ code: 'stale', message: 'question q-1 was already answered by the user' });
+    expect(error).toMatchObject({
+      code: 'stale',
+      message: 'question q-1 was already answered by the user',
+    });
   });
 
   it('refuses an answer against an older version (the question moved meanwhile)', () => {
     const { run, asWaykeeper } = hierarchy();
     run((ctx) => escalateQuestion(ctx, 'q-1', asWaykeeper));
     expect(() =>
-      run((ctx) => answerQuestion(ctx, { questionId: 'q-1', answer: 'x', answeredBy: USER, version: 0 })),
+      run((ctx) =>
+        answerQuestion(ctx, { questionId: 'q-1', answer: 'x', answeredBy: USER, version: 0 }),
+      ),
     ).toThrow(/changed since version 0/);
   });
 
@@ -83,10 +111,14 @@ describe('answerQuestion', () => {
     );
     const asHarmonizer: Actor = { type: 'agent', id: harmonizer.id };
     expect(() =>
-      run((ctx) => answerQuestion(ctx, { questionId: 'q-perm', answer: 'yes', answeredBy: asHarmonizer })),
+      run((ctx) =>
+        answerQuestion(ctx, { questionId: 'q-perm', answer: 'yes', answeredBy: asHarmonizer }),
+      ),
     ).toThrow(/policy or the user only/);
     expect(() =>
-      run((ctx) => answerQuestion(ctx, { questionId: 'q-1', answer: 'x', answeredBy: asHarmonizer })),
+      run((ctx) =>
+        answerQuestion(ctx, { questionId: 'q-1', answer: 'x', answeredBy: asHarmonizer }),
+      ),
     ).toThrow(/held by agent/);
     expect(() =>
       run((ctx) =>
@@ -115,7 +147,13 @@ describe('escalateQuestion', () => {
     const { run, tables, asWaykeeper, harmonizer } = hierarchy();
     const asHarmonizer: Actor = { type: 'agent', id: harmonizer.id };
     expect(run((ctx) => escalateQuestion(ctx, 'q-1', asWaykeeper)).events).toEqual([
-      { type: 'question.escalated', questionId: 'q-1', from: asWaykeeper, to: asHarmonizer, version: 1 },
+      {
+        type: 'question.escalated',
+        questionId: 'q-1',
+        from: asWaykeeper,
+        to: asHarmonizer,
+        version: 1,
+      },
     ]);
     expect(() => run((ctx) => escalateQuestion(ctx, 'q-1', asWaykeeper))).toThrow(/held by agent/);
     expect(run((ctx) => escalateQuestion(ctx, 'q-1', asHarmonizer)).events).toEqual([
@@ -132,13 +170,20 @@ describe('reassignQuestion', () => {
     const to: Actor = { type: 'agent', id: harmonizer.id };
     const { events } = run((ctx) => reassignQuestion(ctx, 'q-1', to, 'holder stopped'));
     expect(events).toEqual([
-      { type: 'question.reassigned', questionId: 'q-1', from: asWaykeeper, to, reason: 'holder stopped', version: 1 },
+      {
+        type: 'question.reassigned',
+        questionId: 'q-1',
+        from: asWaykeeper,
+        to,
+        reason: 'holder stopped',
+        version: 1,
+      },
     ]);
     expect(tables.questions.get('q-1')?.holder).toEqual(to);
     expect(() => run((ctx) => reassignQuestion(ctx, 'q-1', to, 'again'))).toThrow(/already held/);
-    expect(() => run((ctx) => reassignQuestion(ctx, 'q-1', { type: 'agent', id: 'a-x' }, 'x'))).toThrow(
-      /no agent a-x/,
-    );
+    expect(() =>
+      run((ctx) => reassignQuestion(ctx, 'q-1', { type: 'agent', id: 'a-x' }, 'x')),
+    ).toThrow(/no agent a-x/);
   });
 });
 
@@ -152,10 +197,12 @@ describe('updateAgent', () => {
       { type: 'agent.updated', agentId: steward.id, changes: { supervisorId: harmonizer.id } },
     ]);
     expect(tables.agents.get(steward.id)?.supervisorId).toBe(harmonizer.id);
-    expect(run((ctx) => updateAgent(ctx, steward.id, { supervisorId: harmonizer.id })).events).toEqual([]);
-    expect(() => run((ctx) => updateAgent(ctx, harmonizer.id, { supervisorId: waykeeper.id }))).toThrow(
-      /supervise itself/,
-    );
+    expect(
+      run((ctx) => updateAgent(ctx, steward.id, { supervisorId: harmonizer.id })).events,
+    ).toEqual([]);
+    expect(() =>
+      run((ctx) => updateAgent(ctx, harmonizer.id, { supervisorId: waykeeper.id })),
+    ).toThrow(/supervise itself/);
     expect(() => run((ctx) => updateAgent(ctx, steward.id, { bodyId: 'b-x' }))).toThrow(/no body/);
   });
 });

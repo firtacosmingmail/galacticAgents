@@ -14,11 +14,22 @@ describe('moveHost', () => {
     const p = run((ctx) => createProject(ctx, { name: 'CSV', workspace: '/w' })).value;
     const t = run((ctx) => createTask(ctx, { description: 'a', projectId: p.id })).value;
     const steward = run((ctx) =>
-      createAgent(ctx, { role: 'steward', runtime: 'fake', caps: CAPS, bodyId: p.bodyId, taskId: t.id }),
+      createAgent(ctx, {
+        role: 'steward',
+        runtime: 'fake',
+        caps: CAPS,
+        bodyId: p.bodyId,
+        taskId: t.id,
+      }),
     ).value;
     const { events } = run((ctx) => moveHost(ctx, { kind: 'project', id: p.id }, 'b-jupiter'));
     expect(events).toEqual([
-      { type: 'body.moved', host: { kind: 'project', id: p.id }, fromBodyId: 'b-mars', toBodyId: 'b-jupiter' },
+      {
+        type: 'body.moved',
+        host: { kind: 'project', id: p.id },
+        fromBodyId: 'b-mars',
+        toBodyId: 'b-jupiter',
+      },
       { type: 'project.updated', projectId: p.id, changes: { bodyId: 'b-jupiter' } },
       { type: 'task.updated', taskId: t.id, changes: { bodyId: 'b-jupiter' } },
       { type: 'agent.updated', agentId: steward.id, changes: { bodyId: 'b-jupiter' } },

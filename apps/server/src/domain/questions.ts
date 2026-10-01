@@ -176,12 +176,22 @@ export function reassignQuestion(
 ): Question {
   const current = mustOpen(ctx, questionId);
   if (sameActor(current.holder, to)) {
-    throw new DomainError('invalid', `question ${questionId} is already held by ${describeActor(to)}`);
+    throw new DomainError(
+      'invalid',
+      `question ${questionId} is already held by ${describeActor(to)}`,
+    );
   }
   checkHolder(ctx, current, to);
   const from = current.holder;
   const question = moveTo(ctx, current, to);
-  ctx.emit({ type: 'question.reassigned', questionId, from, to, reason, version: question.version });
+  ctx.emit({
+    type: 'question.reassigned',
+    questionId,
+    from,
+    to,
+    reason,
+    version: question.version,
+  });
   return question;
 }
 

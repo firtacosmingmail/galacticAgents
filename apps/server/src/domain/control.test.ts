@@ -17,12 +17,14 @@ describe('recordControl', () => {
   it('records a stop/pause on a task or project as an event only (agent effects are P2-14)', () => {
     const { run, task, project } = setup();
     for (const action of ['stop', 'cancel', 'pause', 'resume'] as const) {
-      expect(run((ctx) => recordControl(ctx, { kind: 'task', id: task.id }, { action }, USER)).events).toEqual([
-        { type: `control.${action}`, target: { kind: 'task', id: task.id }, by: USER },
-      ]);
+      expect(
+        run((ctx) => recordControl(ctx, { kind: 'task', id: task.id }, { action }, USER)).events,
+      ).toEqual([{ type: `control.${action}`, target: { kind: 'task', id: task.id }, by: USER }]);
     }
     expect(
-      run((ctx) => recordControl(ctx, { kind: 'project', id: project.id }, { action: 'pause' }, USER)).types,
+      run((ctx) =>
+        recordControl(ctx, { kind: 'project', id: project.id }, { action: 'pause' }, USER),
+      ).types,
     ).toEqual(['control.pause']);
   });
 
@@ -30,15 +32,16 @@ describe('recordControl', () => {
     const { run, tables, task, project } = setup();
     const target = { kind: 'task', id: task.id } as const;
     expect(
-      run((ctx) => recordControl(ctx, target, { action: 'edit', changes: { priority: 'urgent' } }, USER)).events,
+      run((ctx) =>
+        recordControl(ctx, target, { action: 'edit', changes: { priority: 'urgent' } }, USER),
+      ).events,
     ).toEqual([
       { type: 'control.edit', target, by: USER, changes: { priority: 'urgent' } },
       { type: 'task.updated', taskId: task.id, changes: { priority: 'urgent' } },
     ]);
-    expect(run((ctx) => recordControl(ctx, target, { action: 'pin', pinned: true }, USER)).types).toEqual([
-      'control.pin',
-      'task.updated',
-    ]);
+    expect(
+      run((ctx) => recordControl(ctx, target, { action: 'pin', pinned: true }, USER)).types,
+    ).toEqual(['control.pin', 'task.updated']);
     expect(run((ctx) => recordControl(ctx, target, { action: 'close' }, USER)).types).toEqual([
       'control.close',
       'task.state_changed',
@@ -63,7 +66,9 @@ describe('recordControl', () => {
     const seq = log.currentSeq();
     const target = { kind: 'task', id: task.id } as const;
     expect(() =>
-      run((ctx) => recordControl(ctx, target, { action: 'edit', changes: { bodyId: 'b-x' } }, USER)),
+      run((ctx) =>
+        recordControl(ctx, target, { action: 'edit', changes: { bodyId: 'b-x' } }, USER),
+      ),
     ).toThrow(/cannot be edited/);
     expect(() => run((ctx) => recordControl(ctx, target, { action: 'reopen' }, USER))).toThrow(
       /not finished/,
