@@ -1,11 +1,14 @@
 import type { Actor, Id, Question, QuestionContext, QuestionKind } from '@galactic/protocol';
+import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 
 /**
- * Question commands (P1-23; SPEC §2.6, TECHNOLOGY §5.3). The server owns questions: an
+ * Question commands (P1-23, P2-01; SPEC §2.6, TECHNOLOGY §5.3). The server owns questions: an
  * `agent.needs_input` opens a `Question` row in the same transaction, and an answer closes it.
- * Holder routing (supervisor first for clarifications, escalation, reassignment when a holder
- * dies) arrives with the hierarchy in Phase 2; in Phase 1 every question holds `user`.
+ * Every change of holder or status bumps `version`, so an answer given against an older view is
+ * refused with "already answered by …" instead of overwriting the first one. Where a question is
+ * routed when it opens and when its holder dies is the question service's job (P2-03); these
+ * commands are the moves it makes.
  */
 
 export interface OpenQuestionInput {
@@ -14,15 +17,47 @@ export interface OpenQuestionInput {
   originAgentId: Id;
   context: QuestionContext;
   holder?: Actor;
-  now: string;
 }
 
 const USER: Actor = { type: 'user' };
+
+/** "the user", "agent a-1", "the system": how an actor reads in a refusal. */
+export function describeActor(actor: Actor): string {
+  if (actor.type === 'agent') return `agent ${actor.id ?? '?'}`;
+  return actor.type === 'user' ? 'the user' : 'the system';
+}
+
+const sameActor = (a: Actor, b: Actor): boolean => a.type === b.type && a.id === b.id;
+
+function mustOpen(ctx: CommandContext, questionId: Id): Question {
+  const current = must(ctx.tables.questions.get(questionId), 'question', questionId);
+  if (current.status === 'answered') {
+    throw new DomainError(
+      'stale',
+      `question ${questionId} was already answered by ${describeActor(current.answeredBy ?? USER)}`,
+    );
+  }
+  if (current.status !== 'open') {
+    throw new DomainError('invalid_transition', `question ${questionId} is ${current.status}`);
+  }
+  return current;
+}
+
+/** A permission question is the policy's or the user's, never an agent's (decision 7, 12). */
+function checkHolder(ctx: CommandContext, question: Question, holder: Actor): void {
+  if (holder.type === 'agent') {
+    if (question.kind === 'permission') {
+      throw new DomainError('invalid', `permission question ${question.id} is held by the user`);
+    }
+    must(ctx.tables.agents.get(holder.id ?? ''), 'agent', holder.id ?? '(no id)');
+  }
+}
 
 /** Inserts the row and emits `question.opened`. Re-asking an open id (a resumed session) is a no-op. */
 export function openQuestion(ctx: CommandContext, input: OpenQuestionInput): Question {
   const existing = ctx.tables.questions.get(input.id);
   if (existing && existing.status === 'open') return existing;
+  must(ctx.tables.agents.get(input.originAgentId), 'agent', input.originAgentId);
   const question: Question = {
     id: input.id,
     kind: input.kind,
@@ -31,43 +66,118 @@ export function openQuestion(ctx: CommandContext, input: OpenQuestionInput): Que
     status: 'open',
     context: input.context,
     version: 0,
-    createdAt: input.now,
-    updatedAt: input.now,
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
   };
+  checkHolder(ctx, question, question.holder);
   ctx.tables.questions.upsert(question);
   ctx.emit({ type: 'question.opened', question });
   return question;
 }
 
-/** Marks the row answered and emits `question.answered` with the bumped version. */
-export function answerQuestion(
-  ctx: CommandContext,
-  questionId: Id,
-  answer: string,
-  answeredBy: Actor,
-  now: string,
-): Question {
-  const current = ctx.tables.questions.get(questionId);
-  if (!current) throw new Error(`no question ${questionId}`);
-  if (current.status !== 'open')
-    throw new Error(`question ${questionId} is already ${current.status}`);
+export interface AnswerInput {
+  questionId: Id;
+  answer: string;
+  answeredBy: Actor;
+  /** The version the answerer saw; absent = "whatever it is now" (the runtime's own path). */
+  version?: number;
+}
+
+/**
+ * Marks the row answered and emits `question.answered` with the bumped version. First answer
+ * wins: a second one is refused with who answered first, and so is one given against an older
+ * version (the holder changed meanwhile). An agent may answer only a clarification it holds.
+ */
+export function answerQuestion(ctx: CommandContext, input: AnswerInput): Question {
+  const current = mustOpen(ctx, input.questionId);
+  if (input.version !== undefined && input.version !== current.version) {
+    throw new DomainError(
+      'stale',
+      `question ${current.id} changed since version ${input.version} (now held by ${describeActor(current.holder)})`,
+    );
+  }
+  if (input.answeredBy.type === 'agent') {
+    if (current.kind === 'permission') {
+      throw new DomainError(
+        'invalid',
+        `permission question ${current.id} is answered by the policy or the user only`,
+      );
+    }
+    if (!sameActor(current.holder, input.answeredBy)) {
+      throw new DomainError(
+        'conflict',
+        `question ${current.id} is held by ${describeActor(current.holder)}, not ${describeActor(input.answeredBy)}`,
+      );
+    }
+  }
   const question: Question = {
     ...current,
     status: 'answered',
-    answer,
-    answeredBy,
+    answer: input.answer,
+    answeredBy: input.answeredBy,
     version: current.version + 1,
-    updatedAt: now,
+    updatedAt: ctx.now,
   };
   ctx.tables.questions.upsert(question);
   ctx.emit({
     type: 'question.answered',
-    questionId,
-    answer,
-    answeredBy,
+    questionId: question.id,
+    answer: input.answer,
+    answeredBy: input.answeredBy,
     version: question.version,
   });
   return question;
+}
+
+/**
+ * Hands a clarification one level up (SPEC §2.6): from the holding agent to its supervisor, or to
+ * the user when it has none. Only the holder (or the system) escalates; the user already holds
+ * the top of the chain.
+ */
+export function escalateQuestion(ctx: CommandContext, questionId: Id, by: Actor): Question {
+  const current = mustOpen(ctx, questionId);
+  const from = current.holder;
+  if (from.type !== 'agent') {
+    throw new DomainError('invalid_transition', `question ${questionId} is already with the user`);
+  }
+  if (by.type === 'agent' && !sameActor(by, from)) {
+    throw new DomainError(
+      'conflict',
+      `question ${questionId} is held by ${describeActor(from)}, not ${describeActor(by)}`,
+    );
+  }
+  const holder = must(ctx.tables.agents.get(from.id ?? ''), 'agent', from.id ?? '(no id)');
+  const to: Actor = holder.supervisorId ? { type: 'agent', id: holder.supervisorId } : USER;
+  const question = moveTo(ctx, current, to);
+  ctx.emit({ type: 'question.escalated', questionId, from, to, version: question.version });
+  return question;
+}
+
+/** Changes the holder without an escalation: the holder died (orphan), or a hand-over. */
+export function reassignQuestion(
+  ctx: CommandContext,
+  questionId: Id,
+  to: Actor,
+  reason: string,
+): Question {
+  const current = mustOpen(ctx, questionId);
+  if (sameActor(current.holder, to)) {
+    throw new DomainError('invalid', `question ${questionId} is already held by ${describeActor(to)}`);
+  }
+  checkHolder(ctx, current, to);
+  const from = current.holder;
+  const question = moveTo(ctx, current, to);
+  ctx.emit({ type: 'question.reassigned', questionId, from, to, reason, version: question.version });
+  return question;
+}
+
+function moveTo(ctx: CommandContext, current: Question, to: Actor): Question {
+  return ctx.tables.questions.upsert({
+    ...current,
+    holder: to,
+    version: current.version + 1,
+    updatedAt: ctx.now,
+  });
 }
 
 /**
@@ -78,7 +188,6 @@ export function cancelQuestion(
   ctx: CommandContext,
   questionId: Id,
   reason: string,
-  now: string,
 ): Question | undefined {
   const current = ctx.tables.questions.get(questionId);
   if (!current || current.status !== 'open') return undefined;
@@ -86,7 +195,7 @@ export function cancelQuestion(
     ...current,
     status: 'cancelled',
     version: current.version + 1,
-    updatedAt: now,
+    updatedAt: ctx.now,
   };
   ctx.tables.questions.upsert(question);
   ctx.emit({
@@ -100,14 +209,9 @@ export function cancelQuestion(
 }
 
 /** Cancels every open question of an agent (it ended or was interrupted). */
-export function cancelQuestionsOf(
-  ctx: CommandContext,
-  agentId: Id,
-  reason: string,
-  now: string,
-): Id[] {
+export function cancelQuestionsOf(ctx: CommandContext, agentId: Id, reason: string): Id[] {
   return openQuestionsOf(ctx, agentId)
-    .map((q) => cancelQuestion(ctx, q.id, reason, now)?.id)
+    .map((q) => cancelQuestion(ctx, q.id, reason)?.id)
     .filter((id): id is Id => id !== undefined);
 }
 

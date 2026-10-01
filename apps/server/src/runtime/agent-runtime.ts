@@ -203,7 +203,6 @@ export class AgentRuntime {
         role: req.role,
         runtime: req.runtime,
         caps: this.caps.resolve(req.caps),
-        now: this.now(),
         ...(req.bodyId ? { bodyId: req.bodyId } : {}),
         ...(req.supervisorId ? { supervisorId: req.supervisorId } : {}),
         ...(req.taskId ? { taskId: req.taskId } : {}),
@@ -334,7 +333,7 @@ export class AgentRuntime {
     // The row's session ref and `agent.spawned` in one transaction (one write rule).
     try {
       live.agent = this.opts.log.runCommand((ctx) =>
-        recordSpawned(ctx, live.agent, handle.sessionRef, this.now()),
+        recordSpawned(ctx, live.agent, handle.sessionRef),
       ).value;
     } catch (error) {
       this.onError(error, `record agent.spawned ${agent.id}`);
@@ -384,7 +383,7 @@ export class AgentRuntime {
     }
     live.questions.delete(questionId);
     this.byQuestion.delete(questionId);
-    this.command((ctx) => answerQuestion(ctx, questionId, answer, by, this.now()));
+    this.command((ctx) => answerQuestion(ctx, { questionId, answer, answeredBy: by }));
   }
 
   async pause(agentId: Id, by: Actor): Promise<void> {
@@ -535,7 +534,6 @@ export class AgentRuntime {
           ctx,
           record.agentId,
           stoppedBy ? 'agent stopped' : 'agent interrupted',
-          this.now(),
         );
       });
     }
@@ -728,7 +726,6 @@ export class AgentRuntime {
           kind: event.kind,
           originAgentId: event.agentId,
           context: event.question,
-          now: this.now(),
         });
       });
     } else if (event.type === 'agent.idle' && live.questions.size > live.answering.size) {
@@ -737,7 +734,7 @@ export class AgentRuntime {
       this.command((ctx) => {
         ctx.emit(event);
         for (const q of withdrawn) {
-          cancelQuestion(ctx, q, 'withdrawn: the agent went idle without an answer', this.now());
+          cancelQuestion(ctx, q, 'withdrawn: the agent went idle without an answer');
         }
       });
       for (const q of withdrawn) {
@@ -801,7 +798,7 @@ export class AgentRuntime {
     const reason = `agent ${terminal.slice('agent.'.length)}`;
     this.command((ctx) => {
       ctx.emit(event);
-      cancelQuestionsOf(ctx, live.agent.id, reason, this.now());
+      cancelQuestionsOf(ctx, live.agent.id, reason);
     });
     this.end(live, terminal);
   }

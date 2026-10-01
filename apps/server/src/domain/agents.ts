@@ -26,7 +26,6 @@ export interface CreateAgentInput {
    * carry them in Phase 2.
    */
   meta?: Record<string, unknown>;
-  now: string;
 }
 
 /** Inserts the agent row (and, when no body is given, its procedural asteroid). */
@@ -49,8 +48,8 @@ export function createAgent(ctx: CommandContext, input: CreateAgentInput): Agent
     runtime: input.runtime,
     bodyId,
     caps: input.caps,
-    createdAt: input.now,
-    updatedAt: input.now,
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
     ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
     ...(input.taskId ? { taskId: input.taskId } : {}),
     ...(input.projectId ? { projectId: input.projectId } : {}),
@@ -69,11 +68,10 @@ export function recordSpawned(
   ctx: CommandContext,
   agent: Agent,
   sessionRef: string | undefined,
-  now: string,
 ): Agent {
   let current = agent;
   if (sessionRef && sessionRef !== agent.sessionRef) {
-    current = ctx.tables.agents.upsert({ ...agent, sessionRef, updatedAt: now });
+    current = ctx.tables.agents.upsert({ ...agent, sessionRef, updatedAt: ctx.now });
   }
   ctx.emit({
     type: 'agent.spawned',

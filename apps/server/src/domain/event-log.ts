@@ -6,6 +6,12 @@ import { tables, type Tables } from '../db/tables.js';
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
 export interface CommandContext {
   tables: Tables;
+  /**
+   * The command's clock reading (P2-01): every event it appends carries it as `at`, and every row
+   * it writes uses it for `createdAt` / `updatedAt` — so a client folding `updatedAt = at` builds
+   * exactly the rows the server holds (TECHNOLOGY §6.2). A nested command reads its own.
+   */
+  now: string;
   /** Queues an event; it is inserted right after the mutation, inside the same transaction. */
   emit(event: Event): void;
 }
@@ -103,8 +109,10 @@ export class EventLog {
   runCommand<T>(fn: (ctx: CommandContext) => T): CommandOutcome<T> {
     const mine: EventEnvelope[] = [];
     const queued: Event[] = [];
+    const at = this.now();
     const ctx: CommandContext = {
       tables: this.tables,
+      now: at,
       emit: (event) => {
         const parsed = Event.parse(event);
         if (isTranscriptEvent(parsed)) {
@@ -121,7 +129,6 @@ export class EventLog {
       value = this.db.transaction(() => {
         const result = fn(ctx);
         for (const event of queued) {
-          const at = this.now();
           const info = this.insertEvent.run(at, event.type, JSON.stringify(event));
           mine.push({ seq: Number(info.lastInsertRowid), at, event });
         }
