@@ -158,6 +158,16 @@ export const MessageSent = z.object({
   interrupt: z.boolean(),
 });
 
+/**
+ * The adapter accepted a queued message (P1-33): the agent has it in its session. What a restart
+ * redelivers is exactly the `message.sent` messages without a `message.delivered`.
+ */
+export const MessageDelivered = z.object({
+  type: z.literal('message.delivered'),
+  messageId: Id,
+  agentId: Id,
+});
+
 // ---------------------------------------------------------------------------
 // question.* (SPEC §2.6, TECHNOLOGY §5.3)
 // ---------------------------------------------------------------------------
@@ -175,6 +185,18 @@ export const QuestionAnswered = z.object({
   questionId: Id,
   answer: z.string(),
   answeredBy: Actor,
+  version: z.number().int().nonnegative(),
+});
+/**
+ * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an
+ * interrupt withdrew it (the agent went idle without an answer). A resumed agent re-asks under a
+ * new id.
+ */
+export const QuestionCancelled = z.object({
+  type: z.literal('question.cancelled'),
+  questionId: Id,
+  agentId: Id,
+  reason: z.string(),
   version: z.number().int().nonnegative(),
 });
 /** Holder changed without an escalation, e.g. the holder died (orphaned question). */
@@ -305,10 +327,12 @@ export const Event = z.discriminatedUnion('type', [
   AgentStopped,
   AgentInterrupted,
   MessageSent,
+  MessageDelivered,
   QuestionOpened,
   QuestionEscalated,
   QuestionAnswered,
   QuestionReassigned,
+  QuestionCancelled,
   ProposalCreated,
   ProposalApproved,
   ProposalEdited,

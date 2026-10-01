@@ -51,7 +51,7 @@ export type WorkState = z.infer<typeof WorkState>;
 export const QuestionKind = z.enum(['clarification', 'permission']);
 export type QuestionKind = z.infer<typeof QuestionKind>;
 
-export const QuestionStatus = z.enum(['open', 'answered']);
+export const QuestionStatus = z.enum(['open', 'answered', 'cancelled']);
 export type QuestionStatus = z.infer<typeof QuestionStatus>;
 
 /** Proposal states (SPEC §3.3, decision 16). */

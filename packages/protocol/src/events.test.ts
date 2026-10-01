@@ -30,11 +30,13 @@ function classify(
     case 'agent.interrupted':
       return 'agent';
     case 'message.sent':
+    case 'message.delivered':
       return 'message';
     case 'question.opened':
     case 'question.escalated':
     case 'question.answered':
     case 'question.reassigned':
+    case 'question.cancelled':
       return 'question';
     case 'proposal.created':
     case 'proposal.approved':

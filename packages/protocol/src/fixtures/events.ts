@@ -75,6 +75,8 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     interrupt: false,
   },
 
+  'message.delivered': { type: 'message.delivered', messageId: 'm-1', ...steward },
+
   'question.opened': { type: 'question.opened', question: d.question },
   'question.escalated': {
     type: 'question.escalated',
@@ -89,6 +91,13 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     answer: 'yes',
     answeredBy: waykeeper,
     version: 1,
+  },
+  'question.cancelled': {
+    type: 'question.cancelled',
+    questionId: 'q-1',
+    ...steward,
+    reason: 'agent stopped',
+    version: 2,
   },
   'question.reassigned': {
     type: 'question.reassigned',

@@ -130,6 +130,15 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
           updatedAt: at,
         }),
       };
+    case 'question.cancelled':
+      return {
+        ...next,
+        questions: patch(next.questions, event.questionId, {
+          status: 'cancelled',
+          version: event.version,
+          updatedAt: at,
+        }),
+      };
     case 'question.answered':
       return {
         ...next,
@@ -200,6 +209,7 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'agent.output':
       return next; // transcript traffic never reaches this stream
     case 'message.sent':
+    case 'message.delivered':
       return next; // the inbox is runtime state; a chat view (Phase 2.5) will fold these
 
     case 'control.stop':
