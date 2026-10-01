@@ -17,7 +17,12 @@ import {
 } from '@galactic/protocol';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { createAgent, recordSpawned } from '../domain/agents.js';
-import { answerQuestion, openQuestion } from '../domain/questions.js';
+import {
+  answerQuestion,
+  cancelQuestion,
+  cancelQuestionsOf,
+  openQuestion,
+} from '../domain/questions.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
 import { createPermissionGate } from './permission-gate.js';
@@ -39,7 +44,11 @@ import type { TranscriptPipeline } from './transcripts.js';
  *     stop ends in `agent.failed(reason: cap)` and the adapter's own `agent.stopped` is folded
  *     into it, whichever arrives first;
  *   - events for an agent the runtime does not know (never spawned here, or already ended) never
- *     reach the log — the adapter is reporting a session the server no longer owns.
+ *     reach the log — the adapter is reporting a session the server no longer owns;
+ *   - an agent's open questions are cancelled in the same command as its terminal or
+ *     interrupted event, and when it goes idle without an answer (an interrupt withdrew them,
+ *     P1-34);
+ *   - a stop that was asked for ends as a stop, even when a shutdown overtakes it (P1-32).
  *
  * `agent.spawned` is emitted here, not by adapters (they do not know bodies). The agent row is
  * created by `domain/agents.ts`; Phase 2's `spawnAgent` command composes the same functions.
@@ -112,11 +121,29 @@ interface Live {
   idle: boolean;
   /** A cap was hit: the stop under way ends in `agent.failed(cap)` with this reason. */
   capStop: string | undefined;
+  /** A cap hit before the session handle existed: acted on once the handle arrives. */
+  pendingCap: string | undefined;
+  /** Someone asked for a stop that is still under way: it ends as `agent.stopped{by}`. */
+  stopRequested: Actor | undefined;
+  /** Questions whose answer is being handed to the adapter (not withdrawn by a racing idle). */
+  answering: Set<Id>;
   /** The one terminal event routed for this agent. */
   terminal: Terminal | undefined;
 }
 
 const SYSTEM: Actor = { type: 'system' };
+
+/** One agent's trace in the log, as recovery needs it. */
+class AgentHistory {
+  /** A `control.stop` after the agent's last (re)spawn that no terminal event answered. */
+  stopRequested: Actor | undefined;
+  readonly sent: { messageId: Id; text: string; sender: Actor }[] = [];
+  readonly delivered = new Set<Id>();
+  /** Messages the agent never received, in send order. */
+  undelivered(): { messageId: Id; text: string; sender: Actor }[] {
+    return this.sent.filter((m) => !this.delivered.has(m.messageId));
+  }
+}
 /** How many ended agent ids are remembered so a straggling event is told apart from a stranger. */
 const ENDED_MEMORY = 1_000;
 
@@ -191,12 +218,20 @@ export class AgentRuntime {
         },
       }),
     ).value;
-    return this.start(agent, req, adapter, (opts) => adapter.spawn(opts));
+    return this.start(agent, req, adapter, (opts) => adapter.spawn(opts), false);
   }
 
-  /** Re-opens a saved session (P1-14): the agent row exists, the adapter resumes from its ref. */
-  async resume(agent: Agent, req: Omit<SpawnRequest, 'role' | 'runtime'>): Promise<SpawnResult> {
+  /**
+   * Re-opens a saved session (P1-14): the agent row exists, the adapter resumes from its ref.
+   * Low level — callers outside the runtime use `recoverAgent()`, which checks the agent is
+   * interrupted and takes the policy and the pending messages from the log.
+   */
+  private async resume(
+    agent: Agent,
+    req: Omit<SpawnRequest, 'role' | 'runtime'>,
+  ): Promise<SpawnResult> {
     if (this.disposed) throw new Error('runtime disposed');
+    if (this.live.has(agent.id)) return { ok: false, reason: `agent ${agent.id} is running` };
     const adapter = this.adapters.get(agent.runtime);
     if (!adapter) return { ok: false, reason: `no adapter for runtime ${agent.runtime}` };
     if (!adapter.resumeSession || !agent.sessionRef) {
@@ -211,6 +246,7 @@ export class AgentRuntime {
       { ...req, role: agent.role, runtime: agent.runtime },
       adapter,
       (opts) => adapter.resumeSession!(ref, opts),
+      true,
     );
   }
 
@@ -219,6 +255,7 @@ export class AgentRuntime {
     req: SpawnRequest,
     adapter: AgentAdapter,
     open: (opts: SpawnOptions) => Promise<SpawnHandle>,
+    resuming: boolean,
   ): Promise<SpawnResult> {
     const caps = agent.caps;
     // Registered before the adapter runs: whatever it emits before the handle comes back is
@@ -229,7 +266,15 @@ export class AgentRuntime {
       handle: undefined,
       early: [],
       inbox: new AgentInbox(agent.id, {
-        deliver: (m) => adapter.send(this.session(live), m.text, { interrupt: m.interrupt }),
+        deliver: async (m) => {
+          // The agent is busy from the moment it has the message (P1-33): a pause/resume or a
+          // second message right after must not find it "idle".
+          live.idle = false;
+          await adapter.send(this.session(live), m.text, { interrupt: m.interrupt });
+          if (!live.terminal) {
+            this.record({ type: 'message.delivered', messageId: m.id, agentId: agent.id });
+          }
+        },
         interrupt: () => adapter.interrupt(this.session(live)),
         now: this.now,
         onError: (e) => this.onError(e, `inbox ${agent.id}`),
@@ -239,6 +284,9 @@ export class AgentRuntime {
       paused: false,
       idle: false,
       capStop: undefined,
+      pendingCap: undefined,
+      stopRequested: undefined,
+      answering: new Set(),
       terminal: undefined,
     };
     this.live.set(agent.id, live);
@@ -265,8 +313,21 @@ export class AgentRuntime {
       });
     } catch (error) {
       const message = (error as Error).message;
-      this.record({ type: 'agent.failed', agentId: agent.id, error: message, reason: 'runtime' });
-      this.end(live, 'agent.failed');
+      if (resuming) {
+        // A failed resume leaves the agent interrupted (the status store keeps that state):
+        // the log says so too, rather than a failure the projection would ignore.
+        this.recordEnd(
+          live,
+          { type: 'agent.interrupted', agentId: agent.id, reason: `resume failed: ${message}` },
+          'agent.interrupted',
+        );
+      } else {
+        this.recordEnd(
+          live,
+          { type: 'agent.failed', agentId: agent.id, error: message, reason: 'runtime' },
+          'agent.failed',
+        );
+      }
       return { ok: false, reason: message };
     }
     live.handle = handle;
@@ -279,6 +340,7 @@ export class AgentRuntime {
       this.onError(error, `record agent.spawned ${agent.id}`);
     }
     for (const event of live.early.splice(0)) this.route(event);
+    if (live.pendingCap && !live.terminal) void this.onCapHit(agent.id, live.pendingCap);
     return { ok: true, agent: live.agent };
   }
 
@@ -293,6 +355,9 @@ export class AgentRuntime {
    */
   send(agentId: Id, text: string, opts: { sender: Actor; interrupt?: boolean }): InboxMessage {
     const live = this.must(agentId);
+    if (live.capStop || live.stopRequested || live.inbox.currentState === 'ended') {
+      throw new Error(`agent ${agentId} is stopping`);
+    }
     const messageId = `m-${randomUUID()}`;
     this.record({
       type: 'message.sent',
@@ -311,7 +376,12 @@ export class AgentRuntime {
     const live = this.must(agentId);
     // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
     // an answer in the log that the agent never saw.
-    await live.adapter.answer(questionId, answer);
+    live.answering.add(questionId);
+    try {
+      await live.adapter.answer(questionId, answer);
+    } finally {
+      live.answering.delete(questionId);
+    }
     live.questions.delete(questionId);
     this.byQuestion.delete(questionId);
     this.command((ctx) => answerQuestion(ctx, questionId, answer, by, this.now()));
@@ -320,159 +390,251 @@ export class AgentRuntime {
   async pause(agentId: Id, by: Actor): Promise<void> {
     const live = this.must(agentId);
     if (live.paused) return;
+    const session = this.session(live); // no session yet: refused before anything is logged
     this.record({ type: 'control.pause', target: { kind: 'agent', id: agentId }, by });
     live.paused = true;
     live.inbox.paused();
-    await live.adapter.pause(this.session(live));
+    try {
+      await live.adapter.pause(session);
+    } catch (error) {
+      // The adapter refused (nothing to freeze): the runtime is not paused either.
+      live.paused = false;
+      live.inbox.resumed(live.idle);
+      throw error;
+    }
   }
 
   async resumeAgent(agentId: Id, by: Actor): Promise<void> {
     const live = this.must(agentId);
     if (!live.paused) return;
+    const session = this.session(live);
     this.record({ type: 'control.resume', target: { kind: 'agent', id: agentId }, by });
+    await live.adapter.resume(session); // a failure leaves the agent paused, as the adapter is
+    this.unpaused(live);
+  }
+
+  /** The runtime's side of a resume: delivery restarts (an interrupt queued meanwhile first). */
+  private unpaused(live: Live): void {
+    if (!live.paused) return;
     live.paused = false;
-    await live.adapter.resume(this.session(live));
     live.inbox.resumed(live.idle);
   }
 
+  /** Cancels the current turn. A paused agent is resumed first: a frozen one cannot end a turn. */
   async interrupt(agentId: Id): Promise<void> {
     const live = this.must(agentId);
+    if (live.paused) await this.resumeAgent(agentId, SYSTEM);
     await live.adapter.interrupt(this.session(live));
   }
 
+  /**
+   * Graceful stop. Ends in exactly one terminal event: the adapter's `agent.stopped`, or — if
+   * the adapter's stop resolved without one — `agent.stopped{by}` from the runtime, or
+   * `agent.failed(runtime)` when the adapter's stop threw (P1-32: never an unkillable agent).
+   */
   async stop(agentId: Id, by: Actor): Promise<void> {
     const live = this.live.get(agentId);
-    if (!live || !live.handle) return;
-    this.record({ type: 'control.stop', target: { kind: 'agent', id: agentId }, by });
-    await live.adapter.stop(live.handle.sessionId);
+    if (!live || !live.handle || live.terminal) return;
+    const sessionId = live.handle.sessionId;
+    if (!live.stopRequested && !live.capStop) {
+      live.stopRequested = by;
+      this.record({ type: 'control.stop', target: { kind: 'agent', id: agentId }, by });
+    }
+    try {
+      await live.adapter.stop(sessionId);
+    } catch (error) {
+      this.onError(error, `stop ${agentId}`);
+      if (live.capStop) this.failForCap(live);
+      else {
+        this.recordEnd(
+          live,
+          {
+            type: 'agent.failed',
+            agentId,
+            error: `stop failed: ${(error as Error).message}`,
+            reason: 'runtime',
+          },
+          'agent.failed',
+        );
+      }
+      return;
+    }
+    // The adapter's own `agent.stopped` travels through its event queue: let it arrive first.
+    await new Promise((resolve) => setImmediate(resolve));
+    if (live.terminal) return;
+    if (live.capStop) this.failForCap(live);
+    else this.recordEnd(live, { type: 'agent.stopped', agentId, by }, 'agent.stopped');
   }
 
   /**
-   * Graceful shutdown (P1-14, P1-15; SPEC decision 8): every live agent is marked
-   * `agent.interrupted` — its session ref is already on the row — and its process is stopped.
-   * The adapter's own `agent.stopped` is dropped: the log says "interrupted", so the next start
-   * knows to resume it rather than treat it as a user stop.
+   * Graceful shutdown (P1-14, P1-15, P1-32; SPEC decision 8). Every live agent's fate is logged
+   * first — `agent.interrupted{pending}` (its session ref is already on the row), or, when a stop
+   * or a cap stop was already under way, the `agent.stopped` / `agent.failed(cap)` it was heading
+   * for, so the next start does not resume an agent the user stopped — and the transcripts are
+   * flushed; then every process is stopped in parallel. Events the adapters emit afterwards are
+   * dropped: the log already says how each agent ended.
    */
   async shutdown(reason = 'server shutdown'): Promise<Id[]> {
     const interrupted: Id[] = [];
+    const stops: { live: Live; sessionId: string }[] = [];
     for (const live of [...this.live.values()]) {
       if (live.terminal) continue;
-      const pending = live.inbox.pending().map((m) => m.id);
-      this.record({ type: 'agent.interrupted', agentId: live.agent.id, reason, pending });
-      this.end(live, 'agent.interrupted');
-      interrupted.push(live.agent.id);
-      if (live.handle) {
-        try {
-          await live.adapter.stop(live.handle.sessionId);
-        } catch (error) {
-          this.onError(error, `shutdown stop ${live.agent.id}`);
-        }
+      const agentId = live.agent.id;
+      if (live.capStop) this.failForCap(live);
+      else if (live.stopRequested) {
+        this.recordEnd(
+          live,
+          { type: 'agent.stopped', agentId, by: live.stopRequested },
+          'agent.stopped',
+        );
+      } else {
+        const pending = live.inbox.pending().map((m) => m.id);
+        this.recordEnd(
+          live,
+          { type: 'agent.interrupted', agentId, reason, pending },
+          'agent.interrupted',
+        );
+        interrupted.push(agentId);
       }
+      if (live.handle) stops.push({ live, sessionId: live.handle.sessionId });
     }
+    try {
+      this.opts.transcripts.flush();
+    } catch (error) {
+      this.onError(error, 'shutdown flush');
+    }
+    const results = await Promise.allSettled(
+      stops.map(({ live, sessionId }) => live.adapter.stop(sessionId)),
+    );
+    results.forEach((r, i) => {
+      if (r.status === 'rejected')
+        this.onError(r.reason, `shutdown stop ${stops[i]!.live.agent.id}`);
+    });
     return interrupted;
   }
 
   /**
-   * Startup recovery (P1-14). Agents whose last state is live died with the previous server
-   * (nothing can re-attach to a live process): they are marked `agent.interrupted` first. Every
-   * interrupted agent whose runtime can resume is reopened from its session ref; messages sent
-   * and answers given after the interruption are delivered as its first messages. The rest
-   * stay `interrupted` for the panel's resume action.
+   * Startup recovery (P1-14, P1-29, P1-33). Agents whose last state is live died with the
+   * previous server (nothing can re-attach to a live process): an agent with a stop under way is
+   * marked `agent.stopped`, the others `agent.interrupted`. Every interrupted agent whose runtime
+   * can resume is then reopened through `recoverAgent()`. The log is read once.
    */
   async recover(): Promise<RecoveryReport> {
     const report: RecoveryReport = { resumed: [], needAttention: [] };
-    const records = this.opts.statuses.all();
-    for (const record of records) {
-      if (LIVE_STATES.has(record.state)) {
-        this.record({
-          type: 'agent.interrupted',
-          agentId: record.agentId,
-          reason: 'server restarted',
-        });
-      }
+    const histories = this.histories();
+    for (const record of this.opts.statuses.all()) {
+      if (!LIVE_STATES.has(record.state) || this.live.has(record.agentId)) continue;
+      const stoppedBy = histories.get(record.agentId)?.stopRequested;
+      this.command((ctx) => {
+        ctx.emit(
+          stoppedBy
+            ? { type: 'agent.stopped', agentId: record.agentId, by: stoppedBy }
+            : { type: 'agent.interrupted', agentId: record.agentId, reason: 'server restarted' },
+        );
+        cancelQuestionsOf(
+          ctx,
+          record.agentId,
+          stoppedBy ? 'agent stopped' : 'agent interrupted',
+          this.now(),
+        );
+      });
     }
     for (const record of this.opts.statuses.all()) {
       if (record.state !== 'interrupted') continue;
-      const agent = this.opts.log.tables.agents.get(record.agentId);
-      const meta = (agent?.meta ?? {}) as {
-        cwd?: string;
-        prompt?: string;
-        workspace?: string;
-        permissionPolicy?: PermissionPolicy;
-        bare?: boolean;
-      };
-      const adapter = agent ? this.adapters.get(agent.runtime) : undefined;
-      if (!agent || !adapter?.resumeSession || !agent.sessionRef || !meta.cwd) {
+      const result = await this.recoverOne(record.agentId, histories.get(record.agentId));
+      if (result.ok) report.resumed.push(record.agentId);
+      else {
+        this.onError(new Error(result.reason), `recover ${record.agentId}`);
         report.needAttention.push(record.agentId);
-        continue;
-      }
-      const pending = this.pendingFor(agent.id);
-      const result = await this.resume(agent, {
-        cwd: meta.cwd,
-        prompt: meta.prompt ?? '',
-        ...(meta.workspace ? { workspace: meta.workspace } : {}),
-        ...(meta.permissionPolicy ? { permissionPolicy: meta.permissionPolicy } : {}),
-        ...(meta.bare ? { bare: true } : {}),
-      });
-      if (!result.ok) {
-        this.onError(new Error(result.reason), `recover ${agent.id}`);
-        report.needAttention.push(agent.id);
-        continue;
-      }
-      report.resumed.push(agent.id);
-      for (const first of pending) {
-        this.must(agent.id).inbox.enqueue(first.text, { sender: first.sender, interrupt: false });
       }
     }
     return report;
   }
 
   /**
-   * What the agent never got (P1-22 is the input): messages still queued when it was interrupted
-   * — the exact ids a clean shutdown wrote into `agent.interrupted.pending`, or, after a crash
-   * of the server, every message sent after the agent's last turn end — and answers to its
-   * questions given after the interruption. In log order; redelivery logs nothing new.
+   * Reopens one interrupted agent from its session ref (the panel's "Resume session", P1-29):
+   * refused unless the agent is `interrupted` and not running. The permission policy, workspace
+   * and `bare` come from the agent's saved spawn options; every message sent to it that it never
+   * received is delivered again, with its original id, before anything new.
    */
-  private pendingFor(agentId: Id): { text: string; sender: Actor }[] {
-    const all = this.opts.log.eventsSince(0, Number.MAX_SAFE_INTEGER);
-    let interruptedAt = 0;
-    let lastTurnEnd = 0;
-    let known: Set<Id> | undefined;
-    for (const e of all) {
-      const ev = e.event;
-      if (!('agentId' in ev) || ev.agentId !== agentId) continue;
-      if (ev.type === 'agent.interrupted') {
-        interruptedAt = e.seq;
-        known = ev.pending ? new Set(ev.pending) : undefined;
-      } else if (ev.type === 'agent.idle' || ev.type === 'agent.spawned') {
-        lastTurnEnd = e.seq;
-      }
+  async recoverAgent(agentId: Id): Promise<SpawnResult> {
+    return this.recoverOne(agentId, this.histories(new Set([agentId])).get(agentId));
+  }
+
+  private async recoverOne(agentId: Id, history: AgentHistory | undefined): Promise<SpawnResult> {
+    if (this.live.has(agentId)) return { ok: false, reason: `agent ${agentId} is running` };
+    const state = this.opts.statuses.get(agentId)?.state;
+    if (state !== 'interrupted') {
+      return { ok: false, reason: `agent ${agentId} is ${state ?? 'unknown'}, not interrupted` };
     }
-    const questions = new Set(
-      this.opts.log.tables.questions
-        .all()
-        .filter((q) => q.originAgentId === agentId)
-        .map((q) => q.id),
-    );
-    const out: { text: string; sender: Actor }[] = [];
-    for (const e of all) {
-      const ev = e.event;
-      if (ev.type === 'message.sent' && ev.agentId === agentId) {
-        const undelivered = known
-          ? known.has(ev.messageId)
-          : e.seq > lastTurnEnd && e.seq < interruptedAt;
-        if (undelivered || e.seq > interruptedAt) out.push({ text: ev.text, sender: ev.sender });
-      } else if (
-        ev.type === 'question.answered' &&
-        questions.has(ev.questionId) &&
-        e.seq > interruptedAt
-      ) {
-        const q = this.opts.log.tables.questions.get(ev.questionId);
-        out.push({
-          text: `Answer to your earlier question "${q?.context.text ?? ev.questionId}": ${ev.answer}`,
-          sender: ev.answeredBy,
-        });
+    const agent = this.opts.log.tables.agents.get(agentId);
+    if (!agent) return { ok: false, reason: `no agent ${agentId}` };
+    const meta = (agent.meta ?? {}) as {
+      cwd?: string;
+      prompt?: string;
+      workspace?: string;
+      permissionPolicy?: PermissionPolicy;
+      bare?: boolean;
+    };
+    if (!meta.cwd) return { ok: false, reason: 'agent has no saved working directory' };
+    const result = await this.resume(agent, {
+      cwd: meta.cwd,
+      prompt: meta.prompt ?? '',
+      ...(meta.workspace ? { workspace: meta.workspace } : {}),
+      ...(meta.permissionPolicy ? { permissionPolicy: meta.permissionPolicy } : {}),
+      ...(meta.bare ? { bare: true } : {}),
+    });
+    if (!result.ok) return result;
+    const live = this.live.get(agentId);
+    for (const m of history?.undelivered() ?? []) {
+      live?.inbox.enqueue(m.text, { sender: m.sender, id: m.messageId, interrupt: false });
+    }
+    return result;
+  }
+
+  /**
+   * What the log says about agents (one pass, paged): whether a stop was under way when the
+   * server died, and which `message.sent` messages never got a `message.delivered`.
+   */
+  private histories(only?: ReadonlySet<Id>): Map<Id, AgentHistory> {
+    const out = new Map<Id, AgentHistory>();
+    const of = (id: Id) => {
+      let h = out.get(id);
+      if (!h) out.set(id, (h = new AgentHistory()));
+      return h;
+    };
+    const PAGE = 5_000;
+    let since = 0;
+    for (;;) {
+      const page = this.opts.log.eventsSince(since, PAGE);
+      for (const { seq, event: ev } of page) {
+        since = seq;
+        switch (ev.type) {
+          case 'agent.spawned':
+            if (!only || only.has(ev.agentId)) of(ev.agentId).stopRequested = undefined;
+            break;
+          case 'control.stop':
+            if (ev.target.kind === 'agent' && (!only || only.has(ev.target.id))) {
+              of(ev.target.id).stopRequested = ev.by;
+            }
+            break;
+          case 'agent.stopped':
+          case 'agent.finished':
+          case 'agent.failed':
+          case 'agent.interrupted':
+            if (!only || only.has(ev.agentId)) of(ev.agentId).stopRequested = undefined;
+            break;
+          case 'message.sent':
+            if (!only || only.has(ev.agentId)) of(ev.agentId).sent.push(ev);
+            break;
+          case 'message.delivered':
+            if (!only || only.has(ev.agentId)) of(ev.agentId).delivered.add(ev.messageId);
+            break;
+          default:
+            break;
+        }
       }
+      if (page.length < PAGE) break;
     }
     return out;
   }
@@ -544,13 +706,15 @@ export class AgentRuntime {
       live.early.push(raw);
       return;
     }
-    const event = redactEvent(raw);
-    if (event.type === 'agent.output') {
-      this.opts.transcripts.append(event.agentId, event.kind, event.text);
-      this.opts.statuses.touch(event.agentId);
+    if (raw.type === 'agent.output') {
+      // Raw text: the pipeline redacts with the context of the previous chunk (P1-31), which a
+      // chunk redacted on its own would have lost.
+      this.opts.transcripts.append(raw.agentId, raw.kind, raw.text);
+      this.opts.statuses.touch(raw.agentId);
       if (!live.paused) live.idle = false;
       return;
     }
+    const event = redactEvent(raw);
     if (TERMINAL.has(event.type)) {
       this.terminal(live, event as Extract<AgentEvent, { type: Terminal }>);
       return;
@@ -567,6 +731,19 @@ export class AgentRuntime {
           now: this.now(),
         });
       });
+    } else if (event.type === 'agent.idle' && live.questions.size > live.answering.size) {
+      // Idle while a question is open: an interrupt withdrew it (P1-34). Cancelled with the event.
+      const withdrawn = [...live.questions].filter((q) => !live.answering.has(q));
+      this.command((ctx) => {
+        ctx.emit(event);
+        for (const q of withdrawn) {
+          cancelQuestion(ctx, q, 'withdrawn: the agent went idle without an answer', this.now());
+        }
+      });
+      for (const q of withdrawn) {
+        live.questions.delete(q);
+        this.byQuestion.delete(q);
+      }
     } else {
       this.record(event);
     }
@@ -589,6 +766,10 @@ export class AgentRuntime {
         live.idle = false;
         if (!live.paused) live.inbox.working();
         return;
+      case 'agent.resumed':
+        // The adapter thawed the agent itself (an interrupt while paused): so does the runtime.
+        this.unpaused(live);
+        return;
       default:
         return;
     }
@@ -601,20 +782,28 @@ export class AgentRuntime {
       this.failForCap(live);
       return;
     }
-    this.record(event);
     this.caps.onEvent(event);
-    this.end(live, event.type);
+    this.recordEnd(live, event, event.type);
   }
 
   private failForCap(live: Live): void {
     if (live.terminal) return;
-    this.record({
-      type: 'agent.failed',
-      agentId: live.agent.id,
-      error: live.capStop ?? 'cap',
-      reason: 'cap',
+    this.recordEnd(
+      live,
+      { type: 'agent.failed', agentId: live.agent.id, error: live.capStop ?? 'cap', reason: 'cap' },
+      'agent.failed',
+    );
+  }
+
+  /** Logs how the agent ended and cancels its open questions in the same command, then forgets it. */
+  private recordEnd(live: Live, event: Event, terminal: Terminal): void {
+    if (live.terminal) return;
+    const reason = `agent ${terminal.slice('agent.'.length)}`;
+    this.command((ctx) => {
+      ctx.emit(event);
+      cancelQuestionsOf(ctx, live.agent.id, reason, this.now());
     });
-    this.end(live, 'agent.failed');
+    this.end(live, terminal);
   }
 
   private end(live: Live, terminal: Terminal): void {
@@ -640,7 +829,12 @@ export class AgentRuntime {
    */
   async onCapHit(agentId: Id, reason: string): Promise<void> {
     const live = this.live.get(agentId);
-    if (!live || live.terminal || !live.handle) return;
+    if (!live || live.terminal) return;
+    if (!live.handle) {
+      live.pendingCap = reason; // acted on by start() once the session exists
+      return;
+    }
+    if (live.capStop) return;
     live.capStop = reason;
     live.inbox.ended();
     this.record({ type: 'control.stop', target: { kind: 'agent', id: agentId }, by: SYSTEM });

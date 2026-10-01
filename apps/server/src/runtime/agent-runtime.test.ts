@@ -443,7 +443,7 @@ describe('AgentRuntime — status store wiring (P1-05)', () => {
     fresh.dispose();
   });
 
-  it('resume() re-opens a fake session from its ref after an in-process restart', async () => {
+  it('recover() re-opens a fake session from its ref after an in-process restart', async () => {
     const sessionStore = new Map<string, number>();
     const first = make();
     const adapter1 = new FakeAdapter({ speed: 0, sessionStore });
@@ -456,7 +456,8 @@ describe('AgentRuntime — status store wiring (P1-05)', () => {
     const spawned = await runtime1.spawn(req('scenario:asks'));
     if (!spawned.ok) throw new Error(spawned.reason);
     await first.waitFor(() => first.status(spawned.agent.id)?.state === 'waiting_for_input');
-    await adapter1.dispose(); // the "server" dies mid-question
+    await runtime1.shutdown(); // the "server" goes down mid-question: the agent is interrupted
+    await adapter1.dispose();
 
     const adapter2 = new FakeAdapter({ speed: 0, sessionStore });
     const runtime2 = new AgentRuntime({
@@ -466,8 +467,8 @@ describe('AgentRuntime — status store wiring (P1-05)', () => {
       statuses: first.statuses,
     });
     const row = first.log.tables.agents.get(spawned.agent.id)!;
-    const resumed = await runtime2.resume(row, { prompt: 'scenario:asks', cwd: '/tmp' });
-    expect(resumed.ok).toBe(true);
+    const report = await runtime2.recover();
+    expect(report).toEqual({ resumed: [row.id], needAttention: [] });
     await first.waitFor(
       () => first.eventsOf(row.id).filter((t) => t === 'agent.needs_input').length === 2,
     );
@@ -477,5 +478,150 @@ describe('AgentRuntime — status store wiring (P1-05)', () => {
     expect(first.eventsOf(row.id).filter((t) => t === 'agent.spawned')).toHaveLength(2);
     await runtime2.dispose();
     await runtime1.dispose();
+  });
+});
+
+describe('AgentRuntime — phase review follow-ups (P1-32 … P1-34)', () => {
+  const slowEcho: FakeScenario = {
+    steps: [],
+    onMessage: (m) => [
+      { kind: 'silence', ms: 60 },
+      { kind: 'output', text: `got ${m}` },
+    ],
+  };
+
+  it('pause and resume right after a delivery lose no message (P1-33)', async () => {
+    const errors: string[] = [];
+    const rig = make({
+      speed: 1,
+      scenarios: { slow: slowEcho },
+      onError: (e, c) => errors.push(`${c}: ${(e as Error).message}`),
+    });
+    const agent = await spawnOk(rig, req('scenario:slow'));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'idle');
+    rig.runtime.send(agent.id, 'one', { sender: USER });
+    rig.runtime.send(agent.id, 'two', { sender: USER });
+    await sleep(5);
+    await rig.runtime.pause(agent.id, USER);
+    await rig.runtime.resumeAgent(agent.id, USER);
+    await rig.waitFor(
+      () => rig.eventsOf(agent.id).filter((t) => t === 'message.delivered').length === 2,
+    );
+    expect(
+      rig.runtime
+        .inbox(agent.id)!
+        .history()
+        .map((m) => [m.text, m.error]),
+    ).toEqual([
+      ['one', undefined],
+      ['two', undefined],
+    ]);
+    expect(errors.filter((e) => e.includes('mid-turn'))).toEqual([]);
+  });
+
+  it('an interrupt that withdraws a question cancels it; pause/resume does not bring it back (P1-34)', async () => {
+    const rig = make();
+    const agent = await spawnOk(rig, req('scenario:asks'));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'waiting_for_input');
+    const q = rig.status(agent.id)!.pendingQuestionId!;
+    rig.runtime.send(agent.id, 'never mind', { sender: USER, interrupt: true });
+    await rig.waitFor(() => rig.log.tables.questions.get(q)?.status === 'cancelled');
+    await rig.waitFor(() => rig.status(agent.id)?.pendingQuestionId === undefined);
+    await rig.runtime.pause(agent.id, USER);
+    await rig.runtime.resumeAgent(agent.id, USER);
+    await sleep(20);
+    expect(rig.status(agent.id)?.state).not.toBe('waiting_for_input');
+    await expect(rig.runtime.answer(q, 'late', USER)).rejects.toThrow();
+  });
+
+  it('a stop cancels the open question in the same command as agent.stopped (P1-34)', async () => {
+    const rig = make();
+    const agent = await spawnOk(rig, req('scenario:asks'));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'waiting_for_input');
+    const q = rig.status(agent.id)!.pendingQuestionId!;
+    await rig.runtime.stop(agent.id, USER);
+    await rig.waitFor(() => rig.eventsOf(agent.id).includes('agent.stopped'));
+    expect(rig.log.tables.questions.get(q)?.status).toBe('cancelled');
+    const seqOf = (type: string) =>
+      rig.events.find(
+        (e) => e.event.type === type && 'agentId' in e.event && e.event.agentId === agent.id,
+      )!.seq;
+    expect(seqOf('question.cancelled')).toBe(seqOf('agent.stopped') + 1);
+  });
+
+  it('a stop the adapter cannot carry out still ends the agent (P1-32)', async () => {
+    const errors: string[] = [];
+    const rig = make({ onError: (e) => errors.push((e as Error).message) });
+    const agent = await spawnOk(rig, req('scenario:asks'));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'waiting_for_input');
+    const realStop = rig.adapter.stop.bind(rig.adapter);
+    rig.adapter.stop = async () => {
+      throw new Error('process will not die');
+    };
+    await rig.runtime.stop(agent.id, USER);
+    expect(rig.status(agent.id)?.state).toBe('failed');
+    expect(rig.runtime.liveAgents()).toEqual([]);
+    expect(errors).toContain('process will not die');
+    rig.adapter.stop = realStop;
+  });
+
+  it('refuses a message while a stop is under way instead of logging it (R11)', async () => {
+    const rig = make();
+    const agent = await spawnOk(rig, req('scenario:asks'));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'waiting_for_input');
+    const realStop = rig.adapter.stop.bind(rig.adapter);
+    let release: () => void = () => {};
+    rig.adapter.stop = (id) =>
+      new Promise<void>((resolve) => {
+        release = () => void realStop(id).then(resolve);
+      });
+    const stopping = rig.runtime.stop(agent.id, USER);
+    expect(() => rig.runtime.send(agent.id, 'too late', { sender: USER })).toThrow(/stopping/);
+    expect(rig.eventsOf(agent.id)).not.toContain('message.sent');
+    release();
+    await stopping;
+    rig.adapter.stop = realStop;
+  });
+
+  it('an interrupt while paused resumes the agent first (R9)', async () => {
+    const rig = make();
+    const agent = await spawnOk(rig, req('scenario:asks'));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'waiting_for_input');
+    await rig.runtime.pause(agent.id, USER);
+    await rig.runtime.interrupt(agent.id);
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'idle');
+    const types = rig.events.map((e) => e.event.type);
+    expect(types.indexOf('control.resume')).toBeGreaterThan(types.indexOf('control.pause'));
+  });
+
+  it('a cap hit before the session exists is acted on once it does (R11)', async () => {
+    const rig = make();
+    const realSpawn = rig.adapter.spawn.bind(rig.adapter);
+    rig.adapter.spawn = async (opts) => {
+      await sleep(30);
+      return realSpawn(opts);
+    };
+    const agent = await spawnOk(rig, req('scenario:asks', { caps: { maxWallClockMs: 1 } }));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'failed');
+    const failed = rig.events.find((e) => e.event.type === 'agent.failed')!.event;
+    expect(failed).toMatchObject({ reason: 'cap' });
+  });
+
+  it('a failed resume leaves the agent interrupted in the log too (R11)', async () => {
+    const rig = make();
+    const agent = await spawnOk(rig, req('scenario:asks'));
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'waiting_for_input');
+    await rig.runtime.shutdown();
+    rig.adapter.resumeSession = async () => {
+      throw new Error('session gone');
+    };
+    const result = await rig.runtime.recoverAgent(agent.id);
+    expect(result).toEqual({ ok: false, reason: 'session gone' });
+    const last = rig.events.filter((e) => e.event.type.startsWith('agent.')).at(-1)!.event;
+    expect(last).toMatchObject({
+      type: 'agent.interrupted',
+      reason: 'resume failed: session gone',
+    });
+    expect(rig.status(agent.id)?.state).toBe('interrupted');
   });
 });

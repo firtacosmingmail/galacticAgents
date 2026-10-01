@@ -34,6 +34,8 @@ const eventsOf = (c: ComposedRuntime, agentId: string): string[] =>
     .eventsSince(0, Number.MAX_SAFE_INTEGER)
     .filter((e: EventEnvelope) => 'agentId' in e.event && e.event.agentId === agentId)
     .map((e) => e.event.type);
+const agentEventsOf = (c: ComposedRuntime, agentId: string): string[] =>
+  eventsOf(c, agentId).filter((t) => t.startsWith('agent.'));
 const waitFor = (pred: () => boolean, what: string, ms = 3_000) =>
   new Promise<void>((resolve, reject) => {
     const t0 = Date.now();
@@ -67,7 +69,8 @@ describe('restart recovery', () => {
     });
 
     await first.shutdown();
-    expect(eventsOf(first, id).at(-1)).toBe('agent.interrupted');
+    expect(agentEventsOf(first, id).at(-1)).toBe('agent.interrupted');
+    expect(eventsOf(first, id)).toContain('question.cancelled'); // P1-34: re-asked on resume
     expect(eventsOf(first, id)).not.toContain('agent.stopped');
     expect(first.statuses.get(id)).toMatchObject({
       state: 'interrupted',
@@ -112,14 +115,14 @@ describe('restart recovery', () => {
     expect(report.resumed).toEqual([id]);
     const types = eventsOf(second, id);
     expect(
-      types.slice(types.indexOf('agent.needs_input') + 1, types.indexOf('agent.needs_input') + 3),
-    ).toEqual(['agent.interrupted', 'agent.spawned']);
+      types.slice(types.indexOf('agent.needs_input') + 1, types.indexOf('agent.needs_input') + 4),
+    ).toEqual(['agent.interrupted', 'question.cancelled', 'agent.spawned']);
     await waitFor(() => second.statuses.get(id)?.state === 'waiting_for_input', 're-asked');
     expect(second.statuses.get(id)?.currentActivity).toContain('Which date format');
     lives.push(first); // cleaned up by afterEach
   });
 
-  it('messages sent and answers given while the server was down are delivered first', async () => {
+  it('messages queued at a shutdown are delivered first, keep their ids and survive a second restart', async () => {
     const db = openDatabase(':memory:');
     dbs.push(db);
     const sessions = new Map<string, number>();
@@ -135,48 +138,165 @@ describe('restart recovery', () => {
     await waitFor(() => first.statuses.get(id)?.state === 'waiting_for_input', 'question');
     const questionId = first.statuses.get(id)!.pendingQuestionId!;
     // Queued while the agent is busy with its question: logged, never delivered.
-    first.runtime.send(id, 'please also check the tests', { sender: USER });
+    const queued = first.runtime.send(id, 'please also check the tests', { sender: USER });
     await first.shutdown();
+    // The open question went with the session (P1-34): it cannot be answered any more.
+    expect(first.log.tables.questions.get(questionId)?.status).toBe('cancelled');
+    expect(() =>
+      first.log.runCommand((ctx) =>
+        answerQuestion(ctx, questionId, 'yes', USER, new Date().toISOString()),
+      ),
+    ).toThrow(/cancelled/);
 
-    // "While down": the user answers the open question from another client, straight into the log.
-    first.log.runCommand((ctx) =>
-      answerQuestion(ctx, questionId, 'yes', USER, new Date().toISOString()),
-    );
-
+    // Second life: resumed, the message waits in the inbox with its original id — then the
+    // server goes down again before the agent took it (P1-33).
     const second = boot(db, sessions);
-    const report = await second.recover();
-    expect(report.resumed).toEqual([id]);
-    // The resumed fake re-asks the clarification; both pending items wait in the inbox.
+    expect((await second.recover()).resumed).toEqual([id]);
     await waitFor(() => second.statuses.get(id)?.state === 'waiting_for_input', 're-asked');
     expect(
       second.runtime
         .inbox(id)!
         .pending()
+        .map((m) => m.id),
+    ).toEqual([queued.id]);
+    await second.shutdown();
+
+    // Third life: still pending, delivered once the agent is idle.
+    const third = boot(db, sessions);
+    expect((await third.recover()).resumed).toEqual([id]);
+    await waitFor(() => third.statuses.get(id)?.state === 'waiting_for_input', 're-asked again');
+    expect(
+      third.runtime
+        .inbox(id)!
+        .pending()
         .map((m) => m.text),
-    ).toEqual([
-      'please also check the tests',
-      'Answer to your earlier question "Fix all three?": yes',
-    ]);
-    const q2 = second.statuses.get(id)!.pendingQuestionId!;
-    await second.runtime.answer(q2, 'yes', USER);
+    ).toEqual(['please also check the tests']);
+    await third.runtime.answer(third.statuses.get(id)!.pendingQuestionId!, 'yes', USER);
     await waitFor(
       () =>
-        second.statuses.get(id)?.pendingQuestionId !== undefined &&
-        second.statuses.get(id)?.pendingQuestionId !== q2,
+        third.statuses.get(id)?.state === 'waiting_for_input' &&
+        third.statuses.get(id)?.pendingQuestionId !== undefined,
       'permission',
     );
-    await second.runtime.answer(second.statuses.get(id)!.pendingQuestionId!, 'allow', USER);
+    await third.runtime.answer(third.statuses.get(id)!.pendingQuestionId!, 'allow', USER);
     // `full` finishes on its first follow-up message: the redelivered one.
-    await waitFor(() => second.statuses.get(id)?.state === 'finished', 'finished', 4_000);
-    second.transcripts.flush();
-    const texts = second.transcripts.read(id).map((c) => c.text);
-    expect(texts).toContain('received: please also check the tests');
-    // Redelivery does not log the message a second time.
+    await waitFor(() => third.statuses.get(id)?.state === 'finished', 'finished', 4_000);
+    third.transcripts.flush();
+    expect(third.transcripts.read(id).map((c) => c.text)).toContain(
+      'received: please also check the tests',
+    );
+    const log = third.log.eventsSince(0, Number.MAX_SAFE_INTEGER).map((e) => e.event);
+    // Redelivery logs no second message.sent; the delivery itself is logged once.
+    expect(log.filter((e) => e.type === 'message.sent')).toHaveLength(1);
+    expect(log.filter((e) => e.type === 'message.delivered')).toEqual([
+      { type: 'message.delivered', messageId: queued.id, agentId: id },
+    ]);
+  });
+
+  it('a delivered message is not delivered again after a crash (P1-33)', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const first = boot(db, sessions);
+    const spawned = await first.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:echo',
+      cwd: '/tmp/w',
+    });
+    if (!spawned.ok) throw new Error(spawned.reason);
+    const id = spawned.agent.id;
+    await waitFor(() => first.statuses.get(id)?.state === 'idle', 'idle');
+    const sent = first.runtime.send(id, 'once', { sender: USER });
+    await waitFor(() => eventsOf(first, id).includes('message.delivered'), 'delivered');
     expect(
-      second.log
-        .eventsSince(0, Number.MAX_SAFE_INTEGER)
-        .filter((e) => e.event.type === 'message.sent'),
-    ).toHaveLength(1);
+      first.runtime
+        .inbox(id)!
+        .history()
+        .map((m) => m.id),
+    ).toEqual([sent.id]);
+    lives.splice(lives.indexOf(first), 1); // kill -9
+
+    const second = boot(db, sessions);
+    expect((await second.recover()).resumed).toEqual([id]);
+    expect(second.runtime.inbox(id)!.pending()).toEqual([]);
+    lives.push(first);
+  });
+
+  it('a stop under way when the server shuts down ends as a stop and is not resumed (P1-32)', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const first = boot(db, sessions);
+    const spawned = await first.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:asks',
+      cwd: '/tmp/w',
+    });
+    if (!spawned.ok) throw new Error(spawned.reason);
+    const id = spawned.agent.id;
+    await waitFor(() => first.statuses.get(id)?.state === 'waiting_for_input', 'question');
+    const stopping = first.runtime.stop(id, USER);
+    await first.shutdown();
+    await stopping;
+    const types = agentEventsOf(first, id);
+    expect(types).not.toContain('agent.interrupted');
+    expect(types.filter((t) => ['agent.stopped', 'agent.failed'].includes(t))).toEqual([
+      'agent.stopped',
+    ]);
+    const second = boot(db, sessions);
+    expect(await second.recover()).toEqual({ resumed: [], needAttention: [] });
+    expect(second.statuses.get(id)?.state).toBe('stopped');
+  });
+
+  it('a server that died while a stop was under way marks the agent stopped (P1-32)', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const first = boot(db, sessions);
+    const spawned = await first.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:asks',
+      cwd: '/tmp/w',
+    });
+    if (!spawned.ok) throw new Error(spawned.reason);
+    const id = spawned.agent.id;
+    await waitFor(() => first.statuses.get(id)?.state === 'waiting_for_input', 'question');
+    // The stop was logged, then the server died before the agent's terminal event.
+    first.log.runCommand(({ emit }) =>
+      emit({ type: 'control.stop', target: { kind: 'agent', id }, by: USER }),
+    );
+    lives.splice(lives.indexOf(first), 1);
+
+    const second = boot(db, sessions);
+    expect(await second.recover()).toEqual({ resumed: [], needAttention: [] });
+    expect(second.statuses.get(id)?.state).toBe('stopped');
+    lives.push(first);
+  });
+
+  it('recoverAgent() refuses an agent that is not interrupted (P1-29)', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const first = boot(db, sessions);
+    const spawned = await first.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:asks',
+      cwd: '/tmp/w',
+      permissionPolicy: { rules: { destructive: 'deny' } },
+    });
+    if (!spawned.ok) throw new Error(spawned.reason);
+    const id = spawned.agent.id;
+    await waitFor(() => first.statuses.get(id)?.state === 'waiting_for_input', 'question');
+    const refused = await first.runtime.recoverAgent(id);
+    expect(refused).toMatchObject({ ok: false });
+    expect(agentEventsOf(first, id).filter((t) => t === 'agent.spawned')).toHaveLength(1);
+    expect(first.log.tables.agents.get(id)?.meta).toMatchObject({
+      permissionPolicy: { rules: { destructive: 'deny' } },
+    });
   });
 
   it('agents that cannot be resumed stay interrupted and are reported', async () => {

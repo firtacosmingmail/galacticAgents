@@ -351,7 +351,10 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         await waitState(agent.id, 'waiting_for_input');
         const row = rig.composed.log.tables.agents.get(agent.id)!;
         expect(row.sessionRef).toBeTruthy();
-        await rig.adapterDispose(); // the adapter (and with it the session) is gone
+        // The server goes down: the agent is interrupted (its question cancelled), then the
+        // adapter (and with it the session) is gone.
+        await rig.composed.runtime.shutdown();
+        await rig.adapterDispose();
         const fresh = await target.create();
         rig.adapterDispose = fresh.dispose;
         const composed = composeRuntime(rig.db, {
@@ -362,11 +365,10 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         const old = rig.composed;
         rig.composed = composed;
         composed.log.subscribe((e) => rig.events.push(e));
-        const resumed = await composed.runtime.resume(row, {
-          prompt: target.prompts.ask,
-          cwd: target.cwd,
-        });
-        expect(resumed.ok).toBe(true);
+        // The new server finds the agent live in the log: recovery marks it interrupted
+        // (cancelling its question) and reopens it from the session ref.
+        const report = await composed.recover();
+        expect(report.resumed).toContain(agent.id);
         await waitFor(
           () => typesOf(agent.id).filter((t) => t === 'agent.spawned').length === 2,
           'second agent.spawned',

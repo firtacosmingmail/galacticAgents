@@ -36,6 +36,40 @@ const composed = composeRuntime(db, {
 });
 const { log, statuses, transcripts } = composed;
 
+// Shutdown is wired before anything is resumed or listening (P1-32): a signal during recovery
+// or a failed listen still interrupts the agents and saves their sessions.
+const server: { app?: ReturnType<typeof buildApp> } = {};
+let shuttingDown = false;
+// Every agent is stopped in parallel, each within the supervisor's grace + term periods; the
+// deadline leaves room for that plus the flushes around it.
+const SHUTDOWN_DEADLINE_MS = 10_000 + 5_000 + 10_000;
+function shutdown(code: number): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const deadline = setTimeout(() => {
+    console.error('shutdown deadline reached: exiting');
+    process.exit(1);
+  }, SHUTDOWN_DEADLINE_MS);
+  deadline.unref();
+  void composed
+    .shutdown()
+    .catch((error) => console.error('[runtime] shutdown:', error))
+    .then(() => supervisor.dispose())
+    .catch((error) => console.error('[supervisor] dispose:', error))
+    .then(() => server.app?.close())
+    .catch((error) => console.error('[server] close:', error))
+    .then(() => process.exit(code));
+}
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    if (shuttingDown) {
+      console.error('second signal: exiting now');
+      process.exit(1);
+    }
+    shutdown(0);
+  });
+}
+
 // Resume what the previous server life left running (SPEC decision 8).
 const recovery = await composed.recover();
 if (recovery.resumed.length + recovery.needAttention.length > 0) {
@@ -56,35 +90,16 @@ const app = buildApp({
   ...(webDir ? { webDir } : {}),
 });
 
+server.app = app;
+
 if (tokenGenerated) {
   console.log(`Token generated and stored in ${config.configPath}`);
 }
-const port = await app.listen();
-// `galactic start` watches for this line to print its banner and open the browser.
-console.log(`GalacticAgents Mission Control listening on http://${config.host}:${port}`);
-
-let shuttingDown = false;
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => {
-    if (shuttingDown) {
-      console.error('second signal: exiting now');
-      process.exit(1);
-    }
-    shuttingDown = true;
-    // Graceful shutdown: agents are interrupted and their sessions saved (P1-14 completes this).
-    // A hard deadline keeps one stuck stop from holding the process open.
-    const deadline = setTimeout(() => {
-      console.error('shutdown deadline reached: exiting');
-      process.exit(1);
-    }, 15_000);
-    deadline.unref();
-    void composed
-      .shutdown()
-      .catch((error) => console.error('[runtime] shutdown:', error))
-      .then(() => supervisor.dispose())
-      .catch((error) => console.error('[supervisor] dispose:', error))
-      .then(() => app.close())
-      .catch((error) => console.error('[server] close:', error))
-      .then(() => process.exit(0));
-  });
+try {
+  const port = await app.listen();
+  // `galactic start` watches for this line to print its banner and open the browser.
+  console.log(`GalacticAgents Mission Control listening on http://${config.host}:${port}`);
+} catch (error) {
+  console.error('[server] listen:', error instanceof Error ? error.message : error);
+  shutdown(1);
 }

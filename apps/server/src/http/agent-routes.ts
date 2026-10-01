@@ -124,21 +124,14 @@ export function registerAgentRoutes(
       attempt(reply, () => runtime.stop(agentId(req), USER)),
     );
 
-    /** Reopens an interrupted agent from its session ref (the manual half of P1-14). */
+    /**
+     * Reopens an interrupted agent from its session ref (the manual half of P1-14): the same
+     * path as startup recovery (P1-29) — 409 unless the agent is interrupted and not running.
+     */
     app.post('/api/agents/:id/recover', async (req, reply) => {
-      const agent = log.tables.agents.get(agentId(req));
-      if (!agent) return reply.code(404).send({ error: 'not_found' });
-      const meta = (agent.meta ?? {}) as { cwd?: string; prompt?: string; workspace?: string };
-      if (!meta.cwd) {
-        return reply
-          .code(409)
-          .send({ error: 'rejected', message: 'agent has no saved working directory' });
-      }
-      const result = await runtime.resume(agent, {
-        cwd: meta.cwd,
-        prompt: meta.prompt ?? '',
-        ...(meta.workspace ? { workspace: meta.workspace } : {}),
-      });
+      const id = agentId(req);
+      if (!log.tables.agents.get(id)) return reply.code(404).send({ error: 'not_found' });
+      const result = await runtime.recoverAgent(id);
       if (!result.ok) return reply.code(409).send({ error: 'refused', message: result.reason });
       return { ok: true };
     });
