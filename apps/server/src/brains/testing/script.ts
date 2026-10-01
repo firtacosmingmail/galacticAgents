@@ -54,7 +54,8 @@ export interface TurnContext extends TurnInfo {
 }
 
 export type TurnMatcher = string | RegExp | ((turn: TurnInfo) => boolean);
-export type TurnBody = (t: TurnContext) => void | Promise<void>;
+/** The turn ends when it returns (or its promise settles); a returned value is ignored. */
+export type TurnBody = (t: TurnContext) => unknown;
 
 export interface ScriptRule {
   label: string;
