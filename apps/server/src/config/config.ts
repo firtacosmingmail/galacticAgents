@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 
 /** Persisted in `~/.galactic/config.json`. Every field is optional on disk; defaults fill the rest. */
@@ -10,6 +10,8 @@ export const ConfigFile = z.object({
   token: z.string().min(16).optional(),
   /** Extra allowed `Host`/`Origin` host names, e.g. "mymac.tailnet-name.ts.net" or "*.ts.net". */
   allowedHosts: z.array(z.string().min(1)).optional(),
+  /** Where new project folders are created (SPEC §3.5); absolute or `~/…`. */
+  projectsRoot: z.string().min(1).optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -26,6 +28,11 @@ export interface ServerConfig {
   dataDir: string;
   configPath: string;
   dbPath: string;
+  /**
+   * Where a project without an existing folder gets `<projectsRoot>/<slug>` (SPEC §3.5, P2-05).
+   * Default `~/GalacticProjects`; `GALACTIC_PROJECTS_ROOT` or `projectsRoot` in the file override it.
+   */
+  projectsRoot: string;
 }
 
 export interface LoadedConfig {
@@ -35,6 +42,7 @@ export interface LoadedConfig {
 }
 
 export const DEFAULT_PORT = 4321;
+export const DEFAULT_PROJECTS_DIR = 'GalacticProjects';
 export const DEFAULT_ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 
 export function generateToken(): string {
@@ -79,6 +87,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
   ];
   const allowedHosts = [...new Set([...DEFAULT_ALLOWED_HOSTS, ...extraHosts])];
 
+  const rootSetting = env['GALACTIC_PROJECTS_ROOT'] ?? file.projectsRoot;
+  const projectsRoot = rootSetting
+    ? expandHome(rootSetting)
+    : join(homedir(), DEFAULT_PROJECTS_DIR);
+  if (!isAbsolute(projectsRoot)) {
+    throw new Error(`The projects root must be an absolute path: ${rootSetting}`);
+  }
+
   return {
     config: {
       host: '127.0.0.1',
@@ -89,7 +105,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       dataDir,
       configPath,
       dbPath: env['GALACTIC_DB'] ?? join(dataDir, 'galactic.sqlite'),
+      projectsRoot: resolve(projectsRoot),
     },
     tokenGenerated,
   };
+}
+
+/** `~` and `~/…` name the home directory; anything else is returned as written. */
+export function expandHome(path: string): string {
+  if (path === '~') return homedir();
+  if (path.startsWith('~/')) return join(homedir(), path.slice(2));
+  return path;
 }
