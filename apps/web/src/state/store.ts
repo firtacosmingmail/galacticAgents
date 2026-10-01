@@ -19,6 +19,9 @@ export interface AppState {
   apply: (message: ServerMessage) => void;
   setStatus: (status: ConnectionStatus, detail?: string) => void;
   reset: () => void;
+  /** Set while a session runs: open / close the transcript stream of an agent. */
+  subscribeTranscript?: ((agentId: Id) => void) | undefined;
+  unsubscribeTranscript?: ((agentId: Id) => void) | undefined;
 }
 
 /** Client state is derived from the stream only: the store has no other inputs. */

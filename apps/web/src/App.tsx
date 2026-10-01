@@ -8,6 +8,7 @@ import {
   startSession,
   TOKEN_KEY,
 } from './client/session.js';
+import { AgentsConsole } from './console/AgentsConsole.js';
 import './app.css';
 
 export function App() {
@@ -76,6 +77,7 @@ export function App() {
           setToken(undefined);
         }}
       />
+      <AgentsConsole token={token} />
       <World />
       <EventLog />
     </main>
@@ -86,7 +88,7 @@ function Header() {
   return (
     <header>
       <h1>GalacticAgents</h1>
-      <p className="muted">Mission Control · protocol v{PROTOCOL_VERSION} · Phase 0 event page</p>
+      <p className="muted">Mission Control · protocol v{PROTOCOL_VERSION} · Phase 1 ops console</p>
     </header>
   );
 }

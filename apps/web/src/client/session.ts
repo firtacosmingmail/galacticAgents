@@ -76,8 +76,16 @@ export function startSession(token: string): () => void {
     token,
     onMessage: (m) => useAppStore.getState().apply(m),
     onStatus: (status, detail) => useAppStore.getState().setStatus(status, detail),
+    transcriptSince: (agentId) => useAppStore.getState().transcripts[agentId]?.at(-1)?.seq ?? 0,
   });
   store.setStatus('connecting');
+  useAppStore.setState({
+    subscribeTranscript: (agentId) => client.subscribeTranscript(agentId),
+    unsubscribeTranscript: (agentId) => client.unsubscribeTranscript(agentId),
+  });
   client.connect();
-  return () => client.close();
+  return () => {
+    useAppStore.setState({ subscribeTranscript: undefined, unsubscribeTranscript: undefined });
+    client.close();
+  };
 }

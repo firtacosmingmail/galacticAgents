@@ -15,6 +15,7 @@ export default defineConfig({
       '/ws': { target, ws: true, changeOrigin: false },
       '/health': { target },
       '/dev': { target },
+      '/api': { target },
     },
   },
 });

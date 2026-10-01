@@ -108,3 +108,175 @@ button.secondary {
   color: #b7c0d8;
   word-break: break-all;
 }
+
+/* --- ops console (P1-11) --- */
+.console-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 2fr;
+  gap: 16px;
+}
+@media (max-width: 720px) {
+  .console-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.spawn {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 8px 0 12px;
+}
+.spawn label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.8rem;
+  color: #8b93a7;
+}
+.spawn label.grow {
+  flex: 1;
+  min-width: 200px;
+}
+.spawn input,
+.spawn select,
+.send input {
+  background: #141a2b;
+  color: #e6e9f2;
+  border: 1px solid #2a3150;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+}
+.agent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.agent-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  text-align: left;
+  background: #121729;
+  border: 1px solid #222840;
+  margin-bottom: 6px;
+  padding: 8px;
+  color: inherit;
+}
+.agent-row.selected {
+  border-color: #3b4bd8;
+}
+.agent-row .agent-id,
+.agent-row .activity {
+  grid-column: 2;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-panel {
+  background: #121729;
+  border: 1px solid #222840;
+  padding: 12px;
+}
+.agent-panel header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+.facts .wide {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+.facts dt {
+  font-size: 0.75rem;
+  color: #8b93a7;
+}
+.facts dd {
+  margin: 0;
+}
+.controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+.send {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+.send input:not([type='checkbox']) {
+  flex: 1;
+}
+.check {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 0.85rem;
+}
+button.danger {
+  background: #8a2e2e;
+}
+.question {
+  border: 1px solid #6b5d1f;
+  background: #1d1a0f;
+  padding: 10px;
+  margin: 10px 0;
+}
+.question-permission {
+  border-color: #7a2a2a;
+  background: #1d1010;
+}
+.transcript {
+  background: #0b0e17;
+  border: 1px solid #222840;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+}
+.chunk-thinking {
+  color: #8b93a7;
+  font-style: italic;
+}
+.chunk-tool {
+  color: #9fb6ff;
+}
+.state-working,
+.state-starting {
+  background: #1f4f6f;
+}
+.state-idle {
+  background: #2a3150;
+}
+.state-waiting_for_input {
+  background: #6b5d1f;
+}
+.state-paused {
+  background: #4a3f73;
+}
+.state-stalled {
+  background: #7a4f1f;
+}
+.state-finished {
+  background: #1f6f4a;
+}
+.state-failed,
+.state-stopped {
+  background: #7a2a2a;
+}
+.state-interrupted {
+  background: #5a2a7a;
+}

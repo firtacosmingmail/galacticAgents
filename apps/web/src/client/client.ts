@@ -22,6 +22,8 @@ export interface ClientOptions {
   WebSocketImpl?: typeof WebSocket;
   /** Injectable timer for tests. */
   setTimeoutImpl?: typeof setTimeout;
+  /** The last transcript `seq` the client holds for an agent: re-subscriptions resume from it. */
+  transcriptSince?: (agentId: string) => number;
 }
 
 /**
@@ -38,6 +40,8 @@ export class GalacticClient {
   private _lastEventId: number | undefined;
   private _logId: string | undefined;
   private _status: ConnectionStatus = 'idle';
+  /** Agents whose transcript this client wants; re-sent after every reconnect. */
+  private readonly transcripts = new Set<string>();
 
   constructor(private readonly opts: ClientOptions) {
     this._lastEventId = opts.lastEventId;
@@ -71,9 +75,30 @@ export class GalacticClient {
     this.setStatus('closed');
   }
 
+  /**
+   * Opens the per-agent transcript stream (P1-06). Survives reconnects: the subscription is
+   * re-sent with the last `seq` the store holds every time the stream goes live again.
+   */
+  subscribeTranscript(agentId: string): void {
+    this.transcripts.add(agentId);
+    if (this._status === 'live') this.sendTranscriptSubscribe(agentId);
+  }
+
+  unsubscribeTranscript(agentId: string): void {
+    this.transcripts.delete(agentId);
+    this.socket?.send(JSON.stringify({ type: 'transcript.unsubscribe', agentId }));
+  }
+
+  private sendTranscriptSubscribe(agentId: string): void {
+    const since = this.opts.transcriptSince?.(agentId) ?? 0;
+    this.socket?.send(JSON.stringify({ type: 'transcript.subscribe', agentId, since }));
+  }
+
   private setStatus(status: ConnectionStatus, detail?: string): void {
+    const wentLive = status === 'live' && this._status !== 'live';
     this._status = status;
     this.opts.onStatus?.(status, detail);
+    if (wentLive) for (const agentId of this.transcripts) this.sendTranscriptSubscribe(agentId);
   }
 
   private open(): void {

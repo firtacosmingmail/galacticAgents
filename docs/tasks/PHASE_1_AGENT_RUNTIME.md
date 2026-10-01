@@ -106,9 +106,10 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** `apps/server/src/domain/permissions.ts` — `classifyToolCall` / `classifyCommand` → `PermissionAction[]`, `decide` (strictest wins, nothing recognised → `ask`), `resolvePolicy` (project over default), `evaluate`. Shell commands are split on operators with a stateful `cd`, quoted/wrapped payloads (`sh -c`, `node -e`, `eval`, …) and unexpandable `$VAR` paths are `ask`, git global options are skipped, case-insensitive. Reviewed with bypass probes as table rows.
 
 ### P1-11 — Ops console page
-- **Status:** in progress · **Depends on:** P0-09, P1-05, P1-06, P1-07 · **Parallel with:** P1-13, P1-14
+- **Status:** done (2026-10-01) · **Depends on:** P0-09, P1-05, P1-06, P1-07 · **Parallel with:** P1-13, P1-14
 - Agents list with state, activity, cost, caps; spawn form (adapter, cwd, prompt, policy preset); send message (+ interrupt toggle); answer `needs_input` of both kinds (permission shows the requested action); pause/resume/stop; live transcript view.
 - **Acceptance:** everything in the Phase 1 exit criteria is doable from this page with the fake adapter and with the real one.
+- **Done:** server side `http/agent-routes.ts` (bearer-guarded `/api/runtimes`, `/api/agents` + `send|pause|resume|interrupt|stop|recover`, `/api/questions/:id/answer`; every call goes through the runtime, results arrive on the stream) and the Vite proxy; web side `console/api.ts`, `console/AgentsConsole.tsx` (list, spawn form fed by `/api/runtimes` with the fake scenarios, per-agent panel with facts, question card for both kinds, controls, message + interrupt toggle, live transcript via `transcript.subscribe`, "Resume session" for `interrupted`), `client.ts` transcript subscriptions re-sent on reconnect. Tests: 5 route tests, 4 console tests. Click-through with Playwright against the running server: the fake `full` scenario and the real `claude-sdk` adapter (clarification → permission for an `rm -rf` → pause/resume → message → stop, cost shown) both pass with no page errors.
 
 ### P1-12 — Conformance and resume against the real adapter
 - **Status:** todo · **Depends on:** P1-09, P1-04, P1-14 · **Parallel with:** —
