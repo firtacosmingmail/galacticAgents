@@ -56,6 +56,16 @@ export { TRANSITIONS, canTransition } from './domain/states.js';
 export { buildSnapshot } from './ws/snapshot.js';
 export { CapsEnforcer, DEFAULT_CAPS, type CapUsage } from './runtime/caps.js';
 export { StatusStore, type StatusListener } from './runtime/status-store.js';
+export { WorkStateDeriver } from './runtime/work-state-deriver.js';
+export {
+  PROJECT_RULES,
+  TASK_RULES,
+  deriveProjectState,
+  deriveTaskState,
+  type AgentFact,
+  type AgentPhase,
+  type WorkFacts,
+} from './domain/work-states.js';
 export { composeRuntime, STALL_THRESHOLDS_MS, type ComposedRuntime } from './runtime/compose.js';
 export { FakeAdapter, SCENARIOS, type FakeScenario, type FakeStep } from './adapters/fake/index.js';
 export {

@@ -21,6 +21,7 @@ import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { DEFAULT_CAPS } from './caps.js';
 import { StatusStore } from './status-store.js';
 import { TranscriptPipeline } from './transcripts.js';
+import { WorkStateDeriver } from './work-state-deriver.js';
 
 /**
  * The runtime composition root: log, status store, transcript pipeline, adapters and the agent
@@ -58,6 +59,8 @@ export interface ComposeOptions {
 export interface ComposedRuntime {
   log: EventLog;
   statuses: StatusStore;
+  /** Task and project states derived from agents and questions (P2-15). */
+  workStates: WorkStateDeriver;
   transcripts: TranscriptPipeline;
   runtime: AgentRuntime;
   /** The `DomainCommands` surface over this log and runtime (P2-01). */
@@ -100,6 +103,16 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   log.subscribe((envelope) => statuses.fold(envelope));
   statuses.start();
 
+  // Task and project states (P2-15): rebuilt from the log without writing, then folded after the
+  // status store on every commit; `reconcile` repairs what a crash between a commit and its
+  // derivation left stale (a no-op when the rows agree).
+  const workStates = new WorkStateDeriver(log, {
+    ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'work states') } : {}),
+  });
+  workStates.rebuild(log.eventsSince(0, Number.MAX_SAFE_INTEGER));
+  log.subscribe((envelope) => workStates.fold(envelope));
+  workStates.reconcile();
+
   const transcripts = new TranscriptPipeline(db, {
     ...(opts.flushMs !== undefined ? { flushMs: opts.flushMs } : {}),
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'transcripts') } : {}),
@@ -132,6 +145,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   return {
     log,
     statuses,
+    workStates,
     transcripts,
     runtime,
     commands,

@@ -5,9 +5,9 @@
 // replayed from the snapshot it started from, must give the server's snapshot after every commit
 // (statuses excluded: they are a server-owned projection, TECHNOLOGY §4).
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Actor, EventEnvelope, Snapshot } from '@galactic/protocol';
+import { summarize, type Actor, type EventEnvelope, type Snapshot } from '@galactic/protocol';
 import { FakeAdapter, composeRuntime, openDatabase, type ComposedRuntime } from '@galactic/server';
-import { applyEvent, applySnapshot, type WorldState } from './reduce.js';
+import { applyEvent, applySnapshot, summaryOf, type WorldState } from './reduce.js';
 
 const USER: Actor = { type: 'user' };
 const DAY = 24 * 60 * 60 * 1000;
@@ -276,6 +276,11 @@ describe('replay vs snapshot conformance', () => {
       expect(types, t).toContain(t);
     }
 
+    // Derived task states (P2-15) are logged without `by` and folded like any other change.
+    expect(
+      recorded.some((e) => e.event.type === 'task.state_changed' && e.event.by === undefined),
+    ).toBe(true);
+
     // Replay: from the starting snapshot, fold the log; at each checkpoint compare.
     expect(checkpoints.length).toBeGreaterThan(40);
     let world = applySnapshot(start);
@@ -288,5 +293,7 @@ describe('replay vs snapshot conformance', () => {
       expect(tables(world), `at seq ${checkpoint.seq}`).toEqual(tables(applySnapshot(checkpoint)));
     }
     expect(tables(world)).toEqual(tables(applySnapshot({ ...log.snapshot(), statuses: [] })));
+    // The summary counts the client computes are the server's (P2-15).
+    expect(summaryOf(world)).toEqual(summarize(log.snapshot()));
   });
 });

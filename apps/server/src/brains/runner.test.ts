@@ -95,7 +95,7 @@ describe('BrainRunner', () => {
     expect(rig.prompts).toHaveLength(1);
     const first = rig.prompts[0]!.prompt;
     expect(first).toContain('You are the waykeeper. A new session starts here.');
-    expect(first).toContain(`Tasks of project ${rig.projectId} (CSV, approved) (2):`);
+    expect(first).toContain(`Tasks of project ${rig.projectId} (CSV, in_progress) (2):`); // derived (P2-15): it has approved tasks
     expect(first).toContain('parse the file');
     expect(rig.brain.turns.map((t) => t.kind)).toEqual(['first']);
     expect(rig.errors).toEqual([]);
