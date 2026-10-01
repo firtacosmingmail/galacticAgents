@@ -2,16 +2,21 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
 import {
   AnswerBody,
+  ControlBody,
   PERMISSION_POLICY_PRESETS,
   SendBody,
   SpawnBody,
   type Actor,
+  type ControlAction,
+  type ControlResponse,
   type RuntimesInfo,
   type SendResponse,
   type SpawnResponse,
 } from '@galactic/protocol';
 import type { ServerConfig } from '../config/config.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
+import type { Commands } from '../domain/commands.js';
+import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
 import { bearerGuard } from './security.js';
@@ -28,6 +33,8 @@ export interface AgentRoutesOptions {
   log: EventLog;
   /** Fake-adapter scenario names, for the spawn form in dev mode. */
   scenarios?: () => string[];
+  /** The command surface (P2-01): enables `POST /api/control` (P2-14). */
+  commands?: Commands;
 }
 
 const USER: Actor = { type: 'user' };
@@ -134,6 +141,28 @@ export function registerAgentRoutes(
       if (!result.ok) return reply.code(409).send(refusal('refused', result.reason));
       return { ok: true };
     });
+
+    /**
+     * A panel action on a task, project or agent (decision 11b, P2-14): the same
+     * `DomainCommands.control` a Harmonizer tool calls. 404 for an unknown target, 409 when the
+     * state refuses it; the events arrive on the stream.
+     */
+    const { commands } = opts;
+    if (commands) {
+      app.post('/api/control', async (req, reply) => {
+        const body = parse(ControlBody, req.body, reply);
+        if (!body) return;
+        try {
+          await commands.control(body.target, body.action as ControlAction, USER);
+          return { ok: true, seq: log.currentSeq() } satisfies ControlResponse;
+        } catch (error) {
+          if (error instanceof DomainError && error.code === 'not_found') {
+            return reply.code(404).send({ error: 'not_found', message: error.message });
+          }
+          return reply.code(409).send(refusal('rejected', (error as Error).message));
+        }
+      });
+    }
 
     app.post('/api/questions/:id/answer', async (req, reply) => {
       const body = parse(AnswerBody, req.body, reply);

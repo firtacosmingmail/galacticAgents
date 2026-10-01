@@ -1,5 +1,6 @@
 import type { Actor, ControlAction, ControlTarget, Event, TaskPriority } from '@galactic/protocol';
 import { TaskPriority as TaskPrioritySchema } from '@galactic/protocol';
+import { applyControlState, type ControlStateOptions } from './cascade.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import {
@@ -14,10 +15,10 @@ import { archiveTask, closeTask, pinTask, reopenTask, updateTask } from './tasks
 /**
  * Panel actions on tasks and projects (P2-01; SPEC decision 11b, §4.3). Each one is recorded as a
  * `control.*` event — what supervisors' mailboxes pick up (P2-06) — in the same transaction as
- * its domain effect: edit, close, archive, pin and reopen change the rows here. Stop, cancel,
- * pause and resume of a task or project are recorded only; their effect on the agents (and the
- * cascade to supervisors) is P2-14. Actions on an agent go through the runtime, which records them
- * itself, so they are not handled here.
+ * its domain effect: edit, close, archive, pin and reopen change the rows here; stop, cancel,
+ * pause and resume set the target's state (`cascade.ts`, P2-14). Their effect on the agents is
+ * applied afterwards by `Commands.control` through the runtime. Actions on an agent go through
+ * the runtime, which records them itself, so they are not handled here.
  */
 
 export function recordControl(
@@ -25,6 +26,7 @@ export function recordControl(
   target: ControlTarget,
   action: ControlAction,
   by: Actor,
+  opts: ControlStateOptions = {},
 ): void {
   if (target.kind === 'agent') {
     throw new DomainError('invalid', 'agent controls go through the runtime');
@@ -79,7 +81,11 @@ export function recordControl(
       if (isProject) reopenProject(ctx, target.id, by);
       else reopenTask(ctx, target.id, by);
       return;
-    default:
+    case 'stop':
+    case 'cancel':
+    case 'pause':
+    case 'resume':
+      applyControlState(ctx, target, action.action, by, opts);
       return;
   }
 }

@@ -45,6 +45,9 @@ export class WorkStateDeriver {
   private readonly agents = new Map<Id, AgentTrack>();
   /** Items whose current state was set explicitly (with `by`), and at which `seq`. */
   private readonly holds = new Map<string, number>();
+  /** Items touched by the commit being folded, derived when its last event arrives. */
+  private readonly pendingTasks = new Set<Id>();
+  private readonly pendingProjects = new Set<Id>();
   private readonly onError: (error: unknown) => void;
 
   constructor(
@@ -71,8 +74,17 @@ export class WorkStateDeriver {
   fold(envelope: EventEnvelope): void {
     const affected = this.affected(envelope);
     this.track(envelope);
-    for (const id of affected.tasks) this.deriveTask(id);
-    for (const id of affected.projects) this.deriveProject(id);
+    for (const id of affected.tasks) this.pendingTasks.add(id);
+    for (const id of affected.projects) this.pendingProjects.add(id);
+    // Derive only once the whole commit is folded: a command that sets a task and its project
+    // explicitly (a cancel) must have both holds recorded before either is re-derived.
+    if (envelope.seq < this.log.currentSeq()) return;
+    const tasks = [...this.pendingTasks];
+    const projects = [...this.pendingProjects];
+    this.pendingTasks.clear();
+    this.pendingProjects.clear();
+    for (const id of tasks) this.deriveTask(id);
+    for (const id of projects) this.deriveProject(id);
   }
 
   // -- facts -----------------------------------------------------------------------------------

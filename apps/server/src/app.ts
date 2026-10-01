@@ -28,6 +28,8 @@ export interface AppOptions {
   runtime?: AgentRoutesOptions['runtime'];
   /** Fake-adapter scenario names for the spawn form. */
   scenarios?: () => string[];
+  /** The command surface (P2-01): enables `POST /api/control` (P2-14). */
+  commands?: AgentRoutesOptions['commands'];
   logger?: boolean;
 }
 
@@ -94,6 +96,7 @@ export function buildApp(opts: AppOptions): App {
       runtime: opts.runtime,
       log: opts.log,
       ...(opts.scenarios ? { scenarios: opts.scenarios } : {}),
+      ...(opts.commands ? { commands: opts.commands } : {}),
     });
   }
 

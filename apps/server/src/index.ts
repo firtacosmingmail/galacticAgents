@@ -85,6 +85,7 @@ const app = buildApp({
   statuses,
   transcripts,
   runtime: composed.runtime,
+  commands: composed.commands,
   scenarios: () => fake.scenarioNames(),
   logger: process.env['GALACTIC_LOG'] !== 'silent',
   ...(webDir ? { webDir } : {}),

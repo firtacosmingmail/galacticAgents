@@ -25,6 +25,7 @@ import {
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { recordSpawned, updateAgent } from './agents.js';
 import { assignBody, freeBody, moveHost, sweepMarkers } from './bodies.js';
+import { agentEffect, agentsOf } from './cascade.js';
 import { chooseBody, freeMoons, freePlanets, type ChooseOptions } from './catalogue.js';
 import { recordControl } from './control.js';
 import { DomainError, must } from './errors.js';
@@ -73,6 +74,8 @@ export interface AgentControl {
   answer(questionId: Id, answer: string, by: Actor): Promise<void>;
   /** Whether a live session asked the question and takes its answer through the adapter. */
   hasQuestion(questionId: Id): boolean;
+  /** Agents with a live adapter session: whom a task or project control reaches (P2-14). */
+  liveAgents?(): Agent[];
 }
 
 export interface CommandsOptions {
@@ -396,6 +399,52 @@ export class Commands implements DomainCommands {
           throw new DomainError('invalid', `an agent cannot be given "${action.action}"`);
       }
     }
-    return this.run((ctx) => recordControl(ctx, target, action, by));
+    // A task or project: the event and its state effect in one transaction (refused → nothing
+    // happens), then the agent effect on the target's live agents through the runtime (P2-14).
+    const live = new Set((this.agents?.liveAgents?.() ?? []).map((a) => a.id));
+    const effect = agentEffect(action.action);
+    const affected = effect
+      ? agentsOf(this.log.tables, target)
+          .map((a) => a.id)
+          .filter((id) => live.has(id))
+      : [];
+    const since = this.log.currentSeq();
+    await this.run((ctx) =>
+      recordControl(ctx, target, action, by, { isLive: (id) => live.has(id) }),
+    );
+    if (effect && affected.length > 0) {
+      const runtime = this.runtime();
+      const call = (id: Id) =>
+        effect === 'pause'
+          ? runtime.pause(id, by)
+          : effect === 'resume'
+            ? runtime.resumeAgent(id, by)
+            : runtime.stop(id, by);
+      const results = await Promise.allSettled(affected.map(call));
+      const failed = results.flatMap((r, i) =>
+        r.status === 'rejected' ? [`${affected[i]}: ${(r.reason as Error).message}`] : [],
+      );
+      if (failed.length > 0) {
+        // The state and the other agents' effects stand; the caller learns which agents refused.
+        throw new DomainError(
+          'conflict',
+          `${action.action} reached not every agent: ${failed.join('; ')}`,
+        );
+      }
+    }
+    const events = this.log
+      .eventsSince(since, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter((e) => {
+        // This command's events: the domain ones, and the affected agents' own; not whatever
+        // other agents logged meanwhile.
+        if ('agentId' in e) return affected.includes(e.agentId);
+        if (e.type.startsWith('control.')) {
+          const t = (e as { target: ControlTarget }).target;
+          return t.kind !== 'agent' || affected.includes(t.id);
+        }
+        return true;
+      });
+    return { value: undefined, events };
   }
 }

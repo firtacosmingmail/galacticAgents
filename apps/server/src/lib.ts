@@ -51,6 +51,13 @@ export {
   openQuestionsOf,
 } from './domain/questions.js';
 export { Commands, type AgentControl, type CommandsOptions } from './domain/commands.js';
+export {
+  agentEffect,
+  agentsOf,
+  applyControlState,
+  concernedSupervisors,
+  retentionDue,
+} from './domain/cascade.js';
 export { DomainError } from './domain/errors.js';
 export { TRANSITIONS, canTransition } from './domain/states.js';
 export { buildSnapshot } from './ws/snapshot.js';
