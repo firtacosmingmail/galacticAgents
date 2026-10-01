@@ -42,8 +42,17 @@ export { redactSecrets, redactEvent, containsSecret, REDACTION_RULES } from './r
 export { AgentRuntime, type SpawnRequest, type SpawnResult } from './runtime/agent-runtime.js';
 export { AgentInbox, type InboxMessage } from './runtime/inbox.js';
 export { createPermissionGate, type GateOptions } from './runtime/permission-gate.js';
-export { createAgent, recordSpawned } from './domain/agents.js';
-export { openQuestion, answerQuestion, openQuestionsOf } from './domain/questions.js';
+export { createAgent, recordSpawned, updateAgent } from './domain/agents.js';
+export {
+  openQuestion,
+  answerQuestion,
+  escalateQuestion,
+  reassignQuestion,
+  openQuestionsOf,
+} from './domain/questions.js';
+export { Commands, type AgentControl, type CommandsOptions } from './domain/commands.js';
+export { DomainError } from './domain/errors.js';
+export { TRANSITIONS, canTransition } from './domain/states.js';
 export { buildSnapshot } from './ws/snapshot.js';
 export { CapsEnforcer, DEFAULT_CAPS, type CapUsage } from './runtime/caps.js';
 export { StatusStore, type StatusListener } from './runtime/status-store.js';

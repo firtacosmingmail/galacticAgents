@@ -144,7 +144,7 @@ describe('restart recovery', () => {
     expect(first.log.tables.questions.get(questionId)?.status).toBe('cancelled');
     expect(() =>
       first.log.runCommand((ctx) =>
-        answerQuestion(ctx, questionId, 'yes', USER, new Date().toISOString()),
+        answerQuestion(ctx, { questionId, answer: 'yes', answeredBy: USER }),
       ),
     ).toThrow(/cancelled/);
 

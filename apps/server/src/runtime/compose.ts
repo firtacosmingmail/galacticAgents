@@ -1,5 +1,6 @@
 import type { AgentAdapter, AgentCaps, AgentRuntime as RuntimeName } from '@galactic/protocol';
 import type { Database } from '../db/database.js';
+import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
@@ -45,6 +46,8 @@ export interface ComposedRuntime {
   statuses: StatusStore;
   transcripts: TranscriptPipeline;
   runtime: AgentRuntime;
+  /** The `DomainCommands` surface over this log and runtime (P2-01). */
+  commands: Commands;
   /** Startup recovery (P1-14): marks lost agents interrupted and resumes what can be resumed. */
   recover(): Promise<RecoveryReport>;
   /**
@@ -96,6 +99,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     statuses,
     transcripts,
     runtime,
+    commands: new Commands({ log, agents: runtime }),
     recover: () => runtime.recover(),
     async shutdown() {
       await runtime.shutdown();

@@ -42,6 +42,12 @@ export const Body = z.object({
 });
 export type Body = z.infer<typeof Body>;
 
+/** Per-project permission policy (SPEC §3.6, decision 7). Missing actions fall back to the default policy. */
+export const PermissionPolicy = z.object({
+  rules: z.partialRecord(PermissionAction, PermissionDecision),
+});
+export type PermissionPolicy = z.infer<typeof PermissionPolicy>;
+
 export const Project = z.object({
   id: Id,
   name: z.string().min(1),
@@ -52,6 +58,10 @@ export const Project = z.object({
   parentProjectId: Id.optional(),
   bodyId: Id,
   state: WorkState,
+  /** The project's policy table (TECHNOLOGY §6.2); absent = the global default. */
+  permissionPolicy: PermissionPolicy.optional(),
+  /** Pinned work is never archived by the retention timer (decision 4, 11b). */
+  pinned: z.boolean().optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -69,6 +79,7 @@ export const Task = z.object({
   branch: z.string().optional(),
   blockedBy: z.array(Id),
   state: WorkState,
+  pinned: z.boolean().optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -183,12 +194,6 @@ export const StatusRecord = z.object({
   caps: z.object({ wallClockMs: CapUsage, toolCalls: CapUsage }),
 });
 export type StatusRecord = z.infer<typeof StatusRecord>;
-
-/** Per-project permission policy (SPEC §3.6, decision 7). Missing actions fall back to the default policy. */
-export const PermissionPolicy = z.object({
-  rules: z.partialRecord(PermissionAction, PermissionDecision),
-});
-export type PermissionPolicy = z.infer<typeof PermissionPolicy>;
 
 export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
   rules: {
