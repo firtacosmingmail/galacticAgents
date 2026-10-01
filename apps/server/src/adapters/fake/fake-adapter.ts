@@ -12,6 +12,7 @@ import type {
   SpawnOptions,
   StopOptions,
   ToolCall,
+  ToolDefinition,
 } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import {
@@ -54,6 +55,12 @@ export interface FakeAdapterOptions {
    * process would fail to start. Off by default: unit tests spawn in made-up directories.
    */
   checkCwd?: boolean;
+  /**
+   * Picks the scenario of a spawn from its options instead of its prompt (P2-06: a scripted
+   * brain answers its turn prompts with tool calls). `undefined` falls back to the prompt. The
+   * scenario is remembered by name so `resumeSession` finds it too.
+   */
+  scenarioFor?: (opts: SpawnOptions) => { name: string; scenario: FakeScenario } | undefined;
 }
 
 type Ended = 'finished' | 'failed' | 'stopped';
@@ -96,6 +103,8 @@ class FakeSession {
     readonly scenario: FakeScenario,
     readonly gate: PermissionGate,
     startAt: number,
+    /** The server's tools (a brain's): a scripted call to one runs its handler. */
+    readonly tools: ReadonlyMap<string, ToolDefinition>,
   ) {
     this.stepIndex = startAt;
   }
@@ -116,6 +125,9 @@ export class FakeAdapter implements AgentAdapter {
   private readonly speed: number;
   private readonly sessionStore: Map<string, number>;
   private readonly checkCwd: boolean;
+  private readonly scenarioFor: FakeAdapterOptions['scenarioFor'];
+  /** Scenarios chosen by `scenarioFor`, by name, for `resumeSession`. */
+  private readonly picked = new Map<string, FakeScenario>();
   private disposed = false;
 
   constructor(opts: FakeAdapterOptions = {}) {
@@ -123,6 +135,7 @@ export class FakeAdapter implements AgentAdapter {
     this.speed = opts.speed ?? 1;
     this.sessionStore = opts.sessionStore ?? new Map();
     this.checkCwd = opts.checkCwd ?? false;
+    this.scenarioFor = opts.scenarioFor;
   }
 
   /** The scenario names this adapter knows, for the ops console's spawn form. */
@@ -131,15 +144,17 @@ export class FakeAdapter implements AgentAdapter {
   }
 
   async spawn(opts: SpawnOptions): Promise<SpawnHandle> {
-    const { name, scenario } = scenarioFromPrompt(opts.prompt, this.scenarios);
-    return this.start(opts, name, scenario, 0);
+    const chosen = this.scenarioFor?.(opts);
+    if (chosen) this.picked.set(chosen.name.toLowerCase(), chosen.scenario);
+    const { name, scenario } = chosen ?? scenarioFromPrompt(opts.prompt, this.scenarios);
+    return this.start(opts, name.toLowerCase(), scenario, 0);
   }
 
   async resumeSession(sessionRef: string, opts: SpawnOptions): Promise<SpawnHandle> {
     const m = /^fake:([a-z0-9_-]+):([0-9a-f-]+):(\d+)$/i.exec(sessionRef);
     if (!m) throw new Error(`not a fake session ref: ${sessionRef}`);
     const name = m[1]!.toLowerCase();
-    const scenario = this.scenarios[name];
+    const scenario = this.scenarios[name] ?? this.picked.get(name);
     if (!scenario) throw new Error(`unknown fake scenario in session ref: ${name}`);
     const startAt = this.sessionStore.get(sessionRef) ?? Number(m[3]);
     return this.start(opts, name, scenario, startAt);
@@ -155,7 +170,8 @@ export class FakeAdapter implements AgentAdapter {
     if (this.checkCwd && !isDirectory(opts.cwd)) {
       throw new Error(`working directory does not exist: ${opts.cwd}`);
     }
-    const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt);
+    const tools = new Map((opts.tools ?? []).map((t) => [t.name, t]));
+    const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt, tools);
     this.sessions.set(session.sessionId, session);
     const ref = session.sessionRef;
     this.sessionStore.set(ref, startAt);
@@ -437,7 +453,7 @@ export class FakeAdapter implements AgentAdapter {
   ): Promise<'next' | 'cancelled'> {
     const agentId = session.agentId;
     const toolUseId = `toolu_fake_${randomUUID()}`;
-    const run = () =>
+    const run = async () => {
       this.emit({
         type: 'agent.tool_call',
         agentId,
@@ -445,6 +461,19 @@ export class FakeAdapter implements AgentAdapter {
         toolUseId,
         input: call.input,
       });
+      // A server tool (a brain's) runs its handler, as the SDK's in-process MCP server does; the
+      // result comes back to the "model" as tool output.
+      const tool = session.tools.get(call.toolName);
+      if (!tool) return;
+      let text: string;
+      try {
+        const out = await tool.handler(call.input ?? {});
+        text = typeof out === 'string' ? out : JSON.stringify(out);
+      } catch (error) {
+        text = `tool error: ${(error as Error).message}`;
+      }
+      this.emit({ type: 'agent.output', agentId, kind: 'tool', text: text ?? '' });
+    };
     const skip = (why: string) =>
       this.emit({
         type: 'agent.output',
@@ -454,7 +483,7 @@ export class FakeAdapter implements AgentAdapter {
       });
     const verdict = session.gate.check(call);
     if (verdict.decision === 'allow') {
-      run();
+      await run();
       return 'next';
     }
     if (verdict.decision === 'deny') {
@@ -471,7 +500,7 @@ export class FakeAdapter implements AgentAdapter {
     if (answer === undefined) return 'cancelled';
     await this.holdWhilePaused(session, turn);
     if (turn.cancelled) return 'cancelled';
-    if (/^(allow|yes|y|ok)$/i.test(answer.trim())) run();
+    if (/^(allow|yes|y|ok)$/i.test(answer.trim())) await run();
     else skip('answered no');
     return 'next';
   }

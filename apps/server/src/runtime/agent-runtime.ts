@@ -135,6 +135,13 @@ interface Live {
   answering: Set<Id>;
   /** The one terminal event routed for this agent. */
   terminal: Terminal | undefined;
+  /** How the session was opened; `renewSession()` opens the next one the same way. */
+  spec: SpawnRequest;
+  /**
+   * A brain's mailbox owns its messages (P2-06): `send()` only logs them and the brain runner
+   * folds them into its next turn; only a `turn` message reaches the inbox.
+   */
+  mailbox: boolean;
 }
 
 const SYSTEM: Actor = { type: 'system' };
@@ -295,6 +302,8 @@ export class AgentRuntime {
       stopRequested: undefined,
       answering: new Set(),
       terminal: undefined,
+      spec: req,
+      mailbox: false,
     };
     this.live.set(agent.id, live);
     this.caps.track(agent.id, caps);
@@ -304,6 +313,7 @@ export class AgentRuntime {
       workspace: req.workspace ?? req.cwd,
       cwd: req.cwd,
       caps: this.caps,
+      ...(req.tools ? { serverTools: req.tools.map((t) => t.name) } : {}),
     });
     let handle: SpawnHandle;
     try {
@@ -360,7 +370,11 @@ export class AgentRuntime {
    * Queues a message; delivered when the agent is idle, or now with `interrupt`. Logged as
    * `message.sent` (P1-22) before it is queued, so a restart knows what was still pending.
    */
-  send(agentId: Id, text: string, opts: { sender: Actor; interrupt?: boolean }): InboxMessage {
+  send(
+    agentId: Id,
+    text: string,
+    opts: { sender: Actor; interrupt?: boolean; turn?: boolean },
+  ): InboxMessage {
     const live = this.must(agentId);
     if (live.capStop || live.stopRequested || live.inbox.currentState === 'ended') {
       throw new Error(`agent ${agentId} is stopping`);
@@ -374,7 +388,77 @@ export class AgentRuntime {
       text,
       interrupt: opts.interrupt ?? false,
     });
-    return live.inbox.enqueue(text, { ...opts, id: messageId });
+    if (live.mailbox && !opts.turn) {
+      // Logged only: the brain's mailbox picks it up from the log and folds it into a turn.
+      return {
+        id: messageId,
+        agentId,
+        text,
+        sender: opts.sender,
+        interrupt: opts.interrupt ?? false,
+        queuedAt: this.now(),
+      };
+    }
+    return live.inbox.enqueue(text, {
+      sender: opts.sender,
+      interrupt: opts.interrupt ?? false,
+      id: messageId,
+    });
+  }
+
+  /**
+   * Hands the agent's messages to its brain mailbox (P2-06): from now on `send()` without `turn`
+   * logs `message.sent` and queues nothing, and the brain runner delivers whole turns.
+   */
+  attachMailbox(agentId: Id): void {
+    this.must(agentId).mailbox = true;
+  }
+
+  /**
+   * Replaces a live agent's adapter session with a fresh one on the same row (P2-06: a brain's
+   * periodic session reset with a carried summary in `prompt`). The old session is logged
+   * `agent.interrupted{reason}` and stopped; its stragglers are dropped; then the adapter spawns
+   * a new session with the original options and `agent.spawned` reports the new `sessionRef`.
+   * Messages still queued in the old inbox are not carried over (a brain's inbox is empty
+   * between turns). Refused while a stop is under way.
+   */
+  async renewSession(agentId: Id, prompt: string, reason = 'session reset'): Promise<SpawnResult> {
+    if (this.disposed) throw new Error('runtime disposed');
+    const live = this.must(agentId);
+    if (!live.handle) return { ok: false, reason: `agent ${agentId} has no session yet` };
+    if (live.capStop || live.stopRequested || live.terminal) {
+      return { ok: false, reason: `agent ${agentId} is stopping` };
+    }
+    const { adapter, spec, mailbox } = live;
+    const sessionId = live.handle.sessionId;
+    const pending = live.inbox.pending().map((m) => m.id);
+    this.recordEnd(
+      live,
+      { type: 'agent.interrupted', agentId, reason, pending },
+      'agent.interrupted',
+    );
+    try {
+      await adapter.stop(sessionId);
+    } catch (error) {
+      this.onError(error, `renew stop ${agentId}`);
+    }
+    // The old session's own `agent.stopped` travels through the event queue: let the pump drop
+    // it as a straggler before the new session registers under the same id.
+    await new Promise((resolve) => setImmediate(resolve));
+    const agent = this.opts.log.tables.agents.get(agentId) ?? live.agent;
+    const gate = this.caps.canSpawn();
+    if (!gate.ok) return { ok: false, reason: gate.reason };
+    this.ended.delete(agentId);
+    const result = await this.start(
+      agent,
+      { ...spec, prompt },
+      adapter,
+      (opts) => adapter.spawn(opts),
+      false,
+    );
+    const next = this.live.get(agentId);
+    if (result.ok && next && mailbox) next.mailbox = true;
+    return result;
   }
 
   /** Whether a live session asked `questionId` and waits for its answer through the adapter. */

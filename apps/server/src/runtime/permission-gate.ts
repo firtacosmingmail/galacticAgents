@@ -34,7 +34,17 @@ export interface GateOptions {
   /** Where the agent resolves relative paths from (its worktree). */
   cwd: string;
   caps: CapsEnforcer;
+  /**
+   * The server's own tools handed to a brain (`SpawnOptions.tools`, P2-06): their handlers run in
+   * the server against `DomainCommands`, which refuses what the brain may not do, so the policy
+   * table (about files, shells and the network) has nothing to say about them. Allowed after the
+   * tool-call cap; matched by bare name or as the SDK's `mcp__galactic__<name>`.
+   */
+  serverTools?: readonly string[];
 }
+
+/** The MCP server name the Claude SDK adapter registers brain tools under. */
+export const SERVER_TOOL_PREFIX = 'mcp__galactic__';
 
 /** Every action asks: what the gate falls back to when the policy does not parse. */
 export const FAIL_CLOSED_POLICY: PermissionPolicy = {
@@ -49,12 +59,17 @@ export function createPermissionGate(opts: GateOptions): PermissionGate {
     : 'the project policy is invalid: every action asks';
   const misplaced = misplacedCwd(opts.workspace, opts.cwd);
   const ctx = { workspace: opts.workspace, cwd: opts.cwd };
+  const serverTools = new Set(opts.serverTools ?? []);
+  const isServerTool = (name: string) =>
+    serverTools.has(name) ||
+    (name.startsWith(SERVER_TOOL_PREFIX) && serverTools.has(name.slice(SERVER_TOOL_PREFIX.length)));
 
   const decideCall = (call: ToolCall, reserve: boolean): GateVerdict => {
     if (reserve) {
       const reserved = opts.caps.reserveToolCall(opts.agentId);
       if (!reserved.ok) return { decision: 'deny', reason: reserved.reason };
     }
+    if (isServerTool(call.toolName)) return { decision: 'allow' };
     if (misplaced) return { decision: 'ask', reasons: [misplaced] };
     const verdict = evaluate(policy, call, ctx);
     switch (verdict.decision) {

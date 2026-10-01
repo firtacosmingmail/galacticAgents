@@ -63,3 +63,23 @@ export {
   CLAUDE_PASS_ENV,
   type ClaudeSdkAdapterOptions,
 } from './adapters/claude-sdk/index.js';
+export {
+  BrainRunner,
+  WAKE_RULES,
+  TURN_ENDING_TOOLS,
+  CARRY_SUMMARY_TOOL,
+  wakeLine,
+  createBrainQueries,
+  createWakeScope,
+  renderSeed,
+  type BrainDefinition,
+  type BrainTool,
+  type BrainToolContext,
+  type BrainQueries,
+  type BrainPlacement,
+  type BrainRunnerOptions,
+  type SessionResetPolicy,
+  type WakeRule,
+  type WakeRules,
+  type WakeScope,
+} from './brains/index.js';
