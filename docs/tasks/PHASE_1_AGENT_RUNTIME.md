@@ -1,7 +1,7 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** P1-28 … P1-38 (wave 6, review follow-ups) · **Task status:** 27/38 done, 11 in progress
-**Phase status:** reopened (2026-10-01) for the phase review (`notes/P1-review.md`); exit criteria were verified 2026-10-01 and are re-checked when wave 6 is done
+**Current task:** — (phase complete) · **Task status:** —
+**Phase status:** done (2026-10-01) — 38/38 tasks; reopened the same day for the phase review (`notes/P1-review.md`, wave 6) and closed again; exit criteria re-checked below
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -209,62 +209,75 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** `runtime/transcripts.ts`, tests.
 
 ### P1-28 — `/api` and `/dev` authentication on the decoded route (added 2026-10-01, review R1)
-- **Status:** in progress · **Depends on:** P1-11 · **Parallel with:** P1-29 … P1-37
+- **Status:** done (2026-10-01) · **Depends on:** P1-11 · **Parallel with:** P1-29 … P1-37
 - The bearer check keyed off the raw `req.url`, so `/%61pi/…` skipped it. Register the routes in encapsulated plugins (`prefix: '/api'`, `prefix: '/dev'`) whose hook always runs.
 - **Acceptance:** encoded-path requests (`/%61pi/runtimes`, `/%64ev/events`) without a token get 401/404, never 200.
+- **Done:** `http/security.ts` `bearerGuard()`; `agent-routes.ts` and `dev-routes.ts` register their routes inside an encapsulated scope with an `onRequest` guard; test with `/%61pi/…`, `/ap%69/…`, `/%64ev/…` (TECHNOLOGY §8).
 
 ### P1-29 — One recovery path for `/recover` (added 2026-10-01, review R2)
-- **Status:** in progress · **Depends on:** P1-14 · **Parallel with:** P1-28 …
+- **Status:** done (2026-10-01) · **Depends on:** P1-14 · **Parallel with:** P1-28 …
 - `POST /api/agents/:id/recover` and startup recovery share `AgentRuntime.recoverAgent(id)`: 409 unless the agent is `interrupted` and not live; the policy and `bare` come from `agent.meta`; pending messages and answers are redelivered.
 - **Acceptance:** recover on a live agent → 409 and no second `agent.spawned`; a `cautious` agent resumes `cautious`.
+- **Done:** `AgentRuntime.recoverAgent(id)` (also behind `recover()`): 409 unless `interrupted` and not live, policy/workspace/`bare` from `Agent.meta`, undelivered messages queued with their ids; `resume()` is private; the route is a thin wrapper. Tests in `recovery.test.ts`; conformance resumes through `recover()`.
 
 ### P1-30 — Policy engine bypasses and a fail-closed gate (added 2026-10-01, review R3)
-- **Status:** in progress · **Depends on:** P1-10, P1-18 · **Parallel with:** P1-28 …
+- **Status:** done (2026-10-01) · **Depends on:** P1-10, P1-18 · **Parallel with:** P1-28 …
 - Dequote words before matching; `git -c alias.*`, `git config` aliases/`--global` opaque; glued and fd-prefixed redirections, `/dev/tcp`; split on a single `&`; `~name` unresolvable; more destructive git commands; agent config paths (`.claude/`, `.mcp.json`, `.git/hooks`, `.husky`) ask; unknown policy values → `ask`, the policy parsed in `createPermissionGate`; edit tools with no path → `ask`; interpreters fed from stdin/heredoc are opaque. The gate never throws (an exception → `deny`), asserts cwd inside the workspace, and the SDK adapter checks once per `toolUseId`. SPEC §7 records the merge semantics; TECHNOLOGY §8 that the engine is lexical.
 - **Acceptance:** every bypass in the review is a table row returning `ask`; a throwing gate denies; one reservation per asked call.
+- **Done:** `domain/permissions.ts` is a small shell lexer now (dequoting, `&`, glued/fd redirections, substitutions as commands, heredoc bodies as data, opaque computed names and stdin interpreters); every review bypass is a test row; `git -c` aliases / executed keys and `git config` writes, `~name`, more destructive git commands, agent config paths, edit tools without a path, `Agent` like `Task`, network additions. `runtime/permission-gate.ts` never throws, parses the policy (invalid → all `ask`), cwd outside the workspace → `ask`; `PermissionGate.check(call, {reserve?})` in the protocol. The SDK adapter checks once per `toolUseId` and denies on a throwing gate. SPEC decision 22 and §8 (floor question), TECHNOLOGY §3.1/§8.
 
 ### P1-31 — Redaction of split secrets (added 2026-10-01, review R4)
-- **Status:** in progress · **Depends on:** P1-27 · **Parallel with:** P1-28 …
+- **Status:** done (2026-10-01) · **Depends on:** P1-27 · **Parallel with:** P1-28 …
 - The runtime hands raw `agent.output` text to the transcript pipeline; a private-key block is masked until its `END` line whatever the chunking; the held chunk stays out of a subscribe backlog; new patterns (case-insensitive assignments, `PASS|PWD|CREDENTIAL`, Basic auth, PGP blocks, `xapp-`/`xoxe-`, `glpat-`, `hf_`). TECHNOLOGY §8 records that user-authored text is not redacted.
 - **Acceptance:** a key split through the runtime and a 1.2 KB PEM split anywhere never reach rows or subscribers; a subscriber never gets text that is later changed.
+- **Done:** `runtime/redact.ts` (new patterns, two tiers for secret-bearing names, PGP/OPENSSH/ENCRYPTED blocks), `runtime/transcripts.ts` (stateful private-key masking with a 16 KB cap, same-kind joins, persisted-only subscribe backlog, notify after write, `prune()` keeps the newest row); the runtime hands raw `agent.output` text to the pipeline. TECHNOLOGY §6.2/§8 (user-authored text is not redacted).
 
 ### P1-32 — Stop and shutdown semantics (added 2026-10-01, review R5)
-- **Status:** in progress · **Depends on:** P1-14, P1-09 · **Parallel with:** P1-28 …
+- **Status:** done (2026-10-01) · **Depends on:** P1-14, P1-09 · **Parallel with:** P1-28 …
 - A stop in flight at shutdown ends as `agent.stopped` / `agent.failed(cap)`, never `interrupted`, and is not resumed; shutdown logs every interruption and flushes transcripts first, then stops agents in parallel under a deadline above grace + term; a failing `adapter.stop` ends the agent with `agent.failed(runtime)`; the supervisor's interrupt hook runs inside the grace window; the SDK adapter fails the session when its query loop ends with the process alive; the process group is killed when the leader exits.
 - **Acceptance:** tests for each, including "user stop then shutdown → not resumed" and "grandchild gone after exit".
+- **Done:** Runtime: `stopRequested` on the live entry, shutdown logs each agent's fate first (stopped / failed(cap) / interrupted), flushes transcripts, stops all in parallel; a crash during a stop recovers as `agent.stopped`; stop failure → `agent.failed(runtime)`, resolved-without-event → `agent.stopped{by}`; `index.ts` wires shutdown before recovery, handles a failed listen, deadline 25 s. Supervisor: interrupt hook inside the grace window; the group is killed whenever the leader exits; `reconcile()` cleans a dead leader's group. SDK adapter: loop end with a live CLI → `agent.failed(runtime)` + stop. SPEC decision 23, TECHNOLOGY §3.4.
 
 ### P1-33 — Inbox: no lost or duplicated messages (added 2026-10-01, review R6)
-- **Status:** in progress · **Depends on:** P1-07, P1-14 · **Parallel with:** P1-28 …
+- **Status:** done (2026-10-01) · **Depends on:** P1-07, P1-14 · **Parallel with:** P1-28 …
 - A delivery marks the agent working; a refused delivery goes back to the head of the queue; redelivered items keep their ids; `message.delivered` in the protocol bounds what a crash redelivers; recovery reads the log once.
 - **Acceptance:** pause/resume right after a delivery loses nothing; two restarts in a row keep the pending message; a crash mid-turn does not redeliver the delivered message.
+- **Done:** `message.delivered` in the protocol, logged by the runtime's deliver hook; a delivery marks the agent busy; the inbox retries a refused delivery at the head (3 attempts); recovery redelivers exactly the undelivered messages with their ids, reading the log once (paged). Tests: inbox, runtime (pause/resume after a delivery), recovery (two restarts, crash after delivery).
 
 ### P1-34 — Question lifecycle (added 2026-10-01, review R7)
-- **Status:** in progress · **Depends on:** P1-23 · **Parallel with:** P1-28 …
+- **Status:** done (2026-10-01) · **Depends on:** P1-23 · **Parallel with:** P1-28 …
 - `question.cancelled{questionId, agentId, reason}`: the runtime cancels an agent's open questions in the same command as its terminal or interrupted event and when an interrupt withdraws them; the status store clears `pendingQuestionId` on `agent.idle`.
 - **Acceptance:** after stop or interrupt the row is `cancelled` and pause/resume does not bring back `waiting_for_input`.
+- **Done:** `question.cancelled` + status `cancelled` in the protocol; `domain/questions.ts` `cancelQuestion` / `cancelQuestionsOf`; the runtime cancels with every terminal/interrupted event (one command) and on an idle with a question open; the status store clears `pendingQuestionId` on cancel, idle and interrupted; the web reducer folds it. SPEC decision 21 refined: the resumed agent re-asks instead of receiving an answer given meanwhile.
 
 ### P1-35 — `EventLog` publishes only committed events (added 2026-10-01, review R8)
-- **Status:** in progress · **Depends on:** P0-13 · **Parallel with:** P1-28 …
+- **Status:** done (2026-10-01) · **Depends on:** P0-13 · **Parallel with:** P1-28 …
 - Events are buffered per outermost command and handed to the publish queue on its commit.
 - **Acceptance:** a nested command inside a rolled-back command, run from a subscriber, publishes nothing.
+- **Done:** `domain/event-log.ts` keeps an `uncommitted` buffer per outermost command (truncated on a nested rollback) and publishes it on the outermost commit; two tests that fail on the old code. TECHNOLOGY §6.1.
 
 ### P1-36 — SDK adapter mapping gaps (added 2026-10-01, review R9)
-- **Status:** in progress · **Depends on:** P1-09 · **Parallel with:** P1-28 …
+- **Status:** done (2026-10-01) · **Depends on:** P1-09 · **Parallel with:** P1-28 …
 - `AskUserQuestion` with several questions asks each one; multi-select answers; `interrupt()` while paused resumes first; `agent.paused` only with a process; `result.is_error` fails the turn as an error result; cache tokens in the cost; `rate_limit_event` → `agent.progress`; session leak (`sessions`/`byAgent`) and stale-session events; stderr reported once; `adopt()` rejects a restart policy; stop closes the input so the CLI can exit on its own.
 - **Acceptance:** fake-SDK tests for each.
+- **Done:** `claude-sdk-adapter.ts`: per-question `AskUserQuestion`, multi-select hint, interrupt while paused thaws first, pause refused without a process, `is_error` results as errored turns, cache tokens in the cost, `rate_limit_event` → `agent.progress`, sessions freed and stale sessions ignored, stderr once, session-id check on resume, idle stop by stdin EOF; `supervisor.adopt()` refuses a restart policy. Fake-SDK tests. TECHNOLOGY §3.1.
 
 ### P1-37 — `reconcile()` process identity (added 2026-10-01, review R10)
-- **Status:** in progress · **Depends on:** P1-01 · **Parallel with:** P1-28 …
+- **Status:** done (2026-10-01) · **Depends on:** P1-01 · **Parallel with:** P1-28 …
 - Command name from `basename` of the whole `comm` (macOS paths with spaces), plus a start-time check (`ps -o lstart=`) against `startedAt`.
 - **Acceptance:** tests with an injected process probe: a recycled pid with another start time is not killed; a path with spaces matches.
+- **Done:** `runtime/supervisor.ts`: injectable `probe`, `basename` of the whole `comm`, `lstart` start-time check (5 s tolerance, fallback to name + boot); tests for a recycled pid and a path with spaces. TECHNOLOGY §3.4.
 
 ### P1-38 — Conformance additions, smaller fixes and hygiene (added 2026-10-01, review R11, gaps, hygiene)
-- **Status:** in progress · **Depends on:** P1-28 … P1-37 · **Parallel with:** —
+- **Status:** done (2026-10-01) · **Depends on:** P1-28 … P1-37 · **Parallel with:** —
 - Conformance: permission denied, gate deny, one `tool_call` per call, interrupt while paused and while asking, send while paused, external kill → one `failed(crash)`, spawn failure, two sessions at once, resume from a bad ref. Smaller runtime fixes from R11 (replace on replay, send during a cap stop, early cap hit, failed resume, pause/resume ordering, startup signals, transcript seq after write). REST schemas and `ENDED_STATES` in the protocol; console fixes; 409 bodies redacted. Decisions: spawn cwd, credentials in the CLI env, stall threshold for long tools.
 - **Acceptance:** conformance green on the fake adapter; everything in the review's R11 and hygiene lists done or recorded as a decision.
+- **Done:** Conformance: a `failure paths` block — permission answered deny, policy deny, one `tool_call` per use, interrupt while paused / while asking, send while paused, crash → one `failed(crash)`, bad cwd, two concurrent sessions, resume from an invalid or missing ref (fake adapter: `toolUseId`s, `crash()` hook, `checkCwd`); the claude-sdk target carries the same cases (untested against the real CLI until the dev-machine run). R11: replacing status set after a replay (`status{replace}`), send during a stop, early cap hit, failed resume, pause/resume ordering, startup signals, transcript seq after write. Hygiene: `packages/protocol/src/rest.ts` (spawn/send/answer bodies, `RuntimesInfo`), `ENDED_STATES`, `CLOSE_UNAUTHORIZED`, console send keeps its text on failure, safe unsubscribe and frame parsing, transcripts reset on a new `logId`, redacted 409 bodies; adapters README. Decisions recorded: spawn cwd and stall threshold as SPEC §8 questions, credentials in the CLI env in TECHNOLOGY §8. Not done: a "no process left in the group" conformance case (covered by supervisor tests) and teaching `fake-sdk.ts` every failure mode of the real SDK (those paths are tested with dedicated fake-SDK scripts instead).
 
 ## Exit criteria (from the plan)
 
 Claude Code can be spawned, asked to do a small job, interrupted with a clarification question and a permission request that you answer from the page, paused and resumed, and stopped — the status store shows the right state throughout without sending the agent any extra message; killing the server mid-task and restarting resumes the agent from its session ref; the fake adapter passes the identical test suite.
 
 **Verified 2026-10-01** (`notes/P1-12-real-adapter-run.md`): all of it from the ops console against the real `claude-sdk` adapter (spawn → clarification card → permission card for an `rm -rf` → pause/resume → message → stop, states and cost shown, no extra message sent to the agent); kill -9 + restart resumes from `sessionRef` (`scripts/sdk-restart-smoke.ts`); the fake adapter runs the identical conformance suite in CI (`fake-adapter.conformance.test.ts`, 36 tests across the fake suite) and the real one passes it 11/11 locally. Left for the dev machine: repeat the three local commands under Cosmin's subscription once.
+
+**Re-checked 2026-10-01 after wave 6 (P1-28 … P1-38):** `pnpm build`, `typecheck`, `lint`, `format:check` and `pnpm test` green (protocol 42, server 358 + 1 skipped, web 30; server suite 3× without flakes). The fake adapter passes the extended conformance suite (24 cases, run 3×), including the recovery path through `recover()`. Not re-run against the real SDK here (no CLI in the sandbox): the claude-sdk conformance target now has the new failure-path cases too, so **the dev-machine run is the one open item** — `GALACTIC_REAL_CLAUDE=1 pnpm --filter @galactic/server exec vitest run src/adapters/claude-sdk/claude-sdk.conformance.test.ts`, `scripts/sdk-smoke.ts`, `scripts/sdk-restart-smoke.ts` and the spike's `auth tools`, under the subscription login on the Mac (this also exercises the macOS `ps` identity check of P1-37).

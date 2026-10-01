@@ -131,6 +131,8 @@ How much a Steward may do without asking is a **per-project permission policy** 
 
 Permission questions go straight to the user (§2.6); they are never answered by a Waykeeper or the Harmonizer. Remote clients follow the security rules in `TECHNOLOGY.md`.
 
+How the table is applied (decision 22): a project's policy overrides the global default **per category** — it can loosen as well as tighten; a policy value that is not `allow`/`ask`/`deny` counts as `ask`; writing the agent's own configuration (`.claude/`, `.mcp.json`, anything under `.git/`, `.husky/`) counts as "outside the workspace", because a Steward could plant hooks or tools that run outside the table on its next start. The table is a guard rail, not a sandbox (`TECHNOLOGY.md` §8).
+
 ## 4. Interface requirements
 
 ### 4.1 Solar system view (centre of the screen)
@@ -188,7 +190,7 @@ On first run the application checks that the Claude Code runtime is installed an
 - **Local first.** Agents run on the user's computer; the application runs there too.
 - **Remote access (future).** The user wants to check on the system from a mobile device while the computer is running and reachable over the internet. The architecture must not prevent this (see `TECHNOLOGY.md`).
 - **Non-blocking supervision.** Status reads must never interrupt a working agent.
-- **Resilience (decision 8).** Restarting the application (or the computer) must not lose the map of projects, tasks, bodies and agents, **and running work is resumed automatically**: on shutdown every agent is interrupted gracefully and its session recorded; on startup every interrupted agent is respawned from its saved session, any answer given in the meantime is delivered as its first message, and the Harmonizer reports "recovered: N agents resumed, M need attention". Agents whose runtime cannot resume are shown as `interrupted` with a resume action.
+- **Resilience (decision 8).** Restarting the application (or the computer) must not lose the map of projects, tasks, bodies and agents, **and running work is resumed automatically**: on shutdown every agent is interrupted gracefully and its session recorded; on startup every interrupted agent is respawned from its saved session, any message sent to it that it never received is delivered as its first message (its open questions are cancelled with the interruption and asked again by the resumed agent, decision 21), and the Harmonizer reports "recovered: N agents resumed, M need attention". Agents whose runtime cannot resume are shown as `interrupted` with a resume action.
 - **Cost safety.** Hard caps (per-agent wall-clock and tool calls, global concurrent agents, Stewards per Waykeeper, spawns per hour) exist from the first runnable version; dollar budgets per project come later (decision 18).
 
 ## 6. Glossary
@@ -238,7 +240,9 @@ On first run the application checks that the Claude Code runtime is installed an
 | 18 | Cost safety | **Hard caps from the first runnable version**, dollar budgets later. |
 | 19 | Phase order | **A minimal side panel is delivered right after the hierarchy**, before the 3D scene. |
 | 20 | Renderer | **WebGL only for v1** (see `TECHNOLOGY.md` §2.1). |
-| 21 | Resilience | **A resumed agent starts its caps afresh** (2026-10-01): the wall clock counts from the resume and the tool-call count from zero, so an agent recovered after a restart is not stopped for time it did not get to use; its cost meter keeps the session's running total. Messages and answers that reached the server while the agent was down are delivered as its first messages after the resume. |
+| 21 | Resilience | **A resumed agent starts its caps afresh** (2026-10-01): the wall clock counts from the resume and the tool-call count from zero, so an agent recovered after a restart is not stopped for time it did not get to use; its cost meter keeps the session's running total. Messages the agent never received (no `message.delivered`) are delivered as its first messages after the resume, with their original ids; its open questions are cancelled with the interruption (`question.cancelled`) and the resumed agent asks them again (P1-33, P1-34, refined 2026-10-01). |
+| 22 | Permission policy | **Per-category override, fail closed** (2026-10-01, P1-30): a project's policy replaces the global default category by category (presets like `trusting` rely on loosening); unknown or invalid values and an unreadable policy are `ask`; agent configuration paths count as outside the workspace (§3.6). Whether the global default should instead be a floor is an open question (§8). |
+| 23 | Stops | **A stop always wins** (2026-10-01, P1-32): a stop the user (or a cap) asked for ends the agent as `stopped` (or `failed(cap)`) even when a server shutdown or crash overtakes it; such an agent is never resumed automatically. |
 
 ## 8. Open questions
 
@@ -247,3 +251,6 @@ On first run the application checks that the Claude Code runtime is installed an
 | 2026-09-30 | Which authentication does the TypeScript Agent SDK support for the Harmonizer/Waykeeper brains under a subscription login (decision 17)? If only an API key, the brains bill the key while Stewards use the subscription. | **Answered 2026-09-30 (P1-08):** the SDK spawns its bundled Claude Code and uses the same login as the `claude` binary; in-process brains with custom tools run under the subscription, no API key. `--bare` is the exception: it needs an API key, so the opt-in is refused when none is configured. See `docs/tasks/notes/P1-08-sdk-spike.md`. |
 | 2026-09-30 | Does the Claude SDK path report cost per session reliably enough for the cost meter, or do caps count only time and tool calls in v1? | **Answered 2026-09-30 (P1-08):** every turn's result carries a cumulative `total_cost_usd` (an estimate, notional under a subscription) plus token usage; the cost meter shows it, caps stay wall-clock + tool calls (decision 18), Phase 8 budgets use the estimate. |
 | 2026-09-30 | When a Waykeeper cannot merge a Steward's branch, does the user resolve the conflict by hand in the repo, or does the Waykeeper spawn a "merge" Steward? | Decide in Phase 2 |
+| 2026-10-01 | Should the global permission default be a floor a project cannot loosen (merge = strictest of the two), rather than a per-category override (decision 22)? | Decide before Phase 7 (remote clients); conservative meanwhile: only the panel's presets loosen. |
+| 2026-10-01 | A long silent tool (a build, a test run) looks `stalled` after the runtime's silence threshold. Per-tool thresholds, or a heartbeat while a tool runs? | Decide before Phase 4 makes "stalled" visible in the scene. |
+| 2026-10-01 | Where may an agent be spawned? Today the ops console accepts any directory (dev tool). From Phase 2, require a resolved path inside a project workspace, anything else only with `GALACTIC_DEV`? | Decide with P2-01 (projects and worktrees). |
