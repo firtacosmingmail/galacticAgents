@@ -199,6 +199,11 @@ export const QuestionAnswered = z.object({
   answer: z.string(),
   answeredBy: Actor,
   version: z.number().int().nonnegative(),
+  /**
+   * Every agent that held the question, past and present, oldest first (P2-03): their mailboxes
+   * learn it was answered and stop waiting. Absent when no agent ever held it.
+   */
+  holders: z.array(Id).optional(),
 });
 /**
  * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an
@@ -211,6 +216,8 @@ export const QuestionCancelled = z.object({
   agentId: Id,
   reason: z.string(),
   version: z.number().int().nonnegative(),
+  /** Every agent that held the question, past and present (as on `question.answered`). */
+  holders: z.array(Id).optional(),
 });
 /** Holder changed without an escalation, e.g. the holder died (orphaned question). */
 export const QuestionReassigned = z.object({

@@ -104,7 +104,17 @@ export const question: Question = {
   originAgentId: 'a-steward-1',
   holder: { type: 'agent', id: 'a-waykeeper-1' },
   status: 'open',
-  context: { text: 'Keep the legacy cookie name?', options: ['yes', 'no'] },
+  context: {
+    text: 'Keep the legacy cookie name?',
+    options: ['yes', 'no'],
+    origin: {
+      role: 'steward',
+      taskId: 't-1',
+      projectId: 'p-1',
+      bodyId: 'b-luna',
+      recent: [{ seq: 41, at: NOW, type: 'agent.tool_call', summary: 'Read' }],
+    },
+  },
   version: 0,
   createdAt: NOW,
   updatedAt: NOW,
