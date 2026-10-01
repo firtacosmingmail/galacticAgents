@@ -29,17 +29,22 @@ export function describeActor(actor: Actor): string {
 
 const sameActor = (a: Actor, b: Actor): boolean => a.type === b.type && a.id === b.id;
 
-function mustOpen(ctx: CommandContext, questionId: Id): Question {
-  const current = must(ctx.tables.questions.get(questionId), 'question', questionId);
+/** Refuses a question that is no longer open, saying who answered it first. */
+function checkOpen(current: Question): void {
   if (current.status === 'answered') {
     throw new DomainError(
       'stale',
-      `question ${questionId} was already answered by ${describeActor(current.answeredBy ?? USER)}`,
+      `question ${current.id} was already answered by ${describeActor(current.answeredBy ?? USER)}`,
     );
   }
   if (current.status !== 'open') {
-    throw new DomainError('invalid_transition', `question ${questionId} is ${current.status}`);
+    throw new DomainError('invalid_transition', `question ${current.id} is ${current.status}`);
   }
+}
+
+function mustOpen(ctx: CommandContext, questionId: Id): Question {
+  const current = must(ctx.tables.questions.get(questionId), 'question', questionId);
+  checkOpen(current);
   return current;
 }
 
@@ -89,7 +94,33 @@ export interface AnswerInput {
  * version (the holder changed meanwhile). An agent may answer only a clarification it holds.
  */
 export function answerQuestion(ctx: CommandContext, input: AnswerInput): Question {
-  const current = mustOpen(ctx, input.questionId);
+  const current = must(ctx.tables.questions.get(input.questionId), 'question', input.questionId);
+  checkAnswer(current, input);
+  const question: Question = {
+    ...current,
+    status: 'answered',
+    answer: input.answer,
+    answeredBy: input.answeredBy,
+    version: current.version + 1,
+    updatedAt: ctx.now,
+  };
+  ctx.tables.questions.upsert(question);
+  ctx.emit({
+    type: 'question.answered',
+    questionId: question.id,
+    answer: input.answer,
+    answeredBy: input.answeredBy,
+    version: question.version,
+  });
+  return question;
+}
+
+/**
+ * Whether `input` may answer `current` now; throws the refusal otherwise. Shared with the command
+ * surface, which checks before handing the answer to the agent's adapter.
+ */
+export function checkAnswer(current: Question, input: AnswerInput): void {
+  checkOpen(current);
   if (input.version !== undefined && input.version !== current.version) {
     throw new DomainError(
       'stale',
@@ -110,23 +141,6 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
       );
     }
   }
-  const question: Question = {
-    ...current,
-    status: 'answered',
-    answer: input.answer,
-    answeredBy: input.answeredBy,
-    version: current.version + 1,
-    updatedAt: ctx.now,
-  };
-  ctx.tables.questions.upsert(question);
-  ctx.emit({
-    type: 'question.answered',
-    questionId: question.id,
-    answer: input.answer,
-    answeredBy: input.answeredBy,
-    version: question.version,
-  });
-  return question;
 }
 
 /**
