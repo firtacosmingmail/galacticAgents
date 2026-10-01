@@ -74,7 +74,8 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
   const jobEnd = target.jobEnd ?? 'finished';
   const JOB_END = `agent.${jobEnd}` as const;
 
-  describe(`adapter conformance — ${target.name}`, () => {
+  // A real adapter needs minutes per case; the suite's timeout is the target's, not Vitest's.
+  describe(`adapter conformance — ${target.name}`, { timeout: timeoutMs * 6 }, () => {
     let rig: Rig;
 
     beforeEach(async () => {

@@ -1,6 +1,6 @@
 # Phase 2 — The hierarchy: Harmonizer, Waykeepers, Stewards
 
-**Current task:** — (phase not started; first tasks will be P2-01 and P2-06 groundwork) · **Task status:** —
+**Current task:** P2-01 (wave 1, next — Phase 1 done 2026-10-01) · **Task status:** todo
 **Phase status:** not started (0/19 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.

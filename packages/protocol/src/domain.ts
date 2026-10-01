@@ -218,7 +218,10 @@ export type TranscriptChunk = z.infer<typeof TranscriptChunk>;
  * `trusting` lets a Steward install and talk to the network on its own but still asks before
  * destroying or pushing; `cautious` asks for every change.
  */
-export const PERMISSION_POLICY_PRESETS: Record<'default' | 'trusting' | 'cautious', PermissionPolicy> = {
+export const PERMISSION_POLICY_PRESETS: Record<
+  'default' | 'trusting' | 'cautious',
+  PermissionPolicy
+> = {
   default: DEFAULT_PERMISSION_POLICY,
   trusting: {
     rules: {

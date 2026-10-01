@@ -1,7 +1,7 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** wave 4 — P1-11, P1-13, P1-14, P1-15, P1-16 (all claimed 2026-10-01) · **Task status:** in progress
-**Phase status:** in progress (21/27 done)
+**Current task:** — (phase complete) · **Task status:** —
+**Phase status:** done (2026-10-01) — 27/27 tasks; exit criteria verified below
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -112,30 +112,35 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** server side `http/agent-routes.ts` (bearer-guarded `/api/runtimes`, `/api/agents` + `send|pause|resume|interrupt|stop|recover`, `/api/questions/:id/answer`; every call goes through the runtime, results arrive on the stream) and the Vite proxy; web side `console/api.ts`, `console/AgentsConsole.tsx` (list, spawn form fed by `/api/runtimes` with the fake scenarios, per-agent panel with facts, question card for both kinds, controls, message + interrupt toggle, live transcript via `transcript.subscribe`, "Resume session" for `interrupted`), `client.ts` transcript subscriptions re-sent on reconnect. Tests: 5 route tests, 4 console tests. Click-through with Playwright against the running server: the fake `full` scenario and the real `claude-sdk` adapter (clarification → permission for an `rm -rf` → pause/resume → message → stop, cost shown) both pass with no page errors.
 
 ### P1-12 — Conformance and resume against the real adapter
-- **Status:** todo · **Depends on:** P1-09, P1-04, P1-14 · **Parallel with:** —
+- **Status:** done (2026-10-01) · **Depends on:** P1-09, P1-04, P1-14 · **Parallel with:** —
 - Run the conformance suite against the `claude-sdk` adapter locally (tagged, not in CI); add the "kill the server mid-task, restart, agent resumes from `sessionRef`" scenario.
 - **Acceptance:** suite green locally; a short run log kept in `docs/tasks/notes/`.
+- **Done:** `notes/P1-12-real-adapter-run.md` — conformance 11/11 against the real SDK (`GALACTIC_REAL_CLAUDE=1`), the kill -9 + restart scenario (`scripts/sdk-restart-smoke.ts`: reconcile kills the orphaned CLI, `recover()` resumes the session, the agent remembers life 1), and the ops-console click-through. Fix found on the way: `conformance.ts` now gives its `describe` the target's timeout (Vitest's 5 s default was cutting real runs short). One repeat of the three commands is left for Cosmin's machine under his own subscription.
 
 ### P1-13 — Adapters README: how to add a runtime
-- **Status:** in progress · **Depends on:** P1-04 · **Parallel with:** P1-11, P1-14
+- **Status:** done (2026-10-01) · **Depends on:** P1-04 · **Parallel with:** P1-11, P1-14
 - `apps/server/src/adapters/README.md`: the interface, event mapping table, question kinds, graceful stop, what the conformance suite checks, notes for the future ACP adapter (advertise `elicitation.form`; `request_permission` is permission-kind) and PTY adapter (no resume).
 - **Acceptance:** a reader could implement the ACP adapter from it without reading the SDK adapter.
+- **Done:** `apps/server/src/adapters/README.md` — the interface table (wave 2b contract: no adapter queue, gate in `SpawnOptions`), the event mapping, the two question kinds and how they resolve, the gate verdicts, supervisor outcomes → events, what the conformance suite checks, and the ACP/PTY notes.
 
 ### P1-14 — Restart recovery v1
-- **Status:** in progress · **Depends on:** P1-01, P1-09 · **Parallel with:** P1-11, P1-13
+- **Status:** done (2026-10-01) · **Depends on:** P1-01, P1-09 · **Parallel with:** P1-11, P1-13
 - Graceful shutdown handler (SIGINT/SIGTERM on the server): interrupt every agent, persist session refs, exit. Startup: reconcile PID table, respawn interrupted agents via `resumeSession` where the adapter supports it, deliver any answer given meanwhile as the first message, mark the rest `interrupted`.
 - **Acceptance:** kill -9 and clean restart both recover a fake-adapter agent; state visible in the ops console as `interrupted → working`.
+- **Done:** `index.ts` shutdown = `composed.shutdown()` (every live agent gets `agent.interrupted{pending}` then its adapter stops) → `supervisor.dispose()` → `app.close()`, 15 s deadline, second signal forces exit. Startup = `supervisor.reconcile()` → `composed.recover()`: `AgentRuntime.recover()` resumes every `interrupted` agent whose adapter has `resumeSession` from `agent.meta` (cwd, prompt, workspace, policy), redelivers what was pending (`pendingFor()`: the ids on `agent.interrupted`, else messages/answers logged after the interruption), and reports `{resumed, needAttention}`; the rest stay `interrupted` with a "Resume session" button in the console (`POST /api/agents/:id/recover`). Tests: `runtime/recovery.test.ts` (clean shutdown, kill -9 simulation, redelivery, unresumable), the real run in `notes/P1-12-real-adapter-run.md`.
 
 ### P1-15 — Restart recovery: `agent.interrupted` event and shutdown semantics (added 2026-09-30)
-- **Status:** in progress · **Depends on:** P1-14 design · **Parallel with:** P1-14
+- **Status:** done (2026-10-01) · **Depends on:** P1-14 design · **Parallel with:** P1-14
 - Found in the wave 2 review. The status store has an `interrupted` state but no event maps to it, and a graceful shutdown today ends every agent with `control.stop{by: system}` + `agent.stopped`, indistinguishable from a user stop. Add `agent.interrupted{agentId, reason}` to the protocol (emitted by the shutdown path and by `reconcile()` for dead/orphaned rows), fold it in the status store and the web reducer, and make P1-14's resume path key off it. Decide and record in `SPEC.md` §7 whether a resumed agent's wall-clock cap restarts from zero (today it does).
 - **Acceptance:** after `kill -9` + restart the fake agent shows `interrupted → working`; after a clean shutdown the log has `agent.interrupted`, not `agent.stopped`.
+- **Done:** `agent.interrupted{agentId, reason, pending?}` in the protocol (runtime-owned, a terminal event for the status store: `interrupted` with the reason as activity); emitted by `shutdown()` and by `recover()` for rows the reconcile found dead or orphaned; folded in `status-store.ts` and the web reducer. SPEC decision 21: a resumed agent's caps restart from zero (the run is a new process; the log keeps the history).
 
 ### P1-16 — Retention of ended status records and inbox histories (added 2026-09-30)
-- **Status:** in progress · **Depends on:** P1-05 · **Parallel with:** P1-11
+- **Status:** done (2026-10-01) · **Depends on:** P1-05 · **Parallel with:** P1-11
 - Found in the wave 2 review. Ended agents stay in the status store (and in every snapshot) and the runtime keeps no bounded history of delivered messages. Add a retention rule (keep ended records for the decision-4 period, then drop from the store; keep inbox history in the log or cap it) and stop creating a procedural asteroid for a spawn refused by the concurrency cap.
 - **Acceptance:** a long-running server with thousands of finished agents keeps `snapshot.statuses` bounded; a refused spawn leaves no orphan body.
 - **Note (P1-21):** the refused-spawn half is done — a spawn over the concurrency cap writes nothing. The inbox history is bounded since P1-22 (`message.sent` is in the log). What remains is the retention of ended status records.
+- **Done:** `StatusStore` retention — ended records are kept `retainEndedMs` (24 h) and at most `maxEnded` (500), pruned on the ticker; the `status` message carries `removed: Id[]` and the web store drops them. The log keeps the full history; the snapshot stays bounded (TECHNOLOGY §4).
 
 ### P1-17 — One terminal event per agent (added 2026-09-30, review R1)
 - **Status:** done (2026-09-30) · **Depends on:** P1-02, P1-05 · **Parallel with:** P1-18 … P1-27
@@ -205,3 +210,5 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 ## Exit criteria (from the plan)
 
 Claude Code can be spawned, asked to do a small job, interrupted with a clarification question and a permission request that you answer from the page, paused and resumed, and stopped — the status store shows the right state throughout without sending the agent any extra message; killing the server mid-task and restarting resumes the agent from its session ref; the fake adapter passes the identical test suite.
+
+**Verified 2026-10-01** (`notes/P1-12-real-adapter-run.md`): all of it from the ops console against the real `claude-sdk` adapter (spawn → clarification card → permission card for an `rm -rf` → pause/resume → message → stop, states and cost shown, no extra message sent to the agent); kill -9 + restart resumes from `sessionRef` (`scripts/sdk-restart-smoke.ts`); the fake adapter runs the identical conformance suite in CI (`fake-adapter.conformance.test.ts`, 36 tests across the fake suite) and the real one passes it 11/11 locally. Left for the dev machine: repeat the three local commands under Cosmin's subscription once.
