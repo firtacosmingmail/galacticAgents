@@ -28,6 +28,19 @@ const agentBase = { agentId: Id };
  */
 export const AgentCreated = z.object({ type: z.literal('agent.created'), agent: Agent });
 
+/**
+ * The agent row's placement changed (P2-01): a new supervisor (an orphaned Steward re-parented),
+ * a new body (a promoted task's satellite flies), a task or project handed over. Emitted by the
+ * domain command, never by an adapter.
+ */
+export const AgentUpdated = z.object({
+  type: z.literal('agent.updated'),
+  agentId: Id,
+  changes: Agent.pick({ supervisorId: true, bodyId: true, taskId: true, projectId: true })
+    .partial()
+    .refine((c) => Object.keys(c).length > 0, { message: 'an update changes something' }),
+});
+
 export const AgentSpawned = z.object({
   type: z.literal('agent.spawned'),
   ...agentBase,
@@ -263,7 +276,8 @@ export const ProjectStateChanged = z.object({
   type: z.literal('project.state_changed'),
   projectId: Id,
   from: WorkState,
-  to: WorkState,
+  to: WorkState,  /** Who asked for it; absent for a derived change (P2-15). */
+  by: Actor.optional(),
 });
 
 export const TaskCreated = z.object({ type: z.literal('task.created'), task: Task });
@@ -276,7 +290,8 @@ export const TaskStateChanged = z.object({
   type: z.literal('task.state_changed'),
   taskId: Id,
   from: WorkState,
-  to: WorkState,
+  to: WorkState,  /** Who asked for it; absent for a derived change (P2-15). */
+  by: Actor.optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -313,6 +328,7 @@ export const ControlReopen = z.object({ type: z.literal('control.reopen'), ...co
 /** Every event that can appear in the `events` log and on the WebSocket stream. */
 export const Event = z.discriminatedUnion('type', [
   AgentCreated,
+  AgentUpdated,
   AgentSpawned,
   AgentOutput,
   AgentToolCall,

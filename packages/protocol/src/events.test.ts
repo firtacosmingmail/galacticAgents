@@ -15,6 +15,7 @@ function classify(
 ): 'agent' | 'message' | 'question' | 'proposal' | 'body' | 'project' | 'task' | 'control' {
   switch (e.type) {
     case 'agent.created':
+    case 'agent.updated':
     case 'agent.spawned':
     case 'agent.output':
     case 'agent.tool_call':
@@ -82,10 +83,11 @@ describe('event schemas', () => {
     }
   });
 
-  it('agent.* events about a running agent are AgentEvents; agent.created and the rest are not', () => {
+  it('agent.* events about a running agent are AgentEvents; the row events and the rest are not', () => {
+    const rowEvents = new Set(['agent.created', 'agent.updated']);
     for (const type of EVENT_TYPES) {
       const ok = AgentEvent.safeParse(events[type]).success;
-      expect(ok, type).toBe(type.startsWith('agent.') && type !== 'agent.created');
+      expect(ok, type).toBe(type.startsWith('agent.') && !rowEvents.has(type));
     }
   });
 
@@ -101,6 +103,12 @@ describe('event schemas', () => {
         by: { type: 'user' },
       }).success,
     ).toBe(false);
+  });
+
+  it('refuses an agent.updated that changes nothing', () => {
+    expect(Event.safeParse({ type: 'agent.updated', agentId: 'a', changes: {} }).success).toBe(
+      false,
+    );
   });
 
   it('wraps events in a seq/at envelope', () => {

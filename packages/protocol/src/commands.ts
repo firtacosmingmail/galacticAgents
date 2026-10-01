@@ -21,6 +21,7 @@ import type {
   WorkState,
 } from './enums.js';
 import type { AgentEvent, ControlTarget, Event } from './events.js';
+import type { ToolDefinition } from './adapter.js';
 import type { Id } from './primitives.js';
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,8 @@ export interface CreateProjectInput {
   bodyId?: Id;
   kind?: Exclude<BodyKind, 'asteroid'>;
   permissionPolicy?: PermissionPolicy;
+  /** Default `approved`: a project is created when its proposal is approved (decision 3). */
+  state?: Extract<WorkState, 'proposed' | 'approved'>;
 }
 
 export interface CreateTaskInput {
@@ -44,6 +47,10 @@ export interface CreateTaskInput {
   /** Absent for a standalone task, which gets a fresh asteroid. */
   projectId?: Id;
   blockedBy?: Id[];
+  /** Standalone tasks only: a free asteroid to use instead of a fresh one. */
+  bodyId?: Id;
+  /** Default `approved`; a Waykeeper's plan creates its tasks `proposed` until the card is approved. */
+  state?: Extract<WorkState, 'proposed' | 'approved'>;
 }
 
 export interface SpawnAgentInput {
@@ -55,6 +62,23 @@ export interface SpawnAgentInput {
   prompt: string;
   caps?: Partial<AgentCaps>;
   bare?: boolean;
+  /** Brains: their tools and system prompt (TECHNOLOGY §5.1). */
+  tools?: ToolDefinition[];
+  systemPrompt?: string;
+  /**
+   * Working directory of an agent outside any project (the Harmonizer). An agent with a task or
+   * project runs in the task's worktree or the project's workspace and may not override it
+   * (decision 24).
+   */
+  cwd?: string;
+}
+
+/** Where an agent sits in the hierarchy; what `updateAgent` may change. */
+export type AgentPlacement = Partial<Pick<Agent, 'supervisorId' | 'bodyId' | 'taskId' | 'projectId'>>;
+
+/** Reopening finished work (decision 11b): the old body if it is still free, else `bodyId`. */
+export interface ReopenInput {
+  bodyId?: Id;
 }
 
 export interface CreateProposalInput {
@@ -105,7 +129,9 @@ export interface CommandResult<T> {
 /**
  * The command surface that brain tools and panel actions call (TECHNOLOGY §5). Every command
  * runs under the one write rule (§6.1): domain mutation + event insert in one transaction.
- * Phase 0 defines it; Phase 2 implements it.
+ * Phase 0 defined it; P2-01 implements it (`apps/server/src/domain/commands.ts`). A command that
+ * is refused (unknown id, invalid transition, stale answer, …) rejects with a `DomainError`
+ * and writes nothing.
  */
 export interface DomainCommands {
   // projects and tasks
@@ -116,6 +142,9 @@ export interface DomainCommands {
   ): Promise<CommandResult<Project>>;
   setProjectState(projectId: Id, state: WorkState): Promise<CommandResult<Project>>;
   closeProject(projectId: Id, by: Actor): Promise<CommandResult<Project>>;
+  archiveProject(projectId: Id, by: Actor): Promise<CommandResult<Project>>;
+  pinProject(projectId: Id, pinned: boolean): Promise<CommandResult<Project>>;
+  reopenProject(projectId: Id, by: Actor, input?: ReopenInput): Promise<CommandResult<Project>>;
   createTask(input: CreateTaskInput): Promise<CommandResult<Task>>;
   updateTask(
     taskId: Id,
@@ -123,6 +152,11 @@ export interface DomainCommands {
   ): Promise<CommandResult<Task>>;
   setTaskState(taskId: Id, state: WorkState): Promise<CommandResult<Task>>;
   closeTask(taskId: Id, by: Actor): Promise<CommandResult<Task>>;
+  archiveTask(taskId: Id, by: Actor): Promise<CommandResult<Task>>;
+  pinTask(taskId: Id, pinned: boolean): Promise<CommandResult<Task>>;
+  reopenTask(taskId: Id, by: Actor, input?: ReopenInput): Promise<CommandResult<Task>>;
+  /** A standalone task joins a project and lives on its body from now on (decision 9). */
+  moveTask(taskId: Id, toProjectId: Id, by: Actor): Promise<CommandResult<Task>>;
 
   // bodies (SPEC §3)
   assignBody(bodyId: Id, host: Host): Promise<CommandResult<Body>>;
@@ -131,6 +165,7 @@ export interface DomainCommands {
 
   // agents
   spawnAgent(input: SpawnAgentInput): Promise<CommandResult<Agent>>;
+  updateAgent(agentId: Id, changes: AgentPlacement): Promise<CommandResult<Agent>>;
   stopAgent(agentId: Id, by: Actor): Promise<CommandResult<Agent>>;
   pauseAgent(agentId: Id, by: Actor): Promise<CommandResult<Agent>>;
   resumeAgent(agentId: Id, by: Actor): Promise<CommandResult<Agent>>;

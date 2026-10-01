@@ -92,3 +92,21 @@ export type PermissionAction = z.infer<typeof PermissionAction>;
 
 export const PermissionDecision = z.enum(['allow', 'ask', 'deny']);
 export type PermissionDecision = z.infer<typeof PermissionDecision>;
+
+/**
+ * Why a domain command was refused (P2-01). The REST and WS surfaces map these to their own
+ * error shapes; brain tools hand the message back to the LLM as a tool error.
+ */
+export const DomainErrorCode = z.enum([
+  /** No such project, task, body, agent, proposal or question. */
+  'not_found',
+  /** The entity's state does not allow it (SPEC §4.4 transitions, a decided proposal). */
+  'invalid_transition',
+  /** Something else holds it: a taken body, a reserved body, a planet with an active sub-project. */
+  'conflict',
+  /** The answer was given against an older version; the reply says who answered first. */
+  'stale',
+  /** The input is malformed or contradicts itself. */
+  'invalid',
+]);
+export type DomainErrorCode = z.infer<typeof DomainErrorCode>;
