@@ -18,7 +18,7 @@
 
 ## Decisions (proposed text, ready to paste)
 
-**SPEC §7, decision 25. Control action states (2026-10-01, P2-14).** Explicit control actions set the state of a task or project, recorded with `by`. Agent-caused changes are left to derivation (P2-15).
+**SPEC §7, decision 28 (numbered 25 in the draft). Control action states (2026-10-01, P2-14).** Explicit control actions set the state of a task or project, recorded with `by`. Agent-caused changes are left to derivation (P2-15).
 
 | action | task | project |
 |---|---|---|

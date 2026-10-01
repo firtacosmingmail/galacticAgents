@@ -33,7 +33,7 @@ Branch `worktree-agent-a338ed5827c1ee56a` (from `p2-wave2-services`), 2026-10-01
 
 ## Decisions (proposed text, ready to paste)
 
-**SPEC §7, decision 25 — Workspaces and worktrees (2026-10-01, P2-05).**
+**SPEC §7, decision 27 (numbered 25 in the draft) — Workspaces and worktrees (2026-10-01, P2-05).**
 
 - A workspace is an existing folder or a new `<projectsRoot>/<slug>` (default `~/GalacticProjects`, settable).
 - Never accepted as a workspace: `/`, the home directory itself, the projects root itself, or anything inside or containing the server's data directory.
@@ -56,7 +56,7 @@ Branch `worktree-agent-a338ed5827c1ee56a` (from `p2-wave2-services`), 2026-10-01
 
 **TECHNOLOGY §6 — fields.** `Project.repoPath` = the repository root. `Project.meta.workspace` = the `prepare` result (`WorkspaceMeta`). `Task.meta.worktree = { root, baseBranch, removed? }` and `Task.meta.merge = { commit, fastForward, branchDeleted }`. After a merge, `worktreePath` and `branch` stay as the record of where the work happened, because clearing fields is P2-20. A project that was never prepared counts as serialised.
 
-**Answer to the SPEC §8 merge-conflict question (recommendation).** Phase 2: the conflict becomes a clarification question carrying the file list and both branches. The Waykeeper may answer it from context with "re-run the task on top of the new base". It does this by spawning the same task's Steward in its kept worktree with the instruction to `git merge <base>` and resolve, then calling `merge_task` again. Otherwise it escalates and the user resolves by hand in the worktree; `mergeTask` is then retried. A dedicated "merge Steward" is unnecessary: the task's own Steward has the context. Record as decision 26 if accepted.
+**Answer to the SPEC §8 merge-conflict question (recommendation).** Phase 2: the conflict becomes a clarification question carrying the file list and both branches. The Waykeeper may answer it from context with "re-run the task on top of the new base". It does this by spawning the same task's Steward in its kept worktree with the instruction to `git merge <base>` and resolve, then calling `merge_task` again. Otherwise it escalates and the user resolves by hand in the worktree; `mergeTask` is then retried. A dedicated "merge Steward" is unnecessary: the task's own Steward has the context. Left as an open question in SPEC §8 for the user to decide.
 
 ## Deferred
 
