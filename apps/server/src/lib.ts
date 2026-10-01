@@ -49,3 +49,8 @@ export { CapsEnforcer, DEFAULT_CAPS, type CapUsage } from './runtime/caps.js';
 export { StatusStore, type StatusListener } from './runtime/status-store.js';
 export { composeRuntime, STALL_THRESHOLDS_MS, type ComposedRuntime } from './runtime/compose.js';
 export { FakeAdapter, SCENARIOS, type FakeScenario, type FakeStep } from './adapters/fake/index.js';
+export {
+  ClaudeSdkAdapter,
+  CLAUDE_PASS_ENV,
+  type ClaudeSdkAdapterOptions,
+} from './adapters/claude-sdk/index.js';

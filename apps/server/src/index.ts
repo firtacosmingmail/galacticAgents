@@ -1,13 +1,37 @@
 import { loadConfig } from './config/config.js';
 import { buildApp } from './app.js';
+import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
+import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { openDatabase } from './db/database.js';
 import { composeRuntime } from './runtime/compose.js';
+import { SqliteProcessStore } from './runtime/process-store.js';
+import { ProcessSupervisor } from './runtime/supervisor.js';
 
 const { config, tokenGenerated } = loadConfig();
+const onError = (error: unknown, context: string) =>
+  console.error(`[runtime] ${context}:`, error instanceof Error ? error.message : error);
 
-// Adapters: the fake one always (dev mode without Claude); the claude-sdk adapter joins in P1-09.
-const composed = composeRuntime(openDatabase(config.dbPath), {
-  onError: (error, context) => console.error(`[runtime] ${context}:`, error),
+const db = openDatabase(config.dbPath);
+// The supervisor owns every agent child process; its PID table lives in the same database.
+const supervisor = new ProcessSupervisor({ store: new SqliteProcessStore(db) });
+const reconciled = supervisor.reconcile();
+if (reconciled.dead.length + reconciled.orphans.length > 0) {
+  console.log(
+    `Reconciled the process table: ${reconciled.dead.length} dead, ${reconciled.orphans.length} orphaned (killed)`,
+  );
+}
+
+// Adapters: the fake one always (dev mode without Claude), the real one for Claude Code.
+const composed = composeRuntime(db, {
+  adapters: [
+    new FakeAdapter(),
+    new ClaudeSdkAdapter({
+      supervisor,
+      ...(process.env['GALACTIC_MODEL'] ? { model: process.env['GALACTIC_MODEL'] } : {}),
+      onError,
+    }),
+  ],
+  onError,
 });
 const { log, statuses, transcripts } = composed;
 
@@ -46,6 +70,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     void composed
       .dispose()
       .catch((error) => console.error('[runtime] dispose:', error))
+      .then(() => supervisor.dispose())
+      .catch((error) => console.error('[supervisor] dispose:', error))
       .then(() => app.close())
       .catch((error) => console.error('[server] close:', error))
       .then(() => process.exit(0));
