@@ -62,8 +62,14 @@ export class EventLog {
   private readonly selectSince: Statement;
   private readonly selectMax: Statement;
   private readonly selectMin: Statement;
-  /** Events committed but not yet published (only non-empty inside a command or while publishing). */
+  /** Events committed but not yet published (only non-empty while publishing). */
   private pending: EventEnvelope[] = [];
+  /**
+   * Events inserted by the transaction under way (the outermost command and every nested one),
+   * handed to `pending` only when the outermost command commits: a nested command that
+   * succeeded inside an outer one that then threw is rolled back with it and never published.
+   */
+  private uncommitted: EventEnvelope[] = [];
   private depth = 0;
   /** True while subscribers are being notified; commands run by a subscriber queue behind the batch. */
   private publishing = false;
@@ -109,6 +115,7 @@ export class EventLog {
     };
 
     this.depth++;
+    const mark = this.uncommitted.length;
     let value: T;
     try {
       value = this.db.transaction(() => {
@@ -120,11 +127,16 @@ export class EventLog {
         }
         return result;
       })();
-      this.pending.push(...mine);
+      this.uncommitted.push(...mine);
+      if (this.depth === 1) {
+        // The outermost command committed: its events (and its nested commands') are published.
+        this.pending.push(...this.uncommitted);
+        this.uncommitted = [];
+      }
     } catch (error) {
-      // A failed outermost command drops what its nested commands queued; events queued by an
-      // enclosing publish loop are already committed and stay.
-      if (this.depth === 1 && !this.publishing) this.pending = [];
+      // This command's savepoint (or the whole transaction) was rolled back: so were the events
+      // its nested commands inserted. Events of an enclosing publish loop are already committed.
+      this.uncommitted.length = mark;
       throw error;
     } finally {
       this.depth--;

@@ -147,6 +147,47 @@ describe('EventLog.runCommand', () => {
     expect(errors).toHaveLength(1);
   });
 
+  it('a subscriber command that rolls back publishes nothing of its nested commands (P1-35)', () => {
+    const log = fresh();
+    const seen: number[] = [];
+    let reacted = false;
+    log.subscribe((e) => {
+      seen.push(e.seq);
+      if (reacted) return;
+      reacted = true;
+      expect(() =>
+        log.runCommand(() => {
+          log.runCommand(({ emit }) => emit({ type: 'agent.idle', agentId: 'nested' }));
+          throw new Error('outer fails');
+        }),
+      ).toThrow('outer fails');
+    });
+    log.runCommand(({ emit }) => emit({ type: 'agent.idle', agentId: 'a' }));
+    log.runCommand(({ emit }) => emit({ type: 'agent.idle', agentId: 'b' }));
+    expect(log.eventsSince(0).map((e) => e.seq)).toEqual([1, 2]);
+    expect(seen).toEqual([1, 2]);
+  });
+
+  it('a nested command that throws inside a surviving outer one is not published', () => {
+    const log = fresh();
+    const seen: string[] = [];
+    log.subscribe((e) => seen.push(e.event.type));
+    log.runCommand(({ emit }) => {
+      try {
+        log.runCommand(({ emit: e }) => {
+          e({ type: 'agent.stalled', agentId: 'x' });
+          log.runCommand(({ emit: e2 }) => e2({ type: 'agent.paused', agentId: 'x' }));
+          throw new Error('inner fails');
+        });
+      } catch {
+        // swallowed by the outer command
+      }
+      emit({ type: 'agent.idle', agentId: 'x' });
+    });
+    expect(seen).toEqual(['agent.idle']);
+    expect(log.eventsSince(0).map((e) => e.event.type)).toEqual(['agent.idle']);
+  });
+
   it('nested commands join the outer transaction and publish once, in order', () => {
     const log = fresh();
     const seen: string[] = [];
