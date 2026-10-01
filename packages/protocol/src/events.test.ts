@@ -12,7 +12,16 @@ import { events } from './fixtures/events.js';
 /** Compile-time exhaustiveness: every member of the union must be handled here. */
 function classify(
   e: Event,
-): 'agent' | 'message' | 'question' | 'proposal' | 'body' | 'project' | 'task' | 'control' {
+):
+  | 'agent'
+  | 'message'
+  | 'question'
+  | 'permission'
+  | 'proposal'
+  | 'body'
+  | 'project'
+  | 'task'
+  | 'control' {
   switch (e.type) {
     case 'agent.created':
     case 'agent.updated':
@@ -39,6 +48,8 @@ function classify(
     case 'question.reassigned':
     case 'question.cancelled':
       return 'question';
+    case 'permission.decided':
+      return 'permission';
     case 'proposal.created':
     case 'proposal.approved':
     case 'proposal.edited':

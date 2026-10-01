@@ -106,6 +106,16 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     version: 2,
     holders: ['a-waykeeper-1'],
   },
+  'permission.decided': {
+    type: 'permission.decided',
+    ...steward,
+    questionId: 'q-perm-1',
+    toolCall: { toolName: 'Bash', input: { command: 'rm -rf dist' } },
+    decision: 'deny',
+    action: 'destructive',
+    reason: 'destructive is denied by policy',
+    decidedBy: { type: 'system' },
+  },
   'question.reassigned': {
     type: 'question.reassigned',
     questionId: 'q-1',
