@@ -2,6 +2,7 @@ import type { AgentAdapter, AgentCaps, AgentRuntime as RuntimeName } from '@gala
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
+import { livingFromStatuses, logRouting } from '../domain/question-service.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { DEFAULT_CAPS } from './caps.js';
@@ -83,8 +84,11 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'transcripts') } : {}),
   });
 
+  // One question routing for the runtime and the command surface (P2-03).
+  const questions = logRouting(log, livingFromStatuses(statuses));
   const runtime = new AgentRuntime({
     log,
+    questions,
     adapters: opts.adapters ?? [new FakeAdapter()],
     transcripts,
     statuses,
@@ -99,7 +103,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     statuses,
     transcripts,
     runtime,
-    commands: new Commands({ log, agents: runtime }),
+    commands: new Commands({ log, agents: runtime, questions }),
     recover: () => runtime.recover(),
     async shutdown() {
       await runtime.shutdown();

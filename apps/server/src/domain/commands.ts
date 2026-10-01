@@ -38,12 +38,14 @@ import {
 } from './projects.js';
 import { createProposal, decideProposal } from './proposals.js';
 import {
-  answerQuestion,
-  checkAnswer,
-  escalateQuestion,
-  openQuestion,
-  reassignQuestion,
-} from './questions.js';
+  endAgentQuestions,
+  holdersNow,
+  logRouting,
+  openFromNeedsInput,
+  openRouted,
+  type QuestionRouting,
+} from './question-service.js';
+import { answerQuestion, checkAnswer, escalateQuestion, reassignQuestion } from './questions.js';
 import { setProjectState, setTaskState } from './states.js';
 import {
   archiveTask,
@@ -74,7 +76,11 @@ export interface AgentControl {
 export interface CommandsOptions {
   log: EventLog;
   agents?: AgentControl;
+  /** Question routing (P2-03); default: the log alone (liveness from lifecycle events). */
+  questions?: QuestionRouting;
 }
+
+const ENDINGS = new Set(['agent.finished', 'agent.failed', 'agent.stopped', 'agent.interrupted']);
 
 /**
  * `DomainCommands` (P2-01; TECHNOLOGY §5, §6.1): the one command surface brain tools, panel
@@ -86,10 +92,12 @@ export interface CommandsOptions {
 export class Commands implements DomainCommands {
   private readonly log: EventLog;
   private readonly agents: AgentControl | undefined;
+  private readonly questions: QuestionRouting;
 
   constructor(opts: CommandsOptions) {
     this.log = opts.log;
     this.agents = opts.agents;
+    this.questions = opts.questions ?? logRouting(opts.log);
   }
 
   private run<T>(fn: (ctx: CommandContext) => T): Promise<CommandResult<T>> {
@@ -266,7 +274,8 @@ export class Commands implements DomainCommands {
 
   /**
    * Folds an adapter event into the log the way the runtime does (an `agent.needs_input` opens
-   * its question in the same transaction). For events that do not come through a live session.
+   * its routed question in the same transaction; an end cancels the agent's questions and
+   * re-routes the ones it held, P2-03). For events that do not come through a live session.
    */
   recordAgentEvent(event: AgentEvent): Promise<CommandResult<void>> {
     const parsed = AgentEvent.parse(event);
@@ -278,13 +287,9 @@ export class Commands implements DomainCommands {
         return;
       }
       ctx.emit(parsed);
-      if (parsed.type === 'agent.needs_input') {
-        openQuestion(ctx, {
-          id: parsed.questionId,
-          kind: parsed.kind,
-          originAgentId: parsed.agentId,
-          context: parsed.question,
-        });
+      if (parsed.type === 'agent.needs_input') openFromNeedsInput(ctx, parsed, this.questions);
+      else if (ENDINGS.has(parsed.type)) {
+        endAgentQuestions(ctx, agent.id, parsed.type.slice('agent.'.length), this.questions);
       }
     });
   }
@@ -301,7 +306,9 @@ export class Commands implements DomainCommands {
   // -- questions -------------------------------------------------------------------------------
 
   openQuestion(input: OpenQuestionInput) {
-    return this.run((ctx) => openQuestion(ctx, { ...input, id: `q-${randomUUID()}` }));
+    return this.run((ctx) =>
+      openRouted(ctx, { ...input, id: `q-${randomUUID()}` }, this.questions),
+    );
   }
 
   /**
@@ -320,8 +327,11 @@ export class Commands implements DomainCommands {
     };
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
     checkAnswer(question, answer);
-    if (!this.agents?.hasQuestion(questionId))
-      return this.run((ctx) => answerQuestion(ctx, answer));
+    if (!this.agents?.hasQuestion(questionId)) {
+      return this.run((ctx) =>
+        answerQuestion(ctx, { ...answer, holders: holdersNow(ctx, questionId, this.questions) }),
+      );
+    }
     const since = this.log.currentSeq();
     await this.agents!.answer(questionId, input.answer, input.by);
     const after = must(this.log.tables.questions.get(questionId), 'question', questionId);
@@ -332,7 +342,7 @@ export class Commands implements DomainCommands {
     return { value: after, events };
   }
   escalateQuestion(questionId: Id, by: Actor) {
-    return this.run((ctx) => escalateQuestion(ctx, questionId, by));
+    return this.run((ctx) => escalateQuestion(ctx, questionId, by, this.questions.isLiving));
   }
   reassignQuestion(questionId: Id, to: Actor, reason: string) {
     return this.run((ctx) => reassignQuestion(ctx, questionId, to, reason));
