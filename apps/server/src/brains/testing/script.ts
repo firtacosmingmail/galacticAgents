@@ -146,8 +146,7 @@ export class BrainScript {
     b: TurnBody | undefined,
     label: string | undefined,
   ): this {
-    const [matcher, body] =
-      b === undefined ? [undefined, a as TurnBody] : [a as TurnMatcher, b];
+    const [matcher, body] = b === undefined ? [undefined, a as TurnBody] : [a as TurnMatcher, b];
     this.rules.push({
       label: label ?? describe(matcher),
       ...(matcher !== undefined ? { matcher } : {}),

@@ -25,7 +25,10 @@ afterEach(async () => {
 const createTask = tool('create_task', async (input, ctx) => {
   const { description } = input as { description: string };
   return (
-    await ctx.commands.createTask({ description, ...(ctx.projectId ? { projectId: ctx.projectId } : {}) })
+    await ctx.commands.createTask({
+      description,
+      ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
+    })
   ).value;
 });
 const closeTask = tool('close_task', async (input, ctx) => {
@@ -172,7 +175,7 @@ describe('brain harness', () => {
     expect(problems).toHaveLength(2);
     expect(problems[0]).toMatch(/turn 2: close_task was refused \(not_found\): .*t-missing/);
     expect(problems[1]).toContain(
-      'turn 3: the script called spawn_steward, which is not one of the brain\'s tools (close_task, carry_summary)',
+      "turn 3: the script called spawn_steward, which is not one of the brain's tools (close_task, carry_summary)",
     );
     expect(message).toContain('→ close_task {"taskId":"t-missing"}');
     expect(message).toContain('✗ not_found');
@@ -182,10 +185,11 @@ describe('brain harness', () => {
 
   it('fails assertCalls and timed-out waits with readable messages', async () => {
     const { h, hq, projectId } = await boot();
-    const wk = await h.startBrain(
-      brainDefinition('waykeeper', [createTask]),
-      { runtime: 'fake', projectId, supervisorId: hq.agentId },
-    );
+    const wk = await h.startBrain(brainDefinition('waykeeper', [createTask]), {
+      runtime: 'fake',
+      projectId,
+      supervisorId: hq.agentId,
+    });
     expect(() => wk.assertCalls(['create_task'])).toThrow(
       /expected the calls \["create_task"\], got \[\]/,
     );

@@ -7,7 +7,11 @@ import {
   type FakeTurnIO,
 } from '../../adapters/fake/scenario.js';
 import { openDatabase, type Database } from '../../db/database.js';
-import { composeRuntime, type ComposedRuntime, type ComposeOptions } from '../../runtime/compose.js';
+import {
+  composeRuntime,
+  type ComposedRuntime,
+  type ComposeOptions,
+} from '../../runtime/compose.js';
 import type { BrainDefinition } from '../definition.js';
 import type { BrainPlacement, BrainRunner, BrainRunnerOptions } from '../runner.js';
 import { harmonizerDefinition } from './canned.js';
@@ -18,7 +22,13 @@ import {
   type TurnContext,
   type TurnInfo,
 } from './script.js';
-import { BrainTranscript, json, toOutcome, type ToolOutcome, type TranscriptTurn } from './transcript.js';
+import {
+  BrainTranscript,
+  json,
+  toOutcome,
+  type ToolOutcome,
+  type TranscriptTurn,
+} from './transcript.js';
 
 /**
  * The scripted fake-LLM harness for brains (P2-07). It boots a composed runtime (real event log,
@@ -481,10 +491,10 @@ export class HarnessBrain {
 
   /** Waits until the brain has had `count` turns and is settled. */
   async waitForTurns(count: number, opts: WaitOptions = {}): Promise<void> {
-    await this.harness.until(
-      () => this.transcript.turns.length >= count && this.isSettled(),
-      { ...opts, what: opts.what ?? `${this.transcript.label} to have ${count} turns` },
-    );
+    await this.harness.until(() => this.transcript.turns.length >= count && this.isSettled(), {
+      ...opts,
+      what: opts.what ?? `${this.transcript.label} to have ${count} turns`,
+    });
   }
 
   /** The tool names called so far must be exactly `names`, in order; fails with the transcript. */

@@ -105,7 +105,15 @@ export class BrainTranscript {
 /** The model-side reading of a fake adapter tool result (what the runner's `runTool` returned). */
 export function toOutcome(tool: string, input: unknown, result: FakeToolResult): ToolOutcome {
   if (result.status === 'denied') {
-    return { tool, input, ok: false, error: 'denied', message: result.reason, turnEnded: false, raw: undefined };
+    return {
+      tool,
+      input,
+      ok: false,
+      error: 'denied',
+      message: result.reason,
+      turnEnded: false,
+      raw: undefined,
+    };
   }
   const raw = result.output;
   if (isObject(raw) && typeof raw.error === 'string') {
@@ -131,7 +139,8 @@ const MAX_LINE = 160;
 function promptLines(prompt: string): string[] {
   const all = prompt.split('\n');
   const shown = all.slice(0, MAX_PROMPT_LINES).map((l) => `    │ ${clip(l)}`);
-  if (all.length > MAX_PROMPT_LINES) shown.push(`    │ … (${all.length - MAX_PROMPT_LINES} more lines)`);
+  if (all.length > MAX_PROMPT_LINES)
+    shown.push(`    │ … (${all.length - MAX_PROMPT_LINES} more lines)`);
   return shown;
 }
 

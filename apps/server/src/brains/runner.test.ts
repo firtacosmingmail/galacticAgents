@@ -250,7 +250,9 @@ describe('BrainRunner', () => {
   });
 
   it('returns a refused command to the brain as a tool error instead of failing the turn', async () => {
-    const close = tool('close_task', (_input, ctx) => ctx.commands.closeTask('t-missing', ctx.actor));
+    const close = tool('close_task', (_input, ctx) =>
+      ctx.commands.closeTask('t-missing', ctx.actor),
+    );
     const rig = await boot((s) => s.once('close it', (t) => t.try('close_task')), [close]);
     rig.brain.tell('close it');
     await rig.brain.waitForTurns(2);
