@@ -1,11 +1,12 @@
-import type {
-  AgentCaps,
-  AgentRuntime,
-  AgentState,
-  Event,
-  EventEnvelope,
-  Id,
-  StatusRecord,
+import {
+  ENDED_STATES,
+  type AgentCaps,
+  type AgentRuntime,
+  type AgentState,
+  type Event,
+  type EventEnvelope,
+  type Id,
+  type StatusRecord,
 } from '@galactic/protocol';
 
 /**
@@ -68,7 +69,6 @@ const LIVE: ReadonlySet<AgentState> = new Set([
   'stalled',
   'paused',
 ]);
-const ENDED: ReadonlySet<AgentState> = new Set(['finished', 'failed', 'stopped', 'interrupted']);
 
 export class StatusStore {
   private readonly entries = new Map<Id, Entry>();
@@ -142,7 +142,7 @@ export class StatusStore {
       for (const e of this.entries.values()) {
         if (e.record.pendingQuestionId !== event.questionId) continue;
         const state = e.record.state;
-        const keep = state === 'paused' || ENDED.has(state);
+        const keep = state === 'paused' || ENDED_STATES.has(state);
         this.update(e, at, { ...(keep ? {} : { state: 'working' }), pendingQuestionId: undefined });
         if (e.beforePause === 'waiting_for_input') e.beforePause = 'working';
         if (broadcast) this.mark(e.record.agentId);
@@ -159,7 +159,7 @@ export class StatusStore {
   /** Output arrived (transcript): the agent is alive and working, but nothing is logged. */
   touch(agentId: Id, at: number = this.now()): void {
     const entry = this.entries.get(agentId);
-    if (!entry || ENDED.has(entry.record.state)) return;
+    if (!entry || ENDED_STATES.has(entry.record.state)) return;
     const state = entry.record.state;
     entry.lastEventAt = Math.max(entry.lastEventAt, at);
     // Output means work: a starting or stalled agent is working again. Dirty per chunk, sent per
@@ -191,7 +191,7 @@ export class StatusStore {
   /** Retention (P1-16): drops ended records past their time or beyond the cap, oldest first. */
   prune(now: number = this.now()): Id[] {
     const ended = [...this.entries.values()]
-      .filter((e) => ENDED.has(e.record.state))
+      .filter((e) => ENDED_STATES.has(e.record.state))
       .sort((a, b) => a.lastEventAt - b.lastEventAt);
     const dropped: Id[] = [];
     const overflow = Math.max(0, ended.length - this.maxEnded);
@@ -269,7 +269,7 @@ export class StatusStore {
     const paused = entry.record.state === 'paused';
     // An ended record is a sink (P1-17): the runtime logs one terminal event per agent, and a
     // straggler in an older log must not move a finished agent to `stopped`.
-    if (ENDED.has(entry.record.state) && event.type !== 'agent.spawned') return;
+    if (ENDED_STATES.has(entry.record.state) && event.type !== 'agent.spawned') return;
     switch (event.type) {
       case 'agent.spawned':
         entry.runtime = event.runtime;
@@ -374,7 +374,7 @@ export class StatusStore {
       if (value === undefined) delete (record as Record<string, unknown>)[key];
       else (record as Record<string, unknown>)[key] = value;
     }
-    if (!ENDED.has(entry.record.state) || ENDED.has(record.state)) {
+    if (!ENDED_STATES.has(entry.record.state) || ENDED_STATES.has(record.state)) {
       entry.lastEventAt = Math.max(entry.lastEventAt, at);
     }
     record.lastEventAt = new Date(entry.lastEventAt).toISOString();
@@ -384,7 +384,7 @@ export class StatusStore {
 
   private caps(entry: Entry, now: number): StatusRecord['caps'] {
     const caps = this.opts.capsOf(entry.record.agentId) ?? this.opts.defaultCaps;
-    const ended = ENDED.has(entry.record.state);
+    const ended = ENDED_STATES.has(entry.record.state);
     const used = ended ? entry.record.caps.wallClockMs.used : Math.max(0, now - entry.spawnedAt);
     return {
       wallClockMs: { used, limit: caps.maxWallClockMs },

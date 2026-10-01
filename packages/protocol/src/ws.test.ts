@@ -45,6 +45,20 @@ describe('websocket message schemas', () => {
     );
   });
 
+  it('parses status diffs and replacing sets (P1-38)', () => {
+    expect(ServerMessage.safeParse({ type: 'status', statuses: [] }).success).toBe(false);
+    expect(ServerMessage.safeParse({ type: 'status', statuses: [d.status] }).success).toBe(true);
+    // A replacing set may be empty: every record the client holds is gone.
+    expect(ServerMessage.parse({ type: 'status', statuses: [], replace: true })).toEqual({
+      type: 'status',
+      statuses: [],
+      replace: true,
+    });
+    expect(ServerMessage.safeParse({ type: 'status', statuses: [], replace: false }).success).toBe(
+      false,
+    );
+  });
+
   it('parses the health response', () => {
     expect(
       HealthResponse.parse({

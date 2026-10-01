@@ -147,8 +147,41 @@ describe('status records over the socket (P1-05)', () => {
     expect(status.statuses.map((s) => [s.agentId, s.state])).toEqual([
       [spawned.agent.id, 'finished'],
     ]);
+    expect(status.replace).toBe(true);
     // The replayed events include agent.created, so the agents table is complete as well.
     expect(messages.some((m) => m.type === 'event' && m.event.type === 'agent.created')).toBe(true);
+    ws.close();
+  });
+
+  it('a replaying client gets a replacing set even when it is empty (P1-38)', async () => {
+    const first = open();
+    await first.until(() => first.messages.some((m) => m.type === 'snapshot'));
+    const snapshot = first.messages.find((m) => m.type === 'snapshot') as Extract<
+      ServerMessage,
+      { type: 'snapshot' }
+    >;
+    first.ws.close();
+
+    const ws = new WebSocket(t.wsUrl);
+    const messages: ServerMessage[] = [];
+    ws.on('message', (d) => messages.push(JSON.parse(d.toString()) as ServerMessage));
+    ws.on('open', () =>
+      ws.send(
+        JSON.stringify({
+          type: 'hello',
+          token: TEST_TOKEN,
+          lastEventId: snapshot.seq,
+          logId: snapshot.logId,
+        }),
+      ),
+    );
+    await new Promise<void>((resolve) => {
+      const tick = () =>
+        messages.some((m) => m.type === 'status') ? resolve() : setTimeout(tick, 10);
+      tick();
+    });
+    expect(messages.map((m) => m.type)).toEqual(['caught_up', 'status']);
+    expect(messages[1]).toEqual({ type: 'status', statuses: [], replace: true });
     ws.close();
   });
 

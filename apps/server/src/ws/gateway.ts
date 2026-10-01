@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
+  CLOSE_UNAUTHORIZED,
   ClientMessage,
   type ErrorMessage,
   type HelloMessage,
@@ -10,8 +11,8 @@ import {
 import { isAllowedHost, isAllowedOrigin, tokenMatches } from '../http/security.js';
 import type { ServerConfig } from '../config/config.js';
 
-/** WebSocket close codes in the private 4xxx range. */
-export const CLOSE_UNAUTHORIZED = 4401;
+/** WebSocket close codes in the private 4xxx range (`CLOSE_UNAUTHORIZED` is the protocol's). */
+export { CLOSE_UNAUTHORIZED };
 export const CLOSE_BAD_HELLO = 4400;
 export const CLOSE_HELLO_TIMEOUT = 4408;
 export const CLOSE_PROTOCOL_VIOLATION = 4002;

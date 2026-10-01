@@ -31,6 +31,19 @@ export const AgentState = z.enum([
 ]);
 export type AgentState = z.infer<typeof AgentState>;
 
+/**
+ * The terminal agent states: an agent in one of these is no longer running (an `interrupted` one
+ * can be recovered from its session ref, which starts it again). Shared by the server's status
+ * store (ended records are sinks and subject to retention) and the console (ended agents take no
+ * controls).
+ */
+export const ENDED_STATES: ReadonlySet<AgentState> = new Set<AgentState>([
+  'finished',
+  'failed',
+  'stopped',
+  'interrupted',
+]);
+
 /** Task and project states (SPEC §4.4), derived from agents and open questions. */
 export const WorkState = z.enum([
   'proposed',

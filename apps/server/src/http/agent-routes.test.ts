@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RuntimesInfo } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
@@ -161,5 +162,26 @@ describe('/api agent routes (P1-11)', () => {
     expect((await call(`/api/agents/${id}/recover`)).status).toBe(200);
     await waitFor(() => state(id) === 'waiting_for_input', 're-asked');
     expect((await call(`/api/agents/nope/recover`)).status).toBe(404);
+  });
+
+  it('redacts the messages of 409 bodies (P1-38)', async () => {
+    const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+    vi.spyOn(composed.runtime, 'pause').mockRejectedValue(new Error(`cli said: ${key} is bad`));
+    const paused = await call('/api/agents/a1/pause');
+    expect(paused.status).toBe(409);
+    expect(paused.body['error']).toBe('rejected');
+    expect(paused.body['message']).toMatch(/^cli said: \[redacted:anthropic-key\] is bad$/);
+    expect(JSON.stringify(paused.body)).not.toContain(key);
+
+    vi.spyOn(composed.runtime, 'spawn').mockResolvedValue({ ok: false, reason: `boom ${key}` });
+    const spawned = await call('/api/agents', { runtime: 'fake', prompt: 'x', cwd: '/tmp' });
+    expect(spawned.status).toBe(409);
+    expect(spawned.body['error']).toBe('refused');
+    expect(JSON.stringify(spawned.body)).not.toContain(key);
+  });
+
+  it('answers /api/runtimes with the protocol shape', async () => {
+    const { body } = await call('/api/runtimes');
+    expect(RuntimesInfo.safeParse(body).success).toBe(true);
   });
 });

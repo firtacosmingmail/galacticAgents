@@ -16,6 +16,9 @@ import { EventEnvelope } from './events.js';
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
 // ---------------------------------------------------------------------------
 
+/** WebSocket close code for a bad or missing token (private 4xxx range). */
+export const CLOSE_UNAUTHORIZED = 4401;
+
 /**
  * First frame the client sends. `lastEventId` is the last `seq` it applied, if any, and `logId`
  * the identity of the log it applied it from (from the snapshot); a replay is only possible when
@@ -108,6 +111,10 @@ export const PongMessage = z.object({ type: z.literal('pong') });
 /**
  * A batch of status records (TECHNOLOGY §4): the server-owned projection, sent as diffs at
  * ≈10 Hz after the snapshot. A record replaces the client's copy for that agent.
+ *
+ * With `replace: true` the message is the complete current set (sent after a replay's
+ * `caught_up`, P1-38): the client drops every record it holds that is not in it, so records
+ * removed by retention while it was away do not linger. A replacing set may be empty.
  */
 export const StatusMessage = z
   .object({
@@ -115,9 +122,11 @@ export const StatusMessage = z
     statuses: z.array(StatusRecord),
     /** Agents whose ended record the server dropped (retention, P1-16): forget them. */
     removed: z.array(Id).optional(),
+    /** The statuses are the whole set, not a diff. */
+    replace: z.boolean().optional(),
   })
-  .refine((m) => m.statuses.length > 0 || (m.removed?.length ?? 0) > 0, {
-    message: 'a status message carries records or removals',
+  .refine((m) => m.replace === true || m.statuses.length > 0 || (m.removed?.length ?? 0) > 0, {
+    message: 'a status message carries records or removals, or replaces the set',
   });
 export type StatusMessage = z.infer<typeof StatusMessage>;
 

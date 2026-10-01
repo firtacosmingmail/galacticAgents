@@ -1,15 +1,19 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { z } from 'zod';
+import type { z } from 'zod';
 import {
-  AgentCaps,
-  AgentRole,
-  AgentRuntime as RuntimeName,
+  AnswerBody,
   PERMISSION_POLICY_PRESETS,
+  SendBody,
+  SpawnBody,
   type Actor,
+  type RuntimesInfo,
+  type SendResponse,
+  type SpawnResponse,
 } from '@galactic/protocol';
 import type { ServerConfig } from '../config/config.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
 import type { EventLog } from '../domain/event-log.js';
+import { redactSecrets } from '../runtime/redact.js';
 import { bearerGuard } from './security.js';
 
 /**
@@ -28,19 +32,14 @@ export interface AgentRoutesOptions {
 
 const USER: Actor = { type: 'user' };
 
-const SpawnBody = z.object({
-  role: AgentRole.default('steward'),
-  runtime: RuntimeName,
-  prompt: z.string().min(1),
-  cwd: z.string().min(1),
-  workspace: z.string().min(1).optional(),
-  policy: z.enum(['default', 'trusting', 'cautious']).default('default'),
-  caps: AgentCaps.partial().optional(),
-  bare: z.boolean().optional(),
+/**
+ * A refusal's message comes from the runtime or the adapter and may carry CLI stderr: redact it
+ * like any other text that leaves the server (TECHNOLOGY §8, P1-38).
+ */
+const refusal = (error: 'rejected' | 'refused', message: string) => ({
+  error,
+  message: redactSecrets(message),
 });
-
-const SendBody = z.object({ text: z.string().min(1), interrupt: z.boolean().optional() });
-const AnswerBody = z.object({ answer: z.string().min(1) });
 
 export function registerAgentRoutes(
   parent: FastifyInstance,
@@ -64,12 +63,12 @@ export function registerAgentRoutes(
       try {
         return (await fn()) ?? { ok: true };
       } catch (error) {
-        return reply.code(409).send({ error: 'rejected', message: (error as Error).message });
+        return reply.code(409).send(refusal('rejected', (error as Error).message));
       }
     };
 
     /** What the spawn form can offer. */
-    app.get('/api/runtimes', async () => ({
+    app.get('/api/runtimes', async (): Promise<RuntimesInfo> => ({
       runtimes: (['fake', 'claude-sdk'] as const)
         .filter((name) => runtime.adapter(name) !== undefined)
         .map((name) => ({
@@ -77,7 +76,7 @@ export function registerAgentRoutes(
           resumable: runtime.adapter(name)?.resumeSession !== undefined,
           ...(name === 'fake' && opts.scenarios ? { scenarios: opts.scenarios() } : {}),
         })),
-      policies: Object.keys(PERMISSION_POLICY_PRESETS),
+      policies: Object.keys(PERMISSION_POLICY_PRESETS) as RuntimesInfo['policies'],
       caps: runtime.caps.defaults,
       maxConcurrentAgents: runtime.caps.maxConcurrent,
     }));
@@ -95,8 +94,8 @@ export function registerAgentRoutes(
         ...(body.caps ? { caps: compact(body.caps) } : {}),
         ...(body.bare ? { bare: true } : {}),
       });
-      if (!result.ok) return reply.code(409).send({ error: 'refused', message: result.reason });
-      return reply.code(201).send({ agentId: result.agent.id });
+      if (!result.ok) return reply.code(409).send(refusal('refused', result.reason));
+      return reply.code(201).send({ agentId: result.agent.id } satisfies SpawnResponse);
     });
 
     app.post('/api/agents/:id/send', async (req, reply) => {
@@ -107,7 +106,7 @@ export function registerAgentRoutes(
           sender: USER,
           ...(body.interrupt ? { interrupt: true } : {}),
         });
-        return { messageId: message.id };
+        return { messageId: message.id } satisfies SendResponse;
       });
     });
 
@@ -132,7 +131,7 @@ export function registerAgentRoutes(
       const id = agentId(req);
       if (!log.tables.agents.get(id)) return reply.code(404).send({ error: 'not_found' });
       const result = await runtime.recoverAgent(id);
-      if (!result.ok) return reply.code(409).send({ error: 'refused', message: result.reason });
+      if (!result.ok) return reply.code(409).send(refusal('refused', result.reason));
       return { ok: true };
     });
 
