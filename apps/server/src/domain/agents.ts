@@ -20,6 +20,12 @@ export interface CreateAgentInput {
   projectId?: Id;
   /** A fixed id (tests, resume); default: generated. */
   agentId?: Id;
+  /**
+   * What the resume path needs to reopen the session (P1-14): the working directory, the
+   * workspace root and the prompt. Kept in `meta` (corner case 20) until tasks and projects
+   * carry them in Phase 2.
+   */
+  meta?: Record<string, unknown>;
   now: string;
 }
 
@@ -48,6 +54,7 @@ export function createAgent(ctx: CommandContext, input: CreateAgentInput): Agent
     ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
     ...(input.taskId ? { taskId: input.taskId } : {}),
     ...(input.projectId ? { projectId: input.projectId } : {}),
+    ...(input.meta ? { meta: input.meta } : {}),
   };
   ctx.tables.agents.insert(agent);
   ctx.emit({ type: 'agent.created', agent });

@@ -195,6 +195,7 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'agent.finished':
     case 'agent.failed':
     case 'agent.stopped':
+    case 'agent.interrupted':
       return next;
     case 'agent.output':
       return next; // transcript traffic never reaches this stream

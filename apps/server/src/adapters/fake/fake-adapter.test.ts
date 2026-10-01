@@ -422,7 +422,7 @@ describe('FakeAdapter — session refs are per session', () => {
 });
 
 describe('FakeAdapter — coverage of the event vocabulary', () => {
-  it('can produce every agent.* event of TECHNOLOGY §3.4 except agent.spawned', async () => {
+  it('can produce every agent.* event of TECHNOLOGY §3.4 except the runtime-owned ones', async () => {
     const seen = new Set<AgentEvent['type']>();
     const { adapter, events } = makeAdapter({ speed: 0.05 });
     const a = await adapter.spawn(spawnOpts('scenario:full', 'a-1'));
@@ -446,7 +446,7 @@ describe('FakeAdapter — coverage of the event vocabulary', () => {
     for (const e of events.items) seen.add(e.type);
     const expected = AgentEventSchema.options
       .map((o) => o.shape.type.value)
-      .filter((t) => t !== 'agent.spawned');
+      .filter((t) => t !== 'agent.spawned' && t !== 'agent.interrupted'); // both are the runtime's
     expect([...seen].sort()).toEqual([...expected].sort());
     expect(adapter.scenarioNames()).toEqual(Object.keys(SCENARIOS));
   });

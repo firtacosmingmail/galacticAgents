@@ -301,6 +301,10 @@ export class StatusStore {
       case 'agent.stopped':
         this.update(entry, at, { state: 'stopped', pendingQuestionId: undefined });
         return;
+      case 'agent.interrupted':
+        // The question (if any) is still open: the resume path re-asks or delivers the answer.
+        this.update(entry, at, { state: 'interrupted', currentActivity: event.reason });
+        return;
     }
   }
 

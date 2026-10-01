@@ -106,6 +106,19 @@ export const AgentFailed = z.object({
 
 export const AgentStopped = z.object({ type: z.literal('agent.stopped'), ...agentBase, by: Actor });
 
+/**
+ * The server lost the session without the agent ending (a graceful shutdown, a crash of the
+ * server itself found at the next start). Emitted by the runtime, never by an adapter; the
+ * resume path (SPEC decision 8) respawns the agent from its `sessionRef` where the runtime can.
+ */
+export const AgentInterrupted = z.object({
+  type: z.literal('agent.interrupted'),
+  ...agentBase,
+  reason: z.string(),
+  /** Ids of `message.sent` messages still queued at the interruption (known on a clean shutdown). */
+  pending: z.array(Id).optional(),
+});
+
 /** Everything an adapter (or the runtime, for `agent.spawned`) may emit about a running agent. */
 export const AgentEvent = z.discriminatedUnion('type', [
   AgentSpawned,
@@ -120,6 +133,7 @@ export const AgentEvent = z.discriminatedUnion('type', [
   AgentFinished,
   AgentFailed,
   AgentStopped,
+  AgentInterrupted,
 ]);
 export type AgentEvent = z.infer<typeof AgentEvent>;
 
@@ -289,6 +303,7 @@ export const Event = z.discriminatedUnion('type', [
   AgentFinished,
   AgentFailed,
   AgentStopped,
+  AgentInterrupted,
   MessageSent,
   QuestionOpened,
   QuestionEscalated,

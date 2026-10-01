@@ -27,6 +27,7 @@ function classify(
     case 'agent.finished':
     case 'agent.failed':
     case 'agent.stopped':
+    case 'agent.interrupted':
       return 'agent';
     case 'message.sent':
       return 'message';

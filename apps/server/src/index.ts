@@ -35,6 +35,14 @@ const composed = composeRuntime(db, {
 });
 const { log, statuses, transcripts } = composed;
 
+// Resume what the previous server life left running (SPEC decision 8).
+const recovery = await composed.recover();
+if (recovery.resumed.length + recovery.needAttention.length > 0) {
+  console.log(
+    `Recovered: ${recovery.resumed.length} agents resumed, ${recovery.needAttention.length} need attention`,
+  );
+}
+
 const webDir = process.env['GALACTIC_WEB_DIR'];
 const app = buildApp({
   config,
@@ -68,8 +76,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     }, 15_000);
     deadline.unref();
     void composed
-      .dispose()
-      .catch((error) => console.error('[runtime] dispose:', error))
+      .shutdown()
+      .catch((error) => console.error('[runtime] shutdown:', error))
       .then(() => supervisor.dispose())
       .catch((error) => console.error('[supervisor] dispose:', error))
       .then(() => app.close())

@@ -80,7 +80,23 @@ export interface AgentRuntimeOptions {
 }
 
 const TERMINAL = new Set<AgentEvent['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
-type Terminal = 'agent.finished' | 'agent.failed' | 'agent.stopped';
+type Terminal = 'agent.finished' | 'agent.failed' | 'agent.stopped' | 'agent.interrupted';
+
+export interface RecoveryReport {
+  /** Agents reopened from their session refs. */
+  resumed: Id[];
+  /** Agents left `interrupted`: no session ref, a runtime that cannot resume, or a failed resume. */
+  needAttention: Id[];
+}
+
+const LIVE_STATES: ReadonlySet<string> = new Set([
+  'starting',
+  'working',
+  'waiting_for_input',
+  'idle',
+  'stalled',
+  'paused',
+]);
 
 interface Live {
   agent: Agent;
@@ -166,6 +182,13 @@ export class AgentRuntime {
         ...(req.taskId ? { taskId: req.taskId } : {}),
         ...(req.projectId ? { projectId: req.projectId } : {}),
         ...(req.agentId ? { agentId: req.agentId } : {}),
+        meta: {
+          cwd: req.cwd,
+          prompt: req.prompt,
+          ...(req.workspace ? { workspace: req.workspace } : {}),
+          ...(req.permissionPolicy ? { permissionPolicy: req.permissionPolicy } : {}),
+          ...(req.bare ? { bare: true } : {}),
+        },
       }),
     ).value;
     return this.start(agent, req, adapter, (opts) => adapter.spawn(opts));
@@ -322,6 +345,136 @@ export class AgentRuntime {
     if (!live || !live.handle) return;
     this.record({ type: 'control.stop', target: { kind: 'agent', id: agentId }, by });
     await live.adapter.stop(live.handle.sessionId);
+  }
+
+  /**
+   * Graceful shutdown (P1-14, P1-15; SPEC decision 8): every live agent is marked
+   * `agent.interrupted` — its session ref is already on the row — and its process is stopped.
+   * The adapter's own `agent.stopped` is dropped: the log says "interrupted", so the next start
+   * knows to resume it rather than treat it as a user stop.
+   */
+  async shutdown(reason = 'server shutdown'): Promise<Id[]> {
+    const interrupted: Id[] = [];
+    for (const live of [...this.live.values()]) {
+      if (live.terminal) continue;
+      const pending = live.inbox.pending().map((m) => m.id);
+      this.record({ type: 'agent.interrupted', agentId: live.agent.id, reason, pending });
+      this.end(live, 'agent.interrupted');
+      interrupted.push(live.agent.id);
+      if (live.handle) {
+        try {
+          await live.adapter.stop(live.handle.sessionId);
+        } catch (error) {
+          this.onError(error, `shutdown stop ${live.agent.id}`);
+        }
+      }
+    }
+    return interrupted;
+  }
+
+  /**
+   * Startup recovery (P1-14). Agents whose last state is live died with the previous server
+   * (nothing can re-attach to a live process): they are marked `agent.interrupted` first. Every
+   * interrupted agent whose runtime can resume is reopened from its session ref; messages sent
+   * and answers given after the interruption are delivered as its first messages. The rest
+   * stay `interrupted` for the panel's resume action.
+   */
+  async recover(): Promise<RecoveryReport> {
+    const report: RecoveryReport = { resumed: [], needAttention: [] };
+    const records = this.opts.statuses.all();
+    for (const record of records) {
+      if (LIVE_STATES.has(record.state)) {
+        this.record({
+          type: 'agent.interrupted',
+          agentId: record.agentId,
+          reason: 'server restarted',
+        });
+      }
+    }
+    for (const record of this.opts.statuses.all()) {
+      if (record.state !== 'interrupted') continue;
+      const agent = this.opts.log.tables.agents.get(record.agentId);
+      const meta = (agent?.meta ?? {}) as {
+        cwd?: string;
+        prompt?: string;
+        workspace?: string;
+        permissionPolicy?: PermissionPolicy;
+        bare?: boolean;
+      };
+      const adapter = agent ? this.adapters.get(agent.runtime) : undefined;
+      if (!agent || !adapter?.resumeSession || !agent.sessionRef || !meta.cwd) {
+        report.needAttention.push(record.agentId);
+        continue;
+      }
+      const pending = this.pendingFor(agent.id);
+      const result = await this.resume(agent, {
+        cwd: meta.cwd,
+        prompt: meta.prompt ?? '',
+        ...(meta.workspace ? { workspace: meta.workspace } : {}),
+        ...(meta.permissionPolicy ? { permissionPolicy: meta.permissionPolicy } : {}),
+        ...(meta.bare ? { bare: true } : {}),
+      });
+      if (!result.ok) {
+        this.onError(new Error(result.reason), `recover ${agent.id}`);
+        report.needAttention.push(agent.id);
+        continue;
+      }
+      report.resumed.push(agent.id);
+      for (const first of pending) {
+        this.must(agent.id).inbox.enqueue(first.text, { sender: first.sender, interrupt: false });
+      }
+    }
+    return report;
+  }
+
+  /**
+   * What the agent never got (P1-22 is the input): messages still queued when it was interrupted
+   * — the exact ids a clean shutdown wrote into `agent.interrupted.pending`, or, after a crash
+   * of the server, every message sent after the agent's last turn end — and answers to its
+   * questions given after the interruption. In log order; redelivery logs nothing new.
+   */
+  private pendingFor(agentId: Id): { text: string; sender: Actor }[] {
+    const all = this.opts.log.eventsSince(0, Number.MAX_SAFE_INTEGER);
+    let interruptedAt = 0;
+    let lastTurnEnd = 0;
+    let known: Set<Id> | undefined;
+    for (const e of all) {
+      const ev = e.event;
+      if (!('agentId' in ev) || ev.agentId !== agentId) continue;
+      if (ev.type === 'agent.interrupted') {
+        interruptedAt = e.seq;
+        known = ev.pending ? new Set(ev.pending) : undefined;
+      } else if (ev.type === 'agent.idle' || ev.type === 'agent.spawned') {
+        lastTurnEnd = e.seq;
+      }
+    }
+    const questions = new Set(
+      this.opts.log.tables.questions
+        .all()
+        .filter((q) => q.originAgentId === agentId)
+        .map((q) => q.id),
+    );
+    const out: { text: string; sender: Actor }[] = [];
+    for (const e of all) {
+      const ev = e.event;
+      if (ev.type === 'message.sent' && ev.agentId === agentId) {
+        const undelivered = known
+          ? known.has(ev.messageId)
+          : e.seq > lastTurnEnd && e.seq < interruptedAt;
+        if (undelivered || e.seq > interruptedAt) out.push({ text: ev.text, sender: ev.sender });
+      } else if (
+        ev.type === 'question.answered' &&
+        questions.has(ev.questionId) &&
+        e.seq > interruptedAt
+      ) {
+        const q = this.opts.log.tables.questions.get(ev.questionId);
+        out.push({
+          text: `Answer to your earlier question "${q?.context.text ?? ev.questionId}": ${ev.answer}`,
+          sender: ev.answeredBy,
+        });
+      }
+    }
+    return out;
   }
 
   /** Stops every live agent (graceful) and closes the adapters. */

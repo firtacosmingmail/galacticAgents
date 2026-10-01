@@ -238,6 +238,7 @@ On first run the application checks that the Claude Code runtime is installed an
 | 18 | Cost safety | **Hard caps from the first runnable version**, dollar budgets later. |
 | 19 | Phase order | **A minimal side panel is delivered right after the hierarchy**, before the 3D scene. |
 | 20 | Renderer | **WebGL only for v1** (see `TECHNOLOGY.md` §2.1). |
+| 21 | Resilience | **A resumed agent starts its caps afresh** (2026-10-01): the wall clock counts from the resume and the tool-call count from zero, so an agent recovered after a restart is not stopped for time it did not get to use; its cost meter keeps the session's running total. Messages and answers that reached the server while the agent was down are delivered as its first messages after the resume. |
 
 ## 8. Open questions
 

@@ -2,7 +2,7 @@ import type { AgentAdapter, AgentCaps, AgentRuntime as RuntimeName } from '@gala
 import type { Database } from '../db/database.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
-import { AgentRuntime } from './agent-runtime.js';
+import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { DEFAULT_CAPS } from './caps.js';
 import { StatusStore } from './status-store.js';
 import { TranscriptPipeline } from './transcripts.js';
@@ -42,7 +42,14 @@ export interface ComposedRuntime {
   statuses: StatusStore;
   transcripts: TranscriptPipeline;
   runtime: AgentRuntime;
-  /** Graceful: stops every agent, flushes transcripts and status, releases timers. */
+  /** Startup recovery (P1-14): marks lost agents interrupted and resumes what can be resumed. */
+  recover(): Promise<RecoveryReport>;
+  /**
+   * Graceful shutdown (P1-14): agents are marked `agent.interrupted` and stopped so the next
+   * start resumes them; then transcripts and status are flushed and timers released.
+   */
+  shutdown(): Promise<void>;
+  /** Like `shutdown`, but agents end as stopped (tests, a server that is going away for good). */
   dispose(): Promise<void>;
 }
 
@@ -84,6 +91,13 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     statuses,
     transcripts,
     runtime,
+    recover: () => runtime.recover(),
+    async shutdown() {
+      await runtime.shutdown();
+      await runtime.dispose();
+      statuses.dispose();
+      transcripts.dispose();
+    },
     async dispose() {
       await runtime.dispose();
       statuses.dispose();

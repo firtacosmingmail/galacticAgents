@@ -63,6 +63,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     error: 'tool-call cap reached',
     reason: 'cap',
   },
+  'agent.interrupted': { type: 'agent.interrupted', ...steward, reason: 'server shutdown' },
   'agent.stopped': { type: 'agent.stopped', ...steward, by: waykeeper },
 
   'message.sent': {
