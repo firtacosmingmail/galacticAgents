@@ -186,7 +186,7 @@ describe('BrainRunner', () => {
   });
 
   it("does not wake on its own tool side effects, mid-turn or afterwards, but still on others' events", async () => {
-    let rigRef: Rig | undefined;
+    const ref: { rig?: Rig } = {};
     const pause: BrainTool = {
       name: 'pause_task',
       description: 'pauses a task',
@@ -195,8 +195,8 @@ describe('BrainRunner', () => {
         const { taskId } = input as { taskId: Id };
         await ctx.commands.control({ kind: 'task', id: taskId }, { action: 'pause' }, ctx.actor);
         // Meanwhile the user acts on the other task: that one must still wake the brain.
-        await rigRef!.commands.control(
-          { kind: 'task', id: rigRef!.taskIds[1]! },
+        await ref.rig!.commands.control(
+          { kind: 'task', id: ref.rig!.taskIds[1]! },
           { action: 'pause' },
           USER,
         );
@@ -204,9 +204,9 @@ describe('BrainRunner', () => {
       },
     };
     const script: BrainScript = ({ n }) =>
-      n === 1 ? [callTool('pause_task', { taskId: rigRef!.taskIds[0] })] : [];
+      n === 1 ? [callTool('pause_task', { taskId: ref.rig!.taskIds[0] })] : [];
     const rig = await boot(script, [pause]);
-    rigRef = rig;
+    ref.rig = rig;
     rig.runtime.send(rig.brain.agentId, 'pause the parser', { sender: USER });
     await until(() => rig.prompts.length >= 3);
     await rig.brain.settled();
