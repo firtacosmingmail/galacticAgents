@@ -1,6 +1,6 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** wave 4 — P1-11, P1-13, P1-14, P1-15, P1-16 (next to pick; none claimed yet) · **Task status:** todo
+**Current task:** wave 4 — P1-11, P1-13, P1-14, P1-15, P1-16 (all claimed 2026-10-01) · **Task status:** in progress
 **Phase status:** in progress (21/27 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -106,7 +106,7 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** `apps/server/src/domain/permissions.ts` — `classifyToolCall` / `classifyCommand` → `PermissionAction[]`, `decide` (strictest wins, nothing recognised → `ask`), `resolvePolicy` (project over default), `evaluate`. Shell commands are split on operators with a stateful `cd`, quoted/wrapped payloads (`sh -c`, `node -e`, `eval`, …) and unexpandable `$VAR` paths are `ask`, git global options are skipped, case-insensitive. Reviewed with bypass probes as table rows.
 
 ### P1-11 — Ops console page
-- **Status:** todo · **Depends on:** P0-09, P1-05, P1-06, P1-07 · **Parallel with:** P1-13, P1-14
+- **Status:** in progress · **Depends on:** P0-09, P1-05, P1-06, P1-07 · **Parallel with:** P1-13, P1-14
 - Agents list with state, activity, cost, caps; spawn form (adapter, cwd, prompt, policy preset); send message (+ interrupt toggle); answer `needs_input` of both kinds (permission shows the requested action); pause/resume/stop; live transcript view.
 - **Acceptance:** everything in the Phase 1 exit criteria is doable from this page with the fake adapter and with the real one.
 
@@ -116,22 +116,22 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Acceptance:** suite green locally; a short run log kept in `docs/tasks/notes/`.
 
 ### P1-13 — Adapters README: how to add a runtime
-- **Status:** todo · **Depends on:** P1-04 · **Parallel with:** P1-11, P1-14
+- **Status:** in progress · **Depends on:** P1-04 · **Parallel with:** P1-11, P1-14
 - `apps/server/src/adapters/README.md`: the interface, event mapping table, question kinds, graceful stop, what the conformance suite checks, notes for the future ACP adapter (advertise `elicitation.form`; `request_permission` is permission-kind) and PTY adapter (no resume).
 - **Acceptance:** a reader could implement the ACP adapter from it without reading the SDK adapter.
 
 ### P1-14 — Restart recovery v1
-- **Status:** todo · **Depends on:** P1-01, P1-09 · **Parallel with:** P1-11, P1-13
+- **Status:** in progress · **Depends on:** P1-01, P1-09 · **Parallel with:** P1-11, P1-13
 - Graceful shutdown handler (SIGINT/SIGTERM on the server): interrupt every agent, persist session refs, exit. Startup: reconcile PID table, respawn interrupted agents via `resumeSession` where the adapter supports it, deliver any answer given meanwhile as the first message, mark the rest `interrupted`.
 - **Acceptance:** kill -9 and clean restart both recover a fake-adapter agent; state visible in the ops console as `interrupted → working`.
 
 ### P1-15 — Restart recovery: `agent.interrupted` event and shutdown semantics (added 2026-09-30)
-- **Status:** todo · **Depends on:** P1-14 design · **Parallel with:** P1-14
+- **Status:** in progress · **Depends on:** P1-14 design · **Parallel with:** P1-14
 - Found in the wave 2 review. The status store has an `interrupted` state but no event maps to it, and a graceful shutdown today ends every agent with `control.stop{by: system}` + `agent.stopped`, indistinguishable from a user stop. Add `agent.interrupted{agentId, reason}` to the protocol (emitted by the shutdown path and by `reconcile()` for dead/orphaned rows), fold it in the status store and the web reducer, and make P1-14's resume path key off it. Decide and record in `SPEC.md` §7 whether a resumed agent's wall-clock cap restarts from zero (today it does).
 - **Acceptance:** after `kill -9` + restart the fake agent shows `interrupted → working`; after a clean shutdown the log has `agent.interrupted`, not `agent.stopped`.
 
 ### P1-16 — Retention of ended status records and inbox histories (added 2026-09-30)
-- **Status:** todo · **Depends on:** P1-05 · **Parallel with:** P1-11
+- **Status:** in progress · **Depends on:** P1-05 · **Parallel with:** P1-11
 - Found in the wave 2 review. Ended agents stay in the status store (and in every snapshot) and the runtime keeps no bounded history of delivered messages. Add a retention rule (keep ended records for the decision-4 period, then drop from the store; keep inbox history in the log or cap it) and stop creating a procedural asteroid for a spawn refused by the concurrency cap.
 - **Acceptance:** a long-running server with thousands of finished agents keeps `snapshot.statuses` bounded; a refused spawn leaves no orphan body.
 - **Note (P1-21):** the refused-spawn half is done — a spawn over the concurrency cap writes nothing. The inbox history is bounded since P1-22 (`message.sent` is in the log). What remains is the retention of ended status records.
