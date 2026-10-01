@@ -172,10 +172,10 @@ export class BrainHarness {
       const i = this.scripts.findIndex((s) => sameSelector(s.selector, selector));
       if (i >= 0) this.scripts.splice(i, 1);
       this.scripts.push({ selector, script: opts.script });
-    } else {
-      const script = this.script(selector, opts.scriptOptions);
-      opts.script?.(script);
+    } else if (opts.script) {
+      opts.script(this.script(selector, opts.scriptOptions));
     }
+    // Without a script, the brain follows whatever `script()` registered for it (by role, say).
     const coalesceMs = opts.coalesceMs ?? this.opts.coalesceMs;
     const runner = await this.composed.startBrain(definition, placement, {
       ...(coalesceMs !== undefined ? { coalesceMs } : {}),
@@ -188,7 +188,8 @@ export class BrainHarness {
 
   /**
    * A Harmonizer at the top of the hierarchy, so Waykeepers and Stewards have a supervisor.
-   * Lenient by default (it may be woken by what its subordinates do); pass a script to drive it.
+   * Without a script it is lenient (it may be woken by what its subordinates do); with one it is
+   * strict like any other brain.
    */
   startHarmonizer(
     opts: StartBrainOptions & { definition?: BrainDefinition; cwd?: string } = {},
@@ -197,7 +198,7 @@ export class BrainHarness {
     return this.startBrain(
       definition ?? harmonizerDefinition(),
       { runtime: 'fake', cwd: cwd ?? '/w/hq' },
-      { scriptOptions: { strict: false }, ...rest },
+      { ...(rest.script ? {} : { scriptOptions: { strict: false } }), ...rest },
     );
   }
 
