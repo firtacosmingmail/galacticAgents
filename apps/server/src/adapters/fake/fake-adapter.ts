@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
 import type {
   Actor,
   AgentAdapter,
@@ -35,6 +36,11 @@ import {
  * Session refs are `fake:<scenario>:<sessionId>:<nextStep>`; `resumeSession` continues from the step after
  * the last one completed when the adapter was given the same `sessionStore` (an in-process
  * restart, P1-14), and from the ref's step otherwise.
+ *
+ * Failure modes a real runtime has, for the conformance suite (P1-38): with `checkCwd` a spawn in
+ * a working directory that does not exist is refused (a real CLI cannot start there), and
+ * `crash(agentId)` kills a session from outside (`agent.failed(reason: crash)`, like a process
+ * killed by a signal). Every tool call carries a `toolUseId`, as the SDK's do.
  */
 
 export interface FakeAdapterOptions {
@@ -43,6 +49,11 @@ export interface FakeAdapterOptions {
   speed?: number;
   /** Progress per session ref, shared between adapter instances to survive an in-process restart. */
   sessionStore?: Map<string, number>;
+  /**
+   * Refuse a spawn (or resume) whose `cwd` is not an existing directory, as a real runtime's
+   * process would fail to start. Off by default: unit tests spawn in made-up directories.
+   */
+  checkCwd?: boolean;
 }
 
 type Ended = 'finished' | 'failed' | 'stopped';
@@ -104,12 +115,14 @@ export class FakeAdapter implements AgentAdapter {
   private readonly scenarios: Record<string, FakeScenario>;
   private readonly speed: number;
   private readonly sessionStore: Map<string, number>;
+  private readonly checkCwd: boolean;
   private disposed = false;
 
   constructor(opts: FakeAdapterOptions = {}) {
     this.scenarios = opts.scenarios ?? SCENARIOS;
     this.speed = opts.speed ?? 1;
     this.sessionStore = opts.sessionStore ?? new Map();
+    this.checkCwd = opts.checkCwd ?? false;
   }
 
   /** The scenario names this adapter knows, for the ops console's spawn form. */
@@ -139,6 +152,9 @@ export class FakeAdapter implements AgentAdapter {
     startAt: number,
   ): SpawnHandle {
     if (this.disposed) throw new Error('adapter disposed');
+    if (this.checkCwd && !isDirectory(opts.cwd)) {
+      throw new Error(`working directory does not exist: ${opts.cwd}`);
+    }
     const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt);
     this.sessions.set(session.sessionId, session);
     const ref = session.sessionRef;
@@ -211,6 +227,23 @@ export class FakeAdapter implements AgentAdapter {
       this.emit({ type: 'agent.stopped', agentId: session.agentId, by: SYSTEM });
     });
     return session.stopping;
+  }
+
+  /**
+   * Kills the agent's session from outside, the way a crashed or externally killed process ends:
+   * the turn is abandoned (a pending question withdrawn) and `agent.failed(reason: crash)` is the
+   * session's one terminal event. A no-op for an unknown agent or a session that already ended.
+   * Test-only: nothing in the server calls it.
+   */
+  async crash(agentId: Id, error = 'the fake agent process was killed (SIGKILL)'): Promise<void> {
+    const session = [...this.sessions.values()].find((s) => s.agentId === agentId && !s.ended);
+    if (!session) return;
+    session.ended = 'failed';
+    if (session.turn) this.cancelTurn(session);
+    session.paused = false;
+    session.signal.fire();
+    await session.turnDone;
+    this.emit({ type: 'agent.failed', agentId, error, reason: 'crash' });
   }
 
   async dispose(): Promise<void> {
@@ -403,8 +436,15 @@ export class FakeAdapter implements AgentAdapter {
     ask: { text?: string; action?: PermissionAction } = {},
   ): Promise<'next' | 'cancelled'> {
     const agentId = session.agentId;
+    const toolUseId = `toolu_fake_${randomUUID()}`;
     const run = () =>
-      this.emit({ type: 'agent.tool_call', agentId, toolName: call.toolName, input: call.input });
+      this.emit({
+        type: 'agent.tool_call',
+        agentId,
+        toolName: call.toolName,
+        toolUseId,
+        input: call.input,
+      });
     const skip = (why: string) =>
       this.emit({
         type: 'agent.output',
@@ -453,5 +493,13 @@ export class FakeAdapter implements AgentAdapter {
         question,
       });
     });
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
   }
 }

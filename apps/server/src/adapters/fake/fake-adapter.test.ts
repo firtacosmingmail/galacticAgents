@@ -180,8 +180,18 @@ describe('FakeAdapter — questions', () => {
       type: 'agent.tool_call',
       agentId: 'a-1',
       toolName: 'Bash',
+      toolUseId: expect.stringMatching(/^toolu_fake_/),
       input: { command: 'rm -rf dist' },
     });
+  });
+
+  it('every tool call carries its own toolUseId, reported once', async () => {
+    const { adapter, events } = makeAdapter();
+    await adapter.spawn(spawnOpts('scenario:happy'));
+    await events.waitFor(has('agent.finished'));
+    const ids = events.items.flatMap((e) => (e.type === 'agent.tool_call' ? [e.toolUseId] : []));
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
   });
 
   it('a denied permission skips the tool call', async () => {
@@ -292,6 +302,50 @@ describe('FakeAdapter — pause, resume, stall, fail', () => {
     await sleep(5);
     expect(types(events.items)).toEqual(['agent.output', 'agent.failed']);
     await expect(adapter.send(sessionId, 'x')).rejects.toThrow(/has failed/);
+  });
+});
+
+describe('FakeAdapter — crash and spawn failure (test hooks)', () => {
+  it('crash() ends a working session with one agent.failed(crash), withdrawing its question', async () => {
+    const { adapter, events } = makeAdapter();
+    const { sessionId } = await adapter.spawn(spawnOpts('scenario:asks'));
+    await events.waitFor(has('agent.needs_input'));
+    const q = events.items.at(-1) as Extract<AgentEvent, { type: 'agent.needs_input' }>;
+    await adapter.crash('a-1');
+    await adapter.crash('a-1'); // already ended: no-op
+    await adapter.crash('nobody');
+    await adapter.stop(sessionId); // no-op after the terminal event
+    await sleep(10);
+    expect(types(events.items)).toEqual(['agent.output', 'agent.needs_input', 'agent.failed']);
+    expect(events.items.at(-1)).toMatchObject({ type: 'agent.failed', reason: 'crash' });
+    await expect(adapter.answer(q.questionId, 'x')).rejects.toThrow(/no pending question/);
+    await expect(adapter.send(sessionId, 'x')).rejects.toThrow(/has failed/);
+  });
+
+  it('crash() of a paused session emits nothing but the failure', async () => {
+    const { adapter, events } = makeAdapter({ speed: 1 });
+    const { sessionId } = await adapter.spawn(spawnOpts('scenario:long'));
+    await events.waitFor(has('agent.progress'));
+    await adapter.pause(sessionId);
+    const before = events.items.length;
+    await adapter.crash('a-1');
+    await sleep(80);
+    expect(types(events.items.slice(before))).toEqual(['agent.failed']);
+  });
+
+  it('checkCwd refuses a spawn or resume in a directory that does not exist; off by default', async () => {
+    const strict = makeAdapter({ checkCwd: true });
+    const missing = { ...spawnOpts('scenario:happy'), cwd: '/nonexistent/galactic/nowhere' };
+    await expect(strict.adapter.spawn(missing)).rejects.toThrow(/working directory does not exist/);
+    await expect(
+      strict.adapter.resumeSession(`fake:happy:${'0'.repeat(8)}:0`, missing),
+    ).rejects.toThrow(/working directory does not exist/);
+    await strict.adapter.spawn(spawnOpts('scenario:happy')); // /tmp exists
+    await strict.events.waitFor(has('agent.finished'));
+
+    const lax = makeAdapter();
+    await lax.adapter.spawn(missing);
+    await lax.events.waitFor(has('agent.finished'));
   });
 });
 
