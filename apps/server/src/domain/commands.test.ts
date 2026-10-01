@@ -4,6 +4,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { BODIES } from '../test/world.js';
+import { concernedSupervisors } from './cascade.js';
 import { Commands } from './commands.js';
 import { DomainError } from './errors.js';
 import { EventLog } from './event-log.js';
@@ -20,9 +21,9 @@ afterEach(async () => {
   for (const c of lives.splice(0)) await c.dispose().catch(() => {});
 });
 
-function boot() {
+function boot(speed = 0) {
   const composed = composeRuntime(openDatabase(':memory:'), {
-    adapters: [new FakeAdapter({ speed: 0 })],
+    adapters: [new FakeAdapter({ speed })],
     flushMs: 10,
   });
   lives.push(composed);
@@ -269,5 +270,129 @@ describe('Commands', () => {
         prompt: 'x',
       }),
     ).rejects.toThrow(/no agent runtime/);
+  });
+});
+
+describe('Commands.control on tasks and projects (P2-14)', () => {
+  async function hierarchy() {
+    // Real step delays: `scenario:long` keeps both agents working for the whole test.
+    const composed = boot(1);
+    const { commands, statuses } = composed;
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
+    const waykeeper = (
+      await commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: project.id,
+        prompt: 'scenario:long',
+      })
+    ).value;
+    const steward = (
+      await commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        supervisorId: waykeeper.id,
+        prompt: 'scenario:long',
+      })
+    ).value;
+    await until(
+      () =>
+        statuses.get(waykeeper.id)?.state === 'working' &&
+        statuses.get(steward.id)?.state === 'working',
+    );
+    return { ...composed, project, task, waykeeper, steward };
+  }
+
+  it('pausing a task pauses its Steward and wakes its Waykeeper; resume undoes both', async () => {
+    const { commands, log, statuses, task, waykeeper, steward } = await hierarchy();
+    const target = { kind: 'task', id: task.id } as const;
+    const { events } = await commands.control(target, { action: 'pause' }, USER);
+    expect(events.map((e) => e.type)).toEqual([
+      'control.pause',
+      'task.state_changed',
+      'control.pause',
+      ...events.slice(3).map((e) => e.type),
+    ]);
+    expect(events[2]).toEqual({
+      type: 'control.pause',
+      target: { kind: 'agent', id: steward.id },
+      by: USER,
+    });
+    await until(() => statuses.get(steward.id)?.state === 'paused');
+    expect(statuses.get(waykeeper.id)?.state).toBe('working');
+    expect(log.tables.tasks.get(task.id)?.state).toBe('paused');
+    // The stand-in supervisor check: the task-level event goes to the Waykeeper's mailbox.
+    expect(concernedSupervisors(log.tables, events[0]!)).toEqual([waykeeper.id]);
+    expect(concernedSupervisors(log.tables, events[2]!)).toEqual([waykeeper.id]);
+
+    await commands.control(target, { action: 'resume' }, USER);
+    await until(() => statuses.get(steward.id)?.state !== 'paused');
+    expect(log.tables.tasks.get(task.id)?.state).toBe('in_progress');
+  });
+
+  it('pausing a project pauses its Waykeeper and its Stewards', async () => {
+    const { commands, statuses, project, waykeeper, steward } = await hierarchy();
+    await commands.control({ kind: 'project', id: project.id }, { action: 'pause' }, USER);
+    await until(
+      () =>
+        statuses.get(waykeeper.id)?.state === 'paused' &&
+        statuses.get(steward.id)?.state === 'paused',
+    );
+  });
+
+  it('stopping a task stops its Steward and leaves the task paused for its Waykeeper', async () => {
+    const { commands, log, statuses, task, waykeeper, steward } = await hierarchy();
+    const { events } = await commands.control(
+      { kind: 'task', id: task.id },
+      { action: 'stop' },
+      USER,
+    );
+    expect(events.map((e) => e.type)).toContain('agent.stopped');
+    expect(statuses.get(steward.id)?.state).toBe('stopped');
+    expect(statuses.get(waykeeper.id)?.state).toBe('working');
+    expect(log.tables.tasks.get(task.id)?.state).toBe('paused');
+  });
+
+  it('cancelling a project stops its agents; the body is freed when retention archives it', async () => {
+    const { commands, log, statuses, runtime, project, task, waykeeper, steward } =
+      await hierarchy();
+    const target = { kind: 'project', id: project.id } as const;
+    const { events } = await commands.control(target, { action: 'cancel' }, USER);
+    expect(events.filter((e) => e.type === 'agent.stopped')).toHaveLength(2);
+    expect(statuses.get(waykeeper.id)?.state).toBe('stopped');
+    expect(statuses.get(steward.id)?.state).toBe('stopped');
+    expect(runtime.liveAgents()).toEqual([]);
+    expect(log.tables.projects.get(project.id)?.state).toBe('failed');
+    expect(log.tables.tasks.get(task.id)?.state).toBe('failed');
+    // Retained: the body still hosts the project until the archival job runs.
+    expect(log.tables.bodies.get(project.bodyId)?.host).toEqual({
+      kind: 'project',
+      id: project.id,
+    });
+    // The retention step through the seam (P2-13 runs it on its timer).
+    const archived = await commands.control(target, { action: 'archive' }, { type: 'system' });
+    expect(archived.events.map((e) => e.type)).toEqual([
+      'control.archive',
+      'project.state_changed',
+      'body.freed',
+    ]);
+    expect(log.tables.bodies.get(project.bodyId)?.host).toBeUndefined();
+  });
+
+  it('closing a project stops its Waykeeper', async () => {
+    const { commands, statuses, project, task, waykeeper } = await hierarchy();
+    await commands.control({ kind: 'task', id: task.id }, { action: 'close' }, USER);
+    await commands.control({ kind: 'project', id: project.id }, { action: 'close' }, USER);
+    expect(statuses.get(waykeeper.id)?.state).toBe('stopped');
+  });
+
+  it('a refused control touches no agent', async () => {
+    const { commands, statuses, task, steward } = await hierarchy();
+    await expect(
+      commands.control({ kind: 'task', id: task.id }, { action: 'resume' }, USER),
+    ).rejects.toThrow(/not paused/);
+    expect(statuses.get(steward.id)?.state).toBe('working');
   });
 });
