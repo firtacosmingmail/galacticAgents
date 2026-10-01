@@ -5,25 +5,21 @@
 // replayed from the snapshot it started from, must give the server's snapshot after every commit
 // (statuses excluded: they are a server-owned projection, TECHNOLOGY §4).
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Actor, Body, EventEnvelope, Snapshot } from '@galactic/protocol';
+import { summarize, type Actor, type EventEnvelope, type Snapshot } from '@galactic/protocol';
 import { FakeAdapter, composeRuntime, openDatabase, type ComposedRuntime } from '@galactic/server';
-import { applyEvent, applySnapshot, type WorldState } from './reduce.js';
+import { applyEvent, applySnapshot, summaryOf, type WorldState } from './reduce.js';
 
 const USER: Actor = { type: 'user' };
-const BODIES: Body[] = [
-  { id: 'b-earth', kind: 'planet', name: 'Earth', meta: { reserved: true } },
-  { id: 'b-mars', kind: 'planet', name: 'Mars' },
-  { id: 'b-jupiter', kind: 'planet', name: 'Jupiter' },
-  { id: 'b-phobos', kind: 'moon', parentId: 'b-mars', name: 'Phobos' },
-  { id: 'b-deimos', kind: 'moon', parentId: 'b-mars', name: 'Deimos' },
-  { id: 'b-mars-3', kind: 'moon', parentId: 'b-mars', name: 'Mars III' },
-  { id: 'b-io', kind: 'moon', parentId: 'b-jupiter', name: 'Io' },
-];
+const DAY = 24 * 60 * 60 * 1000;
 
-/** One second per reading: a row stamped with another reading than its event would show. */
-function tickingClock(): () => string {
+/**
+ * One second per reading: a row stamped with another reading than its event would show.
+ * `advance` jumps ahead (the retention sweep of "moved to …" markers).
+ */
+function tickingClock(): (() => string) & { advance(ms: number): void } {
   let t = Date.parse('2026-10-01T09:00:00.000Z');
-  return () => new Date((t += 1000)).toISOString();
+  const clock = () => new Date((t += 1000)).toISOString();
+  return Object.assign(clock, { advance: (ms: number) => void (t += ms) });
 }
 
 const lives: ComposedRuntime[] = [];
@@ -47,16 +43,16 @@ function tables(w: WorldState) {
 
 describe('replay vs snapshot conformance', () => {
   it('folding the recorded log gives the server snapshot at every commit', async () => {
+    const clock = tickingClock();
     const composed = composeRuntime(openDatabase(':memory:'), {
       adapters: [new FakeAdapter({ speed: 5 })], // `long` runs ~5 s: alive for the whole walk
-      log: { now: tickingClock() },
+      log: { now: clock },
       flushMs: 10,
     });
     lives.push(composed);
     const { log, commands, statuses } = composed;
-    // The catalogue is seeded without events (P2-02 seeds it by migration): the client gets it
-    // from the snapshot it starts from, as a real client does.
-    for (const body of BODIES) log.tables.bodies.insert(body);
+    // The catalogue is seeded without events (migration 0005, P2-02): the client gets it from
+    // the snapshot it starts from, as a real client does.
     const start: Snapshot = { ...log.snapshot(), statuses: [] };
 
     const recorded: EventEnvelope[] = [];
@@ -164,7 +160,7 @@ describe('replay vs snapshot conformance', () => {
     });
     await commands.updateAgent(asteroidSteward.id, { supervisorId: waykeeper.id });
 
-    // --- questions opened outside a live session: reassigned, escalated, answered, cancelled
+    // --- questions opened outside a live session: escalated, reassigned, answered, cancelled
     const held = (
       await commands.openQuestion({
         kind: 'clarification',
@@ -172,17 +168,21 @@ describe('replay vs snapshot conformance', () => {
         context: { text: 'Snappy or zstd?' },
       })
     ).value;
-    await commands.reassignQuestion(
-      held.id,
-      { type: 'agent', id: waykeeper.id },
-      'route to supervisor',
-    );
+    // Routed to the asteroid Steward's new supervisor on open (P2-03); up to the user, and back.
     await commands.escalateQuestion(held.id, { type: 'agent', id: waykeeper.id });
+    await commands.reassignQuestion(held.id, { type: 'agent', id: waykeeper.id }, 'hand back');
     await commands.answerQuestion({ questionId: held.id, answer: 'zstd', by: USER, version: 2 });
 
-    // --- moves: a standalone task joins the project (its Steward flies), the project moves
+    // --- moves: a standalone task joins the project (its Steward flies, its asteroid shows
+    // "moved to …"), the sub-project moves (Phobos shows the marker)
     await commands.moveTask(flaky.id, project.id, USER);
     await commands.moveHost({ kind: 'project', id: sub.id }, 'b-deimos');
+    // --- the catalogue picks bodies: a planet and an independent moon
+    const loose = (await commands.createProject({ name: 'Loose', workspace: '/w/loose' })).value;
+    await commands.createProject({ name: 'Small', workspace: '/w/small', kind: 'moon' });
+    await commands.freeBody(flaky.bodyId); // a marker freed early
+    await commands.closeProject(loose.id, USER);
+    await commands.archiveProject(loose.id, USER);
 
     // --- panel actions with their effects
     await commands.control(
@@ -207,7 +207,10 @@ describe('replay vs snapshot conformance', () => {
     await commands.closeProject(sub.id, USER);
     await commands.archiveProject(sub.id, USER);
     await commands.createProject({ name: 'Squatter', workspace: '/w/sq', bodyId: 'b-deimos' });
-    await commands.reopenProject(sub.id, USER, { bodyId: 'b-mars-3' });
+    // Phobos frees once its marker's retention has passed, and the sub-project reopens there.
+    clock.advance(8 * DAY);
+    await commands.sweepMarkers(7 * DAY);
+    await commands.reopenProject(sub.id, USER, { bodyId: 'b-phobos' });
 
     // --- a standalone task archived by the panel, its asteroid freed and taken, reopened elsewhere
     const chore = (await commands.createTask({ description: 'Rotate logs' })).value;
@@ -219,15 +222,20 @@ describe('replay vs snapshot conformance', () => {
     await commands.closeTask(chore.id, USER);
     await commands.control({ kind: 'task', id: chore.id }, { action: 'archive' }, USER);
 
-    // --- a question left open when its agent stops is cancelled with the stop
-    await commands.openQuestion({
-      kind: 'clarification',
-      originAgentId: asteroidSteward.id,
-      context: { text: 'Keep the old flag?' },
-    });
-    await commands.stopAgent(asteroidSteward.id, USER);
+    // --- a question whose holder stops moves to the user (P2-03); left open when its own agent
+    // stops, it is cancelled with the stop
+    const orphan = (
+      await commands.openQuestion({
+        kind: 'clarification',
+        originAgentId: asteroidSteward.id,
+        context: { text: 'Keep the old flag?' },
+      })
+    ).value;
+    expect(orphan.holder).toEqual({ type: 'agent', id: waykeeper.id });
     await commands.stopAgent(waykeeper.id, USER);
     await until(() => statuses.get(waykeeper.id)?.state === 'stopped');
+    expect(log.tables.questions.get(orphan.id)?.holder).toEqual(USER);
+    await commands.stopAgent(asteroidSteward.id, USER);
 
     // Every event type this scenario was meant to cover was really logged.
     const types = new Set(recorded.map((e) => e.event.type));
@@ -268,6 +276,11 @@ describe('replay vs snapshot conformance', () => {
       expect(types, t).toContain(t);
     }
 
+    // Derived task states (P2-15) are logged without `by` and folded like any other change.
+    expect(
+      recorded.some((e) => e.event.type === 'task.state_changed' && e.event.by === undefined),
+    ).toBe(true);
+
     // Replay: from the starting snapshot, fold the log; at each checkpoint compare.
     expect(checkpoints.length).toBeGreaterThan(40);
     let world = applySnapshot(start);
@@ -280,5 +293,7 @@ describe('replay vs snapshot conformance', () => {
       expect(tables(world), `at seq ${checkpoint.seq}`).toEqual(tables(applySnapshot(checkpoint)));
     }
     expect(tables(world)).toEqual(tables(applySnapshot({ ...log.snapshot(), statuses: [] })));
+    // The summary counts the client computes are the server's (P2-15).
+    expect(summaryOf(world)).toEqual(summarize(log.snapshot()));
   });
 });

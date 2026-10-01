@@ -1,7 +1,7 @@
 # Phase 2 — The hierarchy: Harmonizer, Waykeepers, Stewards
 
-**Current task:** wave 2 next — P2-02, P2-03, P2-05, P2-06, P2-14, P2-15 (after `p2-wave1-domain-commands` is merged into `phase-2`) · **Task status:** todo
-**Phase status:** in progress (1/20 done) — on branch `phase-2`
+**Current task:** wave 3 next — P2-04, P2-07, P2-17 (after `p2-wave2-services` is merged into `phase-2`) · **Task status:** todo
+**Phase status:** in progress (7/20 done) — on branch `phase-2`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -53,12 +53,12 @@ P2-20 (added 2026-10-01) runs with wave 4: it needs the Earth/HQ body from P2-02
 - **Acceptance:** each command has a test asserting the row change and the emitted event; invalid transitions are rejected; a **conformance test** replays a recorded event log through the web client's reducer and asserts equality with the server's snapshot at every `seq` (statuses excluded — server-owned).
 
 ### P2-02 — Body catalogue and assignment
-- **Status:** todo · **Depends on:** P2-01 · **Parallel with:** P2-03, P2-05, P2-06, P2-14, P2-15
-- Seed migration: Sun, 8 planets, major moons with `parentId`; `reserved` flag on Sun, Earth, Earth's Moon; procedural asteroid generator (seeded names/orbits, on demand); `freePlanets()`, `freeMoons(planetId?)`, `assignBody(kind, {relatedProjectId?})` implementing decision 10 preferences (sub-project → own planet's moon; independent → moons of Waykeeper-less planets, else any free moon); host assignment for project tasks (`Body.host = task`, `parentId = project body`); `body.moved` / `body.freed`; `moved` marker state with retention.
+- **Status:** done (2026-10-01) · **Depends on:** P2-01 · **Parallel with:** P2-03, P2-05, P2-06, P2-14, P2-15
+- Seed migration: Sun, 8 planets, major moons with `parentId`; `reserved` flag on Sun, Earth, Earth's Moon; procedural asteroid generator (seeded names/orbits, on demand); `freePlanets()`, `freeMoons(planetId?)`, `assignBody(kind, {relatedProjectId?})` implementing decision 10 preferences (sub-project → own planet's moon; independent → moons of Waykeeper-less planets, else any free moon); project tasks live on the project's body (`Task.bodyId = Project.bodyId`, no body of their own — decided with P2-02, SPEC decision 25); `body.moved` / `body.freed`; `moved` marker state with retention.
 - **Acceptance:** tests for every preference rule and for the no-free-planet case; reserved bodies never assigned.
 
 ### P2-03 — Question service
-- **Status:** todo · **Depends on:** P2-01 · **Parallel with:** P2-02, P2-05, P2-06, P2-14, P2-15
+- **Status:** done (2026-10-01) · **Depends on:** P2-01 · **Parallel with:** P2-02, P2-05, P2-06, P2-14, P2-15
 - Open from `agent.needs_input` (kind, context: origin agent, task, body, last N events); holder routing by `supervisorId`; escalate; `answer(questionId, answer, version, answeredBy)` with first-answer-wins and "already answered by …" reply; notify every holder and deliver the answer to the origin agent via the adapter; orphan re-routing when a holder agent dies; `answeredBy` recorded for supervisor answers.
 - **Acceptance:** tests for double answer, orphaned holder, escalation chain for a project Steward and for an asteroid Steward (Harmonizer as supervisor).
 
@@ -68,12 +68,12 @@ P2-20 (added 2026-10-01) runs with wave 4: it needs the Earth/HQ body from P2-02
 - **Acceptance:** tests: allowed action never creates a question; asked action creates a user-held question; brain mailboxes never receive permission questions.
 
 ### P2-05 — Workspace and worktree service
-- **Status:** todo · **Depends on:** P2-01 · **Parallel with:** P2-02, P2-03, P2-06, P2-14, P2-15
+- **Status:** done (2026-10-01) · **Depends on:** P2-01 · **Parallel with:** P2-02, P2-03, P2-06, P2-14, P2-15
 - `Project.workspace`: validate an existing path or create `<projectsRoot>/<slug>`; git detection, `git init` for new folders; `createWorktree(task)` → path + branch; `mergeTask(task)` (fast-forward or merge into base branch, delete worktree on success); conflict detection → returns structured conflict info for a clarification question; non-git fallback flag (serialise Stewards).
 - **Acceptance:** tests on a temp repo: two worktrees, one clean merge, one conflicting merge reported; non-git workspace initialised.
 
 ### P2-06 — Brain runner (mailbox, turns, seeding)
-- **Status:** todo · **Depends on:** P1-09, P2-01 · **Parallel with:** P2-02, P2-03, P2-05, P2-14, P2-15
+- **Status:** done (2026-10-01) · **Depends on:** P1-09, P2-01 · **Parallel with:** P2-02, P2-03, P2-05, P2-14, P2-15
 - Per-brain mailbox fed by a whitelist of events (user message, `question.opened/answered`, `proposal.*` decisions, `agent.finished/failed/stalled`, `control.*`, subordinate reports); one turn at a time; turn prompt = drained mailbox + DB-seeded context (`list_supervised_agents`, project tasks, open questions); tools executed against `DomainCommands`; non-blocking user-facing tools end the turn; session reset policy with summary carry-over; brain spawned via the `claude-sdk` adapter with `tools` + `systemPrompt`, so it has a `StatusRecord`, cost and `sessionRef`.
 - **Acceptance:** unit tests (with P2-07 harness) for coalescing two simultaneous events into one turn, re-entrancy prevention, and that a brain's own tool side effects don't wake it mid-turn.
 
@@ -113,12 +113,12 @@ P2-20 (added 2026-10-01) runs with wave 4: it needs the Earth/HQ body from P2-02
 - **Acceptance:** tests with a fake clock for retention, pin, reopen and the blocked-closure rule.
 
 ### P2-14 — Control actions
-- **Status:** todo · **Depends on:** P2-01, P1-09 · **Parallel with:** P2-02, P2-03, P2-05, P2-06, P2-15
+- **Status:** done (2026-10-01) · **Depends on:** P2-01, P1-09 · **Parallel with:** P2-02, P2-03, P2-05, P2-06, P2-15
 - Server commands for stop/cancel, pause/resume, edit description/priority, close project, archive-now, pin, reopen on tasks, projects and agents; each emits `control.*`, applies the agent-level effect via the adapter, and lands in the affected supervisors' mailboxes; exposed over WS/REST for the panel and as Harmonizer tools.
 - **Acceptance:** tests: pausing a task pauses its Steward and wakes its Waykeeper; cancelling a project stops its agents and frees the body after retention.
 
 ### P2-15 — Task and project state derivation
-- **Status:** todo · **Depends on:** P2-01, P1-05 · **Parallel with:** P2-02, P2-03, P2-05, P2-06, P2-14
+- **Status:** done (2026-10-01) · **Depends on:** P2-01, P1-05 · **Parallel with:** P2-02, P2-03, P2-05, P2-06, P2-14
 - Projection computing `SPEC.md` §4.4 states from agent states, open questions and commands (`proposed → approved → in progress → blocked on user → awaiting closure → completed → archived`, plus `failed`, `paused`, `moved`, `interrupted`); included in snapshot and diffs; system summary counts (open questions, blocked items).
 - **Acceptance:** table-driven tests mapping agent/question combinations to states; "blocked on user" whenever a user-held question exists.
 

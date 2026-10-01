@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
 import type { Agent, Body, BodyKind, Host, Id } from '@galactic/protocol';
+import { isReserved } from './catalogue.js';
 import { DomainError, must, notFound } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK } from './states.js';
@@ -7,11 +7,13 @@ import { FINISHED_WORK } from './states.js';
 /**
  * Body commands (P2-01; SPEC §3.1, §3.4). A body hosts at most one project or standalone task;
  * project tasks live on their project's body and never occupy one of their own (decision 9).
- * Reserved bodies (the Sun, Earth, Earth's Moon — seeded by P2-02 with `meta.reserved`) are never
- * assigned. Which free body a new project should get is P2-02's catalogue; these are the moves.
+ * Reserved bodies (the Sun, Earth, Earth's Moon — seeded by migration 0005 with `meta.reserved`)
+ * are never assigned. Which free body a new project should get is the catalogue's choice
+ * (`catalogue.ts`, P2-02); these are the moves. A body the work moved away from shows a "moved
+ * to …" marker (`movedTo`, decision 15) and is not assignable until it is freed.
  */
 
-export const isReserved = (body: Body): boolean => body.meta?.['reserved'] === true;
+export { createAsteroid, isReserved } from './catalogue.js';
 
 const sameHost = (a: Host | undefined, b: Host): boolean => a?.kind === b.kind && a.id === b.id;
 
@@ -60,6 +62,12 @@ export function parentBodyOf(ctx: CommandContext, host: Host): Id | undefined {
 /** Refuses a body that cannot take `host`: reserved, the wrong kind, or taken by someone else. */
 export function checkAssignable(body: Body, host: Host): void {
   if (isReserved(body)) throw new DomainError('conflict', `${body.name} is reserved`);
+  if (body.movedTo && !body.host) {
+    throw new DomainError(
+      'conflict',
+      `${body.name} shows "moved to ${body.movedTo.bodyId}" until its retention ends`,
+    );
+  }
   if (!KINDS[host.kind].includes(body.kind)) {
     throw new DomainError('invalid', `a ${host.kind} cannot live on a ${body.kind}`);
   }
@@ -79,18 +87,31 @@ export function occupy(ctx: CommandContext, body: Body, host: Host): Body {
   return next;
 }
 
-/** A fresh asteroid for a standalone task (decision 1: unlimited). P2-02 brings names and orbits. */
-export function createAsteroid(ctx: CommandContext, name?: string): Body {
-  const id = `b-${randomUUID()}`;
-  const body: Body = { id, kind: 'asteroid', name: name ?? `Asteroid ${id.slice(2, 10)}` };
-  ctx.tables.bodies.insert(body);
-  ctx.emit({ type: 'body.created', body });
-  return body;
-}
-
-/** The first free, unreserved body of a kind, in catalogue order. P2-02 replaces this with decision 10. */
-export function firstFreeBody(ctx: CommandContext, kind: BodyKind): Body | undefined {
-  return ctx.tables.bodies.all().find((b) => b.kind === kind && !b.host && !isReserved(b));
+/**
+ * The work on `from` left for `toBodyId` (SPEC §3.4): `from` loses its host and shows the "moved
+ * to …" marker, stamped with the command's clock, and `body.moved` announces it (the satellite
+ * flies). With `intoProjectId` a standalone task joined that project's body, whose host stays.
+ */
+export function markMoved(
+  ctx: CommandContext,
+  from: Body,
+  host: Host,
+  toBodyId: Id,
+  intoProjectId?: Id,
+): Body {
+  const { host: _old, ...rest } = from;
+  const marked = ctx.tables.bodies.upsert({
+    ...rest,
+    movedTo: { bodyId: toBodyId, host, at: ctx.now },
+  });
+  ctx.emit({
+    type: 'body.moved',
+    host,
+    fromBodyId: from.id,
+    toBodyId,
+    ...(intoProjectId ? { intoProjectId } : {}),
+  });
+  return marked;
 }
 
 /**
@@ -183,8 +204,8 @@ export function place(ctx: CommandContext, bodyId: Id, host: Host): Body {
 
 /**
  * Moves a hosted project or standalone task to another free body (SPEC §3.4): `body.moved`, the
- * row's `bodyId`, and the agents orbiting the old body with it. The old body's "moved to …"
- * marker and its retention are P2-02 / P2-12.
+ * row's `bodyId`, and the agents orbiting the old body with it. The old body shows the "moved to
+ * …" marker until `sweepMarkers` frees it after the retention period (decision 15).
  */
 export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
   const to = must(ctx.tables.bodies.get(toBodyId), 'body', toBodyId);
@@ -194,10 +215,8 @@ export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
   if (from.id === to.id) return to;
   checkAssignable(to, host);
   checkSubProjectBody(to, parentBodyOf(ctx, host));
-  const { host: _old, ...freed } = from;
-  ctx.tables.bodies.upsert(freed);
+  markMoved(ctx, from, host, toBodyId);
   const next = ctx.tables.bodies.upsert({ ...to, host });
-  ctx.emit({ type: 'body.moved', host, fromBodyId: from.id, toBodyId });
   rehome(ctx, host, toBodyId);
   moveAgents(ctx, host, from.id, toBodyId);
   return next;
@@ -205,11 +224,12 @@ export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
 
 /**
  * Frees a body whose occupant is finished (completed, archived, failed or moved): an active
- * project or task keeps its body. Freeing a free body is a no-op.
+ * project or task keeps its body. A body showing only a "moved to …" marker is freed early (the
+ * user needs the space, decision 16). Freeing a free body is a no-op.
  */
 export function freeBody(ctx: CommandContext, bodyId: Id): Body {
   const body = must(ctx.tables.bodies.get(bodyId), 'body', bodyId);
-  if (!body.host) return body;
+  if (!body.host) return release(ctx, body);
   const occupant =
     body.host.kind === 'project'
       ? ctx.tables.projects.get(body.host.id)
@@ -224,11 +244,30 @@ export function freeBody(ctx: CommandContext, bodyId: Id): Body {
   return release(ctx, body);
 }
 
-/** Clears the host and emits `body.freed`, unchecked (archival, a move out of a project). */
+/** Clears the host and the marker and emits `body.freed`, unchecked (archival, retention). */
 export function release(ctx: CommandContext, body: Body): Body {
-  if (!body.host) return body;
-  const { host: _host, ...freed } = body;
+  if (!body.host && !body.movedTo) return body;
+  const { host: _host, movedTo: _marker, ...freed } = body;
   const next = ctx.tables.bodies.upsert(freed);
   ctx.emit({ type: 'body.freed', bodyId: body.id });
   return next;
+}
+
+/** Decision 4's default retention period, until the settings page (P2-13) makes it configurable. */
+export const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The retention sweep for "moved to …" markers (decision 15): frees every body whose marker is at
+ * least `retentionMs` old by the command's clock (`ctx.now`, injectable through the event log).
+ * P2-13's scheduler calls it; it returns the bodies it freed, in catalogue order of the table.
+ */
+export function sweepMarkers(
+  ctx: CommandContext,
+  retentionMs: number = DEFAULT_RETENTION_MS,
+): Body[] {
+  const now = Date.parse(ctx.now);
+  return ctx.tables.bodies
+    .all()
+    .filter((b) => !b.host && b.movedTo && Date.parse(b.movedTo.at) + retentionMs <= now)
+    .map((b) => release(ctx, b));
 }

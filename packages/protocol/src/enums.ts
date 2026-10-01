@@ -1,7 +1,14 @@
 import { z } from 'zod';
 
-/** Celestial bodies that host work (SPEC §3.1). */
-export const BodyKind = z.enum(['planet', 'moon', 'asteroid']);
+/** The sizes work comes in, and the bodies that host it (SPEC §3.1). */
+export const WorkBodyKind = z.enum(['planet', 'moon', 'asteroid']);
+export type WorkBodyKind = z.infer<typeof WorkBodyKind>;
+
+/**
+ * Every celestial body of the catalogue (P2-02): the bodies that host work, and the Sun, which is
+ * reserved like Earth and Earth's Moon and never hosts anything (SPEC §3.1).
+ */
+export const BodyKind = z.enum(['star', ...WorkBodyKind.options]);
 export type BodyKind = z.infer<typeof BodyKind>;
 
 /** What a body hosts: a project (planet/moon) or a standalone task (asteroid). */

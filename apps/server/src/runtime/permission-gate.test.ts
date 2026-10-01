@@ -23,6 +23,23 @@ const read = { toolName: 'Read', input: { file_path: 'src/a.ts' } };
 const push = { toolName: 'Bash', input: { command: 'git push' } };
 
 describe('createPermissionGate', () => {
+  it("allows a brain's own server tools by name or MCP name (P2-06)", () => {
+    const gate = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+      serverTools: ['ask_user'],
+    });
+    expect(gate.check({ toolName: 'ask_user', input: {} })).toEqual({ decision: 'allow' });
+    expect(gate.check({ toolName: 'mcp__galactic__ask_user' })).toEqual({ decision: 'allow' });
+    const other = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+    });
+    expect(other.check({ toolName: 'mcp__galactic__ask_user' })).toMatchObject({ decision: 'ask' });
+  });
+
   it('decides allowed, asked and denied calls from the policy', () => {
     const gate = createPermissionGate({
       ...base,

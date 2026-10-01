@@ -3,6 +3,7 @@ import { PERMISSION_POLICY_PRESETS } from './domain.js';
 import { ENDED_STATES } from './enums.js';
 import {
   AnswerBody,
+  ControlBody,
   PermissionPolicyPresetName,
   RuntimesInfo,
   SendBody,
@@ -55,5 +56,26 @@ describe('REST body schemas (P1-38)', () => {
 
   it('names the ended agent states', () => {
     expect([...ENDED_STATES].sort()).toEqual(['failed', 'finished', 'interrupted', 'stopped']);
+  });
+});
+
+describe('ControlBody (P2-14)', () => {
+  it('takes every panel action and refuses edits of other fields', () => {
+    const target = { kind: 'task', id: 't-1' } as const;
+    for (const action of ['stop', 'cancel', 'pause', 'resume', 'close', 'archive', 'reopen']) {
+      expect(ControlBody.safeParse({ target, action: { action } }).success).toBe(true);
+    }
+    expect(
+      ControlBody.parse({ target, action: { action: 'edit', changes: { priority: 'high' } } }),
+    ).toEqual({ target, action: { action: 'edit', changes: { priority: 'high' } } });
+    expect(
+      ControlBody.safeParse({ target, action: { action: 'edit', changes: { bodyId: 'b' } } })
+        .success,
+    ).toBe(false);
+    expect(ControlBody.safeParse({ target, action: { action: 'pin' } }).success).toBe(false);
+    expect(
+      ControlBody.safeParse({ target: { kind: 'body', id: 'b' }, action: { action: 'stop' } })
+        .success,
+    ).toBe(false);
   });
 });

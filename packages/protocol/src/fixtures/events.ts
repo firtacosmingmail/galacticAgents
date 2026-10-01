@@ -96,6 +96,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     answer: 'yes',
     answeredBy: waykeeper,
     version: 1,
+    holders: ['a-waykeeper-1'],
   },
   'question.cancelled': {
     type: 'question.cancelled',
@@ -103,6 +104,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     ...steward,
     reason: 'agent stopped',
     version: 2,
+    holders: ['a-waykeeper-1'],
   },
   'question.reassigned': {
     type: 'question.reassigned',
@@ -134,6 +136,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     host: { kind: 'task', id: 't-2' },
     fromBodyId: 'b-ast-1',
     toBodyId: 'b-luna',
+    intoProjectId: 'p-1',
   },
   'body.freed': { type: 'body.freed', bodyId: 'b-ast-1' },
 

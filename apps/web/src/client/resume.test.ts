@@ -24,6 +24,7 @@ beforeEach(async () => {
       dataDir: '',
       configPath: '',
       dbPath: ':memory:',
+      projectsRoot: '/tmp/galactic-projects-unused',
     },
     log,
   });

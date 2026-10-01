@@ -10,6 +10,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
+import { summarize, type SystemSummary } from '@galactic/protocol';
 
 /** Everything the page knows, derived from the stream only (TECHNOLOGY §6.3). */
 export interface WorldState {
@@ -106,16 +107,20 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'body.freed': {
       const body = next.bodies[event.bodyId];
       if (!body) return next;
-      const { host: _host, ...freed } = body;
+      const { host: _host, movedTo: _marker, ...freed } = body;
       return { ...next, bodies: { ...next.bodies, [event.bodyId]: freed } };
     }
     case 'body.moved': {
+      // The old body shows "moved to …" (P2-02, decision 15) until `body.freed`; a task that
+      // joined a project lives on the project's body without hosting it (`intoProjectId`).
       let bodies = next.bodies;
       const from = bodies[event.fromBodyId];
       if (from) {
-        const { host: _host, ...freed } = from;
-        bodies = { ...bodies, [event.fromBodyId]: freed };
+        const { host: _host, ...rest } = from;
+        const movedTo = { bodyId: event.toBodyId, host: event.host, at };
+        bodies = { ...bodies, [event.fromBodyId]: { ...rest, movedTo } };
       }
+      if (event.intoProjectId) return { ...next, bodies };
       return { ...next, bodies: patch(bodies, event.toBodyId, { host: event.host }) };
     }
 
@@ -230,4 +235,16 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'control.reopen':
       return next; // panel actions are recorded for supervisors; their effects arrive as domain events
   }
+}
+
+/**
+ * The system summary counts (P2-15) of a folded world: the same pure function the server uses,
+ * over the same rows, so the badge never disagrees with the server's view.
+ */
+export function summaryOf(world: WorldState): SystemSummary {
+  return summarize({
+    questions: Object.values(world.questions),
+    tasks: Object.values(world.tasks),
+    projects: Object.values(world.projects),
+  });
 }

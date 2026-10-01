@@ -1,12 +1,27 @@
-import type { AgentAdapter, AgentCaps, AgentRuntime as RuntimeName } from '@galactic/protocol';
+import {
+  ENDED_STATES,
+  type AgentAdapter,
+  type AgentCaps,
+  type AgentRuntime as RuntimeName,
+} from '@galactic/protocol';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
+import { livingFromStatuses, logRouting } from '../domain/question-service.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
+import {
+  BrainRunner,
+  createBrainQueries,
+  type BrainDefinition,
+  type BrainPlacement,
+  type BrainQueries,
+  type BrainRunnerOptions,
+} from '../brains/index.js';
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { DEFAULT_CAPS } from './caps.js';
 import { StatusStore } from './status-store.js';
 import { TranscriptPipeline } from './transcripts.js';
+import { WorkStateDeriver } from './work-state-deriver.js';
 
 /**
  * The runtime composition root: log, status store, transcript pipeline, adapters and the agent
@@ -44,10 +59,20 @@ export interface ComposeOptions {
 export interface ComposedRuntime {
   log: EventLog;
   statuses: StatusStore;
+  /** Task and project states derived from agents and questions (P2-15). */
+  workStates: WorkStateDeriver;
   transcripts: TranscriptPipeline;
   runtime: AgentRuntime;
   /** The `DomainCommands` surface over this log and runtime (P2-01). */
   commands: Commands;
+  /** Read-only views brains seed their turns from (P2-06). */
+  queries: BrainQueries;
+  /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
+  startBrain(
+    definition: BrainDefinition,
+    placement: BrainPlacement,
+    opts?: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'>,
+  ): Promise<BrainRunner>;
   /** Startup recovery (P1-14): marks lost agents interrupted and resumes what can be resumed. */
   recover(): Promise<RecoveryReport>;
   /**
@@ -78,13 +103,26 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   log.subscribe((envelope) => statuses.fold(envelope));
   statuses.start();
 
+  // Task and project states (P2-15): rebuilt from the log without writing, then folded after the
+  // status store on every commit; `reconcile` repairs what a crash between a commit and its
+  // derivation left stale (a no-op when the rows agree).
+  const workStates = new WorkStateDeriver(log, {
+    ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'work states') } : {}),
+  });
+  workStates.rebuild(log.eventsSince(0, Number.MAX_SAFE_INTEGER));
+  log.subscribe((envelope) => workStates.fold(envelope));
+  workStates.reconcile();
+
   const transcripts = new TranscriptPipeline(db, {
     ...(opts.flushMs !== undefined ? { flushMs: opts.flushMs } : {}),
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'transcripts') } : {}),
   });
 
+  // One question routing for the runtime and the command surface (P2-03).
+  const questions = logRouting(log, livingFromStatuses(statuses));
   const runtime = new AgentRuntime({
     log,
+    questions,
     adapters: opts.adapters ?? [new FakeAdapter()],
     transcripts,
     statuses,
@@ -94,12 +132,33 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
 
+  const commands = new Commands({
+    log,
+    agents: runtime,
+    questions,
+    isRunning: (id) => {
+      const status = statuses.get(id);
+      return status !== undefined && !ENDED_STATES.has(status.state);
+    },
+  });
+  const queries = createBrainQueries({ tables: log.tables, status: (id) => statuses.get(id) });
   return {
     log,
     statuses,
+    workStates,
     transcripts,
     runtime,
-    commands: new Commands({ log, agents: runtime }),
+    commands,
+    queries,
+    startBrain: (definition, placement, brainOpts = {}) =>
+      BrainRunner.start(definition, placement, {
+        log,
+        runtime,
+        commands,
+        queries,
+        ...brainOpts,
+        ...(opts.onError ? { onError: opts.onError } : {}),
+      }),
     recover: () => runtime.recover(),
     async shutdown() {
       await runtime.shutdown();

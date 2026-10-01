@@ -382,7 +382,7 @@ describe('AgentRuntime — hard caps (P1-02)', () => {
     expect(second).toEqual({ ok: false, reason: 'concurrency cap: 1 of 1 agents already running' });
     expect(rig.events).toHaveLength(before); // no row, no body, no event for the refused spawn
     expect(rig.log.tables.agents.all()).toHaveLength(1);
-    expect(rig.log.tables.bodies.all()).toHaveLength(1);
+    expect(rig.log.tables.bodies.all().filter((b) => b.kind === 'asteroid')).toHaveLength(1);
     await rig.runtime.stop(first.id, USER);
     await rig.waitFor(() => rig.eventsOf(first.id).includes('agent.stopped'));
     expect((await rig.runtime.spawn(req('scenario:echo'))).ok).toBe(true);

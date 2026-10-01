@@ -7,14 +7,18 @@ import type { CommandContext } from './event-log.js';
  * `proposed → approved → in progress ⇄ blocked on user → awaiting closure → completed → archived`;
  * `paused`, `interrupted` and `failed` branch off a running item and come back, `moved` is the
  * marker a promoted or moved item leaves behind (decision 15), and reopening (decision 11b)
- * takes finished work back to `approved`. P2-15 derives most of these from agents and questions;
- * the explicit commands (close, archive, reopen, a panel's state change) go through this table.
+ * takes finished work back to `approved`. P2-15 derives most of these from agents and questions
+ * (`work-states.ts`), and the derivation goes through this table like the explicit commands do:
+ * it added the moves an agent can cause on its own — a Steward that ends its turn or finishes
+ * from `approved`, `paused` or `interrupted` (awaiting closure), one interrupted while awaiting
+ * closure, and a failed task picked up again by a new Steward (any running state).
  */
 export const TRANSITIONS: Readonly<Record<WorkState, readonly WorkState[]>> = {
   proposed: ['approved', 'archived'],
   approved: [
     'in_progress',
     'blocked_on_user',
+    'awaiting_closure',
     'paused',
     'failed',
     'interrupted',
@@ -39,18 +43,43 @@ export const TRANSITIONS: Readonly<Record<WorkState, readonly WorkState[]>> = {
     'moved',
     'completed',
   ],
-  awaiting_closure: ['in_progress', 'blocked_on_user', 'paused', 'failed', 'moved', 'completed'],
-  paused: [
-    'approved',
+  awaiting_closure: [
     'in_progress',
     'blocked_on_user',
+    'paused',
     'failed',
     'interrupted',
     'moved',
     'completed',
   ],
-  interrupted: ['in_progress', 'blocked_on_user', 'paused', 'failed', 'completed'],
-  failed: ['approved', 'in_progress', 'completed', 'archived'],
+  paused: [
+    'approved',
+    'in_progress',
+    'blocked_on_user',
+    'awaiting_closure',
+    'failed',
+    'interrupted',
+    'moved',
+    'completed',
+  ],
+  interrupted: [
+    'in_progress',
+    'blocked_on_user',
+    'awaiting_closure',
+    'paused',
+    'failed',
+    'completed',
+  ],
+  failed: [
+    'approved',
+    'in_progress',
+    'blocked_on_user',
+    'awaiting_closure',
+    'paused',
+    'interrupted',
+    'completed',
+    'archived',
+  ],
   completed: ['approved', 'in_progress', 'archived'],
   archived: ['approved'],
   moved: ['archived'],

@@ -13,7 +13,7 @@ describe('EventLog.runCommand', () => {
     let rowVisibleAtPublish = false;
     log.subscribe((e) => {
       seen.push(e);
-      rowVisibleAtPublish = log.tables.bodies.get('b-earth') !== undefined;
+      rowVisibleAtPublish = log.tables.bodies.get('b-kepler') !== undefined;
     });
 
     const out = log.runCommand(({ tables, emit }) => {
@@ -27,7 +27,7 @@ describe('EventLog.runCommand', () => {
       {
         seq: 1,
         at: fx.NOW,
-        event: { type: 'body.assigned', bodyId: 'b-earth', host: { kind: 'project', id: 'p-1' } },
+        event: { type: 'body.assigned', bodyId: 'b-kepler', host: { kind: 'project', id: 'p-1' } },
       },
     ]);
     expect(seen).toEqual(out.events);
@@ -43,12 +43,12 @@ describe('EventLog.runCommand', () => {
     expect(() =>
       log.runCommand(({ tables, emit }) => {
         tables.bodies.insert(fx.body);
-        emit({ type: 'body.freed', bodyId: 'b-earth' });
+        emit({ type: 'body.freed', bodyId: 'b-kepler' });
         throw new Error('boom');
       }),
     ).toThrow('boom');
 
-    expect(log.tables.bodies.get('b-earth')).toBeUndefined();
+    expect(log.tables.bodies.get('b-kepler')).toBeUndefined();
     expect(log.currentSeq()).toBe(0);
     expect(log.eventsSince(0)).toEqual([]);
     expect(seen).toEqual([]);
@@ -62,7 +62,7 @@ describe('EventLog.runCommand', () => {
         emit({ type: 'agent.output', agentId: 'a', kind: 'text', text: 'no' });
       }),
     ).toThrow(/transcript_chunks/);
-    expect(log.tables.bodies.get('b-earth')).toBeUndefined();
+    expect(log.tables.bodies.get('b-kepler')).toBeUndefined();
   });
 
   it('delivers events to every subscriber strictly in seq order', () => {
@@ -195,7 +195,7 @@ describe('EventLog.runCommand', () => {
 
     log.runCommand(({ tables, emit }) => {
       tables.bodies.insert(fx.body);
-      emit({ type: 'body.freed', bodyId: 'b-earth' });
+      emit({ type: 'body.freed', bodyId: 'b-kepler' });
       const inner = log.runCommand(({ tables: t, emit: e }) => {
         t.bodies.insert(fx.moon);
         e({ type: 'body.assigned', bodyId: 'b-luna', host: { kind: 'project', id: 'p-1' } });
@@ -269,11 +269,13 @@ describe('EventLog readers', () => {
 
   it('builds a snapshot consistent with its seq', () => {
     const log = fresh();
+    const catalogue = log.tables.bodies.all(); // seeded by migration 0005, without events
+    expect(catalogue).toHaveLength(31);
     expect(log.snapshot()).toEqual({
       logId: log.logId,
       seq: 0,
       agents: [],
-      bodies: [],
+      bodies: catalogue,
       projects: [],
       tasks: [],
       questions: [],
@@ -291,7 +293,7 @@ describe('EventLog readers', () => {
     });
     const snap = log.snapshot();
     expect(snap.seq).toBe(1);
-    expect(snap.bodies).toEqual([fx.body, fx.moon]);
+    expect(snap.bodies).toEqual([...catalogue, fx.body, fx.moon]);
     expect(snap.projects).toEqual([fx.project]);
     expect(snap.tasks).toEqual([fx.task]);
     expect(snap.agents).toEqual([fx.harmonizer]);

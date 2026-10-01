@@ -17,12 +17,15 @@ import {
 } from '@galactic/protocol';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { createAgent, recordSpawned } from '../domain/agents.js';
+import { answerQuestion, cancelQuestion, checkAnswer } from '../domain/questions.js';
 import {
-  answerQuestion,
-  cancelQuestion,
-  cancelQuestionsOf,
-  openQuestion,
-} from '../domain/questions.js';
+  endAgentQuestions,
+  holdersNow,
+  livingFromStatuses,
+  logRouting,
+  openFromNeedsInput,
+  type QuestionRouting,
+} from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
@@ -48,7 +51,7 @@ import type { TranscriptPipeline } from './transcripts.js';
  *     reach the log — the adapter is reporting a session the server no longer owns;
  *   - an agent's open questions are cancelled in the same command as its terminal or
  *     interrupted event, and when it goes idle without an answer (an interrupt withdrew them,
- *     P1-34);
+ *     P1-34); the questions it *held* move to the next living supervisor or the user (P2-03);
  *   - a stop that was asked for ends as a stop, even when a shutdown overtakes it (P1-32).
  *
  * `agent.spawned` is emitted here, not by adapters (they do not know bodies). The agent row is
@@ -87,6 +90,8 @@ export interface AgentRuntimeOptions {
   inboxHistory?: number;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
+  /** Question routing (P2-03); default: the log, with liveness from `statuses`. */
+  questions?: QuestionRouting;
 }
 
 const TERMINAL = new Set<AgentEvent['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
@@ -130,6 +135,13 @@ interface Live {
   answering: Set<Id>;
   /** The one terminal event routed for this agent. */
   terminal: Terminal | undefined;
+  /** How the session was opened; `renewSession()` opens the next one the same way. */
+  spec: SpawnRequest;
+  /**
+   * A brain's mailbox owns its messages (P2-06): `send()` only logs them and the brain runner
+   * folds them into its next turn; only a `turn` message reaches the inbox.
+   */
+  mailbox: boolean;
 }
 
 const SYSTEM: Actor = { type: 'system' };
@@ -158,11 +170,13 @@ export class AgentRuntime {
   private readonly onError: (error: unknown, context: string) => void;
   private readonly pumps: Promise<void>[] = [];
   readonly caps: CapsEnforcer;
+  private readonly questions: QuestionRouting;
   private disposed = false;
 
   constructor(private readonly opts: AgentRuntimeOptions) {
     this.now = opts.now ?? (() => new Date().toISOString());
     this.onError = opts.onError ?? (() => {});
+    this.questions = opts.questions ?? logRouting(opts.log, livingFromStatuses(opts.statuses));
     this.caps = new CapsEnforcer({
       maxConcurrentAgents: opts.caps?.maxConcurrentAgents ?? 4,
       defaults: opts.caps?.defaults ?? DEFAULT_CAPS,
@@ -288,6 +302,8 @@ export class AgentRuntime {
       stopRequested: undefined,
       answering: new Set(),
       terminal: undefined,
+      spec: req,
+      mailbox: false,
     };
     this.live.set(agent.id, live);
     this.caps.track(agent.id, caps);
@@ -297,6 +313,7 @@ export class AgentRuntime {
       workspace: req.workspace ?? req.cwd,
       cwd: req.cwd,
       caps: this.caps,
+      ...(req.tools ? { serverTools: req.tools.map((t) => t.name) } : {}),
     });
     let handle: SpawnHandle;
     try {
@@ -353,7 +370,11 @@ export class AgentRuntime {
    * Queues a message; delivered when the agent is idle, or now with `interrupt`. Logged as
    * `message.sent` (P1-22) before it is queued, so a restart knows what was still pending.
    */
-  send(agentId: Id, text: string, opts: { sender: Actor; interrupt?: boolean }): InboxMessage {
+  send(
+    agentId: Id,
+    text: string,
+    opts: { sender: Actor; interrupt?: boolean; turn?: boolean },
+  ): InboxMessage {
     const live = this.must(agentId);
     if (live.capStop || live.stopRequested || live.inbox.currentState === 'ended') {
       throw new Error(`agent ${agentId} is stopping`);
@@ -367,7 +388,79 @@ export class AgentRuntime {
       text,
       interrupt: opts.interrupt ?? false,
     });
-    return live.inbox.enqueue(text, { ...opts, id: messageId });
+    if (live.mailbox && !opts.turn) {
+      // Logged only: the brain's mailbox picks it up from the log and folds it into a turn.
+      return {
+        id: messageId,
+        agentId,
+        text,
+        sender: opts.sender,
+        interrupt: opts.interrupt ?? false,
+        queuedAt: this.now(),
+      };
+    }
+    return live.inbox.enqueue(text, {
+      sender: opts.sender,
+      interrupt: opts.interrupt ?? false,
+      id: messageId,
+    });
+  }
+
+  /**
+   * Hands the agent's messages to its brain mailbox (P2-06): from now on `send()` without `turn`
+   * logs `message.sent` and queues nothing, and the brain runner delivers whole turns.
+   */
+  attachMailbox(agentId: Id): void {
+    this.must(agentId).mailbox = true;
+  }
+
+  /**
+   * Replaces a live agent's adapter session with a fresh one on the same row (P2-06: a brain's
+   * periodic session reset with a carried summary in `prompt`). The old session is logged
+   * `agent.interrupted{reason}` and stopped; its stragglers are dropped; then the adapter spawns
+   * a new session with the original options and `agent.spawned` reports the new `sessionRef`.
+   * Messages still queued in the old inbox are not carried over (a brain's inbox is empty
+   * between turns). Refused while a stop is under way.
+   */
+  async renewSession(agentId: Id, prompt: string, reason = 'session reset'): Promise<SpawnResult> {
+    if (this.disposed) throw new Error('runtime disposed');
+    const live = this.must(agentId);
+    if (!live.handle) return { ok: false, reason: `agent ${agentId} has no session yet` };
+    if (live.capStop || live.stopRequested || live.terminal) {
+      return { ok: false, reason: `agent ${agentId} is stopping` };
+    }
+    const { adapter, spec, mailbox } = live;
+    const sessionId = live.handle.sessionId;
+    const pending = live.inbox.pending().map((m) => m.id);
+    // Same agent row, new session: its held questions stay with it (it lives on).
+    this.recordEnd(
+      live,
+      { type: 'agent.interrupted', agentId, reason, pending },
+      'agent.interrupted',
+      { keepHeld: true },
+    );
+    try {
+      await adapter.stop(sessionId);
+    } catch (error) {
+      this.onError(error, `renew stop ${agentId}`);
+    }
+    // The old session's own `agent.stopped` travels through the event queue: let the pump drop
+    // it as a straggler before the new session registers under the same id.
+    await new Promise((resolve) => setImmediate(resolve));
+    const agent = this.opts.log.tables.agents.get(agentId) ?? live.agent;
+    const gate = this.caps.canSpawn();
+    if (!gate.ok) return { ok: false, reason: gate.reason };
+    this.ended.delete(agentId);
+    const result = await this.start(
+      agent,
+      { ...spec, prompt },
+      adapter,
+      (opts) => adapter.spawn(opts),
+      false,
+    );
+    const next = this.live.get(agentId);
+    if (result.ok && next && mailbox) next.mailbox = true;
+    return result;
   }
 
   /** Whether a live session asked `questionId` and waits for its answer through the adapter. */
@@ -382,6 +475,10 @@ export class AgentRuntime {
     if (live.answering.has(questionId)) {
       throw new DomainError('stale', `question ${questionId} is already being answered`);
     }
+    // The full check before the agent sees anything; afterwards the record only needs it open.
+    const current = this.opts.log.tables.questions.get(questionId);
+    if (!current) throw new Error(`no open question ${questionId}`);
+    checkAnswer(current, { questionId, answer, answeredBy: by });
     // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
     // an answer in the log that the agent never saw.
     live.answering.add(questionId);
@@ -393,7 +490,15 @@ export class AgentRuntime {
     live.questions.delete(questionId);
     this.byQuestion.delete(questionId);
     // Not `command()`: a refused record (the question was cancelled meanwhile) reaches the caller.
-    this.opts.log.runCommand((ctx) => answerQuestion(ctx, { questionId, answer, answeredBy: by }));
+    this.opts.log.runCommand((ctx) =>
+      answerQuestion(ctx, {
+        questionId,
+        answer,
+        answeredBy: by,
+        holders: holdersNow(ctx, questionId, this.questions),
+        delivered: true,
+      }),
+    );
   }
 
   async pause(agentId: Id, by: Actor): Promise<void> {
@@ -540,7 +645,12 @@ export class AgentRuntime {
             ? { type: 'agent.stopped', agentId: record.agentId, by: stoppedBy }
             : { type: 'agent.interrupted', agentId: record.agentId, reason: 'server restarted' },
         );
-        cancelQuestionsOf(ctx, record.agentId, stoppedBy ? 'agent stopped' : 'agent interrupted');
+        endAgentQuestions(
+          ctx,
+          record.agentId,
+          stoppedBy ? 'stopped' : 'interrupted',
+          this.questions,
+        );
       });
     }
     for (const record of this.opts.statuses.all()) {
@@ -724,15 +834,11 @@ export class AgentRuntime {
       return;
     }
     if (event.type === 'agent.needs_input') {
-      // The question row and the event in one transaction: the server owns questions (§5.3).
+      // The question row and the event in one transaction: the server owns questions (§5.3),
+      // routed to its holder by the question service (P2-03).
       this.command((ctx) => {
         ctx.emit(event);
-        openQuestion(ctx, {
-          id: event.questionId,
-          kind: event.kind,
-          originAgentId: event.agentId,
-          context: event.question,
-        });
+        openFromNeedsInput(ctx, event, this.questions);
       });
     } else if (event.type === 'agent.idle' && live.questions.size > live.answering.size) {
       // Idle while a question is open: an interrupt withdrew it (P1-34). Cancelled with the event.
@@ -740,7 +846,12 @@ export class AgentRuntime {
       this.command((ctx) => {
         ctx.emit(event);
         for (const q of withdrawn) {
-          cancelQuestion(ctx, q, 'withdrawn: the agent went idle without an answer');
+          cancelQuestion(
+            ctx,
+            q,
+            'withdrawn: the agent went idle without an answer',
+            holdersNow(ctx, q, this.questions),
+          );
         }
       });
       for (const q of withdrawn) {
@@ -798,13 +909,20 @@ export class AgentRuntime {
     );
   }
 
-  /** Logs how the agent ended and cancels its open questions in the same command, then forgets it. */
-  private recordEnd(live: Live, event: Event, terminal: Terminal): void {
+  /**
+   * Logs how the agent ended, cancels its open questions and re-routes the ones it held (P2-03)
+   * in the same command, then forgets it.
+   */
+  private recordEnd(
+    live: Live,
+    event: Event,
+    terminal: Terminal,
+    opts: { keepHeld?: boolean } = {},
+  ): void {
     if (live.terminal) return;
-    const reason = `agent ${terminal.slice('agent.'.length)}`;
     this.command((ctx) => {
       ctx.emit(event);
-      cancelQuestionsOf(ctx, live.agent.id, reason);
+      endAgentQuestions(ctx, live.agent.id, terminal.slice('agent.'.length), this.questions, opts);
     });
     this.end(live, terminal);
   }

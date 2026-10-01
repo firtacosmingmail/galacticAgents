@@ -199,6 +199,11 @@ export const QuestionAnswered = z.object({
   answer: z.string(),
   answeredBy: Actor,
   version: z.number().int().nonnegative(),
+  /**
+   * Every agent that held the question, past and present, oldest first (P2-03): their mailboxes
+   * learn it was answered and stop waiting. Absent when no agent ever held it.
+   */
+  holders: z.array(Id).optional(),
 });
 /**
  * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an
@@ -211,6 +216,8 @@ export const QuestionCancelled = z.object({
   agentId: Id,
   reason: z.string(),
   version: z.number().int().nonnegative(),
+  /** Every agent that held the question, past and present (as on `question.answered`). */
+  holders: z.array(Id).optional(),
 });
 /** Holder changed without an escalation, e.g. the holder died (orphaned question). */
 export const QuestionReassigned = z.object({
@@ -254,12 +261,20 @@ export const ProposalParked = z.object({
 /** A body that did not exist in the catalogue before: a procedural asteroid, a task's body. */
 export const BodyCreated = z.object({ type: z.literal('body.created'), body: Body });
 export const BodyAssigned = z.object({ type: z.literal('body.assigned'), bodyId: Id, host: Host });
+/**
+ * Work moved from one body to another (SPEC §3.4; its satellite flies). `toBodyId` hosts `host`
+ * from now on — unless `intoProjectId` is set: a standalone task joined that project and lives on
+ * its body, whose host does not change (decision 9). Either way the old body loses its host and
+ * shows the "moved to …" marker (`Body.movedTo`, stamped with the event's `at`) until it is freed.
+ */
 export const BodyMoved = z.object({
   type: z.literal('body.moved'),
   host: Host,
   fromBodyId: Id,
   toBodyId: Id,
+  intoProjectId: Id.optional(),
 });
+/** The body is free again: no host, no "moved to …" marker. */
 export const BodyFreed = z.object({ type: z.literal('body.freed'), bodyId: Id });
 
 // ---------------------------------------------------------------------------

@@ -14,18 +14,19 @@ function setup() {
 }
 
 describe('recordControl', () => {
-  it('records a stop/pause on a task or project as an event only (agent effects are P2-14)', () => {
+  it('records stop/pause/resume/cancel on a task or project with its state effect (cascade.ts)', () => {
     const { run, task, project } = setup();
-    for (const action of ['stop', 'cancel', 'pause', 'resume'] as const) {
-      expect(
-        run((ctx) => recordControl(ctx, { kind: 'task', id: task.id }, { action }, USER)).events,
-      ).toEqual([{ type: `control.${action}`, target: { kind: 'task', id: task.id }, by: USER }]);
+    const target = { kind: 'task', id: task.id } as const;
+    for (const action of ['pause', 'resume', 'stop', 'cancel'] as const) {
+      const out = run((ctx) => recordControl(ctx, target, { action }, USER));
+      expect(out.events[0]).toEqual({ type: `control.${action}`, target, by: USER });
+      expect(out.types.slice(1)).toEqual(['task.state_changed']);
     }
     expect(
       run((ctx) =>
         recordControl(ctx, { kind: 'project', id: project.id }, { action: 'pause' }, USER),
       ).types,
-    ).toEqual(['control.pause']);
+    ).toEqual(['control.pause', 'project.state_changed']);
   });
 
   it('applies edit, close, archive, pin and reopen in the same transaction as the event', () => {

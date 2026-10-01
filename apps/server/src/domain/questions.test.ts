@@ -227,3 +227,24 @@ describe('updateAgent', () => {
     expect(() => run((ctx) => updateAgent(ctx, steward.id, { bodyId: 'b-x' }))).toThrow(/no body/);
   });
 });
+
+describe('a delivered answer (wave-2 review)', () => {
+  it('is recorded even when the holder moved after the check, as the agent has seen it', () => {
+    const { run, tables, asWaykeeper, harmonizer } = hierarchy();
+    run((ctx) => reassignQuestion(ctx, 'q-1', { type: 'agent', id: harmonizer.id }, 'moved'));
+    expect(() =>
+      run((ctx) =>
+        answerQuestion(ctx, { questionId: 'q-1', answer: 'x', answeredBy: asWaykeeper }),
+      ),
+    ).toThrow(/held by agent/);
+    run((ctx) =>
+      answerQuestion(ctx, {
+        questionId: 'q-1',
+        answer: 'x',
+        answeredBy: asWaykeeper,
+        delivered: true,
+      }),
+    );
+    expect(tables.questions.get('q-1')).toMatchObject({ status: 'answered', answer: 'x' });
+  });
+});

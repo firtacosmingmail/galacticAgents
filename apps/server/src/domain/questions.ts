@@ -7,8 +7,8 @@ import type { CommandContext } from './event-log.js';
  * `agent.needs_input` opens a `Question` row in the same transaction, and an answer closes it.
  * Every change of holder or status bumps `version`, so an answer given against an older view is
  * refused with "already answered by …" instead of overwriting the first one. Where a question is
- * routed when it opens and when its holder dies is the question service's job (P2-03); these
- * commands are the moves it makes.
+ * routed when it opens and when its holder dies is the question service's job
+ * (`question-service.ts`, P2-03); these commands are the moves it makes.
  */
 
 export interface OpenQuestionRow {
@@ -90,6 +90,13 @@ export interface AnswerInput {
   answeredBy: Actor;
   /** The version the answerer saw; absent = "whatever it is now" (the runtime's own path). */
   version?: number;
+  /** Every agent that held the question (P2-03), carried on the event for their mailboxes. */
+  holders?: Id[];
+  /**
+   * The answer already reached the agent through its adapter, after the full check: record it as
+   * long as the question is open, even if its holder moved meanwhile — the agent has seen it.
+   */
+  delivered?: boolean;
 }
 
 /**
@@ -115,6 +122,7 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
     answer: input.answer,
     answeredBy: input.answeredBy,
     version: question.version,
+    ...(input.holders?.length ? { holders: input.holders } : {}),
   });
   return question;
 }
@@ -125,6 +133,7 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
  */
 export function checkAnswer(current: Question, input: AnswerInput): void {
   checkOpen(current);
+  if (input.delivered) return;
   if (input.version !== undefined && input.version !== current.version) {
     throw new DomainError(
       'stale',
@@ -149,10 +158,16 @@ export function checkAnswer(current: Question, input: AnswerInput): void {
 
 /**
  * Hands a clarification one level up (SPEC §2.6): from the holding agent to its supervisor, or to
- * the user when it has none. Only the holder (or the system) escalates; the user already holds
- * the top of the chain.
+ * the user when it has none. With `isLiving` (the question service, P2-03) the first living
+ * supervisor up the chain takes it, else the user. Only the holder (or the system) escalates; the
+ * user already holds the top of the chain.
  */
-export function escalateQuestion(ctx: CommandContext, questionId: Id, by: Actor): Question {
+export function escalateQuestion(
+  ctx: CommandContext,
+  questionId: Id,
+  by: Actor,
+  isLiving?: (agentId: Id) => boolean,
+): Question {
   const current = mustOpen(ctx, questionId);
   const from = current.holder;
   if (from.type !== 'agent') {
@@ -165,7 +180,11 @@ export function escalateQuestion(ctx: CommandContext, questionId: Id, by: Actor)
     );
   }
   const holder = must(ctx.tables.agents.get(from.id ?? ''), 'agent', from.id ?? '(no id)');
-  const to: Actor = holder.supervisorId ? { type: 'agent', id: holder.supervisorId } : USER;
+  const to: Actor = isLiving
+    ? livingAbove(ctx, holder.id, isLiving)
+    : holder.supervisorId
+      ? { type: 'agent', id: holder.supervisorId }
+      : USER;
   const question = moveTo(ctx, current, to);
   ctx.emit({ type: 'question.escalated', questionId, from, to, version: question.version });
   return question;
@@ -199,6 +218,25 @@ export function reassignQuestion(
   return question;
 }
 
+/**
+ * The first living supervisor above `agentId` (its supervisor, then that one's, …), or the user
+ * when none is alive (SPEC §2.6; corner case 12). A broken chain (a missing row) ends at the user.
+ */
+export function livingAbove(
+  ctx: CommandContext,
+  agentId: Id,
+  isLiving: (agentId: Id) => boolean,
+): Actor {
+  const seen = new Set<Id>([agentId]);
+  let id = ctx.tables.agents.get(agentId)?.supervisorId;
+  while (id && !seen.has(id)) {
+    seen.add(id);
+    if (isLiving(id)) return { type: 'agent', id };
+    id = ctx.tables.agents.get(id)?.supervisorId;
+  }
+  return USER;
+}
+
 function moveTo(ctx: CommandContext, current: Question, to: Actor): Question {
   return ctx.tables.questions.upsert({
     ...current,
@@ -216,6 +254,7 @@ export function cancelQuestion(
   ctx: CommandContext,
   questionId: Id,
   reason: string,
+  holders?: Id[],
 ): Question | undefined {
   const current = ctx.tables.questions.get(questionId);
   if (!current || current.status !== 'open') return undefined;
@@ -232,14 +271,20 @@ export function cancelQuestion(
     agentId: current.originAgentId,
     reason,
     version: question.version,
+    ...(holders?.length ? { holders } : {}),
   });
   return question;
 }
 
 /** Cancels every open question of an agent (it ended or was interrupted). */
-export function cancelQuestionsOf(ctx: CommandContext, agentId: Id, reason: string): Id[] {
+export function cancelQuestionsOf(
+  ctx: CommandContext,
+  agentId: Id,
+  reason: string,
+  holdersOf?: (questionId: Id) => Id[],
+): Id[] {
   return openQuestionsOf(ctx, agentId)
-    .map((q) => cancelQuestion(ctx, q.id, reason)?.id)
+    .map((q) => cancelQuestion(ctx, q.id, reason, holdersOf?.(q.id))?.id)
     .filter((id): id is Id => id !== undefined);
 }
 

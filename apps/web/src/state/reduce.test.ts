@@ -70,10 +70,28 @@ describe('applyEvent', () => {
       proposals: [],
       statuses: [],
     });
-    w = applyEvent(w, env(1, ev['body.moved'])); // task t-2 from the asteroid to Luna
+    // task t-2 joins project p-1 on Luna: the asteroid shows "moved to Luna", Luna keeps p-1
+    w = applyEvent(w, env(1, ev['body.moved']));
     expect(w.bodies['b-ast-1']?.host).toBeUndefined();
-    expect(w.bodies['b-luna']?.host).toEqual({ kind: 'task', id: 't-2' });
-    w = applyEvent(w, env(2, ev['body.freed']));
+    expect(w.bodies['b-ast-1']?.movedTo).toEqual({
+      bodyId: 'b-luna',
+      host: { kind: 'task', id: 't-2' },
+      at: fx.NOW,
+    });
+    expect(w.bodies['b-luna']?.host).toEqual({ kind: 'project', id: 'p-1' });
+    // a host moving to another body takes it over
+    const moved = applyEvent(
+      w,
+      env(9, {
+        type: 'body.moved',
+        host: { kind: 'project', id: 'p-1' },
+        fromBodyId: 'b-luna',
+        toBodyId: 'b-kepler',
+      }),
+    );
+    expect(moved.bodies['b-kepler']?.host).toEqual({ kind: 'project', id: 'p-1' });
+    expect(moved.bodies['b-luna']?.movedTo?.bodyId).toBe('b-kepler');
+    w = applyEvent(w, env(2, ev['body.freed'])); // the marker's retention is over
     expect(w.bodies['b-ast-1']).toEqual({
       id: 'b-ast-1',
       kind: 'asteroid',
@@ -82,9 +100,9 @@ describe('applyEvent', () => {
     });
     w = applyEvent(
       w,
-      env(3, { type: 'body.assigned', bodyId: 'b-earth', host: { kind: 'project', id: 'p-9' } }),
+      env(3, { type: 'body.assigned', bodyId: 'b-kepler', host: { kind: 'project', id: 'p-9' } }),
     );
-    expect(w.bodies['b-earth']?.host).toEqual({ kind: 'project', id: 'p-9' });
+    expect(w.bodies['b-kepler']?.host).toEqual({ kind: 'project', id: 'p-9' });
     const fresh = { id: 'b-new', kind: 'asteroid', name: 'Vesta-7' } as const;
     w = applyEvent(w, env(4, { type: 'body.created', body: fresh }));
     expect(w.bodies['b-new']).toEqual(fresh);
