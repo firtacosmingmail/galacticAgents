@@ -22,7 +22,7 @@ import {
   type WorkState,
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
-import { updateAgent } from './agents.js';
+import { recordSpawned, updateAgent } from './agents.js';
 import { assignBody, freeBody, moveHost } from './bodies.js';
 import { recordControl } from './control.js';
 import { DomainError, must } from './errors.js';
@@ -223,7 +223,7 @@ export class Commands implements DomainCommands {
     }
     if (input.supervisorId)
       must(tables.agents.get(input.supervisorId), 'agent', input.supervisorId);
-    if (input.cwd && project) {
+    if (input.cwd && (project || task?.worktreePath)) {
       throw new DomainError('invalid', 'an agent of a project runs in its workspace or worktree');
     }
     const cwd = task?.worktreePath ?? project?.workspace ?? input.cwd;
@@ -271,7 +271,12 @@ export class Commands implements DomainCommands {
   recordAgentEvent(event: AgentEvent): Promise<CommandResult<void>> {
     const parsed = AgentEvent.parse(event);
     return this.run((ctx) => {
-      must(ctx.tables.agents.get(parsed.agentId), 'agent', parsed.agentId);
+      const agent = must(ctx.tables.agents.get(parsed.agentId), 'agent', parsed.agentId);
+      if (parsed.type === 'agent.spawned') {
+        // The row keeps the session ref the event reports, as the runtime's spawn does.
+        recordSpawned(ctx, agent, parsed.sessionRef);
+        return;
+      }
       ctx.emit(parsed);
       if (parsed.type === 'agent.needs_input') {
         openQuestion(ctx, {

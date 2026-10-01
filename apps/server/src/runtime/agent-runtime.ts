@@ -23,6 +23,7 @@ import {
   cancelQuestionsOf,
   openQuestion,
 } from '../domain/questions.js';
+import { DomainError } from '../domain/errors.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
 import { createPermissionGate } from './permission-gate.js';
@@ -378,6 +379,9 @@ export class AgentRuntime {
     const agentId = this.byQuestion.get(questionId);
     if (!agentId) throw new Error(`no open question ${questionId}`);
     const live = this.must(agentId);
+    if (live.answering.has(questionId)) {
+      throw new DomainError('stale', `question ${questionId} is already being answered`);
+    }
     // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
     // an answer in the log that the agent never saw.
     live.answering.add(questionId);
@@ -388,7 +392,8 @@ export class AgentRuntime {
     }
     live.questions.delete(questionId);
     this.byQuestion.delete(questionId);
-    this.command((ctx) => answerQuestion(ctx, { questionId, answer, answeredBy: by }));
+    // Not `command()`: a refused record (the question was cancelled meanwhile) reaches the caller.
+    this.opts.log.runCommand((ctx) => answerQuestion(ctx, { questionId, answer, answeredBy: by }));
   }
 
   async pause(agentId: Id, by: Actor): Promise<void> {

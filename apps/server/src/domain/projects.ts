@@ -8,7 +8,15 @@ import {
   type Project,
   type ReopenInput,
 } from '@galactic/protocol';
-import { assignBody, bodyOf, checkAssignable, firstFreeBody, occupy, release } from './bodies.js';
+import {
+  bodyOf,
+  checkAssignable,
+  checkSubProjectBody,
+  firstFreeBody,
+  occupy,
+  place,
+  release,
+} from './bodies.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, checkTransition, setProjectState } from './states.js';
@@ -30,15 +38,49 @@ function parsePolicy(policy: unknown): PermissionPolicy {
   return parsed.data;
 }
 
-function checkParent(ctx: CommandContext, projectId: Id | undefined, parentId: Id): void {
-  if (parentId === projectId)
-    throw new DomainError('invalid', 'a project cannot be its own parent');
-  must(ctx.tables.projects.get(parentId), 'project', parentId);
+/** The parent must exist, still take work, and be neither the project nor one of its descendants. */
+function checkParent(ctx: CommandContext, projectId: Id | undefined, parentId: Id): Project {
+  const parent = must(ctx.tables.projects.get(parentId), 'project', parentId);
+  if (parent.state === 'archived') {
+    throw new DomainError('invalid_transition', `project ${parentId} is archived`);
+  }
+  for (let id: Id | undefined = parentId; id;) {
+    if (id === projectId) throw new DomainError('invalid', 'a project cannot be its own ancestor');
+    id = ctx.tables.projects.get(id)?.parentProjectId;
+  }
+  return parent;
+}
+
+/** Refuses closing or archiving while a sub-project (or, for archive, a task) still runs. */
+function checkNothingActive(ctx: CommandContext, projectId: Id, tasks: boolean): void {
+  const subs = ctx.tables.projects
+    .all()
+    .filter((p) => p.parentProjectId === projectId && !FINISHED_WORK.has(p.state));
+  if (subs.length > 0) {
+    throw new DomainError(
+      'conflict',
+      `project ${projectId} has active sub-projects: ${subs.map((p) => p.name).join(', ')}`,
+    );
+  }
+  if (!tasks) return;
+  const running = ctx.tables.tasks
+    .all()
+    .filter(
+      (t) => t.projectId === projectId && !FINISHED_WORK.has(t.state) && t.state !== 'proposed',
+    );
+  if (running.length > 0) {
+    throw new DomainError(
+      'conflict',
+      `project ${projectId} has ${running.length} unfinished task(s)`,
+    );
+  }
 }
 
 export function createProject(ctx: CommandContext, input: CreateProjectInput): Project {
   if (!input.workspace.trim()) throw new DomainError('invalid', 'a project needs a workspace');
-  if (input.parentProjectId) checkParent(ctx, undefined, input.parentProjectId);
+  const parent = input.parentProjectId
+    ? checkParent(ctx, undefined, input.parentProjectId)
+    : undefined;
   const id = `p-${randomUUID()}`;
   const host = hostOf(id);
   const body = input.bodyId
@@ -46,6 +88,7 @@ export function createProject(ctx: CommandContext, input: CreateProjectInput): P
     : firstFreeBody(ctx, input.kind ?? 'planet');
   if (!body) throw new DomainError('conflict', `no free ${input.kind ?? 'planet'}`);
   checkAssignable(body, host);
+  checkSubProjectBody(body, parent?.bodyId);
   const project: Project = {
     id,
     name: input.name,
@@ -84,7 +127,11 @@ export function updateProject(
   if (defined.workspace !== undefined && !defined.workspace.trim()) {
     throw new DomainError('invalid', 'a project needs a workspace');
   }
-  if (defined.parentProjectId) checkParent(ctx, projectId, defined.parentProjectId);
+  if (defined.parentProjectId) {
+    const parent = checkParent(ctx, projectId, defined.parentProjectId);
+    const body = must(ctx.tables.bodies.get(current.bodyId), 'body', current.bodyId);
+    checkSubProjectBody(body, parent.bodyId);
+  }
   if (defined.permissionPolicy) defined.permissionPolicy = parsePolicy(defined.permissionPolicy);
   if (Object.keys(defined).length === 0) return current;
   const project = ctx.tables.projects.upsert({ ...current, ...defined, updatedAt: ctx.now });
@@ -103,24 +150,21 @@ export function closeProject(ctx: CommandContext, projectId: Id, by: Actor): Pro
     throw new DomainError('invalid_transition', `project ${projectId} is already completed`);
   }
   checkTransition('project', projectId, current.state, 'completed');
-  const active = ctx.tables.projects
-    .all()
-    .filter((p) => p.parentProjectId === projectId && !FINISHED_WORK.has(p.state));
-  if (active.length > 0) {
-    throw new DomainError(
-      'conflict',
-      `project ${projectId} has active sub-projects: ${active.map((p) => p.name).join(', ')}`,
-    );
-  }
+  checkNothingActive(ctx, projectId, false);
   return setProjectState(ctx, projectId, 'completed', by);
 }
 
-/** Archives a finished project now (decision 4, 11b) and frees its body. */
+/**
+ * Archives a finished project now (decision 4, 11b) and frees its body. Only finished work is
+ * archived, and never while a sub-project or a task still runs (their agents orbit the body).
+ */
 export function archiveProject(ctx: CommandContext, projectId: Id, by: Actor): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
   if (current.state === 'archived') {
     throw new DomainError('invalid_transition', `project ${projectId} is already archived`);
   }
+  checkTransition('project', projectId, current.state, 'archived');
+  checkNothingActive(ctx, projectId, true);
   const project = setProjectState(ctx, projectId, 'archived', by);
   const body = bodyOf(ctx, hostOf(projectId));
   if (body) release(ctx, body);
@@ -163,7 +207,7 @@ export function reopenProject(
     const body = must(ctx.tables.bodies.get(input.bodyId), 'body', input.bodyId);
     checkAssignable(body, host);
     if (old.host?.kind === 'project' && old.host.id === projectId) release(ctx, old);
-    assignBody(ctx, body.id, host);
+    place(ctx, body.id, host);
   }
   return setProjectState(ctx, projectId, 'approved', by);
 }

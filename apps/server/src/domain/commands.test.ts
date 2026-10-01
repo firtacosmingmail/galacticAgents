@@ -77,6 +77,21 @@ describe('Commands', () => {
     expect(log.tables.agents.get(agent.id)?.bodyId).toBe(project.bodyId);
   });
 
+  it('refuses a cwd for a standalone Steward that already has a worktree', async () => {
+    const { commands } = boot();
+    const task = (await commands.createTask({ description: 'flaky' })).value;
+    await commands.updateTask(task.id, { worktreePath: '/w/scratch/t' });
+    await expect(
+      commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        cwd: '/x',
+        prompt: 'x',
+      }),
+    ).rejects.toThrow(/workspace or worktree/);
+  });
+
   it('runs a Steward in its task worktree once it has one', async () => {
     const { commands } = boot();
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
@@ -187,6 +202,58 @@ describe('Commands', () => {
     await expect(commands.control(target, { action: 'archive' }, USER)).rejects.toThrow(
       /cannot be given/,
     );
+  });
+
+  it('records an adapter event on the row too: agent.spawned keeps its session ref', async () => {
+    const { commands, log } = boot();
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w' })).value;
+    const agent = (
+      await commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: project.id,
+        prompt: 'x',
+      })
+    ).value;
+    const { events } = await commands.recordAgentEvent({
+      type: 'agent.spawned',
+      agentId: agent.id,
+      role: 'waykeeper',
+      runtime: 'fake',
+      bodyId: agent.bodyId,
+      sessionRef: 's-9',
+    });
+    expect(events).toMatchObject([{ type: 'agent.spawned', agentId: agent.id, sessionRef: 's-9' }]);
+    expect(log.tables.agents.get(agent.id)?.sessionRef).toBe('s-9');
+    const { events: idle } = await commands.recordAgentEvent({
+      type: 'agent.idle',
+      agentId: agent.id,
+    });
+    expect(idle).toEqual([{ type: 'agent.idle', agentId: agent.id }]);
+    await expect(commands.recordAgentEvent({ type: 'agent.idle', agentId: 'a-x' })).rejects.toThrow(
+      /no agent a-x/,
+    );
+  });
+
+  it('refuses a second answer while the first is still reaching the adapter', async () => {
+    const { commands, log } = boot();
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w' })).value;
+    const task = (await commands.createTask({ description: 'x', projectId: project.id })).value;
+    const agent = (
+      await commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        prompt: 'scenario:asks',
+      })
+    ).value;
+    await until(() => log.tables.questions.all().some((q) => q.originAgentId === agent.id));
+    const q = log.tables.questions.all().find((x) => x.originAgentId === agent.id)!;
+    const first = commands.answerQuestion({ questionId: q.id, answer: 'ISO 8601', by: USER });
+    const second = commands.answerQuestion({ questionId: q.id, answer: 'EU', by: USER });
+    await expect(first).resolves.toMatchObject({ value: { answer: 'ISO 8601' } });
+    await expect(second).rejects.toMatchObject({ code: 'stale' });
+    expect(log.tables.questions.get(q.id)?.answer).toBe('ISO 8601');
   });
 
   it('refuses agent commands without a runtime', async () => {

@@ -36,6 +36,27 @@ function hostEntity(ctx: CommandContext, host: Host): { bodyId: Id; state: strin
   return task;
 }
 
+/**
+ * A sub-project lives on a moon of its parent's planet (SPEC §3.2); `parentBodyId` is the parent
+ * project's body.
+ */
+export function checkSubProjectBody(body: Body, parentBodyId: Id | undefined): void {
+  if (parentBodyId === undefined) return;
+  if (body.kind !== 'moon' || body.parentId !== parentBodyId) {
+    throw new DomainError(
+      'invalid',
+      `a sub-project lives on a moon of its parent's planet, not on ${body.name}`,
+    );
+  }
+}
+
+/** The body of a project's parent, when it is a sub-project. */
+export function parentBodyOf(ctx: CommandContext, host: Host): Id | undefined {
+  if (host.kind !== 'project') return undefined;
+  const parentId = ctx.tables.projects.get(host.id)?.parentProjectId;
+  return parentId ? ctx.tables.projects.get(parentId)?.bodyId : undefined;
+}
+
 /** Refuses a body that cannot take `host`: reserved, the wrong kind, or taken by someone else. */
 export function checkAssignable(body: Body, host: Host): void {
   if (isReserved(body)) throw new DomainError('conflict', `${body.name} is reserved`);
@@ -131,9 +152,22 @@ export function moveAgents(ctx: CommandContext, host: Host, fromBodyId: Id, toBo
  * lives on another body moves with `moveHost` instead.
  */
 export function assignBody(ctx: CommandContext, bodyId: Id, host: Host): Body {
+  const entity = hostEntity(ctx, host);
+  if (FINISHED_WORK.has(entity.state as never)) {
+    throw new DomainError(
+      'invalid_transition',
+      `${host.kind} ${host.id} is ${entity.state}; reopen it instead`,
+    );
+  }
+  return place(ctx, bodyId, host);
+}
+
+/** `assignBody` without the state check: reopening finished work puts it back on a body. */
+export function place(ctx: CommandContext, bodyId: Id, host: Host): Body {
   const body = must(ctx.tables.bodies.get(bodyId), 'body', bodyId);
   const entity = hostEntity(ctx, host);
   checkAssignable(body, host);
+  checkSubProjectBody(body, parentBodyOf(ctx, host));
   const current = bodyOf(ctx, host);
   if (current && current.id !== bodyId) {
     throw new DomainError(
@@ -159,6 +193,7 @@ export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
   if (!from) throw new DomainError('invalid', `${host.kind} ${host.id} has no body to move from`);
   if (from.id === to.id) return to;
   checkAssignable(to, host);
+  checkSubProjectBody(to, parentBodyOf(ctx, host));
   const { host: _old, ...freed } = from;
   ctx.tables.bodies.upsert(freed);
   const next = ctx.tables.bodies.upsert({ ...to, host });

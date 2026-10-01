@@ -11,7 +11,7 @@ import {
   updateProject,
 } from './projects.js';
 import { setProjectState } from './states.js';
-import { createTask } from './tasks.js';
+import { closeTask, createTask } from './tasks.js';
 
 const USER = { type: 'user' } as const;
 const input = { name: 'CSV to Parquet', workspace: '/w/csv' };
@@ -108,7 +108,7 @@ describe('updateProject', () => {
     expect(run((ctx) => updateProject(ctx, p.id, {})).events).toEqual([]);
     expect(() => run((ctx) => updateProject(ctx, p.id, { bodyId: 'b-jupiter' }))).toThrow(/moving/);
     expect(() => run((ctx) => updateProject(ctx, p.id, { parentProjectId: p.id }))).toThrow(
-      /own parent/,
+      /own ancestor/,
     );
     expect(() =>
       run((ctx) => updateProject(ctx, p.id, { permissionPolicy: { rules: 'all' } as never })),
@@ -200,6 +200,8 @@ describe('reopenProject', () => {
       }),
     ).value;
     run((ctx) => closeProject(ctx, p.id, USER));
+    expect(() => run((ctx) => archiveProject(ctx, p.id, USER))).toThrow(/1 unfinished task/);
+    run((ctx) => closeTask(ctx, t.id, USER));
     run((ctx) => archiveProject(ctx, p.id, USER));
     run((ctx) => createProject(ctx, { ...input, name: 'Other' })); // takes Mars
     expect(() => run((ctx) => reopenProject(ctx, p.id, USER))).toThrow(/Mars is taken/);
@@ -220,5 +222,55 @@ describe('reopenProject', () => {
     const { run } = world();
     const p = run((ctx) => createProject(ctx, input)).value;
     expect(() => run((ctx) => reopenProject(ctx, p.id, USER))).toThrow(/not finished/);
+  });
+});
+
+describe('review follow-ups (P2-01)', () => {
+  it('refuses parent cycles and archived parents', () => {
+    const { run } = world();
+    const a = run((ctx) => createProject(ctx, input)).value;
+    const b = run((ctx) =>
+      createProject(ctx, { ...input, name: 'B', kind: 'moon', parentProjectId: a.id }),
+    ).value;
+    expect(() => run((ctx) => updateProject(ctx, a.id, { parentProjectId: b.id }))).toThrow(
+      /own ancestor/,
+    );
+    run((ctx) => closeProject(ctx, b.id, USER));
+    run((ctx) => archiveProject(ctx, b.id, USER));
+    expect(() =>
+      run((ctx) => createProject(ctx, { ...input, kind: 'moon', parentProjectId: b.id })),
+    ).toThrow(/archived/);
+  });
+
+  it('archives only finished work, never with an active sub-project', () => {
+    const { run, tables } = world();
+    const a = run((ctx) => createProject(ctx, input)).value;
+    expect(() => run((ctx) => archiveProject(ctx, a.id, USER))).toThrow(
+      /cannot go from approved to archived/,
+    );
+    const sub = run((ctx) =>
+      createProject(ctx, { ...input, name: 'Sub', kind: 'moon', parentProjectId: a.id }),
+    ).value;
+    run((ctx) => closeProject(ctx, sub.id, USER));
+    run((ctx) => closeProject(ctx, a.id, USER));
+    run((ctx) => reopenProject(ctx, sub.id, USER));
+    expect(() => run((ctx) => archiveProject(ctx, a.id, USER))).toThrow(/active sub-projects/);
+    expect(tables.bodies.get(a.bodyId)?.host).toEqual({ kind: 'project', id: a.id });
+  });
+
+  it('keeps a sub-project on a moon of its parent planet', () => {
+    const { run } = world();
+    const a = run((ctx) => createProject(ctx, input)).value; // Mars
+    expect(() =>
+      run((ctx) => createProject(ctx, { ...input, bodyId: 'b-jupiter', parentProjectId: a.id })),
+    ).toThrow(/moon of its parent's planet/);
+    const loose = run((ctx) => createProject(ctx, { ...input, name: 'Loose' })).value; // Jupiter
+    expect(() => run((ctx) => updateProject(ctx, loose.id, { parentProjectId: a.id }))).toThrow(
+      /moon of its parent's planet/,
+    );
+    expect(
+      run((ctx) => createProject(ctx, { ...input, kind: 'moon', parentProjectId: a.id })).value
+        .bodyId,
+    ).toBe('b-phobos');
   });
 });

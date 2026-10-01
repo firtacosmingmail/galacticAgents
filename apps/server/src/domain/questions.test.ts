@@ -142,6 +142,27 @@ describe('answerQuestion', () => {
   });
 });
 
+describe('openQuestion', () => {
+  it('re-opens a closed id with a higher version, so an old view fails the version check', () => {
+    const { run, steward } = hierarchy();
+    run((ctx) => answerQuestion(ctx, { questionId: 'q-1', answer: 'snappy', answeredBy: USER }));
+    const again = run((ctx) =>
+      openQuestion(ctx, {
+        id: 'q-1',
+        kind: 'clarification',
+        originAgentId: steward.id,
+        context: { text: 'Which compression, again?' },
+      }),
+    ).value;
+    expect(again).toMatchObject({ status: 'open', version: 2 });
+    expect(() =>
+      run((ctx) =>
+        answerQuestion(ctx, { questionId: 'q-1', answer: 'x', answeredBy: USER, version: 0 }),
+      ),
+    ).toThrow(/changed since version 0/);
+  });
+});
+
 describe('escalateQuestion', () => {
   it('climbs the supervisor chain to the user, one level per call', () => {
     const { run, tables, asWaykeeper, harmonizer } = hierarchy();

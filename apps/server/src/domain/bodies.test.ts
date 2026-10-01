@@ -68,9 +68,19 @@ describe('assignBody and freeBody', () => {
     run((ctx) => closeProject(ctx, p.id, USER));
     expect(run((ctx) => freeBody(ctx, 'b-mars')).types).toEqual(['body.freed']);
     expect(run((ctx) => freeBody(ctx, 'b-mars')).types).toEqual([]); // already free
-    const { types } = run((ctx) => assignBody(ctx, 'b-jupiter', { kind: 'project', id: p.id }));
-    expect(types).toEqual(['body.assigned', 'project.updated']);
-    expect(tables.projects.get(p.id)?.bodyId).toBe('b-jupiter');
+    // Finished work goes back on a body by reopening, never by a bare assignment.
+    expect(() => run((ctx) => assignBody(ctx, 'b-jupiter', { kind: 'project', id: p.id }))).toThrow(
+      /reopen it instead/,
+    );
+    // A host with no body (its asteroid was freed while the task ran on) can be given one.
+    const st = run((ctx) => createTask(ctx, { description: 'b' })).value;
+    tables.bodies.upsert({ ...tables.bodies.get(st.bodyId)!, host: undefined } as never);
+    const spare = run((ctx) => createTask(ctx, { description: 'c' })).value.bodyId;
+    run((ctx) => closeTask(ctx, tables.bodies.get(spare)!.host!.id, USER));
+    run((ctx) => freeBody(ctx, spare));
+    const { types } = run((ctx) => assignBody(ctx, spare, { kind: 'task', id: st.id }));
+    expect(types).toEqual(['body.assigned', 'task.updated']);
+    expect(tables.tasks.get(st.id)?.bodyId).toBe(spare);
     expect(() => run((ctx) => assignBody(ctx, 'b-mars', { kind: 'project', id: 'p-x' }))).toThrow(
       /no project p-x/,
     );

@@ -15,6 +15,8 @@ const BODIES: Body[] = [
   { id: 'b-mars', kind: 'planet', name: 'Mars' },
   { id: 'b-jupiter', kind: 'planet', name: 'Jupiter' },
   { id: 'b-phobos', kind: 'moon', parentId: 'b-mars', name: 'Phobos' },
+  { id: 'b-deimos', kind: 'moon', parentId: 'b-mars', name: 'Deimos' },
+  { id: 'b-mars-3', kind: 'moon', parentId: 'b-mars', name: 'Mars III' },
   { id: 'b-io', kind: 'moon', parentId: 'b-jupiter', name: 'Io' },
 ];
 
@@ -180,7 +182,7 @@ describe('replay vs snapshot conformance', () => {
 
     // --- moves: a standalone task joins the project (its Steward flies), the project moves
     await commands.moveTask(flaky.id, project.id, USER);
-    await commands.moveHost({ kind: 'project', id: sub.id }, 'b-io');
+    await commands.moveHost({ kind: 'project', id: sub.id }, 'b-deimos');
 
     // --- panel actions with their effects
     await commands.control(
@@ -204,8 +206,25 @@ describe('replay vs snapshot conformance', () => {
     await commands.closeTask(parse.id, { type: 'agent', id: waykeeper.id });
     await commands.closeProject(sub.id, USER);
     await commands.archiveProject(sub.id, USER);
-    await commands.createProject({ name: 'Squatter', workspace: '/w/sq', bodyId: 'b-io' });
-    await commands.reopenProject(sub.id, USER, { bodyId: 'b-jupiter' });
+    await commands.createProject({ name: 'Squatter', workspace: '/w/sq', bodyId: 'b-deimos' });
+    await commands.reopenProject(sub.id, USER, { bodyId: 'b-mars-3' });
+
+    // --- a standalone task archived by the panel, its asteroid freed and taken, reopened elsewhere
+    const chore = (await commands.createTask({ description: 'Rotate logs' })).value;
+    await commands.control({ kind: 'task', id: chore.id }, { action: 'cancel' }, USER);
+    await commands.closeTask(chore.id, USER);
+    await commands.freeBody(chore.bodyId);
+    await commands.createTask({ description: 'Squat', bodyId: chore.bodyId });
+    await commands.reopenTask(chore.id, USER);
+    await commands.closeTask(chore.id, USER);
+    await commands.control({ kind: 'task', id: chore.id }, { action: 'archive' }, USER);
+
+    // --- a question left open when its agent stops is cancelled with the stop
+    await commands.openQuestion({
+      kind: 'clarification',
+      originAgentId: asteroidSteward.id,
+      context: { text: 'Keep the old flag?' },
+    });
     await commands.stopAgent(asteroidSteward.id, USER);
     await commands.stopAgent(waykeeper.id, USER);
     await until(() => statuses.get(waykeeper.id)?.state === 'stopped');
@@ -242,6 +261,9 @@ describe('replay vs snapshot conformance', () => {
       'control.pause',
       'control.resume',
       'control.stop',
+      'control.cancel',
+      'control.archive',
+      'question.cancelled',
     ] as const) {
       expect(types, t).toContain(t);
     }

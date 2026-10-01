@@ -11,7 +11,7 @@ import type { CommandContext } from './event-log.js';
  * commands are the moves it makes.
  */
 
-export interface OpenQuestionInput {
+export interface OpenQuestionRow {
   id: Id;
   kind: QuestionKind;
   originAgentId: Id;
@@ -58,8 +58,11 @@ function checkHolder(ctx: CommandContext, question: Question, holder: Actor): vo
   }
 }
 
-/** Inserts the row and emits `question.opened`. Re-asking an open id (a resumed session) is a no-op. */
-export function openQuestion(ctx: CommandContext, input: OpenQuestionInput): Question {
+/**
+ * Inserts the row and emits `question.opened`. Re-asking an open id (a resumed session) is a
+ * no-op; re-asking a closed one opens it again with a higher version.
+ */
+export function openQuestion(ctx: CommandContext, input: OpenQuestionRow): Question {
   const existing = ctx.tables.questions.get(input.id);
   if (existing && existing.status === 'open') return existing;
   must(ctx.tables.agents.get(input.originAgentId), 'agent', input.originAgentId);
@@ -70,7 +73,8 @@ export function openQuestion(ctx: CommandContext, input: OpenQuestionInput): Que
     holder: input.holder ?? USER,
     status: 'open',
     context: input.context,
-    version: 0,
+    // A re-asked id keeps counting: a view of the old question can never pass the version check.
+    version: existing ? existing.version + 1 : 0,
     createdAt: ctx.now,
     updatedAt: ctx.now,
   };

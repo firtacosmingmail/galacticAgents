@@ -1,17 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import type { Actor, CreateTaskInput, Host, Id, ReopenInput, Task } from '@galactic/protocol';
 import {
-  assignBody,
   bodyOf,
   checkAssignable,
   createAsteroid,
   moveAgents,
   occupy,
+  place,
   release,
 } from './bodies.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
-import { setTaskState } from './states.js';
+import { FINISHED_WORK, setTaskState } from './states.js';
 
 /**
  * Task commands (P2-01; SPEC §2.7, §3.1, §3.4, decisions 9, 11, 11b). A project task lives on its
@@ -158,7 +158,7 @@ export function reopenTask(
   } else {
     if (old.host?.kind === 'task' && old.host.id === taskId) release(ctx, old);
     const body = input.bodyId ? input.bodyId : createAsteroid(ctx).id;
-    assignBody(ctx, body, host);
+    place(ctx, body, host);
   }
   return setTaskState(ctx, taskId, 'approved', by);
 }
@@ -174,6 +174,12 @@ export function moveTask(ctx: CommandContext, taskId: Id, toProjectId: Id, _by: 
     throw new DomainError(
       'invalid',
       `task ${taskId} already belongs to project ${current.projectId}`,
+    );
+  }
+  if (FINISHED_WORK.has(current.state)) {
+    throw new DomainError(
+      'invalid_transition',
+      `task ${taskId} is ${current.state}; reopen it first`,
     );
   }
   const project = openProject(ctx, toProjectId);

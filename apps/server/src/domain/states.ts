@@ -20,7 +20,6 @@ export const TRANSITIONS: Readonly<Record<WorkState, readonly WorkState[]>> = {
     'interrupted',
     'moved',
     'completed',
-    'archived',
   ],
   in_progress: [
     'blocked_on_user',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { world } from '../test/world.js';
 import { createAgent } from './agents.js';
+import { assignBody } from './bodies.js';
 import { archiveProject, closeProject, createProject } from './projects.js';
 import { setTaskState } from './states.js';
 import {
@@ -192,5 +193,18 @@ describe('moveTask', () => {
     expect(tables.bodies.get(st.bodyId)?.host).toBeUndefined();
     expect(tables.agents.get(steward.id)?.bodyId).toBe(project.bodyId);
     expect(() => run((ctx) => moveTask(ctx, st.id, project.id, USER))).toThrow(/already belongs/);
+  });
+});
+
+describe('finished tasks (P2-01 review)', () => {
+  it('cannot be moved into a project or put on a body without reopening', () => {
+    const { run, project } = withProject();
+    const st = run((ctx) => createTask(ctx, { description: 'b' })).value;
+    run((ctx) => closeTask(ctx, st.id, USER));
+    run((ctx) => archiveTask(ctx, st.id, USER));
+    expect(() => run((ctx) => moveTask(ctx, st.id, project.id, USER))).toThrow(/reopen it first/);
+    expect(() => run((ctx) => assignBody(ctx, st.bodyId, { kind: 'task', id: st.id }))).toThrow(
+      /reopen it instead/,
+    );
   });
 });

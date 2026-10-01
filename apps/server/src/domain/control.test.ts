@@ -53,6 +53,7 @@ describe('recordControl', () => {
     const p = { kind: 'project', id: project.id } as const;
     run((ctx) => recordControl(ctx, p, { action: 'edit', changes: { name: 'CSV v2' } }, USER));
     run((ctx) => recordControl(ctx, p, { action: 'close' }, USER));
+    run((ctx) => recordControl(ctx, target, { action: 'close' }, USER));
     expect(run((ctx) => recordControl(ctx, p, { action: 'archive' }, USER)).types).toEqual([
       'control.archive',
       'project.state_changed',
