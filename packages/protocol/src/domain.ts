@@ -212,3 +212,35 @@ export const TranscriptChunk = z.object({
   text: z.string(),
 });
 export type TranscriptChunk = z.infer<typeof TranscriptChunk>;
+
+/**
+ * Named policy presets the panel offers (SPEC §3.6): `default` is the table in the SPEC;
+ * `trusting` lets a Steward install and talk to the network on its own but still asks before
+ * destroying or pushing; `cautious` asks for every change.
+ */
+export const PERMISSION_POLICY_PRESETS: Record<'default' | 'trusting' | 'cautious', PermissionPolicy> = {
+  default: DEFAULT_PERMISSION_POLICY,
+  trusting: {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      destructive: 'ask',
+      outside_workspace: 'ask',
+      network: 'allow',
+      push: 'ask',
+    },
+  },
+  cautious: {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'ask',
+      run_workspace: 'ask',
+      destructive: 'ask',
+      outside_workspace: 'ask',
+      network: 'ask',
+      push: 'deny',
+    },
+  },
+};
+export type PermissionPolicyPreset = keyof typeof PERMISSION_POLICY_PRESETS;

@@ -44,6 +44,10 @@ export class CapsEnforcer {
     return this.opts.defaults;
   }
 
+  get maxConcurrent(): number {
+    return this.opts.maxConcurrentAgents;
+  }
+
   /** Fills missing caps from the defaults. */
   resolve(caps?: Partial<AgentCaps>): AgentCaps {
     return { ...this.opts.defaults, ...(caps ?? {}) };

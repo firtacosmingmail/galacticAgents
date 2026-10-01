@@ -6,6 +6,7 @@ import { isAllowedHost, isLoopback, isLoopbackOrigin } from './http/security.js'
 import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
+import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import type { EventLog } from './domain/event-log.js';
 import type { StatusStore } from './runtime/status-store.js';
 import type { TranscriptPipeline } from './runtime/transcripts.js';
@@ -23,6 +24,10 @@ export interface AppOptions {
   transcripts?: TranscriptPipeline;
   /** The status store (P1-05): its diffs are pushed to every socket. */
   statuses?: StatusStore;
+  /** The agent runtime (P1-11): enables the `/api/*` control routes. */
+  runtime?: AgentRoutesOptions['runtime'];
+  /** Fake-adapter scenario names for the spawn form. */
+  scenarios?: () => string[];
   logger?: boolean;
 }
 
@@ -67,7 +72,12 @@ export function buildApp(opts: AppOptions): App {
     void fastify.register(fastifyStatic, { root: opts.webDir, wildcard: false });
     fastify.setNotFoundHandler((req, reply) => {
       // Single-page app: unknown GET paths load the page; API-shaped paths stay 404.
-      if (req.method === 'GET' && !req.url.startsWith('/dev/') && !req.url.startsWith('/health')) {
+      if (
+        req.method === 'GET' &&
+        !req.url.startsWith('/dev/') &&
+        !req.url.startsWith('/api/') &&
+        !req.url.startsWith('/health')
+      ) {
         return reply.sendFile('index.html');
       }
       return reply.code(404).send({ error: 'not_found' });
@@ -79,6 +89,13 @@ export function buildApp(opts: AppOptions): App {
     warn: (m: string) => fastify.log.warn(m),
   };
   if (opts.log && config.dev) registerDevRoutes(fastify, config, opts.log);
+  if (opts.log && opts.runtime) {
+    registerAgentRoutes(fastify, config, {
+      runtime: opts.runtime,
+      log: opts.log,
+      ...(opts.scenarios ? { scenarios: opts.scenarios } : {}),
+    });
+  }
 
   const onSession =
     opts.onSession ??

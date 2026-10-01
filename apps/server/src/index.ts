@@ -22,9 +22,10 @@ if (reconciled.dead.length + reconciled.orphans.length > 0) {
 }
 
 // Adapters: the fake one always (dev mode without Claude), the real one for Claude Code.
+const fake = new FakeAdapter();
 const composed = composeRuntime(db, {
   adapters: [
-    new FakeAdapter(),
+    fake,
     new ClaudeSdkAdapter({
       supervisor,
       ...(process.env['GALACTIC_MODEL'] ? { model: process.env['GALACTIC_MODEL'] } : {}),
@@ -49,6 +50,8 @@ const app = buildApp({
   log,
   statuses,
   transcripts,
+  runtime: composed.runtime,
+  scenarios: () => fake.scenarioNames(),
   logger: process.env['GALACTIC_LOG'] !== 'silent',
   ...(webDir ? { webDir } : {}),
 });
