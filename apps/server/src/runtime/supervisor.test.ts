@@ -8,6 +8,7 @@ import {
   bootTime,
   commandName,
   isAlive,
+  isRunning,
   parseLstart,
   processName,
   processStartTime,
@@ -257,6 +258,52 @@ describe('ProcessSupervisor — graceful stop', () => {
     await eventually(() => !isAlive(grandchild));
   });
 
+  it('an interrupt hook that never settles still reaches SIGTERM and SIGKILL', async () => {
+    const { s, events } = makeSupervisor();
+    const out: string[] = [];
+    let called = 0;
+    await s.spawn(
+      node(LOITER(['SIGTERM']), {
+        onStdout: (c) => out.push(c),
+        interrupt: () => {
+          called++;
+          return new Promise<void>(() => {}); // a control request to a wedged CLI
+        },
+      }),
+    );
+    await eventually(() => out.join('').includes('ready'));
+    const started = Date.now();
+    const exit = await s.stop('a-1', { graceMs: 150, termMs: 150 });
+    expect(called).toBe(1);
+    expect(exit?.signal).toBe('SIGKILL');
+    expect(out.join('')).toContain('ignored SIGTERM');
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(events.items.map((o) => o.kind)).toEqual(['stopped']);
+  });
+
+  it('an interrupt hook that throws synchronously or rejects still stops the process', async () => {
+    const errors: unknown[] = [];
+    const { s } = makeSupervisor({ onError: (e) => errors.push(e) });
+    await s.spawn(
+      node(LOITER([]), {
+        agentId: 'sync',
+        interrupt: () => {
+          throw new Error('boom');
+        },
+      }),
+    );
+    await s.spawn(
+      node(LOITER([]), { agentId: 'async', interrupt: () => Promise.reject(new Error('later')) }),
+    );
+    const [a, b] = await Promise.all([
+      s.stop('sync', { graceMs: 100, termMs: 300 }),
+      s.stop('async', { graceMs: 100, termMs: 300 }),
+    ]);
+    expect(a?.signal).toBe('SIGTERM');
+    expect(b?.signal).toBe('SIGTERM');
+    expect(errors.map((e) => (e as Error).message).sort()).toEqual(['boom', 'later']);
+  });
+
   it('stopping an unknown, exited or already stopping agent is harmless', async () => {
     const { s } = makeSupervisor();
     expect(await s.stop('nobody')).toBeUndefined();
@@ -277,6 +324,84 @@ describe('ProcessSupervisor — graceful stop', () => {
     await sleep(20);
     expect(events.items.map((o) => o.kind)).toEqual(['stopped']);
     expect(order).toEqual(['spec:stopped']);
+  });
+});
+
+describe('ProcessSupervisor — the group dies with its leader (corner case 4)', () => {
+  /** `sh` that leaves a background `sleep` behind and exits with `code`. */
+  const leaver = (code: number, extra: Partial<ProcessSpec> = {}): ProcessSpec => ({
+    agentId: 'a-1',
+    command: 'sh',
+    args: ['-c', `sleep 60 & echo "child $!"; exit ${code}`],
+    cwd: process.cwd(),
+    ...extra,
+  });
+  const grandchildOf = (out: string[]) => Number(/child (\d+)/.exec(out.join(''))![1]);
+
+  it.each([3, 0])(
+    'the leader exits with %i: the grandchild is gone once exit settles',
+    async (code) => {
+      const { s, events } = makeSupervisor();
+      const out: string[] = [];
+      const proc = await s.spawn(leaver(code, { onStdout: (c) => out.push(c) }));
+      const exit = await proc.exited;
+      expect(exit.code).toBe(code);
+      const grandchild = grandchildOf(out);
+      expect(isRunning(grandchild)).toBe(false);
+      await events.waitFor((e) => e.length === 1);
+      expect(events.items[0]?.kind).toBe(code === 0 ? 'exited' : 'crashed');
+    },
+  );
+
+  it('a leader killed from outside takes its group along, SIGKILL for members that ignore SIGTERM', async () => {
+    const { s } = makeSupervisor({ defaults: { graceMs: 300, termMs: 150 } });
+    const out: string[] = [];
+    const proc = await s.spawn({
+      agentId: 'a-1',
+      command: 'sh',
+      args: ['-c', `sh -c 'trap "" TERM; echo "child $$"; while :; do sleep 1; done' & wait`],
+      cwd: process.cwd(),
+      onStdout: (c) => out.push(c),
+    });
+    await eventually(() => /child \d+/.test(out.join('')));
+    const grandchild = grandchildOf(out);
+    process.kill(proc.pid, 'SIGKILL');
+    await proc.exited;
+    expect(isRunning(grandchild)).toBe(false);
+  });
+
+  it('reconcile kills the leftover group of a dead leader from this boot', async () => {
+    const leader = spawn('sh', ['-c', 'sleep 60 & echo "child $!"; exit 0'], {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const out: string[] = [];
+    leader.stdout!.on('data', (c: Buffer) => out.push(c.toString()));
+    await new Promise((r) => leader.once('exit', r));
+    await eventually(() => /child \d+/.test(out.join('')));
+    const grandchild = grandchildOf(out);
+    expect(isRunning(grandchild)).toBe(true);
+    const store = new MemoryProcessStore();
+    store.upsert({
+      agentId: 'left',
+      pid: leader.pid!,
+      startedAt: new Date().toISOString(),
+      status: 'running',
+      meta: { command: 'sh', bootAt: bootTime() },
+    });
+    // The same leftovers recorded in another boot are never touched.
+    store.upsert({
+      agentId: 'old',
+      pid: leader.pid!,
+      startedAt: new Date().toISOString(),
+      status: 'running',
+      meta: { command: 'sh', bootAt: '2020-01-01T00:00:00.000Z' },
+    });
+    const { s } = makeSupervisor({ store });
+    const result = s.reconcile();
+    expect(result.orphans).toEqual(['left']);
+    expect(result.dead).toEqual(['old']);
+    await eventually(() => !isRunning(grandchild));
   });
 });
 

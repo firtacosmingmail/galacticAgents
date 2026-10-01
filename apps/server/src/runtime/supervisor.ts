@@ -211,6 +211,8 @@ class Managed implements ManagedProcess {
   readonly exited: Promise<ExitInfo>;
   /** Set while the restart policy is between exit and the new child. */
   restarting: Promise<void> | undefined;
+  /** SIGTERM → SIGKILL delay for the group left behind when the leader exits (a stop's `termMs`). */
+  reapMs: number | undefined;
   private resolveExit!: (info: ExitInfo) => void;
   private turnWaiters: (() => void)[] = [];
   /** Bumped by `turnEnded()`; a stop compares it to the value it saw when it started. */
@@ -304,16 +306,38 @@ export function isAlive(pid: number): boolean {
   }
 }
 
-/** Whether the process group `pgid` still has members (signal 0 to the group). */
+/**
+ * Whether the process group `pgid` still has live members: signal 0 to the group, then — since
+ * zombies answer signal 0 too and an orphan's zombie lingers until init reaps it (forever under
+ * a container init that never does) — a `ps` look for a member that is not a zombie.
+ */
 export function isGroupAlive(pgid: number): boolean {
   if (pgid <= 1) return false;
   try {
     process.kill(-pgid, 0);
-    return true;
   } catch (error) {
     // EPERM: the group exists but is not ours to signal — it still has members.
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM') return false;
   }
+  try {
+    const out = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return out.split('\n').some((line) => {
+      const [group, stat] = line.trim().split(/\s+/);
+      return Number(group) === pgid && stat !== undefined && !stat.startsWith('Z');
+    });
+  } catch {
+    return true; // cannot tell: the signal said there are members
+  }
+}
+
+/** Whether `pid` runs and is not a zombie (`ps -o stat=`); for checks after a kill. */
+export function isRunning(pid: number): boolean {
+  if (!isAlive(pid)) return false;
+  const stat = ps('stat', pid);
+  return stat === undefined ? isAlive(pid) : !stat.startsWith('Z');
 }
 
 function ps(field: string, pid: number): string | undefined {
@@ -505,9 +529,12 @@ export class ProcessSupervisor {
     child.once('exit', (code, signal) => {
       // stdio may still drain after `exit`; wait for `close` briefly so output precedes the verdict.
       const closed = new Promise<void>((r) => child.once('close', () => r()));
-      void withTimeout(closed, DRAIN_MS).then(() =>
-        this.onExit(managed, child, { code, signal, at: this.now() }),
-      );
+      const at = this.now();
+      const pgid = child.pid ?? -1;
+      void withTimeout(closed, DRAIN_MS)
+        .then(() => this.reapGroup(pgid, managed.reapMs ?? this.termMs))
+        .catch((error: unknown) => this.onError(error, spec.agentId))
+        .then(() => this.onExit(managed, child, { code, signal, at }));
     });
   }
 
@@ -517,6 +544,22 @@ export class ProcessSupervisor {
     } catch (error) {
       this.onError(error, spec.agentId);
     }
+  }
+
+  /**
+   * The leader is gone (clean exit, crash, external signal, completed stop) but its group may
+   * still hold the agent's own children — a dev server, a watcher, a background shell (corner
+   * case 4). SIGTERM the group (and SIGCONT, in case it was paused), then SIGKILL after `termMs`
+   * if members remain. A group id is not reused while the group has members, so the signal
+   * cannot reach a stranger. `exited` settles only afterwards.
+   */
+  private async reapGroup(pgid: number, termMs: number): Promise<void> {
+    if (pgid <= 1 || !this.probe.groupAlive(pgid)) return;
+    killGroup(pgid, 'SIGTERM');
+    killGroup(pgid, 'SIGCONT');
+    if (await until(() => !this.probe.groupAlive(pgid), termMs)) return;
+    killGroup(pgid, 'SIGKILL');
+    await until(() => !this.probe.groupAlive(pgid), 1_000);
   }
 
   private onExit(managed: Managed, child: ChildProcess, info: ExitInfo): void {
@@ -580,18 +623,25 @@ export class ProcessSupervisor {
     if (managed.exit) return this.finishStop(managed, opts);
     const graceMs = opts.graceMs ?? this.graceMs;
     const termMs = opts.termMs ?? this.termMs;
+    managed.reapMs = termMs;
 
     // 1. Ask the runtime to end the turn. The waiter is registered first so a hook that reports
-    //    the turn end synchronously is not missed.
+    //    the turn end synchronously is not missed. The hook runs inside the grace window: one
+    //    that never settles (a control request to a wedged CLI) must not keep SIGTERM away.
+    const deadline = Date.now() + graceMs;
     const turnOrExit = Promise.race([managed.waitTurnEnd(managed.turnMark), managed.exited]);
+    let hook: Promise<void>;
     try {
-      if (managed.spec.interrupt) await managed.spec.interrupt(managed);
-      else managed.signal('SIGINT');
+      hook = Promise.resolve(
+        managed.spec.interrupt ? managed.spec.interrupt(managed) : managed.signal('SIGINT'),
+      ).catch((error: unknown) => this.onError(error, agentId));
     } catch (error) {
       this.onError(error, agentId);
+      hook = Promise.resolve();
     }
-    // 2. Wait for the turn to end (or the process to exit) within the grace period.
-    const turnEnded = await withTimeout(turnOrExit, graceMs);
+    await withTimeout(Promise.race([hook, turnOrExit]), graceMs);
+    // 2. Wait for the turn to end (or the process to exit) within what is left of the grace.
+    const turnEnded = await withTimeout(turnOrExit, Math.max(0, deadline - Date.now()));
     if (managed.exit) return this.finishStop(managed, opts);
     // The turn ended cleanly: the runtime may shut down on its own — give it a moment before
     // terminating, but only if it signalled the turn end.
@@ -633,8 +683,9 @@ export class ProcessSupervisor {
    * server life: nothing can re-attach to a live process, so a still-running orphan is killed
    * by group and both kinds are marked `interrupted` for the resume path to respawn from their
    * session refs. A pid is only trusted when the row comes from this boot and the live process
-   * still runs the recorded command — pids are recycled, and killing a stranger is worse than
-   * leaving an orphan.
+   * still runs the recorded command with the recorded start time — pids are recycled, and
+   * killing a stranger is worse than leaving an orphan. When the leader is dead but its group
+   * still has members (the CLI's background shells), the group is killed too.
    */
   reconcile(): ReconcileResult {
     const result: ReconcileResult = { dead: [], orphans: [] };
@@ -642,6 +693,10 @@ export class ProcessSupervisor {
       if (this.procs.has(row.agentId)) continue; // ours, this life
       if (row.pid !== undefined && this.isOurs(row)) {
         signalGroup(row.pid, 'SIGKILL');
+        result.orphans.push(row.agentId);
+      } else if (row.pid !== undefined && this.isOurLeftoverGroup(row)) {
+        // The CLI is gone but its group lives on (shells, dev servers): kill the group.
+        killGroup(row.pid, 'SIGKILL');
         result.orphans.push(row.agentId);
       } else {
         result.dead.push(row.agentId);
@@ -684,6 +739,18 @@ export class ProcessSupervisor {
     return Math.abs(started - recorded) <= START_TIME_TOLERANCE_MS;
   }
 
+  /**
+   * The leader is dead but a group with its id still has members. A pid is not handed out
+   * again while a group of that id exists, so within the same boot (the identity check that
+   * still applies without a leader to look at) the group is the one our CLI created.
+   */
+  private isOurLeftoverGroup(row: ProcessRecord): boolean {
+    const pid = row.pid!;
+    if (pid <= 1 || this.probe.alive(pid)) return false;
+    if (typeof row.meta?.['bootAt'] !== 'string' || this.fromOtherBoot(row)) return false;
+    return this.probe.groupAlive(pid);
+  }
+
   /** The persisted row for an agent (running, exited or interrupted). */
   processRecord(agentId: Id): ProcessRecord | undefined {
     return this.store.get(agentId);
@@ -713,6 +780,25 @@ export class ProcessSupervisor {
     } catch (error) {
       this.onError(error, managed.agentId);
     }
+  }
+}
+
+/** Signals the group `-pgid` only — never the pid alone: the leader is gone and its pid may be reused. */
+function killGroup(pgid: number, sig: NodeJS.Signals): void {
+  try {
+    process.kill(-pgid, sig);
+  } catch {
+    // already gone
+  }
+}
+
+/** Polls `check` until it holds (`true`) or `ms` passes (`false`). */
+async function until(check: () => boolean, ms: number): Promise<boolean> {
+  const end = Date.now() + ms;
+  for (;;) {
+    if (check()) return true;
+    if (Date.now() >= end) return false;
+    await sleep(Math.min(25, Math.max(1, end - Date.now())));
   }
 }
 
