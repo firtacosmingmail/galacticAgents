@@ -21,6 +21,7 @@ beforeEach(async () => {
     statuses: composed.statuses,
     transcripts: composed.transcripts,
     runtime: composed.runtime,
+    commands: composed.commands,
     scenarios: () => fake.scenarioNames(),
   });
 });
@@ -183,5 +184,46 @@ describe('/api agent routes (P1-11)', () => {
   it('answers /api/runtimes with the protocol shape', async () => {
     const { body } = await call('/api/runtimes');
     expect(RuntimesInfo.safeParse(body).success).toBe(true);
+  });
+});
+
+describe('POST /api/control (P2-14)', () => {
+  it('pauses a task and its Steward, refuses bad bodies, unknown targets and refused states', async () => {
+    const { commands, log } = composed;
+    log.tables.bodies.insert({ id: 'b-mars', kind: 'planet', name: 'Mars' });
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/tmp' })).value;
+    const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
+    const steward = (
+      await commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        prompt: 'scenario:long',
+      })
+    ).value;
+    await waitFor(() => state(steward.id) === 'working', 'working');
+    const target = { kind: 'task', id: task.id };
+
+    const paused = await call('/api/control', { target, action: { action: 'pause' } });
+    expect(paused.status).toBe(200);
+    expect(paused.body).toMatchObject({ ok: true });
+    await waitFor(() => state(steward.id) === 'paused', 'paused');
+    expect(log.tables.tasks.get(task.id)?.state).toBe('paused');
+
+    expect((await call('/api/control', { target, action: { action: 'fly' } })).status).toBe(400);
+    expect(
+      (
+        await call('/api/control', {
+          target: { kind: 'task', id: 't-x' },
+          action: { action: 'stop' },
+        })
+      ).status,
+    ).toBe(404);
+    const refused = await call('/api/control', { target, action: { action: 'reopen' } });
+    expect(refused.status).toBe(409);
+    expect(refused.body['message']).toMatch(/not finished/);
+    expect(
+      (await call('/api/control', { target, action: { action: 'stop' } }, 'wrong')).status,
+    ).toBe(401);
   });
 });
