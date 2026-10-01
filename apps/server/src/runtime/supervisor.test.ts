@@ -483,6 +483,15 @@ describe('ProcessSupervisor — adopt and expected exits', () => {
     expect(s.get('a-1')).toBeUndefined();
   });
 
+  it('adopt() rejects a restart policy (the caller owns the child it was handed)', () => {
+    const { s } = makeSupervisor();
+    expect(() =>
+      s.adopt(node(LOITER([]), { restart: { mode: 'on-crash', maxRestarts: 1, backoffMs: 10 } })),
+    ).toThrow(/adopt\(\) does not support a restart policy/);
+    expect(s.get('a-1')).toBeUndefined();
+    expect(s.processRecord('a-1')).toBeUndefined();
+  });
+
   it('adopt() returns a live child the caller can hand to a runtime', async () => {
     const { s } = makeSupervisor();
     const out: string[] = [];

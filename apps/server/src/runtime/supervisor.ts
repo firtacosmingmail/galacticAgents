@@ -455,7 +455,7 @@ export class ProcessSupervisor {
    * (command not found, bad cwd) rejects and reports a `start_failed` outcome.
    */
   async spawn(spec: ProcessSpec): Promise<ManagedProcess> {
-    const managed = this.adopt(spec);
+    const managed = this.register(spec);
     const child = managed.child;
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => {
@@ -475,9 +475,19 @@ export class ProcessSupervisor {
   /**
    * Synchronous spawn for callers that must hand the child over at once (the SDK's
    * `spawnClaudeCodeProcess` hook). The process is registered and watched immediately; a start
-   * failure surfaces as a `start_failed` outcome and settles `exited`.
+   * failure surfaces as a `start_failed` outcome and settles `exited`. No restart policy: the
+   * caller holds the child it was handed, and a restart would replace it behind its back.
    */
   adopt(spec: ProcessSpec): ManagedProcess {
+    if (spec.restart && spec.restart.mode !== 'off') {
+      throw new Error(
+        `adopt() does not support a restart policy (agent ${spec.agentId}): the caller owns the child it was handed`,
+      );
+    }
+    return this.register(spec);
+  }
+
+  private register(spec: ProcessSpec): ManagedProcess {
     if (this.disposed) throw new Error('supervisor disposed');
     const existing = this.procs.get(spec.agentId);
     if (existing && existing.state !== 'exited') {
