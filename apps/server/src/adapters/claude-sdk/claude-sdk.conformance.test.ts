@@ -13,6 +13,11 @@ import { ClaudeSdkAdapter } from './claude-sdk-adapter.js';
  *   GALACTIC_REAL_CLAUDE=1 pnpm --filter @galactic/server exec vitest run claude-sdk.conformance
  *
  * Prompts are natural-language instructions that make a Steward do each thing the suite checks.
+ * The failure paths (P1-38) reuse them: a deny of the `permission` prompt's `rm -rf` (answered, or
+ * by the default destructive-deny policy), an interrupt of `long` while paused and of `ask` while
+ * its question is open, a message to `echo` while paused, two `echo` sessions at once, a
+ * `kill -9` of the CLI during `long` (crash), a spawn in a missing directory and a resume from a
+ * bad ref.
  */
 const enabled = process.env['GALACTIC_REAL_CLAUDE'] === '1';
 
@@ -38,6 +43,8 @@ if (!enabled) {
           await adapter.dispose();
           await supervisor.dispose();
         },
+        // An external kill -9 of the CLI's process group: the supervisor reports a crash.
+        crash: (agentId) => supervisor.get(agentId)?.signal('SIGKILL'),
       };
     },
     prompts: {
@@ -53,5 +60,7 @@ if (!enabled) {
     jobEnd: 'idle',
     stallThresholdMs: 5 * 60_000,
     timeoutMs: 120_000,
+    // The SDK starts the CLI after `spawn()` resolved: a bad cwd surfaces as agent.failed(runtime).
+    spawnFailure: 'event',
   });
 }

@@ -9,8 +9,13 @@ describeAdapterConformance({
   runtime: 'fake',
   cwd: '/tmp',
   create: async () => {
-    const adapter = new FakeAdapter({ speed: 1, sessionStore });
-    return { adapter, dispose: () => adapter.dispose() };
+    // `checkCwd`: a spawn in a directory that does not exist fails, as a real runtime's would.
+    const adapter = new FakeAdapter({ speed: 1, sessionStore, checkCwd: true });
+    return {
+      adapter,
+      dispose: () => adapter.dispose(),
+      crash: (agentId) => adapter.crash(agentId),
+    };
   },
   prompts: {
     finish: 'scenario:happy',

@@ -1,13 +1,20 @@
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
   Agent,
   AgentAdapter,
   AgentRuntime as RuntimeName,
+  Event,
   EventEnvelope,
+  Id,
+  PermissionPolicy,
   StatusRecord,
 } from '@galactic/protocol';
 import { openDatabase, type Database } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
+import type { SpawnRequest } from '../runtime/agent-runtime.js';
 
 /**
  * The adapter conformance suite (P1-04; TECHNOLOGY §3, IMPLEMENTATION_PLAN Phase 1). Every
@@ -24,11 +31,24 @@ import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
  * runs in CI; the claude-sdk target is tagged local-only (P1-12).
  */
 
+/** Cases a target may skip, each with the reason (shown in the test name). */
+export type OptionalConformanceCase = 'crash' | 'spawnFailure' | 'concurrentSessions';
+
+export interface ConformanceInstance {
+  adapter: AgentAdapter;
+  dispose(): Promise<void>;
+  /**
+   * Kills the agent's runtime from outside (a crash, `kill -9`): the adapter must report exactly
+   * one `agent.failed(reason: crash)`. Required unless the target skips `crash`.
+   */
+  crash?(agentId: Id): Promise<void> | void;
+}
+
 export interface ConformanceTarget {
   name: string;
   runtime: RuntimeName;
   /** A fresh adapter. Called once per test; `dispose` runs after it. */
-  create(): Promise<{ adapter: AgentAdapter; dispose(): Promise<void> }>;
+  create(): Promise<ConformanceInstance>;
   /** Working directory handed to every spawn. */
   cwd: string;
   prompts: {
@@ -59,14 +79,27 @@ export interface ConformanceTarget {
   stallThresholdMs: number;
   /** Per-step wait budget. Real adapters need minutes. */
   timeoutMs?: number;
+  /**
+   * How a spawn in a directory that does not exist fails. `rejected` (default): `spawn()` itself
+   * fails (`ok: false`, one `agent.failed(runtime)`). `event`: the session is created and its
+   * runtime then fails to start — `spawn()` may resolve, and `agent.failed(runtime)` follows.
+   */
+  spawnFailure?: 'rejected' | 'event';
+  /** A policy under which the `permission` prompt's tool call is denied without asking. */
+  denyPolicy?: PermissionPolicy;
+  /** Optional cases this target cannot run, with the reason. */
+  skip?: Partial<Record<OptionalConformanceCase, string>>;
 }
 
 interface Rig {
   db: Database;
   composed: ComposedRuntime;
   adapterDispose: () => Promise<void>;
+  crash: ((agentId: Id) => Promise<void> | void) | undefined;
   events: EventEnvelope[];
 }
+
+const DENY_DESTRUCTIVE: PermissionPolicy = { rules: { destructive: 'deny' } };
 
 export function describeAdapterConformance(target: ConformanceTarget): void {
   const timeoutMs = target.timeoutMs ?? 5_000;
@@ -80,7 +113,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
 
     beforeEach(async () => {
       const db = openDatabase(':memory:');
-      const { adapter, dispose } = await target.create();
+      const { adapter, dispose, crash } = await target.create();
       const composed = composeRuntime(db, {
         adapters: [adapter],
         flushMs: 10,
@@ -90,7 +123,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       });
       const events: EventEnvelope[] = [];
       composed.log.subscribe((e) => events.push(e));
-      rig = { db, composed, adapterDispose: dispose, events };
+      rig = { db, composed, adapterDispose: dispose, crash, events };
     });
     afterEach(async () => {
       await rig.composed.dispose();
@@ -123,12 +156,13 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       rig.composed.transcripts.flush();
       return rig.composed.transcripts.read(agentId);
     };
-    const spawn = async (prompt: string): Promise<Agent> => {
+    const spawn = async (prompt: string, extra: Partial<SpawnRequest> = {}): Promise<Agent> => {
       const result = await rig.composed.runtime.spawn({
         role: 'steward',
         runtime: target.runtime,
         prompt,
         cwd: target.cwd,
+        ...extra,
       });
       if (!result.ok) throw new Error(result.reason);
       return result.agent;
@@ -139,6 +173,56 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       const id = status(agentId)?.pendingQuestionId;
       if (!id) throw new Error(`no pending question on ${agentId}`);
       return id;
+    };
+    const eventsOf = <T extends Event['type']>(agentId: string, type: T) =>
+      rig.events
+        .map((e) => e.event)
+        .filter((e) => e.type === type && 'agentId' in e && e.agentId === agentId) as Extract<
+        Event,
+        { type: T }
+      >[];
+    const indexOf = (pred: (e: Event) => boolean) => rig.events.findIndex((e) => pred(e.event));
+    const transcriptText = (agentId: string) =>
+      transcript(agentId)
+        .map((c) => c.text)
+        .join('\n');
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const firstWork = (agentId: string) =>
+      waitFor(
+        () => typesOf(agentId).some((t) => t === 'agent.progress' || t === 'agent.tool_call'),
+        'first work',
+      );
+    /** No `toolUseId` is reported twice: one `agent.tool_call` per tool use. */
+    const expectOneCallPerToolUse = (agentId: string) => {
+      const ids = eventsOf(agentId, 'agent.tool_call')
+        .map((e) => e.toolUseId)
+        .filter((id): id is string => id !== undefined);
+      expect(ids).toEqual([...new Set(ids)]);
+    };
+    /** Whether the agent ran a tool call with exactly this tool and input. */
+    const ran = (agentId: string, call: { toolName: string; input?: unknown }) =>
+      eventsOf(agentId, 'agent.tool_call').some(
+        (e) =>
+          e.toolName === call.toolName && JSON.stringify(e.input) === JSON.stringify(call.input),
+      );
+    /**
+     * Waits for the job end, answering every permission question with `deny` meanwhile (a real
+     * model may try the refused call again, or another way).
+     */
+    const denyUntilJobEnd = async (agentId: string) => {
+      const answered = new Set<string>();
+      await waitFor(
+        () => {
+          const q = status(agentId)?.pendingQuestionId;
+          if (q && !answered.has(q)) {
+            answered.add(q);
+            void rig.composed.runtime.answer(q, 'deny', USER).catch(() => {});
+          }
+          return typesOf(agentId).includes(JOB_END);
+        },
+        `${JOB_END} after deny`,
+        timeoutMs * 3,
+      );
     };
     const TERMINAL = ['agent.finished', 'agent.failed', 'agent.stopped'];
     /** After an agent ended: exactly one terminal event, and it stays that way. */
@@ -341,6 +425,256 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
           await rig.composed.runtime.stop(agent.id, USER);
           await new Promise((r) => setTimeout(r, 50));
           expect(rig.events.length).toBe(n);
+        });
+      }
+    });
+
+    describe('failure paths', () => {
+      const optional = (name: OptionalConformanceCase, title: string, fn: () => Promise<void>) => {
+        const reason = target.skip?.[name];
+        if (reason) it.skip(`${title} — skipped for ${target.name}: ${reason}`, () => {});
+        else it(title, fn);
+      };
+
+      it('a permission answered deny: the tool does not run and the agent carries on', async () => {
+        const agent = await spawn(target.prompts.permission);
+        await waitState(agent.id, 'waiting_for_input');
+        const q = eventsOf(agent.id, 'agent.needs_input')[0]!;
+        expect(q.kind).toBe('permission');
+        const call = q.question.toolCall!;
+        expect(call.toolName).toBeTruthy();
+        await denyUntilJobEnd(agent.id);
+        expect(ran(agent.id, call)).toBe(false);
+        expect(rig.composed.log.tables.questions.get(q.questionId)?.status).toBe('answered');
+        expect(typesOf(agent.id)).not.toContain('agent.failed');
+        expectOneCallPerToolUse(agent.id);
+        if (jobEnd === 'finished') await expectOneTerminal(agent.id);
+      });
+
+      it('a policy deny: the tool does not run, no question is asked, the reason is visible', async () => {
+        const agent = await spawn(target.prompts.permission, {
+          permissionPolicy: target.denyPolicy ?? DENY_DESTRUCTIVE,
+        });
+        // A model may retry another way that still needs asking: refuse that too.
+        await denyUntilJobEnd(agent.id);
+        const asked = eventsOf(agent.id, 'agent.needs_input').filter(
+          (e) => e.kind === 'permission',
+        );
+        expect(asked).toEqual([]);
+        expect(typesOf(agent.id)).not.toContain('agent.failed');
+        // The refusal is explained to the agent and lands in its transcript.
+        expect(transcriptText(agent.id)).toMatch(/denied/i);
+        expectOneCallPerToolUse(agent.id);
+        if (jobEnd === 'finished') await expectOneTerminal(agent.id);
+      });
+
+      it('one agent.tool_call per tool use', async () => {
+        const agent = await spawn(target.prompts.permission);
+        await waitState(agent.id, 'waiting_for_input');
+        const call = eventsOf(agent.id, 'agent.needs_input')[0]!.question.toolCall!;
+        await rig.composed.runtime.answer(pendingQuestion(agent.id), 'allow', USER);
+        await waitFor(() => typesOf(agent.id).includes(JOB_END), 'job end after allow');
+        // The allowed call ran once — not once for the hook and again for the permission callback.
+        const same = eventsOf(agent.id, 'agent.tool_call').filter(
+          (e) =>
+            e.toolName === call.toolName && JSON.stringify(e.input) === JSON.stringify(call.input),
+        );
+        expect(same).toHaveLength(1);
+        expectOneCallPerToolUse(agent.id);
+        // The status store counts exactly the reported calls.
+        expect(status(agent.id)?.caps.toolCalls.used).toBe(
+          eventsOf(agent.id, 'agent.tool_call').length,
+        );
+      });
+
+      it('interrupt while paused: the agent is resumed, ends the turn and goes idle', async () => {
+        const agent = await spawn(target.prompts.long);
+        await firstWork(agent.id);
+        await rig.composed.runtime.pause(agent.id, USER);
+        await waitState(agent.id, 'paused');
+        const idles = eventsOf(agent.id, 'agent.idle').length;
+        await rig.composed.runtime.interrupt(agent.id);
+        await waitFor(
+          () => eventsOf(agent.id, 'agent.idle').length > idles,
+          'idle after the interrupt',
+        );
+        await waitState(agent.id, 'idle');
+        const resumed = indexOf((e) => e.type === 'agent.resumed' && e.agentId === agent.id);
+        const idle = indexOf((e) => e.type === 'agent.idle' && e.agentId === agent.id);
+        expect(resumed).toBeGreaterThan(-1);
+        expect(resumed).toBeLessThan(idle);
+        expect(typesOf(agent.id)).not.toContain('agent.finished');
+        expect(rig.composed.runtime.liveAgents().map((a) => a.id)).toContain(agent.id);
+        // Still a working session: it takes the next message.
+        rig.composed.runtime.send(agent.id, 'please reply with the word zeta', { sender: USER });
+        await waitFor(() => transcriptText(agent.id).includes('zeta'), 'echo of zeta');
+        expectCleanDeliveries(agent.id);
+      });
+
+      it('interrupt while a question is open: the turn ends idle and the question is cancelled', async () => {
+        const agent = await spawn(target.prompts.ask);
+        await waitState(agent.id, 'waiting_for_input');
+        const questionId = pendingQuestion(agent.id);
+        await rig.composed.runtime.interrupt(agent.id);
+        await waitState(agent.id, 'idle');
+        expect(status(agent.id)?.pendingQuestionId).toBeUndefined();
+        await waitFor(
+          () => rig.composed.log.tables.questions.get(questionId)?.status === 'cancelled',
+          'question cancelled',
+        );
+        expect(
+          rig.events.some(
+            (e) => e.event.type === 'question.cancelled' && e.event.questionId === questionId,
+          ),
+        ).toBe(true);
+        await expect(rig.composed.runtime.answer(questionId, 'too late', USER)).rejects.toThrow();
+        expect(typesOf(agent.id)).not.toContain('agent.finished');
+        expect(rig.events.map((e) => e.event.type)).not.toContain('question.answered');
+      });
+
+      it('a message sent while paused is held, then delivered after resume', async () => {
+        const agent = await spawn(target.prompts.echo);
+        await waitState(agent.id, 'idle');
+        await rig.composed.runtime.pause(agent.id, USER);
+        await waitState(agent.id, 'paused');
+        const m = rig.composed.runtime.send(agent.id, 'please reply with the word epsilon', {
+          sender: USER,
+        });
+        await sleep(300);
+        const deliveredOf = (e: Event) => e.type === 'message.delivered' && e.messageId === m.id;
+        expect(indexOf(deliveredOf)).toBe(-1);
+        expect(transcriptText(agent.id)).not.toContain('epsilon');
+        await rig.composed.runtime.resumeAgent(agent.id, USER);
+        await waitFor(() => indexOf(deliveredOf) > -1, 'message.delivered');
+        const resume = indexOf(
+          (e) =>
+            e.type === 'control.resume' && e.target.kind === 'agent' && e.target.id === agent.id,
+        );
+        expect(resume).toBeGreaterThan(-1);
+        expect(indexOf(deliveredOf)).toBeGreaterThan(resume);
+        await waitFor(() => transcriptText(agent.id).includes('epsilon'), 'echo of epsilon');
+        expectCleanDeliveries(agent.id);
+      });
+
+      optional(
+        'crash',
+        'an external kill ends the agent with exactly one agent.failed(crash)',
+        async () => {
+          if (!rig.crash)
+            throw new Error(`target ${target.name} has no crash() and does not skip it`);
+          const agent = await spawn(target.prompts.long);
+          await firstWork(agent.id);
+          await rig.crash(agent.id);
+          await waitFor(() => typesOf(agent.id).includes('agent.failed'), 'agent.failed');
+          await waitState(agent.id, 'failed');
+          const failed = eventsOf(agent.id, 'agent.failed');
+          expect(failed).toHaveLength(1);
+          expect(failed[0]!.reason).toBe('crash');
+          expect(rig.composed.runtime.liveAgents().map((a) => a.id)).not.toContain(agent.id);
+          await expectOneTerminal(agent.id);
+          // A stop after the crash is a no-op.
+          const n = rig.events.length;
+          await rig.composed.runtime.stop(agent.id, USER);
+          await sleep(50);
+          expect(rig.events.length).toBe(n);
+        },
+      );
+
+      optional(
+        'spawnFailure',
+        'a spawn that cannot start (bad cwd) fails once, leaving no live agent',
+        async () => {
+          const agentId = `conformance-bad-cwd-${randomUUID()}`;
+          const cwd = join(tmpdir(), `galactic-missing-${randomUUID()}`, 'nowhere');
+          const result = await rig.composed.runtime.spawn({
+            role: 'steward',
+            runtime: target.runtime,
+            prompt: target.prompts.finish,
+            cwd,
+            agentId,
+          });
+          if ((target.spawnFailure ?? 'rejected') === 'rejected') {
+            expect(result.ok).toBe(false);
+            if (!result.ok) expect(result.reason.length).toBeGreaterThan(0);
+          }
+          await waitFor(() => typesOf(agentId).includes('agent.failed'), 'agent.failed');
+          const failed = eventsOf(agentId, 'agent.failed');
+          expect(failed).toHaveLength(1);
+          expect(failed[0]!.reason).toBe('runtime');
+          await waitState(agentId, 'failed');
+          expect(rig.composed.runtime.liveAgents().map((a) => a.id)).not.toContain(agentId);
+          expect(typesOf(agentId)).not.toContain('agent.tool_call');
+          await expectOneTerminal(agentId);
+        },
+      );
+
+      optional(
+        'concurrentSessions',
+        'two sessions at once do not cross events or output',
+        async () => {
+          const [a, b] = await Promise.all([
+            spawn(target.prompts.echo),
+            spawn(target.prompts.echo),
+          ]);
+          await Promise.all([waitState(a.id, 'idle'), waitState(b.id, 'idle')]);
+          const ma = rig.composed.runtime.send(a.id, 'please reply with the word kilo', {
+            sender: USER,
+          });
+          const mb = rig.composed.runtime.send(b.id, 'please reply with the word lima', {
+            sender: USER,
+          });
+          await Promise.all([
+            waitFor(() => transcriptText(a.id).includes('kilo'), 'kilo from a'),
+            waitFor(() => transcriptText(b.id).includes('lima'), 'lima from b'),
+          ]);
+          await Promise.all([
+            waitFor(() => eventsOf(a.id, 'agent.idle').length >= 2, 'a idle again'),
+            waitFor(() => eventsOf(b.id, 'agent.idle').length >= 2, 'b idle again'),
+          ]);
+          expect(transcriptText(a.id)).not.toContain('lima');
+          expect(transcriptText(b.id)).not.toContain('kilo');
+          expect(eventsOf(a.id, 'message.delivered').map((e) => e.messageId)).toEqual([ma.id]);
+          expect(eventsOf(b.id, 'message.delivered').map((e) => e.messageId)).toEqual([mb.id]);
+          expect(eventsOf(a.id, 'agent.spawned')).toHaveLength(1);
+          expect(eventsOf(b.id, 'agent.spawned')).toHaveLength(1);
+          expectCleanDeliveries(a.id);
+          expectCleanDeliveries(b.id);
+        },
+      );
+
+      if (target.resumable) {
+        /** An agent the server shut down: `interrupted`, its session gone. */
+        const interruptedAgent = async () => {
+          const agent = await spawn(target.prompts.echo);
+          await waitState(agent.id, 'idle');
+          await rig.composed.runtime.shutdown();
+          await waitState(agent.id, 'interrupted');
+          return agent;
+        };
+        const expectStaysInterrupted = async (agentId: string, sessionRef: string | undefined) => {
+          const { sessionRef: _saved, ...row } = rig.composed.log.tables.agents.get(agentId)!;
+          rig.composed.log.tables.agents.upsert(
+            sessionRef === undefined ? row : { ...row, sessionRef },
+          );
+          const spawned = eventsOf(agentId, 'agent.spawned').length;
+          const result = await rig.composed.runtime.recoverAgent(agentId);
+          expect(result.ok).toBe(false);
+          await sleep(100);
+          expect(status(agentId)?.state).toBe('interrupted');
+          expect(rig.composed.runtime.liveAgents().map((a) => a.id)).not.toContain(agentId);
+          expect(eventsOf(agentId, 'agent.spawned')).toHaveLength(spawned);
+          expect(typesOf(agentId)).not.toContain('agent.failed');
+          expect(typesOf(agentId)).not.toContain('agent.finished');
+        };
+
+        it('a resume from an invalid session ref fails cleanly and the agent stays interrupted', async () => {
+          const agent = await interruptedAgent();
+          await expectStaysInterrupted(agent.id, 'not a session ref');
+        });
+
+        it('a resume without a session ref is refused and the agent stays interrupted', async () => {
+          const agent = await interruptedAgent();
+          await expectStaysInterrupted(agent.id, undefined);
         });
       }
     });

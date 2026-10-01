@@ -15,17 +15,17 @@ there in forty lines per concern.
 
 `packages/protocol/src/adapter.ts`:
 
-| Call                                     | Contract                                                                                                                                                                                                                          |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spawn(opts) → {sessionId, sessionRef?}` | Start a session in `opts.cwd` with `opts.prompt`. `sessionRef` is whatever `resumeSession` needs later; the runtime persists it on the agent row. Resolve as soon as the session exists; events may already be flowing.           |
-| `send(sessionId, message, {interrupt?})` | **Start a new turn now.** The runtime's inbox only calls this when the session is idle, or right after it called `interrupt` (then `interrupt: true`). Keep no queue; reject a message that arrives mid-turn without `interrupt`. |
-| `answer(questionId, answer)`             | Resolve a pending `agent.needs_input`. Unknown or already-answered ids throw.                                                                                                                                                     |
-| `interrupt(sessionId)`                   | Cancel the current turn. The session reports `agent.idle` when it has; no failure.                                                                                                                                                |
-| `pause` / `resume`                       | Hold the session and let it continue. Emit `agent.paused` / `agent.resumed` (`by: system`; the actor is in the runtime's `control.*` event). Nothing else may be emitted while paused.                                            |
-| `stop(sessionId, {graceMs?})`            | Graceful: interrupt → wait for the turn to end (at most `graceMs`) → terminate → kill. Ends with exactly one `agent.stopped`. Idempotent; a no-op after any terminal event.                                                       |
-| `resumeSession?(sessionRef, opts)`       | Reopen a saved session after a restart. Absent when the runtime cannot (PTY). A reopened session re-asks any question that was pending.                                                                                           |
-| `events`                                 | One `AsyncIterable<AgentEvent>` for every session of the adapter (`lib/event-queue.ts` is the usual implementation). The only source of `agent.*` events for its sessions.                                                        |
-| `dispose()`                              | Stop every session, close the stream.                                                                                                                                                                                             |
+| Call                                     | Contract                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spawn(opts) → {sessionId, sessionRef?}` | Start a session in `opts.cwd` with `opts.prompt`. `sessionRef` is whatever `resumeSession` needs later; the runtime persists it on the agent row. Resolve as soon as the session exists; events may already be flowing.                                                                                                                                    |
+| `send(sessionId, message, {interrupt?})` | **Start a new turn now.** The runtime's inbox only calls this when the session is idle, or right after it called `interrupt` (then `interrupt: true`). Keep no queue; reject a message that arrives mid-turn without `interrupt`. The runtime logs `message.delivered` once `send()` resolves (a rejected delivery is retried from the head of the inbox). |
+| `answer(questionId, answer)`             | Resolve a pending `agent.needs_input`. Unknown or already-answered ids throw.                                                                                                                                                                                                                                                                              |
+| `interrupt(sessionId)`                   | Cancel the current turn. The session reports `agent.idle` when it has; no failure. The runtime resumes a paused agent before interrupting it (a frozen process cannot end a turn); an adapter that gets `interrupt` while paused thaws first and emits `agent.resumed`.                                                                                    |
+| `pause` / `resume`                       | Hold the session and let it continue. Emit `agent.paused` / `agent.resumed` (`by: system`; the actor is in the runtime's `control.*` event). Nothing else may be emitted while paused. `pause` throws when there is nothing to freeze (no process yet, or it exited): the runtime then undoes its own pause.                                               |
+| `stop(sessionId, {graceMs?})`            | Graceful: interrupt → wait for the turn to end (at most `graceMs`) → terminate → kill. Ends with exactly one `agent.stopped`. Idempotent; a no-op after any terminal event.                                                                                                                                                                                |
+| `resumeSession?(sessionRef, opts)`       | Reopen a saved session after a restart. Absent when the runtime cannot (PTY). A reopened session re-asks any question that was pending.                                                                                                                                                                                                                    |
+| `events`                                 | One `AsyncIterable<AgentEvent>` for every session of the adapter (`lib/event-queue.ts` is the usual implementation). The only source of `agent.*` events for its sessions.                                                                                                                                                                                 |
+| `dispose()`                              | Stop every session, close the stream.                                                                                                                                                                                                                                                                                                                      |
 
 `SpawnOptions` also carries `role` (`steward` runs with the repository's context; a brain gets
 its own `systemPrompt` and `tools`), `caps` (informational — the runtime enforces them) and the
@@ -64,7 +64,10 @@ A question is a `Question` row the server owns; the adapter only needs a stable,
 - **`clarification`** — the agent's own question (`AskUserQuestion` in Claude Code, `elicitation/create` in ACP). `question: {text, options?}`. The answer text is fed back to the agent as the user's reply.
 
 A pending question is withdrawn when the turn is interrupted or the session stops: resolve it as
-"no answer" and let the runtime's event (`agent.idle` / `agent.stopped`) explain.
+"no answer" and let the runtime's event (`agent.idle` / `agent.stopped`) explain. The question
+row is the runtime's to close: it logs `question.cancelled` in the same command as the agent's
+terminal or `agent.interrupted` event, and when the agent goes idle with a question still open (an
+interrupt withdrew it). The adapter never reports a cancellation itself.
 
 ## The permission gate
 
@@ -78,6 +81,12 @@ Every tool call goes through `opts.gate.check({toolName, input})` **before it ru
 
 The gate is synchronous and already pre-flights the tool-call cap (a call refused for the cap also
 trips the cap, so the runtime stops the agent). Do not read the policy or the caps yourself.
+
+**One check, one `agent.tool_call` per tool use.** When a runtime offers two permission hooks for
+the same call, ask the gate once: the SDK adapter remembers the `PreToolUse` hook's verdict per
+`toolUseId` and reuses it in `canUseTool`, so a call is gated once (and asks at most one
+question), and it emits `agent.tool_call` once per `toolUseId`, whichever hook let it run. Report
+the `toolUseId` when the runtime has one.
 
 ## Processes and the supervisor
 
@@ -100,14 +109,33 @@ environment the runtime needs (`spec.env`); children never inherit the server's 
 ## What the conformance suite checks
 
 `adapters/conformance.ts` — `describeAdapterConformance(target)` — runs every adapter through the
-real runtime (`composeRuntime`): spawn → output → tool call → job end (`finished`, or `idle` for a
-long-lived session: `jobEnd`); a clarification answered; a permission answered (allow runs the
-tool); pause without events and resume to completion; interrupt → idle with messages delivered
-in order, interrupts first; echo of a message sent while idle; stop from every state (working,
-waiting, paused, idle, after the end); `resumeSession` after the adapter went away; stall
-detection; one terminal event per agent; no delivery ever refused. A target supplies a fresh
-adapter per test and the prompts that make its agent do each thing. `fake/fake-adapter.conformance.test.ts`
-runs in CI; `claude-sdk/claude-sdk.conformance.test.ts` runs with `GALACTIC_REAL_CLAUDE=1`.
+real runtime (`composeRuntime`). The happy paths: spawn → output → tool call → job end
+(`finished`, or `idle` for a long-lived session: `jobEnd`); a clarification answered; a permission
+answered (allow runs the tool); pause without events and resume to completion; interrupt → idle
+with messages delivered in order, interrupts first; echo of a message sent while idle; stop from
+every state (working, waiting, paused, idle, after the end); `resumeSession` after the adapter
+went away; stall detection.
+
+The failure paths (P1-38):
+
+- a permission answered **deny**: the tool does not run (no `agent.tool_call` with its input), the question is `answered`, the agent carries on to its job end without failing;
+- a **policy deny** (`target.denyPolicy`, default `{rules: {destructive: 'deny'}}` with the `permission` prompt): no question, no `tool_call`, the reason in the transcript;
+- **one `agent.tool_call` per tool use**: the allowed call is reported once and no `toolUseId` twice;
+- **interrupt while paused**: the agent is resumed (`agent.resumed` before the `agent.idle`), ends the turn and takes the next message;
+- **interrupt while a question is open**: idle, the question row `cancelled` with a `question.cancelled` event, a late answer refused;
+- **send while paused**: the message is held, and its `message.delivered` comes after the `control.resume`;
+- an **external kill** (`instance.crash(agentId)`): exactly one `agent.failed(reason: crash)`, nothing live, a later stop is a no-op;
+- a **spawn that cannot start** (a cwd that does not exist): one `agent.failed(reason: runtime)`, no live agent; `spawn()` returns `ok: false` unless the target says the runtime fails after the session exists (`spawnFailure: 'event'`);
+- **two sessions at once**: each transcript and each `message.delivered` only its own;
+- **resume from an invalid or a missing session ref** (resumable targets): `recoverAgent()` returns `ok: false`, the agent stays `interrupted`, nothing live, no second `agent.spawned`.
+
+Checked throughout: one terminal event per agent and no delivery ever refused (no message handed
+to the adapter mid-turn). A target supplies a fresh adapter per test (with an optional `crash`
+hook), the prompts that make its agent do each thing, and may `skip` the optional cases (`crash`,
+`spawnFailure`, `concurrentSessions`) with a reason. `fake/fake-adapter.conformance.test.ts` runs
+in CI (the fake adapter with `checkCwd: true` and its `crash()` test hook);
+`claude-sdk/claude-sdk.conformance.test.ts` runs with `GALACTIC_REAL_CLAUDE=1` (crash = `SIGKILL`
+to the CLI's process group through the supervisor; `spawnFailure: 'event'`).
 
 ## Notes for the next adapters
 
