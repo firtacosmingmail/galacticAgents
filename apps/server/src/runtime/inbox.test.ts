@@ -129,19 +129,49 @@ describe('AgentInbox', () => {
     expect(interrupts()).toBe(1);
   });
 
-  it('a failing deliver hook is reported, not thrown', async () => {
+  it('a refused delivery is reported, waits at the head and is retried at the next idle (P1-33)', async () => {
     const errors: unknown[] = [];
+    let refuse = 2;
+    const delivered: string[] = [];
     const inbox = new AgentInbox('a-1', {
-      deliver: () => {
-        throw new Error('adapter gone');
+      deliver: (m) => {
+        if (refuse-- > 0) throw new Error('mid-turn');
+        delivered.push(m.text);
       },
       interrupt: () => {},
       onError: (e) => errors.push(e),
     });
     inbox.idle();
     inbox.enqueue('x', { sender: USER });
+    inbox.enqueue('y', { sender: USER });
     await tick();
     expect(errors).toHaveLength(1);
+    expect(inbox.pending().map((m) => m.text)).toEqual(['x', 'y']);
+    inbox.idle();
+    await tick();
+    expect(inbox.pending().map((m) => m.text)).toEqual(['x', 'y']);
+    inbox.idle();
+    await tick();
+    expect(delivered).toEqual(['x']);
+    expect(inbox.history().map((m) => [m.text, m.error, m.attempts])).toEqual([
+      ['x', undefined, 3],
+    ]);
+  });
+
+  it('gives a message up after the last attempt and keeps it in the history', async () => {
+    const inbox = new AgentInbox('a-1', {
+      deliver: () => {
+        throw new Error('adapter gone');
+      },
+      interrupt: () => {},
+      onError: () => {},
+    });
+    inbox.enqueue('x', { sender: USER });
+    for (let i = 0; i < 3; i++) {
+      inbox.idle();
+      await tick();
+    }
+    expect(inbox.pending()).toEqual([]);
     expect(inbox.history().map((m) => [m.text, m.error, m.deliveredAt])).toEqual([
       ['x', 'adapter gone', undefined],
     ]);

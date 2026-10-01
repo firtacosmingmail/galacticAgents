@@ -19,8 +19,14 @@ export interface InboxMessage {
   interrupt: boolean;
   queuedAt: string;
   deliveredAt?: string;
-  /** Set when the adapter refused the message; it is kept in the history, not retried. */
+  /**
+   * The adapter's last refusal. A refused message goes back to the head of the queue and is
+   * offered again at the next idle (P1-33); after `MAX_DELIVERY_ATTEMPTS` it is given up and kept
+   * in the history with this error (a restart still redelivers it: it was never delivered).
+   */
   error?: string;
+  /** How many times it was handed to the adapter. */
+  attempts?: number;
 }
 
 export interface InboxHooks {
@@ -33,6 +39,9 @@ export interface InboxHooks {
   /** Delivered messages kept for `history()`; older ones drop (the log keeps `message.sent`). */
   history?: number;
 }
+
+/** Deliveries tried per message before it is given up. */
+export const MAX_DELIVERY_ATTEMPTS = 3;
 
 /** Default size of the in-memory delivery history. */
 export const DEFAULT_INBOX_HISTORY = 200;
@@ -137,16 +146,26 @@ export class AgentInbox {
     const message = this.queue.shift()!;
     this.delivering = true;
     this.state = 'working';
+    message.attempts = (message.attempts ?? 0) + 1;
     void (async () => {
+      let done = true;
       try {
         await this.hooks.deliver(message);
         message.deliveredAt = this.now();
+        delete message.error;
       } catch (error) {
         message.error = (error as Error).message;
         (this.hooks.onError ?? (() => {}))(error);
+        // Refused (mid-turn, most likely): it waits at the head for the next idle.
+        if (this.state !== 'ended' && message.attempts! < MAX_DELIVERY_ATTEMPTS) {
+          this.queue.unshift(message);
+          done = false;
+        }
       }
-      this.delivered.push(message);
-      if (this.delivered.length > this.historySize) this.delivered.shift();
+      if (done) {
+        this.delivered.push(message);
+        if (this.delivered.length > this.historySize) this.delivered.shift();
+      }
       this.delivering = false;
       // An idle report may have arrived while the delivery was in flight.
       this.pump();
