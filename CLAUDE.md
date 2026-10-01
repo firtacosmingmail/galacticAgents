@@ -56,9 +56,17 @@ Statuses: `todo` → `in progress` → `done (<date>)`; also `blocked (<reason>)
 
 ## Git conventions
 
-- Local repository on `main`; no remote for now. Commit directly to `main` with task-prefixed messages; use a branch (`p1-03-short-slug`) only for risky or parallel work, and merge it back when the task is done.
+- Local repository on `main`; no remote for now. From Phase 2 on, phase work never lands on `main` directly — it follows the phase branch flow below. Docs-only process changes may still go straight to `main`.
 - Commit messages: `<task-id>: <imperative summary>`; docs-only changes without a task use `docs: <summary>`.
 - Never commit secrets, `.env`, SQLite files or `node_modules` (see `.gitignore`).
+
+## Phase branch flow (from Phase 2 on)
+
+1. **Phase branch.** Create `phase-<n>` from `main` (Phase 2.5: `phase-2.5`) when the phase starts. Cosmin merges it into `main` when the phase is over — agents never merge a phase branch into `main`.
+2. **Batch branch.** For each batch of tasks, create `p<n>-<batch>-<slug>` (e.g. `p2-wave1-domain-commands`) from the phase branch. A batch is as many eligible tasks as can sensibly be done together — usually one wave of the phase file's _Execution order_, or part of one. Claim, implement and finish the tasks on that branch following the ticket flow.
+3. **Test.** Run the full gates on the batch branch: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`. All must be green.
+4. **Review.** Review the batch diff against the phase branch (correctness, the acceptance criteria, adapter/protocol boundaries, docs consistency); fix what the review finds on the batch branch and re-run the gates. Record notable findings in `docs/tasks/notes/P<n>-<batch>-review.md`.
+5. **Ask to merge.** Stop and ask Cosmin to merge the batch branch into the phase branch (or for permission to do it). Do not start the next batch until that merge is done.
 
 ## Working agreements for agents working in this repo
 
