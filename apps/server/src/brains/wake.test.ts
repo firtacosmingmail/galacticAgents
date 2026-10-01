@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { EVENT_TYPES, type Actor, type Event, type Question } from '@galactic/protocol';
 import { events as fixtures, domain as d } from '@galactic/protocol/fixtures';
+import { world } from '../test/world.js';
+import { createAgent } from '../domain/agents.js';
+import { createProject } from '../domain/projects.js';
+import { createTask } from '../domain/tasks.js';
+import { createWakeScope } from './seed.js';
 import { WAKE_RULES, wakeLine, type WakeScope } from './wake.js';
 
 /**
@@ -132,5 +137,54 @@ describe('WAKE_RULES', () => {
     expect(wakeLine({ ...fixtures['control.stop'], target: { kind: 'agent', id: BRAIN } }, s)).toBe(
       'user stopped you',
     );
+  });
+});
+
+describe('control wake-ups through concernedSupervisors (P2-14 seam)', () => {
+  it('wakes a sub-project’s parent Waykeeper and the Harmonizer of a standalone task', () => {
+    const { run, tables } = world();
+    const caps = { maxWallClockMs: 1000, maxToolCalls: 10 };
+    const parent = run((ctx) => createProject(ctx, { name: 'Planet', workspace: '/w' })).value;
+    const sub = run((ctx) =>
+      createProject(ctx, {
+        name: 'Moon',
+        workspace: '/w/m',
+        kind: 'moon',
+        parentProjectId: parent.id,
+      }),
+    ).value;
+    const solo = run((ctx) => createTask(ctx, { description: 'solo' })).value;
+    const harmonizer = run((ctx) =>
+      createAgent(ctx, { role: 'harmonizer', runtime: 'fake', caps }),
+    ).value;
+    const parentWk = run((ctx) =>
+      createAgent(ctx, {
+        role: 'waykeeper',
+        runtime: 'fake',
+        caps,
+        projectId: parent.id,
+        supervisorId: harmonizer.id,
+      }),
+    ).value;
+    const user = { type: 'user' } as const;
+    const pauseSub = {
+      type: 'control.pause',
+      target: { kind: 'project', id: sub.id },
+      by: user,
+    } as const;
+    const pauseSolo = {
+      type: 'control.pause',
+      target: { kind: 'task', id: solo.id },
+      by: user,
+    } as const;
+    const wkScope = createWakeScope(tables, {
+      brainId: parentWk.id,
+      role: 'waykeeper',
+      projectId: parent.id,
+    });
+    const hScope = createWakeScope(tables, { brainId: harmonizer.id, role: 'harmonizer' });
+    expect(wakeLine(pauseSub, wkScope)).toBeDefined();
+    expect(wakeLine(pauseSolo, hScope)).toBeDefined();
+    expect(wakeLine(pauseSolo, wkScope)).toBeUndefined();
   });
 });

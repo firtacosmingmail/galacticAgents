@@ -35,6 +35,11 @@ export interface WakeScope {
   /** The brain decides on the proposal (the Harmonizer proposes; P2-10 adds plan cards). */
   ownsProposal(proposalId: Id): boolean;
   question(questionId: Id): Question | undefined;
+  /**
+   * The control action concerns the brain as a supervisor (P2-14's `concernedSupervisors`): a
+   * task's Waykeeper, an asteroid task's Harmonizer, a sub-project's parent Waykeeper.
+   */
+  concerned?(event: Event): boolean;
 }
 
 export interface WakeRule<T extends EventType> {
@@ -69,7 +74,8 @@ function targets(target: ControlTarget, scope: WakeScope): boolean {
 }
 
 const control = <T extends EventType & `control.${string}`>(verb: string): WakeRule<T> => ({
-  wakes: (e, s) => targets((e as { target: ControlTarget }).target, s),
+  wakes: (e, s) =>
+    targets((e as { target: ControlTarget }).target, s) || (s.concerned?.(e as Event) ?? false),
   describe: (e, s) => {
     const { target, by } = e as unknown as { target: ControlTarget; by: Actor };
     const what =

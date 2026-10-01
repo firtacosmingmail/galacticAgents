@@ -1,6 +1,7 @@
 import type { AgentRole, Id, StatusRecord } from '@galactic/protocol';
 import type { Tables } from '../db/tables.js';
 import type { BrainQueries } from './definition.js';
+import { concernedSupervisors } from '../domain/cascade.js';
 import type { WakeScope } from './wake.js';
 
 /**
@@ -45,6 +46,7 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
 export function createWakeScope(
   tables: Tables,
   brain: { brainId: Id; role: AgentRole; projectId?: Id },
+  opts: { isLive?: (agentId: Id) => boolean } = {},
 ): WakeScope {
   const supervises = (id: Id | undefined) =>
     id !== undefined && tables.agents.get(id)?.supervisorId === brain.brainId;
@@ -62,6 +64,10 @@ export function createWakeScope(
     // The Harmonizer proposes (SPEC §3.3); a Waykeeper's plan card is added by P2-10.
     ownsProposal: () => brain.role === 'harmonizer',
     question: (id) => tables.questions.get(id),
+    concerned: (event) =>
+      concernedSupervisors(tables, event, opts.isLive ? { isLive: opts.isLive } : {}).includes(
+        brain.brainId,
+      ),
   };
 }
 
