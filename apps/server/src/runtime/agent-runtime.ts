@@ -169,8 +169,7 @@ export class AgentRuntime {
   constructor(private readonly opts: AgentRuntimeOptions) {
     this.now = opts.now ?? (() => new Date().toISOString());
     this.onError = opts.onError ?? (() => {});
-    this.questions =
-      opts.questions ?? logRouting(opts.log, livingFromStatuses(opts.statuses));
+    this.questions = opts.questions ?? logRouting(opts.log, livingFromStatuses(opts.statuses));
     this.caps = new CapsEnforcer({
       maxConcurrentAgents: opts.caps?.maxConcurrentAgents ?? 4,
       defaults: opts.caps?.defaults ?? DEFAULT_CAPS,

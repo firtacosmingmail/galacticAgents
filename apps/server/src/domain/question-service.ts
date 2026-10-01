@@ -92,8 +92,7 @@ export function logRouting(log: EventLog, isLiving?: (agentId: Id) => boolean): 
             ORDER BY id DESC LIMIT 1`,
         );
         const row = lastLifecycle.get(...LIFECYCLE, 'agent.interrupted', agentId) as
-          | { type: string }
-          | undefined;
+          { type: string } | undefined;
         return row?.type === 'agent.spawned';
       }),
     recentEvents(agentId, limit) {
