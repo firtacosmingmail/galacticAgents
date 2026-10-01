@@ -1,7 +1,7 @@
 # Phase 2 — The hierarchy: Harmonizer, Waykeepers, Stewards
 
-**Current task:** P2-01 (wave 1, next — Phase 1 done 2026-10-01) · **Task status:** todo
-**Phase status:** not started (0/19 done)
+**Current task:** P2-01 (wave 1, branch `p2-wave1-domain-commands`) · **Task status:** in progress
+**Phase status:** in progress (0/19 done) — on branch `phase-2`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -46,7 +46,7 @@ The full Steward → Waykeeper → Harmonizer → user loop, working through the
 ## Tasks
 
 ### P2-01 — Domain commands
-- **Status:** todo · **Depends on:** P0-07, P0-04 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P0-07, P0-04 · **Parallel with:** —
 - Implement `DomainCommands` as transactional commands: projects (create, set workspace, set state, close, archive, pin, reopen), tasks (create, edit, set state, move, close, archive, reopen), agents (register, set supervisor/body, set state), proposals (create, approve, edit, reject, park), questions (open, escalate, answer, reassign), control actions; every command emits its event(s) and they fully describe the mutation (a new body → `body.created`); snapshot builder completed for all tables. Migration 0003 adds `projects.permission_policy` (JSON, validated by `PermissionPolicy`) and the protocol gains `Project.permissionPolicy?` (TECHNOLOGY §6.2, decided with P0-18).
 - **Acceptance:** each command has a test asserting the row change and the emitted event; invalid transitions are rejected; a **conformance test** replays a recorded event log through the web client's reducer and asserts equality with the server's snapshot at every `seq` (statuses excluded — server-owned).
 
