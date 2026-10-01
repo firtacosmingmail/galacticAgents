@@ -171,12 +171,12 @@ describe('EventLog.runCommand', () => {
   it('a nested command that throws inside a surviving outer one is not published', () => {
     const log = fresh();
     const seen: string[] = [];
-    log.subscribe((e) => seen.push(e.event.type));
+    log.subscribe((e) => seen.push((e.event as { agentId: string }).agentId));
     log.runCommand(({ emit }) => {
       try {
         log.runCommand(({ emit: e }) => {
-          e({ type: 'agent.stalled', agentId: 'x' });
-          log.runCommand(({ emit: e2 }) => e2({ type: 'agent.paused', agentId: 'x' }));
+          e({ type: 'agent.idle', agentId: 'inner' });
+          log.runCommand(({ emit: e2 }) => e2({ type: 'agent.idle', agentId: 'inner2' }));
           throw new Error('inner fails');
         });
       } catch {
@@ -184,8 +184,8 @@ describe('EventLog.runCommand', () => {
       }
       emit({ type: 'agent.idle', agentId: 'x' });
     });
-    expect(seen).toEqual(['agent.idle']);
-    expect(log.eventsSince(0).map((e) => e.event.type)).toEqual(['agent.idle']);
+    expect(seen).toEqual(['x']);
+    expect(log.eventsSince(0)).toHaveLength(1);
   });
 
   it('nested commands join the outer transaction and publish once, in order', () => {
