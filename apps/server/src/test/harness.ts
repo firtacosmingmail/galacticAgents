@@ -21,6 +21,7 @@ export function testConfig(
     dataDir,
     configPath: join(dataDir, 'config.json'),
     dbPath: join(dataDir, 'galactic.sqlite'),
+    projectsRoot: join(dataDir, 'projects-root-unused'),
     cleanup: () => rmSync(dataDir, { recursive: true, force: true }),
     ...overrides,
   };

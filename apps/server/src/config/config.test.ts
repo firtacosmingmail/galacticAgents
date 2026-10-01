@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_PORT, loadConfig } from './config.js';
+import { DEFAULT_PORT, DEFAULT_PROJECTS_DIR, loadConfig } from './config.js';
 
 let home: string;
 beforeEach(() => {
@@ -57,5 +57,27 @@ describe('loadConfig', () => {
 
   it('rejects an invalid port', () => {
     expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_PORT: 'abc' })).toThrow(/Invalid port/);
+  });
+
+  it('defaults the projects root to ~/GalacticProjects; the file and the environment override it (P2-05)', () => {
+    expect(loadConfig({ GALACTIC_HOME: home }).config.projectsRoot).toBe(
+      join(homedir(), DEFAULT_PROJECTS_DIR),
+    );
+    const first = loadConfig({ GALACTIC_HOME: home });
+    const onDisk = JSON.parse(readFileSync(first.config.configPath, 'utf8'));
+    writeFileSync(
+      first.config.configPath,
+      JSON.stringify({ ...onDisk, projectsRoot: '~/code/galactic' }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.projectsRoot).toBe(
+      join(homedir(), 'code/galactic'),
+    );
+    expect(
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_PROJECTS_ROOT: '/srv/projects/' }).config
+        .projectsRoot,
+    ).toBe('/srv/projects');
+    expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_PROJECTS_ROOT: 'rel/dir' })).toThrow(
+      /absolute/,
+    );
   });
 });
