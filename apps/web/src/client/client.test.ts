@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import type { ServerMessage } from '@galactic/protocol';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CLOSE_UNAUTHORIZED, type ServerMessage } from '@galactic/protocol';
 import { GalacticClient, type ConnectionStatus } from './client.js';
 import { FakeWebSocket } from './fake-socket.js';
 
@@ -143,7 +143,7 @@ describe('GalacticClient', () => {
     const t = setup();
     t.client.connect();
     t.socket().serverOpens();
-    t.socket().serverCloses(4401, 'unauthorized');
+    t.socket().serverCloses(CLOSE_UNAUTHORIZED, 'unauthorized');
     expect(t.client.status).toBe('unauthorized');
     expect(t.timers).toHaveLength(0);
 
@@ -154,5 +154,45 @@ describe('GalacticClient', () => {
     expect(u.client.status).toBe('closed');
     expect(u.socket().closeCalls).toEqual([{ code: 1000, reason: 'client closed' }]);
     expect(u.timers).toHaveLength(0);
+  });
+
+  it('unsubscribes a transcript on an open socket only (P1-38)', () => {
+    const t = setup();
+    t.client.connect();
+    t.client.subscribeTranscript('a1');
+    // Still CONNECTING: sending would throw InvalidStateError in a browser.
+    t.client.unsubscribeTranscript('a1');
+    expect(t.socket().sent).toEqual([]);
+    t.socket().serverOpens();
+    t.socket().serverSends(snapshot(0));
+    // The dropped subscription is not re-sent when the stream goes live.
+    expect(t.socket().sent.map((m) => JSON.parse(m).type)).toEqual(['hello']);
+
+    t.client.subscribeTranscript('a2');
+    t.client.unsubscribeTranscript('a2');
+    expect(
+      t
+        .socket()
+        .sent.slice(1)
+        .map((m) => JSON.parse(m)),
+    ).toEqual([
+      { type: 'transcript.subscribe', agentId: 'a2', since: 0 },
+      { type: 'transcript.unsubscribe', agentId: 'a2' },
+    ]);
+  });
+
+  it('ignores a frame that is not JSON and keeps the stream (P1-38)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = setup();
+    t.client.connect();
+    t.socket().serverOpens();
+    t.socket().serverSends(snapshot(3));
+    t.socket().serverSendsRaw('{not json');
+    t.socket().serverSends(idle(4));
+    expect(warn).toHaveBeenCalledOnce();
+    expect(t.received.map((m) => m.type)).toEqual(['snapshot', 'event']);
+    expect(t.client.status).toBe('live');
+    expect(t.socket().closeCalls).toEqual([]);
+    warn.mockRestore();
   });
 });

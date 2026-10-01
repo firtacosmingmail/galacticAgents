@@ -10,9 +10,12 @@ import { useAppStore } from '../state/store.js';
 const calls: { url: string; init?: RequestInit }[] = [];
 const subscribed: string[] = [];
 const unsubscribed: string[] = [];
+/** Whether `/send` is refused (409) or accepted. */
+let sendRefused = true;
 
 beforeEach(() => {
   calls.length = subscribed.length = unsubscribed.length = 0;
+  sendRefused = true;
   useAppStore.getState().reset();
   useAppStore.setState({
     status: 'live',
@@ -37,6 +40,9 @@ beforeEach(() => {
         );
       }
       if (url === '/api/agents') return new Response(JSON.stringify({ agentId: 'a-new' }));
+      if (url.endsWith('/send') && !sendRefused) {
+        return new Response(JSON.stringify({ messageId: 'm-1' }));
+      }
       if (url.endsWith('/send')) {
         return new Response(JSON.stringify({ error: 'rejected', message: 'agent is busy' }), {
           status: 409,
@@ -126,6 +132,18 @@ describe('ops console', () => {
     });
     expect(bodyOf(calls.at(-1)!)).toEqual({ text: 'carry on', interrupt: true });
     await screen.findByText('agent is busy');
+    // … and keeps the text and the checkbox for another try (P1-38).
+    const input = screen.getByPlaceholderText('message to the agent') as HTMLInputElement;
+    expect(input.value).toBe('carry on');
+    expect((screen.getByLabelText('interrupt') as HTMLInputElement).checked).toBe(true);
+
+    sendRefused = false;
+    await act(async () => {
+      fireEvent.click(screen.getByText('Send'));
+    });
+    expect(input.value).toBe('');
+    expect((screen.getByLabelText('interrupt') as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByText('agent is busy')).toBeNull();
   });
 
   it('answers clarification and permission questions', async () => {

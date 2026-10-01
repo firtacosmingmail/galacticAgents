@@ -39,6 +39,10 @@ export class FakeWebSocket {
   serverSends(message: unknown): void {
     this.onmessage?.({ data: JSON.stringify(message) });
   }
+  /** A frame exactly as given, JSON or not. */
+  serverSendsRaw(data: string): void {
+    this.onmessage?.({ data });
+  }
   serverCloses(code: number, reason = ''): void {
     this.readyState = FakeWebSocket.CLOSED;
     this.onclose?.({ code, reason });

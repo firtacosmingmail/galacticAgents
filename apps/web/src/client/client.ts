@@ -1,10 +1,10 @@
-import { ServerMessage } from '@galactic/protocol';
+import { CLOSE_UNAUTHORIZED, ServerMessage } from '@galactic/protocol';
 
 export type ConnectionStatus =
   'idle' | 'connecting' | 'catching_up' | 'live' | 'disconnected' | 'unauthorized' | 'closed';
 
-/** The private close code the server uses for a bad token (`CLOSE_UNAUTHORIZED` on the server). */
-export const CLOSE_UNAUTHORIZED = 4401;
+/** `WebSocket.OPEN`, spelled out so injected implementations need not carry the constants. */
+const WS_OPEN = 1;
 
 export interface ClientOptions {
   url: string;
@@ -86,7 +86,11 @@ export class GalacticClient {
 
   unsubscribeTranscript(agentId: string): void {
     this.transcripts.delete(agentId);
-    this.socket?.send(JSON.stringify({ type: 'transcript.unsubscribe', agentId }));
+    // Only an open socket can take it (a CONNECTING one throws); otherwise there is nothing to
+    // undo: the next session re-subscribes the active subscriptions only.
+    if (this.socket?.readyState === WS_OPEN) {
+      this.socket.send(JSON.stringify({ type: 'transcript.unsubscribe', agentId }));
+    }
   }
 
   private sendTranscriptSubscribe(agentId: string): void {
@@ -121,7 +125,15 @@ export class GalacticClient {
 
     socket.onmessage = (ev) => {
       if (this.socket !== socket) return;
-      const parsed = ServerMessage.safeParse(JSON.parse(String(ev.data)));
+      let data: unknown;
+      try {
+        data = JSON.parse(String(ev.data));
+      } catch {
+        // A frame that is not JSON carries nothing we could apply: skip it, keep the stream.
+        console.warn('galactic: ignoring a server frame that is not JSON');
+        return;
+      }
+      const parsed = ServerMessage.safeParse(data);
       if (!parsed.success) {
         this.setStatus('disconnected', 'unreadable server message');
         socket.close(4002, 'unreadable message');

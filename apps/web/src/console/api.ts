@@ -1,21 +1,16 @@
-import type { AgentCaps, AgentRuntime, PermissionPolicyPreset } from '@galactic/protocol';
+import type {
+  AnswerBody,
+  RuntimesInfo,
+  SendBody,
+  SendResponse,
+  SpawnBody,
+  SpawnResponse,
+} from '@galactic/protocol';
 
-/** The ops console's calls to the server's `/api/*` routes (P1-11). Results arrive on the stream. */
-
-export interface RuntimesInfo {
-  runtimes: { name: AgentRuntime; resumable: boolean; scenarios?: string[] }[];
-  policies: PermissionPolicyPreset[];
-  caps: AgentCaps;
-  maxConcurrentAgents: number;
-}
-
-export interface SpawnInput {
-  runtime: AgentRuntime;
-  prompt: string;
-  cwd: string;
-  policy: PermissionPolicyPreset;
-  caps?: Partial<AgentCaps>;
-}
+/**
+ * The ops console's calls to the server's `/api/*` routes (P1-11). Results arrive on the stream.
+ * The bodies and replies are the protocol's (`packages/protocol/src/rest.ts`).
+ */
 
 export class ApiError extends Error {
   constructor(
@@ -49,16 +44,19 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
   };
   return {
     runtimes: () => call<RuntimesInfo>('GET', '/api/runtimes'),
-    spawn: (input: SpawnInput) => call<{ agentId: string }>('POST', '/api/agents', input),
+    spawn: (input: SpawnBody) => call<SpawnResponse>('POST', '/api/agents', input),
     send: (agentId: string, text: string, interrupt: boolean) =>
-      call<{ messageId: string }>('POST', `/api/agents/${agentId}/send`, { text, interrupt }),
+      call<SendResponse>('POST', `/api/agents/${agentId}/send`, {
+        text,
+        interrupt,
+      } satisfies SendBody),
     pause: (agentId: string) => call('POST', `/api/agents/${agentId}/pause`),
     resume: (agentId: string) => call('POST', `/api/agents/${agentId}/resume`),
     interrupt: (agentId: string) => call('POST', `/api/agents/${agentId}/interrupt`),
     stop: (agentId: string) => call('POST', `/api/agents/${agentId}/stop`),
     recover: (agentId: string) => call('POST', `/api/agents/${agentId}/recover`),
     answer: (questionId: string, answer: string) =>
-      call('POST', `/api/questions/${questionId}/answer`, { answer }),
+      call('POST', `/api/questions/${questionId}/answer`, { answer } satisfies AnswerBody),
   };
 }
 

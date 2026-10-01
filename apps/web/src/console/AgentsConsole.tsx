@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import type { Agent, Question, StatusRecord, TranscriptChunk } from '@galactic/protocol';
+import {
+  ENDED_STATES,
+  type Agent,
+  type AgentRuntime,
+  type Question,
+  type RuntimesInfo,
+  type PermissionPolicyPreset,
+  type StatusRecord,
+  type TranscriptChunk,
+} from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
-import { createApi, type Api, type RuntimesInfo, type SpawnInput } from './api.js';
+import { createApi, type Api } from './api.js';
 
 /**
  * The ops console (P1-11): everything the Phase 1 exit criteria ask for, on one plain page —
@@ -14,12 +23,15 @@ export function AgentsConsole({ token }: { token: string }) {
   const statuses = useAppStore((s) => s.world.statuses);
   const [selected, setSelected] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
-  const run = async (action: () => Promise<unknown>) => {
+  /** Runs an action; a failure is shown. Resolves to whether it succeeded. */
+  const run = async (action: () => Promise<unknown>): Promise<boolean> => {
     try {
       setError(undefined);
       await action();
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     }
   };
 
@@ -78,10 +90,10 @@ function SpawnForm({
   onError: (message: string | undefined) => void;
 }) {
   const [info, setInfo] = useState<RuntimesInfo | undefined>();
-  const [runtime, setRuntime] = useState<SpawnInput['runtime']>('fake');
+  const [runtime, setRuntime] = useState<AgentRuntime>('fake');
   const [prompt, setPrompt] = useState('scenario:happy');
   const [cwd, setCwd] = useState('');
-  const [policy, setPolicy] = useState<SpawnInput['policy']>('default');
+  const [policy, setPolicy] = useState<PermissionPolicyPreset>('default');
   const [busy, setBusy] = useState(false);
   const live = useAppStore((s) => s.status === 'live');
 
@@ -118,10 +130,7 @@ function SpawnForm({
     <form className="spawn" onSubmit={submit}>
       <label>
         runtime
-        <select
-          value={runtime}
-          onChange={(e) => setRuntime(e.target.value as SpawnInput['runtime'])}
-        >
+        <select value={runtime} onChange={(e) => setRuntime(e.target.value as AgentRuntime)}>
           {(info?.runtimes ?? [{ name: 'fake' as const }]).map((r) => (
             <option key={r.name} value={r.name}>
               {r.name}
@@ -159,7 +168,10 @@ function SpawnForm({
       </label>
       <label>
         policy
-        <select value={policy} onChange={(e) => setPolicy(e.target.value as SpawnInput['policy'])}>
+        <select
+          value={policy}
+          onChange={(e) => setPolicy(e.target.value as PermissionPolicyPreset)}
+        >
           {(info?.policies ?? ['default']).map((p) => (
             <option key={p} value={p}>
               {p}
@@ -174,7 +186,6 @@ function SpawnForm({
   );
 }
 
-const ENDED = new Set(['finished', 'failed', 'stopped', 'interrupted']);
 /** A stable empty selection result: a fresh `[]` per render would re-render forever. */
 const NO_CHUNKS: TranscriptChunk[] = [];
 
@@ -187,7 +198,7 @@ function AgentPanel({
   agent: Agent;
   status: StatusRecord | undefined;
   api: Api;
-  run: (action: () => Promise<unknown>) => Promise<void>;
+  run: (action: () => Promise<unknown>) => Promise<boolean>;
 }) {
   const questions = useAppStore((s) => s.world.questions);
   const chunks = useAppStore((s) => s.transcripts[agent.id] ?? NO_CHUNKS);
@@ -208,7 +219,7 @@ function AgentPanel({
   }, [chunks]);
 
   const state = status?.state ?? 'unknown';
-  const ended = ENDED.has(state);
+  const ended = status !== undefined && ENDED_STATES.has(status.state);
   const pending: Question | undefined = status?.pendingQuestionId
     ? questions[status.pendingQuestionId]
     : undefined;
@@ -216,7 +227,8 @@ function AgentPanel({
     e.preventDefault();
     const t = text.trim();
     if (!t) return;
-    await run(() => api.send(agent.id, t, interrupt));
+    // Keep the text when the send failed (the error is shown), so it can be sent again.
+    if (!(await run(() => api.send(agent.id, t, interrupt)))) return;
     setText('');
     setInterrupt(false);
   };

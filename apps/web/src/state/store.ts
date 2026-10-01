@@ -13,6 +13,8 @@ export interface AppState {
   log: EventEnvelope[];
   /** Per-agent transcript chunks in `seq` order, for the agents this page subscribed to. */
   transcripts: Record<Id, TranscriptChunk[]>;
+  /** The log the state came from (the last snapshot's `logId`). */
+  logId?: string | undefined;
   status: ConnectionStatus;
   statusDetail?: string | undefined;
   lastError?: string | undefined;
@@ -34,7 +36,14 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => {
       switch (message.type) {
         case 'snapshot':
-          return { world: applySnapshot(message), log: [] };
+          // A snapshot from another log (a new database) invalidates the transcript seqs too:
+          // keep them only when the log is the same (P1-38).
+          return {
+            world: applySnapshot(message),
+            log: [],
+            logId: message.logId,
+            ...(s.logId !== undefined && s.logId !== message.logId ? { transcripts: {} } : {}),
+          };
         case 'event': {
           const { type: _type, ...envelope } = message;
           return {
@@ -49,8 +58,9 @@ export const useAppStore = create<AppState>((set) => ({
         case 'pong':
           return {};
         case 'status': {
-          // Server-owned records (TECHNOLOGY §4): each one replaces the copy for its agent.
-          const statuses = { ...s.world.statuses };
+          // Server-owned records (TECHNOLOGY §4): each one replaces the copy for its agent; a
+          // replacing set (after a replay, P1-38) replaces them all.
+          const statuses = message.replace ? {} : { ...s.world.statuses };
           for (const record of message.statuses) statuses[record.agentId] = record;
           for (const id of message.removed ?? []) delete statuses[id];
           return { world: { ...s.world, statuses } };
@@ -74,6 +84,7 @@ export const useAppStore = create<AppState>((set) => ({
       world: emptyWorld(),
       log: [],
       transcripts: {},
+      logId: undefined,
       status: 'idle',
       statusDetail: undefined,
       lastError: undefined,
