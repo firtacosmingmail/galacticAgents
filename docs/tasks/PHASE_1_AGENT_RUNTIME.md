@@ -1,7 +1,7 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** — (phase complete) · **Task status:** —
-**Phase status:** done (2026-10-01) — 27/27 tasks; exit criteria verified below
+**Current task:** P1-28 … P1-38 (wave 6, review follow-ups) · **Task status:** 27/38 done, 11 in progress
+**Phase status:** reopened (2026-10-01) for the phase review (`notes/P1-review.md`); exit criteria were verified 2026-10-01 and are re-checked when wave 6 is done
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -41,6 +41,7 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 | 3 | P1-09 | Real adapter needs the spike, supervisor, inbox, policy engine and the gate (P1-18). |
 | 4 (parallel) | P1-11, P1-13, P1-14, P1-15, P1-16 | Ops console, README, restart recovery (+ the two review follow-ups). |
 | 5 | P1-12 | Conformance + resume against the real adapter, last. |
+| 6 (review) | P1-28 … P1-38 | Follow-ups of the phase review (`notes/P1-review.md`); done before Phase 2 starts. P1-38 last (it tests the others). |
 
 ## Tasks
 
@@ -206,6 +207,61 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - The pipeline matches the previous chunk's tail together with the new text; a secret that starts in the previous chunk has its head moved into the new one before both are redacted; the newest chunk of every agent is held for `holdMs` (250 ms) so its successor can complete a split secret; an explicit `flush()` takes everything.
 - **Acceptance:** a key split over two and over three chunks never reaches the rows or the subscribers in any part; the hold test.
 - **Done:** `runtime/transcripts.ts`, tests.
+
+### P1-28 — `/api` and `/dev` authentication on the decoded route (added 2026-10-01, review R1)
+- **Status:** in progress · **Depends on:** P1-11 · **Parallel with:** P1-29 … P1-37
+- The bearer check keyed off the raw `req.url`, so `/%61pi/…` skipped it. Register the routes in encapsulated plugins (`prefix: '/api'`, `prefix: '/dev'`) whose hook always runs.
+- **Acceptance:** encoded-path requests (`/%61pi/runtimes`, `/%64ev/events`) without a token get 401/404, never 200.
+
+### P1-29 — One recovery path for `/recover` (added 2026-10-01, review R2)
+- **Status:** in progress · **Depends on:** P1-14 · **Parallel with:** P1-28 …
+- `POST /api/agents/:id/recover` and startup recovery share `AgentRuntime.recoverAgent(id)`: 409 unless the agent is `interrupted` and not live; the policy and `bare` come from `agent.meta`; pending messages and answers are redelivered.
+- **Acceptance:** recover on a live agent → 409 and no second `agent.spawned`; a `cautious` agent resumes `cautious`.
+
+### P1-30 — Policy engine bypasses and a fail-closed gate (added 2026-10-01, review R3)
+- **Status:** in progress · **Depends on:** P1-10, P1-18 · **Parallel with:** P1-28 …
+- Dequote words before matching; `git -c alias.*`, `git config` aliases/`--global` opaque; glued and fd-prefixed redirections, `/dev/tcp`; split on a single `&`; `~name` unresolvable; more destructive git commands; agent config paths (`.claude/`, `.mcp.json`, `.git/hooks`, `.husky`) ask; unknown policy values → `ask`, the policy parsed in `createPermissionGate`; edit tools with no path → `ask`; interpreters fed from stdin/heredoc are opaque. The gate never throws (an exception → `deny`), asserts cwd inside the workspace, and the SDK adapter checks once per `toolUseId`. SPEC §7 records the merge semantics; TECHNOLOGY §8 that the engine is lexical.
+- **Acceptance:** every bypass in the review is a table row returning `ask`; a throwing gate denies; one reservation per asked call.
+
+### P1-31 — Redaction of split secrets (added 2026-10-01, review R4)
+- **Status:** in progress · **Depends on:** P1-27 · **Parallel with:** P1-28 …
+- The runtime hands raw `agent.output` text to the transcript pipeline; a private-key block is masked until its `END` line whatever the chunking; the held chunk stays out of a subscribe backlog; new patterns (case-insensitive assignments, `PASS|PWD|CREDENTIAL`, Basic auth, PGP blocks, `xapp-`/`xoxe-`, `glpat-`, `hf_`). TECHNOLOGY §8 records that user-authored text is not redacted.
+- **Acceptance:** a key split through the runtime and a 1.2 KB PEM split anywhere never reach rows or subscribers; a subscriber never gets text that is later changed.
+
+### P1-32 — Stop and shutdown semantics (added 2026-10-01, review R5)
+- **Status:** in progress · **Depends on:** P1-14, P1-09 · **Parallel with:** P1-28 …
+- A stop in flight at shutdown ends as `agent.stopped` / `agent.failed(cap)`, never `interrupted`, and is not resumed; shutdown logs every interruption and flushes transcripts first, then stops agents in parallel under a deadline above grace + term; a failing `adapter.stop` ends the agent with `agent.failed(runtime)`; the supervisor's interrupt hook runs inside the grace window; the SDK adapter fails the session when its query loop ends with the process alive; the process group is killed when the leader exits.
+- **Acceptance:** tests for each, including "user stop then shutdown → not resumed" and "grandchild gone after exit".
+
+### P1-33 — Inbox: no lost or duplicated messages (added 2026-10-01, review R6)
+- **Status:** in progress · **Depends on:** P1-07, P1-14 · **Parallel with:** P1-28 …
+- A delivery marks the agent working; a refused delivery goes back to the head of the queue; redelivered items keep their ids; `message.delivered` in the protocol bounds what a crash redelivers; recovery reads the log once.
+- **Acceptance:** pause/resume right after a delivery loses nothing; two restarts in a row keep the pending message; a crash mid-turn does not redeliver the delivered message.
+
+### P1-34 — Question lifecycle (added 2026-10-01, review R7)
+- **Status:** in progress · **Depends on:** P1-23 · **Parallel with:** P1-28 …
+- `question.cancelled{questionId, agentId, reason}`: the runtime cancels an agent's open questions in the same command as its terminal or interrupted event and when an interrupt withdraws them; the status store clears `pendingQuestionId` on `agent.idle`.
+- **Acceptance:** after stop or interrupt the row is `cancelled` and pause/resume does not bring back `waiting_for_input`.
+
+### P1-35 — `EventLog` publishes only committed events (added 2026-10-01, review R8)
+- **Status:** in progress · **Depends on:** P0-13 · **Parallel with:** P1-28 …
+- Events are buffered per outermost command and handed to the publish queue on its commit.
+- **Acceptance:** a nested command inside a rolled-back command, run from a subscriber, publishes nothing.
+
+### P1-36 — SDK adapter mapping gaps (added 2026-10-01, review R9)
+- **Status:** in progress · **Depends on:** P1-09 · **Parallel with:** P1-28 …
+- `AskUserQuestion` with several questions asks each one; multi-select answers; `interrupt()` while paused resumes first; `agent.paused` only with a process; `result.is_error` fails the turn as an error result; cache tokens in the cost; `rate_limit_event` → `agent.progress`; session leak (`sessions`/`byAgent`) and stale-session events; stderr reported once; `adopt()` rejects a restart policy; stop closes the input so the CLI can exit on its own.
+- **Acceptance:** fake-SDK tests for each.
+
+### P1-37 — `reconcile()` process identity (added 2026-10-01, review R10)
+- **Status:** in progress · **Depends on:** P1-01 · **Parallel with:** P1-28 …
+- Command name from `basename` of the whole `comm` (macOS paths with spaces), plus a start-time check (`ps -o lstart=`) against `startedAt`.
+- **Acceptance:** tests with an injected process probe: a recycled pid with another start time is not killed; a path with spaces matches.
+
+### P1-38 — Conformance additions, smaller fixes and hygiene (added 2026-10-01, review R11, gaps, hygiene)
+- **Status:** in progress · **Depends on:** P1-28 … P1-37 · **Parallel with:** —
+- Conformance: permission denied, gate deny, one `tool_call` per call, interrupt while paused and while asking, send while paused, external kill → one `failed(crash)`, spawn failure, two sessions at once, resume from a bad ref. Smaller runtime fixes from R11 (replace on replay, send during a cap stop, early cap hit, failed resume, pause/resume ordering, startup signals, transcript seq after write). REST schemas and `ENDED_STATES` in the protocol; console fixes; 409 bodies redacted. Decisions: spawn cwd, credentials in the CLI env, stall threshold for long tools.
+- **Acceptance:** conformance green on the fake adapter; everything in the review's R11 and hygiene lists done or recorded as a decision.
 
 ## Exit criteria (from the plan)
 
