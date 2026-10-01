@@ -173,11 +173,7 @@ export function updateAgent(ctx: CommandContext, agentId: Id, changes: AgentPlac
     throw new DomainError('invalid', 'the Harmonizer lives on Earth');
   }
   const next = { ...current, ...defined };
-  if (
-    'supervisorId' in defined ||
-    'taskId' in defined ||
-    'projectId' in defined
-  ) {
+  if ('supervisorId' in defined || 'taskId' in defined || 'projectId' in defined) {
     checkPlacement(ctx, next);
   }
   const agent = ctx.tables.agents.upsert({ ...next, updatedAt: ctx.now });

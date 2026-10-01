@@ -178,9 +178,9 @@ describe('updateAgent', () => {
   it('lets a body-only move through for a row from before the rules (Phase 1 ops console)', () => {
     const { run, agent, tasks } = hierarchy();
     const loose = agent('steward');
-    expect(run((ctx) => updateAgent(ctx, loose.id, { bodyId: tasks.asteroid.bodyId })).types).toEqual(
-      ['agent.updated'],
-    );
+    expect(
+      run((ctx) => updateAgent(ctx, loose.id, { bodyId: tasks.asteroid.bodyId })).types,
+    ).toEqual(['agent.updated']);
     expect(() => run((ctx) => updateAgent(ctx, loose.id, { taskId: tasks.asteroid.id }))).toThrow(
       /needs a supervisor: the Harmonizer/,
     );

@@ -21,13 +21,7 @@ import type {
   TaskPriority,
   WorkState,
 } from './enums.js';
-import type {
-  AgentEvent,
-  ControlTarget,
-  Event,
-  ProjectChanges,
-  TaskChanges,
-} from './events.js';
+import type { AgentEvent, ControlTarget, Event, ProjectChanges, TaskChanges } from './events.js';
 import type { ToolDefinition } from './adapter.js';
 import type { Id } from './primitives.js';
 

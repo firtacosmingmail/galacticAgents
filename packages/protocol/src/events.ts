@@ -310,7 +310,11 @@ export const TaskChanges = Task.omit({ id: true, createdAt: true, updatedAt: tru
 export type TaskChanges = z.infer<typeof TaskChanges>;
 
 /** The fields an explicit `null` clears, per row kind (everything else must not be `null`). */
-export const CLEARABLE_PROJECT_FIELDS = ['repoPath', 'parentProjectId', 'permissionPolicy'] as const;
+export const CLEARABLE_PROJECT_FIELDS = [
+  'repoPath',
+  'parentProjectId',
+  'permissionPolicy',
+] as const;
 export const CLEARABLE_TASK_FIELDS = ['worktreePath', 'branch'] as const;
 
 /**

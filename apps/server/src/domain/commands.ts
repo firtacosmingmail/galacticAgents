@@ -26,13 +26,7 @@ import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
 import { assignBody, freeBody, moveHost, sweepMarkers } from './bodies.js';
 import { agentEffect, agentsOf } from './cascade.js';
-import {
-  EARTH_ID,
-  chooseBody,
-  freeMoons,
-  freePlanets,
-  type ChooseOptions,
-} from './catalogue.js';
+import { EARTH_ID, chooseBody, freeMoons, freePlanets, type ChooseOptions } from './catalogue.js';
 import { recordControl } from './control.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext, EventLog } from './event-log.js';

@@ -109,6 +109,27 @@ describe('updateTask', () => {
     );
   });
 
+  it('clears the worktree and branch with an explicit null (P2-20)', () => {
+    const { run, tables, project } = withProject();
+    const t = run((ctx) => createTask(ctx, { description: 'a', projectId: project.id })).value;
+    run((ctx) => updateTask(ctx, t.id, { worktreePath: '/w/csv/.wt/t', branch: 'g/t' }));
+    const { events } = run((ctx) => updateTask(ctx, t.id, { worktreePath: null, branch: null }));
+    expect(events).toEqual([
+      { type: 'task.updated', taskId: t.id, changes: { worktreePath: null, branch: null } },
+    ]);
+    const row = tables.tasks.get(t.id)!;
+    expect(row).not.toHaveProperty('worktreePath');
+    expect(row).not.toHaveProperty('branch');
+    // Clearing what is already absent is a no-op; a required field cannot be cleared.
+    expect(run((ctx) => updateTask(ctx, t.id, { worktreePath: null })).events).toEqual([]);
+    expect(() => run((ctx) => updateTask(ctx, t.id, { description: null } as never))).toThrow(
+      /cannot be cleared/,
+    );
+    expect(() => run((ctx) => updateTask(ctx, t.id, { projectId: null } as never))).toThrow(
+      /cannot be cleared/,
+    );
+  });
+
   it('pins', () => {
     const { run, tables, project } = withProject();
     const t = run((ctx) => createTask(ctx, { description: 'a', projectId: project.id })).value;

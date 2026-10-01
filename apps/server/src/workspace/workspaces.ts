@@ -596,13 +596,17 @@ export class Workspaces {
     });
 
     if (result.ok) {
-      // `worktreePath`/`branch` stay as the record of where the work happened (clearing optional
-      // fields is P2-20); `meta.worktree.removed` says the folder is gone.
+      // The folder is gone, so the task forgets it (an explicit null, P2-20): a reopened task
+      // gets a fresh worktree, and a Steward is never sent into a removed one. The branch goes
+      // too once it is deleted; `meta.merge` keeps the record of where the work happened.
       await this.need('commands').updateTask(taskId, {
+        worktreePath: null,
+        ...(result.branchDeleted ? { branch: null } : {}),
         meta: {
           ...task.meta,
           worktree: { root, baseBranch, removed: true },
           merge: {
+            branch,
             commit: result.commit,
             fastForward: result.fastForward,
             branchDeleted: result.branchDeleted,
@@ -642,6 +646,8 @@ export class Workspaces {
     });
     if (out.removed) {
       await this.need('commands').updateTask(taskId, {
+        worktreePath: null,
+        ...(opts.deleteBranch ? { branch: null } : {}),
         meta: {
           ...task.meta,
           worktree: {

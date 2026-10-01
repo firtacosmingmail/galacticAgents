@@ -290,6 +290,119 @@ describe('Commands', () => {
   });
 });
 
+describe('spawnAgent placement invariants (P2-20)', () => {
+  it('puts the one Harmonizer on Earth without occupying it, and refuses a second while it runs', async () => {
+    const { commands, log, statuses } = boot();
+    const bodies = log.tables.bodies.all().length;
+    const { value: harmonizer, events } = await commands.spawnAgent({
+      role: 'harmonizer',
+      runtime: 'fake',
+      cwd: '/w/hq',
+      prompt: 'x',
+    });
+    expect(harmonizer.bodyId).toBe('b-earth');
+    expect(harmonizer.supervisorId).toBeUndefined();
+    // Placing an agent on a body is not hosting work: no asteroid, no assignment, Earth stays bare.
+    expect(log.tables.bodies.all()).toHaveLength(bodies);
+    expect(log.tables.bodies.get('b-earth')?.host).toBeUndefined();
+    expect(events.map((e) => e.type)).not.toContain('body.assigned');
+
+    const seq = log.currentSeq();
+    const second = { role: 'harmonizer', runtime: 'fake', cwd: '/w/hq', prompt: 'x' } as const;
+    await expect(commands.spawnAgent(second)).rejects.toMatchObject({
+      code: 'conflict',
+      message: expect.stringMatching(/already running/),
+    });
+    expect(log.currentSeq()).toBe(seq);
+    // Once it has ended, a new Harmonizer may start (P2-16 resumes rather than replaces).
+    await commands.stopAgent(harmonizer.id, USER);
+    await until(() => statuses.get(harmonizer.id)?.state === 'stopped');
+    expect((await commands.spawnAgent(second)).value.bodyId).toBe('b-earth');
+  });
+
+  it('refuses a Harmonizer with a supervisor, a task or a project', async () => {
+    const { commands, log } = boot();
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const { harmonizer } = await projectHierarchy(commands, project.id);
+    await commands.stopAgent(harmonizer.id, USER);
+    const seq = log.currentSeq();
+    const base = { role: 'harmonizer', runtime: 'fake', prompt: 'x' } as const;
+    await expect(
+      commands.spawnAgent({ ...base, cwd: '/w/hq', supervisorId: harmonizer.id }),
+    ).rejects.toThrow(/no supervisor/);
+    await expect(commands.spawnAgent({ ...base, projectId: project.id })).rejects.toThrow(
+      /no task or project/,
+    );
+    expect(log.currentSeq()).toBe(seq);
+  });
+
+  it('spawns a Waykeeper or Steward only under the supervisor the hierarchy prescribes', async () => {
+    const { commands, log } = boot();
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const sub = (
+      await commands.createProject({
+        name: 'Writer',
+        workspace: '/w/writer',
+        parentProjectId: project.id,
+      })
+    ).value;
+    const other = (await commands.createProject({ name: 'Other', workspace: '/w/o' })).value;
+    const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
+    const flaky = (await commands.createTask({ description: 'flaky' })).value;
+    const { harmonizer, waykeeper } = await projectHierarchy(commands, project.id);
+    const otherWaykeeper = (
+      await commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: other.id,
+        supervisorId: harmonizer.id,
+        prompt: 'x',
+      })
+    ).value;
+    const seq = log.currentSeq();
+    const waykeeperOf = (projectId: string, supervisorId?: string) =>
+      commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId,
+        ...(supervisorId ? { supervisorId } : {}),
+        prompt: 'x',
+      });
+    const stewardOf = (taskId: string, supervisorId?: string) =>
+      commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId,
+        ...(supervisorId ? { supervisorId } : {}),
+        ...(taskId === flaky.id ? { cwd: '/w/scratch' } : {}),
+        prompt: 'x',
+      });
+    // Always a supervisor.
+    await expect(waykeeperOf(other.id)).rejects.toThrow(/needs a supervisor: the Harmonizer/);
+    await expect(stewardOf(task.id)).rejects.toThrow(/needs a supervisor: the Waykeeper/);
+    await expect(stewardOf(flaky.id)).rejects.toThrow(/needs a supervisor: the Harmonizer/);
+    // A Waykeeper answers to the Harmonizer; a sub-project's to the parent project's Waykeeper.
+    await expect(waykeeperOf(other.id, waykeeper.id)).rejects.toThrow(/answers to the Harmonizer/);
+    await expect(waykeeperOf(sub.id, harmonizer.id)).rejects.toThrow(
+      new RegExp(`answers to the Waykeeper of project ${project.id}`),
+    );
+    await expect(waykeeperOf(sub.id, otherWaykeeper.id)).rejects.toThrow(/Waykeeper of project/);
+    // A project Steward to its project's Waykeeper; an asteroid Steward to the Harmonizer.
+    await expect(stewardOf(task.id, harmonizer.id)).rejects.toThrow(/Waykeeper of project/);
+    await expect(stewardOf(task.id, otherWaykeeper.id)).rejects.toThrow(/Waykeeper of project/);
+    await expect(stewardOf(flaky.id, waykeeper.id)).rejects.toThrow(/answers to the Harmonizer/);
+    await expect(stewardOf(task.id, 'a-nobody')).rejects.toThrow(/no agent a-nobody/);
+    expect(log.currentSeq()).toBe(seq);
+
+    const subWaykeeper = (await waykeeperOf(sub.id, waykeeper.id)).value;
+    expect(subWaykeeper).toMatchObject({ supervisorId: waykeeper.id, projectId: sub.id });
+    // Room under the default concurrency cap of 4 (supervisors are matched by role and project,
+    // not liveness: a stopped agent still names its supervisor).
+    await commands.stopAgent(otherWaykeeper.id, USER);
+    expect((await stewardOf(flaky.id, harmonizer.id)).value.supervisorId).toBe(harmonizer.id);
+  });
+});
+
 describe('Commands.control on tasks and projects (P2-14)', () => {
   async function hierarchy() {
     // Real step delays: `scenario:long` keeps both agents working for the whole test.
