@@ -1,6 +1,6 @@
 # Phase 1 — Agent runtime and adapters
 
-**Current task:** wave 3 — P1-09 (next to pick; not claimed) · **Task status:** todo
+**Current task:** wave 3 — P1-09 (claimed 2026-10-01) · **Task status:** in progress
 **Phase status:** in progress (20/27 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -93,7 +93,7 @@ Prove that real agents can be spawned, observed without interruption, asked, pau
 - **Done:** note + script (`P1-08-sdk-spike.mjs`), SDK pinned at 0.3.285, SPEC §8 rows 1–2 answered, TECHNOLOGY §3.1 carries the adapter shape (streaming input, `PreToolUse` hook + `canUseTool`, `spawnClaudeCodeProcess`, `bare` needs an API key). Ran in a cloud sandbox under an OAuth login; **one follow-up for Cosmin:** run `node docs/tasks/notes/P1-08-sdk-spike.mjs auth tools` once on the dev machine after `pnpm install` to confirm the same under his own subscription.
 
 ### P1-09 — Claude SDK adapter implementation
-- **Status:** todo · **Depends on:** P1-08, P1-01, P1-07, P1-10 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P1-08, P1-01, P1-07, P1-10 · **Parallel with:** —
 - `spawn(opts)` with cwd, prompt, optional tools/system prompt (for Phase 2 brains), subscription login, `bare` opt-in; `PreToolUse` hook → `opts.gate.check(toolCall)` (P1-18: the runtime's gate, never the policy itself) → `allow` runs, `deny` refuses with the reason, `ask` → `needs_input(kind: permission)` (blocks the tool call until answered); `AskUserQuestion` → `needs_input(kind: clarification)`; the supervisor's `onOutcome` (P1-20) is mapped by the adapter to `agent.failed(crash|runtime)` / `agent.stopped`; `send()` starts a turn (the runtime's inbox guarantees idle, P1-19); streaming output/tool calls/thinking → `agent.output` / `agent.tool_call`; final result → `agent.finished(cost)`; `resumeSession(sessionRef)`; `interrupt`, `pause` (hold delivery + interrupt), `resume`, `stop` via the supervisor's graceful sequence.
 - **Acceptance:** manual run on the dev machine passes every step of the exit criteria; unit tests with the SDK mocked for the event mapping.
 - **Read first:** `docs/tasks/notes/P1-wave2b-changes.md` — the interfaces this task builds on (`SpawnOptions.gate`, the `send` contract, `ProcessOutcome`, the one-terminal-event invariant) changed in wave 2b.
