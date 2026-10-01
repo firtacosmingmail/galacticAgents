@@ -327,6 +327,17 @@ describe('resolvePolicy / decide', () => {
     expect(decide(bare, ['read_workspace'])).toBe('allow');
     expect(decide(bare, ['nonsense' as PermissionAction])).toBe('ask');
   });
+
+  it('fails closed on a decision value it does not know', () => {
+    expect(strictest(['allow', 'maybe'])).toBe('ask');
+    expect(strictest([undefined])).toBe('ask');
+    expect(strictest(['maybe', 'deny'])).toBe('deny');
+    const odd = { rules: { read_workspace: 'yes', push: 'deny' } } as unknown as PermissionPolicy;
+    expect(decide(odd, ['read_workspace'])).toBe('ask');
+    expect(decide(odd, ['read_workspace', 'push'])).toBe('deny');
+    const verdict = evaluate(odd, { toolName: 'Read', input: { file_path: 'a.ts' } }, ctx);
+    expect(verdict).toMatchObject({ decision: 'ask', dominant: 'read_workspace' });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -54,10 +54,27 @@ export function resolvePolicy(override?: PermissionPolicy | null): PermissionPol
 
 const STRICTNESS: Record<PermissionDecision, number> = { allow: 0, ask: 1, deny: 2 };
 
-export function strictest(decisions: PermissionDecision[]): PermissionDecision {
+/**
+ * A policy value as a decision: anything that is not `allow`/`ask`/`deny` (a value restored from
+ * an older or corrupted row, a typo) counts as `ask` — the engine fails closed.
+ */
+function asDecision(value: unknown): PermissionDecision {
+  return value === 'allow' || value === 'ask' || value === 'deny' ? value : 'ask';
+}
+
+/** The strictest of `decisions` (`deny` > `ask` > `allow`); an unknown value counts as `ask`. */
+export function strictest(decisions: readonly unknown[]): PermissionDecision {
   let result: PermissionDecision = 'allow';
-  for (const d of decisions) if (STRICTNESS[d] > STRICTNESS[result]) result = d;
+  for (const raw of decisions) {
+    const d = asDecision(raw);
+    if (STRICTNESS[d] > STRICTNESS[result]) result = d;
+  }
   return result;
+}
+
+/** The decision a policy gives one action; a missing or unknown value is `ask`. */
+function ruleFor(policy: PermissionPolicy, action: PermissionAction): PermissionDecision {
+  return asDecision(policy.rules[action]);
 }
 
 /**
@@ -67,7 +84,7 @@ export function strictest(decisions: PermissionDecision[]): PermissionDecision {
 export function decide(policy: PermissionPolicy, actions: PermissionAction[]): PermissionDecision {
   if (actions.length === 0) return 'ask';
   const merged = resolvePolicy(policy);
-  return strictest(actions.map((a) => merged.rules[a] ?? 'ask'));
+  return strictest(actions.map((a) => ruleFor(merged, a)));
 }
 
 /** Classifies the call and decides it under `policy` in one go. */
@@ -79,8 +96,8 @@ export function evaluate(
   const classification = classifyToolCall(call, ctx);
   if (classification.alwaysAllow) return { ...classification, decision: 'allow' };
   const decision = decide(policy, classification.actions);
-  const rules = resolvePolicy(policy).rules;
-  const dominant = classification.actions.find((a) => (rules[a] ?? 'ask') === decision);
+  const merged = resolvePolicy(policy);
+  const dominant = classification.actions.find((a) => ruleFor(merged, a) === decision);
   return { ...classification, decision, ...(dominant ? { dominant } : {}) };
 }
 

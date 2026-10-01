@@ -31,14 +31,28 @@ export type GateVerdict =
       reasons: string[];
     };
 
+export interface GateCheckOptions {
+  /**
+   * Whether this check runs the tool-call cap pre-flight (`reserve`, default `true`): a call that
+   * would exceed the cap is refused and trips the cap. An adapter that consults the gate twice for
+   * the same tool use (a pre-tool hook, then a permission callback for the same `toolUseId`)
+   * passes `false` on the second check so the call is reserved once.
+   */
+  reserve?: boolean;
+}
+
 /**
  * The runtime's decision function for tool calls, built per spawn from the project's policy
  * table and the agent's hard caps. Adapters call it from their permission hook and never see the
  * policy itself, so every runtime — SDK, ACP, PTY — gets the same decisions from one
  * implementation. Synchronous: the hook sits on the agent's hot path and never waits on I/O.
+ *
+ * `check()` never throws: an internal failure comes back as `deny`, a policy that does not parse
+ * makes every action `ask` (fail closed). Each check reserves the call against the tool-call cap
+ * unless `opts.reserve` is `false`.
  */
 export interface PermissionGate {
-  check(call: ToolCall): GateVerdict;
+  check(call: ToolCall, opts?: GateCheckOptions): GateVerdict;
 }
 
 export interface SpawnOptions {
