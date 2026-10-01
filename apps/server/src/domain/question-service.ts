@@ -26,8 +26,8 @@ import {
  * The question service (P2-03; SPEC §2.6, decisions 6, 7, 12, 21; TECHNOLOGY §5.3). The server
  * owns questions; this module decides where they go:
  *
- *   - **open** (`agent.needs_input`): a permission question is held by the user (P2-04 puts the
- *     policy evaluation in front of it; it never reaches a brain). A clarification goes to the
+ *   - **open** (`agent.needs_input`): a permission question is held by the user (the runtime's
+ *     gate has already answered `allow`/`deny` itself, P2-04; it never reaches a brain). A clarification goes to the
  *     origin agent's first living supervisor up the `supervisorId` chain, else to the user — a
  *     project Steward's to its Waykeeper, an asteroid Steward's to the Harmonizer. The context
  *     gains `origin`: role, task, project, body and the agent's last `RECENT_EVENTS` events.
@@ -141,8 +141,8 @@ export function holderFor(
   kind: QuestionKind,
   routing: Pick<QuestionRouting, 'isLiving'>,
 ): Actor {
-  // Decision 7: permission questions are the policy's or the user's, never a brain's. P2-04
-  // evaluates the project policy before a question is opened at all.
+  // Decision 7: permission questions are the policy's or the user's, never a brain's. The
+  // runtime's gate decides first (P2-04, `AgentRuntime.rulePermission`): only `ask` gets here.
   if (kind === 'permission') return { type: 'user' };
   return livingAbove(ctx, originAgentId, routing.isLiving);
 }
