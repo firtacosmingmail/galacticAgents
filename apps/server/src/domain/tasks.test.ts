@@ -167,7 +167,7 @@ describe('task states', () => {
 });
 
 describe('moveTask', () => {
-  it('moves a standalone task onto the project body, frees its asteroid, flies its agent', () => {
+  it('moves a standalone task onto the project body, marks its asteroid, flies its agent', () => {
     const { run, tables, project } = withProject();
     const st = run((ctx) => createTask(ctx, { description: 'b' })).value;
     const steward = run((ctx) =>
@@ -187,10 +187,23 @@ describe('moveTask', () => {
         taskId: st.id,
         changes: { projectId: project.id, bodyId: project.bodyId },
       },
-      { type: 'body.freed', bodyId: st.bodyId },
+      {
+        type: 'body.moved',
+        host: { kind: 'task', id: st.id },
+        fromBodyId: st.bodyId,
+        toBodyId: project.bodyId,
+        intoProjectId: project.id,
+      },
       { type: 'agent.updated', agentId: steward.id, changes: { bodyId: project.bodyId } },
     ]);
+    // The asteroid shows "moved to …" for the retention period; the project keeps its body.
     expect(tables.bodies.get(st.bodyId)?.host).toBeUndefined();
+    expect(tables.bodies.get(st.bodyId)?.movedTo).toEqual({
+      bodyId: project.bodyId,
+      host: { kind: 'task', id: st.id },
+      at: value.updatedAt,
+    });
+    expect(tables.bodies.get(project.bodyId)?.host).toEqual({ kind: 'project', id: project.id });
     expect(tables.agents.get(steward.id)?.bodyId).toBe(project.bodyId);
     expect(() => run((ctx) => moveTask(ctx, st.id, project.id, USER))).toThrow(/already belongs/);
   });

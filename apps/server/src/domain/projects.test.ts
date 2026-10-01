@@ -51,8 +51,19 @@ describe('createProject', () => {
     expect(() => run((ctx) => createProject(ctx, { ...input, bodyId: 'b-jupiter' }))).toThrow(
       /already hosts/,
     );
-    run((ctx) => createProject(ctx, input)); // Mars
-    expect(() => run((ctx) => createProject(ctx, input))).toThrow(/no free planet/);
+    // Jupiter is taken; planets with a free moon go first (Mars, Saturn, …), then Mercury, Venus
+    const taken = Array.from({ length: 6 }, () => run((ctx) => createProject(ctx, input)).value);
+    expect(taken.map((p) => p.bodyId)).toEqual([
+      'b-mars',
+      'b-saturn',
+      'b-uranus',
+      'b-neptune',
+      'b-mercury',
+      'b-venus',
+    ]);
+    expect(() => run((ctx) => createProject(ctx, input))).toThrow(
+      /no free planet — occupied: Mercury: CSV to Parquet \(approved\); Venus: .*Neptune: /,
+    );
   });
 
   it('stores a valid permission policy and refuses an invalid one, leaving nothing behind', () => {

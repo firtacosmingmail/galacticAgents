@@ -5,25 +5,21 @@
 // replayed from the snapshot it started from, must give the server's snapshot after every commit
 // (statuses excluded: they are a server-owned projection, TECHNOLOGY §4).
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Actor, Body, EventEnvelope, Snapshot } from '@galactic/protocol';
+import type { Actor, EventEnvelope, Snapshot } from '@galactic/protocol';
 import { FakeAdapter, composeRuntime, openDatabase, type ComposedRuntime } from '@galactic/server';
 import { applyEvent, applySnapshot, type WorldState } from './reduce.js';
 
 const USER: Actor = { type: 'user' };
-const BODIES: Body[] = [
-  { id: 'b-earth', kind: 'planet', name: 'Earth', meta: { reserved: true } },
-  { id: 'b-mars', kind: 'planet', name: 'Mars' },
-  { id: 'b-jupiter', kind: 'planet', name: 'Jupiter' },
-  { id: 'b-phobos', kind: 'moon', parentId: 'b-mars', name: 'Phobos' },
-  { id: 'b-deimos', kind: 'moon', parentId: 'b-mars', name: 'Deimos' },
-  { id: 'b-mars-3', kind: 'moon', parentId: 'b-mars', name: 'Mars III' },
-  { id: 'b-io', kind: 'moon', parentId: 'b-jupiter', name: 'Io' },
-];
+const DAY = 24 * 60 * 60 * 1000;
 
-/** One second per reading: a row stamped with another reading than its event would show. */
-function tickingClock(): () => string {
+/**
+ * One second per reading: a row stamped with another reading than its event would show.
+ * `advance` jumps ahead (the retention sweep of "moved to …" markers).
+ */
+function tickingClock(): (() => string) & { advance(ms: number): void } {
   let t = Date.parse('2026-10-01T09:00:00.000Z');
-  return () => new Date((t += 1000)).toISOString();
+  const clock = () => new Date((t += 1000)).toISOString();
+  return Object.assign(clock, { advance: (ms: number) => void (t += ms) });
 }
 
 const lives: ComposedRuntime[] = [];
@@ -47,16 +43,16 @@ function tables(w: WorldState) {
 
 describe('replay vs snapshot conformance', () => {
   it('folding the recorded log gives the server snapshot at every commit', async () => {
+    const clock = tickingClock();
     const composed = composeRuntime(openDatabase(':memory:'), {
       adapters: [new FakeAdapter({ speed: 5 })], // `long` runs ~5 s: alive for the whole walk
-      log: { now: tickingClock() },
+      log: { now: clock },
       flushMs: 10,
     });
     lives.push(composed);
     const { log, commands, statuses } = composed;
-    // The catalogue is seeded without events (P2-02 seeds it by migration): the client gets it
-    // from the snapshot it starts from, as a real client does.
-    for (const body of BODIES) log.tables.bodies.insert(body);
+    // The catalogue is seeded without events (migration 0005, P2-02): the client gets it from
+    // the snapshot it starts from, as a real client does.
     const start: Snapshot = { ...log.snapshot(), statuses: [] };
 
     const recorded: EventEnvelope[] = [];
@@ -180,9 +176,16 @@ describe('replay vs snapshot conformance', () => {
     await commands.escalateQuestion(held.id, { type: 'agent', id: waykeeper.id });
     await commands.answerQuestion({ questionId: held.id, answer: 'zstd', by: USER, version: 2 });
 
-    // --- moves: a standalone task joins the project (its Steward flies), the project moves
+    // --- moves: a standalone task joins the project (its Steward flies, its asteroid shows
+    // "moved to …"), the sub-project moves (Phobos shows the marker)
     await commands.moveTask(flaky.id, project.id, USER);
     await commands.moveHost({ kind: 'project', id: sub.id }, 'b-deimos');
+    // --- the catalogue picks bodies: a planet and an independent moon
+    const loose = (await commands.createProject({ name: 'Loose', workspace: '/w/loose' })).value;
+    await commands.createProject({ name: 'Small', workspace: '/w/small', kind: 'moon' });
+    await commands.freeBody(flaky.bodyId); // a marker freed early
+    await commands.closeProject(loose.id, USER);
+    await commands.archiveProject(loose.id, USER);
 
     // --- panel actions with their effects
     await commands.control(
@@ -207,7 +210,10 @@ describe('replay vs snapshot conformance', () => {
     await commands.closeProject(sub.id, USER);
     await commands.archiveProject(sub.id, USER);
     await commands.createProject({ name: 'Squatter', workspace: '/w/sq', bodyId: 'b-deimos' });
-    await commands.reopenProject(sub.id, USER, { bodyId: 'b-mars-3' });
+    // Phobos frees once its marker's retention has passed, and the sub-project reopens there.
+    clock.advance(8 * DAY);
+    await commands.sweepMarkers(7 * DAY);
+    await commands.reopenProject(sub.id, USER, { bodyId: 'b-phobos' });
 
     // --- a standalone task archived by the panel, its asteroid freed and taken, reopened elsewhere
     const chore = (await commands.createTask({ description: 'Rotate logs' })).value;

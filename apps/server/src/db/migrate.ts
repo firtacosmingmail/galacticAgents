@@ -11,6 +11,8 @@ export interface Migration {
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 const FILE_PATTERN = /^(\d{4})_([a-z0-9_]+)\.sql$/;
+/** A migration that rebuilds a table declares it with this line (P2-02). */
+const FK_OFF = /^-- migrate: foreign_keys=off$/m;
 
 /** Reads `NNNN_name.sql` files from the migrations folder, sorted by number. */
 export function loadMigrations(dir: string = MIGRATIONS_DIR): Migration[] {
@@ -52,10 +54,25 @@ export function migrate(db: Database, migrations: Migration[] = loadMigrations()
   );
   for (const m of migrations) {
     if (done.has(m.version)) continue;
-    db.transaction(() => {
-      db.exec(m.sql);
-      insert.run(m.version, m.name, new Date().toISOString());
-    })();
+    // A table rebuild (SQLite's way to change a constraint) runs with foreign keys off, which can
+    // only be switched outside a transaction; the references are checked before the commit.
+    const fkOff = FK_OFF.test(m.sql);
+    const fkWasOn = fkOff && (db.pragma('foreign_keys', { simple: true }) as number) === 1;
+    if (fkWasOn) db.pragma('foreign_keys = OFF');
+    try {
+      db.transaction(() => {
+        db.exec(m.sql);
+        if (fkOff) {
+          const broken = db.pragma('foreign_key_check') as unknown[];
+          if (broken.length > 0) {
+            throw new Error(`Migration ${m.version} broke ${broken.length} foreign key(s)`);
+          }
+        }
+        insert.run(m.version, m.name, new Date().toISOString());
+      })();
+    } finally {
+      if (fkWasOn) db.pragma('foreign_keys = ON');
+    }
     applied.push(m.version);
   }
   const row = db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get() as {

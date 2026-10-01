@@ -4,6 +4,7 @@ import {
   bodyOf,
   checkAssignable,
   createAsteroid,
+  markMoved,
   moveAgents,
   occupy,
   place,
@@ -152,7 +153,8 @@ export function reopenTask(
   }
   const host = hostOf(taskId);
   const old = must(ctx.tables.bodies.get(current.bodyId), 'body', current.bodyId);
-  const oldIsFree = !old.host || (old.host.kind === 'task' && old.host.id === taskId);
+  const oldIsFree =
+    (!old.host && !old.movedTo) || (old.host?.kind === 'task' && old.host.id === taskId);
   if (oldIsFree && (!input.bodyId || input.bodyId === old.id)) {
     occupy(ctx, old, host);
   } else {
@@ -165,8 +167,8 @@ export function reopenTask(
 
 /**
  * A standalone task joins a project (SPEC §3.4, decision 9): it lives on the project's body from
- * now on, its asteroid is freed and its agents fly over. The asteroid's "moved to …" marker and
- * the Steward hand-over to the project's Waykeeper are P2-12.
+ * now on, its asteroid shows "moved to …" (`body.moved` with `intoProjectId`) until the retention
+ * sweep frees it, and its agents fly over. The Steward hand-over to the Waykeeper is P2-12.
  */
 export function moveTask(ctx: CommandContext, taskId: Id, toProjectId: Id, _by: Actor): Task {
   const current = must(ctx.tables.tasks.get(taskId), 'task', taskId);
@@ -195,7 +197,7 @@ export function moveTask(ctx: CommandContext, taskId: Id, toProjectId: Id, _by: 
     taskId,
     changes: { projectId: toProjectId, bodyId: project.bodyId },
   });
-  if (old) release(ctx, old);
+  if (old) markMoved(ctx, old, hostOf(taskId), project.bodyId, toProjectId);
   moveAgents(ctx, hostOf(taskId), current.bodyId, project.bodyId);
   return task;
 }

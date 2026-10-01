@@ -13,6 +13,7 @@ import {
   QuestionKind,
   QuestionStatus,
   TaskPriority,
+  WorkBodyKind,
   WorkState,
 } from './enums.js';
 
@@ -31,16 +32,53 @@ export const AgentCaps = z.object({
 });
 export type AgentCaps = z.infer<typeof AgentCaps>;
 
+/**
+ * The "moved to …" marker a body keeps after its occupant moved away (SPEC §3.4, decision 15):
+ * where it went and when. The body is not free while it shows the marker; the retention sweep
+ * frees it (`body.freed`) once the retention period of decision 4 has passed.
+ */
+export const BodyMarker = z.object({
+  /** The body the work moved to. */
+  bodyId: Id,
+  /** What moved: the project or task that lived here. */
+  host: Host,
+  at: Timestamp,
+});
+export type BodyMarker = z.infer<typeof BodyMarker>;
+
 export const Body = z.object({
   id: Id,
   kind: BodyKind,
-  /** Moons point at their planet. Planets and asteroids have no parent. */
+  /** Moons point at their planet. The Sun, planets and asteroids have no parent. */
   parentId: Id.optional(),
   name: z.string().min(1),
   host: Host.optional(),
+  /** Set by `body.moved` on the body the work left; cleared by `body.freed`. */
+  movedTo: BodyMarker.optional(),
+  /**
+   * Catalogue data (P2-02): `reserved: true` (the Sun, Earth, Earth's Moon), `orbit` (a planet's
+   * position from the Sun, a moon's around its planet), and for procedural asteroids `number`,
+   * `seed` and their generated orbit.
+   */
   meta: Meta.optional(),
 });
 export type Body = z.infer<typeof Body>;
+
+/**
+ * Who holds a body that is not free (P2-02): the planets listed by the "no free planet" refusal
+ * (decision 16), which offers downsizing or closing a completed project early. `host` is absent
+ * for a body that only shows a "moved to …" marker.
+ */
+export const BodyOccupancy = z.object({
+  bodyId: Id,
+  bodyName: z.string(),
+  host: Host.optional(),
+  /** The occupant's name: the project's name or the task's description. */
+  occupant: z.string().optional(),
+  state: WorkState.optional(),
+  movedTo: BodyMarker.optional(),
+});
+export type BodyOccupancy = z.infer<typeof BodyOccupancy>;
 
 /** Per-project permission policy (SPEC §3.6, decision 7). Missing actions fall back to the default policy. */
 export const PermissionPolicy = z.object({
@@ -108,7 +146,7 @@ export type Agent = z.infer<typeof Agent>;
 
 /** The body the Harmonizer proposes for a work request (SPEC §3.3). */
 export const ProposedBody = z.object({
-  kind: BodyKind,
+  kind: WorkBodyKind,
   /** Planet for a proposed moon. */
   parentId: Id.optional(),
   /** An existing free body, when the Harmonizer picked one. */
@@ -121,7 +159,7 @@ export const Proposal = z.object({
   id: Id,
   requestText: z.string().min(1),
   /** The proposed size. */
-  kind: BodyKind,
+  kind: WorkBodyKind,
   proposedBody: ProposedBody,
   workspace: z.string().min(1),
   rationale: z.string(),

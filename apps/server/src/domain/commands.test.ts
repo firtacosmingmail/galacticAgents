@@ -3,7 +3,6 @@ import type { Actor } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
-import { BODIES } from '../test/world.js';
 import { Commands } from './commands.js';
 import { DomainError } from './errors.js';
 import { EventLog } from './event-log.js';
@@ -26,7 +25,6 @@ function boot() {
     flushMs: 10,
   });
   lives.push(composed);
-  for (const body of BODIES) composed.log.tables.bodies.insert(body);
   return composed;
 }
 
@@ -259,7 +257,6 @@ describe('Commands', () => {
   it('refuses agent commands without a runtime', async () => {
     const log = new EventLog(openDatabase(':memory:'));
     const commands = new Commands({ log });
-    for (const body of BODIES) log.tables.bodies.insert(body);
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w' })).value;
     await expect(
       commands.spawnAgent({

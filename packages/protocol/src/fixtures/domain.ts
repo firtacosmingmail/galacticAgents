@@ -11,11 +11,11 @@ import type {
 
 export const NOW = '2026-09-30T10:00:00.000Z';
 
-export const body: Body = { id: 'b-earth', kind: 'planet', name: 'Earth' };
+export const body: Body = { id: 'b-kepler', kind: 'planet', name: 'Kepler' };
 export const moon: Body = {
   id: 'b-luna',
   kind: 'moon',
-  parentId: 'b-earth',
+  parentId: 'b-kepler',
   name: 'Luna',
   host: { kind: 'project', id: 'p-1' },
 };
@@ -90,7 +90,7 @@ export const proposal: Proposal = {
   id: 'pr-1',
   requestText: 'Add dark mode to the settings page',
   kind: 'moon',
-  proposedBody: { kind: 'moon', parentId: 'b-earth', name: 'Dark mode' },
+  proposedBody: { kind: 'moon', parentId: 'b-kepler', name: 'Dark mode' },
   workspace: '/home/cosmin/work/auth',
   rationale: 'Touches a handful of files in one repository; a moon of the auth planet.',
   state: 'pending',

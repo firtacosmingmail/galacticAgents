@@ -106,10 +106,16 @@ describe('domain tables', () => {
     t.questions.insert(fx.permissionQuestion);
     t.settings.set('retentionDays', 14);
 
-    expect(t.bodies.get('b-earth')).toEqual(fx.body);
+    expect(t.bodies.get('b-kepler')).toEqual(fx.body);
     expect(t.bodies.get('b-luna')).toEqual(fx.moon);
     expect(t.bodies.get('b-ast-1')).toEqual(fx.asteroid);
-    expect(t.bodies.all().map((b) => b.id)).toEqual(['b-earth', 'b-luna', 'b-ast-1']);
+    // after the seeded catalogue (migration 0005), in insertion order
+    expect(
+      t.bodies
+        .all()
+        .map((b) => b.id)
+        .slice(-3),
+    ).toEqual(['b-kepler', 'b-luna', 'b-ast-1']);
     expect(t.projects.get('p-1')).toEqual(fx.project);
     expect(t.tasks.get('t-1')).toEqual(fx.task);
     expect(t.tasks.get('t-2')).toEqual(fx.asteroidTask);
@@ -125,9 +131,9 @@ describe('domain tables', () => {
     const t = tables(openDatabase(':memory:'));
     t.bodies.insert(fx.body);
     t.bodies.upsert({ ...fx.body, name: 'Terra' });
-    expect(t.bodies.get('b-earth')?.name).toBe('Terra');
-    expect(t.bodies.delete('b-earth')).toBe(true);
-    expect(t.bodies.get('b-earth')).toBeUndefined();
+    expect(t.bodies.get('b-kepler')?.name).toBe('Terra');
+    expect(t.bodies.delete('b-kepler')).toBe(true);
+    expect(t.bodies.get('b-kepler')).toBeUndefined();
     expect(() => t.bodies.insert({ ...fx.body, kind: 'comet' as never })).toThrow();
   });
 
