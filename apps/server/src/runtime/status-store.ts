@@ -128,6 +128,16 @@ export class StatusStore {
   fold(envelope: EventEnvelope, broadcast = true): void {
     const { event } = envelope;
     const at = Date.parse(envelope.at);
+    if (event.type === 'question.cancelled') {
+      // The question is gone (P1-34); a waiting agent was interrupted out of it and goes idle.
+      for (const e of this.entries.values()) {
+        if (e.record.pendingQuestionId !== event.questionId) continue;
+        this.update(e, at, { pendingQuestionId: undefined });
+        if (e.beforePause === 'waiting_for_input') e.beforePause = 'idle';
+        if (broadcast) this.mark(e.record.agentId);
+      }
+      return;
+    }
     if (event.type === 'question.answered') {
       for (const e of this.entries.values()) {
         if (e.record.pendingQuestionId !== event.questionId) continue;
@@ -300,10 +310,13 @@ export class StatusStore {
         });
         return;
       case 'agent.idle':
+        // An idle agent is not waiting for anything: a question still pending was withdrawn.
         this.update(entry, at, {
           ...(paused ? {} : { state: 'idle' }),
           ...(event.cost ? { costSoFar: event.cost } : {}),
+          pendingQuestionId: undefined,
         });
+        if (paused && entry.beforePause === 'waiting_for_input') entry.beforePause = 'idle';
         return;
       case 'agent.stalled':
         this.update(entry, at, paused ? {} : { state: 'stalled' });
@@ -340,8 +353,12 @@ export class StatusStore {
         this.update(entry, at, { state: 'stopped', pendingQuestionId: undefined });
         return;
       case 'agent.interrupted':
-        // The question (if any) is still open: the resume path re-asks or delivers the answer.
-        this.update(entry, at, { state: 'interrupted', currentActivity: event.reason });
+        // Its open question is cancelled with it (P1-34): a resumed session re-asks.
+        this.update(entry, at, {
+          state: 'interrupted',
+          currentActivity: event.reason,
+          pendingQuestionId: undefined,
+        });
         return;
     }
   }

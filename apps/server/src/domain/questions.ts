@@ -49,7 +49,8 @@ export function answerQuestion(
 ): Question {
   const current = ctx.tables.questions.get(questionId);
   if (!current) throw new Error(`no question ${questionId}`);
-  if (current.status === 'answered') throw new Error(`question ${questionId} is already answered`);
+  if (current.status !== 'open')
+    throw new Error(`question ${questionId} is already ${current.status}`);
   const question: Question = {
     ...current,
     status: 'answered',
@@ -67,6 +68,47 @@ export function answerQuestion(
     version: question.version,
   });
   return question;
+}
+
+/**
+ * Closes an open question that can no longer be answered (P1-34) and emits `question.cancelled`.
+ * A question that is not open is left as it is.
+ */
+export function cancelQuestion(
+  ctx: CommandContext,
+  questionId: Id,
+  reason: string,
+  now: string,
+): Question | undefined {
+  const current = ctx.tables.questions.get(questionId);
+  if (!current || current.status !== 'open') return undefined;
+  const question: Question = {
+    ...current,
+    status: 'cancelled',
+    version: current.version + 1,
+    updatedAt: now,
+  };
+  ctx.tables.questions.upsert(question);
+  ctx.emit({
+    type: 'question.cancelled',
+    questionId,
+    agentId: current.originAgentId,
+    reason,
+    version: question.version,
+  });
+  return question;
+}
+
+/** Cancels every open question of an agent (it ended or was interrupted). */
+export function cancelQuestionsOf(
+  ctx: CommandContext,
+  agentId: Id,
+  reason: string,
+  now: string,
+): Id[] {
+  return openQuestionsOf(ctx, agentId)
+    .map((q) => cancelQuestion(ctx, q.id, reason, now)?.id)
+    .filter((id): id is Id => id !== undefined);
 }
 
 /** Questions still open for an agent (a resume re-delivers their answers, P1-14). */
