@@ -3,6 +3,14 @@ import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
+import {
+  BrainRunner,
+  createBrainQueries,
+  type BrainDefinition,
+  type BrainPlacement,
+  type BrainQueries,
+  type BrainRunnerOptions,
+} from '../brains/index.js';
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { DEFAULT_CAPS } from './caps.js';
 import { StatusStore } from './status-store.js';
@@ -48,6 +56,14 @@ export interface ComposedRuntime {
   runtime: AgentRuntime;
   /** The `DomainCommands` surface over this log and runtime (P2-01). */
   commands: Commands;
+  /** Read-only views brains seed their turns from (P2-06). */
+  queries: BrainQueries;
+  /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
+  startBrain(
+    definition: BrainDefinition,
+    placement: BrainPlacement,
+    opts?: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'>,
+  ): Promise<BrainRunner>;
   /** Startup recovery (P1-14): marks lost agents interrupted and resumes what can be resumed. */
   recover(): Promise<RecoveryReport>;
   /**
@@ -94,12 +110,24 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
 
+  const commands = new Commands({ log, agents: runtime });
+  const queries = createBrainQueries({ tables: log.tables, status: (id) => statuses.get(id) });
   return {
     log,
     statuses,
     transcripts,
     runtime,
-    commands: new Commands({ log, agents: runtime }),
+    commands,
+    queries,
+    startBrain: (definition, placement, brainOpts = {}) =>
+      BrainRunner.start(definition, placement, {
+        log,
+        runtime,
+        commands,
+        queries,
+        ...brainOpts,
+        ...(opts.onError ? { onError: opts.onError } : {}),
+      }),
     recover: () => runtime.recover(),
     async shutdown() {
       await runtime.shutdown();
