@@ -92,7 +92,33 @@ export function isRemoteRequest(req: {
   const origin = req.headers['origin'];
   if (Array.isArray(origin)) return true;
   if (req.headers['tailscale-user-login'] !== undefined) return true;
+  // A proxy on this machine (Tailscale Serve, Funnel, a dev proxy) connects from loopback but
+  // says where the request came from; headers can only make a request look more remote.
+  for (const h of FORWARDING_HEADERS) if (req.headers[h] !== undefined) return true;
+  const host = req.headers['host'];
+  if (Array.isArray(host) || (host !== undefined && !isLoopbackHost(host))) return true;
   return !(isLoopback(req.socket.remoteAddress) && isLoopbackOrigin(origin));
+}
+
+const FORWARDING_HEADERS = [
+  'forwarded',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+  'tailscale-user-name',
+  'tailscale-user-profile-pic',
+];
+
+/** A `Host` header naming this machine: localhost, 127.x or [::1], with or without a port. */
+function isLoopbackHost(host: string): boolean {
+  let name: string;
+  try {
+    name = new URL(`http://${host}`).hostname;
+  } catch {
+    return false;
+  }
+  return LOOPBACK_HOSTS.has(name) || (isIP(name) === 4 && name.startsWith('127.'));
 }
 
 /** Constant-time token comparison. */

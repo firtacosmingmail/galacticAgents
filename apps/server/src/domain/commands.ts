@@ -48,7 +48,13 @@ import {
   openRouted,
   type QuestionRouting,
 } from './question-service.js';
-import { answerQuestion, checkAnswer, escalateQuestion, reassignQuestion } from './questions.js';
+import {
+  answerQuestion,
+  checkAnswer,
+  escalateQuestion,
+  reassignQuestion,
+  COMMAND_SOURCE,
+} from './questions.js';
 import { setProjectState, setTaskState } from './states.js';
 import {
   archiveTask,
@@ -101,6 +107,8 @@ export class Commands implements DomainCommands {
   private readonly agents: AgentControl | undefined;
   private readonly questions: QuestionRouting;
   private readonly choose: ChooseOptions;
+  /** A Harmonizer spawn is under way: the slot is taken before its session reports (review). */
+  private harmonizerSpawning = false;
 
   constructor(opts: CommandsOptions) {
     this.log = opts.log;
@@ -290,11 +298,15 @@ export class Commands implements DomainCommands {
     if (!cwd)
       throw new DomainError('invalid', 'an agent outside a project needs a working directory');
     if (input.role === 'harmonizer') {
+      const live = new Set((this.agents?.liveAgents?.() ?? []).map((a) => a.id));
       const running = tables.agents
         .all()
-        .find((a) => a.role === 'harmonizer' && this.questions.isLiving(a.id));
-      if (running) {
-        throw new DomainError('conflict', `the Harmonizer is already running (${running.id})`);
+        .find((a) => a.role === 'harmonizer' && (live.has(a.id) || this.questions.isLiving(a.id)));
+      if (running || this.harmonizerSpawning) {
+        throw new DomainError(
+          'conflict',
+          `the Harmonizer is already running${running ? ` (${running.id})` : ''}`,
+        );
       }
       must(tables.bodies.get(EARTH_ID), 'body', EARTH_ID);
     }
@@ -308,7 +320,9 @@ export class Commands implements DomainCommands {
           : project?.bodyId;
 
     const since = this.log.currentSeq();
-    const result = await this.runtime().spawn({
+    const harmonizer = input.role === 'harmonizer';
+    if (harmonizer) this.harmonizerSpawning = true;
+    const spawning = this.runtime().spawn({
       role: input.role,
       runtime: input.runtime,
       prompt: input.prompt,
@@ -323,6 +337,12 @@ export class Commands implements DomainCommands {
       ...(input.tools ? { tools: input.tools } : {}),
       ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
     });
+    let result: SpawnResult;
+    try {
+      result = await spawning;
+    } finally {
+      if (harmonizer) this.harmonizerSpawning = false;
+    }
     if (!result.ok) throw new DomainError('conflict', result.reason);
     return { value: result.agent, events: this.eventsOf(since, result.agent.id) };
   }
@@ -375,7 +395,11 @@ export class Commands implements DomainCommands {
 
   openQuestion(input: OpenQuestionInput) {
     return this.run((ctx) =>
-      openRouted(ctx, { ...input, id: `q-${randomUUID()}` }, this.questions),
+      openRouted(
+        ctx,
+        { ...input, id: `q-${randomUUID()}`, meta: { source: COMMAND_SOURCE } },
+        this.questions,
+      ),
     );
   }
 

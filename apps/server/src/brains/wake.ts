@@ -8,6 +8,7 @@ import type {
   Id,
   Question,
 } from '@galactic/protocol';
+import { COMMAND_SOURCE } from '../domain/questions.js';
 
 /**
  * Which events wake a brain (P2-06; TECHNOLOGY §5.2). One data-driven table: an event type that
@@ -68,8 +69,11 @@ function concerns(q: Question | undefined, scope: WakeScope): q is Question {
  * waits for the answer like any holder.
  */
 function heldBefore(holders: readonly Id[] | undefined, scope: WakeScope, q: Question | undefined) {
-  if (q?.originAgentId === scope.brainId) return true;
-  return (q === undefined || q.kind === 'clarification') && (holders ?? []).includes(scope.brainId);
+  if (q !== undefined && q.kind !== 'clarification') return false; // decision 7: never a brain's
+  // Its own question only when it asked through a tool: one its session is blocked on is answered
+  // through the adapter, and a mailbox line would deliver it twice.
+  if (q?.originAgentId === scope.brainId) return q.meta?.['source'] === COMMAND_SOURCE;
+  return (holders ?? []).includes(scope.brainId);
 }
 
 function targets(target: ControlTarget, scope: WakeScope): boolean {

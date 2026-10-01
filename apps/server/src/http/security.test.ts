@@ -78,6 +78,13 @@ describe('security helpers', () => {
       true,
     );
     expect(isRemoteRequest(req('100.101.102.103'))).toBe(true);
-    expect(isRemoteRequest(req(undefined))).toBe(true);
+    expect(isRemoteRequest(req(undefined))).toBe(true); // A loopback proxy without Origin or identity still says where the request came from
+    // (wave-3 review): forwarding headers or a non-loopback Host make it remote.
+    expect(isRemoteRequest(req('127.0.0.1', { 'x-forwarded-for': '100.64.1.2' }))).toBe(true);
+    expect(isRemoteRequest(req('127.0.0.1', { forwarded: 'for=100.64.1.2' }))).toBe(true);
+    expect(isRemoteRequest(req('127.0.0.1', { host: 'mymac.tail1234.ts.net' }))).toBe(true);
+    expect(isRemoteRequest(req('127.0.0.1', { host: '127.0.0.1:7777' }))).toBe(false);
+    expect(isRemoteRequest(req('::1', { host: '[::1]:7777' }))).toBe(false);
+    expect(isRemoteRequest(req('127.0.0.1', { host: 'localhost:7777' }))).toBe(false);
   });
 });

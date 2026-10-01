@@ -328,3 +328,46 @@ describe('restart recovery', () => {
     expect(second.runtime.liveAgents()).toEqual([]);
   });
 });
+
+describe('one Harmonizer at a time (wave-3 review)', () => {
+  it('two concurrent spawns: exactly one Harmonizer runs', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const c = boot(db, new Map(), 1);
+    const spawn = () =>
+      c.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        prompt: 'scenario:long',
+        cwd: '/hq',
+      });
+    const results = await Promise.allSettled([spawn(), spawn()]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(c.runtime.liveAgents().filter((a) => a.role === 'harmonizer')).toHaveLength(1);
+  });
+
+  it('a restart with two interrupted Harmonizers resumes only the newest', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const spawnH = (c: ComposedRuntime) =>
+      c.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        prompt: 'scenario:long',
+        cwd: '/hq',
+      });
+    const first = boot(db, sessions, 1);
+    const h1 = (await spawnH(first)).value;
+    await first.shutdown(); // h1 interrupted
+    const second = boot(db, sessions, 1);
+    const h2 = (await spawnH(second)).value; // allowed: h1 is not running
+    await second.shutdown(); // h2 interrupted too
+    const third = boot(db, sessions, 1);
+    const report = await third.recover();
+    expect(report.resumed).toEqual([h2.id]);
+    expect(report.needAttention).toContain(h1.id);
+    expect((await third.runtime.recoverAgent(h1.id)).ok).toBe(false);
+    expect(third.runtime.liveAgents().filter((a) => a.role === 'harmonizer')).toHaveLength(1);
+  });
+});

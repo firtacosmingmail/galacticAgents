@@ -23,6 +23,21 @@ const read = { toolName: 'Read', input: { file_path: 'src/a.ts' } };
 const push = { toolName: 'Bash', input: { command: 'git push' } };
 
 describe('createPermissionGate', () => {
+  it('reads the workspace on every check: a moved workspace applies at once (wave-3 review)', () => {
+    let workspace = '/w/proj';
+    const gate = createPermissionGate({
+      agentId: 'a-1',
+      workspace: () => workspace,
+      cwd: '/w/proj',
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+    });
+    const edit = { toolName: 'Edit', input: { file_path: '/w/proj/src/a.ts' } };
+    expect(gate.check(edit)).toEqual({ decision: 'allow' });
+    workspace = '/w/elsewhere';
+    expect(gate.check(edit)).toMatchObject({ decision: 'ask' });
+  });
+
   it("allows a brain's own server tools by name or MCP name (P2-06)", () => {
     const gate = createPermissionGate({
       ...base,

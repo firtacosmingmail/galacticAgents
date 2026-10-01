@@ -39,8 +39,11 @@ export interface GateOptions {
    * here with the protocol schema, so a bad value cannot allow.
    */
   policy: unknown;
-  /** The project workspace root that "inside" is measured against. */
-  workspace: string;
+  /**
+   * The project workspace root that "inside" is measured against, or a function returning the
+   * current one (read on every check, like the policy: a moved workspace applies at once).
+   */
+  workspace: string | (() => string);
   /** Where the agent resolves relative paths from (its worktree). */
   cwd: string;
   caps: CapsEnforcer;
@@ -87,8 +90,8 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
     }
     return policy;
   };
-  const misplaced = misplacedCwd(opts.workspace, opts.cwd);
-  const ctx = { workspace: opts.workspace, cwd: opts.cwd };
+  const workspaceNow = () =>
+    typeof opts.workspace === 'function' ? opts.workspace() : opts.workspace;
   const serverTools = new Set(opts.serverTools ?? []);
   const isServerTool = (name: string) =>
     serverTools.has(name) ||
@@ -101,8 +104,10 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
         return { verdict: { decision: 'deny', reason: reserved.reason }, cap: true };
     }
     if (isServerTool(call.toolName)) return { verdict: { decision: 'allow' } };
+    const workspace = workspaceNow();
+    const misplaced = misplacedCwd(workspace, opts.cwd);
     if (misplaced) return { verdict: { decision: 'ask', reasons: [misplaced] } };
-    const verdict = evaluate(policyNow(), call, ctx);
+    const verdict = evaluate(policyNow(), call, { workspace, cwd: opts.cwd });
     const action = verdict.dominant ? { action: verdict.dominant } : {};
     switch (verdict.decision) {
       case 'allow':

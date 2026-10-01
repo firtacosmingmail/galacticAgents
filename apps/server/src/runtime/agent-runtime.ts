@@ -284,7 +284,7 @@ export class AgentRuntime {
     const gate = createPermissionGate({
       agentId: agent.id,
       policy: () => this.policyOf(agent.id, req),
-      workspace: req.workspace ?? req.cwd,
+      workspace: () => this.workspaceOf(agent.id, req),
       cwd: req.cwd,
       caps: this.caps,
       ...(req.tools ? { serverTools: req.tools.map((t) => t.name) } : {}),
@@ -670,8 +670,21 @@ export class AgentRuntime {
         );
       });
     }
+    // One Harmonizer at a time (SPEC decision 32): of several interrupted ones, only the newest
+    // comes back; the others stay interrupted for the user to look at.
+    const harmonizers = this.opts.statuses
+      .all()
+      .filter((r) => r.state === 'interrupted')
+      .map((r) => this.opts.log.tables.agents.get(r.agentId))
+      .filter((a): a is Agent => a?.role === 'harmonizer')
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    const passedOver = new Set(harmonizers.slice(1).map((a) => a.id));
     for (const record of this.opts.statuses.all()) {
       if (record.state !== 'interrupted') continue;
+      if (passedOver.has(record.agentId)) {
+        report.needAttention.push(record.agentId);
+        continue;
+      }
       const result = await this.recoverOne(record.agentId, histories.get(record.agentId));
       if (result.ok) report.resumed.push(record.agentId);
       else {
@@ -700,6 +713,12 @@ export class AgentRuntime {
     }
     const agent = this.opts.log.tables.agents.get(agentId);
     if (!agent) return { ok: false, reason: `no agent ${agentId}` };
+    if (agent.role === 'harmonizer') {
+      const other = [...this.live.values()].find((l) => l.agent.role === 'harmonizer');
+      if (other) {
+        return { ok: false, reason: `the Harmonizer is already running (${other.agent.id})` };
+      }
+    }
     const meta = (agent.meta ?? {}) as {
       cwd?: string;
       prompt?: string;
@@ -795,6 +814,14 @@ export class AgentRuntime {
    * (the global default when the project has none), read on every check so a change applies to
    * the next tool call; an agent outside any project keeps the policy it was spawned with.
    */
+  /** The agent's project workspace now (a moved workspace applies at once), else the spawn's. */
+  private workspaceOf(agentId: Id, req: SpawnRequest): string {
+    const { tables } = this.opts.log;
+    const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
+    const project = projectId ? tables.projects.get(projectId) : undefined;
+    return project?.workspace ?? req.workspace ?? req.cwd;
+  }
+
   private policyOf(agentId: Id, req: SpawnRequest): PermissionPolicy {
     const { tables } = this.opts.log;
     const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;

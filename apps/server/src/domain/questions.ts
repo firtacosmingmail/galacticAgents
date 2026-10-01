@@ -17,7 +17,15 @@ export interface OpenQuestionRow {
   originAgentId: Id;
   context: QuestionContext;
   holder?: Actor;
+  meta?: Record<string, unknown>;
 }
+
+/**
+ * `meta.source` of a question a brain opened through the command surface (a tool such as
+ * `ask_user`): nobody's session is blocked on it, so the asker hears the answer through its
+ * mailbox. A question an adapter raised (`agent.needs_input`) is answered through the adapter.
+ */
+export const COMMAND_SOURCE = 'command';
 
 const USER: Actor = { type: 'user' };
 
@@ -77,6 +85,7 @@ export function openQuestion(ctx: CommandContext, input: OpenQuestionRow): Quest
     version: existing ? existing.version + 1 : 0,
     createdAt: ctx.now,
     updatedAt: ctx.now,
+    ...(input.meta ? { meta: input.meta } : {}),
   };
   checkHolder(ctx, question, question.holder);
   ctx.tables.questions.upsert(question);
