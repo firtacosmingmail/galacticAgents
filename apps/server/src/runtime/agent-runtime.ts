@@ -17,12 +17,15 @@ import {
 } from '@galactic/protocol';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { createAgent, recordSpawned } from '../domain/agents.js';
+import { answerQuestion, cancelQuestion } from '../domain/questions.js';
 import {
-  answerQuestion,
-  cancelQuestion,
-  cancelQuestionsOf,
-  openQuestion,
-} from '../domain/questions.js';
+  endAgentQuestions,
+  holdersNow,
+  livingFromStatuses,
+  logRouting,
+  openFromNeedsInput,
+  type QuestionRouting,
+} from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
@@ -48,7 +51,7 @@ import type { TranscriptPipeline } from './transcripts.js';
  *     reach the log — the adapter is reporting a session the server no longer owns;
  *   - an agent's open questions are cancelled in the same command as its terminal or
  *     interrupted event, and when it goes idle without an answer (an interrupt withdrew them,
- *     P1-34);
+ *     P1-34); the questions it *held* move to the next living supervisor or the user (P2-03);
  *   - a stop that was asked for ends as a stop, even when a shutdown overtakes it (P1-32).
  *
  * `agent.spawned` is emitted here, not by adapters (they do not know bodies). The agent row is
@@ -87,6 +90,8 @@ export interface AgentRuntimeOptions {
   inboxHistory?: number;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
+  /** Question routing (P2-03); default: the log, with liveness from `statuses`. */
+  questions?: QuestionRouting;
 }
 
 const TERMINAL = new Set<AgentEvent['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
@@ -158,11 +163,13 @@ export class AgentRuntime {
   private readonly onError: (error: unknown, context: string) => void;
   private readonly pumps: Promise<void>[] = [];
   readonly caps: CapsEnforcer;
+  private readonly questions: QuestionRouting;
   private disposed = false;
 
   constructor(private readonly opts: AgentRuntimeOptions) {
     this.now = opts.now ?? (() => new Date().toISOString());
     this.onError = opts.onError ?? (() => {});
+    this.questions = opts.questions ?? logRouting(opts.log, livingFromStatuses(opts.statuses));
     this.caps = new CapsEnforcer({
       maxConcurrentAgents: opts.caps?.maxConcurrentAgents ?? 4,
       defaults: opts.caps?.defaults ?? DEFAULT_CAPS,
@@ -393,7 +400,14 @@ export class AgentRuntime {
     live.questions.delete(questionId);
     this.byQuestion.delete(questionId);
     // Not `command()`: a refused record (the question was cancelled meanwhile) reaches the caller.
-    this.opts.log.runCommand((ctx) => answerQuestion(ctx, { questionId, answer, answeredBy: by }));
+    this.opts.log.runCommand((ctx) =>
+      answerQuestion(ctx, {
+        questionId,
+        answer,
+        answeredBy: by,
+        holders: holdersNow(ctx, questionId, this.questions),
+      }),
+    );
   }
 
   async pause(agentId: Id, by: Actor): Promise<void> {
@@ -540,7 +554,12 @@ export class AgentRuntime {
             ? { type: 'agent.stopped', agentId: record.agentId, by: stoppedBy }
             : { type: 'agent.interrupted', agentId: record.agentId, reason: 'server restarted' },
         );
-        cancelQuestionsOf(ctx, record.agentId, stoppedBy ? 'agent stopped' : 'agent interrupted');
+        endAgentQuestions(
+          ctx,
+          record.agentId,
+          stoppedBy ? 'stopped' : 'interrupted',
+          this.questions,
+        );
       });
     }
     for (const record of this.opts.statuses.all()) {
@@ -724,15 +743,11 @@ export class AgentRuntime {
       return;
     }
     if (event.type === 'agent.needs_input') {
-      // The question row and the event in one transaction: the server owns questions (§5.3).
+      // The question row and the event in one transaction: the server owns questions (§5.3),
+      // routed to its holder by the question service (P2-03).
       this.command((ctx) => {
         ctx.emit(event);
-        openQuestion(ctx, {
-          id: event.questionId,
-          kind: event.kind,
-          originAgentId: event.agentId,
-          context: event.question,
-        });
+        openFromNeedsInput(ctx, event, this.questions);
       });
     } else if (event.type === 'agent.idle' && live.questions.size > live.answering.size) {
       // Idle while a question is open: an interrupt withdrew it (P1-34). Cancelled with the event.
@@ -740,7 +755,12 @@ export class AgentRuntime {
       this.command((ctx) => {
         ctx.emit(event);
         for (const q of withdrawn) {
-          cancelQuestion(ctx, q, 'withdrawn: the agent went idle without an answer');
+          cancelQuestion(
+            ctx,
+            q,
+            'withdrawn: the agent went idle without an answer',
+            holdersNow(ctx, q, this.questions),
+          );
         }
       });
       for (const q of withdrawn) {
@@ -798,13 +818,15 @@ export class AgentRuntime {
     );
   }
 
-  /** Logs how the agent ended and cancels its open questions in the same command, then forgets it. */
+  /**
+   * Logs how the agent ended, cancels its open questions and re-routes the ones it held (P2-03)
+   * in the same command, then forgets it.
+   */
   private recordEnd(live: Live, event: Event, terminal: Terminal): void {
     if (live.terminal) return;
-    const reason = `agent ${terminal.slice('agent.'.length)}`;
     this.command((ctx) => {
       ctx.emit(event);
-      cancelQuestionsOf(ctx, live.agent.id, reason);
+      endAgentQuestions(ctx, live.agent.id, terminal.slice('agent.'.length), this.questions);
     });
     this.end(live, terminal);
   }

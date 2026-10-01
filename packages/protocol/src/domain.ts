@@ -136,12 +136,38 @@ export type Proposal = z.infer<typeof Proposal>;
 export const ToolCall = z.object({ toolName: z.string(), input: z.unknown().optional() });
 export type ToolCall = z.infer<typeof ToolCall>;
 
+/** One of the origin agent's last logged events, as a question card shows it (P2-03). */
+export const QuestionRecentEvent = z.object({
+  seq: z.number().int().nonnegative(),
+  at: Timestamp,
+  type: z.string(),
+  /** A one-line reading: the tool name, the progress summary, the message text (capped). */
+  summary: z.string().optional(),
+});
+export type QuestionRecentEvent = z.infer<typeof QuestionRecentEvent>;
+
+/**
+ * Where a question comes from (P2-03; IMPLEMENTATION_PLAN corner case 11), filled by the server
+ * when it opens the question: the origin agent's role, task, project and body, and its last few
+ * logged events, so the card makes sense without opening the agent.
+ */
+export const QuestionOrigin = z.object({
+  role: AgentRole,
+  taskId: Id.optional(),
+  projectId: Id.optional(),
+  bodyId: Id.optional(),
+  recent: z.array(QuestionRecentEvent),
+});
+export type QuestionOrigin = z.infer<typeof QuestionOrigin>;
+
 /** What a question is about: the text the agent asked plus optional choices or the tool call awaiting permission. */
 export const QuestionContext = z.object({
   text: z.string().min(1),
   options: z.array(z.string()).optional(),
   toolCall: ToolCall.optional(),
   permissionAction: PermissionAction.optional(),
+  /** Set by the server on `question.opened`; adapters leave it out. */
+  origin: QuestionOrigin.optional(),
 });
 export type QuestionContext = z.infer<typeof QuestionContext>;
 
