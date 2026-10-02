@@ -133,11 +133,7 @@ describe('claudePreflight (P25-01; SPEC §4.6)', () => {
         message: expect.stringContaining('2.1.285'),
       }),
     ]);
-    expect(calls).toEqual([
-      'claude --version',
-      '/sdk/claude --version',
-      '/sdk/claude auth status',
-    ]);
+    expect(calls).toEqual(['claude --version', '/sdk/claude --version', '/sdk/claude auth status']);
     // A bundled version without a binary to ask: installed, but the login is unknown.
     const noBinary = await claudePreflight(byFile, sdk, 'claude', () => ({ version: '2.1.285' }));
     expect(noBinary).toMatchObject({ ok: false, installed: true, version: '2.1.285' });

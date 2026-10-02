@@ -177,7 +177,12 @@ describe('notificationOf (P25-01; SPEC §4.5)', () => {
       target: { kind: 'agent', id: 's1' },
     });
     // A shutdown of an agent that comes back, or a brain's session reset, is not news.
-    for (const reason of ['server shutdown', 'session reset', 'server restarted', 'resume failed: x']) {
+    for (const reason of [
+      'server shutdown',
+      'session reset',
+      'server restarted',
+      'resume failed: x',
+    ]) {
       expect(
         notificationOf(env(12, { type: 'agent.interrupted', agentId: 's1', reason }), lookup),
         reason,

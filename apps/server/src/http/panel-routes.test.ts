@@ -1,11 +1,4 @@
-import {
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -129,7 +122,7 @@ async function historyApp(pipeline: { holdMs?: number; flushMs?: number } = {}) 
 }
 
 describe('GET /api/agents/:id/conversation (P25-01)', () => {
-  it("gives the persisted lastSeq, so a reply still buffered arrives on the stream", async () => {
+  it('gives the persisted lastSeq, so a reply still buffered arrives on the stream', async () => {
     const { t, transcripts, output } = await historyApp({ holdMs: 60_000, flushMs: 60_000 });
     output('h1', 'text', 'persisted');
     transcripts.append('h1', 'text', 'still buffered'); // no flush yet
@@ -163,7 +156,9 @@ describe('GET /api/agents/:id/conversation (P25-01)', () => {
     expect(sqls.length).toBeGreaterThanOrEqual(8); // newest page plus both cursor kinds × ways
     for (const sql of sqls) {
       const params = (sql.match(/\?/g) ?? []).map(() => 'x');
-      const plan = (log.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[])
+      const plan = (
+        log.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[]
+      )
         .map((p) => p.detail)
         .join(' | ');
       expect(plan, sql).not.toMatch(/TEMP B-TREE|SCAN/);
@@ -565,7 +560,7 @@ describe('settings (P25-01; SPEC §4.6)', () => {
   });
 
   it('saves restart-only settings and refuses env-decided ones', async () => {
-    const { t, config, file } = await settingsApp({ envOverrides: ['retentionDays'] });
+    const { t, file } = await settingsApp({ envOverrides: ['retentionDays'] });
     const root = join(realpathSync(mkdtempSync(join(tmpdir(), 'galactic-root-'))), 'new-root');
     cleanups.push(() => rmSync(dirname(root), { recursive: true, force: true }));
     const res = SettingsResponse.parse(

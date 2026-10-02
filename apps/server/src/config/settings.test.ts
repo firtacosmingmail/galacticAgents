@@ -69,9 +69,9 @@ describe('SettingsService (P25-01)', () => {
     }
     expect(file()).toEqual(before);
     // A folder in the home directory is fine.
-    expect(settings.update({ projectsRoot: join(home, 'etc-like') }, local).settings.projectsRoot).toBe(
-      join(home, 'etc-like'),
-    );
+    expect(
+      settings.update({ projectsRoot: join(home, 'etc-like') }, local).settings.projectsRoot,
+    ).toBe(join(home, 'etc-like'));
   });
 
   it('refuses `~` itself as the projects root', () => {
