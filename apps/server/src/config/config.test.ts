@@ -65,6 +65,40 @@ describe('loadConfig', () => {
     );
   });
 
+  it('reads the spawn caps from the file and the environment, with defaults (P2-17)', () => {
+    expect(loadConfig({ GALACTIC_HOME: home }).config.caps).toEqual({
+      maxConcurrentAgents: 4,
+      maxStewardsPerWaykeeper: 3,
+      maxSpawnsPerHour: 30,
+      maxSpawnsPerHourPerBrain: 20,
+    });
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        caps: { maxStewardsPerWaykeeper: 2, maxSpawnsPerHour: 10 },
+      }),
+    );
+    expect(
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_MAX_SPAWNS_PER_HOUR_PER_BRAIN: '5' }).config.caps,
+    ).toEqual({
+      maxConcurrentAgents: 4,
+      maxStewardsPerWaykeeper: 2,
+      maxSpawnsPerHour: 10,
+      maxSpawnsPerHourPerBrain: 5,
+    });
+    expect(
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_MAX_CONCURRENT_AGENTS: '8' }).config.caps
+        .maxConcurrentAgents,
+    ).toBe(8);
+    expect(() =>
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_MAX_STEWARDS_PER_WAYKEEPER: '0' }),
+    ).toThrow(/maxStewardsPerWaykeeper/);
+    expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_MAX_SPAWNS_PER_HOUR: 'x' })).toThrow(
+      /maxSpawnsPerHour/,
+    );
+  });
+
   it('enables the dev routes only with GALACTIC_DEV (P0-16)', () => {
     expect(loadConfig({ GALACTIC_HOME: home }).config.dev).toBe(false);
     expect(loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '1' }).config.dev).toBe(true);

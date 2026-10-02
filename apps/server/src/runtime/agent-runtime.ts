@@ -31,7 +31,13 @@ import {
 } from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
-import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
+import {
+  CapsEnforcer,
+  DEFAULT_CAPS,
+  DEFAULT_MAX_CONCURRENT_AGENTS,
+  type CapsConfig,
+  type SpawnCheck,
+} from './caps.js';
 import { createPermissionGate, type RuntimeGate } from './permission-gate.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
@@ -88,7 +94,8 @@ export interface AgentRuntimeOptions {
   adapters: AgentAdapter[];
   transcripts: TranscriptPipeline;
   statuses: StatusStore;
-  caps?: { maxConcurrentAgents?: number; defaults?: AgentCaps };
+  /** Hard caps (P1-02) and the hierarchy's spawn caps (P2-17). */
+  caps?: CapsConfig;
   /** Delivered messages kept per inbox for inspection; the log has the full history. */
   inboxHistory?: number;
   now?: () => string;
@@ -184,11 +191,19 @@ export class AgentRuntime {
     this.now = opts.now ?? (() => new Date().toISOString());
     this.onError = opts.onError ?? (() => {});
     this.questions = opts.questions ?? logRouting(opts.log, livingFromStatuses(opts.statuses));
+    const { maxConcurrentAgents, defaults, ...spawn } = opts.caps ?? {};
     this.caps = new CapsEnforcer({
-      maxConcurrentAgents: opts.caps?.maxConcurrentAgents ?? 4,
-      defaults: opts.caps?.defaults ?? DEFAULT_CAPS,
+      maxConcurrentAgents: maxConcurrentAgents ?? DEFAULT_MAX_CONCURRENT_AGENTS,
+      defaults: defaults ?? DEFAULT_CAPS,
+      spawn,
+      agentOf: (id) => opts.log.tables.agents.get(id),
       onCapHit: (agentId, reason) => void this.onCapHit(agentId, reason),
     });
+    // Spawns per hour survive a restart (P2-17): every agent row created in the last hour counts.
+    for (const agent of opts.log.tables.agents.all()) {
+      const at = Date.parse(agent.createdAt);
+      if (Number.isFinite(at)) this.caps.noteSpawn(agent.supervisorId, at);
+    }
     for (const adapter of opts.adapters) {
       this.adapters.set(adapter.runtime, adapter);
       this.pumps.push(this.pump(adapter));
@@ -217,7 +232,7 @@ export class AgentRuntime {
     if (this.disposed) throw new Error('runtime disposed');
     const adapter = this.adapters.get(req.runtime);
     if (!adapter) return { ok: false, reason: `no adapter for runtime ${req.runtime}` };
-    const gate = this.caps.canSpawn();
+    const gate = this.caps.canSpawn(this.spawnCheck(req.role, req.supervisorId));
     if (!gate.ok) return { ok: false, reason: gate.reason };
 
     const agent = this.opts.log.runCommand((ctx) =>
@@ -239,7 +254,21 @@ export class AgentRuntime {
         },
       }),
     ).value;
+    this.caps.noteSpawn(agent.supervisorId);
     return this.start(agent, req, adapter, (opts) => adapter.spawn(opts), false);
+  }
+
+  /** What the caps need to judge a spawn: the role, and who supervises it as what. */
+  private spawnCheck(role: AgentRole, supervisorId: Id | undefined, again = false): SpawnCheck {
+    const supervisorRole = supervisorId
+      ? this.opts.log.tables.agents.get(supervisorId)?.role
+      : undefined;
+    return {
+      role,
+      ...(supervisorId ? { supervisorId } : {}),
+      ...(supervisorRole ? { supervisorRole } : {}),
+      ...(again ? { again: true } : {}),
+    };
   }
 
   /**
@@ -258,7 +287,7 @@ export class AgentRuntime {
     if (!adapter.resumeSession || !agent.sessionRef) {
       return { ok: false, reason: `runtime ${agent.runtime} cannot resume sessions` };
     }
-    const gate = this.caps.canSpawn();
+    const gate = this.caps.canSpawn(this.spawnCheck(agent.role, agent.supervisorId, true));
     if (!gate.ok) return { ok: false, reason: gate.reason };
     const ref = agent.sessionRef;
     this.ended.delete(agent.id);
@@ -331,7 +360,10 @@ export class AgentRuntime {
       mailbox: false,
     };
     this.live.set(agent.id, live);
-    this.caps.track(agent.id, caps);
+    this.caps.track(agent.id, caps, {
+      role: agent.role,
+      ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
+    });
     let handle: SpawnHandle;
     try {
       handle = await open({
@@ -467,7 +499,7 @@ export class AgentRuntime {
     // it as a straggler before the new session registers under the same id.
     await new Promise((resolve) => setImmediate(resolve));
     const agent = this.opts.log.tables.agents.get(agentId) ?? live.agent;
-    const gate = this.caps.canSpawn();
+    const gate = this.caps.canSpawn(this.spawnCheck(agent.role, agent.supervisorId, true));
     if (!gate.ok) return { ok: false, reason: gate.reason };
     this.ended.delete(agentId);
     const result = await this.start(
