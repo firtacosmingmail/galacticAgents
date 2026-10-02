@@ -59,4 +59,46 @@ describe('app store (P1-38)', () => {
     apply(transcript('a1'));
     expect(useAppStore.getState().transcripts['a1']).toHaveLength(1);
   });
+
+  it('folds message.sent into the chat history, merges the REST history, and drops it for a new log (P2-18)', () => {
+    apply(snapshot('log-a'));
+    const sent = (seq: number, messageId: string, text: string): ServerMessage => ({
+      type: 'event',
+      seq,
+      at: fx.NOW,
+      event: {
+        type: 'message.sent',
+        messageId,
+        agentId: 'hq',
+        sender: { type: 'user' },
+        text,
+        interrupt: false,
+      },
+    });
+    apply(sent(5, 'm2', 'second'));
+    useAppStore.getState().addMessages('hq', [
+      {
+        messageId: 'm1',
+        agentId: 'hq',
+        seq: 3,
+        at: fx.NOW,
+        sender: { type: 'user' },
+        text: 'first',
+      },
+      {
+        messageId: 'm2',
+        agentId: 'hq',
+        seq: 5,
+        at: fx.NOW,
+        sender: { type: 'user' },
+        text: 'second',
+      },
+    ]);
+    apply(sent(5, 'm2', 'second')); // a replayed event is not doubled
+    expect(useAppStore.getState().messages['hq']?.map((m) => m.text)).toEqual(['first', 'second']);
+    apply(snapshot('log-a'));
+    expect(useAppStore.getState().messages['hq']).toHaveLength(2);
+    apply(snapshot('log-b'));
+    expect(useAppStore.getState().messages).toEqual({});
+  });
 });

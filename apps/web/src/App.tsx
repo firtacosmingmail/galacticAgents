@@ -9,6 +9,7 @@ import {
   TOKEN_KEY,
 } from './client/session.js';
 import { AgentsConsole } from './console/AgentsConsole.js';
+import { HierarchyConsole } from './console/hierarchy/HierarchyConsole.js';
 import './app.css';
 
 export function App() {
@@ -77,10 +78,44 @@ export function App() {
           setToken(undefined);
         }}
       />
-      <AgentsConsole token={token} />
+      <Consoles token={token} />
+    </main>
+  );
+}
+
+type Tab = 'hierarchy' | 'agents';
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'hierarchy', label: 'Hierarchy' },
+  { id: 'agents', label: 'Agents (dev)' },
+];
+
+/**
+ * The console's pages (P2-18): the hierarchy console drives the Phase 2 loop; the Phase 1 agents
+ * console (free-form spawns, a development tool — decision 24) stays one click away; the raw
+ * snapshot counts and the event log stay below both.
+ */
+function Consoles({ token }: { token: string }) {
+  const [tab, setTab] = useState<Tab>('hierarchy');
+  return (
+    <>
+      <nav className="tabs" role="tablist">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            className={tab === t.id ? 'selected' : 'secondary'}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+      {tab === 'hierarchy' && <HierarchyConsole token={token} />}
+      {tab === 'agents' && <AgentsConsole token={token} />}
       <World />
       <EventLog />
-    </main>
+    </>
   );
 }
 
@@ -88,7 +123,7 @@ function Header() {
   return (
     <header>
       <h1>GalacticAgents</h1>
-      <p className="muted">Mission Control · protocol v{PROTOCOL_VERSION} · Phase 1 ops console</p>
+      <p className="muted">Mission Control · protocol v{PROTOCOL_VERSION} · ops console</p>
     </header>
   );
 }
