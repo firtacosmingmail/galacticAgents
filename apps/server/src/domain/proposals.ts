@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  foldProposalMeta,
   proposalPlan,
   type Actor,
   type CreateProposalInput,
@@ -10,8 +11,18 @@ import {
   type ProposePlanInput,
   type Task,
 } from '@galactic/protocol';
+import { carryOut, type ProposalOptions } from './approval.js';
+import { describeRefusal } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import {
+  bodyRequestOf,
+  park,
+  parkIfNoRoom,
+  parkingFor,
+  roomFor,
+  unparkWaiting,
+} from './parking.js';
 import { setTaskState } from './states.js';
 import { createTask } from './tasks.js';
 
@@ -20,7 +31,9 @@ import { createTask } from './tasks.js';
  * request produces. The user approves it, edits it inline (size, body, workspace), or rejects it —
  * a rejected proposal stays as a draft that can still be edited, and an edited one can be decided
  * again; a proposal with no free planet is parked until it is edited or a planet frees. Approval
- * is final. What approval sets in motion (bodies, spawns) and un-parking are P2-09.
+ * is final. P2-09: a work card that needs a body none is free of is parked by the server
+ * (`parking.ts`) and un-parks when one frees; approval creates what the card asks for
+ * (`approval.ts`).
  */
 
 /** From which states each decision may be taken. */
@@ -54,7 +67,11 @@ function checkShape(ctx: CommandContext, p: Pick<Proposal, 'kind' | 'proposedBod
   }
 }
 
-export function createProposal(ctx: CommandContext, input: CreateProposalInput): Proposal {
+export function createProposal(
+  ctx: CommandContext,
+  input: CreateProposalInput,
+  opts: ProposalOptions = {},
+): Proposal {
   checkShape(ctx, input);
   const proposal: Proposal = {
     id: `pr-${randomUUID()}`,
@@ -73,7 +90,8 @@ export function createProposal(ctx: CommandContext, input: CreateProposalInput):
   }
   ctx.tables.proposals.insert(proposal);
   ctx.emit({ type: 'proposal.created', proposal });
-  return proposal;
+  // Decision 16: no free planet (or moon) — the card is parked at once, by the server (P2-09).
+  return parkIfNoRoom(ctx, proposal, opts);
 }
 
 /** Plan states in which a project takes no new plan: one is waiting for the user, or was approved. */
@@ -168,6 +186,7 @@ export function decideProposal(
   proposalId: Id,
   decision: ProposalDecision,
   by?: Actor,
+  opts: ProposalOptions = {},
 ): Proposal {
   const current = must(ctx.tables.proposals.get(proposalId), 'proposal', proposalId);
   const plan = proposalPlan(current);
@@ -189,10 +208,31 @@ export function decideProposal(
       `proposal ${proposalId} is ${current.state}; it cannot be ${DONE[decision.decision]}`,
     );
   }
-  const save = (changes: Partial<Proposal>) =>
-    ctx.tables.proposals.upsert({ ...current, ...changes, updatedAt: ctx.now });
+  // Any decision but a park drops the card's parking (P2-09; `foldProposalMeta`, as clients fold).
+  const save = (changes: Partial<Proposal>, initGit?: boolean) => {
+    const meta = foldProposalMeta(current.meta, {
+      parked: null,
+      ...(initGit !== undefined ? { initGit } : {}),
+    });
+    const next: Proposal = { ...current, ...changes, updatedAt: ctx.now };
+    if (meta) next.meta = meta;
+    else delete next.meta;
+    return ctx.tables.proposals.upsert(next);
+  };
   switch (decision.decision) {
     case 'approve': {
+      // A work card needs its body now (P2-09): without one it is parked instead (decision 16).
+      const request = plan ? undefined : bodyRequestOf(current);
+      const room = request ? roomFor(ctx, current, opts) : undefined;
+      if (request && room && !room.ok) {
+        if (current.state === 'parked') {
+          throw new DomainError('conflict', `${describeRefusal(room)}: the card stays parked`);
+        }
+        return park(ctx, current, parkingFor(request, room));
+      }
+      const workspace = plan
+        ? current.workspace
+        : (opts.checkWorkspace?.(current.workspace) ?? current.workspace);
       const proposal = save({ state: 'approved' });
       ctx.emit({ type: 'proposal.approved', proposalId });
       // A plan's tasks are approved with it (the ones the user archived meanwhile stay archived).
@@ -201,18 +241,35 @@ export function decideProposal(
           setTaskState(ctx, taskId, 'approved', by);
         }
       }
+      // What the card asks for is created in the approval's transaction (P2-09, `approval.ts`).
+      if (!plan) carryOut(ctx, proposal, room?.ok ? room.body : undefined, workspace, opts);
       return proposal;
     }
     case 'edit': {
-      const changes = Object.fromEntries(
+      const { initGit, ...changes } = Object.fromEntries(
         Object.entries(decision.changes).filter(([, v]) => v !== undefined),
       ) as typeof decision.changes;
-      if (Object.keys(changes).length === 0)
+      if (Object.keys(changes).length === 0 && initGit === undefined)
         throw new DomainError('invalid', 'an edit changes something');
+      if (initGit !== undefined && by?.type !== 'user') {
+        // Decision 27: only the user agrees to turn their folder into a repository.
+        throw new DomainError('invalid', 'only the user agrees to git init a workspace');
+      }
+      if (changes.workspace !== undefined && opts.checkWorkspace) {
+        changes.workspace = opts.checkWorkspace(changes.workspace);
+      }
       checkShape(ctx, { ...current, ...changes });
-      const proposal = save({ ...changes, state: 'edited' });
-      ctx.emit({ type: 'proposal.edited', proposalId, changes });
-      return proposal;
+      const proposal = save({ ...changes, state: 'edited' }, initGit);
+      ctx.emit({
+        type: 'proposal.edited',
+        proposalId,
+        changes: { ...changes, ...(initGit !== undefined ? { initGit } : {}) },
+      });
+      // Still no room for what the card now asks: it stays parked (decision 16). A body this
+      // card no longer proposes may let a parked card in.
+      const after = parkIfNoRoom(ctx, proposal, opts);
+      unparkWaiting(ctx, opts);
+      return after;
     }
     case 'reject': {
       const proposal = save({ state: 'rejected' });
@@ -221,12 +278,11 @@ export function decideProposal(
         proposalId,
         ...(decision.reason ? { reason: decision.reason } : {}),
       });
+      if (!plan) unparkWaiting(ctx, opts);
       return proposal;
     }
-    case 'park': {
-      const proposal = save({ state: 'parked' });
-      ctx.emit({ type: 'proposal.parked', proposalId, reason: decision.reason });
-      return proposal;
-    }
+    case 'park':
+      // Parked by hand: no `waitingFor`, so it waits for the user's next decision.
+      return park(ctx, current, { reason: decision.reason });
   }
 }

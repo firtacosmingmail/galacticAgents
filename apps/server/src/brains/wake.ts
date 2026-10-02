@@ -111,7 +111,7 @@ const ended = <T extends EndedType>(text: (e: EventOfType<T>) => string): WakeRu
   describe: (e) => `agent ${(e as EventOfType<EndedType>).agentId} ${text(e)}`,
 });
 
-type DecisionType = `proposal.${'approved' | 'edited' | 'rejected' | 'parked'}`;
+type DecisionType = `proposal.${'approved' | 'edited' | 'rejected' | 'parked' | 'unparked'}`;
 const proposal = <T extends DecisionType>(text: (e: EventOfType<T>) => string): WakeRule<T> => ({
   wakes: (e, s) => s.ownsProposal((e as EventOfType<DecisionType>).proposalId),
   describe: (e) => `proposal ${(e as EventOfType<DecisionType>).proposalId} ${text(e)}`,
@@ -179,6 +179,11 @@ export const WAKE_RULES: WakeRules = {
   'proposal.edited': proposal((e) => `was edited: ${JSON.stringify(e.changes)}`),
   'proposal.rejected': proposal((e) => `was rejected${e.reason ? `: ${e.reason}` : ''}`),
   'proposal.parked': proposal((e) => `was parked: ${e.reason}`),
+  // P2-09: a body freed and the server un-parked the card; the user decides it again.
+  'proposal.unparked': proposal(
+    (e) =>
+      `is pending again (${e.reason}): it now proposes ${e.proposedBody.bodyId ?? 'a body'} — tell the user they can approve it`,
+  ),
   'agent.finished': ended((e) => `finished${e.result ? `: ${quote(e.result)}` : ''}`),
   'agent.failed': ended((e) => `failed (${e.reason}): ${quote(e.error)}`),
   'agent.stalled': ended((e) => `has been silent for ${Math.round(e.silentForMs / 1000)} s`),

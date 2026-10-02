@@ -47,6 +47,7 @@ describe('WAKE_RULES', () => {
         'proposal.edited',
         'proposal.rejected',
         'proposal.parked',
+        'proposal.unparked',
         'agent.finished',
         'agent.failed',
         'agent.stalled',

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
+import { proposalParking } from '@galactic/protocol';
 import type {
   AgentRuntime,
   Body,
@@ -13,7 +14,7 @@ import type {
   WorkBodyKind,
 } from '@galactic/protocol';
 import { DomainError, must } from '../../domain/errors.js';
-import { slugify } from '../../workspace/workspaces.js';
+import { slugify, workspaceMeta } from '../../workspace/workspaces.js';
 import type { BrainQueries, BrainTool, BrainToolContext } from '../definition.js';
 import { asInput, isLiving, oneOf, S, str, strings } from './input.js';
 import { findRelated, words } from './related.js';
@@ -438,6 +439,9 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         kind: value.kind,
         proposedBody: value.proposedBody,
         workspace: value.workspace,
+        // P2-09: no room → the server parked the card (decision 16); tell the user why.
+        state: value.state,
+        ...(proposalParking(value) ? { parked: proposalParking(value) } : {}),
         ...(choice ? { body: describeChoice(choice) } : {}),
       };
     },
@@ -538,8 +542,8 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
   const createProject: BrainTool = {
     name: 'create_project',
     description:
-      'Creates the project of an APPROVED new-project proposal (planet or moon, with the user’s ' +
-      'edits), on its proposed body or the catalogue’s choice. Then spawn_waykeeper.',
+      'Returns the project of an APPROVED new-project proposal: the approval created it as the ' +
+      'user left the card (size, body, workspace). Then spawn_waykeeper.',
     inputSchema: S.obj({ proposalId: S.str('The approved proposal.') }, ['proposalId']),
     async handler(raw, ctx) {
       const proposal = approved(ctx.queries, str(asInput(raw), 'proposalId'));
@@ -553,9 +557,17 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       if (proposal.kind === 'asteroid') {
         throw new DomainError('invalid', `proposal ${proposal.id} is an asteroid: use create_task`);
       }
+      // P2-09: the approval created the project, as the card was approved; this returns it.
       const done = ctx.queries.projects().find((p) => p.meta?.['proposalId'] === proposal.id);
       if (done) {
-        throw new DomainError('conflict', `proposal ${proposal.id} is already project ${done.id}`);
+        return {
+          projectId: done.id,
+          name: done.name,
+          bodyId: done.bodyId,
+          workspace: done.workspace,
+          state: done.state,
+          note: 'created when the user approved the card; spawn_waykeeper next',
+        };
       }
       const bodyId = proposal.proposedBody.bodyId;
       const parentProjectId =
@@ -583,8 +595,9 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
   const createTask: BrainTool = {
     name: 'create_task',
     description:
-      'Creates the task of an APPROVED proposal: a standalone task on a fresh asteroid (then ' +
-      'spawn_steward), or a task added to an existing project (its Waykeeper picks it up).',
+      'Returns the task of an APPROVED proposal (the approval created it from the card): a ' +
+      'standalone task on its asteroid (then spawn_steward), or a task added to an existing ' +
+      'project (its Waykeeper picks it up). priority and blockedBy are applied to it.',
     inputSchema: S.obj(
       {
         proposalId: S.str('The approved proposal.'),
@@ -598,18 +611,22 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       const input = asInput(raw);
       const proposal = approved(ctx.queries, str(input, 'proposalId'));
       const { request } = proposal;
-      const done = ctx.queries.tasks().find((t) => t.meta?.['proposalId'] === proposal.id);
-      if (done) {
-        throw new DomainError('conflict', `proposal ${proposal.id} is already task ${done.id}`);
-      }
       const priority = oneOf(input, 'priority', ['low', 'normal', 'high', 'urgent'] as const, true);
       const blockedBy = strings(input, 'blockedBy');
       const extra = {
         ...(priority ? { priority } : {}),
         ...(blockedBy ? { blockedBy } : {}),
       };
+      // P2-09: the approval created the task from the card (its description stands); this returns
+      // it, with the priority and blockers given here — they are not on the card.
+      const done = ctx.queries.tasks().find((t) => t.meta?.['proposalId'] === proposal.id);
       let task: Task;
-      if (request.type === 'project_task') {
+      if (done) {
+        task =
+          Object.keys(extra).length > 0 && done.state === 'approved'
+            ? (await ctx.commands.updateTask(done.id, extra)).value
+            : done;
+      } else if (request.type === 'project_task') {
         const { value } = await ctx.commands.createTask({
           description: str(input, 'description', true) ?? request.description,
           projectId: request.projectId,
@@ -746,6 +763,11 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       }
       if (!deps.startWaykeeper) {
         throw new DomainError('invalid', 'no Waykeeper brain is available on this server');
+      }
+      // P2-09: the workspace is ready before anyone works in it — created, or git-initialised
+      // only with the consent given on the card (`meta.initGit`, decision 27).
+      if (ctx.workspaces && !workspaceMeta(project)) {
+        await ctx.workspaces.prepareProject(projectId);
       }
       const { agentId } = await deps.startWaykeeper({
         projectId,

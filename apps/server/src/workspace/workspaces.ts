@@ -428,14 +428,16 @@ export class Workspaces {
 
   /**
    * Prepares a project's workspace and records the result on it through the domain commands
-   * (`project.updated`: canonical `workspace`, `repoPath`, `meta.workspace`).
+   * (`project.updated`: canonical `workspace`, `repoPath`, `meta.workspace`). `initGit` defaults
+   * to the consent the user gave on the project's approved card (`meta.initGit`, P2-09).
    */
   async prepareProject(projectId: Id, opts: { initGit?: boolean } = {}): Promise<WorkspaceInfo> {
     const project = must(this.need('tables').projects.get(projectId), 'project', projectId);
+    const initGit = opts.initGit ?? project.meta?.['initGit'] === true;
     const info = await this.prepare({
       name: project.name,
       path: project.workspace,
-      ...(opts.initGit ? { initGit: true } : {}),
+      ...(initGit ? { initGit: true } : {}),
     });
     const { path, created: _created, ...meta } = info;
     await this.need('commands').updateProject(projectId, {

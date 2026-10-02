@@ -45,6 +45,7 @@ import {
   type ProjectChanges,
 } from './projects.js';
 import { noLooserThan, resolvePolicy, type PolicyWrite } from './permissions.js';
+import type { ProposalOptions } from './approval.js';
 import { createProposal, decideProposal, proposePlan } from './proposals.js';
 import {
   endAgentQuestions,
@@ -103,6 +104,11 @@ export interface CommandsOptions {
    * §8): no policy write is floored. Default off: a write not marked local is floored (P2-21).
    */
   autoApproveRemote?: boolean;
+  /**
+   * Validates a proposal card's workspace (P2-09; the server passes `Workspaces.checkPath`): a
+   * user's edit and the approval are refused for a workspace decision 27 forbids.
+   */
+  checkWorkspace?: (path: string) => string;
 }
 
 const ENDINGS = new Set(['agent.finished', 'agent.failed', 'agent.stopped', 'agent.interrupted']);
@@ -120,6 +126,7 @@ export class Commands implements DomainCommands {
   private readonly questions: QuestionRouting;
   private readonly choose: ChooseOptions;
   private readonly autoApproveRemote: boolean;
+  private readonly proposalOptions: ProposalOptions;
   /**
    * Spawns under way, by slot (`harmonizer`, `waykeeper:<project>`, `steward:<task>`): a slot is
    * taken synchronously, before the spawn's session reports, so two concurrent spawns can never
@@ -133,6 +140,10 @@ export class Commands implements DomainCommands {
     this.questions = opts.questions ?? logRouting(opts.log);
     this.choose = opts.isRunning ? { isRunning: opts.isRunning } : {};
     this.autoApproveRemote = opts.autoApproveRemote ?? false;
+    this.proposalOptions = {
+      ...this.choose,
+      ...(opts.checkWorkspace ? { checkWorkspace: opts.checkWorkspace } : {}),
+    };
   }
 
   /** How a command's policy write is judged (P2-21): its origin plus the server's setting. */
@@ -458,13 +469,13 @@ export class Commands implements DomainCommands {
   // -- proposals -------------------------------------------------------------------------------
 
   createProposal(input: CreateProposalInput) {
-    return this.run((ctx) => createProposal(ctx, input));
+    return this.run((ctx) => createProposal(ctx, input, this.proposalOptions));
   }
   proposePlan(input: ProposePlanInput) {
     return this.run((ctx) => proposePlan(ctx, input));
   }
   decideProposal(proposalId: Id, decision: ProposalDecision, by: Actor) {
-    return this.run((ctx) => decideProposal(ctx, proposalId, decision, by));
+    return this.run((ctx) => decideProposal(ctx, proposalId, decision, by, this.proposalOptions));
   }
 
   // -- questions -------------------------------------------------------------------------------

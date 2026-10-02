@@ -2,6 +2,7 @@ import type { Agent, Body, BodyKind, Host, Id } from '@galactic/protocol';
 import { isReserved } from './catalogue.js';
 import { DomainError, must, notFound } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import { unparkWaiting } from './parking.js';
 import { FINISHED_WORK } from './states.js';
 
 /**
@@ -250,6 +251,8 @@ export function release(ctx: CommandContext, body: Body): Body {
   const { host: _host, movedTo: _marker, ...freed } = body;
   const next = ctx.tables.bodies.upsert(freed);
   ctx.emit({ type: 'body.freed', bodyId: body.id });
+  // A card parked for want of this kind of body un-parks in the same transaction (P2-09).
+  unparkWaiting(ctx);
   return next;
 }
 

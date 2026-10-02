@@ -193,6 +193,60 @@ export function proposalPlan(
   return parsed.success ? parsed.data : undefined;
 }
 
+/**
+ * What a parked card shows and offers (P2-09; SPEC §3.3, decisions 1 and 16), kept in
+ * `Proposal.meta.parked` while the proposal is `parked`. A card the server parked for lack of
+ * room carries `waitingFor` (the body kind it needs) and un-parks by itself when one frees; one
+ * the user parked by hand has only the `reason` and stays parked until it is decided again.
+ */
+export const ParkOffer = z.enum([
+  /** Make it a moon project instead (an independent moon, decision 10). */
+  'downsize_moon',
+  /** Make it standalone work on asteroids. */
+  'downsize_asteroid',
+  /** Close (and archive) a completed project early to free its body. */
+  'close_early',
+  /** A sub-project without a free moon stays a task on its planet (SPEC §3.2). */
+  'task_on_planet',
+]);
+export type ParkOffer = z.infer<typeof ParkOffer>;
+
+export const ProposalParking = z.object({
+  reason: z.string(),
+  /** Set when the server parked the card because no body of this kind was free. */
+  waitingFor: z.enum(['planet', 'moon']).optional(),
+  /** The occupied bodies and their occupants, as the refusal lists them. */
+  occupied: z.array(BodyOccupancy).optional(),
+  offers: z.array(ParkOffer).optional(),
+});
+export type ProposalParking = z.infer<typeof ProposalParking>;
+
+/** The parking a proposal shows, when it is parked with one. */
+export function proposalParking(
+  proposal: Pick<Proposal, 'meta'> | undefined,
+): ProposalParking | undefined {
+  const parsed = ProposalParking.safeParse(proposal?.meta?.['parked']);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * A proposal's `meta` after a decision (P2-09), one implementation for the server and every
+ * client so the two folds cannot drift: `parked` is set while the card is parked and dropped by
+ * any other decision (`null`); `initGit` records the user's consent to turn an existing non-git
+ * workspace into a repository (decision 27). An emptied `meta` is `undefined`.
+ */
+export function foldProposalMeta(
+  meta: Meta | undefined,
+  changes: { parked?: ProposalParking | null; initGit?: boolean },
+): Meta | undefined {
+  const next: Record<string, unknown> = { ...(meta ?? {}) };
+  if (changes.parked === null) delete next['parked'];
+  else if (changes.parked !== undefined) next['parked'] = changes.parked;
+  if (changes.initGit === true) next['initGit'] = true;
+  else if (changes.initGit === false) delete next['initGit'];
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 /** A tool call an agent wants to make, as the permission gate and the permission card see it. */
 export const ToolCall = z.object({ toolName: z.string(), input: z.unknown().optional() });
 export type ToolCall = z.infer<typeof ToolCall>;
