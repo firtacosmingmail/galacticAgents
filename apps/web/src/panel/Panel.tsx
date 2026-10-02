@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, type ReactNode } from 'react';
 import { ENDED_STATES, type Agent, type Id } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { summaryOf, type WorldState } from '../state/reduce.js';
@@ -20,12 +20,21 @@ import './panel.css';
  * store's too, mirrored in the URL. The main area and the right column reuse P2-18's pieces until
  * P25-03 … P25-06 replace them.
  */
-export function Panel({ token, api: given }: { token: string; api?: Api }) {
+export function Panel({
+  token,
+  api: given,
+  onForget,
+}: {
+  token: string;
+  api?: Api;
+  /** Forgets the stored token (back to the paste form), as the ops console's status bar does. */
+  onForget?: () => void;
+}) {
   const api = useMemo(() => given ?? createApi(token), [given, token]);
   return (
     <ApiContext.Provider value={api}>
       <div className="pnl">
-        <TopBar />
+        <TopBar {...(onForget ? { onForget } : {})} />
         <div className="pnl-grid">
           <Navigation />
           <MainArea />
@@ -36,7 +45,7 @@ export function Panel({ token, api: given }: { token: string; api?: Api }) {
   );
 }
 
-function TopBar() {
+function TopBar({ onForget }: { onForget?: () => void }) {
   const status = useAppStore((s) => s.status);
   const world = useAppStore((s) => s.world);
   const summary = summaryOf(world);
@@ -57,8 +66,30 @@ function TopBar() {
       <NavLink to={{ route: 'debug', selection: HARMONIZER }} className="pnl-debug-link">
         Ops console
       </NavLink>
+      {onForget && (
+        <button type="button" className="pnl-forget" onClick={onForget}>
+          Forget token
+        </button>
+      )}
     </header>
   );
+}
+
+/**
+ * A selection whose kind is not the agent's role (`/waykeeper/<a Steward's id>`, an old link)
+ * shows the agent's real view; this rewrites the URL to match, without a new history entry.
+ */
+function useCanonicalSelection(agent: Agent | undefined, selection: Selection) {
+  const navigate = useAppStore((s) => s.navigate);
+  const role = agent?.role;
+  const id = agent?.id;
+  useEffect(() => {
+    if (selection.kind === 'harmonizer' || !role || !id || role === selection.kind) return;
+    navigate(
+      { route: 'panel', selection: role === 'harmonizer' ? HARMONIZER : { kind: role, id } },
+      { replace: true },
+    );
+  }, [navigate, selection, role, id]);
 }
 
 /** The agent a selection points at, if the stream has it. */
@@ -71,6 +102,7 @@ function MainArea() {
   const status = useAppStore((s) => s.status);
   const selection = useAppStore((s) => s.selection);
   const agent = selectedAgent(world, selection);
+  useCanonicalSelection(agent, selection);
 
   let content;
   if (!agent) {

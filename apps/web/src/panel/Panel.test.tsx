@@ -173,6 +173,28 @@ describe('panel shell and selection (P25-02)', () => {
     expect(main().textContent).toMatch(/not in the current log/);
   });
 
+  it('rewrites a link whose kind is not the agent’s role (/waykeeper/<a Steward>)', async () => {
+    const entries = window.history.length;
+    await open('/waykeeper/a-steward-1');
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/steward/a-steward-1'));
+    expect(useAppStore.getState().selection).toEqual({ kind: 'steward', id: 'a-steward-1' });
+    expect(main().dataset['selection']).toBe('steward:a-steward-1');
+    expect(
+      within(main()).getByRole('region', {
+        name: 'view of Steward · Replace the session middleware',
+      }),
+    ).toBeTruthy();
+    // Replaced, not pushed: back does not return to the wrong URL.
+    expect(window.history.length).toBe(entries);
+  });
+
+  it('forgets the token from the panel’s top bar', async () => {
+    await open('/');
+    fireEvent.click(screen.getByRole('button', { name: 'Forget token' }));
+    expect(localStorage.getItem('galactic.token')).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'navigation' })).toBeNull();
+  });
+
   it('shows the ops console at /debug, and links back to the panel', async () => {
     await open('/debug');
     expect(useAppStore.getState().route).toBe('debug');

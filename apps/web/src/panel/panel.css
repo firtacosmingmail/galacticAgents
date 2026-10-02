@@ -108,6 +108,17 @@
   color: var(--pnl-muted);
 }
 
+.pnl-forget {
+  font: inherit;
+  font-size: 13px;
+  color: var(--pnl-muted);
+  background: none;
+  border: 1px solid var(--pnl-line, currentColor);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
 /* the three columns */
 .pnl-grid {
   flex: 1;

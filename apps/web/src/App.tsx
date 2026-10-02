@@ -78,7 +78,7 @@ export function App() {
     setToken(undefined);
   };
 
-  if (route === 'panel') return <Panel token={token} />;
+  if (route === 'panel') return <Panel token={token} onForget={forget} />;
 
   return (
     <main className="page">
