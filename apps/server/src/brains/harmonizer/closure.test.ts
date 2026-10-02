@@ -150,3 +150,102 @@ describe('closure relay end to end (P2-13)', () => {
     h.verify();
   });
 });
+
+describe('closure needs the user’s word, checked in code (decision 11; review)', () => {
+  it('refuses close_project and finished_work without a user answer, and acts on a confirmation', async () => {
+    const clock = tickingClock();
+    const h = brainHarness({ compose: { log: { now: clock } } });
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-closure-')));
+    lives.push({ h, root });
+    const project = (await h.commands.createProject({ name: 'Tool', workspace: '/w/tool' })).value;
+    const done = (await h.commands.createTask({ description: 'old script' })).value;
+    await h.commands.closeTask(done.id, USER);
+    const outcomes: Record<string, unknown> = {};
+    const asked: Id[] = [];
+    const hq = await h.startHarmonizer({
+      definition: harmonizerBrain({ projectsRoot: root }),
+      script: (s) =>
+        s
+          .once('close it on your own', async (t) => {
+            outcomes['close'] = await t.try('close_project', { projectId: project.id });
+            outcomes['archive'] = await t.try('finished_work', {
+              kind: 'task',
+              id: done.id,
+              action: 'archive',
+            });
+          })
+          .once('please archive the old script', async (t) => {
+            const out = await t.call<{ questionId: Id }>('ask_confirmation', {
+              kind: 'task',
+              id: done.id,
+              action: 'archive',
+            });
+            asked.push(out.questionId);
+          })
+          .once(/answered (\S+): "No"/, async (t) => {
+            outcomes['declined'] = await t.try('finished_work', {
+              kind: 'task',
+              id: done.id,
+              action: 'archive',
+              questionId: asked[0],
+            });
+            // A confirmation of another action does not count either.
+            outcomes['other'] = await t.try('finished_work', {
+              kind: 'task',
+              id: done.id,
+              action: 'reopen',
+              questionId: asked[0],
+            });
+          })
+          .once('ask again', async (t) => {
+            const out = await t.call<{ questionId: Id }>('ask_confirmation', {
+              kind: 'task',
+              id: done.id,
+              action: 'archive',
+            });
+            asked.push(out.questionId);
+          })
+          .once(/answered (\S+): "Archive/, async (t) => {
+            outcomes['archived'] = await t.call('finished_work', {
+              kind: 'task',
+              id: done.id,
+              action: 'archive',
+              questionId: asked[1],
+            });
+          })
+          .on(
+            () => true,
+            () => {},
+            'anything else',
+          ),
+    });
+    hq.tell('close it on your own');
+    await h.settle();
+    expect(outcomes['close']).toMatchObject({ ok: false, error: 'invalid' });
+    expect(outcomes['archive']).toMatchObject({ ok: false, error: 'invalid' });
+    expect(h.log.tables.projects.get(project.id)?.state).not.toBe('completed');
+    expect(h.log.tables.tasks.get(done.id)?.state).toBe('completed');
+
+    hq.tell('please archive the old script');
+    await h.settle();
+    expect(h.log.tables.questions.get(asked[0]!)).toMatchObject({
+      status: 'open',
+      holder: USER,
+      context: { options: [expect.stringMatching(/^Archive task "old script"/), 'No'] },
+    });
+    await h.commands.answerQuestion({ questionId: asked[0]!, answer: 'No', by: USER });
+    await h.settle();
+    expect(outcomes['declined']).toMatchObject({ ok: false, error: 'invalid' });
+    expect(outcomes['other']).toMatchObject({ ok: false, error: 'invalid' });
+    expect(h.log.tables.tasks.get(done.id)?.state).toBe('completed');
+
+    hq.tell('ask again');
+    await h.settle();
+    const q = h.log.tables.questions.get(asked[1]!)!;
+    await h.commands.answerQuestion({ questionId: q.id, answer: q.context.options![0]!, by: USER });
+    await h.until(() => h.log.tables.tasks.get(done.id)?.state === 'archived', {
+      what: 'the task to be archived',
+    });
+    expect(outcomes['archived']).toMatchObject({ state: 'archived' });
+  });
+});
