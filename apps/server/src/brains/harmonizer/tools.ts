@@ -627,7 +627,14 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           (request.type === 'standalone_task' ? request.description : proposal.requestText);
         const { value } = await ctx.commands.createTask({
           description,
-          meta: { proposalId: proposal.id, workspace: checkPath(proposal.workspace) },
+          meta: {
+            proposalId: proposal.id,
+            workspace: checkPath(proposal.workspace),
+            // Its Steward also works under this project's (stricter) policy (SPEC §3.5).
+            ...(request.type === 'standalone_task' && request.relatedProjectId
+              ? { relatedProjectId: request.relatedProjectId }
+              : {}),
+          },
           ...extra,
         });
         task = value;

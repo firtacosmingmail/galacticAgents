@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isAbsolute, relative, resolve } from 'node:path';
 import {
   AgentEvent,
   type Actor,
@@ -17,10 +18,12 @@ import {
   type Host,
   type Id,
   type OpenQuestionInput,
+  type PermissionPolicy,
   type ProposalDecision,
   type ProposePlanInput,
   type ReopenInput,
   type SpawnAgentInput,
+  type Task,
   type WorkState,
   type WriteOptions,
 } from '@galactic/protocol';
@@ -41,7 +44,7 @@ import {
   updateProject,
   type ProjectChanges,
 } from './projects.js';
-import type { PolicyWrite } from './permissions.js';
+import { noLooserThan, resolvePolicy, type PolicyWrite } from './permissions.js';
 import { createProposal, decideProposal, proposePlan } from './proposals.js';
 import {
   endAgentQuestions,
@@ -314,6 +317,9 @@ export class Commands implements DomainCommands {
     const cwd = task?.worktreePath ?? project?.workspace ?? input.cwd;
     if (!cwd)
       throw new DomainError('invalid', 'an agent outside a project needs a working directory');
+    // An asteroid Steward in a related project's workspace works under that project's table too,
+    // never looser than the global default (SPEC §3.5, decision 22): per category the strictest.
+    const borrowed = !project && task ? relatedPolicy(tables, task, cwd) : undefined;
     if (input.role === 'harmonizer') {
       const live = new Set((this.agents?.liveAgents?.() ?? []).map((a) => a.id));
       const running = tables.agents
@@ -346,6 +352,7 @@ export class Commands implements DomainCommands {
       cwd,
       ...(project ? { workspace: project.workspace, projectId: project.id } : {}),
       ...(project?.permissionPolicy ? { permissionPolicy: project.permissionPolicy } : {}),
+      ...(borrowed ? { permissionPolicy: borrowed } : {}),
       ...(bodyId ? { bodyId } : {}),
       ...(task ? { taskId: task.id } : {}),
       ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
@@ -543,4 +550,34 @@ export class Commands implements DomainCommands {
     const events = [...own.events, ...this.effectEvents(since, affected, by)];
     return { value: undefined, events };
   }
+}
+
+/**
+ * The policy of a standalone task's Steward that works inside one or more projects' workspaces
+ * (the related project of its card, SPEC §3.5): per category the strictest of those projects'
+ * tables and the global default, so borrowing a workspace never loosens anything. `undefined`
+ * when the folder belongs to no live project (the global default applies).
+ */
+function relatedPolicy(
+  tables: EventLog['tables'],
+  task: Task,
+  cwd: string,
+): PermissionPolicy | undefined {
+  const inside = (child: string, parent: string) => {
+    const rel = relative(resolve(parent), resolve(child));
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  };
+  const relatedId = task.meta?.['relatedProjectId'];
+  const related = tables.projects
+    .all()
+    .filter(
+      (p) =>
+        p.state !== 'archived' &&
+        (p.id === relatedId || inside(cwd, p.workspace) || inside(p.workspace, cwd)),
+    );
+  if (related.length === 0) return undefined;
+  return related.reduce<PermissionPolicy>(
+    (policy, p) => noLooserThan(p.permissionPolicy ?? policy, policy),
+    resolvePolicy(),
+  );
 }

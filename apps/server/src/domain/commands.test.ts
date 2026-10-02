@@ -134,6 +134,36 @@ describe('Commands', () => {
     expect(value.projectId).toBeUndefined();
   });
 
+  it("runs a standalone Steward in a related project's workspace under the stricter of its policy and the default", async () => {
+    const { commands } = boot();
+    // The related project denies network and loosens destructive actions.
+    const policy: PermissionPolicy = { rules: { network: 'deny', destructive: 'allow' } };
+    await commands.createProject(
+      { name: 'CSV', workspace: '/w/csv', permissionPolicy: policy },
+      { origin: 'local' },
+    );
+    const task = (await commands.createTask({ description: 'flaky' })).value;
+    const harmonizer = await spawnHarmonizer(commands);
+    const spawn = (cwd: string) =>
+      commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        supervisorId: harmonizer.id,
+        cwd,
+        prompt: 'scenario:echo',
+      });
+    const { value } = await spawn('/w/csv');
+    const rules = (value.meta?.['permissionPolicy'] as PermissionPolicy).rules;
+    expect(rules['network']).toBe('deny');
+    // Never looser than the global default.
+    expect(rules['destructive']).toBe(DEFAULT_PERMISSION_POLICY.rules['destructive']);
+    await commands.stopAgent(value.id, USER);
+    // A scratch folder belongs to no project: the global default applies.
+    const { value: scratch } = await spawn('/w/scratch/flaky');
+    expect(scratch.meta?.['permissionPolicy']).toBeUndefined();
+  });
+
   it('refuses spawns the hierarchy does not allow (decision 24), before anything is written', async () => {
     const { commands, log } = boot();
     const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
