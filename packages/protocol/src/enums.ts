@@ -1,7 +1,14 @@
 import { z } from 'zod';
 
-/** Celestial bodies that host work (SPEC §3.1). */
-export const BodyKind = z.enum(['planet', 'moon', 'asteroid']);
+/** The sizes work comes in, and the bodies that host it (SPEC §3.1). */
+export const WorkBodyKind = z.enum(['planet', 'moon', 'asteroid']);
+export type WorkBodyKind = z.infer<typeof WorkBodyKind>;
+
+/**
+ * Every celestial body of the catalogue (P2-02): the bodies that host work, and the Sun, which is
+ * reserved like Earth and Earth's Moon and never hosts anything (SPEC §3.1).
+ */
+export const BodyKind = z.enum(['star', ...WorkBodyKind.options]);
 export type BodyKind = z.infer<typeof BodyKind>;
 
 /** What a body hosts: a project (planet/moon) or a standalone task (asteroid). */
@@ -92,3 +99,29 @@ export type PermissionAction = z.infer<typeof PermissionAction>;
 
 export const PermissionDecision = z.enum(['allow', 'ask', 'deny']);
 export type PermissionDecision = z.infer<typeof PermissionDecision>;
+
+/**
+ * Where a request came from (P2-21; TECHNOLOGY §8): `local` only for one `isRemoteRequest` let
+ * through as this machine. A policy write whose origin is not `local` (remote or unknown) is
+ * floored at the global default unless the server sets `autoApproveRemote`.
+ */
+export const RequestOrigin = z.enum(['local', 'remote']);
+export type RequestOrigin = z.infer<typeof RequestOrigin>;
+
+/**
+ * Why a domain command was refused (P2-01). The REST and WS surfaces map these to their own
+ * error shapes; brain tools hand the message back to the LLM as a tool error.
+ */
+export const DomainErrorCode = z.enum([
+  /** No such project, task, body, agent, proposal or question. */
+  'not_found',
+  /** The entity's state does not allow it (SPEC §4.4 transitions, a decided proposal). */
+  'invalid_transition',
+  /** Something else holds it: a taken body, a reserved body, a planet with an active sub-project. */
+  'conflict',
+  /** The answer was given against an older version; the reply says who answered first. */
+  'stale',
+  /** The input is malformed or contradicts itself. */
+  'invalid',
+]);
+export type DomainErrorCode = z.infer<typeof DomainErrorCode>;

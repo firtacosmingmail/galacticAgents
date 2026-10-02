@@ -4,6 +4,9 @@ export {
   DEFAULT_SCENARIO,
   scenarioFromPrompt,
   echo,
+  FakeTurnCancelled,
   type FakeScenario,
   type FakeStep,
+  type FakeToolResult,
+  type FakeTurnIO,
 } from './scenario.js';

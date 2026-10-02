@@ -51,8 +51,8 @@ describe('event page', () => {
     expect(socket.hello).toEqual({ type: 'hello', token: 'tok-from-health' });
     expect(screen.getByText('live')).toBeTruthy();
     expect(screen.getByText('seq 3')).toBeTruthy();
-    expect(screen.getByText('Auth refactor')).toBeTruthy();
-    expect(screen.getByText('Replace the session middleware')).toBeTruthy();
+    expect(screen.getAllByText('Auth refactor').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Replace the session middleware').length).toBeGreaterThan(0);
 
     await act(async () => {
       socket.serverSends({
@@ -133,7 +133,7 @@ describe('event page', () => {
         event: { type: 'agent.idle', agentId: 'a-demo' },
       });
     });
-    expect(screen.getByText('Auth refactor')).toBeTruthy();
+    expect(screen.getAllByText('Auth refactor').length).toBeGreaterThan(0);
 
     // The server drops the connection: the same page resumes from seq 4 of log-a.
     await act(async () => s1.serverCloses(1006));
@@ -158,7 +158,7 @@ describe('event page', () => {
       s3.serverSends({ ...snapshot, seq: 4 });
     });
     expect(s3.hello).toEqual({ type: 'hello', token: 'tok-from-health' });
-    expect(screen.getByText('Auth refactor')).toBeTruthy();
+    expect(screen.getAllByText('Auth refactor').length).toBeGreaterThan(0);
     expect(screen.getByText('seq 4')).toBeTruthy();
   });
 });

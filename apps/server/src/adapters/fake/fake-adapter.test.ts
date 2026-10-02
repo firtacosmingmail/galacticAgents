@@ -455,6 +455,24 @@ describe('FakeAdapter — resumeSession', () => {
       /unknown fake scenario/,
     );
   });
+
+  it('a lost session fails after the handle came back, as the SDK’s does (P2-16)', async () => {
+    const { adapter, events } = makeAdapter({
+      resumeFails: (opts) => (opts.agentId === 'a-lost' ? { ends: 'failed' } : undefined),
+    });
+    const handle = await adapter.resumeSession(
+      'fake:happy:0000-01d-5e55:0',
+      spawnOpts('x', 'a-lost'),
+    );
+    expect(handle.sessionId).toBeTruthy();
+    expect(events.items).toEqual([]); // the caller holds the handle before anything happens
+    await events.waitFor(has('agent.failed'));
+    await sleep(5);
+    expect(events.items).toEqual([
+      expect.objectContaining({ type: 'agent.failed', agentId: 'a-lost', reason: 'crash' }),
+    ]);
+    await expect(adapter.send(handle.sessionId, 'hello')).rejects.toThrow(/has failed/);
+  });
 });
 
 describe('FakeAdapter — session refs are per session', () => {
@@ -520,5 +538,79 @@ describe('FakeAdapter — coverage of the event vocabulary', () => {
       .sort();
     expect(stopped).toEqual(['a-1', 'a-2']);
     await expect(adapter.spawn(spawnOpts('x', 'a-3'))).rejects.toThrow(/disposed/);
+  });
+});
+
+describe('FakeAdapter — script steps (P2-07)', () => {
+  it('runs a script that reads each server tool result before its next call', async () => {
+    const seen: unknown[] = [];
+    const scenario: FakeScenario = {
+      steps: [
+        {
+          kind: 'script',
+          run: async (io) => {
+            const first = await io.toolCall('make', { n: 1 });
+            const id = first.status === 'ran' ? (first.output as { id: string }).id : '?';
+            const second = await io.toolCall('use', { id });
+            seen.push(first, second);
+            io.output(`used ${id}`);
+          },
+        },
+      ],
+    };
+    const { adapter, events } = makeAdapter({
+      scenarioFor: () => ({ name: 'scripted', scenario }),
+    });
+    await adapter.spawn({
+      ...spawnOpts('whatever'),
+      role: 'waykeeper',
+      tools: [
+        { name: 'make', description: '', inputSchema: {}, handler: async () => ({ id: 't-9' }) },
+        { name: 'use', description: '', inputSchema: {}, handler: async (i) => i },
+      ],
+    });
+    await events.waitFor(has('agent.idle'));
+    expect(seen).toEqual([
+      { status: 'ran', output: { id: 't-9' }, text: '{"id":"t-9"}' },
+      { status: 'ran', output: { id: 't-9' }, text: '{"id":"t-9"}' },
+    ]);
+    expect(types(events.items)).toEqual([
+      'agent.tool_call',
+      'agent.output',
+      'agent.tool_call',
+      'agent.output',
+      'agent.output',
+      'agent.idle',
+    ]);
+    expect(events.items.at(-2)).toMatchObject({ text: 'used t-9' });
+  });
+
+  it('reports a denied call to the script and ends a cancelled script turn', async () => {
+    const results: unknown[] = [];
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const scenario: FakeScenario = {
+      steps: [
+        {
+          kind: 'script',
+          run: async (io) => {
+            results.push(await io.toolCall('Write', { file_path: 'x' }));
+            await hold;
+            results.push(await io.toolCall('Read', {}));
+          },
+        },
+      ],
+    };
+    const deny = gate(() => ({ decision: 'deny', reason: 'not here' }));
+    const { adapter, events } = makeAdapter({
+      scenarioFor: () => ({ name: 'scripted', scenario }),
+    });
+    const { sessionId } = await adapter.spawn(spawnOpts('x', 'a-1', deny));
+    while (results.length === 0) await sleep(1);
+    expect(results).toEqual([{ status: 'denied', reason: 'not here' }]);
+    await adapter.interrupt(sessionId);
+    release();
+    await events.waitFor(has('agent.idle'));
+    expect(results).toHaveLength(1);
   });
 });

@@ -1,8 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
+import {
+  DEFAULT_MAX_CONCURRENT_AGENTS,
+  DEFAULT_SPAWN_CAPS,
+  type SpawnCaps,
+} from '../runtime/caps.js';
 
 /** Persisted in `~/.galactic/config.json`. Every field is optional on disk; defaults fill the rest. */
 export const ConfigFile = z.object({
@@ -10,6 +15,30 @@ export const ConfigFile = z.object({
   token: z.string().min(16).optional(),
   /** Extra allowed `Host`/`Origin` host names, e.g. "mymac.tailnet-name.ts.net" or "*.ts.net". */
   allowedHosts: z.array(z.string().min(1)).optional(),
+  /** Where new project folders are created (SPEC §3.5); absolute or `~/…`. */
+  projectsRoot: z.string().min(1).optional(),
+  /**
+   * Let a remote client (Phase 7: the phone PWA through Tailscale Serve) set up auto-approvals:
+   * spawn under a policy looser than the global default. Off unless set (TECHNOLOGY §8, P2-04).
+   */
+  autoApproveRemote: z.boolean().optional(),
+  /**
+   * Decision 4: how long finished work keeps its body (and a "moved to …" marker stays) before the
+   * archival job archives it, in days (fractions allowed). Default 7 (P2-13).
+   */
+  retentionDays: z.number().positive().optional(),
+  /**
+   * Hard caps on spawning (decision 18; P2-17): live Stewards (brains not counted), live
+   * Stewards per Waykeeper, spawns per sliding hour in all and per spawning brain.
+   */
+  caps: z
+    .object({
+      maxConcurrentAgents: z.number().int().positive().optional(),
+      maxStewardsPerWaykeeper: z.number().int().positive().optional(),
+      maxSpawnsPerHour: z.number().int().positive().optional(),
+      maxSpawnsPerHourPerBrain: z.number().int().positive().optional(),
+    })
+    .optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -26,6 +55,29 @@ export interface ServerConfig {
   dataDir: string;
   configPath: string;
   dbPath: string;
+  /**
+   * Where a project without an existing folder gets `<projectsRoot>/<slug>` (SPEC §3.5, P2-05).
+   * Default `~/GalacticProjects`; `GALACTIC_PROJECTS_ROOT` or `projectsRoot` in the file override it.
+   */
+  projectsRoot: string;
+  /**
+   * Whether a request from a remote client may loosen the permission table (P2-04; TECHNOLOGY §8:
+   * "never auto-approved for a remote client unless explicitly configured"). Default `false`: a
+   * remote spawn runs under a policy no looser than the global default in any category.
+   * `autoApproveRemote` in the file or `GALACTIC_AUTO_APPROVE_REMOTE=1` turns it on.
+   */
+  autoApproveRemote: boolean;
+  /**
+   * Decision 4's retention period in ms (P2-13): `retentionDays` in the file or
+   * `GALACTIC_RETENTION_DAYS`; default 7 days.
+   */
+  retentionMs: number;
+  /**
+   * The spawn caps (P2-17): `caps` in the file or `GALACTIC_MAX_CONCURRENT_AGENTS`,
+   * `GALACTIC_MAX_STEWARDS_PER_WAYKEEPER`, `GALACTIC_MAX_SPAWNS_PER_HOUR`,
+   * `GALACTIC_MAX_SPAWNS_PER_HOUR_PER_BRAIN`; defaults 4, 3, 30 and 20.
+   */
+  caps: SpawnCaps & { maxConcurrentAgents: number };
 }
 
 export interface LoadedConfig {
@@ -35,7 +87,17 @@ export interface LoadedConfig {
 }
 
 export const DEFAULT_PORT = 4321;
+export const DEFAULT_PROJECTS_DIR = 'GalacticProjects';
+export const DEFAULT_RETENTION_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+
+const CAP_ENV = [
+  ['maxConcurrentAgents', 'GALACTIC_MAX_CONCURRENT_AGENTS'],
+  ['maxStewardsPerWaykeeper', 'GALACTIC_MAX_STEWARDS_PER_WAYKEEPER'],
+  ['maxSpawnsPerHour', 'GALACTIC_MAX_SPAWNS_PER_HOUR'],
+  ['maxSpawnsPerHourPerBrain', 'GALACTIC_MAX_SPAWNS_PER_HOUR_PER_BRAIN'],
+] as const;
 
 export function generateToken(): string {
   return randomBytes(24).toString('base64url');
@@ -79,6 +141,36 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
   ];
   const allowedHosts = [...new Set([...DEFAULT_ALLOWED_HOSTS, ...extraHosts])];
 
+  const rootSetting = env['GALACTIC_PROJECTS_ROOT'] ?? file.projectsRoot;
+  const projectsRoot = rootSetting
+    ? expandHome(rootSetting)
+    : join(homedir(), DEFAULT_PROJECTS_DIR);
+  if (!isAbsolute(projectsRoot)) {
+    throw new Error(`The projects root must be an absolute path: ${rootSetting}`);
+  }
+
+  const retentionEnv = env['GALACTIC_RETENTION_DAYS'];
+  const retentionDays =
+    retentionEnv !== undefined
+      ? Number(retentionEnv)
+      : (file.retentionDays ?? DEFAULT_RETENTION_DAYS);
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    throw new Error(`Invalid retention period (days): ${retentionEnv ?? file.retentionDays}`);
+  }
+
+  const caps = {
+    maxConcurrentAgents: DEFAULT_MAX_CONCURRENT_AGENTS,
+    ...DEFAULT_SPAWN_CAPS,
+  };
+  for (const [key, envName] of CAP_ENV) {
+    const raw = env[envName];
+    const value = raw !== undefined ? Number(raw) : (file.caps?.[key] ?? caps[key]);
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new Error(`Invalid cap ${key}: ${raw ?? file.caps?.[key]}`);
+    }
+    caps[key] = value;
+  }
+
   return {
     config: {
       host: '127.0.0.1',
@@ -89,7 +181,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       dataDir,
       configPath,
       dbPath: env['GALACTIC_DB'] ?? join(dataDir, 'galactic.sqlite'),
+      projectsRoot: resolve(projectsRoot),
+      autoApproveRemote:
+        env['GALACTIC_AUTO_APPROVE_REMOTE'] !== undefined
+          ? env['GALACTIC_AUTO_APPROVE_REMOTE'] === '1' ||
+            env['GALACTIC_AUTO_APPROVE_REMOTE'] === 'true'
+          : (file.autoApproveRemote ?? false),
+      retentionMs: Math.round(retentionDays * DAY_MS),
+      caps,
     },
     tokenGenerated,
   };
+}
+
+/** `~` and `~/…` name the home directory; anything else is returned as written. */
+export function expandHome(path: string): string {
+  if (path === '~') return homedir();
+  if (path.startsWith('~/')) return join(homedir(), path.slice(2));
+  return path;
 }

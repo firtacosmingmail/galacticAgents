@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_PERMISSION_POLICY,
+  PERMISSION_POLICY_PRESETS,
   type PermissionAction,
   type PermissionDecision,
   type PermissionPolicy,
@@ -13,7 +14,11 @@ import {
   decide,
   evaluate,
   isInsideWorkspace,
+  noLooserThan,
+  mentionsPush,
+  originOfMessages,
   pathsInCommand,
+  policyForWrite,
   resolvePolicy,
   splitCommand,
   strictest,
@@ -149,12 +154,13 @@ describe('SPEC §3.6 row 2 — destructive actions: ask', () => {
 
   it('asks for wrapped or quoted commands it cannot see into', () => {
     check([
-      ['Bash', { command: 'bash -c "rm -rf dist"' }, [], 'ask'],
-      ['Bash', { command: "sh -lc 'git push --force'" }, [], 'ask'],
-      ['Bash', { command: 'eval "rm -rf dist"' }, [], 'ask'],
+      // What the engine still sees counts (decision 49); the opaque part asks on its own.
+      ['Bash', { command: 'bash -c "rm -rf dist"' }, ['destructive'], 'ask'],
+      ['Bash', { command: "sh -lc 'git push --force'" }, ['destructive', 'push'], 'ask'],
+      ['Bash', { command: 'eval "rm -rf dist"' }, ['destructive'], 'ask'],
       ['Bash', { command: "node -e \"require('fs').rmSync('/', {recursive: true})\"" }, [], 'ask'],
       ['Bash', { command: 'python3 -c "import shutil; shutil.rmtree(\'dist\')"' }, [], 'ask'],
-      ['Bash', { command: 'perl -e \'unlink glob "*"\'' }, [], 'ask'],
+      ['Bash', { command: 'perl -e \'unlink glob "*"\'' }, ['destructive'], 'ask'],
       ['Bash', { command: 'ruby -e "puts 1"' }, [], 'ask'],
       ['Bash', { command: 'osascript -e \'tell app "Finder" to empty trash\'' }, [], 'ask'],
     ]);
@@ -480,7 +486,10 @@ describe('P1-30 — review R3 bypasses', () => {
       bash('git -c diff.x.textconv=./evil.sh diff', 'ask'),
       bash('GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=push git x', 'ask'),
     ]);
-    expect(classifyCommand('git -c alias.x=push x', wctx)).toMatchObject({ actions: [] });
+    expect(classifyCommand('git -c alias.x=push x', wctx)).toMatchObject({
+      actions: ['push'],
+      unclassified: true,
+    });
     decisions([
       bash('git config --get user.email', 'allow'),
       bash('git config --list', 'allow'),
@@ -707,5 +716,150 @@ describe('P1-30 — review R3 bypasses', () => {
     expect(evaluate(policy, { toolName: 'Task', input: { prompt: 'x' } }, wctx).decision).toBe(
       'allow',
     );
+  });
+});
+
+describe('noLooserThan (P2-04: a remote client cannot set up auto-approvals)', () => {
+  it('keeps each category at the stricter of the policy and the global default', () => {
+    const floored = noLooserThan({
+      rules: { network: 'allow', push: 'allow', edit_workspace: 'ask', destructive: 'deny' },
+    });
+    expect(floored.rules).toMatchObject({
+      network: 'ask',
+      push: 'ask',
+      edit_workspace: 'ask',
+      destructive: 'deny',
+      read_workspace: 'allow',
+    });
+    expect(noLooserThan(DEFAULT_PERMISSION_POLICY)).toEqual(DEFAULT_PERMISSION_POLICY);
+  });
+});
+
+describe('policyForWrite (P2-21: the one function every policy write goes through)', () => {
+  const loose: PermissionPolicy = { rules: { destructive: 'allow', network: 'allow' } };
+
+  it('keeps a local write, floors a remote or unknown one, keeps everything with autoApproveRemote', () => {
+    expect(policyForWrite(loose, { origin: 'local' })).toEqual(loose);
+    expect(policyForWrite(loose, { origin: 'remote' })).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(policyForWrite(loose)).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(policyForWrite(loose, { origin: 'remote', autoApproveRemote: true })).toEqual(loose);
+    expect(policyForWrite(loose, { autoApproveRemote: true })).toEqual(loose);
+    // A remote client may still tighten.
+    const strict: PermissionPolicy = { rules: { network: 'deny' } };
+    expect(policyForWrite(strict, { origin: 'remote' }).rules['network']).toBe('deny');
+  });
+});
+
+describe('originOfMessages (P2-21: the origin a brain acts with)', () => {
+  it('is local only when every message is, remote when one is, unknown otherwise', () => {
+    expect(originOfMessages([{ origin: 'local' }, { origin: 'local' }])).toBe('local');
+    expect(originOfMessages([{ origin: 'local' }, { origin: 'remote' }])).toBe('remote');
+    expect(originOfMessages([{ origin: 'local' }, {}])).toBeUndefined();
+    expect(originOfMessages([])).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P2-22 — trusted projects and the `unclassified` decision (decision 49)
+// ---------------------------------------------------------------------------
+
+describe('P2-22 — a trusted project: everything except push without cards', () => {
+  const trusted = PERMISSION_POLICY_PRESETS.trusted;
+  const verdict = (toolName: string, input: unknown, p: PermissionPolicy = trusted) =>
+    evaluate(p, { toolName, input }, ctx).decision;
+  const bashUnder = (command: string, p: PermissionPolicy = trusted) =>
+    verdict('Bash', { command }, p);
+
+  it('allows opaque commands, network installs, outside-workspace commands, WebSearch and unknown tools', () => {
+    expect(bashUnder('python -c "import os; print(os.listdir())"')).toBe('allow');
+    expect(bashUnder("node -e \"console.log(require('fs').readdirSync('.'))\"")).toBe('allow');
+    expect(bashUnder('pip install requests')).toBe('allow');
+    expect(bashUnder('python3 -m venv /tmp/venv && /tmp/venv/bin/pip install -e .')).toBe('allow');
+    expect(bashUnder('ls /var/folders/xy/T/venv')).toBe('allow');
+    expect(bashUnder('rm -rf build')).toBe('allow');
+    expect(verdict('WebSearch', { query: 'parquet' })).toBe('allow');
+    expect(verdict('WebFetch', { url: 'https://example.com' })).toBe('allow');
+    expect(verdict('Read', { file_path: '/etc/hosts' })).toBe('allow');
+    expect(verdict('mcp__myserver__do_thing', { x: 1 })).toBe('allow');
+    expect(verdict('Write', {})).toBe('allow');
+  });
+
+  it('still asks before a push, also inside an opaque command', () => {
+    expect(bashUnder('git push origin main')).toBe('ask');
+    expect(bashUnder('git -C sub push')).toBe('ask');
+    expect(bashUnder('sh -c "git push origin main"')).toBe('ask');
+    expect(bashUnder('bash -lc "cd x && git push"')).toBe('ask');
+    expect(bashUnder("python -c \"import subprocess; subprocess.run(['git','push'])\"")).toBe(
+      'ask',
+    );
+    expect(
+      bashUnder(
+        [
+          'python - <<EOF',
+          'import subprocess',
+          'subprocess.run([',
+          '    "git",',
+          '    "push", "origin", "main",',
+          '])',
+          'EOF',
+        ].join('\n'),
+      ),
+    ).toBe('ask');
+    expect(bashUnder("cat <<'EOF' | sh\ngit push\nEOF")).toBe('ask');
+    expect(bashUnder('git $(echo push)')).toBe('ask');
+    expect(bashUnder('sh -c "npm publish"')).toBe('ask');
+    expect(bashUnder('eval "gh pr create --fill"')).toBe('ask');
+    // A readable command that only mentions push in a message stays what it is.
+    expect(bashUnder('git commit -m "push the parser further"')).toBe('allow');
+  });
+
+  it('documents what the push guard catches and what it cannot see', () => {
+    expect(mentionsPush('sh -c "git push"')).toHaveLength(1);
+    expect(mentionsPush("subprocess.run(['git', 'push'])")).toHaveLength(1);
+    expect(mentionsPush('/usr/bin/git-push')).toHaveLength(1);
+    // Over-eager on purpose: one card too many.
+    expect(mentionsPush('python -c "print(\'git\'); stack.push(1)"')).toHaveLength(1);
+    // Not seen: a computed name, or a pushd.
+    expect(mentionsPush("python -c \"import os; os.system('gi' + 't pu' + 'sh')\"")).toEqual([]);
+    expect(mentionsPush('sh -c "pushd x; git status"')).toEqual([]);
+  });
+
+  it('leaves the default, trusting and cautious presets asking for what they cannot classify', () => {
+    for (const p of [
+      DEFAULT_PERMISSION_POLICY,
+      PERMISSION_POLICY_PRESETS.trusting,
+      PERMISSION_POLICY_PRESETS.cautious,
+    ]) {
+      expect(bashUnder('python -c "print(1)"', p)).toBe('ask');
+      expect(verdict('mcp__myserver__do_thing', {}, p)).toBe('ask');
+    }
+    // cautious denies a push, and still does inside an opaque command.
+    expect(bashUnder('sh -c "git push"', PERMISSION_POLICY_PRESETS.cautious)).toBe('deny');
+  });
+
+  it('reads `unclassified` fail-closed and merges it like any rule', () => {
+    expect(decide({ rules: {} }, [])).toBe('ask');
+    expect(decide({ rules: {}, unclassified: 'allow' }, [])).toBe('allow');
+    expect(decide({ rules: {}, unclassified: 'deny' }, [])).toBe('deny');
+    expect(decide({ rules: {}, unclassified: 'maybe' as never }, [])).toBe('ask');
+    // A visible category still counts next to the unclassified part.
+    expect(decide({ rules: { push: 'ask' }, unclassified: 'allow' }, ['push'], true)).toBe('ask');
+    expect(decide({ rules: { network: 'allow' }, unclassified: 'ask' }, ['network'], true)).toBe(
+      'ask',
+    );
+    expect(resolvePolicy({ rules: {}, unclassified: 'allow' }).unclassified).toBe('allow');
+    expect(resolvePolicy(undefined)).not.toHaveProperty('unclassified');
+  });
+
+  it('floors trusted for a remote write: no category and no unclassified call looser than the default', () => {
+    expect(noLooserThan(trusted)).toEqual({ ...DEFAULT_PERMISSION_POLICY, unclassified: 'ask' });
+    expect(noLooserThan({ rules: {}, unclassified: 'deny' }).unclassified).toBe('deny');
+    expect(policyForWrite(trusted, { origin: 'remote' })).toEqual({
+      ...DEFAULT_PERMISSION_POLICY,
+      unclassified: 'ask',
+    });
+    expect(policyForWrite(trusted)).not.toMatchObject({ unclassified: 'allow' });
+    expect(policyForWrite(trusted, { origin: 'local' })).toEqual(trusted);
+    expect(policyForWrite(trusted, { origin: 'remote', autoApproveRemote: true })).toEqual(trusted);
   });
 });

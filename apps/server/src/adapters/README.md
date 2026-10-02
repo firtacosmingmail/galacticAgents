@@ -79,6 +79,13 @@ Every tool call goes through `opts.gate.check({toolName, input})` **before it ru
 | `{decision: 'deny', reason}`          | Refuse it; tell the model the reason; emit an `agent.output` line.                                 |
 | `{decision: 'ask', action?, reasons}` | Open a `permission` question with `toolCall` and `permissionAction: action`; block until answered. |
 
+The runtime decides every `permission` request again with the same gate before it opens a question
+(P2-04): `allow` and `deny` are answered at once through `answer()` (`allow`, or `deny: <reason>`)
+and logged as `permission.decided`, so an adapter whose runtime asks about calls on its own (a PTY
+prompt, an ACP `session/request_permission`) may emit the request without checking the gate first.
+Always put the call in `question.toolCall`: a request without one cannot be judged and goes to the
+user.
+
 The gate is synchronous and already pre-flights the tool-call cap (a call refused for the cap also
 trips the cap, so the runtime stops the agent). Do not read the policy or the caps yourself.
 

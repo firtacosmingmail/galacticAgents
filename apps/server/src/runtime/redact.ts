@@ -258,7 +258,8 @@ export function redactEvent<T extends AgentEvent>(event: T): T {
   }
 }
 
-function redactValue(value: unknown): unknown {
+/** Every string inside `value` redacted (tool inputs, P2-04's `permission.decided`). */
+export function redactValue(value: unknown): unknown {
   if (typeof value === 'string') return redactSecrets(value);
   if (Array.isArray(value)) return value.map(redactValue);
   if (value && typeof value === 'object') {

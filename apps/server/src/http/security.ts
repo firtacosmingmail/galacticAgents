@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import type { RequestOrigin } from '@galactic/protocol';
 
 /** `host:port` → `host` (IPv6 literals keep their brackets, matching the allow-list format). */
 export function hostnameOf(hostHeader: string | undefined): string | undefined {
@@ -77,6 +78,57 @@ export function isLoopback(remoteAddress: string | undefined): boolean {
   const a = remoteAddress.startsWith('::ffff:') ? remoteAddress.slice(7) : remoteAddress;
   if (isIP(a) === 4) return a.startsWith('127.');
   return a === '::1';
+}
+
+/**
+ * Whether a request comes from a remote client (P2-04; TECHNOLOGY §8): anything but a loopback
+ * connection whose `Origin`, if any, is this machine and that carries no Tailscale identity. A
+ * reverse proxy (Tailscale Serve, Phase 7) connects from loopback, so its `Origin` or identity
+ * headers are what give it away. Fails towards "remote": the stricter rules then apply.
+ */
+export function isRemoteRequest(req: {
+  socket: { remoteAddress?: string | undefined };
+  headers: Record<string, string | string[] | undefined>;
+}): boolean {
+  const origin = req.headers['origin'];
+  if (Array.isArray(origin)) return true;
+  if (req.headers['tailscale-user-login'] !== undefined) return true;
+  // A proxy on this machine (Tailscale Serve, Funnel, a dev proxy) connects from loopback but
+  // says where the request came from; headers can only make a request look more remote.
+  for (const h of FORWARDING_HEADERS) if (req.headers[h] !== undefined) return true;
+  const host = req.headers['host'];
+  if (Array.isArray(host) || (host !== undefined && !isLoopbackHost(host))) return true;
+  return !(isLoopback(req.socket.remoteAddress) && isLoopbackOrigin(origin));
+}
+
+/**
+ * A request's origin as the command surface takes it (P2-21): what the routes pass to every
+ * policy-writing command and record on a user's `message.sent`, so a brain acting on that message
+ * writes with the same origin.
+ */
+export function originOf(req: Parameters<typeof isRemoteRequest>[0]): RequestOrigin {
+  return isRemoteRequest(req) ? 'remote' : 'local';
+}
+
+const FORWARDING_HEADERS = [
+  'forwarded',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+  'tailscale-user-name',
+  'tailscale-user-profile-pic',
+];
+
+/** A `Host` header naming this machine: localhost, 127.x or [::1], with or without a port. */
+function isLoopbackHost(host: string): boolean {
+  let name: string;
+  try {
+    name = new URL(`http://${host}`).hostname;
+  } catch {
+    return false;
+  }
+  return LOOPBACK_HOSTS.has(name) || (isIP(name) === 4 && name.startsWith('127.'));
 }
 
 /** Constant-time token comparison. */

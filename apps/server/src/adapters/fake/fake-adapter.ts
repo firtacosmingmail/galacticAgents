@@ -12,14 +12,18 @@ import type {
   SpawnOptions,
   StopOptions,
   ToolCall,
+  ToolDefinition,
 } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import {
   echo,
+  FakeTurnCancelled,
   scenarioFromPrompt,
   SCENARIOS,
   type FakeScenario,
   type FakeStep,
+  type FakeToolResult,
+  type FakeTurnIO,
 } from './scenario.js';
 
 /**
@@ -35,7 +39,9 @@ import {
  *
  * Session refs are `fake:<scenario>:<sessionId>:<nextStep>`; `resumeSession` continues from the step after
  * the last one completed when the adapter was given the same `sessionStore` (an in-process
- * restart, P1-14), and from the ref's step otherwise.
+ * restart, P1-14), and from the ref's step otherwise. A resumed *brain* (a spawn with server tools)
+ * whose first turn was complete takes the resume prompt as a new turn, as the SDK does (P2-16); a
+ * scenario this adapter instance never saw is asked of `scenarioFor` again.
  *
  * Failure modes a real runtime has, for the conformance suite (P1-38): with `checkCwd` a spawn in
  * a working directory that does not exist is refused (a real CLI cannot start there), and
@@ -54,6 +60,22 @@ export interface FakeAdapterOptions {
    * process would fail to start. Off by default: unit tests spawn in made-up directories.
    */
   checkCwd?: boolean;
+  /**
+   * Picks the scenario of a spawn from its options instead of its prompt (P2-06: a scripted
+   * brain answers its turn prompts with tool calls). `undefined` falls back to the prompt. The
+   * scenario is remembered by name so `resumeSession` finds it too.
+   */
+  scenarioFor?: (opts: SpawnOptions) => { name: string; scenario: FakeScenario } | undefined;
+  /**
+   * A resume that fails after the handle came back, as the SDK's does (P2-16): `resumeSession`
+   * returns a handle at once and the session then ends on its own — `failed` (a CLI that exits
+   * with an error: the session file is gone or corrupt) or `finished` (it exits cleanly) — before
+   * any turn. Return `undefined` to resume normally.
+   */
+  resumeFails?: (
+    opts: SpawnOptions,
+    sessionRef: string,
+  ) => { ends: 'failed' | 'finished'; error?: string } | undefined;
 }
 
 type Ended = 'finished' | 'failed' | 'stopped';
@@ -96,6 +118,8 @@ class FakeSession {
     readonly scenario: FakeScenario,
     readonly gate: PermissionGate,
     startAt: number,
+    /** The server's tools (a brain's): a scripted call to one runs its handler. */
+    readonly tools: ReadonlyMap<string, ToolDefinition>,
   ) {
     this.stepIndex = startAt;
   }
@@ -116,6 +140,10 @@ export class FakeAdapter implements AgentAdapter {
   private readonly speed: number;
   private readonly sessionStore: Map<string, number>;
   private readonly checkCwd: boolean;
+  private readonly scenarioFor: FakeAdapterOptions['scenarioFor'];
+  /** Scenarios chosen by `scenarioFor`, by name, for `resumeSession`. */
+  private readonly picked = new Map<string, FakeScenario>();
+  private readonly resumeFails: FakeAdapterOptions['resumeFails'];
   private disposed = false;
 
   constructor(opts: FakeAdapterOptions = {}) {
@@ -123,6 +151,8 @@ export class FakeAdapter implements AgentAdapter {
     this.speed = opts.speed ?? 1;
     this.sessionStore = opts.sessionStore ?? new Map();
     this.checkCwd = opts.checkCwd ?? false;
+    this.scenarioFor = opts.scenarioFor;
+    this.resumeFails = opts.resumeFails;
   }
 
   /** The scenario names this adapter knows, for the ops console's spawn form. */
@@ -131,18 +161,60 @@ export class FakeAdapter implements AgentAdapter {
   }
 
   async spawn(opts: SpawnOptions): Promise<SpawnHandle> {
-    const { name, scenario } = scenarioFromPrompt(opts.prompt, this.scenarios);
-    return this.start(opts, name, scenario, 0);
+    const chosen = this.scenarioFor?.(opts);
+    if (chosen) this.picked.set(chosen.name.toLowerCase(), chosen.scenario);
+    const { name, scenario } = chosen ?? scenarioFromPrompt(opts.prompt, this.scenarios);
+    return this.start(opts, name.toLowerCase(), scenario, 0);
   }
 
   async resumeSession(sessionRef: string, opts: SpawnOptions): Promise<SpawnHandle> {
     const m = /^fake:([a-z0-9_-]+):([0-9a-f-]+):(\d+)$/i.exec(sessionRef);
     if (!m) throw new Error(`not a fake session ref: ${sessionRef}`);
-    const name = m[1]!.toLowerCase();
-    const scenario = this.scenarios[name];
-    if (!scenario) throw new Error(`unknown fake scenario in session ref: ${name}`);
+    let name = m[1]!.toLowerCase();
+    let scenario = this.scenarios[name] ?? this.picked.get(name);
+    if (!scenario) {
+      // A scripted brain from an earlier adapter instance (a restart): its script picks it again.
+      const chosen = this.scenarioFor?.(opts);
+      if (chosen) {
+        name = chosen.name.toLowerCase();
+        scenario = chosen.scenario;
+        this.picked.set(name, scenario);
+      }
+    }
+    if (!scenario) throw new Error(`unknown fake scenario in session ref: ${m[1]!.toLowerCase()}`);
     const startAt = this.sessionStore.get(sessionRef) ?? Number(m[3]);
-    return this.start(opts, name, scenario, startAt);
+    const fails = this.resumeFails?.(opts, sessionRef);
+    if (fails) return this.lostSession(opts, name, scenario, startAt, fails);
+    return this.start(opts, name, scenario, startAt, true);
+  }
+
+  /** A resumed session that ends on its own before its first turn (`resumeFails`). */
+  private lostSession(
+    opts: SpawnOptions,
+    name: string,
+    scenario: FakeScenario,
+    startAt: number,
+    fails: { ends: 'failed' | 'finished'; error?: string },
+  ): SpawnHandle {
+    if (this.disposed) throw new Error('adapter disposed');
+    const tools = new Map((opts.tools ?? []).map((t) => [t.name, t]));
+    const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt, tools);
+    this.sessions.set(session.sessionId, session);
+    session.ended = fails.ends;
+    // Later, as a CLI that exits after it started: the caller holds the handle first.
+    setImmediate(() => {
+      this.emit(
+        fails.ends === 'failed'
+          ? {
+              type: 'agent.failed',
+              agentId: opts.agentId,
+              error: fails.error ?? 'No conversation found with this session ID',
+              reason: 'crash',
+            }
+          : { type: 'agent.finished', agentId: opts.agentId },
+      );
+    });
+    return { sessionId: session.sessionId, sessionRef: session.sessionRef };
   }
 
   private start(
@@ -150,15 +222,24 @@ export class FakeAdapter implements AgentAdapter {
     name: string,
     scenario: FakeScenario,
     startAt: number,
+    resumed = false,
   ): SpawnHandle {
     if (this.disposed) throw new Error('adapter disposed');
     if (this.checkCwd && !isDirectory(opts.cwd)) {
       throw new Error(`working directory does not exist: ${opts.cwd}`);
     }
-    const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt);
+    const tools = new Map((opts.tools ?? []).map((t) => [t.name, t]));
+    const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt, tools);
     this.sessions.set(session.sessionId, session);
     const ref = session.sessionRef;
     this.sessionStore.set(ref, startAt);
+    // A resumed brain whose first turn was done: the resume prompt is its next turn (P2-16).
+    if (resumed && tools.size > 0 && startAt >= scenario.steps.length && opts.prompt) {
+      session.messageCount++;
+      const steps = scenario.onMessage?.(opts.prompt, session.messageCount) ?? echo(opts.prompt);
+      queueMicrotask(() => void this.runTurn(session, steps, 0, undefined));
+      return { sessionId: session.sessionId, sessionRef: ref };
+    }
     // The first turn starts on the next tick so the caller holds the handle before any event.
     queueMicrotask(() => this.runTurn(session, scenario.steps, startAt, ref));
     return { sessionId: session.sessionId, sessionRef: ref };
@@ -354,7 +435,8 @@ export class FakeAdapter implements AgentAdapter {
       case 'tool_call':
         await this.delay(session, step.delayMs, turn);
         if (turn.cancelled) return 'cancelled';
-        return this.toolCall(session, turn, { toolName: step.toolName, input: step.input });
+        return (await this.toolCall(session, turn, { toolName: step.toolName, input: step.input }))
+          .outcome;
       case 'progress':
         await this.delay(session, step.delayMs, turn);
         if (turn.cancelled) return 'cancelled';
@@ -389,15 +471,19 @@ export class FakeAdapter implements AgentAdapter {
       case 'permission':
         await this.holdWhilePaused(session, turn);
         if (turn.cancelled) return 'cancelled';
-        return this.toolCall(
-          session,
-          turn,
-          { toolName: step.toolName, input: step.input },
-          {
-            ...(step.text !== undefined ? { text: step.text } : {}),
-            action: step.permissionAction,
-          },
-        );
+        return (
+          await this.toolCall(
+            session,
+            turn,
+            { toolName: step.toolName, input: step.input },
+            {
+              ...(step.text !== undefined ? { text: step.text } : {}),
+              action: step.permissionAction,
+            },
+          )
+        ).outcome;
+      case 'script':
+        return this.script(session, step.run, turn);
       case 'finish':
         await this.delay(session, step.delayMs, turn);
         if (turn.cancelled) return 'cancelled';
@@ -425,6 +511,48 @@ export class FakeAdapter implements AgentAdapter {
   }
 
   /**
+   * A `script` step (P2-07): its body calls tools and reads their results in turn order. A call
+   * after the turn was cancelled rejects with `FakeTurnCancelled`; any other error of the body is
+   * reported as output and the turn goes on.
+   */
+  private async script(
+    session: FakeSession,
+    run: (io: FakeTurnIO) => Promise<void>,
+    turn: { cancelled: boolean },
+  ): Promise<'next' | 'cancelled'> {
+    const live = () => {
+      if (turn.cancelled || session.ended) throw new FakeTurnCancelled();
+    };
+    const io: FakeTurnIO = {
+      toolCall: async (toolName, input) => {
+        live();
+        await this.holdWhilePaused(session, turn);
+        live();
+        const { outcome, result } = await this.toolCall(session, turn, { toolName, input });
+        if (outcome === 'cancelled' || !result) throw new FakeTurnCancelled();
+        return result;
+      },
+      output: (text, kind = 'text') => {
+        live();
+        this.emit({ type: 'agent.output', agentId: session.agentId, kind, text });
+      },
+    };
+    try {
+      await run(io);
+    } catch (error) {
+      if (error instanceof FakeTurnCancelled || turn.cancelled) return 'cancelled';
+      if (session.ended) return 'cancelled';
+      this.emit({
+        type: 'agent.output',
+        agentId: session.agentId,
+        kind: 'text',
+        text: `script error: ${(error as Error).message}`,
+      });
+    }
+    return turn.cancelled ? 'cancelled' : 'next';
+  }
+
+  /**
    * One tool call through the runtime's gate, the way a real adapter's permission hook does it:
    * `allow` runs it (an `agent.tool_call` follows), `ask` blocks behind a permission question and
    * runs it on `allow`/`yes`, `deny` skips it with an output line carrying the reason.
@@ -434,10 +562,10 @@ export class FakeAdapter implements AgentAdapter {
     turn: { cancelled: boolean },
     call: ToolCall,
     ask: { text?: string; action?: PermissionAction } = {},
-  ): Promise<'next' | 'cancelled'> {
+  ): Promise<{ outcome: 'next' | 'cancelled'; result?: FakeToolResult }> {
     const agentId = session.agentId;
     const toolUseId = `toolu_fake_${randomUUID()}`;
-    const run = () =>
+    const run = async (): Promise<FakeToolResult> => {
       this.emit({
         type: 'agent.tool_call',
         agentId,
@@ -445,22 +573,34 @@ export class FakeAdapter implements AgentAdapter {
         toolUseId,
         input: call.input,
       });
-    const skip = (why: string) =>
+      // A server tool (a brain's) runs its handler, as the SDK's in-process MCP server does; the
+      // result comes back to the "model" as tool output.
+      const tool = session.tools.get(call.toolName);
+      if (!tool) return { status: 'ran' };
+      let text: string;
+      let output: unknown;
+      try {
+        output = await tool.handler(call.input ?? {});
+        text = typeof output === 'string' ? output : JSON.stringify(output);
+      } catch (error) {
+        text = `tool error: ${(error as Error).message}`;
+        output = { error: 'error', message: (error as Error).message };
+      }
+      this.emit({ type: 'agent.output', agentId, kind: 'tool', text: text ?? '' });
+      return { status: 'ran', output, text: text ?? '' };
+    };
+    const skip = (why: string): FakeToolResult => {
       this.emit({
         type: 'agent.output',
         agentId,
         kind: 'text',
         text: `permission denied for ${call.toolName} (${why}), skipping`,
       });
+      return { status: 'denied', reason: why };
+    };
     const verdict = session.gate.check(call);
-    if (verdict.decision === 'allow') {
-      run();
-      return 'next';
-    }
-    if (verdict.decision === 'deny') {
-      skip(verdict.reason);
-      return 'next';
-    }
+    if (verdict.decision === 'allow') return { outcome: 'next', result: await run() };
+    if (verdict.decision === 'deny') return { outcome: 'next', result: skip(verdict.reason) };
     const action = verdict.action ?? ask.action;
     const why = verdict.reasons.length > 0 ? ` ${verdict.reasons.join('; ')}` : '';
     const answer = await this.askQuestion(session, 'permission', {
@@ -468,12 +608,11 @@ export class FakeAdapter implements AgentAdapter {
       toolCall: call,
       ...(action ? { permissionAction: action } : {}),
     });
-    if (answer === undefined) return 'cancelled';
+    if (answer === undefined) return { outcome: 'cancelled' };
     await this.holdWhilePaused(session, turn);
-    if (turn.cancelled) return 'cancelled';
-    if (/^(allow|yes|y|ok)$/i.test(answer.trim())) run();
-    else skip('answered no');
-    return 'next';
+    if (turn.cancelled) return { outcome: 'cancelled' };
+    const result = /^(allow|yes|y|ok)$/i.test(answer.trim()) ? await run() : skip('answered no');
+    return { outcome: 'next', result };
   }
 
   private askQuestion(

@@ -1,13 +1,33 @@
 import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
-import { Event, isTranscriptEvent, type EventEnvelope, type Snapshot } from '@galactic/protocol';
+import {
+  Event,
+  isTranscriptEvent,
+  type EventEnvelope,
+  type Id,
+  type Snapshot,
+} from '@galactic/protocol';
 import { tables, type Tables } from '../db/tables.js';
+import type { ChooseOptions } from './catalogue.js';
 
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
 export interface CommandContext {
   tables: Tables;
+  /**
+   * The command's clock reading (P2-01): every event it appends carries it as `at`, and every row
+   * it writes uses it for `createdAt` / `updatedAt` — so a client folding `updatedAt = at` builds
+   * exactly the rows the server holds (TECHNOLOGY §6.2). A nested command reads its own.
+   */
+  now: string;
   /** Queues an event; it is inserted right after the mutation, inside the same transaction. */
   emit(event: Event): void;
+  /**
+   * How a command that is not handed options picks bodies (decision 10's "is its Waykeeper
+   * running"): the log's `choose`, which the composition wires to the status store. Body-freeing
+   * paths (archival, the marker sweep, `freeBody`) un-park cards with it, so they choose the way
+   * an approval does.
+   */
+  choose?: ChooseOptions;
 }
 
 export interface CommandOutcome<T> {
@@ -57,6 +77,8 @@ export class EventLog {
   private readonly now: () => string;
   private readonly onSubscriberError: (error: unknown, envelope: EventEnvelope) => void;
   readonly maxReplay: number;
+  /** Every command's `ctx.choose` (the composition sets `isRunning`); default: none. */
+  choose: ChooseOptions = {};
   private readonly subscribers = new Set<Subscriber>();
   private readonly insertEvent: Statement;
   private readonly selectSince: Statement;
@@ -71,6 +93,7 @@ export class EventLog {
    */
   private uncommitted: EventEnvelope[] = [];
   private depth = 0;
+  private selectLatestOf: Statement | undefined;
   /** True while subscribers are being notified; commands run by a subscriber queue behind the batch. */
   private publishing = false;
 
@@ -103,8 +126,11 @@ export class EventLog {
   runCommand<T>(fn: (ctx: CommandContext) => T): CommandOutcome<T> {
     const mine: EventEnvelope[] = [];
     const queued: Event[] = [];
+    const at = this.now();
     const ctx: CommandContext = {
       tables: this.tables,
+      now: at,
+      choose: this.choose,
       emit: (event) => {
         const parsed = Event.parse(event);
         if (isTranscriptEvent(parsed)) {
@@ -121,7 +147,6 @@ export class EventLog {
       value = this.db.transaction(() => {
         const result = fn(ctx);
         for (const event of queued) {
-          const at = this.now();
           const info = this.insertEvent.run(at, event.type, JSON.stringify(event));
           mine.push({ seq: Number(info.lastInsertRowid), at, event });
         }
@@ -189,6 +214,26 @@ export class EventLog {
   }
 
   /** Events with `seq > since`, in order. */
+  /**
+   * The newest `limit` events of `type` about `agentId` (the payload's `agentId`), oldest first:
+   * an indexed read (migration 0006), never a scan of the whole log (P2-18: the chat history).
+   */
+  latestOf(type: Event['type'], agentId: Id, limit: number): EventEnvelope[] {
+    this.selectLatestOf ??= this.db.prepare(
+      `SELECT id, at, payload FROM events
+        WHERE type = ? AND json_extract(payload, '$.agentId') = ?
+        ORDER BY id DESC LIMIT ?`,
+    );
+    const rows = this.selectLatestOf.all(type, agentId, limit) as {
+      id: number;
+      at: string;
+      payload: string;
+    }[];
+    return rows
+      .reverse()
+      .map((r) => ({ seq: r.id, at: r.at, event: JSON.parse(r.payload) as Event }));
+  }
+
   eventsSince(since: number, limit = this.maxReplay): EventEnvelope[] {
     const rows = this.selectSince.all(since, limit) as {
       id: number;

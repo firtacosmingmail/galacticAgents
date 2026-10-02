@@ -42,11 +42,39 @@ export { redactSecrets, redactEvent, containsSecret, REDACTION_RULES } from './r
 export { AgentRuntime, type SpawnRequest, type SpawnResult } from './runtime/agent-runtime.js';
 export { AgentInbox, type InboxMessage } from './runtime/inbox.js';
 export { createPermissionGate, type GateOptions } from './runtime/permission-gate.js';
-export { createAgent, recordSpawned } from './domain/agents.js';
-export { openQuestion, answerQuestion, openQuestionsOf } from './domain/questions.js';
+export { createAgent, recordSpawned, updateAgent } from './domain/agents.js';
+export {
+  openQuestion,
+  answerQuestion,
+  escalateQuestion,
+  reassignQuestion,
+  openQuestionsOf,
+} from './domain/questions.js';
+export { Commands, type AgentControl, type CommandsOptions } from './domain/commands.js';
+export { PromotionFlow, promotionActor, type PromotionFlowOptions } from './brains/promotion.js';
+export { carriedOut, isPromotion } from './domain/promotion.js';
+export {
+  agentEffect,
+  agentsOf,
+  applyControlState,
+  concernedSupervisors,
+  retentionDue,
+} from './domain/cascade.js';
+export { DomainError } from './domain/errors.js';
+export { TRANSITIONS, canTransition } from './domain/states.js';
 export { buildSnapshot } from './ws/snapshot.js';
 export { CapsEnforcer, DEFAULT_CAPS, type CapUsage } from './runtime/caps.js';
 export { StatusStore, type StatusListener } from './runtime/status-store.js';
+export { WorkStateDeriver } from './runtime/work-state-deriver.js';
+export {
+  PROJECT_RULES,
+  TASK_RULES,
+  deriveProjectState,
+  deriveTaskState,
+  type AgentFact,
+  type AgentPhase,
+  type WorkFacts,
+} from './domain/work-states.js';
 export { composeRuntime, STALL_THRESHOLDS_MS, type ComposedRuntime } from './runtime/compose.js';
 export { FakeAdapter, SCENARIOS, type FakeScenario, type FakeStep } from './adapters/fake/index.js';
 export {
@@ -54,3 +82,59 @@ export {
   CLAUDE_PASS_ENV,
   type ClaudeSdkAdapterOptions,
 } from './adapters/claude-sdk/index.js';
+export {
+  BrainRunner,
+  WAKE_RULES,
+  TURN_ENDING_TOOLS,
+  CARRY_SUMMARY_TOOL,
+  wakeLine,
+  createBrainQueries,
+  createWakeScope,
+  renderSeed,
+  type BrainDefinition,
+  type BrainTool,
+  type BrainToolContext,
+  type BrainQueries,
+  type BrainPlacement,
+  type BrainRunnerOptions,
+  type SessionResetPolicy,
+  type WakeRule,
+  type WakeRules,
+  type WakeScope,
+} from './brains/index.js';
+export {
+  harmonizerBrain,
+  harmonizerRuntime,
+  startHarmonizer,
+  HARMONIZER_SYSTEM_PROMPT,
+  type HarmonizerDeps,
+  type HarmonizerRequest,
+} from './brains/harmonizer/index.js';
+export { waykeeperDefinition } from './brains/waykeeper/index.js';
+// The scripted fake-LLM harness (P2-07), for the web console's end-to-end test (P2-18).
+export {
+  brainHarness,
+  firstTurn,
+  BrainHarness,
+  BrainScript,
+  type HarnessBrain,
+  type HarnessOptions,
+  type TurnContext,
+} from './brains/testing/index.js';
+export {
+  Workspaces,
+  WorkspaceMeta,
+  stewardsSerialised,
+  workspaceMeta,
+  branchName,
+  slugify,
+  type WorkspaceInfo,
+  type WorkspacesOptions,
+  type WorktreeInfo,
+  type MergeResult,
+  type MergeConflict,
+  type MergeRecord,
+  type ExternalCommit,
+  EXTERNAL_COMMITS_SHOWN,
+} from './workspace/workspaces.js';
+export { gitRunner, GitError, SAFE_GIT_CONFIG, type Git } from './workspace/git.js';

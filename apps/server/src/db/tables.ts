@@ -8,6 +8,9 @@ const json = (v: unknown): string | null => (v === undefined ? null : JSON.strin
 const parse = <T>(v: unknown): T | undefined =>
   typeof v === 'string' ? (JSON.parse(v) as T) : undefined;
 const opt = <T>(v: unknown): T | undefined => (v === null ? undefined : (v as T));
+const flag = (v: boolean | undefined): number | null => (v === undefined ? null : v ? 1 : 0);
+const unflag = (v: unknown): boolean | undefined =>
+  v === null || v === undefined ? undefined : v === 1;
 
 /** Strips `undefined` values so parsed objects compare equal to their fixtures. */
 function compact<T extends object>(o: T): T {
@@ -87,6 +90,7 @@ const bodies: Mapper<Body> = {
     name: b.name,
     host_kind: b.host?.kind ?? null,
     host_id: b.host?.id ?? null,
+    moved_to: json(b.movedTo),
     meta: json(b.meta),
   }),
   fromRow: (r) => ({
@@ -97,6 +101,7 @@ const bodies: Mapper<Body> = {
     host: r['host_kind']
       ? { kind: r['host_kind'] as 'project' | 'task', id: r['host_id'] as Id }
       : undefined,
+    movedTo: parse(r['moved_to']),
     meta: parse(r['meta']),
   }),
 };
@@ -112,6 +117,8 @@ const projects: Mapper<Project> = {
     parent_project_id: p.parentProjectId ?? null,
     body_id: p.bodyId,
     state: p.state,
+    permission_policy: json(p.permissionPolicy),
+    pinned: flag(p.pinned),
     created_at: p.createdAt,
     updated_at: p.updatedAt,
     meta: json(p.meta),
@@ -124,6 +131,8 @@ const projects: Mapper<Project> = {
     parentProjectId: opt<Id>(r['parent_project_id']),
     bodyId: r['body_id'] as Id,
     state: r['state'] as Project['state'],
+    permissionPolicy: parse<Project['permissionPolicy']>(r['permission_policy']),
+    pinned: unflag(r['pinned']),
     createdAt: r['created_at'] as string,
     updatedAt: r['updated_at'] as string,
     meta: parse(r['meta']),
@@ -143,6 +152,7 @@ const tasks: Mapper<Task> = {
     branch: t.branch ?? null,
     blocked_by: JSON.stringify(t.blockedBy),
     state: t.state,
+    pinned: flag(t.pinned),
     created_at: t.createdAt,
     updated_at: t.updatedAt,
     meta: json(t.meta),
@@ -157,6 +167,7 @@ const tasks: Mapper<Task> = {
     branch: opt<string>(r['branch']),
     blockedBy: parse<Id[]>(r['blocked_by']) ?? [],
     state: r['state'] as Task['state'],
+    pinned: unflag(r['pinned']),
     createdAt: r['created_at'] as string,
     updatedAt: r['updated_at'] as string,
     meta: parse(r['meta']),
@@ -285,6 +296,7 @@ export function tables(db: Database): Tables {
       'name',
       'host_kind',
       'host_id',
+      'moved_to',
       'meta',
     ]),
     projects: new Table(db, projects, [
@@ -295,6 +307,8 @@ export function tables(db: Database): Tables {
       'parent_project_id',
       'body_id',
       'state',
+      'permission_policy',
+      'pinned',
       'created_at',
       'updated_at',
       'meta',
@@ -309,6 +323,7 @@ export function tables(db: Database): Tables {
       'branch',
       'blocked_by',
       'state',
+      'pinned',
       'created_at',
       'updated_at',
       'meta',

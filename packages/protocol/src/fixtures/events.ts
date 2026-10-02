@@ -8,6 +8,11 @@ const waykeeper = { type: 'agent', id: 'a-waykeeper-1' } as const;
 /** One valid fixture per event type. The type of this map keeps it exhaustive. */
 export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
   'agent.created': { type: 'agent.created', agent: d.agent },
+  'agent.updated': {
+    type: 'agent.updated',
+    agentId: 'a-steward-1',
+    changes: { supervisorId: 'a-harmonizer' },
+  },
   'agent.spawned': {
     type: 'agent.spawned',
     ...steward,
@@ -91,6 +96,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     answer: 'yes',
     answeredBy: waykeeper,
     version: 1,
+    holders: ['a-waykeeper-1'],
   },
   'question.cancelled': {
     type: 'question.cancelled',
@@ -98,6 +104,17 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     ...steward,
     reason: 'agent stopped',
     version: 2,
+    holders: ['a-waykeeper-1'],
+  },
+  'permission.decided': {
+    type: 'permission.decided',
+    ...steward,
+    questionId: 'q-perm-1',
+    toolCall: { toolName: 'Bash', input: { command: 'rm -rf dist' } },
+    decision: 'deny',
+    action: 'destructive',
+    reason: 'destructive is denied by policy',
+    decidedBy: { type: 'system' },
   },
   'question.reassigned': {
     type: 'question.reassigned',
@@ -116,7 +133,41 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     changes: { kind: 'asteroid', proposedBody: { kind: 'asteroid', name: 'Dark mode' } },
   },
   'proposal.rejected': { type: 'proposal.rejected', proposalId: 'pr-1', reason: 'not now' },
-  'proposal.parked': { type: 'proposal.parked', proposalId: 'pr-1', reason: 'no free planet' },
+  'proposal.parked': {
+    type: 'proposal.parked',
+    proposalId: 'pr-1',
+    reason: 'no free planet',
+    waitingFor: 'planet',
+    occupied: [
+      {
+        bodyId: 'b-mars',
+        bodyName: 'Mars',
+        host: { kind: 'project', id: 'p-1' },
+        occupant: 'CSV to Parquet',
+        state: 'completed',
+      },
+    ],
+    offers: ['downsize_moon', 'downsize_asteroid', 'close_early'],
+  },
+  'proposal.unparked': {
+    type: 'proposal.unparked',
+    proposalId: 'pr-1',
+    proposedBody: { kind: 'planet', bodyId: 'b-mars', name: 'Dark mode' },
+    reason: 'Mars is free again',
+  },
+  'promotion.carried_out': {
+    type: 'promotion.carried_out',
+    proposalId: 'pr-1',
+    outcome: {
+      ok: true,
+      target: { kind: 'task', id: 't-2' },
+      fromBodyId: 'b-ast-1',
+      toBodyId: 'b-luna',
+      projectId: 'p-1',
+      waykeeperId: 'a-waykeeper-1',
+      stewardIds: ['a-steward-1'],
+    },
+  },
 
   'body.created': { type: 'body.created', body: d.moon },
   'body.assigned': {
@@ -129,6 +180,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     host: { kind: 'task', id: 't-2' },
     fromBodyId: 'b-ast-1',
     toBodyId: 'b-luna',
+    intoProjectId: 'p-1',
   },
   'body.freed': { type: 'body.freed', bodyId: 'b-ast-1' },
 
@@ -139,6 +191,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     projectId: 'p-1',
     from: 'approved',
     to: 'in_progress',
+    by: user,
   },
 
   'task.created': { type: 'task.created', task: d.task },

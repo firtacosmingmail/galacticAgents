@@ -1,18 +1,31 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
-import { AgentRole, AgentRuntime, QuestionKind, WorkState } from './enums.js';
+import {
+  AgentRole,
+  AgentRuntime,
+  PermissionAction,
+  QuestionKind,
+  RequestOrigin,
+  WorkState,
+} from './enums.js';
 import {
   Actor,
   Agent,
   Body,
   Cost,
   Host,
+  PermissionPolicy,
   Progress,
   Project,
+  PromotionOutcome,
   Proposal,
+  ProposalParking,
+  ProposedBody,
   Question,
   QuestionContext,
   Task,
+  ToolCall,
+  TrustLevel,
 } from './domain.js';
 
 // ---------------------------------------------------------------------------
@@ -28,6 +41,19 @@ const agentBase = { agentId: Id };
  */
 export const AgentCreated = z.object({ type: z.literal('agent.created'), agent: Agent });
 
+/**
+ * The agent row's placement changed (P2-01): a new supervisor (an orphaned Steward re-parented),
+ * a new body (a promoted task's satellite flies), a task or project handed over. Emitted by the
+ * domain command, never by an adapter.
+ */
+export const AgentUpdated = z.object({
+  type: z.literal('agent.updated'),
+  agentId: Id,
+  changes: Agent.pick({ supervisorId: true, bodyId: true, taskId: true, projectId: true })
+    .partial()
+    .refine((c) => Object.keys(c).length > 0, { message: 'an update changes something' }),
+});
+
 export const AgentSpawned = z.object({
   type: z.literal('agent.spawned'),
   ...agentBase,
@@ -38,6 +64,11 @@ export const AgentSpawned = z.object({
   supervisorId: Id.optional(),
   taskId: Id.optional(),
   projectId: Id.optional(),
+  /**
+   * A reopened brain's first prompt folded the log up to this seq (P2-16): once that session's
+   * first turn ends (`agent.idle`), a later requeue cuts here.
+   */
+  foldedUpTo: z.number().int().nonnegative().optional(),
 });
 
 /** Transcript traffic. Routed to `transcript_chunks`, never persisted in `events` (TECHNOLOGY §6.2). */
@@ -156,6 +187,12 @@ export const MessageSent = z.object({
   text: z.string(),
   /** Asked to cancel the current turn and go first. */
   interrupt: z.boolean(),
+  /**
+   * Where a user's message came from (P2-21): what a brain passes to the policy-writing commands
+   * it calls for this message. Absent for agents' and system messages, and unknown counts as
+   * remote.
+   */
+  origin: RequestOrigin.optional(),
 });
 
 /**
@@ -186,6 +223,11 @@ export const QuestionAnswered = z.object({
   answer: z.string(),
   answeredBy: Actor,
   version: z.number().int().nonnegative(),
+  /**
+   * Every agent that held the question, past and present, oldest first (P2-03): their mailboxes
+   * learn it was answered and stop waiting. Absent when no agent ever held it.
+   */
+  holders: z.array(Id).optional(),
 });
 /**
  * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an
@@ -198,6 +240,8 @@ export const QuestionCancelled = z.object({
   agentId: Id,
   reason: z.string(),
   version: z.number().int().nonnegative(),
+  /** Every agent that held the question, past and present (as on `question.answered`). */
+  holders: z.array(Id).optional(),
 });
 /** Holder changed without an escalation, e.g. the holder died (orphaned question). */
 export const QuestionReassigned = z.object({
@@ -207,6 +251,30 @@ export const QuestionReassigned = z.object({
   to: Actor,
   reason: z.string(),
   version: z.number().int().nonnegative(),
+});
+
+// ---------------------------------------------------------------------------
+// permission.* (SPEC §3.6, decision 7; P2-04)
+// ---------------------------------------------------------------------------
+
+/**
+ * The project's policy table decided a tool call without the user (P2-04): `allow` answered a
+ * permission request at once, `deny` refused it (or the gate refused the call before any request
+ * existed). `questionId` is the adapter's request the decision answered; absent when the gate
+ * refused the call outright. No question row is ever opened for it. `decidedBy` is always the
+ * system: an LLM never decides a permission.
+ */
+export const PermissionDecided = z.object({
+  type: z.literal('permission.decided'),
+  agentId: Id,
+  questionId: Id.optional(),
+  toolCall: ToolCall,
+  decision: z.enum(['allow', 'deny']),
+  /** The category that produced the decision, when one was recognised. */
+  action: PermissionAction.optional(),
+  /** Why, for a denial (the policy line, a check failure). */
+  reason: z.string().optional(),
+  decidedBy: Actor,
 });
 
 // ---------------------------------------------------------------------------
@@ -221,17 +289,53 @@ export const ProposalApproved = z.object({ type: z.literal('proposal.approved'),
 export const ProposalEdited = z.object({
   type: z.literal('proposal.edited'),
   proposalId: Id,
-  changes: Proposal.pick({ kind: true, proposedBody: true, workspace: true }).partial(),
+  changes: Proposal.pick({ kind: true, proposedBody: true, workspace: true })
+    .extend({
+      /** The user's consent to `git init` an existing non-git workspace (decision 27): `meta.initGit`. */
+      initGit: z.boolean().optional(),
+      /** The trust level the user chose for the project (decision 49): `meta.trust`. */
+      trust: TrustLevel.optional(),
+    })
+    .partial(),
 });
 export const ProposalRejected = z.object({
   type: z.literal('proposal.rejected'),
   proposalId: Id,
   reason: z.string().optional(),
 });
+/**
+ * Parked (decision 16). A card the server parked for lack of room also carries what the card
+ * shows (`ProposalParking`: the body kind it waits for, the occupied bodies, the offers); the
+ * parking is kept in `meta.parked` until the next decision.
+ */
 export const ProposalParked = z.object({
   type: z.literal('proposal.parked'),
   proposalId: Id,
   reason: z.string(),
+  waitingFor: ProposalParking.shape.waitingFor,
+  occupied: ProposalParking.shape.occupied,
+  offers: ProposalParking.shape.offers,
+});
+/**
+ * A card parked for lack of room is pending again (P2-09): a body of its kind freed. It now
+ * proposes `proposedBody` (the catalogue's choice) and loses `meta.parked`; the user decides it.
+ */
+export const ProposalUnparked = z.object({
+  type: z.literal('proposal.unparked'),
+  proposalId: Id,
+  proposedBody: ProposedBody,
+  reason: z.string(),
+});
+
+/**
+ * An approved promotion card was carried out by the server (P2-12; SPEC §3.4): the work moved,
+ * its Waykeeper runs, its Stewards were handed over — or, with `ok: false`, why not. The card
+ * keeps the outcome as `meta.carriedOut`; the brain that owns the card is woken to report it.
+ */
+export const PromotionCarriedOut = z.object({
+  type: z.literal('promotion.carried_out'),
+  proposalId: Id,
+  outcome: PromotionOutcome,
 });
 
 // ---------------------------------------------------------------------------
@@ -241,12 +345,20 @@ export const ProposalParked = z.object({
 /** A body that did not exist in the catalogue before: a procedural asteroid, a task's body. */
 export const BodyCreated = z.object({ type: z.literal('body.created'), body: Body });
 export const BodyAssigned = z.object({ type: z.literal('body.assigned'), bodyId: Id, host: Host });
+/**
+ * Work moved from one body to another (SPEC §3.4; its satellite flies). `toBodyId` hosts `host`
+ * from now on — unless `intoProjectId` is set: a standalone task joined that project and lives on
+ * its body, whose host does not change (decision 9). Either way the old body loses its host and
+ * shows the "moved to …" marker (`Body.movedTo`, stamped with the event's `at`) until it is freed.
+ */
 export const BodyMoved = z.object({
   type: z.literal('body.moved'),
   host: Host,
   fromBodyId: Id,
   toBodyId: Id,
+  intoProjectId: Id.optional(),
 });
+/** The body is free again: no host, no "moved to …" marker. */
 export const BodyFreed = z.object({ type: z.literal('body.freed'), bodyId: Id });
 
 // ---------------------------------------------------------------------------
@@ -254,29 +366,81 @@ export const BodyFreed = z.object({ type: z.literal('body.freed'), bodyId: Id })
 // ---------------------------------------------------------------------------
 
 export const ProjectCreated = z.object({ type: z.literal('project.created'), project: Project });
+/**
+ * What `project.updated` / `task.updated` may change (P2-20; TECHNOLOGY §6.2). A key that is
+ * absent (or `undefined`) is unchanged; an explicit `null` clears an optional field — detaching a
+ * sub-project (`parentProjectId`), dropping the policy, forgetting a merged task's worktree. Only
+ * the fields listed here are clearable; the server's commands and the web reducer fold the same
+ * changes with `applyChanges`, so replaying the log rebuilds the server's rows.
+ */
+export const ProjectChanges = Project.omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  state: true,
+})
+  .extend({
+    repoPath: z.string().nullable(),
+    parentProjectId: Id.nullable(),
+    permissionPolicy: PermissionPolicy.nullable(),
+  })
+  .partial();
+export type ProjectChanges = z.infer<typeof ProjectChanges>;
+
+export const TaskChanges = Task.omit({ id: true, createdAt: true, updatedAt: true, state: true })
+  .extend({ worktreePath: z.string().nullable(), branch: z.string().nullable() })
+  .partial();
+export type TaskChanges = z.infer<typeof TaskChanges>;
+
+/** The fields an explicit `null` clears, per row kind (everything else must not be `null`). */
+export const CLEARABLE_PROJECT_FIELDS = [
+  'repoPath',
+  'parentProjectId',
+  'permissionPolicy',
+] as const;
+export const CLEARABLE_TASK_FIELDS = ['worktreePath', 'branch'] as const;
+
+/**
+ * Folds `changes` into `current` (P2-20): `undefined` leaves a field unchanged, `null` removes it,
+ * anything else replaces it. Pure; the one patch rule the server and the client share.
+ */
+export function applyChanges<T extends object>(
+  current: T,
+  changes: { readonly [key: string]: unknown },
+): T {
+  const next = { ...current } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(changes)) {
+    if (value === null) delete next[key];
+    else if (value !== undefined) next[key] = value;
+  }
+  return next as T;
+}
+
 export const ProjectUpdated = z.object({
   type: z.literal('project.updated'),
   projectId: Id,
-  changes: Project.omit({ id: true, createdAt: true, updatedAt: true, state: true }).partial(),
+  changes: ProjectChanges,
 });
 export const ProjectStateChanged = z.object({
   type: z.literal('project.state_changed'),
   projectId: Id,
   from: WorkState,
-  to: WorkState,
+  to: WorkState /** Who asked for it; absent for a derived change (P2-15). */,
+  by: Actor.optional(),
 });
 
 export const TaskCreated = z.object({ type: z.literal('task.created'), task: Task });
 export const TaskUpdated = z.object({
   type: z.literal('task.updated'),
   taskId: Id,
-  changes: Task.omit({ id: true, createdAt: true, updatedAt: true, state: true }).partial(),
+  changes: TaskChanges,
 });
 export const TaskStateChanged = z.object({
   type: z.literal('task.state_changed'),
   taskId: Id,
   from: WorkState,
-  to: WorkState,
+  to: WorkState /** Who asked for it; absent for a derived change (P2-15). */,
+  by: Actor.optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -313,6 +477,7 @@ export const ControlReopen = z.object({ type: z.literal('control.reopen'), ...co
 /** Every event that can appear in the `events` log and on the WebSocket stream. */
 export const Event = z.discriminatedUnion('type', [
   AgentCreated,
+  AgentUpdated,
   AgentSpawned,
   AgentOutput,
   AgentToolCall,
@@ -333,11 +498,14 @@ export const Event = z.discriminatedUnion('type', [
   QuestionAnswered,
   QuestionReassigned,
   QuestionCancelled,
+  PermissionDecided,
   ProposalCreated,
   ProposalApproved,
   ProposalEdited,
   ProposalRejected,
   ProposalParked,
+  ProposalUnparked,
+  PromotionCarriedOut,
   BodyCreated,
   BodyAssigned,
   BodyMoved,

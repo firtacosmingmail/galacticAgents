@@ -8,7 +8,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 |---|---|---|---|---|
 | 0 — Foundations | `PHASE_0_FOUNDATIONS.md` | done (2026-09-30) | 18/18 | — |
 | 1 — Agent runtime and adapters | `PHASE_1_AGENT_RUNTIME.md` | done (2026-10-01) | 38/38 | — |
-| 2 — Hierarchy | `PHASE_2_HIERARCHY.md` | not started | 0/19 | P2-01 (wave 1, next) |
+| 2 — Hierarchy | `PHASE_2_HIERARCHY.md` | done (2026-10-02) | 22/22 | — |
 | 2.5 — Minimal side panel | `PHASE_2.5_MINIMAL_PANEL.md` | not started | 0/9 | — |
 | 3 — Solar system scene | `PHASE_3_SOLAR_SYSTEM_SCENE.md` | not started | 0/8 | — |
 | 4 — Living overlays | `PHASE_4_LIVING_OVERLAYS.md` | not started | 0/7 | — |

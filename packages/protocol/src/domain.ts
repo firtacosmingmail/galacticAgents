@@ -13,6 +13,7 @@ import {
   QuestionKind,
   QuestionStatus,
   TaskPriority,
+  WorkBodyKind,
   WorkState,
 } from './enums.js';
 
@@ -31,16 +32,64 @@ export const AgentCaps = z.object({
 });
 export type AgentCaps = z.infer<typeof AgentCaps>;
 
+/**
+ * The "moved to …" marker a body keeps after its occupant moved away (SPEC §3.4, decision 15):
+ * where it went and when. The body is not free while it shows the marker; the retention sweep
+ * frees it (`body.freed`) once the retention period of decision 4 has passed.
+ */
+export const BodyMarker = z.object({
+  /** The body the work moved to. */
+  bodyId: Id,
+  /** What moved: the project or task that lived here. */
+  host: Host,
+  at: Timestamp,
+});
+export type BodyMarker = z.infer<typeof BodyMarker>;
+
 export const Body = z.object({
   id: Id,
   kind: BodyKind,
-  /** Moons point at their planet. Planets and asteroids have no parent. */
+  /** Moons point at their planet. The Sun, planets and asteroids have no parent. */
   parentId: Id.optional(),
   name: z.string().min(1),
   host: Host.optional(),
+  /** Set by `body.moved` on the body the work left; cleared by `body.freed`. */
+  movedTo: BodyMarker.optional(),
+  /**
+   * Catalogue data (P2-02): `reserved: true` (the Sun, Earth, Earth's Moon), `orbit` (a planet's
+   * position from the Sun, a moon's around its planet), and for procedural asteroids `number`,
+   * `seed` and their generated orbit.
+   */
   meta: Meta.optional(),
 });
 export type Body = z.infer<typeof Body>;
+
+/**
+ * Who holds a body that is not free (P2-02): the planets listed by the "no free planet" refusal
+ * (decision 16), which offers downsizing or closing a completed project early. `host` is absent
+ * for a body that only shows a "moved to …" marker.
+ */
+export const BodyOccupancy = z.object({
+  bodyId: Id,
+  bodyName: z.string(),
+  host: Host.optional(),
+  /** The occupant's name: the project's name or the task's description. */
+  occupant: z.string().optional(),
+  state: WorkState.optional(),
+  movedTo: BodyMarker.optional(),
+});
+export type BodyOccupancy = z.infer<typeof BodyOccupancy>;
+
+/**
+ * Per-project permission policy (SPEC §3.6, decision 7). Missing actions fall back to the default
+ * policy. `unclassified` decides a call the engine cannot classify — an opaque command, an unknown
+ * tool (decision 49); absent means `ask`, and so does any value the engine does not know.
+ */
+export const PermissionPolicy = z.object({
+  rules: z.partialRecord(PermissionAction, PermissionDecision),
+  unclassified: PermissionDecision.optional(),
+});
+export type PermissionPolicy = z.infer<typeof PermissionPolicy>;
 
 export const Project = z.object({
   id: Id,
@@ -52,6 +101,10 @@ export const Project = z.object({
   parentProjectId: Id.optional(),
   bodyId: Id,
   state: WorkState,
+  /** The project's policy table (TECHNOLOGY §6.2); absent = the global default. */
+  permissionPolicy: PermissionPolicy.optional(),
+  /** Pinned work is never archived by the retention timer (decision 4, 11b). */
+  pinned: z.boolean().optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -69,6 +122,7 @@ export const Task = z.object({
   branch: z.string().optional(),
   blockedBy: z.array(Id),
   state: WorkState,
+  pinned: z.boolean().optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -97,7 +151,7 @@ export type Agent = z.infer<typeof Agent>;
 
 /** The body the Harmonizer proposes for a work request (SPEC §3.3). */
 export const ProposedBody = z.object({
-  kind: BodyKind,
+  kind: WorkBodyKind,
   /** Planet for a proposed moon. */
   parentId: Id.optional(),
   /** An existing free body, when the Harmonizer picked one. */
@@ -110,7 +164,7 @@ export const Proposal = z.object({
   id: Id,
   requestText: z.string().min(1),
   /** The proposed size. */
-  kind: BodyKind,
+  kind: WorkBodyKind,
   proposedBody: ProposedBody,
   workspace: z.string().min(1),
   rationale: z.string(),
@@ -121,9 +175,193 @@ export const Proposal = z.object({
 });
 export type Proposal = z.infer<typeof Proposal>;
 
+/**
+ * A Waykeeper's task plan card (P2-10; SPEC §3.3, decision 3), kept in `Proposal.meta.plan`: the
+ * plan's tasks exist as `proposed` tasks of the project and are approved (or left as a draft) as
+ * one. `kind`, `proposedBody` and `workspace` of the proposal repeat the project's, so a client
+ * that does not know plans still shows a sensible card.
+ */
+export const ProposalPlan = z.object({
+  projectId: Id,
+  /** The Waykeeper that planned; its successor on the same project owns the card too. */
+  waykeeperId: Id,
+  /** The plan's tasks, in plan order. */
+  taskIds: z.array(Id).min(1),
+});
+export type ProposalPlan = z.infer<typeof ProposalPlan>;
+
+/** The plan a proposal carries, when it is a Waykeeper's plan card. */
+export function proposalPlan(
+  proposal: Pick<Proposal, 'meta'> | undefined,
+): ProposalPlan | undefined {
+  const parsed = ProposalPlan.safeParse(proposal?.meta?.['plan']);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * What a parked card shows and offers (P2-09; SPEC §3.3, decisions 1 and 16), kept in
+ * `Proposal.meta.parked` while the proposal is `parked`. A card the server parked for lack of
+ * room carries `waitingFor` (the body kind it needs) and un-parks by itself when one frees; one
+ * the user parked by hand has only the `reason` and stays parked until it is decided again.
+ */
+export const ParkOffer = z.enum([
+  /** Make it a moon project instead (an independent moon, decision 10). */
+  'downsize_moon',
+  /** Make it standalone work on asteroids. */
+  'downsize_asteroid',
+  /** Close (and archive) a completed project early to free its body. */
+  'close_early',
+  /** A sub-project without a free moon stays a task on its planet (SPEC §3.2). */
+  'task_on_planet',
+]);
+export type ParkOffer = z.infer<typeof ParkOffer>;
+
+export const ProposalParking = z.object({
+  reason: z.string(),
+  /** Set when the server parked the card because no body of this kind was free. */
+  waitingFor: z.enum(['planet', 'moon']).optional(),
+  /** The occupied bodies and their occupants, as the refusal lists them. */
+  occupied: z.array(BodyOccupancy).optional(),
+  offers: z.array(ParkOffer).optional(),
+});
+export type ProposalParking = z.infer<typeof ProposalParking>;
+
+/** The parking a proposal shows, when it is parked with one. */
+export function proposalParking(
+  proposal: Pick<Proposal, 'meta'> | undefined,
+): ProposalParking | undefined {
+  const parsed = ProposalParking.safeParse(proposal?.meta?.['parked']);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * A proposal's `meta` after a decision (P2-09), one implementation for the server and every
+ * client so the two folds cannot drift: `parked` is set while the card is parked and dropped by
+ * any other decision (`null`); `initGit` records the user's consent to turn an existing non-git
+ * workspace into a repository (decision 27). An emptied `meta` is `undefined`.
+ */
+export function foldProposalMeta(
+  meta: Meta | undefined,
+  changes: ProposalMetaChanges,
+): Meta | undefined {
+  const next: Record<string, unknown> = { ...(meta ?? {}) };
+  if (changes.parked === null) delete next['parked'];
+  else if (changes.parked !== undefined) next['parked'] = changes.parked;
+  if (changes.initGit === true) next['initGit'] = true;
+  else if (changes.initGit === false) delete next['initGit'];
+  if (changes.trust === 'default') delete next['trust'];
+  else if (changes.trust !== undefined) next['trust'] = changes.trust;
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+/** What a decision changes in a proposal's `meta` (`foldProposalMeta`). */
+export interface ProposalMetaChanges {
+  parked?: ProposalParking | null;
+  initGit?: boolean;
+  /** The trust level the user chose on the card (decision 49): `default` drops `meta.trust`. */
+  trust?: TrustLevel;
+}
+
+/**
+ * The trust level the user chose on a work card (decision 49): `meta.trust`, read fail-closed —
+ * anything that is not a known level is `default`.
+ */
+export function proposalTrust(proposal: Pick<Proposal, 'meta'> | undefined): TrustLevel {
+  const parsed = TrustLevel.safeParse(proposal?.meta?.['trust']);
+  return parsed.success ? parsed.data : 'default';
+}
+
+/**
+ * What a promotion card moves (P2-12; SPEC §3.4, decision 2), read from either card shape: the
+ * Harmonizer's `meta.request = {type: 'promotion', target, toProjectId?}` (P2-08) or a Waykeeper's
+ * `meta.promotion = {taskId, fromProjectId, requestedBy}` (P2-10). `toProjectId`: a standalone
+ * task joins that existing project; otherwise the target grows to the card's `kind` (a task
+ * becomes a project of its own, a project moves to a bigger body). `fromProjectId` /
+ * `requestedBy`: a Waykeeper asked for its project's task.
+ */
+export const PromotionRequest = z.object({
+  target: Host,
+  toProjectId: Id.optional(),
+  fromProjectId: Id.optional(),
+  requestedBy: Id.optional(),
+  /** The name on the card, for a new project. */
+  name: z.string().optional(),
+  /** The body the work was on when the card was made (the Harmonizer's cards). */
+  fromBodyId: Id.optional(),
+});
+export type PromotionRequest = z.infer<typeof PromotionRequest>;
+
+/** The promotion a proposal asks for, when it is a promotion card (either shape). */
+export function proposalPromotion(
+  proposal: Pick<Proposal, 'meta'> | undefined,
+): PromotionRequest | undefined {
+  const meta = proposal?.meta;
+  const request = meta?.['request'] as Record<string, unknown> | undefined;
+  if (request?.['type'] === 'promotion') {
+    const parsed = PromotionRequest.safeParse({
+      target: request['target'],
+      toProjectId: request['toProjectId'],
+      name: request['name'],
+      fromBodyId: request['fromBodyId'],
+    });
+    if (parsed.success) return parsed.data;
+  }
+  const promotion = meta?.['promotion'] as Record<string, unknown> | undefined;
+  if (promotion && typeof promotion['taskId'] === 'string') {
+    const parsed = PromotionRequest.safeParse({
+      target: { kind: 'task', id: promotion['taskId'] },
+      fromProjectId: promotion['fromProjectId'],
+      requestedBy: promotion['requestedBy'],
+    });
+    if (parsed.success) return parsed.data;
+  }
+  return undefined;
+}
+
+/**
+ * How an approved promotion was carried out (P2-12), kept on the card as `meta.carriedOut` and
+ * announced by `promotion.carried_out`: the work's old and new body, the project it belongs to
+ * now, the Waykeeper that runs it and the Stewards handed over — or why it could not be done.
+ */
+export const PromotionOutcome = z.object({
+  ok: z.boolean(),
+  target: Host,
+  fromBodyId: Id.optional(),
+  toBodyId: Id.optional(),
+  projectId: Id.optional(),
+  waykeeperId: Id.optional(),
+  stewardIds: z.array(Id).optional(),
+  error: z.string().optional(),
+});
+export type PromotionOutcome = z.infer<typeof PromotionOutcome>;
+
 /** A tool call an agent wants to make, as the permission gate and the permission card see it. */
 export const ToolCall = z.object({ toolName: z.string(), input: z.unknown().optional() });
 export type ToolCall = z.infer<typeof ToolCall>;
+
+/** One of the origin agent's last logged events, as a question card shows it (P2-03). */
+export const QuestionRecentEvent = z.object({
+  seq: z.number().int().nonnegative(),
+  at: Timestamp,
+  type: z.string(),
+  /** A one-line reading: the tool name, the progress summary, the message text (capped). */
+  summary: z.string().optional(),
+});
+export type QuestionRecentEvent = z.infer<typeof QuestionRecentEvent>;
+
+/**
+ * Where a question comes from (P2-03; IMPLEMENTATION_PLAN corner case 11), filled by the server
+ * when it opens the question: the origin agent's role, task, project and body, and its last few
+ * logged events, so the card makes sense without opening the agent.
+ */
+export const QuestionOrigin = z.object({
+  role: AgentRole,
+  taskId: Id.optional(),
+  projectId: Id.optional(),
+  bodyId: Id.optional(),
+  recent: z.array(QuestionRecentEvent),
+});
+export type QuestionOrigin = z.infer<typeof QuestionOrigin>;
 
 /** What a question is about: the text the agent asked plus optional choices or the tool call awaiting permission. */
 export const QuestionContext = z.object({
@@ -131,6 +369,8 @@ export const QuestionContext = z.object({
   options: z.array(z.string()).optional(),
   toolCall: ToolCall.optional(),
   permissionAction: PermissionAction.optional(),
+  /** Set by the server on `question.opened`; adapters leave it out. */
+  origin: QuestionOrigin.optional(),
 });
 export type QuestionContext = z.infer<typeof QuestionContext>;
 
@@ -184,12 +424,6 @@ export const StatusRecord = z.object({
 });
 export type StatusRecord = z.infer<typeof StatusRecord>;
 
-/** Per-project permission policy (SPEC §3.6, decision 7). Missing actions fall back to the default policy. */
-export const PermissionPolicy = z.object({
-  rules: z.partialRecord(PermissionAction, PermissionDecision),
-});
-export type PermissionPolicy = z.infer<typeof PermissionPolicy>;
-
 export const DEFAULT_PERMISSION_POLICY: PermissionPolicy = {
   rules: {
     read_workspace: 'allow',
@@ -214,14 +448,19 @@ export const TranscriptChunk = z.object({
 export type TranscriptChunk = z.infer<typeof TranscriptChunk>;
 
 /**
+ * A project's trust level (decision 49): the name of the policy preset the user chose for it on
+ * the proposal card or the project's edit form.
+ */
+export const TrustLevel = z.enum(['default', 'trusting', 'cautious', 'trusted']);
+export type TrustLevel = z.infer<typeof TrustLevel>;
+
+/**
  * Named policy presets the panel offers (SPEC §3.6): `default` is the table in the SPEC;
  * `trusting` lets a Steward install and talk to the network on its own but still asks before
- * destroying or pushing; `cautious` asks for every change.
+ * destroying or pushing; `cautious` asks for every change; `trusted` (decision 49) allows
+ * everything — calls the engine cannot classify included — except a push, which asks.
  */
-export const PERMISSION_POLICY_PRESETS: Record<
-  'default' | 'trusting' | 'cautious',
-  PermissionPolicy
-> = {
+export const PERMISSION_POLICY_PRESETS: Record<TrustLevel, PermissionPolicy> = {
   default: DEFAULT_PERMISSION_POLICY,
   trusting: {
     rules: {
@@ -245,5 +484,39 @@ export const PERMISSION_POLICY_PRESETS: Record<
       push: 'deny',
     },
   },
+  trusted: {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      destructive: 'allow',
+      outside_workspace: 'allow',
+      network: 'allow',
+      push: 'ask',
+    },
+    unclassified: 'allow',
+  },
 };
 export type PermissionPolicyPreset = keyof typeof PERMISSION_POLICY_PRESETS;
+
+/**
+ * The trust level a project's policy amounts to (decision 49): the preset whose table it equals
+ * once merged over the global default (no policy is `default`), or `custom`.
+ */
+export function trustLevelOf(policy: PermissionPolicy | undefined | null): TrustLevel | 'custom' {
+  const merged = (p: PermissionPolicy | undefined | null) => ({
+    rules: { ...DEFAULT_PERMISSION_POLICY.rules, ...(p?.rules ?? {}) },
+    unclassified: p?.unclassified ?? 'ask',
+  });
+  const own = merged(policy);
+  for (const level of TrustLevel.options) {
+    const preset = merged(PERMISSION_POLICY_PRESETS[level]);
+    if (
+      own.unclassified === preset.unclassified &&
+      PermissionAction.options.every((a) => own.rules[a] === preset.rules[a])
+    ) {
+      return level;
+    }
+  }
+  return 'custom';
+}

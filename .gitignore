@@ -30,3 +30,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 pnpm-debug.log*
+
+# JSON reports the rtk vitest wrapper writes next to a package
+.vitest/
+
+# Agent worktrees made by Claude Code
+.claude/worktrees/

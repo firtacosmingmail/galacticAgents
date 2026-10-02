@@ -24,6 +24,15 @@ beforeEach(async () => {
       dataDir: '',
       configPath: '',
       dbPath: ':memory:',
+      projectsRoot: '/tmp/galactic-projects-unused',
+      autoApproveRemote: false,
+      retentionMs: 7 * 24 * 60 * 60 * 1000,
+      caps: {
+        maxConcurrentAgents: 4,
+        maxStewardsPerWaykeeper: 3,
+        maxSpawnsPerHour: 30,
+        maxSpawnsPerHourPerBrain: 20,
+      },
     },
     log,
   });

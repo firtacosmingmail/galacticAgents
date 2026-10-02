@@ -10,23 +10,37 @@ import {
   type AgentRuntime as RuntimeName,
   type Event,
   type Id,
+  type PermissionAction,
   type PermissionPolicy,
+  type RequestOrigin,
   type SpawnHandle,
   type SpawnOptions,
+  type ToolCall,
   type ToolDefinition,
 } from '@galactic/protocol';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { createAgent, recordSpawned } from '../domain/agents.js';
+import { answerQuestion, cancelQuestion, checkAnswer } from '../domain/questions.js';
 import {
-  answerQuestion,
-  cancelQuestion,
-  cancelQuestionsOf,
-  openQuestion,
-} from '../domain/questions.js';
+  endAgentQuestions,
+  holdersNow,
+  rerouteHeldBy,
+  livingFromStatuses,
+  logRouting,
+  openFromNeedsInput,
+  type QuestionRouting,
+} from '../domain/question-service.js';
+import { DomainError } from '../domain/errors.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
-import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
-import { createPermissionGate } from './permission-gate.js';
-import { redactEvent } from './redact.js';
+import {
+  CapsEnforcer,
+  DEFAULT_CAPS,
+  DEFAULT_MAX_CONCURRENT_AGENTS,
+  type CapsConfig,
+  type SpawnCheck,
+} from './caps.js';
+import { createPermissionGate, type RuntimeGate } from './permission-gate.js';
+import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
 import type { TranscriptPipeline } from './transcripts.js';
 
@@ -47,7 +61,7 @@ import type { TranscriptPipeline } from './transcripts.js';
  *     reach the log — the adapter is reporting a session the server no longer owns;
  *   - an agent's open questions are cancelled in the same command as its terminal or
  *     interrupted event, and when it goes idle without an answer (an interrupt withdrew them,
- *     P1-34);
+ *     P1-34); the questions it *held* move to the next living supervisor or the user (P2-03);
  *   - a stop that was asked for ends as a stop, even when a shutdown overtakes it (P1-32).
  *
  * `agent.spawned` is emitted here, not by adapters (they do not know bodies). The agent row is
@@ -81,15 +95,71 @@ export interface AgentRuntimeOptions {
   adapters: AgentAdapter[];
   transcripts: TranscriptPipeline;
   statuses: StatusStore;
-  caps?: { maxConcurrentAgents?: number; defaults?: AgentCaps };
+  /** Hard caps (P1-02) and the hierarchy's spawn caps (P2-17). */
+  caps?: CapsConfig;
   /** Delivered messages kept per inbox for inspection; the log has the full history. */
   inboxHistory?: number;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
+  /** Question routing (P2-03); default: the log, with liveness from `statuses`. */
+  questions?: QuestionRouting;
 }
 
 const TERMINAL = new Set<AgentEvent['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
 type Terminal = 'agent.finished' | 'agent.failed' | 'agent.stopped' | 'agent.interrupted';
+
+/**
+ * How an interrupted agent is reopened (P2-16). A brain passes its definition (`tools`,
+ * `systemPrompt`) and its first turn; its messages stay with its mailbox.
+ */
+export interface ReopenOptions {
+  tools?: ToolDefinition[];
+  systemPrompt?: string;
+  /** The resumed session's first message (default: `RESUME_PROMPT`). */
+  prompt?: string;
+  /**
+   * With it, an agent whose session cannot be resumed (no session ref, a runtime without resume,
+   * a failed resume) gets a fresh session on the same agent row, with this first prompt — a brain
+   * re-seeded from the database. Without it the agent stays interrupted.
+   */
+  freshPrompt?: string;
+  /**
+   * The agent is a brain with a mailbox (P2-06): `send()` only logs its messages from the start,
+   * and the messages it never received are not redelivered raw — its runner folds them into the
+   * first turn.
+   */
+  mailbox?: boolean;
+  /**
+   * The seq up to which the first prompt folded the log (a brain's requeue): recorded on
+   * `agent.spawned` so a later requeue cuts there once this session's first turn ended.
+   */
+  foldedUpTo?: number;
+  /**
+   * A session resumed from its ref that ends before its first turn did (the SDK hands back a
+   * handle at once; a lost or corrupt session only shows when the CLI exits) is a failed resume,
+   * not an end: with `freshPrompt` the runtime opens the fresh session on the same row and calls
+   * this first, synchronously, with that session's outcome — before the `agent.interrupted` is
+   * logged.
+   */
+  onFallback?: (fresh: Promise<SpawnResult>) => void;
+}
+
+/** A reopen's outcome: `resumed` from the session ref, or a `fresh` session on the same row. */
+export type ReopenResult = SpawnResult & { mode?: 'resumed' | 'fresh' };
+
+/**
+ * Reopens an interrupted brain as a brain (P2-16): through its runner, with its definition. Returns
+ * `undefined` for an agent it has no definition for (it is then resumed as a plain agent).
+ */
+export type BrainResumer = (agent: Agent) => Promise<SpawnResult> | undefined;
+
+/**
+ * The first message of a resumed session (P2-16): the agent continues where it was, instead of
+ * being handed its original task prompt again.
+ */
+export const RESUME_PROMPT =
+  'The server restarted and your session was resumed. Continue where you left off; if you had ' +
+  'already finished, say so in one line.';
 
 export interface RecoveryReport {
   /** Agents reopened from their session refs. */
@@ -114,6 +184,10 @@ interface Live {
   handle: SpawnHandle | undefined;
   /** Events the adapter emitted before the handle came back: routed after `agent.spawned`. */
   early: AgentEvent[];
+  /** The one place this agent's permissions are decided (P2-04): the adapter's hooks and ours. */
+  gate: RuntimeGate;
+  /** `permission.decided` events made before the handle came back: logged after `agent.spawned`. */
+  decisions: Event[];
   inbox: AgentInbox;
   /** Question ids currently open for this agent (adapter-assigned). */
   questions: Set<Id>;
@@ -129,6 +203,46 @@ interface Live {
   answering: Set<Id>;
   /** The one terminal event routed for this agent. */
   terminal: Terminal | undefined;
+  /** How the session was opened; `renewSession()` opens the next one the same way. */
+  spec: SpawnRequest;
+  /**
+   * A brain's mailbox owns its messages (P2-06): `send()` only logs them and the brain runner
+   * folds them into its next turn; only a `turn` message reaches the inbox.
+   */
+  mailbox: boolean;
+  /** The current turn (P2-11): its last text output and whether it was cut short. */
+  turn: { text: string | undefined; interrupted: boolean };
+  /** The session was resumed and its first turn has not ended yet (P2-16). */
+  resumedTurn: boolean;
+  /**
+   * A session resumed from its ref whose first turn has not ended (P2-16): ending now means the
+   * resume failed (a lost session), handled by `resumeLost`.
+   */
+  probation: Probation | undefined;
+  /** The session did something (output, a tool call, a question) since it opened. */
+  activity: boolean;
+}
+
+/** What a resumed session falls back to if it ends before its first turn did (P2-16). */
+interface Probation {
+  /** A brain: the fresh session on the same row. Absent: the agent is left interrupted. */
+  fresh?: { req: SpawnRequest; mailbox: boolean; foldedUpTo?: number };
+  onFallback?: (fresh: Promise<SpawnResult>) => void;
+}
+
+/**
+ * How one turn of an agent ended (P2-11): what `onTurnEnded` listeners get on every
+ * `agent.idle`, after it is logged. `text` is the turn's last text output (redacted);
+ * `interrupted` says the turn was cut short (an interrupt, a pause, a stop or a cap stop under
+ * way); `queued` counts the messages waiting to start the next turn at once.
+ */
+export interface TurnEnd {
+  agent: Agent;
+  text: string | undefined;
+  interrupted: boolean;
+  queued: number;
+  /** The first turn of a resumed session (P2-16): the turn the resume prompt started. */
+  resumed: boolean;
 }
 
 const SYSTEM: Actor = { type: 'system' };
@@ -157,16 +271,35 @@ export class AgentRuntime {
   private readonly onError: (error: unknown, context: string) => void;
   private readonly pumps: Promise<void>[] = [];
   readonly caps: CapsEnforcer;
+  private readonly questions: QuestionRouting;
   private disposed = false;
+  private readonly turnListeners = new Set<(turn: TurnEnd) => void>();
+  private brainResumer: BrainResumer | undefined;
+  /**
+   * Interrupted agents startup recovery is about to reopen (P2-16): the brains resumed first must
+   * not replace them, so `isReserved` tells the spawn guards they are on their way back.
+   */
+  private readonly reserved = new Set<Id>();
+  /** Brains whose lost resume is being replaced by a fresh session (`resumeLost`). */
+  private readonly refreshing = new Set<Id>();
 
   constructor(private readonly opts: AgentRuntimeOptions) {
     this.now = opts.now ?? (() => new Date().toISOString());
     this.onError = opts.onError ?? (() => {});
+    this.questions = opts.questions ?? logRouting(opts.log, livingFromStatuses(opts.statuses));
+    const { maxConcurrentAgents, defaults, ...spawn } = opts.caps ?? {};
     this.caps = new CapsEnforcer({
-      maxConcurrentAgents: opts.caps?.maxConcurrentAgents ?? 4,
-      defaults: opts.caps?.defaults ?? DEFAULT_CAPS,
+      maxConcurrentAgents: maxConcurrentAgents ?? DEFAULT_MAX_CONCURRENT_AGENTS,
+      defaults: defaults ?? DEFAULT_CAPS,
+      spawn,
+      agentOf: (id) => opts.log.tables.agents.get(id),
       onCapHit: (agentId, reason) => void this.onCapHit(agentId, reason),
     });
+    // Spawns per hour survive a restart (P2-17): every agent row created in the last hour counts.
+    for (const agent of opts.log.tables.agents.all()) {
+      const at = Date.parse(agent.createdAt);
+      if (Number.isFinite(at)) this.caps.noteSpawn(agent.supervisorId, at);
+    }
     for (const adapter of opts.adapters) {
       this.adapters.set(adapter.runtime, adapter);
       this.pumps.push(this.pump(adapter));
@@ -195,7 +328,7 @@ export class AgentRuntime {
     if (this.disposed) throw new Error('runtime disposed');
     const adapter = this.adapters.get(req.runtime);
     if (!adapter) return { ok: false, reason: `no adapter for runtime ${req.runtime}` };
-    const gate = this.caps.canSpawn();
+    const gate = this.caps.canSpawn(this.spawnCheck(req.role, req.supervisorId));
     if (!gate.ok) return { ok: false, reason: gate.reason };
 
     const agent = this.opts.log.runCommand((ctx) =>
@@ -203,7 +336,6 @@ export class AgentRuntime {
         role: req.role,
         runtime: req.runtime,
         caps: this.caps.resolve(req.caps),
-        now: this.now(),
         ...(req.bodyId ? { bodyId: req.bodyId } : {}),
         ...(req.supervisorId ? { supervisorId: req.supervisorId } : {}),
         ...(req.taskId ? { taskId: req.taskId } : {}),
@@ -218,7 +350,21 @@ export class AgentRuntime {
         },
       }),
     ).value;
+    this.caps.noteSpawn(agent.supervisorId);
     return this.start(agent, req, adapter, (opts) => adapter.spawn(opts), false);
+  }
+
+  /** What the caps need to judge a spawn: the role, and who supervises it as what. */
+  private spawnCheck(role: AgentRole, supervisorId: Id | undefined, again = false): SpawnCheck {
+    const supervisorRole = supervisorId
+      ? this.opts.log.tables.agents.get(supervisorId)?.role
+      : undefined;
+    return {
+      role,
+      ...(supervisorId ? { supervisorId } : {}),
+      ...(supervisorRole ? { supervisorRole } : {}),
+      ...(again ? { again: true } : {}),
+    };
   }
 
   /**
@@ -229,24 +375,33 @@ export class AgentRuntime {
   private async resume(
     agent: Agent,
     req: Omit<SpawnRequest, 'role' | 'runtime'>,
+    opts: { fresh?: boolean; mailbox?: boolean; foldedUpTo?: number; probation?: Probation } = {},
   ): Promise<SpawnResult> {
     if (this.disposed) throw new Error('runtime disposed');
     if (this.live.has(agent.id)) return { ok: false, reason: `agent ${agent.id} is running` };
     const adapter = this.adapters.get(agent.runtime);
     if (!adapter) return { ok: false, reason: `no adapter for runtime ${agent.runtime}` };
-    if (!adapter.resumeSession || !agent.sessionRef) {
+    const ref = agent.sessionRef;
+    if (!opts.fresh && (!adapter.resumeSession || !ref)) {
       return { ok: false, reason: `runtime ${agent.runtime} cannot resume sessions` };
     }
-    const gate = this.caps.canSpawn();
+    const gate = this.caps.canSpawn(this.spawnCheck(agent.role, agent.supervisorId, true));
     if (!gate.ok) return { ok: false, reason: gate.reason };
-    const ref = agent.sessionRef;
     this.ended.delete(agent.id);
     return this.start(
       agent,
       { ...req, role: agent.role, runtime: agent.runtime },
       adapter,
-      (opts) => adapter.resumeSession!(ref, opts),
+      opts.fresh || !ref
+        ? (spawnOpts) => adapter.spawn(spawnOpts)
+        : (spawnOpts) => adapter.resumeSession!(ref, spawnOpts),
       true,
+      {
+        mailbox: opts.mailbox ?? false,
+        resumed: !opts.fresh,
+        ...(opts.foldedUpTo !== undefined ? { foldedUpTo: opts.foldedUpTo } : {}),
+        ...(opts.probation && !opts.fresh && ref ? { probation: opts.probation } : {}),
+      },
     );
   }
 
@@ -256,26 +411,49 @@ export class AgentRuntime {
     adapter: AgentAdapter,
     open: (opts: SpawnOptions) => Promise<SpawnHandle>,
     resuming: boolean,
+    how: { mailbox?: boolean; resumed?: boolean; foldedUpTo?: number; probation?: Probation } = {},
   ): Promise<SpawnResult> {
     const caps = agent.caps;
     // Registered before the adapter runs: whatever it emits before the handle comes back is
     // buffered and routed after `agent.spawned`, and counts against the caps from the start.
+    // The project's table as of each check (P2-04): a changed policy applies to the next call.
+    const gate = createPermissionGate({
+      agentId: agent.id,
+      policy: () => this.policyOf(agent.id, req),
+      workspace: () => this.workspaceOf(agent.id, req),
+      cwd: req.cwd,
+      caps: this.caps,
+      ...(req.tools ? { serverTools: req.tools.map((t) => t.name) } : {}),
+      onDeny: (call, verdict, action) =>
+        this.permissionDecided(live, {
+          toolCall: call,
+          decision: 'deny',
+          reason: verdict.reason,
+          action,
+        }),
+    });
     const live: Live = {
       agent,
       adapter,
       handle: undefined,
       early: [],
+      gate,
+      decisions: [],
       inbox: new AgentInbox(agent.id, {
         deliver: async (m) => {
           // The agent is busy from the moment it has the message (P1-33): a pause/resume or a
           // second message right after must not find it "idle".
           live.idle = false;
+          live.turn = { text: undefined, interrupted: false };
           await adapter.send(this.session(live), m.text, { interrupt: m.interrupt });
           if (!live.terminal) {
             this.record({ type: 'message.delivered', messageId: m.id, agentId: agent.id });
           }
         },
-        interrupt: () => adapter.interrupt(this.session(live)),
+        interrupt: () => {
+          live.turn.interrupted = true;
+          return adapter.interrupt(this.session(live));
+        },
         now: this.now,
         onError: (e) => this.onError(e, `inbox ${agent.id}`),
         ...(this.opts.inboxHistory !== undefined ? { history: this.opts.inboxHistory } : {}),
@@ -288,15 +466,18 @@ export class AgentRuntime {
       stopRequested: undefined,
       answering: new Set(),
       terminal: undefined,
+      spec: req,
+      // A reopened brain owns its messages from the start (P2-16): nothing slips into the inbox.
+      mailbox: how.mailbox ?? false,
+      turn: { text: undefined, interrupted: false },
+      resumedTurn: how.resumed ?? false,
+      probation: how.probation,
+      activity: false,
     };
     this.live.set(agent.id, live);
-    this.caps.track(agent.id, caps);
-    const gate = createPermissionGate({
-      agentId: agent.id,
-      policy: req.permissionPolicy ?? DEFAULT_PERMISSION_POLICY,
-      workspace: req.workspace ?? req.cwd,
-      cwd: req.cwd,
-      caps: this.caps,
+    this.caps.track(agent.id, caps, {
+      role: agent.role,
+      ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
     });
     let handle: SpawnHandle;
     try {
@@ -334,11 +515,17 @@ export class AgentRuntime {
     // The row's session ref and `agent.spawned` in one transaction (one write rule).
     try {
       live.agent = this.opts.log.runCommand((ctx) =>
-        recordSpawned(ctx, live.agent, handle.sessionRef, this.now()),
+        recordSpawned(
+          ctx,
+          live.agent,
+          handle.sessionRef,
+          how.foldedUpTo !== undefined ? { foldedUpTo: how.foldedUpTo } : {},
+        ),
       ).value;
     } catch (error) {
       this.onError(error, `record agent.spawned ${agent.id}`);
     }
+    for (const event of live.decisions.splice(0)) this.record(event);
     for (const event of live.early.splice(0)) this.route(event);
     if (live.pendingCap && !live.terminal) void this.onCapHit(agent.id, live.pendingCap);
     return { ok: true, agent: live.agent };
@@ -353,7 +540,11 @@ export class AgentRuntime {
    * Queues a message; delivered when the agent is idle, or now with `interrupt`. Logged as
    * `message.sent` (P1-22) before it is queued, so a restart knows what was still pending.
    */
-  send(agentId: Id, text: string, opts: { sender: Actor; interrupt?: boolean }): InboxMessage {
+  send(
+    agentId: Id,
+    text: string,
+    opts: { sender: Actor; interrupt?: boolean; turn?: boolean; origin?: RequestOrigin },
+  ): InboxMessage {
     const live = this.must(agentId);
     if (live.capStop || live.stopRequested || live.inbox.currentState === 'ended') {
       throw new Error(`agent ${agentId} is stopping`);
@@ -366,14 +557,99 @@ export class AgentRuntime {
       sender: opts.sender,
       text,
       interrupt: opts.interrupt ?? false,
+      ...(opts.origin ? { origin: opts.origin } : {}),
     });
-    return live.inbox.enqueue(text, { ...opts, id: messageId });
+    if (live.mailbox && !opts.turn) {
+      // Logged only: the brain's mailbox picks it up from the log and folds it into a turn.
+      return {
+        id: messageId,
+        agentId,
+        text,
+        sender: opts.sender,
+        interrupt: opts.interrupt ?? false,
+        queuedAt: this.now(),
+      };
+    }
+    return live.inbox.enqueue(text, {
+      sender: opts.sender,
+      interrupt: opts.interrupt ?? false,
+      id: messageId,
+    });
+  }
+
+  /**
+   * Hands the agent's messages to its brain mailbox (P2-06): from now on `send()` without `turn`
+   * logs `message.sent` and queues nothing, and the brain runner delivers whole turns.
+   */
+  attachMailbox(agentId: Id): void {
+    this.must(agentId).mailbox = true;
+  }
+
+  /**
+   * Replaces a live agent's adapter session with a fresh one on the same row (P2-06: a brain's
+   * periodic session reset with a carried summary in `prompt`). The old session is logged
+   * `agent.interrupted{reason}` and stopped; its stragglers are dropped; then the adapter spawns
+   * a new session with the original options and `agent.spawned` reports the new `sessionRef`.
+   * Messages still queued in the old inbox are not carried over (a brain's inbox is empty
+   * between turns). Refused while a stop is under way.
+   */
+  async renewSession(agentId: Id, prompt: string, reason = 'session reset'): Promise<SpawnResult> {
+    if (this.disposed) throw new Error('runtime disposed');
+    const live = this.must(agentId);
+    if (!live.handle) return { ok: false, reason: `agent ${agentId} has no session yet` };
+    if (live.capStop || live.stopRequested || live.terminal) {
+      return { ok: false, reason: `agent ${agentId} is stopping` };
+    }
+    const { adapter, spec, mailbox } = live;
+    const sessionId = live.handle.sessionId;
+    const pending = live.inbox.pending().map((m) => m.id);
+    // Same agent row, new session: its held questions stay with it (it lives on).
+    this.recordEnd(
+      live,
+      { type: 'agent.interrupted', agentId, reason, pending },
+      'agent.interrupted',
+      { keepHeld: true },
+    );
+    try {
+      await adapter.stop(sessionId);
+    } catch (error) {
+      this.onError(error, `renew stop ${agentId}`);
+    }
+    // The old session's own `agent.stopped` travels through the event queue: let the pump drop
+    // it as a straggler before the new session registers under the same id.
+    await new Promise((resolve) => setImmediate(resolve));
+    const agent = this.opts.log.tables.agents.get(agentId) ?? live.agent;
+    const gate = this.caps.canSpawn(this.spawnCheck(agent.role, agent.supervisorId, true));
+    if (!gate.ok) return { ok: false, reason: gate.reason };
+    this.ended.delete(agentId);
+    const result = await this.start(
+      agent,
+      { ...spec, prompt },
+      adapter,
+      (opts) => adapter.spawn(opts),
+      false,
+    );
+    const next = this.live.get(agentId);
+    if (result.ok && next && mailbox) next.mailbox = true;
+    return result;
+  }
+
+  /** Whether a live session asked `questionId` and waits for its answer through the adapter. */
+  hasQuestion(questionId: Id): boolean {
+    return this.byQuestion.has(questionId);
   }
 
   async answer(questionId: Id, answer: string, by: Actor): Promise<void> {
     const agentId = this.byQuestion.get(questionId);
     if (!agentId) throw new Error(`no open question ${questionId}`);
     const live = this.must(agentId);
+    if (live.answering.has(questionId)) {
+      throw new DomainError('stale', `question ${questionId} is already being answered`);
+    }
+    // The full check before the agent sees anything; afterwards the record only needs it open.
+    const current = this.opts.log.tables.questions.get(questionId);
+    if (!current) throw new Error(`no open question ${questionId}`);
+    checkAnswer(current, { questionId, answer, answeredBy: by });
     // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
     // an answer in the log that the agent never saw.
     live.answering.add(questionId);
@@ -384,7 +660,16 @@ export class AgentRuntime {
     }
     live.questions.delete(questionId);
     this.byQuestion.delete(questionId);
-    this.command((ctx) => answerQuestion(ctx, questionId, answer, by, this.now()));
+    // Not `command()`: a refused record (the question was cancelled meanwhile) reaches the caller.
+    this.opts.log.runCommand((ctx) =>
+      answerQuestion(ctx, {
+        questionId,
+        answer,
+        answeredBy: by,
+        holders: holdersNow(ctx, questionId, this.questions),
+        delivered: true,
+      }),
+    );
   }
 
   async pause(agentId: Id, by: Actor): Promise<void> {
@@ -394,12 +679,15 @@ export class AgentRuntime {
     this.record({ type: 'control.pause', target: { kind: 'agent', id: agentId }, by });
     live.paused = true;
     live.inbox.paused();
+    // A paused agent's wall clock stops (its cap counts working time only).
+    this.caps.pause(agentId);
     try {
       await live.adapter.pause(session);
     } catch (error) {
       // The adapter refused (nothing to freeze): the runtime is not paused either.
       live.paused = false;
       live.inbox.resumed(live.idle);
+      this.caps.resume(agentId);
       throw error;
     }
   }
@@ -417,6 +705,7 @@ export class AgentRuntime {
   private unpaused(live: Live): void {
     if (!live.paused) return;
     live.paused = false;
+    this.caps.resume(live.agent.id);
     live.inbox.resumed(live.idle);
   }
 
@@ -424,6 +713,7 @@ export class AgentRuntime {
   async interrupt(agentId: Id): Promise<void> {
     const live = this.must(agentId);
     if (live.paused) await this.resumeAgent(agentId, SYSTEM);
+    live.turn.interrupted = true;
     await live.adapter.interrupt(this.session(live));
   }
 
@@ -477,7 +767,11 @@ export class AgentRuntime {
   async shutdown(reason = 'server shutdown'): Promise<Id[]> {
     const interrupted: Id[] = [];
     const stops: { live: Live; sessionId: string }[] = [];
-    for (const live of [...this.live.values()]) {
+    // Stewards first (P2-16): their own questions go before their supervisors' held ones move up.
+    const deepestFirst = [...this.live.values()].sort(
+      (a, b) => this.depth(b.agent.id) - this.depth(a.agent.id),
+    );
+    for (const live of deepestFirst) {
       if (live.terminal) continue;
       const agentId = live.agent.id;
       if (live.capStop) this.failForCap(live);
@@ -522,7 +816,12 @@ export class AgentRuntime {
   async recover(): Promise<RecoveryReport> {
     const report: RecoveryReport = { resumed: [], needAttention: [] };
     const histories = this.histories();
-    for (const record of this.opts.statuses.all()) {
+    // Stewards first, supervisors last (P2-16): an agent's own questions are cancelled before the
+    // questions its supervisor holds are moved up, so nothing climbs the chain for nothing.
+    const deepestFirst = [...this.opts.statuses.all()].sort(
+      (a, b) => this.depth(b.agentId) - this.depth(a.agentId),
+    );
+    for (const record of deepestFirst) {
       if (!LIVE_STATES.has(record.state) || this.live.has(record.agentId)) continue;
       const stoppedBy = histories.get(record.agentId)?.stopRequested;
       this.command((ctx) => {
@@ -531,23 +830,57 @@ export class AgentRuntime {
             ? { type: 'agent.stopped', agentId: record.agentId, by: stoppedBy }
             : { type: 'agent.interrupted', agentId: record.agentId, reason: 'server restarted' },
         );
-        cancelQuestionsOf(
+        endAgentQuestions(
           ctx,
           record.agentId,
-          stoppedBy ? 'agent stopped' : 'agent interrupted',
-          this.now(),
+          stoppedBy ? 'stopped' : 'interrupted',
+          this.questions,
         );
       });
     }
-    for (const record of this.opts.statuses.all()) {
-      if (record.state !== 'interrupted') continue;
-      const result = await this.recoverOne(record.agentId, histories.get(record.agentId));
+    // One Harmonizer at a time (SPEC decision 32): of several interrupted ones, only the newest
+    // comes back; the others stay interrupted for the user to look at.
+    const created = new Map(this.opts.log.tables.agents.all().map((a, i) => [a.id, i]));
+    const harmonizers = this.opts.statuses
+      .all()
+      .filter((r) => r.state === 'interrupted')
+      .map((r) => this.opts.log.tables.agents.get(r.agentId))
+      .filter((a): a is Agent => a?.role === 'harmonizer')
+      // Newest first; rows created in the same millisecond by creation order (the table's).
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) ||
+          (created.get(b.id) ?? 0) - (created.get(a.id) ?? 0),
+      );
+    const passedOver = new Set(harmonizers.slice(1).map((a) => a.id));
+    // Supervisors before their Stewards (P2-16, P2-03): a resumed Steward re-asks its questions,
+    // and they must find its Waykeeper (or the Harmonizer) running, not climb to the user.
+    const interrupted = this.opts.statuses
+      .all()
+      .filter((r) => r.state === 'interrupted')
+      .sort((a, b) => this.depth(a.agentId) - this.depth(b.agentId));
+    // On their way back (P2-16): a brain resumed before its Stewards must not replace them.
+    for (const r of interrupted) if (!passedOver.has(r.agentId)) this.reserved.add(r.agentId);
+    for (const record of interrupted) {
+      if (passedOver.has(record.agentId)) {
+        report.needAttention.push(record.agentId);
+        this.releaseHeld(record.agentId, 'was not resumed (one Harmonizer at a time)');
+        continue;
+      }
+      let result: SpawnResult;
+      try {
+        result = await this.recoverOne(record.agentId, histories.get(record.agentId));
+      } finally {
+        this.reserved.delete(record.agentId);
+      }
       if (result.ok) report.resumed.push(record.agentId);
       else {
         this.onError(new Error(result.reason), `recover ${record.agentId}`);
         report.needAttention.push(record.agentId);
+        this.releaseHeld(record.agentId, 'could not be resumed');
       }
     }
+    this.reserved.clear();
     return report;
   }
 
@@ -558,10 +891,39 @@ export class AgentRuntime {
    * received is delivered again, with its original id, before anything new.
    */
   async recoverAgent(agentId: Id): Promise<SpawnResult> {
-    return this.recoverOne(agentId, this.histories(new Set([agentId])).get(agentId));
+    return this.recoverOne(agentId, undefined);
+  }
+
+  /**
+   * Who reopens brains (P2-16): the composition registers its brain definitions here, so startup
+   * recovery and the panel's resume action bring a Harmonizer or Waykeeper back through its
+   * runner — tools, system prompt and mailbox — never as a bare session.
+   */
+  setBrainResumer(resumer: BrainResumer | undefined): void {
+    this.brainResumer = resumer;
+  }
+
+  /**
+   * Reopens one interrupted agent with explicit options (P2-16: a brain runner reopening its
+   * brain). Refused unless the agent is `interrupted` and not running; one Harmonizer at a time.
+   * Tries the session ref first; with `freshPrompt`, falls back to a fresh session on the same
+   * row. Does not consult the brain resumer.
+   */
+  async reopen(agentId: Id, opts: ReopenOptions = {}): Promise<ReopenResult> {
+    return this.reopenOne(agentId, undefined, opts);
   }
 
   private async recoverOne(agentId: Id, history: AgentHistory | undefined): Promise<SpawnResult> {
+    const refused = this.refuseReopen(agentId);
+    if (refused) return refused;
+    const agent = this.opts.log.tables.agents.get(agentId)!;
+    const viaBrain = this.brainResumer?.(agent);
+    if (viaBrain) return viaBrain;
+    return this.reopenOne(agentId, history, {});
+  }
+
+  /** Why `agentId` cannot be reopened now, or `undefined`. */
+  private refuseReopen(agentId: Id): { ok: false; reason: string } | undefined {
     if (this.live.has(agentId)) return { ok: false, reason: `agent ${agentId} is running` };
     const state = this.opts.statuses.get(agentId)?.state;
     if (state !== 'interrupted') {
@@ -569,6 +931,82 @@ export class AgentRuntime {
     }
     const agent = this.opts.log.tables.agents.get(agentId);
     if (!agent) return { ok: false, reason: `no agent ${agentId}` };
+    const running = (same: (other: Agent) => boolean) =>
+      [...this.live.values()].find(
+        (l) => l.agent.id !== agentId && l.agent.role === agent.role && same(l.agent),
+      )?.agent;
+    if (agent.role === 'harmonizer') {
+      const other = running(() => true);
+      if (other) return { ok: false, reason: `the Harmonizer is already running (${other.id})` };
+    }
+    // One Steward per task and one Waykeeper per project (P2-16): an interrupted one is not
+    // brought back beside the agent that replaced it.
+    if (agent.role === 'steward' && agent.taskId) {
+      const other = running((a) => a.taskId === agent.taskId);
+      if (other) {
+        return {
+          ok: false,
+          reason: `task ${agent.taskId} already has a running Steward (${other.id})`,
+        };
+      }
+    }
+    if (agent.role === 'waykeeper' && agent.projectId) {
+      const other = running((a) => a.projectId === agent.projectId);
+      if (other) {
+        return {
+          ok: false,
+          reason: `project ${agent.projectId} already has a running Waykeeper (${other.id})`,
+        };
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * The agent is interrupted and startup recovery is about to reopen it (P2-16). The spawn guards
+   * count it as running: a supervisor resumed first must not spawn its replacement.
+   */
+  isReserved(agentId: Id): boolean {
+    return this.reserved.has(agentId) || this.refreshing.has(agentId);
+  }
+
+  /**
+   * A resumed session's first message (dev-machine run, 2026-10-02). The restart cancelled the
+   * agent's open questions (decision 21) and the model is not told by its session, so with only
+   * "continue" it goes idle instead of asking again. The message names what the agent was
+   * waiting for — the questions cancelled in the same command as its last interruption — and asks
+   * it to ask again (a clarification through its question tool, a refused tool call by running it
+   * again, so the gate decides it afresh).
+   */
+  private resumePromptFor(agentId: Id): string {
+    const { log } = this.opts;
+    const [interrupted] = log.latestOf('agent.interrupted', agentId, 1);
+    if (!interrupted) return RESUME_PROMPT;
+    const cancelled = log
+      .latestOf('question.cancelled', agentId, 20)
+      .filter((e) => e.seq > interrupted.seq && e.at === interrupted.at)
+      .map((e) => log.tables.questions.get((e.event as { questionId: Id }).questionId))
+      .filter((q): q is NonNullable<typeof q> => q !== undefined);
+    if (cancelled.length === 0) return RESUME_PROMPT;
+    const lines = cancelled.map((q) =>
+      q.kind === 'permission'
+        ? `- you were waiting for permission to run ${q.context.toolCall?.toolName ?? 'a tool'} (${q.context.text}); run that tool call again if you still need it`
+        : `- you had asked: "${q.context.text}"${q.context.options?.length ? ` (options: ${q.context.options.join(', ')})` : ''}; ask it again with your question tool`,
+    );
+    return (
+      `${RESUME_PROMPT}\nBefore the restart you were waiting for an answer; it was cancelled by ` +
+      `the restart:\n${lines.join('\n')}\nAsk it again before you continue.`
+    );
+  }
+
+  private async reopenOne(
+    agentId: Id,
+    known: AgentHistory | undefined,
+    opts: ReopenOptions,
+  ): Promise<ReopenResult> {
+    const refused = this.refuseReopen(agentId);
+    if (refused) return refused;
+    const agent = this.opts.log.tables.agents.get(agentId)!;
     const meta = (agent.meta ?? {}) as {
       cwd?: string;
       prompt?: string;
@@ -577,19 +1015,70 @@ export class AgentRuntime {
       bare?: boolean;
     };
     if (!meta.cwd) return { ok: false, reason: 'agent has no saved working directory' };
-    const result = await this.resume(agent, {
+    const base = {
       cwd: meta.cwd,
-      prompt: meta.prompt ?? '',
       ...(meta.workspace ? { workspace: meta.workspace } : {}),
       ...(meta.permissionPolicy ? { permissionPolicy: meta.permissionPolicy } : {}),
       ...(meta.bare ? { bare: true } : {}),
-    });
-    if (!result.ok) return result;
-    const live = this.live.get(agentId);
-    for (const m of history?.undelivered() ?? []) {
-      live?.inbox.enqueue(m.text, { sender: m.sender, id: m.messageId, interrupt: false });
+      ...(opts.tools ? { tools: opts.tools } : {}),
+      ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
+    };
+    const mailbox = opts.mailbox ?? false;
+    const folded = opts.foldedUpTo !== undefined ? { foldedUpTo: opts.foldedUpTo } : {};
+    const fresh =
+      opts.freshPrompt !== undefined
+        ? {
+            req: { ...base, role: agent.role, runtime: agent.runtime, prompt: opts.freshPrompt },
+            mailbox,
+            ...folded,
+          }
+        : undefined;
+    let mode: 'resumed' | 'fresh' = 'resumed';
+    // An end before the resumed session's first turn ended is a failed resume too (P2-16): the
+    // SDK returns the handle at once and a lost session only shows when the CLI exits.
+    let result = await this.resume(
+      agent,
+      { ...base, prompt: opts.prompt ?? this.resumePromptFor(agentId) },
+      {
+        mailbox,
+        ...folded,
+        probation: {
+          ...(fresh ? { fresh } : {}),
+          ...(opts.onFallback ? { onFallback: opts.onFallback } : {}),
+        },
+      },
+    );
+    if (!result.ok && fresh && !this.live.has(agentId)) {
+      // The session is gone (or never resumable): a fresh one on the same row, re-seeded from the
+      // database by the caller's prompt. A failed resume left the agent interrupted, as it must be.
+      mode = 'fresh';
+      result = await this.resume(this.opts.log.tables.agents.get(agentId) ?? agent, fresh.req, {
+        fresh: true,
+        mailbox,
+        ...folded,
+      });
     }
-    return result;
+    if (!result.ok) return result;
+    if (!mailbox) {
+      const history = known ?? this.histories(new Set([agentId])).get(agentId);
+      const live = this.live.get(agentId);
+      for (const m of history?.undelivered() ?? []) {
+        live?.inbox.enqueue(m.text, { sender: m.sender, id: m.messageId, interrupt: false });
+      }
+    }
+    return { ...result, mode };
+  }
+
+  /** How many supervisors are above the agent (the Harmonizer is 0). */
+  private depth(agentId: Id): number {
+    const { agents } = this.opts.log.tables;
+    let depth = 0;
+    const seen = new Set<Id>([agentId]);
+    for (let a = agents.get(agentId); a?.supervisorId && !seen.has(a.supervisorId); depth++) {
+      seen.add(a.supervisorId);
+      a = agents.get(a.supervisorId);
+    }
+    return depth;
   }
 
   /**
@@ -653,10 +1142,141 @@ export class AgentRuntime {
 
   // ---------------------------------------------------------------------------
 
+  /**
+   * Listens to every turn end of every agent (P2-11: a Steward's report to its supervisor).
+   * Called synchronously after the `agent.idle` is logged and before the next queued message is
+   * delivered. Returns the unsubscribe function.
+   */
+  onTurnEnded(listener: (turn: TurnEnd) => void): () => void {
+    this.turnListeners.add(listener);
+    return () => this.turnListeners.delete(listener);
+  }
+
+  /** The agent has a brain mailbox (P2-06): messages to it are folded into its turns. */
+  hasMailbox(agentId: Id): boolean {
+    return this.live.get(agentId)?.mailbox ?? false;
+  }
+
+  private turnEnded(live: Live, turn: Live['turn']): void {
+    const resumed = live.resumedTurn;
+    live.resumedTurn = false;
+    if (this.turnListeners.size === 0) return;
+    const end: TurnEnd = {
+      agent: live.agent,
+      text: turn.text === undefined ? undefined : redactSecrets(turn.text),
+      interrupted:
+        turn.interrupted ||
+        live.paused ||
+        live.stopRequested !== undefined ||
+        live.capStop !== undefined ||
+        live.terminal !== undefined,
+      queued: live.inbox.pending().length,
+      resumed,
+    };
+    for (const listener of this.turnListeners) {
+      try {
+        listener(end);
+      } catch (error) {
+        this.onError(error, `turn end of ${live.agent.id}`);
+      }
+    }
+  }
+
   private must(agentId: Id): Live {
     const live = this.live.get(agentId);
     if (!live) throw new Error(`agent ${agentId} is not running`);
     return live;
+  }
+
+  /**
+   * The policy an agent's permissions are decided under now (decision 22): its project's table
+   * (the global default when the project has none), read on every check so a change applies to
+   * the next tool call; an agent outside any project keeps the policy it was spawned with.
+   */
+  /** The agent's project workspace now (a moved workspace applies at once), else the spawn's. */
+  private workspaceOf(agentId: Id, req: SpawnRequest): string {
+    const { tables } = this.opts.log;
+    const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
+    const project = projectId ? tables.projects.get(projectId) : undefined;
+    return project?.workspace ?? req.workspace ?? req.cwd;
+  }
+
+  private policyOf(agentId: Id, req: SpawnRequest): PermissionPolicy {
+    const { tables } = this.opts.log;
+    const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
+    const project = projectId ? tables.projects.get(projectId) : undefined;
+    if (project) return project.permissionPolicy ?? DEFAULT_PERMISSION_POLICY;
+    return req.permissionPolicy ?? DEFAULT_PERMISSION_POLICY;
+  }
+
+  /**
+   * Permission routing (P2-04; SPEC §2.6, decision 7): a permission request is decided by the
+   * agent's gate — the same decision the adapter's hook got — before any question exists. `allow`
+   * and `deny` answer the adapter at once and log `permission.decided{decidedBy: system}`; no
+   * question row is opened, so nothing waits on the user and nothing reaches a brain. `ask` (and
+   * a request without a tool call, which nothing can judge) returns `false`: the caller opens the
+   * user-held question. Decided on the raw call — the redacted one is what the log keeps.
+   */
+  private rulePermission(
+    live: Live,
+    raw: Extract<AgentEvent, { type: 'agent.needs_input' }>,
+    event: Extract<AgentEvent, { type: 'agent.needs_input' }>,
+  ): boolean {
+    const call = raw.question.toolCall;
+    if (!call) return false;
+    const { verdict, action } = live.gate.decide(call);
+    if (verdict.decision === 'ask') {
+      // The card shows the category the policy asks about when the adapter did not name one.
+      const asked = verdict.action ?? action;
+      if (!event.question.permissionAction && asked) event.question.permissionAction = asked;
+      return false;
+    }
+    this.permissionDecided(
+      live,
+      {
+        toolCall: event.question.toolCall ?? call,
+        decision: verdict.decision,
+        action,
+        ...(verdict.decision === 'deny' ? { reason: verdict.reason } : {}),
+      },
+      event.questionId,
+    );
+    live.idle = false;
+    if (!live.paused) live.inbox.working();
+    const answer = verdict.decision === 'allow' ? 'allow' : `deny: ${verdict.reason}`;
+    void live.adapter
+      .answer(event.questionId, answer)
+      .catch((error: unknown) => this.onError(error, `permission answer ${event.questionId}`));
+    return true;
+  }
+
+  /** Logs a decision the policy made without the user (P2-04), with the tool input redacted. */
+  private permissionDecided(
+    live: Live,
+    d: {
+      toolCall: ToolCall;
+      decision: 'allow' | 'deny';
+      action: PermissionAction | undefined;
+      reason?: string;
+    },
+    questionId?: Id,
+  ): void {
+    if (live.terminal) return;
+    const event: Event = {
+      type: 'permission.decided',
+      agentId: live.agent.id,
+      ...(questionId ? { questionId } : {}),
+      toolCall: {
+        toolName: d.toolCall.toolName,
+        ...(d.toolCall.input !== undefined ? { input: redactValue(d.toolCall.input) } : {}),
+      },
+      decision: d.decision,
+      ...(d.action ? { action: d.action } : {}),
+      ...(d.reason ? { reason: redactSecrets(d.reason) } : {}),
+      decidedBy: SYSTEM,
+    };
+    if (!live.handle) live.decisions.push(event);
+    else this.record(event);
   }
 
   /** Appends an event under the one write rule; the status store sees it as a log subscriber. */
@@ -706,30 +1326,44 @@ export class AgentRuntime {
       live.early.push(raw);
       return;
     }
+    if (raw.type !== 'agent.idle' && !TERMINAL.has(raw.type)) live.activity = true;
     if (raw.type === 'agent.output') {
       // Raw text: the pipeline redacts with the context of the previous chunk (P1-31), which a
       // chunk redacted on its own would have lost.
       this.opts.transcripts.append(raw.agentId, raw.kind, raw.text);
       this.opts.statuses.touch(raw.agentId);
       if (!live.paused) live.idle = false;
+      if (raw.kind === 'text' && raw.text.trim() !== '') live.turn.text = raw.text;
       return;
     }
-    const event = redactEvent(raw);
+    let event = redactEvent(raw);
+    if (
+      event.type === 'agent.finished' &&
+      live.agent.role === 'steward' &&
+      !event.result?.trim() &&
+      live.turn.text !== undefined
+    ) {
+      // A Steward that finished without a result: its last words are its report (P2-11).
+      event = { ...event, result: redactSecrets(live.turn.text) };
+    }
     if (TERMINAL.has(event.type)) {
       this.terminal(live, event as Extract<AgentEvent, { type: Terminal }>);
       return;
     }
+    if (
+      event.type === 'agent.needs_input' &&
+      event.kind === 'permission' &&
+      raw.type === 'agent.needs_input' &&
+      this.rulePermission(live, raw, event)
+    ) {
+      return;
+    }
     if (event.type === 'agent.needs_input') {
-      // The question row and the event in one transaction: the server owns questions (§5.3).
+      // The question row and the event in one transaction: the server owns questions (§5.3),
+      // routed to its holder by the question service (P2-03).
       this.command((ctx) => {
         ctx.emit(event);
-        openQuestion(ctx, {
-          id: event.questionId,
-          kind: event.kind,
-          originAgentId: event.agentId,
-          context: event.question,
-          now: this.now(),
-        });
+        openFromNeedsInput(ctx, event, this.questions);
       });
     } else if (event.type === 'agent.idle' && live.questions.size > live.answering.size) {
       // Idle while a question is open: an interrupt withdrew it (P1-34). Cancelled with the event.
@@ -737,7 +1371,12 @@ export class AgentRuntime {
       this.command((ctx) => {
         ctx.emit(event);
         for (const q of withdrawn) {
-          cancelQuestion(ctx, q, 'withdrawn: the agent went idle without an answer', this.now());
+          cancelQuestion(
+            ctx,
+            q,
+            'withdrawn: the agent went idle without an answer',
+            holdersNow(ctx, q, this.questions),
+          );
         }
       });
       for (const q of withdrawn) {
@@ -750,10 +1389,15 @@ export class AgentRuntime {
     // Caps after the log so a tripping tool call precedes the stop it causes.
     this.caps.onEvent(event);
     switch (event.type) {
-      case 'agent.idle':
+      case 'agent.idle': {
         live.idle = true;
+        live.probation = undefined; // the resumed session took its first turn: it is resumed
+        const turn = live.turn;
+        live.turn = { text: undefined, interrupted: false };
+        this.turnEnded(live, turn);
         if (!live.paused) live.inbox.idle();
         return;
+      }
       case 'agent.needs_input':
         live.questions.add(event.questionId);
         this.byQuestion.set(event.questionId, event.agentId);
@@ -782,8 +1426,84 @@ export class AgentRuntime {
       this.failForCap(live);
       return;
     }
+    const probation = live.probation;
+    if (probation && !live.capStop && !live.stopRequested && !this.disposed) {
+      live.probation = undefined;
+      // A brain falls back to a fresh session; a plain agent that failed before doing anything
+      // stays interrupted for the panel's resume action. Anything else is a real end.
+      if (probation.fresh || (event.type === 'agent.failed' && !live.activity)) {
+        this.resumeLost(live, event, probation);
+        return;
+      }
+    }
     this.caps.onEvent(event);
     this.recordEnd(live, event, event.type);
+  }
+
+  /**
+   * A session resumed from its ref ended before its first turn did (P2-16): the resume failed.
+   * The agent is logged `agent.interrupted{resume failed}` — its tool-asked and held questions
+   * stay, it is coming back — and a brain gets its fresh session on the same row, as a resume
+   * that failed at once does. If that cannot start either, it stays interrupted and the questions
+   * it held move on.
+   */
+  private resumeLost(live: Live, event: Event, probation: Probation): void {
+    const agentId = live.agent.id;
+    const why =
+      event.type === 'agent.failed'
+        ? event.error
+        : `the session ${event.type.slice('agent.'.length)} before its first turn`;
+    const reason = `resume failed: ${why}`;
+    const fresh = probation.fresh;
+    if (!fresh) {
+      this.recordEnd(live, { type: 'agent.interrupted', agentId, reason }, 'agent.interrupted');
+      return;
+    }
+    let settle!: (result: SpawnResult) => void;
+    const outcome = new Promise<SpawnResult>((resolve) => (settle = resolve));
+    try {
+      probation.onFallback?.(outcome);
+    } catch (error) {
+      this.onError(error, `resume fallback ${agentId}`);
+    }
+    this.refreshing.add(agentId); // on its way back: nothing replaces it meanwhile
+    this.recordEnd(live, { type: 'agent.interrupted', agentId, reason }, 'agent.interrupted', {
+      keepHeld: true,
+    });
+    void (async () => {
+      // Stragglers of the lost session are dropped before the new one registers under its id.
+      await new Promise((resolve) => setImmediate(resolve));
+      let result: SpawnResult;
+      try {
+        const agent = this.opts.log.tables.agents.get(agentId) ?? live.agent;
+        result = this.disposed
+          ? { ok: false, reason: 'runtime disposed' }
+          : await this.resume(agent, fresh.req, {
+              fresh: true,
+              mailbox: fresh.mailbox,
+              ...(fresh.foldedUpTo !== undefined ? { foldedUpTo: fresh.foldedUpTo } : {}),
+            });
+      } catch (error) {
+        result = { ok: false, reason: (error as Error).message };
+      }
+      this.refreshing.delete(agentId);
+      if (!result.ok) {
+        this.onError(new Error(result.reason), `fresh session after ${reason} (${agentId})`);
+        this.releaseHeld(agentId, 'could not be resumed');
+      }
+      settle(result);
+    })();
+  }
+
+  /**
+   * The questions an interrupted agent held move to the next living supervisor or the user
+   * (P2-03): it is not coming back (passed over, or its resume failed for good).
+   */
+  private releaseHeld(agentId: Id, why: string): void {
+    if (this.live.has(agentId)) return;
+    this.command((ctx) => {
+      rerouteHeldBy(ctx, agentId, this.questions, `holder ${agentId} ${why}`);
+    });
   }
 
   private failForCap(live: Live): void {
@@ -795,13 +1515,20 @@ export class AgentRuntime {
     );
   }
 
-  /** Logs how the agent ended and cancels its open questions in the same command, then forgets it. */
-  private recordEnd(live: Live, event: Event, terminal: Terminal): void {
+  /**
+   * Logs how the agent ended, cancels its open questions and re-routes the ones it held (P2-03)
+   * in the same command, then forgets it.
+   */
+  private recordEnd(
+    live: Live,
+    event: Event,
+    terminal: Terminal,
+    opts: { keepHeld?: boolean } = {},
+  ): void {
     if (live.terminal) return;
-    const reason = `agent ${terminal.slice('agent.'.length)}`;
     this.command((ctx) => {
       ctx.emit(event);
-      cancelQuestionsOf(ctx, live.agent.id, reason, this.now());
+      endAgentQuestions(ctx, live.agent.id, terminal.slice('agent.'.length), this.questions, opts);
     });
     this.end(live, terminal);
   }

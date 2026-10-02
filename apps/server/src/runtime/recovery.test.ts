@@ -3,6 +3,7 @@ import type { EventEnvelope } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase, type Database } from '../db/database.js';
 import { answerQuestion } from '../domain/questions.js';
+import { RESUME_PROMPT } from './agent-runtime.js';
 import { composeRuntime, type ComposedRuntime } from './compose.js';
 
 /**
@@ -144,7 +145,7 @@ describe('restart recovery', () => {
     expect(first.log.tables.questions.get(questionId)?.status).toBe('cancelled');
     expect(() =>
       first.log.runCommand((ctx) =>
-        answerQuestion(ctx, questionId, 'yes', USER, new Date().toISOString()),
+        answerQuestion(ctx, { questionId, answer: 'yes', answeredBy: USER }),
       ),
     ).toThrow(/cancelled/);
 
@@ -326,5 +327,108 @@ describe('restart recovery', () => {
     expect(second.statuses.get(id)?.state).toBe('interrupted');
     await sleep(20);
     expect(second.runtime.liveAgents()).toEqual([]);
+  });
+});
+
+describe('one Harmonizer at a time (wave-3 review)', () => {
+  it('two concurrent spawns: exactly one Harmonizer runs', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const c = boot(db, new Map(), 1);
+    const spawn = () =>
+      c.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        prompt: 'scenario:long',
+        cwd: '/hq',
+      });
+    const results = await Promise.allSettled([spawn(), spawn()]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(c.runtime.liveAgents().filter((a) => a.role === 'harmonizer')).toHaveLength(1);
+  });
+
+  it('a restart with two interrupted Harmonizers resumes only the newest', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const spawnH = (c: ComposedRuntime) =>
+      c.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        prompt: 'scenario:long',
+        cwd: '/hq',
+      });
+    const first = boot(db, sessions, 1);
+    const h1 = (await spawnH(first)).value;
+    await first.shutdown(); // h1 interrupted
+    const second = boot(db, sessions, 1);
+    const h2 = (await spawnH(second)).value; // allowed: h1 is not running
+    await second.shutdown(); // h2 interrupted too
+    const third = boot(db, sessions, 1);
+    const report = await third.recover();
+    expect(report.resumed).toEqual([h2.id]);
+    expect(report.needAttention).toContain(h1.id);
+    expect((await third.runtime.recoverAgent(h1.id)).ok).toBe(false);
+    expect(third.runtime.liveAgents().filter((a) => a.role === 'harmonizer')).toHaveLength(1);
+  });
+});
+
+describe('the resume message (dev-machine run, 2026-10-02)', () => {
+  it('names the questions the restart cancelled and asks the agent to ask them again', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const first = boot(db, sessions);
+    const spawned = await first.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:asks',
+      cwd: '/tmp/w',
+    });
+    if (!spawned.ok) throw new Error(spawned.reason);
+    const id = spawned.agent.id;
+    await waitFor(() => first.statuses.get(id)?.state === 'waiting_for_input', 'question');
+    const asked = first.log.tables.questions.all().find((q) => q.originAgentId === id)!;
+    await first.shutdown();
+
+    const second = boot(db, sessions);
+    const adapter = second.runtime.adapter('fake')!;
+    const prompts: string[] = [];
+    const original = adapter.resumeSession!.bind(adapter);
+    adapter.resumeSession = (ref, opts) => {
+      prompts.push(opts.prompt);
+      return original(ref, opts);
+    };
+    await second.recover();
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain(asked.context.text);
+    expect(prompts[0]).toMatch(/cancelled by the restart/i);
+    expect(prompts[0]).toMatch(/ask it again/i);
+  });
+
+  it('is the plain resume message when nothing was cancelled', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const first = boot(db, sessions, 1);
+    const spawned = await first.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:long',
+      cwd: '/tmp/w',
+    });
+    if (!spawned.ok) throw new Error(spawned.reason);
+    await waitFor(() => first.statuses.get(spawned.agent.id)?.state === 'working', 'working');
+    await first.shutdown();
+    const second = boot(db, sessions);
+    const adapter = second.runtime.adapter('fake')!;
+    const prompts: string[] = [];
+    const original = adapter.resumeSession!.bind(adapter);
+    adapter.resumeSession = (ref, opts) => {
+      prompts.push(opts.prompt);
+      return original(ref, opts);
+    };
+    await second.recover();
+    expect(prompts).toEqual([RESUME_PROMPT]);
   });
 });
