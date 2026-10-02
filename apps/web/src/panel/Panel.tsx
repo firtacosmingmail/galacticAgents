@@ -6,10 +6,10 @@ import { HARMONIZER, selectionKey, type Selection } from '../state/selection.js'
 import { createApi, type Api } from '../console/api.js';
 import { ChatBox } from '../console/hierarchy/ChatBox.js';
 import { currentHarmonizer } from '../console/hierarchy/HierarchyConsole.js';
-import { ProposalCards } from '../console/hierarchy/ProposalCards.js';
-import { QuestionInbox } from '../console/hierarchy/QuestionInbox.js';
 import { StewardView } from '../console/hierarchy/StewardView.js';
 import { ApiContext, agentLabel, StatePill } from '../console/hierarchy/shared.js';
+import { CardLinksContext } from './cards/index.js';
+import { Inbox } from './Inbox.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
 import './panel.css';
 
@@ -33,14 +33,16 @@ export function Panel({
   const api = useMemo(() => given ?? createApi(token), [given, token]);
   return (
     <ApiContext.Provider value={api}>
-      <div className="pnl">
-        <TopBar {...(onForget ? { onForget } : {})} />
-        <div className="pnl-grid">
-          <Navigation />
-          <MainArea />
-          <SideColumn />
+      <CardLinksContext.Provider value={true}>
+        <div className="pnl">
+          <TopBar {...(onForget ? { onForget } : {})} />
+          <div className="pnl-grid">
+            <Navigation />
+            <MainArea />
+            <SideColumn />
+          </div>
         </div>
-      </div>
+      </CardLinksContext.Provider>
     </ApiContext.Provider>
   );
 }
@@ -212,8 +214,7 @@ function SideColumn() {
         )}
       </section>
       <section className="pnl-inbox" aria-label="inbox">
-        <QuestionInbox />
-        <ProposalCards />
+        <Inbox />
       </section>
     </aside>
   );
