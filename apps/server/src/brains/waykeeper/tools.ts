@@ -277,15 +277,31 @@ export const spawnStewardTool: BrainTool = {
         `task ${task.id} already has a running Steward (${running[0]!.agent.id})`,
       );
     }
+    const hadWorktree = task.worktreePath !== undefined;
+    const hadBranch = task.branch !== undefined;
     const where = await placeSteward(ctx, task);
     const project = projectOf(ctx);
-    const { value } = await ctx.commands.spawnAgent({
-      role: 'steward',
-      runtime: runtimeOf(ctx),
-      taskId: task.id,
-      supervisorId: ctx.brainId,
-      prompt: stewardPrompt(task, project, where, instructions),
-    });
+    let value: Agent;
+    try {
+      ({ value } = await ctx.commands.spawnAgent({
+        role: 'steward',
+        runtime: runtimeOf(ctx),
+        taskId: task.id,
+        supervisorId: ctx.brainId,
+        prompt: stewardPrompt(task, project, where, instructions, {
+          related: ctx.queries.projectTasks(project.id),
+        }),
+      }));
+    } catch (error) {
+      // Refused (a spawn cap, say): the worktree made for it goes again — nothing is left behind
+      // a refusal (P2-17). One the task already had (a Steward sent back) is kept.
+      if (!hadWorktree && where.branch && ctx.workspaces) {
+        await ctx.workspaces
+          .removeWorktree(task.id, { deleteBranch: !hadBranch })
+          .catch(() => undefined);
+      }
+      throw error;
+    }
     // Kept for a Steward sent back after it ended (decision 30): it gets them again.
     const fresh = ctx.queries.task(task.id)!;
     await ctx.commands.updateTask(task.id, {
@@ -530,20 +546,24 @@ async function sendBack(
   // A new Steward knows nothing of the task: the send-back first (its note leads), then the task
   // and the instructions its first Steward was given.
   const instructions = task.meta?.['stewardInstructions'];
+  const project = projectOf(ctx);
   const brief = stewardPrompt(
     task,
-    projectOf(ctx),
+    project,
     { cwd: conflict.worktreePath, branch: conflict.sourceBranch, serialised: false },
-    typeof instructions === 'string' && instructions.trim() !== ''
-      ? instructions
-      : '(No instructions were recorded for this task; work from its description.)',
+    `The task, as its first Steward was given it:\n\n${
+      typeof instructions === 'string' && instructions.trim() !== ''
+        ? instructions
+        : '(No instructions were recorded for this task; work from its description.)'
+    }`,
+    { related: ctx.queries.projectTasks(project.id), lead: text },
   );
   const { value } = await ctx.commands.spawnAgent({
     role: 'steward',
     runtime: runtimeOf(ctx),
     taskId: task.id,
     supervisorId: ctx.brainId,
-    prompt: `${text}\n\n---\nThe task, as its first Steward was given it:\n\n${brief}`,
+    prompt: brief,
   });
   return { stewardId: value.id, how: 'respawned' };
 }

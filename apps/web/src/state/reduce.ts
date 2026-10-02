@@ -10,7 +10,13 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
-import { applyChanges, summarize, type SystemSummary } from '@galactic/protocol';
+import {
+  applyChanges,
+  foldProposalMeta,
+  summarize,
+  type ProposalParking,
+  type SystemSummary,
+} from '@galactic/protocol';
 
 /** Everything the page knows, derived from the stream only (TECHNOLOGY §6.3). */
 export interface WorldState {
@@ -49,6 +55,22 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
     proposals: byId(snapshot.proposals),
     statuses: Object.fromEntries(snapshot.statuses.map((s) => [s.agentId, s])),
   };
+}
+
+/**
+ * A proposal decision (P2-09): its field changes, and its `meta` folded by the protocol's
+ * `foldProposalMeta` exactly as the server folds it (`parked` set or dropped, `initGit`).
+ */
+function decide(
+  map: Record<Id, Proposal>,
+  id: Id,
+  changes: { [K in keyof Proposal]?: Proposal[K] | undefined },
+  metaChanges: { parked?: ProposalParking | null; initGit?: boolean },
+): Record<Id, Proposal> {
+  const current = map[id];
+  if (!current) return map;
+  const meta = foldProposalMeta(current.meta, metaChanges);
+  return { ...map, [id]: applyChanges(current, { ...changes, meta: meta ?? null }) };
 }
 
 /**
@@ -163,27 +185,70 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'proposal.approved':
       return {
         ...next,
-        proposals: patch(next.proposals, event.proposalId, { state: 'approved', updatedAt: at }),
+        proposals: decide(
+          next.proposals,
+          event.proposalId,
+          { state: 'approved', updatedAt: at },
+          { parked: null },
+        ),
       };
-    case 'proposal.edited':
+    case 'proposal.edited': {
+      const { initGit, ...changes } = event.changes;
       return {
         ...next,
-        proposals: patch(next.proposals, event.proposalId, {
-          ...event.changes,
-          state: 'edited',
-          updatedAt: at,
-        }),
+        proposals: decide(
+          next.proposals,
+          event.proposalId,
+          { ...changes, state: 'edited', updatedAt: at },
+          { parked: null, ...(initGit !== undefined ? { initGit } : {}) },
+        ),
       };
+    }
     case 'proposal.rejected':
       return {
         ...next,
-        proposals: patch(next.proposals, event.proposalId, { state: 'rejected', updatedAt: at }),
+        proposals: decide(
+          next.proposals,
+          event.proposalId,
+          { state: 'rejected', updatedAt: at },
+          { parked: null },
+        ),
       };
-    case 'proposal.parked':
+    case 'proposal.parked': {
+      const { type: _type, proposalId, ...parked } = event;
       return {
         ...next,
-        proposals: patch(next.proposals, event.proposalId, { state: 'parked', updatedAt: at }),
+        proposals: decide(
+          next.proposals,
+          proposalId,
+          { state: 'parked', updatedAt: at },
+          { parked },
+        ),
       };
+    }
+    case 'proposal.unparked':
+      return {
+        ...next,
+        proposals: decide(
+          next.proposals,
+          event.proposalId,
+          { state: 'pending', proposedBody: event.proposedBody, updatedAt: at },
+          { parked: null },
+        ),
+      };
+    case 'promotion.carried_out': {
+      // The card keeps how it was carried out (P2-12), as the server's row does.
+      const card = next.proposals[event.proposalId];
+      return card
+        ? {
+            ...next,
+            proposals: patch(next.proposals, event.proposalId, {
+              meta: { ...(card.meta ?? {}), carriedOut: event.outcome },
+              updatedAt: at,
+            }),
+          }
+        : next;
+    }
 
     // Status records are a server-owned projection (TECHNOLOGY §4, decision recorded with P0-18):
     // the client receives them in the snapshot and, from P1-05, as status messages, and never

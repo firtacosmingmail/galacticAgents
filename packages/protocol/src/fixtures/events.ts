@@ -133,7 +133,41 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     changes: { kind: 'asteroid', proposedBody: { kind: 'asteroid', name: 'Dark mode' } },
   },
   'proposal.rejected': { type: 'proposal.rejected', proposalId: 'pr-1', reason: 'not now' },
-  'proposal.parked': { type: 'proposal.parked', proposalId: 'pr-1', reason: 'no free planet' },
+  'proposal.parked': {
+    type: 'proposal.parked',
+    proposalId: 'pr-1',
+    reason: 'no free planet',
+    waitingFor: 'planet',
+    occupied: [
+      {
+        bodyId: 'b-mars',
+        bodyName: 'Mars',
+        host: { kind: 'project', id: 'p-1' },
+        occupant: 'CSV to Parquet',
+        state: 'completed',
+      },
+    ],
+    offers: ['downsize_moon', 'downsize_asteroid', 'close_early'],
+  },
+  'proposal.unparked': {
+    type: 'proposal.unparked',
+    proposalId: 'pr-1',
+    proposedBody: { kind: 'planet', bodyId: 'b-mars', name: 'Dark mode' },
+    reason: 'Mars is free again',
+  },
+  'promotion.carried_out': {
+    type: 'promotion.carried_out',
+    proposalId: 'pr-1',
+    outcome: {
+      ok: true,
+      target: { kind: 'task', id: 't-2' },
+      fromBodyId: 'b-ast-1',
+      toBodyId: 'b-luna',
+      projectId: 'p-1',
+      waykeeperId: 'a-waykeeper-1',
+      stewardIds: ['a-steward-1'],
+    },
+  },
 
   'body.created': { type: 'body.created', body: d.moon },
   'body.assigned': {

@@ -4,6 +4,7 @@ import {
   PermissionPolicy,
   applyChanges,
   type Actor,
+  type Body,
   type CreateProjectInput,
   type Host,
   type Id,
@@ -12,12 +13,15 @@ import {
   type ReopenInput,
 } from '@galactic/protocol';
 import { bodyOf, checkAssignable, checkSubProjectBody, occupy, place, release } from './bodies.js';
+import { unparkWaiting } from './parking.js';
 import { chooseBody, describeRefusal, type ChooseOptions } from './catalogue.js';
+import { withdrawClosureQuestion } from './closure.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, checkTransition, setProjectState } from './states.js';
 import { effectiveChanges } from './changes.js';
 import { policyForWrite, type PolicyWrite } from './permissions.js';
+import { handOverProject, type HandOverOptions } from './handover.js';
 
 /**
  * Project commands (P2-01; SPEC §2.7, §3, decision 11, 11b). A project lives on a planet or moon
@@ -138,13 +142,15 @@ export function createProject(
  * only by `moveHost` and its state only by the state commands. An explicit `null` clears a
  * clearable field (P2-20): `parentProjectId` detaches a sub-project (its moon then hosts an
  * independent project, decision 10), `permissionPolicy` falls back to the global default. A new
- * policy is floored at the global default unless `write` is local (P2-21).
+ * policy is floored at the global default unless `write` is local (P2-21). A new parent (or none)
+ * hands the project's Waykeeper over in the same command (P2-12, decision 32).
  */
 export function updateProject(
   ctx: CommandContext,
   projectId: Id,
   changes: ProjectChanges,
   write: PolicyWrite = {},
+  handOver: HandOverOptions = {},
 ): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
   const defined = effectiveChanges(current, changes, CLEARABLE_PROJECT_FIELDS, 'project');
@@ -169,13 +175,15 @@ export function updateProject(
     updatedAt: ctx.now,
   });
   ctx.emit({ type: 'project.updated', projectId, changes: defined });
+  if ('parentProjectId' in defined) handOverProject(ctx, projectId, handOver);
   return project;
 }
 
 /**
  * The user closes a project (decision 11): `completed`, the body stays occupied for the retention
- * period (P2-13 stops the Waykeeper and starts the timer). A planet with an active sub-project
- * moon cannot be closed (SPEC §3.2).
+ * period (its clock starts now, `retention.ts`; `control.close` also stops the Waykeeper). A
+ * planet with an active sub-project moon cannot be closed (SPEC §3.2). An open "anything else?"
+ * question of the closure relay is withdrawn (P2-13).
  */
 export function closeProject(ctx: CommandContext, projectId: Id, by: Actor): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
@@ -184,7 +192,9 @@ export function closeProject(ctx: CommandContext, projectId: Id, by: Actor): Pro
   }
   checkTransition('project', projectId, current.state, 'completed');
   checkNothingActive(ctx, projectId, false);
-  return setProjectState(ctx, projectId, 'completed', by);
+  const project = setProjectState(ctx, projectId, 'completed', by);
+  withdrawClosureQuestion(ctx, projectId, 'the project was closed');
+  return project;
 }
 
 /**
@@ -208,15 +218,32 @@ export function pinProject(ctx: CommandContext, projectId: Id, pinned: boolean):
   return updateProject(ctx, projectId, { pinned });
 }
 
+/** A new body for a reopened project whose old one is taken: the catalogue's choice for its kind. */
+function reopenBody(ctx: CommandContext, project: Project, old: Body, opts: ChooseOptions) {
+  const choice = project.parentProjectId
+    ? chooseBody(ctx, { kind: 'moon', parentProjectId: project.parentProjectId }, opts)
+    : chooseBody(ctx, { kind: old.kind === 'moon' ? 'moon' : 'planet' }, opts);
+  if (!choice.ok) {
+    throw new DomainError(
+      'conflict',
+      `${old.name} is taken and ${describeRefusal(choice)}; reopen project ${project.id} later`,
+    );
+  }
+  return choice.body;
+}
+
 /**
  * Reopens finished work (decision 11b) as `approved`: on its old body if that still hosts it or
- * is free, otherwise on `input.bodyId` (the history keeps the link through the events).
+ * is free, otherwise on `input.bodyId` or — without one — the catalogue's choice for its kind (a
+ * sub-project: a moon of its parent's planet), P2-13. A project that changes body keeps the link
+ * in `meta.previousBodyIds` (and the history in the events).
  */
 export function reopenProject(
   ctx: CommandContext,
   projectId: Id,
   by: Actor,
   input: ReopenInput = {},
+  opts: ChooseOptions = {},
 ): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
   if (!['completed', 'archived', 'failed'].includes(current.state)) {
@@ -232,16 +259,21 @@ export function reopenProject(
   if (oldIsFree && (!input.bodyId || input.bodyId === old.id)) {
     occupy(ctx, old, host);
   } else {
-    if (!input.bodyId) {
-      throw new DomainError(
-        'conflict',
-        `${old.name} is taken; reopen project ${projectId} on another body`,
-      );
-    }
-    const body = must(ctx.tables.bodies.get(input.bodyId), 'body', input.bodyId);
+    const body = input.bodyId
+      ? must(ctx.tables.bodies.get(input.bodyId), 'body', input.bodyId)
+      : reopenBody(ctx, current, old, opts);
     checkAssignable(body, host);
-    if (old.host?.kind === 'project' && old.host.id === projectId) release(ctx, old);
+    // The old body is freed first (the project leaves it), but cards are un-parked only once the
+    // project holds its new one: no card is told a body is free that this reopen takes.
+    const freesOld = old.host?.kind === 'project' && old.host.id === projectId;
+    if (freesOld) release(ctx, old, false);
     place(ctx, body.id, host);
+    const previous = current.meta?.['previousBodyIds'];
+    const ids = Array.isArray(previous) ? (previous as Id[]) : [];
+    updateProject(ctx, projectId, {
+      meta: { ...ctx.tables.projects.get(projectId)!.meta, previousBodyIds: [...ids, old.id] },
+    });
+    if (freesOld) unparkWaiting(ctx, { ...ctx.choose, ...opts });
   }
   return setProjectState(ctx, projectId, 'approved', by);
 }

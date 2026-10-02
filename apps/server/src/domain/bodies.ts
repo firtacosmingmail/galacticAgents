@@ -2,6 +2,7 @@ import type { Agent, Body, BodyKind, Host, Id } from '@galactic/protocol';
 import { isReserved } from './catalogue.js';
 import { DomainError, must, notFound } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import { unparkWaiting } from './parking.js';
 import { FINISHED_WORK } from './states.js';
 
 /**
@@ -244,12 +245,18 @@ export function freeBody(ctx: CommandContext, bodyId: Id): Body {
   return release(ctx, body);
 }
 
-/** Clears the host and the marker and emits `body.freed`, unchecked (archival, retention). */
-export function release(ctx: CommandContext, body: Body): Body {
+/**
+ * Clears the host and the marker and emits `body.freed`, unchecked (archival, retention). A card
+ * parked for want of this kind of body un-parks in the same transaction (P2-09), choosing as the
+ * log's `choose` says. A command that frees a body and then takes one itself (a reopen) passes
+ * `unpark: false` and un-parks at its end, so no card is offered the body the command takes.
+ */
+export function release(ctx: CommandContext, body: Body, unpark = true): Body {
   if (!body.host && !body.movedTo) return body;
   const { host: _host, movedTo: _marker, ...freed } = body;
   const next = ctx.tables.bodies.upsert(freed);
   ctx.emit({ type: 'body.freed', bodyId: body.id });
+  if (unpark) unparkWaiting(ctx, ctx.choose ?? {});
   return next;
 }
 

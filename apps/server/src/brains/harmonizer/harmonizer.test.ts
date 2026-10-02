@@ -148,9 +148,11 @@ describe('Harmonizer brain (P2-08)', () => {
           })
           .once(/proposal (\S+) was approved/, async (t) => {
             const proposalId = /proposal (\S+) was approved/.exec(t.prompt)![1]!;
+            // The approval created the project (P2-09): create_project returns it, every time.
             const project = await t.call<{ projectId: Id }>('create_project', { proposalId });
-            const twice = await t.try('create_project', { proposalId });
-            expect(twice).toMatchObject({ ok: false, error: 'conflict' });
+            const twice = await t.call<{ projectId: Id }>('create_project', { proposalId });
+            expect(twice.projectId).toBe(project.projectId);
+            expect(h.log.tables.projects.all()).toHaveLength(1);
             await t.call('spawn_waykeeper', { projectId: project.projectId });
             const second = await t.try('spawn_waykeeper', { projectId: project.projectId });
             expect(second).toMatchObject({ ok: false, error: 'conflict' });
@@ -459,11 +461,12 @@ describe('Harmonizer brain (P2-08)', () => {
         rationale: 'belongs to CSV',
         meta: { request: { type: 'project_task', name, description: name, projectId: project.id } },
       });
-      await h.commands.decideProposal(value.id, { decision: 'approve' }, USER);
       return value.id;
     };
+    const approve = (id: Id) => h.commands.decideProposal(id, { decision: 'approve' }, USER);
     const lonely = await card('pagination');
     const withWk = await card('sorting');
+    await approve(lonely);
     const results: Record<string, unknown>[] = [];
     const hq = await h.startHarmonizer({
       definition,
@@ -483,6 +486,8 @@ describe('Harmonizer brain (P2-08)', () => {
       { runtime: 'fake', projectId: project.id, supervisorId: hq.agentId },
       { script: (s) => s.once(/task \S+ was added to your project/, (t) => t.say('on it')) },
     );
+    // The approval creates the task (P2-09), which wakes the running Waykeeper.
+    await approve(withWk);
     hq.tell('second');
     await h.done();
     expect(results[0]).toMatchObject({ waykeeperId: null, note: /no running Waykeeper/ });
@@ -516,6 +521,43 @@ describe('Harmonizer brain (P2-08)', () => {
       },
     });
     expect(h.log.tables.tasks.get(task.id)?.bodyId).toBe(task.bodyId);
+  });
+
+  it('refuses a "promotion" that is not to a bigger body (review: planet down to a moon)', async () => {
+    const { h, definition } = setup();
+    const { value: planet } = await h.commands.createProject({
+      name: 'Big',
+      workspace: '/w/big',
+      kind: 'planet',
+    });
+    const outcomes: unknown[] = [];
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s.once('shrink', async (t) => {
+          outcomes.push(
+            await t.try('propose_promotion', {
+              projectId: planet.id,
+              toKind: 'moon',
+              rationale: 'r',
+            }),
+          );
+          outcomes.push(
+            await t.try('propose_promotion', {
+              projectId: planet.id,
+              toKind: 'planet',
+              rationale: 'r',
+            }),
+          );
+        }),
+    });
+    hq.tell('shrink it');
+    await h.done();
+    expect(outcomes).toEqual([
+      expect.objectContaining({ ok: false, error: 'invalid' }),
+      expect.objectContaining({ ok: false, error: 'invalid' }),
+    ]);
+    expect(proposals(h)).toHaveLength(0);
   });
 });
 

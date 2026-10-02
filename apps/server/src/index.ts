@@ -2,10 +2,12 @@ import { mkdirSync } from 'node:fs';
 import { loadConfig } from './config/config.js';
 import { buildApp } from './app.js';
 import { harmonizerRuntime, startHarmonizer } from './brains/harmonizer/index.js';
+import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { openDatabase } from './db/database.js';
+import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { composeRuntime } from './runtime/compose.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { ProcessSupervisor } from './runtime/supervisor.js';
@@ -40,12 +42,17 @@ const composed = composeRuntime(db, {
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
   autoApproveRemote: config.autoApproveRemote,
+  // Spawn caps (decision 18, P2-17): concurrency, Stewards per Waykeeper, spawns per hour.
+  caps: config.caps,
+  // Finished work past decision 4's retention period is archived hourly (P2-13).
+  archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
 });
 const { log, statuses, transcripts } = composed;
 
 // Shutdown is wired before anything is resumed or listening (P1-32): a signal during recovery
 // or a failed listen still interrupts the agents and saves their sessions.
 const server: { app?: ReturnType<typeof buildApp> } = {};
+let promotions: PromotionFlow | undefined;
 let shuttingDown = false;
 // Every agent is stopped in parallel, each within the supervisor's grace + term periods; the
 // deadline leaves room for that plus the flushes around it.
@@ -58,6 +65,8 @@ function shutdown(code: number): void {
     process.exit(1);
   }, SHUTDOWN_DEADLINE_MS);
   deadline.unref();
+  // The promotion flow stops with the runtime: no card is carried out while agents are stopping.
+  promotions?.stop();
   void composed
     .shutdown()
     .catch((error) => console.error('[runtime] shutdown:', error))
@@ -85,6 +94,17 @@ if (recovery.resumed.length + recovery.needAttention.length > 0) {
   );
 }
 
+// Promotion cards are carried out by the server once the user approves them (P2-12): the move,
+// the new project's Waykeeper and the Steward hand-over. The flow starts after the Harmonizer
+// (below), so cards approved before a restart find their supervisor running.
+const startWaykeeper = async (input: {
+  projectId: string;
+  supervisorId: string;
+  runtime: Parameters<typeof composed.startBrain>[1]['runtime'];
+}) => {
+  const runner = await composed.startBrain(waykeeperDefinition(), input);
+  return { agentId: runner.agentId };
+};
 const webDir = process.env['GALACTIC_WEB_DIR'];
 const app = buildApp({
   config,
@@ -129,14 +149,7 @@ if (hqRuntime && !shuttingDown) {
         checkPath: (path) => workspaces.checkPath(path),
         runtime: hqRuntime,
         // `spawn_waykeeper` starts a Waykeeper brain (P2-10) for the approved project.
-        startWaykeeper: async ({ projectId, supervisorId, runtime }) => {
-          const runner = await composed.startBrain(waykeeperDefinition(), {
-            runtime,
-            projectId,
-            supervisorId,
-          });
-          return { agentId: runner.agentId };
-        },
+        startWaykeeper,
       },
     });
     console.log(
@@ -147,4 +160,17 @@ if (hqRuntime && !shuttingDown) {
   } catch (error) {
     console.error('[harmonizer] start:', error instanceof Error ? error.message : error);
   }
+}
+
+// After recovery and the Harmonizer: a resumed Waykeeper is found running instead of doubled, an
+// approved card left unrecorded is carried out under a running Harmonizer, and the Stewards of
+// cards still waiting for the user are paused again (a pause does not survive a restart).
+if (!shuttingDown) {
+  promotions = new PromotionFlow({
+    log,
+    commands: composed.commands,
+    liveAgents: () => composed.runtime.liveAgents(),
+    startWaykeeper,
+    onError,
+  }).start();
 }

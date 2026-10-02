@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
 import { Event, isTranscriptEvent, type EventEnvelope, type Snapshot } from '@galactic/protocol';
 import { tables, type Tables } from '../db/tables.js';
+import type { ChooseOptions } from './catalogue.js';
 
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
 export interface CommandContext {
@@ -14,6 +15,13 @@ export interface CommandContext {
   now: string;
   /** Queues an event; it is inserted right after the mutation, inside the same transaction. */
   emit(event: Event): void;
+  /**
+   * How a command that is not handed options picks bodies (decision 10's "is its Waykeeper
+   * running"): the log's `choose`, which the composition wires to the status store. Body-freeing
+   * paths (archival, the marker sweep, `freeBody`) un-park cards with it, so they choose the way
+   * an approval does.
+   */
+  choose?: ChooseOptions;
 }
 
 export interface CommandOutcome<T> {
@@ -63,6 +71,8 @@ export class EventLog {
   private readonly now: () => string;
   private readonly onSubscriberError: (error: unknown, envelope: EventEnvelope) => void;
   readonly maxReplay: number;
+  /** Every command's `ctx.choose` (the composition sets `isRunning`); default: none. */
+  choose: ChooseOptions = {};
   private readonly subscribers = new Set<Subscriber>();
   private readonly insertEvent: Statement;
   private readonly selectSince: Statement;
@@ -113,6 +123,7 @@ export class EventLog {
     const ctx: CommandContext = {
       tables: this.tables,
       now: at,
+      choose: this.choose,
       emit: (event) => {
         const parsed = Event.parse(event);
         if (isTranscriptEvent(parsed)) {

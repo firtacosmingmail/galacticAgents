@@ -1,7 +1,6 @@
 import {
   ENDED_STATES,
   type AgentAdapter,
-  type AgentCaps,
   type AgentRuntime as RuntimeName,
 } from '@galactic/protocol';
 import type { Database } from '../db/database.js';
@@ -18,8 +17,10 @@ import {
   type BrainRunnerOptions,
 } from '../brains/index.js';
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
-import { DEFAULT_CAPS } from './caps.js';
+import { Archival, type Timers } from './archival.js';
+import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
 import { StatusStore } from './status-store.js';
+import { stewardReports, type StewardReports } from './steward-reports.js';
 import { TranscriptPipeline } from './transcripts.js';
 import { WorkStateDeriver } from './work-state-deriver.js';
 import { Workspaces, type WorkspacesOptions } from '../workspace/workspaces.js';
@@ -43,7 +44,8 @@ export interface ComposeOptions {
   /** Adapters to register; default: the fake adapter only (dev mode without Claude). */
   adapters?: AgentAdapter[];
   log?: EventLogOptions;
-  caps?: { maxConcurrentAgents?: number; defaults?: AgentCaps };
+  /** Hard caps (P1-02) and the hierarchy's spawn caps (P2-17); `index.ts` passes `config.caps`. */
+  caps?: CapsConfig;
   stallThresholdMs?: (runtime: RuntimeName | undefined) => number;
   /** How often stalls are checked and wall clocks refreshed. */
   tickMs?: number;
@@ -63,6 +65,12 @@ export interface ComposeOptions {
    * configured `projectsRoot` and `dataDir`.
    */
   workspaces?: Omit<WorkspacesOptions, 'commands' | 'tables'>;
+  /**
+   * The archival job (P2-13): `retentionMs` is decision 4's period (`config.retentionMs`, default
+   * 7 days); the timer runs only with an `intervalMs` (`index.ts` passes one; tests leave it off
+   * and call `archival.sweep()` under an injected clock).
+   */
+  archival?: { retentionMs?: number; intervalMs?: number; timers?: Timers };
 }
 
 export interface ComposedRuntime {
@@ -74,10 +82,14 @@ export interface ComposedRuntime {
   runtime: AgentRuntime;
   /** The `DomainCommands` surface over this log and runtime (P2-01). */
   commands: Commands;
+  /** Stewards' done reports to their supervisors (P2-11). */
+  reports: StewardReports;
   /** Read-only views brains seed their turns from (P2-06). */
   queries: BrainQueries;
   /** Workspaces and worktrees, when composed with `workspaces` paths (P2-10). */
   workspaces?: Workspaces;
+  /** The retention / archival job (P2-13); its timer runs when composed with an interval. */
+  archival: Archival;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
   startBrain(
     definition: BrainDefinition,
@@ -143,20 +155,39 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
 
+  // Decision 10's "is its Waykeeper running", for the commands and for every body-freeing path
+  // (archival, the marker sweep): they un-park cards the way an approval chooses (P2-09).
+  const isRunning = (id: string): boolean => {
+    const status = statuses.get(id);
+    return status !== undefined && !ENDED_STATES.has(status.state);
+  };
+  log.choose = { isRunning };
+
+  // A Steward that ends its turn reports to its supervisor's mailbox (P2-11).
+  const reports = stewardReports(runtime, log.tables, opts.onError);
+
   const commands = new Commands({
     log,
     agents: runtime,
     questions,
     ...(opts.autoApproveRemote ? { autoApproveRemote: true } : {}),
-    isRunning: (id) => {
-      const status = statuses.get(id);
-      return status !== undefined && !ENDED_STATES.has(status.state);
-    },
+    // A card's workspace is checked as the workspace service checks it (P2-09, decision 27).
+    ...(opts.workspaces
+      ? { checkWorkspace: (path: string): string => workspaces!.checkPath(path) }
+      : {}),
+    isRunning,
   });
   const queries = createBrainQueries({ tables: log.tables, status: (id) => statuses.get(id) });
-  const workspaces = opts.workspaces
+  const workspaces: Workspaces | undefined = opts.workspaces
     ? new Workspaces({ ...opts.workspaces, commands, tables: log.tables })
     : undefined;
+  const archival = new Archival({
+    log,
+    ...(opts.archival?.retentionMs !== undefined ? { retentionMs: opts.archival.retentionMs } : {}),
+    ...(opts.archival?.timers ? { timers: opts.archival.timers } : {}),
+    ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'archival') } : {}),
+  });
+  if (opts.archival?.intervalMs) archival.start(opts.archival.intervalMs);
   return {
     log,
     statuses,
@@ -164,8 +195,10 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     transcripts,
     runtime,
     commands,
+    reports,
     queries,
     ...(workspaces ? { workspaces } : {}),
+    archival,
     startBrain: (definition, placement, brainOpts = {}) =>
       BrainRunner.start(definition, placement, {
         log,
@@ -178,12 +211,16 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       }),
     recover: () => runtime.recover(),
     async shutdown() {
+      archival.stop();
+      reports.dispose();
       await runtime.shutdown();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();
     },
     async dispose() {
+      archival.stop();
+      reports.dispose();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();
