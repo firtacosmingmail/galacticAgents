@@ -3,7 +3,7 @@ import type { Id, Proposal } from '@galactic/protocol';
 import { carriedOut } from '../domain/promotion.js';
 import { tickingClock } from '../test/world.js';
 import { harmonizerBrain } from './harmonizer/index.js';
-import { PromotionFlow, promotionActor } from './promotion.js';
+import { PromotionFlow, promotionActor, type PromotionFlowOptions } from './promotion.js';
 import { brainHarness, type BrainHarness, type BrainScript } from './testing/index.js';
 import { waykeeperDefinition } from './waykeeper/index.js';
 
@@ -575,6 +575,89 @@ describe('promotion (P2-12)', () => {
     await next.idle();
     await h.until(() => state(steward.id) === 'paused', { what: 'the Steward paused again' });
     expect(card().state).toBe('pending');
+  });
+
+  async function stewardOf(h: BrainHarness, supervisorId: Id) {
+    const task = (
+      await h.commands.createTask({ description: 'grow', meta: { workspace: '/w/scratch/g' } })
+    ).value;
+    const steward = (
+      await h.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        supervisorId,
+        cwd: '/w/scratch/g',
+        prompt: 'scenario:long',
+      })
+    ).value;
+    return { task, steward };
+  }
+  const restartedFlow = (h: BrainHarness, extra: Partial<PromotionFlowOptions> = {}) => {
+    const next = new PromotionFlow({
+      log: h.log,
+      commands: h.commands,
+      liveAgents: () => h.runtime.liveAgents(),
+      startWaykeeper: async () => ({ agentId: 'unused' }),
+      ...extra,
+    }).start();
+    flows.push(next);
+    return next;
+  };
+
+  it('pauses the Stewards of a card made before the flow started (P2-16)', async () => {
+    const { h, flow, state } = setup();
+    flow.stop(); // the server is starting: the card comes before the flow subscribes
+    const hq = await h.startHarmonizer();
+    const { task, steward } = await stewardOf(h, hq.agentId);
+    await h.until(() => state(steward.id) === 'working');
+    await h.commands.createProposal(planetPromotion(task));
+    expect(state(steward.id)).toBe('working'); // nobody paused it
+    const next = restartedFlow(h);
+    await next.idle();
+    await h.until(() => state(steward.id) === 'paused', { what: 'the Steward paused at start' });
+  });
+
+  it('leaves a Steward the user resumed while the card waits running after a restart (P2-16)', async () => {
+    const { h, flow, state } = setup();
+    const hq = await h.startHarmonizer();
+    const { task, steward } = await stewardOf(h, hq.agentId);
+    await h.until(() => state(steward.id) === 'working');
+    await h.commands.createProposal(planetPromotion(task));
+    await flow.idle();
+    await h.until(() => state(steward.id) === 'paused');
+    await h.commands.resumeAgent(steward.id, USER); // the user wants it to go on meanwhile
+    await h.until(() => state(steward.id) === 'working');
+    flow.stop();
+    const next = restartedFlow(h);
+    await next.idle();
+    expect(state(steward.id)).toBe('working');
+  });
+
+  it('a card waiting across a restart keeps its clock: it counts from the approval (P2-16)', async () => {
+    const { h, flow, card } = setup();
+    const task = (
+      await h.commands.createTask({ description: 'grow', meta: { workspace: '/w/scratch/g' } })
+    ).value;
+    const { value: p } = await h.commands.createProposal(planetPromotion(task));
+    await h.commands.decideProposal(p.id, { decision: 'approve' }, USER);
+    await flow.idle();
+    expect(flow.waitingCards()).toHaveLength(1); // no Harmonizer runs
+    flow.stop();
+    const approvedAt = Date.parse(
+      h.log
+        .eventsSince(0, Number.MAX_SAFE_INTEGER)
+        .find(({ event }) => event.type === 'proposal.approved')!.at,
+    );
+    // The next server life starts three hours later, still without a running Harmonizer: the card
+    // has waited past `giveUpMs` (2 h) since its approval and fails, instead of waiting anew.
+    const next = restartedFlow(h, { now: () => approvedAt + 3 * 60 * 60_000 });
+    await next.idle();
+    expect(carriedOut(card())).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/no running Harmonizer/),
+    });
+    expect(next.waitingCards()).toEqual([]);
   });
 });
 
