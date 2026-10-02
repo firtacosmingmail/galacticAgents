@@ -10,7 +10,7 @@ import { world } from '../test/world.js';
 import type { ProposalOptions } from './approval.js';
 import { freeBody } from './bodies.js';
 import { DomainError } from './errors.js';
-import { archiveProject, closeProject, createProject } from './projects.js';
+import { archiveProject, closeProject, createProject, reopenProject } from './projects.js';
 import { moveProject } from './promotion.js';
 import { createProposal, decideProposal, proposePlan } from './proposals.js';
 import { archiveTask, closeTask, createTask } from './tasks.js';
@@ -624,5 +624,77 @@ describe('proposal flow (P2-09)', () => {
     const approved = f.decide(card.id, { decision: 'approve' });
     expect(approved.types).toContain('body.moved');
     expect(f.tables.projects.get(moonProject.id)!.bodyId).toBe('b-jupiter');
+  });
+
+  it('a reopen un-parks cards only once it holds its new body: no card is offered that body (review)', () => {
+    const f = flow();
+    const made = f.fillPlanets();
+    const { value: card } = f.propose(newProject('Game'));
+    expect(card.state).toBe('parked');
+    const reopened = made[6]!;
+    f.run((ctx) => closeProject(ctx, reopened.id, USER));
+    // A free planet earlier in the catalogue than the reopened project's (a row freed outside
+    // `release`, say by an older server): the reopen takes it.
+    const target = f.tables.bodies.get(made[0]!.bodyId)!;
+    const { host: _gone, ...bare } = target;
+    f.log.db.transaction(() => f.tables.bodies.upsert(bare))();
+    const out = f.run((ctx) => reopenProject(ctx, reopened.id, USER, { bodyId: target.id }));
+    expect(f.tables.projects.get(reopened.id)!.bodyId).toBe(target.id);
+    const unparked = out.events.filter((e) => e.type === 'proposal.unparked');
+    expect(unparked).toEqual([
+      expect.objectContaining({
+        proposedBody: expect.objectContaining({ bodyId: reopened.bodyId }),
+      }),
+    ]);
+    expect(out.types.indexOf('proposal.unparked')).toBeGreaterThan(
+      out.types.indexOf('body.assigned'),
+    );
+  });
+
+  it('body-freeing paths un-park with the log’s running check, as an approval chooses (review)', () => {
+    const f = flow();
+    const asked: string[] = [];
+    f.log.choose = {
+      isRunning: (id) => {
+        asked.push(id);
+        return false;
+      },
+    };
+    const main = f.run((ctx) =>
+      createProject(ctx, { name: 'Main', workspace: '/w/main', kind: 'planet' }, {}),
+    ).value;
+    f.run((ctx) =>
+      ctx.tables.agents.insert({
+        id: 'a-wk',
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: main.id,
+        bodyId: main.bodyId,
+        caps: { maxWallClockMs: 1000, maxToolCalls: 1 },
+        createdAt: ctx.now,
+        updatedAt: ctx.now,
+      } as never),
+    );
+    const moons = f.tables.bodies.all().filter((b) => b.kind === 'moon' && !b.meta?.reserved);
+    const taken = moons.map(
+      (m, i) =>
+        f.run((ctx) =>
+          createProject(
+            ctx,
+            { name: `M${i}`, workspace: `/w/m${i}`, kind: 'moon', bodyId: m.id },
+            {},
+          ),
+        ).value,
+    );
+    const { value: card } = f.propose(
+      newProject('Moonlet', { kind: 'moon', proposedBody: { kind: 'moon', name: 'Moonlet' } }),
+    );
+    expect(card.state).toBe('parked');
+    const onMain = taken.find((p) => f.tables.bodies.get(p.bodyId)!.parentId === main.bodyId)!;
+    f.run((ctx) => closeProject(ctx, onMain.id, USER));
+    asked.length = 0;
+    f.run((ctx) => archiveProject(ctx, onMain.id, USER));
+    expect(f.card(card.id).state).toBe('pending');
+    expect(asked).toContain('a-wk');
   });
 });

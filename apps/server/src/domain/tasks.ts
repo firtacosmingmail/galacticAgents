@@ -22,6 +22,7 @@ import {
 } from './bodies.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import { unparkWaiting } from './parking.js';
 import { FINISHED_WORK, setTaskState } from './states.js';
 import { effectiveChanges } from './changes.js';
 import { handOverTask, type HandOverOptions } from './handover.js';
@@ -169,9 +170,12 @@ export function reopenTask(
   if (oldIsFree && (!input.bodyId || input.bodyId === old.id)) {
     occupy(ctx, old, host);
   } else {
-    if (old.host?.kind === 'task' && old.host.id === taskId) release(ctx, old);
+    // As a reopened project: cards are un-parked once the task holds its new body.
+    const freesOld = old.host?.kind === 'task' && old.host.id === taskId;
+    if (freesOld) release(ctx, old, false);
     const body = input.bodyId ? input.bodyId : createAsteroid(ctx).id;
     place(ctx, body, host);
+    if (freesOld) unparkWaiting(ctx, ctx.choose ?? {});
   }
   return setTaskState(ctx, taskId, 'approved', by);
 }

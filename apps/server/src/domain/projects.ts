@@ -13,6 +13,7 @@ import {
   type ReopenInput,
 } from '@galactic/protocol';
 import { bodyOf, checkAssignable, checkSubProjectBody, occupy, place, release } from './bodies.js';
+import { unparkWaiting } from './parking.js';
 import { chooseBody, describeRefusal, type ChooseOptions } from './catalogue.js';
 import { withdrawClosureQuestion } from './closure.js';
 import { DomainError, must } from './errors.js';
@@ -262,13 +263,17 @@ export function reopenProject(
       ? must(ctx.tables.bodies.get(input.bodyId), 'body', input.bodyId)
       : reopenBody(ctx, current, old, opts);
     checkAssignable(body, host);
-    if (old.host?.kind === 'project' && old.host.id === projectId) release(ctx, old);
+    // The old body is freed first (the project leaves it), but cards are un-parked only once the
+    // project holds its new one: no card is told a body is free that this reopen takes.
+    const freesOld = old.host?.kind === 'project' && old.host.id === projectId;
+    if (freesOld) release(ctx, old, false);
     place(ctx, body.id, host);
     const previous = current.meta?.['previousBodyIds'];
     const ids = Array.isArray(previous) ? (previous as Id[]) : [];
     updateProject(ctx, projectId, {
       meta: { ...ctx.tables.projects.get(projectId)!.meta, previousBodyIds: [...ids, old.id] },
     });
+    if (freesOld) unparkWaiting(ctx, { ...ctx.choose, ...opts });
   }
   return setProjectState(ctx, projectId, 'approved', by);
 }

@@ -155,6 +155,14 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
 
+  // Decision 10's "is its Waykeeper running", for the commands and for every body-freeing path
+  // (archival, the marker sweep): they un-park cards the way an approval chooses (P2-09).
+  const isRunning = (id: string): boolean => {
+    const status = statuses.get(id);
+    return status !== undefined && !ENDED_STATES.has(status.state);
+  };
+  log.choose = { isRunning };
+
   // A Steward that ends its turn reports to its supervisor's mailbox (P2-11).
   const reports = stewardReports(runtime, log.tables, opts.onError);
 
@@ -167,10 +175,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.workspaces
       ? { checkWorkspace: (path: string): string => workspaces!.checkPath(path) }
       : {}),
-    isRunning: (id) => {
-      const status = statuses.get(id);
-      return status !== undefined && !ENDED_STATES.has(status.state);
-    },
+    isRunning,
   });
   const queries = createBrainQueries({ tables: log.tables, status: (id) => statuses.get(id) });
   const workspaces: Workspaces | undefined = opts.workspaces
