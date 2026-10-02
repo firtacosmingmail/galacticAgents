@@ -23,6 +23,7 @@ import {
   type TurnContext,
 } from '../testing/index.js';
 import { waykeeperDefinition } from './index.js';
+import { EXTERNAL_CONFLICT_OPTIONS } from './prompt.js';
 
 /**
  * P2-10 acceptance with the P2-07 harness: a real Waykeeper definition (its prompt and tools)
@@ -541,5 +542,127 @@ describe('Waykeeper brain (P2-10)', () => {
       workspace: { git: false, serialStewards: true },
     });
     expect(existsSync(join(dir, '.git'))).toBe(false);
+  });
+});
+
+describe('Waykeeper merge conflicts with external commits (wave-4 review)', () => {
+  /** One task whose Steward edits shared.txt while the user edits it on the base branch. */
+  async function externalConflict(script: (s: BrainScript, plan: () => Id[]) => void) {
+    const { project, dir } = await gitProject();
+    let plan: Id[] = [];
+    steward(
+      'edit-c',
+      (t) => {
+        commitFile(t.worktreePath!, 'shared.txt', 'from C\n', 'task C');
+        commitFile(dir, 'shared.txt', 'from the user\n', 'user: hotfix the shared file');
+      },
+      () => task(plan[0]!),
+    );
+    steward(
+      'resolve-c',
+      (t) => {
+        const wt = t.worktreePath!;
+        try {
+          git(wt, 'merge', '-q', base(dir));
+        } catch {
+          // the expected conflict
+        }
+        writeFileSync(join(wt, 'shared.txt'), 'from the user\nfrom C\n');
+        git(wt, 'add', 'shared.txt');
+        git(wt, 'commit', '-q', '--no-edit');
+      },
+      () => task(plan[0]!),
+    );
+    const { hq, wk } = await startWaykeeper(project, (s) => {
+      s.once('plan', async (t) => {
+        const out = await t.call<{ tasks: { taskId: Id }[] }>('plan_tasks', {
+          summary: 'One task',
+          tasks: [{ description: 'edit c' }],
+        });
+        plan = out.tasks.map((x) => x.taskId);
+      }).once(/was approved/, (t) =>
+        t.call('spawn_steward', { taskId: plan[0], instructions: 'scenario:edit-c' }),
+      );
+      script(s, () => plan);
+    });
+    wk.tell('plan');
+    await h.until(() => h.log.tables.proposals.all().length > 0);
+    await approve(h.log.tables.proposals.all()[0]!.id);
+    return { hq, wk, dir, plan: () => plan };
+  }
+
+  const events = () => h.log.eventsSince(0, Number.MAX_SAFE_INTEGER).map((e) => e.event);
+
+  it('asks the user directly, without waking the Harmonizer, and sends the Steward back on their answer', async () => {
+    let finishes = 0;
+    const { hq, dir, plan } = await externalConflict((s, plan) =>
+      s
+        .on(/agent \S+ finished/, async (t) => {
+          finishes++;
+          const taskId = plan()[0]!;
+          if (finishes === 1) {
+            const out = await t.call<Record<string, unknown>>('merge_task', { taskId });
+            expect(out).toMatchObject({ external: true, action: 'asked_user' });
+            // Not before the user answered.
+            expect(await t.try('merge_task', { taskId, sendBack: true })).toMatchObject({
+              ok: false,
+              error: 'invalid_transition',
+            });
+            return;
+          }
+          const merged = await t.call<{ merged: boolean }>('merge_task', { taskId });
+          expect(merged.merged).toBe(true);
+          await t.call('close_task', { taskId });
+        })
+        .once(/user answered/, async (t) => {
+          const out = await t.call<Record<string, unknown>>('merge_task', {
+            taskId: plan()[0],
+            sendBack: true,
+            note: 'scenario:resolve-c',
+          });
+          expect(out).toMatchObject({
+            action: 'steward_sent_back',
+            onUsersAnswer: true,
+            how: 'respawned',
+          });
+        }),
+    );
+    await h.until(() => h.log.tables.questions.all().length > 0, LONG);
+    await h.settle(LONG);
+    const [question] = h.log.tables.questions.all();
+    // Held by the user from the start: no escalation hop, no Harmonizer in between.
+    expect(question).toMatchObject({ holder: { type: 'user' }, status: 'open' });
+    expect(events().filter((e) => e.type === 'question.escalated')).toEqual([]);
+
+    await h.commands.answerQuestion({
+      questionId: question!.id,
+      answer: EXTERNAL_CONFLICT_OPTIONS[0]!,
+      by: { type: 'user' },
+    });
+    await h.until(() => task(plan()[0]!).state === 'completed', { ...LONG, what: 'the close' });
+    await h.done(LONG);
+    expect(readFileSync(join(dir, 'shared.txt'), 'utf8')).toBe('from the user\nfrom C\n');
+    const hqLines = hq.runner.turns.flatMap((x) => x.items);
+    expect(hqLines.filter((i) => JSON.stringify(i.event).includes(question!.id))).toEqual([]);
+    expect(task(plan()[0]!).meta?.['mergeConflict']).toBeUndefined();
+  });
+
+  it('withdraws the open conflict question when the task is closed unmerged', async () => {
+    const { plan } = await externalConflict((s, plan) =>
+      s.once(/agent \S+ finished/, async (t) => {
+        const taskId = plan()[0]!;
+        const out = await t.call<{ questionId: Id }>('merge_task', { taskId });
+        const closed = await t.call<Record<string, unknown>>('close_task', {
+          taskId,
+          unmerged: true,
+        });
+        expect(closed).toMatchObject({ state: 'completed', withdrawnQuestion: out.questionId });
+      }),
+    );
+    await h.until(() => task(plan()[0]!).state === 'completed', LONG);
+    await h.done(LONG);
+    const [question] = h.log.tables.questions.all();
+    expect(question).toMatchObject({ status: 'cancelled' });
+    expect(task(plan()[0]!).worktreePath).toBeDefined();
   });
 });

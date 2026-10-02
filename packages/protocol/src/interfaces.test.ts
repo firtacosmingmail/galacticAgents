@@ -75,6 +75,7 @@ const commands: DomainCommands = {
   answerQuestion: notImplemented,
   escalateQuestion: notImplemented,
   reassignQuestion: notImplemented,
+  withdrawQuestion: notImplemented,
   control: () => noop(undefined),
 };
 

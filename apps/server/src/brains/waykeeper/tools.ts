@@ -1,6 +1,5 @@
 import {
   proposalPlan,
-  type Actor,
   type Agent,
   type Id,
   type PlanTaskInput,
@@ -31,7 +30,6 @@ import {
  * reads as `{ error, message }`. The shared supervision tools live in `../common-tools.ts`.
  */
 
-const SYSTEM: Actor = { type: 'system' };
 const PRIORITIES: readonly TaskPriority[] = ['low', 'normal', 'high', 'urgent'];
 /** Task states with nothing left to do on the task. */
 const TASK_DONE = new Set(['completed', 'archived', 'moved']);
@@ -374,6 +372,11 @@ export const mergeTaskTool: BrainTool = {
         type: 'string',
         description: 'A line for the Steward, should it be sent back to resolve a conflict.',
       },
+      sendBack: {
+        type: 'boolean',
+        description:
+          "Only after the user answered the task's conflict question with \"send the Steward back\": on a conflict, send the task's Steward back whatever the conflict's origin.",
+      },
     },
     ['taskId'],
   ),
@@ -402,11 +405,29 @@ export const mergeTaskTool: BrainTool = {
         `the Steward of task ${task.id} (${busy[0]!.agent.id}) is still working; merge when it reports`,
       );
     }
+    // Decision 30: an external conflict (or one the Steward failed twice) is the user's call; the
+    // Steward goes back for it only on the user's answer to the task's conflict question.
+    const sendBackAsked = input['sendBack'] === true;
+    if (sendBackAsked) {
+      const questionId = mergeMetaOf(task).questionId;
+      const question = questionId ? ctx.queries.question(questionId) : undefined;
+      if (question?.status !== 'answered' || question.answeredBy?.type !== 'user') {
+        throw new DomainError(
+          'invalid_transition',
+          question?.status === 'open'
+            ? `sendBack waits for the user's answer to ${question.id}`
+            : `task ${task.id} has no conflict question the user answered: sendBack needs one`,
+        );
+      }
+    }
     const result = await ctx.workspaces.mergeTask(task.id, {
       ...(input['commitPending'] === true ? { commitPending: true } : {}),
     });
     if (result.ok) {
-      if (task.meta?.['mergeConflict']) await saveMergeMeta(ctx, task.id, null);
+      if (task.meta?.['mergeConflict']) {
+        await withdrawConflictQuestion(ctx, task, 'the task was merged');
+        await saveMergeMeta(ctx, task.id, null);
+      }
       return {
         merged: true,
         commit: result.commit,
@@ -424,7 +445,7 @@ export const mergeTaskTool: BrainTool = {
         ...(result.files ? { files: result.files } : {}),
       };
     }
-    return onConflict(ctx, task, result.conflict, optStr(input, 'note'));
+    return onConflict(ctx, task, result.conflict, optStr(input, 'note'), sendBackAsked);
   },
 };
 
@@ -433,6 +454,8 @@ async function onConflict(
   task: Task,
   conflict: MergeConflict,
   note: string | undefined,
+  /** The user said to send the Steward back: do it whatever the conflict, and count afresh. */
+  userSaidSendBack = false,
 ) {
   const meta = mergeMetaOf(task);
   const facts = {
@@ -443,6 +466,18 @@ async function onConflict(
     targetBranch: conflict.targetBranch,
     external: conflict.external,
   };
+  if (userSaidSendBack) {
+    const back = await sendBack(ctx, task, conflict, note);
+    // The user's answer settles the old question; the count of send-backs starts again.
+    await saveMergeMeta(ctx, task.id, { sentBack: 1 });
+    return {
+      ...facts,
+      action: 'steward_sent_back',
+      onUsersAnswer: true,
+      ...back,
+      next: 'Wait for the Steward to report, then call merge_task again.',
+    };
+  }
   if (!conflict.external && (meta.sentBack ?? 0) < MAX_SEND_BACKS) {
     const back = await sendBack(ctx, task, conflict, note);
     await saveMergeMeta(ctx, task.id, { ...meta, sentBack: (meta.sentBack ?? 0) + 1 });
@@ -514,22 +549,28 @@ async function sendBack(
 }
 
 /**
- * A clarification question for the user: opened by the brain (held by its supervisor at first,
- * as every question is) and escalated by the system straight up to the user, because decision 30
- * leaves this one to the user — no brain between may answer it.
+ * A clarification question for the user (decision 30 leaves this one to the user — no brain
+ * between may answer it): opened as the brain's, held by the user from the start (`toUser`), so
+ * no supervisor holds it on the way or is woken by it.
  */
 async function askUser(ctx: BrainToolContext, text: string, options: string[]): Promise<Question> {
-  let question = (
+  return (
     await ctx.commands.openQuestion({
       kind: 'clarification',
       originAgentId: ctx.brainId,
       context: { text, options },
+      toUser: true,
     })
   ).value;
-  for (let hops = 0; question.holder.type === 'agent' && hops < 8; hops++) {
-    question = (await ctx.commands.escalateQuestion(question.id, SYSTEM)).value;
-  }
-  return question;
+}
+
+/** Withdraws the task's open merge-conflict question, if any (the task closed or merged). */
+async function withdrawConflictQuestion(ctx: BrainToolContext, task: Task, reason: string) {
+  const questionId = mergeMetaOf(task).questionId;
+  const question = questionId ? ctx.queries.question(questionId) : undefined;
+  if (question?.status !== 'open') return undefined;
+  await ctx.commands.withdrawQuestion(question.id, reason, ctx.actor);
+  return question.id;
 }
 
 // -- close_task ------------------------------------------------------------------------------------
@@ -566,9 +607,13 @@ export const closeTaskTool: BrainTool = {
     }
     const { value } = await ctx.commands.closeTask(task.id, ctx.actor);
     for (const { agent } of live) await ctx.commands.stopAgent(agent.id, ctx.actor);
+    // A conflict question nobody needs to answer any more is withdrawn (closed unmerged).
+    const withdrawn = await withdrawConflictQuestion(ctx, task, 'the task was closed');
+    if (task.meta?.['mergeConflict']) await saveMergeMeta(ctx, task.id, null);
     const open = ctx.queries.projectTasks(projectOf(ctx).id).filter((t) => !TASK_DONE.has(t.state));
     return {
       ...brief(value),
+      ...(withdrawn ? { withdrawnQuestion: withdrawn } : {}),
       openTasks: open.map(brief),
       ...(open.length === 0
         ? {

@@ -59,10 +59,15 @@ const isBrain = (actor: Actor | undefined, scope: WakeScope) =>
 const who = (actor: Actor, scope: WakeScope): string =>
   actor.type === 'agent' ? (actor.id === scope.brainId ? 'you' : `agent ${actor.id}`) : actor.type;
 
-/** A question concerns the brain when it holds it or one of its agents asked it. */
+/**
+ * A question concerns the brain when it holds it or one of its agents asked it — except a question
+ * opened for the user alone (`meta.toUser`, decision 30): no supervisor between may answer it, so
+ * none is woken by it.
+ */
 function concerns(q: Question | undefined, scope: WakeScope): q is Question {
   if (!q || q.kind !== 'clarification') return false;
-  return isBrain(q.holder, scope) || scope.supervises(q.originAgentId);
+  if (isBrain(q.holder, scope)) return true;
+  return q.meta?.['toUser'] !== true && scope.supervises(q.originAgentId);
 }
 
 /**

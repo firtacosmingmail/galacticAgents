@@ -148,6 +148,13 @@ export interface OpenQuestionInput {
   kind: QuestionKind;
   originAgentId: Id;
   context: QuestionContext;
+  /**
+   * A clarification only the user may answer (a Waykeeper's merge conflict with external
+   * changes, SPEC decision 30): held by the user from the start, never by a supervisor, and its
+   * supervisors' mailboxes are not woken by it. Refused for a permission question (already the
+   * user's).
+   */
+  toUser?: boolean;
 }
 
 export interface AnswerQuestionInput {
@@ -258,6 +265,12 @@ export interface DomainCommands {
   answerQuestion(input: AnswerQuestionInput): Promise<CommandResult<Question>>;
   escalateQuestion(questionId: Id, by: Actor): Promise<CommandResult<Question>>;
   reassignQuestion(questionId: Id, to: Actor, reason: string): Promise<CommandResult<Question>>;
+  /**
+   * Withdraws an open clarification that no longer needs an answer (`question.cancelled` with
+   * `reason`): an agent only its own, and never one a live session is blocked on (that one ends
+   * with its agent). A question that is not open is returned unchanged.
+   */
+  withdrawQuestion(questionId: Id, reason: string, by: Actor): Promise<CommandResult<Question>>;
 
   // panel actions (SPEC decision 11b)
   /** A project edit's `permissionPolicy` is floored unless `write.origin` is `local` (P2-21). */

@@ -56,6 +56,7 @@ import {
 } from './question-service.js';
 import {
   answerQuestion,
+  cancelQuestion,
   checkAnswer,
   escalateQuestion,
   reassignQuestion,
@@ -468,12 +469,27 @@ export class Commands implements DomainCommands {
 
   // -- questions -------------------------------------------------------------------------------
 
+  /**
+   * `toUser` (a choice only the user may make, decision 30): held by the user from the start, in
+   * the same command, so no supervisor holds it on the way and none is woken by it.
+   */
   openQuestion(input: OpenQuestionInput) {
+    const { toUser, ...rest } = input;
+    if (toUser && rest.kind !== 'clarification') {
+      return Promise.reject(
+        new DomainError('invalid', 'only a clarification is opened for the user explicitly'),
+      );
+    }
     return this.run((ctx) =>
       openRouted(
         ctx,
-        { ...input, id: `q-${randomUUID()}`, meta: { source: COMMAND_SOURCE } },
+        {
+          ...rest,
+          id: `q-${randomUUID()}`,
+          meta: { source: COMMAND_SOURCE, ...(toUser ? { toUser: true } : {}) },
+        },
         this.questions,
+        toUser ? { type: 'user' } : undefined,
       ),
     );
   }
@@ -513,6 +529,24 @@ export class Commands implements DomainCommands {
   }
   reassignQuestion(questionId: Id, to: Actor, reason: string) {
     return this.run((ctx) => reassignQuestion(ctx, questionId, to, reason));
+  }
+  async withdrawQuestion(questionId: Id, reason: string, by: Actor) {
+    const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    if (question.status !== 'open') return { value: question, events: [] };
+    if (question.kind !== 'clarification') {
+      throw new DomainError('invalid', `${questionId} is a permission question: the user decides`);
+    }
+    if (by.type === 'agent' && by.id !== question.originAgentId) {
+      throw new DomainError('conflict', `${questionId} is not your question`);
+    }
+    if (this.agents?.hasQuestion(questionId)) {
+      throw new DomainError('invalid', `a live session waits on ${questionId}: stop its agent`);
+    }
+    return this.run(
+      (ctx) =>
+        cancelQuestion(ctx, questionId, reason, holdersNow(ctx, questionId, this.questions)) ??
+        question,
+    );
   }
 
   // -- panel actions ---------------------------------------------------------------------------

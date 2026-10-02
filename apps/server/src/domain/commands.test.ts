@@ -840,3 +840,40 @@ describe('Commands.spawnAgent concurrency (wave-4 review)', () => {
     ).resolves.toBeDefined();
   });
 });
+
+describe('Commands questions for the user alone (wave-4 review)', () => {
+  it('opens a toUser clarification held by the user, and lets only its asker withdraw it', async () => {
+    const { commands, log } = boot();
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const { harmonizer, waykeeper } = await projectHierarchy(commands, project.id);
+    const { value: q, events } = await commands.openQuestion({
+      kind: 'clarification',
+      originAgentId: waykeeper.id,
+      context: { text: 'external commits: how to resolve?' },
+      toUser: true,
+    });
+    expect(q).toMatchObject({ holder: { type: 'user' }, meta: { toUser: true } });
+    expect(events.map((e) => e.type)).toEqual(['question.opened']);
+    await expect(
+      commands.openQuestion({
+        kind: 'permission',
+        originAgentId: waykeeper.id,
+        context: { text: 'x' },
+        toUser: true,
+      }),
+    ).rejects.toMatchObject({ code: 'invalid' });
+    await expect(
+      commands.withdrawQuestion(q.id, 'not yours', { type: 'agent', id: harmonizer.id }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    const { value: withdrawn } = await commands.withdrawQuestion(q.id, 'task closed', {
+      type: 'agent',
+      id: waykeeper.id,
+    });
+    expect(withdrawn.status).toBe('cancelled');
+    expect(log.tables.questions.get(q.id)?.status).toBe('cancelled');
+    // Withdrawing again changes nothing.
+    expect(
+      (await commands.withdrawQuestion(q.id, 'again', { type: 'agent', id: waykeeper.id })).events,
+    ).toEqual([]);
+  });
+});
