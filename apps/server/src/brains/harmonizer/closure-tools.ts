@@ -1,6 +1,7 @@
 import type { ControlAction, ControlTarget, Id, Project, Question } from '@galactic/protocol';
 import { closureRequestOf } from '../../domain/closure.js';
 import { DomainError, must } from '../../domain/errors.js';
+import { COMMAND_SOURCE } from '../../domain/questions.js';
 import { isLive } from '../common-tools.js';
 import type { BrainStartContext, BrainTool, BrainToolContext } from '../definition.js';
 import { asInput, oneOf, S, str } from './input.js';
@@ -292,4 +293,43 @@ export async function closureNotes(ctx: BrainStartContext): Promise<string[]> {
     );
   }
   return lines;
+}
+
+/**
+ * The Harmonizer's other start notes (P2-16): questions an ended Harmonizer asked the user through
+ * a tool (`ask_user`, `ask_confirmation`) and nobody answered. Their answer could never reach the
+ * new Harmonizer (the answer wakes the asker, and `finished_work` accepts only a confirmation this
+ * Harmonizer asked), so they are withdrawn — the "waiting for you" count comes back down — and the
+ * new Harmonizer is told what was asked, to ask again if it still matters. Closure questions are
+ * `closureNotes`' (run first).
+ */
+export async function strandedQuestionNotes(ctx: BrainStartContext): Promise<string[]> {
+  const lines: string[] = [];
+  for (const q of ctx.queries.allOpenQuestions()) {
+    if (q.kind !== 'clarification' || q.meta?.['source'] !== COMMAND_SOURCE) continue;
+    if (q.originAgentId === ctx.brainId) continue;
+    if (ctx.queries.agent(q.originAgentId)?.role !== 'harmonizer') continue;
+    if (isLive(ctx.queries.status(q.originAgentId))) continue;
+    try {
+      await ctx.commands.withdrawQuestion(
+        q.id,
+        'the Harmonizer that asked it has ended; the new one asks again if it still matters',
+        { type: 'system' },
+      );
+    } catch {
+      continue; // answered or withdrawn meanwhile
+    }
+    lines.push(
+      `an earlier Harmonizer (${q.originAgentId}) had asked the user ${JSON.stringify(q.context.text)} ` +
+        `(${q.id}) and ended before the answer; the question was withdrawn — ask again ` +
+        '(ask_user, ask_confirmation) if it still matters.',
+    );
+  }
+  return lines;
+}
+
+/** Every start note of the Harmonizer: unrelayed closure requests, then stranded questions. */
+export async function harmonizerStartNotes(ctx: BrainStartContext): Promise<string[]> {
+  const closure = await closureNotes(ctx);
+  return [...closure, ...(await strandedQuestionNotes(ctx))];
 }

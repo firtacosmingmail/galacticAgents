@@ -173,6 +173,17 @@ if (hqRuntime && !shuttingDown) {
   } catch (error) {
     console.error('[harmonizer] start:', error instanceof Error ? error.message : error);
   }
+  // From now on a Harmonizer that ends (other than by the user's stop) is replaced (P2-16).
+  if (!shuttingDown) {
+    composed.keepHarmonizer(async () => {
+      const hq = await startHarmonizer(composed, {
+        runtime: hqRuntime,
+        cwd: workspaces.projectsRoot,
+        deps: harmonizerDeps,
+      });
+      if (hq.status === 'started') console.log(`Harmonizer restarted (${hq.agentId})`);
+    });
+  }
 }
 // The Harmonizer tells the user what the restart recovered (SPEC §5: "recovered: N resumed, M need
 // attention"), in its chat.

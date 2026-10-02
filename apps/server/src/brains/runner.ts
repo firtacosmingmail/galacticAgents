@@ -140,6 +140,11 @@ export class BrainRunner {
   private carried: string | undefined;
   /** The turn message whose delivery also delivers the folded `message.sent` ids. */
   private turnMessage: { id: string; folded: Id[] } | undefined;
+  /**
+   * The messages a reopened session's first prompt folded (P2-16): delivered once that turn ends,
+   * not when the handle comes back — a resume can still fail before its first turn did.
+   */
+  private firstTurnFolded: Id[] | undefined;
   private scope: WakeScope | undefined;
   private waiters: (() => void)[] = [];
   /**
@@ -299,7 +304,8 @@ export class BrainRunner {
     );
     // Subscribed and cut at the same seq: an event is either requeued or delivered live, once.
     this.unsubscribe = log.subscribe((env) => this.onEnvelope(env));
-    const requeued = requeue(log, agentId, this.scope, this.definition.wakeRules, log.currentSeq());
+    const upTo = log.currentSeq();
+    const requeued = requeue(log, agentId, this.scope, this.definition.wakeRules, upTo);
     const items: MailboxItem[] = [...notes, ...requeued];
     const resumedPrompt = this.reopenPrompt(items, 'resumed');
     const freshPrompt = this.reopenPrompt(items, 'fresh');
@@ -312,6 +318,9 @@ export class BrainRunner {
         prompt: resumedPrompt,
         freshPrompt,
         mailbox: true,
+        foldedUpTo: upTo,
+        // The resumed session ended before its first turn did: the runtime opens the fresh one.
+        onFallback: (fresh) => this.fallback(turn, freshPrompt, fresh),
       });
     } catch (error) {
       result = { ok: false, reason: (error as Error).message };
@@ -322,8 +331,23 @@ export class BrainRunner {
     }
     if (result.mode === 'fresh') turn.prompt = freshPrompt;
     if (this.stateValue === 'renewing') this.stateValue = 'in_turn';
-    this.markDelivered(foldedMessages(items));
+    this.firstTurnFolded = foldedMessages(items);
     return result;
+  }
+
+  /** A resume that failed after the handle came back (P2-16): the fresh session takes over. */
+  private fallback(turn: TurnRecord, freshPrompt: string, fresh: Promise<SpawnResult>): void {
+    if (this.stateValue === 'ended') return;
+    this.stateValue = 'renewing'; // the lost session's `agent.interrupted` must not end the runner
+    turn.prompt = freshPrompt;
+    void fresh.then((result) => {
+      if (result.ok) {
+        if (this.stateValue === 'renewing') this.stateValue = 'in_turn';
+        return;
+      }
+      this.onError(new Error(result.reason), `brain ${this.id} fresh session`);
+      this.end();
+    });
   }
 
   private async startNotes(brainId: Id | undefined, resumed: boolean): Promise<string[]> {
@@ -417,6 +441,10 @@ export class BrainRunner {
     const ended = this.current;
     this.current = undefined;
     this.stateValue = 'idle';
+    if (this.firstTurnFolded) {
+      this.markDelivered(this.firstTurnFolded);
+      this.firstTurnFolded = undefined;
+    }
     if (ended?.kind === 'summary') {
       void this.renew();
     } else if (this.shouldReset()) {

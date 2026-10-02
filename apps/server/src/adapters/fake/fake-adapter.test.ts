@@ -455,6 +455,24 @@ describe('FakeAdapter — resumeSession', () => {
       /unknown fake scenario/,
     );
   });
+
+  it('a lost session fails after the handle came back, as the SDK’s does (P2-16)', async () => {
+    const { adapter, events } = makeAdapter({
+      resumeFails: (opts) => (opts.agentId === 'a-lost' ? { ends: 'failed' } : undefined),
+    });
+    const handle = await adapter.resumeSession(
+      'fake:happy:0000-01d-5e55:0',
+      spawnOpts('x', 'a-lost'),
+    );
+    expect(handle.sessionId).toBeTruthy();
+    expect(events.items).toEqual([]); // the caller holds the handle before anything happens
+    await events.waitFor(has('agent.failed'));
+    await sleep(5);
+    expect(events.items).toEqual([
+      expect.objectContaining({ type: 'agent.failed', agentId: 'a-lost', reason: 'crash' }),
+    ]);
+    await expect(adapter.send(handle.sessionId, 'hello')).rejects.toThrow(/has failed/);
+  });
 });
 
 describe('FakeAdapter — session refs are per session', () => {

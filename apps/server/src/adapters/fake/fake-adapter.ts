@@ -66,6 +66,16 @@ export interface FakeAdapterOptions {
    * scenario is remembered by name so `resumeSession` finds it too.
    */
   scenarioFor?: (opts: SpawnOptions) => { name: string; scenario: FakeScenario } | undefined;
+  /**
+   * A resume that fails after the handle came back, as the SDK's does (P2-16): `resumeSession`
+   * returns a handle at once and the session then ends on its own — `failed` (a CLI that exits
+   * with an error: the session file is gone or corrupt) or `finished` (it exits cleanly) — before
+   * any turn. Return `undefined` to resume normally.
+   */
+  resumeFails?: (
+    opts: SpawnOptions,
+    sessionRef: string,
+  ) => { ends: 'failed' | 'finished'; error?: string } | undefined;
 }
 
 type Ended = 'finished' | 'failed' | 'stopped';
@@ -133,6 +143,7 @@ export class FakeAdapter implements AgentAdapter {
   private readonly scenarioFor: FakeAdapterOptions['scenarioFor'];
   /** Scenarios chosen by `scenarioFor`, by name, for `resumeSession`. */
   private readonly picked = new Map<string, FakeScenario>();
+  private readonly resumeFails: FakeAdapterOptions['resumeFails'];
   private disposed = false;
 
   constructor(opts: FakeAdapterOptions = {}) {
@@ -141,6 +152,7 @@ export class FakeAdapter implements AgentAdapter {
     this.sessionStore = opts.sessionStore ?? new Map();
     this.checkCwd = opts.checkCwd ?? false;
     this.scenarioFor = opts.scenarioFor;
+    this.resumeFails = opts.resumeFails;
   }
 
   /** The scenario names this adapter knows, for the ops console's spawn form. */
@@ -171,7 +183,38 @@ export class FakeAdapter implements AgentAdapter {
     }
     if (!scenario) throw new Error(`unknown fake scenario in session ref: ${m[1]!.toLowerCase()}`);
     const startAt = this.sessionStore.get(sessionRef) ?? Number(m[3]);
+    const fails = this.resumeFails?.(opts, sessionRef);
+    if (fails) return this.lostSession(opts, name, scenario, startAt, fails);
     return this.start(opts, name, scenario, startAt, true);
+  }
+
+  /** A resumed session that ends on its own before its first turn (`resumeFails`). */
+  private lostSession(
+    opts: SpawnOptions,
+    name: string,
+    scenario: FakeScenario,
+    startAt: number,
+    fails: { ends: 'failed' | 'finished'; error?: string },
+  ): SpawnHandle {
+    if (this.disposed) throw new Error('adapter disposed');
+    const tools = new Map((opts.tools ?? []).map((t) => [t.name, t]));
+    const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt, tools);
+    this.sessions.set(session.sessionId, session);
+    session.ended = fails.ends;
+    // Later, as a CLI that exits after it started: the caller holds the handle first.
+    setImmediate(() => {
+      this.emit(
+        fails.ends === 'failed'
+          ? {
+              type: 'agent.failed',
+              agentId: opts.agentId,
+              error: fails.error ?? 'No conversation found with this session ID',
+              reason: 'crash',
+            }
+          : { type: 'agent.finished', agentId: opts.agentId },
+      );
+    });
+    return { sessionId: session.sessionId, sessionRef: session.sessionRef };
   }
 
   private start(

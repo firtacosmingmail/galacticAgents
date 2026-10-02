@@ -242,11 +242,13 @@ export function rerouteHeldBy(
   agentId: Id,
   routing: Pick<QuestionRouting, 'isLiving'>,
   reason: string,
+  keep?: (q: Question) => boolean,
 ): Question[] {
   const isLiving = (id: Id) => id !== agentId && routing.isLiving(id);
   return ctx.tables.questions
     .all()
     .filter((q) => q.status === 'open' && q.holder.type === 'agent' && q.holder.id === agentId)
+    .filter((q) => !keep?.(q))
     .map((q) => {
       let to = livingAbove(ctx, agentId, isLiving);
       // A re-parented chain must never hand a question to the agent that asked it.
@@ -273,7 +275,9 @@ export function endAgentQuestions(
     how === 'interrupted' ? (q: Question) => q.meta?.['source'] === COMMAND_SOURCE : undefined;
   cancelQuestionsOf(ctx, agentId, `agent ${how}`, (q) => holdersNow(ctx, q, routing), keep);
   // A session reset replaces the session, not the agent: the questions it holds stay with it.
-  if (!opts.keepHeld) rerouteHeldBy(ctx, agentId, routing, `holder ${agentId} ${how}`);
+  // An interrupted holder keeps the tool-asked questions it holds too (decision 45): their asker
+  // keeps them open and the holder is resumed; recovery moves them on if it cannot be.
+  if (!opts.keepHeld) rerouteHeldBy(ctx, agentId, routing, `holder ${agentId} ${how}`, keep);
 }
 
 /**

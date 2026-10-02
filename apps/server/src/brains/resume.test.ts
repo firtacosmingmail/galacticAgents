@@ -2,11 +2,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Event, Id } from '@galactic/protocol';
+import { summarize, type Event, type Id } from '@galactic/protocol';
+import type { FakeAdapterOptions } from '../adapters/fake/fake-adapter.js';
 import { SCENARIOS, type FakeScenario } from '../adapters/fake/scenario.js';
 import { openDatabase, type Database } from '../db/database.js';
 import { gitRunner } from '../workspace/git.js';
-import { harmonizerBrain } from './harmonizer/index.js';
+import { harmonizerBrain, startHarmonizer } from './harmonizer/index.js';
 import { brainHarness, type BrainHarness, type HarnessBrain } from './testing/index.js';
 import { waykeeperDefinition } from './waykeeper/index.js';
 
@@ -58,10 +59,10 @@ function world(): World {
   };
 }
 
-function boot(w: World): BrainHarness {
+function boot(w: World, adapter: Pick<FakeAdapterOptions, 'resumeFails'> = {}): BrainHarness {
   const h = brainHarness({
     db: w.db,
-    adapter: { scenarios: w.scenarios, sessionStore: w.sessions },
+    adapter: { scenarios: w.scenarios, sessionStore: w.sessions, ...adapter },
     // Real worktrees (two Stewards of one project run side by side only in a git workspace).
     compose: {
       workspaces: {
@@ -445,5 +446,259 @@ describe('hierarchy restart and resume (P2-16)', () => {
     expect(outcome).toMatchObject([{ ok: true }]);
     // A second resume is refused: it runs.
     expect((await h2.runtime.recoverAgent(one.wk.agentId)).ok).toBe(false);
+  });
+
+  it('a resume that fails after the handle came back falls back to a fresh session; nothing owed is lost', async () => {
+    const w = world();
+    const h1 = boot(w);
+    const one = await firstLife(h1, w);
+    h1.crash();
+    const late = h1.runtime.send(one.wk.agentId, 'please add a README task too', {
+      sender: USER,
+    });
+
+    // The SDK hands back a handle at once; the lost session only shows when the CLI exits.
+    const lost = new Set([one.hq.agentId, one.wk.agentId]);
+    const h2 = boot(w, {
+      resumeFails: (opts) => (lost.has(opts.agentId) ? { ends: 'failed' } : undefined),
+    });
+    defineBrains(h2);
+    h2.script('harmonizer', { strict: false });
+    h2.script('waykeeper', { strict: false });
+    const seqBefore = h2.log.currentSeq();
+    const { report } = await h2.recover();
+    expect(report.resumed).toEqual(expect.arrayContaining([one.hq.agentId, one.wk.agentId]));
+    await h2.until(
+      () =>
+        [one.hq.agentId, one.wk.agentId].every(
+          (id) => h2.statuses.get(id)?.state === 'idle' && h2.composed.runnerOf(id) !== undefined,
+        ),
+      { ...LONG, what: 'both brains back on fresh sessions' },
+    );
+    await h2.settle(LONG);
+
+    const after = events(h2).filter(({ seq }) => seq > seqBefore);
+    for (const id of lost) {
+      // A failed resume, never an end: no agent.failed, the runner still drives the brain.
+      expect(after.some(({ event: e }) => e.type === 'agent.failed' && e.agentId === id)).toBe(
+        false,
+      );
+      expect(
+        after.some(
+          ({ event: e }) =>
+            e.type === 'agent.interrupted' && e.agentId === id && /resume failed/.test(e.reason),
+        ),
+      ).toBe(true);
+      expect(h2.composed.runnerOf(id)?.state).not.toBe('ended');
+    }
+    // The fresh session's first prompt carries what the brain was owed; delivered once.
+    const wk2 = h2.brains.find((b) => b.agentId === one.wk.agentId)!;
+    const fresh = wk2.prompts().find((p) => p.includes('could not be resumed'))!;
+    expect(fresh).toContain('the user said: "please add a README task too"');
+    expect(
+      events(h2).filter(
+        ({ event: e }) => e.type === 'message.delivered' && e.messageId === late.id,
+      ),
+    ).toHaveLength(1);
+    // Same rows, one Harmonizer; the Harmonizer's tool-asked question survived.
+    expect(h2.runtime.liveAgents().filter((a) => a.role === 'harmonizer')).toEqual([
+      expect.objectContaining({ id: one.hq.agentId }),
+    ]);
+    expect(h2.log.tables.questions.get(one.licenceQ)?.status).toBe('open');
+    // The Steward's re-asked question is still held by its Waykeeper, not climbed to the user.
+    const reasked = h2.log.tables.questions
+      .all()
+      .find((q) => q.status === 'open' && q.originAgentId === one.asker.id);
+    expect(reasked?.holder).toEqual({ type: 'agent', id: one.wk.agentId });
+    h2.verify();
+  });
+
+  it('a Harmonizer that ends for good is replaced, unless the user stopped it', async () => {
+    const w = world();
+    const h = boot(w);
+    h.script('harmonizer', { strict: false });
+    const start = () =>
+      startHarmonizer(h.composed, {
+        runtime: 'fake',
+        cwd: '/w/hq',
+        deps: { projectsRoot: '/w/projects' },
+      });
+    const first = await start();
+    h.composed.keepHarmonizer(start);
+    await h.adapter.crash(first.agentId); // its process dies: agent.failed(crash)
+    const liveHq = () => h.runtime.liveAgents().filter((a) => a.role === 'harmonizer');
+    await h.until(() => liveHq().length === 1 && liveHq()[0]!.id !== first.agentId, {
+      ...LONG,
+      what: 'a new Harmonizer',
+    });
+    const second = liveHq()[0]!;
+    await h.commands.stopAgent(second.id, USER);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(liveHq()).toEqual([]);
+  });
+
+  it('an interrupted Steward or Waykeeper is not reopened beside the one that replaced it', async () => {
+    const w = world();
+    const h1 = boot(w);
+    const hq = await h1.startHarmonizer({ definition: hqDefinition() });
+    const project = (await h1.commands.createProject({ name: 'P', workspace: '/w/p' })).value;
+    const wk = await h1.startBrain(waykeeperDefinition(), {
+      runtime: 'fake',
+      projectId: project.id,
+      supervisorId: hq.agentId,
+    });
+    const task = (
+      await h1.commands.createTask({ description: 'notes', meta: { workspace: '/w/s' } })
+    ).value;
+    const spawnSteward = async (h: BrainHarness) =>
+      (
+        await h.commands.spawnAgent({
+          role: 'steward',
+          runtime: 'fake',
+          taskId: task.id,
+          supervisorId: hq.agentId,
+          cwd: '/w/s',
+          prompt: 'scenario:notes',
+        })
+      ).value;
+    const old = await spawnSteward(h1);
+    await h1.settle(LONG);
+    await h1.composed.shutdown();
+
+    // No startup recovery: replacements run, then the panel's resume is tried on the old ones.
+    const h2 = boot(w);
+    defineBrains(h2);
+    h2.script('waykeeper', { strict: false });
+    h2.script('harmonizer', { strict: false });
+    await h2.startHarmonizer({ definition: hqDefinition() });
+    await h2.startBrain(waykeeperDefinition(), {
+      runtime: 'fake',
+      projectId: project.id,
+      supervisorId: hq.agentId,
+    });
+    await spawnSteward(h2);
+    const steward = await h2.runtime.recoverAgent(old.id);
+    expect(steward).toMatchObject({ ok: false });
+    expect(!steward.ok && steward.reason).toMatch(/already has a running Steward/);
+    const waykeeper = await h2.runtime.recoverAgent(wk.agentId);
+    expect(!waykeeper.ok && waykeeper.reason).toMatch(/already has a running Waykeeper/);
+    expect(h2.statuses.get(old.id)?.state).toBe('interrupted');
+  });
+
+  it('a brain resumed before its Stewards does not spawn replacements for them', async () => {
+    const w = world();
+    const h1 = boot(w);
+    const one = await firstLife(h1, w);
+    h1.crash();
+
+    const h2 = boot(w);
+    defineBrains(h2);
+    h2.script('harmonizer', { strict: false });
+    const tried: { ok: boolean; error?: string | undefined }[] = [];
+    // The first Steward's reopen is held, so the loop has not reached the other one yet when the
+    // Waykeeper's first turn tries to spawn a Steward for that one's task.
+    let heldAgent: Id | undefined;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const resumeSession = h2.adapter.resumeSession.bind(h2.adapter);
+    h2.adapter.resumeSession = async (ref, opts) => {
+      if (opts.role === 'steward' && heldAgent === undefined) {
+        heldAgent = opts.agentId;
+        await held;
+      }
+      return resumeSession(ref, opts);
+    };
+    h2.script('waykeeper', { strict: false }).once(/was resumed/, async (t) => {
+      await h2.until(() => heldAgent !== undefined);
+      const other = [one.asker, one.noter].find((a) => a.id !== heldAgent)!;
+      const outcome = await t.try('spawn_steward', {
+        taskId: other.taskId,
+        instructions: 'scenario:notes\nDo it again.',
+      });
+      tried.push({ ok: outcome.ok, error: outcome.error });
+    });
+    const agentsBefore = h2.log.tables.agents.all().length;
+    const recovering = h2.recover();
+    await h2.until(() => tried.length === 1, { ...LONG, what: "the Waykeeper's spawn attempt" });
+    release();
+    const { report } = await recovering;
+    expect(tried).toEqual([{ ok: false, error: 'conflict' }]);
+    expect(report.resumed).toEqual(expect.arrayContaining([one.asker.id, one.noter.id]));
+    expect(h2.log.tables.agents.all()).toHaveLength(agentsBefore);
+    await h2.settle(LONG);
+  });
+
+  it('the questions an ended Harmonizer asked the user are withdrawn and handed to the new one', async () => {
+    const w = world();
+    const h1 = boot(w);
+    const old = (
+      await h1.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        cwd: '/w/hq',
+        prompt: 'scenario:echo',
+      })
+    ).value;
+    const { value: q } = await h1.commands.openQuestion({
+      kind: 'clarification',
+      originAgentId: old.id,
+      context: { text: 'Which licence?' },
+      toUser: true,
+    });
+    await h1.composed.shutdown();
+    h1.log.runCommand((ctx) => {
+      const { sessionRef: _ref, ...rest } = ctx.tables.agents.get(old.id)!;
+      ctx.tables.agents.upsert(rest);
+    });
+
+    const h2 = boot(w);
+    const { report } = await h2.recover();
+    expect(report.needAttention).toEqual([old.id]);
+    expect(h2.log.tables.questions.get(q.id)?.status).toBe('open');
+    const hq = await h2.startHarmonizer({ definition: hqDefinition() });
+    await h2.settle(LONG);
+    expect(hq.prompts()[0]).toContain(`had asked the user "Which licence?" (${q.id})`);
+    expect(h2.log.tables.questions.get(q.id)?.status).toBe('cancelled');
+    const { tables } = h2.log;
+    expect(
+      summarize({
+        questions: tables.questions.all(),
+        tasks: tables.tasks.all(),
+        projects: tables.projects.all(),
+      }).userQuestions,
+    ).toBe(0);
+  });
+
+  it('a tool-asked question held by an interrupted brain stays with it across a restart', async () => {
+    const w = world();
+    const h1 = boot(w);
+    const hq = await h1.startHarmonizer({ definition: hqDefinition() });
+    const project = (await h1.commands.createProject({ name: 'P', workspace: '/w/p' })).value;
+    const wk = await h1.startBrain(waykeeperDefinition(), {
+      runtime: 'fake',
+      projectId: project.id,
+      supervisorId: hq.agentId,
+    });
+    // The Waykeeper's own question, through a tool: held by its supervisor, the Harmonizer.
+    const { value: q } = await h1.commands.openQuestion({
+      kind: 'clarification',
+      originAgentId: wk.agentId,
+      context: { text: 'Postgres or SQLite?' },
+    });
+    expect(q.holder).toEqual({ type: 'agent', id: hq.agentId });
+    await h1.settle(LONG);
+    await h1.composed.shutdown();
+    expect(h1.log.tables.questions.get(q.id)?.holder).toEqual({ type: 'agent', id: hq.agentId });
+
+    const h2 = boot(w);
+    defineBrains(h2);
+    h2.script('harmonizer', { strict: false });
+    h2.script('waykeeper', { strict: false });
+    await h2.recover();
+    await h2.settle(LONG);
+    expect(h2.log.tables.questions.get(q.id)).toMatchObject({
+      status: 'open',
+      holder: { type: 'agent', id: hq.agentId },
+    });
   });
 });

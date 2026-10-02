@@ -24,6 +24,7 @@ import { answerQuestion, cancelQuestion, checkAnswer } from '../domain/questions
 import {
   endAgentQuestions,
   holdersNow,
+  rerouteHeldBy,
   livingFromStatuses,
   logRouting,
   openFromNeedsInput,
@@ -128,6 +129,19 @@ export interface ReopenOptions {
    * first turn.
    */
   mailbox?: boolean;
+  /**
+   * The seq up to which the first prompt folded the log (a brain's requeue): recorded on
+   * `agent.spawned` so a later requeue cuts there once this session's first turn ended.
+   */
+  foldedUpTo?: number;
+  /**
+   * A session resumed from its ref that ends before its first turn did (the SDK hands back a
+   * handle at once; a lost or corrupt session only shows when the CLI exits) is a failed resume,
+   * not an end: with `freshPrompt` the runtime opens the fresh session on the same row and calls
+   * this first, synchronously, with that session's outcome — before the `agent.interrupted` is
+   * logged.
+   */
+  onFallback?: (fresh: Promise<SpawnResult>) => void;
 }
 
 /** A reopen's outcome: `resumed` from the session ref, or a `fresh` session on the same row. */
@@ -200,6 +214,20 @@ interface Live {
   turn: { text: string | undefined; interrupted: boolean };
   /** The session was resumed and its first turn has not ended yet (P2-16). */
   resumedTurn: boolean;
+  /**
+   * A session resumed from its ref whose first turn has not ended (P2-16): ending now means the
+   * resume failed (a lost session), handled by `resumeLost`.
+   */
+  probation: Probation | undefined;
+  /** The session did something (output, a tool call, a question) since it opened. */
+  activity: boolean;
+}
+
+/** What a resumed session falls back to if it ends before its first turn did (P2-16). */
+interface Probation {
+  /** A brain: the fresh session on the same row. Absent: the agent is left interrupted. */
+  fresh?: { req: SpawnRequest; mailbox: boolean; foldedUpTo?: number };
+  onFallback?: (fresh: Promise<SpawnResult>) => void;
 }
 
 /**
@@ -247,6 +275,13 @@ export class AgentRuntime {
   private disposed = false;
   private readonly turnListeners = new Set<(turn: TurnEnd) => void>();
   private brainResumer: BrainResumer | undefined;
+  /**
+   * Interrupted agents startup recovery is about to reopen (P2-16): the brains resumed first must
+   * not replace them, so `isReserved` tells the spawn guards they are on their way back.
+   */
+  private readonly reserved = new Set<Id>();
+  /** Brains whose lost resume is being replaced by a fresh session (`resumeLost`). */
+  private readonly refreshing = new Set<Id>();
 
   constructor(private readonly opts: AgentRuntimeOptions) {
     this.now = opts.now ?? (() => new Date().toISOString());
@@ -340,7 +375,7 @@ export class AgentRuntime {
   private async resume(
     agent: Agent,
     req: Omit<SpawnRequest, 'role' | 'runtime'>,
-    opts: { fresh?: boolean; mailbox?: boolean } = {},
+    opts: { fresh?: boolean; mailbox?: boolean; foldedUpTo?: number; probation?: Probation } = {},
   ): Promise<SpawnResult> {
     if (this.disposed) throw new Error('runtime disposed');
     if (this.live.has(agent.id)) return { ok: false, reason: `agent ${agent.id} is running` };
@@ -361,7 +396,12 @@ export class AgentRuntime {
         ? (spawnOpts) => adapter.spawn(spawnOpts)
         : (spawnOpts) => adapter.resumeSession!(ref, spawnOpts),
       true,
-      { mailbox: opts.mailbox ?? false, resumed: !opts.fresh },
+      {
+        mailbox: opts.mailbox ?? false,
+        resumed: !opts.fresh,
+        ...(opts.foldedUpTo !== undefined ? { foldedUpTo: opts.foldedUpTo } : {}),
+        ...(opts.probation && !opts.fresh && ref ? { probation: opts.probation } : {}),
+      },
     );
   }
 
@@ -371,7 +411,7 @@ export class AgentRuntime {
     adapter: AgentAdapter,
     open: (opts: SpawnOptions) => Promise<SpawnHandle>,
     resuming: boolean,
-    how: { mailbox?: boolean; resumed?: boolean } = {},
+    how: { mailbox?: boolean; resumed?: boolean; foldedUpTo?: number; probation?: Probation } = {},
   ): Promise<SpawnResult> {
     const caps = agent.caps;
     // Registered before the adapter runs: whatever it emits before the handle comes back is
@@ -431,6 +471,8 @@ export class AgentRuntime {
       mailbox: how.mailbox ?? false,
       turn: { text: undefined, interrupted: false },
       resumedTurn: how.resumed ?? false,
+      probation: how.probation,
+      activity: false,
     };
     this.live.set(agent.id, live);
     this.caps.track(agent.id, caps, {
@@ -473,7 +515,12 @@ export class AgentRuntime {
     // The row's session ref and `agent.spawned` in one transaction (one write rule).
     try {
       live.agent = this.opts.log.runCommand((ctx) =>
-        recordSpawned(ctx, live.agent, handle.sessionRef),
+        recordSpawned(
+          ctx,
+          live.agent,
+          handle.sessionRef,
+          how.foldedUpTo !== undefined ? { foldedUpTo: how.foldedUpTo } : {},
+        ),
       ).value;
     } catch (error) {
       this.onError(error, `record agent.spawned ${agent.id}`);
@@ -806,18 +853,28 @@ export class AgentRuntime {
       .all()
       .filter((r) => r.state === 'interrupted')
       .sort((a, b) => this.depth(a.agentId) - this.depth(b.agentId));
+    // On their way back (P2-16): a brain resumed before its Stewards must not replace them.
+    for (const r of interrupted) if (!passedOver.has(r.agentId)) this.reserved.add(r.agentId);
     for (const record of interrupted) {
       if (passedOver.has(record.agentId)) {
         report.needAttention.push(record.agentId);
+        this.releaseHeld(record.agentId, 'was not resumed (one Harmonizer at a time)');
         continue;
       }
-      const result = await this.recoverOne(record.agentId, histories.get(record.agentId));
+      let result: SpawnResult;
+      try {
+        result = await this.recoverOne(record.agentId, histories.get(record.agentId));
+      } finally {
+        this.reserved.delete(record.agentId);
+      }
       if (result.ok) report.resumed.push(record.agentId);
       else {
         this.onError(new Error(result.reason), `recover ${record.agentId}`);
         report.needAttention.push(record.agentId);
+        this.releaseHeld(record.agentId, 'could not be resumed');
       }
     }
+    this.reserved.clear();
     return report;
   }
 
@@ -868,13 +925,43 @@ export class AgentRuntime {
     }
     const agent = this.opts.log.tables.agents.get(agentId);
     if (!agent) return { ok: false, reason: `no agent ${agentId}` };
+    const running = (same: (other: Agent) => boolean) =>
+      [...this.live.values()].find(
+        (l) => l.agent.id !== agentId && l.agent.role === agent.role && same(l.agent),
+      )?.agent;
     if (agent.role === 'harmonizer') {
-      const other = [...this.live.values()].find((l) => l.agent.role === 'harmonizer');
+      const other = running(() => true);
+      if (other) return { ok: false, reason: `the Harmonizer is already running (${other.id})` };
+    }
+    // One Steward per task and one Waykeeper per project (P2-16): an interrupted one is not
+    // brought back beside the agent that replaced it.
+    if (agent.role === 'steward' && agent.taskId) {
+      const other = running((a) => a.taskId === agent.taskId);
       if (other) {
-        return { ok: false, reason: `the Harmonizer is already running (${other.agent.id})` };
+        return {
+          ok: false,
+          reason: `task ${agent.taskId} already has a running Steward (${other.id})`,
+        };
+      }
+    }
+    if (agent.role === 'waykeeper' && agent.projectId) {
+      const other = running((a) => a.projectId === agent.projectId);
+      if (other) {
+        return {
+          ok: false,
+          reason: `project ${agent.projectId} already has a running Waykeeper (${other.id})`,
+        };
       }
     }
     return undefined;
+  }
+
+  /**
+   * The agent is interrupted and startup recovery is about to reopen it (P2-16). The spawn guards
+   * count it as running: a supervisor resumed first must not spawn its replacement.
+   */
+  isReserved(agentId: Id): boolean {
+    return this.reserved.has(agentId) || this.refreshing.has(agentId);
   }
 
   private async reopenOne(
@@ -902,21 +989,39 @@ export class AgentRuntime {
       ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
     };
     const mailbox = opts.mailbox ?? false;
+    const folded = opts.foldedUpTo !== undefined ? { foldedUpTo: opts.foldedUpTo } : {};
+    const fresh =
+      opts.freshPrompt !== undefined
+        ? {
+            req: { ...base, role: agent.role, runtime: agent.runtime, prompt: opts.freshPrompt },
+            mailbox,
+            ...folded,
+          }
+        : undefined;
     let mode: 'resumed' | 'fresh' = 'resumed';
+    // An end before the resumed session's first turn ended is a failed resume too (P2-16): the
+    // SDK returns the handle at once and a lost session only shows when the CLI exits.
     let result = await this.resume(
       agent,
       { ...base, prompt: opts.prompt ?? RESUME_PROMPT },
-      { mailbox },
+      {
+        mailbox,
+        ...folded,
+        probation: {
+          ...(fresh ? { fresh } : {}),
+          ...(opts.onFallback ? { onFallback: opts.onFallback } : {}),
+        },
+      },
     );
-    if (!result.ok && opts.freshPrompt !== undefined && !this.live.has(agentId)) {
+    if (!result.ok && fresh && !this.live.has(agentId)) {
       // The session is gone (or never resumable): a fresh one on the same row, re-seeded from the
       // database by the caller's prompt. A failed resume left the agent interrupted, as it must be.
       mode = 'fresh';
-      result = await this.resume(
-        this.opts.log.tables.agents.get(agentId) ?? agent,
-        { ...base, prompt: opts.freshPrompt },
-        { fresh: true, mailbox },
-      );
+      result = await this.resume(this.opts.log.tables.agents.get(agentId) ?? agent, fresh.req, {
+        fresh: true,
+        mailbox,
+        ...folded,
+      });
     }
     if (!result.ok) return result;
     if (!mailbox) {
@@ -1186,6 +1291,7 @@ export class AgentRuntime {
       live.early.push(raw);
       return;
     }
+    if (raw.type !== 'agent.idle' && !TERMINAL.has(raw.type)) live.activity = true;
     if (raw.type === 'agent.output') {
       // Raw text: the pipeline redacts with the context of the previous chunk (P1-31), which a
       // chunk redacted on its own would have lost.
@@ -1250,6 +1356,7 @@ export class AgentRuntime {
     switch (event.type) {
       case 'agent.idle': {
         live.idle = true;
+        live.probation = undefined; // the resumed session took its first turn: it is resumed
         const turn = live.turn;
         live.turn = { text: undefined, interrupted: false };
         this.turnEnded(live, turn);
@@ -1284,8 +1391,84 @@ export class AgentRuntime {
       this.failForCap(live);
       return;
     }
+    const probation = live.probation;
+    if (probation && !live.capStop && !live.stopRequested && !this.disposed) {
+      live.probation = undefined;
+      // A brain falls back to a fresh session; a plain agent that failed before doing anything
+      // stays interrupted for the panel's resume action. Anything else is a real end.
+      if (probation.fresh || (event.type === 'agent.failed' && !live.activity)) {
+        this.resumeLost(live, event, probation);
+        return;
+      }
+    }
     this.caps.onEvent(event);
     this.recordEnd(live, event, event.type);
+  }
+
+  /**
+   * A session resumed from its ref ended before its first turn did (P2-16): the resume failed.
+   * The agent is logged `agent.interrupted{resume failed}` — its tool-asked and held questions
+   * stay, it is coming back — and a brain gets its fresh session on the same row, as a resume
+   * that failed at once does. If that cannot start either, it stays interrupted and the questions
+   * it held move on.
+   */
+  private resumeLost(live: Live, event: Event, probation: Probation): void {
+    const agentId = live.agent.id;
+    const why =
+      event.type === 'agent.failed'
+        ? event.error
+        : `the session ${event.type.slice('agent.'.length)} before its first turn`;
+    const reason = `resume failed: ${why}`;
+    const fresh = probation.fresh;
+    if (!fresh) {
+      this.recordEnd(live, { type: 'agent.interrupted', agentId, reason }, 'agent.interrupted');
+      return;
+    }
+    let settle!: (result: SpawnResult) => void;
+    const outcome = new Promise<SpawnResult>((resolve) => (settle = resolve));
+    try {
+      probation.onFallback?.(outcome);
+    } catch (error) {
+      this.onError(error, `resume fallback ${agentId}`);
+    }
+    this.refreshing.add(agentId); // on its way back: nothing replaces it meanwhile
+    this.recordEnd(live, { type: 'agent.interrupted', agentId, reason }, 'agent.interrupted', {
+      keepHeld: true,
+    });
+    void (async () => {
+      // Stragglers of the lost session are dropped before the new one registers under its id.
+      await new Promise((resolve) => setImmediate(resolve));
+      let result: SpawnResult;
+      try {
+        const agent = this.opts.log.tables.agents.get(agentId) ?? live.agent;
+        result = this.disposed
+          ? { ok: false, reason: 'runtime disposed' }
+          : await this.resume(agent, fresh.req, {
+              fresh: true,
+              mailbox: fresh.mailbox,
+              ...(fresh.foldedUpTo !== undefined ? { foldedUpTo: fresh.foldedUpTo } : {}),
+            });
+      } catch (error) {
+        result = { ok: false, reason: (error as Error).message };
+      }
+      this.refreshing.delete(agentId);
+      if (!result.ok) {
+        this.onError(new Error(result.reason), `fresh session after ${reason} (${agentId})`);
+        this.releaseHeld(agentId, 'could not be resumed');
+      }
+      settle(result);
+    })();
+  }
+
+  /**
+   * The questions an interrupted agent held move to the next living supervisor or the user
+   * (P2-03): it is not coming back (passed over, or its resume failed for good).
+   */
+  private releaseHeld(agentId: Id, why: string): void {
+    if (this.live.has(agentId)) return;
+    this.command((ctx) => {
+      rerouteHeldBy(ctx, agentId, this.questions, `holder ${agentId} ${why}`);
+    });
   }
 
   private failForCap(live: Live): void {

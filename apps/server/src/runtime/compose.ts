@@ -116,6 +116,17 @@ export interface ComposedRuntime {
    * whether a Harmonizer got it (none runs, or nothing was recovered: false).
    */
   announceRecovery(report: RecoveryReport): boolean;
+  /**
+   * Keeps a Harmonizer running (P2-16, decision 32): once armed (after the boot-time start), when
+   * a Harmonizer ends — failed, finished, stopped by anyone but the user, or left interrupted —
+   * and no other one runs or is on its way back, `start` is called (it must start one only if
+   * none runs: `startHarmonizer`). At most `maxRestarts` within `windowMs` (default 3 in 10 min).
+   * Returns the disarm function; shutdown and dispose disarm it too.
+   */
+  keepHarmonizer(
+    start: () => Promise<unknown>,
+    opts?: { maxRestarts?: number; windowMs?: number },
+  ): () => void;
   /** Startup recovery (P1-14): marks lost agents interrupted and resumes what can be resumed. */
   recover(): Promise<RecoveryReport>;
   /**
@@ -192,8 +203,11 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   });
 
   // One question routing for the runtime and the command surface (P2-03).
-  const questions = logRouting(log, livingFromStatuses(statuses));
-  const runtime = new AgentRuntime({
+  // An agent on its way back (recovery is about to reopen it, or a lost resume is being replaced
+  // by a fresh session, P2-16) still holds what is routed to it.
+  const living = livingFromStatuses(statuses);
+  const questions = logRouting(log, (id) => living(id) || runtime.isReserved(id));
+  const runtime: AgentRuntime = new AgentRuntime({
     log,
     questions,
     adapters: opts.adapters ?? [new FakeAdapter()],
@@ -238,7 +252,17 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       : {}),
     isRunning,
   });
-  const queries = createBrainQueries({ tables: log.tables, status: (id) => statuses.get(id) });
+  const queries = createBrainQueries({
+    tables: log.tables,
+    status: (id) => {
+      const status = statuses.get(id);
+      // An interrupted agent startup recovery is about to reopen is on its way back (P2-16): a
+      // brain resumed before its Stewards sees it starting, and its spawn guards do not replace it.
+      return status?.state === 'interrupted' && runtime.isReserved(id)
+        ? { ...status, state: 'starting' }
+        : status;
+    },
+  });
   const workspaces: Workspaces | undefined = opts.workspaces
     ? new Workspaces({ ...opts.workspaces, commands, tables: log.tables })
     : undefined;
@@ -280,6 +304,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       return result;
     });
   });
+  const disarmHarmonizer: (() => void)[] = [];
   const describeAgent = (id: Id): string => {
     const agent = log.tables.agents.get(id);
     const status = statuses.get(id);
@@ -319,8 +344,72 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       hq.note(recoveryNote(report, describeAgent));
       return true;
     },
+    keepHarmonizer(start, keepOpts = {}) {
+      const maxRestarts = keepOpts.maxRestarts ?? 3;
+      const windowMs = keepOpts.windowMs ?? 10 * 60_000;
+      const restarts: number[] = [];
+      let scheduled = false;
+      let armed = true;
+      const check = () => {
+        scheduled = false;
+        if (!armed) return;
+        const running = runtime.liveAgents().some((a) => a.role === 'harmonizer');
+        const comingBack = log.tables.agents
+          .all()
+          .some((a) => a.role === 'harmonizer' && runtime.isReserved(a.id));
+        if (running) return;
+        if (comingBack) {
+          // Look again once its reopen settled: it may still fail.
+          scheduled = true;
+          setTimeout(check, 50).unref();
+          return;
+        }
+        const now = Date.now();
+        while (restarts.length > 0 && now - restarts[0]! > windowMs) restarts.shift();
+        if (restarts.length >= maxRestarts) {
+          opts.onError?.(
+            new Error(`the Harmonizer ended ${restarts.length} times in a row: not restarting it`),
+            'keep harmonizer',
+          );
+          return;
+        }
+        restarts.push(now);
+        start().catch((error: unknown) => opts.onError?.(error, 'keep harmonizer: start'));
+      };
+      // A stop the user asked for: the adapter's own `agent.stopped` may say `system`.
+      const stoppedByUser = new Set<Id>();
+      const unsubscribe = log.subscribe(({ event }) => {
+        if (!armed) return;
+        if (event.type === 'control.stop' && event.target.kind === 'agent') {
+          if (event.by.type === 'user') stoppedByUser.add(event.target.id);
+          return;
+        }
+        if (scheduled) return;
+        if (
+          event.type !== 'agent.finished' &&
+          event.type !== 'agent.failed' &&
+          event.type !== 'agent.stopped' &&
+          event.type !== 'agent.interrupted'
+        ) {
+          return;
+        }
+        if (log.tables.agents.get(event.agentId)?.role !== 'harmonizer') return;
+        if (stoppedByUser.delete(event.agentId) && event.type === 'agent.stopped') return;
+        if (event.type === 'agent.stopped' && event.by.type === 'user') return; // the user's call
+        scheduled = true;
+        // After the command that ended it: a fallback or a resume may be taking over.
+        setImmediate(check);
+      });
+      const disarm = () => {
+        armed = false;
+        unsubscribe();
+      };
+      disarmHarmonizer.push(disarm);
+      return disarm;
+    },
     recover: () => runtime.recover(),
     async shutdown() {
+      for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
       reports.dispose();
       await runtime.shutdown();
@@ -329,6 +418,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       transcripts.dispose();
     },
     async dispose() {
+      for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
       reports.dispose();
       await runtime.dispose();
