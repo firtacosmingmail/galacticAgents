@@ -3,7 +3,13 @@ import type { Agent, ControlBody } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { HARMONIZER } from '../state/selection.js';
 import { EditForm } from '../console/hierarchy/WorkTree.js';
-import { agentLabel, ErrorLine, StatePill, useAction, useApi } from '../console/hierarchy/shared.js';
+import {
+  agentLabel,
+  ErrorLine,
+  StatePill,
+  useAction,
+  useApi,
+} from '../console/hierarchy/shared.js';
 import { Beacon, NavLink } from './Navigation.js';
 import {
   agentActions,

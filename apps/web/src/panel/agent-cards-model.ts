@@ -137,13 +137,14 @@ export function wallClockUsed(status: StatusRecord, now: number): number {
   return Math.max(status.caps.wallClockMs.used, Number.isFinite(since) ? since : 0);
 }
 
-/** "42 s", "12 min", "1 h 05". */
+/** "42 s", "12 min", "1 h", "1 h 05". */
 export function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s} s`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m} min`;
-  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`;
+  const h = Math.floor(m / 60);
+  return m % 60 === 0 ? `${h} h` : `${h} h ${String(m % 60).padStart(2, '0')}`;
 }
 
 /** Cost so far: dollars when the runtime reports them, else tokens, else nothing yet. */
@@ -215,8 +216,7 @@ export function workActions(work: CardWork): CardAction[] {
       confirm: `Archive the ${what} now? It leaves the panel and frees its body.`,
     });
   out.push({ action: 'pin', label: pinned ? 'Unpin' : 'Pin' });
-  if (finished && state !== 'moved')
-    out.push({ action: 'reopen', label: 'Reopen' });
+  if (finished && state !== 'moved') out.push({ action: 'reopen', label: 'Reopen' });
   if (!finished) out.push({ action: 'edit', label: 'Edit' });
   return out;
 }

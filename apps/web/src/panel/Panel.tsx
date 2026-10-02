@@ -204,11 +204,7 @@ function SideColumn() {
     <aside className="pnl-side" aria-label="managed agents and inbox">
       <section aria-label="managed agents">
         <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
-        {supervisor ? (
-          <AgentLinks ids={[supervisor]} />
-        ) : (
-          <ManagedAgentCards supervisor={agent} />
-        )}
+        {supervisor ? <AgentLinks ids={[supervisor]} /> : <ManagedAgentCards supervisor={agent} />}
       </section>
       <section className="pnl-inbox" aria-label="inbox">
         <QuestionInbox />
