@@ -424,6 +424,45 @@ describe('Waykeeper brain (P2-10)', () => {
     await h.done(LONG);
   });
 
+  it('sends a sub-project’s closure request to the Harmonizer, not the parent Waykeeper', async () => {
+    const planet = (
+      await h.commands.createProject({ name: 'App', workspace: join(tmp, 'home', 'app') })
+    ).value;
+    const moon = (
+      await h.commands.createProject({
+        name: 'App docs',
+        workspace: join(tmp, 'home', 'docs'),
+        kind: 'moon',
+        parentProjectId: planet.id,
+      })
+    ).value;
+    const done = (await h.commands.createTask({ projectId: moon.id, description: 'docs' })).value;
+    await h.commands.closeTask(done.id, { type: 'user' });
+    const hq = await h.startHarmonizer({
+      script: (s) => s.once(/reported: .*every task is closed/s, (t) => t.say('asking the user')),
+    });
+    const parent = await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: planet.id, supervisorId: hq.agentId },
+      { script: (s) => s },
+    );
+    const sub = await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: moon.id, supervisorId: parent.agentId },
+      {
+        script: (s) =>
+          s.once('wrap up', async (t) => {
+            const out = await t.call('request_project_closure', { summary: 'Docs written.' });
+            expect(out).toMatchObject({ requestedOf: hq.agentId, messageId: expect.any(String) });
+          }),
+      },
+    );
+    sub.tell('wrap up');
+    await h.done();
+    expect(parent.turns.length).toBe(1);
+    expect(hq.prompts().join('\n')).toContain(`Project ${moon.id}`);
+  });
+
   it('runs one Steward at a time in a workspace that is not a git repository', async () => {
     const dir = join(tmp, 'home', 'plain folder');
     mkdirSync(dir);

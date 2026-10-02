@@ -63,6 +63,16 @@ export function createWakeScope(
   return {
     ...brain,
     supervises,
+    below: (id) => {
+      const seen = new Set<Id>();
+      for (let at = id; at !== undefined && !seen.has(at); ) {
+        seen.add(at);
+        const up: Id | undefined = tables.agents.get(at)?.supervisorId;
+        if (up === brain.brainId) return true;
+        at = up;
+      }
+      return false;
+    },
     runsTask: (taskId) => {
       const task = tables.tasks.get(taskId);
       if (task && brain.projectId && task.projectId === brain.projectId) return true;

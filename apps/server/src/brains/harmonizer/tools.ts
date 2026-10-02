@@ -733,11 +733,13 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           .agents()
           .filter((a) => a.role === 'waykeeper' && a.projectId === project.parentProjectId)
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-        const living = parent.find((a) => isLiving(ctx.queries, a.id)) ?? parent[0];
+        // Decision 32: a sub-project's Waykeeper answers to the parent's Waykeeper — a running
+        // one; an ended one could never hear its reports.
+        const living = parent.find((a) => isLiving(ctx.queries, a.id));
         if (!living) {
           throw new DomainError(
-            'invalid',
-            `sub-project ${projectId} needs the Waykeeper of ${project.parentProjectId} first`,
+            'invalid_transition',
+            `sub-project ${projectId} needs a running Waykeeper of ${project.parentProjectId} first: spawn_waykeeper ${project.parentProjectId}`,
           );
         }
         supervisorId = living.id;

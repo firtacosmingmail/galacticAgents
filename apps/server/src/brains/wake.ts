@@ -29,6 +29,8 @@ export interface WakeScope {
   projectId?: Id;
   /** `agentId` is directly supervised by the brain. */
   supervises(agentId: Id | undefined): boolean;
+  /** `agentId` is anywhere below the brain in the `supervisorId` chain (direct reports too). */
+  below?(agentId: Id | undefined): boolean;
   /** The brain runs the task: a task of its project, or the task of an agent it supervises. */
   runsTask(taskId: Id): boolean;
   /** The brain runs the project: its own, or one a supervised Waykeeper runs. */
@@ -114,11 +116,14 @@ const quote = (text: string) => JSON.stringify(text);
 
 export const WAKE_RULES: WakeRules = {
   'message.sent': {
-    // A user's chat line to the brain, or a report from an agent it supervises. The brain's own
-    // turn messages are sent by the system and never wake it.
+    // A user's chat line to the brain, or a report from an agent below it (a direct report, or a
+    // sub-project's Waykeeper asking the Harmonizer for closure). The brain's own turn messages
+    // are sent by the system and never wake it.
     wakes: (e, s) =>
       e.agentId === s.brainId &&
-      (e.sender.type === 'user' || (e.sender.type === 'agent' && s.supervises(e.sender.id))),
+      (e.sender.type === 'user' ||
+        (e.sender.type === 'agent' &&
+          (s.supervises(e.sender.id) || (s.below?.(e.sender.id) ?? false)))),
     describe: (e, s) =>
       e.sender.type === 'user'
         ? `the user said: ${quote(e.text)}`

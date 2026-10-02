@@ -703,8 +703,13 @@ export const requestProjectClosureTool: BrainTool = {
         `Stewards still running: ${running.map((r) => r.agent.id).join(', ')}`,
       );
     }
-    const supervisorId = ctx.queries.agent(ctx.brainId)?.supervisorId;
-    if (!supervisorId) throw new DomainError('invalid', 'you have no supervisor to ask');
+    // SPEC §2.7, decision 36: the Harmonizer asks the user, also for a sub-project (whose
+    // Waykeeper answers to the parent's Waykeeper, not to the Harmonizer).
+    const harmonizer = ctx.queries
+      .agents()
+      .filter((a) => a.role === 'harmonizer')
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .find((a) => isLive(ctx.queries.status(a.id)));
     // The request is kept on the project, so it survives a restart and P2-13 can read it.
     await ctx.commands.updateProject(project.id, {
       meta: {
@@ -717,16 +722,16 @@ export const requestProjectClosureTool: BrainTool = {
       'Please ask the user whether anything else is needed, or whether to close the project.';
     let messageId: Id | undefined;
     try {
-      messageId = ctx.send(supervisorId, text).messageId;
+      if (harmonizer) messageId = ctx.send(harmonizer.id, text).messageId;
     } catch {
-      // A supervisor that is not running learns it from the project's record on its next start.
+      // A Harmonizer that is not running learns it from the project's record on its next start.
     }
     return {
       projectId: project.id,
-      requestedOf: supervisorId,
+      ...(harmonizer ? { requestedOf: harmonizer.id } : {}),
       ...(messageId
         ? { messageId }
-        : { note: 'your supervisor is not running; the request is recorded' }),
+        : { note: 'the Harmonizer is not running; the request is recorded on the project' }),
     };
   },
 };

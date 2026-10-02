@@ -410,6 +410,43 @@ describe('Harmonizer brain (P2-08)', () => {
     });
   });
 
+  it('starts a sub-project’s Waykeeper only under a running parent Waykeeper (decision 32)', async () => {
+    const { h, definition, waykeepers } = setup();
+    const { value: planet } = await h.commands.createProject({ name: 'App', workspace: '/w/app' });
+    const { value: moon } = await h.commands.createProject({
+      name: 'App docs',
+      workspace: '/w/docs',
+      kind: 'moon',
+      parentProjectId: planet.id,
+    });
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('staff it', async (t) => {
+            expect(await t.try('spawn_waykeeper', { projectId: moon.id })).toMatchObject({
+              ok: false,
+              error: 'invalid_transition',
+            });
+            const p = await t.call<{ agentId: Id }>('spawn_waykeeper', { projectId: planet.id });
+            await h.commands.stopAgent(p.agentId, USER);
+            // An ended parent Waykeeper is no supervisor.
+            expect(await t.try('spawn_waykeeper', { projectId: moon.id })).toMatchObject({
+              ok: false,
+              error: 'invalid_transition',
+            });
+            await t.call('spawn_waykeeper', { projectId: planet.id });
+            const sub = await t.call<{ supervisorId: Id }>('spawn_waykeeper', {
+              projectId: moon.id,
+            });
+            expect(sub.supervisorId).toBe(waykeepers[1]);
+          })
+          .on(/stopped agent/, () => {}),
+    });
+    hq.tell('staff it');
+    await h.done();
+  });
+
   it('wakes the project’s Waykeeper with a task it adds, and says when none runs', async () => {
     const { h, definition } = setup();
     const { value: project } = await h.commands.createProject({ name: 'CSV', workspace: '/w/csv' });
