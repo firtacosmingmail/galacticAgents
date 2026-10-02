@@ -348,7 +348,8 @@ describe('Waykeeper brain (P2-10)', () => {
     const respawned = h.log.tables.agents.get(sentBack!['stewardId'] as Id)!;
     const prompt = respawned.meta?.['prompt'] as string;
     expect(prompt.startsWith('scenario:resolve')).toBe(true);
-    expect(prompt).toContain(`Task ${plan[1]} of project "CSV tool" (${project.id}): edit b`);
+    expect(prompt).toContain(`Your task (${plan[1]}): edit b`);
+    expect(prompt).toContain(`Project: "CSV tool" (${project.id})`);
     expect(prompt).toContain('Edit the shared file as B.');
     // No question reached the user; the merge went in after the resolution.
     expect(h.log.tables.questions.all()).toEqual([]);
@@ -531,7 +532,9 @@ describe('Waykeeper brain (P2-10)', () => {
             merged: true,
             serialised: true,
           });
-        }),
+        })
+        // The held Steward ends its silent turn: a report without text (P2-11), nothing to do.
+        .once(/ended its turn without a report/, () => Promise.resolve()),
     );
     wk.tell('plan');
     await h.until(() => h.log.tables.proposals.all().length > 0);

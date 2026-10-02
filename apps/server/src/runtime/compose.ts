@@ -20,6 +20,7 @@ import {
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { DEFAULT_CAPS } from './caps.js';
 import { StatusStore } from './status-store.js';
+import { stewardReports, type StewardReports } from './steward-reports.js';
 import { TranscriptPipeline } from './transcripts.js';
 import { WorkStateDeriver } from './work-state-deriver.js';
 import { Workspaces, type WorkspacesOptions } from '../workspace/workspaces.js';
@@ -74,6 +75,8 @@ export interface ComposedRuntime {
   runtime: AgentRuntime;
   /** The `DomainCommands` surface over this log and runtime (P2-01). */
   commands: Commands;
+  /** Stewards' done reports to their supervisors (P2-11). */
+  reports: StewardReports;
   /** Read-only views brains seed their turns from (P2-06). */
   queries: BrainQueries;
   /** Workspaces and worktrees, when composed with `workspaces` paths (P2-10). */
@@ -143,6 +146,9 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
 
+  // A Steward that ends its turn reports to its supervisor's mailbox (P2-11).
+  const reports = stewardReports(runtime, log.tables, opts.onError);
+
   const commands = new Commands({
     log,
     agents: runtime,
@@ -164,6 +170,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     transcripts,
     runtime,
     commands,
+    reports,
     queries,
     ...(workspaces ? { workspaces } : {}),
     startBrain: (definition, placement, brainOpts = {}) =>
@@ -178,12 +185,14 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       }),
     recover: () => runtime.recover(),
     async shutdown() {
+      reports.dispose();
       await runtime.shutdown();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();
     },
     async dispose() {
+      reports.dispose();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();

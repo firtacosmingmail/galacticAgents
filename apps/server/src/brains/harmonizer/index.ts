@@ -1,5 +1,6 @@
 import type { Agent, AgentRuntime, Id } from '@galactic/protocol';
 import type { BrainDefinition } from '../definition.js';
+import { STEWARD_TOOLS } from '../steward-tools.js';
 import type { BrainPlacement, BrainRunner, BrainRunnerOptions } from '../runner.js';
 import { SUPERVISOR_TOOLS } from './agent-tools.js';
 import { HARMONIZER_SYSTEM_PROMPT } from './prompt.js';
@@ -29,7 +30,7 @@ export function harmonizerBrain(deps: HarmonizerDeps): BrainDefinition {
   return {
     role: 'harmonizer',
     systemPrompt: HARMONIZER_SYSTEM_PROMPT,
-    tools: [...harmonizerTools(deps), ...SUPERVISOR_TOOLS],
+    tools: [...harmonizerTools(deps), ...SUPERVISOR_TOOLS, ...STEWARD_TOOLS],
   };
 }
 
