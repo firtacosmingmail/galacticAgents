@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_PERMISSION_POLICY, type Actor, type PermissionPolicy } from '@galactic/protocol';
+import {
+  DEFAULT_PERMISSION_POLICY,
+  type Actor,
+  type Agent,
+  type PermissionPolicy,
+} from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
@@ -755,5 +760,83 @@ describe('Commands.spawnAgent result (wave-4 review)', () => {
       cwd: '/hq',
     });
     expect(events.map((e) => e.type)).toEqual(['agent.created', 'agent.spawned']);
+  });
+});
+
+describe('Commands.spawnAgent concurrency (wave-4 review)', () => {
+  it('keeps one live Waykeeper per project and one live Steward per task across parallel spawns', async () => {
+    const log = new EventLog(openDatabase(':memory:'));
+    const live: Agent[] = [];
+    const agents = {
+      // A slow session: the row appears only after a tick, as a real adapter's would.
+      spawn: async (req: SpawnRequest): Promise<SpawnResult> => {
+        await new Promise((r) => setTimeout(r, 5));
+        const agent = log.runCommand((ctx) =>
+          createAgent(ctx, {
+            role: req.role,
+            runtime: req.runtime,
+            caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+            ...(req.bodyId ? { bodyId: req.bodyId } : {}),
+            ...(req.supervisorId ? { supervisorId: req.supervisorId } : {}),
+            ...(req.taskId ? { taskId: req.taskId } : {}),
+            ...(req.projectId ? { projectId: req.projectId } : {}),
+          }),
+        ).value;
+        live.push(agent);
+        return { ok: true, agent };
+      },
+      stop: () => Promise.resolve(),
+      pause: () => Promise.resolve(),
+      resumeAgent: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      hasQuestion: () => false,
+      liveAgents: () => live,
+    };
+    const commands = new Commands({ log, agents });
+    const hq = await spawnHarmonizer(commands);
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const waykeepers = await Promise.allSettled(
+      [1, 2].map(() =>
+        commands.spawnAgent({
+          role: 'waykeeper',
+          runtime: 'fake',
+          projectId: project.id,
+          supervisorId: hq.id,
+          prompt: 'x',
+        }),
+      ),
+    );
+    expect(waykeepers.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(waykeepers.find((r) => r.status === 'rejected')).toMatchObject({
+      reason: { code: 'conflict' },
+    });
+    const task = (await commands.createTask({ description: 'flaky' })).value;
+    const stewards = await Promise.allSettled(
+      [1, 2].map(() =>
+        commands.spawnAgent({
+          role: 'steward',
+          runtime: 'fake',
+          taskId: task.id,
+          supervisorId: hq.id,
+          cwd: '/w/scratch',
+          prompt: 'x',
+        }),
+      ),
+    );
+    expect(stewards.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(log.tables.agents.all().filter((a) => a.taskId === task.id)).toHaveLength(1);
+    expect(log.tables.agents.all().filter((a) => a.role === 'waykeeper')).toHaveLength(1);
+    // Once the slot's agent has ended, a new spawn is allowed again.
+    live.splice(0);
+    await expect(
+      commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        supervisorId: hq.id,
+        cwd: '/w/scratch',
+        prompt: 'x',
+      }),
+    ).resolves.toBeDefined();
   });
 });

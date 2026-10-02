@@ -119,8 +119,12 @@ export class Commands implements DomainCommands {
   private readonly questions: QuestionRouting;
   private readonly choose: ChooseOptions;
   private readonly autoApproveRemote: boolean;
-  /** A Harmonizer spawn is under way: the slot is taken before its session reports (review). */
-  private harmonizerSpawning = false;
+  /**
+   * Spawns under way, by slot (`harmonizer`, `waykeeper:<project>`, `steward:<task>`): a slot is
+   * taken synchronously, before the spawn's session reports, so two concurrent spawns can never
+   * both pass the "one live agent" check (wave-4 review).
+   */
+  private readonly spawning = new Set<string>();
 
   constructor(opts: CommandsOptions) {
     this.log = opts.log;
@@ -320,19 +324,41 @@ export class Commands implements DomainCommands {
     // An asteroid Steward in a related project's workspace works under that project's table too,
     // never looser than the global default (SPEC §3.5, decision 22): per category the strictest.
     const borrowed = !project && task ? relatedPolicy(tables, task, cwd) : undefined;
-    if (input.role === 'harmonizer') {
+    // One live Harmonizer (decision 32), one live Waykeeper per project, one live Steward per task.
+    const slot =
+      input.role === 'harmonizer'
+        ? { key: 'harmonizer', what: 'the Harmonizer is already running', of: () => true }
+        : input.role === 'waykeeper' && projectId
+          ? {
+              key: `waykeeper:${projectId}`,
+              what: `project ${projectId} already has a running Waykeeper`,
+              of: (a: Agent) => a.projectId === projectId,
+            }
+          : input.role === 'steward' && task
+            ? {
+                key: `steward:${task.id}`,
+                what: `task ${task.id} already has a running Steward`,
+                of: (a: Agent) => a.taskId === task.id,
+              }
+            : undefined;
+    if (slot) {
       const live = new Set((this.agents?.liveAgents?.() ?? []).map((a) => a.id));
       const running = tables.agents
         .all()
-        .find((a) => a.role === 'harmonizer' && (live.has(a.id) || this.questions.isLiving(a.id)));
-      if (running || this.harmonizerSpawning) {
+        .find(
+          (a) =>
+            a.role === input.role &&
+            slot.of(a) &&
+            (live.has(a.id) || this.questions.isLiving(a.id)),
+        );
+      if (running || this.spawning.has(slot.key)) {
         throw new DomainError(
           'conflict',
-          `the Harmonizer is already running${running ? ` (${running.id})` : ''}`,
+          `${slot.what}${running ? ` (${running.id})` : ' (a spawn is under way)'}`,
         );
       }
-      must(tables.bodies.get(EARTH_ID), 'body', EARTH_ID);
     }
+    if (input.role === 'harmonizer') must(tables.bodies.get(EARTH_ID), 'body', EARTH_ID);
     // Earth is the headquarters (SPEC §3.1): the Harmonizer orbits it without it hosting work, so
     // the reserved body is neither assigned nor occupied (P2-20).
     const bodyId =
@@ -343,29 +369,35 @@ export class Commands implements DomainCommands {
           : project?.bodyId;
 
     const since = this.log.currentSeq();
-    const harmonizer = input.role === 'harmonizer';
-    if (harmonizer) this.harmonizerSpawning = true;
-    const spawning = this.runtime().spawn({
-      role: input.role,
-      runtime: input.runtime,
-      prompt: input.prompt,
-      cwd,
-      ...(project ? { workspace: project.workspace, projectId: project.id } : {}),
-      ...(project?.permissionPolicy ? { permissionPolicy: project.permissionPolicy } : {}),
-      ...(borrowed ? { permissionPolicy: borrowed } : {}),
-      ...(bodyId ? { bodyId } : {}),
-      ...(task ? { taskId: task.id } : {}),
-      ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
-      ...(input.caps ? { caps: input.caps } : {}),
-      ...(input.bare ? { bare: true } : {}),
-      ...(input.tools ? { tools: input.tools } : {}),
-      ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
-    });
+    const runtime = this.runtime();
+    if (slot) this.spawning.add(slot.key);
+    let spawning: Promise<SpawnResult>;
+    try {
+      spawning = runtime.spawn({
+        role: input.role,
+        runtime: input.runtime,
+        prompt: input.prompt,
+        cwd,
+        ...(project ? { workspace: project.workspace, projectId: project.id } : {}),
+        ...(project?.permissionPolicy ? { permissionPolicy: project.permissionPolicy } : {}),
+        ...(borrowed ? { permissionPolicy: borrowed } : {}),
+        ...(bodyId ? { bodyId } : {}),
+        ...(task ? { taskId: task.id } : {}),
+        ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
+        ...(input.caps ? { caps: input.caps } : {}),
+        ...(input.bare ? { bare: true } : {}),
+        ...(input.tools ? { tools: input.tools } : {}),
+        ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
+      });
+    } catch (error) {
+      if (slot) this.spawning.delete(slot.key);
+      throw error;
+    }
     let result: SpawnResult;
     try {
       result = await spawning;
     } finally {
-      if (harmonizer) this.harmonizerSpawning = false;
+      if (slot) this.spawning.delete(slot.key);
     }
     if (!result.ok) throw new DomainError('conflict', result.reason);
     // Only what the spawn itself did — the row, its body, the session — never what the new agent
