@@ -1,6 +1,6 @@
 # Phase 2.5 — Minimal side panel
 
-**Current task:** wave 2 next — P25-03, P25-04, P25-05, P25-06 (after `p25-wave1-endpoints-shell` is merged into `phase-2.5`) · **Task status:** todo
+**Current task:** P25-03, P25-04, P25-05, P25-06 (wave 2, branch `p25-wave2-panel-ui`) · **Task status:** in progress
 **Phase status:** in progress (2/9 done) — on branch `phase-2.5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -48,22 +48,22 @@ A daily-usable product before any 3D (SPEC decision 19): the spec's side panel i
 - **Acceptance:** navigating between Harmonizer, a Waykeeper and a Steward changes the selection and the main area.
 
 ### P25-03 — Chat with the Harmonizer and Waykeepers
-- **Status:** todo · **Depends on:** P25-01, P25-02 · **Parallel with:** P25-04, P25-05, P25-06
+- **Status:** in progress · **Depends on:** P25-01, P25-02 · **Parallel with:** P25-04, P25-05, P25-06
 - Message list from history + live events; composer sending to the selected brain (enqueued as a mailbox event); inline rendering of proposals, task-plan cards and status reports posted by the brain; "Harmonizer" always one click away.
 - **Acceptance:** a request typed here produces a proposal card in the same thread; a Waykeeper conversation shows its plan card.
 
 ### P25-04 — Managed agents cards and control actions
-- **Status:** todo · **Depends on:** P25-02, P2-14 · **Parallel with:** P25-03, P25-05, P25-06
+- **Status:** in progress · **Depends on:** P25-02, P2-14 · **Parallel with:** P25-03, P25-05, P25-06
 - For the Harmonizer: Waykeepers + asteroid Stewards; for a Waykeeper: its Stewards. Cards show state, activity one-liner, cost-so-far, caps usage, open-question badge; actions: pause/resume, stop/cancel, open (select), close/archive/pin/reopen where applicable.
 - **Acceptance:** every control action in `SPEC.md` §4.3 is reachable from a card.
 
 ### P25-05 — Steward read-only view
-- **Status:** todo · **Depends on:** P25-02, P1-06 · **Parallel with:** P25-03, P25-04, P25-06
+- **Status:** in progress · **Depends on:** P25-02, P1-06 · **Parallel with:** P25-03, P25-04, P25-06
 - Status header, current activity, live transcript with tool calls and thought process, worktree/branch info, open question (if any); **message box only while an open clarification question for the user exists**, sending the answer through the question service; stop/pause available.
 - **Acceptance:** with no open question the view has no composer; with one, the answer resolves it and the composer disappears.
 
 ### P25-06 — Question inbox, proposal and plan cards
-- **Status:** todo · **Depends on:** P25-02, P2-09, P2-03 · **Parallel with:** P25-03, P25-04, P25-05
+- **Status:** in progress · **Depends on:** P25-02, P2-09, P2-03 · **Parallel with:** P25-03, P25-04, P25-05
 - Inbox listing every open question (kind badge, holder, origin agent, task/body, context, "open agent" link); inline answer; permission cards show the requested action and allow/deny; proposal cards (approve / edit size, body, workspace inline / reject) and task-plan cards (approve / edit / reject); parked proposals shown with the occupied-planets explanation and downsizing/closure offers; supervisor-answered questions visible read-only with `answeredBy`.
 - **Acceptance:** answering in the inbox resolves the question in the chat thread too; "already answered by …" shown on a stale answer.
 
