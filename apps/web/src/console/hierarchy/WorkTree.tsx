@@ -275,9 +275,9 @@ export function Controls({
   );
 }
 
-type EditChanges = Extract<ControlBody['action'], { action: 'edit' }>['changes'];
+export type EditChanges = Extract<ControlBody['action'], { action: 'edit' }>['changes'];
 
-function EditForm({
+export function EditForm({
   target,
   item,
   busy,
