@@ -80,9 +80,14 @@ export const BodyOccupancy = z.object({
 });
 export type BodyOccupancy = z.infer<typeof BodyOccupancy>;
 
-/** Per-project permission policy (SPEC §3.6, decision 7). Missing actions fall back to the default policy. */
+/**
+ * Per-project permission policy (SPEC §3.6, decision 7). Missing actions fall back to the default
+ * policy. `unclassified` decides a call the engine cannot classify — an opaque command, an unknown
+ * tool (decision 49); absent means `ask`, and so does any value the engine does not know.
+ */
 export const PermissionPolicy = z.object({
   rules: z.partialRecord(PermissionAction, PermissionDecision),
+  unclassified: PermissionDecision.optional(),
 });
 export type PermissionPolicy = z.infer<typeof PermissionPolicy>;
 
@@ -237,14 +242,33 @@ export function proposalParking(
  */
 export function foldProposalMeta(
   meta: Meta | undefined,
-  changes: { parked?: ProposalParking | null; initGit?: boolean },
+  changes: ProposalMetaChanges,
 ): Meta | undefined {
   const next: Record<string, unknown> = { ...(meta ?? {}) };
   if (changes.parked === null) delete next['parked'];
   else if (changes.parked !== undefined) next['parked'] = changes.parked;
   if (changes.initGit === true) next['initGit'] = true;
   else if (changes.initGit === false) delete next['initGit'];
+  if (changes.trust === 'default') delete next['trust'];
+  else if (changes.trust !== undefined) next['trust'] = changes.trust;
   return Object.keys(next).length > 0 ? next : undefined;
+}
+
+/** What a decision changes in a proposal's `meta` (`foldProposalMeta`). */
+export interface ProposalMetaChanges {
+  parked?: ProposalParking | null;
+  initGit?: boolean;
+  /** The trust level the user chose on the card (decision 49): `default` drops `meta.trust`. */
+  trust?: TrustLevel;
+}
+
+/**
+ * The trust level the user chose on a work card (decision 49): `meta.trust`, read fail-closed —
+ * anything that is not a known level is `default`.
+ */
+export function proposalTrust(proposal: Pick<Proposal, 'meta'> | undefined): TrustLevel {
+  const parsed = TrustLevel.safeParse(proposal?.meta?.['trust']);
+  return parsed.success ? parsed.data : 'default';
 }
 
 /**
@@ -424,14 +448,19 @@ export const TranscriptChunk = z.object({
 export type TranscriptChunk = z.infer<typeof TranscriptChunk>;
 
 /**
+ * A project's trust level (decision 49): the name of the policy preset the user chose for it on
+ * the proposal card or the project's edit form.
+ */
+export const TrustLevel = z.enum(['default', 'trusting', 'cautious', 'trusted']);
+export type TrustLevel = z.infer<typeof TrustLevel>;
+
+/**
  * Named policy presets the panel offers (SPEC §3.6): `default` is the table in the SPEC;
  * `trusting` lets a Steward install and talk to the network on its own but still asks before
- * destroying or pushing; `cautious` asks for every change.
+ * destroying or pushing; `cautious` asks for every change; `trusted` (decision 49) allows
+ * everything — calls the engine cannot classify included — except a push, which asks.
  */
-export const PERMISSION_POLICY_PRESETS: Record<
-  'default' | 'trusting' | 'cautious',
-  PermissionPolicy
-> = {
+export const PERMISSION_POLICY_PRESETS: Record<TrustLevel, PermissionPolicy> = {
   default: DEFAULT_PERMISSION_POLICY,
   trusting: {
     rules: {
@@ -455,5 +484,39 @@ export const PERMISSION_POLICY_PRESETS: Record<
       push: 'deny',
     },
   },
+  trusted: {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      destructive: 'allow',
+      outside_workspace: 'allow',
+      network: 'allow',
+      push: 'ask',
+    },
+    unclassified: 'allow',
+  },
 };
 export type PermissionPolicyPreset = keyof typeof PERMISSION_POLICY_PRESETS;
+
+/**
+ * The trust level a project's policy amounts to (decision 49): the preset whose table it equals
+ * once merged over the global default (no policy is `default`), or `custom`.
+ */
+export function trustLevelOf(policy: PermissionPolicy | undefined | null): TrustLevel | 'custom' {
+  const merged = (p: PermissionPolicy | undefined | null) => ({
+    rules: { ...DEFAULT_PERMISSION_POLICY.rules, ...(p?.rules ?? {}) },
+    unclassified: p?.unclassified ?? 'ask',
+  });
+  const own = merged(policy);
+  for (const level of TrustLevel.options) {
+    const preset = merged(PERMISSION_POLICY_PRESETS[level]);
+    if (
+      own.unclassified === preset.unclassified &&
+      PermissionAction.options.every((a) => own.rules[a] === preset.rules[a])
+    ) {
+      return level;
+    }
+  }
+  return 'custom';
+}

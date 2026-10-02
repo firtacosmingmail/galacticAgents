@@ -3,12 +3,17 @@ import {
   Agent,
   Body,
   DEFAULT_PERMISSION_POLICY,
+  foldProposalMeta,
+  PERMISSION_POLICY_PRESETS,
   PermissionPolicy,
   Project,
   Proposal,
+  proposalTrust,
   Question,
   StatusRecord,
   Task,
+  TrustLevel,
+  trustLevelOf,
 } from './domain.js';
 import { AgentState, PermissionAction, WorkState } from './enums.js';
 import * as fx from './fixtures/domain.js';
@@ -73,5 +78,46 @@ describe('domain schemas', () => {
     ]);
     expect(WorkState.options).toContain('blocked_on_user');
     expect(WorkState.options).toContain('awaiting_closure');
+  });
+});
+
+describe('trust levels (P2-22, decision 49)', () => {
+  it('offers trusted: everything allowed except push, unclassified calls allowed', () => {
+    const trusted = PERMISSION_POLICY_PRESETS.trusted;
+    for (const action of PermissionAction.options) {
+      expect(trusted.rules[action]).toBe(action === 'push' ? 'ask' : 'allow');
+    }
+    expect(trusted.unclassified).toBe('allow');
+    for (const level of ['default', 'trusting', 'cautious'] as const) {
+      expect(PERMISSION_POLICY_PRESETS[level]).not.toHaveProperty('unclassified');
+    }
+    expect(Object.keys(PERMISSION_POLICY_PRESETS)).toEqual(TrustLevel.options);
+    expect(PermissionPolicy.safeParse({ rules: {}, unclassified: 'allow' }).success).toBe(true);
+    expect(PermissionPolicy.safeParse({ rules: {}, unclassified: 'maybe' }).success).toBe(false);
+  });
+
+  it('names the level a policy amounts to', () => {
+    expect(trustLevelOf(undefined)).toBe('default');
+    expect(trustLevelOf({ rules: {} })).toBe('default');
+    for (const level of TrustLevel.options) {
+      expect(trustLevelOf(PERMISSION_POLICY_PRESETS[level])).toBe(level);
+    }
+    expect(trustLevelOf({ rules: { network: 'allow' } })).toBe('trusting');
+    expect(trustLevelOf({ rules: { push: 'deny' } })).toBe('custom');
+    // A floored trusted policy is the default table again.
+    expect(trustLevelOf({ ...DEFAULT_PERMISSION_POLICY, unclassified: 'ask' })).toBe('default');
+  });
+
+  it('folds the trust chosen on a card into meta.trust; default drops it', () => {
+    const meta = foldProposalMeta(undefined, { trust: 'trusted' });
+    expect(meta).toEqual({ trust: 'trusted' });
+    expect(proposalTrust({ meta })).toBe('trusted');
+    expect(foldProposalMeta(meta, { trust: 'default' })).toBeUndefined();
+    expect(foldProposalMeta({ initGit: true, trust: 'cautious' }, { parked: null })).toEqual({
+      initGit: true,
+      trust: 'cautious',
+    });
+    expect(proposalTrust({ meta: { trust: 'yolo' } })).toBe('default');
+    expect(proposalTrust(undefined)).toBe('default');
   });
 });

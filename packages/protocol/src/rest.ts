@@ -8,6 +8,7 @@ import {
   PERMISSION_POLICY_PRESETS,
   PermissionPolicy,
   type PermissionPolicyPreset,
+  TrustLevel,
 } from './domain.js';
 import { ControlTarget } from './events.js';
 
@@ -79,6 +80,7 @@ export const ProposalDecisionBody = z.discriminatedUnion('decision', [
         proposedBody: ProposedBody.optional(),
         workspace: z.string().min(1).optional(),
         initGit: z.boolean().optional(),
+        trust: TrustLevel.optional(),
       })
       .strict(),
   }),

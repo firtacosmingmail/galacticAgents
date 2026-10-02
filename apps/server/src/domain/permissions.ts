@@ -17,8 +17,10 @@ import {
  * turns those into one decision. The strictest category wins (`deny` > `ask` > `allow`), so a
  * command that both installs a package and deletes files asks as long as either category asks.
  *
- * Anything the engine cannot classify — an unknown tool, a path it cannot resolve — is `ask`:
- * the conservative behaviour the working agreements call for. An LLM never takes part in this.
+ * Anything the engine cannot classify — an unknown tool, a command it cannot read — gets the
+ * policy's `unclassified` decision, `ask` unless the project says otherwise (a `trusted` project,
+ * decision 49): the conservative behaviour the working agreements call for. A push stays visible
+ * even inside an unreadable command (`mentionsPush`). An LLM never takes part in this.
  */
 
 export interface PolicyContext {
@@ -43,6 +45,12 @@ export interface Classification {
   reasons: string[];
   /** Set for tools that only touch the agent's own bookkeeping: allowed whatever the policy. */
   alwaysAllow?: true;
+  /**
+   * Set when the engine could not classify all of the call — an unknown tool, an opaque command
+   * (decision 49): the policy's `unclassified` decision joins those of `actions`, which then hold
+   * only what could still be seen (a push mentioned inside an inline script, say).
+   */
+  unclassified?: true;
 }
 
 export interface PolicyVerdict extends Classification {
@@ -57,7 +65,11 @@ export interface PolicyVerdict extends Classification {
 
 /** The per-project policy over the global default: missing actions fall back to the default. */
 export function resolvePolicy(override?: PermissionPolicy | null): PermissionPolicy {
-  return { rules: { ...DEFAULT_PERMISSION_POLICY.rules, ...(override?.rules ?? {}) } };
+  const unclassified = override?.unclassified ?? DEFAULT_PERMISSION_POLICY.unclassified;
+  return {
+    rules: { ...DEFAULT_PERMISSION_POLICY.rules, ...(override?.rules ?? {}) },
+    ...(unclassified !== undefined ? { unclassified } : {}),
+  };
 }
 
 /**
@@ -75,10 +87,15 @@ export function noLooserThan(
     ...Object.keys(own.rules),
     ...Object.keys(base.rules),
   ]) as Set<PermissionAction>;
+  const unclassified =
+    own.unclassified === undefined && base.unclassified === undefined
+      ? undefined
+      : strictest([own.unclassified ?? 'ask', base.unclassified ?? 'ask']);
   return {
     rules: Object.fromEntries(
       [...actions].map((a) => [a, strictest([own.rules[a], base.rules[a]])]),
     ),
+    ...(unclassified !== undefined ? { unclassified } : {}),
   };
 }
 
@@ -147,13 +164,20 @@ function ruleFor(policy: PermissionPolicy, action: PermissionAction): Permission
 }
 
 /**
- * The decision for a set of action categories under a policy. An empty set (nothing recognised)
- * is `ask`, never `allow`.
+ * The decision for a set of action categories under a policy. A call the engine could not fully
+ * classify (`unclassified`; an empty set always is) also gets the policy's `unclassified`
+ * decision — absent or unknown is `ask` (decision 49) — so nothing unrecognised is allowed
+ * unless the project says so.
  */
-export function decide(policy: PermissionPolicy, actions: PermissionAction[]): PermissionDecision {
-  if (actions.length === 0) return 'ask';
+export function decide(
+  policy: PermissionPolicy,
+  actions: PermissionAction[],
+  unclassified = false,
+): PermissionDecision {
   const merged = resolvePolicy(policy);
-  return strictest(actions.map((a) => ruleFor(merged, a)));
+  const decisions: unknown[] = actions.map((a) => ruleFor(merged, a));
+  if (unclassified || actions.length === 0) decisions.push(asDecision(merged.unclassified));
+  return strictest(decisions);
 }
 
 /** Classifies the call and decides it under `policy` in one go. */
@@ -164,7 +188,7 @@ export function evaluate(
 ): PolicyVerdict {
   const classification = classifyToolCall(call, ctx);
   if (classification.alwaysAllow) return { ...classification, decision: 'allow' };
-  const decision = decide(policy, classification.actions);
+  const decision = decide(policy, classification.actions, classification.unclassified === true);
   const merged = resolvePolicy(policy);
   const dominant = classification.actions.find((a) => ruleFor(merged, a) === decision);
   return { ...classification, decision, ...(dominant ? { dominant } : {}) };
@@ -221,7 +245,8 @@ export function classifyToolCall(call: ToolCall, ctx: PolicyContext): Classifica
     const command = typeof input['command'] === 'string' ? input['command'] : '';
     return classifyCommand(command, ctx);
   }
-  return { actions: [], reasons: [`unknown tool ${name}`] };
+  // MCP tools of the user's own setup land here too: a `trusted` project allows them (decision 49).
+  return { actions: [], reasons: [`unknown tool ${name}`], unclassified: true };
 }
 
 function classifyPaths(
@@ -233,7 +258,9 @@ function classifyPaths(
   const paths = PATH_FIELDS.map((f) => input[f]).filter((v): v is string => typeof v === 'string');
   const edit = inside === 'edit_workspace';
   // An edit tool that names no file cannot be placed: ask.
-  if (edit && paths.length === 0) return { actions: [], reasons: [`${tool} names no file path`] };
+  if (edit && paths.length === 0) {
+    return { actions: [], reasons: [`${tool} names no file path`], unclassified: true };
+  }
 
   const reasons: string[] = [];
   for (const p of paths) {
@@ -1118,7 +1145,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   const actions = new Set<PermissionAction>();
   const reasons: string[] = [];
   const trimmed = command.trim();
-  if (trimmed === '') return { actions: [], reasons: ['empty command'] };
+  if (trimmed === '') return { actions: [], reasons: ['empty command'], unclassified: true };
 
   const lexed = lexCommand(trimmed);
   let opaque = lexed.opaque.length > 0;
@@ -1183,9 +1210,42 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       }
     }
   }
-  if (opaque) return { actions: [], reasons };
+  if (opaque) {
+    // What the engine saw still counts; a push hidden in the unreadable part is looked for in
+    // the raw text (decision 49), so a trusted project still asks before anything leaves.
+    for (const why of mentionsPush(trimmed)) {
+      actions.add('push');
+      reasons.push(why);
+    }
+    return { actions: [...actions], reasons, unclassified: true };
+  }
   if (actions.size === 0) actions.add('run_workspace');
   return { actions: [...actions], reasons };
+}
+
+/** `git`, then — anywhere later in the text — `push` as a word (`git-push`, `'git','push'` too). */
+const GIT_PUSH = /\bgit\b[\s\S]*?\bpush\b/i;
+
+/**
+ * Why the raw text of an opaque command may push (decision 49): `git` followed anywhere later by
+ * `push` — across quotes, `sh -c "…"`, inline scripts, heredoc bodies and newlines, so
+ * `python - <<EOF … subprocess.run(['git', 'push']) … EOF` counts — and the push rules (`npm
+ * publish`, `gh pr create`, `scp host:…`, …) over the text with quotes and backslashes removed.
+ * Deliberately over-eager (`git log; echo push` counts too: one card too many). It cannot see a
+ * push that is computed (`"gi"+"t"`), encoded or kept in a script file the command runs.
+ */
+export function mentionsPush(text: string): string[] {
+  const bare = text.replace(/["'`\\]/g, '');
+  const out: string[] = [];
+  if (GIT_PUSH.test(text) || GIT_PUSH.test(bare)) {
+    out.push('the command mentions git push, which leaves the machine');
+  }
+  for (const rule of PUSH_RULES) {
+    if (rule.action === 'push' && !rule.reason.startsWith('git push') && rule.pattern.test(bare)) {
+      out.push(`${rule.reason} (inside an opaque command)`);
+    }
+  }
+  return out;
 }
 
 /** Agent/git configuration paths `command` may write: write redirections, or any argument of a non-read-only command. */
