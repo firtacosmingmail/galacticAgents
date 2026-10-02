@@ -67,7 +67,7 @@ Built in a worktree branched from `p2-wave5-flows`, in parallel with P2-11, P2-1
 
 ## Deferred
 
-- `unparkWaiting` inside `release()` has no `isRunning`. For an independent moon card, decision 10's "planet without a Waykeeper" preference therefore counts every unfinished project's Waykeeper as present. It is deterministic, slightly conservative.
+- *(Fixed in the wave-5 review: `release()` un-parks with `ctx.choose`, the status store's running check.)* `unparkWaiting` inside `release()` had no `isRunning`. For an independent moon card, decision 10's "planet without a Waykeeper" preference therefore counts every unfinished project's Waykeeper as present. It is deterministic, slightly conservative.
 - A card created before P2-09 that is already approved but not carried out still goes through the Harmonizer's old create path. That path is kept as a fallback in `create_project` / `create_task`.
 - The workspace of an approved project is prepared lazily, by `spawn_waykeeper` or by the Waykeeper's `placeSteward`, never in the approval transaction, because git work is I/O. A folder therefore exists only once someone works in it.
 - The `meta.bodyChoice` that P2-08's `propose` writes is now informational. The parking payload is authoritative.

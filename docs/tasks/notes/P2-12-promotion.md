@@ -80,7 +80,7 @@ Branch: the P2-12 worktree off `p2-wave5-flows`. The phase file, README, SPEC, T
 
 ## Deferred / known limits
 
-- **Partial failure.** A step that fails after an earlier one succeeded leaves the earlier work in place. For example, a new project whose Waykeeper could not start stays without its task. The outcome tells the owner, and there is no automatic retry or rollback.
+- **Partial failure.** *(Superseded by the wave-5 review fixes.)* The approval now creates the new project (or moves the project target), so the body is reserved. No running supervisor or a refused Waykeeper spawn makes the card wait and retry (`RetryLater`, on agent lifecycle events and every minute, for 2 h); a Waykeeper started by the Harmonizer meanwhile is adopted; a final failure fails the empty project and frees its body. `start()` re-pauses the Stewards of undecided cards, and a paused agent's wall clock stops.
 - **Workspaces.** The new project's workspace is the card's. A promoted asteroid Steward keeps working in its folder (scratch or related project), and if it has no worktree, its new Waykeeper closes it unmerged or sends it back. A project task promoted under an edited workspace keeps its worktree in the old repository.
 - **Cost of `resumeStewards`.** It scans the whole log for the card's pauses. This is fine at the scale of a local app; an index on control events would make it cheap.
 - **Moving a planet down.** A project target with sub-projects is refused at approval, not when the card is made.
