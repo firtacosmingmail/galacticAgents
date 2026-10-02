@@ -1,6 +1,6 @@
 # Phase 2 — The hierarchy: Harmonizer, Waykeepers, Stewards
 
-**Current task:** wave 4 next — P2-08, P2-10 (after `p2-wave3-permissions-harness` is merged into `phase-2`) · **Task status:** todo
+**Current task:** P2-08, P2-10, P2-21 (wave 4, branch `p2-wave4-brains`) · **Task status:** in progress
 **Phase status:** in progress (10/21 done) — on branch `phase-2`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -83,7 +83,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** used by P2-06, P2-08, P2-10 tests; runs in CI.
 
 ### P2-08 — Harmonizer brain
-- **Status:** todo · **Depends on:** P2-06, P2-02, P2-03 · **Parallel with:** P2-10
+- **Status:** in progress · **Depends on:** P2-06, P2-02, P2-03 · **Parallel with:** P2-10
 - System prompt (role, sizing rules, moon rules, escalation etiquette, conversational vs work requests, closure relay); tools: `find_related_work`, `size_request`, `propose`, `create_project`, `create_task`, `assign_body`, `spawn_waykeeper`, `spawn_steward` (asteroid; supervisor = Harmonizer), `propose_promotion`, `close_task` (asteroid), `stop/pause/resume_agent`, `get_agent_status`, `list_supervised_agents`, `ask_user`, `answer_question` (clarification only), `report_status`, `freePlanets`, `freeMoons`; Harmonizer auto-started with the server and idle otherwise.
 - **Acceptance:** scripted tests: status question produces no proposal; new project produces a proposal; asteroid Steward's question is held by the Harmonizer; permission questions never reach it.
 
@@ -93,7 +93,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** tests for each transition; a parked proposal resumes automatically after a planet is freed.
 
 ### P2-10 — Waykeeper brain
-- **Status:** todo · **Depends on:** P2-06, P2-05, P2-03 · **Parallel with:** P2-08
+- **Status:** in progress · **Depends on:** P2-06, P2-05, P2-03 · **Parallel with:** P2-08
 - System prompt (project coordination, plan once, worktrees, closure judgement, answering from context); tools: `plan_tasks`, `create_task`, `spawn_steward` (creates worktree; sets policy), `merge_task`, `close_task`, `stop/pause/resume_agent`, `get_agent_status`, `list_supervised_agents`, `answer_question` (clarification only, logged), `escalate`, `request_promotion`, `request_project_closure`, `report_status`.
 - Merge conflicts follow SPEC decision 30: the conflict info from `Workspaces.mergeTask` must say whether the base branch's conflicting side contains commits that did not come from the project's own task branches (`external`); without external commits the Waykeeper sends the task's Steward back to merge and resolve, with them it asks the user.
 - **Acceptance:** scripted tests: plan → single card; Steward "done" → close + merge; conflict from the project's own branches → the Steward is sent back to resolve; conflict with external commits → a question to the user; all tasks closed → `request_project_closure`.
@@ -150,7 +150,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** tests for each invariant; the conformance test covers clearing a field.
 
 ### P2-21 — Remote floor on every policy write (added 2026-10-01)
-- **Status:** todo · **Depends on:** P2-04 · **Parallel with:** P2-08, P2-10
+- **Status:** in progress · **Depends on:** P2-04 · **Parallel with:** P2-08, P2-10
 - From the wave-3 review (`docs/tasks/notes/P2-wave3-review.md`, finding 4). P2-04 floors a remote client's chosen policy at the global default only on `POST /api/agents`; since the gate reads `project.permissionPolicy` live, any other write (a WS or REST project edit, a Harmonizer tool acting on a remote user's message, P2-18's panel) would loosen running agents at once. Route every `permissionPolicy` write through one function that applies `noLooserThan` unless the request is local or `autoApproveRemote` is set, and carry the request's origin (local/remote) to the command surface.
 - **Acceptance:** tests: a remote project edit cannot loosen the policy; a local one can; a Harmonizer tool acting for a remote message is floored.
 
