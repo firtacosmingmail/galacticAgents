@@ -51,6 +51,8 @@ export {
   openQuestionsOf,
 } from './domain/questions.js';
 export { Commands, type AgentControl, type CommandsOptions } from './domain/commands.js';
+export { PromotionFlow, promotionActor, type PromotionFlowOptions } from './brains/promotion.js';
+export { carriedOut, isPromotion } from './domain/promotion.js';
 export {
   agentEffect,
   agentsOf,

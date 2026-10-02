@@ -47,6 +47,7 @@ describe('WAKE_RULES', () => {
         'proposal.edited',
         'proposal.rejected',
         'proposal.parked',
+        'promotion.carried_out',
         'agent.finished',
         'agent.failed',
         'agent.stalled',
@@ -71,6 +72,26 @@ describe('WAKE_RULES', () => {
     }
     expect(wakeLine(fixtures['agent.output'], s)).toBeUndefined();
     expect(wakeLine(fixtures['agent.tool_call'], s)).toBeUndefined();
+  });
+
+  it('wakes the owner of a carried-out promotion and the Waykeeper of the work’s project (P2-12)', () => {
+    const e = fixtures['promotion.carried_out'] as Event;
+    const owner = scope({ role: 'harmonizer', ownsProposal: () => true });
+    expect(wakeLine(e, owner)).toBe(
+      'promotion pr-1 was carried out: task t-2 moved from b-ast-1 to b-luna (project p-1, ' +
+        'Waykeeper a-waykeeper-1); its Stewards (a-steward-1) were handed over and resumed',
+    );
+    // The project's Waykeeper (p-1) learns it took the work over; another project's does not.
+    expect(wakeLine(e, scope({ ownsProposal: () => false }))).toContain('was carried out');
+    expect(wakeLine(e, scope({ ownsProposal: () => false, projectId: 'p-2' }))).toBeUndefined();
+    const failed: Event = {
+      type: 'promotion.carried_out',
+      proposalId: 'pr-1',
+      outcome: { ok: false, target: { kind: 'task', id: 't-2' }, error: 'no free moon' },
+    };
+    expect(wakeLine(failed, owner)).toBe(
+      'promotion pr-1 of task t-2 could not be carried out: no free moon',
+    );
   });
 
   it('wakes on a user message or a subordinate report to the brain, never on a system message', () => {

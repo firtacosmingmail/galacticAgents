@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { loadConfig } from './config/config.js';
 import { buildApp } from './app.js';
 import { harmonizerRuntime, startHarmonizer } from './brains/harmonizer/index.js';
+import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
@@ -85,6 +86,25 @@ if (recovery.resumed.length + recovery.needAttention.length > 0) {
   );
 }
 
+// Promotion cards are carried out by the server once the user approves them (P2-12): the move,
+// the new project's Waykeeper and the Steward hand-over; cards approved before a crash are carried
+// out now. Started after recovery, so a resumed Waykeeper is found running instead of doubled.
+const startWaykeeper = async (input: {
+  projectId: string;
+  supervisorId: string;
+  runtime: Parameters<typeof composed.startBrain>[1]['runtime'];
+}) => {
+  const runner = await composed.startBrain(waykeeperDefinition(), input);
+  return { agentId: runner.agentId };
+};
+new PromotionFlow({
+  log,
+  commands: composed.commands,
+  liveAgents: () => composed.runtime.liveAgents(),
+  startWaykeeper,
+  onError,
+}).start();
+
 const webDir = process.env['GALACTIC_WEB_DIR'];
 const app = buildApp({
   config,
@@ -129,14 +149,7 @@ if (hqRuntime && !shuttingDown) {
         checkPath: (path) => workspaces.checkPath(path),
         runtime: hqRuntime,
         // `spawn_waykeeper` starts a Waykeeper brain (P2-10) for the approved project.
-        startWaykeeper: async ({ projectId, supervisorId, runtime }) => {
-          const runner = await composed.startBrain(waykeeperDefinition(), {
-            runtime,
-            projectId,
-            supervisorId,
-          });
-          return { agentId: runner.agentId };
-        },
+        startWaykeeper,
       },
     });
     console.log(

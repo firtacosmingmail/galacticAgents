@@ -208,6 +208,8 @@ export const PromotionRequest = z.object({
   requestedBy: Id.optional(),
   /** The name on the card, for a new project. */
   name: z.string().optional(),
+  /** The body the work was on when the card was made (the Harmonizer's cards). */
+  fromBodyId: Id.optional(),
 });
 export type PromotionRequest = z.infer<typeof PromotionRequest>;
 
@@ -222,6 +224,7 @@ export function proposalPromotion(
       target: request['target'],
       toProjectId: request['toProjectId'],
       name: request['name'],
+      fromBodyId: request['fromBodyId'],
     });
     if (parsed.success) return parsed.data;
   }
