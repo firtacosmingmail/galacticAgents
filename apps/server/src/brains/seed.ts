@@ -1,4 +1,4 @@
-import type { AgentRole, Id, StatusRecord } from '@galactic/protocol';
+import { proposalPlan, type AgentRole, type Id, type StatusRecord } from '@galactic/protocol';
 import type { Tables } from '../db/tables.js';
 import type { BrainQueries } from './definition.js';
 import { concernedSupervisors } from '../domain/cascade.js';
@@ -27,6 +27,7 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
           return s ? { agent, status: s } : { agent };
         }),
     project: (id) => tables.projects.get(id),
+    task: (id) => tables.tasks.get(id),
     projectTasks: (projectId) =>
       tables.tasks
         .all()
@@ -38,6 +39,8 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
         if (q.holder.type === 'agent' && q.holder.id === brainId) return true;
         return tables.agents.get(q.originAgentId)?.supervisorId === brainId;
       }),
+    question: (id) => tables.questions.get(id),
+    proposals: () => tables.proposals.all().sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
   };
   return queries;
 }
@@ -61,8 +64,13 @@ export function createWakeScope(
     },
     runsProject: (projectId) =>
       projectId === brain.projectId || supervised().some((a) => a.projectId === projectId),
-    // The Harmonizer proposes (SPEC §3.3); a Waykeeper's plan card is added by P2-10.
-    ownsProposal: () => brain.role === 'harmonizer',
+    // The Harmonizer proposes (SPEC §3.3); a plan card belongs to its project's Waykeeper —
+    // whichever agent runs the project now, so a replacement Waykeeper learns the decision (P2-10).
+    ownsProposal: (proposalId) => {
+      const plan = proposalPlan(tables.proposals.get(proposalId));
+      if (plan) return brain.role === 'waykeeper' && plan.projectId === brain.projectId;
+      return brain.role === 'harmonizer';
+    },
     question: (id) => tables.questions.get(id),
     concerned: (event) =>
       concernedSupervisors(tables, event, opts.isLive ? { isLive: opts.isLive } : {}).includes(

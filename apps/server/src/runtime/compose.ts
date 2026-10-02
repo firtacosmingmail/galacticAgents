@@ -22,6 +22,7 @@ import { DEFAULT_CAPS } from './caps.js';
 import { StatusStore } from './status-store.js';
 import { TranscriptPipeline } from './transcripts.js';
 import { WorkStateDeriver } from './work-state-deriver.js';
+import { Workspaces, type WorkspacesOptions } from '../workspace/workspaces.js';
 
 /**
  * The runtime composition root: log, status store, transcript pipeline, adapters and the agent
@@ -54,6 +55,12 @@ export interface ComposeOptions {
   inboxHistory?: number;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
+  /**
+   * The workspace service's paths (P2-05/P2-10): with them the composition builds `Workspaces`
+   * over its own commands and tables, and every brain's tools get it. `index.ts` passes the
+   * configured `projectsRoot` and `dataDir`.
+   */
+  workspaces?: Omit<WorkspacesOptions, 'commands' | 'tables'>;
 }
 
 export interface ComposedRuntime {
@@ -67,6 +74,8 @@ export interface ComposedRuntime {
   commands: Commands;
   /** Read-only views brains seed their turns from (P2-06). */
   queries: BrainQueries;
+  /** Workspaces and worktrees, when composed with `workspaces` paths (P2-10). */
+  workspaces?: Workspaces;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
   startBrain(
     definition: BrainDefinition,
@@ -142,6 +151,9 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     },
   });
   const queries = createBrainQueries({ tables: log.tables, status: (id) => statuses.get(id) });
+  const workspaces = opts.workspaces
+    ? new Workspaces({ ...opts.workspaces, commands, tables: log.tables })
+    : undefined;
   return {
     log,
     statuses,
@@ -150,12 +162,14 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     runtime,
     commands,
     queries,
+    ...(workspaces ? { workspaces } : {}),
     startBrain: (definition, placement, brainOpts = {}) =>
       BrainRunner.start(definition, placement, {
         log,
         runtime,
         commands,
         queries,
+        ...(workspaces ? { workspaces } : {}),
         ...brainOpts,
         ...(opts.onError ? { onError: opts.onError } : {}),
       }),
