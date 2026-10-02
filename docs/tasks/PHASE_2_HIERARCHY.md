@@ -1,6 +1,6 @@
 # Phase 2 — The hierarchy: Harmonizer, Waykeepers, Stewards
 
-**Current task:** wave 5 next — P2-09, P2-11, P2-12, P2-13, P2-17 (after `p2-wave4-brains` is merged into `phase-2`) · **Task status:** todo
+**Current task:** P2-09, P2-11, P2-12, P2-13, P2-17 (wave 5, branch `p2-wave5-flows`) · **Task status:** in progress
 **Phase status:** in progress (13/21 done) — on branch `phase-2`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -88,7 +88,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** scripted tests: status question produces no proposal; new project produces a proposal; asteroid Steward's question is held by the Harmonizer; permission questions never reach it.
 
 ### P2-09 — Proposal flow
-- **Status:** todo · **Depends on:** P2-08, P2-02 · **Parallel with:** P2-11, P2-12, P2-13
+- **Status:** in progress · **Depends on:** P2-08, P2-02 · **Parallel with:** P2-11, P2-12, P2-13
 - `Proposal` lifecycle: created → approved / edited (size, body, workspace) / rejected (draft stays) / parked (no free planet: payload lists occupied planets + occupants, offers downsizing and early closure; un-parks when a planet frees or the user edits); task-plan card from `plan_tasks` approved once; approval triggers body assignment + spawns.
 - **Acceptance:** tests for each transition; a parked proposal resumes automatically after a planet is freed.
 
@@ -99,18 +99,18 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** scripted tests: plan → single card; Steward "done" → close + merge; conflict from the project's own branches → the Steward is sent back to resolve; conflict with external commits → a question to the user; all tasks closed → `request_project_closure`.
 
 ### P2-11 — Steward lifecycle
-- **Status:** todo · **Depends on:** P2-10, P2-08, P2-04 · **Parallel with:** P2-09, P2-12, P2-13
+- **Status:** in progress · **Depends on:** P2-10, P2-08, P2-04 · **Parallel with:** P2-09, P2-12, P2-13
 - Steward spawn in its worktree with the project's policy and caps; prompt template carrying task, project context and the "report done / ask when unsure" etiquette; done report → supervisor decides (close vs waiting for input); asteroid Stewards supervised by the Harmonizer; Steward `finished` without a done report handled as a report.
 - **Acceptance:** end-to-end with the fake adapter: task spawned, reports done, Waykeeper closes and merges; same for an asteroid task with the Harmonizer.
 
 ### P2-12 — Promotion and moves
-- **Status:** todo · **Depends on:** P2-09, P2-02 · **Parallel with:** P2-11, P2-13
+- **Status:** in progress · **Depends on:** P2-09, P2-02 · **Parallel with:** P2-11, P2-13
 - `propose_promotion` / `request_promotion` → proposal; approval: pause the Steward if mid-task, create/assign the new body, `body.moved` (drives the satellite flight in Phase 4), spawn a Waykeeper if promoted to moon/planet, hand over or resume the Steward, old body in `moved` state for the retention period then freed, permanent link in history; "task added to an existing project" moves an asteroid task onto the project body the same way.
 - Hand-overs (from the wave-3 review): `moveTask` and attaching or detaching a sub-project (`parentProjectId`) re-parent the agents in the same command — the moved task's Steward gets the project and its Waykeeper as supervisor, a detached sub-project's Waykeeper the Harmonizer — so SPEC decision 32 holds at every commit.
 - **Acceptance:** tests: asteroid → moon promotion with a mid-task Steward; task moved into project; old body freed after retention.
 
 ### P2-13 — Closure, retention and archival
-- **Status:** todo · **Depends on:** P2-10, P2-02, P2-14 · **Parallel with:** P2-11, P2-12
+- **Status:** in progress · **Depends on:** P2-10, P2-02, P2-14 · **Parallel with:** P2-11, P2-12
 - `request_project_closure` → Harmonizer `ask_user("anything else on <project>?")` → user closes (control action) → Waykeeper stopped, transcripts kept, `completed`, retention timer (default 7 days, setting); scheduled archival job frees the body; archive-now, pin (suspends the timer), reopen (same body if free, else new body linked); sub-project moons block their planet's closure.
 - **Acceptance:** tests with a fake clock for retention, pin, reopen and the blocked-closure rule.
 
@@ -131,7 +131,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** kill -9 during a running project; after restart every agent is `working` or `interrupted` with a reason, no duplicate questions or spawns.
 
 ### P2-17 — Additional caps
-- **Status:** todo · **Depends on:** P1-02, P2-10 · **Parallel with:** P2-09, P2-11, P2-12, P2-13
+- **Status:** in progress · **Depends on:** P1-02, P2-10 · **Parallel with:** P2-09, P2-11, P2-12, P2-13
 - Max Stewards per Waykeeper; max spawns per hour (global and per brain); a refused spawn is a tool error the brain sees and reports.
 - **Acceptance:** tests; the Waykeeper's report of a refused spawn is visible in its transcript.
 
