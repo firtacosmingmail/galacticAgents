@@ -107,6 +107,11 @@ export interface MergeConflict {
   externalCommits: ExternalCommit[];
   /** How many there are in all (the list may be cut). */
   externalCount: number;
+  /**
+   * The base side could not be listed (a failed `rev-list`): the conflict counts as external
+   * (fail closed — the user decides, nobody is sent back on a guess); this says why.
+   */
+  externalUnknown?: string;
 }
 
 export interface ExternalCommit {
@@ -608,9 +613,10 @@ export class Workspaces {
                 files,
                 workspace: project.workspace,
                 worktreePath: task.worktreePath!,
-                external: external.count > 0,
+                external: external.count > 0 || external.unknown !== undefined,
                 externalCommits: external.commits,
                 externalCount: external.count,
+                ...(external.unknown !== undefined ? { externalUnknown: external.unknown } : {}),
               },
             };
           }
@@ -637,20 +643,24 @@ export class Workspaces {
     if (result.ok) {
       // The folder is gone, so the task forgets it (an explicit null, P2-20): a reopened task
       // gets a fresh worktree, and a Steward is never sent into a removed one. The branch goes
-      // too once it is deleted; `meta.merge` keeps the record of where the work happened.
+      // too once it is deleted; `meta.merge` keeps the record of where the work happened, and
+      // `meta.merges` every merge of the task (a reopened task merged twice keeps its first
+      // range "own" for decision 30).
+      const record: MergeRecord = {
+        branch,
+        commit: result.commit,
+        before: result.before,
+        fastForward: result.fastForward,
+        branchDeleted: result.branchDeleted,
+      };
       await this.need('commands').updateTask(taskId, {
         worktreePath: null,
         ...(result.branchDeleted ? { branch: null } : {}),
         meta: {
           ...task.meta,
           worktree: { root, baseBranch, removed: true },
-          merge: {
-            branch,
-            commit: result.commit,
-            before: result.before,
-            fastForward: result.fastForward,
-            branchDeleted: result.branchDeleted,
-          } satisfies MergeRecord,
+          merge: record,
+          merges: [...mergeRecords(task), record],
         },
       });
     }
@@ -706,36 +716,53 @@ export class Workspaces {
 
   /**
    * The base branch's commits behind a conflict that the project did not merge itself (SPEC
-   * decision 30). The base side is `merge-base..HEAD` limited to the conflicting files (merge
-   * commits left out: their content is their parents'); a commit is the project's own when an
-   * earlier merge of one of its tasks brought it in (`meta.merge.before..commit`). Run inside the
-   * repository's lock, after the merge was aborted.
+   * decision 30). The base side is `merge-base..HEAD` limited to the conflicting files; a commit
+   * is the project's own when a merge of one of its tasks brought it in (any of the task's
+   * `meta.merges`, `before..commit`). Run inside the repository's lock, after the merge was
+   * aborted.
+   *
+   * It fails closed: a base side git cannot list counts as external (`unknown`), and a merge range
+   * it cannot list marks nothing as own. Known limit: merge commits are left out (`--no-merges`,
+   * their content is mostly their parents'), so a hand edit made inside a merge commit on the base
+   * branch (an "evil merge") is not seen as external by itself — its parents usually are.
    */
   private async externalCommits(
     cwd: string,
     projectId: Id,
     branch: string,
     files: string[],
-  ): Promise<{ count: number; commits: ExternalCommit[] }> {
-    const base = (await this.git(cwd, ['merge-base', 'HEAD', branch])).stdout.trim();
-    const list = async (args: string[]) =>
-      (await this.git(cwd, ['rev-list', ...args], { allowFailure: true })).stdout
+  ): Promise<{ count: number; commits: ExternalCommit[]; unknown?: string }> {
+    const base = await this.git(cwd, ['merge-base', 'HEAD', branch], { allowFailure: true });
+    if (base.code !== 0 || !base.stdout.trim()) {
+      return { count: 0, commits: [], unknown: (base.stderr || 'no merge base').trim() };
+    }
+    const from = base.stdout.trim();
+    const list = async (args: string[]): Promise<string[] | { failed: string }> => {
+      const out = await this.git(cwd, ['rev-list', ...args], { allowFailure: true });
+      if (out.code !== 0) return { failed: (out.stderr || out.stdout).trim() || 'rev-list failed' };
+      return out.stdout
         .split('\n')
         .map((l) => l.trim())
         .filter(Boolean);
-    let side = await list(['--full-history', '--no-merges', `${base}..HEAD`, '--', ...files]);
-    if (side.length === 0) side = await list(['--no-merges', `${base}..HEAD`]);
+    };
+    let side = await list(['--full-history', '--no-merges', `${from}..HEAD`, '--', ...files]);
+    if (Array.isArray(side) && side.length === 0) {
+      side = await list(['--no-merges', `${from}..HEAD`]);
+    }
+    if (!Array.isArray(side)) return { count: 0, commits: [], unknown: side.failed };
     if (side.length === 0) return { count: 0, commits: [] };
     const own = new Set<string>();
     const tasks = this.need('tables')
       .tasks.all()
       .filter((t) => t.projectId === projectId);
     for (const t of tasks) {
-      const merge = t.meta?.['merge'] as Partial<MergeRecord> | undefined;
-      if (!merge?.commit || !merge.before) continue;
-      if (!/^[0-9a-f]{7,64}$/.test(merge.commit) || !/^[0-9a-f]{7,64}$/.test(merge.before))
-        continue;
-      for (const c of await list([`${merge.before}..${merge.commit}`])) own.add(c);
+      for (const merge of mergeRecords(t)) {
+        if (!merge.commit || !merge.before) continue;
+        if (!/^[0-9a-f]{7,64}$/.test(merge.commit) || !/^[0-9a-f]{7,64}$/.test(merge.before))
+          continue;
+        const range = await list([`${merge.before}..${merge.commit}`]);
+        if (Array.isArray(range)) for (const c of range) own.add(c);
+      }
     }
     const external = side.filter((c) => !own.has(c));
     if (external.length === 0) return { count: 0, commits: [] };
@@ -820,6 +847,14 @@ export class Workspaces {
 }
 
 /** Where a task's worktree lives: derived, never read back from a stored field. */
+/** Every recorded merge of a task, oldest first (`meta.merges`, or the older single `meta.merge`). */
+export function mergeRecords(task: Pick<Task, 'meta'>): Partial<MergeRecord>[] {
+  const list = task.meta?.['merges'];
+  if (Array.isArray(list)) return list as Partial<MergeRecord>[];
+  const one = task.meta?.['merge'] as Partial<MergeRecord> | undefined;
+  return one ? [one] : [];
+}
+
 export function worktreeRoot(workspace: string, taskId: Id): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(taskId)) {
     throw new DomainError('invalid', `task id ${JSON.stringify(taskId)} cannot name a worktree`);

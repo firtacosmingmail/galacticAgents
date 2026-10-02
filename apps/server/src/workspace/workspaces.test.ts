@@ -302,6 +302,63 @@ describe('worktrees and merges', () => {
     ]);
   });
 
+  it('keeps every merge of a task as its own work, so a twice-merged task stays "own"', async () => {
+    const dir = join(tmp, 'home', 'twice');
+    const { project: p } = await project('Twice', dir);
+    commitFile(dir, 'shared.txt', 'base\n', 'base content');
+    const a = await task(p.id, 'Merged twice');
+    const b = await task(p.id, 'Conflicting task');
+    const wb = await spaces.createWorktree(b.id);
+    const wa = await spaces.createWorktree(a.id);
+    commitFile(wa.path, 'shared.txt', 'from A\n', 'task A: shared');
+    expect(await spaces.mergeTask(a.id)).toMatchObject({ ok: true });
+    // The task is reopened and merged again, on an unrelated file.
+    const again = await spaces.createWorktree(a.id);
+    commitFile(again.path, 'other.txt', 'more\n', 'task A: follow-up');
+    expect(await spaces.mergeTask(a.id)).toMatchObject({ ok: true });
+    expect(w.tables.tasks.get(a.id)!.meta?.['merges']).toHaveLength(2);
+    commitFile(wb.path, 'shared.txt', 'from B\n', 'task B: shared');
+
+    const result = await spaces.mergeTask(b.id);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'conflict',
+      conflict: { external: false, externalCount: 0 },
+    });
+  });
+
+  it('fails closed: a base side git cannot list counts as external', async () => {
+    const dir = join(tmp, 'home', 'closed');
+    const real = gitRunner({ env: GIT_ENV });
+    const failing = new Workspaces({
+      projectsRoot: join(tmp, 'projects root'),
+      dataDir: join(tmp, 'data'),
+      home: join(tmp, 'home'),
+      git: (cwd, args, opts) =>
+        args[0] === 'rev-list' && args.includes('--no-merges')
+          ? Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: bad object' })
+          : real(cwd, args, opts),
+      commands,
+      tables: w.tables,
+    });
+    const created = await commands.createProject({ name: 'Closed', workspace: dir });
+    await failing.prepareProject(created.value.id);
+    commitFile(dir, 'shared.txt', 'base\n', 'base content');
+    const a = await task(created.value.id, 'A');
+    const b = await task(created.value.id, 'B');
+    const wa = await failing.createWorktree(a.id);
+    const wb = await failing.createWorktree(b.id);
+    commitFile(wa.path, 'shared.txt', 'from A\n', 'task A');
+    commitFile(wb.path, 'shared.txt', 'from B\n', 'task B');
+    expect(await failing.mergeTask(a.id)).toMatchObject({ ok: true });
+    const result = await failing.mergeTask(b.id);
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'conflict',
+      conflict: { external: true, externalUnknown: expect.stringContaining('bad object') },
+    });
+  });
+
   it('merges a branch that diverged from the base with a merge commit', async () => {
     const dir = join(tmp, 'home', 'diverged');
     const { project: p } = await project('Diverged', dir);

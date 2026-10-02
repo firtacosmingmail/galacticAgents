@@ -64,7 +64,9 @@ export function externalConflictText(conflict: MergeConflict, description: strin
     `Merging task ${conflict.taskId} ("${description}") conflicts with changes on ${conflict.targetBranch} that did not come from this project's tasks.`,
     `Branches: ${conflict.sourceBranch} → ${conflict.targetBranch}`,
     `Conflicting files: ${conflict.files.join(', ')}`,
-    `Commits from outside the project:\n${commits}${more}`,
+    conflict.externalUnknown !== undefined
+      ? `The commits on ${conflict.targetBranch} could not be listed (${conflict.externalUnknown}), so they may come from outside the project.`
+      : `Commits from outside the project:\n${commits}${more}`,
     `The task's work is kept in ${conflict.worktreePath}. How should it be resolved?`,
   ].join('\n');
 }
