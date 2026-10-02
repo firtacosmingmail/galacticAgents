@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import {
   type GateCheckOptions,
@@ -107,7 +108,11 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
     const workspace = workspaceNow();
     const misplaced = misplacedCwd(workspace, opts.cwd);
     if (misplaced) return { verdict: { decision: 'ask', reasons: [misplaced] } };
-    const verdict = evaluate(policyNow(), call, { workspace, cwd: opts.cwd });
+    const verdict = evaluate(policyNow(), call, {
+      workspace,
+      cwd: opts.cwd,
+      aliases: aliasesOf(workspace, opts.cwd),
+    });
     const action = verdict.dominant ? { action: verdict.dominant } : {};
     switch (verdict.decision) {
       case 'allow':
@@ -188,4 +193,25 @@ function misplacedCwd(workspace: string, cwd: string): string | undefined {
     return `cwd ${cwd} is outside the workspace ${workspace}`;
   }
   return undefined;
+}
+
+/**
+ * The resolved spellings of the workspace and the cwd, when they differ from the given ones (a
+ * symlink on the way: macOS `/var` → `/private/var`, a symlinked projects folder). Claude Code
+ * resolves its cwd, so it names resolved paths; the engine judges them as the given ones. The cwd
+ * comes first, so a worktree inside the workspace maps to itself. A path that does not exist (yet)
+ * has no other spelling.
+ */
+function aliasesOf(workspace: string, cwd: string): { from: string; to: string }[] {
+  const out: { from: string; to: string }[] = [];
+  for (const given of [resolve(cwd), resolve(workspace)]) {
+    let real: string;
+    try {
+      real = realpathSync(given);
+    } catch {
+      continue;
+    }
+    if (real !== given && !out.some((a) => a.from === real)) out.push({ from: real, to: given });
+  }
+  return out;
 }

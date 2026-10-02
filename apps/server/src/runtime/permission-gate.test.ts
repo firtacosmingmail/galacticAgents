@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_PERMISSION_POLICY } from '@galactic/protocol';
 import { CapsEnforcer } from './caps.js';
@@ -23,6 +26,38 @@ const read = { toolName: 'Read', input: { file_path: 'src/a.ts' } };
 const push = { toolName: 'Bash', input: { command: 'git push' } };
 
 describe('createPermissionGate', () => {
+  it('treats the resolved and the given spelling of a symlinked workspace as one place (dev-machine run)', () => {
+    // macOS: a temp folder is /var/folders/…, which is really /private/var/folders/…; Claude Code
+    // resolves its cwd, so it asks about the resolved path. Reproduced with a symlink anywhere.
+    const real = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-real-')));
+    mkdirSync(join(real, 'src'));
+    const link = join(realpathSync(mkdtempSync(join(tmpdir(), 'galactic-link-'))), 'ws');
+    symlinkSync(real, link);
+    const gate = createPermissionGate({
+      agentId: 'a-1',
+      workspace: link,
+      cwd: link,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+    });
+    expect(gate.check({ toolName: 'Read', input: { file_path: join(real, 'README.md') } })).toEqual(
+      {
+        decision: 'allow',
+      },
+    );
+    expect(gate.check({ toolName: 'Edit', input: { file_path: join(link, 'src/a.ts') } })).toEqual({
+      decision: 'allow',
+    });
+    // Agent configuration stays outside, whichever spelling is used.
+    expect(
+      gate.check({ toolName: 'Write', input: { file_path: join(real, '.claude/settings.json') } }),
+    ).toMatchObject({ decision: 'ask' });
+    // A sibling of the real folder is still outside.
+    expect(
+      gate.check({ toolName: 'Read', input: { file_path: join(real, '..', 'other', 'x') } }),
+    ).toMatchObject({ decision: 'ask' });
+  });
+
   it('reads the workspace on every check: a moved workspace applies at once (wave-3 review)', () => {
     let workspace = '/w/proj';
     const gate = createPermissionGate({

@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_PERMISSION_POLICY,
   type PermissionAction,
@@ -28,6 +28,13 @@ export interface PolicyContext {
   cwd?: string;
   /** `~` expands to this; defaults to the real home directory. */
   home?: string;
+  /**
+   * Other spellings of the workspace or cwd (dev-machine run, 2026-10-02): a path under `from` is
+   * judged as the same path under `to`. The gate fills it with the resolved form of a symlinked
+   * workspace (macOS `/var` → `/private/var`, a symlinked projects folder), because Claude Code
+   * resolves its cwd and asks about resolved paths. The engine itself stays lexical.
+   */
+  aliases?: readonly { from: string; to: string }[];
 }
 
 export interface Classification {
@@ -1289,7 +1296,15 @@ export function isInsideWorkspace(p: string, ctx: PolicyContext): boolean {
   if (/^~[^/]/.test(p)) return false;
   const workspace = resolve(expandHome(ctx.workspace, ctx));
   const cwd = ctx.cwd ? resolve(expandHome(ctx.cwd, ctx)) : workspace;
-  return within(workspace, resolvePath(p, ctx, cwd));
+  return within(workspace, unalias(resolvePath(p, ctx, cwd), ctx));
+}
+
+/** `target` rewritten from another spelling of a root to the one the context names. */
+function unalias(target: string, ctx: PolicyContext): string {
+  for (const { from, to } of ctx.aliases ?? []) {
+    if (within(from, target)) return join(to, relative(from, target));
+  }
+  return target;
 }
 
 function within(root: string, target: string): boolean {
@@ -1306,7 +1321,7 @@ function within(root: string, target: string): boolean {
 export function isAgentConfigPath(p: string, ctx: PolicyContext): boolean {
   const workspace = resolve(expandHome(ctx.workspace, ctx));
   const cwd = ctx.cwd ? resolve(expandHome(ctx.cwd, ctx)) : workspace;
-  const target = resolvePath(p, ctx, cwd);
+  const target = unalias(resolvePath(p, ctx, cwd), ctx);
   const root = within(cwd, target) ? cwd : workspace;
   const segments = relative(root, target).split(sep);
   return (
