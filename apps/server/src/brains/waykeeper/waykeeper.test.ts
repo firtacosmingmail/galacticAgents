@@ -424,6 +424,34 @@ describe('Waykeeper brain (P2-10)', () => {
     await h.done(LONG);
   });
 
+  it('hears the decision on its own promotion request; the Harmonizer does not', async () => {
+    const project = (
+      await h.commands.createProject({ name: 'App', workspace: join(tmp, 'home', 'app') })
+    ).value;
+    const grown = (await h.commands.createTask({ projectId: project.id, description: 'auth' }))
+      .value;
+    const hq = await h.startHarmonizer({ script: (s) => s });
+    const wk = await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: project.id, supervisorId: hq.agentId },
+      {
+        script: (s) =>
+          s
+            .on(/was added to your project/, () => {})
+            .once('it grew', (t) =>
+              t.call('request_promotion', { taskId: grown.id, to: 'moon', reason: 'it grew' }),
+            )
+            .once(/proposal \S+ was approved/, (t) => t.say('waiting for the move')),
+      },
+    );
+    wk.tell('it grew');
+    await h.until(() => h.log.tables.proposals.all().length > 0);
+    await h.settle();
+    await approve(h.log.tables.proposals.all()[0]!.id);
+    await h.done();
+    expect(hq.prompts().join('\n')).not.toMatch(/was approved/);
+  });
+
   it('sends a sub-project’s closure request to the Harmonizer, not the parent Waykeeper', async () => {
     const planet = (
       await h.commands.createProject({ name: 'App', workspace: join(tmp, 'home', 'app') })

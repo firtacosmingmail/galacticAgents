@@ -82,9 +82,18 @@ export function createWakeScope(
       projectId === brain.projectId || supervised().some((a) => a.projectId === projectId),
     // The Harmonizer proposes (SPEC §3.3); a plan card belongs to its project's Waykeeper —
     // whichever agent runs the project now, so a replacement Waykeeper learns the decision (P2-10).
+    // A Waykeeper's promotion request (`meta.promotion`) is its project's Waykeeper's too: only
+    // that brain hears the decision (P2-12 does the move), never the Harmonizer as well.
     ownsProposal: (proposalId) => {
-      const plan = proposalPlan(tables.proposals.get(proposalId));
+      const proposal = tables.proposals.get(proposalId);
+      const plan = proposalPlan(proposal);
       if (plan) return brain.role === 'waykeeper' && plan.projectId === brain.projectId;
+      const promotion = proposal?.meta?.['promotion'] as
+        | { fromProjectId?: unknown; requestedBy?: unknown }
+        | undefined;
+      if (promotion && typeof promotion.fromProjectId === 'string' && promotion.requestedBy) {
+        return brain.role === 'waykeeper' && promotion.fromProjectId === brain.projectId;
+      }
       return brain.role === 'harmonizer';
     },
     question: (id) => tables.questions.get(id),
