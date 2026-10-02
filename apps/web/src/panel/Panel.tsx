@@ -11,6 +11,7 @@ import { QuestionInbox } from '../console/hierarchy/QuestionInbox.js';
 import { StewardView } from '../console/hierarchy/StewardView.js';
 import { ApiContext, agentLabel, StatePill } from '../console/hierarchy/shared.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
+import { ManagedAgentCards } from './AgentCards.js';
 import './panel.css';
 
 /**
@@ -170,7 +171,8 @@ function Empty({ children }: { children: ReactNode }) {
 /**
  * The agents the selected supervisor manages directly (SPEC §4.2): for the Harmonizer its
  * Waykeepers and the asteroid Stewards, for a Waykeeper its Stewards, for a Steward its
- * supervisor. A plain list until P25-04's cards.
+ * supervisor. The panel itself shows P25-04's cards (`managedCards`, which also keeps ended
+ * agents and sub-project Waykeepers); this plain list stays for callers that want live agents.
  */
 export function managedAgents(world: WorldState, agent: Agent | undefined): Agent[] {
   if (!agent) return [];
@@ -197,7 +199,6 @@ function SideColumn() {
   const world = useAppStore((s) => s.world);
   const selection = useAppStore((s) => s.selection);
   const agent = selectedAgent(world, selection);
-  const managed = managedAgents(world, agent);
   const supervisor: Id | undefined = agent?.role === 'steward' ? agent.supervisorId : undefined;
   return (
     <aside className="pnl-side" aria-label="managed agents and inbox">
@@ -205,10 +206,8 @@ function SideColumn() {
         <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
         {supervisor ? (
           <AgentLinks ids={[supervisor]} />
-        ) : managed.length === 0 ? (
-          <p className="pnl-empty">No agents working under it.</p>
         ) : (
-          <AgentLinks ids={managed.map((a) => a.id)} />
+          <ManagedAgentCards supervisor={agent} />
         )}
       </section>
       <section className="pnl-inbox" aria-label="inbox">
