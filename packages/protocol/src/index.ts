@@ -16,3 +16,4 @@ export * from './rest.js';
 export * from './adapter.js';
 export * from './commands.js';
 export * from './summary.js';
+export * from './panel.js';

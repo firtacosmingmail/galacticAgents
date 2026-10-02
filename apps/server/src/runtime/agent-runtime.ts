@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  DEFAULT_PERMISSION_POLICY,
   type Actor,
   type Agent,
   type AgentAdapter,
@@ -31,6 +30,7 @@ import {
   type QuestionRouting,
 } from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
+import { globalDefaultPolicy } from '../domain/permissions.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import {
   CapsEnforcer,
@@ -1205,8 +1205,9 @@ export class AgentRuntime {
     const { tables } = this.opts.log;
     const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
     const project = projectId ? tables.projects.get(projectId) : undefined;
-    if (project) return project.permissionPolicy ?? DEFAULT_PERMISSION_POLICY;
-    return req.permissionPolicy ?? DEFAULT_PERMISSION_POLICY;
+    // No table of its own: the global default as it is now (P25-01: the settings may change it).
+    if (project) return project.permissionPolicy ?? globalDefaultPolicy();
+    return req.permissionPolicy ?? globalDefaultPolicy();
   }
 
   /**

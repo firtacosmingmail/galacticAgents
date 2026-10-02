@@ -7,6 +7,7 @@ import type {
   Id,
   PermissionAction,
   PermissionGate,
+  RuntimePreflight,
   SendOptions,
   SpawnHandle,
   SpawnOptions,
@@ -325,6 +326,11 @@ export class FakeAdapter implements AgentAdapter {
     session.signal.fire();
     await session.turnDone;
     this.emit({ type: 'agent.failed', agentId, error, reason: 'crash' });
+  }
+
+  /** Always ready: nothing to install or log in to (P25-01). */
+  preflight(): Promise<RuntimePreflight> {
+    return Promise.resolve({ runtime: 'fake', ok: true, installed: true, problems: [] });
   }
 
   async dispose(): Promise<void> {
