@@ -98,3 +98,17 @@ Phase 1 exit criteria hold against the real adapter: spawn, follow, answer both 
 pause/resume, interrupt, stop, kill -9 + restart with resume, a tool-call cap stop (unit-tested
 with the fake adapter; the gate's pre-flight is adapter-independent), and the fake adapter runs the
 same suite in CI.
+
+## 4. Dev-machine run (2026-10-02, macOS, Cosmin's claude.ai team subscription)
+
+`pnpm check:real` on the Mac: `claude auth status` → `authMethod: claude.ai`, `apiProvider: firstParty`, `subscriptionType: team`; no `ANTHROPIC_API_KEY`, no `CLAUDE_CODE_OAUTH_TOKEN` in the environment — **decision 17 confirmed on the real account**.
+
+**First run:** spike PASS, restart PASS, smoke FAIL (permission step), conformance FAIL (5 of 22). Investigated (systematic, root cause first):
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| A Read of the workspace's own README asked for permission ("outside the workspace") | macOS temp folders are `/var/folders/…` = `/private/var/folders/…`; Claude Code resolves its cwd and names resolved paths, the gate compared them lexically with the given workspace path (any symlinked workspace, not only macOS) | the gate passes the resolved spellings of the workspace and cwd as `aliases` to the (still lexical) engine — commit 3a5969e, symlink test in `permission-gate.test.ts` |
+| A resumed agent did not ask its interrupted question again | since P2-16 a resumed session gets only `RESUME_PROMPT` ("continue"); the restart had cancelled its question (decision 21) and nothing told the model, so it went idle — the fake adapter ignores the prompt, so no test caught it | the resume message names the questions the restart cancelled and asks the agent to ask again — commit f94368c, tests in `recovery.test.ts` |
+| `rm -rf` never reached the gate (three conformance tests, the smoke's permission step) | the developer's own global Claude Code settings (`~/.claude/settings.json` deny `Bash(rm -rf:*)`) are loaded into Steward sessions (`settingSources: ['user', …]`), and Claude Code refused the call before the PreToolUse hook — no `agent.tool_call`, no question | not a code bug: `ClaudeSdkAdapter({stewardSettingSources})`; the conformance suite and the smoke load `['project', 'local']`, so they test our gate — commit c39c1db. Real Stewards keep loading user settings (SPEC §8 open question) |
+
+**Second run: all PASS** — spike 12 s, smoke 79 s (permission 1 `destructive` `rm -rf`, permission 2 `outside_workspace` `cat /etc/hostname`), conformance **22/22** in 220 s, restart 87 s (resumed from the session after `kill -9`, the session remembered its codeword, no orphan left). Log: `.galactic/checks/real-2026-10-02T15-01-46-424Z.log` (local). The spike's custom-tool turn read ~91k cached context tokens: the standalone spike loads the developer's full Claude Code setup; product brains load no settings (`settingSources: []`).
