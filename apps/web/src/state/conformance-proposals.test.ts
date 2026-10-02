@@ -5,7 +5,14 @@
 // edit, approvals that create projects and tasks. The reducer folds `meta.parked` / `meta.initGit`
 // with the protocol's `foldProposalMeta`, as the server does; at every commit they must agree.
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Actor, CreateProposalInput, EventEnvelope, Id, Snapshot } from '@galactic/protocol';
+import {
+  PERMISSION_POLICY_PRESETS,
+  type Actor,
+  type CreateProposalInput,
+  type EventEnvelope,
+  type Id,
+  type Snapshot,
+} from '@galactic/protocol';
 import { FakeAdapter, composeRuntime, openDatabase, type ComposedRuntime } from '@galactic/server';
 import { applyEvent, applySnapshot, type WorldState } from './reduce.js';
 
@@ -66,10 +73,14 @@ describe('replay vs snapshot conformance: the proposal flow (P2-09)', () => {
     expect([game.state, later.state]).toEqual(['parked', 'parked']);
     // The user consents to git init on the parked card: an edit, still parked.
     await commands.decideProposal(game.id, { decision: 'edit', changes: { initGit: true } }, USER);
+    // …and makes it trusted, then cautious, then trusted again (P2-22, decision 49).
+    for (const trust of ['trusted', 'cautious', 'default', 'trusted'] as const) {
+      await commands.decideProposal(game.id, { decision: 'edit', changes: { trust } }, USER);
+    }
     // A planet frees: the oldest card un-parks in the same commit.
     await commands.archiveProject(made[0]!, USER);
     expect(log.tables.proposals.get(game.id)?.state).toBe('pending');
-    await commands.decideProposal(game.id, { decision: 'approve' }, USER);
+    await commands.decideProposal(game.id, { decision: 'approve' }, USER, { origin: 'local' });
     // The other one is downsized to a moon by the user (un-parked by the edit) and approved.
     await commands.decideProposal(
       later.id,
@@ -130,7 +141,12 @@ describe('replay vs snapshot conformance: the proposal flow (P2-09)', () => {
     expect(world.proposals[game.id]?.meta).toEqual({
       request: { type: 'new_project', name: 'Game' },
       initGit: true,
+      trust: 'trusted',
     });
+    const gameProject = Object.values(world.projects).find(
+      (p) => p.meta?.['proposalId'] === game.id,
+    );
+    expect(gameProject?.permissionPolicy).toEqual(PERMISSION_POLICY_PRESETS.trusted);
     expect(world.proposals[someday.id]?.meta).not.toHaveProperty('parked');
   });
 });

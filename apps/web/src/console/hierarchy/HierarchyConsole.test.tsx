@@ -11,6 +11,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
+import { PERMISSION_POLICY_PRESETS } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { useAppStore } from '../../state/store.js';
 import { HierarchyConsole } from './HierarchyConsole.js';
@@ -197,7 +198,7 @@ describe('project/task tree (P2-18)', () => {
     await flush();
     const controls = screen.getByLabelText('controls of Auth refactor');
     await click(within(controls).getByText('Edit'));
-    fireEvent.change(within(controls).getByDisplayValue('unchanged'), {
+    fireEvent.change(within(controls).getByDisplayValue('unchanged (default)'), {
       target: { value: 'clear' },
     });
     await click(within(controls).getByText('Save'));
@@ -205,6 +206,49 @@ describe('project/task tree (P2-18)', () => {
     expect(posts('/api/control')[0]?.body).toEqual({
       target: { kind: 'project', id: 'p-1' },
       action: { action: 'edit', changes: { permissionPolicy: null } },
+    });
+  });
+
+  it("shows each project's trust level and makes a project trusted from its edit form (P2-22)", async () => {
+    seed({
+      projects: [
+        fx.project,
+        {
+          ...fx.project,
+          id: 'p-2',
+          name: 'Trusted thing',
+          permissionPolicy: PERMISSION_POLICY_PRESETS.trusted,
+        },
+        {
+          ...fx.project,
+          id: 'p-3',
+          name: 'Odd thing',
+          permissionPolicy: { rules: { push: 'deny' } },
+        },
+      ],
+    });
+    ui();
+    await flush();
+    const trustOf = (name: string) =>
+      within(screen.getByLabelText(`project ${name}`)).getAllByLabelText('trust level')[0]!
+        .textContent;
+    expect(trustOf('Auth refactor')).toBe('trust: default');
+    expect(trustOf('Trusted thing')).toBe('trust: trusted');
+    expect(trustOf('Odd thing')).toBe('trust: custom');
+    const controls = screen.getByLabelText('controls of Auth refactor');
+    await click(within(controls).getByText('Edit'));
+    const select = within(controls).getByLabelText('trust level');
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((o) => o.getAttribute('value')),
+    ).toEqual(['', 'clear', 'default', 'trusting', 'cautious', 'trusted']);
+    fireEvent.change(select, { target: { value: 'trusted' } });
+    await click(within(controls).getByText('Save'));
+    await flush();
+    expect(posts('/api/control')[0]?.body).toEqual({
+      target: { kind: 'project', id: 'p-1' },
+      action: { action: 'edit', changes: { permissionPolicy: PERMISSION_POLICY_PRESETS.trusted } },
     });
   });
 });
@@ -257,6 +301,58 @@ describe('proposal cards (P2-18)', () => {
     ]);
     // A saved edit closes the form.
     expect(within(el).queryByLabelText('edit card')).toBeNull();
+  });
+
+  it('shows the trust level on the card and lets the user choose it (P2-22)', async () => {
+    seed({
+      proposals: [
+        card,
+        {
+          ...card,
+          id: 'pr-2',
+          requestText: 'Trusted one',
+          meta: { ...card.meta, trust: 'trusted' },
+        },
+      ],
+    });
+    ui();
+    await flush();
+    const el = screen.getByLabelText('proposal Add dark mode to the settings page');
+    expect(within(el).getByLabelText('trust level').textContent).toMatch(/^default/);
+    const other = screen.getByLabelText('proposal Trusted one');
+    expect(within(other).getByLabelText('trust level').textContent).toMatch(
+      /^trusted — everything without a card except a push/,
+    );
+    await click(within(el).getByText('Edit'));
+    const form = within(el).getByLabelText('edit card');
+    const select = within(form).getByLabelText('trust level');
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((o) => o.getAttribute('value')),
+    ).toEqual(['default', 'trusting', 'cautious', 'trusted']);
+    fireEvent.change(select, { target: { value: 'trusted' } });
+    await click(within(form).getByText('Save'));
+    await flush();
+    expect(posts('/api/proposals/pr-1/decide').map((c) => c.body)).toEqual([
+      { decision: 'edit', changes: { trust: 'trusted' } },
+    ]);
+  });
+
+  it('offers no trust level for standalone work on an asteroid', async () => {
+    seed({
+      proposals: [
+        { ...card, kind: 'asteroid', proposedBody: { kind: 'asteroid', name: 'Ceres-9' } },
+      ],
+    });
+    ui();
+    await flush();
+    const el = screen.getByLabelText('proposal Add dark mode to the settings page');
+    expect(within(el).queryByLabelText('trust level')).toBeNull();
+    await click(within(el).getByText('Edit'));
+    expect(
+      within(within(el).getByLabelText('edit card')).queryByLabelText('trust level'),
+    ).toBeNull();
   });
 
   it('shows a parked card with the occupied bodies and the offers', async () => {
