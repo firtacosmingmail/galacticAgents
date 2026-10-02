@@ -95,23 +95,25 @@ export const messageEntryId = (messageId: Id) => `m:${messageId}`;
 /** The id a live `text` chunk has in the history. */
 export const replyEntryId = (agentId: Id, seq: number) => `r:${agentId}:${seq}`;
 
-/** The live lines of an agent's conversation: the messages sent to it and its non-blank text. */
+/** The live lines of an agent's conversation: the messages sent to it (not its turn prompts) and its non-blank text. */
 export function liveEntries(
   agentId: Id,
   messages: readonly ChatMessage[],
   chunks: readonly TranscriptChunk[],
 ): ChatEntry[] {
   return [
-    ...messages.map((m): ChatEntry => ({
-      id: messageEntryId(m.messageId),
-      agentId,
-      kind: 'message',
-      at: m.at,
-      sender: m.sender,
-      text: m.text,
-      messageId: m.messageId,
-      seq: m.seq,
-    })),
+    ...messages
+      .filter((m) => !m.turn)
+      .map((m): ChatEntry => ({
+        id: messageEntryId(m.messageId),
+        agentId,
+        kind: 'message',
+        at: m.at,
+        sender: m.sender,
+        text: m.text,
+        messageId: m.messageId,
+        seq: m.seq,
+      })),
     ...chunks
       .filter((c) => c.kind === 'text' && c.text.trim() !== '')
       .map((c): ChatEntry => ({
@@ -127,7 +129,7 @@ export function liveEntries(
 }
 
 /** A card shown in a thread (decision 52: placed by the time it was created). */
-export type ThreadCard =
+export type ThreadCardItem =
   | { kind: 'proposal'; id: Id; at: string; proposal: Proposal }
   | { kind: 'question'; id: Id; at: string; question: Question };
 
@@ -147,11 +149,11 @@ function questionThread(world: Pick<WorldState, 'agents'>, q: Question): Agent |
 export function threadCards(
   world: Pick<WorldState, 'agents' | 'proposals' | 'questions'>,
   agent: Agent | undefined,
-): ThreadCard[] {
+): ThreadCardItem[] {
   if (!agent || agent.role === 'steward') return [];
   const ownerProject = (p: Proposal): Id | undefined =>
     proposalPlan(p)?.projectId ?? proposalPromotion(p)?.fromProjectId;
-  const cards: ThreadCard[] = [];
+  const cards: ThreadCardItem[] = [];
   for (const p of Object.values(world.proposals)) {
     const project = ownerProject(p);
     const mine =
@@ -171,13 +173,13 @@ export function threadCards(
 
 export type ThreadItem =
   | { kind: 'entry'; key: string; entry: ChatEntry }
-  | { kind: 'card'; key: string; card: ThreadCard };
+  | { kind: 'card'; key: string; card: ThreadCardItem };
 
 /**
  * The thread as shown: the lines, with each card after the lines up to its creation time. While
  * older history is still unread, a card older than the oldest line waits until it is paged in.
  */
-export function threadItems(entries: ChatEntry[], cards: ThreadCard[], hasOlder: boolean) {
+export function threadItems(entries: ChatEntry[], cards: ThreadCardItem[], hasOlder: boolean) {
   const first = entries[0]?.at;
   const shown = hasOlder && first !== undefined ? cards.filter((c) => c.at >= first) : cards;
   const items: ThreadItem[] = [];

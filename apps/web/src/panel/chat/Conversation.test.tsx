@@ -165,7 +165,21 @@ describe('the panel chat (P25-03)', () => {
         },
         at(1),
       );
+      // The brain's turn prompt is logged as a system message, but it is not a chat line.
+      event(
+        {
+          type: 'message.sent',
+          messageId: 'msg-turn',
+          agentId: H,
+          sender: { type: 'system' },
+          text: 'Since your last turn: the user said "you said 1"',
+          interrupt: false,
+          turn: true,
+        },
+        at(1),
+      );
     });
+    expect(within(thread()).queryByText(/Since your last turn/)).toBeNull();
     expect(within(thread()).getAllByText('brain said 2')).toHaveLength(1);
     expect(within(thread()).getAllByText('you said 1')).toHaveLength(1);
     expect(within(thread()).getByText('brain said 4')).toBeTruthy();

@@ -31,7 +31,7 @@ import {
   useApi,
 } from '../../console/hierarchy/shared.js';
 import { NavLink } from '../Navigation.js';
-import { InlineCard } from './InlineCards.js';
+import { ThreadCard } from './InlineCards.js';
 import './chat.css';
 
 /**
@@ -206,7 +206,7 @@ export function Conversation({ agentId }: { agentId: Id }) {
         )}
         {items.map((item) =>
           item.kind === 'card' ? (
-            <InlineCard key={item.key} card={item.card} />
+            <ThreadCard key={item.key} kind={item.card.kind} id={item.card.id} />
           ) : (
             <Line key={item.key} entry={item.entry} agentId={agentId} name={name} />
           ),

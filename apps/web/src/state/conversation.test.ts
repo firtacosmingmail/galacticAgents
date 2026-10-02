@@ -46,7 +46,7 @@ function fakeServer(all: ConversationEntry[], lastSeq = 0) {
   const calls: ConversationQuery[] = [];
   const fetch = async (_agentId: string, q: ConversationQuery) => {
     calls.push(q);
-    const limit = q.limit ?? 50;
+    const limit = Number(q.limit ?? 50);
     const index = (cursor: string) => all.findIndex((e) => e.cursor === cursor);
     if (q.after) {
       const from = index(q.after) + 1;
