@@ -17,6 +17,7 @@ import { slugify } from '../../workspace/workspaces.js';
 import type { BrainQueries, BrainTool, BrainToolContext } from '../definition.js';
 import { asInput, isLiving, oneOf, S, str, strings } from './input.js';
 import { findRelated, words } from './related.js';
+import { stewardPrompt as stewardTemplate } from '../steward-prompt.js';
 
 /**
  * The Harmonizer's own tools (P2-08; TECHNOLOGY §5.3). Handlers call `DomainCommands` and read
@@ -69,18 +70,17 @@ export interface HarmonizerDeps {
 /** SPEC §3.5: a standalone task without a related project works in a scratch folder. */
 export const SCRATCH_DIR = 'scratch';
 
-/** The default asteroid Steward prompt; P2-11 replaces it with the full template. */
+/** The asteroid Steward's prompt: P2-11's shared template, with the Harmonizer as supervisor. */
 export function defaultStewardPrompt(
   task: Task,
   extra: { workspace: string; instructions?: string },
 ): string {
-  return [
-    `Your task (${task.id}): ${task.description}`,
-    `You work in ${extra.workspace}. Stay inside it.`,
-    ...(extra.instructions ? [extra.instructions] : []),
-    'When you are unsure, ask a question instead of guessing. When the task is done, say so ' +
-      'clearly and summarise what you did; your supervisor decides whether the task is closed.',
-  ].join('\n\n');
+  return stewardTemplate({
+    task,
+    supervisor: 'harmonizer',
+    cwd: extra.workspace,
+    ...(extra.instructions ? { instructions: extra.instructions } : {}),
+  });
 }
 
 function defaultCheckPath(projectsRoot: string) {

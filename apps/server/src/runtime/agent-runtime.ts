@@ -149,6 +149,21 @@ interface Live {
    * folds them into its next turn; only a `turn` message reaches the inbox.
    */
   mailbox: boolean;
+  /** The current turn (P2-11): its last text output and whether it was cut short. */
+  turn: { text: string | undefined; interrupted: boolean };
+}
+
+/**
+ * How one turn of an agent ended (P2-11): what `onTurnEnded` listeners get on every
+ * `agent.idle`, after it is logged. `text` is the turn's last text output (redacted);
+ * `interrupted` says the turn was cut short (an interrupt, a pause, a stop or a cap stop under
+ * way); `queued` counts the messages waiting to start the next turn at once.
+ */
+export interface TurnEnd {
+  agent: Agent;
+  text: string | undefined;
+  interrupted: boolean;
+  queued: number;
 }
 
 const SYSTEM: Actor = { type: 'system' };
@@ -179,6 +194,7 @@ export class AgentRuntime {
   readonly caps: CapsEnforcer;
   private readonly questions: QuestionRouting;
   private disposed = false;
+  private readonly turnListeners = new Set<(turn: TurnEnd) => void>();
 
   constructor(private readonly opts: AgentRuntimeOptions) {
     this.now = opts.now ?? (() => new Date().toISOString());
@@ -309,12 +325,16 @@ export class AgentRuntime {
           // The agent is busy from the moment it has the message (P1-33): a pause/resume or a
           // second message right after must not find it "idle".
           live.idle = false;
+          live.turn = { text: undefined, interrupted: false };
           await adapter.send(this.session(live), m.text, { interrupt: m.interrupt });
           if (!live.terminal) {
             this.record({ type: 'message.delivered', messageId: m.id, agentId: agent.id });
           }
         },
-        interrupt: () => adapter.interrupt(this.session(live)),
+        interrupt: () => {
+          live.turn.interrupted = true;
+          return adapter.interrupt(this.session(live));
+        },
         now: this.now,
         onError: (e) => this.onError(e, `inbox ${agent.id}`),
         ...(this.opts.inboxHistory !== undefined ? { history: this.opts.inboxHistory } : {}),
@@ -329,6 +349,7 @@ export class AgentRuntime {
       terminal: undefined,
       spec: req,
       mailbox: false,
+      turn: { text: undefined, interrupted: false },
     };
     this.live.set(agent.id, live);
     this.caps.track(agent.id, caps);
@@ -557,6 +578,7 @@ export class AgentRuntime {
   async interrupt(agentId: Id): Promise<void> {
     const live = this.must(agentId);
     if (live.paused) await this.resumeAgent(agentId, SYSTEM);
+    live.turn.interrupted = true;
     await live.adapter.interrupt(this.session(live));
   }
 
@@ -805,6 +827,43 @@ export class AgentRuntime {
 
   // ---------------------------------------------------------------------------
 
+  /**
+   * Listens to every turn end of every agent (P2-11: a Steward's report to its supervisor).
+   * Called synchronously after the `agent.idle` is logged and before the next queued message is
+   * delivered. Returns the unsubscribe function.
+   */
+  onTurnEnded(listener: (turn: TurnEnd) => void): () => void {
+    this.turnListeners.add(listener);
+    return () => this.turnListeners.delete(listener);
+  }
+
+  /** The agent has a brain mailbox (P2-06): messages to it are folded into its turns. */
+  hasMailbox(agentId: Id): boolean {
+    return this.live.get(agentId)?.mailbox ?? false;
+  }
+
+  private turnEnded(live: Live, turn: Live['turn']): void {
+    if (this.turnListeners.size === 0) return;
+    const end: TurnEnd = {
+      agent: live.agent,
+      text: turn.text === undefined ? undefined : redactSecrets(turn.text),
+      interrupted:
+        turn.interrupted ||
+        live.paused ||
+        live.stopRequested !== undefined ||
+        live.capStop !== undefined ||
+        live.terminal !== undefined,
+      queued: live.inbox.pending().length,
+    };
+    for (const listener of this.turnListeners) {
+      try {
+        listener(end);
+      } catch (error) {
+        this.onError(error, `turn end of ${live.agent.id}`);
+      }
+    }
+  }
+
   private must(agentId: Id): Live {
     const live = this.live.get(agentId);
     if (!live) throw new Error(`agent ${agentId} is not running`);
@@ -955,9 +1014,19 @@ export class AgentRuntime {
       this.opts.transcripts.append(raw.agentId, raw.kind, raw.text);
       this.opts.statuses.touch(raw.agentId);
       if (!live.paused) live.idle = false;
+      if (raw.kind === 'text' && raw.text.trim() !== '') live.turn.text = raw.text;
       return;
     }
-    const event = redactEvent(raw);
+    let event = redactEvent(raw);
+    if (
+      event.type === 'agent.finished' &&
+      live.agent.role === 'steward' &&
+      !event.result?.trim() &&
+      live.turn.text !== undefined
+    ) {
+      // A Steward that finished without a result: its last words are its report (P2-11).
+      event = { ...event, result: redactSecrets(live.turn.text) };
+    }
     if (TERMINAL.has(event.type)) {
       this.terminal(live, event as Extract<AgentEvent, { type: Terminal }>);
       return;
@@ -1001,10 +1070,14 @@ export class AgentRuntime {
     // Caps after the log so a tripping tool call precedes the stop it causes.
     this.caps.onEvent(event);
     switch (event.type) {
-      case 'agent.idle':
+      case 'agent.idle': {
         live.idle = true;
+        const turn = live.turn;
+        live.turn = { text: undefined, interrupted: false };
+        this.turnEnded(live, turn);
         if (!live.paused) live.inbox.idle();
         return;
+      }
       case 'agent.needs_input':
         live.questions.add(event.questionId);
         this.byQuestion.set(event.questionId, event.agentId);
