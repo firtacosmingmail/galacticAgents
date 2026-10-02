@@ -17,6 +17,7 @@ import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, checkTransition, setProjectState } from './states.js';
 import { effectiveChanges } from './changes.js';
+import { policyForWrite, type PolicyWrite } from './permissions.js';
 
 /**
  * Project commands (P2-01; SPEC §2.7, §3, decision 11, 11b). A project lives on a planet or moon
@@ -28,11 +29,15 @@ export type { ProjectChanges };
 
 const hostOf = (projectId: Id): Host => ({ kind: 'project', id: projectId });
 
-function parsePolicy(policy: unknown): PermissionPolicy {
+/**
+ * A policy being written: validated, then floored at the global default unless the write is
+ * local or the server sets `autoApproveRemote` (P2-21, `policyForWrite`).
+ */
+export function parsePolicy(policy: unknown, write: PolicyWrite): PermissionPolicy {
   const parsed = PermissionPolicy.safeParse(policy);
   if (!parsed.success)
     throw new DomainError('invalid', `invalid permission policy: ${parsed.error.message}`);
-  return parsed.data;
+  return policyForWrite(parsed.data, write);
 }
 
 /** The parent must exist, still take work, and be neither the project nor one of its descendants. */
@@ -89,10 +94,12 @@ function pickBody(ctx: CommandContext, input: CreateProjectInput, opts: ChooseOp
   return choice.body;
 }
 
+/** `write`: the request's origin, for the policy floor (P2-21); unknown counts as remote. */
 export function createProject(
   ctx: CommandContext,
   input: CreateProjectInput,
   opts: ChooseOptions = {},
+  write: PolicyWrite = {},
 ): Project {
   if (!input.workspace.trim()) throw new DomainError('invalid', 'a project needs a workspace');
   const parent = input.parentProjectId
@@ -115,7 +122,9 @@ export function createProject(
     updatedAt: ctx.now,
     ...(input.repoPath ? { repoPath: input.repoPath } : {}),
     ...(input.parentProjectId ? { parentProjectId: input.parentProjectId } : {}),
-    ...(input.permissionPolicy ? { permissionPolicy: parsePolicy(input.permissionPolicy) } : {}),
+    ...(input.permissionPolicy
+      ? { permissionPolicy: parsePolicy(input.permissionPolicy, write) }
+      : {}),
   };
   ctx.tables.projects.insert(project);
   ctx.emit({ type: 'project.created', project });
@@ -127,12 +136,14 @@ export function createProject(
  * Edits a project's fields (name, workspace, repo path, policy, pin, parent). Its body changes
  * only by `moveHost` and its state only by the state commands. An explicit `null` clears a
  * clearable field (P2-20): `parentProjectId` detaches a sub-project (its moon then hosts an
- * independent project, decision 10), `permissionPolicy` falls back to the global default.
+ * independent project, decision 10), `permissionPolicy` falls back to the global default. A new
+ * policy is floored at the global default unless `write` is local (P2-21).
  */
 export function updateProject(
   ctx: CommandContext,
   projectId: Id,
   changes: ProjectChanges,
+  write: PolicyWrite = {},
 ): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
   const defined = effectiveChanges(current, changes, CLEARABLE_PROJECT_FIELDS, 'project');
@@ -148,7 +159,9 @@ export function updateProject(
     const body = must(ctx.tables.bodies.get(current.bodyId), 'body', current.bodyId);
     checkSubProjectBody(body, parent.bodyId);
   }
-  if (defined.permissionPolicy) defined.permissionPolicy = parsePolicy(defined.permissionPolicy);
+  if (defined.permissionPolicy) {
+    defined.permissionPolicy = parsePolicy(defined.permissionPolicy, write);
+  }
   if (Object.keys(defined).length === 0) return current;
   const project = ctx.tables.projects.upsert({
     ...applyChanges(current, defined),

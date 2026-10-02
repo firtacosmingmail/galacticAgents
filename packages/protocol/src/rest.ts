@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { AgentRole, AgentRuntime, TaskPriority } from './enums.js';
 import type { ControlAction as ControlActionType } from './commands.js';
-import { AgentCaps, PERMISSION_POLICY_PRESETS, type PermissionPolicyPreset } from './domain.js';
+import {
+  AgentCaps,
+  PERMISSION_POLICY_PRESETS,
+  PermissionPolicy,
+  type PermissionPolicyPreset,
+} from './domain.js';
 import { ControlTarget } from './events.js';
 
 // ---------------------------------------------------------------------------
@@ -60,7 +65,9 @@ export type RuntimesInfo = z.infer<typeof RuntimesInfo>;
 
 /**
  * A panel action (decision 11b, P2-14), as `DomainCommands.control` takes it. Edit carries the
- * fields the panel may change: a task's description and priority, a project's name.
+ * fields the panel may change: a task's description and priority, a project's name and its
+ * permission policy (`null` returns it to the global default; a remote client's choice is floored
+ * at the global default, P2-21).
  */
 export const ControlActionBody = z.discriminatedUnion('action', [
   z.object({ action: z.literal('stop') }),
@@ -74,6 +81,7 @@ export const ControlActionBody = z.discriminatedUnion('action', [
         description: z.string().min(1).optional(),
         priority: TaskPriority.optional(),
         name: z.string().min(1).optional(),
+        permissionPolicy: PermissionPolicy.nullable().optional(),
       })
       .strict(),
   }),

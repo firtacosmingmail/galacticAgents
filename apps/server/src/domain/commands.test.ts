@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Actor } from '@galactic/protocol';
+import { DEFAULT_PERMISSION_POLICY, type Actor, type PermissionPolicy } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
@@ -53,7 +53,10 @@ describe('Commands', () => {
     const { commands, log, runtime } = boot();
     const policy = { rules: { network: 'allow' as const } };
     const project = (
-      await commands.createProject({ name: 'CSV', workspace: '/w/csv', permissionPolicy: policy })
+      await commands.createProject(
+        { name: 'CSV', workspace: '/w/csv', permissionPolicy: policy },
+        { origin: 'local' },
+      )
     ).value;
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
     const { waykeeper } = await projectHierarchy(commands, project.id);
@@ -287,6 +290,86 @@ describe('Commands', () => {
     await expect(
       commands.spawnAgent({ role: 'harmonizer', runtime: 'fake', cwd: '/w/hq', prompt: 'x' }),
     ).rejects.toThrow(/no agent runtime/);
+  });
+});
+
+describe('the remote floor on policy writes (P2-21)', () => {
+  const LOOSE: PermissionPolicy = { rules: { destructive: 'allow', push: 'allow' } };
+
+  it('floors createProject, updateProject and a project edit unless the write is local', async () => {
+    const { commands, log } = boot();
+    const policyOf = (id: string) => log.tables.projects.get(id)?.permissionPolicy;
+    const create = (origin?: 'local' | 'remote') =>
+      commands
+        .createProject(
+          { name: 'CSV', workspace: '/w/csv', kind: 'moon', permissionPolicy: LOOSE },
+          origin ? { origin } : undefined,
+        )
+        .then((r) => r.value.id);
+
+    expect(policyOf(await create('local'))).toEqual(LOOSE);
+    expect(policyOf(await create('remote'))).toEqual(DEFAULT_PERMISSION_POLICY);
+    // Unknown origin fails closed: a write nobody vouched for as local is floored.
+    const p = await create();
+    expect(policyOf(p)).toEqual(DEFAULT_PERMISSION_POLICY);
+
+    const { events } = await commands.updateProject(
+      p,
+      { permissionPolicy: LOOSE },
+      { origin: 'remote' },
+    );
+    expect(events).toEqual([
+      {
+        type: 'project.updated',
+        projectId: p,
+        changes: { permissionPolicy: DEFAULT_PERMISSION_POLICY },
+      },
+    ]);
+    await commands.updateProject(p, { permissionPolicy: LOOSE }, { origin: 'local' });
+    expect(policyOf(p)).toEqual(LOOSE);
+
+    const edit = (origin?: 'local' | 'remote') =>
+      commands.control(
+        { kind: 'project', id: p },
+        { action: 'edit', changes: { permissionPolicy: { rules: { network: 'allow' } } } },
+        USER,
+        origin ? { origin } : undefined,
+      );
+    await edit('remote');
+    expect(policyOf(p)).toEqual(DEFAULT_PERMISSION_POLICY);
+    await edit();
+    expect(policyOf(p)).toEqual(DEFAULT_PERMISSION_POLICY);
+    await edit('local');
+    expect(policyOf(p)).toEqual({ rules: { network: 'allow' } });
+    // Other writes need no origin at all.
+    await commands.updateProject(p, { name: 'CSV 2' });
+    expect(policyOf(p)).toEqual({ rules: { network: 'allow' } });
+  });
+
+  it('refuses a policy edit on a task', async () => {
+    const { commands } = boot();
+    const task = (await commands.createTask({ description: 'parse' })).value;
+    await expect(
+      commands.control(
+        { kind: 'task', id: task.id },
+        { action: 'edit', changes: { permissionPolicy: LOOSE } },
+        USER,
+        { origin: 'local' },
+      ),
+    ).rejects.toMatchObject({ code: 'invalid' });
+  });
+
+  it('floors nothing on a server configured with autoApproveRemote', async () => {
+    const composed = composeRuntime(openDatabase(':memory:'), {
+      adapters: [new FakeAdapter()],
+      autoApproveRemote: true,
+    });
+    lives.push(composed);
+    const { value } = await composed.commands.createProject(
+      { name: 'CSV', workspace: '/w/csv', permissionPolicy: LOOSE },
+      { origin: 'remote' },
+    );
+    expect(value.permissionPolicy).toEqual(LOOSE);
   });
 });
 

@@ -14,7 +14,9 @@ import {
   evaluate,
   isInsideWorkspace,
   noLooserThan,
+  originOfMessages,
   pathsInCommand,
+  policyForWrite,
   resolvePolicy,
   splitCommand,
   strictest,
@@ -724,5 +726,29 @@ describe('noLooserThan (P2-04: a remote client cannot set up auto-approvals)', (
       read_workspace: 'allow',
     });
     expect(noLooserThan(DEFAULT_PERMISSION_POLICY)).toEqual(DEFAULT_PERMISSION_POLICY);
+  });
+});
+
+describe('policyForWrite (P2-21: the one function every policy write goes through)', () => {
+  const loose: PermissionPolicy = { rules: { destructive: 'allow', network: 'allow' } };
+
+  it('keeps a local write, floors a remote or unknown one, keeps everything with autoApproveRemote', () => {
+    expect(policyForWrite(loose, { origin: 'local' })).toEqual(loose);
+    expect(policyForWrite(loose, { origin: 'remote' })).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(policyForWrite(loose)).toEqual(DEFAULT_PERMISSION_POLICY);
+    expect(policyForWrite(loose, { origin: 'remote', autoApproveRemote: true })).toEqual(loose);
+    expect(policyForWrite(loose, { autoApproveRemote: true })).toEqual(loose);
+    // A remote client may still tighten.
+    const strict: PermissionPolicy = { rules: { network: 'deny' } };
+    expect(policyForWrite(strict, { origin: 'remote' }).rules['network']).toBe('deny');
+  });
+});
+
+describe('originOfMessages (P2-21: the origin a brain acts with)', () => {
+  it('is local only when every message is, remote when one is, unknown otherwise', () => {
+    expect(originOfMessages([{ origin: 'local' }, { origin: 'local' }])).toBe('local');
+    expect(originOfMessages([{ origin: 'local' }, { origin: 'remote' }])).toBe('remote');
+    expect(originOfMessages([{ origin: 'local' }, {}])).toBeUndefined();
+    expect(originOfMessages([])).toBeUndefined();
   });
 });

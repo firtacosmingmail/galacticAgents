@@ -117,6 +117,13 @@ describe('event schemas', () => {
     ).toBe(false);
   });
 
+  it("records a user message's origin on message.sent, and only a known one (P2-21)", () => {
+    const sent = { ...events['message.sent'], sender: { type: 'user' as const } };
+    expect(Event.parse({ ...sent, origin: 'remote' })).toEqual({ ...sent, origin: 'remote' });
+    expect(Event.parse(sent)).toEqual(sent);
+    expect(Event.safeParse({ ...sent, origin: 'lan' }).success).toBe(false);
+  });
+
   it('refuses an agent.updated that changes nothing', () => {
     expect(Event.safeParse({ type: 'agent.updated', agentId: 'a', changes: {} }).success).toBe(
       false,

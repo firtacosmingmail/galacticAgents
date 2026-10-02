@@ -12,6 +12,7 @@ import {
   type Id,
   type PermissionAction,
   type PermissionPolicy,
+  type RequestOrigin,
   type SpawnHandle,
   type SpawnOptions,
   type ToolCall,
@@ -390,7 +391,7 @@ export class AgentRuntime {
   send(
     agentId: Id,
     text: string,
-    opts: { sender: Actor; interrupt?: boolean; turn?: boolean },
+    opts: { sender: Actor; interrupt?: boolean; turn?: boolean; origin?: RequestOrigin },
   ): InboxMessage {
     const live = this.must(agentId);
     if (live.capStop || live.stopRequested || live.inbox.currentState === 'ended') {
@@ -404,6 +405,7 @@ export class AgentRuntime {
       sender: opts.sender,
       text,
       interrupt: opts.interrupt ?? false,
+      ...(opts.origin ? { origin: opts.origin } : {}),
     });
     if (live.mailbox && !opts.turn) {
       // Logged only: the brain's mailbox picks it up from the log and folds it into a turn.

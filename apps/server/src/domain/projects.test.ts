@@ -69,7 +69,9 @@ describe('createProject', () => {
   it('stores a valid permission policy and refuses an invalid one, leaving nothing behind', () => {
     const { run, tables, log } = world();
     const policy = { rules: { network: 'allow' as const } };
-    const { value } = run((ctx) => createProject(ctx, { ...input, permissionPolicy: policy }));
+    const { value } = run((ctx) =>
+      createProject(ctx, { ...input, permissionPolicy: policy }, {}, { origin: 'local' }),
+    );
     expect(tables.projects.get(value.id)?.permissionPolicy).toEqual(policy);
     const seq = log.currentSeq();
     expect(() =>
