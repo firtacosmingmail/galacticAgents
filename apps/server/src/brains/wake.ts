@@ -153,6 +153,18 @@ export const WAKE_RULES: WakeRules = {
     describe: (e, s) =>
       `${e.questionId} moved from ${who(e.from, s)} to ${who(e.to, s)} (${e.reason})`,
   },
+  // Work added to a Waykeeper's project by someone else (the Harmonizer carrying out a card): its
+  // own create_task / plan tasks are its own side effects and never get here; a plan's proposed
+  // tasks wait for the card's decision instead.
+  'task.created': {
+    wakes: (e, s) =>
+      s.role === 'waykeeper' &&
+      e.task.projectId !== undefined &&
+      e.task.projectId === s.projectId &&
+      e.task.state !== 'proposed',
+    describe: (e) =>
+      `task ${e.task.id} was added to your project (${e.task.state}, ${e.task.priority}): ${quote(e.task.description)}`,
+  },
   'proposal.approved': proposal(() => 'was approved'),
   'proposal.edited': proposal((e) => `was edited: ${JSON.stringify(e.changes)}`),
   'proposal.rejected': proposal((e) => `was rejected${e.reason ? `: ${e.reason}` : ''}`),

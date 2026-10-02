@@ -410,6 +410,50 @@ describe('Harmonizer brain (P2-08)', () => {
     });
   });
 
+  it('wakes the project’s Waykeeper with a task it adds, and says when none runs', async () => {
+    const { h, definition } = setup();
+    const { value: project } = await h.commands.createProject({ name: 'CSV', workspace: '/w/csv' });
+    const card = async (name: string) => {
+      const { value } = await h.commands.createProposal({
+        requestText: name,
+        kind: 'moon',
+        proposedBody: { kind: 'moon', name, bodyId: project.bodyId },
+        workspace: '/w/csv',
+        rationale: 'belongs to CSV',
+        meta: { request: { type: 'project_task', name, description: name, projectId: project.id } },
+      });
+      await h.commands.decideProposal(value.id, { decision: 'approve' }, USER);
+      return value.id;
+    };
+    const lonely = await card('pagination');
+    const withWk = await card('sorting');
+    const results: Record<string, unknown>[] = [];
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('first', async (t) => {
+            results.push(await t.call('create_task', { proposalId: lonely }));
+          })
+          .once('second', async (t) => {
+            results.push(await t.call('create_task', { proposalId: withWk }));
+          }),
+    });
+    hq.tell('first');
+    await h.settle();
+    const wk = await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: project.id, supervisorId: hq.agentId },
+      { script: (s) => s.once(/task \S+ was added to your project/, (t) => t.say('on it')) },
+    );
+    hq.tell('second');
+    await h.done();
+    expect(results[0]).toMatchObject({ waykeeperId: null, note: /no running Waykeeper/ });
+    expect(results[1]).toMatchObject({ waykeeperId: wk.agentId });
+    const sorting = h.queries.projectTasks(project.id).find((x) => x.description === 'sorting')!;
+    expect(wk.prompts().join('\n')).toContain(`task ${sorting.id} was added`);
+  });
+
   it('proposes a promotion without moving anything', async () => {
     const { h, definition } = setup();
     const { value: task } = await h.commands.createTask({ description: 'a growing script' });

@@ -644,12 +644,32 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           `proposal ${proposal.id} is a ${proposal.kind} ${request.type}: use ${request.type === 'promotion' ? 'nothing (the server moves it)' : 'create_project'}`,
         );
       }
+      // A project task wakes the project's running Waykeeper (wake rule `task.created`); without
+      // one nobody picks it up, so the model is told to start it.
+      const waykeeper = task.projectId
+        ? ctx.queries
+            .agents()
+            .find(
+              (a) =>
+                a.role === 'waykeeper' &&
+                a.projectId === task.projectId &&
+                isLiving(ctx.queries, a.id),
+            )
+        : undefined;
       return {
         taskId: task.id,
         bodyId: task.bodyId,
         state: task.state,
         ...(task.projectId ? { projectId: task.projectId } : {}),
         ...(task.meta?.['workspace'] ? { workspace: task.meta['workspace'] } : {}),
+        ...(task.projectId
+          ? waykeeper
+            ? { waykeeperId: waykeeper.id, note: 'its Waykeeper was told and picks it up' }
+            : {
+                waykeeperId: null,
+                note: `project ${task.projectId} has no running Waykeeper: nobody picks the task up until you spawn_waykeeper`,
+              }
+          : {}),
       };
     },
   };

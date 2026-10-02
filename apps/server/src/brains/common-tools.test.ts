@@ -76,39 +76,48 @@ describe('common tools', () => {
       { runtime: 'fake', projectId: project.id, supervisorId: hq.agentId },
       {
         script: (s) =>
-          s.once('check', async (t) => {
-            const [q] = h.log.tables.questions.all();
-            expect(q).toMatchObject({ kind: 'permission', holder: { type: 'user' } });
-            const refused = await t.try('answer_question', { questionId: q!.id, answer: 'allow' });
-            expect(refused).toMatchObject({ ok: false, error: 'invalid' });
-            expect(refused.message).toMatch(/permission question/);
-            expect(await t.try('stop_agent', { agentId: hq.agentId })).toMatchObject({
-              ok: false,
-              error: 'invalid',
-            });
-            expect(await t.try('pause_agent', { agentId: t.agentId })).toMatchObject({
-              ok: false,
-            });
-            const listed = await t.call<{ agentId: Id; state: string }[]>('list_supervised_agents');
-            expect(listed.map((a) => a.agentId)).toEqual([stewardId]);
-            expect(await t.call('get_agent_status', { agentId: stewardId })).toMatchObject({
-              role: 'steward',
-              state: 'waiting_for_input',
-              waitingOn: q!.id,
-            });
-            expect(await t.call('report_status', { text: 'waiting on a permission' })).toEqual({
-              to: hq.agentId,
-              messageId: expect.any(String),
-            });
-            await t.call('stop_agent', { agentId: stewardId });
-          }),
+          s
+            // Its task was added by someone else (here, the test): that wakes it (P2-08 review).
+            .on(/was added to your project/, () => {})
+            .once('check', async (t) => {
+              const [q] = h.log.tables.questions.all();
+              expect(q).toMatchObject({ kind: 'permission', holder: { type: 'user' } });
+              const refused = await t.try('answer_question', {
+                questionId: q!.id,
+                answer: 'allow',
+              });
+              expect(refused).toMatchObject({ ok: false, error: 'invalid' });
+              expect(refused.message).toMatch(/permission question/);
+              expect(await t.try('stop_agent', { agentId: hq.agentId })).toMatchObject({
+                ok: false,
+                error: 'invalid',
+              });
+              expect(await t.try('pause_agent', { agentId: t.agentId })).toMatchObject({
+                ok: false,
+              });
+              const listed =
+                await t.call<{ agentId: Id; state: string }[]>('list_supervised_agents');
+              expect(listed.map((a) => a.agentId)).toEqual([stewardId]);
+              expect(await t.call('get_agent_status', { agentId: stewardId })).toMatchObject({
+                role: 'steward',
+                state: 'waiting_for_input',
+                waitingOn: q!.id,
+              });
+              expect(await t.call('report_status', { text: 'waiting on a permission' })).toEqual({
+                to: hq.agentId,
+                messageId: expect.any(String),
+              });
+              await t.call('stop_agent', { agentId: stewardId });
+            }),
       },
     );
     stewardId = await steward(h, project.id, wk.agentId, 'permission');
     await h.until(() => h.log.tables.questions.all().length > 0);
     await h.settle();
     // The permission question never woke the Waykeeper (strict script: no unexpected turn).
-    expect(wk.turns).toHaveLength(1);
+    const permissionId = h.log.tables.questions.all()[0]!.id;
+    const lines = wk.runner.turns.flatMap((x) => x.items);
+    expect(lines.filter((i) => JSON.stringify(i.event).includes(permissionId))).toEqual([]);
     wk.tell('check');
     await h.done();
     expect(h.statuses.get(stewardId)?.state).toBe('stopped');
