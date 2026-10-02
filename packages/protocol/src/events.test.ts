@@ -20,6 +20,7 @@ function classify(
   | 'permission'
   | 'proposal'
   | 'promotion'
+  | 'recovery'
   | 'body'
   | 'project'
   | 'task'
@@ -84,6 +85,8 @@ function classify(
     case 'control.pin':
     case 'control.reopen':
       return 'control';
+    case 'recovery.needs_attention':
+      return 'recovery';
     default:
       return assertNever(e);
   }

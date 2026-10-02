@@ -281,6 +281,8 @@ describe('GET /api/notifications (P25-01; SPEC §4.5)', () => {
       version: 1,
     });
     emit({ type: 'agent.interrupted', agentId: 'w1', reason: 'server shutdown' });
+    emit({ type: 'agent.interrupted', agentId: 'w1', reason: 'session reset' });
+    emit({ type: 'recovery.needs_attention', agentId: 'w1', reason: 'resume failed: gone' });
     emit({
       type: 'proposal.parked',
       proposalId: 'p1',

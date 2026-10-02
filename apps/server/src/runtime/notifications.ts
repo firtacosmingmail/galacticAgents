@@ -25,7 +25,7 @@ const NOTIFYING = `type IN (${TYPES}) AND (
     AND json_extract(payload, '$.to.type') = 'user') OR
   (type IN ('task.state_changed', 'project.state_changed')
     AND json_extract(payload, '$.to') IN ('completed', 'failed')) OR
-  type = 'agent.interrupted' OR
+  type = 'recovery.needs_attention' OR
   (type = 'proposal.parked' AND json_extract(payload, '$.waitingFor') IS NOT NULL)
 )`;
 

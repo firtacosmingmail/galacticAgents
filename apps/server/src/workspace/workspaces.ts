@@ -295,7 +295,7 @@ export class Workspaces {
       throw new DomainError('invalid', `a workspace must be an absolute path: ${path}`);
     }
     const abs = canonical(expanded);
-    const unsafe = unsafeFolder(abs, this, 'the workspace');
+    const unsafe = unsafeFolder(abs, { home: this.home, dataDir: this.dataDir }, 'the workspace');
     if (unsafe) throw new DomainError('invalid', unsafe);
     if (abs === this.projectsRoot) {
       throw new DomainError('invalid', 'the workspace cannot be the projects root itself');

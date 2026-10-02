@@ -247,7 +247,11 @@ export const NotificationKind = z.enum([
   'task_failed',
   'project_completed',
   'project_failed',
-  /** Work interrupted by a restart (an agent's session was lost; it can be resumed). */
+  /**
+   * Work interrupted by a restart: recovery left an agent interrupted (`recovery.needs_attention`;
+   * it can be resumed from the panel). Not every `agent.interrupted`: a graceful shutdown of an
+   * agent that comes back, or a brain's session reset, is not news.
+   */
   'interrupted',
   /** A request parked for lack of a free body (decision 16). */
   'no_space',
@@ -313,7 +317,7 @@ export const NOTIFYING_EVENT_TYPES = [
   'question.reassigned',
   'task.state_changed',
   'project.state_changed',
-  'agent.interrupted',
+  'recovery.needs_attention',
   'proposal.parked',
 ] as const;
 
@@ -367,7 +371,7 @@ export function notificationOf(
         target: { kind: isTask ? 'task' : 'project', id },
       };
     }
-    case 'agent.interrupted': {
+    case 'recovery.needs_attention': {
       const role = lookup.agent?.(event.agentId)?.role;
       return {
         ...base,
