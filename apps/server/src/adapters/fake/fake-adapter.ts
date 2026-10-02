@@ -17,10 +17,13 @@ import type {
 import { EventQueue } from '../../lib/event-queue.js';
 import {
   echo,
+  FakeTurnCancelled,
   scenarioFromPrompt,
   SCENARIOS,
   type FakeScenario,
   type FakeStep,
+  type FakeToolResult,
+  type FakeTurnIO,
 } from './scenario.js';
 
 /**
@@ -370,7 +373,8 @@ export class FakeAdapter implements AgentAdapter {
       case 'tool_call':
         await this.delay(session, step.delayMs, turn);
         if (turn.cancelled) return 'cancelled';
-        return this.toolCall(session, turn, { toolName: step.toolName, input: step.input });
+        return (await this.toolCall(session, turn, { toolName: step.toolName, input: step.input }))
+          .outcome;
       case 'progress':
         await this.delay(session, step.delayMs, turn);
         if (turn.cancelled) return 'cancelled';
@@ -405,15 +409,19 @@ export class FakeAdapter implements AgentAdapter {
       case 'permission':
         await this.holdWhilePaused(session, turn);
         if (turn.cancelled) return 'cancelled';
-        return this.toolCall(
-          session,
-          turn,
-          { toolName: step.toolName, input: step.input },
-          {
-            ...(step.text !== undefined ? { text: step.text } : {}),
-            action: step.permissionAction,
-          },
-        );
+        return (
+          await this.toolCall(
+            session,
+            turn,
+            { toolName: step.toolName, input: step.input },
+            {
+              ...(step.text !== undefined ? { text: step.text } : {}),
+              action: step.permissionAction,
+            },
+          )
+        ).outcome;
+      case 'script':
+        return this.script(session, step.run, turn);
       case 'finish':
         await this.delay(session, step.delayMs, turn);
         if (turn.cancelled) return 'cancelled';
@@ -441,6 +449,48 @@ export class FakeAdapter implements AgentAdapter {
   }
 
   /**
+   * A `script` step (P2-07): its body calls tools and reads their results in turn order. A call
+   * after the turn was cancelled rejects with `FakeTurnCancelled`; any other error of the body is
+   * reported as output and the turn goes on.
+   */
+  private async script(
+    session: FakeSession,
+    run: (io: FakeTurnIO) => Promise<void>,
+    turn: { cancelled: boolean },
+  ): Promise<'next' | 'cancelled'> {
+    const live = () => {
+      if (turn.cancelled || session.ended) throw new FakeTurnCancelled();
+    };
+    const io: FakeTurnIO = {
+      toolCall: async (toolName, input) => {
+        live();
+        await this.holdWhilePaused(session, turn);
+        live();
+        const { outcome, result } = await this.toolCall(session, turn, { toolName, input });
+        if (outcome === 'cancelled' || !result) throw new FakeTurnCancelled();
+        return result;
+      },
+      output: (text, kind = 'text') => {
+        live();
+        this.emit({ type: 'agent.output', agentId: session.agentId, kind, text });
+      },
+    };
+    try {
+      await run(io);
+    } catch (error) {
+      if (error instanceof FakeTurnCancelled || turn.cancelled) return 'cancelled';
+      if (session.ended) return 'cancelled';
+      this.emit({
+        type: 'agent.output',
+        agentId: session.agentId,
+        kind: 'text',
+        text: `script error: ${(error as Error).message}`,
+      });
+    }
+    return turn.cancelled ? 'cancelled' : 'next';
+  }
+
+  /**
    * One tool call through the runtime's gate, the way a real adapter's permission hook does it:
    * `allow` runs it (an `agent.tool_call` follows), `ask` blocks behind a permission question and
    * runs it on `allow`/`yes`, `deny` skips it with an output line carrying the reason.
@@ -450,10 +500,10 @@ export class FakeAdapter implements AgentAdapter {
     turn: { cancelled: boolean },
     call: ToolCall,
     ask: { text?: string; action?: PermissionAction } = {},
-  ): Promise<'next' | 'cancelled'> {
+  ): Promise<{ outcome: 'next' | 'cancelled'; result?: FakeToolResult }> {
     const agentId = session.agentId;
     const toolUseId = `toolu_fake_${randomUUID()}`;
-    const run = async () => {
+    const run = async (): Promise<FakeToolResult> => {
       this.emit({
         type: 'agent.tool_call',
         agentId,
@@ -464,32 +514,31 @@ export class FakeAdapter implements AgentAdapter {
       // A server tool (a brain's) runs its handler, as the SDK's in-process MCP server does; the
       // result comes back to the "model" as tool output.
       const tool = session.tools.get(call.toolName);
-      if (!tool) return;
+      if (!tool) return { status: 'ran' };
       let text: string;
+      let output: unknown;
       try {
-        const out = await tool.handler(call.input ?? {});
-        text = typeof out === 'string' ? out : JSON.stringify(out);
+        output = await tool.handler(call.input ?? {});
+        text = typeof output === 'string' ? output : JSON.stringify(output);
       } catch (error) {
         text = `tool error: ${(error as Error).message}`;
+        output = { error: 'error', message: (error as Error).message };
       }
       this.emit({ type: 'agent.output', agentId, kind: 'tool', text: text ?? '' });
+      return { status: 'ran', output, text: text ?? '' };
     };
-    const skip = (why: string) =>
+    const skip = (why: string): FakeToolResult => {
       this.emit({
         type: 'agent.output',
         agentId,
         kind: 'text',
         text: `permission denied for ${call.toolName} (${why}), skipping`,
       });
+      return { status: 'denied', reason: why };
+    };
     const verdict = session.gate.check(call);
-    if (verdict.decision === 'allow') {
-      await run();
-      return 'next';
-    }
-    if (verdict.decision === 'deny') {
-      skip(verdict.reason);
-      return 'next';
-    }
+    if (verdict.decision === 'allow') return { outcome: 'next', result: await run() };
+    if (verdict.decision === 'deny') return { outcome: 'next', result: skip(verdict.reason) };
     const action = verdict.action ?? ask.action;
     const why = verdict.reasons.length > 0 ? ` ${verdict.reasons.join('; ')}` : '';
     const answer = await this.askQuestion(session, 'permission', {
@@ -497,12 +546,11 @@ export class FakeAdapter implements AgentAdapter {
       toolCall: call,
       ...(action ? { permissionAction: action } : {}),
     });
-    if (answer === undefined) return 'cancelled';
+    if (answer === undefined) return { outcome: 'cancelled' };
     await this.holdWhilePaused(session, turn);
-    if (turn.cancelled) return 'cancelled';
-    if (/^(allow|yes|y|ok)$/i.test(answer.trim())) await run();
-    else skip('answered no');
-    return 'next';
+    if (turn.cancelled) return { outcome: 'cancelled' };
+    const result = /^(allow|yes|y|ok)$/i.test(answer.trim()) ? await run() : skip('answered no');
+    return { outcome: 'next', result };
   }
 
   private askQuestion(

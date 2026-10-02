@@ -23,14 +23,27 @@ import type { CapsEnforcer } from './caps.js';
  * workspace at the file-system root) makes every call `ask`, because lexical "inside" checks
  * would be meaningless there.
  *
- * Pure apart from the cap counter: no I/O, no LLM (SPEC decision 7).
+ * The one place a permission is decided (P2-04): adapters call it from their hooks, and the
+ * runtime calls it again (`reserve: false`) for an `agent.needs_input(kind: permission)` before
+ * any question is opened, so the hook and the question path can never disagree.
+ *
+ * The policy is read on every check (`policy` may be a function): a change to the project's
+ * table applies to the next tool call of agents already running.
+ *
+ * Pure apart from the cap counter and `onDeny`: no I/O, no LLM (SPEC decision 7).
  */
 export interface GateOptions {
   agentId: Id;
-  /** The project's policy; parsed here with the protocol schema, so a bad value cannot allow. */
+  /**
+   * The project's policy, or a function returning the current one (read on every check); parsed
+   * here with the protocol schema, so a bad value cannot allow.
+   */
   policy: unknown;
-  /** The project workspace root that "inside" is measured against. */
-  workspace: string;
+  /**
+   * The project workspace root that "inside" is measured against, or a function returning the
+   * current one (read on every check, like the policy: a moved workspace applies at once).
+   */
+  workspace: string | (() => string);
   /** Where the agent resolves relative paths from (its worktree). */
   cwd: string;
   caps: CapsEnforcer;
@@ -41,6 +54,16 @@ export interface GateOptions {
    * tool-call cap; matched by bare name or as the SDK's `mcp__galactic__<name>`.
    */
   serverTools?: readonly string[];
+  /**
+   * Told about every refusal the gate makes on its own — the policy table, a check that failed —
+   * but not about a tool-call cap refusal, which the cap logs as the agent's failure. The runtime
+   * logs these as `permission.decided{deny}` (P2-04). Must not throw (a throw is swallowed).
+   */
+  onDeny?: (
+    call: ToolCall,
+    verdict: Extract<GateVerdict, { decision: 'deny' }>,
+    action: PermissionAction | undefined,
+  ) => void;
 }
 
 /** The MCP server name the Claude SDK adapter registers brain tools under. */
@@ -51,58 +74,105 @@ export const FAIL_CLOSED_POLICY: PermissionPolicy = {
   rules: Object.fromEntries(PermissionAction.options.map((a) => [a, 'ask'])),
 };
 
-export function createPermissionGate(opts: GateOptions): PermissionGate {
-  const parsed = PermissionPolicy.safeParse(opts.policy);
-  const policy = parsed.success ? parsed.data : FAIL_CLOSED_POLICY;
-  const policyNote = parsed.success
-    ? undefined
-    : 'the project policy is invalid: every action asks';
-  const misplaced = misplacedCwd(opts.workspace, opts.cwd);
-  const ctx = { workspace: opts.workspace, cwd: opts.cwd };
+export function createPermissionGate(opts: GateOptions): RuntimeGate {
+  const current = typeof opts.policy === 'function' ? (opts.policy as () => unknown) : undefined;
+  let lastRaw: unknown = Symbol('unset');
+  let policy: PermissionPolicy = FAIL_CLOSED_POLICY;
+  let policyNote: string | undefined;
+  /** The policy as of now, parsed once per distinct value. */
+  const policyNow = () => {
+    const raw = current ? current() : opts.policy;
+    if (raw !== lastRaw) {
+      lastRaw = raw;
+      const parsed = PermissionPolicy.safeParse(raw);
+      policy = parsed.success ? parsed.data : FAIL_CLOSED_POLICY;
+      policyNote = parsed.success ? undefined : 'the project policy is invalid: every action asks';
+    }
+    return policy;
+  };
+  const workspaceNow = () =>
+    typeof opts.workspace === 'function' ? opts.workspace() : opts.workspace;
   const serverTools = new Set(opts.serverTools ?? []);
   const isServerTool = (name: string) =>
     serverTools.has(name) ||
     (name.startsWith(SERVER_TOOL_PREFIX) && serverTools.has(name.slice(SERVER_TOOL_PREFIX.length)));
-
-  const decideCall = (call: ToolCall, reserve: boolean): GateVerdict => {
+  /** The verdict, plus the category behind a denial (the gate's verdict does not carry it). */
+  const decideCall = (call: ToolCall, reserve: boolean): Decision => {
     if (reserve) {
       const reserved = opts.caps.reserveToolCall(opts.agentId);
-      if (!reserved.ok) return { decision: 'deny', reason: reserved.reason };
+      if (!reserved.ok)
+        return { verdict: { decision: 'deny', reason: reserved.reason }, cap: true };
     }
-    if (isServerTool(call.toolName)) return { decision: 'allow' };
-    if (misplaced) return { decision: 'ask', reasons: [misplaced] };
-    const verdict = evaluate(policy, call, ctx);
+    if (isServerTool(call.toolName)) return { verdict: { decision: 'allow' } };
+    const workspace = workspaceNow();
+    const misplaced = misplacedCwd(workspace, opts.cwd);
+    if (misplaced) return { verdict: { decision: 'ask', reasons: [misplaced] } };
+    const verdict = evaluate(policyNow(), call, { workspace, cwd: opts.cwd });
+    const action = verdict.dominant ? { action: verdict.dominant } : {};
     switch (verdict.decision) {
       case 'allow':
-        return { decision: 'allow' };
+        return { verdict: { decision: 'allow' }, ...action };
       case 'deny':
         return {
-          decision: 'deny',
-          reason: verdict.reasons[0] ?? `${verdict.dominant ?? 'this action'} is denied by policy`,
+          verdict: {
+            decision: 'deny',
+            reason:
+              verdict.reasons[0] ?? `${verdict.dominant ?? 'this action'} is denied by policy`,
+          },
+          ...action,
         };
       case 'ask': {
         const reasons = policyNote ? [policyNote, ...verdict.reasons] : verdict.reasons;
-        return {
-          decision: 'ask',
-          ...(verdict.dominant ? { action: verdict.dominant } : {}),
-          reasons,
-        };
+        return { verdict: { decision: 'ask', ...action, reasons }, ...action };
       }
       default:
-        return { decision: 'deny', reason: 'permission check failed: no decision' };
+        return { verdict: { decision: 'deny', reason: 'permission check failed: no decision' } };
+    }
+  };
+  const safely = (call: ToolCall, reserve: boolean): Decision => {
+    try {
+      return decideCall(call, reserve);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { verdict: { decision: 'deny', reason: `permission check failed: ${message}` } };
     }
   };
 
   return {
     check(call: ToolCall, options?: GateCheckOptions): GateVerdict {
-      try {
-        return decideCall(call, options?.reserve ?? true);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return { decision: 'deny', reason: `permission check failed: ${message}` };
+      const decision = safely(call, options?.reserve ?? true);
+      const { verdict } = decision;
+      if (verdict.decision === 'deny' && !decision.cap && opts.onDeny) {
+        try {
+          opts.onDeny(call, verdict, decision.action);
+        } catch {
+          // Logging a refusal never turns it into something else.
+        }
       }
+      return verdict;
+    },
+    decide(call: ToolCall): Decision {
+      return safely(call, false);
     },
   };
+}
+
+/** What the gate decided about one call, with what the runtime logs beside the verdict. */
+export interface Decision {
+  verdict: GateVerdict;
+  /** The policy category behind the verdict, when one was recognised. */
+  action?: PermissionAction;
+  /** A refusal for the tool-call cap (logged as the agent's failure, not as a permission). */
+  cap?: true;
+}
+
+/**
+ * The gate as the runtime holds it: the adapters' `check()`, plus `decide()` — the same decision
+ * without the cap reservation and without `onDeny` — for a permission request that reached the
+ * runtime (P2-04).
+ */
+export interface RuntimeGate extends PermissionGate {
+  decide(call: ToolCall): Decision;
 }
 
 /**

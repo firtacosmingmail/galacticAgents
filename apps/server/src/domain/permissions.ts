@@ -52,6 +52,28 @@ export function resolvePolicy(override?: PermissionPolicy | null): PermissionPol
   return { rules: { ...DEFAULT_PERMISSION_POLICY.rules, ...(override?.rules ?? {}) } };
 }
 
+/**
+ * `policy` with no category looser than `floor` (default: the global table): per category the
+ * stricter of the two (P2-04). What a remote client's choice of policy becomes unless the server
+ * is configured to let remote clients set up auto-approvals (`autoApproveRemote`).
+ */
+export function noLooserThan(
+  policy: PermissionPolicy,
+  floor: PermissionPolicy = DEFAULT_PERMISSION_POLICY,
+): PermissionPolicy {
+  const own = resolvePolicy(policy);
+  const base = resolvePolicy(floor);
+  const actions = new Set([
+    ...Object.keys(own.rules),
+    ...Object.keys(base.rules),
+  ]) as Set<PermissionAction>;
+  return {
+    rules: Object.fromEntries(
+      [...actions].map((a) => [a, strictest([own.rules[a], base.rules[a]])]),
+    ),
+  };
+}
+
 const STRICTNESS: Record<PermissionDecision, number> = { allow: 0, ask: 1, deny: 2 };
 
 /**

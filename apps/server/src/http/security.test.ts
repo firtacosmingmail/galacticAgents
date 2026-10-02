@@ -5,6 +5,7 @@ import {
   isAllowedOrigin,
   isLoopback,
   isLoopbackOrigin,
+  isRemoteRequest,
   tokenMatches,
 } from './security.js';
 
@@ -60,5 +61,30 @@ describe('security helpers', () => {
     expect(tokenMatches('abd', 'abc')).toBe(false);
     expect(tokenMatches('ab', 'abc')).toBe(false);
     expect(tokenMatches(undefined, 'abc')).toBe(false);
+  });
+
+  it('tells a remote client from the local page (P2-04)', () => {
+    const req = (remoteAddress: string | undefined, headers: Record<string, string> = {}) => ({
+      socket: { remoteAddress },
+      headers,
+    });
+    expect(isRemoteRequest(req('127.0.0.1'))).toBe(false);
+    expect(isRemoteRequest(req('::1', { origin: 'http://localhost:5173' }))).toBe(false);
+    // Tailscale Serve connects from loopback but carries the remote page's Origin or identity.
+    expect(isRemoteRequest(req('127.0.0.1', { origin: 'https://mymac.tail1234.ts.net' }))).toBe(
+      true,
+    );
+    expect(isRemoteRequest(req('127.0.0.1', { 'tailscale-user-login': 'me@example.com' }))).toBe(
+      true,
+    );
+    expect(isRemoteRequest(req('100.101.102.103'))).toBe(true);
+    expect(isRemoteRequest(req(undefined))).toBe(true); // A loopback proxy without Origin or identity still says where the request came from
+    // (wave-3 review): forwarding headers or a non-loopback Host make it remote.
+    expect(isRemoteRequest(req('127.0.0.1', { 'x-forwarded-for': '100.64.1.2' }))).toBe(true);
+    expect(isRemoteRequest(req('127.0.0.1', { forwarded: 'for=100.64.1.2' }))).toBe(true);
+    expect(isRemoteRequest(req('127.0.0.1', { host: 'mymac.tail1234.ts.net' }))).toBe(true);
+    expect(isRemoteRequest(req('127.0.0.1', { host: '127.0.0.1:7777' }))).toBe(false);
+    expect(isRemoteRequest(req('::1', { host: '[::1]:7777' }))).toBe(false);
+    expect(isRemoteRequest(req('127.0.0.1', { host: 'localhost:7777' }))).toBe(false);
   });
 });

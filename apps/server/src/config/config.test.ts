@@ -55,6 +55,24 @@ describe('loadConfig', () => {
     expect(loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '0' }).config.dev).toBe(false);
   });
 
+  it('never lets a remote client loosen the policy unless configured (P2-04)', () => {
+    expect(loadConfig({ GALACTIC_HOME: home }).config.autoApproveRemote).toBe(false);
+    expect(
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_AUTO_APPROVE_REMOTE: '1' }).config
+        .autoApproveRemote,
+    ).toBe(true);
+    const onDisk = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as object;
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ ...onDisk, autoApproveRemote: true }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.autoApproveRemote).toBe(true);
+    expect(
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_AUTO_APPROVE_REMOTE: '0' }).config
+        .autoApproveRemote,
+    ).toBe(false);
+  });
+
   it('rejects an invalid port', () => {
     expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_PORT: 'abc' })).toThrow(/Invalid port/);
   });

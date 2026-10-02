@@ -4,6 +4,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { startTestApp, TEST_TOKEN } from '../test/harness.js';
+import { projectHierarchy } from '../test/hierarchy.js';
 
 let composed: ComposedRuntime;
 let fake: FakeAdapter;
@@ -14,7 +15,8 @@ beforeEach(async () => {
   composed = composeRuntime(openDatabase(':memory:'), {
     adapters: [fake],
     flushMs: 10,
-    caps: { maxConcurrentAgents: 2 },
+    // Three: the control test runs a Harmonizer, a Waykeeper and a Steward (P2-20).
+    caps: { maxConcurrentAgents: 3 },
   });
   t = await startTestApp({
     log: composed.log,
@@ -86,8 +88,35 @@ describe('/api agent routes (P1-11)', () => {
         { name: 'fake', resumable: true, scenarios: expect.arrayContaining(['happy', 'asks']) },
       ],
       policies: ['default', 'trusting', 'cautious'],
-      maxConcurrentAgents: 2,
+      maxConcurrentAgents: 3,
     });
+  });
+
+  it("floors a remote client's policy at the global default unless configured (P2-04)", async () => {
+    const spawn = async (headers: Record<string, string>) => {
+      const res = await fetch(`${t.baseUrl}/api/agents`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${TEST_TOKEN}`,
+          'content-type': 'application/json',
+          ...headers,
+        },
+        body: JSON.stringify({
+          runtime: 'fake',
+          prompt: 'scenario:echo',
+          cwd: '/tmp',
+          policy: 'trusting',
+        }),
+      });
+      const id = ((await res.json()) as { agentId: string }).agentId;
+      return composed.log.tables.agents.get(id)?.meta?.['permissionPolicy'] as
+        { rules: Record<string, string> } | undefined;
+    };
+    const local = await spawn({});
+    expect(local?.rules['network']).toBe('allow');
+    const remote = await spawn({ origin: 'https://mymac.tail1234.ts.net' });
+    expect(remote?.rules['network']).toBe('ask');
+    expect(remote?.rules['edit_workspace']).toBe('allow');
   });
 
   it('spawns, messages, pauses, resumes and stops an agent', async () => {
@@ -143,6 +172,8 @@ describe('/api agent routes (P1-11)', () => {
 
     const b = await call('/api/agents', { runtime: 'fake', prompt: 'scenario:long', cwd: '/tmp' });
     expect(b.status).toBe(201);
+    const b2 = await call('/api/agents', { runtime: 'fake', prompt: 'scenario:long', cwd: '/tmp' });
+    expect(b2.status).toBe(201);
     const c = await call('/api/agents', { runtime: 'fake', prompt: 'scenario:long', cwd: '/tmp' });
     expect(c.status).toBe(409);
     expect(c.body['message']).toMatch(/concurrency cap/);
@@ -192,11 +223,13 @@ describe('POST /api/control (P2-14)', () => {
     const { commands, log } = composed;
     const project = (await commands.createProject({ name: 'CSV', workspace: '/tmp' })).value;
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
+    const { waykeeper } = await projectHierarchy(commands, project.id);
     const steward = (
       await commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         taskId: task.id,
+        supervisorId: waykeeper.id,
         prompt: 'scenario:long',
       })
     ).value;
