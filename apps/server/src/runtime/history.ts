@@ -7,7 +7,6 @@ import type {
   TranscriptChunk,
   TranscriptResponse,
 } from '@galactic/protocol';
-import type { TranscriptPipeline } from './transcripts.js';
 
 /**
  * Paged reads for the side panel (P25-01): an agent's conversation and its transcript, straight
@@ -21,7 +20,8 @@ import type { TranscriptPipeline } from './transcripts.js';
  * `<at>~m<seq>` or `<at>~r<chunkSeq>`, opaque to clients. The newest page comes first; `before`
  * pages back and `after` forward, so a reloaded chat can show the last page and load older ones
  * on scroll. A reply still buffered in the transcript pipeline (≤ 250 ms) is not in the page yet;
- * it arrives on the transcript stream.
+ * it arrives on the transcript stream subscribed from the page's `lastSeq` (the newest persisted
+ * chunk, read in the same synchronous call, so nothing falls between the page and the stream).
  */
 
 interface Cursor {
@@ -54,10 +54,7 @@ interface ChunkRow {
 export class History {
   private readonly stmts = new Map<string, Statement>();
 
-  constructor(
-    private readonly db: Database,
-    private readonly transcripts?: TranscriptPipeline,
-  ) {}
+  constructor(private readonly db: Database) {}
 
   private stmt(sql: string): Statement {
     let s = this.stmts.get(sql);
@@ -158,6 +155,7 @@ export class History {
     return {
       entries: page.map(([, entry]) => entry),
       hasMore: entries.length > q.limit,
+      lastSeq: this.maxSeq(agentId),
     };
   }
 
@@ -201,7 +199,7 @@ export class History {
         return { agentId, seq: r.seq, at: r.at, kind, text };
       }),
       hasMore: rows.length > q.limit,
-      lastSeq: this.transcripts?.lastSeq(agentId) ?? this.maxSeq(agentId),
+      lastSeq: this.maxSeq(agentId),
     };
   }
 

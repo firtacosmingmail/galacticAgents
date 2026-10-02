@@ -83,11 +83,16 @@ function clock(start = Date.parse('2026-10-02T10:00:00.000Z')) {
 }
 
 /** A log with an agent and a transcript pipeline on the same database, both clocked. */
-async function historyApp() {
+async function historyApp(pipeline: { holdMs?: number; flushMs?: number } = {}) {
   const db = openDatabase(':memory:');
   const c = clock();
   const log = new EventLog(db, { now: c.now });
-  const transcripts = new TranscriptPipeline(db, { now: c.now, holdMs: 0, flushMs: 1 });
+  const transcripts = new TranscriptPipeline(db, {
+    now: c.now,
+    holdMs: 0,
+    flushMs: 1,
+    ...pipeline,
+  });
   const agent = (id: string, role: AgentRole) =>
     log.runCommand((ctx) =>
       createAgent(ctx, {
@@ -124,6 +129,25 @@ async function historyApp() {
 }
 
 describe('GET /api/agents/:id/conversation (P25-01)', () => {
+  it("gives the persisted lastSeq, so a reply still buffered arrives on the stream", async () => {
+    const { t, transcripts, output } = await historyApp({ holdMs: 60_000, flushMs: 60_000 });
+    output('h1', 'text', 'persisted');
+    transcripts.append('h1', 'text', 'still buffered'); // no flush yet
+    expect(transcripts.lastSeq('h1')).toBe(2);
+    const page = ConversationResponse.parse((await get(t, '/api/agents/h1/conversation')).body);
+    expect(page.entries.map((e) => e.text)).toEqual(['persisted']);
+    expect(page.lastSeq).toBe(1);
+    const tail = TranscriptResponse.parse((await get(t, '/api/agents/h1/transcript')).body);
+    expect(tail.lastSeq).toBe(1);
+    const live: number[] = [];
+    const off = transcripts.subscribe('h1', page.lastSeq, (chunks) =>
+      live.push(...chunks.map((c) => c.seq)),
+    );
+    transcripts.flush();
+    off();
+    expect(live).toEqual([2]); // the buffered reply, not missed
+  });
+
   it('reads each page through the partial indexes: no sort, no scan of the chunks', async () => {
     const { log, message, output } = await historyApp();
     message('h1', 'hello');
@@ -143,7 +167,9 @@ describe('GET /api/agents/:id/conversation (P25-01)', () => {
         .map((p) => p.detail)
         .join(' | ');
       expect(plan, sql).not.toMatch(/TEMP B-TREE|SCAN/);
-      expect(plan, sql).toMatch(/USING INDEX (events_message_agent_at|transcript_text_at)/);
+      expect(plan, sql).toMatch(
+        /USING INDEX (events_message_agent_at|transcript_text_at)|USING COVERING INDEX sqlite_autoindex_transcript_chunks/,
+      );
     }
   });
 
@@ -227,7 +253,7 @@ describe('GET /api/agents/:id/conversation (P25-01)', () => {
       (await get(t, '/api/agents/h1/conversation', { authorization: 'Bearer x' })).status,
     ).toBe(401);
     const empty = ConversationResponse.parse((await get(t, '/api/agents/w1/conversation')).body);
-    expect(empty).toEqual({ entries: [], hasMore: false });
+    expect(empty).toEqual({ entries: [], hasMore: false, lastSeq: 0 });
   });
 });
 

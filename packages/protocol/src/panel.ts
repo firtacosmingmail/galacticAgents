@@ -62,6 +62,12 @@ export type ConversationQuery = z.input<typeof ConversationQuery>;
 export const ConversationResponse = z.object({
   entries: z.array(ConversationEntry),
   hasMore: z.boolean(),
+  /**
+   * The agent's newest **persisted** transcript `seq` when the page was read (0 for none): where
+   * the live transcript starts (`transcript.subscribe{since: lastSeq}`), so a reply still buffered
+   * in the pipeline (not in the page yet) arrives on the stream instead of being missed.
+   */
+  lastSeq: z.number().int().nonnegative(),
 });
 export type ConversationResponse = z.infer<typeof ConversationResponse>;
 
@@ -95,7 +101,11 @@ export const TranscriptResponse = z.object({
   /** Oldest first. */
   chunks: z.array(TranscriptChunk),
   hasMore: z.boolean(),
-  /** The newest persisted or buffered `seq` of the agent (0 for none). */
+  /**
+   * The agent's newest persisted `seq` when the page was read (0 for none): the `since` of a
+   * `transcript.subscribe` that continues it. Buffered chunks are not counted — they reach the
+   * subscriber with the next flush, which a `since` past them would drop.
+   */
   lastSeq: z.number().int().nonnegative(),
 });
 export type TranscriptResponse = z.infer<typeof TranscriptResponse>;

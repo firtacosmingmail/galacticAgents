@@ -55,7 +55,7 @@ export function registerPanelRoutes(
 ): void {
   void parent.register(async (app) => {
     const { log } = opts;
-    const history = new History(log.db, opts.transcripts);
+    const history = new History(log.db);
     app.addHook('onRequest', bearerGuard(config));
 
     const parse = <T>(
