@@ -14,9 +14,9 @@ import type { TranscriptPipeline } from './transcripts.js';
  * from the two streams of TECHNOLOGY §6.2 — never a scan of the whole log.
  *
  * **The conversation** of an agent is what the chat shows: every `message.sent` to it (the user's
- * lines, its subordinates' reports, the system's notices; the `(type, agentId)` index of
- * migration 0006) and every `text` chunk of its own transcript (its replies: the SDK adapter
- * emits one chunk per assistant text block, so a chunk is a whole reply). The two are merged by
+ * lines, its subordinates' reports, the system's notices) and every `text` chunk of its own
+ * transcript (its replies: the SDK adapter emits one chunk per assistant text block, so a chunk
+ * is a whole reply); both read through migration 0007's partial indexes. The two are merged by
  * time — (`at`, messages first, then `seq`) — and the position in that order is the cursor:
  * `<at>~m<seq>` or `<at>~r<chunkSeq>`, opaque to clients. The newest page comes first; `before`
  * pages back and `after` forward, so a reloaded chat can show the last page and load older ones
@@ -78,24 +78,28 @@ export class History {
     const forward = q.after !== undefined;
     const take = q.limit + 1;
 
-    // Messages: `src` 0. Older than the cursor: at < c.at, or the same instant and (the cursor is
-    // a reply, or an earlier id). Newer: at > c.at, or the same instant, the cursor a message, a
-    // later id. Replies: `src` 1, the mirror image.
+    // Messages: `src` 0. Older than the cursor: (at, id) below the cursor's when it is a message,
+    // else at <= its instant (messages come first at the same instant). Newer: the mirror image.
+    // Replies: `src` 1, likewise. Row values keep each bound one range of the partial indexes of
+    // migration 0007 — (agentId, at, id) over `message.sent`, (agent_id, at, seq) over the `text`
+    // chunks — which also serve the ORDER BY: a page reads only its rows.
     let msgWhere = '';
     let chunkWhere = '';
     const msgArgs: unknown[] = [agentId];
     const chunkArgs: unknown[] = [agentId];
     if (cursor) {
-      if (!forward) {
-        msgWhere = cursor.src === 1 ? 'AND at <= ?' : 'AND (at < ? OR (at = ? AND id < ?))';
-        chunkWhere = cursor.src === 1 ? 'AND (at < ? OR (at = ? AND seq < ?))' : 'AND at < ?';
+      const [lt, le] = forward ? ['>', '>='] : ['<', '<='];
+      if (cursor.src === 0) {
+        msgWhere = `AND (at, id) ${lt} (?, ?)`;
+        msgArgs.push(cursor.at, cursor.n);
+        chunkWhere = `AND at ${forward ? le : lt} ?`;
+        chunkArgs.push(cursor.at);
       } else {
-        msgWhere = cursor.src === 1 ? 'AND at > ?' : 'AND (at > ? OR (at = ? AND id > ?))';
-        chunkWhere = cursor.src === 1 ? 'AND (at > ? OR (at = ? AND seq > ?))' : 'AND at >= ?';
+        msgWhere = `AND at ${forward ? lt : le} ?`;
+        msgArgs.push(cursor.at);
+        chunkWhere = `AND (at, seq) ${lt} (?, ?)`;
+        chunkArgs.push(cursor.at, cursor.n);
       }
-      const three = [cursor.at, cursor.at, cursor.n];
-      msgArgs.push(...(cursor.src === 0 ? three : [cursor.at]));
-      chunkArgs.push(...(cursor.src === 1 ? three : [cursor.at]));
     }
     const dir = forward ? 'ASC' : 'DESC';
     const messages = this.stmt(
@@ -105,7 +109,8 @@ export class History {
     ).all(...msgArgs) as EventRow[];
     const replies = this.stmt(
       `SELECT seq, at, chunk FROM transcript_chunks
-        WHERE agent_id = ? AND json_extract(chunk, '$.kind') = 'text' ${chunkWhere}
+        WHERE agent_id = ? AND json_valid(chunk) AND json_extract(chunk, '$.kind') = 'text'
+          ${chunkWhere}
         ORDER BY at ${dir}, seq ${dir} LIMIT ${take}`,
     ).all(...chunkArgs) as ChunkRow[];
 

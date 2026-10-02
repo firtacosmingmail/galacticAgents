@@ -35,6 +35,7 @@ import {
   setGlobalDefaultPolicy,
 } from '../domain/permissions.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
+import { History } from '../runtime/history.js';
 import { ProcessSupervisor } from '../runtime/supervisor.js';
 import { TranscriptPipeline } from '../runtime/transcripts.js';
 import { startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
@@ -123,6 +124,29 @@ async function historyApp() {
 }
 
 describe('GET /api/agents/:id/conversation (P25-01)', () => {
+  it('reads each page through the partial indexes: no sort, no scan of the chunks', async () => {
+    const { log, message, output } = await historyApp();
+    message('h1', 'hello');
+    output('h1', 'text', 'Hi!');
+    const history = new History(log.db);
+    const first = history.conversation('h1', { limit: 1 });
+    const [m, r] = [first.entries[0]!, history.conversation('h1', { limit: 2 }).entries[0]!];
+    for (const cursor of [m.cursor, r.cursor, first.entries[0]!.cursor]) {
+      history.conversation('h1', { before: cursor, limit: 5 });
+      history.conversation('h1', { after: cursor, limit: 5 });
+    }
+    const sqls = [...(history as unknown as { stmts: Map<string, unknown> }).stmts.keys()];
+    expect(sqls.length).toBeGreaterThanOrEqual(8); // newest page plus both cursor kinds × ways
+    for (const sql of sqls) {
+      const params = (sql.match(/\?/g) ?? []).map(() => 'x');
+      const plan = (log.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[])
+        .map((p) => p.detail)
+        .join(' | ');
+      expect(plan, sql).not.toMatch(/TEMP B-TREE|SCAN/);
+      expect(plan, sql).toMatch(/USING INDEX (events_message_agent_at|transcript_text_at)/);
+    }
+  });
+
   it('merges the messages to an agent and its replies by time, and pages both ways', async () => {
     const { t, message, output, clock: c } = await historyApp();
     message('h1', 'hello'); // 1
