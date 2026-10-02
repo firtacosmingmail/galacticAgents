@@ -115,7 +115,8 @@ describe('spawn caps through Commands.spawnAgent (P2-17)', () => {
   it('caps spawns per hour per spawning brain, even when its earlier Stewards have ended', async () => {
     const c = boot({ maxSpawnsPerHourPerBrain: 2 });
     const { waykeeper, tasks } = await projectWithTasks(c, 3);
-    for (const taskId of tasks.slice(0, 2)) await steward(c, taskId, waykeeper.id, 'scenario:fails');
+    for (const taskId of tasks.slice(0, 2))
+      await steward(c, taskId, waykeeper.id, 'scenario:fails');
     await until(() => c.runtime.caps.liveCount === 2);
     const error = await refusal(steward(c, tasks[2]!, waykeeper.id));
     expect(error.message).toMatch(
