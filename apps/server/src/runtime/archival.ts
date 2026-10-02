@@ -45,7 +45,8 @@ export interface ArchivalOptions {
 }
 
 export class Archival {
-  readonly retentionMs: number;
+  /** Mutable (P25-01): a settings write applies from the next sweep on. */
+  retentionMs: number;
   private readonly timers: Timers;
   private handle: unknown;
 

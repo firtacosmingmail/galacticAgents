@@ -69,6 +69,11 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     reason: 'cap',
   },
   'agent.interrupted': { type: 'agent.interrupted', ...steward, reason: 'server shutdown' },
+  'recovery.needs_attention': {
+    type: 'recovery.needs_attention',
+    agentId: steward.agentId,
+    reason: 'resume failed: no session',
+  },
   'agent.stopped': { type: 'agent.stopped', ...steward, by: waykeeper },
 
   'message.sent': {

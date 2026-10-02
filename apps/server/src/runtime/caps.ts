@@ -107,6 +107,20 @@ export class CapsEnforcer {
     return this.opts.maxConcurrentAgents;
   }
 
+  /**
+   * Changes the limits live (P25-01: the settings page). The next spawn check and the next agent's
+   * defaults use them; agents already running keep the caps they started with, and a lowered
+   * concurrency or Stewards-per-Waykeeper cap stops nobody, it only refuses new spawns.
+   */
+  update(next: Partial<SpawnCaps> & { maxConcurrentAgents?: number; defaults?: AgentCaps }): void {
+    const { maxConcurrentAgents, defaults, ...spawn } = next;
+    if (maxConcurrentAgents !== undefined) this.opts.maxConcurrentAgents = maxConcurrentAgents;
+    if (defaults !== undefined) this.opts.defaults = defaults;
+    for (const [key, value] of Object.entries(spawn) as [keyof SpawnCaps, number | undefined][]) {
+      if (value !== undefined) this.spawnCaps[key] = value;
+    }
+  }
+
   /** Fills missing caps from the defaults. */
   resolve(caps?: Partial<AgentCaps>): AgentCaps {
     return { ...this.opts.defaults, ...(caps ?? {}) };

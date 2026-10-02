@@ -1,7 +1,7 @@
 # Phase 2.5 — Minimal side panel
 
-**Current task:** — (phase not started; first task will be P25-01 / P25-02 in parallel) · **Task status:** —
-**Phase status:** not started (0/9 done)
+**Current task:** wave 2 next — P25-03, P25-04, P25-05, P25-06 (after `p25-wave1-endpoints-shell` is merged into `phase-2.5`) · **Task status:** todo
+**Phase status:** in progress (2/9 done) — on branch `phase-2.5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -38,12 +38,12 @@ A daily-usable product before any 3D (SPEC decision 19): the spec's side panel i
 ## Tasks
 
 ### P25-01 — Server endpoints for the panel
-- **Status:** todo · **Depends on:** P2-18 · **Parallel with:** P25-02
+- **Status:** done (2026-10-02) · **Depends on:** P2-18 · **Parallel with:** P25-02
 - REST/WS additions: conversation history per brain (messages with `sender`, paged), Steward transcript (from P1-06), settings read/write (projects root, default permission policy, retention, caps, quality tier), runtime preflight (Claude installed, logged in, version), notification events feed.
 - **Acceptance:** endpoints typed in `packages/protocol`; tests for history paging and settings validation.
 
 ### P25-02 — Panel app shell and selection model
-- **Status:** todo · **Depends on:** P0-09, P2-15 · **Parallel with:** P25-01
+- **Status:** done (2026-10-02) · **Depends on:** P0-09, P2-15 · **Parallel with:** P25-01
 - Layout: left navigation (Harmonizer, projects → Waykeepers, asteroid tasks), main conversation area, right column for managed agents/inbox; selection state in the store; routing; "list mode" is the only mode for now; ops console reachable at `/debug`.
 - **Acceptance:** navigating between Harmonizer, a Waykeeper and a Steward changes the selection and the main area.
 

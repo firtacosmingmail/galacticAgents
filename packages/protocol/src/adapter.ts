@@ -1,6 +1,7 @@
 import type { AgentCaps, ToolCall } from './domain.js';
 import type { AgentRole, AgentRuntime, PermissionAction } from './enums.js';
 import type { AgentEvent } from './events.js';
+import type { RuntimePreflight } from './panel.js';
 import type { Id } from './primitives.js';
 
 /**
@@ -122,4 +123,9 @@ export interface AgentAdapter {
   readonly events: AsyncIterable<AgentEvent>;
   /** Stops every session and releases resources. */
   dispose(): Promise<void>;
+  /**
+   * Checks that the runtime can run here (P25-01; SPEC §4.6): installed, logged in, versions,
+   * with fixable messages. Never throws: a failed check is a problem in the result.
+   */
+  preflight?(): Promise<RuntimePreflight>;
 }

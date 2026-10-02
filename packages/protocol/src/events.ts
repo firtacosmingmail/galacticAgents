@@ -150,6 +150,20 @@ export const AgentInterrupted = z.object({
   pending: z.array(Id).optional(),
 });
 
+/**
+ * Startup recovery left this agent interrupted (P25-01; SPEC §4.5, decision 46): it was not
+ * resumed (one Harmonizer at a time), its resume failed, or a resumed session was lost before its
+ * first turn and no fresh session could replace it. The work waits for the user's "Resume
+ * session"; this is what the "work interrupted by a restart" notification keys on — never on
+ * `agent.interrupted` itself, which every graceful shutdown and session reset logs too. Logged at
+ * most once per interruption (until the agent is spawned again). Emitted by the runtime only.
+ */
+export const RecoveryNeedsAttention = z.object({
+  type: z.literal('recovery.needs_attention'),
+  agentId: Id,
+  reason: z.string(),
+});
+
 /** Everything an adapter (or the runtime, for `agent.spawned`) may emit about a running agent. */
 export const AgentEvent = z.discriminatedUnion('type', [
   AgentSpawned,
@@ -491,6 +505,7 @@ export const Event = z.discriminatedUnion('type', [
   AgentFailed,
   AgentStopped,
   AgentInterrupted,
+  RecoveryNeedsAttention,
   MessageSent,
   MessageDelivered,
   QuestionOpened,

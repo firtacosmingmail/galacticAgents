@@ -219,7 +219,7 @@ function isInside(child: string, parent: string): boolean {
 }
 
 /** Resolves symlinks of the longest existing prefix, so a not-yet-created path compares truly. */
-function canonical(path: string): string {
+export function canonical(path: string): string {
   const abs = resolve(path);
   let existing = abs;
   const rest: string[] = [];
@@ -230,6 +230,26 @@ function canonical(path: string): string {
     existing = parent;
   }
   return join(realpathSync(existing), ...rest);
+}
+
+/**
+ * Why a folder must not be handed to agents (as a workspace or as the projects root, the
+ * Harmonizer's cwd and every new project's parent), or `undefined` when it may be. `path`,
+ * `home` and `dataDir` must be canonical (`canonical()`): `/`, the home directory itself, and
+ * anything inside or containing the server's data directory (the token in `config.json`, the
+ * SQLite) are refused. `what` names the thing in the message ("the workspace").
+ */
+export function unsafeFolder(
+  path: string,
+  places: { home: string; dataDir: string },
+  what: string,
+): string | undefined {
+  if (path === canonical('/')) return `${what} cannot be /`;
+  if (path === places.home) return `${what} cannot be the home directory itself`;
+  if (isInside(path, places.dataDir) || isInside(places.dataDir, path)) {
+    return `${what} cannot contain or be inside the server's data directory (${places.dataDir})`;
+  }
+  return undefined;
 }
 
 export class Workspaces {
@@ -275,18 +295,10 @@ export class Workspaces {
       throw new DomainError('invalid', `a workspace must be an absolute path: ${path}`);
     }
     const abs = canonical(expanded);
-    if (abs === canonical('/')) throw new DomainError('invalid', 'the workspace cannot be /');
-    if (abs === this.home) {
-      throw new DomainError('invalid', 'the workspace cannot be the home directory itself');
-    }
+    const unsafe = unsafeFolder(abs, { home: this.home, dataDir: this.dataDir }, 'the workspace');
+    if (unsafe) throw new DomainError('invalid', unsafe);
     if (abs === this.projectsRoot) {
       throw new DomainError('invalid', 'the workspace cannot be the projects root itself');
-    }
-    if (isInside(abs, this.dataDir) || isInside(this.dataDir, abs)) {
-      throw new DomainError(
-        'invalid',
-        `the workspace cannot contain or be inside the server's data directory (${this.dataDir})`,
-      );
     }
     return abs;
   }

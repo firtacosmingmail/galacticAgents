@@ -8,6 +8,15 @@ import type {
 } from '@galactic/protocol';
 import { applyEvent, applySnapshot, emptyWorld, type WorldState } from './reduce.js';
 import type { ConnectionStatus } from '../client/client.js';
+import {
+  currentLocation,
+  HARMONIZER,
+  pathFor,
+  sameSelection,
+  type PageLocation,
+  type Route,
+  type Selection,
+} from './selection.js';
 
 export const MAX_LOG = 200;
 /** Transcript chunks kept per agent (oldest dropped). */
@@ -55,13 +64,49 @@ export interface AppState {
   reset: () => void;
   /** Adds an agent's messages read from the REST history. */
   addMessages: (agentId: Id, messages: ChatMessage[]) => void;
+  /**
+   * The page's route and the panel's selection (P25-02). These are the only fields not derived
+   * from the stream: they are the user's navigation, mirrored in the URL (history API) so a deep
+   * link or a reload restores them. `reset()` leaves them alone.
+   */
+  route: Route;
+  selection: Selection;
+  /** Selects who the main area shows, on the panel; pushes a history entry when it changes. */
+  select: (selection: Selection) => void;
+  /** Selects an agent by id, by its role (unknown ids and roles keep the selection). */
+  selectAgent: (agentId: Id) => void;
+  /** Goes to a route and selection; `replace` rewrites the current history entry instead. */
+  navigate: (location: PageLocation, opts?: { replace?: boolean }) => void;
+  /** Reads the route and selection back from the URL (on load and on back/forward). */
+  syncFromLocation: () => void;
   /** Set while a session runs: open / close the transcript stream of an agent. */
   subscribeTranscript?: ((agentId: Id) => void) | undefined;
   unsubscribeTranscript?: ((agentId: Id) => void) | undefined;
 }
 
 /** Client state is derived from the stream only: the store has no other inputs. */
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
+  ...currentLocation(),
+  select: (selection) => get().navigate({ route: 'panel', selection }),
+  selectAgent: (agentId) => {
+    const agent = get().world.agents[agentId];
+    if (!agent) return;
+    get().select(agent.role === 'harmonizer' ? HARMONIZER : { kind: agent.role, id: agent.id });
+  },
+  navigate: (location, opts) => {
+    const { route, selection } = get();
+    const unchanged = route === location.route && sameSelection(selection, location.selection);
+    if (typeof window !== 'undefined') {
+      const path = pathFor(location);
+      if (opts?.replace) window.history.replaceState(null, '', path);
+      else if (window.location.pathname !== path) window.history.pushState(null, '', path);
+    }
+    if (!unchanged) set({ route: location.route, selection: location.selection });
+  },
+  syncFromLocation: () => {
+    const location = currentLocation();
+    get().navigate(location, { replace: true }); // canonicalises an unrecognised path
+  },
   world: emptyWorld(),
   log: [],
   transcripts: {},
