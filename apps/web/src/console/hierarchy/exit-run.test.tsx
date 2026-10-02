@@ -201,22 +201,14 @@ describe('the Phase 2 exit run from the hierarchy console (P2-18)', () => {
     const waykeeper = h.script('waykeeper');
     waykeeper
       .once(firstTurn, async (t) => {
-        // The first turn can start before the runner learned its agent id (a tool call then is
-        // refused, "the brain has not been spawned yet"; see the P2-18 notes): a model takes
-        // longer than that to answer, so the script waits the same way.
-        const input = {
+        // A first-turn tool call works even for a brain started from inside another brain's tool
+        // (P2-16 fixed the race P2-18 found).
+        const out = await t.call<{ tasks: { taskId: Id }[] }>('plan_tasks', {
           summary: 'Reader and writer',
           rationale: 'Two separable pieces',
           tasks: [{ description: 'read CSV' }, { description: 'write Parquet' }],
-        };
-        for (let i = 0; i < 100; i++) {
-          const out = await t.try('plan_tasks', input);
-          if (out.ok) {
-            plan = (out.value as { tasks: { taskId: Id }[] }).tasks.map((x) => x.taskId);
-            return;
-          }
-          await new Promise((r) => setTimeout(r, 10));
-        }
+        });
+        plan = out.tasks.map((x) => x.taskId);
       })
       .once(/proposal \S+ was approved/, async (t) => {
         await t.call('spawn_steward', { taskId: plan[0], instructions: 'scenario:reader' });
