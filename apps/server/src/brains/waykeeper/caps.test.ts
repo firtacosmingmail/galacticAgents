@@ -131,5 +131,9 @@ describe('Waykeeper under the spawn caps (P2-17)', () => {
     const stewards = h.queries.supervisedAgents(wk.agentId);
     expect(stewards.map((s) => s.agent.taskId).sort()).toEqual([plan[0], plan[1]].sort());
     expect(h.log.tables.agents.all().some((a) => a.taskId === plan[2])).toBe(false);
+    // …and no worktree or branch: the one made for the refused spawn was removed (review).
+    expect(h.log.tables.tasks.get(plan[2]!)?.worktreePath).toBeUndefined();
+    expect(git(dir, 'worktree', 'list').split('\n')).toHaveLength(3);
+    expect(git(dir, 'branch', '--list').split('\n')).toHaveLength(3);
   });
 });
