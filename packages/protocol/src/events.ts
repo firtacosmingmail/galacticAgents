@@ -63,6 +63,11 @@ export const AgentSpawned = z.object({
   supervisorId: Id.optional(),
   taskId: Id.optional(),
   projectId: Id.optional(),
+  /**
+   * A reopened brain's first prompt folded the log up to this seq (P2-16): once that session's
+   * first turn ends (`agent.idle`), a later requeue cuts here.
+   */
+  foldedUpTo: z.number().int().nonnegative().optional(),
 });
 
 /** Transcript traffic. Routed to `transcript_chunks`, never persisted in `events` (TECHNOLOGY §6.2). */

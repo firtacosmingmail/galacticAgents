@@ -22,13 +22,16 @@ const RULES = {
   },
   'task.created': always,
   'control.pause': always,
+  'agent.finished': always,
+  'question.cancelled': always,
 } as unknown as WakeRules;
 const scope = { brainId: B, role: 'waykeeper' } as unknown as WakeScope;
 
 function logOf(events: Partial<Event>[]) {
+  // One `at` per command: every event its own, unless it names the command it belongs to (`cmd`).
   const envelopes = events.map((event, i) => ({
     seq: i + 1,
-    at: '2026-10-02T00:00:00.000Z',
+    at: `2026-10-02T00:00:${String((event as { cmd?: number }).cmd ?? i).padStart(2, '0')}.000Z`,
     event: event as Event,
   })) as EventEnvelope[];
   return {
@@ -105,5 +108,52 @@ describe('requeue (P2-16)', () => {
         sent('new', USER),
       ]),
     ).toEqual(['said new']);
+  });
+
+  it('keeps other agents’ lifecycle in the brain’s own turn, not what its own command caused', () => {
+    expect(
+      lines([
+        created,
+        sent('turn-1', SYSTEM),
+        delivered('turn-1'),
+        { type: 'agent.finished', agentId: 'a-steward', tag: 'other' } as unknown as Event,
+        task('own'),
+        // One command of the brain (stop_steward): its actor-less effect goes with it.
+        {
+          type: 'control.pause',
+          target: { kind: 'agent', id: 'x' },
+          by: { type: 'agent', id: B },
+          cmd: 90,
+        } as unknown as Event,
+        { type: 'question.cancelled', agentId: 'x', tag: 'own', cmd: 90 } as unknown as Event,
+        { type: 'question.cancelled', agentId: 'y', tag: 'other' } as unknown as Event,
+        { type: 'agent.idle', agentId: B } as Event,
+      ]),
+    ).toEqual(['agent.finished other', 'question.cancelled other']);
+  });
+
+  it('an earlier reopen cuts at its watermark once its first turn ended', () => {
+    const before = [
+      created,
+      sent('turn-1', SYSTEM),
+      delivered('turn-1'),
+      { type: 'agent.idle', agentId: B } as Event,
+      { type: 'agent.interrupted', agentId: B, reason: 'server restarted' } as Event,
+      task('recovery noise'), // seq 6: folded into the reopened session's first prompt
+    ];
+    const spawned = { type: 'agent.spawned', agentId: B, foldedUpTo: 6 } as unknown as Event;
+    // The first turn ended: nothing up to the watermark comes back (no double fold).
+    expect(
+      lines([...before, spawned, { type: 'agent.idle', agentId: B } as Event, task('after')]),
+    ).toEqual(['task.created after']);
+    // The session was lost before its first turn ended: what it was given is folded again.
+    expect(
+      lines([
+        ...before,
+        spawned,
+        { type: 'agent.interrupted', agentId: B, reason: 'resume failed' } as Event,
+        task('after'),
+      ]),
+    ).toEqual(['task.created recovery noise', 'task.created after']);
   });
 });

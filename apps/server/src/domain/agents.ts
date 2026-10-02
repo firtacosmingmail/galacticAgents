@@ -189,6 +189,7 @@ export function recordSpawned(
   ctx: CommandContext,
   agent: Agent,
   sessionRef: string | undefined,
+  extra: { foldedUpTo?: number } = {},
 ): Agent {
   let current = agent;
   if (sessionRef && sessionRef !== agent.sessionRef) {
@@ -204,6 +205,7 @@ export function recordSpawned(
     ...(current.supervisorId ? { supervisorId: current.supervisorId } : {}),
     ...(current.taskId ? { taskId: current.taskId } : {}),
     ...(current.projectId ? { projectId: current.projectId } : {}),
+    ...(extra.foldedUpTo !== undefined ? { foldedUpTo: extra.foldedUpTo } : {}),
   });
   return current;
 }
