@@ -19,7 +19,12 @@ function fakeTimers() {
     },
     clearInterval: () => void cleared++,
   };
-  return { timers, tick: () => ticks.forEach((t) => t()), count: () => ticks.length, cleared: () => cleared };
+  return {
+    timers,
+    tick: () => ticks.forEach((t) => t()),
+    count: () => ticks.length,
+    cleared: () => cleared,
+  };
 }
 
 async function closedProject(composed: ReturnType<typeof composeRuntime>) {
@@ -69,7 +74,11 @@ describe('archival job (P2-13)', () => {
     const errors: unknown[] = [];
     const fake = fakeTimers();
     const archival = new Archival({
-      log: { runCommand: () => { throw new Error('db gone'); } } as never,
+      log: {
+        runCommand: () => {
+          throw new Error('db gone');
+        },
+      } as never,
       timers: fake.timers,
       onError: (e) => errors.push(e),
     });

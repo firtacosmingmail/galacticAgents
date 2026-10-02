@@ -57,7 +57,10 @@ export const askClosureTool: BrainTool = {
     await ctx.commands.updateProject(projectId, {
       meta: {
         ...project.meta,
-        closureRequest: { ...(request ?? { by: ctx.brainId, summary: summary ?? '' }), questionId: value.id },
+        closureRequest: {
+          ...(request ?? { by: ctx.brainId, summary: summary ?? '' }),
+          questionId: value.id,
+        },
       },
     });
     return { questionId: value.id, projectId };
@@ -121,4 +124,8 @@ export const finishedWorkTool: BrainTool = {
   },
 };
 
-export const CLOSURE_TOOLS: readonly BrainTool[] = [askClosureTool, closeProjectTool, finishedWorkTool];
+export const CLOSURE_TOOLS: readonly BrainTool[] = [
+  askClosureTool,
+  closeProjectTool,
+  finishedWorkTool,
+];

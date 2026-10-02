@@ -121,7 +121,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
 
   const retentionEnv = env['GALACTIC_RETENTION_DAYS'];
   const retentionDays =
-    retentionEnv !== undefined ? Number(retentionEnv) : (file.retentionDays ?? DEFAULT_RETENTION_DAYS);
+    retentionEnv !== undefined
+      ? Number(retentionEnv)
+      : (file.retentionDays ?? DEFAULT_RETENTION_DAYS);
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
     throw new Error(`Invalid retention period (days): ${retentionEnv ?? file.retentionDays}`);
   }

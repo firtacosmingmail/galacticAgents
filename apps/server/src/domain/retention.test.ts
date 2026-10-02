@@ -103,7 +103,9 @@ describe('retention and archival (P2-13)', () => {
     const { log, run, clock } = world();
     const t = run((ctx) => createTask(ctx, { description: 'keep me' })).value;
     run((ctx) => closeTask(ctx, t.id, USER));
-    run((ctx) => recordControl(ctx, { kind: 'task', id: t.id }, { action: 'pin', pinned: true }, USER));
+    run((ctx) =>
+      recordControl(ctx, { kind: 'task', id: t.id }, { action: 'pin', pinned: true }, USER),
+    );
     clock.advance(RETENTION * 2);
     expect(sweepRetention(log, RETENTION).archived).toEqual([]);
   });
@@ -189,7 +191,12 @@ describe('reopen (P2-13)', () => {
     sweepRetention(log, RETENTION);
     // Someone else takes its moon.
     run((ctx) =>
-      createProject(ctx, { ...input, name: 'Other docs', bodyId: sub.bodyId, parentProjectId: planet.id }),
+      createProject(ctx, {
+        ...input,
+        name: 'Other docs',
+        bodyId: sub.bodyId,
+        parentProjectId: planet.id,
+      }),
     );
     run((ctx) => reopenProject(ctx, sub.id, USER));
     const body = tables.bodies.get(tables.projects.get(sub.id)!.bodyId)!;

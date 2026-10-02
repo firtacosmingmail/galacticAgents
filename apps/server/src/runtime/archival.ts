@@ -1,6 +1,11 @@
 import { DEFAULT_RETENTION_MS } from '../domain/bodies.js';
 import type { EventLog } from '../domain/event-log.js';
-import { retained, sweepRetention, type RetentionItem, type SweepReport } from '../domain/retention.js';
+import {
+  retained,
+  sweepRetention,
+  type RetentionItem,
+  type SweepReport,
+} from '../domain/retention.js';
 
 /**
  * The scheduled archival job (P2-13; SPEC decision 4, 15): an interval timer in the runtime
