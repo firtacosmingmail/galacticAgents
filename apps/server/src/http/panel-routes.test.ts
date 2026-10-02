@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ConversationResponse,
   DEFAULT_PERMISSION_POLICY,
@@ -622,8 +622,18 @@ describe('GET /api/preflight (P25-01)', () => {
     expect(res.runtimes[0]!.problems[0]!.fix).toBeTruthy();
     await get(t, '/api/preflight'); // cached
     expect(calls).toBe(1);
-    await get(t, '/api/preflight?refresh=1');
-    expect(calls).toBe(2);
+    await get(t, '/api/preflight?refresh=1'); // within 5 s of the last run: the cached result
+    expect(calls).toBe(1);
+    const realNow = Date.now.bind(Date);
+    const later = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 6_000);
+    try {
+      await get(t, '/api/preflight?refresh=1');
+      expect(calls).toBe(2);
+      await get(t, '/api/preflight?refresh=1'); // rate-limited again
+      expect(calls).toBe(2);
+    } finally {
+      later.mockRestore();
+    }
     expect((await get(t, '/api/preflight', { authorization: 'Bearer nope' })).status).toBe(401);
   });
 });

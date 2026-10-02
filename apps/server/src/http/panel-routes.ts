@@ -46,6 +46,11 @@ export interface PanelRoutesOptions {
   settings?: SettingsService;
   /** How long a preflight result is reused (default 30 s); `?refresh=1` runs it again. */
   preflightTtlMs?: number;
+  /**
+   * The youngest result `?refresh=1` may replace (default 5 s): a refresh within that time gets
+   * the cached result, so a client cannot keep the server spawning `claude`.
+   */
+  preflightMinRefreshMs?: number;
 }
 
 export function registerPanelRoutes(
@@ -128,6 +133,7 @@ export function registerPanelRoutes(
     const { runtime } = opts;
     if (runtime) {
       const ttl = opts.preflightTtlMs ?? 30_000;
+      const minRefresh = opts.preflightMinRefreshMs ?? 5_000;
       let cached: { at: number; value: PreflightResponse } | undefined;
       let running: Promise<PreflightResponse> | undefined;
       const check = async (): Promise<PreflightResponse> => {
@@ -164,8 +170,9 @@ export function registerPanelRoutes(
       };
       app.get('/api/preflight', async (req): Promise<PreflightResponse> => {
         const refresh = (req.query as { refresh?: string }).refresh;
-        const fresh = refresh === '1' || refresh === 'true';
-        if (!fresh && cached && Date.now() - cached.at < ttl) return cached.value;
+        const age = cached ? Date.now() - cached.at : Infinity;
+        const fresh = (refresh === '1' || refresh === 'true') && age >= minRefresh;
+        if (!fresh && age < ttl) return cached!.value;
         // Concurrent callers share one run (it spawns `claude` twice).
         running ??= check().finally(() => {
           running = undefined;

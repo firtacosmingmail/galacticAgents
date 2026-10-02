@@ -1,15 +1,22 @@
 import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PreflightProblem, RuntimePreflight } from '@galactic/protocol';
+import { INHERITED_ENV } from '../../runtime/supervisor.js';
 
 /**
  * The Claude runtime's preflight (P25-01; SPEC §4.6, decision 17): is Claude Code installed, is
  * it logged in — with a subscription, which decision 17 assumes — and which versions. The SDK
  * drives its own bundled Claude Code but shares the `claude` CLI's login (P1-08), so the login is
  * read from `claude auth status` (JSON), as `scripts/check-real.mjs` does. Every failure is a
- * problem with a fix, never an exception.
+ * problem with a fix, never an exception. Without a `claude` on the PATH the SDK still runs its
+ * bundled CLI: that is a warning (the bundled version is reported, and the login is read through
+ * the bundled binary when it can be found), not an error.
+ *
+ * The commands get the same allow-listed environment as an agent (`INHERITED_ENV`, P1-24): the
+ * server's token and any API key are not theirs, and the login they report is the agents' one.
  */
 
 /** Runs a command and resolves with its output, or with the error (`code` ENOENT: not found). */
@@ -20,12 +27,59 @@ export type Exec = (
 
 const TIMEOUT_MS = 10_000;
 
+/** The allow-listed part of the server's environment (what an agent's process inherits). */
+export function allowListedEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of INHERITED_ENV) {
+    const value = source[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
 export const execCommand: Exec = (file, args) =>
   new Promise((resolve) => {
-    execFile(file, args, { timeout: TIMEOUT_MS, encoding: 'utf8' }, (error, stdout, stderr) => {
-      resolve({ stdout, stderr, ...(error ? { error } : {}) });
-    });
+    execFile(
+      file,
+      args,
+      { timeout: TIMEOUT_MS, encoding: 'utf8', env: allowListedEnv() },
+      (error, stdout, stderr) => {
+        resolve({ stdout, stderr, ...(error ? { error } : {}) });
+      },
+    );
   });
+
+/** The Claude Code the Agent SDK bundles: its version (`manifest.json`) and binary, if found. */
+export interface BundledCli {
+  version?: string;
+  path?: string;
+}
+
+export function bundledCli(): BundledCli | undefined {
+  try {
+    const entry = fileURLToPath(import.meta.resolve('@anthropic-ai/claude-agent-sdk'));
+    const found: BundledCli = {};
+    try {
+      const manifest = JSON.parse(readFileSync(join(dirname(entry), 'manifest.json'), 'utf8')) as {
+        version?: unknown;
+      };
+      if (typeof manifest.version === 'string') found.version = manifest.version;
+    } catch {
+      // no manifest: an SDK without a bundled CLI, or another layout
+    }
+    try {
+      const native = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
+      const pkg = createRequire(entry).resolve(`${native}/package.json`);
+      const binary = join(dirname(pkg), process.platform === 'win32' ? 'claude.exe' : 'claude');
+      if (existsSync(binary)) found.path = binary;
+    } catch {
+      // the native package for this platform is not installed
+    }
+    return found.version || found.path ? found : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The Agent SDK's version from its package.json; `undefined` when it cannot be found. */
 export function sdkVersion(): string | undefined {
@@ -53,6 +107,7 @@ export async function claudePreflight(
   exec: Exec = execCommand,
   sdk: () => string | undefined = sdkVersion,
   binary = 'claude',
+  bundled: () => BundledCli | undefined = bundledCli,
 ): Promise<RuntimePreflight> {
   const problems: PreflightProblem[] = [];
   const result: RuntimePreflight = {
@@ -72,7 +127,33 @@ export async function claudePreflight(
     });
   }
 
-  const version = await exec(binary, ['--version']);
+  let version = await exec(binary, ['--version']);
+  if (version.error?.code === 'ENOENT') {
+    const cli = bundled();
+    if (cli) {
+      problems.push({
+        code: 'not_installed',
+        severity: 'warning',
+        message:
+          'No `claude` command on the PATH: agents run the Claude Code bundled with the Agent ' +
+          `SDK${cli.version ? ` (${cli.version})` : ''}.`,
+        fix: 'install Claude Code (https://claude.com/claude-code) to log in and check it from a terminal',
+      });
+      if (!cli.path) {
+        result.installed = true;
+        if (cli.version) result.version = cli.version;
+        problems.push({
+          code: 'auth_unreadable',
+          severity: 'error',
+          message: 'Could not read the Claude login: no `claude` command to ask.',
+          fix: LOGIN_FIX,
+        });
+        return finish(result);
+      }
+      binary = cli.path;
+      version = await exec(binary, ['--version']);
+    }
+  }
   if (version.error) {
     const missing = version.error.code === 'ENOENT';
     problems.push({
