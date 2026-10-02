@@ -69,6 +69,22 @@ describe('CapsEnforcer', () => {
     expect(caps.usage('a-1')).toBeUndefined();
   });
 
+  it('a paused agent’s wall clock stops; resume starts it again with what is left (review)', async () => {
+    const { caps, hits, advance } = make();
+    caps.track('a-1', { maxWallClockMs: 60, maxToolCalls: 100 });
+    advance(20);
+    caps.pause('a-1');
+    advance(1_000);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(hits).toEqual([]);
+    expect(caps.usage('a-1')?.wallClockMs).toEqual({ used: 20, limit: 60 });
+    caps.resume('a-1');
+    advance(5);
+    expect(caps.usage('a-1')?.wallClockMs).toEqual({ used: 25, limit: 60 });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(hits).toEqual([['a-1', 'wall-clock cap: 60 ms elapsed']]);
+  });
+
   it('release clears the timer; DEFAULT_CAPS are sane', async () => {
     const { caps, hits } = make();
     caps.track('a-1', { maxWallClockMs: 20, maxToolCalls: 100 });

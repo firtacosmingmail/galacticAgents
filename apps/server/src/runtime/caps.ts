@@ -75,7 +75,10 @@ export interface CapUsage {
 
 interface Tracked {
   caps: AgentCaps;
-  startedAt: number;
+  /** Wall-clock time used before the current run (the clock stops while the agent is paused). */
+  usedMs: number;
+  /** When the current run started; `undefined` while paused. */
+  runningSince: number | undefined;
   toolCalls: number;
   timer: NodeJS.Timeout | undefined;
   hit: boolean;
@@ -214,17 +217,45 @@ export class CapsEnforcer {
     this.release(agentId);
     const entry: Tracked = {
       caps,
-      startedAt: this.now(),
+      usedMs: 0,
+      runningSince: this.now(),
       toolCalls: 0,
       timer: undefined,
       hit: false,
       info,
     };
-    entry.timer = setTimeout(() => {
-      this.hit(agentId, entry, `wall-clock cap: ${formatMs(caps.maxWallClockMs)} elapsed`);
-    }, caps.maxWallClockMs);
-    entry.timer.unref?.();
+    this.arm(agentId, entry);
     this.tracked.set(agentId, entry);
+  }
+
+  /** Sets the wall-clock timer for what is left of the agent's cap. */
+  private arm(agentId: Id, entry: Tracked): void {
+    const left = Math.max(entry.caps.maxWallClockMs - entry.usedMs, 0);
+    entry.timer = setTimeout(() => {
+      this.hit(agentId, entry, `wall-clock cap: ${formatMs(entry.caps.maxWallClockMs)} elapsed`);
+    }, left);
+    entry.timer.unref?.();
+  }
+
+  /**
+   * A paused agent's wall clock stops (review of wave 5): a pause of any kind — the user's, a
+   * promotion card's while the user decides — is time the agent does not work, so it never runs
+   * down the cap. `resume` starts it again with what is left.
+   */
+  pause(agentId: Id): void {
+    const entry = this.tracked.get(agentId);
+    if (!entry || entry.hit || entry.runningSince === undefined) return;
+    entry.usedMs += this.now() - entry.runningSince;
+    entry.runningSince = undefined;
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.timer = undefined;
+  }
+
+  resume(agentId: Id): void {
+    const entry = this.tracked.get(agentId);
+    if (!entry || entry.hit || entry.runningSince !== undefined) return;
+    entry.runningSince = this.now();
+    this.arm(agentId, entry);
   }
 
   /** Counts tool calls and releases finished agents. Safe to feed every agent event. */
@@ -270,7 +301,11 @@ export class CapsEnforcer {
     const entry = this.tracked.get(agentId);
     if (!entry) return undefined;
     return {
-      wallClockMs: { used: this.now() - entry.startedAt, limit: entry.caps.maxWallClockMs },
+      wallClockMs: {
+        used:
+          entry.usedMs + (entry.runningSince === undefined ? 0 : this.now() - entry.runningSince),
+        limit: entry.caps.maxWallClockMs,
+      },
       toolCalls: { used: entry.toolCalls, limit: entry.caps.maxToolCalls },
     };
   }

@@ -580,12 +580,15 @@ export class AgentRuntime {
     this.record({ type: 'control.pause', target: { kind: 'agent', id: agentId }, by });
     live.paused = true;
     live.inbox.paused();
+    // A paused agent's wall clock stops (its cap counts working time only).
+    this.caps.pause(agentId);
     try {
       await live.adapter.pause(session);
     } catch (error) {
       // The adapter refused (nothing to freeze): the runtime is not paused either.
       live.paused = false;
       live.inbox.resumed(live.idle);
+      this.caps.resume(agentId);
       throw error;
     }
   }
@@ -603,6 +606,7 @@ export class AgentRuntime {
   private unpaused(live: Live): void {
     if (!live.paused) return;
     live.paused = false;
+    this.caps.resume(live.agent.id);
     live.inbox.resumed(live.idle);
   }
 

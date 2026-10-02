@@ -425,6 +425,16 @@ describe('AgentRuntime — hard caps (P1-02)', () => {
     expect(failed).toMatchObject({ reason: 'cap', error: 'wall-clock cap: 120 ms elapsed' });
     expect(rig.eventsOf(agent.id)).not.toContain('agent.finished');
   });
+
+  it('a paused agent does not run down its wall-clock cap (review)', async () => {
+    const rig = make({ speed: 1 });
+    const agent = await spawnOk(rig, req('scenario:long', { caps: { maxWallClockMs: 150 } }));
+    await rig.runtime.pause(agent.id, USER);
+    await sleep(300);
+    expect(rig.eventsOf(agent.id)).not.toContain('agent.failed');
+    await rig.runtime.resumeAgent(agent.id, USER);
+    await rig.waitFor(() => rig.eventsOf(agent.id).includes('agent.failed'));
+  });
 });
 
 describe('AgentRuntime — status store wiring (P1-05)', () => {
