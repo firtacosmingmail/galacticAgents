@@ -1,5 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { loadConfig } from './config/config.js';
+import { SettingsService } from './config/settings.js';
+import { setGlobalDefaultPolicy } from './domain/permissions.js';
 import { buildApp } from './app.js';
 import {
   harmonizerBrain,
@@ -19,6 +21,8 @@ import { ProcessSupervisor } from './runtime/supervisor.js';
 import { Workspaces } from './workspace/workspaces.js';
 
 const { config, tokenGenerated } = loadConfig();
+// The global default permission table from the settings (P25-01), before any agent runs.
+setGlobalDefaultPolicy(config.defaultPermissionPolicy);
 const onError = (error: unknown, context: string) =>
   console.error(`[runtime] ${context}:`, error instanceof Error ? error.message : error);
 
@@ -40,6 +44,10 @@ const composed = composeRuntime(db, {
     new ClaudeSdkAdapter({
       supervisor,
       ...(process.env['GALACTIC_MODEL'] ? { model: process.env['GALACTIC_MODEL'] } : {}),
+      // SPEC §8 open question: Stewards load `~/.claude` unless the settings say not (P25-01).
+      ...(config.stewardsLoadUserSettings === false
+        ? { stewardSettingSources: ['project', 'local'] as ('project' | 'local')[] }
+        : {}),
       onError,
     }),
   ],
@@ -53,6 +61,12 @@ const composed = composeRuntime(db, {
   archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
 });
 const { log, statuses, transcripts } = composed;
+// The settings page (P25-01): caps and retention apply live through the runtime and the job.
+const settings = new SettingsService({
+  config,
+  caps: composed.runtime.caps,
+  archival: composed.archival,
+});
 
 // Shutdown is wired before anything is resumed or listening (P1-32): a signal during recovery
 // or a failed listen still interrupts the agents and saves their sessions.
@@ -137,6 +151,7 @@ const app = buildApp({
   transcripts,
   runtime: composed.runtime,
   commands: composed.commands,
+  settings,
   scenarios: () => fake.scenarioNames(),
   logger: process.env['GALACTIC_LOG'] !== 'silent',
   ...(webDir ? { webDir } : {}),

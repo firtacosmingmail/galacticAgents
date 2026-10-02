@@ -7,6 +7,8 @@ import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
+import { registerPanelRoutes } from './http/panel-routes.js';
+import type { SettingsService } from './config/settings.js';
 import type { EventLog } from './domain/event-log.js';
 import type { StatusStore } from './runtime/status-store.js';
 import type { TranscriptPipeline } from './runtime/transcripts.js';
@@ -30,6 +32,8 @@ export interface AppOptions {
   scenarios?: () => string[];
   /** The command surface (P2-01): enables `POST /api/control` (P2-14). */
   commands?: AgentRoutesOptions['commands'];
+  /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
+  settings?: SettingsService;
   logger?: boolean;
 }
 
@@ -97,6 +101,15 @@ export function buildApp(opts: AppOptions): App {
       log: opts.log,
       ...(opts.scenarios ? { scenarios: opts.scenarios } : {}),
       ...(opts.commands ? { commands: opts.commands } : {}),
+    });
+  }
+  // The side panel's history, settings, preflight and notifications (P25-01).
+  if (opts.log) {
+    registerPanelRoutes(fastify, config, {
+      log: opts.log,
+      ...(opts.runtime ? { runtime: opts.runtime } : {}),
+      ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
+      ...(opts.settings ? { settings: opts.settings } : {}),
     });
   }
 
