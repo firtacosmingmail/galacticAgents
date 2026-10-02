@@ -200,6 +200,28 @@ describe('POST /api/questions/:id/answer with a version (P2-18)', () => {
     expect((await post('/api/questions/q-nope/answer', { answer: 'x' })).status).toBe(404);
     expect((await post(`/api/questions/${q2.id}/answer`, { answer: '' })).status).toBe(400);
   });
+
+  it('an adapter that fails to take the answer is a 500 that echoes nothing', async () => {
+    const spawned = await composed.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:asks',
+      cwd: '/w/s',
+    });
+    expect(spawned.ok).toBe(true);
+    const agentId = spawned.ok ? spawned.agent.id : '';
+    let questionId: string | undefined;
+    for (let i = 0; i < 200 && !questionId; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      questionId = composed.statuses.get(agentId)?.pendingQuestionId;
+    }
+    const adapter = composed.runtime.adapter('fake')!;
+    adapter.answer = () =>
+      Promise.reject(new Error('cli said: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789'));
+    const res = await post(`/api/questions/${questionId!}/answer`, { answer: 'ISO 8601' });
+    expect(res).toEqual({ status: 500, body: { error: 'internal' } });
+    expect(composed.log.tables.questions.get(questionId!)?.status).toBe('open');
+  });
 });
 
 describe('GET /api/agents/:id/messages (P2-18)', () => {
@@ -218,5 +240,48 @@ describe('GET /api/agents/:id/messages (P2-18)', () => {
     expect(messages[0]!.seq).toBeLessThan(messages[1]!.seq);
     expect((await call('GET', '/api/agents/a-nope/messages')).status).toBe(404);
     expect((await call('GET', `/api/agents/${hq.id}/messages`, undefined, 'bad')).status).toBe(401);
+  });
+
+  it('returns the newest 200, as the stream carries them, through the index', async () => {
+    const hq = await spawnHarmonizer(composed.commands);
+    const key = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789';
+    composed.log.runCommand((ctx) => {
+      for (let i = 0; i < 205; i++) {
+        ctx.emit({
+          type: 'message.sent',
+          messageId: `m-${i}`,
+          agentId: hq.id,
+          sender: { type: 'user' },
+          // What the user typed is kept as written (TECHNOLOGY §8): the stream carries it so.
+          text: i === 204 ? `my key is ${key}` : `line ${i}`,
+          interrupt: false,
+        });
+        // Another agent's messages are not this chat's.
+        if (i % 50 === 0) {
+          ctx.emit({
+            type: 'message.sent',
+            messageId: `o-${i}`,
+            agentId: 'a-other',
+            sender: { type: 'user' },
+            text: 'elsewhere',
+            interrupt: false,
+          });
+        }
+      }
+    });
+    const { messages } = MessagesResponse.parse(
+      (await call('GET', `/api/agents/${hq.id}/messages`)).body,
+    );
+    expect(messages).toHaveLength(200);
+    expect(messages[0]!.messageId).toBe('m-5');
+    expect(messages.at(-1)!.text).toBe(`my key is ${key}`);
+    expect(messages.every((m, i) => i === 0 || m.seq > messages[i - 1]!.seq)).toBe(true);
+    const plan = composed.log.db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT id FROM events
+          WHERE type = ? AND json_extract(payload, '$.agentId') = ? ORDER BY id DESC LIMIT 200`,
+      )
+      .all('message.sent', hq.id) as { detail: string }[];
+    expect(plan.map((p) => p.detail).join(' ')).toContain('events_type_agent');
   });
 });

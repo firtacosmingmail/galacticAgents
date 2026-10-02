@@ -44,6 +44,8 @@ export interface AgentRoutesOptions {
 }
 
 const USER: Actor = { type: 'user' };
+/** How many messages `GET /api/agents/:id/messages` returns (the newest). */
+const CHAT_HISTORY = 200;
 
 /**
  * A refusal's message comes from the runtime or the adapter and may carry CLI stderr: redact it
@@ -174,7 +176,7 @@ export function registerAgentRoutes(
         return reply.code(500).send({ error: 'internal' });
       }
       if (error.code === 'not_found') {
-        return reply.code(404).send({ error: 'not_found', message: error.message });
+        return reply.code(404).send({ error: 'not_found', message: redactSecrets(error.message) });
       }
       if (error.code === 'invalid') {
         return reply.code(400).send({ error: 'invalid', message: redactSecrets(error.message) });
@@ -229,25 +231,28 @@ export function registerAgentRoutes(
     }
 
     /**
-     * The messages sent to an agent (P2-18): the chat boxes' history after a reload, read from
-     * the log's `message.sent` events — the same events the page folds live from the stream.
+     * The messages sent to an agent (P2-18): the chat boxes' history after a reload or a snapshot,
+     * read from the log's `message.sent` events — the same events the page folds live from the
+     * stream, so the text is what the stream carries (user-written text is not redacted,
+     * TECHNOLOGY §8; a Steward's report was redacted when it was made). The last 200, through the
+     * `(type, agentId)` index.
      */
     app.get('/api/agents/:id/messages', async (req, reply) => {
       const id = agentId(req);
       if (!log.tables.agents.get(id)) return reply.code(404).send({ error: 'not_found' });
       const messages: ChatMessage[] = [];
-      for (const { seq, at, event } of log.eventsSince(0, Number.MAX_SAFE_INTEGER)) {
-        if (event.type !== 'message.sent' || event.agentId !== id) continue;
+      for (const { seq, at, event } of log.latestOf('message.sent', id, CHAT_HISTORY)) {
+        if (event.type !== 'message.sent') continue;
         messages.push({
           messageId: event.messageId,
           agentId: id,
           seq,
           at,
           sender: event.sender,
-          text: redactSecrets(event.text),
+          text: event.text,
         });
       }
-      return { messages: messages.slice(-200) } satisfies MessagesResponse;
+      return { messages } satisfies MessagesResponse;
     });
 
     /**
@@ -272,10 +277,8 @@ export function registerAgentRoutes(
         });
         return { ok: true };
       } catch (error) {
-        // The runtime's own refusals (no such question in a live session) are plain errors.
-        if (!(error instanceof DomainError)) {
-          return reply.code(409).send(refusal('rejected', (error as Error).message));
-        }
+        // Anything that is not a domain refusal (an adapter that failed to take the answer) is a
+        // 500, logged here and never echoed to the client.
         return refuse(req, reply, error);
       }
     });
