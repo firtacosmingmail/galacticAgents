@@ -35,7 +35,8 @@ import { bearerGuard, originOf } from './security.js';
  * - `GET /api/notifications` — the SPEC §4.5 feed.
  *
  * Errors: 400 `invalid_query` / `invalid_body` (zod issues) or `invalid` (a value the settings
- * refuse, with a message), 404 `not_found`, 409 `env_override`.
+ * refuse, with a message), 403 `remote_settings` (a remote client may change only the quality
+ * tier and tighten the default policy, decision 51), 404 `not_found`, 409 `env_override`.
  */
 
 export interface PanelRoutesOptions {
@@ -113,7 +114,9 @@ export function registerPanelRoutes(
         } catch (error) {
           if (error instanceof SettingsError) {
             return reply
-              .code(error.code === 'env_override' ? 409 : 400)
+              .code(
+                error.code === 'env_override' ? 409 : error.code === 'remote_settings' ? 403 : 400,
+              )
               .send({ error: error.code, message: error.message });
           }
           req.log.error(error);

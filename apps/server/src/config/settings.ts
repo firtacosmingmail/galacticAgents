@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import {
   DEFAULT_PERMISSION_POLICY,
@@ -16,6 +17,7 @@ import {
 } from '../domain/permissions.js';
 import type { Archival } from '../runtime/archival.js';
 import type { CapsEnforcer } from '../runtime/caps.js';
+import { canonical, unsafeFolder } from '../workspace/workspaces.js';
 import { ConfigFile, expandHome, type ServerConfig } from './config.js';
 
 /**
@@ -33,9 +35,14 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
  *
  * A setting an environment variable decided is read-only (`envOverrides`): the file would be
- * shadowed at the next start, so a patch of it is refused. A remote client's default policy is
- * floored at the current default unless `autoApproveRemote` (decision 37): it can tighten the
- * default, never loosen it — the default is the floor of every other remote write.
+ * shadowed at the next start, so a patch of it is refused.
+ *
+ * Remote clients (decision 51, until Phase 7 decides otherwise): settings are written from local
+ * requests only. Unless `autoApproveRemote`, a remote request — or one of unknown origin — may
+ * change only the quality tier and the default policy, and its default policy is floored at the
+ * current default (decision 37, refined by 50): it can tighten the default, never loosen it — the
+ * default is the floor of every other remote write. Any other field is refused (403
+ * `remote_settings`) before anything is written.
  */
 
 export const DEFAULT_QUALITY_TIER = 'high' as const;
@@ -45,7 +52,7 @@ const RESTART = ['projectsRoot', 'stewardsLoadUserSettings'] as const;
 
 export class SettingsError extends Error {
   constructor(
-    readonly code: 'env_override' | 'invalid',
+    readonly code: 'env_override' | 'invalid' | 'remote_settings',
     message: string,
   ) {
     super(message);
@@ -58,7 +65,12 @@ export interface SettingsServiceOptions {
   caps?: CapsEnforcer;
   /** The archival job: the retention period applies live through it. */
   archival?: Archival;
+  /** The home directory the projects root may not be (default `os.homedir()`; tests). */
+  home?: string;
 }
+
+/** What a remote client may patch (decision 51): the policy only floored (decision 37). */
+const REMOTE_WRITABLE: readonly SettingName[] = ['defaultPermissionPolicy', 'qualityTier'];
 
 export class SettingsService {
   private readonly config: ServerConfig;
@@ -94,6 +106,17 @@ export class SettingsService {
    * `SettingsError` before anything is written when a field is env-decided or invalid.
    */
   update(patch: SettingsPatch, write: PolicyWrite = {}): SettingsResponse {
+    const remote = write.origin !== 'local' && !write.autoApproveRemote;
+    const refused = (Object.keys(patch) as SettingName[]).filter(
+      (k) => patch[k] !== undefined && !REMOTE_WRITABLE.includes(k),
+    );
+    if (remote && refused.length > 0) {
+      throw new SettingsError(
+        'remote_settings',
+        `settings can be changed only on this machine (a remote client may change the quality ` +
+          `tier and tighten the default permission table): ${refused.join(', ')}`,
+      );
+    }
     const locked = (Object.keys(patch) as SettingName[]).filter(
       (k) => patch[k] !== undefined && this.config.envOverrides?.includes(k),
     );
@@ -106,7 +129,16 @@ export class SettingsService {
     }
 
     const next = this.current();
-    if (patch.projectsRoot !== undefined) next.projectsRoot = checkProjectsRoot(patch.projectsRoot);
+    if (patch.projectsRoot !== undefined) {
+      next.projectsRoot = checkProjectsRoot(patch.projectsRoot, {
+        home: canonical(this.opts.home ?? homedir()),
+        dataDirs: [
+          this.config.dataDir,
+          dirname(this.config.configPath),
+          ...(isAbsolute(this.config.dbPath) ? [dirname(this.config.dbPath)] : []),
+        ],
+      });
+    }
     let floored = false;
     let policyOnDisk: PermissionPolicy | undefined | null; // undefined: unchanged, null: removed
     if (patch.defaultPermissionPolicy !== undefined) {
@@ -166,7 +198,7 @@ export class SettingsService {
     const raw: Record<string, unknown> = existsSync(path)
       ? (JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>)
       : {};
-    if (patch.projectsRoot !== undefined) raw['projectsRoot'] = patch.projectsRoot;
+    if (patch.projectsRoot !== undefined) raw['projectsRoot'] = next.projectsRoot;
     if (policy === null) delete raw['defaultPermissionPolicy'];
     else if (policy !== undefined) raw['defaultPermissionPolicy'] = policy;
     if (patch.retentionDays !== undefined) raw['retentionDays'] = next.retentionDays;
@@ -225,8 +257,14 @@ function sameTable(a: PermissionPolicy, b: PermissionPolicy): boolean {
   );
 }
 
-/** The projects root a patch may set: absolute (or `~/…`), not `/`, not an existing file. */
-function checkProjectsRoot(value: string): string {
+/**
+ * The projects root a patch may set, as it is saved: absolute (or `~/…`, expanded), trimmed and
+ * normalised; not an existing file; and, on its symlink-free path, none of the folders a
+ * workspace may not be either (`unsafeFolder`: `/`, the home directory itself, inside or
+ * containing the data directory) — after a restart it is the Harmonizer's cwd and every new
+ * project's parent.
+ */
+function checkProjectsRoot(value: string, places: { home: string; dataDirs: string[] }): string {
   const abs = expandHome(value.trim());
   if (!isAbsolute(abs)) {
     throw new SettingsError(
@@ -235,7 +273,11 @@ function checkProjectsRoot(value: string): string {
     );
   }
   const path = resolve(abs);
-  if (path === '/') throw new SettingsError('invalid', 'the projects root cannot be /');
+  const real = canonical(path);
+  for (const dataDir of new Set(places.dataDirs.map((d) => canonical(d)))) {
+    const unsafe = unsafeFolder(real, { home: places.home, dataDir }, 'the projects root');
+    if (unsafe) throw new SettingsError('invalid', unsafe);
+  }
   if (existsSync(path) && !statSync(path).isDirectory()) {
     throw new SettingsError('invalid', `the projects root is a file, not a folder: ${path}`);
   }

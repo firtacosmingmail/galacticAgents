@@ -1,0 +1,125 @@
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { setGlobalDefaultPolicy } from '../domain/permissions.js';
+import { loadConfig } from './config.js';
+import { SettingsError, SettingsService } from './settings.js';
+
+const dirs: string[] = [];
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  setGlobalDefaultPolicy(null);
+});
+const temp = (prefix: string) => {
+  const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  dirs.push(d);
+  return d;
+};
+
+/** A fresh data dir with a loaded config, and a fake home beside it. */
+function setup() {
+  const home = temp('galactic-home-');
+  const dataDir = join(home, '.galactic');
+  const env = { GALACTIC_HOME: dataDir } as NodeJS.ProcessEnv;
+  const { config } = loadConfig(env);
+  const settings = new SettingsService({ config, home });
+  const file = () => JSON.parse(readFileSync(config.configPath, 'utf8')) as Record<string, unknown>;
+  return { home, dataDir, env, config, settings, file };
+}
+const local = { origin: 'local' as const };
+const refusal = (fn: () => unknown) => {
+  try {
+    fn();
+  } catch (error) {
+    if (error instanceof SettingsError) return { code: error.code, message: error.message };
+    throw error;
+  }
+  return undefined;
+};
+
+describe('SettingsService (P25-01)', () => {
+  it('saves the cleaned projects root, so the next start still loads the config', () => {
+    const { env, settings, file } = setup();
+    const target = join(temp('galactic-root-'), 'x');
+    const res = settings.update({ projectsRoot: `  ${target}/ ` }, local);
+    expect(res.settings.projectsRoot).toBe(target);
+    expect(file()['projectsRoot']).toBe(target);
+    expect(loadConfig(env).config.projectsRoot).toBe(target); // the restart works
+  });
+
+  it('refuses a projects root a workspace could not be either (decision 27)', () => {
+    const { home, dataDir, settings, file } = setup();
+    const before = file();
+    const outside = temp('galactic-link-');
+    const link = join(outside, 'to-data');
+    symlinkSync(dataDir, link);
+    mkdirSync(join(home, 'etc-like'));
+    for (const [path, why] of [
+      ['/', /cannot be \//],
+      [home, /home directory/],
+      [dataDir, /data directory/],
+      [join(dataDir, 'projects'), /data directory/],
+      [link, /data directory/], // through a symlink
+      [join(link, 'inside'), /data directory/],
+    ] as const) {
+      const r = refusal(() => settings.update({ projectsRoot: path }, local));
+      expect(r?.code, path).toBe('invalid');
+      expect(r?.message, path).toMatch(why);
+    }
+    expect(file()).toEqual(before);
+    // A folder in the home directory is fine.
+    expect(settings.update({ projectsRoot: join(home, 'etc-like') }, local).settings.projectsRoot).toBe(
+      join(home, 'etc-like'),
+    );
+  });
+
+  it('refuses `~` itself as the projects root', () => {
+    const dataDir = join(temp('galactic-data-'), 'd');
+    const { config } = loadConfig({ GALACTIC_HOME: dataDir } as NodeJS.ProcessEnv);
+    const settings = new SettingsService({ config });
+    expect(refusal(() => settings.update({ projectsRoot: '~' }, local))?.message).toMatch(
+      /home directory/,
+    );
+  });
+
+  it('a remote or unknown-origin request may only change the tier and tighten the policy (decision 51)', () => {
+    const { settings, file } = setup();
+    const before = file();
+    const root = temp('galactic-root-');
+    for (const patch of [
+      { caps: { maxConcurrentAgents: 64 } },
+      { caps: { maxSpawnsPerHour: 10_000 } },
+      { caps: { maxToolCalls: 100_000 } },
+      { caps: { maxWallClockMs: 60_000 } }, // even a stricter cap: settings are local-only
+      { retentionDays: 0.0001 },
+      { stewardsLoadUserSettings: true },
+      { projectsRoot: root },
+      { qualityTier: 'mobile' as const, retentionDays: 3 }, // one refused field refuses all
+    ]) {
+      for (const write of [{ origin: 'remote' as const }, {}]) {
+        const r = refusal(() => settings.update(patch, write));
+        expect(r?.code, JSON.stringify([patch, write])).toBe('remote_settings');
+      }
+    }
+    expect(file()).toEqual(before);
+
+    const tier = settings.update({ qualityTier: 'balanced' }, { origin: 'remote' });
+    expect(tier.settings.qualityTier).toBe('balanced');
+    const policy = settings.update(
+      { defaultPermissionPolicy: { rules: { push: 'allow', network: 'deny' } } },
+      { origin: 'remote' },
+    );
+    expect(policy.floored).toBe(true);
+    expect(policy.settings.defaultPermissionPolicy.rules).toMatchObject({
+      push: 'ask',
+      network: 'deny',
+    });
+    // `autoApproveRemote` lifts the rule.
+    const trusted = settings.update(
+      { caps: { maxConcurrentAgents: 8 } },
+      { origin: 'remote', autoApproveRemote: true },
+    );
+    expect(trusted.settings.caps.maxConcurrentAgents).toBe(8);
+  });
+});

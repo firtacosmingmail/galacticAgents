@@ -1,4 +1,13 @@
-import { readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ConversationResponse,
@@ -457,9 +466,32 @@ describe('settings (P25-01; SPEC §4.6)', () => {
     expect(file()['defaultPermissionPolicy']).toBeUndefined();
   });
 
+  it('refuses a remote client every setting but the tier and a tighter policy (decision 51)', async () => {
+    const { t, file } = await settingsApp();
+    const before = file();
+    const remote = { origin: 'https://mymac.tail1234.ts.net' };
+    for (const body of [
+      { caps: { maxConcurrentAgents: 64, maxSpawnsPerHour: 10_000, maxToolCalls: 100_000 } },
+      { retentionDays: 0.0001 },
+      { stewardsLoadUserSettings: true },
+      { projectsRoot: '/tmp/elsewhere' },
+    ]) {
+      const res = await patch(t, body, remote);
+      expect(res, JSON.stringify(body)).toMatchObject({
+        status: 403,
+        body: { error: 'remote_settings' },
+      });
+      expect(String(res.body['message'])).toMatch(/only on this machine/);
+    }
+    expect(file()).toEqual(before);
+    const tier = await patch(t, { qualityTier: 'balanced' }, remote);
+    expect(tier.status).toBe(200);
+  });
+
   it('saves restart-only settings and refuses env-decided ones', async () => {
     const { t, config, file } = await settingsApp({ envOverrides: ['retentionDays'] });
-    const root = `${config.dataDir}/new-root`;
+    const root = join(realpathSync(mkdtempSync(join(tmpdir(), 'galactic-root-'))), 'new-root');
+    cleanups.push(() => rmSync(dirname(root), { recursive: true, force: true }));
     const res = SettingsResponse.parse(
       (await patch(t, { projectsRoot: root, stewardsLoadUserSettings: false })).body,
     );
