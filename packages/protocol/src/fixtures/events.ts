@@ -134,6 +134,19 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
   },
   'proposal.rejected': { type: 'proposal.rejected', proposalId: 'pr-1', reason: 'not now' },
   'proposal.parked': { type: 'proposal.parked', proposalId: 'pr-1', reason: 'no free planet' },
+  'promotion.carried_out': {
+    type: 'promotion.carried_out',
+    proposalId: 'pr-1',
+    outcome: {
+      ok: true,
+      target: { kind: 'task', id: 't-2' },
+      fromBodyId: 'b-ast-1',
+      toBodyId: 'b-luna',
+      projectId: 'p-1',
+      waykeeperId: 'a-waykeeper-1',
+      stewardIds: ['a-steward-1'],
+    },
+  },
 
   'body.created': { type: 'body.created', body: d.moon },
   'body.assigned': {

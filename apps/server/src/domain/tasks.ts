@@ -24,6 +24,7 @@ import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, setTaskState } from './states.js';
 import { effectiveChanges } from './changes.js';
+import { handOverTask, type HandOverOptions } from './handover.js';
 
 /**
  * Task commands (P2-01; SPEC §2.7, §3.1, §3.4, decisions 9, 11, 11b). A project task lives on its
@@ -178,9 +179,16 @@ export function reopenTask(
 /**
  * A standalone task joins a project (SPEC §3.4, decision 9): it lives on the project's body from
  * now on, its asteroid shows "moved to …" (`body.moved` with `intoProjectId`) until the retention
- * sweep frees it, and its agents fly over. The Steward hand-over to the Waykeeper is P2-12.
+ * sweep frees it, and its agents fly over. Its Stewards are handed over in the same command
+ * (P2-12, decision 32): the project and its Waykeeper — refused while the project has none.
  */
-export function moveTask(ctx: CommandContext, taskId: Id, toProjectId: Id, _by: Actor): Task {
+export function moveTask(
+  ctx: CommandContext,
+  taskId: Id,
+  toProjectId: Id,
+  _by: Actor,
+  handOver: HandOverOptions = {},
+): Task {
   const current = must(ctx.tables.tasks.get(taskId), 'task', taskId);
   if (current.projectId) {
     throw new DomainError(
@@ -209,5 +217,6 @@ export function moveTask(ctx: CommandContext, taskId: Id, toProjectId: Id, _by: 
   });
   if (old) markMoved(ctx, old, hostOf(taskId), project.bodyId, toProjectId);
   moveAgents(ctx, hostOf(taskId), current.bodyId, project.bodyId);
+  handOverTask(ctx, taskId, handOver);
   return task;
 }

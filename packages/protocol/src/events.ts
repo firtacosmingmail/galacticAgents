@@ -17,6 +17,7 @@ import {
   PermissionPolicy,
   Progress,
   Project,
+  PromotionOutcome,
   Proposal,
   Question,
   QuestionContext,
@@ -293,6 +294,17 @@ export const ProposalParked = z.object({
   reason: z.string(),
 });
 
+/**
+ * An approved promotion card was carried out by the server (P2-12; SPEC §3.4): the work moved,
+ * its Waykeeper runs, its Stewards were handed over — or, with `ok: false`, why not. The card
+ * keeps the outcome as `meta.carriedOut`; the brain that owns the card is woken to report it.
+ */
+export const PromotionCarriedOut = z.object({
+  type: z.literal('promotion.carried_out'),
+  proposalId: Id,
+  outcome: PromotionOutcome,
+});
+
 // ---------------------------------------------------------------------------
 // body.* (SPEC §3.4, decision 9)
 // ---------------------------------------------------------------------------
@@ -459,6 +471,7 @@ export const Event = z.discriminatedUnion('type', [
   ProposalEdited,
   ProposalRejected,
   ProposalParked,
+  PromotionCarriedOut,
   BodyCreated,
   BodyAssigned,
   BodyMoved,

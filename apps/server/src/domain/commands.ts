@@ -140,6 +140,11 @@ export class Commands implements DomainCommands {
     return { origin: write.origin, autoApproveRemote: this.autoApproveRemote };
   }
 
+  /** Hand-overs prefer a living supervisor (P2-12). */
+  private handOver() {
+    return { isLiving: (id: Id) => this.questions.isLiving(id) };
+  }
+
   private run<T>(fn: (ctx: CommandContext) => T): Promise<CommandResult<T>> {
     try {
       const out = this.log.runCommand(fn);
@@ -216,7 +221,9 @@ export class Commands implements DomainCommands {
   }
   /** A new `permissionPolicy` is floored at the global default unless `write.origin` is local. */
   updateProject(projectId: Id, changes: ProjectChanges, write?: WriteOptions) {
-    return this.run((ctx) => updateProject(ctx, projectId, changes, this.policyWrite(write)));
+    return this.run((ctx) =>
+      updateProject(ctx, projectId, changes, this.policyWrite(write), this.handOver()),
+    );
   }
   setProjectState(projectId: Id, state: WorkState) {
     return this.run((ctx) => setProjectState(ctx, projectId, state));
@@ -255,7 +262,7 @@ export class Commands implements DomainCommands {
     return this.run((ctx) => reopenTask(ctx, taskId, by, input));
   }
   moveTask(taskId: Id, toProjectId: Id, by: Actor) {
-    return this.run((ctx) => moveTask(ctx, taskId, toProjectId, by));
+    return this.run((ctx) => moveTask(ctx, taskId, toProjectId, by, this.handOver()));
   }
 
   // -- bodies ----------------------------------------------------------------------------------

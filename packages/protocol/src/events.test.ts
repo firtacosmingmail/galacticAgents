@@ -56,6 +56,7 @@ function classify(
     case 'proposal.edited':
     case 'proposal.rejected':
     case 'proposal.parked':
+    case 'promotion.carried_out':
       return 'proposal';
     case 'body.created':
     case 'body.assigned':
