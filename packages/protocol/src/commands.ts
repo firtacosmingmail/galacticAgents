@@ -18,12 +18,13 @@ import type {
   AgentRuntime,
   WorkBodyKind,
   QuestionKind,
+  RequestOrigin,
   TaskPriority,
   WorkState,
 } from './enums.js';
 import type { AgentEvent, ControlTarget, Event, ProjectChanges, TaskChanges } from './events.js';
 import type { ToolDefinition } from './adapter.js';
-import type { Id } from './primitives.js';
+import type { Id, Meta } from './primitives.js';
 
 // ---------------------------------------------------------------------------
 // Command inputs. Ids and timestamps are assigned by the server, never by the caller.
@@ -40,6 +41,8 @@ export interface CreateProjectInput {
   permissionPolicy?: PermissionPolicy;
   /** Default `approved`: a project is created when its proposal is approved (decision 3). */
   state?: Extract<WorkState, 'proposed' | 'approved'>;
+  /** Stored as the row's `meta` (e.g. the Harmonizer's `proposalId`, P2-08). */
+  meta?: Meta;
 }
 
 export interface CreateTaskInput {
@@ -52,6 +55,8 @@ export interface CreateTaskInput {
   bodyId?: Id;
   /** Default `approved`; a Waykeeper's plan creates its tasks `proposed` until the card is approved. */
   state?: Extract<WorkState, 'proposed' | 'approved'>;
+  /** Stored as the row's `meta` (e.g. the Harmonizer's `proposalId` and a standalone task's workspace, P2-08). */
+  meta?: Meta;
 }
 
 export interface SpawnAgentInput {
@@ -107,6 +112,30 @@ export interface CreateProposalInput {
   proposedBody: ProposedBody;
   workspace: string;
   rationale: string;
+  /** Speculative card data (a promotion request's task, …); a plan card is made by `proposePlan`. */
+  meta?: Meta;
+}
+
+/** One task of a Waykeeper's plan (P2-10). */
+export interface PlanTaskInput {
+  description: string;
+  priority?: TaskPriority;
+  /** Earlier tasks of the same plan (0-based positions) or existing task ids. */
+  blockedBy?: (number | Id)[];
+}
+
+/**
+ * A Waykeeper's task plan (P2-10; SPEC §3.3): its tasks are created `proposed` and the plan card
+ * (a proposal carrying `meta.plan`) is created with them, in one transaction.
+ */
+export interface ProposePlanInput {
+  projectId: Id;
+  /** The Waykeeper presenting the plan. */
+  waykeeperId: Id;
+  /** What the plan does, one or two lines: the card's text. */
+  summary: string;
+  rationale?: string;
+  tasks: PlanTaskInput[];
 }
 
 export type ProposalDecision =
@@ -119,6 +148,13 @@ export interface OpenQuestionInput {
   kind: QuestionKind;
   originAgentId: Id;
   context: QuestionContext;
+  /**
+   * A clarification only the user may answer (a Waykeeper's merge conflict with external
+   * changes, SPEC decision 30): held by the user from the start, never by a supervisor, and its
+   * supervisors' mailboxes are not woken by it. Refused for a permission question (already the
+   * user's).
+   */
+  toUser?: boolean;
 }
 
 export interface AnswerQuestionInput {
@@ -140,6 +176,16 @@ export type ControlAction =
   | { action: 'pin'; pinned: boolean }
   | { action: 'reopen' };
 
+/**
+ * Who a write is for (P2-21): the origin of the request that caused it. Policy-writing commands
+ * (`createProject`, `updateProject`, `control` edit) floor a `permissionPolicy` at the global
+ * default unless `origin` is `local` or the server sets `autoApproveRemote`: an unknown origin
+ * counts as remote. A brain passes the origin of the user message it acts on (`message.sent`).
+ */
+export interface WriteOptions {
+  origin?: RequestOrigin | undefined;
+}
+
 /** What every command returns: the affected aggregate plus the events it appended. */
 export interface CommandResult<T> {
   value: T;
@@ -155,9 +201,17 @@ export interface CommandResult<T> {
  */
 export interface DomainCommands {
   // projects and tasks
-  createProject(input: CreateProjectInput): Promise<CommandResult<Project>>;
-  /** `null` clears a clearable field (`ProjectChanges`, P2-20). */
-  updateProject(projectId: Id, changes: ProjectChanges): Promise<CommandResult<Project>>;
+  /** A `permissionPolicy` is floored unless `write.origin` is `local` (P2-21). */
+  createProject(input: CreateProjectInput, write?: WriteOptions): Promise<CommandResult<Project>>;
+  /**
+   * `null` clears a clearable field (`ProjectChanges`, P2-20); a `permissionPolicy` is floored
+   * unless `write.origin` is `local` (P2-21).
+   */
+  updateProject(
+    projectId: Id,
+    changes: ProjectChanges,
+    write?: WriteOptions,
+  ): Promise<CommandResult<Project>>;
   setProjectState(projectId: Id, state: WorkState): Promise<CommandResult<Project>>;
   closeProject(projectId: Id, by: Actor): Promise<CommandResult<Project>>;
   archiveProject(projectId: Id, by: Actor): Promise<CommandResult<Project>>;
@@ -196,6 +250,10 @@ export interface DomainCommands {
 
   // proposals (SPEC §3.3)
   createProposal(input: CreateProposalInput): Promise<CommandResult<Proposal>>;
+  /** A Waykeeper's plan card and its `proposed` tasks, in one transaction (P2-10). */
+  proposePlan(
+    input: ProposePlanInput,
+  ): Promise<CommandResult<{ proposal: Proposal; tasks: Task[] }>>;
   decideProposal(
     proposalId: Id,
     decision: ProposalDecision,
@@ -207,7 +265,19 @@ export interface DomainCommands {
   answerQuestion(input: AnswerQuestionInput): Promise<CommandResult<Question>>;
   escalateQuestion(questionId: Id, by: Actor): Promise<CommandResult<Question>>;
   reassignQuestion(questionId: Id, to: Actor, reason: string): Promise<CommandResult<Question>>;
+  /**
+   * Withdraws an open clarification that no longer needs an answer (`question.cancelled` with
+   * `reason`): an agent only its own, and never one a live session is blocked on (that one ends
+   * with its agent). A question that is not open is returned unchanged.
+   */
+  withdrawQuestion(questionId: Id, reason: string, by: Actor): Promise<CommandResult<Question>>;
 
   // panel actions (SPEC decision 11b)
-  control(target: ControlTarget, action: ControlAction, by: Actor): Promise<CommandResult<void>>;
+  /** A project edit's `permissionPolicy` is floored unless `write.origin` is `local` (P2-21). */
+  control(
+    target: ControlTarget,
+    action: ControlAction,
+    by: Actor,
+    write?: WriteOptions,
+  ): Promise<CommandResult<void>>;
 }

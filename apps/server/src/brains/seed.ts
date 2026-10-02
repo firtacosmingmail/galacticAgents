@@ -1,4 +1,4 @@
-import type { AgentRole, Id, StatusRecord } from '@galactic/protocol';
+import { proposalPlan, type AgentRole, type Id, type StatusRecord } from '@galactic/protocol';
 import type { Tables } from '../db/tables.js';
 import type { BrainQueries } from './definition.js';
 import { concernedSupervisors } from '../domain/cascade.js';
@@ -27,6 +27,7 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
           return s ? { agent, status: s } : { agent };
         }),
     project: (id) => tables.projects.get(id),
+    task: (id) => tables.tasks.get(id),
     projectTasks: (projectId) =>
       tables.tasks
         .all()
@@ -38,6 +39,14 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
         if (q.holder.type === 'agent' && q.holder.id === brainId) return true;
         return tables.agents.get(q.originAgentId)?.supervisorId === brainId;
       }),
+    agents: () => tables.agents.all(),
+    projects: () => tables.projects.all(),
+    tasks: () => tables.tasks.all().sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    body: (id) => tables.bodies.get(id),
+    proposal: (id) => tables.proposals.get(id),
+    proposals: () => tables.proposals.all().sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    question: (id) => tables.questions.get(id),
+    allOpenQuestions: () => tables.questions.all().filter((q) => q.status === 'open'),
   };
   return queries;
 }
@@ -54,6 +63,16 @@ export function createWakeScope(
   return {
     ...brain,
     supervises,
+    below: (id) => {
+      const seen = new Set<Id>();
+      for (let at = id; at !== undefined && !seen.has(at);) {
+        seen.add(at);
+        const up: Id | undefined = tables.agents.get(at)?.supervisorId;
+        if (up === brain.brainId) return true;
+        at = up;
+      }
+      return false;
+    },
     runsTask: (taskId) => {
       const task = tables.tasks.get(taskId);
       if (task && brain.projectId && task.projectId === brain.projectId) return true;
@@ -61,8 +80,21 @@ export function createWakeScope(
     },
     runsProject: (projectId) =>
       projectId === brain.projectId || supervised().some((a) => a.projectId === projectId),
-    // The Harmonizer proposes (SPEC §3.3); a Waykeeper's plan card is added by P2-10.
-    ownsProposal: () => brain.role === 'harmonizer',
+    // The Harmonizer proposes (SPEC §3.3); a plan card belongs to its project's Waykeeper —
+    // whichever agent runs the project now, so a replacement Waykeeper learns the decision (P2-10).
+    // A Waykeeper's promotion request (`meta.promotion`) is its project's Waykeeper's too: only
+    // that brain hears the decision (P2-12 does the move), never the Harmonizer as well.
+    ownsProposal: (proposalId) => {
+      const proposal = tables.proposals.get(proposalId);
+      const plan = proposalPlan(proposal);
+      if (plan) return brain.role === 'waykeeper' && plan.projectId === brain.projectId;
+      const promotion = proposal?.meta?.['promotion'] as
+        { fromProjectId?: unknown; requestedBy?: unknown } | undefined;
+      if (promotion && typeof promotion.fromProjectId === 'string' && promotion.requestedBy) {
+        return brain.role === 'waykeeper' && promotion.fromProjectId === brain.projectId;
+      }
+      return brain.role === 'harmonizer';
+    },
     question: (id) => tables.questions.get(id),
     concerned: (event) =>
       concernedSupervisors(tables, event, opts.isLive ? { isLive: opts.isLive } : {}).includes(

@@ -199,6 +199,8 @@ export function openRouted(
   ctx: CommandContext,
   input: Omit<OpenQuestionRow, 'holder'>,
   routing: QuestionRouting,
+  /** A holder chosen by the caller (`OpenQuestionInput.toUser`); default: the routing rule. */
+  holder?: Actor,
 ): Question {
   const context: QuestionContext = {
     ...input.context,
@@ -207,7 +209,7 @@ export function openRouted(
   return openQuestion(ctx, {
     ...input,
     context,
-    holder: holderFor(ctx, input.originAgentId, input.kind, routing),
+    holder: holder ?? holderFor(ctx, input.originAgentId, input.kind, routing),
   });
 }
 

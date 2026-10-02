@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isAbsolute, relative, resolve } from 'node:path';
 import {
   AgentEvent,
   type Actor,
@@ -17,10 +18,14 @@ import {
   type Host,
   type Id,
   type OpenQuestionInput,
+  type PermissionPolicy,
   type ProposalDecision,
+  type ProposePlanInput,
   type ReopenInput,
   type SpawnAgentInput,
+  type Task,
   type WorkState,
+  type WriteOptions,
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
@@ -39,7 +44,8 @@ import {
   updateProject,
   type ProjectChanges,
 } from './projects.js';
-import { createProposal, decideProposal } from './proposals.js';
+import { noLooserThan, resolvePolicy, type PolicyWrite } from './permissions.js';
+import { createProposal, decideProposal, proposePlan } from './proposals.js';
 import {
   endAgentQuestions,
   holdersNow,
@@ -50,6 +56,7 @@ import {
 } from './question-service.js';
 import {
   answerQuestion,
+  cancelQuestion,
   checkAnswer,
   escalateQuestion,
   reassignQuestion,
@@ -91,6 +98,11 @@ export interface CommandsOptions {
   questions?: QuestionRouting;
   /** Whether an agent still runs (the status store), for decision 10's Waykeeper-less planets. */
   isRunning?: (agentId: Id) => boolean;
+  /**
+   * The server lets remote clients set up auto-approvals (`config.autoApproveRemote`, TECHNOLOGY
+   * §8): no policy write is floored. Default off: a write not marked local is floored (P2-21).
+   */
+  autoApproveRemote?: boolean;
 }
 
 const ENDINGS = new Set(['agent.finished', 'agent.failed', 'agent.stopped', 'agent.interrupted']);
@@ -107,14 +119,25 @@ export class Commands implements DomainCommands {
   private readonly agents: AgentControl | undefined;
   private readonly questions: QuestionRouting;
   private readonly choose: ChooseOptions;
-  /** A Harmonizer spawn is under way: the slot is taken before its session reports (review). */
-  private harmonizerSpawning = false;
+  private readonly autoApproveRemote: boolean;
+  /**
+   * Spawns under way, by slot (`harmonizer`, `waykeeper:<project>`, `steward:<task>`): a slot is
+   * taken synchronously, before the spawn's session reports, so two concurrent spawns can never
+   * both pass the "one live agent" check (wave-4 review).
+   */
+  private readonly spawning = new Set<string>();
 
   constructor(opts: CommandsOptions) {
     this.log = opts.log;
     this.agents = opts.agents;
     this.questions = opts.questions ?? logRouting(opts.log);
     this.choose = opts.isRunning ? { isRunning: opts.isRunning } : {};
+    this.autoApproveRemote = opts.autoApproveRemote ?? false;
+  }
+
+  /** How a command's policy write is judged (P2-21): its origin plus the server's setting. */
+  private policyWrite(write: WriteOptions = {}): PolicyWrite {
+    return { origin: write.origin, autoApproveRemote: this.autoApproveRemote };
   }
 
   private run<T>(fn: (ctx: CommandContext) => T): Promise<CommandResult<T>> {
@@ -187,11 +210,13 @@ export class Commands implements DomainCommands {
 
   // -- projects and tasks ----------------------------------------------------------------------
 
-  createProject(input: CreateProjectInput) {
-    return this.run((ctx) => createProject(ctx, input, this.choose));
+  /** A `permissionPolicy` is floored at the global default unless `write.origin` is local. */
+  createProject(input: CreateProjectInput, write?: WriteOptions) {
+    return this.run((ctx) => createProject(ctx, input, this.choose, this.policyWrite(write)));
   }
-  updateProject(projectId: Id, changes: ProjectChanges) {
-    return this.run((ctx) => updateProject(ctx, projectId, changes));
+  /** A new `permissionPolicy` is floored at the global default unless `write.origin` is local. */
+  updateProject(projectId: Id, changes: ProjectChanges, write?: WriteOptions) {
+    return this.run((ctx) => updateProject(ctx, projectId, changes, this.policyWrite(write)));
   }
   setProjectState(projectId: Id, state: WorkState) {
     return this.run((ctx) => setProjectState(ctx, projectId, state));
@@ -297,19 +322,44 @@ export class Commands implements DomainCommands {
     const cwd = task?.worktreePath ?? project?.workspace ?? input.cwd;
     if (!cwd)
       throw new DomainError('invalid', 'an agent outside a project needs a working directory');
-    if (input.role === 'harmonizer') {
+    // An asteroid Steward in a related project's workspace works under that project's table too,
+    // never looser than the global default (SPEC §3.5, decision 22): per category the strictest.
+    const borrowed = !project && task ? relatedPolicy(tables, task, cwd) : undefined;
+    // One live Harmonizer (decision 32), one live Waykeeper per project, one live Steward per task.
+    const slot =
+      input.role === 'harmonizer'
+        ? { key: 'harmonizer', what: 'the Harmonizer is already running', of: () => true }
+        : input.role === 'waykeeper' && projectId
+          ? {
+              key: `waykeeper:${projectId}`,
+              what: `project ${projectId} already has a running Waykeeper`,
+              of: (a: Agent) => a.projectId === projectId,
+            }
+          : input.role === 'steward' && task
+            ? {
+                key: `steward:${task.id}`,
+                what: `task ${task.id} already has a running Steward`,
+                of: (a: Agent) => a.taskId === task.id,
+              }
+            : undefined;
+    if (slot) {
       const live = new Set((this.agents?.liveAgents?.() ?? []).map((a) => a.id));
       const running = tables.agents
         .all()
-        .find((a) => a.role === 'harmonizer' && (live.has(a.id) || this.questions.isLiving(a.id)));
-      if (running || this.harmonizerSpawning) {
+        .find(
+          (a) =>
+            a.role === input.role &&
+            slot.of(a) &&
+            (live.has(a.id) || this.questions.isLiving(a.id)),
+        );
+      if (running || this.spawning.has(slot.key)) {
         throw new DomainError(
           'conflict',
-          `the Harmonizer is already running${running ? ` (${running.id})` : ''}`,
+          `${slot.what}${running ? ` (${running.id})` : ' (a spawn is under way)'}`,
         );
       }
-      must(tables.bodies.get(EARTH_ID), 'body', EARTH_ID);
     }
+    if (input.role === 'harmonizer') must(tables.bodies.get(EARTH_ID), 'body', EARTH_ID);
     // Earth is the headquarters (SPEC §3.1): the Harmonizer orbits it without it hosting work, so
     // the reserved body is neither assigned nor occupied (P2-20).
     const bodyId =
@@ -320,31 +370,54 @@ export class Commands implements DomainCommands {
           : project?.bodyId;
 
     const since = this.log.currentSeq();
-    const harmonizer = input.role === 'harmonizer';
-    if (harmonizer) this.harmonizerSpawning = true;
-    const spawning = this.runtime().spawn({
-      role: input.role,
-      runtime: input.runtime,
-      prompt: input.prompt,
-      cwd,
-      ...(project ? { workspace: project.workspace, projectId: project.id } : {}),
-      ...(project?.permissionPolicy ? { permissionPolicy: project.permissionPolicy } : {}),
-      ...(bodyId ? { bodyId } : {}),
-      ...(task ? { taskId: task.id } : {}),
-      ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
-      ...(input.caps ? { caps: input.caps } : {}),
-      ...(input.bare ? { bare: true } : {}),
-      ...(input.tools ? { tools: input.tools } : {}),
-      ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
-    });
+    const runtime = this.runtime();
+    if (slot) this.spawning.add(slot.key);
+    let spawning: Promise<SpawnResult>;
+    try {
+      spawning = runtime.spawn({
+        role: input.role,
+        runtime: input.runtime,
+        prompt: input.prompt,
+        cwd,
+        ...(project ? { workspace: project.workspace, projectId: project.id } : {}),
+        ...(project?.permissionPolicy ? { permissionPolicy: project.permissionPolicy } : {}),
+        ...(borrowed ? { permissionPolicy: borrowed } : {}),
+        ...(bodyId ? { bodyId } : {}),
+        ...(task ? { taskId: task.id } : {}),
+        ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
+        ...(input.caps ? { caps: input.caps } : {}),
+        ...(input.bare ? { bare: true } : {}),
+        ...(input.tools ? { tools: input.tools } : {}),
+        ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
+      });
+    } catch (error) {
+      if (slot) this.spawning.delete(slot.key);
+      throw error;
+    }
     let result: SpawnResult;
     try {
       result = await spawning;
     } finally {
-      if (harmonizer) this.harmonizerSpawning = false;
+      if (slot) this.spawning.delete(slot.key);
     }
     if (!result.ok) throw new DomainError('conflict', result.reason);
-    return { value: result.agent, events: this.eventsOf(since, result.agent.id) };
+    // Only what the spawn itself did — the row, its body, the session — never what the new agent
+    // did on its own since: a brain drops a tool call's events as its own, so a Steward that
+    // finished before the spawn call returned would never wake its supervisor (wave-4 review).
+    const created = new Set(['agent.created', 'agent.spawned', 'body.created']);
+    const events = this.log
+      .eventsSince(since, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter(
+        (e) =>
+          created.has(e.type) &&
+          (e.type === 'agent.created'
+            ? e.agent.id === result.agent.id
+            : e.type === 'body.created'
+              ? e.body.id === result.agent.bodyId
+              : e.type === 'agent.spawned' && e.agentId === result.agent.id),
+      );
+    return { value: result.agent, events };
   }
 
   updateAgent(agentId: Id, changes: AgentPlacement) {
@@ -387,18 +460,36 @@ export class Commands implements DomainCommands {
   createProposal(input: CreateProposalInput) {
     return this.run((ctx) => createProposal(ctx, input));
   }
-  decideProposal(proposalId: Id, decision: ProposalDecision, _by: Actor) {
-    return this.run((ctx) => decideProposal(ctx, proposalId, decision));
+  proposePlan(input: ProposePlanInput) {
+    return this.run((ctx) => proposePlan(ctx, input));
+  }
+  decideProposal(proposalId: Id, decision: ProposalDecision, by: Actor) {
+    return this.run((ctx) => decideProposal(ctx, proposalId, decision, by));
   }
 
   // -- questions -------------------------------------------------------------------------------
 
+  /**
+   * `toUser` (a choice only the user may make, decision 30): held by the user from the start, in
+   * the same command, so no supervisor holds it on the way and none is woken by it.
+   */
   openQuestion(input: OpenQuestionInput) {
+    const { toUser, ...rest } = input;
+    if (toUser && rest.kind !== 'clarification') {
+      return Promise.reject(
+        new DomainError('invalid', 'only a clarification is opened for the user explicitly'),
+      );
+    }
     return this.run((ctx) =>
       openRouted(
         ctx,
-        { ...input, id: `q-${randomUUID()}`, meta: { source: COMMAND_SOURCE } },
+        {
+          ...rest,
+          id: `q-${randomUUID()}`,
+          meta: { source: COMMAND_SOURCE, ...(toUser ? { toUser: true } : {}) },
+        },
         this.questions,
+        toUser ? { type: 'user' } : undefined,
       ),
     );
   }
@@ -439,17 +530,37 @@ export class Commands implements DomainCommands {
   reassignQuestion(questionId: Id, to: Actor, reason: string) {
     return this.run((ctx) => reassignQuestion(ctx, questionId, to, reason));
   }
+  async withdrawQuestion(questionId: Id, reason: string, by: Actor) {
+    const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    if (question.status !== 'open') return { value: question, events: [] };
+    if (question.kind !== 'clarification') {
+      throw new DomainError('invalid', `${questionId} is a permission question: the user decides`);
+    }
+    if (by.type === 'agent' && by.id !== question.originAgentId) {
+      throw new DomainError('conflict', `${questionId} is not your question`);
+    }
+    if (this.agents?.hasQuestion(questionId)) {
+      throw new DomainError('invalid', `a live session waits on ${questionId}: stop its agent`);
+    }
+    return this.run(
+      (ctx) =>
+        cancelQuestion(ctx, questionId, reason, holdersNow(ctx, questionId, this.questions)) ??
+        question,
+    );
+  }
 
   // -- panel actions ---------------------------------------------------------------------------
 
   /**
    * A panel action (decision 11b). On an agent: stop/cancel, pause and resume through the runtime
-   * (which records `control.*` itself). On a task or project: recorded with its domain effect.
+   * (which records `control.*` itself). On a task or project: recorded with its domain effect;
+   * a project edit's `permissionPolicy` is floored unless `write.origin` is local (P2-21).
    */
   async control(
     target: ControlTarget,
     action: ControlAction,
     by: Actor,
+    write?: WriteOptions,
   ): Promise<CommandResult<void>> {
     if (target.kind === 'agent') {
       const run = (fn: (r: AgentControl) => Promise<void>) =>
@@ -476,7 +587,10 @@ export class Commands implements DomainCommands {
           .filter((id) => live.has(id))
       : [];
     const own = await this.run((ctx) =>
-      recordControl(ctx, target, action, by, { isLive: (id) => live.has(id) }),
+      recordControl(ctx, target, action, by, {
+        isLive: (id) => live.has(id),
+        write: this.policyWrite(write),
+      }),
     );
     const since = this.log.currentSeq();
     if (effect && affected.length > 0) {
@@ -502,4 +616,34 @@ export class Commands implements DomainCommands {
     const events = [...own.events, ...this.effectEvents(since, affected, by)];
     return { value: undefined, events };
   }
+}
+
+/**
+ * The policy of a standalone task's Steward that works inside one or more projects' workspaces
+ * (the related project of its card, SPEC §3.5): per category the strictest of those projects'
+ * tables and the global default, so borrowing a workspace never loosens anything. `undefined`
+ * when the folder belongs to no live project (the global default applies).
+ */
+function relatedPolicy(
+  tables: EventLog['tables'],
+  task: Task,
+  cwd: string,
+): PermissionPolicy | undefined {
+  const inside = (child: string, parent: string) => {
+    const rel = relative(resolve(parent), resolve(child));
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  };
+  const relatedId = task.meta?.['relatedProjectId'];
+  const related = tables.projects
+    .all()
+    .filter(
+      (p) =>
+        p.state !== 'archived' &&
+        (p.id === relatedId || inside(cwd, p.workspace) || inside(p.workspace, cwd)),
+    );
+  if (related.length === 0) return undefined;
+  return related.reduce<PermissionPolicy>(
+    (policy, p) => noLooserThan(p.permissionPolicy ?? policy, policy),
+    resolvePolicy(),
+  );
 }

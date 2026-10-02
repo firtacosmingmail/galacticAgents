@@ -83,6 +83,7 @@ export function createTask(ctx: CommandContext, input: CreateTaskInput): Task {
     createdAt: ctx.now,
     updatedAt: ctx.now,
     ...(input.projectId ? { projectId: input.projectId } : {}),
+    ...(input.meta ? { meta: input.meta } : {}),
   };
   ctx.tables.tasks.insert(task);
   ctx.emit({ type: 'task.created', task });

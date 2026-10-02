@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Actor } from '@galactic/protocol';
+import {
+  DEFAULT_PERMISSION_POLICY,
+  type Actor,
+  type Agent,
+  type PermissionPolicy,
+} from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { concernedSupervisors } from './cascade.js';
-import { createAgent } from './agents.js';
+import { createAgent, recordSpawned } from './agents.js';
+import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { Commands } from './commands.js';
 import { DomainError } from './errors.js';
 import { EventLog } from './event-log.js';
@@ -53,7 +59,10 @@ describe('Commands', () => {
     const { commands, log, runtime } = boot();
     const policy = { rules: { network: 'allow' as const } };
     const project = (
-      await commands.createProject({ name: 'CSV', workspace: '/w/csv', permissionPolicy: policy })
+      await commands.createProject(
+        { name: 'CSV', workspace: '/w/csv', permissionPolicy: policy },
+        { origin: 'local' },
+      )
     ).value;
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
     const { waykeeper } = await projectHierarchy(commands, project.id);
@@ -128,6 +137,36 @@ describe('Commands', () => {
     expect(value).toMatchObject({ bodyId: task.bodyId, taskId: task.id });
     expect(value.meta).toMatchObject({ cwd: '/w/scratch' });
     expect(value.projectId).toBeUndefined();
+  });
+
+  it("runs a standalone Steward in a related project's workspace under the stricter of its policy and the default", async () => {
+    const { commands } = boot();
+    // The related project denies network and loosens destructive actions.
+    const policy: PermissionPolicy = { rules: { network: 'deny', destructive: 'allow' } };
+    await commands.createProject(
+      { name: 'CSV', workspace: '/w/csv', permissionPolicy: policy },
+      { origin: 'local' },
+    );
+    const task = (await commands.createTask({ description: 'flaky' })).value;
+    const harmonizer = await spawnHarmonizer(commands);
+    const spawn = (cwd: string) =>
+      commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        supervisorId: harmonizer.id,
+        cwd,
+        prompt: 'scenario:echo',
+      });
+    const { value } = await spawn('/w/csv');
+    const rules = (value.meta?.['permissionPolicy'] as PermissionPolicy).rules;
+    expect(rules['network']).toBe('deny');
+    // Never looser than the global default.
+    expect(rules['destructive']).toBe(DEFAULT_PERMISSION_POLICY.rules['destructive']);
+    await commands.stopAgent(value.id, USER);
+    // A scratch folder belongs to no project: the global default applies.
+    const { value: scratch } = await spawn('/w/scratch/flaky');
+    expect(scratch.meta?.['permissionPolicy']).toBeUndefined();
   });
 
   it('refuses spawns the hierarchy does not allow (decision 24), before anything is written', async () => {
@@ -287,6 +326,86 @@ describe('Commands', () => {
     await expect(
       commands.spawnAgent({ role: 'harmonizer', runtime: 'fake', cwd: '/w/hq', prompt: 'x' }),
     ).rejects.toThrow(/no agent runtime/);
+  });
+});
+
+describe('the remote floor on policy writes (P2-21)', () => {
+  const LOOSE: PermissionPolicy = { rules: { destructive: 'allow', push: 'allow' } };
+
+  it('floors createProject, updateProject and a project edit unless the write is local', async () => {
+    const { commands, log } = boot();
+    const policyOf = (id: string) => log.tables.projects.get(id)?.permissionPolicy;
+    const create = (origin?: 'local' | 'remote') =>
+      commands
+        .createProject(
+          { name: 'CSV', workspace: '/w/csv', kind: 'moon', permissionPolicy: LOOSE },
+          origin ? { origin } : undefined,
+        )
+        .then((r) => r.value.id);
+
+    expect(policyOf(await create('local'))).toEqual(LOOSE);
+    expect(policyOf(await create('remote'))).toEqual(DEFAULT_PERMISSION_POLICY);
+    // Unknown origin fails closed: a write nobody vouched for as local is floored.
+    const p = await create();
+    expect(policyOf(p)).toEqual(DEFAULT_PERMISSION_POLICY);
+
+    const { events } = await commands.updateProject(
+      p,
+      { permissionPolicy: LOOSE },
+      { origin: 'remote' },
+    );
+    expect(events).toEqual([
+      {
+        type: 'project.updated',
+        projectId: p,
+        changes: { permissionPolicy: DEFAULT_PERMISSION_POLICY },
+      },
+    ]);
+    await commands.updateProject(p, { permissionPolicy: LOOSE }, { origin: 'local' });
+    expect(policyOf(p)).toEqual(LOOSE);
+
+    const edit = (origin?: 'local' | 'remote') =>
+      commands.control(
+        { kind: 'project', id: p },
+        { action: 'edit', changes: { permissionPolicy: { rules: { network: 'allow' } } } },
+        USER,
+        origin ? { origin } : undefined,
+      );
+    await edit('remote');
+    expect(policyOf(p)).toEqual(DEFAULT_PERMISSION_POLICY);
+    await edit();
+    expect(policyOf(p)).toEqual(DEFAULT_PERMISSION_POLICY);
+    await edit('local');
+    expect(policyOf(p)).toEqual({ rules: { network: 'allow' } });
+    // Other writes need no origin at all.
+    await commands.updateProject(p, { name: 'CSV 2' });
+    expect(policyOf(p)).toEqual({ rules: { network: 'allow' } });
+  });
+
+  it('refuses a policy edit on a task', async () => {
+    const { commands } = boot();
+    const task = (await commands.createTask({ description: 'parse' })).value;
+    await expect(
+      commands.control(
+        { kind: 'task', id: task.id },
+        { action: 'edit', changes: { permissionPolicy: LOOSE } },
+        USER,
+        { origin: 'local' },
+      ),
+    ).rejects.toMatchObject({ code: 'invalid' });
+  });
+
+  it('floors nothing on a server configured with autoApproveRemote', async () => {
+    const composed = composeRuntime(openDatabase(':memory:'), {
+      adapters: [new FakeAdapter()],
+      autoApproveRemote: true,
+    });
+    lives.push(composed);
+    const { value } = await composed.commands.createProject(
+      { name: 'CSV', workspace: '/w/csv', permissionPolicy: LOOSE },
+      { origin: 'remote' },
+    );
+    expect(value.permissionPolicy).toEqual(LOOSE);
   });
 });
 
@@ -605,5 +724,156 @@ describe('Commands.control result (wave-2 review)', () => {
       'agent.paused',
     ]);
     expect(events.some((e) => 'target' in e && e.target.id === other)).toBe(false);
+  });
+});
+
+describe('Commands.spawnAgent result (wave-4 review)', () => {
+  it('carries only what the spawn did, never what the new agent did before it returned', async () => {
+    const log = new EventLog(openDatabase(':memory:'));
+    const agents = {
+      spawn: (req: SpawnRequest): Promise<SpawnResult> => {
+        const agent = log.runCommand((ctx) =>
+          createAgent(ctx, {
+            role: req.role,
+            runtime: req.runtime,
+            caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+            ...(req.bodyId ? { bodyId: req.bodyId } : {}),
+          }),
+        ).value;
+        log.runCommand((ctx) => recordSpawned(ctx, agent, 's-1'));
+        // A fast agent: done before the spawn call has returned to its caller.
+        log.runCommand(({ emit }) => emit({ type: 'agent.finished', agentId: agent.id }));
+        return Promise.resolve({ ok: true, agent });
+      },
+      stop: () => Promise.resolve(),
+      pause: () => Promise.resolve(),
+      resumeAgent: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      hasQuestion: () => false,
+      liveAgents: () => [],
+    };
+    const commands = new Commands({ log, agents });
+    const { events } = await commands.spawnAgent({
+      role: 'harmonizer',
+      runtime: 'fake',
+      prompt: 'x',
+      cwd: '/hq',
+    });
+    expect(events.map((e) => e.type)).toEqual(['agent.created', 'agent.spawned']);
+  });
+});
+
+describe('Commands.spawnAgent concurrency (wave-4 review)', () => {
+  it('keeps one live Waykeeper per project and one live Steward per task across parallel spawns', async () => {
+    const log = new EventLog(openDatabase(':memory:'));
+    const live: Agent[] = [];
+    const agents = {
+      // A slow session: the row appears only after a tick, as a real adapter's would.
+      spawn: async (req: SpawnRequest): Promise<SpawnResult> => {
+        await new Promise((r) => setTimeout(r, 5));
+        const agent = log.runCommand((ctx) =>
+          createAgent(ctx, {
+            role: req.role,
+            runtime: req.runtime,
+            caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+            ...(req.bodyId ? { bodyId: req.bodyId } : {}),
+            ...(req.supervisorId ? { supervisorId: req.supervisorId } : {}),
+            ...(req.taskId ? { taskId: req.taskId } : {}),
+            ...(req.projectId ? { projectId: req.projectId } : {}),
+          }),
+        ).value;
+        live.push(agent);
+        return { ok: true, agent };
+      },
+      stop: () => Promise.resolve(),
+      pause: () => Promise.resolve(),
+      resumeAgent: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      hasQuestion: () => false,
+      liveAgents: () => live,
+    };
+    const commands = new Commands({ log, agents });
+    const hq = await spawnHarmonizer(commands);
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const waykeepers = await Promise.allSettled(
+      [1, 2].map(() =>
+        commands.spawnAgent({
+          role: 'waykeeper',
+          runtime: 'fake',
+          projectId: project.id,
+          supervisorId: hq.id,
+          prompt: 'x',
+        }),
+      ),
+    );
+    expect(waykeepers.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(waykeepers.find((r) => r.status === 'rejected')).toMatchObject({
+      reason: { code: 'conflict' },
+    });
+    const task = (await commands.createTask({ description: 'flaky' })).value;
+    const stewards = await Promise.allSettled(
+      [1, 2].map(() =>
+        commands.spawnAgent({
+          role: 'steward',
+          runtime: 'fake',
+          taskId: task.id,
+          supervisorId: hq.id,
+          cwd: '/w/scratch',
+          prompt: 'x',
+        }),
+      ),
+    );
+    expect(stewards.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(log.tables.agents.all().filter((a) => a.taskId === task.id)).toHaveLength(1);
+    expect(log.tables.agents.all().filter((a) => a.role === 'waykeeper')).toHaveLength(1);
+    // Once the slot's agent has ended, a new spawn is allowed again.
+    live.splice(0);
+    await expect(
+      commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        supervisorId: hq.id,
+        cwd: '/w/scratch',
+        prompt: 'x',
+      }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('Commands questions for the user alone (wave-4 review)', () => {
+  it('opens a toUser clarification held by the user, and lets only its asker withdraw it', async () => {
+    const { commands, log } = boot();
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const { harmonizer, waykeeper } = await projectHierarchy(commands, project.id);
+    const { value: q, events } = await commands.openQuestion({
+      kind: 'clarification',
+      originAgentId: waykeeper.id,
+      context: { text: 'external commits: how to resolve?' },
+      toUser: true,
+    });
+    expect(q).toMatchObject({ holder: { type: 'user' }, meta: { toUser: true } });
+    expect(events.map((e) => e.type)).toEqual(['question.opened']);
+    await expect(
+      commands.openQuestion({
+        kind: 'permission',
+        originAgentId: waykeeper.id,
+        context: { text: 'x' },
+        toUser: true,
+      }),
+    ).rejects.toMatchObject({ code: 'invalid' });
+    await expect(
+      commands.withdrawQuestion(q.id, 'not yours', { type: 'agent', id: harmonizer.id }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    const { value: withdrawn } = await commands.withdrawQuestion(q.id, 'task closed', {
+      type: 'agent',
+      id: waykeeper.id,
+    });
+    expect(withdrawn.status).toBe('cancelled');
+    expect(log.tables.questions.get(q.id)?.status).toBe('cancelled');
+    // Withdrawing again changes nothing.
+    expect(
+      (await commands.withdrawQuestion(q.id, 'again', { type: 'agent', id: waykeeper.id })).events,
+    ).toEqual([]);
   });
 });

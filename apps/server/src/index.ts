@@ -1,11 +1,15 @@
+import { mkdirSync } from 'node:fs';
 import { loadConfig } from './config/config.js';
 import { buildApp } from './app.js';
+import { harmonizerRuntime, startHarmonizer } from './brains/harmonizer/index.js';
+import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { openDatabase } from './db/database.js';
 import { composeRuntime } from './runtime/compose.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { ProcessSupervisor } from './runtime/supervisor.js';
+import { Workspaces } from './workspace/workspaces.js';
 
 const { config, tokenGenerated } = loadConfig();
 const onError = (error: unknown, context: string) =>
@@ -32,7 +36,10 @@ const composed = composeRuntime(db, {
       onError,
     }),
   ],
+  // Brain tools create worktrees and merge through this service (P2-05, P2-10).
+  workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
+  autoApproveRemote: config.autoApproveRemote,
 });
 const { log, statuses, transcripts } = composed;
 
@@ -103,4 +110,41 @@ try {
 } catch (error) {
   console.error('[server] listen:', error instanceof Error ? error.message : error);
   shutdown(1);
+}
+
+// The Harmonizer starts with the application and is idle otherwise (SPEC §2.1, P2-08). One at a
+// time (decision 32): one that recovery resumed is left running.
+const hqRuntime = harmonizerRuntime(process.env['GALACTIC_HARMONIZER'], config.dev);
+if (hqRuntime && !shuttingDown) {
+  try {
+    mkdirSync(config.projectsRoot, { recursive: true });
+    const workspaces =
+      composed.workspaces ??
+      new Workspaces({ projectsRoot: config.projectsRoot, dataDir: config.dataDir });
+    const hq = await startHarmonizer(composed, {
+      runtime: hqRuntime,
+      cwd: workspaces.projectsRoot,
+      deps: {
+        projectsRoot: workspaces.projectsRoot,
+        checkPath: (path) => workspaces.checkPath(path),
+        runtime: hqRuntime,
+        // `spawn_waykeeper` starts a Waykeeper brain (P2-10) for the approved project.
+        startWaykeeper: async ({ projectId, supervisorId, runtime }) => {
+          const runner = await composed.startBrain(waykeeperDefinition(), {
+            runtime,
+            projectId,
+            supervisorId,
+          });
+          return { agentId: runner.agentId };
+        },
+      },
+    });
+    console.log(
+      hq.status === 'started'
+        ? `Harmonizer started (${hq.agentId}, ${hqRuntime})`
+        : `Harmonizer already running (${hq.agentId})`,
+    );
+  } catch (error) {
+    console.error('[harmonizer] start:', error instanceof Error ? error.message : error);
+  }
 }

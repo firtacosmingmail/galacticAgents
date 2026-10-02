@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
-import { AgentRole, AgentRuntime, PermissionAction, QuestionKind, WorkState } from './enums.js';
+import {
+  AgentRole,
+  AgentRuntime,
+  PermissionAction,
+  QuestionKind,
+  RequestOrigin,
+  WorkState,
+} from './enums.js';
 import {
   Actor,
   Agent,
@@ -171,6 +178,12 @@ export const MessageSent = z.object({
   text: z.string(),
   /** Asked to cancel the current turn and go first. */
   interrupt: z.boolean(),
+  /**
+   * Where a user's message came from (P2-21): what a brain passes to the policy-writing commands
+   * it calls for this message. Absent for agents' and system messages, and unknown counts as
+   * remote.
+   */
+  origin: RequestOrigin.optional(),
 });
 
 /**

@@ -101,6 +101,14 @@ export {
   type WakeScope,
 } from './brains/index.js';
 export {
+  harmonizerBrain,
+  harmonizerRuntime,
+  startHarmonizer,
+  HARMONIZER_SYSTEM_PROMPT,
+  type HarmonizerDeps,
+  type HarmonizerRequest,
+} from './brains/harmonizer/index.js';
+export {
   Workspaces,
   WorkspaceMeta,
   stewardsSerialised,
@@ -112,5 +120,8 @@ export {
   type WorktreeInfo,
   type MergeResult,
   type MergeConflict,
+  type MergeRecord,
+  type ExternalCommit,
+  EXTERNAL_COMMITS_SHOWN,
 } from './workspace/workspaces.js';
 export { gitRunner, GitError, SAFE_GIT_CONFIG, type Git } from './workspace/git.js';

@@ -101,6 +101,14 @@ export const PermissionDecision = z.enum(['allow', 'ask', 'deny']);
 export type PermissionDecision = z.infer<typeof PermissionDecision>;
 
 /**
+ * Where a request came from (P2-21; TECHNOLOGY §8): `local` only for one `isRemoteRequest` let
+ * through as this machine. A policy write whose origin is not `local` (remote or unknown) is
+ * floored at the global default unless the server sets `autoApproveRemote`.
+ */
+export const RequestOrigin = z.enum(['local', 'remote']);
+export type RequestOrigin = z.infer<typeof RequestOrigin>;
+
+/**
  * Why a domain command was refused (P2-01). The REST and WS surfaces map these to their own
  * error shapes; brain tools hand the message back to the LLM as a tool error.
  */

@@ -42,6 +42,7 @@ describe('WAKE_RULES', () => {
         'question.cancelled',
         'question.escalated',
         'question.reassigned',
+        'task.created',
         'proposal.approved',
         'proposal.edited',
         'proposal.rejected',

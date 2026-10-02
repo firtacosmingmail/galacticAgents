@@ -69,11 +69,13 @@ const commands: DomainCommands = {
   resumeAgent: notImplemented,
   recordAgentEvent: () => noop(undefined),
   createProposal: notImplemented,
+  proposePlan: notImplemented,
   decideProposal: notImplemented,
   openQuestion: notImplemented,
   answerQuestion: notImplemented,
   escalateQuestion: notImplemented,
   reassignQuestion: notImplemented,
+  withdrawQuestion: notImplemented,
   control: () => noop(undefined),
 };
 

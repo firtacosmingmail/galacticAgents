@@ -5,6 +5,7 @@ import {
   type PermissionAction,
   type PermissionDecision,
   type PermissionPolicy,
+  type RequestOrigin,
   type ToolCall,
 } from '@galactic/protocol';
 
@@ -72,6 +73,45 @@ export function noLooserThan(
       [...actions].map((a) => [a, strictest([own.rules[a], base.rules[a]])]),
     ),
   };
+}
+
+/**
+ * How a policy write is judged (P2-21): where its request came from, and whether the server lets
+ * remote clients set up auto-approvals (`autoApproveRemote`, TECHNOLOGY §8).
+ */
+export interface PolicyWrite {
+  /** Absent: unknown, which counts as remote (fails closed). */
+  origin?: RequestOrigin | undefined;
+  autoApproveRemote?: boolean | undefined;
+}
+
+/**
+ * The policy a write actually stores (P2-21): every `permissionPolicy` write — a project created
+ * or edited through any command, REST route or brain tool, and the spawn presets of
+ * `POST /api/agents` — goes through here. A local request, or any request on a server with
+ * `autoApproveRemote`, keeps its policy; anything else (remote, or of unknown origin) is held to
+ * the global default in every category (`noLooserThan`). Clearing a policy needs no floor: it
+ * returns to the global default.
+ */
+export function policyForWrite(
+  policy: PermissionPolicy,
+  write: PolicyWrite = {},
+): PermissionPolicy {
+  if (write.origin === 'local' || write.autoApproveRemote) return policy;
+  return noLooserThan(policy);
+}
+
+/**
+ * The origin a brain's writes take when it acts on a turn's messages (P2-21): `local` only when
+ * every message carries `origin: 'local'`; one remote or unknown message (an agent's or the
+ * system's has none) makes the whole turn unknown, which policy writes treat as remote.
+ */
+export function originOfMessages(
+  messages: readonly { origin?: RequestOrigin | undefined }[],
+): RequestOrigin | undefined {
+  if (messages.length === 0) return undefined;
+  if (messages.every((m) => m.origin === 'local')) return 'local';
+  return messages.some((m) => m.origin === 'remote') ? 'remote' : undefined;
 }
 
 const STRICTNESS: Record<PermissionDecision, number> = { allow: 0, ask: 1, deny: 2 };

@@ -29,6 +29,8 @@ export interface WakeScope {
   projectId?: Id;
   /** `agentId` is directly supervised by the brain. */
   supervises(agentId: Id | undefined): boolean;
+  /** `agentId` is anywhere below the brain in the `supervisorId` chain (direct reports too). */
+  below?(agentId: Id | undefined): boolean;
   /** The brain runs the task: a task of its project, or the task of an agent it supervises. */
   runsTask(taskId: Id): boolean;
   /** The brain runs the project: its own, or one a supervised Waykeeper runs. */
@@ -57,10 +59,15 @@ const isBrain = (actor: Actor | undefined, scope: WakeScope) =>
 const who = (actor: Actor, scope: WakeScope): string =>
   actor.type === 'agent' ? (actor.id === scope.brainId ? 'you' : `agent ${actor.id}`) : actor.type;
 
-/** A question concerns the brain when it holds it or one of its agents asked it. */
+/**
+ * A question concerns the brain when it holds it or one of its agents asked it — except a question
+ * opened for the user alone (`meta.toUser`, decision 30): no supervisor between may answer it, so
+ * none is woken by it.
+ */
 function concerns(q: Question | undefined, scope: WakeScope): q is Question {
   if (!q || q.kind !== 'clarification') return false;
-  return isBrain(q.holder, scope) || scope.supervises(q.originAgentId);
+  if (isBrain(q.holder, scope)) return true;
+  return q.meta?.['toUser'] !== true && scope.supervises(q.originAgentId);
 }
 
 /**
@@ -114,11 +121,14 @@ const quote = (text: string) => JSON.stringify(text);
 
 export const WAKE_RULES: WakeRules = {
   'message.sent': {
-    // A user's chat line to the brain, or a report from an agent it supervises. The brain's own
-    // turn messages are sent by the system and never wake it.
+    // A user's chat line to the brain, or a report from an agent below it (a direct report, or a
+    // sub-project's Waykeeper asking the Harmonizer for closure). The brain's own turn messages
+    // are sent by the system and never wake it.
     wakes: (e, s) =>
       e.agentId === s.brainId &&
-      (e.sender.type === 'user' || (e.sender.type === 'agent' && s.supervises(e.sender.id))),
+      (e.sender.type === 'user' ||
+        (e.sender.type === 'agent' &&
+          (s.supervises(e.sender.id) || (s.below?.(e.sender.id) ?? false)))),
     describe: (e, s) =>
       e.sender.type === 'user'
         ? `the user said: ${quote(e.text)}`
@@ -152,6 +162,18 @@ export const WAKE_RULES: WakeRules = {
       isBrain(e.from, s) || isBrain(e.to, s) || concerns(s.question(e.questionId), s),
     describe: (e, s) =>
       `${e.questionId} moved from ${who(e.from, s)} to ${who(e.to, s)} (${e.reason})`,
+  },
+  // Work added to a Waykeeper's project by someone else (the Harmonizer carrying out a card): its
+  // own create_task / plan tasks are its own side effects and never get here; a plan's proposed
+  // tasks wait for the card's decision instead.
+  'task.created': {
+    wakes: (e, s) =>
+      s.role === 'waykeeper' &&
+      e.task.projectId !== undefined &&
+      e.task.projectId === s.projectId &&
+      e.task.state !== 'proposed',
+    describe: (e) =>
+      `task ${e.task.id} was added to your project (${e.task.state}, ${e.task.priority}): ${quote(e.task.description)}`,
   },
   'proposal.approved': proposal(() => 'was approved'),
   'proposal.edited': proposal((e) => `was edited: ${JSON.stringify(e.changes)}`),
