@@ -74,3 +74,18 @@ export async function startHarmonizer(
   );
   return { status: 'started', agentId: runner.agentId, runner };
 }
+
+/**
+ * Which runtime the boot-time Harmonizer uses (`GALACTIC_HARMONIZER`): `off` (or `0`) starts none;
+ * `fake` or `claude-sdk` picks one; unset means the fake adapter in dev mode (no Claude needed)
+ * and `claude-sdk` otherwise.
+ */
+export function harmonizerRuntime(
+  setting: string | undefined,
+  dev: boolean,
+): AgentRuntime | undefined {
+  const value = setting?.trim().toLowerCase();
+  if (value === 'off' || value === '0' || value === 'false') return undefined;
+  if (value === 'fake' || value === 'claude-sdk') return value;
+  return dev ? 'fake' : 'claude-sdk';
+}

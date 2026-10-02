@@ -104,7 +104,10 @@ const requestOf = (p: Proposal): HarmonizerRequest | undefined =>
   p.meta?.['request'] as HarmonizerRequest | undefined;
 
 /** A proposal the Harmonizer made, approved by the user (decision 3). */
-function approved(queries: BrainQueries, proposalId: Id): Proposal & { request: HarmonizerRequest } {
+function approved(
+  queries: BrainQueries,
+  proposalId: Id,
+): Proposal & { request: HarmonizerRequest } {
   const proposal = must(queries.proposal(proposalId), 'proposal', proposalId);
   const request = requestOf(proposal);
   if (!request) {
@@ -185,7 +188,12 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         throw new DomainError('conflict', `${body.name} is not free`);
       }
       return {
-        proposedBody: { kind, name, bodyId: body.id, ...(body.parentId ? { parentId: body.parentId } : {}) },
+        proposedBody: {
+          kind,
+          name,
+          bodyId: body.id,
+          ...(body.parentId ? { parentId: body.parentId } : {}),
+        },
       };
     }
     const request: BodyRequest =
@@ -266,7 +274,11 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           ...base,
           kind,
           rationale: `a task of ${project.name}: it lives on the project's body`,
-          proposedBody: { kind: bodyKind(ctx.queries, project), bodyId: project.bodyId, name: suggestedName },
+          proposedBody: {
+            kind: bodyKind(ctx.queries, project),
+            bodyId: project.bodyId,
+            name: suggestedName,
+          },
           workspace: project.workspace,
         };
       }
@@ -337,8 +349,12 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         name: S.str('The project’s name, or a short name for the task.'),
         rationale: S.str('Why this size and body, in a sentence or two.'),
         kind: S.enum(['planet', 'moon'], 'new_project only: the size.'),
-        workspace: S.str('Absolute folder (default: a new folder under the projects root, or for a task the related project’s workspace or a scratch folder).'),
-        bodyId: S.str('new_project only: a specific free planet or moon (default: the catalogue’s choice).'),
+        workspace: S.str(
+          'Absolute folder (default: a new folder under the projects root, or for a task the related project’s workspace or a scratch folder).',
+        ),
+        bodyId: S.str(
+          'new_project only: a specific free planet or moon (default: the catalogue’s choice).',
+        ),
         parentProjectId: S.str('new_project moon only: the planet project of a sub-project.'),
         projectId: S.str('project_task only: the project the task joins.'),
         relatedProjectId: S.str('standalone_task only: the project whose workspace it uses.'),
@@ -529,7 +545,10 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       const proposal = approved(ctx.queries, str(asInput(raw), 'proposalId'));
       const { request } = proposal;
       if (request.type !== 'new_project' && request.type !== 'standalone_task') {
-        throw new DomainError('invalid', `proposal ${proposal.id} is a ${request.type}, not a new project`);
+        throw new DomainError(
+          'invalid',
+          `proposal ${proposal.id} is a ${request.type}, not a new project`,
+        );
       }
       if (proposal.kind === 'asteroid') {
         throw new DomainError('invalid', `proposal ${proposal.id} is an asteroid: use create_task`);
@@ -540,7 +559,9 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       }
       const bodyId = proposal.proposedBody.bodyId;
       const parentProjectId =
-        request.type === 'new_project' && proposal.kind === 'moon' ? request.parentProjectId : undefined;
+        request.type === 'new_project' && proposal.kind === 'moon'
+          ? request.parentProjectId
+          : undefined;
       const { value } = await ctx.commands.createProject({
         name: request.name,
         workspace: checkPath(proposal.workspace),
@@ -674,7 +695,10 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         .filter((a) => a.role === 'waykeeper' && a.projectId === projectId);
       const running = waykeepers.find((a) => isLiving(ctx.queries, a.id));
       if (running) {
-        throw new DomainError('conflict', `project ${projectId} already has Waykeeper ${running.id}`);
+        throw new DomainError(
+          'conflict',
+          `project ${projectId} already has Waykeeper ${running.id}`,
+        );
       }
       let supervisorId = ctx.brainId;
       if (project.parentProjectId) {
@@ -727,7 +751,11 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           `task ${taskId} belongs to project ${task.projectId}: its Waykeeper spawns its Stewards`,
         );
       }
-      if (!['approved', 'in_progress', 'paused', 'interrupted', 'blocked_on_user'].includes(task.state)) {
+      if (
+        !['approved', 'in_progress', 'paused', 'interrupted', 'blocked_on_user'].includes(
+          task.state,
+        )
+      ) {
         throw new DomainError('invalid_transition', `task ${taskId} is ${task.state}`);
       }
       const running = ctx.queries
@@ -741,7 +769,11 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           (task.meta?.['workspace'] as string | undefined) ??
           join(root, SCRATCH_DIR, taskId),
       );
-      ensureDir(workspace);
+      try {
+        ensureDir(workspace);
+      } catch (error) {
+        throw new DomainError('invalid', `cannot create ${workspace}: ${(error as Error).message}`);
+      }
       const instructions = str(input, 'instructions', true);
       const { value } = await ctx.commands.spawnAgent({
         role: 'steward',
@@ -829,7 +861,8 @@ export function nameFrom(text: string): string {
   return w.map((x, i) => (i === 0 ? x[0]!.toUpperCase() + x.slice(1) : x)).join(' ');
 }
 
-const PLANET_HINTS = /\b(app|application|platform|system|service|product|initiative|website|site)\b/i;
+const PLANET_HINTS =
+  /\b(app|application|platform|system|service|product|initiative|website|site)\b/i;
 const ASTEROID_HINTS =
   /\b(fix|bug|typo|script|investigate|investigation|check|look into|one-off|quick|small|rename|update|bump)\b/i;
 
@@ -853,4 +886,3 @@ function rationaleFor(kind: 'planet' | 'moon', choice: BodyChoice | undefined, p
       ? "no moon of the parent's planet is free: it stays a task on the planet"
       : 'no moon is free';
 }
-
