@@ -13,11 +13,13 @@ import {
 import { Beacon, NavLink } from './Navigation.js';
 import {
   agentActions,
+  cardKey,
   formatCost,
   formatDuration,
   managedCards,
   wallClockUsed,
   workActions,
+  workTitle,
   type AgentCardModel,
   type CardAction,
 } from './agent-cards-model.js';
@@ -43,7 +45,7 @@ export function ManagedAgentCards({ supervisor }: { supervisor: Agent | undefine
       {cards.length === 0 ? (
         <p className="pnl-empty">No agents working under it.</p>
       ) : (
-        cards.map((c) => <AgentCard key={c.agent.id} card={c} now={now} />)
+        cards.map((c) => <AgentCard key={cardKey(c)} card={c} now={now} />)
       )}
       <label className="pnl-check agc-archived">
         <input
@@ -77,7 +79,8 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
   const [pending, setPending] = useState<{ scope: Scope; action: CardAction } | undefined>();
   const [editing, setEditing] = useState(false);
   const { agent, status, work, blocked, openQuestions } = card;
-  const name = agentLabel(agent, world);
+  // A work-only card (no agent runs the work yet) is named after its work.
+  const name = agent ? agentLabel(agent, world) : work ? workTitle(work) : '—';
   const workName = work
     ? work.kind === 'task'
       ? work.item.description
@@ -88,9 +91,9 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
     run(() =>
       api.control({
         target:
-          scope === 'agent' || !work
-            ? { kind: 'agent', id: agent.id }
-            : { kind: work.kind, id: work.item.id },
+          scope === 'work' && work
+            ? { kind: work.kind, id: work.item.id }
+            : { kind: 'agent', id: agent!.id },
         action: body,
       }),
     );
@@ -103,7 +106,11 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
   const click = (scope: Scope, a: CardAction) =>
     a.confirm ? setPending({ scope, action: a }) : void perform(scope, a);
 
-  const to = agent.role === 'harmonizer' ? HARMONIZER : { kind: agent.role, id: agent.id };
+  const to = agent
+    ? agent.role === 'harmonizer'
+      ? HARMONIZER
+      : { kind: agent.role, id: agent.id }
+    : undefined;
   const wall = status ? wallClockUsed(status, now) : undefined;
   const questions = openQuestions.length;
 
@@ -117,12 +124,20 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
             {questions} open question{questions === 1 ? '' : 's'}
           </span>
         )}
-        <NavLink to={{ route: 'panel', selection: to }} className="agc-name">
-          <span className="pnl-nav-name">{name}</span>
-        </NavLink>
+        {to ? (
+          <NavLink to={{ route: 'panel', selection: to }} className="agc-name">
+            <span className="pnl-nav-name">{name}</span>
+          </NavLink>
+        ) : (
+          <span className="agc-name pnl-nav-name">{name}</span>
+        )}
       </header>
       <p className="agc-activity" title={status?.currentActivity}>
-        {status?.currentActivity ?? (card.live ? 'no activity yet' : 'not running')}
+        {agent
+          ? (status?.currentActivity ?? (card.live ? 'no activity yet' : 'not running'))
+          : work?.item.state === 'approved'
+            ? 'queued: no agent yet'
+            : 'no agent'}
       </p>
       <dl className="agc-facts">
         {work && (
@@ -138,61 +153,67 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
             </dd>
           </div>
         )}
-        <div>
-          <dt>cost</dt>
-          <dd aria-label="cost so far">{formatCost(status)}</dd>
-        </div>
-        <div>
-          <dt>wall clock</dt>
-          <dd aria-label="wall clock">
-            {status && wall !== undefined ? (
-              <Usage
-                used={wall}
-                limit={status.caps.wallClockMs.limit}
-                text={`${formatDuration(wall)} / ${formatDuration(status.caps.wallClockMs.limit)}`}
-              />
-            ) : (
-              '—'
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>tool calls</dt>
-          <dd aria-label="tool calls">
-            {status ? (
-              <Usage
-                used={status.caps.toolCalls.used}
-                limit={status.caps.toolCalls.limit}
-                text={`${status.caps.toolCalls.used} / ${status.caps.toolCalls.limit}`}
-              />
-            ) : (
-              '—'
-            )}
-          </dd>
-        </div>
+        {agent && (
+          <>
+            <div>
+              <dt>cost</dt>
+              <dd aria-label="cost so far">{formatCost(status)}</dd>
+            </div>
+            <div>
+              <dt>wall clock</dt>
+              <dd aria-label="wall clock">
+                {status && wall !== undefined ? (
+                  <Usage
+                    used={wall}
+                    limit={status.caps.wallClockMs.limit}
+                    text={`${formatDuration(wall)} / ${formatDuration(status.caps.wallClockMs.limit)}`}
+                  />
+                ) : (
+                  '—'
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>tool calls</dt>
+              <dd aria-label="tool calls">
+                {status ? (
+                  <Usage
+                    used={status.caps.toolCalls.used}
+                    limit={status.caps.toolCalls.limit}
+                    text={`${status.caps.toolCalls.used} / ${status.caps.toolCalls.limit}`}
+                  />
+                ) : (
+                  '—'
+                )}
+              </dd>
+            </div>
+          </>
+        )}
       </dl>
 
-      <ActionRow
-        label={`agent controls of ${name}`}
-        title="agent"
-        actions={agentActions(status)}
-        busy={busy}
-        onClick={(a) => click('agent', a)}
-        extra={
-          status?.state === 'interrupted' ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setPending(undefined);
-                void run(() => api.recover(agent.id));
-              }}
-            >
-              Resume session
-            </button>
-          ) : null
-        }
-      />
+      {agent && (
+        <ActionRow
+          label={`agent controls of ${name}`}
+          title="agent"
+          actions={agentActions(status)}
+          busy={busy}
+          onClick={(a) => click('agent', a)}
+          extra={
+            status?.state === 'interrupted' ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setPending(undefined);
+                  void run(() => api.recover(agent.id));
+                }}
+              >
+                Resume session
+              </button>
+            ) : null
+          }
+        />
+      )}
       {work && (
         <ActionRow
           label={`${work.kind} controls of ${workName}`}

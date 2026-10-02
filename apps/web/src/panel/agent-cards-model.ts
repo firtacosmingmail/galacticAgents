@@ -21,7 +21,12 @@ import type { WorldState } from '../state/reduce.js';
 export type CardWork = { kind: 'task'; item: Task } | { kind: 'project'; item: Project };
 
 export interface AgentCardModel {
-  agent: Agent;
+  /**
+   * The agent running the work; undefined for work no agent runs yet (an approved task queued
+   * behind the concurrency cap, an approved project whose Waykeeper is not spawned yet): a
+   * work-only card, with the work's controls and no agent row.
+   */
+  agent: Agent | undefined;
   status: StatusRecord | undefined;
   work: CardWork | undefined;
   /** The agent's session is still running (any state but the ended ones). */
@@ -44,7 +49,7 @@ const RUNNING: ReadonlySet<WorkState> = new Set([
 const isLive = (status: StatusRecord | undefined) =>
   status === undefined || !ENDED_STATES.has(status.state);
 
-const byAge = (a: Agent, b: Agent) =>
+const byAge = (a: { createdAt: string; id: string }, b: { createdAt: string; id: string }) =>
   a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 
 /**
@@ -87,16 +92,32 @@ function agentsOfWork(world: WorldState, work: CardWork): Agent[] {
     .sort(byAge);
 }
 
+/** A work-only card's title: "Task · <description>", "Project · <name>". */
+export function workTitle(work: CardWork): string {
+  return work.kind === 'task' ? `Task · ${work.item.description}` : `Project · ${work.item.name}`;
+}
+
+/** A card's age: its agent's, or for a work-only card the work's. */
+const cardAge = (c: AgentCardModel): { createdAt: string; id: string } => c.agent ?? c.work!.item;
+
+/** A stable key for a card: its agent, or its work when no agent runs it. */
+export const cardKey = (c: AgentCardModel): string =>
+  c.agent ? c.agent.id : `${c.work!.kind}:${c.work!.item.id}`;
+
 function rank(card: AgentCardModel): number {
   if (card.blocked) return 0;
   if (card.live) return 1;
+  // Work-only cards of unfinished work are waiting to run: with the running ones.
+  if (!card.agent && card.work && !FINISHED.has(card.work.item.state)) return 1;
   return 2;
 }
 
 /**
  * The cards under a supervisor: every live agent of the work it manages, and for work with no
  * live agent its newest agent (so stopped, finished or failed work keeps its card and its
- * resume / close / archive / reopen actions). Archived work is left out unless asked for.
+ * resume / close / archive / reopen actions). Work that never had an agent (approved but queued
+ * or not spawned yet) gets a work-only card; proposed work is left out (it is on its card).
+ * Archived work is left out unless asked for.
  * Ordered "blocked on user" first, then running, then ended; oldest first within a rank.
  */
 export function managedCards(
@@ -110,6 +131,18 @@ export function managedCards(
   for (const work of managedWork(world, supervisor)) {
     if (work.item.state === 'archived' && !opts.showArchived) continue;
     const agents = agentsOfWork(world, work);
+    if (agents.length === 0) {
+      if (work.item.state === 'proposed') continue;
+      cards.push({
+        agent: undefined,
+        status: undefined,
+        work,
+        live: false,
+        blocked: work.item.state === 'blocked_on_user',
+        openQuestions: [],
+      });
+      continue;
+    }
     const live = agents.filter((a) => isLive(world.statuses[a.id]));
     const shown = live.length > 0 ? live : agents.slice(-1);
     for (const agent of shown) {
@@ -126,7 +159,7 @@ export function managedCards(
       });
     }
   }
-  return cards.sort((a, b) => rank(a) - rank(b) || byAge(a.agent, b.agent));
+  return cards.sort((a, b) => rank(a) - rank(b) || byAge(cardAge(a), cardAge(b)));
 }
 
 /** The running wall clock: extrapolated from `startedAt` while the agent works (TECHNOLOGY §4). */
