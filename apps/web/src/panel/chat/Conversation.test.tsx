@@ -221,6 +221,25 @@ describe('the panel chat (P25-03)', () => {
     expect(pages).toBe(2);
   });
 
+  it('reads the history again when the log changes (no lingering "Loading…")', async () => {
+    const f = fakeApi(() =>
+      f.calls.length > 1
+        ? { entries: [entry(7, 'reply')], hasMore: false, lastSeq: 7 }
+        : { entries: [entry(4, 'reply')], hasMore: false, lastSeq: 4 },
+    );
+    show(H, f.api);
+    await screen.findByText('brain said 4');
+    // A new database: the threads of the old log are dropped and the open chat reads the new one.
+    act(() => useAppStore.getState().apply(snapshot({ logId: 'log-b' })));
+    await screen.findByText('brain said 7');
+    expect(within(thread()).queryByText('brain said 4')).toBeNull();
+    expect(screen.queryByText(/Loading/)).toBeNull();
+    // Opened again on the new log: loaded, with the live seam at the new page's lastSeq.
+    await waitFor(() => expect(conversationSince(H)).toBe(7));
+    expect(useConversationStore.getState().threads[H]?.loaded).toBe(true);
+    expect(f.calls.every((c) => c.limit === 50 && !c.after && !c.before)).toBe(true);
+  });
+
   it('sends to the selected brain and shows the line as sending until it arrives', async () => {
     const f = fakeApi(() => ({ entries: [], hasMore: false, lastSeq: 0 }));
     show(waykeeper.id, f.api);

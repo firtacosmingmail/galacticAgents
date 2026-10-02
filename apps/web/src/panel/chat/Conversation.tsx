@@ -75,6 +75,8 @@ function useThread(agentId: Id): { thread: Thread; entries: ChatEntry[]; loadOld
   useEffect(() => conv().forLog(logId), [conv, logId]);
 
   // The history first; the live transcript starts where it ended.
+  // Reopened when the log changes too: `forLog` (above, so it runs first) dropped the threads,
+  // and the history must be read again from the new log (as `useStewardTranscript` does).
   useEffect(() => {
     let cancelled = false;
     seenSnapshots.current = useAppStore.getState().snapshots;
@@ -95,7 +97,7 @@ function useThread(agentId: Id): { thread: Thread; entries: ChatEntry[]; loadOld
         return { transcripts: rest };
       });
     };
-  }, [conv, agentId, fetchPage]);
+  }, [conv, agentId, fetchPage, logId]);
 
   useEffect(() => {
     if (!ready) return;
