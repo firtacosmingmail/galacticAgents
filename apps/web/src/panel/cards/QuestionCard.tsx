@@ -184,7 +184,11 @@ export function QuestionCard({
         </form>
       )}
       {ownStale !== undefined ? (
-        <StaleBanner questionId={q.id} message={ownStale} onDismiss={() => setOwnStale(undefined)} />
+        <StaleBanner
+          questionId={q.id}
+          message={ownStale}
+          onDismiss={() => setOwnStale(undefined)}
+        />
       ) : (
         <ErrorLine error={error} />
       )}

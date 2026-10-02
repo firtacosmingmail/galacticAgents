@@ -1,12 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type { Id } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
-import {
-  AnsweredQuestionCard,
-  ProposalCard,
-  QuestionCard,
-  StaleBanner,
-} from './cards/index.js';
+import { AnsweredQuestionCard, ProposalCard, QuestionCard, StaleBanner } from './cards/index.js';
 import { inboxModel, type InboxItem } from './inbox-model.js';
 import { Beacon } from './Navigation.js';
 import './inbox.css';

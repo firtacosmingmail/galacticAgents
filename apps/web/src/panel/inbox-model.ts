@@ -8,8 +8,7 @@ import type { WorldState } from '../state/reduce.js';
  */
 
 export type InboxItem =
-  | { kind: 'question'; question: Question }
-  | { kind: 'proposal'; proposal: Proposal };
+  { kind: 'question'; question: Question } | { kind: 'proposal'; proposal: Proposal };
 
 export interface InboxModel {
   /** Blocked on the user: open questions they hold, and cards waiting for their decision. */

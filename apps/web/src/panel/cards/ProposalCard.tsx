@@ -88,7 +88,9 @@ function ApprovedCard({ proposal: p }: { proposal: Proposal }) {
       <header>
         <StatePill state={p.state} />
         <strong>
-          {plan ? `Plan for ${world.projects[plan.projectId]?.name ?? plan.projectId}` : p.requestText}
+          {plan
+            ? `Plan for ${world.projects[plan.projectId]?.name ?? plan.projectId}`
+            : p.requestText}
         </strong>
         <span className="muted">
           {plan ? `${plan.taskIds.length} tasks` : `${p.kind} · ${p.proposedBody.name}`}
