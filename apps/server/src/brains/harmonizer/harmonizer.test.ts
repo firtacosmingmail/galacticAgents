@@ -251,6 +251,54 @@ describe('Harmonizer brain (P2-08)', () => {
     hq.assertCalls(['propose', 'create_task', 'spawn_steward', 'answer_question', 'close_task']);
   });
 
+  it('runs an asteroid Steward only in the workspace approved on its card (decision 34)', async () => {
+    const elsewhere = join(tmpdir(), 'galactic-not-approved');
+    const made: string[] = [];
+    const { h, root, definition } = setup({
+      stewardPrompt: () => 'scenario:happy',
+      ensureDir: (p) => made.push(p),
+    });
+    const { value: card } = await h.commands.createProposal({
+      requestText: 'rename the logs',
+      kind: 'asteroid',
+      proposedBody: { kind: 'asteroid', name: 'Rename logs' },
+      workspace: join(root, 'approved'),
+      rationale: 'small',
+      meta: {
+        request: { type: 'standalone_task', name: 'Rename logs', description: 'rename the logs' },
+      },
+    });
+    await h.commands.decideProposal(card.id, { decision: 'approve' }, USER);
+    // A task that never had a card has no approved workspace.
+    const { value: bare } = await h.commands.createTask({ description: 'no card' });
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('go', async (t) => {
+            const task = await t.call<{ taskId: Id }>('create_task', { proposalId: card.id });
+            const moved = await t.try('spawn_steward', {
+              taskId: task.taskId,
+              workspace: elsewhere,
+            });
+            expect(moved).toMatchObject({ ok: false, error: 'invalid' });
+            expect(await t.try('spawn_steward', { taskId: bare.id })).toMatchObject({
+              ok: false,
+              error: 'invalid',
+            });
+            const out = await t.call<{ workspace: string }>('spawn_steward', {
+              taskId: task.taskId,
+            });
+            expect(out.workspace).toBe(join(root, 'approved'));
+          })
+          .on(/finished/, () => {}),
+    });
+    hq.tell('go');
+    await h.done();
+    expect(made).toEqual([join(root, 'approved')]);
+    expect(h.log.tables.agents.all().filter((a) => a.role === 'steward')).toHaveLength(1);
+  });
+
   it('never sees a permission question, and refuses to answer one', async () => {
     const { h, root, definition } = setup({ stewardPrompt: () => 'scenario:permission' });
     const seen: { permissionId?: Id } = {};

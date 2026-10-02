@@ -731,12 +731,12 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     name: 'spawn_steward',
     description:
       'Starts the Steward of a standalone (asteroid) task; you are its supervisor. It works in ' +
-      'the card’s workspace (a related project’s workspace or a scratch folder) unless you give ' +
-      'one. Project tasks get their Stewards from their Waykeeper.',
+      'the workspace the user approved on the task’s card (a related project’s workspace or a ' +
+      'scratch folder); only the card changes it. Project tasks get their Stewards from their ' +
+      'Waykeeper.',
     inputSchema: S.obj(
       {
         taskId: S.str('The standalone task.'),
-        workspace: S.str('Absolute folder to work in (default: the task’s).'),
         instructions: S.str('Extra instructions for the Steward.'),
       },
       ['taskId'],
@@ -744,6 +744,13 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     async handler(raw, ctx) {
       const input = asInput(raw);
       const taskId = str(input, 'taskId');
+      if (input['workspace'] !== undefined) {
+        // Decisions 3 and 34: the workspace is the user's to change, on the card.
+        throw new DomainError(
+          'invalid',
+          'a Steward works in the workspace approved on its card; only the card changes it',
+        );
+      }
       const task = must(ctx.queries.task(taskId), 'task', taskId);
       if (task.projectId) {
         throw new DomainError(
@@ -764,11 +771,14 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       if (running) {
         throw new DomainError('conflict', `task ${taskId} already has Steward ${running.id}`);
       }
-      const workspace = checkPath(
-        str(input, 'workspace', true) ??
-          (task.meta?.['workspace'] as string | undefined) ??
-          join(root, SCRATCH_DIR, taskId),
-      );
+      const approvedWorkspace = task.meta?.['workspace'];
+      if (typeof approvedWorkspace !== 'string' || approvedWorkspace === '') {
+        throw new DomainError(
+          'invalid',
+          `task ${taskId} has no workspace approved on a card: propose it as a standalone task first`,
+        );
+      }
+      const workspace = checkPath(approvedWorkspace);
       try {
         ensureDir(workspace);
       } catch (error) {
