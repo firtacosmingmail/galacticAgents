@@ -218,7 +218,12 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
       const { type: _type, proposalId, ...parked } = event;
       return {
         ...next,
-        proposals: decide(next.proposals, proposalId, { state: 'parked', updatedAt: at }, { parked }),
+        proposals: decide(
+          next.proposals,
+          proposalId,
+          { state: 'parked', updatedAt: at },
+          { parked },
+        ),
       };
     }
     case 'proposal.unparked':

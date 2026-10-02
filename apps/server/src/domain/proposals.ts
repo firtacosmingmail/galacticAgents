@@ -15,7 +15,14 @@ import { carryOut, type ProposalOptions } from './approval.js';
 import { describeRefusal } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
-import { bodyRequestOf, park, parkIfNoRoom, parkingFor, roomFor, unparkWaiting } from './parking.js';
+import {
+  bodyRequestOf,
+  park,
+  parkIfNoRoom,
+  parkingFor,
+  roomFor,
+  unparkWaiting,
+} from './parking.js';
 import { setTaskState } from './states.js';
 import { createTask } from './tasks.js';
 

@@ -542,8 +542,8 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
   const createProject: BrainTool = {
     name: 'create_project',
     description:
-      'Creates the project of an APPROVED new-project proposal (planet or moon, with the user’s ' +
-      'edits), on its proposed body or the catalogue’s choice. Then spawn_waykeeper.',
+      'Returns the project of an APPROVED new-project proposal: the approval created it as the ' +
+      'user left the card (size, body, workspace). Then spawn_waykeeper.',
     inputSchema: S.obj({ proposalId: S.str('The approved proposal.') }, ['proposalId']),
     async handler(raw, ctx) {
       const proposal = approved(ctx.queries, str(asInput(raw), 'proposalId'));
@@ -595,8 +595,9 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
   const createTask: BrainTool = {
     name: 'create_task',
     description:
-      'Creates the task of an APPROVED proposal: a standalone task on a fresh asteroid (then ' +
-      'spawn_steward), or a task added to an existing project (its Waykeeper picks it up).',
+      'Returns the task of an APPROVED proposal (the approval created it from the card): a ' +
+      'standalone task on its asteroid (then spawn_steward), or a task added to an existing ' +
+      'project (its Waykeeper picks it up). priority and blockedBy are applied to it.',
     inputSchema: S.obj(
       {
         proposalId: S.str('The approved proposal.'),

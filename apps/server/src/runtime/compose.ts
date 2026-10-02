@@ -149,7 +149,9 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     questions,
     ...(opts.autoApproveRemote ? { autoApproveRemote: true } : {}),
     // A card's workspace is checked as the workspace service checks it (P2-09, decision 27).
-    ...(opts.workspaces ? { checkWorkspace: (path: string): string => workspaces!.checkPath(path) } : {}),
+    ...(opts.workspaces
+      ? { checkWorkspace: (path: string): string => workspaces!.checkPath(path) }
+      : {}),
     isRunning: (id) => {
       const status = statuses.get(id);
       return status !== undefined && !ENDED_STATES.has(status.state);

@@ -143,7 +143,9 @@ export type ProposalDecision =
   | {
       decision: 'edit';
       /** `initGit`: the user's consent to `git init` an existing non-git workspace (decision 27). */
-      changes: Partial<Pick<Proposal, 'kind' | 'proposedBody' | 'workspace'> & { initGit: boolean }>;
+      changes: Partial<
+        Pick<Proposal, 'kind' | 'proposedBody' | 'workspace'> & { initGit: boolean }
+      >;
     }
   | { decision: 'reject'; reason?: string }
   | { decision: 'park'; reason: string };

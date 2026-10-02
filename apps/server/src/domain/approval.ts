@@ -25,9 +25,7 @@ export interface ProposalOptions extends ChooseOptions {
 }
 
 export type CarriedOut =
-  | { kind: 'project'; project: Project }
-  | { kind: 'task'; task: Task }
-  | { kind: 'nothing' };
+  { kind: 'project'; project: Project } | { kind: 'task'; task: Task } | { kind: 'nothing' };
 
 /**
  * Creates what the approved card `p` asks for. `body` is the free planet or moon a new project
