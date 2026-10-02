@@ -148,7 +148,9 @@ describe('the Steward view (P25-05)', () => {
     expect(text).toMatch(/\/home\/cosmin\/work\/auth\/\.worktrees\/t-1/);
     expect(text).toMatch(/task\/t-1-session-middleware/);
     expect(text).toMatch(/Auth refactor/);
-    expect(text).toMatch(/\$0\.42/);
+    // The same figures as the managed-agents cards (shared formatters).
+    expect(text).toMatch(/\$0\.4200/);
+    expect(text).toMatch(/wall clock\d+ (s|min|h)( \d\d)? \/ 1 h/);
     expect(text).toMatch(/17 \/ 500/);
     expect(within(view()).queryByText('blocked on you')).toBeNull();
 

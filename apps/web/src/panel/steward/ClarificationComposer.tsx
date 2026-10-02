@@ -1,25 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import type { Question } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
-import type { WorldState } from '../../state/reduce.js';
 import { ApiError } from '../../console/api.js';
 import { actorLabel, ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js';
-
-/** A refused (stale) answer, kept by the view so it can say who answered first. */
-export interface StaleRefusal {
-  questionId: string;
-  message: string;
-}
-
-/** "already answered by Waykeeper · CSV tool: "ISO 8601"", from the folded world when it knows. */
-export function staleLine(world: WorldState, r: StaleRefusal): string {
-  const q = world.questions[r.questionId];
-  if (q?.status === 'answered') {
-    return `already answered by ${actorLabel(q.answeredBy, world)}${q.answer ? `: "${q.answer}"` : ''}`;
-  }
-  if (q?.status === 'cancelled') return 'the question was withdrawn';
-  return r.message;
-}
 
 /**
  * The Steward view's only message box (decision 13): the answer to its open clarification
@@ -33,7 +16,8 @@ export function ClarificationComposer({
   onSent,
 }: {
   question: Question;
-  onStale: (refusal: StaleRefusal) => void;
+  /** A stale refusal; the view shows the shared `StaleBanner` (it says who answered first). */
+  onStale: (questionId: string, message: string) => void;
   onSent: () => void;
 }) {
   const api = useApi();
@@ -54,7 +38,7 @@ export function ClarificationComposer({
     if (ok) {
       setValue('');
       onSent();
-    } else if (stale !== undefined) onStale({ questionId: q.id, message: stale });
+    } else if (stale !== undefined) onStale(q.id, stale);
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();

@@ -85,14 +85,14 @@ afterEach(() => {
 });
 
 /** Renders the app at a URL and feeds it the snapshot over the (fake) socket. */
-async function open(path: string) {
+async function open(path: string, initial: ServerMessage = snapshot) {
   window.history.replaceState(null, '', path);
   render(<App />);
   await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   const socket = FakeWebSocket.instances[0]!;
   await act(async () => {
     socket.serverOpens();
-    socket.serverSends(snapshot);
+    socket.serverSends(initial);
   });
 }
 
@@ -227,5 +227,21 @@ describe('panel shell and selection (P25-02)', () => {
       { label: 'task Fix the flaky date test', badge: 'blocked on you' },
       { label: 'task Bump the lint rules', badge: null },
     ]);
+  });
+
+  it('counts the same "waiting for you" in the top bar and the inbox header', async () => {
+    await open('/', {
+      ...(snapshot as Extract<ServerMessage, { type: 'snapshot' }>),
+      questions: [
+        { ...fx.question, id: 'q-user', holder: { type: 'user' } },
+        // Held by a supervisor: not waiting for the user.
+        { ...fx.question, id: 'q-wk' },
+      ],
+      proposals: [fx.proposal, { ...fx.proposal, id: 'pr-2', state: 'rejected' }],
+    });
+    const top = screen.getByLabelText('summary');
+    const inbox = screen.getByRole('region', { name: 'question inbox' });
+    expect(within(top).getByText('2 waiting for you')).toBeTruthy();
+    expect(within(inbox).getByText('2 waiting for you')).toBeTruthy();
   });
 });

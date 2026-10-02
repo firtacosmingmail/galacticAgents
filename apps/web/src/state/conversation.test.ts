@@ -153,6 +153,44 @@ describe('conversation paging and the live seam (P25-03)', () => {
     expect(t.liveFrom).toBe(9);
   });
 
+  it('catches up a thread with no history by reading the newest page', async () => {
+    const store = useConversationStore.getState();
+    await store.open('a-h', fakeServer([], 0).fetch);
+    // Only a live line, which has no cursor; then a snapshot skipped some messages.
+    store.absorb('a-h', [{ ...reply(2), cursor: undefined }]);
+    const later = fakeServer(all, 6);
+    await store.catchUp('a-h', later.fetch);
+    expect(later.calls).toEqual([{ limit: 50 }]);
+    const t = useConversationStore.getState().threads['a-h']!;
+    expect(t.entries.map((e) => e.id)).toEqual(all.map((e) => e.id));
+    expect(t.entries.find((e) => e.id === 'r:a-h:2')?.cursor).toBe('c-r-2');
+    expect(t.oldestCursor).toBe('c-m-1');
+    expect(t.newestCursor).toBe('c-r-6');
+  });
+
+  it('restarts from the newest page when the catch-up cap is hit, leaving no hole', async () => {
+    const many = Array.from({ length: 4_300 }, (_, i) => msg(i + 1, 0));
+    many.forEach((e, i) => (e.at = new Date(Date.UTC(2026, 9, 2, 10, 0, 0, i)).toISOString()));
+    const store = useConversationStore.getState();
+    await store.open('a-h', fakeServer(many.slice(0, 2), 2).fetch);
+    store.close('a-h');
+    // Reopened after more than 20 pages of 200 were written.
+    const later = fakeServer(many, 4_300);
+    await store.open('a-h', later.fetch);
+    expect(later.calls).toHaveLength(21);
+    expect(later.calls.at(-1)).toEqual({ limit: 50 });
+    const t = useConversationStore.getState().threads['a-h']!;
+    // The thread is the newest page (older held lines dropped), and pages back from it.
+    expect(t.entries.map((e) => e.id)).toEqual(many.slice(-50).map((e) => e.id));
+    expect(t.oldestCursor).toBe(many.at(-50)!.cursor);
+    expect(t.newestCursor).toBe(many.at(-1)!.cursor);
+    expect(t.hasOlder).toBe(true);
+    expect(t.liveFrom).toBe(4_300);
+    await store.loadOlder('a-h', later.fetch);
+    const ids = useConversationStore.getState().threads['a-h']!.entries.map((e) => e.id);
+    expect(ids).toEqual(many.slice(-100).map((e) => e.id));
+  });
+
   it('drops every thread when the log changes and reports a failed read', async () => {
     const store = useConversationStore.getState();
     store.forLog('log-a');
@@ -178,7 +216,12 @@ describe('thread cards (P25-03)', () => {
     supervisorId: 'a-harmonizer',
   };
   const steward: Agent = fx.agent; // supervised by a-waykeeper-1
-  const asteroidSteward: Agent = { ...fx.agent, id: 'a-steward-2', supervisorId: 'a-harmonizer' };
+  const asteroidSteward: Agent = {
+    ...fx.agent,
+    id: 'a-steward-2',
+    taskId: fx.asteroidTask.id,
+    supervisorId: 'a-harmonizer',
+  };
   const agents = {
     [fx.harmonizer.id]: fx.harmonizer,
     [waykeeper.id]: waykeeper,
@@ -201,6 +244,7 @@ describe('thread cards (P25-03)', () => {
   const q2: Question = { ...fx.question, id: 'q-ast', originAgentId: 'a-steward-2' };
   const world = {
     agents,
+    tasks: { [fx.task.id]: fx.task, [fx.asteroidTask.id]: fx.asteroidTask },
     proposals: { [plan.id]: plan, [promotion.id]: promotion, [work.id]: work },
     questions: { [q1.id]: q1, [q2.id]: q2 },
   };
@@ -217,6 +261,24 @@ describe('thread cards (P25-03)', () => {
         .sort(),
     ).toEqual(['pr-work', 'q-ast']);
     expect(threadCards(world, steward)).toEqual([]);
+  });
+
+  it('routes a Steward’s question by project: to the current Waykeeper after a replacement', () => {
+    // The Steward was spawned by a Waykeeper that has since been replaced (decision 32): its
+    // `supervisorId` still names the old one, but the question belongs to the project's thread.
+    const successor: Agent = { ...waykeeper, id: 'a-waykeeper-2', createdAt: at(30) };
+    const orphan: Agent = { ...steward, supervisorId: 'a-waykeeper-gone' };
+    const replaced = {
+      ...world,
+      agents: { ...agents, [steward.id]: orphan, [successor.id]: successor },
+    };
+    expect(threadCards(replaced, successor).map((c) => c.id)).toContain('q-1');
+    expect(threadCards(replaced, fx.harmonizer).map((c) => c.id)).not.toContain('q-1');
+    // A standalone task's Steward asks the Harmonizer, whoever its supervisor says.
+    const misfiled = { ...asteroidSteward, supervisorId: successor.id };
+    const standalone = { ...replaced, agents: { ...replaced.agents, [misfiled.id]: misfiled } };
+    expect(threadCards(standalone, fx.harmonizer).map((c) => c.id)).toContain('q-ast');
+    expect(threadCards(standalone, successor).map((c) => c.id)).not.toContain('q-ast');
   });
 
   it('places cards by creation time, holding back older ones while history is unread', () => {

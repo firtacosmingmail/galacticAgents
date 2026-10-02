@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import type { Id } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { AnsweredQuestionCard, ProposalCard, QuestionCard, StaleBanner } from './cards/index.js';
-import { inboxModel, type InboxItem } from './inbox-model.js';
+import { inboxModel, waitingForUserCount, type InboxItem } from './inbox-model.js';
 import { Beacon } from './Navigation.js';
 import './inbox.css';
 
@@ -26,7 +26,7 @@ export function Inbox() {
   const model = inboxModel(world);
   const onStale = (questionId: Id, message: string) =>
     setRefusals((r) => [...r.filter((x) => x.questionId !== questionId), { questionId, message }]);
-  const count = model.waiting.length;
+  const count = waitingForUserCount(world);
 
   return (
     <section className="pnl-inbox-list" aria-label="question inbox">

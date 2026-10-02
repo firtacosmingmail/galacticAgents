@@ -10,7 +10,7 @@ import {
 import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
 import { HARMONIZER, type Selection } from '../../state/selection.js';
-import { OriginContext, QuestionCard } from '../../console/hierarchy/QuestionInbox.js';
+import { OriginContext, QuestionCard, StaleBanner } from '../cards/index.js';
 import {
   actorLabel,
   agentLabel,
@@ -20,7 +20,9 @@ import {
   useApi,
 } from '../../console/hierarchy/shared.js';
 import { Beacon, NavLink } from '../Navigation.js';
-import { ClarificationComposer, type StaleRefusal, staleLine } from './ClarificationComposer.js';
+import { useNow } from '../AgentCards.js';
+import { formatCost, formatDuration, wallClockUsed } from '../agent-cards-model.js';
+import { ClarificationComposer } from './ClarificationComposer.js';
 import { TranscriptLog } from './TranscriptLog.js';
 import { useStewardTranscript } from './useStewardTranscript.js';
 import './steward.css';
@@ -36,7 +38,7 @@ import './steward.css';
 export function StewardPanelView({ agentId }: { agentId: Id }) {
   const world = useAppStore((s) => s.world);
   const { chunks, view, loadOlder } = useStewardTranscript(agentId);
-  const [refusal, setRefusal] = useState<StaleRefusal | undefined>();
+  const [refusal, setRefusal] = useState<{ questionId: Id; message: string } | undefined>();
 
   const agent = world.agents[agentId];
   const status = world.statuses[agentId];
@@ -66,19 +68,18 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
         </section>
       )}
       {refusal && (
-        <p className="error" role="alert">
-          Not sent: {staleLine(world, refusal)}{' '}
-          <button type="button" className="secondary" onClick={() => setRefusal(undefined)}>
-            dismiss
-          </button>
-        </p>
+        <StaleBanner
+          questionId={refusal.questionId}
+          message={refusal.message}
+          onDismiss={() => setRefusal(undefined)}
+        />
       )}
       <TranscriptLog chunks={chunks} view={view} loadOlder={loadOlder} />
       {clarification ? (
         <ClarificationComposer
           key={clarification.id}
           question={clarification}
-          onStale={setRefusal}
+          onStale={(questionId, message) => setRefusal({ questionId, message })}
           onSent={() => setRefusal(undefined)}
         />
       ) : (
@@ -115,6 +116,9 @@ function StatusHeader({
   blocked: boolean;
 }) {
   const world = useAppStore((s) => s.world);
+  const now = useNow(
+    status !== undefined && !ENDED_STATES.has(status.state) && status.state !== 'paused',
+  );
   const task = agent?.taskId ? world.tasks[agent.taskId] : undefined;
   const project = task?.projectId ? world.projects[task.projectId] : undefined;
   const body = world.bodies[task?.bodyId ?? agent?.bodyId ?? ''];
@@ -154,11 +158,15 @@ function StatusHeader({
           {task?.worktreePath ? <code>{task.worktreePath}</code> : '—'}
         </Fact>
         <Fact label="branch">{task?.branch ? <code>{task.branch}</code> : '—'}</Fact>
-        <Fact label="cost">{costLine(status)}</Fact>
+        <Fact label="cost">{formatCost(status)}</Fact>
         <Fact label="tool calls">
           {status ? `${status.caps.toolCalls.used} / ${status.caps.toolCalls.limit}` : '—'}
         </Fact>
-        <Fact label="wall clock">{status ? wallClockLine(status) : '—'}</Fact>
+        <Fact label="wall clock">
+          {status
+            ? `${formatDuration(wallClockUsed(status, now))} / ${formatDuration(status.caps.wallClockMs.limit)}`
+            : '—'}
+        </Fact>
         {status?.progress && (
           <Fact label="progress">
             {status.progress.done} / {status.progress.total}
@@ -185,34 +193,6 @@ function Fact({
     </div>
   );
 }
-
-/** "$0.42 · 12.3k in / 2.1k out", or "—" before the first report. */
-export function costLine(status: StatusRecord | undefined): string {
-  const c = status?.costSoFar;
-  if (!c) return '—';
-  const parts: string[] = [];
-  if (c.usd !== undefined) parts.push(`$${c.usd.toFixed(2)}`);
-  if (c.inputTokens !== undefined || c.outputTokens !== undefined) {
-    parts.push(`${tokens(c.inputTokens ?? 0)} in / ${tokens(c.outputTokens ?? 0)} out`);
-  }
-  return parts.length > 0 ? parts.join(' · ') : '—';
-}
-
-const tokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-
-/** Used / limit in minutes; a live agent's clock runs on from `startedAt` (StatusRecord docs). */
-function wallClockLine(status: StatusRecord): string {
-  const live = !ENDED_STATES.has(status.state) && status.state !== 'paused';
-  const since = Date.parse(status.startedAt);
-  const running = live && Number.isFinite(since) ? Date.now() - since : 0;
-  const used = Math.min(
-    Math.max(status.caps.wallClockMs.used, running),
-    status.caps.wallClockMs.limit,
-  );
-  return `${minutes(used)} / ${minutes(status.caps.wallClockMs.limit)}`;
-}
-
-const minutes = (ms: number) => `${Math.round(ms / 60_000)} min`;
 
 function Controls({ agentId, status }: { agentId: Id; status: StatusRecord | undefined }) {
   const api = useApi();

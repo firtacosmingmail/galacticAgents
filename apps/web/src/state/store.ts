@@ -20,7 +20,11 @@ import {
 import { createTranscriptViewSlice, type TranscriptViewSlice } from './transcript-view.js';
 
 export const MAX_LOG = 200;
-/** Transcript chunks kept per agent (oldest dropped). */
+/**
+ * Transcript chunks kept per agent: live chunks past it drop the oldest — except while a Steward
+ * view has paged back (`transcriptViews[id].pagedBack`), whose older pages the user asked for.
+ * Paged-back history is bounded by the scrolling, and the view's next newest page resets it.
+ */
 export const MAX_TRANSCRIPT = 2_000;
 /** Chat messages kept per agent (oldest dropped). */
 export const MAX_MESSAGES = 500;
@@ -175,7 +179,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           const lastSeq = current.at(-1)?.seq ?? 0;
           const fresh = message.chunks.filter((c) => c.seq > lastSeq);
           if (fresh.length === 0) return {};
-          const merged = [...current, ...fresh].slice(-MAX_TRANSCRIPT);
+          const all = [...current, ...fresh];
+          // The cap never undoes a deliberate scroll back (see MAX_TRANSCRIPT).
+          const merged = s.transcriptViews[message.agentId]?.pagedBack
+            ? all
+            : all.slice(-MAX_TRANSCRIPT);
           return { transcripts: { ...s.transcripts, [message.agentId]: merged } };
         }
       }

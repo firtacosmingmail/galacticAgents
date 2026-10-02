@@ -500,4 +500,58 @@ describe('managed-agents cards: what they show (P25-04)', () => {
     fireEvent.click(screen.getByLabelText('show archived work'));
     expect(card(STEWARD)).toBeTruthy();
   });
+
+  it('gives work no agent runs yet a work-only card with the work controls', async () => {
+    const queued: Task = {
+      ...fx.asteroidTask,
+      id: 't-q',
+      description: 'Queued task',
+      state: 'approved',
+    };
+    const unspawned: Project = {
+      ...fx.project,
+      id: 'p-new',
+      name: 'New project',
+      state: 'approved',
+    };
+    const proposed: Task = {
+      ...fx.asteroidTask,
+      id: 't-p',
+      description: 'Proposed task',
+      state: 'proposed',
+    };
+    load({ extraTasks: [queued, proposed], extraProjects: [unspawned] });
+    show();
+    const q = card('Task · Queued task');
+    expect(within(q).getByText('queued: no agent yet')).toBeTruthy();
+    // No agent row: no agent controls, no link, no agent figures.
+    expect(within(q).queryByRole('group', { name: /^agent controls/ })).toBeNull();
+    expect(within(q).queryByRole('link')).toBeNull();
+    expect(within(q).queryByLabelText('cost so far')).toBeNull();
+    expect(card('Project · New project')).toBeTruthy();
+    // Proposed work stays on its plan card.
+    expect(screen.queryByRole('article', { name: 'card of Task · Proposed task' })).toBeNull();
+
+    const controls = within(q).getByRole('group', { name: /^task controls of/ });
+    for (const b of ['Pause', 'Stop', 'Cancel', 'Close', 'Pin', 'Edit'])
+      expect(within(controls).getByRole('button', { name: b })).toBeTruthy();
+    fireEvent.click(within(controls).getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(within(q).getByRole('button', { name: 'Yes, cancel' }));
+    await waitFor(() =>
+      expect(control).toHaveBeenCalledWith({
+        target: { kind: 'task', id: 't-q' },
+        action: { action: 'cancel' },
+      }),
+    );
+
+    fireEvent.click(within(controls).getByRole('button', { name: 'Edit' }));
+    fireEvent.change(within(q).getByLabelText('priority'), { target: { value: 'low' } });
+    fireEvent.click(within(q).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(control).toHaveBeenCalledWith({
+        target: { kind: 'task', id: 't-q' },
+        action: { action: 'edit', changes: { priority: 'low' } },
+      }),
+    );
+  });
 });
