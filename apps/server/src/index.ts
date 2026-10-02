@@ -33,6 +33,7 @@ const composed = composeRuntime(db, {
     }),
   ],
   onError,
+  autoApproveRemote: config.autoApproveRemote,
 });
 const { log, statuses, transcripts } = composed;
 

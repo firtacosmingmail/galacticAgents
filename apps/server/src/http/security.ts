@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import type { RequestOrigin } from '@galactic/protocol';
 
 /** `host:port` → `host` (IPv6 literals keep their brackets, matching the allow-list format). */
 export function hostnameOf(hostHeader: string | undefined): string | undefined {
@@ -98,6 +99,15 @@ export function isRemoteRequest(req: {
   const host = req.headers['host'];
   if (Array.isArray(host) || (host !== undefined && !isLoopbackHost(host))) return true;
   return !(isLoopback(req.socket.remoteAddress) && isLoopbackOrigin(origin));
+}
+
+/**
+ * A request's origin as the command surface takes it (P2-21): what the routes pass to every
+ * policy-writing command and record on a user's `message.sent`, so a brain acting on that message
+ * writes with the same origin.
+ */
+export function originOf(req: Parameters<typeof isRemoteRequest>[0]): RequestOrigin {
+  return isRemoteRequest(req) ? 'remote' : 'local';
 }
 
 const FORWARDING_HEADERS = [

@@ -87,11 +87,15 @@ async function hierarchy(opts: { policy?: PermissionPolicy; ungated?: boolean; p
     })
   ).value;
   const project = (
-    await commands.createProject({
-      name: 'CSV',
-      workspace: '/w/csv',
-      ...(opts.policy ? { permissionPolicy: opts.policy } : {}),
-    })
+    // The user's own choice on this machine (a remote one is floored, P2-21).
+    await commands.createProject(
+      {
+        name: 'CSV',
+        workspace: '/w/csv',
+        ...(opts.policy ? { permissionPolicy: opts.policy } : {}),
+      },
+      { origin: 'local' },
+    )
   ).value;
   const waykeeper = (
     await commands.spawnAgent({
@@ -232,9 +236,11 @@ describe('permission routing (P2-04)', () => {
     await until(() => h.log.tables.questions.all().length === 1);
     const [first] = h.log.tables.questions.all();
 
-    await h.commands.updateProject(h.project.id, {
-      permissionPolicy: { rules: { destructive: 'allow' } },
-    });
+    await h.commands.updateProject(
+      h.project.id,
+      { permissionPolicy: { rules: { destructive: 'allow' } } },
+      { origin: 'local' },
+    );
     // The open card stays with the user: a loosened table never approves it silently.
     expect(h.log.tables.questions.get(first!.id)).toMatchObject({
       status: 'open',

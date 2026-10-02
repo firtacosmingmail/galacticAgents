@@ -53,7 +53,10 @@ describe('Commands', () => {
     const { commands, log, runtime } = boot();
     const policy = { rules: { network: 'allow' as const } };
     const project = (
-      await commands.createProject({ name: 'CSV', workspace: '/w/csv', permissionPolicy: policy })
+      await commands.createProject(
+        { name: 'CSV', workspace: '/w/csv', permissionPolicy: policy },
+        { origin: 'local' },
+      )
     ).value;
     const task = (await commands.createTask({ description: 'parse', projectId: project.id })).value;
     const { waykeeper } = await projectHierarchy(commands, project.id);

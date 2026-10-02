@@ -79,3 +79,22 @@ describe('ControlBody (P2-14)', () => {
     ).toBe(false);
   });
 });
+
+describe('ControlBody project policy edit (P2-21)', () => {
+  it('takes a permission policy or null, and refuses a malformed one', () => {
+    const target = { kind: 'project', id: 'p-1' } as const;
+    const policy = { rules: { destructive: 'allow' } };
+    for (const permissionPolicy of [policy, null]) {
+      expect(
+        ControlBody.safeParse({ target, action: { action: 'edit', changes: { permissionPolicy } } })
+          .success,
+      ).toBe(true);
+    }
+    expect(
+      ControlBody.safeParse({
+        target,
+        action: { action: 'edit', changes: { permissionPolicy: { rules: { destructive: 'sure' } } } },
+      }).success,
+    ).toBe(false);
+  });
+});

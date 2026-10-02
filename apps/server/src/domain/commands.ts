@@ -21,6 +21,7 @@ import {
   type ReopenInput,
   type SpawnAgentInput,
   type WorkState,
+  type WriteOptions,
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
@@ -39,6 +40,7 @@ import {
   updateProject,
   type ProjectChanges,
 } from './projects.js';
+import type { PolicyWrite } from './permissions.js';
 import { createProposal, decideProposal } from './proposals.js';
 import {
   endAgentQuestions,
@@ -91,6 +93,11 @@ export interface CommandsOptions {
   questions?: QuestionRouting;
   /** Whether an agent still runs (the status store), for decision 10's Waykeeper-less planets. */
   isRunning?: (agentId: Id) => boolean;
+  /**
+   * The server lets remote clients set up auto-approvals (`config.autoApproveRemote`, TECHNOLOGY
+   * §8): no policy write is floored. Default off: a write not marked local is floored (P2-21).
+   */
+  autoApproveRemote?: boolean;
 }
 
 const ENDINGS = new Set(['agent.finished', 'agent.failed', 'agent.stopped', 'agent.interrupted']);
@@ -107,6 +114,7 @@ export class Commands implements DomainCommands {
   private readonly agents: AgentControl | undefined;
   private readonly questions: QuestionRouting;
   private readonly choose: ChooseOptions;
+  private readonly autoApproveRemote: boolean;
   /** A Harmonizer spawn is under way: the slot is taken before its session reports (review). */
   private harmonizerSpawning = false;
 
@@ -115,6 +123,12 @@ export class Commands implements DomainCommands {
     this.agents = opts.agents;
     this.questions = opts.questions ?? logRouting(opts.log);
     this.choose = opts.isRunning ? { isRunning: opts.isRunning } : {};
+    this.autoApproveRemote = opts.autoApproveRemote ?? false;
+  }
+
+  /** How a command's policy write is judged (P2-21): its origin plus the server's setting. */
+  private policyWrite(write: WriteOptions = {}): PolicyWrite {
+    return { origin: write.origin, autoApproveRemote: this.autoApproveRemote };
   }
 
   private run<T>(fn: (ctx: CommandContext) => T): Promise<CommandResult<T>> {
@@ -187,11 +201,13 @@ export class Commands implements DomainCommands {
 
   // -- projects and tasks ----------------------------------------------------------------------
 
-  createProject(input: CreateProjectInput) {
-    return this.run((ctx) => createProject(ctx, input, this.choose));
+  /** A `permissionPolicy` is floored at the global default unless `write.origin` is local. */
+  createProject(input: CreateProjectInput, write?: WriteOptions) {
+    return this.run((ctx) => createProject(ctx, input, this.choose, this.policyWrite(write)));
   }
-  updateProject(projectId: Id, changes: ProjectChanges) {
-    return this.run((ctx) => updateProject(ctx, projectId, changes));
+  /** A new `permissionPolicy` is floored at the global default unless `write.origin` is local. */
+  updateProject(projectId: Id, changes: ProjectChanges, write?: WriteOptions) {
+    return this.run((ctx) => updateProject(ctx, projectId, changes, this.policyWrite(write)));
   }
   setProjectState(projectId: Id, state: WorkState) {
     return this.run((ctx) => setProjectState(ctx, projectId, state));
@@ -444,12 +460,14 @@ export class Commands implements DomainCommands {
 
   /**
    * A panel action (decision 11b). On an agent: stop/cancel, pause and resume through the runtime
-   * (which records `control.*` itself). On a task or project: recorded with its domain effect.
+   * (which records `control.*` itself). On a task or project: recorded with its domain effect;
+   * a project edit's `permissionPolicy` is floored unless `write.origin` is local (P2-21).
    */
   async control(
     target: ControlTarget,
     action: ControlAction,
     by: Actor,
+    write?: WriteOptions,
   ): Promise<CommandResult<void>> {
     if (target.kind === 'agent') {
       const run = (fn: (r: AgentControl) => Promise<void>) =>
@@ -476,7 +494,10 @@ export class Commands implements DomainCommands {
           .filter((id) => live.has(id))
       : [];
     const own = await this.run((ctx) =>
-      recordControl(ctx, target, action, by, { isLive: (id) => live.has(id) }),
+      recordControl(ctx, target, action, by, {
+        isLive: (id) => live.has(id),
+        write: this.policyWrite(write),
+      }),
     );
     const since = this.log.currentSeq();
     if (effect && affected.length > 0) {

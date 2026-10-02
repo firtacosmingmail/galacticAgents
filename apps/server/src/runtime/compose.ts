@@ -54,6 +54,8 @@ export interface ComposeOptions {
   inboxHistory?: number;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
+  /** `config.autoApproveRemote`: no policy write is floored (P2-21). */
+  autoApproveRemote?: boolean;
 }
 
 export interface ComposedRuntime {
@@ -136,6 +138,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     log,
     agents: runtime,
     questions,
+    ...(opts.autoApproveRemote ? { autoApproveRemote: true } : {}),
     isRunning: (id) => {
       const status = statuses.get(id);
       return status !== undefined && !ENDED_STATES.has(status.state);

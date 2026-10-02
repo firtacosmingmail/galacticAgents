@@ -19,8 +19,8 @@ import type { Commands } from '../domain/commands.js';
 import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
-import { noLooserThan } from '../domain/permissions.js';
-import { bearerGuard, isRemoteRequest } from './security.js';
+import { policyForWrite } from '../domain/permissions.js';
+import { bearerGuard, originOf } from './security.js';
 
 /**
  * The agent control surface the ops console uses (P1-11; TECHNOLOGY §2.2 "a small REST
@@ -99,10 +99,11 @@ export function registerAgentRoutes(
         cwd: body.cwd,
         ...(body.workspace ? { workspace: body.workspace } : {}),
         // A remote client never sets up auto-approvals unless the server allows it (P2-04).
-        permissionPolicy:
-          isRemoteRequest(req) && !config.autoApproveRemote
-            ? noLooserThan(PERMISSION_POLICY_PRESETS[body.policy])
-            : PERMISSION_POLICY_PRESETS[body.policy],
+        // A remote client's preset is floored at the global default (P2-04, P2-21).
+        permissionPolicy: policyForWrite(PERMISSION_POLICY_PRESETS[body.policy], {
+          origin: originOf(req),
+          autoApproveRemote: config.autoApproveRemote,
+        }),
         ...(body.caps ? { caps: compact(body.caps) } : {}),
         ...(body.bare ? { bare: true } : {}),
       });
@@ -114,8 +115,11 @@ export function registerAgentRoutes(
       const body = parse(SendBody, req.body, reply);
       if (!body) return;
       return attempt(reply, async () => {
+        // The origin rides on `message.sent`: a brain acting on it writes policies as this
+        // request would (P2-21).
         const message = runtime.send(agentId(req), body.text, {
           sender: USER,
+          origin: originOf(req),
           ...(body.interrupt ? { interrupt: true } : {}),
         });
         return { messageId: message.id } satisfies SendResponse;
@@ -150,7 +154,8 @@ export function registerAgentRoutes(
     /**
      * A panel action on a task, project or agent (decision 11b, P2-14): the same
      * `DomainCommands.control` a Harmonizer tool calls. 404 for an unknown target, 409 when the
-     * state refuses it; the events arrive on the stream.
+     * state refuses it; the events arrive on the stream. A project edit may set or clear its
+     * permission policy: a remote client's is floored at the global default (P2-21).
      */
     const { commands } = opts;
     if (commands) {
@@ -158,7 +163,9 @@ export function registerAgentRoutes(
         const body = parse(ControlBody, req.body, reply);
         if (!body) return;
         try {
-          await commands.control(body.target, body.action as ControlAction, USER);
+          await commands.control(body.target, body.action as ControlAction, USER, {
+            origin: originOf(req),
+          });
           return { ok: true, seq: log.currentSeq() } satisfies ControlResponse;
         } catch (error) {
           if (!(error instanceof DomainError)) {

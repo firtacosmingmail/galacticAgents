@@ -18,6 +18,7 @@ import type {
   AgentRuntime,
   WorkBodyKind,
   QuestionKind,
+  RequestOrigin,
   TaskPriority,
   WorkState,
 } from './enums.js';
@@ -140,6 +141,16 @@ export type ControlAction =
   | { action: 'pin'; pinned: boolean }
   | { action: 'reopen' };
 
+/**
+ * Who a write is for (P2-21): the origin of the request that caused it. Policy-writing commands
+ * (`createProject`, `updateProject`, `control` edit) floor a `permissionPolicy` at the global
+ * default unless `origin` is `local` or the server sets `autoApproveRemote`: an unknown origin
+ * counts as remote. A brain passes the origin of the user message it acts on (`message.sent`).
+ */
+export interface WriteOptions {
+  origin?: RequestOrigin;
+}
+
 /** What every command returns: the affected aggregate plus the events it appended. */
 export interface CommandResult<T> {
   value: T;
@@ -155,9 +166,17 @@ export interface CommandResult<T> {
  */
 export interface DomainCommands {
   // projects and tasks
-  createProject(input: CreateProjectInput): Promise<CommandResult<Project>>;
-  /** `null` clears a clearable field (`ProjectChanges`, P2-20). */
-  updateProject(projectId: Id, changes: ProjectChanges): Promise<CommandResult<Project>>;
+  /** A `permissionPolicy` is floored unless `write.origin` is `local` (P2-21). */
+  createProject(input: CreateProjectInput, write?: WriteOptions): Promise<CommandResult<Project>>;
+  /**
+   * `null` clears a clearable field (`ProjectChanges`, P2-20); a `permissionPolicy` is floored
+   * unless `write.origin` is `local` (P2-21).
+   */
+  updateProject(
+    projectId: Id,
+    changes: ProjectChanges,
+    write?: WriteOptions,
+  ): Promise<CommandResult<Project>>;
   setProjectState(projectId: Id, state: WorkState): Promise<CommandResult<Project>>;
   closeProject(projectId: Id, by: Actor): Promise<CommandResult<Project>>;
   archiveProject(projectId: Id, by: Actor): Promise<CommandResult<Project>>;
@@ -209,5 +228,11 @@ export interface DomainCommands {
   reassignQuestion(questionId: Id, to: Actor, reason: string): Promise<CommandResult<Question>>;
 
   // panel actions (SPEC decision 11b)
-  control(target: ControlTarget, action: ControlAction, by: Actor): Promise<CommandResult<void>>;
+  /** A project edit's `permissionPolicy` is floored unless `write.origin` is `local` (P2-21). */
+  control(
+    target: ControlTarget,
+    action: ControlAction,
+    by: Actor,
+    write?: WriteOptions,
+  ): Promise<CommandResult<void>>;
 }
