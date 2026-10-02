@@ -125,6 +125,7 @@ export function createProject(
     ...(input.permissionPolicy
       ? { permissionPolicy: parsePolicy(input.permissionPolicy, write) }
       : {}),
+    ...(input.meta ? { meta: input.meta } : {}),
   };
   ctx.tables.projects.insert(project);
   ctx.emit({ type: 'project.created', project });

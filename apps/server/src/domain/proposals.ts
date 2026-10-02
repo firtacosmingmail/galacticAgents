@@ -60,6 +60,7 @@ export function createProposal(ctx: CommandContext, input: CreateProposalInput):
     state: 'pending',
     createdAt: ctx.now,
     updatedAt: ctx.now,
+    ...(input.meta ? { meta: input.meta } : {}),
   };
   ctx.tables.proposals.insert(proposal);
   ctx.emit({ type: 'proposal.created', proposal });

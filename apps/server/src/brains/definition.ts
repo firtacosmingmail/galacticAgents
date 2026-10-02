@@ -2,9 +2,11 @@ import type {
   Actor,
   Agent,
   AgentRole,
+  Body,
   DomainCommands,
   Id,
   Project,
+  Proposal,
   Question,
   StatusRecord,
   Task,
@@ -30,6 +32,18 @@ export interface BrainQueries {
   projectTasks(projectId: Id): Task[];
   /** Open clarification questions the brain holds or one of its agents asked. */
   openQuestions(brainId: Id): Question[];
+  // The whole world, for the Harmonizer's related-work search and status reports (P2-08).
+  agents(): Agent[];
+  projects(): Project[];
+  /** Every task, in creation order. */
+  tasks(): Task[];
+  task(taskId: Id): Task | undefined;
+  body(bodyId: Id): Body | undefined;
+  proposal(proposalId: Id): Proposal | undefined;
+  proposals(): Proposal[];
+  question(questionId: Id): Question | undefined;
+  /** Every open question, of any kind and holder. */
+  allOpenQuestions(): Question[];
 }
 
 /** What a tool handler gets besides its input. */

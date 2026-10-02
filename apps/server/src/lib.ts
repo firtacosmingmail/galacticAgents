@@ -101,6 +101,14 @@ export {
   type WakeScope,
 } from './brains/index.js';
 export {
+  harmonizerBrain,
+  harmonizerRuntime,
+  startHarmonizer,
+  HARMONIZER_SYSTEM_PROMPT,
+  type HarmonizerDeps,
+  type HarmonizerRequest,
+} from './brains/harmonizer/index.js';
+export {
   Workspaces,
   WorkspaceMeta,
   stewardsSerialised,
