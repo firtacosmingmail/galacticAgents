@@ -100,6 +100,23 @@ export interface BrainDefinition {
   tools: BrainTool[];
   /** An extended wake table (default `WAKE_RULES`). */
   wakeRules?: WakeRules;
+  /**
+   * Lines for the brain's first turn of a session that starts or resumes (P2-16): what happened
+   * while it was not running that no wake event tells it (the Harmonizer: closure requests
+   * recorded while it was down). It may act (withdraw a stale question) before the turn starts.
+   */
+  startNotes?: (ctx: BrainStartContext) => Promise<string[]> | string[];
+}
+
+/** What `startNotes` gets. */
+export interface BrainStartContext {
+  /** Absent for a brain being spawned for the first time (its id is not known yet). */
+  brainId?: Id;
+  role: AgentRole;
+  /** The brain comes back after a restart (or the panel's resume), not a first spawn. */
+  resumed: boolean;
+  commands: DomainCommands;
+  queries: BrainQueries;
 }
 
 /** Tools that are non-blocking and end the turn (TECHNOLOGY §5.2). */

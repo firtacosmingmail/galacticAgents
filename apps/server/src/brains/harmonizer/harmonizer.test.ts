@@ -572,7 +572,11 @@ describe('Harmonizer boot start (P2-08, decision 32)', () => {
       bodyId: EARTH_ID,
     });
     const second = await startHarmonizer(h.composed, opts);
-    expect(second).toEqual({ status: 'running', agentId: first.agentId });
+    expect(second).toMatchObject({ status: 'running', agentId: first.agentId });
+    // The running one is driven by its runner (P2-16: the host knows it).
+    if (first.status === 'started' && second.status === 'running') {
+      expect(second.runner).toBe(first.runner);
+    }
     expect(h.log.tables.agents.all()).toHaveLength(1);
     if (first.status === 'started') first.runner.dispose();
   });

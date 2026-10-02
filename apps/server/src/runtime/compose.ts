@@ -1,7 +1,9 @@
 import {
   ENDED_STATES,
+  type Agent,
   type AgentAdapter,
   type AgentRuntime as RuntimeName,
+  type Id,
 } from '@galactic/protocol';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
@@ -96,6 +98,24 @@ export interface ComposedRuntime {
     placement: BrainPlacement,
     opts?: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'>,
   ): Promise<BrainRunner>;
+  /**
+   * The brains recovery brings back as brains (P2-16): a definition per role, built for the agent
+   * row being resumed. Startup recovery and `POST /api/agents/:id/recover` reopen a Harmonizer or
+   * Waykeeper through `BrainRunner.resume` with it; a role without one is resumed as a plain
+   * agent. Call before `recover()`.
+   */
+  defineBrains(
+    definitions: BrainDefinitions,
+    opts?: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'>,
+  ): void;
+  /** The runner driving a brain, while it runs (started or resumed here). */
+  runnerOf(agentId: Id): BrainRunner | undefined;
+  /**
+   * The recovery report to the user (SPEC §5, decision 8): a line for the running Harmonizer's
+   * next turn, "recovered: N resumed, M need attention", which it relays in its chat. Returns
+   * whether a Harmonizer got it (none runs, or nothing was recovered: false).
+   */
+  announceRecovery(report: RecoveryReport): boolean;
   /** Startup recovery (P1-14): marks lost agents interrupted and resumes what can be resumed. */
   recover(): Promise<RecoveryReport>;
   /**
@@ -105,6 +125,36 @@ export interface ComposedRuntime {
   shutdown(): Promise<void>;
   /** Like `shutdown`, but agents end as stopped (tests, a server that is going away for good). */
   dispose(): Promise<void>;
+}
+
+/** A brain definition per role, for the agent row being resumed (P2-16). */
+export type BrainDefinitions = Partial<
+  Record<BrainDefinition['role'], (agent: Agent) => BrainDefinition>
+>;
+
+/** Where a resumed brain runs: its row's runtime, project, supervisor and working directory. */
+function placementOf(agent: Agent): BrainPlacement {
+  const cwd = (agent.meta as { cwd?: unknown } | undefined)?.cwd;
+  return {
+    runtime: agent.runtime,
+    ...(agent.projectId ? { projectId: agent.projectId } : {}),
+    ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
+    ...(typeof cwd === 'string' ? { cwd } : {}),
+  };
+}
+
+/** The recovery report as the Harmonizer reads it (P2-16). */
+export function recoveryNote(report: RecoveryReport, describe: (agentId: Id) => string): string {
+  const n = report.resumed.length;
+  const m = report.needAttention.length;
+  const attention =
+    m > 0 ? ` Need attention: ${report.needAttention.map((id) => describe(id)).join('; ')}.` : '';
+  return (
+    `the server restarted — recovered: ${n} agent${n === 1 ? '' : 's'} resumed, ${m} ` +
+    `need${m === 1 ? 's' : ''} attention.${attention} Tell the user in one line ("recovered: ` +
+    `${n} resumed, ${m} need attention"), naming what needs attention; an interrupted agent can ` +
+    'be resumed from the panel.'
+  );
 }
 
 export function composeRuntime(db: Database, opts: ComposeOptions = {}): ComposedRuntime {
@@ -163,8 +213,19 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   };
   log.choose = { isRunning };
 
-  // A Steward that ends its turn reports to its supervisor's mailbox (P2-11).
-  const reports = stewardReports(runtime, log.tables, opts.onError);
+  // A Steward that ends its turn reports to its supervisor's mailbox (P2-11); a report missed while
+  // the supervisor was down is sent again when it comes back (P2-16).
+  const reports = stewardReports(runtime, log.tables, opts.onError, {
+    eventsSince: (seq, limit) => log.eventsSince(seq, limit),
+    stateOf: (id) => statuses.get(id)?.state,
+    lastText: (id) => {
+      const from = Math.max(0, transcripts.lastSeq(id) - 200);
+      return transcripts
+        .read(id, from, 200)
+        .filter((c) => c.kind === 'text' && c.text.trim() !== '')
+        .at(-1)?.text;
+    },
+  });
 
   const commands = new Commands({
     log,
@@ -188,6 +249,46 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'archival') } : {}),
   });
   if (opts.archival?.intervalMs) archival.start(opts.archival.intervalMs);
+
+  // The brains this composition drives (P2-16): started here or resumed by recovery.
+  const runners = new Map<Id, BrainRunner>();
+  const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
+    log,
+    runtime,
+    commands,
+    queries,
+    ...(workspaces ? { workspaces } : {}),
+    ...extra,
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
+  const adopt = (runner: BrainRunner): BrainRunner => {
+    runners.set(runner.agentId, runner);
+    // Reports its Stewards could not deliver while it was not running (P2-16).
+    reports.resend(runner.agentId);
+    return runner;
+  };
+  let definitions: BrainDefinitions = {};
+  let resumeOptions: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {};
+  runtime.setBrainResumer((agent) => {
+    if (agent.role === 'steward') return undefined;
+    const define = definitions[agent.role];
+    if (!define) return undefined;
+    return BrainRunner.resume(define(agent), placementOf(agent), agent.id, {
+      ...runnerOptions(resumeOptions),
+    }).then(({ runner, result }) => {
+      if (runner) adopt(runner);
+      return result;
+    });
+  });
+  const describeAgent = (id: Id): string => {
+    const agent = log.tables.agents.get(id);
+    const status = statuses.get(id);
+    const what = agent
+      ? `${agent.role} ${id}${agent.taskId ? ` (task ${agent.taskId})` : agent.projectId ? ` (project ${agent.projectId})` : ''}`
+      : `agent ${id}`;
+    return `${what}: ${status?.state ?? 'unknown'}${status?.currentActivity ? ` — ${status.currentActivity}` : ''}`;
+  };
+
   return {
     log,
     statuses,
@@ -199,16 +300,25 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     queries,
     ...(workspaces ? { workspaces } : {}),
     archival,
-    startBrain: (definition, placement, brainOpts = {}) =>
-      BrainRunner.start(definition, placement, {
-        log,
-        runtime,
-        commands,
-        queries,
-        ...(workspaces ? { workspaces } : {}),
-        ...brainOpts,
-        ...(opts.onError ? { onError: opts.onError } : {}),
-      }),
+    startBrain: async (definition, placement, brainOpts = {}) =>
+      adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),
+    defineBrains(defs, brainOpts = {}) {
+      definitions = { ...defs };
+      resumeOptions = brainOpts;
+    },
+    runnerOf(agentId) {
+      const runner = runners.get(agentId);
+      return runner && runner.state !== 'ended' ? runner : undefined;
+    },
+    announceRecovery(report) {
+      if (report.resumed.length + report.needAttention.length === 0) return false;
+      const hq = [...runners.values()].find(
+        (r) => r.definition.role === 'harmonizer' && r.state !== 'ended',
+      );
+      if (!hq) return false;
+      hq.note(recoveryNote(report, describeAgent));
+      return true;
+    },
     recover: () => runtime.recover(),
     async shutdown() {
       archival.stop();

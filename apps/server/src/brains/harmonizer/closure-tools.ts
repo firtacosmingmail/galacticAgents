@@ -1,7 +1,8 @@
 import type { ControlAction, ControlTarget, Id, Project, Question } from '@galactic/protocol';
 import { closureRequestOf } from '../../domain/closure.js';
 import { DomainError, must } from '../../domain/errors.js';
-import type { BrainTool, BrainToolContext } from '../definition.js';
+import { isLive } from '../common-tools.js';
+import type { BrainStartContext, BrainTool, BrainToolContext } from '../definition.js';
 import { asInput, oneOf, S, str } from './input.js';
 
 /**
@@ -255,3 +256,40 @@ export const CLOSURE_TOOLS: readonly BrainTool[] = [
   closeProjectTool,
   finishedWorkTool,
 ];
+
+/**
+ * The closure requests a starting or resumed Harmonizer must relay (P2-16; P2-13's deferred
+ * case): every unfinished project whose Waykeeper recorded a closure request that no living
+ * Harmonizer has asked the user about — no question yet (recorded while no Harmonizer ran), or
+ * one that was cancelled. A question still open that an earlier, ended Harmonizer asked is
+ * withdrawn, so this one asks again and hears the answer. One line per project for the first turn.
+ */
+export async function closureNotes(ctx: BrainStartContext): Promise<string[]> {
+  const lines: string[] = [];
+  for (const project of ctx.queries.projects()) {
+    if (FINISHED.has(project.state)) continue;
+    const request = closureRequestOf(project);
+    if (!request) continue;
+    const q = request.questionId ? ctx.queries.question(request.questionId) : undefined;
+    if (q?.status === 'answered') continue;
+    if (q?.status === 'open') {
+      const mine = ctx.brainId !== undefined && q.originAgentId === ctx.brainId;
+      if (mine || isLive(ctx.queries.status(q.originAgentId))) continue;
+      try {
+        await ctx.commands.withdrawQuestion(
+          q.id,
+          'the Harmonizer that asked it has ended; the new one asks again',
+          { type: 'system' },
+        );
+      } catch {
+        continue; // answered or withdrawn meanwhile
+      }
+    }
+    lines.push(
+      `the Waykeeper of project ${project.id} ("${project.name}") asked for closure and the ` +
+        `user has not been asked yet${request.summary ? `: ${JSON.stringify(request.summary)}` : ''} ` +
+        '— relay it with ask_closure.',
+    );
+  }
+  return lines;
+}

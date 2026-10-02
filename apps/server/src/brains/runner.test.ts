@@ -102,6 +102,37 @@ describe('BrainRunner', () => {
     await rig.h.done();
   });
 
+  it("a first-turn tool call works for a brain started from inside another brain's tool (P2-16)", async () => {
+    const h = brainHarness();
+    lives.push(h);
+    const project = (await h.commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+    const waykeeper = brainDefinition('waykeeper', [tool('ping', () => 'pong')]);
+    // The Waykeeper's model calls a tool at once, in its spawn prompt's turn.
+    h.script('waykeeper').once(firstTurn, async (t) => {
+      await t.call('ping');
+    });
+    let started: Id | undefined;
+    const hq = await h.startHarmonizer({
+      definition: brainDefinition('harmonizer', [
+        tool('start_waykeeper', async (_input, ctx) => {
+          // What the Harmonizer's spawn_waykeeper does: a brain started inside a tool call.
+          const wk = await h.startBrain(waykeeper, {
+            runtime: 'fake',
+            projectId: project.id,
+            supervisorId: ctx.brainId,
+          });
+          started = wk.agentId;
+          return { agentId: wk.agentId };
+        }),
+      ]),
+      script: (s) => s.once('start it', (t) => t.call('start_waykeeper')),
+    });
+    hq.tell('start it');
+    await h.until(() => started !== undefined && h.transcript(started)?.calls('ping').length === 1);
+    await h.done();
+    expect(h.transcript(started!)!.calls('ping')).toMatchObject([{ ok: true, value: 'pong' }]);
+  });
+
   it('coalesces two simultaneous events into one turn', async () => {
     const rig = await boot((s) => s.once('first thing', () => {}));
     const a = rig.brain.tell('first thing');
@@ -139,7 +170,7 @@ describe('BrainRunner', () => {
     const lines = rig.brain.runner.turns[1]!.items.map((i) => i.line);
     expect(lines).toHaveLength(2);
     expect(lines.every((l) => /finished: "Done: fixed the flaky date test."$/.test(l))).toBe(true);
-    expect(rig.brain.runner.turns[1]!.items.map((i) => i.event.type)).toEqual([
+    expect(rig.brain.runner.turns[1]!.items.map((i) => i.event?.type)).toEqual([
       'agent.finished',
       'agent.finished',
     ]);
