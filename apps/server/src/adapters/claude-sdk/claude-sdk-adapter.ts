@@ -74,6 +74,13 @@ export interface ClaudeSdkAdapterOptions {
   sdk?: SdkSurface | (() => Promise<SdkSurface>);
   /** Model for every spawn; the CLI's default when absent. */
   model?: string;
+  /**
+   * Which Claude Code settings a Steward session loads (decision 17: a normal session with the
+   * repository's context). Default `['user', 'project', 'local']`. The real-Claude checks pass
+   * `['project', 'local']`, so a developer's own global rules (a deny list, hooks) cannot decide
+   * for the permission gate they are testing. Brains always load none.
+   */
+  stewardSettingSources?: ('user' | 'project' | 'local')[];
   /** Extra environment for the CLI, e.g. `ANTHROPIC_API_KEY` for `bare` spawns. */
   env?: Record<string, string | undefined>;
   /** Variables copied from the server's environment on top of the supervisor's allow-list. */
@@ -292,7 +299,9 @@ export class ClaudeSdkAdapter implements AgentAdapter {
       persistSession: true,
       abortController: session.abort,
       // Brains carry their own instructions and tools; Stewards get the repository's context.
-      settingSources: isBrain ? [] : ['user', 'project', 'local'],
+      settingSources: isBrain
+        ? []
+        : (this.opts.stewardSettingSources ?? ['user', 'project', 'local']),
       ...(opts.systemPrompt
         ? {
             systemPrompt: isBrain

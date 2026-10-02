@@ -52,6 +52,7 @@ function make(
     spawnChild?: boolean;
     env?: Record<string, string | undefined>;
     fake?: Omit<FakeSdkOptions, 'script' | 'spawnChild'>;
+    stewardSettingSources?: ('user' | 'project' | 'local')[];
   } = {},
 ) {
   const sdk = new FakeSdk({
@@ -68,6 +69,7 @@ function make(
     streamEndGraceMs: 150,
     onError: (error, context) => errors.push({ error, context }),
     ...(opts.env ? { env: opts.env } : {}),
+    ...(opts.stewardSettingSources ? { stewardSettingSources: opts.stewardSettingSources } : {}),
   });
   const events = collect<AgentEvent>(adapter.events);
   rigs.push({ adapter, supervisor });
@@ -124,6 +126,15 @@ describe('ClaudeSdkAdapter — message mapping', () => {
     expect(options.resume).toBeUndefined();
     expect(options.hooks?.PreToolUse?.[0]?.hooks).toHaveLength(1);
     expect(options.canUseTool).toBeTypeOf('function');
+  });
+
+  it("loads the configured settings for a Steward (the real-Claude checks exclude the user's own)", async () => {
+    const { adapter, events, sdk } = make(() => [{ text: 'hi' }], {
+      stewardSettingSources: ['project', 'local'],
+    });
+    await adapter.spawn(spawnOpts('hello'));
+    await events.waitFor(has('agent.idle'));
+    expect(sdk.calls[0]!.options.settingSources).toEqual(['project', 'local']);
   });
 
   it('the CLI runs under the supervisor in its own process group with a PID row', async () => {

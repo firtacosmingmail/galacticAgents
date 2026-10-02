@@ -36,7 +36,13 @@ if (!enabled) {
     cwd,
     create: async () => {
       const supervisor = new ProcessSupervisor({ defaults: { graceMs: 20_000, termMs: 5_000 } });
-      const adapter = new ClaudeSdkAdapter({ supervisor, model, graceMs: 20_000 });
+      // Our gate under test, not the developer's own global Claude Code rules (dev-machine run).
+      const adapter = new ClaudeSdkAdapter({
+        supervisor,
+        model,
+        graceMs: 20_000,
+        stewardSettingSources: ['project', 'local'],
+      });
       return {
         adapter,
         dispose: async () => {
