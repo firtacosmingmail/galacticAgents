@@ -14,7 +14,12 @@ import type { EventLog } from '../domain/event-log.js';
  * the REST backfill and the stream give the same ids and a client deduping by id never notifies
  * twice. Only the notifying shapes are read (an indexed `type` filter plus the payload fields that
  * decide), never the whole log. Without `after`, the newest page (what a fresh page shows);
- * with `after`, everything since — the next `after` is the returned `seq`.
+ * with `after`, everything since — the next `after` is the returned `seq` (never below the
+ * `after` it was given, so a cursor from a newer log never moves back).
+ *
+ * A backfill is about now: a question that is no longer open (answered, cancelled, withdrawn
+ * meanwhile) is left out, so a reconnecting client does not alert for it. The live stream needs
+ * no such filter — it carries the question's end right after.
  */
 
 const TYPES = NOTIFYING_EVENT_TYPES.map((t) => `'${t}'`).join(', ');
@@ -63,11 +68,16 @@ export function notificationFeed(
       { seq: row.id, at: row.at, event: JSON.parse(row.payload) as Event },
       lookup,
     );
+    if (n?.target.kind === 'question') {
+      const status = log.tables.questions.get(n.target.id)?.status;
+      if (status !== undefined && status !== 'open') continue;
+    }
     // A question escalated to the user twice keeps its first notification.
     if (n && !seen.has(n.id)) {
       seen.add(n.id);
       notifications.push(n);
     }
   }
-  return { notifications, seq: hasMore ? page.at(-1)!.id : head, hasMore };
+  const seq = hasMore ? page.at(-1)!.id : Math.max(head, q.after ?? 0);
+  return { notifications, seq, hasMore };
 }

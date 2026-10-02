@@ -311,6 +311,30 @@ describe('GET /api/notifications (P25-01; SPEC §4.5)', () => {
     );
     expect(none.notifications).toEqual([]);
     expect(none.seq).toBe(page2.seq);
+    // A cursor beyond the head (a newer log, a stale tab) never moves back.
+    const ahead = NotificationsResponse.parse(
+      (await get(t, `/api/notifications?after=${page2.seq + 100}`)).body,
+    );
+    expect(ahead.seq).toBe(page2.seq + 100);
+  });
+
+  it('leaves out questions that are no longer open', async () => {
+    const { t, log } = await historyApp();
+    for (const [id, status] of [
+      ['q-open', 'open'],
+      ['q-answered', 'answered'],
+      ['q-cancelled', 'cancelled'],
+    ] as const) {
+      log.runCommand((ctx) => {
+        const q = question(id, { status });
+        ctx.tables.questions.upsert(q);
+        ctx.emit({ type: 'question.opened', question: { ...q, status: 'open' } });
+      });
+    }
+    const feed = NotificationsResponse.parse((await get(t, '/api/notifications?after=0')).body);
+    expect(feed.notifications.map((n) => n.id)).toEqual(['question:q-open']);
+    const newest = NotificationsResponse.parse((await get(t, '/api/notifications')).body);
+    expect(newest.notifications.map((n) => n.id)).toEqual(['question:q-open']);
   });
 });
 
