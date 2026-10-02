@@ -150,14 +150,17 @@ describe('updateAgent', () => {
 
   it('hands a promoted Steward over in one update: project and supervisor together', () => {
     const { run, tables, project, tasks, waykeeper, asteroidSteward } = hierarchy();
-    run((ctx) => moveTask(ctx, tasks.asteroid.id, project.id, USER));
     // Half a hand-over is refused: the Harmonizer does not supervise a project Steward.
     expect(() =>
-      run((ctx) => updateAgent(ctx, asteroidSteward.id, { projectId: project.id })),
-    ).toThrow(/answers to the Waykeeper/);
-    run((ctx) =>
-      updateAgent(ctx, asteroidSteward.id, { projectId: project.id, supervisorId: waykeeper.id }),
-    );
+      run((ctx) => updateAgent(ctx, asteroidSteward.id, { supervisorId: waykeeper.id })),
+    ).toThrow(/answers to the Harmonizer/);
+    // `moveTask` hands the Steward over itself, in the same command (P2-12, decision 32).
+    const { events } = run((ctx) => moveTask(ctx, tasks.asteroid.id, project.id, USER));
+    expect(events.at(-1)).toEqual({
+      type: 'agent.updated',
+      agentId: asteroidSteward.id,
+      changes: { supervisorId: waykeeper.id, projectId: project.id },
+    });
     expect(tables.agents.get(asteroidSteward.id)).toMatchObject({
       projectId: project.id,
       supervisorId: waykeeper.id,

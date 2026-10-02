@@ -184,6 +184,31 @@ export const WAKE_RULES: WakeRules = {
     (e) =>
       `is pending again (${e.reason}): it now proposes ${e.proposedBody.bodyId ?? 'a body'} — tell the user they can approve it`,
   ),
+  // The server carried out a promotion card (P2-12): its owner reports it, and the Waykeeper that
+  // runs the work's project now learns what it took over.
+  'promotion.carried_out': {
+    wakes: (e, s) =>
+      s.ownsProposal(e.proposalId) ||
+      (s.role === 'waykeeper' &&
+        e.outcome.projectId !== undefined &&
+        e.outcome.projectId === s.projectId),
+    describe: (e) => {
+      const o = e.outcome;
+      if (!o.ok) {
+        return `promotion ${e.proposalId} of ${o.target.kind} ${o.target.id} could not be carried out: ${o.error ?? 'unknown error'}`;
+      }
+      const stewards = o.stewardIds?.length
+        ? `; its Stewards (${o.stewardIds.join(', ')}) were handed over and resumed`
+        : '';
+      return (
+        `promotion ${e.proposalId} was carried out: ${o.target.kind} ${o.target.id} moved from ` +
+        `${o.fromBodyId ?? '?'} to ${o.toBodyId ?? '?'}` +
+        (o.projectId ? ` (project ${o.projectId}` : '') +
+        (o.waykeeperId ? `, Waykeeper ${o.waykeeperId})` : o.projectId ? ')' : '') +
+        stewards
+      );
+    },
+  },
   'agent.finished': ended((e) => `finished${e.result ? `: ${quote(e.result)}` : ''}`),
   'agent.failed': ended((e) => `failed (${e.reason}): ${quote(e.error)}`),
   'agent.stalled': ended((e) => `has been silent for ${Math.round(e.silentForMs / 1000)} s`),

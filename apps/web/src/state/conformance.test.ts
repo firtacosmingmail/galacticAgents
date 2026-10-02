@@ -6,7 +6,14 @@
 // (statuses excluded: they are a server-owned projection, TECHNOLOGY §4).
 import { afterEach, describe, expect, it } from 'vitest';
 import { summarize, type Actor, type EventEnvelope, type Snapshot } from '@galactic/protocol';
-import { FakeAdapter, composeRuntime, openDatabase, type ComposedRuntime } from '@galactic/server';
+import {
+  FakeAdapter,
+  PromotionFlow,
+  carriedOut,
+  composeRuntime,
+  openDatabase,
+  type ComposedRuntime,
+} from '@galactic/server';
 import { applyEvent, applySnapshot, summaryOf, type WorldState } from './reduce.js';
 
 const USER: Actor = { type: 'user' };
@@ -48,6 +55,7 @@ describe('replay vs snapshot conformance', () => {
       adapters: [new FakeAdapter({ speed: 5 })], // `long` runs ~5 s: alive for the whole walk
       log: { now: clock },
       flushMs: 10,
+      caps: { maxConcurrentAgents: 8 },
     });
     lives.push(composed);
     const { log, commands, statuses } = composed;
@@ -166,12 +174,70 @@ describe('replay vs snapshot conformance', () => {
       version: 0,
     });
     // A standalone task joins the project (its Steward flies, its asteroid shows "moved to …");
-    // its Steward is handed over to the project's Waykeeper in one update.
+    // its Steward is handed over to the project's Waykeeper in the same command (P2-12).
     await commands.moveTask(flaky.id, project.id, USER);
-    await commands.updateAgent(asteroidSteward.id, {
+    expect(log.tables.agents.get(asteroidSteward.id)).toMatchObject({
       projectId: project.id,
       supervisorId: waykeeper.id,
     });
+
+    // --- a promotion card (P2-12): the mid-task Steward is paused while the user decides; on
+    // approval the server creates the moon project, starts its Waykeeper, moves the task (the
+    // asteroid's marker), hands the Steward over, resumes it and records the outcome on the card
+    const flow = new PromotionFlow({
+      log,
+      commands,
+      liveAgents: () => composed.runtime.liveAgents(),
+      startWaykeeper: async ({ projectId, supervisorId, runtime }) => ({
+        agentId: (
+          await commands.spawnAgent({
+            role: 'waykeeper',
+            runtime,
+            projectId,
+            supervisorId,
+            prompt: 'scenario:long',
+          })
+        ).value.id,
+      }),
+    }).start();
+    const grown = (
+      await commands.createTask({ description: 'Grow the importer', meta: { workspace: '/w/imp' } })
+    ).value;
+    const grownSteward = (
+      await commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: grown.id,
+        supervisorId: harmonizer.id,
+        cwd: '/w/imp',
+        prompt: 'scenario:long',
+      })
+    ).value;
+    const card = (
+      await commands.createProposal({
+        requestText: 'promote the importer',
+        kind: 'moon',
+        proposedBody: { kind: 'moon', name: 'Importer', bodyId: 'b-io', parentId: 'b-jupiter' },
+        workspace: '/w/imp',
+        rationale: 'it grew',
+        meta: {
+          request: {
+            type: 'promotion',
+            name: 'Importer',
+            target: { kind: 'task', id: grown.id },
+            fromBodyId: grown.bodyId,
+          },
+        },
+      })
+    ).value;
+    await flow.idle();
+    await commands.decideProposal(card.id, { decision: 'approve' }, USER);
+    await until(() => carriedOut(log.tables.proposals.get(card.id)) !== undefined);
+    await flow.idle();
+    flow.stop();
+    expect(carriedOut(log.tables.proposals.get(card.id))).toMatchObject({ ok: true });
+    expect(log.tables.agents.get(grownSteward.id)).toMatchObject({ bodyId: 'b-io' });
+    await commands.stopAgent(grownSteward.id, USER);
 
     // --- questions opened outside a live session: escalated, reassigned, answered, cancelled
     const held = (
@@ -292,6 +358,7 @@ describe('replay vs snapshot conformance', () => {
       'control.cancel',
       'control.archive',
       'question.cancelled',
+      'promotion.carried_out',
     ] as const) {
       expect(types, t).toContain(t);
     }

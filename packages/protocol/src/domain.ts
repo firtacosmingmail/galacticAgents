@@ -247,6 +247,70 @@ export function foldProposalMeta(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+/**
+ * What a promotion card moves (P2-12; SPEC §3.4, decision 2), read from either card shape: the
+ * Harmonizer's `meta.request = {type: 'promotion', target, toProjectId?}` (P2-08) or a Waykeeper's
+ * `meta.promotion = {taskId, fromProjectId, requestedBy}` (P2-10). `toProjectId`: a standalone
+ * task joins that existing project; otherwise the target grows to the card's `kind` (a task
+ * becomes a project of its own, a project moves to a bigger body). `fromProjectId` /
+ * `requestedBy`: a Waykeeper asked for its project's task.
+ */
+export const PromotionRequest = z.object({
+  target: Host,
+  toProjectId: Id.optional(),
+  fromProjectId: Id.optional(),
+  requestedBy: Id.optional(),
+  /** The name on the card, for a new project. */
+  name: z.string().optional(),
+  /** The body the work was on when the card was made (the Harmonizer's cards). */
+  fromBodyId: Id.optional(),
+});
+export type PromotionRequest = z.infer<typeof PromotionRequest>;
+
+/** The promotion a proposal asks for, when it is a promotion card (either shape). */
+export function proposalPromotion(
+  proposal: Pick<Proposal, 'meta'> | undefined,
+): PromotionRequest | undefined {
+  const meta = proposal?.meta;
+  const request = meta?.['request'] as Record<string, unknown> | undefined;
+  if (request?.['type'] === 'promotion') {
+    const parsed = PromotionRequest.safeParse({
+      target: request['target'],
+      toProjectId: request['toProjectId'],
+      name: request['name'],
+      fromBodyId: request['fromBodyId'],
+    });
+    if (parsed.success) return parsed.data;
+  }
+  const promotion = meta?.['promotion'] as Record<string, unknown> | undefined;
+  if (promotion && typeof promotion['taskId'] === 'string') {
+    const parsed = PromotionRequest.safeParse({
+      target: { kind: 'task', id: promotion['taskId'] },
+      fromProjectId: promotion['fromProjectId'],
+      requestedBy: promotion['requestedBy'],
+    });
+    if (parsed.success) return parsed.data;
+  }
+  return undefined;
+}
+
+/**
+ * How an approved promotion was carried out (P2-12), kept on the card as `meta.carriedOut` and
+ * announced by `promotion.carried_out`: the work's old and new body, the project it belongs to
+ * now, the Waykeeper that runs it and the Stewards handed over — or why it could not be done.
+ */
+export const PromotionOutcome = z.object({
+  ok: z.boolean(),
+  target: Host,
+  fromBodyId: Id.optional(),
+  toBodyId: Id.optional(),
+  projectId: Id.optional(),
+  waykeeperId: Id.optional(),
+  stewardIds: z.array(Id).optional(),
+  error: z.string().optional(),
+});
+export type PromotionOutcome = z.infer<typeof PromotionOutcome>;
+
 /** A tool call an agent wants to make, as the permission gate and the permission card see it. */
 export const ToolCall = z.object({ toolName: z.string(), input: z.unknown().optional() });
 export type ToolCall = z.infer<typeof ToolCall>;

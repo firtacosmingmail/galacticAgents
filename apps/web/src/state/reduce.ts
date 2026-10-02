@@ -236,6 +236,19 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
           { parked: null },
         ),
       };
+    case 'promotion.carried_out': {
+      // The card keeps how it was carried out (P2-12), as the server's row does.
+      const card = next.proposals[event.proposalId];
+      return card
+        ? {
+            ...next,
+            proposals: patch(next.proposals, event.proposalId, {
+              meta: { ...(card.meta ?? {}), carriedOut: event.outcome },
+              updatedAt: at,
+            }),
+          }
+        : next;
+    }
 
     // Status records are a server-owned projection (TECHNOLOGY §4, decision recorded with P0-18):
     // the client receives them in the snapshot and, from P1-05, as status messages, and never

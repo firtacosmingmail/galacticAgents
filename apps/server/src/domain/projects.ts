@@ -20,6 +20,7 @@ import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, checkTransition, setProjectState } from './states.js';
 import { effectiveChanges } from './changes.js';
 import { policyForWrite, type PolicyWrite } from './permissions.js';
+import { handOverProject, type HandOverOptions } from './handover.js';
 
 /**
  * Project commands (P2-01; SPEC §2.7, §3, decision 11, 11b). A project lives on a planet or moon
@@ -140,13 +141,15 @@ export function createProject(
  * only by `moveHost` and its state only by the state commands. An explicit `null` clears a
  * clearable field (P2-20): `parentProjectId` detaches a sub-project (its moon then hosts an
  * independent project, decision 10), `permissionPolicy` falls back to the global default. A new
- * policy is floored at the global default unless `write` is local (P2-21).
+ * policy is floored at the global default unless `write` is local (P2-21). A new parent (or none)
+ * hands the project's Waykeeper over in the same command (P2-12, decision 32).
  */
 export function updateProject(
   ctx: CommandContext,
   projectId: Id,
   changes: ProjectChanges,
   write: PolicyWrite = {},
+  handOver: HandOverOptions = {},
 ): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
   const defined = effectiveChanges(current, changes, CLEARABLE_PROJECT_FIELDS, 'project');
@@ -171,6 +174,7 @@ export function updateProject(
     updatedAt: ctx.now,
   });
   ctx.emit({ type: 'project.updated', projectId, changes: defined });
+  if ('parentProjectId' in defined) handOverProject(ctx, projectId, handOver);
   return project;
 }
 
