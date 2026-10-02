@@ -1,7 +1,7 @@
 # Phase 2 — The hierarchy: Harmonizer, Waykeepers, Stewards
 
-**Current task:** P2-19 (wave 7, next — the real exit run on the dev machine, after `p2-wave6-resume-console` is merged into `phase-2`) · **Task status:** todo
-**Phase status:** in progress (20/21 done) — on branch `phase-2`
+**Current task:** — (Phase 2 done; Phase 2.5 next) · **Task status:** done
+**Phase status:** done (2026-10-02, 22/22) — on branch `phase-2`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -142,7 +142,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** the Phase 2 exit run can be driven entirely from this page.
 
 ### P2-19 — End-to-end exit run and crash drill
-- **Status:** todo · **Depends on:** all Phase 2 tasks · **Parallel with:** —
+- **Status:** done (2026-10-02) · **Depends on:** all Phase 2 tasks · **Parallel with:** —
 - First, on the dev machine, `pnpm check:real` (the Phase 1 real-SDK checks, decision 17) must pass. Then run the exit criteria script ("build a CLI that converts CSV to Parquet") for real: related-work check, proposal with workspace, body, Waykeeper plan approved once, Stewards in worktrees, one supervisor-answered and one escalated clarification, one permission request, merged branches, closure request accepted; `kill -9` the server mid-way and confirm automatic resume. Record the run and any spec deviations in `docs/tasks/notes/P2-19-exit-run.md`; update SPEC/TECH if decisions changed.
 - **Acceptance:** exit criteria met; notes committed.
 
@@ -156,6 +156,16 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - From the wave-3 review (`docs/tasks/notes/P2-wave3-review.md`, finding 4). P2-04 floors a remote client's chosen policy at the global default only on `POST /api/agents`; since the gate reads `project.permissionPolicy` live, any other write (a WS or REST project edit, a Harmonizer tool acting on a remote user's message, P2-18's panel) would loosen running agents at once. Route every `permissionPolicy` write through one function that applies `noLooserThan` unless the request is local or `autoApproveRemote` is set, and carry the request's origin (local/remote) to the command surface.
 - **Acceptance:** tests: a remote project edit cannot loosen the policy; a local one can; a Harmonizer tool acting for a remote message is floored.
 
+### P2-22 — "Trusted" projects: everything except push without cards (added 2026-10-02)
+- **Status:** done (2026-10-02) · **Depends on:** P2-04, P2-09, P2-18, P2-21 · **Parallel with:** —
+- From the dev machine: too many permission cards (a Steward's venv in a temp folder, `python -c`, `pip install`, WebSearch). A per-project trust level chosen by the user on the proposal card and the project's edit form: a new preset `trusted` — every category `allow` except `push` (`ask`) — and a policy field `unclassified` (default `ask`) for calls the engine cannot classify (opaque commands, unknown tools), `allow` in `trusted`; a command whose text mentions `git … push` counts as push even when opaque. Only the user sets it (as the initGit consent, decision 27); remote clients stay floored (decision 37).
+- **Acceptance:** tests: a trusted project's Steward runs opaque commands, network installs and outside-workspace commands with no question; `git push` still asks, also inside an opaque command; a brain cannot set the trust level; a remote edit cannot set it; the console offers it on the card and the project edit form.
+
 ## Exit criteria (from the plan)
 
 "Start a new project: build a CLI that converts CSV to Parquet" typed to the Harmonizer results in a related-work check, a sizing proposal with a workspace you confirm, a planet or moon assignment, a Waykeeper whose task plan you approve once, several Stewards each in its own worktree, at least one clarification answered by the Waykeeper from context (visible to you) and one escalated to you, one permission request answered by you, merged branches, a closure request you accept — all visible in the ops console, and survivable across a `kill -9` of the server with automatic resume.
+
+## Exit verification (2026-10-02)
+
+- **Automated, on the dev machine:** the full suite (protocol 54, server 797 + 1 skipped, web 54) and `pnpm check:real` against real Claude under Cosmin's subscription — spike, smoke, conformance 22/22, `kill -9` restart smoke — all PASS (`notes/P1-12-real-adapter-run.md` §4). The exit-run path through the console is exercised end to end with scripted brains, fake Stewards and real git (`apps/web/src/console/hierarchy/exit-run.test.tsx`); the hierarchy's `kill -9` drill with the fake adapter (`brains/resume.test.ts`).
+- **Manual (P2-19):** Cosmin tested the application on the dev machine with the real Harmonizer and reported on 2026-10-02 that it works; the coordinator did not observe that run, so `notes/P2-19-exit-run.md` records it as the user's report. Exit criteria items not explicitly reported there (notably the manual `kill -9` of the server mid-project) are confirmed by the automated drills above, not by the manual run.

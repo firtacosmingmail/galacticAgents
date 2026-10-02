@@ -3,6 +3,8 @@ import {
   proposalParking,
   proposalPlan,
   proposalPromotion,
+  proposalTrust,
+  TrustLevel,
   WorkBodyKind,
   type Body,
   type ParkOffer,
@@ -17,10 +19,19 @@ import { actorLabel, ErrorLine, StatePill, useAction, useApi } from './shared.js
 
 /**
  * Proposal cards (P2-18; SPEC §3.3): the one card a work request produces — approve, edit its
- * size, body and workspace or give the `git init` consent (decision 27), reject with a reason; a
+ * size, body and workspace, give the `git init` consent (decision 27) or choose the project's
+ * trust level (decision 49), reject with a reason; a
  * parked card shows the occupied bodies and the offers (decision 16, 38) — and a Waykeeper's plan
  * card, approved or rejected as a whole and edited through its tasks (decision 35).
  */
+
+/** What each trust level lets the project's Stewards do without a card (decision 49). */
+export const TRUST_HINTS: Record<TrustLevel, string> = {
+  default: 'asks before deleting, leaving the workspace, the network and pushing',
+  trusting: 'also installs and uses the network on its own',
+  cautious: 'asks for every change',
+  trusted: 'everything without a card except a push',
+};
 
 const OPEN: ReadonlySet<Proposal['state']> = new Set(['pending', 'edited', 'parked']);
 
@@ -127,6 +138,7 @@ function WorkCard({ proposal: p }: { proposal: Proposal }) {
   const promotion = proposalPromotion(p);
   const body = p.proposedBody.bodyId ? world.bodies[p.proposedBody.bodyId] : undefined;
   const initGit = p.meta?.['initGit'] === true;
+  const trust = proposalTrust(p);
   return (
     <article
       className={`card proposal proposal-${p.state}`}
@@ -156,6 +168,14 @@ function WorkCard({ proposal: p }: { proposal: Proposal }) {
             {initGit ? ' · git init agreed' : ''}
           </dd>
         </div>
+        {p.kind !== 'asteroid' && (
+          <div className="wide">
+            <dt>trust level</dt>
+            <dd aria-label="trust level">
+              {trust} <span className="muted">— {TRUST_HINTS[trust]}</span>
+            </dd>
+          </div>
+        )}
         {promotion && (
           <div className="wide">
             <dt>moves</dt>
@@ -294,6 +314,7 @@ function EditCard({
   const [name, setName] = useState(p.proposedBody.name);
   const [workspace, setWorkspace] = useState(p.workspace);
   const [initGit, setInitGit] = useState(p.meta?.['initGit'] === true);
+  const [trust, setTrust] = useState<TrustLevel>(proposalTrust(p));
   const choices = freeBodies(world, kind);
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -315,6 +336,7 @@ function EditCard({
         ? { workspace: workspace.trim() }
         : {}),
       ...(initGit !== (p.meta?.['initGit'] === true) ? { initGit } : {}),
+      ...(trust !== proposalTrust(p) ? { trust } : {}),
     });
   };
   return (
@@ -362,6 +384,18 @@ function EditCard({
         <input type="checkbox" checked={initGit} onChange={(e) => setInitGit(e.target.checked)} />
         git init this folder if it is not a repository
       </label>
+      {kind !== 'asteroid' && (
+        <label>
+          trust level
+          <select value={trust} onChange={(e) => setTrust(e.target.value as TrustLevel)}>
+            {TrustLevel.options.map((t) => (
+              <option key={t} value={t}>
+                {t} — {TRUST_HINTS[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <button type="submit" disabled={busy}>
         Save
       </button>

@@ -1,4 +1,4 @@
-import type { Agent, AgentRuntime, Id } from '@galactic/protocol';
+import type { Actor, Agent, AgentRuntime, Id } from '@galactic/protocol';
 import type { BrainDefinition } from '../definition.js';
 import { STEWARD_TOOLS } from '../steward-tools.js';
 import type { BrainPlacement, BrainRunner, BrainRunnerOptions } from '../runner.js';
@@ -45,7 +45,7 @@ export function harmonizerBrain(deps: HarmonizerDeps): BrainDefinition {
 
 /** What the boot-time start needs from the composed runtime. */
 export interface HarmonizerHost {
-  runtime: { liveAgents(): Agent[] };
+  runtime: { liveAgents(): Agent[]; stop(agentId: Id, by: Actor): Promise<void> };
   /** The runner of a running brain (P2-16). */
   runnerOf?(agentId: Id): BrainRunner | undefined;
   startBrain(
@@ -64,7 +64,8 @@ export interface StartHarmonizerOptions {
 }
 
 export type StartHarmonizerResult =
-  | { status: 'started'; agentId: Id; runner: BrainRunner }
+  /** `replaced`: a Harmonizer on another runtime was stopped to make way for this one. */
+  | { status: 'started'; agentId: Id; runner: BrainRunner; replaced?: Id }
   /**
    * One already runs (resumed by startup recovery, say): no second one (decision 32). `runner` is
    * its runner when the host drives it (P2-16: recovery resumes it as a brain).
@@ -81,29 +82,34 @@ export async function startHarmonizer(
   opts: StartHarmonizerOptions,
 ): Promise<StartHarmonizerResult> {
   const live = host.runtime.liveAgents().find((a) => a.role === 'harmonizer');
-  if (live) {
+  if (live && live.runtime === opts.runtime) {
     const runner = host.runnerOf?.(live.id);
     return { status: 'running', agentId: live.id, ...(runner ? { runner } : {}) };
   }
+  // One on another runtime (a fake one from an earlier dev run that recovery brought back) gives
+  // way: stopped by the system, it is not resumed again, and one Harmonizer runs (decision 32).
+  if (live) await host.runtime.stop(live.id, { type: 'system' });
   const runner = await host.startBrain(
     harmonizerBrain(opts.deps),
     { runtime: opts.runtime, cwd: opts.cwd },
     opts.runner ?? {},
   );
-  return { status: 'started', agentId: runner.agentId, runner };
+  return {
+    status: 'started',
+    agentId: runner.agentId,
+    runner,
+    ...(live ? { replaced: live.id } : {}),
+  };
 }
 
 /**
- * Which runtime the boot-time Harmonizer uses (`GALACTIC_HARMONIZER`): `off` (or `0`) starts none;
- * `fake` or `claude-sdk` picks one; unset means the fake adapter in dev mode (no Claude needed)
- * and `claude-sdk` otherwise.
+ * Which runtime the boot-time Harmonizer uses (`GALACTIC_HARMONIZER`): unset means real Claude
+ * (`claude-sdk`), in dev mode too (2026-10-02: `pnpm dev` starts with a real Harmonizer); `fake`
+ * picks the fake adapter (no Claude needed); `off` (or `0`) starts none.
  */
-export function harmonizerRuntime(
-  setting: string | undefined,
-  dev: boolean,
-): AgentRuntime | undefined {
+export function harmonizerRuntime(setting: string | undefined): AgentRuntime | undefined {
   const value = setting?.trim().toLowerCase();
   if (value === 'off' || value === '0' || value === 'false') return undefined;
   if (value === 'fake' || value === 'claude-sdk') return value;
-  return dev ? 'fake' : 'claude-sdk';
+  return 'claude-sdk';
 }

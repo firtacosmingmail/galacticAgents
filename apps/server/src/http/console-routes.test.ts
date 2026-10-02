@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MessagesResponse, type Id } from '@galactic/protocol';
+import {
+  DEFAULT_PERMISSION_POLICY,
+  MessagesResponse,
+  PERMISSION_POLICY_PRESETS,
+  type Id,
+} from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
@@ -92,6 +97,64 @@ describe('POST /api/proposals/:id/decide (P2-18)', () => {
     const again = await post(`/api/proposals/${id}/decide`, { decision: 'reject' });
     expect(again.status).toBe(409);
     expect(again.body['message']).toMatch(/approved/);
+  });
+
+  it('sets the trust level on the card: a local approval makes the project trusted, a remote one is floored (P2-22)', async () => {
+    const REMOTE = { origin: 'https://mymac.tail1234.ts.net' };
+    const decide = async (id: Id, body: unknown, headers: Record<string, string> = {}) => {
+      const res = await fetch(`${t.baseUrl}/api/proposals/${id}/decide`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${TEST_TOKEN}`,
+          'content-type': 'application/json',
+          ...headers,
+        },
+        body: JSON.stringify(body),
+      });
+      return res.status;
+    };
+    const projectOf = (id: Id) =>
+      composed.log.tables.projects.all().find((p) => p.meta?.['proposalId'] === id);
+
+    const local = await workCard('Lab');
+    expect(await decide(local, { decision: 'edit', changes: { trust: 'trusted' } })).toBe(200);
+    expect(composed.log.tables.proposals.get(local)?.meta).toMatchObject({ trust: 'trusted' });
+    expect(await decide(local, { decision: 'edit', changes: { trust: 'yolo' } })).toBe(400);
+    expect(await decide(local, { decision: 'approve' })).toBe(200);
+    expect(projectOf(local)?.permissionPolicy).toEqual(PERMISSION_POLICY_PRESETS.trusted);
+
+    const remote = await workCard('Far');
+    expect(await decide(remote, { decision: 'edit', changes: { trust: 'trusted' } }, REMOTE)).toBe(
+      200,
+    );
+    expect(await decide(remote, { decision: 'approve' }, REMOTE)).toBe(200);
+    expect(projectOf(remote)?.permissionPolicy).toEqual({
+      ...DEFAULT_PERMISSION_POLICY,
+      unclassified: 'ask',
+    });
+
+    // The edit form's way: a remote edit cannot make a project trusted either.
+    const edit = (headers: Record<string, string> = {}) =>
+      fetch(`${t.baseUrl}/api/control`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${TEST_TOKEN}`,
+          'content-type': 'application/json',
+          ...headers,
+        },
+        body: JSON.stringify({
+          target: { kind: 'project', id: projectOf(remote)!.id },
+          action: {
+            action: 'edit',
+            changes: { permissionPolicy: PERMISSION_POLICY_PRESETS.trusted },
+          },
+        }),
+      });
+    expect((await edit(REMOTE)).status).toBe(200);
+    expect(projectOf(remote)?.permissionPolicy?.unclassified).toBe('ask');
+    expect(projectOf(remote)?.permissionPolicy?.rules['network']).toBe('ask');
+    expect((await edit()).status).toBe(200);
+    expect(projectOf(remote)?.permissionPolicy).toEqual(PERMISSION_POLICY_PRESETS.trusted);
   });
 
   it('rejects with a reason (the draft stays editable) and parks by hand', async () => {

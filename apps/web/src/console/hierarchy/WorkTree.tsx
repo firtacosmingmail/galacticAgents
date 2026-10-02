@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import {
   PERMISSION_POLICY_PRESETS,
   TaskPriority,
+  trustLevelOf,
   type ControlBody,
   type Id,
   type PermissionPolicyPreset,
@@ -123,6 +124,9 @@ function ProjectNode({
         <span className="muted">
           {body ? `${body.kind} ${body.name}` : project.bodyId}
           {project.pinned ? ' · pinned' : ''}
+        </span>
+        <span className="muted" aria-label="trust level">
+          trust: {trustLevelOf(project.permissionPolicy)}
         </span>
         <code className="muted">{project.workspace}</code>
       </div>
@@ -325,9 +329,9 @@ function EditForm({
         </label>
       ) : (
         <label>
-          permission policy
+          trust level
           <select value={policy} onChange={(e) => setPolicy(e.target.value as typeof policy)}>
-            <option value="">unchanged</option>
+            <option value="">unchanged ({trustLevelOf(project.permissionPolicy)})</option>
             <option value="clear">global default</option>
             {(Object.keys(PERMISSION_POLICY_PRESETS) as PermissionPolicyPreset[]).map((p) => (
               <option key={p} value={p}>

@@ -14,7 +14,7 @@ import {
   applyChanges,
   foldProposalMeta,
   summarize,
-  type ProposalParking,
+  type ProposalMetaChanges,
   type SystemSummary,
 } from '@galactic/protocol';
 
@@ -59,13 +59,13 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
 
 /**
  * A proposal decision (P2-09): its field changes, and its `meta` folded by the protocol's
- * `foldProposalMeta` exactly as the server folds it (`parked` set or dropped, `initGit`).
+ * `foldProposalMeta` exactly as the server folds it (`parked` set or dropped, `initGit`, `trust`).
  */
 function decide(
   map: Record<Id, Proposal>,
   id: Id,
   changes: { [K in keyof Proposal]?: Proposal[K] | undefined },
-  metaChanges: { parked?: ProposalParking | null; initGit?: boolean },
+  metaChanges: ProposalMetaChanges,
 ): Record<Id, Proposal> {
   const current = map[id];
   if (!current) return map;
@@ -193,14 +193,18 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
         ),
       };
     case 'proposal.edited': {
-      const { initGit, ...changes } = event.changes;
+      const { initGit, trust, ...changes } = event.changes;
       return {
         ...next,
         proposals: decide(
           next.proposals,
           event.proposalId,
           { ...changes, state: 'edited', updatedAt: at },
-          { parked: null, ...(initGit !== undefined ? { initGit } : {}) },
+          {
+            parked: null,
+            ...(initGit !== undefined ? { initGit } : {}),
+            ...(trust !== undefined ? { trust } : {}),
+          },
         ),
       };
     }

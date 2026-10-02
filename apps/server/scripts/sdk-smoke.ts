@@ -23,6 +23,8 @@ const supervisor = new ProcessSupervisor({ defaults: { graceMs: 15_000, termMs: 
 const adapter = new ClaudeSdkAdapter({
   supervisor,
   model: process.env['SMOKE_MODEL'] ?? 'claude-sonnet-4-5',
+  // Our gate under test, not the developer's own global Claude Code rules (dev-machine run).
+  stewardSettingSources: ['project', 'local'],
   onError: (e, ctx) =>
     process.env['SMOKE_DEBUG']
       ? console.error(`[adapter ${ctx}]`, (e as Error).message)

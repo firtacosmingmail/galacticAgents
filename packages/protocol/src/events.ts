@@ -25,6 +25,7 @@ import {
   QuestionContext,
   Task,
   ToolCall,
+  TrustLevel,
 } from './domain.js';
 
 // ---------------------------------------------------------------------------
@@ -292,6 +293,8 @@ export const ProposalEdited = z.object({
     .extend({
       /** The user's consent to `git init` an existing non-git workspace (decision 27): `meta.initGit`. */
       initGit: z.boolean().optional(),
+      /** The trust level the user chose for the project (decision 49): `meta.trust`. */
+      trust: TrustLevel.optional(),
     })
     .partial(),
 });

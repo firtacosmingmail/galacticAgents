@@ -12,6 +12,7 @@ import type {
   Question,
   QuestionContext,
   Task,
+  TrustLevel,
 } from './domain.js';
 import type {
   AgentRole,
@@ -142,9 +143,15 @@ export type ProposalDecision =
   | { decision: 'approve' }
   | {
       decision: 'edit';
-      /** `initGit`: the user's consent to `git init` an existing non-git workspace (decision 27). */
+      /**
+       * `initGit`: the user's consent to `git init` an existing non-git workspace (decision 27);
+       * `trust`: the trust level of the project the card creates (decision 49). Both the user's only.
+       */
       changes: Partial<
-        Pick<Proposal, 'kind' | 'proposedBody' | 'workspace'> & { initGit: boolean }
+        Pick<Proposal, 'kind' | 'proposedBody' | 'workspace'> & {
+          initGit: boolean;
+          trust: TrustLevel;
+        }
       >;
     }
   | { decision: 'reject'; reason?: string }
@@ -260,10 +267,15 @@ export interface DomainCommands {
   proposePlan(
     input: ProposePlanInput,
   ): Promise<CommandResult<{ proposal: Proposal; tasks: Task[] }>>;
+  /**
+   * `write`: the request's origin (P2-21): the policy of the trust level an approval gives the
+   * project it creates (decision 49) is floored unless `write.origin` is `local`.
+   */
   decideProposal(
     proposalId: Id,
     decision: ProposalDecision,
     by: Actor,
+    write?: WriteOptions,
   ): Promise<CommandResult<Proposal>>;
 
   // questions (SPEC §2.6)

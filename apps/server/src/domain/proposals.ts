@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   foldProposalMeta,
   proposalPlan,
+  TrustLevel,
   type Actor,
   type CreateProposalInput,
   type Id,
@@ -73,6 +74,8 @@ export function createProposal(
   opts: ProposalOptions = {},
 ): Proposal {
   checkShape(ctx, input);
+  // A card's trust level is the user's alone (decision 49): whoever proposes cannot preset it.
+  const { trust: _trust, ...meta } = input.meta ?? {};
   const proposal: Proposal = {
     id: `pr-${randomUUID()}`,
     requestText: input.requestText,
@@ -83,7 +86,7 @@ export function createProposal(
     state: 'pending',
     createdAt: ctx.now,
     updatedAt: ctx.now,
-    ...(input.meta && Object.keys(input.meta).length > 0 ? { meta: input.meta } : {}),
+    ...(Object.keys(meta).length > 0 ? { meta } : {}),
   };
   if (proposalPlan(proposal)) {
     throw new DomainError('invalid', 'a plan card is made by proposePlan, with its tasks');
@@ -209,11 +212,11 @@ export function decideProposal(
     );
   }
   // Any decision but a park drops the card's parking (P2-09; `foldProposalMeta`, as clients fold).
-  const save = (changes: Partial<Proposal>, initGit?: boolean) => {
-    const meta = foldProposalMeta(current.meta, {
-      parked: null,
-      ...(initGit !== undefined ? { initGit } : {}),
-    });
+  const save = (
+    changes: Partial<Proposal>,
+    user: { initGit?: boolean; trust?: TrustLevel } = {},
+  ) => {
+    const meta = foldProposalMeta(current.meta, { parked: null, ...user });
     const next: Proposal = { ...current, ...changes, updatedAt: ctx.now };
     if (meta) next.meta = meta;
     else delete next.meta;
@@ -246,25 +249,35 @@ export function decideProposal(
       return proposal;
     }
     case 'edit': {
-      const { initGit, ...changes } = Object.fromEntries(
+      const { initGit, trust, ...changes } = Object.fromEntries(
         Object.entries(decision.changes).filter(([, v]) => v !== undefined),
       ) as typeof decision.changes;
-      if (Object.keys(changes).length === 0 && initGit === undefined)
+      if (Object.keys(changes).length === 0 && initGit === undefined && trust === undefined)
         throw new DomainError('invalid', 'an edit changes something');
       if (initGit !== undefined && by?.type !== 'user') {
         // Decision 27: only the user agrees to turn their folder into a repository.
         throw new DomainError('invalid', 'only the user agrees to git init a workspace');
       }
+      if (trust !== undefined) {
+        // Decision 49: only the user sets how far a project is trusted — a brain cannot raise
+        // the trust of the work it proposes.
+        if (by?.type !== 'user') {
+          throw new DomainError('invalid', "only the user sets a project's trust level");
+        }
+        if (!TrustLevel.safeParse(trust).success) {
+          throw new DomainError('invalid', `unknown trust level ${String(trust)}`);
+        }
+      }
+      const user = {
+        ...(initGit !== undefined ? { initGit } : {}),
+        ...(trust !== undefined ? { trust } : {}),
+      };
       if (changes.workspace !== undefined && opts.checkWorkspace) {
         changes.workspace = opts.checkWorkspace(changes.workspace);
       }
       checkShape(ctx, { ...current, ...changes });
-      const proposal = save({ ...changes, state: 'edited' }, initGit);
-      ctx.emit({
-        type: 'proposal.edited',
-        proposalId,
-        changes: { ...changes, ...(initGit !== undefined ? { initGit } : {}) },
-      });
+      const proposal = save({ ...changes, state: 'edited' }, user);
+      ctx.emit({ type: 'proposal.edited', proposalId, changes: { ...changes, ...user } });
       // Still no room for what the card now asks: it stays parked (decision 16). A body this
       // card no longer proposes may let a parked card in.
       const after = parkIfNoRoom(ctx, proposal, opts);
