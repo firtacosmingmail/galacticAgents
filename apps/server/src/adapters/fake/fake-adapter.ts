@@ -39,7 +39,9 @@ import {
  *
  * Session refs are `fake:<scenario>:<sessionId>:<nextStep>`; `resumeSession` continues from the step after
  * the last one completed when the adapter was given the same `sessionStore` (an in-process
- * restart, P1-14), and from the ref's step otherwise.
+ * restart, P1-14), and from the ref's step otherwise. A resumed *brain* (a spawn with server tools)
+ * whose first turn was complete takes the resume prompt as a new turn, as the SDK does (P2-16); a
+ * scenario this adapter instance never saw is asked of `scenarioFor` again.
  *
  * Failure modes a real runtime has, for the conformance suite (P1-38): with `checkCwd` a spawn in
  * a working directory that does not exist is refused (a real CLI cannot start there), and
@@ -156,11 +158,20 @@ export class FakeAdapter implements AgentAdapter {
   async resumeSession(sessionRef: string, opts: SpawnOptions): Promise<SpawnHandle> {
     const m = /^fake:([a-z0-9_-]+):([0-9a-f-]+):(\d+)$/i.exec(sessionRef);
     if (!m) throw new Error(`not a fake session ref: ${sessionRef}`);
-    const name = m[1]!.toLowerCase();
-    const scenario = this.scenarios[name] ?? this.picked.get(name);
-    if (!scenario) throw new Error(`unknown fake scenario in session ref: ${name}`);
+    let name = m[1]!.toLowerCase();
+    let scenario = this.scenarios[name] ?? this.picked.get(name);
+    if (!scenario) {
+      // A scripted brain from an earlier adapter instance (a restart): its script picks it again.
+      const chosen = this.scenarioFor?.(opts);
+      if (chosen) {
+        name = chosen.name.toLowerCase();
+        scenario = chosen.scenario;
+        this.picked.set(name, scenario);
+      }
+    }
+    if (!scenario) throw new Error(`unknown fake scenario in session ref: ${m[1]!.toLowerCase()}`);
     const startAt = this.sessionStore.get(sessionRef) ?? Number(m[3]);
-    return this.start(opts, name, scenario, startAt);
+    return this.start(opts, name, scenario, startAt, true);
   }
 
   private start(
@@ -168,6 +179,7 @@ export class FakeAdapter implements AgentAdapter {
     name: string,
     scenario: FakeScenario,
     startAt: number,
+    resumed = false,
   ): SpawnHandle {
     if (this.disposed) throw new Error('adapter disposed');
     if (this.checkCwd && !isDirectory(opts.cwd)) {
@@ -178,6 +190,13 @@ export class FakeAdapter implements AgentAdapter {
     this.sessions.set(session.sessionId, session);
     const ref = session.sessionRef;
     this.sessionStore.set(ref, startAt);
+    // A resumed brain whose first turn was done: the resume prompt is its next turn (P2-16).
+    if (resumed && tools.size > 0 && startAt >= scenario.steps.length && opts.prompt) {
+      session.messageCount++;
+      const steps = scenario.onMessage?.(opts.prompt, session.messageCount) ?? echo(opts.prompt);
+      queueMicrotask(() => void this.runTurn(session, steps, 0, undefined));
+      return { sessionId: session.sessionId, sessionRef: ref };
+    }
     // The first turn starts on the next tick so the caller holds the handle before any event.
     queueMicrotask(() => this.runTurn(session, scenario.steps, startAt, ref));
     return { sessionId: session.sessionId, sessionRef: ref };

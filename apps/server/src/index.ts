@@ -1,7 +1,12 @@
 import { mkdirSync } from 'node:fs';
 import { loadConfig } from './config/config.js';
 import { buildApp } from './app.js';
-import { harmonizerRuntime, startHarmonizer } from './brains/harmonizer/index.js';
+import {
+  harmonizerBrain,
+  harmonizerRuntime,
+  startHarmonizer,
+  type HarmonizerDeps,
+} from './brains/harmonizer/index.js';
 import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
@@ -86,14 +91,6 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   });
 }
 
-// Resume what the previous server life left running (SPEC decision 8).
-const recovery = await composed.recover();
-if (recovery.resumed.length + recovery.needAttention.length > 0) {
-  console.log(
-    `Recovered: ${recovery.resumed.length} agents resumed, ${recovery.needAttention.length} need attention`,
-  );
-}
-
 // Promotion cards are carried out by the server once the user approves them (P2-12): the move,
 // the new project's Waykeeper and the Steward hand-over. The flow starts after the Harmonizer
 // (below), so cards approved before a restart find their supervisor running.
@@ -105,6 +102,33 @@ const startWaykeeper = async (input: {
   const runner = await composed.startBrain(waykeeperDefinition(), input);
   return { agentId: runner.agentId };
 };
+
+// The brains' definitions, before recovery (P2-16): an interrupted Harmonizer or Waykeeper comes
+// back through its runner — tools, system prompt, mailbox — not as a bare session.
+const hqRuntime = harmonizerRuntime(process.env['GALACTIC_HARMONIZER'], config.dev);
+mkdirSync(config.projectsRoot, { recursive: true });
+const workspaces =
+  composed.workspaces ??
+  new Workspaces({ projectsRoot: config.projectsRoot, dataDir: config.dataDir });
+const harmonizerDeps: HarmonizerDeps = {
+  projectsRoot: workspaces.projectsRoot,
+  checkPath: (path) => workspaces.checkPath(path),
+  runtime: hqRuntime ?? (config.dev ? 'fake' : 'claude-sdk'),
+  // `spawn_waykeeper` starts a Waykeeper brain (P2-10) for the approved project.
+  startWaykeeper,
+};
+composed.defineBrains({
+  harmonizer: () => harmonizerBrain(harmonizerDeps),
+  waykeeper: () => waykeeperDefinition(),
+});
+
+// Resume what the previous server life left running (SPEC decision 8): supervisors first.
+const recovery = await composed.recover();
+if (recovery.resumed.length + recovery.needAttention.length > 0) {
+  console.log(
+    `Recovered: ${recovery.resumed.length} agents resumed, ${recovery.needAttention.length} need attention`,
+  );
+}
 const webDir = process.env['GALACTIC_WEB_DIR'];
 const app = buildApp({
   config,
@@ -134,33 +158,25 @@ try {
 
 // The Harmonizer starts with the application and is idle otherwise (SPEC §2.1, P2-08). One at a
 // time (decision 32): one that recovery resumed is left running.
-const hqRuntime = harmonizerRuntime(process.env['GALACTIC_HARMONIZER'], config.dev);
 if (hqRuntime && !shuttingDown) {
   try {
-    mkdirSync(config.projectsRoot, { recursive: true });
-    const workspaces =
-      composed.workspaces ??
-      new Workspaces({ projectsRoot: config.projectsRoot, dataDir: config.dataDir });
     const hq = await startHarmonizer(composed, {
       runtime: hqRuntime,
       cwd: workspaces.projectsRoot,
-      deps: {
-        projectsRoot: workspaces.projectsRoot,
-        checkPath: (path) => workspaces.checkPath(path),
-        runtime: hqRuntime,
-        // `spawn_waykeeper` starts a Waykeeper brain (P2-10) for the approved project.
-        startWaykeeper,
-      },
+      deps: harmonizerDeps,
     });
     console.log(
       hq.status === 'started'
         ? `Harmonizer started (${hq.agentId}, ${hqRuntime})`
-        : `Harmonizer already running (${hq.agentId})`,
+        : `Harmonizer resumed (${hq.agentId})`,
     );
   } catch (error) {
     console.error('[harmonizer] start:', error instanceof Error ? error.message : error);
   }
 }
+// The Harmonizer tells the user what the restart recovered (SPEC §5: "recovered: N resumed, M need
+// attention"), in its chat.
+if (!shuttingDown) composed.announceRecovery(recovery);
 
 // After recovery and the Harmonizer: a resumed Waykeeper is found running instead of doubled, an
 // approved card left unrecorded is carried out under a running Harmonizer, and the Stewards of

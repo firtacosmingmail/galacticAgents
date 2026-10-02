@@ -45,7 +45,9 @@ import { FINISHED_WORK, setProjectState } from '../domain/states.js';
  * - **Idempotent:** every step checks what is already done, a card is carried out once (by its
  *   record), and `start()` carries out approved cards a previous server life left unrecorded and
  *   pauses again the Stewards of cards still waiting for the user (a pause does not survive a
- *   restart).
+ *   restart) — also a card made before the flow started, which had paused nobody yet (P2-16).
+ *   Nothing about a waiting card lives only in memory: the waiting time counts from the card's
+ *   approval in the log, so a restart neither forgets a card nor restarts its clock.
  * - **Body:** the approval itself took the card's body (P2-09: the new project is created on it,
  *   a project target moved to it), so nothing can take it while the flow waits.
  * - **Waiting, not failing:** what may pass — no running Harmonizer (or parent Waykeeper) yet, a
@@ -125,11 +127,18 @@ export class PromotionFlow {
   start(): this {
     if (this.unsubscribe) return this;
     this.unsubscribe = this.opts.log.subscribe((e) => this.onEvent(e));
+    const approvedAt = this.approvals();
     for (const p of this.opts.log.tables.proposals.all()) {
       const request = proposalPromotion(p);
       if (!request || carriedOut(p)) continue;
-      if (p.state === 'approved') this.track(this.carryOut(p.id));
-      else if (UNDECIDED.has(p.state)) this.track(this.pauseStewards(p, request, true));
+      if (p.state === 'approved') {
+        // Waiting since the approval, not since this start (P2-16).
+        const at = approvedAt.get(p.id);
+        if (at !== undefined && !this.waiting.has(p.id)) {
+          this.waiting.set(p.id, { since: at, reason: 'approved before the restart' });
+        }
+        this.track(this.carryOut(p.id));
+      } else if (UNDECIDED.has(p.state)) this.track(this.pauseStewards(p, request, true));
     }
     const every = this.opts.retryMs ?? 60_000;
     if (every > 0) {
@@ -149,6 +158,17 @@ export class PromotionFlow {
   /** The cards waiting for a retry, with the reason (tests, diagnostics). */
   waitingCards(): { proposalId: Id; reason: string }[] {
     return [...this.waiting].map(([proposalId, w]) => ({ proposalId, reason: w.reason }));
+  }
+
+  /** When each promotion card was (last) approved, from the log. */
+  private approvals(): Map<Id, number> {
+    const out = new Map<Id, number>();
+    for (const { at, event } of this.opts.log.eventsSince(0, Number.MAX_SAFE_INTEGER)) {
+      if (event.type !== 'proposal.approved') continue;
+      const t = Date.parse(at);
+      if (Number.isFinite(t)) out.set(event.proposalId, t);
+    }
+    return out;
   }
 
   private retryWaiting(): void {
@@ -404,16 +424,17 @@ export class PromotionFlow {
 
   /**
    * The target task's live Stewards, paused by this card (SPEC §3.4: "the Steward is paused").
-   * `again` (a restart: the runtime's pause did not survive it): only the Stewards this card had
-   * paused and nobody resumed since.
+   * `again` (a restart: the runtime's pause did not survive it): every one the card paused, or
+   * would have paused had the flow been running when the card was made (P2-16) — except one that
+   * someone else paused or resumed since the card was made (that choice stays theirs).
    */
   private async pauseStewards(p: Proposal, req: PromotionRequest, again = false): Promise<void> {
     if (req.target.kind !== 'task' || carriedOut(p)) return;
     const by = promotionActor(p.id);
-    const mine = again ? this.pausedBy(by) : undefined;
+    const others = again ? this.touchedByOthers(p.id, by) : undefined;
     for (const agent of this.opts.liveAgents()) {
       if (agent.role !== 'steward' || agent.taskId !== req.target.id) continue;
-      if (mine && !mine.has(agent.id)) continue;
+      if (others?.has(agent.id)) continue;
       // Already paused (by the user, say): the runtime records nothing and this card leaves it.
       await this.opts.commands.pauseAgent(agent.id, by).catch(() => undefined);
     }
@@ -430,6 +451,23 @@ export class PromotionFlow {
         this.opts.onError?.(error, `promotion ${p.id}: resume ${agentId}`);
       });
     }
+  }
+
+  /** Agents whose last pause or resume after the card was made is someone else's than `by`'s. */
+  private touchedByOthers(proposalId: Id, by: Actor): Set<Id> {
+    const last = new Map<Id, Actor>();
+    let made = false;
+    for (const { event } of this.opts.log.eventsSince(0, Number.MAX_SAFE_INTEGER)) {
+      if (event.type === 'proposal.created' && event.proposal.id === proposalId) made = true;
+      if (!made) continue;
+      if (event.type !== 'control.pause' && event.type !== 'control.resume') continue;
+      if (event.target.kind === 'agent') last.set(event.target.id, event.by);
+    }
+    const out = new Set<Id>();
+    for (const [agentId, actor] of last) {
+      if (actor.type !== by.type || actor.id !== by.id) out.add(agentId);
+    }
+    return out;
   }
 
   /** Agents whose last pause or resume (`control.*`) was a pause by `by`. */
