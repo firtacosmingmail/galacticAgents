@@ -59,8 +59,8 @@ export function ManagedAgentCards({ supervisor }: { supervisor: Agent | undefine
   );
 }
 
-/** The current time, re-read every second while something's wall clock runs. */
-function useNow(ticking: boolean): number {
+/** The current time, re-read every second while something's wall clock runs (cards, Steward view). */
+export function useNow(ticking: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!ticking) return;
