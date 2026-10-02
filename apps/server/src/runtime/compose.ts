@@ -148,13 +148,15 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     agents: runtime,
     questions,
     ...(opts.autoApproveRemote ? { autoApproveRemote: true } : {}),
+    // A card's workspace is checked as the workspace service checks it (P2-09, decision 27).
+    ...(opts.workspaces ? { checkWorkspace: (path: string): string => workspaces!.checkPath(path) } : {}),
     isRunning: (id) => {
       const status = statuses.get(id);
       return status !== undefined && !ENDED_STATES.has(status.state);
     },
   });
   const queries = createBrainQueries({ tables: log.tables, status: (id) => statuses.get(id) });
-  const workspaces = opts.workspaces
+  const workspaces: Workspaces | undefined = opts.workspaces
     ? new Workspaces({ ...opts.workspaces, commands, tables: log.tables })
     : undefined;
   return {

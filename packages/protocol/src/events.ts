@@ -18,6 +18,8 @@ import {
   Progress,
   Project,
   Proposal,
+  ProposalParking,
+  ProposedBody,
   Question,
   QuestionContext,
   Task,
@@ -280,16 +282,39 @@ export const ProposalApproved = z.object({ type: z.literal('proposal.approved'),
 export const ProposalEdited = z.object({
   type: z.literal('proposal.edited'),
   proposalId: Id,
-  changes: Proposal.pick({ kind: true, proposedBody: true, workspace: true }).partial(),
+  changes: Proposal.pick({ kind: true, proposedBody: true, workspace: true })
+    .extend({
+      /** The user's consent to `git init` an existing non-git workspace (decision 27): `meta.initGit`. */
+      initGit: z.boolean().optional(),
+    })
+    .partial(),
 });
 export const ProposalRejected = z.object({
   type: z.literal('proposal.rejected'),
   proposalId: Id,
   reason: z.string().optional(),
 });
+/**
+ * Parked (decision 16). A card the server parked for lack of room also carries what the card
+ * shows (`ProposalParking`: the body kind it waits for, the occupied bodies, the offers); the
+ * parking is kept in `meta.parked` until the next decision.
+ */
 export const ProposalParked = z.object({
   type: z.literal('proposal.parked'),
   proposalId: Id,
+  reason: z.string(),
+  waitingFor: ProposalParking.shape.waitingFor,
+  occupied: ProposalParking.shape.occupied,
+  offers: ProposalParking.shape.offers,
+});
+/**
+ * A card parked for lack of room is pending again (P2-09): a body of its kind freed. It now
+ * proposes `proposedBody` (the catalogue's choice) and loses `meta.parked`; the user decides it.
+ */
+export const ProposalUnparked = z.object({
+  type: z.literal('proposal.unparked'),
+  proposalId: Id,
+  proposedBody: ProposedBody,
   reason: z.string(),
 });
 
@@ -459,6 +484,7 @@ export const Event = z.discriminatedUnion('type', [
   ProposalEdited,
   ProposalRejected,
   ProposalParked,
+  ProposalUnparked,
   BodyCreated,
   BodyAssigned,
   BodyMoved,
