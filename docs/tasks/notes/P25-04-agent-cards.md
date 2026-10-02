@@ -32,7 +32,7 @@ The right column's "Managed agents" section (P25-02 left it as a list of links) 
 - **Refusals** (409 and the others) show on the card's own error line, in the server's words, via `useAction` and `ErrorLine`.
 - **`agent-cards.css`**: styles for the cards, built on the panel's tokens.
 
-## Decisions (proposed text, ready to paste)
+## Decisions (recorded as SPEC decision 56; the text below is the original proposal)
 
 - **SPEC §4.2 addition: managed-agents cards (decision N).**
   - Each card shows the agent's state, the activity one-liner, cost so far, wall-clock and tool-call usage against their caps, and a badge with the number of open questions. "Blocked on you" is the loudest state and sorts first.

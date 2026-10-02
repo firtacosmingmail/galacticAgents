@@ -62,7 +62,7 @@ Accessible names, for tests:
   - a parked card's occupied bodies and its downsize offer;
   - a plan card's approve, its task controls, and the read-only view after `proposal.approved`, both in the inbox and in a thread.
 
-## Decisions (proposed text)
+## Decisions (recorded as SPEC decision 58 — with a fifth, folded group, rejected cards — and TECHNOLOGY §6.3 "Shared cards", which corrects the claim below: the Steward view renders its clarification box itself, with the shared stale line; the text below is the original proposal)
 
 - **SPEC §4.2 addition, inbox order (decision N):** the inbox lists, in this order:
   1. what blocks on the user: permission questions, then clarifications they hold, then the cards waiting for their decision (work and plan), each oldest first;

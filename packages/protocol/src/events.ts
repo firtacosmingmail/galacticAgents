@@ -210,7 +210,7 @@ export const MessageSent = z.object({
   /**
    * A brain's turn prompt (P25-03): the runner's digest of what happened since its last turn,
    * sent by the system. Logged like any message, but not a line of the conversation (decision
-   * 52): the panel's chat and `GET /api/agents/:id/conversation` leave it out.
+   * 54): the panel's chat and `GET /api/agents/:id/conversation` leave it out.
    */
   turn: z.literal(true).optional(),
 });

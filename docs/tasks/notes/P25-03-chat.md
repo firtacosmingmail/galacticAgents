@@ -21,17 +21,15 @@ The panel's main area for a brain is now its own chat, `panel/chat/Conversation.
 - **Cards in the thread** (decision 52, placed by `createdAt`) come from `threadCards(world, agent)`:
   - **Waykeeper:** its project's plan cards (`meta.plan.projectId`, so a successor Waykeeper owns them too) and its promotion requests (`fromProjectId`).
   - **Harmonizer:** every other card.
-  - **Questions:** they go to the thread of the brain that asked, or of the asking Steward's supervisor, so asteroid Stewards' questions go to the Harmonizer.
+  - **Questions:** they go to the thread of the brain that asked, or of the asking Steward's current supervisor by role and project (after the review fix; so a replacement Waykeeper takes it over), so asteroid Stewards' questions go to the Harmonizer.
   - **Cards older than the oldest loaded line** stay hidden until that history is paged in.
 - **Harmonizer one click away:** the shell's first nav row and the "← Harmonizer" link in the main header. The real-server test clicks the link.
 
-## Shared component (for P25-06 / the merge)
+## Shared component (after the merge)
 
-`panel/chat/InlineCards.tsx` exports `ThreadCard({kind: 'proposal' | 'question', id})`. Its wrapper `<div class="thread-card" data-card={id}>` stays. **`ThreadBody` is the one place to swap the card implementation.** Point it at P25-06's `ProposalView({proposalId})` / `QuestionView({questionId})` from `panel/cards/index.js`, and set `CardLinksContext` to true if the "open agent" link is wanted. Today it renders P2-18's `ProposalCard` / `QuestionCard` while the card is open, and a one-line fold once it is decided (a rejected draft keeps the full card behind a `<details>`).
+`panel/chat/InlineCards.tsx` exports `ThreadCard({kind: 'proposal' | 'question', id})`: a `<div class="thread-card" data-card={id}>` wrapper around P25-06's `ProposalView` / `QuestionView`. The thread no longer folds decided cards itself; the shared views show their compact forms (approved card, answered card, "Withdrawn: …"), a rejected card stays full. The chat tests query the shared labels (`proposal <requestText>`, `plan <requestText>`).
 
-**Tests that depend on the card's aria-labels:** `Conversation.test.tsx` and `chat-run.test.tsx` query `proposal <requestText>`, `plan <requestText>`, the buttons "Approve" / "Approve plan", and the fold labels `work card …` / `plan card …`. Adjust them if P25-06's views name things differently. The `data-card` ordering checks are unaffected.
-
-## Decisions (proposed text; numbers to assign)
+## Decisions (recorded as SPEC decisions 54 and 55, TECHNOLOGY §6.3 "The chat" and the §7 vocabulary; the text below is the original proposal)
 
 - **SPEC §7, decision N — A brain's turn prompts are not conversation (P25-03, refines 52).** The runner's per-turn digest ("Since your last turn: …" plus the current state) is logged as a `message.sent` from the system, like any message. It is marked `turn: true` and is not part of the conversation: neither the panel's chat nor `GET /api/agents/:id/conversation` shows it. Other system messages, such as a recovery notice, are still conversation lines. Turn prompts logged before this change are not marked and still show.
 - **SPEC §7, decision N+1 — Where a card shows in the chat (P25-03).** A plan card and a Waykeeper's promotion request show in the conversation with that project's Waykeeper. Every other card (work cards, the Harmonizer's promotion and closure cards) shows in the Harmonizer's conversation. A question shows in the conversation of the brain that asked it, or, for a Steward's question, of the Steward's supervisor. A card is the same card in the thread and in the inbox: answering it in one place resolves it in both. Once decided, it folds to one line in the thread.

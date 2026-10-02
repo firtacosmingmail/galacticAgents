@@ -41,7 +41,7 @@ The panel's main area now shows a Steward through `apps/web/src/panel/steward/St
   - The pure `mergeChunks`. A `newest` page drops held chunks older than itself: they came from an earlier visit and may leave a hole.
 - **Chunks**: they stay in the existing `transcripts` map, so the live reducer and the session's `since` work unchanged.
 
-## Decisions
+## Decisions (recorded as SPEC decision 57; SPEC §2.4 and §4.2 now follow decision 48)
 
 - **Following decision 48 over the task text.** The task says "only while an open clarification question *for the user* exists". Decision 48 (and SPEC §2.4's "answering anywhere") offers the answer box for any open clarification of the Steward, including one a supervisor holds. The view follows decision 48 and says who holds it. Proposed SPEC text, **decision N — The Steward view (P25-05)**: "The Steward view shows its status (blocked on you first), current activity, task, project, body, worktree and branch, cost and caps, and its transcript with tool calls and collapsed thinking, backfilled over REST and then live. It has a message box only while the Steward has an open clarification (held by the user or a supervisor); the box answers that question with its version and disappears once it is answered. A permission request shows allow / refuse only. Pause, resume and stop act on the agent; stop asks for confirmation."
 - **Subscribe after the page.** Subscribing first would replay the whole transcript from `seq` 0. The `since` is the newest held `seq` (≥ the page's `lastSeq` in practice), never a value past an unseen persisted chunk.
