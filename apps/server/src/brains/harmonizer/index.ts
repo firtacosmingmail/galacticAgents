@@ -2,6 +2,7 @@ import type { Agent, AgentRuntime, Id } from '@galactic/protocol';
 import type { BrainDefinition } from '../definition.js';
 import type { BrainPlacement, BrainRunner, BrainRunnerOptions } from '../runner.js';
 import { SUPERVISOR_TOOLS } from './agent-tools.js';
+import { CLOSURE_TOOLS } from './closure-tools.js';
 import { HARMONIZER_SYSTEM_PROMPT } from './prompt.js';
 import { harmonizerTools, type HarmonizerDeps } from './tools.js';
 
@@ -22,14 +23,15 @@ export {
   type HarmonizerRequest,
 } from './tools.js';
 export { SUPERVISOR_TOOLS, statusReport } from './agent-tools.js';
+export { CLOSURE_TOOLS } from './closure-tools.js';
 export { findRelated, words, type RelatedMatch } from './related.js';
 
-/** The Harmonizer's definition: its prompt, its own tools, then the supervisor tools. */
+/** The Harmonizer's definition: its prompt, its own tools, the closure tools (P2-13), then the supervisor tools. */
 export function harmonizerBrain(deps: HarmonizerDeps): BrainDefinition {
   return {
     role: 'harmonizer',
     systemPrompt: HARMONIZER_SYSTEM_PROMPT,
-    tools: [...harmonizerTools(deps), ...SUPERVISOR_TOOLS],
+    tools: [...harmonizerTools(deps), ...CLOSURE_TOOLS, ...SUPERVISOR_TOOLS],
   };
 }
 
