@@ -507,8 +507,14 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         if (toProjectId) throw new DomainError('invalid', 'only a task joins another project');
         const project = must(ctx.queries.project(projectId!), 'project', projectId!);
         kind = oneOf(input, 'toKind', ['moon', 'planet'] as const);
-        if (bodyKind(ctx.queries, project) === kind) {
-          throw new DomainError('invalid', `project ${project.id} already is a ${kind}`);
+        // A promotion goes to a bigger body only (decision 2): a moon project to a planet. A
+        // planet is the biggest body there is; a move down is not a promotion.
+        const from = bodyKind(ctx.queries, project);
+        if (from !== 'moon' || kind !== 'planet') {
+          throw new DomainError(
+            'invalid',
+            `project ${project.id} is a ${from}: only a moon project is promoted, to a planet`,
+          );
         }
         const name = str(input, 'name', true) ?? project.name;
         ({ proposedBody, choice } = await proposedBodyFor(ctx, kind, name, {}));

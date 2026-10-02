@@ -522,6 +522,43 @@ describe('Harmonizer brain (P2-08)', () => {
     });
     expect(h.log.tables.tasks.get(task.id)?.bodyId).toBe(task.bodyId);
   });
+
+  it('refuses a "promotion" that is not to a bigger body (review: planet down to a moon)', async () => {
+    const { h, definition } = setup();
+    const { value: planet } = await h.commands.createProject({
+      name: 'Big',
+      workspace: '/w/big',
+      kind: 'planet',
+    });
+    const outcomes: unknown[] = [];
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s.once('shrink', async (t) => {
+          outcomes.push(
+            await t.try('propose_promotion', {
+              projectId: planet.id,
+              toKind: 'moon',
+              rationale: 'r',
+            }),
+          );
+          outcomes.push(
+            await t.try('propose_promotion', {
+              projectId: planet.id,
+              toKind: 'planet',
+              rationale: 'r',
+            }),
+          );
+        }),
+    });
+    hq.tell('shrink it');
+    await h.done();
+    expect(outcomes).toEqual([
+      expect.objectContaining({ ok: false, error: 'invalid' }),
+      expect.objectContaining({ ok: false, error: 'invalid' }),
+    ]);
+    expect(proposals(h)).toHaveLength(0);
+  });
 });
 
 describe('Harmonizer boot start (P2-08, decision 32)', () => {
