@@ -581,13 +581,50 @@ describe('Harmonizer boot start (P2-08, decision 32)', () => {
     if (first.status === 'started') first.runner.dispose();
   });
 
-  it('picks the boot runtime: fake in dev mode, claude-sdk otherwise, none when off', () => {
-    expect(harmonizerRuntime(undefined, true)).toBe('fake');
-    expect(harmonizerRuntime(undefined, false)).toBe('claude-sdk');
-    expect(harmonizerRuntime('claude-sdk', true)).toBe('claude-sdk');
-    expect(harmonizerRuntime('fake', false)).toBe('fake');
-    expect(harmonizerRuntime('off', false)).toBeUndefined();
-    expect(harmonizerRuntime('0', true)).toBeUndefined();
+  it('picks the boot runtime: claude-sdk by default (dev mode too), fake on request, none when off', () => {
+    expect(harmonizerRuntime(undefined)).toBe('claude-sdk');
+    expect(harmonizerRuntime('claude-sdk')).toBe('claude-sdk');
+    expect(harmonizerRuntime('fake')).toBe('fake');
+    expect(harmonizerRuntime('off')).toBeUndefined();
+    expect(harmonizerRuntime('0')).toBeUndefined();
+  });
+
+  it('replaces a running Harmonizer on another runtime with one on the wanted runtime', async () => {
+    const stopped: string[] = [];
+    let live = [{ id: 'h-old', role: 'harmonizer' as const, runtime: 'fake' as const }];
+    const started: string[] = [];
+    const host = {
+      runtime: {
+        liveAgents: () => live as never,
+        stop: (id: string) => {
+          stopped.push(id);
+          live = [];
+          return Promise.resolve();
+        },
+      },
+      startBrain: (_d: unknown, placement: { runtime: string }) => {
+        started.push(placement.runtime);
+        return Promise.resolve({ agentId: 'h-new' } as never);
+      },
+    };
+    const out = await startHarmonizer(host, {
+      runtime: 'claude-sdk',
+      cwd: '/w',
+      deps: { projectsRoot: '/w' },
+    });
+    expect(stopped).toEqual(['h-old']);
+    expect(started).toEqual(['claude-sdk']);
+    expect(out).toMatchObject({ status: 'started', agentId: 'h-new', replaced: 'h-old' });
+
+    // The same runtime is left running.
+    live = [{ id: 'h-new', role: 'harmonizer', runtime: 'claude-sdk' } as never];
+    const again = await startHarmonizer(host, {
+      runtime: 'claude-sdk',
+      cwd: '/w',
+      deps: { projectsRoot: '/w' },
+    });
+    expect(again).toMatchObject({ status: 'running', agentId: 'h-new' });
+    expect(stopped).toEqual(['h-old']);
   });
 });
 

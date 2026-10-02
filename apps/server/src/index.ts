@@ -105,7 +105,7 @@ const startWaykeeper = async (input: {
 
 // The brains' definitions, before recovery (P2-16): an interrupted Harmonizer or Waykeeper comes
 // back through its runner — tools, system prompt, mailbox — not as a bare session.
-const hqRuntime = harmonizerRuntime(process.env['GALACTIC_HARMONIZER'], config.dev);
+const hqRuntime = harmonizerRuntime(process.env['GALACTIC_HARMONIZER']);
 mkdirSync(config.projectsRoot, { recursive: true });
 const workspaces =
   composed.workspaces ??
@@ -167,8 +167,9 @@ if (hqRuntime && !shuttingDown) {
     });
     console.log(
       hq.status === 'started'
-        ? `Harmonizer started (${hq.agentId}, ${hqRuntime})`
-        : `Harmonizer resumed (${hq.agentId})`,
+        ? `Harmonizer started on ${hqRuntime} (${hq.agentId})` +
+            (hq.replaced ? `, replacing ${hq.replaced} (another runtime)` : '')
+        : `Harmonizer resumed on ${hqRuntime} (${hq.agentId})`,
     );
   } catch (error) {
     console.error('[harmonizer] start:', error instanceof Error ? error.message : error);
