@@ -88,7 +88,9 @@ describe('Waykeeper under the spawn caps (P2-17)', () => {
               await t.call('report_status', {
                 text: `Spawn refused for task ${plan[2]}: ${refusal}. I start it when a Steward ends.`,
               });
-            }),
+            })
+            // The Stewards' end-of-turn reports (P2-11) wake it; nothing to do in this test.
+            .on(/reported: "Task/, () => Promise.resolve()),
       },
     );
     wk.tell('plan');
