@@ -93,7 +93,10 @@ describe('ControlBody project policy edit (P2-21)', () => {
     expect(
       ControlBody.safeParse({
         target,
-        action: { action: 'edit', changes: { permissionPolicy: { rules: { destructive: 'sure' } } } },
+        action: {
+          action: 'edit',
+          changes: { permissionPolicy: { rules: { destructive: 'sure' } } },
+        },
       }).success,
     ).toBe(false);
   });

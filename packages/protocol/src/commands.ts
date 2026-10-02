@@ -148,7 +148,7 @@ export type ControlAction =
  * counts as remote. A brain passes the origin of the user message it acts on (`message.sent`).
  */
 export interface WriteOptions {
-  origin?: RequestOrigin;
+  origin?: RequestOrigin | undefined;
 }
 
 /** What every command returns: the affected aggregate plus the events it appended. */

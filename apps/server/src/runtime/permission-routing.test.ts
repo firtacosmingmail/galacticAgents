@@ -86,17 +86,17 @@ async function hierarchy(opts: { policy?: PermissionPolicy; ungated?: boolean; p
       cwd: '/hq',
     })
   ).value;
-  const project = (
-    // The user's own choice on this machine (a remote one is floored, P2-21).
-    await commands.createProject(
-      {
-        name: 'CSV',
-        workspace: '/w/csv',
-        ...(opts.policy ? { permissionPolicy: opts.policy } : {}),
-      },
-      { origin: 'local' },
-    )
-  ).value;
+  const project = // The user's own choice on this machine (a remote one is floored, P2-21).
+    (
+      await commands.createProject(
+        {
+          name: 'CSV',
+          workspace: '/w/csv',
+          ...(opts.policy ? { permissionPolicy: opts.policy } : {}),
+        },
+        { origin: 'local' },
+      )
+    ).value;
   const waykeeper = (
     await commands.spawnAgent({
       role: 'waykeeper',

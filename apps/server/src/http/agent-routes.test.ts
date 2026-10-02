@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RuntimesInfo } from '@galactic/protocol';
+import { DEFAULT_PERMISSION_POLICY, RuntimesInfo, type Event } from '@galactic/protocol';
+import { originOfMessages } from '../domain/permissions.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
@@ -263,5 +264,124 @@ describe('POST /api/control (P2-14)', () => {
     expect(
       (await call('/api/control', { target, action: { action: 'stop' } }, 'wrong')).status,
     ).toBe(401);
+  });
+});
+
+describe('the remote floor on every policy write (P2-21)', () => {
+  /** A request as a phone through Tailscale Serve makes it: loopback, but a remote `Origin`. */
+  const REMOTE = { origin: 'https://mymac.tail1234.ts.net' };
+  const LOOSE = { rules: { destructive: 'allow', network: 'allow' } } as const;
+  const post = async (path: string, body: unknown, headers: Record<string, string> = {}) => {
+    const res = await fetch(`${t.baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${TEST_TOKEN}`,
+        'content-type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  };
+  const policyOf = (id: string) => composed.log.tables.projects.get(id)?.permissionPolicy;
+  const editPolicy = (id: string, permissionPolicy: unknown, headers?: Record<string, string>) =>
+    post(
+      '/api/control',
+      {
+        target: { kind: 'project', id },
+        action: { action: 'edit', changes: { permissionPolicy } },
+      },
+      headers,
+    );
+
+  it('a remote project edit cannot loosen the policy; a local one can; null clears it', async () => {
+    const { commands, log } = composed;
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/tmp' })).value;
+
+    const remote = await editPolicy(project.id, LOOSE, REMOTE);
+    expect(remote.status).toBe(200);
+    expect(policyOf(project.id)).toEqual(DEFAULT_PERMISSION_POLICY);
+    // The supervisors' mailboxes see what was applied, not what was asked.
+    const edit = log
+      .eventsSince(0)
+      .map((e) => e.event)
+      .filter((e): e is Extract<Event, { type: 'control.edit' }> => e.type === 'control.edit')
+      .at(-1);
+    expect(edit?.changes).toEqual({ permissionPolicy: DEFAULT_PERMISSION_POLICY });
+
+    // Stricter than the default is the remote client's to choose.
+    await editPolicy(project.id, { rules: { network: 'deny' } }, REMOTE);
+    expect(policyOf(project.id)?.rules['network']).toBe('deny');
+    expect(policyOf(project.id)?.rules['destructive']).toBe('ask');
+
+    expect((await editPolicy(project.id, LOOSE)).status).toBe(200);
+    expect(policyOf(project.id)).toEqual(LOOSE);
+
+    // Clearing returns to the global default, never looser than the floor: fine from anywhere.
+    expect((await editPolicy(project.id, null, REMOTE)).status).toBe(200);
+    expect(policyOf(project.id)).toBeUndefined();
+
+    expect((await editPolicy(project.id, { rules: { destructive: 'sure' } })).status).toBe(400);
+    expect(
+      (
+        await post('/api/control', {
+          target: { kind: 'task', id: 't-x' },
+          action: { action: 'edit', changes: { permissionPolicy: LOOSE } },
+        })
+      ).status,
+    ).toBe(404);
+  });
+
+  it('a forwarded request counts as remote too', async () => {
+    const project = (await composed.commands.createProject({ name: 'CSV', workspace: '/tmp' }))
+      .value;
+    await editPolicy(project.id, LOOSE, { 'x-forwarded-for': '100.64.0.7' });
+    expect(policyOf(project.id)).toEqual(DEFAULT_PERMISSION_POLICY);
+  });
+
+  it("records a message's origin, and a brain's write for a remote message is floored", async () => {
+    const { commands, log } = composed;
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/tmp' })).value;
+    const harmonizer = (
+      await commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        cwd: '/tmp',
+        prompt: 'scenario:echo',
+      })
+    ).value;
+    await waitFor(() => state(harmonizer.id) === 'idle', 'idle');
+    const sent = () =>
+      log
+        .eventsSince(0)
+        .map((e) => e.event)
+        .filter((e): e is Extract<Event, { type: 'message.sent' }> => e.type === 'message.sent');
+
+    // What a Harmonizer tool does for the turn's messages (the P2-08 seam): pass their origin.
+    const brainWrite = (messages: ReturnType<typeof sent>) =>
+      commands.updateProject(
+        project.id,
+        { permissionPolicy: LOOSE },
+        { origin: originOfMessages(messages) },
+      );
+
+    expect(
+      (await post(`/api/agents/${harmonizer.id}/send`, { text: 'trust it' }, REMOTE)).status,
+    ).toBe(200);
+    expect(sent().at(-1)?.origin).toBe('remote');
+    await brainWrite(sent().slice(-1));
+    expect(policyOf(project.id)).toEqual(DEFAULT_PERMISSION_POLICY);
+
+    expect((await post(`/api/agents/${harmonizer.id}/send`, { text: 'trust it' })).status).toBe(
+      200,
+    );
+    expect(sent().at(-1)?.origin).toBe('local');
+    await brainWrite(sent().slice(-1));
+    expect(policyOf(project.id)).toEqual(LOOSE);
+
+    // A turn that folds a remote message with a local one acts for the remote one too.
+    await commands.updateProject(project.id, { permissionPolicy: null }, { origin: 'local' });
+    await brainWrite(sent());
+    expect(policyOf(project.id)).toEqual(DEFAULT_PERMISSION_POLICY);
   });
 });

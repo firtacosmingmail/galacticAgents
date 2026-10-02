@@ -93,7 +93,10 @@ export interface PolicyWrite {
  * the global default in every category (`noLooserThan`). Clearing a policy needs no floor: it
  * returns to the global default.
  */
-export function policyForWrite(policy: PermissionPolicy, write: PolicyWrite = {}): PermissionPolicy {
+export function policyForWrite(
+  policy: PermissionPolicy,
+  write: PolicyWrite = {},
+): PermissionPolicy {
   if (write.origin === 'local' || write.autoApproveRemote) return policy;
   return noLooserThan(policy);
 }
