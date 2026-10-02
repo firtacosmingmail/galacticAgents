@@ -23,8 +23,9 @@ import type { TurnEnd } from './agent-runtime.js';
  * Across a restart (P2-16), with the log:
  *   - a report the supervisor missed (no mailbox when the Steward's turn ended) is sent again when
  *     the supervisor comes back (`resend`), for each idle Steward it supervises that still owes one;
- *   - the first turn of a resumed Steward reports only when its last turn before the restart
- *     still owed one — a resumed idle Steward does not report the same turn twice.
+ *   - the first turn of a resumed Steward reports when it ends the work the restart cut short, or
+ *     when its last turn before the restart still owed one — a resumed idle Steward whose report
+ *     was sent does not report the same turn twice.
  */
 
 /** What the reports need from the agent runtime (`AgentRuntime` provides it). */
@@ -80,36 +81,38 @@ export interface StewardReports {
 const PAGE = 5_000;
 
 /**
- * Whether the Steward's last turn end still owes its supervisor a report (P2-16): an `agent.idle`
- * with no message from the Steward after it, no new message delivered to it, and no end.
- * `beforeLast`: as of just before its last `agent.idle` (the resumed turn that just ended).
+ * Whether the Steward owes its supervisor a report (P2-16), from the log: it is `working` from a
+ * spawn or a delivered message until a turn ends (`agent.idle`), which makes the report `owed`
+ * until the Steward sends one (a `message.sent` from it); an end clears it. An `agent.idle` that
+ * ends no work — a resumed idle Steward's first turn — changes nothing: a report sent before the
+ * restart stays sent, a missed one stays owed.
  */
-export function owesReport(
-  log: Pick<ReportHistory, 'eventsSince'>,
-  stewardId: Id,
-  beforeLast = false,
-): boolean {
-  let owed = false;
-  let beforeLastIdle = false;
+export function owesReport(log: Pick<ReportHistory, 'eventsSince'>, stewardId: Id): boolean {
+  let state: 'none' | 'working' | 'owed' | 'reported' = 'none';
   let since = 0;
   for (;;) {
     const page = log.eventsSince(since, PAGE);
     for (const { seq, event } of page) {
       since = seq;
       switch (event.type) {
-        case 'agent.idle':
-          if (event.agentId !== stewardId) break;
-          beforeLastIdle = owed;
-          owed = true;
-          break;
-        case 'message.sent':
-          if (event.sender.type === 'agent' && event.sender.id === stewardId) owed = false;
+        case 'agent.spawned':
+          if (event.agentId === stewardId && state === 'none') state = 'working';
           break;
         case 'message.delivered':
+          if (event.agentId === stewardId) state = 'working';
+          break;
+        case 'agent.idle':
+          if (event.agentId === stewardId && (state === 'working' || state === 'none')) {
+            state = 'owed';
+          }
+          break;
+        case 'message.sent':
+          if (event.sender.type === 'agent' && event.sender.id === stewardId) state = 'reported';
+          break;
         case 'agent.finished':
         case 'agent.failed':
         case 'agent.stopped':
-          if (event.agentId === stewardId) owed = false;
+          if (event.agentId === stewardId) state = 'reported';
           break;
         default:
           break;
@@ -117,7 +120,7 @@ export function owesReport(
     }
     if (page.length < PAGE) break;
   }
-  return beforeLast ? beforeLastIdle : owed;
+  return state === 'owed';
 }
 
 export function stewardReports(
@@ -150,7 +153,7 @@ export function stewardReports(
   const unsubscribe = runtime.onTurnEnded((turn) => {
     if (turn.agent.role !== 'steward' || turn.interrupted || turn.queued > 0) return;
     // A resumed Steward's first turn reports only what the restart kept from its supervisor.
-    if (turn.resumed && history && !owesReport(history, turn.agent.id, true)) return;
+    if (turn.resumed && history && !owesReport(history, turn.agent.id)) return;
     report(tables.agents.get(turn.agent.id) ?? turn.agent, turn.text, turn.resumed);
   });
   return {
