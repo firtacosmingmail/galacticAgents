@@ -198,7 +198,10 @@ export class PromotionFlow {
     const existing = tables.projects.all().find((x) => x.meta?.['proposalId'] === p.id);
     if (existing) return existing;
     if (p.kind === 'asteroid') {
-      throw new DomainError('invalid', `proposal ${p.id} was resized to an asteroid: nothing grows`);
+      throw new DomainError(
+        'invalid',
+        `proposal ${p.id} was resized to an asteroid: nothing grows`,
+      );
     }
     const task = must(tables.tasks.get(req.target.id), 'task', req.target.id);
     const from = req.fromProjectId ? tables.projects.get(req.fromProjectId) : undefined;

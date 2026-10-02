@@ -23,7 +23,12 @@ afterEach(async () => {
 
 const carriedLine = /promotion (\S+) was carried out/;
 /** Any other wake-up (a Steward paused by the card, resumed, finished) needs no action here. */
-const rest = (s: BrainScript) => s.on(() => true, () => {}, 'anything else');
+const rest = (s: BrainScript) =>
+  s.on(
+    () => true,
+    () => {},
+    'anything else',
+  );
 
 function setup() {
   const clock = tickingClock();
@@ -261,7 +266,10 @@ describe('promotion (P2-12)', () => {
 
   it("promotes a Waykeeper's task to a sub-project moon under that Waykeeper", async () => {
     const { h, flow, waykeepers, state, card } = setup();
-    h.script({ role: 'waykeeper' }).on(() => true, () => {});
+    h.script({ role: 'waykeeper' }).on(
+      () => true,
+      () => {},
+    );
     const project = (
       await h.commands.createProject({ name: 'App', workspace: '/w/app', bodyId: 'b-saturn' })
     ).value;
@@ -398,7 +406,10 @@ describe('promotion (P2-12)', () => {
     const failing = (await h.commands.createProposal(request(archived.id))).value;
     await h.commands.decideProposal(failing.id, { decision: 'approve' }, USER);
     await h.until(() => carriedOut(card()) !== undefined);
-    expect(carriedOut(card())).toMatchObject({ ok: false, error: expect.stringMatching(/archived/) });
+    expect(carriedOut(card())).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/archived/),
+    });
     expect(h.log.tables.tasks.get(task.id)?.projectId).toBeUndefined();
 
     // A card approved while no flow listened (a crash between approval and the move).

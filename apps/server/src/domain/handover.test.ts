@@ -17,7 +17,10 @@ const CAPS = { maxWallClockMs: 1000, maxToolCalls: 10 };
 
 function setup() {
   const w = world();
-  const agent = (role: AgentRole, place: { supervisorId?: Id; taskId?: Id; projectId?: Id; bodyId?: Id }) =>
+  const agent = (
+    role: AgentRole,
+    place: { supervisorId?: Id; taskId?: Id; projectId?: Id; bodyId?: Id },
+  ) =>
     w.run((ctx) =>
       createAgent(ctx, {
         role,

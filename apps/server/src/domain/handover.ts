@@ -44,16 +44,14 @@ const isHarmonizer = (a: Agent) => a.role === 'harmonizer';
 /** The task's Stewards follow it: its project and its project's Waykeeper (or the Harmonizer). */
 export function handOverTask(ctx: CommandContext, taskId: Id, opts: HandOverOptions = {}): Agent[] {
   const task = must(ctx.tables.tasks.get(taskId), 'task', taskId);
-  const stewards = ctx.tables.agents
-    .all()
-    .filter(
-      (a) =>
-        a.role === 'steward' &&
-        a.taskId === taskId &&
-        // A row from before the rules (the Phase 1 ops console, no supervisor) stays outside them.
-        a.supervisorId !== undefined &&
-        (a.projectId !== task.projectId || !supervisedRight(ctx, a, task.projectId)),
-    );
+  const stewards = ctx.tables.agents.all().filter(
+    (a) =>
+      a.role === 'steward' &&
+      a.taskId === taskId &&
+      // A row from before the rules (the Phase 1 ops console, no supervisor) stays outside them.
+      a.supervisorId !== undefined &&
+      (a.projectId !== task.projectId || !supervisedRight(ctx, a, task.projectId)),
+  );
   if (stewards.length === 0) return [];
   const supervisor = pickSupervisor(
     ctx,

@@ -5,7 +5,13 @@ import { createAgent } from './agents.js';
 import { EARTH_ID } from './catalogue.js';
 import { createProject } from './projects.js';
 import { createProposal } from './proposals.js';
-import { carriedOut, isPromotion, moveProject, recordPromotion, transferTask } from './promotion.js';
+import {
+  carriedOut,
+  isPromotion,
+  moveProject,
+  recordPromotion,
+  transferTask,
+} from './promotion.js';
 import { createTask } from './tasks.js';
 
 /** The transactional steps of a promotion (P2-12). */

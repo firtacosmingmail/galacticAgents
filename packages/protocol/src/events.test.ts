@@ -19,6 +19,7 @@ function classify(
   | 'question'
   | 'permission'
   | 'proposal'
+  | 'promotion'
   | 'body'
   | 'project'
   | 'task'
@@ -56,8 +57,9 @@ function classify(
     case 'proposal.edited':
     case 'proposal.rejected':
     case 'proposal.parked':
-    case 'promotion.carried_out':
       return 'proposal';
+    case 'promotion.carried_out':
+      return 'promotion';
     case 'body.created':
     case 'body.assigned':
     case 'body.moved':
