@@ -170,6 +170,29 @@ export const Proposal = z.object({
 });
 export type Proposal = z.infer<typeof Proposal>;
 
+/**
+ * A Waykeeper's task plan card (P2-10; SPEC §3.3, decision 3), kept in `Proposal.meta.plan`: the
+ * plan's tasks exist as `proposed` tasks of the project and are approved (or left as a draft) as
+ * one. `kind`, `proposedBody` and `workspace` of the proposal repeat the project's, so a client
+ * that does not know plans still shows a sensible card.
+ */
+export const ProposalPlan = z.object({
+  projectId: Id,
+  /** The Waykeeper that planned; its successor on the same project owns the card too. */
+  waykeeperId: Id,
+  /** The plan's tasks, in plan order. */
+  taskIds: z.array(Id).min(1),
+});
+export type ProposalPlan = z.infer<typeof ProposalPlan>;
+
+/** The plan a proposal carries, when it is a Waykeeper's plan card. */
+export function proposalPlan(
+  proposal: Pick<Proposal, 'meta'> | undefined,
+): ProposalPlan | undefined {
+  const parsed = ProposalPlan.safeParse(proposal?.meta?.['plan']);
+  return parsed.success ? parsed.data : undefined;
+}
+
 /** A tool call an agent wants to make, as the permission gate and the permission card see it. */
 export const ToolCall = z.object({ toolName: z.string(), input: z.unknown().optional() });
 export type ToolCall = z.infer<typeof ToolCall>;

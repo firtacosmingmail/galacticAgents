@@ -258,6 +258,10 @@ describe('worktrees and merges', () => {
         files: ['shared.txt'],
         workspace: dir,
         worktreePath: wb.path,
+        // Only the project's own merged task (A) is on the base side: the Waykeeper resolves.
+        external: false,
+        externalCommits: [],
+        externalCount: 0,
       },
     });
     // Aborted cleanly: same head, no merge in progress, nothing changed, worktree and branch kept.
@@ -266,6 +270,36 @@ describe('worktrees and merges', () => {
     expect(git(dir, 'status', '--porcelain')).toBe('');
     expect(existsSync(wb.path)).toBe(true);
     expect(git(dir, 'branch', '--list', wb.branch)).toContain(wb.branch);
+  });
+
+  it('marks a conflict external when the base side holds commits no task merged (decision 30)', async () => {
+    const dir = join(tmp, 'home', 'external');
+    const { project: p } = await project('External', dir);
+    commitFile(dir, 'shared.txt', 'base\n', 'base content');
+    const a = await task(p.id, 'Merged task');
+    const b = await task(p.id, 'Conflicting task');
+    const wa = await spaces.createWorktree(a.id);
+    const wb = await spaces.createWorktree(b.id);
+    commitFile(wa.path, 'other.txt', 'a\n', 'task A: other file');
+    commitFile(wa.path, 'shared.txt', 'from A\n', 'task A: shared');
+    commitFile(wb.path, 'shared.txt', 'from B\n', 'task B: shared');
+    expect(await spaces.mergeTask(a.id)).toMatchObject({ ok: true, fastForward: true });
+    expect(w.tables.tasks.get(a.id)!.meta).toMatchObject({ merge: { before: expect.any(String) } });
+    // The user commits on the base branch by hand: an external change to the same file.
+    commitFile(dir, 'shared.txt', 'from the user\n', 'user: hand edit');
+    commitFile(dir, 'unrelated.txt', 'x\n', 'user: unrelated file');
+
+    const result = await spaces.mergeTask(b.id);
+    expect(result.ok).toBe(false);
+    const conflict = (result as Extract<typeof result, { reason: 'conflict' }>).conflict;
+    expect(conflict).toMatchObject({ external: true, externalCount: 1, files: ['shared.txt'] });
+    expect(conflict.externalCommits).toEqual([
+      {
+        id: expect.stringMatching(/^[0-9a-f]{7,}$/),
+        subject: 'user: hand edit',
+        author: 'Test Steward',
+      },
+    ]);
   });
 
   it('merges a branch that diverged from the base with a merge commit', async () => {
