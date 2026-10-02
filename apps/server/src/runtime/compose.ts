@@ -1,7 +1,6 @@
 import {
   ENDED_STATES,
   type AgentAdapter,
-  type AgentCaps,
   type AgentRuntime as RuntimeName,
 } from '@galactic/protocol';
 import type { Database } from '../db/database.js';
@@ -19,7 +18,7 @@ import {
 } from '../brains/index.js';
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { Archival, type Timers } from './archival.js';
-import { DEFAULT_CAPS } from './caps.js';
+import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
 import { StatusStore } from './status-store.js';
 import { stewardReports, type StewardReports } from './steward-reports.js';
 import { TranscriptPipeline } from './transcripts.js';
@@ -45,7 +44,8 @@ export interface ComposeOptions {
   /** Adapters to register; default: the fake adapter only (dev mode without Claude). */
   adapters?: AgentAdapter[];
   log?: EventLogOptions;
-  caps?: { maxConcurrentAgents?: number; defaults?: AgentCaps };
+  /** Hard caps (P1-02) and the hierarchy's spawn caps (P2-17); `index.ts` passes `config.caps`. */
+  caps?: CapsConfig;
   stallThresholdMs?: (runtime: RuntimeName | undefined) => number;
   /** How often stalls are checked and wall clocks refreshed. */
   tickMs?: number;

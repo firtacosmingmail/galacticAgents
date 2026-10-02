@@ -42,6 +42,8 @@ const composed = composeRuntime(db, {
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
   autoApproveRemote: config.autoApproveRemote,
+  // Spawn caps (decision 18, P2-17): concurrency, Stewards per Waykeeper, spawns per hour.
+  caps: config.caps,
   // Finished work past decision 4's retention period is archived hourly (P2-13).
   archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
 });
