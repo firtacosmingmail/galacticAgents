@@ -68,9 +68,7 @@ export function TranscriptLog({
           </button>
         )}
         {view.status === 'loading' && chunks.length === 0 && <p className="muted">Loading…</p>}
-        {view.status !== 'loading' && chunks.length === 0 && (
-          <p className="muted">Nothing yet.</p>
-        )}
+        {view.status !== 'loading' && chunks.length === 0 && <p className="muted">Nothing yet.</p>}
         {chunks.map((c) => (
           <Chunk key={c.seq} chunk={c} />
         ))}

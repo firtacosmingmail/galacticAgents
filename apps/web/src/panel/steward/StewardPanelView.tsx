@@ -205,7 +205,10 @@ function wallClockLine(status: StatusRecord): string {
   const live = !ENDED_STATES.has(status.state) && status.state !== 'paused';
   const since = Date.parse(status.startedAt);
   const running = live && Number.isFinite(since) ? Date.now() - since : 0;
-  const used = Math.min(Math.max(status.caps.wallClockMs.used, running), status.caps.wallClockMs.limit);
+  const used = Math.min(
+    Math.max(status.caps.wallClockMs.used, running),
+    status.caps.wallClockMs.limit,
+  );
   return `${minutes(used)} / ${minutes(status.caps.wallClockMs.limit)}`;
 }
 

@@ -53,7 +53,10 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
   return {
     runtimes: () => call<RuntimesInfo>('GET', '/api/runtimes'),
     /** `GET /api/agents/:id/transcript` (P25-01), paged by `seq`; without a cursor the newest page. */
-    transcript: (agentId: string, query: { before?: number; after?: number; limit?: number } = {}) => {
+    transcript: (
+      agentId: string,
+      query: { before?: number; after?: number; limit?: number } = {},
+    ) => {
       const params = new URLSearchParams();
       for (const [k, v] of Object.entries(query)) if (v !== undefined) params.set(k, String(v));
       const qs = params.toString();
