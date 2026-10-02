@@ -42,6 +42,11 @@ export interface AppState {
   messages: Record<Id, ChatMessage[]>;
   /** The log the state came from (the last snapshot's `logId`). */
   logId?: string | undefined;
+  /**
+   * How many snapshots this page took (P2-18): a snapshot catch-up skipped the events between,
+   * so the chat boxes read their history again when it changes.
+   */
+  snapshots: number;
   status: ConnectionStatus;
   statusDetail?: string | undefined;
   lastError?: string | undefined;
@@ -61,6 +66,7 @@ export const useAppStore = create<AppState>((set) => ({
   log: [],
   transcripts: {},
   messages: {},
+  snapshots: 0,
   status: 'idle',
   apply: (message) =>
     set((s) => {
@@ -72,6 +78,7 @@ export const useAppStore = create<AppState>((set) => ({
             world: applySnapshot(message),
             log: [],
             logId: message.logId,
+            snapshots: s.snapshots + 1,
             ...(s.logId !== undefined && s.logId !== message.logId
               ? { transcripts: {}, messages: {} }
               : {}),
@@ -143,6 +150,7 @@ export const useAppStore = create<AppState>((set) => ({
       transcripts: {},
       messages: {},
       logId: undefined,
+      snapshots: 0,
       status: 'idle',
       statusDetail: undefined,
       lastError: undefined,

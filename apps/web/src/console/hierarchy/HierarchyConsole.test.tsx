@@ -527,6 +527,35 @@ describe('chat boxes (P2-18)', () => {
     });
   });
 
+  it('reads the history again after a snapshot catch-up (a reconnect)', async () => {
+    seed();
+    ui();
+    await flush();
+    const fetched = () => calls.filter((c) => c.url === '/api/agents/a-harmonizer/messages');
+    expect(fetched()).toHaveLength(1);
+    // While the page was away a line reached the Harmonizer; the reconnect took a snapshot.
+    replies['GET /api/agents/a-harmonizer/messages'] = {
+      status: 200,
+      body: {
+        messages: [
+          {
+            messageId: 'm-away',
+            agentId: 'a-harmonizer',
+            seq: 11,
+            at: later(1),
+            sender: { type: 'user' },
+            text: 'sent from the phone',
+          },
+        ],
+      },
+    };
+    seed();
+    await flush();
+    expect(fetched()).toHaveLength(2);
+    const chat = screen.getByLabelText('chat with Harmonizer');
+    expect(within(chat).getByText(/sent from the phone/)).toBeTruthy();
+  });
+
   it("opens a Waykeeper's chat from the tree", async () => {
     seed();
     ui();

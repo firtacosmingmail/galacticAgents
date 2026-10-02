@@ -34,6 +34,7 @@ export function ChatBox({ agentId, title }: { agentId: Id; title?: string }) {
   const world = useAppStore((s) => s.world);
   const messages = useAppStore((s) => s.messages[agentId] ?? NO_MESSAGES);
   const addMessages = useAppStore((s) => s.addMessages);
+  const snapshots = useAppStore((s) => s.snapshots);
   const chunks = useTranscript(agentId);
   const { run, error, busy } = useAction();
   const [text, setText] = useState('');
@@ -44,7 +45,8 @@ export function ChatBox({ agentId, title }: { agentId: Id; title?: string }) {
   const status = world.statuses[agentId];
   const ended = status !== undefined && ENDED_STATES.has(status.state);
 
-  // The history before this page's stream (after a reload, a long absence).
+  // The history before this page's stream: after a reload, and after every snapshot catch-up
+  // (the messages sent between the two never came on the stream; TECHNOLOGY §6.3).
   useEffect(() => {
     let cancelled = false;
     void api
@@ -56,7 +58,7 @@ export function ChatBox({ agentId, title }: { agentId: Id; title?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [api, agentId, addMessages]);
+  }, [api, agentId, addMessages, snapshots]);
 
   const lines: Line[] = [
     ...messages.map((m): Line => ({ kind: 'in', at: m.at, key: `m-${m.messageId}`, message: m })),
