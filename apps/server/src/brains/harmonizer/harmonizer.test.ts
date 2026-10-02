@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Id, Proposal } from '@galactic/protocol';
 import { EARTH_ID } from '../../domain/catalogue.js';
-import { brainDefinition, brainHarness, type BrainHarness } from '../testing/index.js';
+import { brainHarness, type BrainHarness } from '../testing/index.js';
+import { waykeeperDefinition } from '../waykeeper/index.js';
 import {
   findRelated,
   harmonizerBrain,
@@ -40,7 +41,8 @@ function setup(deps: Partial<HarmonizerDeps> = {}) {
   const definition = harmonizerBrain({
     projectsRoot: root,
     startWaykeeper: async ({ projectId, supervisorId }) => {
-      const wk = await h.startBrain(brainDefinition('waykeeper'), {
+      // The real Waykeeper brain (P2-10), as `index.ts` wires it.
+      const wk = await h.startBrain(waykeeperDefinition(), {
         runtime: 'fake',
         projectId,
         supervisorId,

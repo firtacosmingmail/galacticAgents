@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { loadConfig } from './config/config.js';
 import { buildApp } from './app.js';
 import { harmonizerRuntime, startHarmonizer } from './brains/harmonizer/index.js';
+import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { openDatabase } from './db/database.js';
@@ -117,10 +118,9 @@ const hqRuntime = harmonizerRuntime(process.env['GALACTIC_HARMONIZER'], config.d
 if (hqRuntime && !shuttingDown) {
   try {
     mkdirSync(config.projectsRoot, { recursive: true });
-    const workspaces = new Workspaces({
-      projectsRoot: config.projectsRoot,
-      dataDir: config.dataDir,
-    });
+    const workspaces =
+      composed.workspaces ??
+      new Workspaces({ projectsRoot: config.projectsRoot, dataDir: config.dataDir });
     const hq = await startHarmonizer(composed, {
       runtime: hqRuntime,
       cwd: workspaces.projectsRoot,
@@ -128,6 +128,15 @@ if (hqRuntime && !shuttingDown) {
         projectsRoot: workspaces.projectsRoot,
         checkPath: (path) => workspaces.checkPath(path),
         runtime: hqRuntime,
+        // `spawn_waykeeper` starts a Waykeeper brain (P2-10) for the approved project.
+        startWaykeeper: async ({ projectId, supervisorId, runtime }) => {
+          const runner = await composed.startBrain(waykeeperDefinition(), {
+            runtime,
+            projectId,
+            supervisorId,
+          });
+          return { agentId: runner.agentId };
+        },
       },
     });
     console.log(

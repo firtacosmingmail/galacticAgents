@@ -361,7 +361,23 @@ export class Commands implements DomainCommands {
       if (harmonizer) this.harmonizerSpawning = false;
     }
     if (!result.ok) throw new DomainError('conflict', result.reason);
-    return { value: result.agent, events: this.eventsOf(since, result.agent.id) };
+    // Only what the spawn itself did — the row, its body, the session — never what the new agent
+    // did on its own since: a brain drops a tool call's events as its own, so a Steward that
+    // finished before the spawn call returned would never wake its supervisor (wave-4 review).
+    const created = new Set(['agent.created', 'agent.spawned', 'body.created']);
+    const events = this.log
+      .eventsSince(since, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter(
+        (e) =>
+          created.has(e.type) &&
+          (e.type === 'agent.created'
+            ? e.agent.id === result.agent.id
+            : e.type === 'body.created'
+              ? e.body.id === result.agent.bodyId
+              : e.type === 'agent.spawned' && e.agentId === result.agent.id),
+      );
+    return { value: result.agent, events };
   }
 
   updateAgent(agentId: Id, changes: AgentPlacement) {

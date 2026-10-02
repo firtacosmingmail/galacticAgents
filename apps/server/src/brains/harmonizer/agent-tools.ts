@@ -1,13 +1,15 @@
 import type { Agent, Id, Question, StatusRecord } from '@galactic/protocol';
-import { DomainError, must } from '../../domain/errors.js';
-import type { BrainQueries, BrainTool, BrainToolContext } from '../definition.js';
-import { asInput, int, isLiving, S, str } from './input.js';
+import { must } from '../../domain/errors.js';
+import { commonTools } from '../common-tools.js';
+import type { BrainQueries, BrainTool } from '../definition.js';
+import { asInput, isLiving, S, str } from './input.js';
 
 /**
- * The supervisor tools both brains have (P2-08). P2-10 builds the shared module
- * `brains/common-tools.ts` with the same names in parallel; these are the Harmonizer's versions,
- * to be consolidated at merge (see `docs/tasks/notes/P2-08-harmonizer.md`). Status is read, never
- * requested from the agent (SPEC §2.5).
+ * The Harmonizer's own supervisor tools (P2-08). The tools both brains share — stop, pause and
+ * resume an agent, its status, the supervised agents, answering a clarification — come from
+ * `brains/common-tools.ts` (P2-10); only `report_status` differs: the Harmonizer has no
+ * supervisor to report to, so its `report_status` reads the status of the system for the user.
+ * Status is read, never requested from the agent (SPEC §2.5).
  */
 
 /** One agent as a tool result shows it. */
@@ -36,112 +38,6 @@ function questionLine(q: Question) {
     version: q.version,
   };
 }
-
-const agentControl = (
-  name: 'stop_agent' | 'pause_agent' | 'resume_agent',
-  verb: string,
-  call: (ctx: BrainToolContext, agentId: Id) => Promise<unknown>,
-): BrainTool => ({
-  name,
-  description: `${verb} an agent (a Waykeeper or a Steward) by id. Never yourself.`,
-  inputSchema: S.obj(
-    { agentId: S.str('The agent to act on.'), reason: S.str('Why, for the log and the user.') },
-    ['agentId'],
-  ),
-  async handler(raw, ctx) {
-    const input = asInput(raw);
-    const agentId = str(input, 'agentId');
-    must(ctx.queries.agent(agentId), 'agent', agentId);
-    if (agentId === ctx.brainId) {
-      throw new DomainError('invalid', `you cannot ${verb.toLowerCase()} yourself`);
-    }
-    await call(ctx, agentId);
-    return agentLine(ctx.queries.agent(agentId)!, ctx.queries.status(agentId));
-  },
-});
-
-export const stopAgent = agentControl('stop_agent', 'Stop', (ctx, id) =>
-  ctx.commands.stopAgent(id, ctx.actor),
-);
-export const pauseAgent = agentControl('pause_agent', 'Pause', (ctx, id) =>
-  ctx.commands.pauseAgent(id, ctx.actor),
-);
-export const resumeAgent = agentControl('resume_agent', 'Resume', (ctx, id) =>
-  ctx.commands.resumeAgent(id, ctx.actor),
-);
-
-export const getAgentStatus: BrainTool = {
-  name: 'get_agent_status',
-  description:
-    'Reads one agent’s status (state, activity, progress, the question it waits on) without ' +
-    'interrupting it.',
-  inputSchema: S.obj({ agentId: S.str('The agent.') }, ['agentId']),
-  async handler(raw, ctx) {
-    const agentId = str(asInput(raw), 'agentId');
-    const agent = must(ctx.queries.agent(agentId), 'agent', agentId);
-    const status = ctx.queries.status(agentId);
-    const question = status?.pendingQuestionId
-      ? ctx.queries.question(status.pendingQuestionId)
-      : undefined;
-    const task = agent.taskId ? ctx.queries.task(agent.taskId) : undefined;
-    return {
-      ...agentLine(agent, status),
-      ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
-      ...(status ? { startedAt: status.startedAt, lastEventAt: status.lastEventAt } : {}),
-      ...(status?.caps ? { caps: status.caps } : {}),
-      ...(task ? { task: { id: task.id, description: task.description, state: task.state } } : {}),
-      ...(question ? { question: questionLine(question) } : {}),
-    };
-  },
-};
-
-export const listSupervisedAgents: BrainTool = {
-  name: 'list_supervised_agents',
-  description:
-    'Lists the agents you supervise directly (Waykeepers, asteroid Stewards) with their status.',
-  inputSchema: S.obj({}),
-  async handler(_raw, ctx) {
-    return ctx.queries
-      .supervisedAgents(ctx.brainId)
-      .map(({ agent, status }) => agentLine(agent, status));
-  },
-};
-
-export const answerQuestion: BrainTool = {
-  name: 'answer_question',
-  description:
-    'Answers a clarification question you hold, when the context already contains the answer. ' +
-    'Logged with you as the answerer and visible to the user. Permission questions are refused.',
-  inputSchema: S.obj(
-    {
-      questionId: S.str('The question.'),
-      answer: S.str('The answer.'),
-      version: { type: 'integer', description: 'The version you saw (from the state block).' },
-    },
-    ['questionId', 'answer'],
-  ),
-  async handler(raw, ctx) {
-    const input = asInput(raw);
-    const questionId = str(input, 'questionId');
-    const answer = str(input, 'answer');
-    const version = int(input, 'version');
-    const question = must(ctx.queries.question(questionId), 'question', questionId);
-    if (question.kind === 'permission') {
-      // Decision 7: the policy table or the user decides permissions, never an LLM.
-      throw new DomainError(
-        'invalid',
-        'permission questions are decided by the project’s policy or the user, never by an agent',
-      );
-    }
-    const { value } = await ctx.commands.answerQuestion({
-      questionId,
-      answer,
-      by: ctx.actor,
-      ...(version !== undefined ? { version } : {}),
-    });
-    return { questionId: value.id, status: value.status, answeredBy: 'you' };
-  },
-};
 
 /** What `report_status` says about the whole system, a project, a task or an agent. */
 export function statusReport(queries: BrainQueries, brainId: Id, input: Record<string, unknown>) {
@@ -245,12 +141,8 @@ export const reportStatus: BrainTool = {
   },
 };
 
+/** The shared supervisor tools, with the Harmonizer's own `report_status`. */
 export const SUPERVISOR_TOOLS: BrainTool[] = [
-  stopAgent,
-  pauseAgent,
-  resumeAgent,
-  getAgentStatus,
-  listSupervisedAgents,
-  answerQuestion,
+  ...commonTools().filter((t) => t.name !== 'report_status'),
   reportStatus,
 ];

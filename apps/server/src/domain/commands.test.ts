@@ -4,7 +4,8 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { concernedSupervisors } from './cascade.js';
-import { createAgent } from './agents.js';
+import { createAgent, recordSpawned } from './agents.js';
+import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { Commands } from './commands.js';
 import { DomainError } from './errors.js';
 import { EventLog } from './event-log.js';
@@ -688,5 +689,41 @@ describe('Commands.control result (wave-2 review)', () => {
       'agent.paused',
     ]);
     expect(events.some((e) => 'target' in e && e.target.id === other)).toBe(false);
+  });
+});
+
+describe('Commands.spawnAgent result (wave-4 review)', () => {
+  it('carries only what the spawn did, never what the new agent did before it returned', async () => {
+    const log = new EventLog(openDatabase(':memory:'));
+    const agents = {
+      spawn: (req: SpawnRequest): Promise<SpawnResult> => {
+        const agent = log.runCommand((ctx) =>
+          createAgent(ctx, {
+            role: req.role,
+            runtime: req.runtime,
+            caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+            ...(req.bodyId ? { bodyId: req.bodyId } : {}),
+          }),
+        ).value;
+        log.runCommand((ctx) => recordSpawned(ctx, agent, 's-1'));
+        // A fast agent: done before the spawn call has returned to its caller.
+        log.runCommand(({ emit }) => emit({ type: 'agent.finished', agentId: agent.id }));
+        return Promise.resolve({ ok: true, agent });
+      },
+      stop: () => Promise.resolve(),
+      pause: () => Promise.resolve(),
+      resumeAgent: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      hasQuestion: () => false,
+      liveAgents: () => [],
+    };
+    const commands = new Commands({ log, agents });
+    const { events } = await commands.spawnAgent({
+      role: 'harmonizer',
+      runtime: 'fake',
+      prompt: 'x',
+      cwd: '/hq',
+    });
+    expect(events.map((e) => e.type)).toEqual(['agent.created', 'agent.spawned']);
   });
 });

@@ -85,17 +85,17 @@ const task = (id: Id): Task => h.log.tables.tasks.get(id)!;
 const base = (dir: string) => git(dir, 'symbolic-ref', '--short', 'HEAD');
 
 /**
- * A Steward scenario: after a beat (a model takes longer than its spawn), `work(task)` runs in the
- * Steward's task, then the Steward finishes. Registered under `name`; a Steward picks it with a
+ * A Steward scenario: `work(task)` runs in the Steward's task (at once unless `delayMs`), then the
+ * Steward finishes — even before its spawn call returns, its supervisor hears it (wave-4 review). Registered under `name`; a Steward picks it with a
  * prompt that starts `scenario:<name>`.
  */
-function steward(name: string, work: (task: Task) => void, pick: () => Task): void {
+function steward(name: string, work: (task: Task) => void, pick: () => Task, delayMs = 0): void {
   scenarios[name] = {
     steps: [
       {
         kind: 'script',
         run: async () => {
-          await sleep(15);
+          if (delayMs > 0) await sleep(delayMs);
           work(pick());
         },
       },
@@ -200,10 +200,12 @@ describe('Waykeeper brain (P2-10)', () => {
       (t) => commitFile(t.worktreePath!, 'a.txt', 'a\n', 'task A'),
       () => task(plan[0]!),
     );
+    // Still running when the Waykeeper tries a second Steward on its task (the conflict below).
     steward(
       'write-b',
       (t) => commitFile(t.worktreePath!, 'b.txt', 'b\n', 'task B'),
       () => task(plan[1]!),
+      50,
     );
     const { hq, wk } = await startWaykeeper(project, (s) =>
       s
