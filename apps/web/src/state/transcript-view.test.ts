@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { TranscriptChunk } from '@galactic/protocol';
 import { mergeChunks } from './transcript-view.js';
-import { useAppStore } from './store.js';
+import { MAX_TRANSCRIPT, useAppStore } from './store.js';
 
 const c = (seq: number): TranscriptChunk => ({
   agentId: 'a-1',
@@ -39,5 +39,27 @@ describe('transcript view slice (P25-05)', () => {
     });
     useAppStore.getState().reset();
     expect(useAppStore.getState().transcriptViews).toEqual({});
+  });
+
+  it('never trims paged-back history with the live cap; a newest page re-arms the cap', () => {
+    const range = (from: number, n: number) => Array.from({ length: n }, (_, i) => c(from + i));
+    const held = () => seqs(useAppStore.getState().transcripts['a-1']!);
+    const s = useAppStore.getState();
+    s.setTranscriptView('a-1', { status: 'ready', hasMore: true });
+    s.addTranscriptPage('a-1', range(1_001, 100), 'newest');
+    s.apply({ type: 'transcript', agentId: 'a-1', chunks: range(1_101, MAX_TRANSCRIPT - 100) });
+    expect(held()).toHaveLength(MAX_TRANSCRIPT);
+    // Scrolled back one page: over the cap, and a live chunk keeps it.
+    s.addTranscriptPage('a-1', range(901, 100), 'older');
+    expect(useAppStore.getState().transcriptViews['a-1']?.pagedBack).toBe(true);
+    s.apply({ type: 'transcript', agentId: 'a-1', chunks: [c(3_001)] });
+    expect(held()[0]).toBe(901);
+    expect(held()).toHaveLength(MAX_TRANSCRIPT + 101);
+    // The view opened again (its newest page): live overflow drops the oldest as before.
+    s.addTranscriptPage('a-1', range(2_902, 100), 'newest');
+    expect(useAppStore.getState().transcriptViews['a-1']?.pagedBack).toBe(false);
+    s.apply({ type: 'transcript', agentId: 'a-1', chunks: range(3_002, MAX_TRANSCRIPT) });
+    expect(held()).toHaveLength(MAX_TRANSCRIPT);
+    expect(held().at(-1)).toBe(3_001 + MAX_TRANSCRIPT);
   });
 });

@@ -14,6 +14,12 @@ export interface TranscriptView {
   hasMore: boolean;
   /** An older page is being read (scrolling back). */
   loadingOlder: boolean;
+  /**
+   * Older pages were read by scrolling back (since the last newest page). While set, the store's
+   * per-agent cap (`MAX_TRANSCRIPT`) does not trim the chunks: the oldest ones are history the
+   * user asked for, and trimming them would undo the scroll back.
+   */
+  pagedBack?: boolean | undefined;
   error?: string | undefined;
 }
 
@@ -63,7 +69,23 @@ export function createTranscriptViewSlice(set: Set): TranscriptViewSlice {
       set((s) => {
         const held = s.transcripts[agentId] ?? [];
         const merged = mergeChunks(held, chunks, mode);
-        return merged === held ? {} : { transcripts: { ...s.transcripts, [agentId]: merged } };
+        // A newest page starts the view over (older held chunks are dropped); a non-empty older
+        // page extends it back.
+        const view = s.transcriptViews[agentId];
+        const was = view?.pagedBack ?? false;
+        const pagedBack = mode === 'newest' ? false : was || chunks.length > 0;
+        const views =
+          was === pagedBack
+            ? {}
+            : {
+                transcriptViews: {
+                  ...s.transcriptViews,
+                  [agentId]: { ...(view ?? NEW_VIEW), pagedBack },
+                },
+              };
+        return merged === held
+          ? views
+          : { ...views, transcripts: { ...s.transcripts, [agentId]: merged } };
       }),
   };
 }
