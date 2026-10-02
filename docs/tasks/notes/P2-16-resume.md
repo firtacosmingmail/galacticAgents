@@ -66,12 +66,18 @@ After the cut, the turn that began there ran the brain's tools. Up to the brain'
 - `apps/server/src/runtime/compose.ts`: `defineBrains`, `runnerOf`, `announceRecovery`, `recoveryNote`; `startBrain` keeps the runner and re-sends missed reports; the report history.
 - `lib.ts`: not touched. Nothing in `apps/web` or `apps/server/src/http`.
 
+## Review fixes (2026-10-02)
+
+- A resume that fails after the handle came back (the SDK reports a lost session only when the CLI exits) is a failed resume: a brain falls back to its fresh session on the same row, a plain agent that failed before doing anything stays interrupted. The folded messages are marked delivered when the first turn ends. The fake adapter's `resumeFails` simulates it.
+- `keepHarmonizer`: a Harmonizer that ends (other than by the user's stop) is replaced.
+- No second Steward per task / Waykeeper per project through a reopen; agents recovery is about to reopen are reserved for the spawn guards and question routing.
+- An ended Harmonizer's open `ask_user` / `ask_confirmation` questions are **withdrawn** by the new Harmonizer's start notes (not re-owned: the answer wakes only the asker and `finished_work` accepts only its own confirmation), and it is told what was asked.
+- An interrupted holder keeps the tool-asked questions it holds; recovery re-routes them for an agent it does not bring back.
+- Requeue: other agents' lifecycle, question events and proposal decisions are kept in the brain's own turn unless in one of its own commands; `agent.spawned.foldedUpTo` is the reopen's watermark (no double fold after a second crash).
+
 ## Deferred / known limits
 
-- If the old Harmonizer cannot be resumed and a new one replaces it, the old one's open `ask_user` / `ask_confirmation` questions stay open, and the new Harmonizer does not hear their answers. Closure questions are the exception: they are withdrawn and asked again.
-- Requeue limits:
-  - An event without an actor, committed by someone else during the brain's own last turn, is dropped. The seed shows its effect.
-  - After a second crash, events committed between an earlier resume's cut and its reopen (recovery noise) can be folded twice.
+- Requeue: an actor-less event the brain's tools never produce but that is not in the kept list (say, a `task.created` by another brain's command during this brain's turn) is still dropped; the seed shows its effect.
 - The recovery note is a turn of its own, after the Harmonizer's resume turn. It is not folded into that turn.
 - A paused Steward's turn end (an interrupted turn) counts as an owed report for `owesReport`. A pause the user made does not survive a restart (unchanged). Only promotion cards pause again.
 - The fake adapter tracks only first-turn steps for resume. Message turns of a fake session are not resumed mid-turn.
