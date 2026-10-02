@@ -2,20 +2,19 @@ import {
   proposalPromotion,
   type Body,
   type BodyChoice,
-  type BodyRequest,
   type Host,
   type Id,
   type Project,
   type PromotionOutcome,
-  type PromotionRequest,
   type Proposal,
   type Task,
 } from '@galactic/protocol';
 import { moveAgents, moveHost } from './bodies.js';
-import { chooseBody, isFree, type ChooseOptions, type Reader } from './catalogue.js';
+import { isFree, type ChooseOptions, type Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { handOverTask, type HandOverOptions } from './handover.js';
+import { promotedParent, roomFor } from './parking.js';
 import { createProject, updateProject } from './projects.js';
 import { FINISHED_WORK } from './states.js';
 
@@ -140,48 +139,19 @@ export function usableBody(
   return body && body.kind === kind && isFree(body) ? body : undefined;
 }
 
-/**
- * The project a Waykeeper's moon becomes a sub-project of (SPEC §3.2): the requesting project —
- * unless the user put the card on a moon of another planet, which makes it a project of its own.
- */
-export function promotedParent(ctx: Reader, p: Proposal, req: PromotionRequest): Id | undefined {
-  if (req.target.kind !== 'task' || !req.fromProjectId || p.kind !== 'moon') return undefined;
-  const from = ctx.tables.projects.get(req.fromProjectId);
-  if (!from) return undefined;
-  const named = p.proposedBody.bodyId ? ctx.tables.bodies.get(p.proposedBody.bodyId) : undefined;
-  return !named || named.parentId === from.bodyId ? from.id : undefined;
-}
-
-/** The catalogue request of a promotion that needs a new body (none for a move into a project). */
-export function promotionBodyRequest(ctx: Reader, p: Proposal): BodyRequest | undefined {
-  const req = proposalPromotion(p);
-  if (!req || req.toProjectId || p.kind === 'asteroid') return undefined;
-  if (p.kind === 'planet') return { kind: 'planet' };
-  const parentProjectId = promotedParent(ctx, p, req);
-  return parentProjectId ? { kind: 'moon', parentProjectId } : { kind: 'moon' };
-}
+export { promotedParent, promotionBodyRequest } from './parking.js';
 
 /**
- * The body a promotion gets now: the one the card names while it is free, of the card's kind and
- * (for a sub-project) a moon of the parent's planet; else the catalogue's choice. P2-09's
- * `roomFor` does the same for the Harmonizer's cards (and parks them when nothing is free).
+ * The body a promotion gets now: P2-09's `roomFor`, the one rule for every card — the body the
+ * card names while it is free, of the card's kind and (for a sub-project) a moon of the parent's
+ * planet; else the catalogue's choice.
  */
 export function promotionRoom(
   ctx: Reader,
   p: Proposal,
   opts: ChooseOptions = {},
 ): BodyChoice | undefined {
-  const request = promotionBodyRequest(ctx, p);
-  if (!request) return undefined;
-  const named = usableBody(ctx, p.proposedBody.bodyId, request.kind);
-  if (named) {
-    const parentPlanet =
-      'parentProjectId' in request && request.parentProjectId
-        ? ctx.tables.projects.get(request.parentProjectId)?.bodyId
-        : undefined;
-    if (!parentPlanet || named.parentId === parentPlanet) return { ok: true, body: named };
-  }
-  return chooseBody(ctx, request, opts);
+  return roomFor(ctx, p, opts);
 }
 
 /**

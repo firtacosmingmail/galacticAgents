@@ -222,7 +222,7 @@ export function decideProposal(
   switch (decision.decision) {
     case 'approve': {
       // A work card needs its body now (P2-09): without one it is parked instead (decision 16).
-      const request = plan ? undefined : bodyRequestOf(current);
+      const request = plan ? undefined : bodyRequestOf(ctx, current);
       const room = request ? roomFor(ctx, current, opts) : undefined;
       if (request && room && !room.ok) {
         if (current.state === 'parked') {

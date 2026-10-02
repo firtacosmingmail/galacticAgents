@@ -11,6 +11,7 @@ import type { ProposalOptions } from './approval.js';
 import { freeBody } from './bodies.js';
 import { DomainError } from './errors.js';
 import { archiveProject, closeProject, createProject } from './projects.js';
+import { moveProject } from './promotion.js';
 import { createProposal, decideProposal, proposePlan } from './proposals.js';
 import { archiveTask, closeTask, createTask } from './tasks.js';
 
@@ -496,5 +497,132 @@ describe('proposal flow (P2-09)', () => {
       'task.state_changed',
     ]);
     expect(f.tables.projects.all()).toHaveLength(7);
+  });
+
+  it('un-parking skips a card it cannot place instead of failing the freeing command (review)', () => {
+    const f = flow();
+    const main = f.run((ctx) =>
+      createProject(ctx, { name: 'Main', workspace: '/w/main', kind: 'planet' }, {}),
+    ).value;
+    const moons = f.tables.bodies
+      .all()
+      .filter((b) => b.kind === 'moon' && b.parentId === main.bodyId);
+    const independents = moons.map(
+      (m, i) =>
+        f.run((ctx) =>
+          createProject(
+            ctx,
+            { name: `Ind${i}`, workspace: `/w/i${i}`, kind: 'moon', bodyId: m.id },
+            {},
+          ),
+        ).value,
+    );
+    const { value: card } = f.propose(
+      newProject('NewSub', {
+        kind: 'moon',
+        proposedBody: { kind: 'moon', name: 'NewSub' },
+        meta: { request: { type: 'new_project', name: 'NewSub', parentProjectId: main.id } },
+      }),
+    );
+    expect(card.state).toBe('parked');
+    // Its parent leaves the planet: the catalogue can no longer place a moon of "its planet".
+    const freeMoon = f.tables.bodies
+      .all()
+      .find(
+        (b) => b.kind === 'moon' && !b.host && b.parentId !== main.bodyId && !b.meta?.reserved,
+      )!;
+    f.run((ctx) => moveProject(ctx, main.id, freeMoon.id));
+    // Unrelated commands that free a body still commit; the card stays parked.
+    const t = f.run((ctx) =>
+      createTask(ctx, { description: 'x', meta: { workspace: '/w/x' } }),
+    ).value;
+    f.run((ctx) => closeTask(ctx, t.id, USER));
+    expect(f.run((ctx) => freeBody(ctx, t.bodyId)).types).toContain('body.freed');
+    f.run((ctx) => closeProject(ctx, independents[0]!.id, USER));
+    expect(f.run((ctx) => archiveProject(ctx, independents[0]!.id, USER)).types).toContain(
+      'body.freed',
+    );
+    expect(f.card(card.id).state).toBe('parked');
+  });
+
+  it('parks a Waykeeper promotion card without a free moon, un-parks it, and the approval takes the body', () => {
+    const f = flow();
+    const main = f.run((ctx) =>
+      createProject(ctx, { name: 'Main', workspace: '/w/main', kind: 'planet' }, {}),
+    ).value;
+    const moons = f.tables.bodies
+      .all()
+      .filter((b) => b.kind === 'moon' && b.parentId === main.bodyId);
+    const subs = moons.map(
+      (m, i) =>
+        f.run((ctx) =>
+          createProject(
+            ctx,
+            {
+              name: `Sub${i}`,
+              workspace: `/w/s${i}`,
+              kind: 'moon',
+              bodyId: m.id,
+              parentProjectId: main.id,
+            },
+            {},
+          ),
+        ).value,
+    );
+    const task = f.run((ctx) => createTask(ctx, { description: 'grow', projectId: main.id })).value;
+    const { value: card } = f.propose({
+      requestText: 'Promote',
+      kind: 'moon',
+      proposedBody: { kind: 'moon', name: 'a free moon' },
+      workspace: '/w/main',
+      rationale: 'x',
+      meta: { promotion: { taskId: task.id, fromProjectId: main.id, requestedBy: 'a-wk' } },
+    });
+    // No free moon of Main's planet: parked by the server, offering a task on the planet.
+    expect(card.state).toBe('parked');
+    expect(proposalParking(card)).toMatchObject({
+      waitingFor: 'moon',
+      offers: ['task_on_planet', 'close_early'],
+    });
+    // A sub-project is archived: its moon frees and the card is pending again, on that moon.
+    f.run((ctx) => closeProject(ctx, subs[0]!.id, USER));
+    const freed = f.run((ctx) => archiveProject(ctx, subs[0]!.id, USER));
+    expect(freed.types).toContain('proposal.unparked');
+    expect(f.card(card.id)).toMatchObject({
+      state: 'pending',
+      proposedBody: { bodyId: moons[0]!.id },
+    });
+    // The approval creates the promoted project on it, in its own transaction (the body is the
+    // card's from then on).
+    const approved = f.decide(card.id, { decision: 'approve' });
+    expect(approved.types).toEqual(['proposal.approved', 'project.created', 'body.assigned']);
+    const promoted = f.tables.projects.all().find((p) => p.meta?.['proposalId'] === card.id)!;
+    expect(promoted).toMatchObject({ bodyId: moons[0]!.id, parentProjectId: main.id });
+    expect(f.tables.bodies.get(moons[0]!.id)!.host).toEqual({ kind: 'project', id: promoted.id });
+  });
+
+  it('moves a project target to its new body in the approval', () => {
+    const f = flow();
+    const moonProject = f.run((ctx) =>
+      createProject(ctx, { name: 'Little', workspace: '/w/little', kind: 'moon' }, {}),
+    ).value;
+    const { value: card } = f.propose({
+      requestText: 'promote',
+      kind: 'planet',
+      proposedBody: { kind: 'planet', name: 'Little', bodyId: 'b-jupiter' },
+      workspace: '/w/little',
+      rationale: 'x',
+      meta: {
+        request: {
+          type: 'promotion',
+          name: 'Little',
+          target: { kind: 'project', id: moonProject.id },
+          fromBodyId: moonProject.bodyId,
+        },
+      },
+    });
+    const approved = f.decide(card.id, { decision: 'approve' });
+    expect(approved.types).toContain('body.moved');
+    expect(f.tables.projects.get(moonProject.id)!.bodyId).toBe('b-jupiter');
   });
 });

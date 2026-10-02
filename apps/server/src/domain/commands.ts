@@ -142,6 +142,8 @@ export class Commands implements DomainCommands {
     this.autoApproveRemote = opts.autoApproveRemote ?? false;
     this.proposalOptions = {
       ...this.choose,
+      // A promotion moved in the approval hands its agents over to living supervisors (P2-12).
+      handOver: { isLiving: (id: Id) => this.questions.isLiving(id) },
       ...(opts.checkWorkspace ? { checkWorkspace: opts.checkWorkspace } : {}),
     };
   }

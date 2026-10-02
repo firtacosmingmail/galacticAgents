@@ -1,8 +1,16 @@
-import type { Body, Project, Proposal, Task } from '@galactic/protocol';
+import {
+  proposalPromotion,
+  type Body,
+  type Project,
+  type Proposal,
+  type Task,
+} from '@galactic/protocol';
 import type { ChooseOptions } from './catalogue.js';
 import type { CommandContext } from './event-log.js';
+import type { HandOverOptions } from './handover.js';
 import { requestOf } from './parking.js';
 import { createProject } from './projects.js';
+import { createPromotedProject, moveProject } from './promotion.js';
 import { createTask } from './tasks.js';
 
 /**
@@ -22,23 +30,40 @@ export interface ProposalOptions extends ChooseOptions {
    * directory, the projects root or the data directory (decision 27). Default: unchecked.
    */
   checkWorkspace?: (path: string) => string;
+  /** Hand-overs of a promotion moved in the approval (P2-12): prefer a living supervisor. */
+  handOver?: HandOverOptions;
 }
 
 export type CarriedOut =
-  { kind: 'project'; project: Project } | { kind: 'task'; task: Task } | { kind: 'nothing' };
+  | { kind: 'project'; project: Project }
+  | { kind: 'task'; task: Task }
+  | { kind: 'moved'; project: Project }
+  | { kind: 'nothing' };
 
 /**
  * Creates what the approved card `p` asks for. `body` is the free planet or moon a new project
  * gets (from `roomFor`); `workspace` the card's workspace, already checked. A card without
- * `meta.request` and a promotion (P2-12 moves the work) create nothing here.
+ * `meta.request` creates nothing here. A promotion (either card shape) takes its body here, so
+ * the body is the approval's and nothing can take it before the flow runs: a task's new project
+ * is created on it (`createPromotedProject`), a project target moves to it (`moveProject`); the
+ * rest — the Waykeeper, the task's move, the Stewards — is `brains/promotion.ts`'s (P2-12).
  */
 export function carryOut(
   ctx: CommandContext,
   p: Proposal,
   body: Body | undefined,
   workspace: string,
-  opts: ChooseOptions = {},
+  opts: ProposalOptions = {},
 ): CarriedOut {
+  const promotion = proposalPromotion(p);
+  if (promotion) {
+    if (!body || promotion.toProjectId) return { kind: 'nothing' };
+    if (promotion.target.kind === 'task') {
+      return { kind: 'project', project: createPromotedProject(ctx, { ...p, workspace }, body) };
+    }
+    moveProject(ctx, promotion.target.id, body.id, opts.handOver ?? {});
+    return { kind: 'moved', project: ctx.tables.projects.get(promotion.target.id)! };
+  }
   const request = requestOf(p);
   if (!request || request.type === 'promotion') return { kind: 'nothing' };
   const proposalId = p.id;
