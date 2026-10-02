@@ -316,7 +316,10 @@ describe('Waykeeper brain (P2-10)', () => {
         })
         .once(/was approved/, async (t) => {
           await t.call('spawn_steward', { taskId: plan[0], instructions: 'scenario:edit-a' });
-          await t.call('spawn_steward', { taskId: plan[1], instructions: 'scenario:edit-b' });
+          await t.call('spawn_steward', {
+            taskId: plan[1],
+            instructions: 'scenario:edit-b\nEdit the shared file as B.',
+          });
         })
         .on(/finished/, mergeAndClose),
     );
@@ -340,6 +343,12 @@ describe('Waykeeper brain (P2-10)', () => {
     expect(stewardsOfB).toHaveLength(2);
     expect(stewardsOfB.every((a) => a.supervisorId === wk.agentId)).toBe(true);
     expect(stewardsOfB.map((a) => a.id)).toContain(sentBack!['stewardId']);
+    // The new Steward is told the send-back first, then the task and its original instructions.
+    const respawned = h.log.tables.agents.get(sentBack!['stewardId'] as Id)!;
+    const prompt = respawned.meta?.['prompt'] as string;
+    expect(prompt.startsWith('scenario:resolve')).toBe(true);
+    expect(prompt).toContain(`Task ${plan[1]} of project "CSV tool" (${project.id}): edit b`);
+    expect(prompt).toContain('Edit the shared file as B.');
     // No question reached the user; the merge went in after the resolution.
     expect(h.log.tables.questions.all()).toEqual([]);
     expect(plan.map((id) => task(id).state)).toEqual(['completed', 'completed']);

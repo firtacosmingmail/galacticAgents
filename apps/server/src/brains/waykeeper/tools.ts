@@ -288,6 +288,11 @@ export const spawnStewardTool: BrainTool = {
       supervisorId: ctx.brainId,
       prompt: stewardPrompt(task, project, where, instructions),
     });
+    // Kept for a Steward sent back after it ended (decision 30): it gets them again.
+    const fresh = ctx.queries.task(task.id)!;
+    await ctx.commands.updateTask(task.id, {
+      meta: { ...fresh.meta, stewardInstructions: instructions },
+    });
     return {
       stewardId: value.id,
       taskId: task.id,
@@ -487,12 +492,23 @@ async function sendBack(
     ctx.send(live.id, text);
     return { stewardId: live.id, how: 'messaged' };
   }
+  // A new Steward knows nothing of the task: the send-back first (its note leads), then the task
+  // and the instructions its first Steward was given.
+  const instructions = task.meta?.['stewardInstructions'];
+  const brief = stewardPrompt(
+    task,
+    projectOf(ctx),
+    { cwd: conflict.worktreePath, branch: conflict.sourceBranch, serialised: false },
+    typeof instructions === 'string' && instructions.trim() !== ''
+      ? instructions
+      : '(No instructions were recorded for this task; work from its description.)',
+  );
   const { value } = await ctx.commands.spawnAgent({
     role: 'steward',
     runtime: runtimeOf(ctx),
     taskId: task.id,
     supervisorId: ctx.brainId,
-    prompt: text,
+    prompt: `${text}\n\n---\nThe task, as its first Steward was given it:\n\n${brief}`,
   });
   return { stewardId: value.id, how: 'respawned' };
 }
