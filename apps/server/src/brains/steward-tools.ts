@@ -12,7 +12,29 @@ import type { BrainTool } from './definition.js';
  * The message is queued, never an interrupt: supervision without interruption (SPEC §2.5). A
  * Steward that is still working gets it when its turn ends. Only the caller's own Stewards
  * (direct reports) can be told, and only while they run.
+ *
+ * A report → `tell_steward` → report loop is bounded here, not only by the Steward's tool-call
+ * and wall-clock caps (a text-only ping-pong makes no tool calls): at most
+ * `MAX_TELLS_PER_HOUR` messages to one Steward in any sliding hour, then the tool is refused and
+ * the supervisor escalates or closes instead (decision 18; kept in memory, a restart forgets it).
  */
+export const MAX_TELLS_PER_HOUR = 20;
+const HOUR_MS = 60 * 60 * 1000;
+const told = new Map<string, number[]>();
+
+/** Counts one message to `agentId` now, or refuses when the hour's quota is used. */
+export function noteTell(agentId: string, now: number = Date.now()): void {
+  const recent = (told.get(agentId) ?? []).filter((at) => at > now - HOUR_MS);
+  if (recent.length >= MAX_TELLS_PER_HOUR) {
+    told.set(agentId, recent);
+    throw new DomainError(
+      'conflict',
+      `Steward ${agentId} was told ${recent.length} times in the last hour (limit ${MAX_TELLS_PER_HOUR}): ` +
+        'stop the back-and-forth — escalate what it needs, or close the task',
+    );
+  }
+  told.set(agentId, [...recent, now]);
+}
 export const tellStewardTool: BrainTool = {
   name: 'tell_steward',
   description:
@@ -51,6 +73,7 @@ export const tellStewardTool: BrainTool = {
         `Steward ${agentId} is ${status?.state ?? 'not running'}: it cannot be told anything`,
       );
     }
+    noteTell(agentId);
     const { messageId } = ctx.send(agentId, text);
     return { agentId, messageId, state: status?.state };
   },
