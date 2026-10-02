@@ -1,4 +1,5 @@
 import { GalacticClient } from './client.js';
+import { conversationSince } from '../state/conversation.js';
 import { useAppStore } from '../state/store.js';
 
 export const TOKEN_KEY = 'galactic.token';
@@ -76,7 +77,12 @@ export function startSession(token: string): () => void {
     token,
     onMessage: (m) => useAppStore.getState().apply(m),
     onStatus: (status, detail) => useAppStore.getState().setStatus(status, detail),
-    transcriptSince: (agentId) => useAppStore.getState().transcripts[agentId]?.at(-1)?.seq ?? 0,
+    // An open chat starts the live transcript where its history page ended (P25-03).
+    transcriptSince: (agentId) =>
+      Math.max(
+        useAppStore.getState().transcripts[agentId]?.at(-1)?.seq ?? 0,
+        conversationSince(agentId),
+      ),
   });
   store.setStatus('connecting');
   useAppStore.setState({

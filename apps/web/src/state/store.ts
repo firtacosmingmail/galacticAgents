@@ -148,6 +148,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                         at: envelope.at,
                         sender: event.sender,
                         text: event.text,
+                        ...(event.turn ? { turn: true as const } : {}),
                       },
                     ]),
                   },

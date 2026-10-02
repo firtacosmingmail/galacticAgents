@@ -2,6 +2,8 @@ import type {
   AnswerBody,
   ControlBody,
   ControlResponse,
+  ConversationQuery,
+  ConversationResponse,
   DecideResponse,
   MessagesResponse,
   ProposalDecisionBody,
@@ -86,6 +88,16 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
       call<DecideResponse>('POST', `/api/proposals/${proposalId}/decide`, decision),
     control: (body: ControlBody) => call<ControlResponse>('POST', '/api/control', body),
     messages: (agentId: string) => call<MessagesResponse>('GET', `/api/agents/${agentId}/messages`),
+    /** The panel's chat history (P25-01), paged by an opaque cursor (P25-03). */
+    conversation: (agentId: string, query: ConversationQuery = {}) => {
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(query)) if (v !== undefined) params.set(k, String(v));
+      const qs = params.toString();
+      return call<ConversationResponse>(
+        'GET',
+        `/api/agents/${encodeURIComponent(agentId)}/conversation${qs ? `?${qs}` : ''}`,
+      );
+    },
   };
 }
 

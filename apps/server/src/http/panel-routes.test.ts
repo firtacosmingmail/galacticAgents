@@ -632,3 +632,29 @@ describe('GET /api/preflight (P25-01)', () => {
     expect((await get(t, '/api/preflight', { authorization: 'Bearer nope' })).status).toBe(401);
   });
 });
+
+describe('GET /api/agents/:id/conversation leaves out turn prompts (P25-03)', () => {
+  it('a brain turn prompt (`message.sent.turn`) is not a conversation line', async () => {
+    const { t, log, message, output } = await historyApp();
+    message('h1', 'build me a thing');
+    log.runCommand((ctx) =>
+      ctx.emit({
+        type: 'message.sent',
+        messageId: 'msg-turn',
+        agentId: 'h1',
+        sender: { type: 'system' },
+        text: 'Since your last turn:\n1. the user said: "build me a thing"',
+        interrupt: false,
+        turn: true,
+      }),
+    );
+    output('h1', 'text', 'On it.');
+    message('h1', 'thanks');
+    const page = ConversationResponse.parse((await get(t, '/api/agents/h1/conversation')).body);
+    expect(page.entries.map((e) => e.text)).toEqual(['build me a thing', 'On it.', 'thanks']);
+    const older = ConversationResponse.parse(
+      (await get(t, `/api/agents/h1/conversation?limit=1&before=${page.entries[2]!.cursor}`)).body,
+    );
+    expect(older.entries.map((e) => e.text)).toEqual(['On it.']);
+  });
+});
