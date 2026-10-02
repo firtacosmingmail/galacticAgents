@@ -23,7 +23,7 @@ import type {
 } from './enums.js';
 import type { AgentEvent, ControlTarget, Event, ProjectChanges, TaskChanges } from './events.js';
 import type { ToolDefinition } from './adapter.js';
-import type { Id } from './primitives.js';
+import type { Id, Meta } from './primitives.js';
 
 // ---------------------------------------------------------------------------
 // Command inputs. Ids and timestamps are assigned by the server, never by the caller.
@@ -40,6 +40,8 @@ export interface CreateProjectInput {
   permissionPolicy?: PermissionPolicy;
   /** Default `approved`: a project is created when its proposal is approved (decision 3). */
   state?: Extract<WorkState, 'proposed' | 'approved'>;
+  /** Stored as the row's `meta` (e.g. the Harmonizer's `proposalId`, P2-08). */
+  meta?: Meta;
 }
 
 export interface CreateTaskInput {
@@ -52,6 +54,8 @@ export interface CreateTaskInput {
   bodyId?: Id;
   /** Default `approved`; a Waykeeper's plan creates its tasks `proposed` until the card is approved. */
   state?: Extract<WorkState, 'proposed' | 'approved'>;
+  /** Stored as the row's `meta` (e.g. the Harmonizer's `proposalId` and a standalone task's workspace, P2-08). */
+  meta?: Meta;
 }
 
 export interface SpawnAgentInput {
@@ -107,6 +111,8 @@ export interface CreateProposalInput {
   proposedBody: ProposedBody;
   workspace: string;
   rationale: string;
+  /** Stored as the row's `meta`: what the card asks for (the Harmonizer's `request`, P2-08). */
+  meta?: Meta;
 }
 
 export type ProposalDecision =

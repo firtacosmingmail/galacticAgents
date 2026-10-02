@@ -116,6 +116,7 @@ export function createProject(
     ...(input.repoPath ? { repoPath: input.repoPath } : {}),
     ...(input.parentProjectId ? { parentProjectId: input.parentProjectId } : {}),
     ...(input.permissionPolicy ? { permissionPolicy: parsePolicy(input.permissionPolicy) } : {}),
+    ...(input.meta ? { meta: input.meta } : {}),
   };
   ctx.tables.projects.insert(project);
   ctx.emit({ type: 'project.created', project });

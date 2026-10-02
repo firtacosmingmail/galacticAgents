@@ -38,6 +38,15 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
         if (q.holder.type === 'agent' && q.holder.id === brainId) return true;
         return tables.agents.get(q.originAgentId)?.supervisorId === brainId;
       }),
+    agents: () => tables.agents.all(),
+    projects: () => tables.projects.all(),
+    tasks: () => tables.tasks.all().sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    task: (id) => tables.tasks.get(id),
+    body: (id) => tables.bodies.get(id),
+    proposal: (id) => tables.proposals.get(id),
+    proposals: () => tables.proposals.all(),
+    question: (id) => tables.questions.get(id),
+    allOpenQuestions: () => tables.questions.all().filter((q) => q.status === 'open'),
   };
   return queries;
 }
