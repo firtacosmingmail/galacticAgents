@@ -330,7 +330,7 @@ describe('question service — orphaned holders', () => {
     await until(() => h.statuses.get(steward.id)?.state === 'finished');
   });
 
-  it('re-routes on every way a holder ends: a shutdown interrupts it too', async () => {
+  it('a shutdown interrupts the Steward before its holder: its question never climbs (P2-16)', async () => {
     const h = await hierarchy();
     const steward = await h.steward();
     const q = await questionOf(h, steward);
@@ -342,14 +342,11 @@ describe('question service — orphaned holders', () => {
           : e.type.startsWith('question.') && 'questionId' in e && e.questionId === q.id,
       )
       .map((e) => e.type);
-    // Agents are interrupted in spawn order: the Harmonizer, then the Waykeeper (its question goes
-    // to the user, the Harmonizer being gone), then the Steward (its question is cancelled and
-    // re-asked after the resume, decision 21) — never left with a dead holder.
-    expect(kinds).toEqual(['question.opened', 'question.reassigned', 'question.cancelled']);
-    expect(allEvents(h).find((e) => e.type === 'question.reassigned')).toMatchObject({
-      to: USER,
-      reason: `holder ${h.waykeeper.id} interrupted`,
-    });
+    // Agents are interrupted deepest first (P2-16): the Steward's question is cancelled (and
+    // re-asked after the resume, decision 21) before its Waykeeper is interrupted, so it never
+    // climbs to the user on the way down — and is never left with a dead holder.
+    expect(kinds).toEqual(['question.opened', 'question.cancelled']);
+    expect(allEvents(h).some((e) => e.type === 'question.reassigned')).toBe(false);
     expect(h.log.tables.questions.get(q.id)?.status).toBe('cancelled');
   });
 });

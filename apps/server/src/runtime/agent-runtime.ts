@@ -107,6 +107,46 @@ export interface AgentRuntimeOptions {
 const TERMINAL = new Set<AgentEvent['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
 type Terminal = 'agent.finished' | 'agent.failed' | 'agent.stopped' | 'agent.interrupted';
 
+/**
+ * How an interrupted agent is reopened (P2-16). A brain passes its definition (`tools`,
+ * `systemPrompt`) and its first turn; its messages stay with its mailbox.
+ */
+export interface ReopenOptions {
+  tools?: ToolDefinition[];
+  systemPrompt?: string;
+  /** The resumed session's first message (default: `RESUME_PROMPT`). */
+  prompt?: string;
+  /**
+   * With it, an agent whose session cannot be resumed (no session ref, a runtime without resume,
+   * a failed resume) gets a fresh session on the same agent row, with this first prompt — a brain
+   * re-seeded from the database. Without it the agent stays interrupted.
+   */
+  freshPrompt?: string;
+  /**
+   * The agent is a brain with a mailbox (P2-06): `send()` only logs its messages from the start,
+   * and the messages it never received are not redelivered raw — its runner folds them into the
+   * first turn.
+   */
+  mailbox?: boolean;
+}
+
+/** A reopen's outcome: `resumed` from the session ref, or a `fresh` session on the same row. */
+export type ReopenResult = SpawnResult & { mode?: 'resumed' | 'fresh' };
+
+/**
+ * Reopens an interrupted brain as a brain (P2-16): through its runner, with its definition. Returns
+ * `undefined` for an agent it has no definition for (it is then resumed as a plain agent).
+ */
+export type BrainResumer = (agent: Agent) => Promise<SpawnResult> | undefined;
+
+/**
+ * The first message of a resumed session (P2-16): the agent continues where it was, instead of
+ * being handed its original task prompt again.
+ */
+export const RESUME_PROMPT =
+  'The server restarted and your session was resumed. Continue where you left off; if you had ' +
+  'already finished, say so in one line.';
+
 export interface RecoveryReport {
   /** Agents reopened from their session refs. */
   resumed: Id[];
@@ -158,6 +198,8 @@ interface Live {
   mailbox: boolean;
   /** The current turn (P2-11): its last text output and whether it was cut short. */
   turn: { text: string | undefined; interrupted: boolean };
+  /** The session was resumed and its first turn has not ended yet (P2-16). */
+  resumedTurn: boolean;
 }
 
 /**
@@ -171,6 +213,8 @@ export interface TurnEnd {
   text: string | undefined;
   interrupted: boolean;
   queued: number;
+  /** The first turn of a resumed session (P2-16): the turn the resume prompt started. */
+  resumed: boolean;
 }
 
 const SYSTEM: Actor = { type: 'system' };
@@ -202,6 +246,7 @@ export class AgentRuntime {
   private readonly questions: QuestionRouting;
   private disposed = false;
   private readonly turnListeners = new Set<(turn: TurnEnd) => void>();
+  private brainResumer: BrainResumer | undefined;
 
   constructor(private readonly opts: AgentRuntimeOptions) {
     this.now = opts.now ?? (() => new Date().toISOString());
@@ -295,24 +340,28 @@ export class AgentRuntime {
   private async resume(
     agent: Agent,
     req: Omit<SpawnRequest, 'role' | 'runtime'>,
+    opts: { fresh?: boolean; mailbox?: boolean } = {},
   ): Promise<SpawnResult> {
     if (this.disposed) throw new Error('runtime disposed');
     if (this.live.has(agent.id)) return { ok: false, reason: `agent ${agent.id} is running` };
     const adapter = this.adapters.get(agent.runtime);
     if (!adapter) return { ok: false, reason: `no adapter for runtime ${agent.runtime}` };
-    if (!adapter.resumeSession || !agent.sessionRef) {
+    const ref = agent.sessionRef;
+    if (!opts.fresh && (!adapter.resumeSession || !ref)) {
       return { ok: false, reason: `runtime ${agent.runtime} cannot resume sessions` };
     }
     const gate = this.caps.canSpawn(this.spawnCheck(agent.role, agent.supervisorId, true));
     if (!gate.ok) return { ok: false, reason: gate.reason };
-    const ref = agent.sessionRef;
     this.ended.delete(agent.id);
     return this.start(
       agent,
       { ...req, role: agent.role, runtime: agent.runtime },
       adapter,
-      (opts) => adapter.resumeSession!(ref, opts),
+      opts.fresh || !ref
+        ? (spawnOpts) => adapter.spawn(spawnOpts)
+        : (spawnOpts) => adapter.resumeSession!(ref, spawnOpts),
       true,
+      { mailbox: opts.mailbox ?? false, resumed: !opts.fresh },
     );
   }
 
@@ -322,6 +371,7 @@ export class AgentRuntime {
     adapter: AgentAdapter,
     open: (opts: SpawnOptions) => Promise<SpawnHandle>,
     resuming: boolean,
+    how: { mailbox?: boolean; resumed?: boolean } = {},
   ): Promise<SpawnResult> {
     const caps = agent.caps;
     // Registered before the adapter runs: whatever it emits before the handle comes back is
@@ -377,8 +427,10 @@ export class AgentRuntime {
       answering: new Set(),
       terminal: undefined,
       spec: req,
-      mailbox: false,
+      // A reopened brain owns its messages from the start (P2-16): nothing slips into the inbox.
+      mailbox: how.mailbox ?? false,
       turn: { text: undefined, interrupted: false },
+      resumedTurn: how.resumed ?? false,
     };
     this.live.set(agent.id, live);
     this.caps.track(agent.id, caps, {
@@ -668,7 +720,11 @@ export class AgentRuntime {
   async shutdown(reason = 'server shutdown'): Promise<Id[]> {
     const interrupted: Id[] = [];
     const stops: { live: Live; sessionId: string }[] = [];
-    for (const live of [...this.live.values()]) {
+    // Stewards first (P2-16): their own questions go before their supervisors' held ones move up.
+    const deepestFirst = [...this.live.values()].sort(
+      (a, b) => this.depth(b.agent.id) - this.depth(a.agent.id),
+    );
+    for (const live of deepestFirst) {
       if (live.terminal) continue;
       const agentId = live.agent.id;
       if (live.capStop) this.failForCap(live);
@@ -713,7 +769,12 @@ export class AgentRuntime {
   async recover(): Promise<RecoveryReport> {
     const report: RecoveryReport = { resumed: [], needAttention: [] };
     const histories = this.histories();
-    for (const record of this.opts.statuses.all()) {
+    // Stewards first, supervisors last (P2-16): an agent's own questions are cancelled before the
+    // questions its supervisor holds are moved up, so nothing climbs the chain for nothing.
+    const deepestFirst = [...this.opts.statuses.all()].sort(
+      (a, b) => this.depth(b.agentId) - this.depth(a.agentId),
+    );
+    for (const record of deepestFirst) {
       if (!LIVE_STATES.has(record.state) || this.live.has(record.agentId)) continue;
       const stoppedBy = histories.get(record.agentId)?.stopRequested;
       this.command((ctx) => {
@@ -739,8 +800,13 @@ export class AgentRuntime {
       .filter((a): a is Agent => a?.role === 'harmonizer')
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
     const passedOver = new Set(harmonizers.slice(1).map((a) => a.id));
-    for (const record of this.opts.statuses.all()) {
-      if (record.state !== 'interrupted') continue;
+    // Supervisors before their Stewards (P2-16, P2-03): a resumed Steward re-asks its questions,
+    // and they must find its Waykeeper (or the Harmonizer) running, not climb to the user.
+    const interrupted = this.opts.statuses
+      .all()
+      .filter((r) => r.state === 'interrupted')
+      .sort((a, b) => this.depth(a.agentId) - this.depth(b.agentId));
+    for (const record of interrupted) {
       if (passedOver.has(record.agentId)) {
         report.needAttention.push(record.agentId);
         continue;
@@ -762,10 +828,39 @@ export class AgentRuntime {
    * received is delivered again, with its original id, before anything new.
    */
   async recoverAgent(agentId: Id): Promise<SpawnResult> {
-    return this.recoverOne(agentId, this.histories(new Set([agentId])).get(agentId));
+    return this.recoverOne(agentId, undefined);
+  }
+
+  /**
+   * Who reopens brains (P2-16): the composition registers its brain definitions here, so startup
+   * recovery and the panel's resume action bring a Harmonizer or Waykeeper back through its
+   * runner — tools, system prompt and mailbox — never as a bare session.
+   */
+  setBrainResumer(resumer: BrainResumer | undefined): void {
+    this.brainResumer = resumer;
+  }
+
+  /**
+   * Reopens one interrupted agent with explicit options (P2-16: a brain runner reopening its
+   * brain). Refused unless the agent is `interrupted` and not running; one Harmonizer at a time.
+   * Tries the session ref first; with `freshPrompt`, falls back to a fresh session on the same
+   * row. Does not consult the brain resumer.
+   */
+  async reopen(agentId: Id, opts: ReopenOptions = {}): Promise<ReopenResult> {
+    return this.reopenOne(agentId, undefined, opts);
   }
 
   private async recoverOne(agentId: Id, history: AgentHistory | undefined): Promise<SpawnResult> {
+    const refused = this.refuseReopen(agentId);
+    if (refused) return refused;
+    const agent = this.opts.log.tables.agents.get(agentId)!;
+    const viaBrain = this.brainResumer?.(agent);
+    if (viaBrain) return viaBrain;
+    return this.reopenOne(agentId, history, {});
+  }
+
+  /** Why `agentId` cannot be reopened now, or `undefined`. */
+  private refuseReopen(agentId: Id): { ok: false; reason: string } | undefined {
     if (this.live.has(agentId)) return { ok: false, reason: `agent ${agentId} is running` };
     const state = this.opts.statuses.get(agentId)?.state;
     if (state !== 'interrupted') {
@@ -779,6 +874,17 @@ export class AgentRuntime {
         return { ok: false, reason: `the Harmonizer is already running (${other.agent.id})` };
       }
     }
+    return undefined;
+  }
+
+  private async reopenOne(
+    agentId: Id,
+    known: AgentHistory | undefined,
+    opts: ReopenOptions,
+  ): Promise<ReopenResult> {
+    const refused = this.refuseReopen(agentId);
+    if (refused) return refused;
+    const agent = this.opts.log.tables.agents.get(agentId)!;
     const meta = (agent.meta ?? {}) as {
       cwd?: string;
       prompt?: string;
@@ -787,19 +893,52 @@ export class AgentRuntime {
       bare?: boolean;
     };
     if (!meta.cwd) return { ok: false, reason: 'agent has no saved working directory' };
-    const result = await this.resume(agent, {
+    const base = {
       cwd: meta.cwd,
-      prompt: meta.prompt ?? '',
       ...(meta.workspace ? { workspace: meta.workspace } : {}),
       ...(meta.permissionPolicy ? { permissionPolicy: meta.permissionPolicy } : {}),
       ...(meta.bare ? { bare: true } : {}),
-    });
-    if (!result.ok) return result;
-    const live = this.live.get(agentId);
-    for (const m of history?.undelivered() ?? []) {
-      live?.inbox.enqueue(m.text, { sender: m.sender, id: m.messageId, interrupt: false });
+      ...(opts.tools ? { tools: opts.tools } : {}),
+      ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
+    };
+    const mailbox = opts.mailbox ?? false;
+    let mode: 'resumed' | 'fresh' = 'resumed';
+    let result = await this.resume(
+      agent,
+      { ...base, prompt: opts.prompt ?? RESUME_PROMPT },
+      { mailbox },
+    );
+    if (!result.ok && opts.freshPrompt !== undefined && !this.live.has(agentId)) {
+      // The session is gone (or never resumable): a fresh one on the same row, re-seeded from the
+      // database by the caller's prompt. A failed resume left the agent interrupted, as it must be.
+      mode = 'fresh';
+      result = await this.resume(
+        this.opts.log.tables.agents.get(agentId) ?? agent,
+        { ...base, prompt: opts.freshPrompt },
+        { fresh: true, mailbox },
+      );
     }
-    return result;
+    if (!result.ok) return result;
+    if (!mailbox) {
+      const history = known ?? this.histories(new Set([agentId])).get(agentId);
+      const live = this.live.get(agentId);
+      for (const m of history?.undelivered() ?? []) {
+        live?.inbox.enqueue(m.text, { sender: m.sender, id: m.messageId, interrupt: false });
+      }
+    }
+    return { ...result, mode };
+  }
+
+  /** How many supervisors are above the agent (the Harmonizer is 0). */
+  private depth(agentId: Id): number {
+    const { agents } = this.opts.log.tables;
+    let depth = 0;
+    const seen = new Set<Id>([agentId]);
+    for (let a = agents.get(agentId); a?.supervisorId && !seen.has(a.supervisorId); depth++) {
+      seen.add(a.supervisorId);
+      a = agents.get(a.supervisorId);
+    }
+    return depth;
   }
 
   /**
@@ -879,6 +1018,8 @@ export class AgentRuntime {
   }
 
   private turnEnded(live: Live, turn: Live['turn']): void {
+    const resumed = live.resumedTurn;
+    live.resumedTurn = false;
     if (this.turnListeners.size === 0) return;
     const end: TurnEnd = {
       agent: live.agent,
@@ -890,6 +1031,7 @@ export class AgentRuntime {
         live.capStop !== undefined ||
         live.terminal !== undefined,
       queued: live.inbox.pending().length,
+      resumed,
     };
     for (const listener of this.turnListeners) {
       try {

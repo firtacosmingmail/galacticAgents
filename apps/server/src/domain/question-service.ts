@@ -15,6 +15,7 @@ import type {
 import { must } from './errors.js';
 import type { CommandContext, EventLog } from './event-log.js';
 import {
+  COMMAND_SOURCE,
   cancelQuestionsOf,
   livingAbove,
   openQuestion,
@@ -265,7 +266,12 @@ export function endAgentQuestions(
   routing: QuestionRouting,
   opts: { keepHeld?: boolean } = {},
 ): void {
-  cancelQuestionsOf(ctx, agentId, `agent ${how}`, (q) => holdersNow(ctx, q, routing));
+  // A question a brain opened through a tool (`ask_user`, `ask_closure`, …) is not tied to its
+  // session (P2-16): an interruption (a restart, a session reset) keeps it open for the resumed
+  // brain, whose mailbox gets the answer. Only an end for good cancels it.
+  const keep =
+    how === 'interrupted' ? (q: Question) => q.meta?.['source'] === COMMAND_SOURCE : undefined;
+  cancelQuestionsOf(ctx, agentId, `agent ${how}`, (q) => holdersNow(ctx, q, routing), keep);
   // A session reset replaces the session, not the agent: the questions it holds stay with it.
   if (!opts.keepHeld) rerouteHeldBy(ctx, agentId, routing, `holder ${agentId} ${how}`);
 }
