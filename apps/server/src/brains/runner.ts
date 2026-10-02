@@ -9,7 +9,7 @@ import type {
   ToolDefinition,
 } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
-import type { SpawnResult } from '../runtime/agent-runtime.js';
+import type { ReopenOptions, ReopenResult, SpawnResult } from '../runtime/agent-runtime.js';
 import type { Workspaces } from '../workspace/workspaces.js';
 import {
   CARRY_SUMMARY_TOOL,
@@ -19,6 +19,7 @@ import {
   type BrainTool,
   type BrainToolContext,
 } from './definition.js';
+import { requeue } from './requeue.js';
 import { createWakeScope, renderSeed } from './seed.js';
 import { wakeLine, type WakeScope } from './wake.js';
 
@@ -42,8 +43,10 @@ import { wakeLine, type WakeScope } from './wake.js';
  * reach the brain only through the mailbox (`AgentRuntime.attachMailbox`); the runner marks them
  * `message.delivered` once the turn that folded them was delivered.
  *
- * Not persisted (P2-16): a restart loses the mailbox; requeueing in-flight events belongs to the
- * hierarchy resume.
+ * After a restart (P2-16) `BrainRunner.resume` reopens the brain on its agent row: the session is
+ * resumed from its ref (else a fresh one is re-seeded from the database), with the definition's
+ * tools and prompt, and the mailbox the brain had is rebuilt from the log (`requeue.ts`) and
+ * folded into its first turn.
  */
 
 /** What the runner needs from the agent runtime. `AgentRuntime` provides it. */
@@ -51,6 +54,8 @@ export interface BrainRuntime {
   send(agentId: Id, text: string, opts: { sender: Actor; turn?: boolean }): { id: string };
   attachMailbox(agentId: Id): void;
   renewSession(agentId: Id, prompt: string, reason?: string): Promise<SpawnResult>;
+  /** Reopens an interrupted agent (P2-16); `BrainRunner.resume` needs it. */
+  reopen?(agentId: Id, opts: ReopenOptions): Promise<ReopenResult>;
 }
 
 /** Where the brain runs. */
@@ -90,7 +95,8 @@ export interface BrainRunnerOptions {
 export interface MailboxItem {
   seq: number;
   at: string;
-  event: Event;
+  /** Absent for a note (`BrainRunner.note`): a line the server adds, not an event. */
+  event?: Event;
   /** The line the turn prompt shows. */
   line: string;
 }
@@ -134,8 +140,19 @@ export class BrainRunner {
   private carried: string | undefined;
   /** The turn message whose delivery also delivers the folded `message.sent` ids. */
   private turnMessage: { id: string; folded: Id[] } | undefined;
+  /**
+   * The messages a reopened session's first prompt folded (P2-16): delivered once that turn ends,
+   * not when the handle comes back — a resume can still fail before its first turn did.
+   */
+  private firstTurnFolded: Id[] | undefined;
   private scope: WakeScope | undefined;
   private waiters: (() => void)[] = [];
+  /**
+   * Resolves once the brain's agent id is known (or the spawn failed). The adapter may start the
+   * first turn before `spawnAgent` returns the id; a tool call in that turn waits for it here.
+   */
+  private readonly ready: Promise<void>;
+  private markReady!: () => void;
   /** Every turn so far (tests, the ops console later). */
   readonly turns: TurnRecord[] = [];
   private readonly coalesceMs: number;
@@ -148,6 +165,7 @@ export class BrainRunner {
   ) {
     this.coalesceMs = opts.coalesceMs ?? 0;
     this.onError = opts.onError ?? (() => {});
+    this.ready = new Promise((resolve) => (this.markReady = resolve));
   }
 
   /** Spawns the brain and starts driving it. Rejects (and leaves no runner) when the spawn is refused. */
@@ -159,6 +177,25 @@ export class BrainRunner {
     const runner = new BrainRunner(definition, placement, opts);
     await runner.spawn();
     return runner;
+  }
+
+  /**
+   * Brings an interrupted brain back as a brain (P2-16): the same agent row, its session resumed
+   * from its ref where the runtime can (else a fresh session re-seeded from the database), with
+   * the definition's tools, system prompt and a mailbox. The first turn folds what the brain had
+   * not consumed before it went down, the definition's start notes and `notes`. A refused reopen
+   * leaves the agent interrupted and returns no runner.
+   */
+  static async resume(
+    definition: BrainDefinition,
+    placement: BrainPlacement,
+    agentId: Id,
+    opts: BrainRunnerOptions & { notes?: string[] },
+  ): Promise<{ runner?: BrainRunner; result: ReopenResult }> {
+    const { notes, ...rest } = opts;
+    const runner = new BrainRunner(definition, placement, rest);
+    const result = await runner.reopen(agentId, notes ?? []);
+    return result.ok ? { runner, result } : { result };
   }
 
   get agentId(): Id {
@@ -197,12 +234,23 @@ export class BrainRunner {
     this.end();
   }
 
+  /**
+   * A line for the brain's next turn that is not an event (P2-16: the server's recovery report to
+   * the Harmonizer). Wakes the brain like a mailbox event.
+   */
+  note(line: string): void {
+    if (this.stateValue === 'ended') return;
+    this.mailbox.push({ seq: this.opts.log.currentSeq(), at: new Date().toISOString(), line });
+    this.schedule();
+  }
+
   // ---------------------------------------------------------------------------------------------
 
   private async spawn(): Promise<void> {
+    const notes = (await this.startNotes(undefined, false)).map((line) => this.noteItem(line));
     this.unsubscribe = this.opts.log.subscribe((env) => this.onEnvelope(env));
-    const prompt = this.firstPrompt([]);
-    this.beginTurn('first', prompt, [], true);
+    const prompt = this.firstPrompt(notes);
+    this.beginTurn('first', prompt, notes, true);
     let agentId: Id;
     try {
       const { value } = await this.opts.commands.spawnAgent({
@@ -219,6 +267,7 @@ export class BrainRunner {
       agentId = value.id;
     } catch (error) {
       this.end();
+      this.markReady();
       throw error;
     }
     this.id = agentId;
@@ -231,6 +280,94 @@ export class BrainRunner {
     const early = this.early ?? [];
     this.early = undefined;
     for (const env of early) this.onEnvelope(env);
+    this.markReady();
+  }
+
+  /** Reopens the brain on its agent row (P2-16). */
+  private async reopen(agentId: Id, extra: string[]): Promise<ReopenResult> {
+    const { runtime, log } = this.opts;
+    if (!runtime.reopen) {
+      this.end();
+      return { ok: false, reason: 'this runtime cannot reopen brains' };
+    }
+    this.id = agentId;
+    this.early = undefined;
+    this.markReady();
+    this.stateValue = 'renewing'; // a failed resume's `agent.interrupted` must not end the runner
+    this.scope = createWakeScope(log.tables, {
+      brainId: agentId,
+      role: this.definition.role,
+      ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
+    });
+    const notes = [...(await this.startNotes(agentId, true)), ...extra].map((line) =>
+      this.noteItem(line),
+    );
+    // Subscribed and cut at the same seq: an event is either requeued or delivered live, once.
+    this.unsubscribe = log.subscribe((env) => this.onEnvelope(env));
+    const upTo = log.currentSeq();
+    const requeued = requeue(log, agentId, this.scope, this.definition.wakeRules, upTo);
+    const items: MailboxItem[] = [...notes, ...requeued];
+    const resumedPrompt = this.reopenPrompt(items, 'resumed');
+    const freshPrompt = this.reopenPrompt(items, 'fresh');
+    const turn = this.beginTurn('first', resumedPrompt, items, true);
+    let result: ReopenResult;
+    try {
+      result = await runtime.reopen(agentId, {
+        tools: this.toolDefinitions(),
+        systemPrompt: this.definition.systemPrompt,
+        prompt: resumedPrompt,
+        freshPrompt,
+        mailbox: true,
+        foldedUpTo: upTo,
+        // The resumed session ended before its first turn did: the runtime opens the fresh one.
+        onFallback: (fresh) => this.fallback(turn, freshPrompt, fresh),
+      });
+    } catch (error) {
+      result = { ok: false, reason: (error as Error).message };
+    }
+    if (!result.ok) {
+      this.end();
+      return result;
+    }
+    if (result.mode === 'fresh') turn.prompt = freshPrompt;
+    if (this.stateValue === 'renewing') this.stateValue = 'in_turn';
+    this.firstTurnFolded = foldedMessages(items);
+    return result;
+  }
+
+  /** A resume that failed after the handle came back (P2-16): the fresh session takes over. */
+  private fallback(turn: TurnRecord, freshPrompt: string, fresh: Promise<SpawnResult>): void {
+    if (this.stateValue === 'ended') return;
+    this.stateValue = 'renewing'; // the lost session's `agent.interrupted` must not end the runner
+    turn.prompt = freshPrompt;
+    void fresh.then((result) => {
+      if (result.ok) {
+        if (this.stateValue === 'renewing') this.stateValue = 'in_turn';
+        return;
+      }
+      this.onError(new Error(result.reason), `brain ${this.id} fresh session`);
+      this.end();
+    });
+  }
+
+  private async startNotes(brainId: Id | undefined, resumed: boolean): Promise<string[]> {
+    if (!this.definition.startNotes) return [];
+    try {
+      return await this.definition.startNotes({
+        ...(brainId ? { brainId } : {}),
+        role: this.definition.role,
+        resumed,
+        commands: this.opts.commands,
+        queries: this.opts.queries,
+      });
+    } catch (error) {
+      this.onError(error, `brain ${brainId ?? this.definition.role} start notes`);
+      return [];
+    }
+  }
+
+  private noteItem(line: string): MailboxItem {
+    return { seq: this.opts.log.currentSeq(), at: new Date().toISOString(), line };
   }
 
   private onEnvelope(env: EventEnvelope): void {
@@ -304,6 +441,10 @@ export class BrainRunner {
     const ended = this.current;
     this.current = undefined;
     this.stateValue = 'idle';
+    if (this.firstTurnFolded) {
+      this.markDelivered(this.firstTurnFolded);
+      this.firstTurnFolded = undefined;
+    }
     if (ended?.kind === 'summary') {
       void this.renew();
     } else if (this.shouldReset()) {
@@ -450,6 +591,22 @@ export class BrainRunner {
     });
   }
 
+  /** The first prompt after a restart: the resumed session's, or a fresh session's. */
+  private reopenPrompt(items: MailboxItem[], mode: 'resumed' | 'fresh'): string {
+    const role = this.definition.role;
+    const parts =
+      mode === 'resumed'
+        ? [`The server restarted and your session as the ${role} was resumed.`]
+        : [
+            `You are the ${role}. The server restarted and your previous session could not be ` +
+              'resumed: a new session starts here, seeded from the database.',
+          ];
+    if (this.carried) parts.push(`Summary carried from your previous session:\n${this.carried}`);
+    if (items.length > 0) parts.push(renderItems('Since your last turn:', items));
+    parts.push(this.seed());
+    return parts.join('\n\n');
+  }
+
   private firstPrompt(items: MailboxItem[]): string {
     const parts = [`You are the ${this.definition.role}. A new session starts here.`];
     if (this.carried) {
@@ -497,6 +654,12 @@ export class BrainRunner {
   }
 
   private async runTool(tool: BrainTool, input: unknown): Promise<unknown> {
+    // The first turn can start before the spawn returned the brain's id (a fast adapter, a brain
+    // started inside another brain's tool): its calls wait for the id and the early events.
+    if (!this.id) await this.ready;
+    if (!this.id) {
+      return { error: 'not_running', message: 'the brain could not be started' };
+    }
     const turn = this.current;
     if (turn?.endedBy) {
       return {
@@ -572,6 +735,10 @@ export class BrainRunner {
     }
     for (let i = 0; i < this.mailbox.length;) {
       const item = this.mailbox[i]!;
+      if (!item.event) {
+        i++;
+        continue;
+      }
       const k = JSON.stringify(item.event);
       const left = keys.get(k) ?? 0;
       if (item.seq > since && left > 0) {
@@ -589,6 +756,6 @@ function renderItems(title: string, items: MailboxItem[]): string {
 /** The `message.sent` ids a turn folds in. */
 function foldedMessages(items: MailboxItem[]): Id[] {
   return items.flatMap((item) =>
-    item.event.type === 'message.sent' ? [item.event.messageId] : [],
+    item.event?.type === 'message.sent' ? [item.event.messageId] : [],
   );
 }

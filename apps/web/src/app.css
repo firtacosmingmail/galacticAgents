@@ -280,3 +280,103 @@ button.danger {
 .state-interrupted {
   background: #5a2a7a;
 }
+
+/* The hierarchy console (P2-18): plain, functional; the real panel is Phase 2.5's. */
+.page:has(.hierarchy) {
+  max-width: 1280px;
+}
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0 0;
+}
+.summary {
+  display: flex;
+  gap: 16px;
+  margin: 0 0 8px;
+}
+.hierarchy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.hierarchy-grid .column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.hierarchy h3 {
+  font-size: 1rem;
+  margin: 8px 0 6px;
+}
+.hierarchy h4 {
+  font-size: 0.9rem;
+  margin: 8px 0 4px;
+}
+.card,
+.chat,
+.work-tree,
+.steward {
+  border: 1px solid #252b3d;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #11151f;
+}
+.card {
+  margin: 6px 0;
+}
+.card header,
+.chat header,
+.steward header,
+.node-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+.tree {
+  list-style: none;
+  margin: 4px 0;
+  padding-left: 14px;
+  border-left: 1px solid #252b3d;
+}
+.node {
+  margin: 6px 0;
+}
+.agent-buttons,
+.controls,
+.edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: end;
+  margin: 4px 0;
+}
+.parked {
+  border-left: 3px solid #d9a441;
+  padding-left: 8px;
+}
+.question-permission {
+  border-color: #7a4b4b;
+}
+.chat-lines {
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 0.9rem;
+}
+.chat-line {
+  margin: 2px 0;
+  overflow-wrap: anywhere;
+}
+.chat-line .who {
+  color: #8b93a7;
+}
+.chat-line.from-user .who {
+  color: #7fb2ff;
+}
+.tool-call code,
+.node-head code {
+  overflow-wrap: anywhere;
+}

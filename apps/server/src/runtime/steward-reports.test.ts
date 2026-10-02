@@ -125,6 +125,31 @@ describe('Steward reports (P2-11)', () => {
     expect(h.runtime.inbox(plain)?.pending()).toEqual([]);
   });
 
+  it('a report missed while the supervisor had no mailbox is sent again when it gets one (P2-16)', async () => {
+    const plain = (
+      await h.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        cwd: '/w/hq',
+        prompt: 'scenario:echo',
+      })
+    ).value.id;
+    await h.until(isIdle(plain));
+    scenarios['done'] = { steps: [{ kind: 'output', text: 'Done: all of it.' }] };
+    const id = await steward(plain, 'scenario:done');
+    await h.until(isIdle(id));
+    expect(reportsFrom(id)).toEqual([]);
+    h.composed.transcripts.flush();
+    // The supervisor comes back as a brain (resumed, or started): the report owed is sent now.
+    h.runtime.attachMailbox(plain);
+    expect(h.composed.reports.resend(plain)).toEqual([id]);
+    const [report] = reportsFrom(id);
+    expect(report!.text).toContain('Its report: Done: all of it.');
+    expect(report!.text).toContain('Sent again');
+    // Once sent, it is not owed any more.
+    expect(h.composed.reports.resend(plain)).toEqual([]);
+  });
+
   it('the report text: the task, the report, a cut for very long ones, none for silence', () => {
     const task = { id: 't-1', description: 'fix it' } as Task;
     expect(reportText(task, ' Done: fixed. ')).toBe(

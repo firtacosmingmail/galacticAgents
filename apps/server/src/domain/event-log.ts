@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
-import { Event, isTranscriptEvent, type EventEnvelope, type Snapshot } from '@galactic/protocol';
+import {
+  Event,
+  isTranscriptEvent,
+  type EventEnvelope,
+  type Id,
+  type Snapshot,
+} from '@galactic/protocol';
 import { tables, type Tables } from '../db/tables.js';
 import type { ChooseOptions } from './catalogue.js';
 
@@ -87,6 +93,7 @@ export class EventLog {
    */
   private uncommitted: EventEnvelope[] = [];
   private depth = 0;
+  private selectLatestOf: Statement | undefined;
   /** True while subscribers are being notified; commands run by a subscriber queue behind the batch. */
   private publishing = false;
 
@@ -207,6 +214,26 @@ export class EventLog {
   }
 
   /** Events with `seq > since`, in order. */
+  /**
+   * The newest `limit` events of `type` about `agentId` (the payload's `agentId`), oldest first:
+   * an indexed read (migration 0006), never a scan of the whole log (P2-18: the chat history).
+   */
+  latestOf(type: Event['type'], agentId: Id, limit: number): EventEnvelope[] {
+    this.selectLatestOf ??= this.db.prepare(
+      `SELECT id, at, payload FROM events
+        WHERE type = ? AND json_extract(payload, '$.agentId') = ?
+        ORDER BY id DESC LIMIT ?`,
+    );
+    const rows = this.selectLatestOf.all(type, agentId, limit) as {
+      id: number;
+      at: string;
+      payload: string;
+    }[];
+    return rows
+      .reverse()
+      .map((r) => ({ seq: r.id, at: r.at, event: JSON.parse(r.payload) as Event }));
+  }
+
   eventsSince(since: number, limit = this.maxReplay): EventEnvelope[] {
     const rows = this.selectSince.all(since, limit) as {
       id: number;

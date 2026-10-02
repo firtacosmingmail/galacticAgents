@@ -1,5 +1,10 @@
 import type {
   AnswerBody,
+  ControlBody,
+  ControlResponse,
+  DecideResponse,
+  MessagesResponse,
+  ProposalDecisionBody,
   RuntimesInfo,
   SendBody,
   SendResponse,
@@ -16,6 +21,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The refusal's code (`stale`, `rejected`, `not_found`, `invalid`, …). */
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -38,7 +45,7 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         (data['message'] as string | undefined) ??
         (data['error'] as string | undefined) ??
         `${res.status}`;
-      throw new ApiError(res.status, message);
+      throw new ApiError(res.status, message, data['error'] as string | undefined);
     }
     return data as T;
   };
@@ -55,8 +62,16 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     interrupt: (agentId: string) => call('POST', `/api/agents/${agentId}/interrupt`),
     stop: (agentId: string) => call('POST', `/api/agents/${agentId}/stop`),
     recover: (agentId: string) => call('POST', `/api/agents/${agentId}/recover`),
-    answer: (questionId: string, answer: string) =>
-      call('POST', `/api/questions/${questionId}/answer`, { answer } satisfies AnswerBody),
+    /** `version`: the question's version as the page saw it (a stale answer is refused). */
+    answer: (questionId: string, answer: string, version?: number) =>
+      call('POST', `/api/questions/${questionId}/answer`, {
+        answer,
+        ...(version !== undefined ? { version } : {}),
+      } satisfies AnswerBody),
+    decide: (proposalId: string, decision: ProposalDecisionBody) =>
+      call<DecideResponse>('POST', `/api/proposals/${proposalId}/decide`, decision),
+    control: (body: ControlBody) => call<ControlResponse>('POST', '/api/control', body),
+    messages: (agentId: string) => call<MessagesResponse>('GET', `/api/agents/${agentId}/messages`),
   };
 }
 

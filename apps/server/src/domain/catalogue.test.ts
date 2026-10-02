@@ -79,7 +79,7 @@ describe('the seeded catalogue (migration 0005)', () => {
     db.prepare(
       "INSERT INTO projects (id, name, workspace, body_id, state, created_at, updated_at) VALUES ('p-1', 'Demo', '/w', 'b-demo', 'approved', 't', 't')",
     ).run();
-    expect(migrate(db, all).applied).toEqual([5]);
+    expect(migrate(db, all.slice(0, 5)).applied).toEqual([5]);
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
     const t = openTables(db);
     expect(t.bodies.get('b-demo')).toEqual({

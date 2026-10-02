@@ -1,7 +1,7 @@
 # Phase 2 — The hierarchy: Harmonizer, Waykeepers, Stewards
 
-**Current task:** wave 6 next — P2-16, P2-18 (after `p2-wave5-flows` is merged into `phase-2`) · **Task status:** todo
-**Phase status:** in progress (18/21 done) — on branch `phase-2`
+**Current task:** P2-19 (wave 7, next — the real exit run on the dev machine, after `p2-wave6-resume-console` is merged into `phase-2`) · **Task status:** todo
+**Phase status:** in progress (20/21 done) — on branch `phase-2`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -125,7 +125,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** table-driven tests mapping agent/question combinations to states; "blocked on user" whenever a user-held question exists.
 
 ### P2-16 — Hierarchy restart and resume
-- **Status:** todo · **Depends on:** P1-14, P2-06, P2-03 · **Parallel with:** P2-18
+- **Status:** done (2026-10-02) · **Depends on:** P1-14, P2-06, P2-03 · **Parallel with:** P2-18
 - Extend recovery to brains (resume Harmonizer/Waykeepers from `sessionRef` or re-seed from DB if the session is unusable); re-deliver pending answers; requeue mailbox events that were in flight; Harmonizer's "recovered: N resumed, M need attention" message; `interrupted` state on non-resumable agents with a resume action.
 - From the wave-4 review: today a Harmonizer resumed by startup recovery comes back without its runner (no tools, no system prompt, no mailbox) and `startHarmonizer` leaves it in place, so after every restart there is no working Harmonizer until this task lands. Brain resume must go through `BrainRunner` (or `renewSession` with the definition), for the Harmonizer and every Waykeeper.
 - From wave 5: re-send Steward reports a supervisor missed while it was down (P2-11 drops a report when the supervisor has no mailbox); re-ask closure requests recorded while the Harmonizer was down (P2-13); keep promotion cards waiting to retry across a restart (P2-12's retry queue is in memory) and pause the Stewards of a card created before the promotion flow starts.
@@ -137,13 +137,13 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 - **Acceptance:** tests; the Waykeeper's report of a refused spawn is visible in its transcript.
 
 ### P2-18 — Ops console extensions for the hierarchy
-- **Status:** todo · **Depends on:** P1-11, P2-09, P2-15 · **Parallel with:** P2-16
+- **Status:** done (2026-10-02) · **Depends on:** P1-11, P2-09, P2-15 · **Parallel with:** P2-16
 - Project/task tree with derived states; proposal and task-plan cards (approve / edit / reject); question inbox with kind, holder, context and inline answer (permission cards show the action); control actions; Harmonizer and Waykeeper chat boxes; Steward transcript view read-only with a message box only when it holds an open clarification question.
 - **Acceptance:** the Phase 2 exit run can be driven entirely from this page.
 
 ### P2-19 — End-to-end exit run and crash drill
 - **Status:** todo · **Depends on:** all Phase 2 tasks · **Parallel with:** —
-- Run the exit criteria script ("build a CLI that converts CSV to Parquet") for real: related-work check, proposal with workspace, body, Waykeeper plan approved once, Stewards in worktrees, one supervisor-answered and one escalated clarification, one permission request, merged branches, closure request accepted; `kill -9` the server mid-way and confirm automatic resume. Record the run and any spec deviations in `docs/tasks/notes/P2-19-exit-run.md`; update SPEC/TECH if decisions changed.
+- First, on the dev machine, `pnpm check:real` (the Phase 1 real-SDK checks, decision 17) must pass. Then run the exit criteria script ("build a CLI that converts CSV to Parquet") for real: related-work check, proposal with workspace, body, Waykeeper plan approved once, Stewards in worktrees, one supervisor-answered and one escalated clarification, one permission request, merged branches, closure request accepted; `kill -9` the server mid-way and confirm automatic resume. Record the run and any spec deviations in `docs/tasks/notes/P2-19-exit-run.md`; update SPEC/TECH if decisions changed.
 - **Acceptance:** exit criteria met; notes committed.
 
 ### P2-20 — Hierarchy placement invariants and clearable fields (added 2026-10-01)

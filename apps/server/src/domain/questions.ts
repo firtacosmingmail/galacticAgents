@@ -291,8 +291,10 @@ export function cancelQuestionsOf(
   agentId: Id,
   reason: string,
   holdersOf?: (questionId: Id) => Id[],
+  keep?: (q: Question) => boolean,
 ): Id[] {
   return openQuestionsOf(ctx, agentId)
+    .filter((q) => !keep?.(q))
     .map((q) => cancelQuestion(ctx, q.id, reason, holdersOf?.(q.id))?.id)
     .filter((id): id is Id => id !== undefined);
 }

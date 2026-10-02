@@ -4,11 +4,16 @@ import {
   AnswerBody,
   ControlBody,
   PERMISSION_POLICY_PRESETS,
+  ProposalDecisionBody,
   SendBody,
   SpawnBody,
   type Actor,
+  type ChatMessage,
   type ControlAction,
   type ControlResponse,
+  type DecideResponse,
+  type MessagesResponse,
+  type ProposalDecision,
   type RuntimesInfo,
   type SendResponse,
   type SpawnResponse,
@@ -39,6 +44,8 @@ export interface AgentRoutesOptions {
 }
 
 const USER: Actor = { type: 'user' };
+/** How many messages `GET /api/agents/:id/messages` returns (the newest). */
+const CHAT_HISTORY = 200;
 
 /**
  * A refusal's message comes from the runtime or the adapter and may carry CLI stderr: redact it
@@ -158,6 +165,27 @@ export function registerAgentRoutes(
      * permission policy: a remote client's is floored at the global default (P2-21).
      */
     const { commands } = opts;
+    /**
+     * A refused domain command as the console reads it (P2-14, P2-18): 404 unknown, 400 invalid,
+     * 409 for a state that refuses it (`stale` keeps its code: "already answered by …"), 500 for
+     * anything that is not a refusal (a bug or a runtime failure, never reported as a conflict).
+     */
+    const refuse = (req: FastifyRequest, reply: FastifyReply, error: unknown) => {
+      if (!(error instanceof DomainError)) {
+        req.log.error(error);
+        return reply.code(500).send({ error: 'internal' });
+      }
+      if (error.code === 'not_found') {
+        return reply.code(404).send({ error: 'not_found', message: redactSecrets(error.message) });
+      }
+      if (error.code === 'invalid') {
+        return reply.code(400).send({ error: 'invalid', message: redactSecrets(error.message) });
+      }
+      if (error.code === 'stale') {
+        return reply.code(409).send({ error: 'stale', message: redactSecrets(error.message) });
+      }
+      return reply.code(409).send(refusal('rejected', error.message));
+    };
     if (commands) {
       app.post('/api/control', async (req, reply) => {
         const body = parse(ControlBody, req.body, reply);
@@ -168,30 +196,91 @@ export function registerAgentRoutes(
           });
           return { ok: true, seq: log.currentSeq() } satisfies ControlResponse;
         } catch (error) {
-          if (!(error instanceof DomainError)) {
-            // Not a refusal: a bug or a runtime failure, never reported as a conflict.
-            req.log.error(error);
-            return reply.code(500).send({ error: 'internal' });
-          }
-          if (error.code === 'not_found') {
-            return reply.code(404).send({ error: 'not_found', message: error.message });
-          }
-          if (error.code === 'invalid') {
-            return reply
-              .code(400)
-              .send({ error: 'invalid', message: redactSecrets(error.message) });
-          }
-          return reply.code(409).send(refusal('rejected', error.message));
+          return refuse(req, reply, error);
+        }
+      });
+
+      /**
+       * The user's decision on a proposal card (P2-18; SPEC §3.3): approve, edit (size, body,
+       * workspace, the `initGit` consent of decision 27), reject with a reason, or park. The same
+       * `DomainCommands.decideProposal` the brains' flows use, as the user: approval creates what
+       * the card asks for (decision 38) and wakes the card's owner. No policy is written here
+       * (an approved project starts on the global default; its table is edited through
+       * `/api/control`, floored for remote clients there).
+       */
+      app.post('/api/proposals/:id/decide', async (req, reply) => {
+        const body = parse(ProposalDecisionBody, req.body, reply);
+        if (!body) return;
+        const decision: ProposalDecision =
+          body.decision === 'edit'
+            ? { decision: 'edit', changes: compact(body.changes) }
+            : body.decision === 'reject'
+              ? { decision: 'reject', ...(body.reason ? { reason: body.reason } : {}) }
+              : body;
+        try {
+          const { value } = await commands.decideProposal(
+            (req.params as { id: string }).id,
+            decision,
+            USER,
+          );
+          return { ok: true, state: value.state, seq: log.currentSeq() } satisfies DecideResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
         }
       });
     }
 
+    /**
+     * The messages sent to an agent (P2-18): the chat boxes' history after a reload or a snapshot,
+     * read from the log's `message.sent` events — the same events the page folds live from the
+     * stream, so the text is what the stream carries (user-written text is not redacted,
+     * TECHNOLOGY §8; a Steward's report was redacted when it was made). The last 200, through the
+     * `(type, agentId)` index.
+     */
+    app.get('/api/agents/:id/messages', async (req, reply) => {
+      const id = agentId(req);
+      if (!log.tables.agents.get(id)) return reply.code(404).send({ error: 'not_found' });
+      const messages: ChatMessage[] = [];
+      for (const { seq, at, event } of log.latestOf('message.sent', id, CHAT_HISTORY)) {
+        if (event.type !== 'message.sent') continue;
+        messages.push({
+          messageId: event.messageId,
+          agentId: id,
+          seq,
+          at,
+          sender: event.sender,
+          text: event.text,
+        });
+      }
+      return { messages } satisfies MessagesResponse;
+    });
+
+    /**
+     * Answers a question as the user (SPEC §2.6). With the command surface it is
+     * `DomainCommands.answerQuestion`: first answer wins, `version` refuses a stale answer with
+     * 409 `stale` ("already answered by …"), and a question no live session waits on (a brain's
+     * `ask_user`, a closure question) is answered too (P2-18). Without it, the Phase 1 path.
+     */
     app.post('/api/questions/:id/answer', async (req, reply) => {
       const body = parse(AnswerBody, req.body, reply);
       if (!body) return;
-      return attempt(reply, () =>
-        runtime.answer((req.params as { id: string }).id, body.answer, USER),
-      );
+      const questionId = (req.params as { id: string }).id;
+      if (!commands) {
+        return attempt(reply, () => runtime.answer(questionId, body.answer, USER));
+      }
+      try {
+        await commands.answerQuestion({
+          questionId,
+          answer: body.answer,
+          by: USER,
+          ...(body.version !== undefined ? { version: body.version } : {}),
+        });
+        return { ok: true };
+      } catch (error) {
+        // Anything that is not a domain refusal (an adapter that failed to take the answer) is a
+        // 500, logged here and never echoed to the client.
+        return refuse(req, reply, error);
+      }
     });
   });
 }

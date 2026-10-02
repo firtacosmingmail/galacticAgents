@@ -7,6 +7,7 @@ import {
   type FakeTurnIO,
 } from '../../adapters/fake/scenario.js';
 import { openDatabase, type Database } from '../../db/database.js';
+import type { RecoveryReport } from '../../runtime/agent-runtime.js';
 import {
   composeRuntime,
   type ComposedRuntime,
@@ -318,6 +319,38 @@ export class BrainHarness {
 
   failure(problems: string[]): HarnessFailure {
     return new HarnessFailure(problems, this.report());
+  }
+
+  /**
+   * A kill -9 (P2-16): the brains' in-memory mailboxes are lost and nothing this server life does
+   * afterwards reaches the log — the adapter's event stream is cut and the reports and timers
+   * stop. The agents' last states stay as the log has them. Boot a new harness over the same
+   * `db` (and the adapter's `sessionStore`) and call `recover()` there. `dispose()` still works.
+   */
+  crash(): void {
+    for (const b of this.brains) b.runner.dispose();
+    this.adapter.events.close();
+    this.composed.reports.dispose();
+    this.composed.archival.stop();
+  }
+
+  /**
+   * Startup recovery on this harness (P2-16): `composed.recover()`, then every brain it resumed is
+   * added to `brains` (so `settle()` waits for it) with its runner and transcript. Register the
+   * brain definitions (`composed.defineBrains`) and the scripts first.
+   */
+  async recover(): Promise<{ report: RecoveryReport; resumed: HarnessBrain[] }> {
+    const report = await this.composed.recover();
+    const resumed: HarnessBrain[] = [];
+    for (const id of report.resumed) {
+      const runner = this.composed.runnerOf(id);
+      if (!runner || this.brains.some((b) => b.agentId === id)) continue;
+      const transcript = this.transcript(id) ?? new BrainTranscript(id, runner.definition.role);
+      const brain = new HarnessBrain(this, runner, transcript);
+      this.brains.push(brain);
+      resumed.push(brain);
+    }
+    return { report, resumed };
   }
 
   async dispose(): Promise<void> {
