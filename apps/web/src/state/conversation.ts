@@ -25,7 +25,8 @@ import type { WorldState } from './reduce.js';
  * (`conversationSince`, which the session's `transcriptSince` reads), so a reply still buffered
  * when the page was read arrives on the stream and nothing is read twice. After a snapshot
  * catch-up (the messages between never came on the stream) the thread pages forward from its
- * newest history entry until it is caught up.
+ * newest history entry until it is caught up (a thread with no history reads the newest page; a
+ * catch-up too long to finish restarts the thread from the newest page, see `forward`).
  *
  * Kept in its own store beside `useAppStore`: it is a REST-filled cache, not stream-derived
  * state, and it is dropped when the page switches to another log.
@@ -133,21 +134,38 @@ export type ThreadCardItem =
   | { kind: 'proposal'; id: Id; at: string; proposal: Proposal }
   | { kind: 'question'; id: Id; at: string; question: Question };
 
-/** The brain whose thread a question belongs to: the asking brain, or the Steward's supervisor. */
-function questionThread(world: Pick<WorldState, 'agents'>, q: Question): Agent | undefined {
+/**
+ * Whose thread a question belongs to, by role and project (never by `supervisorId`, so a
+ * replacement Waykeeper inherits its predecessor's Stewards' questions, decision 32 — the same
+ * rule as the plan cards and the managed-agents cards): the project's Waykeeper for a question
+ * asked on a project (by its Waykeeper or by a Steward of one of its tasks), the Harmonizer for
+ * its own and for a standalone task's Steward.
+ */
+type QuestionOwner = { role: 'harmonizer' } | { role: 'waykeeper'; projectId: Id };
+
+function questionOwner(
+  world: Pick<WorldState, 'agents' | 'tasks'>,
+  q: Question,
+): QuestionOwner | undefined {
   const origin = world.agents[q.originAgentId];
   if (!origin) return undefined;
-  if (origin.role !== 'steward') return origin;
-  return origin.supervisorId ? world.agents[origin.supervisorId] : undefined;
+  if (origin.role === 'harmonizer') return { role: 'harmonizer' };
+  if (origin.role === 'waykeeper')
+    return origin.projectId ? { role: 'waykeeper', projectId: origin.projectId } : undefined;
+  const taskId = origin.taskId ?? q.context.origin?.taskId;
+  const task = taskId ? world.tasks[taskId] : undefined;
+  const projectId = task ? task.projectId : q.context.origin?.projectId;
+  return projectId ? { role: 'waykeeper', projectId } : { role: 'harmonizer' };
 }
 
 /**
  * The cards of a brain's thread: for a Waykeeper, its project's plan cards and promotion
  * requests (a successor on the same project owns them too); for the Harmonizer, every other card.
- * Questions go to the thread of the brain that asked, or of the asking Steward's supervisor.
+ * Questions go by project the same way (`questionOwner`): a project's questions to its Waykeeper,
+ * the rest to the Harmonizer.
  */
 export function threadCards(
-  world: Pick<WorldState, 'agents' | 'proposals' | 'questions'>,
+  world: Pick<WorldState, 'agents' | 'tasks' | 'proposals' | 'questions'>,
   agent: Agent | undefined,
 ): ThreadCardItem[] {
   if (!agent || agent.role === 'steward') return [];
@@ -163,9 +181,12 @@ export function threadCards(
     if (mine) cards.push({ kind: 'proposal', id: p.id, at: p.createdAt, proposal: p });
   }
   for (const q of Object.values(world.questions)) {
-    const brain = questionThread(world, q);
-    if (!brain) continue;
-    const mine = agent.role === 'harmonizer' ? brain.role === 'harmonizer' : brain.id === agent.id;
+    const owner = questionOwner(world, q);
+    if (!owner) continue;
+    const mine =
+      owner.role === 'harmonizer'
+        ? agent.role === 'harmonizer'
+        : agent.role === 'waykeeper' && agent.projectId === owner.projectId;
     if (mine) cards.push({ kind: 'question', id: q.id, at: q.createdAt, question: q });
   }
   return cards.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
@@ -217,7 +238,7 @@ export interface ConversationState {
    * newest entry) and records where the live transcript starts. Resolves when done.
    */
   open: (agentId: Id, fetch: ConversationFetch) => Promise<void>;
-  /** Pages forward from the newest history entry until caught up (after a snapshot catch-up). */
+  /** Brings the thread up to date after a snapshot catch-up (see `forward`). */
   catchUp: (agentId: Id, fetch: ConversationFetch) => Promise<void>;
   /** Pages one page back (scrolling up). */
   loadOlder: (agentId: Id, fetch: ConversationFetch) => Promise<void>;
@@ -242,22 +263,53 @@ export const useConversationStore = create<ConversationState>((set, get) => {
       error: error instanceof Error ? error.message : 'the history could not be read',
     }));
 
-  const forward = async (agentId: Id, fetch: ConversationFetch): Promise<number | undefined> => {
-    let lastSeq: number | undefined;
+  /**
+   * Reads the newest page. `restart`: the thread's held history may not reach it (the catch-up
+   * gave up), so held lines older than the page are dropped — the thread is then the newest page
+   * plus what pages back from it, with no hole — and its cursors are the page's.
+   */
+  const newest = async (
+    agentId: Id,
+    fetch: ConversationFetch,
+    restart: boolean,
+  ): Promise<number> => {
+    const page = asPage(await fetch(agentId, { limit: PAGE }));
+    if (!page) throw new Error('the history reply was not understood');
+    patch(agentId, (t) => {
+      const first = page.entries[0];
+      const held =
+        restart && first ? t.entries.filter((e) => compareEntries(e, first) >= 0) : t.entries;
+      return {
+        entries: mergeEntries(held, page.entries),
+        oldestCursor: first?.cursor ?? (restart ? undefined : t.oldestCursor),
+        newestCursor: page.entries.at(-1)?.cursor ?? (restart ? undefined : t.newestCursor),
+        hasOlder: page.hasMore,
+      };
+    });
+    return page.lastSeq;
+  };
+
+  /**
+   * Brings the thread up to date and returns the newest persisted transcript `seq` (the live
+   * seam): pages forward from the newest history entry; a thread with no history yet (none read,
+   * or only live lines, which have no cursor) reads the newest page instead. When the catch-up
+   * cap is hit there is still history between the last page read and now, so the thread restarts
+   * from the newest page rather than leave a hole before the live stream.
+   */
+  const forward = async (agentId: Id, fetch: ConversationFetch): Promise<number> => {
+    if (thread(agentId).newestCursor === undefined) return newest(agentId, fetch, false);
     for (let i = 0; i < MAX_CATCH_UP_PAGES; i++) {
-      const after = thread(agentId).newestCursor;
-      if (after === undefined) return lastSeq;
+      const after = thread(agentId).newestCursor!;
       const page = asPage(await fetch(agentId, { after, limit: 200 }));
       if (!page) throw new Error('the history reply was not understood');
-      lastSeq = page.lastSeq;
       patch(agentId, (t) => ({
         entries: mergeEntries(t.entries, page.entries),
         newestCursor: page.entries.at(-1)?.cursor ?? t.newestCursor,
         oldestCursor: t.oldestCursor ?? page.entries[0]?.cursor,
       }));
-      if (!page.hasMore) return lastSeq;
+      if (!page.hasMore) return page.lastSeq;
     }
-    return lastSeq;
+    return newest(agentId, fetch, true);
   };
 
   return {
@@ -269,22 +321,8 @@ export const useConversationStore = create<ConversationState>((set, get) => {
     },
     open: async (agentId, fetch) => {
       try {
-        if (thread(agentId).newestCursor !== undefined) {
-          const lastSeq = await forward(agentId, fetch);
-          patch(agentId, () => ({ loaded: true, error: undefined, liveFrom: lastSeq }));
-          return;
-        }
-        const page = asPage(await fetch(agentId, { limit: PAGE }));
-        if (!page) throw new Error('the history reply was not understood');
-        patch(agentId, (t) => ({
-          entries: mergeEntries(t.entries, page.entries),
-          oldestCursor: page.entries[0]?.cursor,
-          newestCursor: page.entries.at(-1)?.cursor,
-          hasOlder: page.hasMore,
-          loaded: true,
-          error: undefined,
-          liveFrom: page.lastSeq,
-        }));
+        const lastSeq = await forward(agentId, fetch);
+        patch(agentId, () => ({ loaded: true, error: undefined, liveFrom: lastSeq }));
       } catch (error) {
         failed(agentId, error);
       }
