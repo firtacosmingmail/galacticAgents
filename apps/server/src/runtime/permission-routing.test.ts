@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   EVENT_TYPES,
+  PERMISSION_POLICY_PRESETS,
   type Event,
   type EventOfType,
   type PermissionPolicy,
@@ -53,6 +54,54 @@ const SCRIPTS: Record<string, FakeScenario> = {
         permissionAction: 'destructive',
       },
       { kind: 'finish', result: 'cleaned' },
+    ],
+  },
+  /** What a trusted project's Steward does on the dev machine (P2-22), then two pushes. */
+  trusted: {
+    steps: [
+      {
+        kind: 'permission',
+        toolName: 'Bash',
+        input: { command: 'python -c "print(1)"' },
+        permissionAction: 'run_workspace',
+      },
+      {
+        kind: 'permission',
+        toolName: 'Bash',
+        input: { command: 'pip install requests' },
+        permissionAction: 'network',
+      },
+      {
+        kind: 'permission',
+        toolName: 'Bash',
+        input: { command: 'python3 -m venv /tmp/venv && /tmp/venv/bin/python -c "import x"' },
+        permissionAction: 'outside_workspace',
+      },
+      {
+        kind: 'permission',
+        toolName: 'WebSearch',
+        input: { query: 'pyarrow csv' },
+        permissionAction: 'network',
+      },
+      {
+        kind: 'permission',
+        toolName: 'mcp__mine__lookup',
+        input: { q: 'x' },
+        permissionAction: 'network',
+      },
+      {
+        kind: 'permission',
+        toolName: 'Bash',
+        input: { command: 'git push origin main' },
+        permissionAction: 'push',
+      },
+      {
+        kind: 'permission',
+        toolName: 'Bash',
+        input: { command: 'sh -c "git push origin main"' },
+        permissionAction: 'push',
+      },
+      { kind: 'finish', result: 'shipped' },
     ],
   },
 };
@@ -311,5 +360,59 @@ describe('permission routing (P2-04)', () => {
     const logged = JSON.stringify(c.log.eventsSince(0, Number.MAX_SAFE_INTEGER));
     expect(logged).toContain('permission.decided');
     expect(logged).not.toContain(secret);
+  });
+
+  it('a trusted project: opaque commands, installs and unknown tools run with no question; a push asks the user (P2-22)', async () => {
+    for (const ungated of [true, false]) {
+      const h = await hierarchy({
+        ungated,
+        prompt: 'scenario:trusted',
+        policy: PERMISSION_POLICY_PRESETS.trusted,
+      });
+      await until(() => h.log.tables.questions.all().length === 1);
+      const [push] = h.log.tables.questions.all();
+      expect(push).toMatchObject({
+        kind: 'permission',
+        holder: { type: 'user' },
+        originAgentId: h.steward.id,
+        context: {
+          permissionAction: 'push',
+          toolCall: { input: { command: 'git push origin main' } },
+        },
+      });
+      // Everything before the push ran without a card.
+      const ran = () =>
+        h
+          .ofType('agent.tool_call')
+          .filter((e) => e.agentId === h.steward.id)
+          .map((e) => JSON.stringify(e.input));
+      for (const input of [
+        { command: 'python -c "print(1)"' },
+        { command: 'pip install requests' },
+        { query: 'pyarrow csv' },
+        { q: 'x' },
+      ]) {
+        expect(ran(), JSON.stringify(input)).toContain(JSON.stringify(input));
+      }
+      await h.commands.answerQuestion({
+        questionId: push!.id,
+        answer: 'allow',
+        by: { type: 'user' },
+      });
+      // The push hidden in `sh -c` asks too.
+      await until(() => h.log.tables.questions.all().length === 2);
+      const hidden = h.log.tables.questions.all().find((q) => q.id !== push!.id);
+      expect(hidden).toMatchObject({
+        kind: 'permission',
+        holder: { type: 'user' },
+        context: { permissionAction: 'push' },
+      });
+      await h.commands.answerQuestion({
+        questionId: hidden!.id,
+        answer: 'allow',
+        by: { type: 'user' },
+      });
+      await until(() => h.state() === 'finished');
+    }
   });
 });

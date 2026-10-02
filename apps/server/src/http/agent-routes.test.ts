@@ -88,7 +88,7 @@ describe('/api agent routes (P1-11)', () => {
       runtimes: [
         { name: 'fake', resumable: true, scenarios: expect.arrayContaining(['happy', 'asks']) },
       ],
-      policies: ['default', 'trusting', 'cautious'],
+      policies: ['default', 'trusting', 'cautious', 'trusted'],
       maxConcurrentAgents: 3,
     });
   });

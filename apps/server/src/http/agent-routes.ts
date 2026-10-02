@@ -204,9 +204,10 @@ export function registerAgentRoutes(
        * The user's decision on a proposal card (P2-18; SPEC §3.3): approve, edit (size, body,
        * workspace, the `initGit` consent of decision 27), reject with a reason, or park. The same
        * `DomainCommands.decideProposal` the brains' flows use, as the user: approval creates what
-       * the card asks for (decision 38) and wakes the card's owner. No policy is written here
-       * (an approved project starts on the global default; its table is edited through
-       * `/api/control`, floored for remote clients there).
+       * the card asks for (decision 38) and wakes the card's owner. The trust level the user
+       * chose on the card (decision 49) becomes the approved project's policy, floored for a
+       * remote request like every policy write (P2-21); later the table is edited through
+       * `/api/control`, floored there too.
        */
       app.post('/api/proposals/:id/decide', async (req, reply) => {
         const body = parse(ProposalDecisionBody, req.body, reply);
@@ -222,6 +223,7 @@ export function registerAgentRoutes(
             (req.params as { id: string }).id,
             decision,
             USER,
+            { origin: originOf(req) },
           );
           return { ok: true, state: value.state, seq: log.currentSeq() } satisfies DecideResponse;
         } catch (error) {

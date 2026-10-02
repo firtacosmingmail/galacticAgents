@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_PERMISSION_POLICY,
+  PERMISSION_POLICY_PRESETS,
   proposalParking,
   type Actor,
   type CreateProposalInput,
@@ -60,6 +62,75 @@ function flow(opts: ProposalOptions = {}) {
   };
   return { ...w, propose, decide, card, fillPlanets };
 }
+
+describe('trust level on the card (P2-22, decision 49)', () => {
+  it('the user sets it on the card; a local approval creates a trusted project', () => {
+    const f = flow({ policyWrite: { origin: 'local' } });
+    const { value: p } = f.propose(newProject('Lab'));
+    const edited = f.decide(p, { decision: 'edit', changes: { trust: 'trusted' } });
+    expect(edited.events).toEqual([
+      { type: 'proposal.edited', proposalId: p.id, changes: { trust: 'trusted' } },
+    ]);
+    expect(f.card(p.id).meta).toMatchObject({ trust: 'trusted' });
+    f.decide(p, { decision: 'approve' });
+    expect(f.tables.projects.all()[0]?.permissionPolicy).toEqual(PERMISSION_POLICY_PRESETS.trusted);
+  });
+
+  it('refuses a brain that tries to set it, and an unknown level', () => {
+    const f = flow({ policyWrite: { origin: 'local' } });
+    const { value: p } = f.propose(newProject('Lab'));
+    expect(() => f.decide(p, { decision: 'edit', changes: { trust: 'trusted' } }, AGENT)).toThrow(
+      /only the user/,
+    );
+    expect(() => f.decide(p, { decision: 'edit', changes: { trust: 'yolo' as never } })).toThrow(
+      /unknown trust level/,
+    );
+    expect(f.card(p.id).meta).not.toHaveProperty('trust');
+    f.decide(p, { decision: 'approve' }, AGENT);
+    expect(f.tables.projects.all()[0]).not.toHaveProperty('permissionPolicy');
+    // Nor can whoever proposes the card preset it.
+    const { value: q } = f.propose(
+      newProject('Preset', {
+        meta: { request: { type: 'new_project', name: 'Preset' }, trust: 'trusted' },
+      }),
+    );
+    expect(f.card(q.id).meta).toEqual({ request: { type: 'new_project', name: 'Preset' } });
+  });
+
+  it('a remote (or unknown-origin) approval is floored at the global default', () => {
+    for (const policyWrite of [{ origin: 'remote' as const }, {}]) {
+      const f = flow({ policyWrite });
+      const { value: p } = f.propose(newProject('Lab'));
+      f.decide(p, { decision: 'edit', changes: { trust: 'trusted' } });
+      f.decide(p, { decision: 'approve' });
+      expect(f.tables.projects.all()[0]?.permissionPolicy).toEqual({
+        ...DEFAULT_PERMISSION_POLICY,
+        unclassified: 'ask',
+      });
+    }
+    // …unless the server lets remote clients set up auto-approvals.
+    const f = flow({ policyWrite: { origin: 'remote', autoApproveRemote: true } });
+    const { value: p } = f.propose(newProject('Lab'));
+    f.decide(p, { decision: 'edit', changes: { trust: 'trusted' } });
+    f.decide(p, { decision: 'approve' });
+    expect(f.tables.projects.all()[0]?.permissionPolicy).toEqual(PERMISSION_POLICY_PRESETS.trusted);
+  });
+
+  it('back to default drops it; a cautious card stays cautious even from a remote approval', () => {
+    const f = flow({ policyWrite: { origin: 'remote' } });
+    const { value: p } = f.propose(newProject('Lab'));
+    f.decide(p, { decision: 'edit', changes: { trust: 'trusted' } });
+    f.decide(p, { decision: 'edit', changes: { trust: 'default' } });
+    expect(f.card(p.id).meta).not.toHaveProperty('trust');
+    const { value: q } = f.propose(
+      newProject('Careful', { proposedBody: { kind: 'planet', name: 'Careful' } }),
+    );
+    f.decide(q, { decision: 'edit', changes: { trust: 'cautious' } });
+    f.decide(q, { decision: 'approve' });
+    const careful = f.tables.projects.all().find((x) => x.name === 'Careful');
+    expect(careful?.permissionPolicy?.rules).toEqual(PERMISSION_POLICY_PRESETS.cautious.rules);
+  });
+});
 
 describe('proposal flow (P2-09)', () => {
   it('created → approved: the approval creates the project on the body the card names', () => {

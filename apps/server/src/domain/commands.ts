@@ -483,8 +483,14 @@ export class Commands implements DomainCommands {
   proposePlan(input: ProposePlanInput) {
     return this.run((ctx) => proposePlan(ctx, input));
   }
-  decideProposal(proposalId: Id, decision: ProposalDecision, by: Actor) {
-    return this.run((ctx) => decideProposal(ctx, proposalId, decision, by, this.proposalOptions));
+  /** The trust level an approval gives its project is floored unless `write.origin` is local. */
+  decideProposal(proposalId: Id, decision: ProposalDecision, by: Actor, write?: WriteOptions) {
+    return this.run((ctx) =>
+      decideProposal(ctx, proposalId, decision, by, {
+        ...this.proposalOptions,
+        policyWrite: this.policyWrite(write),
+      }),
+    );
   }
 
   // -- questions -------------------------------------------------------------------------------

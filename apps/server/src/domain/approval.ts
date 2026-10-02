@@ -1,5 +1,7 @@
 import {
+  PERMISSION_POLICY_PRESETS,
   proposalPromotion,
+  proposalTrust,
   type Body,
   type Project,
   type Proposal,
@@ -8,6 +10,7 @@ import {
 import type { ChooseOptions } from './catalogue.js';
 import type { CommandContext } from './event-log.js';
 import type { HandOverOptions } from './handover.js';
+import type { PolicyWrite } from './permissions.js';
 import { requestOf } from './parking.js';
 import { createProject } from './projects.js';
 import { createPromotedProject, moveProject } from './promotion.js';
@@ -32,6 +35,12 @@ export interface ProposalOptions extends ChooseOptions {
   checkWorkspace?: (path: string) => string;
   /** Hand-overs of a promotion moved in the approval (P2-12): prefer a living supervisor. */
   handOver?: HandOverOptions;
+  /**
+   * How the approval's policy write is judged (P2-21): the trust level chosen on the card
+   * (decision 49) becomes the new project's policy through `policyForWrite`, so a remote (or
+   * unknown) approval is floored at the global default. Absent: unknown origin.
+   */
+  policyWrite?: PolicyWrite;
 }
 
 export type CarriedOut =
@@ -94,6 +103,8 @@ export function carryOut(
   }
   const parentProjectId =
     request.type === 'new_project' && p.kind === 'moon' ? request.parentProjectId : undefined;
+  // The trust level the user chose on the card (decision 49); `default` writes no policy.
+  const trust = proposalTrust(p);
   const project = createProject(
     ctx,
     {
@@ -102,10 +113,12 @@ export function carryOut(
       kind: p.kind,
       ...(body ? { bodyId: body.id } : {}),
       ...(parentProjectId ? { parentProjectId } : {}),
+      ...(trust !== 'default' ? { permissionPolicy: PERMISSION_POLICY_PRESETS[trust] } : {}),
       // The user's consent on the card (decision 27): `Workspaces.prepareProject` reads it.
       meta: { proposalId, ...(p.meta?.['initGit'] === true ? { initGit: true } : {}) },
     },
     opts,
+    opts.policyWrite ?? {},
   );
   return { kind: 'project', project };
 }
