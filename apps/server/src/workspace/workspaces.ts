@@ -96,6 +96,38 @@ export interface MergeConflict {
   files: string[];
   workspace: string;
   worktreePath: string;
+  /**
+   * SPEC decision 30: the base branch's side of the conflict (its commits since the task branched,
+   * touching the conflicting files) holds commits that did not come from the project's own task
+   * branches — the user's or anyone else's. Then the user decides; otherwise the Waykeeper sends
+   * the task's Steward back to merge the base branch and resolve.
+   */
+  external: boolean;
+  /** Those commits, newest first (at most `EXTERNAL_COMMITS_SHOWN`). */
+  externalCommits: ExternalCommit[];
+  /** How many there are in all (the list may be cut). */
+  externalCount: number;
+}
+
+export interface ExternalCommit {
+  /** Abbreviated id. */
+  id: string;
+  subject: string;
+  author?: string;
+}
+
+/** How many external commits a conflict lists. */
+export const EXTERNAL_COMMITS_SHOWN = 20;
+
+/** What a successful merge recorded in `Task.meta.merge`. */
+export interface MergeRecord {
+  branch: string;
+  /** The base branch's commit after the merge. */
+  commit: string;
+  /** The base branch's commit before it: `before..commit` is what the task brought in. */
+  before?: string;
+  fastForward: boolean;
+  branchDeleted: boolean;
 }
 
 export type MergeResult =
@@ -106,6 +138,8 @@ export type MergeResult =
       baseBranch: string;
       /** The base branch's commit after the merge. */
       commit: string;
+      /** The base branch's commit before the merge. */
+      before: string;
       fastForward: boolean;
       /** The branch had nothing the base branch lacked. */
       nothingToMerge: boolean;
@@ -562,6 +596,7 @@ export class Workspaces {
           );
           await this.git(cwd, ['merge', '--abort'], { allowFailure: true });
           if (files.length > 0) {
+            const external = await this.externalCommits(cwd, project.id, branch, files);
             return {
               ok: false,
               reason: 'conflict',
@@ -573,6 +608,9 @@ export class Workspaces {
                 files,
                 workspace: project.workspace,
                 worktreePath: task.worktreePath!,
+                external: external.count > 0,
+                externalCommits: external.commits,
+                externalCount: external.count,
               },
             };
           }
@@ -589,6 +627,7 @@ export class Workspaces {
         branch,
         baseBranch,
         commit,
+        before,
         fastForward,
         nothingToMerge: ahead === 0,
         branchDeleted: deleted.code === 0,
@@ -608,9 +647,10 @@ export class Workspaces {
           merge: {
             branch,
             commit: result.commit,
+            before: result.before,
             fastForward: result.fastForward,
             branchDeleted: result.branchDeleted,
-          },
+          } satisfies MergeRecord,
         },
       });
     }
@@ -663,6 +703,59 @@ export class Workspaces {
   }
 
   // -- helpers ---------------------------------------------------------------------------------
+
+  /**
+   * The base branch's commits behind a conflict that the project did not merge itself (SPEC
+   * decision 30). The base side is `merge-base..HEAD` limited to the conflicting files (merge
+   * commits left out: their content is their parents'); a commit is the project's own when an
+   * earlier merge of one of its tasks brought it in (`meta.merge.before..commit`). Run inside the
+   * repository's lock, after the merge was aborted.
+   */
+  private async externalCommits(
+    cwd: string,
+    projectId: Id,
+    branch: string,
+    files: string[],
+  ): Promise<{ count: number; commits: ExternalCommit[] }> {
+    const base = (await this.git(cwd, ['merge-base', 'HEAD', branch])).stdout.trim();
+    const list = async (args: string[]) =>
+      (await this.git(cwd, ['rev-list', ...args], { allowFailure: true })).stdout
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+    let side = await list(['--full-history', '--no-merges', `${base}..HEAD`, '--', ...files]);
+    if (side.length === 0) side = await list(['--no-merges', `${base}..HEAD`]);
+    if (side.length === 0) return { count: 0, commits: [] };
+    const own = new Set<string>();
+    const tasks = this.need('tables')
+      .tasks.all()
+      .filter((t) => t.projectId === projectId);
+    for (const t of tasks) {
+      const merge = t.meta?.['merge'] as Partial<MergeRecord> | undefined;
+      if (!merge?.commit || !merge.before) continue;
+      if (!/^[0-9a-f]{7,64}$/.test(merge.commit) || !/^[0-9a-f]{7,64}$/.test(merge.before))
+        continue;
+      for (const c of await list([`${merge.before}..${merge.commit}`])) own.add(c);
+    }
+    const external = side.filter((c) => !own.has(c));
+    if (external.length === 0) return { count: 0, commits: [] };
+    const shown = external.slice(0, EXTERNAL_COMMITS_SHOWN);
+    const out = await this.git(cwd, [
+      'log',
+      '--no-walk=unsorted',
+      '--format=%h%x1f%an%x1f%s%x1e',
+      ...shown,
+    ]);
+    const commits = out.stdout
+      .split('\x1e')
+      .map((r) => r.trim())
+      .filter(Boolean)
+      .map((r) => {
+        const [id = '', author = '', subject = ''] = r.split('\x1f');
+        return { id, subject, ...(author ? { author } : {}) };
+      });
+    return { count: external.length, commits };
+  }
 
   /** Changed paths (`status --porcelain`), untracked included or not. */
   private async changes(cwd: string, untracked: boolean): Promise<string[]> {

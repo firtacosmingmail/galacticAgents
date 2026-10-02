@@ -11,6 +11,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
+import type { Workspaces } from '../workspace/workspaces.js';
 import type { WakeRules } from './wake.js';
 
 /**
@@ -28,6 +29,8 @@ export interface BrainQueries {
   /** Agents whose `supervisorId` is `brainId`, with their status records. */
   supervisedAgents(brainId: Id): { agent: Agent; status?: StatusRecord }[];
   project(projectId: Id): Project | undefined;
+  /** Any task, by id (P2-10). */
+  task(taskId: Id): Task | undefined;
   /** The tasks of a project, in creation order. */
   projectTasks(projectId: Id): Task[];
   /** Open clarification questions the brain holds or one of its agents asked. */
@@ -59,6 +62,18 @@ export interface BrainToolContext {
    */
   commands: DomainCommands;
   queries: BrainQueries;
+  /**
+   * A chat line from the brain to another agent (P2-10): its report to its supervisor, or an
+   * instruction to a live Steward it supervises. Logged as `message.sent` with the brain as the
+   * sender; refused (throws) when the agent is not running.
+   */
+  send(agentId: Id, text: string): { messageId: Id };
+  /**
+   * Workspaces and worktrees (P2-05), when the server was composed with its paths (`index.ts`
+   * passes `projectsRoot` and `dataDir`; tests pass temp folders). Absent: tools that need git
+   * refuse, and Stewards run in the project's workspace.
+   */
+  workspaces?: Workspaces;
 }
 
 export interface BrainTool {

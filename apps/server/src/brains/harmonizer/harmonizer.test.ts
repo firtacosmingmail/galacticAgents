@@ -169,6 +169,9 @@ describe('Harmonizer brain (P2-08)', () => {
           actor: { type: 'agent', id: hq.agentId },
           commands: h.commands,
           queries: h.queries,
+          send: () => {
+            throw new Error('not used here');
+          },
         },
       )
       .catch((e: { code: string }) => e.code);

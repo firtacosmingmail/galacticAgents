@@ -1,13 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  CreateProposalInput,
-  Id,
-  Proposal,
-  ProposalDecision,
-  ProposalState,
+import {
+  proposalPlan,
+  type Actor,
+  type CreateProposalInput,
+  type Id,
+  type Proposal,
+  type ProposalDecision,
+  type ProposalState,
+  type ProposePlanInput,
+  type Task,
 } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import { setTaskState } from './states.js';
+import { createTask } from './tasks.js';
 
 /**
  * Proposal commands (P2-01; SPEC §3.3, decisions 3 and 16). A proposal is the one card a work
@@ -60,19 +66,123 @@ export function createProposal(ctx: CommandContext, input: CreateProposalInput):
     state: 'pending',
     createdAt: ctx.now,
     updatedAt: ctx.now,
-    ...(input.meta ? { meta: input.meta } : {}),
+    ...(input.meta && Object.keys(input.meta).length > 0 ? { meta: input.meta } : {}),
   };
+  if (proposalPlan(proposal)) {
+    throw new DomainError('invalid', 'a plan card is made by proposePlan, with its tasks');
+  }
   ctx.tables.proposals.insert(proposal);
   ctx.emit({ type: 'proposal.created', proposal });
   return proposal;
+}
+
+/** Plan states in which a project takes no new plan: one is waiting for the user, or was approved. */
+const LIVE_PLAN: readonly ProposalState[] = ['pending', 'edited', 'parked', 'approved'];
+
+/** The project's plan cards, oldest first. */
+export function plansOf(ctx: Pick<CommandContext, 'tables'>, projectId: Id): Proposal[] {
+  return ctx.tables.proposals
+    .all()
+    .filter((p) => proposalPlan(p)?.projectId === projectId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/**
+ * A Waykeeper's task plan as one card (P2-10; SPEC §3.3, decision 3). The tasks are created
+ * `proposed` on the project's body and the card is a proposal whose `meta.plan` lists them; its
+ * size, body and workspace are the project's. One plan per project: refused while another plan
+ * card waits for the user or after one was approved (later tasks are added one by one). A new plan
+ * after a rejection replaces the rejected draft: its tasks still `proposed` are archived.
+ */
+export function proposePlan(
+  ctx: CommandContext,
+  input: ProposePlanInput,
+): { proposal: Proposal; tasks: Task[] } {
+  const project = must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
+  const waykeeper = must(ctx.tables.agents.get(input.waykeeperId), 'agent', input.waykeeperId);
+  if (waykeeper.role !== 'waykeeper' || waykeeper.projectId !== project.id) {
+    throw new DomainError('invalid', `${waykeeper.id} is not the Waykeeper of ${project.id}`);
+  }
+  if (!input.summary.trim()) throw new DomainError('invalid', 'a plan needs a summary');
+  if (input.tasks.length === 0) throw new DomainError('invalid', 'a plan needs at least one task');
+  const plans = plansOf(ctx, project.id);
+  const live = plans.find((p) => LIVE_PLAN.includes(p.state));
+  if (live) {
+    throw new DomainError(
+      live.state === 'approved' ? 'invalid_transition' : 'conflict',
+      live.state === 'approved'
+        ? `the plan of project ${project.id} was approved (${live.id}); add tasks one by one`
+        : `plan ${live.id} of project ${project.id} is waiting for the user`,
+    );
+  }
+  // The rejected drafts this plan replaces: their tasks that never started go to the archive.
+  for (const old of plans) {
+    for (const taskId of proposalPlan(old)!.taskIds) {
+      if (ctx.tables.tasks.get(taskId)?.state === 'proposed') {
+        setTaskState(ctx, taskId, 'archived', { type: 'agent', id: waykeeper.id });
+      }
+    }
+  }
+  const tasks: Task[] = [];
+  input.tasks.forEach((t, i) => {
+    const blockedBy = (t.blockedBy ?? []).map((b) => {
+      if (typeof b === 'string') return b;
+      if (!Number.isInteger(b) || b < 0 || b >= i) {
+        throw new DomainError('invalid', `task ${i} of the plan can only wait for earlier tasks`);
+      }
+      return tasks[b]!.id;
+    });
+    tasks.push(
+      createTask(ctx, {
+        description: t.description,
+        projectId: project.id,
+        state: 'proposed',
+        ...(t.priority ? { priority: t.priority } : {}),
+        ...(blockedBy.length > 0 ? { blockedBy } : {}),
+      }),
+    );
+  });
+  const body = must(ctx.tables.bodies.get(project.bodyId), 'body', project.bodyId);
+  const kind = body.kind === 'moon' ? 'moon' : 'planet';
+  const proposal: Proposal = {
+    id: `pr-${randomUUID()}`,
+    requestText: input.summary,
+    kind,
+    proposedBody: { kind, bodyId: body.id, name: body.name },
+    workspace: project.workspace,
+    rationale: input.rationale ?? '',
+    state: 'pending',
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    meta: {
+      plan: { projectId: project.id, waykeeperId: waykeeper.id, taskIds: tasks.map((t) => t.id) },
+    },
+  };
+  ctx.tables.proposals.insert(proposal);
+  ctx.emit({ type: 'proposal.created', proposal });
+  return { proposal, tasks };
 }
 
 export function decideProposal(
   ctx: CommandContext,
   proposalId: Id,
   decision: ProposalDecision,
+  by?: Actor,
 ): Proposal {
   const current = must(ctx.tables.proposals.get(proposalId), 'proposal', proposalId);
+  const plan = proposalPlan(current);
+  if (plan) {
+    // The user decides on a plan (decision 3), as one; it is edited through its tasks.
+    if (by?.type === 'agent') {
+      throw new DomainError('invalid', `plan ${proposalId} is the user's to decide`);
+    }
+    if (decision.decision === 'edit' || decision.decision === 'park') {
+      throw new DomainError(
+        'invalid',
+        `plan ${proposalId} is not ${DONE[decision.decision]}: edit its tasks, or reject it with a reason`,
+      );
+    }
+  }
   if (!ALLOWED[decision.decision].includes(current.state)) {
     throw new DomainError(
       'invalid_transition',
@@ -85,6 +195,12 @@ export function decideProposal(
     case 'approve': {
       const proposal = save({ state: 'approved' });
       ctx.emit({ type: 'proposal.approved', proposalId });
+      // A plan's tasks are approved with it (the ones the user archived meanwhile stay archived).
+      for (const taskId of plan?.taskIds ?? []) {
+        if (ctx.tables.tasks.get(taskId)?.state === 'proposed') {
+          setTaskState(ctx, taskId, 'approved', by);
+        }
+      }
       return proposal;
     }
     case 'edit': {

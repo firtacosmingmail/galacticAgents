@@ -10,6 +10,7 @@ import type {
 } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 import type { SpawnResult } from '../runtime/agent-runtime.js';
+import type { Workspaces } from '../workspace/workspaces.js';
 import {
   CARRY_SUMMARY_TOOL,
   TURN_ENDING_TOOLS,
@@ -81,6 +82,8 @@ export interface BrainRunnerOptions {
   /** How long a woken idle brain waits for more events before its turn starts. Default 0. */
   coalesceMs?: number;
   reset?: SessionResetPolicy;
+  /** Handed to the brain's tools as `ctx.workspaces` (P2-10). */
+  workspaces?: Workspaces;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -520,13 +523,19 @@ export class BrainRunner {
 
   private toolContext(): BrainToolContext {
     const brainId = this.agentId;
+    const actor: Actor = { type: 'agent', id: brainId };
     return {
       brainId,
       role: this.definition.role,
       ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
-      actor: { type: 'agent', id: brainId },
+      actor,
       commands: this.ownCommands(),
       queries: this.opts.queries,
+      // A line to another agent never wakes the brain: `message.sent` wakes only its addressee.
+      send: (agentId, text) => ({
+        messageId: this.opts.runtime.send(agentId, text, { sender: actor }).id,
+      }),
+      ...(this.opts.workspaces ? { workspaces: this.opts.workspaces } : {}),
     };
   }
 

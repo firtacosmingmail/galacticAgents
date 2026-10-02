@@ -18,6 +18,7 @@ import {
   type Id,
   type OpenQuestionInput,
   type ProposalDecision,
+  type ProposePlanInput,
   type ReopenInput,
   type SpawnAgentInput,
   type WorkState,
@@ -41,7 +42,7 @@ import {
   type ProjectChanges,
 } from './projects.js';
 import type { PolicyWrite } from './permissions.js';
-import { createProposal, decideProposal } from './proposals.js';
+import { createProposal, decideProposal, proposePlan } from './proposals.js';
 import {
   endAgentQuestions,
   holdersNow,
@@ -403,8 +404,11 @@ export class Commands implements DomainCommands {
   createProposal(input: CreateProposalInput) {
     return this.run((ctx) => createProposal(ctx, input));
   }
-  decideProposal(proposalId: Id, decision: ProposalDecision, _by: Actor) {
-    return this.run((ctx) => decideProposal(ctx, proposalId, decision));
+  proposePlan(input: ProposePlanInput) {
+    return this.run((ctx) => proposePlan(ctx, input));
+  }
+  decideProposal(proposalId: Id, decision: ProposalDecision, by: Actor) {
+    return this.run((ctx) => decideProposal(ctx, proposalId, decision, by));
   }
 
   // -- questions -------------------------------------------------------------------------------

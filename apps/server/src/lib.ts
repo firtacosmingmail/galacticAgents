@@ -120,5 +120,8 @@ export {
   type WorktreeInfo,
   type MergeResult,
   type MergeConflict,
+  type MergeRecord,
+  type ExternalCommit,
+  EXTERNAL_COMMITS_SHOWN,
 } from './workspace/workspaces.js';
 export { gitRunner, GitError, SAFE_GIT_CONFIG, type Git } from './workspace/git.js';

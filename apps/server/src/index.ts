@@ -35,6 +35,8 @@ const composed = composeRuntime(db, {
       onError,
     }),
   ],
+  // Brain tools create worktrees and merge through this service (P2-05, P2-10).
+  workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
   autoApproveRemote: config.autoApproveRemote,
 });

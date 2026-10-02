@@ -112,8 +112,30 @@ export interface CreateProposalInput {
   proposedBody: ProposedBody;
   workspace: string;
   rationale: string;
-  /** Stored as the row's `meta`: what the card asks for (the Harmonizer's `request`, P2-08). */
+  /** Speculative card data (a promotion request's task, …); a plan card is made by `proposePlan`. */
   meta?: Meta;
+}
+
+/** One task of a Waykeeper's plan (P2-10). */
+export interface PlanTaskInput {
+  description: string;
+  priority?: TaskPriority;
+  /** Earlier tasks of the same plan (0-based positions) or existing task ids. */
+  blockedBy?: (number | Id)[];
+}
+
+/**
+ * A Waykeeper's task plan (P2-10; SPEC §3.3): its tasks are created `proposed` and the plan card
+ * (a proposal carrying `meta.plan`) is created with them, in one transaction.
+ */
+export interface ProposePlanInput {
+  projectId: Id;
+  /** The Waykeeper presenting the plan. */
+  waykeeperId: Id;
+  /** What the plan does, one or two lines: the card's text. */
+  summary: string;
+  rationale?: string;
+  tasks: PlanTaskInput[];
 }
 
 export type ProposalDecision =
@@ -221,6 +243,10 @@ export interface DomainCommands {
 
   // proposals (SPEC §3.3)
   createProposal(input: CreateProposalInput): Promise<CommandResult<Proposal>>;
+  /** A Waykeeper's plan card and its `proposed` tasks, in one transaction (P2-10). */
+  proposePlan(
+    input: ProposePlanInput,
+  ): Promise<CommandResult<{ proposal: Proposal; tasks: Task[] }>>;
   decideProposal(
     proposalId: Id,
     decision: ProposalDecision,
