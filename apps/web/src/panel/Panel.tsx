@@ -4,12 +4,12 @@ import { useAppStore } from '../state/store.js';
 import { summaryOf, type WorldState } from '../state/reduce.js';
 import { HARMONIZER, selectionKey, type Selection } from '../state/selection.js';
 import { createApi, type Api } from '../console/api.js';
-import { ChatBox } from '../console/hierarchy/ChatBox.js';
 import { currentHarmonizer } from '../console/hierarchy/HierarchyConsole.js';
 import { ProposalCards } from '../console/hierarchy/ProposalCards.js';
 import { QuestionInbox } from '../console/hierarchy/QuestionInbox.js';
 import { StewardView } from '../console/hierarchy/StewardView.js';
 import { ApiContext, agentLabel, StatePill } from '../console/hierarchy/shared.js';
+import { Conversation } from './chat/Conversation.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
 import './panel.css';
 
@@ -17,8 +17,8 @@ import './panel.css';
  * The side panel (P25-02, SPEC §4.2) in "list mode", the only mode for now: the navigation on
  * the left, the selected conversation or Steward view in the middle, the managed agents and the
  * inbox on the right. Everything comes from the store (TECHNOLOGY §6.3); the selection is the
- * store's too, mirrored in the URL. The main area and the right column reuse P2-18's pieces until
- * P25-03 … P25-06 replace them.
+ * store's too, mirrored in the URL. The main area's chat is P25-03's; the Steward view and the right
+ * column reuse P2-18's pieces until P25-04 … P25-06 replace them.
  */
 export function Panel({
   token,
@@ -123,14 +123,8 @@ function MainArea() {
     // Read-only (decision 13); P25-05 replaces this view.
     content = <StewardView key={agent.id} agentId={agent.id} />;
   } else {
-    // P25-03 replaces this chat.
-    content = (
-      <ChatBox
-        key={agent.id}
-        agentId={agent.id}
-        {...(agent.role === 'harmonizer' ? { title: 'Harmonizer' } : {})}
-      />
-    );
+    // The Harmonizer or a Waykeeper: the conversation (P25-03).
+    content = <Conversation key={agent.id} agentId={agent.id} />;
   }
 
   return (
