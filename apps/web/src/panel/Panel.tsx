@@ -8,9 +8,9 @@ import { ChatBox } from '../console/hierarchy/ChatBox.js';
 import { currentHarmonizer } from '../console/hierarchy/HierarchyConsole.js';
 import { ProposalCards } from '../console/hierarchy/ProposalCards.js';
 import { QuestionInbox } from '../console/hierarchy/QuestionInbox.js';
-import { StewardView } from '../console/hierarchy/StewardView.js';
 import { ApiContext, agentLabel, StatePill } from '../console/hierarchy/shared.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
+import { StewardPanelView } from './steward/StewardPanelView.js';
 import './panel.css';
 
 /**
@@ -120,8 +120,8 @@ function MainArea() {
         <Empty>Loading…</Empty>
       );
   } else if (agent.role === 'steward') {
-    // Read-only (decision 13); P25-05 replaces this view.
-    content = <StewardView key={agent.id} agentId={agent.id} />;
+    // Read-only except an open clarification's answer (decision 13; P25-05).
+    content = <StewardPanelView key={agent.id} agentId={agent.id} />;
   } else {
     // P25-03 replaces this chat.
     content = (

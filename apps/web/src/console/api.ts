@@ -10,6 +10,7 @@ import type {
   SendResponse,
   SpawnBody,
   SpawnResponse,
+  TranscriptResponse,
 } from '@galactic/protocol';
 
 /**
@@ -51,6 +52,16 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
   };
   return {
     runtimes: () => call<RuntimesInfo>('GET', '/api/runtimes'),
+    /** `GET /api/agents/:id/transcript` (P25-01), paged by `seq`; without a cursor the newest page. */
+    transcript: (agentId: string, query: { before?: number; after?: number; limit?: number } = {}) => {
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(query)) if (v !== undefined) params.set(k, String(v));
+      const qs = params.toString();
+      return call<TranscriptResponse>(
+        'GET',
+        `/api/agents/${encodeURIComponent(agentId)}/transcript${qs ? `?${qs}` : ''}`,
+      );
+    },
     spawn: (input: SpawnBody) => call<SpawnResponse>('POST', '/api/agents', input),
     send: (agentId: string, text: string, interrupt: boolean) =>
       call<SendResponse>('POST', `/api/agents/${agentId}/send`, {
