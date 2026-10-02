@@ -109,7 +109,9 @@ async function firstLife(h: BrainHarness, w: World) {
       scriptOptions: { strict: false },
       script: (s) =>
         s.on(/was added to your project/, async (t) => {
-          for (const m of t.prompt.matchAll(/task (\S+) was added to your project[^:]*: "([^"]+)"/g)) {
+          for (const m of t.prompt.matchAll(
+            /task (\S+) was added to your project[^:]*: "([^"]+)"/g,
+          )) {
             await t.call('spawn_steward', {
               taskId: m[1],
               instructions: `scenario:${m[2]!.split(' ')[0]}\nDo it.`,
@@ -221,10 +223,10 @@ describe('hierarchy restart and resume (P2-16)', () => {
     expect(respawned.slice(0, 2)).toEqual([one.hq.agentId, one.wk.agentId]);
     expect(new Set(respawned.slice(2))).toEqual(new Set([one.asker.id, one.noter.id]));
 
-    await h2.until(
-      () => h2.statuses.get(one.asker.id)?.state === 'waiting_for_input',
-      { ...LONG, what: 'the asking Steward to ask again' },
-    );
+    await h2.until(() => h2.statuses.get(one.asker.id)?.state === 'waiting_for_input', {
+      ...LONG,
+      what: 'the asking Steward to ask again',
+    });
     await h2.settle(LONG);
     for (const id of [one.hq.agentId, one.wk.agentId, one.asker.id, one.noter.id]) {
       expect(['working', 'idle', 'waiting_for_input']).toContain(h2.statuses.get(id)?.state);
@@ -233,9 +235,13 @@ describe('hierarchy restart and resume (P2-16)', () => {
     const hq2 = h2.brains.find((b) => b.agentId === one.hq.agentId)! as HarnessBrain;
     const wk2 = h2.brains.find((b) => b.agentId === one.wk.agentId)! as HarnessBrain;
     // The first turn after the resume folds what the brain had not consumed.
-    const wkResume = wk2.prompts().find((p) => p.includes('your session as the waykeeper was resumed'))!;
+    const wkResume = wk2
+      .prompts()
+      .find((p) => p.includes('your session as the waykeeper was resumed'))!;
     expect(wkResume).toContain('the user said: "please add a README task too"');
-    const hqResume = hq2.prompts().find((p) => p.includes('your session as the harmonizer was resumed'))!;
+    const hqResume = hq2
+      .prompts()
+      .find((p) => p.includes('your session as the harmonizer was resumed'))!;
     expect(hqResume).toContain(`answered ${one.nameQ}: "notes-cli"`);
     // … and only that: nothing the brain already saw or did itself.
     expect(hqResume).not.toContain('Which licence?');
@@ -312,6 +318,106 @@ describe('hierarchy restart and resume (P2-16)', () => {
     await h2.settle(LONG);
     expect(wk2.calls('list_supervised_agents')).toMatchObject([{ ok: true }]);
     expect(h2.log.tables.agents.all().filter((a) => a.role === 'waykeeper')).toHaveLength(1);
+  });
+
+  it('a resumed Steward cut short mid-work reports when its resumed turn ends', async () => {
+    const w = world();
+    let lives = 0;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    // Mid-work at the crash in the first life; the resumed session finishes the step.
+    w.scenarios['slow'] = {
+      steps: [
+        {
+          kind: 'script',
+          run: async (io) => {
+            if (++lives === 1) await held;
+            io.output('Done: finished after the restart.');
+          },
+        },
+      ],
+    };
+    const h1 = boot(w);
+    const hq = await h1.startHarmonizer({ definition: hqDefinition() });
+    const task = (
+      await h1.commands.createTask({ description: 'slow job', meta: { workspace: '/w/s' } })
+    ).value;
+    const steward = (
+      await h1.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        supervisorId: hq.agentId,
+        cwd: '/w/s',
+        prompt: 'scenario:slow',
+      })
+    ).value;
+    await h1.until(() => lives === 1);
+    await h1.settle(LONG);
+    h1.crash();
+
+    const h2 = boot(w);
+    defineBrains(h2);
+    h2.script('harmonizer', { strict: false });
+    const { report } = await h2.recover();
+    expect(report.resumed).toEqual([hq.agentId, steward.id]);
+    const reportOf = () =>
+      events(h2).find(
+        ({ event: e }) =>
+          e.type === 'message.sent' && e.sender.type === 'agent' && e.sender.id === steward.id,
+      );
+    await h2.until(() => reportOf() !== undefined, { ...LONG, what: 'the report' });
+    expect((reportOf()!.event as Extract<Event, { type: 'message.sent' }>).text).toContain(
+      'Done: finished after the restart.',
+    );
+    await h2.settle(LONG);
+    release(); // the dead first life's session may end now (its events go nowhere)
+  });
+
+  it('closure requests no living Harmonizer relayed are in the next Harmonizer’s first turn', async () => {
+    const w = world();
+    const h1 = boot(w);
+    // An earlier Harmonizer asked the user about one project, then the server went down; it
+    // cannot be resumed. Another project's request was recorded while no Harmonizer ran.
+    const old = (
+      await h1.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        cwd: '/w/hq',
+        prompt: 'scenario:echo',
+      })
+    ).value;
+    const asked = (await h1.commands.createProject({ name: 'Asked', workspace: '/w/a' })).value;
+    const unasked = (await h1.commands.createProject({ name: 'Unasked', workspace: '/w/u' })).value;
+    const { value: q } = await h1.commands.openQuestion({
+      kind: 'clarification',
+      originAgentId: old.id,
+      context: { text: 'Anything else on Asked?' },
+    });
+    await h1.commands.updateProject(asked.id, {
+      meta: { closureRequest: { by: 'a-wk', summary: 'all done', tasks: 1, questionId: q.id } },
+    });
+    await h1.commands.updateProject(unasked.id, {
+      meta: { closureRequest: { by: 'a-wk2', summary: 'shipped', tasks: 2 } },
+    });
+    await h1.composed.shutdown();
+    // The old Harmonizer's question survived its interruption (it was asked through a tool).
+    expect(h1.log.tables.questions.get(q.id)?.status).toBe('open');
+    h1.log.runCommand((ctx) => {
+      const { sessionRef: _ref, ...rest } = ctx.tables.agents.get(old.id)!;
+      ctx.tables.agents.upsert(rest);
+    });
+
+    const h2 = boot(w);
+    const { report } = await h2.recover();
+    expect(report.needAttention).toEqual([old.id]);
+    const hq = await h2.startHarmonizer({ definition: hqDefinition() });
+    await h2.settle(LONG);
+    const first = hq.prompts()[0]!;
+    expect(first).toContain(`project ${unasked.id} ("Unasked") asked for closure`);
+    expect(first).toContain(`project ${asked.id} ("Asked") asked for closure`);
+    // The stale question is withdrawn: the new Harmonizer asks again and hears the answer.
+    expect(h2.log.tables.questions.get(q.id)?.status).toBe('cancelled');
   });
 
   it("the panel's resume action brings an interrupted brain back as a brain", async () => {

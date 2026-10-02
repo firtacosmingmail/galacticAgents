@@ -170,7 +170,7 @@ describe('BrainRunner', () => {
     const lines = rig.brain.runner.turns[1]!.items.map((i) => i.line);
     expect(lines).toHaveLength(2);
     expect(lines.every((l) => /finished: "Done: fixed the flaky date test."$/.test(l))).toBe(true);
-    expect(rig.brain.runner.turns[1]!.items.map((i) => i.event.type)).toEqual([
+    expect(rig.brain.runner.turns[1]!.items.map((i) => i.event?.type)).toEqual([
       'agent.finished',
       'agent.finished',
     ]);

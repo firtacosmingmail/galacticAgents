@@ -345,8 +345,7 @@ export class BrainHarness {
     for (const id of report.resumed) {
       const runner = this.composed.runnerOf(id);
       if (!runner || this.brains.some((b) => b.agentId === id)) continue;
-      const transcript =
-        this.transcript(id) ?? new BrainTranscript(id, runner.definition.role);
+      const transcript = this.transcript(id) ?? new BrainTranscript(id, runner.definition.role);
       const brain = new HarnessBrain(this, runner, transcript);
       this.brains.push(brain);
       resumed.push(brain);

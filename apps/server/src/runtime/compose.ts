@@ -144,10 +144,7 @@ function placementOf(agent: Agent): BrainPlacement {
 }
 
 /** The recovery report as the Harmonizer reads it (P2-16). */
-export function recoveryNote(
-  report: RecoveryReport,
-  describe: (agentId: Id) => string,
-): string {
+export function recoveryNote(report: RecoveryReport, describe: (agentId: Id) => string): string {
   const n = report.resumed.length;
   const m = report.needAttention.length;
   const attention =

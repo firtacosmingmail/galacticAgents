@@ -131,6 +131,8 @@ export function requeue(
       continue;
     }
     if (event.type === 'message.sent' && delivered.has(event.messageId)) continue;
+    // The runner's own turn prompts: what they folded is requeued itself.
+    if (turnMessages.has((event as { messageId?: Id }).messageId ?? '')) continue;
     const actor = actorOf(event);
     if (isAgent(actor, brainId)) continue;
     if (inOwnTurn && !actor) continue;
