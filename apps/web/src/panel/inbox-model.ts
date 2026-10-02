@@ -68,3 +68,17 @@ export function inboxModel(world: Pick<WorldState, 'questions' | 'proposals'>): 
     rejected: proposals.filter((p) => p.state === 'rejected'),
   };
 }
+
+/**
+ * How many things wait for the user: the open questions they hold and the cards waiting for
+ * their decision (pending or edited) — the inbox's "Waiting for you" group. The top bar and the
+ * inbox header both show this one number, so they always agree.
+ */
+export function waitingForUserCount(world: Pick<WorldState, 'questions' | 'proposals'>): number {
+  let n = 0;
+  for (const q of Object.values(world.questions))
+    if (q.status === 'open' && q.holder.type === 'user') n++;
+  for (const p of Object.values(world.proposals))
+    if (p.state === 'pending' || p.state === 'edited') n++;
+  return n;
+}
