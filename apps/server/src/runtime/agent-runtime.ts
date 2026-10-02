@@ -840,12 +840,18 @@ export class AgentRuntime {
     }
     // One Harmonizer at a time (SPEC decision 32): of several interrupted ones, only the newest
     // comes back; the others stay interrupted for the user to look at.
+    const created = new Map(this.opts.log.tables.agents.all().map((a, i) => [a.id, i]));
     const harmonizers = this.opts.statuses
       .all()
       .filter((r) => r.state === 'interrupted')
       .map((r) => this.opts.log.tables.agents.get(r.agentId))
       .filter((a): a is Agent => a?.role === 'harmonizer')
-      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+      // Newest first; rows created in the same millisecond by creation order (the table's).
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) ||
+          (created.get(b.id) ?? 0) - (created.get(a.id) ?? 0),
+      );
     const passedOver = new Set(harmonizers.slice(1).map((a) => a.id));
     // Supervisors before their Stewards (P2-16, P2-03): a resumed Steward re-asks its questions,
     // and they must find its Waykeeper (or the Harmonizer) running, not climb to the user.
