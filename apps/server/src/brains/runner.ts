@@ -142,6 +142,12 @@ export class BrainRunner {
   private turnMessage: { id: string; folded: Id[] } | undefined;
   private scope: WakeScope | undefined;
   private waiters: (() => void)[] = [];
+  /**
+   * Resolves once the brain's agent id is known (or the spawn failed). The adapter may start the
+   * first turn before `spawnAgent` returns the id; a tool call in that turn waits for it here.
+   */
+  private readonly ready: Promise<void>;
+  private markReady!: () => void;
   /** Every turn so far (tests, the ops console later). */
   readonly turns: TurnRecord[] = [];
   private readonly coalesceMs: number;
@@ -154,6 +160,7 @@ export class BrainRunner {
   ) {
     this.coalesceMs = opts.coalesceMs ?? 0;
     this.onError = opts.onError ?? (() => {});
+    this.ready = new Promise((resolve) => (this.markReady = resolve));
   }
 
   /** Spawns the brain and starts driving it. Rejects (and leaves no runner) when the spawn is refused. */
@@ -255,6 +262,7 @@ export class BrainRunner {
       agentId = value.id;
     } catch (error) {
       this.end();
+      this.markReady();
       throw error;
     }
     this.id = agentId;
@@ -267,6 +275,7 @@ export class BrainRunner {
     const early = this.early ?? [];
     this.early = undefined;
     for (const env of early) this.onEnvelope(env);
+    this.markReady();
   }
 
   /** Reopens the brain on its agent row (P2-16). */
@@ -278,6 +287,7 @@ export class BrainRunner {
     }
     this.id = agentId;
     this.early = undefined;
+    this.markReady();
     this.stateValue = 'renewing'; // a failed resume's `agent.interrupted` must not end the runner
     this.scope = createWakeScope(log.tables, {
       brainId: agentId,
@@ -616,6 +626,12 @@ export class BrainRunner {
   }
 
   private async runTool(tool: BrainTool, input: unknown): Promise<unknown> {
+    // The first turn can start before the spawn returned the brain's id (a fast adapter, a brain
+    // started inside another brain's tool): its calls wait for the id and the early events.
+    if (!this.id) await this.ready;
+    if (!this.id) {
+      return { error: 'not_running', message: 'the brain could not be started' };
+    }
     const turn = this.current;
     if (turn?.endedBy) {
       return {
