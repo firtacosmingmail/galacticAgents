@@ -3,6 +3,7 @@ import {
   type Actor,
   type Agent,
   type AgentRuntime,
+  type BodyChoice,
   type EventEnvelope,
   type Id,
   type Project,
@@ -16,10 +17,11 @@ import { DomainError, must } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import {
   carriedOut,
+  createPromotedProject,
   moveProject,
+  promotionRoom,
   recordPromotion,
   transferTask,
-  usableBody,
 } from '../domain/promotion.js';
 
 /**
@@ -55,6 +57,12 @@ export interface PromotionFlowOptions {
     supervisorId: Id;
     runtime: AgentRuntime;
   }) => Promise<{ agentId: Id }>;
+  /**
+   * The body a card that needs one gets now. Default `promotionRoom`: the card's body while it is
+   * free, else the catalogue's choice. At the P2-09 merge, pass its `roomFor`, so a promotion and
+   * a plain card take their body the same way.
+   */
+  roomFor?: (p: Proposal) => BodyChoice | undefined;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -144,7 +152,7 @@ export class PromotionFlow {
     try {
       outcome =
         request.target.kind === 'project'
-          ? await this.promoteProject(proposal, request)
+          ? this.promoteProject(proposal, request)
           : await this.promoteTask(proposal, request);
     } catch (error) {
       outcome = {
@@ -168,7 +176,7 @@ export class PromotionFlow {
     const fromBodyId = req.fromBodyId ?? task.bodyId;
     const project = req.toProjectId
       ? must(tables.projects.get(req.toProjectId), 'project', req.toProjectId)
-      : await this.projectFor(p, req);
+      : this.projectFor(p);
     const waykeeperId = await this.ensureWaykeeper(project, req);
     const handOver = { isLiving: this.isLive() };
     const now = must(tables.tasks.get(task.id), 'task', task.id);
@@ -191,44 +199,24 @@ export class PromotionFlow {
     };
   }
 
-  /** The card's new project: created once (found again by `meta.proposalId` on a retry). */
-  private async projectFor(p: Proposal, req: PromotionRequest): Promise<Project> {
-    const { log, commands } = this.opts;
-    const tables = log.tables;
-    const existing = tables.projects.all().find((x) => x.meta?.['proposalId'] === p.id);
+  /**
+   * The card's new project: one an earlier attempt (or, after the P2-09 merge, the approval
+   * transaction) created for it, else created now on the body `room` gives.
+   */
+  private projectFor(p: Proposal): Project {
+    const { log } = this.opts;
+    const existing = log.tables.projects.all().find((x) => x.meta?.['proposalId'] === p.id);
     if (existing) return existing;
-    if (p.kind === 'asteroid') {
-      throw new DomainError(
-        'invalid',
-        `proposal ${p.id} was resized to an asteroid: nothing grows`,
-      );
-    }
-    const task = must(tables.tasks.get(req.target.id), 'task', req.target.id);
-    const from = req.fromProjectId ? tables.projects.get(req.fromProjectId) : undefined;
-    // A Waykeeper's moon is a sub-project of its project (SPEC §3.2) — unless the user put it on
-    // a moon of another planet on the card, which makes it a project of its own.
-    const named = p.proposedBody.bodyId ? tables.bodies.get(p.proposedBody.bodyId) : undefined;
-    const sub =
-      from !== undefined && p.kind === 'moon' && (!named || named.parentId === from.bodyId);
-    const body = usableBody(log, p.proposedBody.bodyId, p.kind);
-    const { value } = await commands.createProject({
-      name: req.name ?? nameOf(task.description),
-      workspace: p.workspace,
-      kind: p.kind,
-      ...(body ? { bodyId: body.id } : {}),
-      ...(sub ? { parentProjectId: from.id } : {}),
-      meta: {
-        proposalId: p.id,
-        // The permanent link in history (decision 15), besides the `body.moved` event.
-        promotedFrom: {
-          kind: 'task',
-          taskId: task.id,
-          bodyId: req.fromBodyId ?? task.bodyId,
-          ...(task.projectId ? { projectId: task.projectId } : {}),
-        },
-      },
-    });
-    return value;
+    const body = this.room(p);
+    return log.runCommand((ctx) => createPromotedProject(ctx, p, body)).value;
+  }
+
+  /** The body a card needing one gets now, or a refusal naming what is occupied. */
+  private room(p: Proposal) {
+    const choice = this.opts.roomFor ? this.opts.roomFor(p) : promotionRoom(this.opts.log, p);
+    if (!choice) throw new DomainError('invalid', `proposal ${p.id} needs no new body`);
+    if (!choice.ok) throw new DomainError('conflict', describeRefusal(choice));
+    return choice.body;
   }
 
   /**
@@ -269,22 +257,17 @@ export class PromotionFlow {
 
   // -- a project moves to a bigger body --------------------------------------------------------
 
-  private async promoteProject(p: Proposal, req: PromotionRequest): Promise<PromotionOutcome> {
-    const { log, commands } = this.opts;
+  private promoteProject(p: Proposal, req: PromotionRequest): PromotionOutcome {
+    const { log } = this.opts;
     const project = must(log.tables.projects.get(req.target.id), 'project', req.target.id);
     const fromBodyId = req.fromBodyId ?? project.bodyId;
     if (p.kind === 'asteroid') {
       throw new DomainError('invalid', 'a project lives on a planet or a moon');
     }
     let toBodyId = project.bodyId;
+    // Moved already (an earlier attempt that was not recorded): nothing left to move.
     if (project.bodyId === fromBodyId) {
-      const named = usableBody(log, p.proposedBody.bodyId, p.kind);
-      if (named) toBodyId = named.id;
-      else {
-        const choice = await commands.chooseBody({ kind: p.kind });
-        if (!choice.ok) throw new DomainError('conflict', describeRefusal(choice));
-        toBodyId = choice.body.id;
-      }
+      toBodyId = this.room(p).id;
       log.runCommand((ctx) => moveProject(ctx, project.id, toBodyId, { isLiving: this.isLive() }));
     }
     const live = this.isLive();
@@ -337,10 +320,4 @@ export class PromotionFlow {
     const ids = new Set(this.opts.liveAgents().map((a) => a.id));
     return (id) => ids.has(id);
   }
-}
-
-/** A project name from a task description: its first line, at most 60 characters. */
-function nameOf(description: string): string {
-  const line = description.split('\n')[0]!.trim();
-  return line.length > 60 ? `${line.slice(0, 59)}…` : line || 'Promoted task';
 }

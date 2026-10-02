@@ -1,18 +1,22 @@
 import {
   proposalPromotion,
   type Body,
+  type BodyChoice,
+  type BodyRequest,
   type Host,
   type Id,
+  type Project,
   type PromotionOutcome,
+  type PromotionRequest,
   type Proposal,
   type Task,
 } from '@galactic/protocol';
 import { moveAgents, moveHost } from './bodies.js';
-import { isFree } from './catalogue.js';
+import { chooseBody, isFree, type ChooseOptions, type Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { handOverTask, type HandOverOptions } from './handover.js';
-import { updateProject } from './projects.js';
+import { createProject, updateProject } from './projects.js';
 import { FINISHED_WORK } from './states.js';
 
 /**
@@ -128,10 +132,96 @@ export function recordPromotion(
 
 /** A body the card names that can still take the work: free and of the card's kind. */
 export function usableBody(
-  ctx: Pick<CommandContext, 'tables'>,
+  ctx: Reader,
   bodyId: Id | undefined,
   kind: Body['kind'],
 ): Body | undefined {
   const body = bodyId ? ctx.tables.bodies.get(bodyId) : undefined;
   return body && body.kind === kind && isFree(body) ? body : undefined;
+}
+
+/**
+ * The project a Waykeeper's moon becomes a sub-project of (SPEC §3.2): the requesting project —
+ * unless the user put the card on a moon of another planet, which makes it a project of its own.
+ */
+export function promotedParent(ctx: Reader, p: Proposal, req: PromotionRequest): Id | undefined {
+  if (req.target.kind !== 'task' || !req.fromProjectId || p.kind !== 'moon') return undefined;
+  const from = ctx.tables.projects.get(req.fromProjectId);
+  if (!from) return undefined;
+  const named = p.proposedBody.bodyId ? ctx.tables.bodies.get(p.proposedBody.bodyId) : undefined;
+  return !named || named.parentId === from.bodyId ? from.id : undefined;
+}
+
+/** The catalogue request of a promotion that needs a new body (none for a move into a project). */
+export function promotionBodyRequest(ctx: Reader, p: Proposal): BodyRequest | undefined {
+  const req = proposalPromotion(p);
+  if (!req || req.toProjectId || p.kind === 'asteroid') return undefined;
+  if (p.kind === 'planet') return { kind: 'planet' };
+  const parentProjectId = promotedParent(ctx, p, req);
+  return parentProjectId ? { kind: 'moon', parentProjectId } : { kind: 'moon' };
+}
+
+/**
+ * The body a promotion gets now: the one the card names while it is free, of the card's kind and
+ * (for a sub-project) a moon of the parent's planet; else the catalogue's choice. P2-09's
+ * `roomFor` does the same for the Harmonizer's cards (and parks them when nothing is free).
+ */
+export function promotionRoom(
+  ctx: Reader,
+  p: Proposal,
+  opts: ChooseOptions = {},
+): BodyChoice | undefined {
+  const request = promotionBodyRequest(ctx, p);
+  if (!request) return undefined;
+  const named = usableBody(ctx, p.proposedBody.bodyId, request.kind);
+  if (named) {
+    const parentPlanet =
+      'parentProjectId' in request && request.parentProjectId
+        ? ctx.tables.projects.get(request.parentProjectId)?.bodyId
+        : undefined;
+    if (!parentPlanet || named.parentId === parentPlanet) return { ok: true, body: named };
+  }
+  return chooseBody(ctx, request, opts);
+}
+
+/**
+ * The new project of a task promotion card, on `body`: created once (found again by
+ * `meta.proposalId`), with `meta.promotedFrom` — the permanent link in history (decision 15),
+ * besides the `body.moved` event. A Waykeeper's moon is a sub-project of its project. Usable in
+ * the approval transaction (P2-09's `carryOut`) as well as by the flow.
+ */
+export function createPromotedProject(ctx: CommandContext, p: Proposal, body: Body): Project {
+  const existing = ctx.tables.projects.all().find((x) => x.meta?.['proposalId'] === p.id);
+  if (existing) return existing;
+  const req = proposalPromotion(p);
+  if (!req || req.target.kind !== 'task' || req.toProjectId) {
+    throw new DomainError('invalid', `proposal ${p.id} does not make a new project`);
+  }
+  if (p.kind === 'asteroid') {
+    throw new DomainError('invalid', `proposal ${p.id} was resized to an asteroid: nothing grows`);
+  }
+  const task = must(ctx.tables.tasks.get(req.target.id), 'task', req.target.id);
+  const parentProjectId = promotedParent(ctx, p, req);
+  return createProject(ctx, {
+    name: req.name ?? nameOf(task.description),
+    workspace: p.workspace,
+    kind: p.kind,
+    bodyId: body.id,
+    ...(parentProjectId ? { parentProjectId } : {}),
+    meta: {
+      proposalId: p.id,
+      promotedFrom: {
+        kind: 'task',
+        taskId: task.id,
+        bodyId: req.fromBodyId ?? task.bodyId,
+        ...(task.projectId ? { projectId: task.projectId } : {}),
+      },
+    },
+  });
+}
+
+/** A project name from a task description: its first line, at most 60 characters. */
+export function nameOf(description: string): string {
+  const line = description.split('\n')[0]!.trim();
+  return line.length > 60 ? `${line.slice(0, 59)}…` : line || 'Promoted task';
 }

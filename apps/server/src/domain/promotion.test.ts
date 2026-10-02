@@ -7,8 +7,10 @@ import { createProject } from './projects.js';
 import { createProposal } from './proposals.js';
 import {
   carriedOut,
+  createPromotedProject,
   isPromotion,
   moveProject,
+  promotionRoom,
   recordPromotion,
   transferTask,
 } from './promotion.js';
@@ -175,5 +177,58 @@ describe('promotion cards', () => {
       run((ctx) => recordPromotion(ctx, harmonizerCard.id, { ...outcome, ok: false })).events,
     ).toEqual([]);
     expect(() => run((ctx) => recordPromotion(ctx, plain.id, outcome))).toThrow(/not a promotion/);
+  });
+});
+
+describe('the new project of a task promotion', () => {
+  it("puts a Waykeeper's moon on its planet as a sub-project, once; a taken body falls back to the catalogue", () => {
+    const { run, tables, planet } = setup();
+    const auth = run((ctx) => createTask(ctx, { projectId: planet.id, description: 'auth' })).value;
+    const card = run((ctx) =>
+      createProposal(ctx, {
+        requestText: 'promote auth',
+        kind: 'moon',
+        // Titan was named on the card, then taken before the approval.
+        proposedBody: { kind: 'moon', name: 'Titan', bodyId: 'b-titan', parentId: 'b-saturn' },
+        workspace: '/w/app',
+        rationale: 'r',
+        meta: { promotion: { taskId: auth.id, fromProjectId: planet.id, requestedBy: 'a-x' } },
+      }),
+    ).value;
+    run((ctx) => createProject(ctx, { name: 'Squat', workspace: '/w/s', bodyId: 'b-titan' }));
+    const room = promotionRoom({ tables }, card);
+    const body = room?.ok ? room.body : undefined;
+    expect(body).toMatchObject({ kind: 'moon', parentId: 'b-saturn' });
+    expect(body?.id).not.toBe('b-titan');
+    const project = run((ctx) => createPromotedProject(ctx, card, body!)).value;
+    expect(project).toMatchObject({
+      name: 'auth',
+      parentProjectId: planet.id,
+      bodyId: body!.id,
+      meta: {
+        proposalId: card.id,
+        promotedFrom: { kind: 'task', taskId: auth.id, projectId: planet.id },
+      },
+    });
+    expect(run((ctx) => createPromotedProject(ctx, card, body!)).events).toEqual([]);
+    // A move into an existing project needs no body.
+    const into = run((ctx) =>
+      createProposal(ctx, {
+        requestText: 'move',
+        kind: 'planet',
+        proposedBody: { kind: 'planet', name: 'App', bodyId: 'b-saturn' },
+        workspace: '/w/app',
+        rationale: 'r',
+        meta: {
+          request: {
+            type: 'promotion',
+            name: 'x',
+            target: { kind: 'task', id: 't-1' },
+            toProjectId: planet.id,
+          },
+        },
+      }),
+    ).value;
+    expect(promotionRoom({ tables }, into)).toBeUndefined();
   });
 });
