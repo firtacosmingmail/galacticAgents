@@ -6,6 +6,7 @@ import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { openDatabase } from './db/database.js';
+import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { composeRuntime } from './runtime/compose.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { ProcessSupervisor } from './runtime/supervisor.js';
@@ -40,6 +41,8 @@ const composed = composeRuntime(db, {
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
   autoApproveRemote: config.autoApproveRemote,
+  // Finished work past decision 4's retention period is archived hourly (P2-13).
+  archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
 });
 const { log, statuses, transcripts } = composed;
 

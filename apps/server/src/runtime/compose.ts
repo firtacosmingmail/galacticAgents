@@ -18,6 +18,7 @@ import {
   type BrainRunnerOptions,
 } from '../brains/index.js';
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
+import { Archival, type Timers } from './archival.js';
 import { DEFAULT_CAPS } from './caps.js';
 import { StatusStore } from './status-store.js';
 import { TranscriptPipeline } from './transcripts.js';
@@ -63,6 +64,12 @@ export interface ComposeOptions {
    * configured `projectsRoot` and `dataDir`.
    */
   workspaces?: Omit<WorkspacesOptions, 'commands' | 'tables'>;
+  /**
+   * The archival job (P2-13): `retentionMs` is decision 4's period (`config.retentionMs`, default
+   * 7 days); the timer runs only with an `intervalMs` (`index.ts` passes one; tests leave it off
+   * and call `archival.sweep()` under an injected clock).
+   */
+  archival?: { retentionMs?: number; intervalMs?: number; timers?: Timers };
 }
 
 export interface ComposedRuntime {
@@ -78,6 +85,8 @@ export interface ComposedRuntime {
   queries: BrainQueries;
   /** Workspaces and worktrees, when composed with `workspaces` paths (P2-10). */
   workspaces?: Workspaces;
+  /** The retention / archival job (P2-13); its timer runs when composed with an interval. */
+  archival: Archival;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
   startBrain(
     definition: BrainDefinition,
@@ -157,6 +166,13 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   const workspaces = opts.workspaces
     ? new Workspaces({ ...opts.workspaces, commands, tables: log.tables })
     : undefined;
+  const archival = new Archival({
+    log,
+    ...(opts.archival?.retentionMs !== undefined ? { retentionMs: opts.archival.retentionMs } : {}),
+    ...(opts.archival?.timers ? { timers: opts.archival.timers } : {}),
+    ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'archival') } : {}),
+  });
+  if (opts.archival?.intervalMs) archival.start(opts.archival.intervalMs);
   return {
     log,
     statuses,
@@ -166,6 +182,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     commands,
     queries,
     ...(workspaces ? { workspaces } : {}),
+    archival,
     startBrain: (definition, placement, brainOpts = {}) =>
       BrainRunner.start(definition, placement, {
         log,
@@ -178,12 +195,14 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       }),
     recover: () => runtime.recover(),
     async shutdown() {
+      archival.stop();
       await runtime.shutdown();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();
     },
     async dispose() {
+      archival.stop();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();

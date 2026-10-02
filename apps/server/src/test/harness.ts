@@ -23,6 +23,7 @@ export function testConfig(
     dbPath: join(dataDir, 'galactic.sqlite'),
     projectsRoot: join(dataDir, 'projects-root-unused'),
     autoApproveRemote: false,
+    retentionMs: 7 * 24 * 60 * 60 * 1000,
     cleanup: () => rmSync(dataDir, { recursive: true, force: true }),
     ...overrides,
   };

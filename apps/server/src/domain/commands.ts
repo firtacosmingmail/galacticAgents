@@ -231,7 +231,7 @@ export class Commands implements DomainCommands {
     return this.run((ctx) => pinProject(ctx, projectId, pinned));
   }
   reopenProject(projectId: Id, by: Actor, input?: ReopenInput) {
-    return this.run((ctx) => reopenProject(ctx, projectId, by, input));
+    return this.run((ctx) => reopenProject(ctx, projectId, by, input, this.choose));
   }
   createTask(input: CreateTaskInput) {
     return this.run((ctx) => createTask(ctx, input));
