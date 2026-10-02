@@ -4,7 +4,9 @@ import { ENDED_STATES } from './enums.js';
 import {
   AnswerBody,
   ControlBody,
+  MessagesResponse,
   PermissionPolicyPresetName,
+  ProposalDecisionBody,
   RuntimesInfo,
   SendBody,
   SpawnBody,
@@ -99,5 +101,37 @@ describe('ControlBody project policy edit (P2-21)', () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it('parses proposal decisions, versioned answers and chat history (P2-18)', () => {
+    expect(ProposalDecisionBody.parse({ decision: 'approve' })).toEqual({ decision: 'approve' });
+    expect(
+      ProposalDecisionBody.parse({
+        decision: 'edit',
+        changes: { kind: 'moon', proposedBody: { kind: 'moon', name: 'Io' }, initGit: true },
+      }),
+    ).toMatchObject({ changes: { kind: 'moon', initGit: true } });
+    // Only the card's size, body, workspace and the git consent are editable.
+    expect(
+      ProposalDecisionBody.safeParse({ decision: 'edit', changes: { requestText: 'x' } }).success,
+    ).toBe(false);
+    expect(ProposalDecisionBody.safeParse({ decision: 'park' }).success).toBe(false);
+    expect(ProposalDecisionBody.safeParse({ decision: 'reject' }).success).toBe(true);
+    expect(AnswerBody.parse({ answer: 'yes', version: 2 })).toEqual({ answer: 'yes', version: 2 });
+    expect(AnswerBody.safeParse({ answer: 'yes', version: -1 }).success).toBe(false);
+    expect(
+      MessagesResponse.safeParse({
+        messages: [
+          {
+            messageId: 'm',
+            agentId: 'a',
+            seq: 1,
+            at: 'now',
+            sender: { type: 'user' },
+            text: 'hi',
+          },
+        ],
+      }).success,
+    ).toBe(true);
   });
 });
