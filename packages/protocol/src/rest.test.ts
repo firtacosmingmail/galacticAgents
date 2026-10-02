@@ -116,6 +116,13 @@ describe('ControlBody project policy edit (P2-21)', () => {
       ProposalDecisionBody.safeParse({ decision: 'edit', changes: { requestText: 'x' } }).success,
     ).toBe(false);
     expect(ProposalDecisionBody.safeParse({ decision: 'park' }).success).toBe(false);
+    // The trust level of the project the card creates (P2-22): a known level only.
+    expect(ProposalDecisionBody.parse({ decision: 'edit', changes: { trust: 'trusted' } })).toEqual(
+      { decision: 'edit', changes: { trust: 'trusted' } },
+    );
+    expect(
+      ProposalDecisionBody.safeParse({ decision: 'edit', changes: { trust: 'yolo' } }).success,
+    ).toBe(false);
     expect(ProposalDecisionBody.safeParse({ decision: 'reject' }).success).toBe(true);
     expect(AnswerBody.parse({ answer: 'yes', version: 2 })).toEqual({ answer: 'yes', version: 2 });
     expect(AnswerBody.safeParse({ answer: 'yes', version: -1 }).success).toBe(false);

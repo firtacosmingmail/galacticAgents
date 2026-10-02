@@ -789,7 +789,9 @@ describe('P2-22 — a trusted project: everything except push without cards', ()
     expect(bashUnder('git -C sub push')).toBe('ask');
     expect(bashUnder('sh -c "git push origin main"')).toBe('ask');
     expect(bashUnder('bash -lc "cd x && git push"')).toBe('ask');
-    expect(bashUnder("python -c \"import subprocess; subprocess.run(['git','push'])\"")).toBe('ask');
+    expect(bashUnder("python -c \"import subprocess; subprocess.run(['git','push'])\"")).toBe(
+      'ask',
+    );
     expect(
       bashUnder(
         [
@@ -818,7 +820,7 @@ describe('P2-22 — a trusted project: everything except push without cards', ()
     // Over-eager on purpose: one card too many.
     expect(mentionsPush('python -c "print(\'git\'); stack.push(1)"')).toHaveLength(1);
     // Not seen: a computed name, or a pushd.
-    expect(mentionsPush('python -c "import os; os.system(\'gi\' + \'t pu\' + \'sh\')"')).toEqual([]);
+    expect(mentionsPush("python -c \"import os; os.system('gi' + 't pu' + 'sh')\"")).toEqual([]);
     expect(mentionsPush('sh -c "pushd x; git status"')).toEqual([]);
   });
 
