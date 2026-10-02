@@ -90,17 +90,6 @@
 .thread-card .card {
   margin: 0;
 }
-.thread-card-folded p,
-.thread-card-folded summary {
-  margin: 0;
-  padding: 6px 10px;
-  border: 1px solid var(--pnl-line);
-  border-radius: 6px;
-  font-size: 13px;
-}
-.thread-card-folded summary {
-  cursor: pointer;
-}
 .pnl-typing {
   margin: 0 4px;
   font-size: 12px;
