@@ -108,6 +108,8 @@ export const ChatMessage = z.object({
   at: z.string(),
   sender: Actor,
   text: z.string(),
+  /** A brain's turn prompt (`message.sent.turn`, P25-03): not a conversation line. */
+  turn: z.literal(true).optional(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 

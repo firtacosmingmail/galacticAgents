@@ -558,6 +558,7 @@ export class AgentRuntime {
       text,
       interrupt: opts.interrupt ?? false,
       ...(opts.origin ? { origin: opts.origin } : {}),
+      ...(opts.turn ? { turn: true as const } : {}),
     });
     if (live.mailbox && !opts.turn) {
       // Logged only: the brain's mailbox picks it up from the log and folds it into a turn.

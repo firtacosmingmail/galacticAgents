@@ -145,6 +145,15 @@ describe('BrainRunner', () => {
     );
     expect(turn).toContain('Agents you supervise (0):');
     expect(turnMessages(rig)).toHaveLength(1);
+    // A turn prompt is marked, so the panel's conversation leaves it out (P25-03); the user's
+    // lines are not.
+    expect(turnMessages(rig)[0]).toMatchObject({ turn: true });
+    const told = rig.h.log
+      .eventsSince(0, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter((e) => e.type === 'message.sent' && e.sender.type === 'user');
+    expect(told).toHaveLength(2);
+    expect(told.every((e) => e.type === 'message.sent' && e.turn === undefined)).toBe(true);
     // The folded messages reached the brain inside the turn: a restart must not redeliver them.
     const delivered = rig.h.log
       .eventsSince(0, Number.MAX_SAFE_INTEGER)
