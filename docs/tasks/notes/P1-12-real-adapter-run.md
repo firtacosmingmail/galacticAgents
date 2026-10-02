@@ -5,6 +5,8 @@ Node 22, `@anthropic-ai/claude-agent-sdk@0.3.285` (pinned; bundled CLI 2.1.x), a
 login (`claude auth status` → `oauth_token`, first party), default model. Nothing here runs in CI;
 every command below is local-only and gated by `GALACTIC_REAL_CLAUDE=1` or is a script.
 
+**One command (added 2026-10-02):** `pnpm check:real` runs the four dev-machine checks below (the P1-08 spike's `auth tools`, `scripts/sdk-smoke.ts`, this conformance suite, `scripts/sdk-restart-smoke.ts`) after checking `claude auth status`, judges each by its exit code and its output, prints a PASS/FAIL summary and keeps the full log in `.galactic/checks/`. `pnpm check:real smoke restart` runs a subset.
+
 **Left for the dev machine:** repeat the three commands once under Cosmin's own subscription after
 `pnpm install` (same login kind, so no surprise expected; decision 17 deserves the check).
 

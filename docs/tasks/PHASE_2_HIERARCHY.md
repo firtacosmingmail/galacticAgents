@@ -143,7 +143,7 @@ P2-20 (added 2026-10-01) runs in wave 3: it needs only the Earth/HQ body from P2
 
 ### P2-19 — End-to-end exit run and crash drill
 - **Status:** todo · **Depends on:** all Phase 2 tasks · **Parallel with:** —
-- Run the exit criteria script ("build a CLI that converts CSV to Parquet") for real: related-work check, proposal with workspace, body, Waykeeper plan approved once, Stewards in worktrees, one supervisor-answered and one escalated clarification, one permission request, merged branches, closure request accepted; `kill -9` the server mid-way and confirm automatic resume. Record the run and any spec deviations in `docs/tasks/notes/P2-19-exit-run.md`; update SPEC/TECH if decisions changed.
+- First, on the dev machine, `pnpm check:real` (the Phase 1 real-SDK checks, decision 17) must pass. Then run the exit criteria script ("build a CLI that converts CSV to Parquet") for real: related-work check, proposal with workspace, body, Waykeeper plan approved once, Stewards in worktrees, one supervisor-answered and one escalated clarification, one permission request, merged branches, closure request accepted; `kill -9` the server mid-way and confirm automatic resume. Record the run and any spec deviations in `docs/tasks/notes/P2-19-exit-run.md`; update SPEC/TECH if decisions changed.
 - **Acceptance:** exit criteria met; notes committed.
 
 ### P2-20 — Hierarchy placement invariants and clearable fields (added 2026-10-01)
