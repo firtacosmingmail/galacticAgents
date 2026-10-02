@@ -264,14 +264,15 @@ describe('reopenProject', () => {
     run((ctx) => closeTask(ctx, t.id, USER));
     run((ctx) => archiveProject(ctx, p.id, USER));
     run((ctx) => createProject(ctx, { ...input, name: 'Other' })); // takes Mars
-    expect(() => run((ctx) => reopenProject(ctx, p.id, USER))).toThrow(/Mars is taken/);
     const { value, types } = run((ctx) => reopenProject(ctx, p.id, USER, { bodyId: 'b-jupiter' }));
     expect(value).toMatchObject({ state: 'approved', bodyId: 'b-jupiter' });
+    expect(value.meta).toEqual({ previousBodyIds: ['b-mars'] });
     expect(types).toEqual([
       'body.assigned',
       'project.updated',
       'task.updated',
       'agent.updated',
+      'project.updated',
       'project.state_changed',
     ]);
     expect(tables.tasks.get(t.id)?.bodyId).toBe('b-jupiter');

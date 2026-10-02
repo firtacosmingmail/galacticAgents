@@ -17,6 +17,11 @@ export const ConfigFile = z.object({
    * spawn under a policy looser than the global default. Off unless set (TECHNOLOGY §8, P2-04).
    */
   autoApproveRemote: z.boolean().optional(),
+  /**
+   * Decision 4: how long finished work keeps its body (and a "moved to …" marker stays) before the
+   * archival job archives it, in days (fractions allowed). Default 7 (P2-13).
+   */
+  retentionDays: z.number().positive().optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -45,6 +50,11 @@ export interface ServerConfig {
    * `autoApproveRemote` in the file or `GALACTIC_AUTO_APPROVE_REMOTE=1` turns it on.
    */
   autoApproveRemote: boolean;
+  /**
+   * Decision 4's retention period in ms (P2-13): `retentionDays` in the file or
+   * `GALACTIC_RETENTION_DAYS`; default 7 days.
+   */
+  retentionMs: number;
 }
 
 export interface LoadedConfig {
@@ -55,6 +65,8 @@ export interface LoadedConfig {
 
 export const DEFAULT_PORT = 4321;
 export const DEFAULT_PROJECTS_DIR = 'GalacticProjects';
+export const DEFAULT_RETENTION_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 
 export function generateToken(): string {
@@ -107,6 +119,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     throw new Error(`The projects root must be an absolute path: ${rootSetting}`);
   }
 
+  const retentionEnv = env['GALACTIC_RETENTION_DAYS'];
+  const retentionDays =
+    retentionEnv !== undefined
+      ? Number(retentionEnv)
+      : (file.retentionDays ?? DEFAULT_RETENTION_DAYS);
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    throw new Error(`Invalid retention period (days): ${retentionEnv ?? file.retentionDays}`);
+  }
+
   return {
     config: {
       host: '127.0.0.1',
@@ -123,6 +144,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
           ? env['GALACTIC_AUTO_APPROVE_REMOTE'] === '1' ||
             env['GALACTIC_AUTO_APPROVE_REMOTE'] === 'true'
           : (file.autoApproveRemote ?? false),
+      retentionMs: Math.round(retentionDays * DAY_MS),
     },
     tokenGenerated,
   };

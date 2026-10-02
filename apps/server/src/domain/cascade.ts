@@ -268,10 +268,10 @@ export function concernedSupervisors(
 }
 
 /**
- * The retention seam for P2-13: finished projects whose body is still held and that nothing pins
- * — `completed` (closed) or `failed` (cancelled) — with `updatedAt` as an approximation of when
- * they finished (P2-13 may keep a precise `finishedAt` in `meta` instead). P2-13's archival job archives each one past the retention period with
- * `archiveProject` (or `control(archive)` by the system), which frees the body.
+ * Finished projects whose body is still held and that nothing pins — `completed` (closed) or
+ * `failed` (cancelled) — with `updatedAt` as an approximation of when they finished. Superseded
+ * by `retention.ts` (P2-13), whose `retained(log)` takes the clock from the log and also covers
+ * standalone tasks; the archival job uses that one.
  */
 export function retentionDue(tables: Tables): { projectId: Id; since: string }[] {
   return tables.projects

@@ -26,6 +26,7 @@ beforeEach(async () => {
       dbPath: ':memory:',
       projectsRoot: '/tmp/galactic-projects-unused',
       autoApproveRemote: false,
+      retentionMs: 7 * 24 * 60 * 60 * 1000,
     },
     log,
   });
