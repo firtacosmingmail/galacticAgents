@@ -65,7 +65,7 @@ export function createWakeScope(
     supervises,
     below: (id) => {
       const seen = new Set<Id>();
-      for (let at = id; at !== undefined && !seen.has(at); ) {
+      for (let at = id; at !== undefined && !seen.has(at);) {
         seen.add(at);
         const up: Id | undefined = tables.agents.get(at)?.supervisorId;
         if (up === brain.brainId) return true;
@@ -89,8 +89,7 @@ export function createWakeScope(
       const plan = proposalPlan(proposal);
       if (plan) return brain.role === 'waykeeper' && plan.projectId === brain.projectId;
       const promotion = proposal?.meta?.['promotion'] as
-        | { fromProjectId?: unknown; requestedBy?: unknown }
-        | undefined;
+        { fromProjectId?: unknown; requestedBy?: unknown } | undefined;
       if (promotion && typeof promotion.fromProjectId === 'string' && promotion.requestedBy) {
         return brain.role === 'waykeeper' && promotion.fromProjectId === brain.projectId;
       }
