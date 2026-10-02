@@ -17,6 +17,7 @@ import {
   type Route,
   type Selection,
 } from './selection.js';
+import { createTranscriptViewSlice, type TranscriptViewSlice } from './transcript-view.js';
 
 export const MAX_LOG = 200;
 /** Transcript chunks kept per agent (oldest dropped). */
@@ -36,7 +37,7 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): 
   return [...current, ...fresh].sort((a, b) => a.seq - b.seq).slice(-MAX_MESSAGES);
 }
 
-export interface AppState {
+export interface AppState extends TranscriptViewSlice {
   world: WorldState;
   /** The most recent events, newest first, for the event page. */
   log: EventEnvelope[];
@@ -86,6 +87,7 @@ export interface AppState {
 
 /** Client state is derived from the stream only: the store has no other inputs. */
 export const useAppStore = create<AppState>((set, get) => ({
+  ...createTranscriptViewSlice(set),
   ...currentLocation(),
   select: (selection) => get().navigate({ route: 'panel', selection }),
   selectAgent: (agentId) => {
@@ -125,7 +127,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             logId: message.logId,
             snapshots: s.snapshots + 1,
             ...(s.logId !== undefined && s.logId !== message.logId
-              ? { transcripts: {}, messages: {} }
+              ? { transcripts: {}, messages: {}, transcriptViews: {} }
               : {}),
           };
         case 'event': {
@@ -194,6 +196,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       log: [],
       transcripts: {},
       messages: {},
+      transcriptViews: {},
       logId: undefined,
       snapshots: 0,
       status: 'idle',
