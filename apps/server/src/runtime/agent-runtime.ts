@@ -970,6 +970,35 @@ export class AgentRuntime {
     return this.reserved.has(agentId) || this.refreshing.has(agentId);
   }
 
+  /**
+   * A resumed session's first message (dev-machine run, 2026-10-02). The restart cancelled the
+   * agent's open questions (decision 21) and the model is not told by its session, so with only
+   * "continue" it goes idle instead of asking again. The message names what the agent was
+   * waiting for — the questions cancelled in the same command as its last interruption — and asks
+   * it to ask again (a clarification through its question tool, a refused tool call by running it
+   * again, so the gate decides it afresh).
+   */
+  private resumePromptFor(agentId: Id): string {
+    const { log } = this.opts;
+    const [interrupted] = log.latestOf('agent.interrupted', agentId, 1);
+    if (!interrupted) return RESUME_PROMPT;
+    const cancelled = log
+      .latestOf('question.cancelled', agentId, 20)
+      .filter((e) => e.seq > interrupted.seq && e.at === interrupted.at)
+      .map((e) => log.tables.questions.get((e.event as { questionId: Id }).questionId))
+      .filter((q): q is NonNullable<typeof q> => q !== undefined);
+    if (cancelled.length === 0) return RESUME_PROMPT;
+    const lines = cancelled.map((q) =>
+      q.kind === 'permission'
+        ? `- you were waiting for permission to run ${q.context.toolCall?.toolName ?? 'a tool'} (${q.context.text}); run that tool call again if you still need it`
+        : `- you had asked: "${q.context.text}"${q.context.options?.length ? ` (options: ${q.context.options.join(', ')})` : ''}; ask it again with your question tool`,
+    );
+    return (
+      `${RESUME_PROMPT}\nBefore the restart you were waiting for an answer; it was cancelled by ` +
+      `the restart:\n${lines.join('\n')}\nAsk it again before you continue.`
+    );
+  }
+
   private async reopenOne(
     agentId: Id,
     known: AgentHistory | undefined,
@@ -1009,7 +1038,7 @@ export class AgentRuntime {
     // SDK returns the handle at once and a lost session only shows when the CLI exits.
     let result = await this.resume(
       agent,
-      { ...base, prompt: opts.prompt ?? RESUME_PROMPT },
+      { ...base, prompt: opts.prompt ?? this.resumePromptFor(agentId) },
       {
         mailbox,
         ...folded,
