@@ -56,7 +56,8 @@ syncFromLocation()         // read the URL (load, popstate); canonicalises unkno
 
 - **URLs:** `/` selects the Harmonizer, `/waykeeper/<id>` a Waykeeper, `/steward/<id>` a Steward (the id is URI-encoded), and `/debug` opens the ops console. Anything else reads as `/`.
 - **Where the URL is read:** at store creation, and again by `App`'s `useLocationSync` in a layout effect, which also listens to `popstate`. So a reload or a deep link restores the selection, and back/forward work.
-- **`reset()`** (forget token, refused token) leaves the route and the selection alone.
+- **Canonical URL (review fix):** a selection whose kind is not the agent's role (`/waykeeper/<a Steward's id>`) shows the agent's real view and the URL is rewritten to match (`useCanonicalSelection`, a replaced history entry).
+- **`reset()`** (forget token, refused token) leaves the route and the selection alone. The panel's top bar has its own "Forget token" button (review fix), as the ops console's status bar does.
 - **Not stream-derived:** the route and the selection are the only store fields that do not come from the stream. They are the user's navigation, not world state, so the replay-vs-snapshot conformance test is untouched.
 
 ## Routing and deep links
