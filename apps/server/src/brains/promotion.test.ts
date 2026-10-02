@@ -17,7 +17,9 @@ import { waykeeperDefinition } from './waykeeper/index.js';
 const USER = { type: 'user' } as const;
 const DAY = 24 * 60 * 60 * 1000;
 const lives: BrainHarness[] = [];
+const flows: PromotionFlow[] = [];
 afterEach(async () => {
+  for (const f of flows.splice(0)) f.stop();
   for (const h of lives.splice(0)) await h.dispose().catch(() => {});
 });
 
@@ -53,6 +55,7 @@ function setup() {
     startWaykeeper,
     onError: (e, ctx) => h.errors.push(`${ctx}: ${(e as Error).message}`),
   }).start();
+  flows.push(flow);
   const state = (agentId: Id) => h.statuses.get(agentId)?.state;
   const card = (): Proposal => h.log.tables.proposals.all()[0]!;
   const types = () => h.log.eventsSince(0, Number.MAX_SAFE_INTEGER).map((e) => e.event);
@@ -440,4 +443,155 @@ describe('promotion (P2-12)', () => {
     ).toMatchObject({ supervisorId: hq.agentId });
     next.stop();
   });
+
+  it('waits for a running Harmonizer instead of failing, then carries the card out (review)', async () => {
+    const { h, flow, card, waykeepers } = setup();
+    const task = (
+      await h.commands.createTask({ description: 'grow', meta: { workspace: '/w/scratch/g' } })
+    ).value;
+    const { value: p } = await h.commands.createProposal(planetPromotion(task));
+    await h.commands.decideProposal(p.id, { decision: 'approve' }, USER);
+    await flow.idle();
+    // No Harmonizer runs yet (the server starts it after the flow, or it is restarting).
+    expect(carriedOut(card())).toBeUndefined();
+    expect(flow.waitingCards()).toEqual([
+      { proposalId: p.id, reason: expect.stringMatching(/no running Harmonizer/) },
+    ]);
+    // The approval took the body: the project holds it while the card waits.
+    const project = h.log.tables.projects.all().find((x) => x.meta?.['proposalId'] === p.id)!;
+    expect(h.log.tables.bodies.get(project.bodyId)!.host).toEqual({
+      kind: 'project',
+      id: project.id,
+    });
+    const hq = await h.startHarmonizer();
+    await h.until(() => carriedOut(card()) !== undefined, { what: 'the card to be carried out' });
+    await flow.idle();
+    expect(carriedOut(card())).toMatchObject({ ok: true, projectId: project.id });
+    expect(flow.waitingCards()).toEqual([]);
+    expect(h.log.tables.tasks.get(task.id)?.projectId).toBe(project.id);
+    expect(h.log.tables.agents.get(waykeepers[0]!)).toMatchObject({ supervisorId: hq.agentId });
+  });
+
+  it('adopts a Waykeeper someone else started meanwhile instead of failing (review)', async () => {
+    const { h, card, flow: theirs } = setup();
+    theirs.stop();
+    const hq = await h.startHarmonizer();
+    let started: Id | undefined;
+    const flow = new PromotionFlow({
+      log: h.log,
+      commands: h.commands,
+      liveAgents: () => h.runtime.liveAgents(),
+      // The Harmonizer's own spawn_waykeeper won the race: this spawn is refused.
+      startWaykeeper: async (input) => {
+        started = (await h.startBrain(waykeeperDefinition(), input)).agentId;
+        throw new Error(`project ${input.projectId} already has a running Waykeeper`);
+      },
+    }).start();
+    flows.push(flow);
+    const task = (
+      await h.commands.createTask({ description: 'grow', meta: { workspace: '/w/scratch/g' } })
+    ).value;
+    // An earlier Steward of the task that ended: it is not "handed over and resumed".
+    const old = (
+      await h.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        supervisorId: hq.agentId,
+        cwd: '/w/scratch/g',
+        prompt: 'scenario:long',
+      })
+    ).value;
+    await h.commands.stopAgent(old.id, USER);
+    const { value: p } = await h.commands.createProposal(planetPromotion(task));
+    await h.commands.decideProposal(p.id, { decision: 'approve' }, USER);
+    await h.until(() => carriedOut(card()) !== undefined);
+    await flow.idle();
+    expect(carriedOut(card())).toMatchObject({ ok: true, waykeeperId: started });
+    expect(carriedOut(card())).not.toHaveProperty('stewardIds');
+  });
+
+  it('a final failure frees the body of the empty project it made (review)', async () => {
+    const { h, flow, card } = setup();
+    await h.startHarmonizer();
+    const task = (
+      await h.commands.createTask({ description: 'grow', meta: { workspace: '/w/scratch/g' } })
+    ).value;
+    const { value: p } = await h.commands.createProposal(planetPromotion(task));
+    // The task is finished before the user approves: nothing can move.
+    await h.commands.closeTask(task.id, USER);
+    await h.commands.decideProposal(p.id, { decision: 'approve' }, USER);
+    await h.until(() => carriedOut(card()) !== undefined);
+    await flow.idle();
+    expect(carriedOut(card())).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/completed/),
+    });
+    const project = h.log.tables.projects.all().find((x) => x.meta?.['proposalId'] === p.id)!;
+    expect(project.state).toBe('failed');
+    expect(h.log.tables.bodies.get(project.bodyId)!.host).toBeUndefined();
+    expect(h.log.tables.agents.all().filter((a) => a.role === 'waykeeper')).toEqual([]);
+  });
+
+  it('pauses the Stewards of a card still waiting for the user again after a restart (review)', async () => {
+    const { h, flow, card, state } = setup();
+    const hq = await h.startHarmonizer();
+    const task = (
+      await h.commands.createTask({ description: 'grow', meta: { workspace: '/w/scratch/g' } })
+    ).value;
+    const steward = (
+      await h.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: task.id,
+        supervisorId: hq.agentId,
+        cwd: '/w/scratch/g',
+        prompt: 'scenario:long',
+      })
+    ).value;
+    await h.until(() => state(steward.id) === 'working');
+    const { value: p } = await h.commands.createProposal(planetPromotion(task));
+    await flow.idle();
+    await h.until(() => state(steward.id) === 'paused');
+    // A restart: the flow goes away, and the runtime's pause with it (the Steward runs again,
+    // the log still says the card paused it).
+    flow.stop();
+    await h.runtime.resumeAgent(steward.id, { type: 'system' });
+    h.log.runCommand((ctx) =>
+      ctx.emit({
+        type: 'control.pause',
+        target: { kind: 'agent', id: steward.id },
+        by: promotionActor(p.id),
+      }),
+    );
+    await h.until(() => state(steward.id) === 'working');
+    const next = new PromotionFlow({
+      log: h.log,
+      commands: h.commands,
+      liveAgents: () => h.runtime.liveAgents(),
+      startWaykeeper: async () => ({ agentId: 'unused' }),
+    }).start();
+    flows.push(next);
+    await next.idle();
+    await h.until(() => state(steward.id) === 'paused', { what: 'the Steward paused again' });
+    expect(card().state).toBe('pending');
+  });
 });
+
+function planetPromotion(task: { id: Id; bodyId: Id }) {
+  return {
+    requestText: 'promote',
+    kind: 'planet' as const,
+    proposedBody: { kind: 'planet' as const, name: 'G' },
+    workspace: '/w/scratch/g',
+    rationale: 'x',
+    meta: {
+      request: {
+        type: 'promotion',
+        name: 'G',
+        target: { kind: 'task', id: task.id },
+        fromBodyId: task.bodyId,
+      },
+    },
+  };
+}
