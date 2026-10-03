@@ -4,6 +4,7 @@ import {
   Matrix4,
   Raycaster,
   Vector2,
+  Vector3,
   type Mesh,
   type Object3D,
   type PerspectiveCamera,
@@ -13,9 +14,11 @@ import { allAnchors, getAnchor } from '../anchors.js';
 import { labelAt } from '../labels/registry.js';
 import { anchorPosition } from '../camera/store.js';
 import { useAppStore } from '../../state/store.js';
+import { allSatellites, getSatellite } from '../satellites/registry.js';
 import { bodyName, outlineBody, selectionBody } from './body-action.js';
 import { ClickTracker } from './click.js';
-import { pickBodies, pixelScale, type PickResult } from './pick.js';
+import { pixelScale } from './pick.js';
+import { pickScene, type PickTarget, type SatelliteSphere, type ScenePick } from './scene-pick.js';
 import {
   bodyInView,
   depthPassWithoutDecor,
@@ -25,7 +28,15 @@ import {
   type OutlineDepthPassOwner,
 } from './outline.js';
 import { DECOR_LAYER } from '../layers.js';
-import { activateBody, usePickingStore, type Point } from './store.js';
+import type { Vec3 } from '../camera/flight.js';
+import {
+  activateBody,
+  activateSatellite,
+  hoveredBody,
+  hoveredSatellite,
+  usePickingStore,
+  type Point,
+} from './store.js';
 import { noteUserCameraInput } from './sync.js';
 
 /**
@@ -53,6 +64,13 @@ import { noteUserCameraInput } from './sync.js';
  * takes no pointer events, so a wheel, a drag or a press-drag-release that starts on a label
  * reaches the canvas like any other (`labelUnder` has the rule).
  *
+ * Satellites (P4-08) are pick targets too (`pickScene`: a satellite under the pointer wins over
+ * the body behind it and over labels; a body's surface in front of it hides it). Hovering one
+ * shows its agent's card at the satellite's point on screen, followed as it orbits: while any
+ * satellite is drawn and the pointer rests on the canvas, the hover is re-picked once per frame
+ * (satellites move without the camera moving). The hovered satellite gets the faint ring too; a
+ * click selects its agent (`activateSatellite`) and flies to its body.
+ *
  * Unmounting (the scene hidden, the WebGL context lost) clears the hover label and closes the
  * popover: they live in a module store that outlives the canvas.
  */
@@ -75,6 +93,7 @@ export function Picking({ outline }: PickingProps) {
     raycaster: new Raycaster(),
     ndc: new Vector2(),
     seenCamera: new Matrix4(),
+    projected: new Vector3(),
   }));
   /** Asks for a hover pick at the last pointer position (set by the listeners' effect). */
   const repick = useRef<(() => void) | undefined>(undefined);
@@ -90,13 +109,13 @@ export function Picking({ outline }: PickingProps) {
       const rect = canvas.getBoundingClientRect();
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
-    const pick = (at: Point): PickResult => {
+    const pick = (at: Point): ScenePick => {
       const { camera, size } = get();
       const cam = camera as PerspectiveCamera;
       tools.ndc.set((at.x / size.width) * 2 - 1, -(at.y / size.height) * 2 + 1);
       tools.raycaster.setFromCamera(tools.ndc, cam);
       const { origin, direction } = tools.raycaster.ray;
-      return pickBodies(
+      return pickScene(
         {
           origin: [origin.x, origin.y, origin.z],
           direction: [direction.x, direction.y, direction.z],
@@ -106,8 +125,20 @@ export function Picking({ outline }: PickingProps) {
           center: anchorPosition(a),
           radius: a.radius,
         })),
+        satelliteSpheres(),
         pixelScale(size.height, cam.fov ?? 45),
       );
+    };
+    /** A satellite's point on screen (CSS pixels from the canvas's corner, whole pixels). */
+    const onScreen = (agentId: string): Point | undefined => {
+      const f = getSatellite(agentId);
+      if (!f) return undefined;
+      const { camera, size } = get();
+      const p = tools.projected.set(f.position[0], f.position[1], f.position[2]).project(camera);
+      return {
+        x: Math.round(((p.x + 1) / 2) * size.width),
+        y: Math.round(((1 - p.y) / 2) * size.height),
+      };
     };
     const hoverNow = () => {
       frame = 0;
@@ -116,21 +147,32 @@ export function Picking({ outline }: PickingProps) {
       const at = pointAt(e);
       const result = pick(at);
       const label = labelUnder(result, at);
-      const top = label ?? result.choice ?? result.candidates[0]?.bodyId;
+      const top: PickTarget | undefined = label
+        ? { kind: 'body', bodyId: label }
+        : (result.choice ?? result.candidates[0]);
+      const others = label || result.choice ? 0 : result.candidates.length - 1;
       const picking = usePickingStore.getState();
+      const was = picking.hover;
       if (!top) {
         picking.setHover(undefined);
+      } else if (top.kind === 'satellite') {
+        const f = getSatellite(top.agentId);
+        picking.setHover({
+          kind: 'satellite',
+          agentId: top.agentId,
+          mode: f?.mode ?? 'orbiting',
+          satelliteBodyId: f?.bodyId ?? '',
+          others,
+          ...(onScreen(top.agentId) ?? at),
+        });
       } else {
         const world = useAppStore.getState().world;
-        picking.setHover({
-          bodyId: top,
-          name: bodyName(world, top),
-          others: label || result.choice ? 0 : result.candidates.length - 1,
-          ...at,
-        });
+        picking.setHover({ bodyId: top.bodyId, name: bodyName(world, top.bodyId), others, ...at });
       }
       canvas.style.cursor = top ? 'pointer' : '';
-      invalidate();
+      // Re-picked every frame while satellites are drawn: redraw only when something changed
+      // (the demand loop would otherwise never rest).
+      if (usePickingStore.getState().hover !== was) invalidate();
     };
 
     const requestHover = () => {
@@ -170,12 +212,15 @@ export function Picking({ outline }: PickingProps) {
       const picking = usePickingStore.getState();
       // The camera is about to move: the label comes back once it does (`repick`).
       picking.setHover(undefined);
+      const choice = result.choice;
       if (label) activateBody(label, at);
-      else if (result.choice) activateBody(result.choice, at);
+      else if (choice?.kind === 'satellite') activateSatellite(choice.agentId);
+      else if (choice) activateBody(choice.bodyId, at);
       else if (result.candidates.length > 1) {
         picking.showHere(
           at,
-          result.candidates.map((c) => c.bodyId),
+          result.candidates.flatMap((c) => (c.kind === 'body' ? [c.bodyId] : [])),
+          result.candidates.flatMap((c) => (c.kind === 'satellite' ? [c.agentId] : [])),
         );
       } else picking.closePopover();
     };
@@ -215,15 +260,17 @@ export function Picking({ outline }: PickingProps) {
 
   useFrame((state) => {
     const m = state.camera.matrixWorld;
-    if (tools.seenCamera.equals(m)) return;
-    tools.seenCamera.copy(m);
-    repick.current?.();
+    const moved = !tools.seenCamera.equals(m);
+    if (moved) tools.seenCamera.copy(m);
+    // Satellites move on their own: the one under a still pointer changes, the card follows.
+    if (moved || satellitesDrawn()) repick.current?.();
   });
 
-  const hovered = usePickingStore((s) => s.hover?.bodyId);
+  const hovered = usePickingStore((s) => hoveredBody(s.hover));
+  const hoveredAgent = usePickingStore((s) => hoveredSatellite(s.hover));
   const selected = useAppStore((s) => selectionBody(s.world, s.selection));
   const outlined = useAppStore((s) => outlineBody(s.world, s.selection));
-  useEffect(() => invalidate(), [hovered, selected, invalidate]);
+  useEffect(() => invalidate(), [hovered, hoveredAgent, selected, invalidate]);
   // The ring yields to the outline only where there is one.
   const outlineShown = outline !== undefined && outlined !== undefined && outlined === selected;
 
@@ -234,6 +281,7 @@ export function Picking({ outline }: PickingProps) {
         color="#ffffff"
         opacity={0.35}
       />
+      <HighlightRing agentId={hoveredAgent} color="#ffffff" opacity={0.55} />
       <HighlightRing
         bodyId={selected}
         color="#7fb2ff"
@@ -247,29 +295,48 @@ export function Picking({ outline }: PickingProps) {
 
 const xy = (e: PointerEvent) => ({ x: e.clientX, y: e.clientY });
 
+/** The drawn satellites as pick spheres: visible, not fully shrunk out, half their span. */
+export function satelliteSpheres(): SatelliteSphere[] {
+  const spheres: SatelliteSphere[] = [];
+  for (const f of allSatellites()) {
+    if (!f.visible || f.presence <= 0 || f.size <= 0) continue;
+    spheres.push({ agentId: f.agentId, center: f.position, radius: f.size / 2 });
+  }
+  return spheres;
+}
+
+function satellitesDrawn(): boolean {
+  return allSatellites().some((f) => f.visible);
+}
+
 /**
  * The label-vs-body rule (P3-07): a body the pointer's ray passes through (its drawn sphere or its
  * minimum target, `hit`) takes precedence — so a moon under its planet's label stays clickable, and
  * a body in front of a label is what the user sees under the pointer. Otherwise a shown label's
  * rectangle under the pointer means that label's body, over near misses (bodies merely within
- * `CLUSTER_PX`, such as the label's own body just below it). `undefined`: no label decides it.
+ * `CLUSTER_PX`, such as the label's own body just below it). A satellite under the pointer wins
+ * over labels too (P4-08). `undefined`: no label decides it.
  */
-export function labelUnder(result: PickResult, at: Point): string | undefined {
-  if (result.candidates.some((c) => c.hit)) return undefined;
+export function labelUnder(result: ScenePick, at: Point): string | undefined {
+  if (result.satellites.length > 0) return undefined;
+  if (result.bodies.candidates.some((c) => c.hit)) return undefined;
   return labelAt(at.x, at.y);
 }
 
 /**
- * A thin ring facing the camera around a body's anchor, drawn over everything (no depth test), at
- * least `RING_MIN_PX` in radius. `hideAbovePx`: hidden once the body is that big on screen.
+ * A thin ring facing the camera around a body's anchor — or around a satellite (`agentId`,
+ * P4-08) — drawn over everything (no depth test), at least `RING_MIN_PX` in radius.
+ * `hideAbovePx`: hidden once the body is that big on screen.
  */
 function HighlightRing({
   bodyId,
+  agentId,
   color,
   opacity,
   hideAbovePx,
 }: {
-  bodyId: string | undefined;
+  bodyId?: string | undefined;
+  agentId?: string | undefined;
   color: string;
   opacity: number;
   hideAbovePx?: number;
@@ -278,19 +345,19 @@ function HighlightRing({
   useFrame((state) => {
     const ring = ref.current;
     if (!ring) return;
-    const anchor = bodyId ? getAnchor(bodyId) : undefined;
-    if (!anchor) {
+    const target = ringTarget(bodyId, agentId);
+    if (!target) {
       ring.visible = false;
       return;
     }
     const camera = state.camera as PerspectiveCamera;
-    const [x, y, z] = anchorPosition(anchor);
+    const [x, y, z] = target.center;
     const depth = Math.max(1e-6, camera.position.distanceTo(ring.position.set(x, y, z)));
     const perPx = depth / pixelScale(state.size.height, camera.fov ?? 45);
-    const screenRadius = anchor.radius / perPx;
+    const screenRadius = target.radius / perPx;
     ring.visible = hideAbovePx === undefined || screenRadius < hideAbovePx;
     ring.quaternion.copy(camera.quaternion);
-    ring.scale.setScalar(Math.max(anchor.radius * RING_SCALE, RING_MIN_PX * perPx));
+    ring.scale.setScalar(Math.max(target.radius * RING_SCALE, RING_MIN_PX * perPx));
   });
   return (
     <mesh
@@ -312,6 +379,21 @@ function HighlightRing({
       />
     </mesh>
   );
+}
+
+/** Where a highlight ring goes: a body's anchor, or a drawn satellite (half its span). */
+function ringTarget(
+  bodyId: string | undefined,
+  agentId: string | undefined,
+): { center: Vec3; radius: number } | undefined {
+  if (agentId) {
+    const f = getSatellite(agentId);
+    return f && f.visible && f.presence > 0
+      ? { center: f.position, radius: f.size / 2 }
+      : undefined;
+  }
+  const anchor = bodyId ? getAnchor(bodyId) : undefined;
+  return anchor ? { center: anchorPosition(anchor), radius: anchor.radius } : undefined;
 }
 
 /**

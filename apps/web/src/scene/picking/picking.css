@@ -15,6 +15,48 @@
 .pick-hover-more {
   color: #8a91a6;
 }
+/* A satellite's hover card (P4-08): name + state pill, what it is doing, where it is. */
+.pick-sat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: min(300px, calc(100% - 16px));
+  padding: 4px 8px 5px;
+  border: 1px solid rgba(120, 140, 190, 0.35);
+  border-radius: 6px;
+  background: rgba(6, 9, 20, 0.86);
+  white-space: normal;
+}
+.pick-sat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.pick-sat-head .pill {
+  flex: none;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 15px;
+}
+.pick-sat-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pick-sat-activity {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #c4cce0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.pick-sat-where {
+  color: #8a91a6;
+  font-size: 11px;
+}
 .pick-popover {
   position: absolute;
   z-index: var(--scene-z-popover);

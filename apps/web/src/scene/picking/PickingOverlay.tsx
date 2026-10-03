@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useCameraStore } from '../camera/store.js';
-import { activateBody, usePickingStore, type Popover } from './store.js';
+import { SatelliteHoverCard } from './SatelliteHoverCard.js';
+import { activateBody, activateSatellite, usePickingStore, type Popover } from './store.js';
 import './picking.css';
 
 /**
@@ -11,6 +12,10 @@ import './picking.css';
  * close button closes the popover; closing it, or choosing from the list, gives the keyboard focus
  * back to the scene area (as Escape does), not to the page.
  *
+ * Over a satellite (P4-08) the hover label is its agent's card instead (`SatelliteHoverCard`), and
+ * the "what's here" list names the satellites under the pointer (by their agent) before the
+ * bodies; choosing one selects that agent.
+ *
  * A body's info card opens at the click and, once the camera lands on that body, moves to the
  * scene's centre where the body now is (the same place `Enter` opens it).
  */
@@ -19,7 +24,15 @@ export function PickingOverlay() {
   const popover = usePickingStore((s) => s.popover);
   return (
     <>
-      {hover && !popover && (
+      {hover?.kind === 'satellite' && !popover && (
+        <SatelliteHoverCard
+          agentId={hover.agentId}
+          mode={hover.mode}
+          bodyId={hover.satelliteBodyId}
+          others={hover.others}
+        />
+      )}
+      {hover && hover.kind !== 'satellite' && !popover && (
         <div
           className="pick-hover"
           role="tooltip"
@@ -104,6 +117,17 @@ export function PickPopover({ popover }: { popover: Popover }) {
         <>
           <strong className="pick-title">What's here</strong>
           <ul className="pick-list">
+            {popover.satellites.map((s) => (
+              <li key={`satellite:${s.agentId}`}>
+                <button
+                  type="button"
+                  className="pick-list-satellite"
+                  onClick={() => thenFocusScene(() => void activateSatellite(s.agentId))}
+                >
+                  {s.name}
+                </button>
+              </li>
+            ))}
             {popover.bodies.map((b) => (
               <li key={b.bodyId}>
                 <button
