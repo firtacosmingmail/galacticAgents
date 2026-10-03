@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** P4-08, P4-09 (added to wave 1, branch `p4-wave1-satellite`) · **Task status:** in progress
-**Phase status:** in progress (1/9 done) — on branch `phase-4`
+**Current task:** P4-02, P4-03, P4-05 (wave 2, after wave 1 is merged into `phase-4`) · **Task status:** todo
+**Phase status:** in progress (3/9 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -74,12 +74,12 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Acceptance:** scrubbing replays body assignments, moves and completions.
 
 ### P4-08 — Satellite hover card (added 2026-10-03)
-- **Status:** in progress · **Depends on:** P4-01, P3-05 · **Parallel with:** P4-09
+- **Status:** done (2026-10-03) · **Depends on:** P4-01, P3-05 · **Parallel with:** P4-09
 - Cosmin, after seeing the satellites: "I would want to be able to see information about them when I hover them with the mouse. Information like what agents they are and small info on what they are doing, like a title." Satellites become hover targets in the scene's picking (they win over the body under them); the hover card shows the agent's role and name (Waykeeper of <project> / Steward of <task>), its state, and a one-line title of its current activity. Clicking a satellite selects its agent (SPEC §4.1: "clicking a satellite selects that agent").
 - **Acceptance:** hovering any visible satellite shows the right agent and activity within a frame; clicking selects that agent in the panel; tests.
 
 ### P4-09 — Hidable managed agents, compact project rows (added 2026-10-03)
-- **Status:** in progress · **Depends on:** P25-04, P25-02 · **Parallel with:** P4-08
+- **Status:** done (2026-10-03) · **Depends on:** P25-04, P25-02 · **Parallel with:** P4-08
 - Cosmin: "I don't need the Managed agents side panel. I want it hidable." and "in the projects side panel, when I select a Waykeeper, I want to see less information, but I want to know how many Stewards it uses." The managed-agents column gets a hide/show toggle remembered per browser (the panel layout reflows); a selected project's navigation row stays compact (its tasks collapsed unless opened) and shows how many Stewards it uses (running / total).
 - **Acceptance:** the managed-agents column hides and stays hidden after a reload, with nothing lost (its controls remain reachable elsewhere: the agent's own view, the history); a selected project row shows its Steward count; tests.
 

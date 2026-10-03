@@ -13,4 +13,8 @@ An independent review found no blocker. Fixed:
 | 5 | Bodies placed after some readers: a one-frame lag, a shudder around fast moons | body placement at `useFrame` priority −1 (`scene/frame-order.ts`) |
 | nits | reduced motion mid-flight froze it; beams popped; anchorless satellites took budget; per-frame closures; no fade on start/end | all fixed; a scanning satellite keeps its budget |
 
-Gates on the merged branch: build, typecheck, lint, format:check green; protocol 67, server 845 (+1 skipped), web 637.
+## Added after Cosmin's look (P4-08, P4-09)
+
+Cosmin saw the satellites and asked for a hover card, a hidable managed-agents column and compact project rows with a Steward count. P4-08 (satellite hover card, decision 70) and P4-09 (hidable cards, compact rows, decision 69) were built in parallel and reviewed together. Fixed after the review: the system-view hover flickered between a speck planet's satellites (it now names the body, "+n"); clicks on orbiting satellites missed (the satellite under the pointer at press is clicked); a hover grace keeps a satellite hovered while the pointer rests on or follows it; per-frame allocations and frame-rate re-renders removed. In the panel: hiding the cards lost every project and task control (a controls strip in the main header now carries the selected agent's work controls); the Steward count counted every Steward ever spawned (now tasks: "N active, M in total", paused not active).
+
+Gates on the merged branch: build, typecheck, lint, format:check green; protocol 67, server 845 (+1 skipped), web 700.
