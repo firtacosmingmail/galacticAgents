@@ -91,6 +91,10 @@ export function gitRunner(options: GitRunnerOptions = {}): Git {
           }
         },
       );
+      // A git command that exits without reading its stdin closes the pipe first: writing to it
+      // then fails with EPIPE, which without a listener is an uncaught exception that would take
+      // the server down. The command's own outcome is reported through the callback above.
+      child.stdin?.on('error', () => {});
       child.stdin?.end(opts.input ?? '');
     });
 }
