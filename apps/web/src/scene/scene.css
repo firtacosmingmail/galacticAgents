@@ -1,0 +1,96 @@
+/* The solar-system scene's slot in the panel (P3-01). */
+/*
+ * Stacking inside the scene area, bottom to top (every layer below is a positioned child of
+ * `.pnl-scene`, which isolates them from the rest of the panel):
+ *   1. the canvas (z-index auto);
+ *   2. the domain labels (P3-07, --scene-z-labels) — paint-only, they take no pointer events;
+ *   3. the scene chrome: fps meter, camera breadcrumb, scale toggle (--scene-z-chrome) — a label
+ *      sliding under them never covers them;
+ *   4. picking's hover label (--scene-z-hover) and popover (--scene-z-popover), over everything.
+ * `stacking.test.ts` checks the order.
+ */
+.pnl-scene {
+  --scene-z-labels: 10;
+  --scene-z-chrome: 20;
+  --scene-z-hover: 30;
+  --scene-z-popover: 40;
+  isolation: isolate;
+  grid-area: scene;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: #02030a;
+  overflow: hidden;
+}
+.pnl-scene-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #8a91a6;
+  font-size: 13px;
+}
+.pnl-scene-fps {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #9cf59c;
+  font:
+    12px/1.4 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  pointer-events: none;
+  z-index: var(--scene-z-chrome);
+}
+.pnl-scene:focus-visible {
+  outline: 2px solid #5b8cff;
+  outline-offset: -2px;
+}
+/* Where the camera is (P3-04): "Solar system › Jupiter › Europa", over the scene's bottom-left. */
+.pnl-scene-crumbs {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+  z-index: var(--scene-z-chrome);
+}
+.pnl-scene-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pnl-scene-crumbs li + li::before {
+  content: '›';
+  margin: 0 6px;
+  color: #8a91a6;
+}
+.pnl-scene-crumbs button {
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: #9db8ff;
+  font: inherit;
+  cursor: pointer;
+}
+.pnl-scene-crumbs button:hover {
+  text-decoration: underline;
+}
+.pnl-scene-crumbs button[aria-current] {
+  color: #d8dcea;
+}
+.pnl-scene-crumbs span {
+  padding: 2px 4px;
+  color: #d8dcea;
+}

@@ -48,6 +48,46 @@ describe('health endpoint', () => {
     expect(HealthResponse.parse(await remote.json()).token).toBeUndefined();
   });
 
+  it('still hands the token to the Vite dev proxy (Host localhost:5173, no Origin)', async () => {
+    const body = await new Promise<string>((resolve, reject) => {
+      request(
+        { host: '127.0.0.1', port: t.port, path: '/health', headers: { host: 'localhost:5173' } },
+        (res) => {
+          let data = '';
+          res.on('data', (chunk) => (data += chunk));
+          res.on('end', () => resolve(data));
+        },
+      )
+        .on('error', reject)
+        .end();
+    });
+    expect(HealthResponse.parse(JSON.parse(body)).token).toBe(TEST_TOKEN);
+  });
+
+  it('withholds the token from a proxied request with a remote Host and no Origin (P3-08)', async () => {
+    // A LAN or Tailscale client reaching us through a proxy on this machine (vite preview --host,
+    // Tailscale Serve) connects from loopback; a plain GET or curl sends no Origin. Its Host is
+    // the only sign it is remote, and it must not get the token.
+    const body = await new Promise<string>((resolve, reject) => {
+      request(
+        {
+          host: '127.0.0.1',
+          port: t.port,
+          path: '/health',
+          headers: { host: 'mymac.tail1234.ts.net' },
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (chunk) => (data += chunk));
+          res.on('end', () => resolve(data));
+        },
+      )
+        .on('error', reject)
+        .end();
+    });
+    expect(HealthResponse.parse(JSON.parse(body)).token).toBeUndefined();
+  });
+
   it('refuses a wrong Host header', async () => {
     // fetch() silently drops a custom Host header, so use http.request.
     const status = await new Promise<number | undefined>((resolve, reject) => {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, type ReactNode } from 'react';
 import type { Agent, Id } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
-import { summaryOf, type WorldState } from '../state/reduce.js';
+import type { WorldState } from '../state/reduce.js';
 import { HARMONIZER, selectionKey, type Selection } from '../state/selection.js';
 import { createApi, type Api } from '../console/api.js';
 import { currentHarmonizer } from '../console/hierarchy/HierarchyConsole.js';
@@ -9,21 +9,23 @@ import { ApiContext, agentLabel, StatePill } from '../console/hierarchy/shared.j
 import { Conversation } from './chat/Conversation.js';
 import { CardLinksContext } from './cards/index.js';
 import { Inbox } from './Inbox.js';
-import { waitingForUserCount } from './inbox-model.js';
-import { Beacon, Navigation, NavLink } from './Navigation.js';
+import { Navigation, NavLink } from './Navigation.js';
 import { StewardPanelView } from './steward/StewardPanelView.js';
 import { ManagedAgentCards } from './AgentCards.js';
-import { NotificationsControl } from './notifications/NotificationsControl.js';
 import { FirstRunGate } from './settings/FirstRunGate.js';
 import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
 import { HistoryPage } from './history/HistoryPage.js';
+import { SceneArea } from '../scene/SceneArea.js';
+import { useScene } from '../scene/visibility.js';
+import { INBOX_ID, TopBar } from './TopBar.js';
 import './panel.css';
 
 /**
- * The side panel (P25-02, SPEC §4.2) in "list mode", the only mode for now: the navigation on
- * the left, the selected conversation or Steward view in the middle, the managed agents and the
- * inbox on the right. Everything comes from the store (TECHNOLOGY §6.3); the selection is the
+ * The side panel (P25-02, SPEC §4.2): the navigation on the left, the selected conversation or
+ * Steward view in the middle, the managed agents and the inbox on the right. With the solar-system
+ * scene shown (P3-01) the scene takes the centre and the conversation and the side column sit
+ * beside it; hidden ("list mode") the panel is the Phase 2.5 layout. Everything comes from the store (TECHNOLOGY §6.3); the selection is the
  * store's too, mirrored in the URL. The main area is the chat with a brain (P25-03) or the
  * Steward view (P25-05); the right column holds the managed-agents cards (P25-04) and the inbox
  * (P25-06).
@@ -40,12 +42,14 @@ export function Panel({
 }) {
   const api = useMemo(() => given ?? createApi(token), [given, token]);
   const route = useAppStore((s) => s.route);
+  const scene = useScene();
+  const showScene = route === 'panel' && scene.shown;
   return (
     <ApiContext.Provider value={api}>
       <SettingsProvider api={api}>
         <CardLinksContext.Provider value={true}>
-          <div className="pnl">
-            <TopBar {...(onForget ? { onForget } : {})} />
+          <div className={showScene ? 'pnl pnl-with-scene' : 'pnl'}>
+            <TopBar scene={scene} {...(onForget ? { onForget } : {})} />
             {route === 'settings' ? (
               // The settings page (P25-08), in the panel's frame.
               <SettingsPage token={token} />
@@ -55,8 +59,9 @@ export function Panel({
             ) : (
               // A fresh install walks through the first-run wizard first (P25-08).
               <FirstRunGate>
-                <div className="pnl-grid">
+                <div className={showScene ? 'pnl-grid pnl-grid-scene' : 'pnl-grid'}>
                   <Navigation />
+                  {showScene && <SceneArea onFailure={scene.fail} />}
                   <MainArea />
                   <SideColumn />
                 </div>
@@ -66,55 +71,6 @@ export function Panel({
         </CardLinksContext.Provider>
       </SettingsProvider>
     </ApiContext.Provider>
-  );
-}
-
-function TopBar({ onForget }: { onForget?: () => void }) {
-  const status = useAppStore((s) => s.status);
-  const route = useAppStore((s) => s.route);
-  const selection = useAppStore((s) => s.selection);
-  const world = useAppStore((s) => s.world);
-  const summary = summaryOf(world);
-  // The inbox header's number too: questions the user holds and cards awaiting their decision.
-  const waiting = waitingForUserCount(world);
-  return (
-    <header className="pnl-top">
-      <NavLink to={{ route: 'panel', selection: HARMONIZER }} className="pnl-brand">
-        GalacticAgents
-      </NavLink>
-      <span className={`pnl-conn pnl-conn-${status}`} aria-label="connection">
-        {status.replace(/_/g, ' ')}
-      </span>
-      <span className="pnl-top-counts" aria-label="summary">
-        {waiting > 0 && <Beacon>{waiting} waiting for you</Beacon>}
-        <span>{summary.openQuestions} open questions</span>
-        <span>{summary.blockedItems} blocked</span>
-      </span>
-      <span className="pnl-spacer" />
-      <NotificationsControl />
-      <NavLink
-        to={{ route: 'history', selection }}
-        current={route === 'history'}
-        className="pnl-history-link"
-      >
-        History
-      </NavLink>
-      <NavLink
-        to={{ route: 'settings', selection }}
-        current={route === 'settings'}
-        className="pnl-settings-link"
-      >
-        Settings
-      </NavLink>
-      <NavLink to={{ route: 'debug', selection: HARMONIZER }} className="pnl-debug-link">
-        Ops console
-      </NavLink>
-      {onForget && (
-        <button type="button" className="pnl-forget" onClick={onForget}>
-          Forget token
-        </button>
-      )}
-    </header>
   );
 }
 
@@ -215,7 +171,7 @@ function SideColumn() {
         <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
         {supervisor ? <AgentLinks ids={[supervisor]} /> : <ManagedAgentCards supervisor={agent} />}
       </section>
-      <section className="pnl-inbox" aria-label="inbox">
+      <section className="pnl-inbox" aria-label="inbox" id={INBOX_ID} tabIndex={-1}>
         <Inbox />
       </section>
     </aside>

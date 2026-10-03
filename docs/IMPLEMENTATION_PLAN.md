@@ -89,7 +89,7 @@ Each phase ends with something you can run. Estimates assume one developer worki
 - Planets with textures, axial tilt, rings for Saturn/Uranus, major moons on orbits; hand-tuned (non-real) spacing with a "true scale" toggle.
 - Asteroid belt: instanced mesh (thousands of rocks); task-hosting asteroids get an individual mesh, label and pick target.
 - Camera: orbit/pan/zoom controls, click-to-focus with smooth flight to a body, breadcrumb "back to system".
-- Picking via raycast (`three-mesh-bvh` once dense); hover highlight; selection outline. Clicking a planet/moon selects its project and Waykeeper; an asteroid its task; a satellite its agent (SPEC §4.1).
+- Picking by ray vs the bodies' bounding spheres (SPEC decision 65; no mesh raycast or `three-mesh-bvh`); hover highlight; selection outline. Clicking a planet/moon selects its project and Waykeeper; an asteroid its task; a satellite its agent (SPEC §4.1).
 - LOD tiers and a quality setting (high / balanced / mobile).
 - Bodies bind to the domain model: hosted project/task name and state appear as an HTML label anchored to the body; independent-project moons are visually distinct from sub-project moons.
 

@@ -1,0 +1,146 @@
+#!/usr/bin/env node
+/**
+ * Generates Earth's land/sea mask (P3-09): `apps/web/src/scene/bodies/earth-mask-data.ts`.
+ *
+ * Source: Natural Earth "land" polygons (naturalearthdata.com, public domain — "No permission is
+ * needed to use Natural Earth. Crediting the authors is unnecessary."), via the GitHub mirror
+ * `nvkelso/natural-earth-vector`, `geojson/ne_50m_land.geojson`.
+ *
+ * The polygons are rasterised (even-odd, sampled at texel centres) into an equirectangular grid
+ * of `width` × `width / 2` texels, row 0 at the north pole (90°N), column 0 at 180°W, and written
+ * as run lengths (sea first, alternating, row-major across the whole grid) encoded as base-64
+ * varints (5 data bits per character, the 6th bit = "more follows"), see `earth-mask.ts`.
+ *
+ * Usage (from the repo root; no dependencies beyond Node ≥ 18):
+ *
+ *   node apps/web/scripts/earth-mask.mjs                     # download the default source
+ *   node apps/web/scripts/earth-mask.mjs --source ne_50m_land.geojson --width 1024
+ *   node apps/web/scripts/earth-mask.mjs --out /tmp/mask.ts
+ */
+import { readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
+const DEFAULT_SOURCE =
+  'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_land.geojson';
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_OUT = path.join(HERE, '../src/scene/bodies/earth-mask-data.ts');
+const ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_';
+
+function args() {
+  const out = { source: DEFAULT_SOURCE, width: 1024, out: DEFAULT_OUT };
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i += 2) {
+    const [flag, value] = [argv[i], argv[i + 1]];
+    if (value === undefined) throw new Error(`Missing a value for ${flag}`);
+    if (flag === '--source') out.source = value;
+    else if (flag === '--width') out.width = Number(value);
+    else if (flag === '--out') out.out = path.resolve(value);
+    else throw new Error(`Unknown flag ${flag}`);
+  }
+  if (!Number.isInteger(out.width) || out.width < 16 || out.width % 2 !== 0) {
+    throw new Error('--width must be an even integer ≥ 16');
+  }
+  return out;
+}
+
+async function load(source) {
+  if (/^https?:\/\//.test(source)) {
+    const res = await fetch(source);
+    if (!res.ok) throw new Error(`GET ${source}: ${res.status} ${res.statusText}`);
+    return res.json();
+  }
+  return JSON.parse(await readFile(source, 'utf8'));
+}
+
+/** Every ring (outer boundaries and holes alike) of every polygon, as [lon, lat] lists. */
+function rings(geojson) {
+  const out = [];
+  const add = (geometry) => {
+    if (!geometry) return;
+    if (geometry.type === 'Polygon') out.push(...geometry.coordinates);
+    else if (geometry.type === 'MultiPolygon') for (const p of geometry.coordinates) out.push(...p);
+    else if (geometry.type === 'GeometryCollection') geometry.geometries.forEach(add);
+  };
+  for (const feature of geojson.features ?? [geojson]) add(feature.geometry ?? feature);
+  return out;
+}
+
+/** Even-odd scanline fill at texel centres: 1 = land. Row 0 = 90°N, column 0 = 180°W. */
+function rasterise(allRings, width, height) {
+  const mask = new Uint8Array(width * height);
+  const edges = [];
+  for (const ring of allRings) {
+    for (let k = 0; k < ring.length; k++) {
+      const a = ring[k];
+      const b = ring[(k + 1) % ring.length];
+      if (a[1] !== b[1]) edges.push([a[0], a[1], b[0], b[1]]);
+    }
+  }
+  for (let j = 0; j < height; j++) {
+    const lat = 90 - ((j + 0.5) / height) * 180;
+    const xs = [];
+    for (const [x0, y0, x1, y1] of edges) {
+      if (y0 <= lat !== y1 <= lat) xs.push(x0 + ((lat - y0) / (y1 - y0)) * (x1 - x0));
+    }
+    xs.sort((p, q) => p - q);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      // Columns whose centre lies in [xs[k], xs[k + 1]).
+      const from = Math.max(0, Math.ceil(((xs[k] + 180) / 360) * width - 0.5));
+      const to = Math.min(width - 1, Math.ceil(((xs[k + 1] + 180) / 360) * width - 0.5) - 1);
+      for (let i = from; i <= to; i++) mask[j * width + i] = 1;
+    }
+  }
+  return mask;
+}
+
+function encode(mask) {
+  let out = '';
+  let value = 0;
+  let run = 0;
+  const push = (n) => {
+    do {
+      const low = n & 31;
+      n = Math.floor(n / 32);
+      out += ALPHABET[low | (n > 0 ? 32 : 0)];
+    } while (n > 0);
+  };
+  for (const bit of mask) {
+    if (bit === value) run++;
+    else {
+      push(run);
+      value = bit;
+      run = 1;
+    }
+  }
+  push(run);
+  return out;
+}
+
+const { source, width, out } = args();
+const height = width / 2;
+const geojson = await load(source);
+const mask = rasterise(rings(geojson), width, height);
+const encoded = encode(mask);
+let land = 0;
+for (const bit of mask) land += bit;
+const lines = encoded.match(/.{1,96}/g) ?? [];
+const date = new Date().toISOString().slice(0, 10);
+const file = `/**
+ * Earth's land/sea mask (P3-09), generated by \`apps/web/scripts/earth-mask.mjs\` — do not edit.
+ *
+ * Source: Natural Earth land polygons (public domain, naturalearthdata.com), ${path.basename(source)}
+ * Generated: ${date}; ${width} × ${height} texels, row 0 = 90°N, column 0 = 180°W; land ${((land / mask.length) * 100).toFixed(1)} %.
+ * Encoding: run lengths (sea first, alternating), base-64 varints; decoded by \`earth-mask.ts\`.
+ * Regenerate: \`node apps/web/scripts/earth-mask.mjs\` (see the script for options).
+ */
+export const EARTH_MASK_WIDTH = ${width};
+export const EARTH_MASK_HEIGHT = ${height};
+export const EARTH_MASK_RUNS = [
+${lines.map((l) => `  '${l}',`).join('\n')}
+].join('');
+`;
+await writeFile(out, file);
+console.log(
+  `${out}: ${width}×${height}, ${encoded.length} chars encoded, ${file.length} bytes, land ${((land / mask.length) * 100).toFixed(1)} %`,
+);

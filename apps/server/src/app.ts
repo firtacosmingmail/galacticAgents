@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { PROTOCOL_VERSION, type HealthResponse } from '@galactic/protocol';
 import type { ServerConfig } from './config/config.js';
-import { isAllowedHost, isLoopback, isLoopbackOrigin } from './http/security.js';
+import { isAllowedHost, isRemoteRequest } from './http/security.js';
 import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
@@ -65,10 +65,12 @@ export function buildApp(opts: AppOptions): App {
       seq: opts.log?.currentSeq() ?? 0,
       ...(opts.log ? { logId: opts.log.logId } : {}),
     };
-    // The token is handed only to same-machine callers whose Origin (if any) is this machine, so
-    // the local web page can pick it up without pasting. A remote page reaching us through a
-    // reverse proxy (Phase 7) also arrives from loopback but with its own Origin: it pastes.
-    if (isLoopback(req.socket.remoteAddress) && isLoopbackOrigin(req.headers.origin)) {
+    // The token is handed only to same-machine callers, so the local web page can pick it up
+    // without pasting. A remote client reaching us through a proxy on this machine (Tailscale
+    // Serve, `vite preview --host`) also arrives from loopback, maybe with no Origin at all (a
+    // plain GET, curl): its Host or forwarding headers give it away (`isRemoteRequest`), and it
+    // pastes the token (P3-08 review: the Origin check alone handed it to any LAN client).
+    if (!isRemoteRequest(req)) {
       body.token = config.token;
     }
     return body;

@@ -8,6 +8,9 @@ const target = `http://127.0.0.1:${serverPort}`;
 
 export default defineConfig({
   plugins: [react()],
+  // The solar-system scene (P3-01) is its own lazily loaded chunk, and three.js alone is about
+  // 0.7 MB minified: warn only past what that chunk is expected to weigh.
+  build: { chunkSizeWarningLimit: 1200 },
   server: {
     port: 5173,
     strictPort: true,
