@@ -13,6 +13,7 @@ import { waitingForUserCount } from './inbox-model.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
 import { StewardPanelView } from './steward/StewardPanelView.js';
 import { ManagedAgentCards } from './AgentCards.js';
+import { NotificationsControl } from './notifications/NotificationsControl.js';
 import './panel.css';
 
 /**
@@ -70,6 +71,7 @@ function TopBar({ onForget }: { onForget?: () => void }) {
         <span>{summary.blockedItems} blocked</span>
       </span>
       <span className="pnl-spacer" />
+      <NotificationsControl />
       <NavLink to={{ route: 'debug', selection: HARMONIZER }} className="pnl-debug-link">
         Ops console
       </NavLink>

@@ -1,0 +1,60 @@
+/* Desktop notifications (P25-07): the top bar's control, its popover and the settings block. */
+.ntf-control {
+  position: relative;
+}
+.ntf-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  width: min(340px, calc(100vw - 32px));
+  padding: 12px 14px;
+  background: var(--pnl-surface, #161a26);
+  color: var(--pnl-ink, inherit);
+  border: 1px solid var(--pnl-line, #262c40);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.ntf-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.ntf-heading {
+  margin: 0;
+  font-size: 14px;
+}
+.ntf-status {
+  margin: 0;
+}
+.ntf-status-blocked {
+  color: var(--pnl-beacon, #ffb547);
+}
+.ntf-button {
+  font: inherit;
+  font-size: 13px;
+}
+.ntf-kinds {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--pnl-line, #262c40);
+  border-radius: 6px;
+}
+.ntf-kinds legend {
+  padding: 0 4px;
+  color: var(--pnl-muted, inherit);
+}
+.ntf-kind {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.ntf-note {
+  margin: 0;
+  color: var(--pnl-muted, inherit);
+  font-size: 12px;
+}

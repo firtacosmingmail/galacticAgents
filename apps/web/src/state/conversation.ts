@@ -141,9 +141,9 @@ export type ThreadCardItem =
  * asked on a project (by its Waykeeper or by a Steward of one of its tasks), the Harmonizer for
  * its own and for a standalone task's Steward.
  */
-type QuestionOwner = { role: 'harmonizer' } | { role: 'waykeeper'; projectId: Id };
+export type QuestionOwner = { role: 'harmonizer' } | { role: 'waykeeper'; projectId: Id };
 
-function questionOwner(
+export function questionOwner(
   world: Pick<WorldState, 'agents' | 'tasks'>,
   q: Question,
 ): QuestionOwner | undefined {
