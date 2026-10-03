@@ -17,3 +17,4 @@ export * from './adapter.js';
 export * from './commands.js';
 export * from './summary.js';
 export * from './panel.js';
+export * from './belt.js';
