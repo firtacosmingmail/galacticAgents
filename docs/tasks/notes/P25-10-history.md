@@ -63,7 +63,7 @@ What the page shows:
   - for a withdrawn question: when, and "Why: <reason>".
 - **Paging.** Each list has "Show older" while `hasMore`, plus Refresh.
 
-## Proposed SPEC text (product)
+## Proposed SPEC text (product; recorded as SPEC decision 61, §4.2 and decision 53; TECHNOLOGY §6.3)
 
 **SPEC §7, new decision — The history view (2026-10-03, P25-10; §4.2, decisions 4, 11b, 53).** The history view lives at `/history`, in the panel's frame, reached from the top bar. It has two lists, newest first:
 
