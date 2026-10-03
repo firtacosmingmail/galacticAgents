@@ -25,6 +25,7 @@ import { Picking } from './picking/Picking.js';
 import { LabelProjector } from './labels/LabelProjector.js';
 import { MoonMarkers } from './labels/MoonMarkers.js';
 import { DECOR_LAYER, showDecor } from './layers.js';
+import { Satellites } from './satellites/Satellites.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -100,6 +101,8 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       {/* Phase 3 wave 2: each task owns its folder; they meet through `anchors.ts`. */}
       <Bodies quality={quality} sunRadius={SUN_RADIUS} />
       <Belt rocks={quality.beltRocks} />
+      {/* P4-01: a satellite per live Waykeeper / Steward, on its work's body (`satellites/`). */}
+      <Satellites quality={quality} />
       <CameraRig />
       <Picking outline={quality.bloom ? outline : undefined} />
       <MoonMarkers />

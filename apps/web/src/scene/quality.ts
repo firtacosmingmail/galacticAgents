@@ -36,7 +36,13 @@ import type { QualityTier } from '@galactic/protocol';
  *   the frame cap;
  * - `maxFps`: a frame-rate cap while the decorative motion runs (`null` = the display's rate); the
  *   mobile tier renders every other frame of a 60 Hz display to save the phone's battery. The fps
- *   meter (`?show_fps=true`) lifts the cap so it measures the headroom.
+ *   meter (`?show_fps=true`) lifts the cap so it measures the headroom;
+ * - `satellites` (P4-01, `satellites/`): `instanceAbove` — with more satellites than this, the
+ *   scene draws them as one instanced mesh for the bodies and one for the scanning beams (two draw
+ *   calls whatever the count) instead of a mesh pair each; `maxAnimated` — the hard cap on
+ *   satellites animating at once (scans, activity archetypes, flights, landings; corner case 21):
+ *   flights and landings always run (they must complete, corner case 26) and count toward it, the
+ *   others beyond it simply orbit.
  */
 /** Linear luminance a pixel needs (before tone mapping) to bloom. */
 export const BLOOM_THRESHOLD = 1.0;
@@ -63,6 +69,13 @@ export interface SceneQuality {
   orbitSegments: { planet: number; moon: number };
   labelHz: number;
   maxFps: number | null;
+  satellites: SatelliteQuality;
+}
+
+/** The satellites' share of a tier (P4-01). */
+export interface SatelliteQuality {
+  instanceAbove: number;
+  maxAnimated: number;
 }
 
 /** One level of detail of the planets and moons (P3-06). */
@@ -132,6 +145,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     orbitSegments: { planet: 192, moon: 96 },
     labelHz: 30,
     maxFps: null,
+    satellites: { instanceAbove: 12, maxAnimated: 16 },
   },
   balanced: {
     tier: 'balanced',
@@ -175,6 +189,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     orbitSegments: { planet: 128, moon: 64 },
     labelHz: 30,
     maxFps: null,
+    satellites: { instanceAbove: 12, maxAnimated: 12 },
   },
   mobile: {
     tier: 'mobile',
@@ -210,6 +225,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     orbitSegments: { planet: 96, moon: 48 },
     labelHz: 15,
     maxFps: 30,
+    satellites: { instanceAbove: 8, maxAnimated: 6 },
   },
 };
 
