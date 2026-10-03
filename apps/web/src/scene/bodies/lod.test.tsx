@@ -51,7 +51,7 @@ describe('quality tier table (P3-06)', () => {
   it('defines every field for every tier', () => {
     for (const tier of TIERS) {
       const q = QUALITY_TIERS[tier];
-      expect(q.shadowMapSize).toBeGreaterThan(0);
+      expect(q).not.toHaveProperty('shadowMapSize'); // P3-10: no shadow map any more
       expect(q.textureBudgetMB).toBeGreaterThan(0);
       expect(q.ringSegments).toBeGreaterThanOrEqual(32);
       expect(q.orbitSegments.planet).toBeGreaterThanOrEqual(q.orbitSegments.moon);
@@ -98,7 +98,6 @@ describe('quality tier table (P3-06)', () => {
       q.dprCap,
       q.stars,
       q.beltRocks,
-      q.shadowMapSize,
       q.textureBudgetMB,
       q.ringSegments,
       q.orbitSegments.planet,

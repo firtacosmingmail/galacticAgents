@@ -36,7 +36,8 @@ import { DECOR_LAYER, showDecor } from './layers.js';
  *
  * The frame loop is continuous while the decorative orbital motion runs (P3-02) or the fps meter
  * measures; with `prefers-reduced-motion` and no meter it renders on demand (resize, a change).
- * The tier's `shadows` flag turns on the shadow map and the Sun light's shadow (P3-02).
+ * The tier's `shadows` flag turns on the bodies' eclipse shadows (P3-10, `bodies/eclipse.ts`):
+ * computed in the bodies' shaders, there is no shadow map.
  *
  * Picking (P3-05) listens on the canvas and draws the hover / selection rings; on tiers with a
  * composer the selected body also gets the outline effect (the composer then runs with
@@ -55,12 +56,6 @@ export interface SolarSceneProps {
 }
 
 export const SUN_RADIUS = 6;
-/**
- * The Sun light's shadow (P3-02, tiers with `shadows`): one point-light shadow map, PCF filtered,
- * its size from the tier (`shadowMapSize`, P3-06), reaching past Neptune's moons in true scale.
- * Its main effect is Saturn's shadow on its rings and moons eclipsed by their planet.
- */
-const SHADOW_FAR = 1300;
 const BACKGROUND = '#02030a';
 
 /** The selection outline (P3-05): the panel's accent, hidden edges dimmer, no pulse. */
@@ -89,11 +84,9 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       }
       // sRGB output and ACES filmic tone mapping are R3F's defaults (not `flat`, not `linear`).
       dpr={[1, quality.dprCap]}
-      // The shadow map follows `quality.shadows` (PCF, `shadows="percentage"`: three r18x dropped
-      // the PCFSoft that `shadows={true}` asks for), together with the Sun light's `castShadow`,
-      // so a tier change also changes the lights' state and the materials recompile.
       frameloop={frameloop}
-      shadows={quality.shadows ? 'percentage' : false}
+      // No shadow map (P3-10): the Sun is a point light, whose cube shadow magnified an inner
+      // planet's shadow over a whole outer planet; the bodies compute their eclipses themselves.
       camera={{ position: [0, 40, 140], fov: 45, near: 0.1, far: 6000 }}
       // The camera sees the decorations' layer too (P3-08, `layers.ts`).
       onCreated={({ camera }) => showDecor(camera)}
@@ -101,23 +94,11 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <color attach="background" args={[BACKGROUND]} />
       <ambientLight intensity={0.04} />
       {/* The Sun lights the planets (P3-02); decay 0 so spacing does not change their brightness. */}
-      <pointLight
-        // three never resizes a point light's cube shadow map: a new size gets a new light.
-        key={quality.shadowMapSize}
-        position={[0, 0, 0]}
-        intensity={3}
-        decay={0}
-        castShadow={quality.shadows}
-        shadow-mapSize={[quality.shadowMapSize, quality.shadowMapSize]}
-        shadow-camera-near={SUN_RADIUS}
-        shadow-camera-far={SHADOW_FAR}
-        shadow-bias={-0.0005}
-        shadow-normalBias={0.02}
-      />
+      <pointLight position={[0, 0, 0]} intensity={3} decay={0} />
       <StarField count={quality.stars} />
       <Sun glow={quality.bloom === null} />
       {/* Phase 3 wave 2: each task owns its folder; they meet through `anchors.ts`. */}
-      <Bodies quality={quality} />
+      <Bodies quality={quality} sunRadius={SUN_RADIUS} />
       <Belt rocks={quality.beltRocks} />
       <CameraRig />
       <Picking outline={quality.bloom ? outline : undefined} />
