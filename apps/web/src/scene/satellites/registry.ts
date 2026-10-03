@@ -17,12 +17,14 @@ import type { SatelliteFrame } from './director.js';
  */
 let frames: ReadonlyMap<Id, SatelliteFrame> = new Map();
 let ids: readonly Id[] = [];
+let list: readonly SatelliteFrame[] = [];
 const listeners = new Set<() => void>();
 
 /** Replaces the published set (the director calls it when satellites are added or removed). */
 export function publishSatellites(next: ReadonlyMap<Id, SatelliteFrame>): void {
   frames = next;
   ids = [...next.keys()];
+  list = [...next.values()];
   listeners.forEach((l) => l());
 }
 
@@ -31,7 +33,15 @@ export function getSatellite(agentId: Id): SatelliteFrame | undefined {
 }
 
 export function allSatellites(): SatelliteFrame[] {
-  return [...frames.values()];
+  return [...list];
+}
+
+/**
+ * The published frames, in the director's order: the same array until the next publish (the
+ * frames inside are live). For per-frame readers (picking), which must not copy.
+ */
+export function satelliteFrames(): readonly SatelliteFrame[] {
+  return list;
 }
 
 /** The published agent ids, in the director's order; the same array until the next publish. */

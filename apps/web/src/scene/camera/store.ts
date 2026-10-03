@@ -97,11 +97,20 @@ function step(get: () => CameraState, direction: 1 | -1): string | undefined {
 
 const KIND_RANK: Record<BodyAnchor['kind'], number> = { star: 0, planet: 1, moon: 2, asteroid: 3 };
 
-/** An anchor's world position (its world matrix's translation, brought up to date). */
-export function anchorPosition(anchor: BodyAnchor): Vec3 {
+/**
+ * An anchor's world position (its world matrix's translation, brought up to date), written into
+ * `out` when given (per-frame readers reuse one buffer), else a new tuple.
+ */
+export function anchorPosition(
+  anchor: BodyAnchor,
+  out: [number, number, number] = [0, 0, 0],
+): Vec3 {
   anchor.object.updateWorldMatrix(true, false);
   const e = anchor.object.matrixWorld.elements;
-  return [e[12] ?? 0, e[13] ?? 0, e[14] ?? 0];
+  out[0] = e[12] ?? 0;
+  out[1] = e[13] ?? 0;
+  out[2] = e[14] ?? 0;
+  return out;
 }
 
 /**
