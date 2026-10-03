@@ -393,7 +393,7 @@ describe('anchors', () => {
 });
 
 describe('shadows', () => {
-  it('planets cast; only the largest moons do (the small ones are not worth six more draws)', () => {
+  it('planets cast; only the largest moons do (the small ones would be a few pixels)', () => {
     const list = buildRenderList(CATALOGUE, 'fake');
     const casters = list.flatMap((p) => p.moons.filter((m) => m.castShadow).map((m) => m.name));
     expect(casters.sort()).toEqual(
