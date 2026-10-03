@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   ClampToEdgeWrapping,
   DataTexture,
@@ -12,7 +12,7 @@ import {
 } from 'three';
 import type { LodConfig, LodLevel } from '../quality.js';
 import type { BodyLook, RingLook } from './appearance.js';
-import { paintAsync } from './painter.js';
+import { onPaintModeChange, paintAsync, paintsOffMainThread } from './painter.js';
 import {
   hasRelief,
   paintRings,
@@ -30,8 +30,11 @@ import { TextureCache } from './texture-cache.js';
  * - Nearer levels (bigger maps, plus the bump/roughness detail map) are painted lazily off the
  *   main thread (`painter.ts`) when a body reaches that level, and live in `nearTextures`, a cache
  *   keyed by content and size (`surfaceMapsKey`), shared by bodies that look alike, kept idle
- *   within the tier's budget and dropped on a tier change (`useNearTextureBudget`). Until the near
- *   maps are ready the body keeps its far map.
+ *   within the tier's budget and dropped on a tier change (`useNearTextureBudget`). Until a
+ *   level's maps are ready the body keeps the maps it showed before (the far map at first), so a
+ *   level change never drops it back to the far map while the new one is painted.
+ * - Without a paint worker, near maps would be painted on the main thread and freeze the UI: they
+ *   are then capped at the middle level's size, without detail maps (`nearMapsSpec`).
  * - Sphere geometries are unit spheres per level and kind, shared by every body (scaled by the
  *   mesh) and disposed when the tier changes (`useSphereGeometries`).
  */
@@ -70,6 +73,25 @@ export type BodyKind = 'planet' | 'moon';
 export function levelTexture(level: LodLevel, kind: BodyKind): { width: number; height: number } {
   const width = kind === 'planet' ? level.planetTexture : level.moonTexture;
   return { width, height: width / 2 };
+}
+
+/**
+ * The maps a body asks for at a level: the level's size and detail, except without a paint worker
+ * (`offMainThread` false), where the size is capped at the last level before the far one (high:
+ * 1024 for a planet) and no detail map is painted — 2048 + detail is about 1.5 s of main thread.
+ */
+export function nearMapsSpec(
+  lod: LodConfig,
+  levelIndex: number,
+  kind: BodyKind,
+  look: BodyLook,
+  offMainThread: boolean,
+): { width: number; height: number; detail: boolean } {
+  const level = lod.levels[Math.min(levelIndex, lod.levels.length - 1)]!;
+  const size = levelTexture(level, kind);
+  if (offMainThread) return { ...size, detail: levelDetail(level, look) };
+  const cap = levelTexture(lod.levels[Math.max(0, lod.levels.length - 2)]!, kind);
+  return { ...(size.width > cap.width ? cap : size), detail: false };
 }
 
 /** Whether a level paints a detail map for this surface. */
@@ -148,9 +170,10 @@ export function useSurfaceTexture(
 }
 
 /**
- * The maps a body shows at LOD `levelIndex`: the far map until the level's own maps (bigger, maybe
- * with detail) are painted, then those. A level whose map is no bigger than the far one and paints
- * no detail just uses the far map.
+ * The maps a body shows at LOD `levelIndex`: the level's own maps once painted (bigger, maybe with
+ * detail); until then whatever it showed before — the previous level's maps, still referenced in
+ * the cache, or the far map. A level whose map is no bigger than the far one and paints no detail
+ * just uses the far map.
  */
 export function useBodyMaps(
   look: BodyLook,
@@ -160,35 +183,60 @@ export function useBodyMaps(
 ): { map: DataTexture; detail: DataTexture | null } {
   const far = lod.levels[lod.levels.length - 1]!;
   const farMap = useSurfaceTexture(look, levelTexture(far, kind));
-  const level = lod.levels[Math.min(levelIndex, lod.levels.length - 1)]!;
-  const { width, height } = levelTexture(level, kind);
-  const detail = levelDetail(level, look);
+  const offMainThread = useSyncExternalStore(onPaintModeChange, paintsOffMainThread, () => true);
+  const { width, height, detail } = nearMapsSpec(lod, levelIndex, kind, look, offMainThread);
   const near = width > levelTexture(far, kind).width || detail;
   const key = near ? surfaceMapsKey(look, width, detail) : null;
-  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  /** The near maps on show, whose cache reference this body holds (effects only). */
+  const held = useRef<string | null>(null);
+  /** The same key, for the render (a state change also re-renders when the new maps arrive). */
+  const [shownKey, setShownKey] = useState<string | null>(null);
 
   useEffect(() => {
-    if (key === null) return;
+    /** Shows `next` (already acquired) and lets go of what was shown before. */
+    const show = (next: string | null) => {
+      const old = held.current;
+      held.current = next;
+      if (old !== null) nearTextures.release(old);
+      queueMicrotask(() => setShownKey(next));
+    };
+    if (key === null) {
+      show(null); // the far map is always ready
+      return;
+    }
     let live = true;
     const handle = nearTextures.acquire(key, surfaceMapsBytes(width, detail), (signal) =>
       paintAsync({ look, width, height, detail }, signal).then((layers) =>
         SurfaceMaps.from(layers, width, height),
       ),
     );
-    if (handle.value === undefined) {
+    if (handle.value !== undefined) show(key);
+    else {
       void handle.promise.then((value) => {
-        if (live && value) rerender();
+        if (live && value) show(key);
       });
     }
     return () => {
       live = false;
-      nearTextures.release(key);
+      // Not shown yet: let go (a pending paint is abandoned). Shown: kept until the next is ready.
+      if (held.current !== key) nearTextures.release(key);
     };
-    // `key` captures the look's content and the size.
+    // `key` captures the look's content and the size; the paint mode re-asks after a worker
+    // failure (its jobs were failed).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, offMainThread]);
 
-  const maps = key === null ? undefined : nearTextures.peek(key);
+  useEffect(
+    () => () => {
+      if (held.current !== null) nearTextures.release(held.current);
+      held.current = null;
+    },
+    [],
+  );
+
+  if (key === null) return { map: farMap, detail: null };
+  const maps =
+    nearTextures.peek(key) ?? (shownKey === null ? undefined : nearTextures.peek(shownKey));
   return maps ? { map: maps.map, detail: maps.detail } : { map: farMap, detail: null };
 }
 

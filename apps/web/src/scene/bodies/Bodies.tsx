@@ -15,7 +15,7 @@ import {
   type MoonItem,
   type PlanetItem,
 } from './layout.js';
-import { motionEnabled, useReducedMotion } from '../motion.js';
+import { motionEnabled, motionSeconds, useReducedMotion } from '../motion.js';
 import { placeOnOrbit } from '../orbit.js';
 import type { SceneQuality } from '../quality.js';
 import { useLodLevel } from './lod.js';
@@ -93,9 +93,9 @@ function Planet({
   useOrbit(anchor, item.distance, item.phase, item.period, motion);
   useBodyAnchor(anchor, planetAnchor(item));
   const level = useLodLevel(anchor, item.radius, quality.lod);
-  useFrame((state) => {
+  useFrame(() => {
     if (!motion || !spin.current) return;
-    spin.current.rotation.y = (state.clock.elapsedTime / SPIN_PERIOD) * Math.PI * 2;
+    spin.current.rotation.y = (motionSeconds() / SPIN_PERIOD) * Math.PI * 2;
   });
   useLayoutEffect(() => {
     if (!motion && spin.current) spin.current.rotation.y = 0;
@@ -275,8 +275,8 @@ function useOrbit(
     if (ref.current) placeOnOrbit(ref.current, distance, orbitAngle(phase, period, 0));
     invalidate();
   }, [ref, distance, phase, period, motion, invalidate]);
-  useFrame((state) => {
+  useFrame(() => {
     if (!motion || !ref.current) return;
-    placeOnOrbit(ref.current, distance, orbitAngle(phase, period, state.clock.elapsedTime));
+    placeOnOrbit(ref.current, distance, orbitAngle(phase, period, motionSeconds()));
   });
 }

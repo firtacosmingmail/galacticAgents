@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { HARMONIZER } from '../../state/selection.js';
-import { bodyAction, bodyName, headquartersBody, selectionBody } from './body-action.js';
+import {
+  bodyAction,
+  bodyName,
+  headquartersBody,
+  outlineBody,
+  selectionBody,
+} from './body-action.js';
 import { pickingWorld } from './fixtures.js';
 
 describe('bodyAction (a click on a body, SPEC §4.1 and decision 53)', () => {
@@ -101,5 +107,16 @@ describe('selectionBody (the outline and the panel → scene flight)', () => {
       expect(action.kind).toBe('select');
       if (action.kind === 'select') expect(selectionBody(world, action.selection)).toBe(bodyId);
     }
+  });
+});
+
+describe('outlineBody (what the composer outlines)', () => {
+  it("outlines the selected agent's body, never Earth for the default Harmonizer selection", () => {
+    const world = pickingWorld();
+    expect(outlineBody(world, HARMONIZER)).toBeUndefined();
+    expect(selectionBody(world, HARMONIZER)).toBe('b-earth'); // the ring still marks Earth
+    expect(outlineBody(world, { kind: 'waykeeper', id: 'a-wk-new' })).toBe('b-jupiter');
+    expect(outlineBody(world, { kind: 'steward', id: 'a-st' })).toBe('b-ast-7');
+    expect(outlineBody(world, { kind: 'steward', id: 'a-gone' })).toBeUndefined();
   });
 });
