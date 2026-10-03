@@ -407,22 +407,31 @@
   }
 }
 
-/* managed agents hidden (P4-09): only the inbox is left in the side column, so it narrows in
-   list mode and, beside the scene, moves under the conversation (content-sized, capped) — the
-   conversation and the scene take the space; stacked layouts (≤1100 px) are unchanged */
+/* managed agents hidden (P4-09): only the inbox is left in the side column. In list mode the
+   column narrows; beside the scene the inbox sits under the conversation, sized to its content
+   and capped at about the share it had before (2fr of 5), so the conversation keeps at least its
+   height; at ≥1700 px the fourth column goes and the scene takes its width. Stacked layouts
+   (≤1100 px) are unchanged. */
 @media (min-width: 1101px) {
   .pnl-grid.pnl-grid-no-agents:not(.pnl-grid-scene) {
     grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(240px, 320px);
   }
   .pnl-grid.pnl-grid-scene.pnl-grid-no-agents {
-    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(360px, 440px);
     grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .pnl-grid-scene.pnl-grid-no-agents > .pnl-side {
+    box-sizing: border-box;
+    max-height: 36vh;
+  }
+}
+@media (min-width: 1700px) {
+  .pnl-grid.pnl-grid-scene.pnl-grid-no-agents {
+    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(360px, 440px);
     grid-template-areas:
       'nav scene main'
       'nav scene side';
   }
   .pnl-grid-scene.pnl-grid-no-agents > .pnl-side {
-    max-height: 40vh;
     border-top: 1px solid var(--pnl-line);
   }
 }
@@ -658,4 +667,13 @@ a.pnl-link:hover {
 }
 .pnl-inbox {
   margin-top: 8px;
+}
+/* the side column can be narrow (P4-09 narrows it with the managed agents hidden): an inline
+   answer row wraps instead of running past the column's edge */
+.pnl-side .send {
+  flex-wrap: wrap;
+}
+.pnl-side .send input:not([type='checkbox']) {
+  flex: 1 1 8em;
+  min-width: 0;
 }
