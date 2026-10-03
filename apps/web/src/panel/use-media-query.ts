@@ -6,6 +6,13 @@ import { useCallback, useSyncExternalStore } from 'react';
  */
 export const COMPACT_TOP_BAR_QUERY = '(max-width: 760px)';
 
+/**
+ * At or below this width the panel stacks (P4-10): the scene, the navigation and the side column
+ * scroll together in one area, with the docked conversation under it. Above it, three columns.
+ * The same width as panel.css's stacked breakpoint.
+ */
+export const STACKED_LAYOUT_QUERY = '(max-width: 1100px)';
+
 function mediaQuery(query: string): MediaQueryList | undefined {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
   try {

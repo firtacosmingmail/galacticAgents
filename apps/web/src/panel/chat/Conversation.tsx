@@ -158,6 +158,17 @@ export function Conversation({ agentId }: { agentId: Id }) {
       el.scrollTop = el.scrollHeight;
     }
   }, [first, count]);
+  // The thread changes height (the dock resized, minimised and restored, P4-10): stay at the
+  // bottom when the user was there.
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (atBottom.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   const older = () => {
     const el = scroller.current;
     if (el) restore.current = { height: el.scrollHeight, top: el.scrollTop };
