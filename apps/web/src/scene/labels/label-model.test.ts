@@ -140,7 +140,11 @@ describe('world → labels', () => {
       kind: 'moon',
       parentId: 'b-jupiter',
       name: 'Europa',
-      movedTo: { bodyId: 'b-jupiter', host: { kind: 'task', id: 't-in' }, at: fx.project.createdAt },
+      movedTo: {
+        bodyId: 'b-jupiter',
+        host: { kind: 'task', id: 't-in' },
+        at: fx.project.createdAt,
+      },
     };
     expect(bodyLabel(world, 'b-europa')).toMatchObject({
       kind: 'moved',

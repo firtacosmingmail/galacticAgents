@@ -223,14 +223,17 @@ describe('labels as pick targets (P3-07)', () => {
     expect(useCameraStore.getState().focusedId).toBeUndefined();
   });
 
-  it("hovering a label hovers its body; a hidden label is no target", () => {
+  it('hovering a label hovers its body; a hidden label is no target', () => {
     render(<Picking />);
     frame();
     pointer('pointerMove', 420, 300);
     flushRaf();
     expect(usePickingStore.getState().hover).toMatchObject({ bodyId: 'b-jupiter', others: 0 });
     expect(canvas.style.cursor).toBe('pointer');
-    setShown([...labelEntries()].find((e) => e.bodyId === 'b-jupiter')!, false);
+    setShown(
+      [...labelEntries()].find((e) => e.bodyId === 'b-jupiter')!,
+      false,
+    );
     pointer('pointerMove', 421, 300);
     flushRaf();
     expect(usePickingStore.getState().hover).toBeUndefined();

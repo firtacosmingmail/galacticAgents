@@ -153,7 +153,7 @@ describe('LabelLayer (content from the store)', () => {
     expect(entry?.priority).toBe(5);
   });
 
-  it('a label is no click target (picking resolves it); the hovered body\'s label is marked', () => {
+  it("a label is no click target (picking resolves it); the hovered body's label is marked", () => {
     render(<LabelLayer />);
     fireEvent.click(label('b-jupiter'), { clientX: 40, clientY: 30 });
     expect(selected()).toBe('harmonizer');
@@ -336,7 +336,10 @@ describe('LabelProjector (one pass for every label)', () => {
       useAppStore.setState({
         world: {
           ...world,
-          bodies: { ...world.bodies, 'b-mars': { ...mars, host: { kind: 'project', id: 'p-new' } } },
+          bodies: {
+            ...world.bodies,
+            'b-mars': { ...mars, host: { kind: 'project', id: 'p-new' } },
+          },
         },
       });
     });
