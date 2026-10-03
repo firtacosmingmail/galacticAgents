@@ -228,7 +228,7 @@ export function sceneQuality(tier: QualityTier | undefined): SceneQuality {
  * Whether the WebGL context itself is multisampled (P3-08). With a composer (bloom), the scene is
  * drawn into the composer's own multisampled target (`multisampling` 4) and only a full-screen
  * quad reaches the canvas, so a multisampled canvas would add a full-resolution MSAA buffer and its
- * resolve every frame for nothing (measured: ≈ 40 → ≈ 60 fps at high under load). The context
+ * resolve every frame for nothing (≈ +15 % headroom at high, P3-08 notes). The context
  * gets MSAA only on a tier that wants it and draws the scene straight to the canvas.
  */
 export function contextAntialias(quality: Pick<SceneQuality, 'antialias' | 'bloom'>): boolean {
