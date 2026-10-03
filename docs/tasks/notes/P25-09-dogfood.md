@@ -38,3 +38,7 @@ Open the panel URL the server prints (with its token). On this install the first
 ## Fixes made
 
 - 2026-10-03 — Waykeeper questions were not visible in the Harmonizer window (only in the project's thread and the inbox). Now a project's clarification that reached the user also shows as a card in the Harmonizer chat (same card; SPEC decision 55 amended). Permission questions stay out of it.
+
+## Result
+
+2026-10-03: Cosmin tested the panel on a real project and accepted the phase ("looks good"); the checklist above stays as a regression list for later runs. Friction found later is fixed in Phase 3.
