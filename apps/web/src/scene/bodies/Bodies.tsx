@@ -14,7 +14,7 @@ import {
   type MoonItem,
   type PlanetItem,
 } from './layout.js';
-import { motionEnabled, useReducedMotion } from './motion.js';
+import { motionEnabled, useReducedMotion } from '../motion.js';
 import { MOON_TEXTURE, PLANET_TEXTURE } from './surface.js';
 import { useRingTexture, useSurfaceTexture } from './textures.js';
 

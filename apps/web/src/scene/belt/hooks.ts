@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, type RefObject } from 'react';
 import type { Object3D } from 'three';
 import { registerAnchor, type BodyAnchor } from '../anchors.js';
 
@@ -20,24 +20,5 @@ export function useBodyAnchor(
   }, [bodyId, ref, radius, kind]);
 }
 
-const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
-
-/** Whether the user asked for reduced motion; follows changes of the setting. */
-export function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() => queryReducedMotion()?.matches ?? false);
-  useEffect(() => {
-    const query = queryReducedMotion();
-    if (!query) return;
-    const update = () => setReduced(query.matches);
-    update();
-    query.addEventListener('change', update);
-    return () => query.removeEventListener('change', update);
-  }, []);
-  return reduced;
-}
-
-function queryReducedMotion(): MediaQueryList | undefined {
-  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-    ? window.matchMedia(REDUCED_MOTION)
-    : undefined;
-}
+/** The shared reduced-motion preference (`scene/motion.ts`, P3-02), under the belt's name. */
+export { useReducedMotion as usePrefersReducedMotion } from '../motion.js';

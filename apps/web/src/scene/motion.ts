@@ -1,16 +1,22 @@
 import { useSyncExternalStore } from 'react';
 
 /**
- * Decorative motion (P3-02): planets go round the Sun, moons round their planets, planets spin.
- * It is off when the user asks the system for reduced motion (`prefers-reduced-motion: reduce`):
- * the bodies then sit still at their starting angles (chosen so none hides behind the Sun) and
- * the canvas renders on demand again. No three.js here.
+ * The scene's decorative motion and the user's reduced-motion preference, shared by the scene's
+ * parts (P3-02 bodies, P3-03 belt; the frame loop in `SolarScene`): planets go round the Sun,
+ * moons round their planets, planets spin, the belt turns. All of it stops when the user asks the
+ * system for reduced motion (`prefers-reduced-motion: reduce`): the bodies then sit still at their
+ * starting angles (chosen so none hides behind the Sun) and the canvas renders on demand again.
+ * No three.js here.
  */
 export const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 
 function mediaQuery(): MediaQueryList | undefined {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-  return window.matchMedia(REDUCED_MOTION_QUERY);
+  try {
+    return window.matchMedia(REDUCED_MOTION_QUERY);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Whether the user prefers reduced motion right now (no `matchMedia` → no preference). */

@@ -31,7 +31,7 @@ import {
   prefersReducedMotion,
   REDUCED_MOTION_QUERY,
   sceneFrameloop,
-} from './motion.js';
+} from '../motion.js';
 import { paintRings, paintSurface } from './surface.js';
 import type { Object3D } from 'three';
 

@@ -9,7 +9,7 @@ import { generateStarField } from './starfield.js';
 import { Bodies } from './bodies/Bodies.js';
 import { SUN_ANCHOR_ID } from './anchors.js';
 import { attachAnchor } from './bodies/anchor-binding.js';
-import { motionEnabled, sceneFrameloop, useReducedMotion } from './bodies/motion.js';
+import { motionEnabled, sceneFrameloop, useReducedMotion } from './motion.js';
 import { Belt } from './belt/Belt.js';
 import { CameraRig } from './camera/CameraRig.js';
 
