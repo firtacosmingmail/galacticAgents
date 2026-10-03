@@ -99,7 +99,13 @@ export function Picking({ outline }: PickingProps) {
     };
 
     const onDown = (e: PointerEvent) => {
-      tracker.down({ pointerId: e.pointerId, button: e.button, ...xy(e), at: e.timeStamp });
+      tracker.down({
+        pointerId: e.pointerId,
+        button: e.button,
+        pointerType: e.pointerType,
+        ...xy(e),
+        at: e.timeStamp,
+      });
     };
     const onMove = (e: PointerEvent) => {
       tracker.move({ pointerId: e.pointerId, ...xy(e) });

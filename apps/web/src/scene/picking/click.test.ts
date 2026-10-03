@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLICK_MAX_MS, CLICK_SLOP_PX, ClickTracker } from './click.js';
+import { CLICK_MAX_MS, CLICK_SLOP_PX, ClickTracker, clickSlop, TAP_SLOP_PX } from './click.js';
 
 const press = (
   t: ClickTracker,
@@ -53,5 +53,23 @@ describe('ClickTracker (click vs drag)', () => {
     press(t);
     t.cancel();
     expect(t.up({ pointerId: 1, x: 100, y: 100, at: 10 })).toBe(false);
+  });
+
+  it('a tap may wander further than a mouse click (touch and pen slop)', () => {
+    expect(clickSlop('mouse')).toBe(CLICK_SLOP_PX);
+    expect(clickSlop(undefined)).toBe(CLICK_SLOP_PX);
+    expect(clickSlop('pen')).toBe(TAP_SLOP_PX);
+    const t = new ClickTracker();
+    const tap = (pointerType: string) =>
+      t.down({ pointerId: 1, button: 0, x: 100, y: 100, at: 0, pointerType });
+    // 8 px: a drag with the mouse, a tap with a finger.
+    tap('mouse');
+    expect(t.up({ pointerId: 1, x: 108, y: 100, at: 90 })).toBe(false);
+    tap('touch');
+    t.move({ pointerId: 1, x: 106, y: 104 });
+    expect(t.up({ pointerId: 1, x: 108, y: 100, at: 90 })).toBe(true);
+    // Beyond the tap slop a finger drags too.
+    tap('touch');
+    expect(t.up({ pointerId: 1, x: 100 + TAP_SLOP_PX + 1, y: 100, at: 90 })).toBe(false);
   });
 });
