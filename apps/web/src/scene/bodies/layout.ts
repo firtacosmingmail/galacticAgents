@@ -1,5 +1,6 @@
 import type { Body } from '@galactic/protocol';
 import { auToScene, PLANET_AU, TRUE_UNITS_PER_KM, type ScaleMode } from '../scale.js';
+import { orbitPoint } from '../orbit.js';
 import { MOON_LOOKS, moonLook, PLANET_LOOKS, planetLook, type BodyLook } from './appearance.js';
 
 /**
@@ -60,7 +61,7 @@ export const MOON_BASE_PERIOD = 24;
 /** Seconds per planet spin (decorative). */
 export const SPIN_PERIOD = 40;
 
-/** The far side of the Sun from the default camera (on +z): orbit angle π/2 (see `orbitPosition`). */
+/** The far side of the Sun from the default camera (on +z): orbit angle π/2 (see `scene/orbit.ts`). */
 export const FAR_SIDE_ANGLE = Math.PI / 2;
 /** How close (radians) to the far side a static planet may sit before it is nudged away. */
 export const FAR_SIDE_MARGIN = (30 * Math.PI) / 180;
@@ -73,11 +74,6 @@ export function planetAu(orbit: number): number {
   if (known !== undefined) return known;
   const last = PLANET_AU[PLANET_AU.length - 1]!;
   return last + 10 * Math.max(1, orbit - PLANET_AU.length);
-}
-
-/** Position on an orbit in its plane (x, z), counter-clockwise seen from above (+y). */
-export function orbitPosition(distance: number, angle: number): [x: number, z: number] {
-  return [distance * Math.cos(angle), -distance * Math.sin(angle)];
 }
 
 /** Orbit angle at time `t` seconds (`t` = 0 when motion is off: the static layout). */
@@ -238,10 +234,11 @@ export function anchorSpecs(list: readonly PlanetItem[]): AnchorSpec[] {
 /** Circle points (x, 0, z) for an orbit line, closed by `LineLoop`. */
 export function circlePoints(radius: number, segments: number): Float32Array {
   const out = new Float32Array(segments * 3);
+  const p = orbitPoint(0, 0);
   for (let i = 0; i < segments; i++) {
-    const [x, z] = orbitPosition(radius, (i / segments) * Math.PI * 2);
-    out[i * 3] = x;
-    out[i * 3 + 2] = z;
+    orbitPoint(radius, (i / segments) * Math.PI * 2, 0, p);
+    out[i * 3] = p[0];
+    out[i * 3 + 2] = p[2];
   }
   return out;
 }

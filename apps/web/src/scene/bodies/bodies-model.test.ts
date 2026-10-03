@@ -22,7 +22,6 @@ import {
   FAR_SIDE_ANGLE,
   FAR_SIDE_MARGIN,
   orbitAngle,
-  orbitPosition,
   safePhase,
   type PlanetItem,
 } from './layout.js';
@@ -32,6 +31,7 @@ import {
   REDUCED_MOTION_QUERY,
   sceneFrameloop,
 } from '../motion.js';
+import { orbitPoint } from '../orbit.js';
 import { paintRings, paintSurface } from './surface.js';
 import type { Object3D } from 'three';
 
@@ -275,7 +275,7 @@ describe('orbits and motion', () => {
         expect(angleBetween(p.phase, FAR_SIDE_ANGLE)).toBeGreaterThanOrEqual(
           FAR_SIDE_MARGIN - 1e-9,
         );
-        const [x, z] = orbitPosition(p.distance, orbitAngle(p.phase, p.period, 0));
+        const [x, , z] = orbitPoint(p.distance, orbitAngle(p.phase, p.period, 0));
         // Not hidden by the Sun's disc: either in front of it, or off to the side by more than it.
         expect(z > 0 || Math.abs(x) > 6 + p.radius).toBe(true);
       }
@@ -297,7 +297,7 @@ describe('orbits and motion', () => {
     expect(list[0]!.period).toBeGreaterThanOrEqual(60);
     const p = list[0]!;
     expect(orbitAngle(p.phase, p.period, p.period) - p.phase).toBeCloseTo(Math.PI * 2);
-    const [x, z] = orbitPosition(10, Math.PI / 2);
+    const [x, , z] = orbitPoint(10, Math.PI / 2);
     expect(x).toBeCloseTo(0);
     expect(z).toBeCloseTo(-10); // the far side from a camera on +z
   });

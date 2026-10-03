@@ -87,7 +87,8 @@ describe('orbit placement', () => {
     const [x, y, z] = orbitPosition({ radius: 2.5, phase: Math.PI / 2, inclination: 0 }, 'true');
     expect(x).toBeCloseTo(0, 9);
     expect(y).toBeCloseTo(0, 9);
-    expect(z).toBeCloseTo(auToScene(2.5, 'true'), 9);
+    // The planets' convention (scene/orbit.ts): π/2 is the far side, −z.
+    expect(z).toBeCloseTo(-auToScene(2.5, 'true'), 9);
     const tilted = orbitPosition({ radius: 3, phase: 0, inclination: 0.1 }, 'fake');
     expect(new Vector3(...tilted).length()).toBeCloseTo(auToScene(3, 'fake'), 9);
     expect(tilted[1]).toBeGreaterThan(0);

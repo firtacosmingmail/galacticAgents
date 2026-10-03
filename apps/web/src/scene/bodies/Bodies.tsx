@@ -9,12 +9,12 @@ import {
   buildRenderList,
   circlePoints,
   orbitAngle,
-  orbitPosition,
   SPIN_PERIOD,
   type MoonItem,
   type PlanetItem,
 } from './layout.js';
 import { motionEnabled, useReducedMotion } from '../motion.js';
+import { placeOnOrbit } from '../orbit.js';
 import { MOON_TEXTURE, PLANET_TEXTURE } from './surface.js';
 import { useRingTexture, useSurfaceTexture } from './textures.js';
 
@@ -178,19 +178,13 @@ function useOrbit(
 ) {
   const invalidate = useThree((s) => s.invalidate);
   useLayoutEffect(() => {
-    place(ref.current, distance, orbitAngle(phase, period, 0));
+    if (ref.current) placeOnOrbit(ref.current, distance, orbitAngle(phase, period, 0));
     invalidate();
   }, [ref, distance, phase, period, motion, invalidate]);
   useFrame((state) => {
-    if (!motion) return;
-    place(ref.current, distance, orbitAngle(phase, period, state.clock.elapsedTime));
+    if (!motion || !ref.current) return;
+    placeOnOrbit(ref.current, distance, orbitAngle(phase, period, state.clock.elapsedTime));
   });
-}
-
-function place(object: Object3D | null, distance: number, angle: number) {
-  if (!object) return;
-  const [x, z] = orbitPosition(distance, angle);
-  object.position.set(x, 0, z);
 }
 
 /** Registers the body's anchor while it is drawn; re-registers when its radius changes (scale). */

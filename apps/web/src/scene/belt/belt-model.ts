@@ -8,6 +8,7 @@ import {
   type Body,
   type Id,
 } from '@galactic/protocol';
+import { orbitPoint } from '../orbit.js';
 import { auToScene, type ScaleMode } from '../scale.js';
 
 /**
@@ -22,8 +23,9 @@ import { auToScene, type ScaleMode } from '../scale.js';
  *   individually at their `meta.orbit` (the server's `asteroidSpec`).
  *
  * Placement: an orbit (`radius` AU, `phase`, `inclination`) is a point at `auToScene(radius)` from
- * the Sun, at azimuth `phase` around the vertical axis and `inclination` above or below the
- * ecliptic. Decorative (corner case 26), and the distance from the Sun is exactly the scaled radius.
+ * the Sun, at azimuth `phase` (the scene's one convention, `scene/orbit.ts`: counter-clockwise
+ * seen from above, like the planets) and `inclination` above or below the ecliptic. Decorative
+ * (corner case 26), and the distance from the Sun is exactly the scaled radius.
  */
 
 /** The background rocks' own stream: the belt seed, offset so it never replays asteroid `n`. */
@@ -77,12 +79,7 @@ export function orbitPosition(
   mode: ScaleMode,
   out: [number, number, number] = [0, 0, 0],
 ): [number, number, number] {
-  const r = auToScene(orbit.radius, mode);
-  const flat = r * Math.cos(orbit.inclination);
-  out[0] = flat * Math.cos(orbit.phase);
-  out[1] = r * Math.sin(orbit.inclination);
-  out[2] = flat * Math.sin(orbit.phase);
-  return out;
+  return orbitPoint(auToScene(orbit.radius, mode), orbit.phase, orbit.inclination, out);
 }
 
 /** The belt's extent in scene units at a scale: the radii of its inner and outer edges. */
