@@ -130,14 +130,14 @@ describe('a Steward’s clarification in the chat and the inbox', () => {
     expect(within(inbox()).getByText('Nothing waits for you.')).toBeTruthy();
   });
 
-  it('is not in the Harmonizer’s thread', async () => {
+  it('is in the Harmonizer’s thread too, since it reached the user (decision 55)', async () => {
     show(fx.harmonizer.id);
     await waitFor(() =>
       expect(useConversationStore.getState().threads[fx.harmonizer.id]?.loaded).toBe(true),
     );
     expect(
-      within(thread()).queryByRole('article', { name: `clarification question ${TEXT}` }),
-    ).toBeNull();
+      within(thread()).getByRole('article', { name: `clarification question ${TEXT}` }),
+    ).toBeTruthy();
     expect(
       within(inbox()).getByRole('article', { name: `clarification question ${TEXT}` }),
     ).toBeTruthy();

@@ -281,6 +281,47 @@ describe('thread cards (P25-03)', () => {
     expect(threadCards(standalone, successor).map((c) => c.id)).not.toContain('q-ast');
   });
 
+  it('shows a project’s clarification in the Harmonizer’s thread too once it reached the user', () => {
+    const toUser: Question = { ...q1, holder: { type: 'user' }, version: 2 };
+    const answered: Question = {
+      ...q1,
+      id: 'q-answered',
+      status: 'answered',
+      answeredBy: { type: 'user' },
+      answer: 'yes',
+    };
+    const bySupervisor: Question = {
+      ...q1,
+      id: 'q-wk-answered',
+      status: 'answered',
+      answeredBy: { type: 'agent', id: waykeeper.id },
+    };
+    const permission: Question = {
+      ...q1,
+      id: 'q-perm',
+      kind: 'permission',
+      holder: { type: 'user' },
+    };
+    const reached = {
+      ...world,
+      questions: {
+        ...world.questions,
+        [toUser.id]: toUser,
+        [answered.id]: answered,
+        [bySupervisor.id]: bySupervisor,
+        [permission.id]: permission,
+      },
+    };
+    const harmonizer = threadCards(reached, fx.harmonizer).map((c) => c.id);
+    expect(harmonizer).toEqual(expect.arrayContaining(['q-1', 'q-answered']));
+    expect(harmonizer).not.toContain('q-wk-answered');
+    expect(harmonizer).not.toContain('q-perm');
+    // The project's thread keeps all of them.
+    expect(threadCards(reached, waykeeper).map((c) => c.id)).toEqual(
+      expect.arrayContaining(['q-1', 'q-answered', 'q-wk-answered', 'q-perm']),
+    );
+  });
+
   it('places cards by creation time, holding back older ones while history is unread', () => {
     const cards = threadCards(world, fx.harmonizer).filter((c) => c.kind === 'proposal');
     const entries = [msg(1), reply(3)];

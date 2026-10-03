@@ -33,8 +33,8 @@ Open the panel URL the server prints (with its token). On this install the first
 
 | Date | What I tried | What happened | Severity (blocking / annoying / cosmetic) |
 |---|---|---|---|
-| | | | |
+| 2026-10-03 | Look for a Waykeeper's question in the Harmonizer window | Not there (by decision 55) — only in the Waykeeper chat and the inbox | annoying → fixed |
 
 ## Fixes made
 
-(filled in as blocking items are fixed)
+- 2026-10-03 — Waykeeper questions were not visible in the Harmonizer window (only in the project's thread and the inbox). Now a project's clarification that reached the user also shows as a card in the Harmonizer chat (same card; SPEC decision 55 amended). Permission questions stay out of it.
