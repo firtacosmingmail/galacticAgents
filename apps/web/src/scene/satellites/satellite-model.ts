@@ -2,6 +2,7 @@ import { ENDED_STATES, type AgentRole, type AgentState, type Id } from '@galacti
 import type { WorldState } from '../../state/reduce.js';
 import { HEADQUARTERS_BODY_ID } from '../picking/body-action.js';
 import type { ActivityArchetype } from './machine.js';
+import { deriveArchetype } from './archetype.js';
 
 /**
  * Which satellites the scene draws (P4-01; SPEC §4.1, decisions 9, 53). No three.js.
@@ -142,7 +143,7 @@ export function satelliteList(
       bodyId,
       state: status.state,
       activity: status.currentActivity,
-      archetype: undefined,
+      archetype: deriveArchetype(agent.role, status), // P4-03 (`archetype.ts`)
       landed: options.keepLanded === true && hasLanded(world, agentId),
       supervisorId: agent.supervisorId,
     });
