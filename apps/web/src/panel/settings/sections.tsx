@@ -452,7 +452,7 @@ export const CAPS: SectionSpec<CapsDraft> = {
 export const QUALITY_TIER: SectionSpec<QualityTier> = {
   field: 'qualityTier',
   title: 'Rendering quality',
-  intro: 'How detailed the solar-system scene is drawn (the scene arrives in a later version).',
+  intro: 'How detailed the solar-system scene is drawn; a change applies to the scene at once.',
   fromSettings: (s) => s.qualityTier,
   validate: () => undefined,
   toPatch: (d) => ({ qualityTier: d }),

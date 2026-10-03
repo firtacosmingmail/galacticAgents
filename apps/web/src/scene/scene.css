@@ -1,0 +1,33 @@
+/* The solar-system scene's slot in the panel (P3-01). */
+.pnl-scene {
+  grid-area: scene;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: #02030a;
+  overflow: hidden;
+}
+.pnl-scene-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #8a91a6;
+  font-size: 13px;
+}
+.pnl-scene-fps {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #9cf59c;
+  font:
+    12px/1.4 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  pointer-events: none;
+}
