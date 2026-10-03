@@ -58,7 +58,8 @@ import { useHeldArchetypes } from './activity/use-held-archetypes.js';
  *
  * Two render paths (corner case 21): up to the tier's `instanceAbove` satellites, a mesh pair each
  * (the satellite and its beam, the beam hidden between scans); above it, one instanced mesh for
- * all satellites and one for all beams — two draw calls whatever the count. Everything is on the
+ * all satellites and one for the beams being drawn — at most two draw calls whatever the count (the
+beam mesh holds only the scanning satellites' beams and is hidden when none scans). Everything is on the
  * decorations' layer (`DECOR_LAYER`), so the selection outline's depth pass skips it (P3-08).
  *
  * P4-02: the list keeps failed agents and adds the Harmonizer's HQ station (`SCENE_SATELLITES`);
@@ -174,7 +175,7 @@ interface MeshPair {
 }
 
 /** Where the frame loop writes: the per-satellite meshes, or the two instanced meshes. */
-class RenderTargets {
+export class RenderTargets {
   readonly meshes = new Map<Id, MeshPair>();
   bodies: InstancedMesh | null = null;
   beams: InstancedMesh | null = null;
@@ -259,26 +260,35 @@ function writeMeshes(
   }
 }
 
-function writeInstanced(
+/**
+ * The instanced path: every ordinary satellite is a body instance (`n`); only the beams being
+ * drawn — visible and scanning — are beam instances (`m`), so between scans the beam mesh draws
+ * nothing and is skipped (`visible = false`: no draw call, no zero-scaled cones).
+ */
+export function writeInstanced(
   frames: readonly SatelliteFrame[],
-  targets: RenderTargets,
+  targets: Pick<RenderTargets, 'bodies' | 'beams'>,
   bloom: boolean,
 ): void {
   const { bodies, beams } = targets;
   if (!bodies || !beams) return;
   const capacity = bodies.instanceMatrix.count;
   let n = 0;
+  let m = 0;
   for (const f of frames) {
     if (n >= capacity) break;
     if (f.role === 'harmonizer') continue; // the HQ station has its own meshes
     bodies.setMatrixAt(n, bodyMatrix(f, matrix));
     bodies.setColorAt(n, bodyColor(f, color));
-    beams.setMatrixAt(n, beamMatrix(f, matrix));
-    beams.setColorAt(n, beamColor(f, bloom, color));
     n++;
+    if (!f.visible || f.beam <= 0) continue;
+    beams.setMatrixAt(m, beamMatrix(f, matrix));
+    beams.setColorAt(m, beamColor(f, bloom, color));
+    m++;
   }
   bodies.count = n;
-  beams.count = n;
+  beams.count = m;
+  beams.visible = m > 0;
   bodies.instanceMatrix.needsUpdate = true;
   beams.instanceMatrix.needsUpdate = true;
   if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true;

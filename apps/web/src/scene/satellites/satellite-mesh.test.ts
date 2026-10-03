@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Color, Matrix4, Vector3 } from 'three';
+import { Color, InstancedMesh, Matrix4, MeshBasicMaterial, Vector3 } from 'three';
 import type { SatelliteFrame } from './director.js';
 import { sampleActor, createActor } from './machine.js';
 import { BEAM, beamProfile, luminance, MAX_BODY_LUMINANCE } from './look.js';
@@ -11,7 +11,7 @@ import {
   bodyMatrix,
   satelliteGeometry,
 } from './satellite-mesh.js';
-import { instanceCapacity } from './Satellites.js';
+import { instanceCapacity, writeInstanced } from './Satellites.js';
 
 const frame = (over: Partial<SatelliteFrame> = {}): SatelliteFrame => ({
   agentId: 'a-1',
@@ -124,5 +124,46 @@ describe('instanced capacity', () => {
     expect(instanceCapacity(16)).toBe(16);
     expect(instanceCapacity(17)).toBe(32);
     expect(instanceCapacity(40)).toBe(48);
+  });
+});
+
+describe('instanced path (writeInstanced)', () => {
+  const meshes = () => {
+    const bodies = new InstancedMesh(satelliteGeometry(), new MeshBasicMaterial(), 16);
+    const beams = new InstancedMesh(beamGeometry(), new MeshBasicMaterial(), 16);
+    return { bodies, beams };
+  };
+
+  it('draws no beam instance (and no beam draw call) while nothing scans', () => {
+    const t = meshes();
+    const idle = [frame({ agentId: 'a-1', beam: 0 }), frame({ agentId: 'a-2', beam: 0 })];
+    writeInstanced(idle, t, true);
+    expect(t.bodies.count).toBe(2);
+    expect(t.beams.count).toBe(0);
+    expect(t.beams.visible).toBe(false);
+  });
+
+  it('writes only the visible, scanning beams, packed from index 0', () => {
+    const t = meshes();
+    const frames = [
+      frame({ agentId: 'a-1', beam: 0 }),
+      frame({ agentId: 'a-2', beam: 0.5 }),
+      frame({ agentId: 'a-3', beam: 1, visible: false }),
+      frame({ agentId: 'a-4', beam: 1 }),
+      frame({ agentId: 'a-hq', role: 'harmonizer', beam: 1 }),
+    ];
+    writeInstanced(frames, t, true);
+    expect(t.bodies.count).toBe(4); // the HQ station draws itself
+    expect(t.beams.count).toBe(2);
+    expect(t.beams.visible).toBe(true);
+    // Instance 0 is a-2's beam (half strength), instance 1 a-4's (full strength).
+    const c = new Color();
+    t.beams.getColorAt(0, c);
+    expect(c.g).toBeCloseTo(beamColor(frames[1]!, true, new Color()).g);
+    t.beams.getColorAt(1, c);
+    expect(c.g).toBeCloseTo(beamColor(frames[3]!, true, new Color()).g);
+    // The scan ends: hidden again.
+    writeInstanced([frame({ beam: 0 })], t, true);
+    expect([t.beams.count, t.beams.visible]).toEqual([0, false]);
   });
 });
