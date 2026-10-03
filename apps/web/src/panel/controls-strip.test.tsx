@@ -106,7 +106,7 @@ async function open(path: string, initial: ServerMessage = snapshot()) {
   });
 }
 
-const main = () => within(screen.getByRole('main', { name: 'main area' }));
+const main = () => within(screen.getByRole('main'));
 const strip = (name: string) => within(main().getByRole('group', { name: `controls of ${name}` }));
 const more = () => within(main().getByRole('group', { name: 'more controls' }));
 /** Waits for the strip's last action to settle (its buttons are disabled while one runs). */
@@ -272,5 +272,58 @@ describe('controls strip in a Steward’s view (P4-09)', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(main().queryByRole('group', { name: 'more controls' })).toBeNull();
     expect(document.activeElement).toBe(toggle);
+  });
+});
+
+describe('where the "More" menu opens (P4-10)', () => {
+  const menu = () => main().getByRole('group', { name: 'more controls' });
+  /** Fakes the layout jsdom does not have: the strip's row and the menu's boxes. */
+  function boxes(row: Partial<DOMRect>, menuHeight: number) {
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (this.classList.contains('ctl-row'))
+        return { left: 600, right: 1000, width: 400, ...row } as DOMRect;
+      if (this.classList.contains('ctl-menu'))
+        return {
+          top: 0,
+          bottom: menuHeight,
+          height: menuHeight,
+          left: 700,
+          right: 1000,
+        } as DOMRect;
+      return original.call(this);
+    });
+  }
+  afterEach(() => vi.restoreAllMocks());
+
+  it('opens downwards in list mode, where the bar is at the top of the centre', async () => {
+    await open('/waykeeper/a-waykeeper-1');
+    expect(document.querySelector('.pnl-grid-scene')).toBeNull(); // list mode
+    boxes({ top: 60, bottom: 90, height: 30 }, 160);
+    const more = strip(WAYKEEPER).getByRole('button', { name: 'More' });
+    fireEvent.click(more);
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    expect(menu().dataset['placement']).toBe('below');
+    // Capped to the room below it (jsdom's window is 768 px tall), less the margin.
+    expect(menu().style.maxHeight).toBe(`${768 - 90 - 8}px`);
+    fireEvent.click(more);
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('opens upwards when the bar is low on the screen and there is more room above', async () => {
+    await open('/waykeeper/a-waykeeper-1');
+    boxes({ top: 700, bottom: 740, height: 40 }, 160);
+    fireEvent.click(strip(WAYKEEPER).getByRole('button', { name: 'More' }));
+    expect(menu().dataset['placement']).toBe('above');
+    expect(menu().style.maxHeight).toBe(`${700 - 8}px`);
+  });
+
+  it('stays below when it fits there, even low-ish on the screen', async () => {
+    await open('/waykeeper/a-waykeeper-1');
+    boxes({ top: 500, bottom: 530, height: 30 }, 160);
+    fireEvent.click(strip(WAYKEEPER).getByRole('button', { name: 'More' }));
+    expect(menu().dataset['placement']).toBe('below');
   });
 });
