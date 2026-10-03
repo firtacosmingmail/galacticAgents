@@ -9,8 +9,9 @@ import type { SatelliteFrame } from './director.js';
  * - the renderer (`Satellites.tsx`) draws one satellite per published id (`satelliteIds`);
  * - P4-02 (HQ station, legend), P4-03 (a transport shuttle flies between a Steward's frame and its
  *   Waykeeper's), P4-05 (beacons) and P4-04 (fly / land markers) read frames here;
- * - picking (SPEC §4.1: "clicking a satellite selects that agent") can test the frames' spheres
- *   (`position`, `size`) the way it tests the anchors; it does not yet (P4-01 leaves picking as is).
+ * - picking (P4-08; SPEC §4.1: "clicking a satellite selects that agent") tests the visible
+ *   frames' spheres (`position`, half the `size`) next to the anchors' (`picking/scene-pick.ts`),
+ *   and the hover card and ring follow the hovered frame.
  *
  * Type-only imports: no three.js.
  */
