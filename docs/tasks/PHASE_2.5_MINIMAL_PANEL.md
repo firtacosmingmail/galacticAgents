@@ -1,6 +1,6 @@
 # Phase 2.5 — Minimal side panel
 
-**Current task:** P25-07, P25-08 (wave 3, after wave 2 is merged into `phase-2.5`) · **Task status:** todo
+**Current task:** P25-07, P25-08 (wave 3, branch `p25-wave3-notify-settings`) · **Task status:** in progress
 **Phase status:** in progress (6/9 done) — on branch `phase-2.5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -68,12 +68,12 @@ A daily-usable product before any 3D (SPEC decision 19): the spec's side panel i
 - **Acceptance:** answering in the inbox resolves the question in the chat thread too; "already answered by …" shown on a stale answer.
 
 ### P25-07 — Desktop notifications
-- **Status:** todo · **Depends on:** P25-01 · **Parallel with:** P25-08
+- **Status:** in progress · **Depends on:** P25-01 · **Parallel with:** P25-08
 - Browser Notification API (permission requested on a user gesture); triggers per `SPEC.md` §4.5: question/permission opened for the user, task/project finished or failed, work interrupted by a restart, refusal for lack of space; click focuses the relevant item; per-type toggles in settings.
 - **Acceptance:** each trigger produces one notification; no duplicates on reconnect.
 
 ### P25-08 — Settings page and first-run preflight
-- **Status:** todo · **Depends on:** P25-01 · **Parallel with:** P25-07
+- **Status:** in progress · **Depends on:** P25-01 · **Parallel with:** P25-07
 - First-run wizard: preflight (runtime installed / logged in) with fixable error messages, projects root picker, default permission policy editor (table from `SPEC.md` §3.6), retention period, caps, quality tier; the same as a settings page afterwards; token display/QR placeholder for Phase 7.
 - **Acceptance:** a fresh install walks through the wizard and lands in the panel; invalid settings are rejected with messages.
 
