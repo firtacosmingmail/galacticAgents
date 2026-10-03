@@ -156,5 +156,6 @@ export function satelliteFrame(
     presence: 1,
     tint: '#ffffff',
     brightness: 1,
+    beamTint: [0.4, 0.95, 1.3],
   };
 }
