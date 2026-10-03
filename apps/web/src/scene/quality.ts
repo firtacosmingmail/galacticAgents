@@ -22,7 +22,11 @@ import type { QualityTier } from '@galactic/protocol';
  *   closer than `within` body radii (so they work in both scales), with `hysteresis` so a camera
  *   sitting on a boundary does not flicker: sphere segments, the procedural texture width (height
  *   = width / 2; the farthest level is painted at once, nearer ones lazily, off the main thread)
- *   and whether the bump/roughness `detail` map is painted (rocky and Earth-like surfaces);
+ *   and whether the bump/roughness `detail` map is painted (rocky and Earth-like surfaces).
+ *   Sizing rule: a sphere at d radii spans ≈ H·dpr / (0.414·d) device pixels (45° vertical FOV),
+ *   and about half the texture's width faces the camera, so a level's width should be ≥ twice
+ *   that span at its far boundary. The camera frames a body at ≈ 8.5 of its anchor radii (P3-04),
+ *   which must enter the near level (8.5 < within × (1 − hysteresis)) on every tier;
  * - `textureBudgetMB`: how many megabytes of near-level textures (CPU copy + GPU with mipmaps,
  *   estimated) may stay cached once nothing uses them; everything idle is dropped on a tier change;
  * - `ringSegments`, `orbitSegments`: tessellation of Saturn's and Uranus's rings and of the orbit
@@ -95,7 +99,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     lod: {
       levels: [
         {
-          within: 14,
+          within: 16,
           planetSegments: [128, 96],
           moonSegments: [64, 48],
           planetTexture: 2048,
@@ -103,11 +107,11 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
           detail: true,
         },
         {
-          within: 24,
+          within: 32,
           planetSegments: [64, 48],
           moonSegments: [32, 24],
-          planetTexture: 512,
-          moonTexture: 256,
+          planetTexture: 1024,
+          moonTexture: 512,
           detail: false,
         },
         {
@@ -149,8 +153,8 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
           within: 24,
           planetSegments: [48, 32],
           moonSegments: [24, 16],
-          planetTexture: 256,
-          moonTexture: 128,
+          planetTexture: 512,
+          moonTexture: 256,
           detail: false,
         },
         {
@@ -181,7 +185,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     lod: {
       levels: [
         {
-          within: 10,
+          within: 12,
           planetSegments: [48, 32],
           moonSegments: [24, 16],
           planetTexture: 512,
@@ -192,8 +196,8 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
           within: Infinity,
           planetSegments: [24, 16],
           moonSegments: [12, 8],
-          planetTexture: 128,
-          moonTexture: 64,
+          planetTexture: 256,
+          moonTexture: 128,
           detail: false,
         },
       ],

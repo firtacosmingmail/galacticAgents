@@ -140,14 +140,21 @@ describe('quality tier table (P3-06)', () => {
     });
     expect(m.lod.levels.every((l) => !l.detail && l.planetTexture <= 512)).toBe(true);
     expect(m.beltRocks).toBeLessThanOrEqual(1200);
-    // A framed body (camera ≈ 8.5 radii, P3-04) still gets the near level.
-    expect(levelAt(m.lod, 8.5)).toBe(m.lod.levels[0]);
   });
 
-  it('keeps the system view low-poly: at 30+ radii every tier shows its farthest level', () => {
+  it('gives a framed body (the camera at ≈ 8.5 radii, P3-04) the near level on every tier', () => {
     for (const tier of TIERS) {
-      const { levels } = QUALITY_TIERS[tier].lod;
-      expect(levelAt(QUALITY_TIERS[tier].lod, 30)).toBe(levels.at(-1));
+      const { levels, hysteresis } = QUALITY_TIERS[tier].lod;
+      // Coming in from far away, through the hysteresis band.
+      expect(selectLodLevel(8.6, levels, levels.length - 1, hysteresis)).toBe(0);
+    }
+  });
+
+  it('keeps the system view low-poly: at 40+ radii every tier shows its farthest level', () => {
+    for (const tier of TIERS) {
+      const { levels, hysteresis } = QUALITY_TIERS[tier].lod;
+      expect(levelAt(QUALITY_TIERS[tier].lod, 40)).toBe(levels.at(-1));
+      expect(selectLodLevel(40, levels, 0, hysteresis)).toBe(levels.length - 1);
     }
   });
 
@@ -373,7 +380,7 @@ describe('body maps per level, and a tier change', () => {
 
   it('shows the far map at once, the near maps once painted, and frees them on a tier change', async () => {
     const high = QUALITY_TIERS.high.lod;
-    const { result, rerender } = renderHook(
+    const { result, rerender, unmount } = renderHook(
       ({ lod, level }: { lod: LodConfig; level: number }) =>
         useBodyMaps(mars, 'planet', lod, level),
       { initialProps: { lod: high, level: high.levels.length - 1 } },
@@ -398,17 +405,30 @@ describe('body maps per level, and a tier change', () => {
     const farDisposed = vi.fn();
     far.addEventListener('dispose', farDisposed);
 
-    // Switch to mobile: the far map is repainted at the mobile size (the old one disposed), the
-    // near map is released and, once the tier's cleanup runs, dropped.
+    // Switch to mobile: the far map has the same size there, so it is kept (no repaint); the near
+    // map is released and, once the tier's cleanup runs, dropped.
     const mobile = QUALITY_TIERS.mobile.lod;
     rerender({ lod: mobile, level: mobile.levels.length - 1 });
-    expect(result.current.map.image.width).toBe(mobile.levels.at(-1)!.planetTexture);
-    expect(farDisposed).toHaveBeenCalledTimes(1);
+    expect(result.current.map).toBe(far);
+    expect(farDisposed).not.toHaveBeenCalled();
     expect(nearTextures.stats()).toMatchObject({ idle: 1 });
     nearTextures.dropIdle();
     expect(disposed.map).toHaveBeenCalledTimes(1);
     expect(disposed.detail).toHaveBeenCalledTimes(1);
     expect(nearTextures.stats().entries).toBe(0);
+
+    // A far map of another size replaces (and disposes) the old one; unmounting disposes the last.
+    const smaller: LodConfig = {
+      ...mobile,
+      levels: [mobile.levels[0]!, { ...mobile.levels[1]!, planetTexture: 128 }],
+    };
+    rerender({ lod: smaller, level: 1 });
+    expect(result.current.map.image.width).toBe(128);
+    expect(farDisposed).toHaveBeenCalledTimes(1);
+    const last = vi.fn();
+    result.current.map.addEventListener('dispose', last);
+    unmount();
+    expect(last).toHaveBeenCalledTimes(1);
   }, 30_000);
 
   it('shares unit sphere geometries per level and disposes them all', () => {
@@ -495,7 +515,7 @@ describe('frame-rate cap', () => {
   });
 
   it('applies only while the loop would run continuously, and never to the fps meter', () => {
-    expect(cappedFrameloop('always', 30, false)).toEqual({ frameloop: 'demand', capFps: 30 });
+    expect(cappedFrameloop('always', 30, false)).toEqual({ frameloop: 'never', capFps: 30 });
     expect(cappedFrameloop('always', 30, true)).toEqual({ frameloop: 'always', capFps: null });
     expect(cappedFrameloop('demand', 30, false)).toEqual({ frameloop: 'demand', capFps: null });
     expect(cappedFrameloop('always', null, false)).toEqual({ frameloop: 'always', capFps: null });
