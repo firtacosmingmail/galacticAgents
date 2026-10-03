@@ -136,3 +136,62 @@
 .agc-archived {
   margin-top: 4px;
 }
+
+/* The main area's controls strip (P4-09): the selected agent's own controls, compact. */
+.ctl {
+  flex-basis: 100%;
+}
+.ctl-row {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.ctl-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ctl-group .agc-actions-title {
+  min-width: 0;
+}
+.pnl .ctl-row button {
+  padding: 2px 8px;
+  font-size: 12px;
+  min-height: 28px;
+}
+.pnl .ctl-row button.agc-destructive {
+  background: transparent;
+  color: var(--pnl-ink);
+  border: 1px solid #e0605b;
+}
+.ctl-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  min-width: min(260px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  background: var(--pnl-raised);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 25%);
+}
+.ctl .agc-confirm,
+.ctl .edit,
+.ctl .error {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.stw-controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 16px;
+}
+.stw-controls-row .ctl {
+  flex-basis: auto;
+}

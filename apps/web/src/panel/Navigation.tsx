@@ -155,16 +155,16 @@ function NavRow({
 }
 
 /**
- * A project's Steward count (P4-09), compact: "2/5 Stewards" reads as running / total; screen
- * readers and the tooltip get the words.
+ * A project's Steward count (P4-09), by task: "2 active, 3 in total" — its tasks whose Steward
+ * is working now (a paused one is not active) and all its tasks that have had a Steward. The
+ * tooltip and screen readers get the same words, naming the Stewards.
  */
 function StewardBadge({ count }: { count: StewardCount }) {
-  const words = `${count.running} ${count.running === 1 ? 'Steward' : 'Stewards'} working, ${count.total} in total`;
+  const short = `${count.active} active, ${count.total} in total`;
+  const words = `Stewards: ${short}`;
   return (
-    <span className={`pnl-nav-stewards${count.running > 0 ? ' is-busy' : ''}`} title={words}>
-      <span aria-hidden="true">
-        {count.running}/{count.total} {count.total === 1 ? 'Steward' : 'Stewards'}
-      </span>
+    <span className={`pnl-nav-stewards${count.active > 0 ? ' is-busy' : ''}`} title={words}>
+      <span aria-hidden="true">{short}</span>
       <span className="pnl-visually-hidden">{words}</span>
     </span>
   );

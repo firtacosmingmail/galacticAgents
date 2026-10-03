@@ -25,9 +25,12 @@ export interface NavItem {
   children: NavItem[];
 }
 
-/** How many Stewards a project uses: running now, and all it has had in the client's world. */
+/**
+ * How many Stewards a project uses, by task: the tasks whose Steward is active now, and all the
+ * tasks that have had one in the client's world.
+ */
 export interface StewardCount {
-  running: number;
+  active: number;
   total: number;
 }
 
@@ -64,28 +67,34 @@ function isRunning(world: Pick<WorldState, 'statuses'>, agentId: Id): boolean {
 }
 
 /**
- * The Stewards a project uses (P4-09): those whose task belongs to the project itself — a
- * sub-project's tasks count on the sub-project's own row, under its own Waykeeper. The total is
- * every Steward the client knows on those tasks (a respawned task counts each of its Stewards),
- * leaving out archived tasks unless archived work is shown, like the row's nested list; running
- * ones are those whose status is not ended.
+ * How many Stewards a project uses (P4-09), counted by task — the work being done, not every
+ * Steward process ever spawned: `total` is the project's own tasks that have had a Steward (a
+ * sub-project's tasks count on the sub-project's own row, under its own Waykeeper; a respawned
+ * task counts once), leaving out archived tasks unless archived work is shown, like the row's
+ * nested list. `active` is those whose newest Steward (`primaryAgent`, the one the task opens) is
+ * live and not paused: waiting for input still counts (it is live and needs the user), paused
+ * does not.
  */
 export function stewardCount(
   world: Pick<WorldState, 'agents' | 'tasks' | 'statuses'>,
   projectId: Id,
   opts: { showArchived?: boolean } = {},
 ): StewardCount {
-  let running = 0;
-  let total = 0;
+  const tasks = new Set<Id>();
   for (const a of Object.values(world.agents)) {
     if (a.role !== 'steward' || !a.taskId) continue;
     const task = world.tasks[a.taskId];
     if (!task || task.projectId !== projectId) continue;
     if (task.state === 'archived' && opts.showArchived !== true) continue;
-    total += 1;
-    if (isRunning(world, a.id)) running += 1;
+    tasks.add(a.taskId);
   }
-  return { running, total };
+  let active = 0;
+  for (const taskId of tasks) {
+    const newest = primaryAgent(world, agentsFor(world, { taskId }));
+    const state = newest ? world.statuses[newest.id]?.state : undefined;
+    if (state !== undefined && !ENDED_STATES.has(state) && state !== 'paused') active += 1;
+  }
+  return { active, total: tasks.size };
 }
 
 type Sortable = NavItem & { createdAt: string };

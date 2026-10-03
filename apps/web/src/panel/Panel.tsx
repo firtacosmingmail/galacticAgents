@@ -12,6 +12,7 @@ import { Inbox } from './Inbox.js';
 import { Navigation, NavLink } from './Navigation.js';
 import { StewardPanelView } from './steward/StewardPanelView.js';
 import { ManagedAgentCards } from './AgentCards.js';
+import { ControlsStrip } from './controls.js';
 import { FirstRunGate } from './settings/FirstRunGate.js';
 import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
@@ -159,7 +160,28 @@ function MainHeader({ agent, selection }: { agent: Agent | undefined; selection:
           ← Harmonizer
         </NavLink>
       )}
+      {agent?.role === 'waykeeper' && <WaykeeperControls agent={agent} />}
     </div>
+  );
+}
+
+/**
+ * A Waykeeper's own controls in the header (P4-09): its project's work actions and its agent
+ * actions, reachable with the managed-agents cards hidden (a project's card sits under the
+ * Harmonizer, not here). A Steward's task controls sit in its view, next to its agent controls.
+ */
+function WaykeeperControls({ agent }: { agent: Agent }) {
+  const world = useAppStore((s) => s.world);
+  const project = agent.projectId ? world.projects[agent.projectId] : undefined;
+  return (
+    <ControlsStrip
+      key={agent.id}
+      agentId={agent.id}
+      status={world.statuses[agent.id]}
+      work={project ? { kind: 'project', item: project } : undefined}
+      withAgent
+      name={agentLabel(agent, world)}
+    />
   );
 }
 

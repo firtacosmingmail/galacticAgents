@@ -200,6 +200,7 @@ describe('hidable managed agents (P4-09)', () => {
     fireEvent.click(within(menu()).getByRole('button', { name: 'Hide managed agents' }));
     expect(managed()).toBeNull();
     expect(menu().hidden).toBe(true); // the menu closes, as after the scene toggle
+    expect(document.activeElement).toBe(menuButton());
     expect(inbox()).toBeTruthy();
 
     fireEvent.click(menuButton());
@@ -231,26 +232,45 @@ describe('hidable managed agents (P4-09)', () => {
 });
 
 describe('Steward counts (P4-09)', () => {
-  it('counts the project’s own Stewards: running and total, sub-projects on their own row', () => {
+  it('counts the project’s own tasks with a Steward, sub-projects on their own row', () => {
     const world = worldOf();
-    expect(stewardCount(world, 'p-1')).toEqual({ running: 2, total: 3 });
-    expect(stewardCount(world, 'p-1', { showArchived: true })).toEqual({ running: 2, total: 4 });
-    expect(stewardCount(world, 'p-3')).toEqual({ running: 1, total: 1 });
-    expect(stewardCount(world, 'p-unknown')).toEqual({ running: 0, total: 0 });
+    // t-1 and t-4 (respawned: two Stewards, counted once); t-6 is archived.
+    expect(stewardCount(world, 'p-1')).toEqual({ active: 2, total: 2 });
+    expect(stewardCount(world, 'p-1', { showArchived: true })).toEqual({ active: 2, total: 3 });
+    expect(stewardCount(world, 'p-3')).toEqual({ active: 1, total: 1 });
+    expect(stewardCount(world, 'p-unknown')).toEqual({ active: 0, total: 0 });
 
     const [auth] = buildNav(world).projects;
-    expect(auth?.stewards).toEqual({ running: 2, total: 3 });
+    expect(auth?.stewards).toEqual({ active: 2, total: 2 });
     expect(auth?.children.find((c) => c.kind === 'project')?.stewards).toEqual({
-      running: 1,
+      active: 1,
       total: 1,
     });
     expect(auth?.children.find((c) => c.kind === 'task')?.stewards).toBeUndefined();
   });
 
-  it('a Steward without a status is not running', () => {
+  it('a respawned task is active by its newest live Steward, and counts once', () => {
+    const world = worldOf();
+    // Both t-4 Stewards live: still one task, one active.
+    world.statuses['a-steward-9'] = status('a-steward-9');
+    expect(stewardCount(world, 'p-1')).toEqual({ active: 2, total: 2 });
+    // Both ended: the task still counts in the total, not as active.
+    world.statuses['a-steward-4'] = status('a-steward-4', 'stopped');
+    world.statuses['a-steward-9'] = status('a-steward-9', 'finished');
+    expect(stewardCount(world, 'p-1')).toEqual({ active: 1, total: 2 });
+  });
+
+  it('paused is not active; waiting for the user is', () => {
+    const world = worldOf();
+    world.statuses['a-steward-1'] = status('a-steward-1', 'paused');
+    world.statuses['a-steward-4'] = status('a-steward-4', 'waiting_for_input');
+    expect(stewardCount(world, 'p-1')).toEqual({ active: 1, total: 2 });
+  });
+
+  it('a Steward without a status is not active', () => {
     const world = worldOf();
     delete world.statuses['a-steward-4'];
-    expect(stewardCount(world, 'p-1')).toEqual({ running: 1, total: 3 });
+    expect(stewardCount(world, 'p-1')).toEqual({ active: 1, total: 2 });
   });
 });
 
@@ -264,18 +284,18 @@ describe('compact project rows (P4-09)', () => {
     const toggle = within(row).getByRole('button', { name: 'Show the work in Auth refactor' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(within(row).queryByRole('link', { name: /Rotate the signing keys/ })).toBeNull();
-    // The count: visible "2/3 Stewards", spoken in words.
+    // The count, by task: visible "2 active, 2 in total", the Stewards named for screen readers.
     const badge = row.querySelector(':scope > .pnl-row-line .pnl-nav-stewards')!;
-    expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe('2/3 Stewards');
-    expect(badge.getAttribute('title')).toBe('2 Stewards working, 3 in total');
-    expect(link.textContent).toContain('2 Stewards working, 3 in total');
+    expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe('2 active, 2 in total');
+    expect(badge.getAttribute('title')).toBe('Stewards: 2 active, 2 in total');
+    expect(link.textContent).toContain('Stewards: 2 active, 2 in total');
 
     // The expand toggle still works, both ways.
     fireEvent.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(within(row).getByRole('link', { name: /Rotate the signing keys/ })).toBeTruthy();
     const sub = projectRow('Token store');
-    expect(within(sub).getByText('1 Steward working, 1 in total')).toBeTruthy();
+    expect(within(sub).getByText('Stewards: 1 active, 1 in total')).toBeTruthy();
     fireEvent.click(within(row).getByRole('button', { name: 'Hide the work in Auth refactor' }));
     expect(within(row).queryByRole('link', { name: /Rotate the signing keys/ })).toBeNull();
   });
