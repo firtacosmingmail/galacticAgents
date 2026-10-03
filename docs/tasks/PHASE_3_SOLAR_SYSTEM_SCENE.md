@@ -1,7 +1,7 @@
 # Phase 3 — Solar system scene
 
-**Current task:** P3-10, P3-11, P3-12 (wave 6, branch `p3-wave6-device-fixes`); P3-08's device run waits for them · **Task status:** in progress
-**Phase status:** in progress (8/12 done) — on branch `phase-3`
+**Current task:** P3-08 (device run on Cosmin's Mac and phone, after wave 6 is merged into `phase-3`) · **Task status:** in progress
+**Phase status:** in progress (11/12 done) — on branch `phase-3`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -87,17 +87,17 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 - **Acceptance:** the continents are recognisable at the close-up level on every tier; the mask adds at most ~20 kB to the scene chunk and nothing to the panel's first chunk; the licence is recorded.
 
 ### P3-10 — Planet-sized shadows over Jupiter and Saturn (added 2026-10-03)
-- **Status:** in progress · **Depends on:** P3-02, P3-06, P3-08 · **Parallel with:** P3-11, P3-12
+- **Status:** done (2026-10-03) · **Depends on:** P3-02, P3-06, P3-08 · **Parallel with:** P3-11, P3-12
 - Cosmin, looking at the scene: "very big shadows going over Jupiter from time to time, big enough to cover the entire planet. I saw it on Saturn as well. If it is the shadow of a moon, it should definitely not be that big." Find the cause (suspected: the Sun is a point light, so a planet passing between the Sun and an outer planet throws a magnified shadow in the enlarged readable layout) and fix it so shadows stay plausible: a moon's shadow is a small spot, a planet never eclipses another, Saturn keeps its shadow on its rings.
 - **Acceptance:** no planet-sized shadow on any body over a full orbital cycle at "high" (screenshot evidence), Saturn's ring shadow kept, a test for the casting rules.
 
 ### P3-11 — The fps meter does not show (added 2026-10-03)
-- **Status:** in progress · **Depends on:** P3-01 · **Parallel with:** P3-10, P3-12
+- **Status:** done (2026-10-03) · **Depends on:** P3-01 · **Parallel with:** P3-10, P3-12
 - Cosmin: adding `?show_fps=true` to the localhost URL shows nothing. Find why (URL rewriting, the scene hidden, the stacking order, the dev server) and fix it so `?show_fps=true` on any panel URL shows the meter at the scene's top-left and `?show_fps=false` hides it.
 - **Acceptance:** `?show_fps=true` works from a cold load of `/`, `/waykeeper/<id>` and `/steward/<id>`, in `pnpm dev` and in a build; a test.
 
 ### P3-12 — Top bar on small screens (added 2026-10-03)
-- **Status:** in progress · **Depends on:** P25-02 · **Parallel with:** P3-10, P3-11
+- **Status:** done (2026-10-03) · **Depends on:** P25-02 · **Parallel with:** P3-10, P3-11
 - Cosmin: "on mobile the menus on the top are mixed in each other; a better design is needed there, maybe a hamburger menu, or something better suited for mobile." Redesign the top bar for narrow screens: the essentials stay visible (back to the Harmonizer, "N waiting for you"), the rest (notifications, scene toggle, settings, history, debug, forget token) moves into a menu that is keyboard- and screen-reader-accessible; the desktop layout is unchanged.
 - **Acceptance:** no overlapping controls from 320 px to 1100 px wide; every top-bar action reachable on the phone; tests.
 
