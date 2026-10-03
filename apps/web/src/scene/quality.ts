@@ -5,8 +5,8 @@ import type { QualityTier } from '@galactic/protocol';
  * so P3-06 (LOD and quality) extends it rather than scattering `tier === 'mobile'` checks.
  *
  * - `dprCap`: the highest device pixel ratio the canvas renders at (R3F `dpr={[1, cap]}`);
- * - `antialias`: MSAA on the context (and the composer's multisampling) — a context parameter,
- *   so a change recreates the canvas;
+ * - `antialias`: MSAA — the composer's multisampling where there is a composer, else the
+ *   context's (`contextAntialias`, P3-08; a context parameter, so a change recreates the canvas);
  * - `bloom`: the postprocessing bloom on emissive surfaces (the Sun); `null` = no composer at all.
  *   The threshold is 1.0 (linear luminance before tone mapping): only HDR emitters bloom, never
  *   the stars (capped at `STAR_MAX_BRIGHTNESS`, below it);
@@ -222,4 +222,15 @@ export const DEFAULT_QUALITY_TIER: QualityTier = 'high';
 
 export function sceneQuality(tier: QualityTier | undefined): SceneQuality {
   return QUALITY_TIERS[tier ?? DEFAULT_QUALITY_TIER];
+}
+
+/**
+ * Whether the WebGL context itself is multisampled (P3-08). With a composer (bloom), the scene is
+ * drawn into the composer's own multisampled target (`multisampling` 4) and only a full-screen
+ * quad reaches the canvas, so a multisampled canvas would add a full-resolution MSAA buffer and its
+ * resolve every frame for nothing (measured: ≈ 40 → ≈ 60 fps at high under load). The context
+ * gets MSAA only on a tier that wants it and draws the scene straight to the canvas.
+ */
+export function contextAntialias(quality: Pick<SceneQuality, 'antialias' | 'bloom'>): boolean {
+  return quality.antialias && quality.bloom === null;
 }

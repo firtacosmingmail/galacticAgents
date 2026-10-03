@@ -5,6 +5,7 @@ import { FPS_FLAG_KEY, FpsCounter, fpsMeterEnabled } from './fps.js';
 import {
   BLOOM_SMOOTHING,
   BLOOM_THRESHOLD,
+  contextAntialias,
   DEFAULT_QUALITY_TIER,
   QUALITY_TIERS,
   sceneQuality,
@@ -81,6 +82,19 @@ function srgbHexToLinear(hex: string): [number, number, number] {
   };
   return [channel(0), channel(1), channel(2)];
 }
+
+describe('context antialiasing (P3-08)', () => {
+  it('multisamples in the composer, never in the context as well', () => {
+    for (const q of Object.values(QUALITY_TIERS)) {
+      // A tier with a composer gets MSAA from the composer only; one without, from the context.
+      expect(contextAntialias(q)).toBe(q.antialias && q.bloom === null);
+    }
+    expect(contextAntialias(QUALITY_TIERS.high)).toBe(false);
+    expect(contextAntialias(QUALITY_TIERS.balanced)).toBe(false);
+    expect(contextAntialias({ antialias: true, bloom: null })).toBe(true);
+    expect(contextAntialias({ antialias: false, bloom: null })).toBe(false);
+  });
+});
 
 describe('star field', () => {
   it('is centred on the camera, so the true-scale overview (≈ 2800 out) is still inside it', () => {
