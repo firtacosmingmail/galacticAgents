@@ -24,6 +24,8 @@ Branch `p4-03-archetypes` (from `p4-wave2-state-activity-beacons`), 2026-10-03.
 - `satellites/satellite-model.test.ts`: the fixture's activity ("Editing src/session.ts") now gives `transporting`, and there is one new hook test.
 - `docs/TECHNOLOGY.md` §2.1: one new "Steward activity archetypes (P4-03)" bullet after the P4-01 satellites bullet.
 
+After merging P4-02: every archetype piece is placed from the satellite's live frame (`position`, `target`, `bodyRadius`, `size`), never from an orbit clock of its own, so it follows P4-02's per-satellite orbit clock (paused satellites hold still, failed ones drift). Archetypes apply to working Stewards only: not to failed or paused agents, and not to the HQ station. The activity test frames gained `beamTint`.
+
 Not touched: `look.ts` colours (P4-02), the machine, the director, the phase file's status lines, `docs/tasks/README.md`, `SPEC.md`.
 
 ## What arrives from the server
