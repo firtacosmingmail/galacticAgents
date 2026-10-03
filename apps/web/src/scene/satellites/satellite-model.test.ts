@@ -66,9 +66,25 @@ describe('satelliteList', () => {
     expect(list[0]).toMatchObject({
       activity: fx.status.currentActivity,
       supervisorId: 'a-waykeeper-1',
-      archetype: undefined,
+      archetype: 'transporting', // P4-03: "Editing src/session.ts" is an edit
       landed: false,
     });
+  });
+
+  it('P4-03 hook: a working Steward gets the archetype of its activity; others none', () => {
+    const w = world(allWorking);
+    const at = (activity: string) => {
+      w.statuses['a-steward-1'] = { ...status('a-steward-1'), currentActivity: activity };
+      w.statuses['a-waykeeper-1'] = { ...status('a-waykeeper-1'), currentActivity: activity };
+      const list = satelliteList(w);
+      return [list[0]?.archetype, list[2]?.archetype];
+    };
+    expect(at('Read: src/a.ts')).toEqual(['gathering', undefined]);
+    expect(at('Bash: pnpm test')).toEqual(['building', undefined]);
+    expect(at('Bash: git commit -m x')).toEqual(['transporting', undefined]);
+    expect(at('TodoWrite')).toEqual([undefined, undefined]);
+    // The idle Steward of the asteroid has none, whatever it last did.
+    expect(satelliteList(w)[1]?.archetype).toBeUndefined();
   });
 
   it('leaves the Harmonizer out until P4-02 asks for its HQ station on Earth', () => {
