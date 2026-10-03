@@ -106,6 +106,19 @@
   animation: scene-legend-flicker 1.9s steps(1, end) infinite;
 }
 /* The HQ: a ring of light and dark segments around a hub, turning like the station's. */
+.scene-legend-beacon {
+  display: inline-grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  border: 1px solid #1d1300;
+  border-radius: 50%;
+  background: #ffb547;
+  color: #1d1300;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
 .scene-legend-hq {
   display: inline-block;
   width: 12px;

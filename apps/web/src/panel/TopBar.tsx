@@ -16,8 +16,10 @@ import { Beacon, NavLink } from './Navigation.js';
 import { NotificationsControl, NotificationsDisclosure } from './notifications/index.js';
 import { COMPACT_TOP_BAR_QUERY, useMediaQuery } from './use-media-query.js';
 
+import { revealInbox } from './inbox-reveal.js';
+
 /** The inbox section's id, for the compact bar's "waiting for you" button (P3-12). */
-export const INBOX_ID = 'pnl-inbox';
+export { INBOX_ID } from './inbox-reveal.js';
 const MENU_ID = 'pnl-top-menu';
 
 interface TopBarProps {
@@ -87,22 +89,6 @@ function WideTopBar({ scene, agents, onForget }: TopBarProps) {
       )}
     </header>
   );
-}
-
-/**
- * Scrolls the inbox into view and focuses it, once it is mounted: from the settings or history
- * page the panel first navigates back to the main view, whose columns may wait for the settings
- * read (P25-08's gate), so this looks for the inbox over a few frames. While the first-run wizard
- * shows, the inbox never mounts: it gives up after about a second, having still navigated home.
- */
-function revealInbox(triesLeft = 60) {
-  const inbox = document.getElementById(INBOX_ID);
-  if (inbox) {
-    inbox.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
-    inbox.focus({ preventScroll: true });
-    return;
-  }
-  if (triesLeft > 0) requestAnimationFrame(() => revealInbox(triesLeft - 1));
 }
 
 function CompactTopBar({ scene, agents, onForget }: TopBarProps) {

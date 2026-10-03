@@ -133,6 +133,20 @@ export function SatelliteLegend() {
             </span>
           </span>
         </li>
+        <li data-role="beacon">
+          <span className="scene-legend-swatch">
+            <span className="scene-legend-beacon" aria-hidden="true">
+              ?
+            </span>
+          </span>
+          <span className="scene-legend-text">
+            <b>Question beacon</b>{' '}
+            <span className="scene-legend-hint">
+              a pillar above a body: a question waits for you (a padlock: a permission); click it to
+              open it in the inbox
+            </span>
+          </span>
+        </li>
       </ul>
     </div>
   );

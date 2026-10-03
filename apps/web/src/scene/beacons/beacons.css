@@ -1,0 +1,50 @@
+/* Question beacons (P4-05): the hover card over the scene, and the inbox card a click reveals. */
+.pick-hover.beacon-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: min(300px, calc(100% - 16px));
+  padding: 4px 8px 5px;
+  border: 1px solid rgba(255, 181, 71, 0.6);
+  border-radius: 6px;
+  background: rgba(6, 9, 20, 0.88);
+  white-space: normal;
+}
+.beacon-card-head {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #e6ecff;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+.beacon-card-kind {
+  color: #ffb547;
+  font-weight: 600;
+}
+.beacon-card-asker {
+  overflow: hidden;
+  color: #c4cce0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.beacon-card-hint {
+  color: #8a91a6;
+  font-size: 11px;
+}
+
+/* The inbox card a beacon's click opened: an amber ring for a moment (`revealQuestion`). */
+#pnl-inbox .is-revealed {
+  outline: 2px solid #ffb547;
+  outline-offset: 2px;
+  transition: outline-color 0.4s ease-out;
+}
+#pnl-inbox [data-question-id]:focus-visible {
+  outline: 2px solid #ffb547;
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  #pnl-inbox .is-revealed {
+    transition: none;
+  }
+}

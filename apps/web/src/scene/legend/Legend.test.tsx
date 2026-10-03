@@ -54,6 +54,9 @@ describe('the satellite legend (P4-02)', () => {
     expect(container.querySelector('li[data-role="harmonizer"]')?.textContent).toContain(
       'Harmonizer HQ',
     );
+    expect(container.querySelector('li[data-role="beacon"]')?.textContent).toContain(
+      'Question beacon',
+    );
     expect(
       container
         .querySelector('li[data-role="roles"] .scene-legend-dot')
