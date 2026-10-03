@@ -8,27 +8,29 @@ All new UI is in `apps/web/src/panel/settings/`, on top of P25-01's endpoints (`
 | --- | --- |
 | `SettingsData.tsx` | `SettingsProvider` / `useSettingsData()`. The panel reads `GET /api/settings` once, and the page and the first-run gate share that copy. Every write goes through `patch()`, and the reply replaces the copy. The state is `loading`, `ready`, `unavailable` (404, a reply that is not a settings reply, or a stand-in api without the method) or `error` (shown with a retry). |
 | `sections.tsx` | One spec per setting (`PROJECTS_ROOT`, `PERMISSION_POLICY`, `RETENTION`, `CAPS`, `QUALITY_TIER`, `STEWARD_SOURCES`), each with its editor, a client-side check and the patch it sends. `useSection(spec)` holds the draft over the saved value, the client error, the server refusal, the notice and the locked/restart flags. `SectionFrame` renders all of it. The page and the wizard use the same specs, so they validate and word errors identically. |
-| `settings-model.ts` | The pure parts: the §3.6 table rows (plus decision 49's `unclassified`), the decision-51 restart fields, the env-variable names, validators, the caps draft (wall-clock edited in minutes), `refusalMessage()` and `isSettingsResponse()`. |
+| `settings-model.ts` | The pure parts: the §3.6 table rows (plus decision 49's `unclassified`), the decision-51 restart fields, the env-variable names, validators, the caps draft (wall-clock edited in minutes, decimals allowed), `changedCaps`, `refusalMessage()` and `isSettingsResponse()`. |
 | `PreflightCheck.tsx` | The runtime check. For each runtime it shows installed, logged in, the login (auth method · subscription), the provider, the Claude Code and Agent SDK versions, and each problem with its severity and **Fix:**. "Check again" calls `?refresh=1`. |
-| `AccessToken.tsx` | The token, masked to its last 4 characters until "Reveal" is clicked. "Copy" uses the clipboard. A dashed QR placeholder stands in for Phase 7. The token is never put in a URL, a log or an attribute. |
+| `AccessToken.tsx` | The token, masked to its last 4 characters (fully masked when shorter than 12) until "Reveal" is clicked. "Copy" uses the clipboard. A dashed QR placeholder stands in for Phase 7. The token is never put in a URL, a log or an attribute. |
 | `SettingsPage.tsx` | `/settings`: the runtime check, the six setting sections (each with its own Save), **Notifications** (mounts P25-07's `<NotificationSettings heading={false} />` under the page's own heading), and Access. |
-| `FirstRunWizard.tsx` | The steps: Runtime check → Projects root → Default permission policy → Retention period → Caps → Rendering quality → Stewards' settings sources → Done ("Open the panel"). "Skip setup — keep the defaults" is available on every step. |
-| `FirstRunGate.tsx` | Shows the wizard in place of the panel's three columns while the setup is not done (see below). On finishing, it navigates to `/` with the Harmonizer selected. |
+| `FirstRunWizard.tsx` | The steps: Runtime check → Projects root → Default permission policy → Retention period → Caps → Rendering quality → Stewards' settings sources → Done ("Open the panel"). "Skip setup — keep the defaults" is available on every step; a refused skip is shown next to it at once, with "Continue without saving that setup is done". |
+| `FirstRunGate.tsx` | Shows the wizard in place of the panel's three columns while the setup is not done and this client may finish it (see below). On finishing, it navigates to `/` with the Harmonizer selected. |
 | `settings.css` | Uses the panel's tokens. Works in dark and light. One column, at most 820 px wide. |
 
 ### Behaviour
 
 - **First run.** The marker is on the server, not per browser. A new `setupCompleted: true` patch stamps `setupCompletedAt` (ISO) in `config.json`. The stamp is written once and never moved or cleared. `GET /api/settings` reports it.
-  - The wizard shows **only** when the server's reply is a valid settings reply without `setupCompletedAt`.
-  - While loading, on a 404 or an older server, on a failed read, or with a `{}` stub, the panel shows as before. So the wizard is something the server offers, never a wall in front of a working panel. This is also why no existing test needed changing.
-  - Finishing and skipping both stamp the marker. A refusal of the marker (403 for a remote client) is shown, and the Done step then offers "Continue without saving that setup is done", which lets this page life through.
+  - The wizard shows **only** when the server's reply is a valid settings reply without `setupCompletedAt` and with `writable` absent or `all`.
+  - **Who may finish it (review fix).** `SettingsResponse.writable` (`all` | `limited`, optional) is computed by the server from the request's origin exactly as the patch decides (`writableFor`: `limited` for a remote or unknown-origin request unless `autoApproveRemote`). It is on the `GET` and on every patch reply. A `limited` client with no marker gets the panel with a dismissible note, "Setup is not finished — finish it on the computer running Mission Control" (per page life), instead of a wizard whose marker it could never save. Absent (an older server) counts as `all`.
+  - **While loading** the gated area renders nothing (no flash of the panel before the wizard). On a 404 or an older server, on a failed read, or with a `{}` stub, the panel shows as before. So the wizard is something the server offers, never a wall in front of a working panel. One existing test (`Panel.test.tsx`, back from `/debug`) now awaits the navigation, since the remounted panel waits for its settings read.
+  - Finishing and skipping both stamp the marker. A refusal of the marker is shown at once next to the Skip button on whatever step it happened (and on the Done step for "Open the panel"), with "Continue without saving that setup is done", which lets this page life through.
+  - `config.json`'s `setupCompletedAt` is read leniently (any non-empty string), so a hand-edited value does not stop the server; it is still written as ISO, and `response()` reports a parseable date normalised to ISO and anything else as the epoch (setup still done).
   - An install that existed before this change has no marker, so it sees the wizard once. That is deliberate: every step is pre-filled with the current settings and "Skip" is one click.
 - **Preflight in the wizard.** Errors do not block the setup. The button reads "Continue anyway", with a note that agents cannot run until the problems are fixed. That follows SPEC §4.6: a fixable message, not a crash and not a dead end.
 - **Saving.** On the page, each section has its own Save, enabled only when the section is dirty, valid on the client and not locked. In the wizard, "Next" saves only a changed section ("Save and continue") and stays on the step if the server refuses.
 - **Client validation** is a courtesy; the server stays the authority.
   - Projects root: absolute or `~/…`; not `/`, not `~` itself.
   - Retention: more than 0 and at most 3650 days.
-  - Caps: whole numbers within the protocol's bounds, with an error on each field.
+  - Caps: whole numbers within the protocol's bounds, with an error on each field. The wall-clock cap is in minutes and may be decimal: `Math.round(minutes × 60000)` ms is checked against the protocol schema, so every value the server accepts (90 000 ms = 1.5 min) is accepted, and a field left untouched keeps its stored value exactly. Save sends only the caps that changed (the server merges caps key by key).
 - **Server refusals** are shown in the section that sent them (`role="alert"`):
   - 400 `invalid_body`: "Not accepted by the server — path: message", from the zod `issues`. `ApiError` now carries the error body.
   - 400 `invalid`: "Not accepted: <server message>".
@@ -65,9 +67,10 @@ All new UI is in `apps/web/src/panel/settings/`, on top of P25-01's endpoints (`
 
 ## Shared files touched (exact)
 
-- `packages/protocol/src/panel.ts`: `SettingsPatch.setupCompleted` (optional literal `true`) and `SettingsResponse.setupCompletedAt` (optional timestamp). Both additive.
-- `apps/server/src/config/config.ts`: `ConfigFile.setupCompletedAt`, `ServerConfig.setupCompletedAt`, and `loadConfig` copies it.
-- `apps/server/src/config/settings.ts`: `response()` reports the marker, `update()` stamps it once, `persist()` writes it, and the doc comment mentions it.
+- `packages/protocol/src/panel.ts`: `SettingsPatch.setupCompleted` (optional literal `true`), `SettingsResponse.setupCompletedAt` (optional timestamp) and `SettingsResponse.writable` (optional `all` | `limited`, review fix). All additive.
+- `apps/server/src/http/panel-routes.ts` (review fix): the settings `GET` and `PATCH` replies carry `writable`.
+- `apps/server/src/config/config.ts`: `ConfigFile.setupCompletedAt` (a lenient non-empty string since the review), `ServerConfig.setupCompletedAt`, and `loadConfig` copies it.
+- `apps/server/src/config/settings.ts`: `writableFor(write)` (review fix, also used by `update()`), `response()` reports the marker (normalised to ISO), `update()` stamps it once, `persist()` writes it, and the doc comment mentions it.
 - `apps/server/src/http/panel-routes.test.ts`: one new test and a `loadConfig` import.
 - `apps/web/src/console/api.ts`:
   - `ApiError` gains an optional 4th `body` parameter (the error JSON);
@@ -95,8 +98,8 @@ All new UI is in `apps/web/src/panel/settings/`, on top of P25-01's endpoints (`
 
 ## Tests
 
-- `apps/server/src/http/panel-routes.test.ts` (+1): the marker is absent at first; a remote client gets 403 and nothing is written; `setupCompleted: false` gets 400; a local patch stamps it with the token kept; a second patch keeps the same stamp; `loadConfig` reads it back.
-- `apps/web/src/panel/settings/settings.test.tsx` (9, through `<App />` with a fake socket and a stand-in settings server):
+- `apps/server/src/http/panel-routes.test.ts` (+2): `writable` is `all` locally and `limited` remotely on the GET and on patch replies, and `all` remotely with `autoApproveRemote` (which may then stamp the marker). The marker test: the marker is absent at first; a remote client gets 403 and nothing is written; `setupCompleted: false` gets 400; a local patch stamps it with the token kept; a second patch keeps the same stamp; `loadConfig` reads it back.
+- `apps/web/src/panel/settings/settings.test.tsx` (14, through `<App />` with a fake socket and a stand-in settings server):
   - A fresh install walks the whole wizard:
     - a preflight error with its fix, then a re-check that calls `?refresh=1` and reports ready;
     - a projects root refused on the client, then by the server (400 `invalid`, message shown, still on the step), then saved;
@@ -106,13 +109,18 @@ All new UI is in `apps/web/src/panel/settings/`, on top of P25-01's endpoints (`
   - Skip sends only the marker and lands in the panel.
   - No wizard once the setup is done.
   - A refused marker (403) is shown, and the user can still go on.
+  - A refused skip (500) is shown on the first step, next to Skip, with the way on.
+  - A `writable: limited` client gets the panel and a dismissible note, never the wizard, and sends no patch.
+  - While the settings read is in flight neither the panel nor the wizard shows; a failed read then shows the panel, a fresh install the wizard (no panel flash).
+  - A stored 90 000 ms wall-clock shows as 1.5 and editing an unrelated cap saves just that cap.
   - The settings page is reached from the top bar at `/settings` and left again, and it contains P25-07's `desktop notifications` section.
   - An env-fixed retention is read-only and names its variable. "Applies at the next start" shows on the restart fields, and "restart Mission Control to apply" shows when `restartRequired` lists a field and after saving the projects root.
   - Client validation: a cap error and a disabled Save; a retention error.
-  - Server refusals shown next to their section: 409 on caps (and the exact caps patch, with the wall-clock converted from minutes), 403 on the Stewards' sources, 400 `invalid_body` with issues on retention.
+  - Server refusals shown next to their section: 409 on caps (and the exact caps patch: only the changed caps, the wall-clock converted from minutes), 403 on the Stewards' sources, 400 `invalid_body` with issues on retention.
   - The policy reset sends `null`; the table returns to §3.6 and the reset button disables.
   - The runtime check shows versions; the token is masked, revealed only on click, and never in the URL; the QR placeholder is present.
-- `apps/web/src/panel/settings/settings-model.test.ts` (6): the validators, the minutes conversion and per-field cap errors, the policy row helpers, each refusal's wording, and `isSettingsResponse`.
+- `apps/web/src/panel/settings/settings-model.test.ts` (8): the validators, the minutes conversion (decimal minutes, untouched values kept exactly, only changed caps sent) and per-field cap errors, `maskToken`, the policy row helpers, each refusal's wording, and `isSettingsResponse`.
+- `apps/server/src/config/settings.test.ts` (+2) and `config.test.ts` (+1): `writableFor`; a hand-edited marker loads and is reported as a timestamp.
 - `apps/web/src/state/selection.test.ts`: `/settings` round-trips, `/settings/` canonicalises, and `/settings/x` falls back to the panel.
 
 Gates on `p25-08-settings` (after merging P25-07): `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check` and `pnpm test` are all green. Protocol 61, server 829 (+1 skipped), web 179.
