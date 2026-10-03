@@ -13,8 +13,8 @@ import type { QualityTier } from '@galactic/protocol';
  * - `stars`: points in the star-field skybox;
  * - `beltRocks`: background rocks in the asteroid belt (P3-03): one instanced mesh, one draw call
  *   whatever the count; a lighter tier draws a prefix of the same deterministic belt;
- * - `shadows`: whether the tier may use a shadow map. Not wired yet: nothing receives shadows, so
- *   the canvas has no shadow map and the Sun's light casts none until P3-02 adds the planets.
+ * - `shadows`: the shadow map and the Sun light's point shadow (P3-02): planets and moons cast and
+ *   receive, rings receive (Saturn's shadow on its rings, eclipses of moons).
  */
 /** Linear luminance a pixel needs (before tone mapping) to bloom. */
 export const BLOOM_THRESHOLD = 1.0;

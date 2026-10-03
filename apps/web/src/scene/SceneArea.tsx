@@ -15,6 +15,7 @@ import { sceneKeyAction, SCENE_SHORTCUTS } from './camera/keys.js';
 import { useCameraStore } from './camera/store.js';
 import { fpsMeterEnabled, type FpsSample } from './fps.js';
 import { sceneQuality } from './quality.js';
+import { ScaleToggle } from './bodies/ScaleToggle.js';
 import './scene.css';
 
 /** The reason reported when the browser takes the scene's WebGL context away. */
@@ -63,6 +64,7 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
       </SceneErrorBoundary>
       <CameraBreadcrumb />
       {showFps && <FpsMeter sample={sample} tier={quality.tier} />}
+      <ScaleToggle />
     </section>
   );
 }
