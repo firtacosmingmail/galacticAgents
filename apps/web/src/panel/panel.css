@@ -407,6 +407,26 @@
   }
 }
 
+/* managed agents hidden (P4-09): only the inbox is left in the side column, so it narrows in
+   list mode and, beside the scene, moves under the conversation (content-sized, capped) — the
+   conversation and the scene take the space; stacked layouts (≤1100 px) are unchanged */
+@media (min-width: 1101px) {
+  .pnl-grid.pnl-grid-no-agents:not(.pnl-grid-scene) {
+    grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(240px, 320px);
+  }
+  .pnl-grid.pnl-grid-scene.pnl-grid-no-agents {
+    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(360px, 440px);
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'nav scene main'
+      'nav scene side';
+  }
+  .pnl-grid-scene.pnl-grid-no-agents > .pnl-side {
+    max-height: 40vh;
+    border-top: 1px solid var(--pnl-line);
+  }
+}
+
 .pnl-scene-toggle {
   font: inherit;
   font-size: 13px;
@@ -485,6 +505,23 @@ a.pnl-link:hover {
 .pnl-nav-sub {
   font: 11px var(--pnl-mono);
   color: var(--pnl-muted);
+}
+.pnl-nav-stewards {
+  font: 11px var(--pnl-mono);
+  color: var(--pnl-muted);
+  white-space: nowrap;
+}
+.pnl-nav-stewards.is-busy {
+  color: var(--pnl-here);
+}
+.pnl-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .pnl-tree {
   list-style: none;
@@ -590,6 +627,30 @@ a.pnl-link:hover {
 }
 
 /* right column */
+.pnl-side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pnl-side-head .pnl-eyebrow {
+  margin-top: 4px;
+}
+.pnl .pnl-side-hide {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pnl-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pnl .pnl-side-hide:hover {
+  background: var(--pnl-raised);
+  color: var(--pnl-ink);
+}
 .pnl-agents {
   list-style: none;
   margin: 0;
