@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Vec3Tuple } from '../orbit.js';
 import {
   BASE_SHELL,
+  blendOrbit,
   orbitAngle,
   orbitOffset,
   orbitSlots,
@@ -29,6 +30,45 @@ describe('orbit slots', () => {
     expect(slots.get('a-other')).toBe(0);
   });
 
+  it('are sticky: holders keep their slot, arrivals take the lowest free one', () => {
+    const first = orbitSlots([
+      { agentId: 'a-w', role: 'waykeeper', bodyId: 'b-mars' },
+      ...stewards(3),
+    ]);
+    const held = new Map(
+      [...first].map(([agentId, slot]) => [agentId, { bodyId: 'b-mars', slot }] as const),
+    );
+    // Steward 01 ends, a new Steward (sorting first) arrives, the Waykeeper is replaced.
+    const next = orbitSlots(
+      [
+        { agentId: 'a-new-waykeeper', role: 'waykeeper', bodyId: 'b-mars' },
+        { agentId: 'a-aaa', role: 'steward', bodyId: 'b-mars' },
+        { agentId: 'a-steward-00', role: 'steward', bodyId: 'b-mars' },
+        { agentId: 'a-steward-02', role: 'steward', bodyId: 'b-mars' },
+      ],
+      held,
+    );
+    expect(next.get('a-steward-00')).toBe(first.get('a-steward-00'));
+    expect(next.get('a-steward-02')).toBe(first.get('a-steward-02'));
+    expect(next.get('a-new-waykeeper')).toBe(0); // slot 0 was free
+    expect(next.get('a-aaa')).toBe(first.get('a-steward-01')); // the lowest free slot
+  });
+
+  it('a slot held on another body is not kept: a moved satellite arrives anew', () => {
+    const next = orbitSlots(
+      [
+        { agentId: 'a-moved', role: 'steward', bodyId: 'b-io' },
+        { agentId: 'a-io', role: 'steward', bodyId: 'b-io' },
+      ],
+      new Map([
+        ['a-moved', { bodyId: 'b-mars', slot: 0 }],
+        ['a-io', { bodyId: 'b-io', slot: 0 }],
+      ]),
+    );
+    expect(next.get('a-io')).toBe(0);
+    expect(next.get('a-moved')).toBe(1);
+  });
+
   it('does not depend on the input order', () => {
     const list = stewards(6);
     const a = orbitSlots(list);
@@ -51,6 +91,21 @@ describe('satellite orbits', () => {
     expect(w.radius).toBe(BASE_SHELL);
     expect(BASE_SHELL).toBeGreaterThan(1.5);
     expect(w.speed).toBeLessThan(s.speed);
+  });
+
+  it('blend radius, inclination and node (the short way round), keeping the target phase', () => {
+    const from = { radius: 2, inclination: 0.2, node: 6.2, phase: 1, speed: 1 };
+    const to = { radius: 3, inclination: 0.6, node: 0.1, phase: 4, speed: 2 };
+    const out = { ...from };
+    expect(blendOrbit(from, to, 0, out)).toMatchObject({ radius: 2, inclination: 0.2, phase: 4 });
+    const mid = blendOrbit(from, to, 0.5, out);
+    expect(mid.radius).toBeCloseTo(2.5);
+    expect(mid.inclination).toBeCloseTo(0.4);
+    // 6.2 → 0.1 crosses 2π: halfway is near 2π, not near π.
+    expect(Math.cos(mid.node)).toBeGreaterThan(0.99);
+    const end = blendOrbit(from, to, 1, out);
+    expect(Math.cos(end.node - to.node)).toBeCloseTo(1, 9);
+    expect(end.speed).toBe(2);
   });
 
   it('place every point at the orbit radius from the centre', () => {

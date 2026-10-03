@@ -4,7 +4,9 @@ import type { SatelliteFrame } from './director.js';
 /**
  * The satellites as the rest of the scene sees them (P4-01), like `anchors.ts` for bodies: one
  * live `SatelliteFrame` per drawn satellite, keyed by agent id, whose position, size, mode and
- * beam the director rewrites in place every frame. Readers:
+ * beam the director rewrites in place every frame. A satellite whose agent just ended stays here
+ * while it shrinks out (`presence` < 1). Readers:
+ * - the renderer (`Satellites.tsx`) draws one satellite per published id (`satelliteIds`);
  * - P4-02 (HQ station, legend), P4-03 (a transport shuttle flies between a Steward's frame and its
  *   Waykeeper's), P4-05 (beacons) and P4-04 (fly / land markers) read frames here;
  * - picking (SPEC §4.1: "clicking a satellite selects that agent") can test the frames' spheres
@@ -13,11 +15,13 @@ import type { SatelliteFrame } from './director.js';
  * Type-only imports: no three.js.
  */
 let frames: ReadonlyMap<Id, SatelliteFrame> = new Map();
+let ids: readonly Id[] = [];
 const listeners = new Set<() => void>();
 
 /** Replaces the published set (the director calls it when satellites are added or removed). */
 export function publishSatellites(next: ReadonlyMap<Id, SatelliteFrame>): void {
   frames = next;
+  ids = [...next.keys()];
   listeners.forEach((l) => l());
 }
 
@@ -27,6 +31,11 @@ export function getSatellite(agentId: Id): SatelliteFrame | undefined {
 
 export function allSatellites(): SatelliteFrame[] {
   return [...frames.values()];
+}
+
+/** The published agent ids, in the director's order; the same array until the next publish. */
+export function satelliteIds(): readonly Id[] {
+  return ids;
 }
 
 /** Called when satellites are added or removed (not when they move or change mode). */

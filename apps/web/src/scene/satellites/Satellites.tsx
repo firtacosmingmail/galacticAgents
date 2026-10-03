@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import {
   AdditiveBlending,
@@ -25,6 +25,7 @@ import {
   instancedPath,
   SatelliteDirector,
   type AnchorLookup,
+  type PixelSize,
   type SatelliteFrame,
 } from './director.js';
 import {
@@ -36,7 +37,7 @@ import {
   satelliteGeometry,
 } from './satellite-mesh.js';
 import { sameSatellites, satelliteList, type SatelliteSpec } from './satellite-model.js';
-import { publishSatellites } from './registry.js';
+import { onSatellitesChanged, satelliteIds } from './registry.js';
 
 /**
  * The satellites (P4-01; SPEC §4.1, TECHNOLOGY §2.1): one per live Waykeeper and Steward, orbiting
@@ -85,11 +86,19 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
     director.setSpecs(list, motionSeconds());
     invalidate();
   }, [director, list, invalidate]);
-  useEffect(() => () => publishSatellites(new Map()), []);
+  // Unmount forgets everything, and so does StrictMode's rehearsed unmount — which re-runs the
+  // layout effect above next, so `applied` must forget too or the satellites never come back.
+  useEffect(
+    () => () => {
+      applied.current = [];
+      director.reset();
+    },
+    [director],
+  );
   useEffect(() => onAnchorsChanged(() => invalidate()), [invalidate]);
 
-  const ids = useMemo(() => list.map((s) => s.agentId).join('\n'), [list]);
-  const agentIds = useMemo(() => (ids === '' ? [] : ids.split('\n')), [ids]);
+  // What is drawn is what the director publishes: the live satellites and those shrinking out.
+  const agentIds = useSyncExternalStore(onSatellitesChanged, satelliteIds);
   const instanced = instancedPath(agentIds.length, quality.satellites);
   const bloom = quality.bloom !== null;
 
@@ -97,17 +106,14 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
   useEffect(() => () => Object.values(shapes).forEach((g) => g.dispose()), [shapes]);
 
   const [targets] = useState(() => new RenderTargets());
+  const [pixels] = useState(() => new PixelSizer());
 
   useFrame((state) => {
-    const camera = state.camera as PerspectiveCamera;
-    const perPx = pixelScale(state.size.height, camera.fov ?? 45);
+    pixels.follow(state.camera as PerspectiveCamera, state.size.height);
     const frames = director.update(
       motionSeconds(),
       lookupAnchor,
-      (p) => {
-        scratch.set(p[0], p[1], p[2]);
-        return Math.max(1e-6, camera.position.distanceTo(scratch)) / perPx;
-      },
+      pixels.size,
       useCameraStore.getState().focusedId,
     );
     if (instanced) writeInstanced(frames, targets, bloom);
@@ -159,6 +165,22 @@ class RenderTargets {
 
 const scratch = new Vector3();
 const matrix = new Matrix4();
+
+/** World units per pixel at a point, for this frame's camera (one function, not one per frame). */
+class PixelSizer {
+  private camera: PerspectiveCamera | null = null;
+  private perPx = 1;
+  /** This frame's camera and canvas height. */
+  follow(camera: PerspectiveCamera, height: number): void {
+    this.camera = camera;
+    this.perPx = pixelScale(height, camera.fov ?? 45);
+  }
+  readonly size: PixelSize = (p) => {
+    if (!this.camera) return 0;
+    scratch.set(p[0], p[1], p[2]);
+    return Math.max(1e-6, this.camera.position.distanceTo(scratch)) / this.perPx;
+  };
+}
 const color = new Color();
 
 /** The anchor registry as the director's lookup (live world position, no allocation). */
