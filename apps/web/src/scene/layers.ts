@@ -2,14 +2,16 @@ import type { Camera } from 'three';
 
 /**
  * The scene's render layers (P3-08). Everything is on three's default layer 0 except the
- * decorations that never hide a body: orbit lines, the star field, the belt's background rocks,
- * the task asteroids' halos, the highlight and own-project rings. Those sit on `DECOR_LAYER` only
+ * decorations: orbit lines, the star field, the task asteroids' halos, the highlight and
+ * own-project rings. The belt's background rocks stay on layer 0: they do hide task asteroids,
+ * so the outline must see them. Leaving the halos out means a selected asteroid's outline is no
+ * longer hidden behind its own halo (intended). Those sit on `DECOR_LAYER` only
  * (`layers={DECOR_LAYER}` on the object), and the scene's camera renders both layers.
  *
  * Why: the selection outline (P3-05) re-renders the whole scene into a depth buffer on every frame
  * a body is outlined, to tell the outline's visible edges from its hidden ones. Only real
- * occluders matter there; the decorations doubled its draw calls at the system view (the belt
- * alone is ≈ 6000 instanced rocks). `withoutDecor` renders that pass without them.
+ * occluders matter there; the decorations added most of its draw calls at the system view (each
+ * orbit line is a draw). `withoutDecor` renders that pass without them.
  */
 export const DECOR_LAYER = 1;
 

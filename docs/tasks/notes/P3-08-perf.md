@@ -250,3 +250,9 @@ Also worth a line: the phone's warmth and battery after about 5 minutes with the
 ## Security finding — fixed (2026-10-03)
 
 The coordinator fixed the `/health` token leak found here: the token is now handed out only when `!isRemoteRequest(req)` (`apps/server/src/app.ts`), so a LAN or Tailscale client behind a proxy on this machine (a remote `Host`, no `Origin`) no longer gets it; `app.test.ts` reproduces the leak (it failed before the fix). For the phone run, paste the token on the phone (it is printed by `galactic start` and shown on the settings page's Access section).
+
+## Review follow-up (2026-10-03)
+
+- The belt's background rocks are back on layer 0 (in the outline's depth pass): they do hide task asteroids, so a selected asteroid behind a rock must draw its covered outline as hidden. The halos stay on `DECOR_LAYER`, so an outline is no longer hidden behind its own halo — a visible (intended) change, contrary to "indistinguishable" above. Cost: one instanced draw in the depth pass while something is outlined; the 291 → 226 figure above is from before this and should read about 227.
+- `app.test.ts` also asserts that the Vite dev proxy's request shape (`Host: localhost:5173`, no Origin) still gets the token.
+- For the device run: switch high → mobile → high and check Saturn's ring shadow comes back (tier switches no longer recreate the GL context).

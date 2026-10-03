@@ -94,7 +94,8 @@ function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
       key={count}
       ref={mesh}
       name="belt-rocks"
-      layers={DECOR_LAYER}
+      // Stays on layer 0: the rocks really hide task asteroids, so the outline's depth pass needs
+      // them (one instanced draw) to draw a covered outline as hidden (P3-08 review).
       args={[geometry, undefined, Math.max(1, count)]}
     >
       <meshStandardMaterial flatShading roughness={1} metalness={0} />
