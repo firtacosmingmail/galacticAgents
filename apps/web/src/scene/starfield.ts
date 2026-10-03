@@ -1,7 +1,9 @@
 /**
  * The star-field skybox as plain data (no three.js here, so it is testable without WebGL): `count`
  * points spread uniformly over a spherical shell around the origin, with a slight colour spread
- * (blue-white to warm) and brightness spread. Seeded, so the sky is the same on every load.
+ * (blue-white to warm) and brightness spread. Seeded, so the sky is the same on every load. The
+ * scene centres the shell on the camera every frame (`centreOnCamera`), so it is a true backdrop:
+ * the camera is always inside it, however far it zooms out, in either scale.
  */
 export interface StarField {
   /** xyz per star. */
@@ -64,4 +66,20 @@ export function generateStarField(count: number, seed = 1): StarField {
     colors[i * 3 + 2] = tint[2] * brightness;
   }
   return { positions, colors };
+}
+
+/** What `centreOnCamera` needs of three's objects (structural: no three.js import here). */
+export interface Placeable<V> {
+  position: { copy(v: V): unknown };
+  updateMatrixWorld(force?: boolean): void;
+}
+
+/**
+ * Centres the star shell on the camera about to draw it (the points' `onBeforeRender`). three
+ * computes the object's model-view matrix right after that hook, so the new world matrix is used
+ * in the same frame: no lag behind a moving camera.
+ */
+export function centreOnCamera<V>(stars: Placeable<V>, camera: { position: V }): void {
+  stars.position.copy(camera.position);
+  stars.updateMatrixWorld(true);
 }

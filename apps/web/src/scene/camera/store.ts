@@ -19,7 +19,12 @@ export interface CameraState {
   focusedId: string | undefined;
   /** True while a flight runs. */
   flying: boolean;
-  /** The latest request; the rig handles each `seq` once. */
+  /**
+   * The latest request; the rig handles each `seq` once. Cleared when the camera is released (the
+   * rig also releases it when it unmounts), and a newly mounted rig ignores whatever request is
+   * already there (`handledOnMount`), so a remounted rig (the scene hidden and shown, a switch to
+   * or from the mobile tier) never replays an old flight.
+   */
   request: CameraRequest | undefined;
   /** Flies to a body's anchor and follows it; false (nothing changes) when it is not in the scene. */
   flyTo: (bodyId: string) => boolean;
@@ -56,8 +61,24 @@ export const useCameraStore = create<CameraState>((set, get) => ({
   flightStarted: () => set({ flying: true }),
   arrived: () => set({ flying: false }),
   atOverview: () => set({ flying: false, focusedId: undefined }),
-  released: () => set({ flying: false, focusedId: undefined }),
+  released: () => set({ flying: false, focusedId: undefined, request: undefined }),
 }));
+
+/**
+ * The seq a newly mounted rig counts as already handled: the store's current request's, so a rig
+ * acts only on requests made after it mounted.
+ */
+export function handledOnMount(): number {
+  return useCameraStore.getState().request?.seq ?? 0;
+}
+
+/** The request the rig should start now, if any: one whose seq it has not handled yet. */
+export function pendingRequest(
+  request: CameraRequest | undefined,
+  handled: number,
+): CameraRequest | undefined {
+  return request && request.seq !== handled ? request : undefined;
+}
 
 function step(get: () => CameraState, direction: 1 | -1): string | undefined {
   const order = bodyOrder(allAnchors());
@@ -85,42 +106,95 @@ export function anchorPosition(anchor: BodyAnchor): Vec3 {
 
 /**
  * The order of next / previous body: the Sun, the planets, the moons, then the asteroids; within
- * a kind, outward from the Sun (the orbit order: Mercury first, a belt asteroid by its orbit
- * radius); ties by id, so the order is stable.
+ * a kind, by the anchor's stable `order` (planets by catalogue orbit, moons by planet then rank,
+ * asteroids by number), never by live position, so moons going round do not reshuffle it. Bodies
+ * without an order come after the others of their kind; ties go by id.
  */
-export function bodyOrder(anchors: BodyAnchor[]): BodyAnchor[] {
-  const keyed = anchors.map((a) => {
-    const [x, y, z] = anchorPosition(a);
-    return { a, rank: KIND_RANK[a.kind], d: Math.hypot(x, y, z) };
-  });
-  keyed.sort((p, q) => p.rank - q.rank || p.d - q.d || (p.a.bodyId < q.a.bodyId ? -1 : 1));
-  return keyed.map((k) => k.a);
+export function bodyOrder(anchors: readonly BodyAnchor[]): BodyAnchor[] {
+  return [...anchors].sort(
+    (p, q) =>
+      KIND_RANK[p.kind] - KIND_RANK[q.kind] ||
+      compareOrder(p.order, q.order) ||
+      (p.bodyId < q.bodyId ? -1 : p.bodyId > q.bodyId ? 1 : 0),
+  );
+}
+
+function compareOrder(a: number | undefined, b: number | undefined): number {
+  if (a === b) return 0;
+  if (a === undefined) return 1;
+  if (b === undefined) return -1;
+  return a - b;
 }
 
 /**
- * The registry as the camera director sees it this frame: every anchor's live position and
- * radius, the Sun's radius (the `star` anchor's, else the default) and the system's extent.
+ * How far a planet's own system reaches, in planet radii, for the overview: moons farther out
+ * than that (Nereid, true scale) do not widen the frame. The overview frames the orbits.
  */
-export function anchorWorld(anchors: BodyAnchor[] = allAnchors()): DirectorWorld {
-  let sunRadius = DEFAULT_SUN_RADIUS;
+export const OVERVIEW_PLANET_REACH = 3;
+
+/**
+ * The system's extent for the overview: the farthest star, planet or asteroid from the Sun plus
+ * its radius (× `OVERVIEW_PLANET_REACH` for a planet, for its near moons). Moons are left out, so a
+ * far moon does not zoom the overview out for a speck. Bodies move on circles about the Sun, so
+ * this does not change as they move: it is computed when the anchors change, not every frame.
+ */
+export function systemExtent(anchors: readonly BodyAnchor[]): number {
   let extent = 0;
-  const bodies = new Map<string, BodyView>();
   for (const a of anchors) {
-    const position = anchorPosition(a);
-    if (a.kind === 'star') sunRadius = a.radius;
-    extent = Math.max(extent, length(position) + a.radius);
-    bodies.set(a.bodyId, { position, radius: a.radius });
+    if (a.kind === 'moon') continue;
+    const reach = a.kind === 'planet' ? a.radius * OVERVIEW_PLANET_REACH : a.radius;
+    extent = Math.max(extent, length(anchorPosition(a)) + reach);
   }
-  return { sunRadius, extent, body: (id) => bodies.get(id) };
+  return extent;
 }
 
-/** The user asked the system for less motion: flights become instant jumps. */
-export function prefersReducedMotion(): boolean {
-  try {
-    return (
-      typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
-    );
-  } catch {
-    return false;
+/**
+ * The registry as the camera director sees it (`DirectorWorld`), read lazily: `body(id)` reads
+ * that one anchor's live position when asked (only while flying to or following it), and the
+ * Sun's radius and the system's extent are computed once and kept until `invalidate()` (the rig
+ * calls it when anchors are added or removed and when the scale changes). A free camera reads no
+ * anchor at all.
+ */
+export class AnchorWorld implements DirectorWorld {
+  private stale = true;
+  private sun = DEFAULT_SUN_RADIUS;
+  private reach = 0;
+  private readonly all: () => BodyAnchor[];
+  private readonly get: (bodyId: string) => BodyAnchor | undefined;
+
+  constructor(
+    all: () => BodyAnchor[] = allAnchors,
+    get: (bodyId: string) => BodyAnchor | undefined = getAnchor,
+  ) {
+    this.all = all;
+    this.get = get;
+  }
+
+  /** The anchors changed (added, removed, rescaled): recompute the Sun and the extent when next read. */
+  invalidate(): void {
+    this.stale = true;
+  }
+
+  get sunRadius(): number {
+    this.refresh();
+    return this.sun;
+  }
+
+  get extent(): number {
+    this.refresh();
+    return this.reach;
+  }
+
+  body(bodyId: string): BodyView | undefined {
+    const a = this.get(bodyId);
+    return a ? { position: anchorPosition(a), radius: a.radius } : undefined;
+  }
+
+  private refresh(): void {
+    if (!this.stale) return;
+    this.stale = false;
+    const anchors = this.all();
+    this.sun = anchors.find((a) => a.kind === 'star')?.radius ?? DEFAULT_SUN_RADIUS;
+    this.reach = systemExtent(anchors);
   }
 }

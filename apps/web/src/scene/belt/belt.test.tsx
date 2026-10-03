@@ -21,7 +21,7 @@ import {
   taskAsteroids,
 } from './belt-model.js';
 import { rockGeometry, writeBeltInstances } from './belt-mesh.js';
-import { useBodyAnchor } from './hooks.js';
+import { useBodyAnchor } from '../anchor-binding.js';
 
 afterEach(cleanup);
 
@@ -126,8 +126,16 @@ describe('world → task asteroids', () => {
       hostId: 't1',
       orbit: asteroidSpec(1).meta.orbit,
       seed: asteroidSpec(1).meta.seed,
+      number: 1, // its stable place in the camera's next / previous order
     });
     expect(taskAsteroids({})).toEqual([]);
+    const bare: Body = {
+      id: 'hand-made',
+      kind: 'asteroid',
+      name: 'Hand-made',
+      host: { kind: 'task', id: 't9' },
+    };
+    expect(taskAsteroids({ bare })[0]).not.toHaveProperty('number');
   });
 
   it('task asteroids sit in the belt in both scales', () => {
@@ -207,7 +215,7 @@ describe('belt spin', () => {
 describe('anchor registration helper', () => {
   function Probe({ id, radius }: { id: string; radius: number }) {
     const ref = useRef<Object3D>(new Object3D());
-    useBodyAnchor(id, ref, radius, 'asteroid');
+    useBodyAnchor(ref, { bodyId: id, radius, kind: 'asteroid' });
     return null;
   }
 

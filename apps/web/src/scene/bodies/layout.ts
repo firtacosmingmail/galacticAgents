@@ -1,5 +1,6 @@
 import type { Body } from '@galactic/protocol';
 import { auToScene, PLANET_AU, TRUE_UNITS_PER_KM, type ScaleMode } from '../scale.js';
+import { moonOrder } from '../anchors.js';
 import { orbitPoint } from '../orbit.js';
 import { MOON_LOOKS, moonLook, PLANET_LOOKS, planetLook, type BodyLook } from './appearance.js';
 
@@ -20,6 +21,10 @@ export interface MoonItem {
   look: BodyLook;
   /** 1-based position among its planet's moons (by `meta.orbit`, then id). */
   rank: number;
+  /** Its stable place among the moons (`moonOrder(planet orbit, rank)`), for the camera's order. */
+  order: number;
+  /** Whether it casts a shadow on tiers with shadows (`castsShadow`); every moon receives. */
+  castShadow: boolean;
   /** Orbit radius around the planet, in the planet's equatorial plane, scene units. */
   distance: number;
   radius: number;
@@ -54,6 +59,19 @@ export const MOON_CLEARANCE = 1.6;
 export const MOON_STEP = 1.4;
 /** True scale: the smallest radius drawn, so Phobos is still something to click. */
 export const MIN_TRUE_RADIUS = 0.02;
+
+/**
+ * Shadows (tiers with `shadows`): a moon casts only from this real radius up (the Moon, the
+ * Galilean moons, Titan, Triton). The Sun's point-light shadow renders every caster into all six
+ * faces of a cube map each frame, so each caster costs six extra draws; the small moons' shadows
+ * are a few pixels at most. Planets always cast.
+ */
+export const SHADOW_MOON_MIN_KM = 1000;
+
+/** Whether a moon with this look casts a shadow. */
+export function castsShadow(look: BodyLook): boolean {
+  return look.radiusKm >= SHADOW_MOON_MIN_KM;
+}
 
 /** Seconds per revolution of the innermost planet; outer ones are slower (decorative only). */
 export const PLANET_BASE_PERIOD = 100;
@@ -193,6 +211,8 @@ export function buildRenderList(
         known: mKnown,
         look: mLook,
         rank,
+        order: moonOrder(orbit, rank),
+        castShadow: castsShadow(mLook),
         distance: moonDistance(mLook, mRadius, rank, outerRadius, mode),
         radius: mRadius,
         phase: wrapAngle(rank * 2.1 + (mLook.seed % 7)),
@@ -222,13 +242,20 @@ export interface AnchorSpec {
   bodyId: string;
   radius: number;
   kind: 'planet' | 'moon';
+  /** The stable next / previous order (`BodyAnchor.order`). */
+  order: number;
 }
 
 export function anchorSpecs(list: readonly PlanetItem[]): AnchorSpec[] {
-  return list.flatMap((p) => [
-    { bodyId: p.bodyId, radius: p.outerRadius, kind: 'planet' as const },
-    ...p.moons.map((m) => ({ bodyId: m.bodyId, radius: m.radius, kind: 'moon' as const })),
-  ]);
+  return list.flatMap((p) => [planetAnchor(p), ...p.moons.map(moonAnchor)]);
+}
+
+export function planetAnchor(p: PlanetItem): AnchorSpec {
+  return { bodyId: p.bodyId, radius: p.outerRadius, kind: 'planet', order: p.orbit };
+}
+
+export function moonAnchor(m: MoonItem): AnchorSpec {
+  return { bodyId: m.bodyId, radius: m.radius, kind: 'moon', order: m.order };
 }
 
 /** Circle points (x, 0, z) for an orbit line, closed by `LineLoop`. */

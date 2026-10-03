@@ -116,6 +116,8 @@ export interface TaskAsteroid {
   orbit: BeltOrbit;
   /** Drives the rock's shape, so each task asteroid keeps its own look. */
   seed: number;
+  /** Its catalogue `meta.number`, if any: the stable next / previous order (`BodyAnchor.order`). */
+  number?: number;
 }
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -161,7 +163,15 @@ export function taskAsteroids(bodies: Readonly<Record<Id, Body>>): TaskAsteroid[
   for (const body of Object.values(bodies)) {
     if (body.kind !== 'asteroid' || !body.host) continue;
     const { orbit, seed } = asteroidOrbit(body);
-    out.push({ bodyId: body.id, name: body.name, hostId: body.host.id, orbit, seed });
+    const number = body.meta?.['number'];
+    out.push({
+      bodyId: body.id,
+      name: body.name,
+      hostId: body.host.id,
+      orbit,
+      seed,
+      ...(isNum(number) ? { number } : {}),
+    });
   }
   return out.sort((a, b) => (a.bodyId < b.bodyId ? -1 : a.bodyId > b.bodyId ? 1 : 0));
 }

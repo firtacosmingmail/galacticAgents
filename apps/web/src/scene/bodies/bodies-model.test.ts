@@ -13,11 +13,12 @@ import {
 } from '../scale.js';
 import { STAR_SHELL } from '../starfield.js';
 import { DEFAULT_LOOK, DEFAULT_MOON_LOOK, MOON_LOOKS, PLANET_LOOKS } from './appearance.js';
-import { attachAnchor } from './anchor-binding.js';
+import { attachAnchor } from '../anchor-binding.js';
 import {
   anchorSpecs,
   angleBetween,
   buildRenderList,
+  castsShadow,
   circlePoints,
   FAR_SIDE_ANGLE,
   FAR_SIDE_MARGIN,
@@ -373,7 +374,32 @@ describe('anchors', () => {
     expect(allAnchors()).toHaveLength(before);
   });
 
+  it('anchors carry a stable order: planets by orbit, moons by planet orbit then rank', () => {
+    for (const mode of MODES) {
+      const specs = anchorSpecs(buildRenderList(CATALOGUE, mode));
+      const order = (id: string) => specs.find((a) => a.bodyId === id)!.order;
+      expect(order('b-mercury')).toBe(1);
+      expect(order('b-neptune')).toBe(8);
+      expect(order('b-phobos')).toBeLessThan(order('b-deimos'));
+      expect(order('b-deimos')).toBeLessThan(order('b-io'));
+      expect(order('b-io')).toBeLessThan(order('b-europa'));
+      expect(order('b-triton')).toBeLessThan(order('b-nereid'));
+    }
+  });
+
   it('the Sun registers under the catalogue id', () => {
     expect(SUN_ANCHOR_ID).toBe(CATALOGUE.find((b) => b.kind === 'star')!.id);
+  });
+});
+
+describe('shadows', () => {
+  it('planets cast; only the largest moons do (the small ones are not worth six more draws)', () => {
+    const list = buildRenderList(CATALOGUE, 'fake');
+    const casters = list.flatMap((p) => p.moons.filter((m) => m.castShadow).map((m) => m.name));
+    expect(casters.sort()).toEqual(
+      ['Callisto', 'Europa', 'Ganymede', 'Io', 'Moon', 'Titan', 'Triton'].sort(),
+    );
+    expect(castsShadow(MOON_LOOKS['Phobos']!)).toBe(false);
+    expect(castsShadow(DEFAULT_MOON_LOOK)).toBe(false);
   });
 });
