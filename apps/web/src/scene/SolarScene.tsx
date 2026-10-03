@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Bloom, EffectComposer, ToneMapping } from '@react-three/postprocessing';
-import { ToneMappingMode } from 'postprocessing';
+import { Bloom, EffectComposer, Outline, ToneMapping } from '@react-three/postprocessing';
+import { ToneMappingMode, type OutlineEffect } from 'postprocessing';
 import {
   AdditiveBlending,
   CanvasTexture,
@@ -20,6 +20,7 @@ import { attachAnchor } from './anchor-binding.js';
 import { motionEnabled, sceneFrameloop, useReducedMotion } from './motion.js';
 import { Belt } from './belt/Belt.js';
 import { CameraRig } from './camera/CameraRig.js';
+import { Picking } from './picking/Picking.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -32,6 +33,10 @@ import { CameraRig } from './camera/CameraRig.js';
  * The frame loop is continuous while the decorative orbital motion runs (P3-02) or the fps meter
  * measures; with `prefers-reduced-motion` and no meter it renders on demand (resize, a change).
  * The tier's `shadows` flag turns on the shadow map and the Sun light's shadow (P3-02).
+ *
+ * Picking (P3-05) listens on the canvas and draws the hover / selection rings; on tiers with a
+ * composer the selected body also gets the outline effect (the composer then runs with
+ * `autoClear={false}`, which the outline needs; the render pass still clears).
  */
 export interface SolarSceneProps {
   quality: SceneQuality;
@@ -51,7 +56,11 @@ const SHADOW_MAP_SIZE = 1024;
 const SHADOW_FAR = 1300;
 const BACKGROUND = '#02030a';
 
+/** The selection outline (P3-05): the panel's accent, hidden edges dimmer, no pulse. */
+const OUTLINE = { visible: '#7fb2ff', hidden: '#2b4a80', strength: 4 } as const;
+
 export default function SolarScene({ quality, onFps, onContextLost }: SolarSceneProps) {
+  const outline = useRef<OutlineEffect>(null);
   return (
     <Canvas
       // `antialias` is a context parameter: a tier that changes it gets a new context.
@@ -96,8 +105,16 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <Bodies />
       <Belt rocks={quality.beltRocks} />
       <CameraRig />
+      <Picking outline={quality.bloom ? outline : undefined} />
       {quality.bloom && (
-        <EffectComposer multisampling={quality.antialias ? 4 : 0}>
+        <EffectComposer multisampling={quality.antialias ? 4 : 0} autoClear={false}>
+          <Outline
+            ref={outline}
+            visibleEdgeColor={OUTLINE.visible}
+            hiddenEdgeColor={OUTLINE.hidden}
+            edgeStrength={OUTLINE.strength}
+            xRay
+          />
           <Bloom
             intensity={quality.bloom.intensity}
             luminanceThreshold={quality.bloom.threshold}
