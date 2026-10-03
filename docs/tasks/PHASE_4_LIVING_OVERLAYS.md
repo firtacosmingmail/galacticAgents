@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** P4-02, P4-03, P4-05 (wave 2, branch `p4-wave2-state-activity-beacons`) · **Task status:** in progress
-**Phase status:** in progress (4/10 done) — on branch `phase-4`
+**Current task:** P4-04 (wave 3, after wave 2 is merged into `phase-4`) · **Task status:** todo
+**Phase status:** in progress (7/10 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -44,12 +44,12 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Acceptance:** a satellite per active Waykeeper/Steward orbits the right body; state switches animate smoothly.
 
 ### P4-02 — State → visual mapping and HQ station
-- **Status:** in progress · **Depends on:** P4-01 · **Parallel with:** P4-03, P4-05
+- **Status:** done (2026-10-04) · **Depends on:** P4-01 · **Parallel with:** P4-03, P4-05
 - Colour and pulse per agent state (working, waiting_for_input, paused, stalled, idle, failed); Harmonizer HQ station orbiting Earth with its own idle/thinking indication; legend in the panel.
 - **Acceptance:** a designer or friend can tell which bodies are busy, blocked, or failed without reading text.
 
 ### P4-03 — Steward activity archetypes
-- **Status:** in progress · **Depends on:** P4-01 · **Parallel with:** P4-02, P4-05
+- **Status:** done (2026-10-04) · **Depends on:** P4-01 · **Parallel with:** P4-02, P4-05
 - Derive `gathering | transporting | building` from `current_activity` / summariser output (reading & searching → gathering; producing output / commits → transporting between Steward and Waykeeper satellite; running builds/tests/editing many files → building); surface robots on rocky bodies, orbital platforms on gas giants; raw activity text stays available in the panel (corner case 32).
 - **Acceptance:** switching activity in the harness changes the archetype within a second.
 
@@ -59,7 +59,7 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Acceptance:** moving a task to a project in the panel flies its satellite there; completing a task lands it.
 
 ### P4-05 — Question beacon
-- **Status:** in progress · **Depends on:** P4-01, P2-03 · **Parallel with:** P4-02, P4-03
+- **Status:** done (2026-10-04) · **Depends on:** P4-01, P2-03 · **Parallel with:** P4-02, P4-03
 - A body with an open user-held question shows a visible beacon (distinct for permission vs clarification); clicking opens the question in the inbox.
 - **Acceptance:** beacon appears/disappears with the question lifecycle.
 
