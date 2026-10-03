@@ -73,7 +73,7 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 
 ### P3-07 — Domain binding and labels
 - **Status:** in progress · **Depends on:** P3-05, P2-15 · **Parallel with:** —
-- Bodies bound to the domain model from the store: hosted project/task name and derived state as HTML labels anchored to bodies (drei `<Html>`), throttled updates; independent-project moons visibly distinct from sub-project moons (SPEC §3.2); reserved bodies unlabelled; `moved` and `completed` markers as label states (animations come in Phase 4).
+- Bodies bound to the domain model from the store: hosted project/task name and derived state as one HTML label layer projected in a throttled pass (no drei `Html`; decision 66), throttled updates; independent-project moons visibly distinct from sub-project moons (SPEC §3.2); reserved bodies unlabelled; `moved` and `completed` markers as label states (animations come in Phase 4).
 - **Acceptance:** every assigned body shows the right name and state; a state change in the store updates the label within a second.
 
 ### P3-08 — Performance pass and phone test
