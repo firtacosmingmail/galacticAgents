@@ -10,6 +10,7 @@ import {
 } from 'three';
 import type { OutlineEffect } from 'postprocessing';
 import { allAnchors, getAnchor } from '../anchors.js';
+import { labelAt } from '../labels/registry.js';
 import { anchorPosition } from '../camera/store.js';
 import { useAppStore } from '../../state/store.js';
 import { bodyName, outlineBody, selectionBody } from './body-action.js';
@@ -39,6 +40,10 @@ import { noteUserCameraInput } from './sync.js';
  * pass over the whole scene). The `<Outline>` stays mounted either way (no shader recompiles).
  * The outline's meshes are re-collected every frame from the anchor's subtree, so a mesh swapped
  * by LOD (P3-06) is followed.
+ *
+ * Labels (P3-07) are extra pick targets resolved here, not DOM click targets: the label layer
+ * takes no pointer events, so a wheel, a drag or a press-drag-release that starts on a label
+ * reaches the canvas like any other (`labelUnder` has the rule).
  *
  * Unmounting (the scene hidden, the WebGL context lost) clears the hover label and closes the
  * popover: they live in a module store that outlives the canvas.
@@ -102,7 +107,8 @@ export function Picking({ outline }: PickingProps) {
       if (!e) return;
       const at = pointAt(e);
       const result = pick(at);
-      const top = result.choice ?? result.candidates[0]?.bodyId;
+      const label = labelUnder(result, at);
+      const top = label ?? result.choice ?? result.candidates[0]?.bodyId;
       const picking = usePickingStore.getState();
       if (!top) {
         picking.setHover(undefined);
@@ -111,7 +117,7 @@ export function Picking({ outline }: PickingProps) {
         picking.setHover({
           bodyId: top,
           name: bodyName(world, top),
-          others: result.choice ? 0 : result.candidates.length - 1,
+          others: label || result.choice ? 0 : result.candidates.length - 1,
           ...at,
         });
       }
@@ -152,10 +158,12 @@ export function Picking({ outline }: PickingProps) {
       }
       const at = pointAt(e);
       const result = pick(at);
+      const label = labelUnder(result, at);
       const picking = usePickingStore.getState();
       // The camera is about to move: the label comes back once it does (`repick`).
       picking.setHover(undefined);
-      if (result.choice) activateBody(result.choice, at);
+      if (label) activateBody(label, at);
+      else if (result.choice) activateBody(result.choice, at);
       else if (result.candidates.length > 1) {
         picking.showHere(
           at,
@@ -230,6 +238,18 @@ export function Picking({ outline }: PickingProps) {
 }
 
 const xy = (e: PointerEvent) => ({ x: e.clientX, y: e.clientY });
+
+/**
+ * The label-vs-body rule (P3-07): a body the pointer's ray passes through (its drawn sphere or its
+ * minimum target, `hit`) takes precedence — so a moon under its planet's label stays clickable, and
+ * a body in front of a label is what the user sees under the pointer. Otherwise a shown label's
+ * rectangle under the pointer means that label's body, over near misses (bodies merely within
+ * `CLUSTER_PX`, such as the label's own body just below it). `undefined`: no label decides it.
+ */
+export function labelUnder(result: PickResult, at: Point): string | undefined {
+  if (result.candidates.some((c) => c.hit)) return undefined;
+  return labelAt(at.x, at.y);
+}
 
 /**
  * A thin ring facing the camera around a body's anchor, drawn over everything (no depth test), at

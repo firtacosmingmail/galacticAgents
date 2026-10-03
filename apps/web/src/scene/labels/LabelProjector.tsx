@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Matrix4, type PerspectiveCamera } from 'three';
-import { allAnchors, getAnchor } from '../anchors.js';
-import { anchorPosition } from '../camera/store.js';
+import { allAnchors, getAnchor, onAnchorsChanged } from '../anchors.js';
+import { anchorPosition, useCameraStore } from '../camera/store.js';
 import { pixelScale } from '../picking/pick.js';
+import { PRIORITY } from './label-model.js';
 import {
   declutter,
-  LABEL_GAP_PX,
+  labelRect,
   movedEnough,
   occluded,
   onScreen,
@@ -30,10 +31,12 @@ import {
  * drei `<Html>` per body. On a rendered frame, at most `hz` times a second (30 on high and
  * balanced, 15 on mobile — and never more often than the capped loop renders), it projects every
  * registered label's anchor, hides labels whose body is behind the camera, off screen or behind
- * the Sun or a planet, de-clutters overlaps by priority, and writes a label's transform only when
+ * the Sun or a planet (the selected and the focused body's label is clamped to the top edge
+ * rather than hidden above it), de-clutters overlaps by priority, and writes a label's transform only when
  * it moved by more than half a pixel (and its visibility only when that changed).
  *
- * A new label, a content change (size, priority) or a resize forces the next update. Under the
+ * A new label, a new or removed anchor, a content change (size, priority) or a resize forces the
+ * next update. Under the
  * on-demand loop a skipped frame schedules one render for when the next update is due, so a
  * camera that stops between two updates still leaves its labels in place.
  */
@@ -48,14 +51,18 @@ export function LabelProjector({ hz }: { hz: number }) {
   useEffect(() => tools.throttle.setRate(hz), [tools, hz]);
 
   useEffect(() => {
-    const stop = onLabelsChanged(() => {
+    const refresh = () => {
       tools.throttle.force();
       invalidate();
-    });
-    tools.throttle.force();
-    invalidate();
+    };
+    // A label and its body's anchor register independently (the label in a layout effect, the
+    // anchor in the body's passive effect, in either order): either one arriving forces a pass.
+    const stopLabels = onLabelsChanged(refresh);
+    const stopAnchors = onAnchorsChanged(refresh);
+    refresh();
     return () => {
-      stop();
+      stopLabels();
+      stopAnchors();
       if (timer.current) clearTimeout(timer.current);
       timer.current = undefined;
       hideAll();
@@ -110,6 +117,8 @@ export function projectLabels(
       .filter((a) => a.kind === 'star' || a.kind === 'planet')
       .map((a) => ({ bodyId: a.bodyId, center: anchorPosition(a), radius: a.radius })));
 
+  // Kept inside the top edge rather than hidden there: the selection's and the camera focus's.
+  const focusedId = useCameraStore.getState().focusedId;
   const candidates: LabelBox[] = [];
   const byId = new Map<string, LabelEntry>();
   for (const entry of labelEntries()) {
@@ -128,6 +137,7 @@ export function projectLabels(
       h: entry.h,
       priority: entry.priority,
       depth: point.depth,
+      pinTop: entry.priority === PRIORITY.selected || entry.bodyId === focusedId,
     };
     if (!onScreen(box, size.width, size.height)) continue;
     if (occluded(eye, position, entry.bodyId, occluderList())) continue;
@@ -143,7 +153,7 @@ export function projectLabels(
       continue;
     }
     const x = box.x;
-    const y = box.y - box.r - LABEL_GAP_PX;
+    const y = labelRect(box).bottom;
     if (movedEnough(entry.written, x, y)) writePosition(entry, x, y);
     setShown(entry, true);
   }

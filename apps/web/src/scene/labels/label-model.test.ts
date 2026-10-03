@@ -55,7 +55,6 @@ const ids = (world: LabelWorld) => bodyLabels(world).map((l) => l.bodyId);
 describe('world → labels', () => {
   it('labels every assigned body and the moved markers, nothing else', () => {
     expect(ids(labelWorld())).toEqual([
-      'b-ast-11', // moved to Jupiter
       'b-ast-7', // a task
       'b-ast-9', // a task, no agent yet
       'b-europa', // a sub-project
@@ -134,10 +133,29 @@ describe('world → labels', () => {
       tone: 'done',
       movedTo: { bodyId: 'b-jupiter', name: 'Jupiter' },
     });
-    expect(bodyLabel(labelWorld(), 'b-ast-11')).toMatchObject({
+    // A moon keeps its marker too.
+    const world = labelWorld();
+    world.bodies['b-europa'] = {
+      id: 'b-europa',
+      kind: 'moon',
+      parentId: 'b-jupiter',
+      name: 'Europa',
+      movedTo: {
+        bodyId: 'b-jupiter',
+        host: { kind: 'task', id: 't-in' },
+        at: fx.project.createdAt,
+      },
+    };
+    expect(bodyLabel(world, 'b-europa')).toMatchObject({
+      kind: 'moved',
       title: fx.task.description,
       stateText: 'moved to Jupiter',
     });
+  });
+
+  it('an asteroid whose task moved away has no label: it is part of the belt (decision 63)', () => {
+    expect(bodyLabel(labelWorld(), 'b-ast-11')).toBeUndefined();
+    expect(ids(labelWorld())).not.toContain('b-ast-11');
   });
 
   it('hosted work wins over a stale marker', () => {

@@ -10,7 +10,9 @@ import { bodyName } from '../picking/body-action.js';
  * Which bodies get a label:
  * - a body hosting a project (planet or moon) or a task (asteroid): the work's name and its state
  *   (the server's derived state, P2-15), as a compact pill;
- * - a body that only shows a "moved to …" marker (decision 15): the work that left and where to;
+ * - a planet or moon that only shows a "moved to …" marker (decision 15): the work that left and
+ *   where to. Not an asteroid: one whose task moved away is just part of the belt (decision 63) —
+ *   it has no anchor, so its label could never show;
  * - nothing else: free bodies, and the reserved ones (the Sun, Earth — the headquarters, which
  *   picking already maps to the Harmonizer — and Earth's Moon) stay unlabelled.
  *
@@ -163,7 +165,8 @@ export function bodyLabel(
     return finish(label);
   }
 
-  if (body.movedTo) {
+  // An asteroid whose task moved away rejoins the belt (decision 63): no anchor, no label.
+  if (body.movedTo && body.kind !== 'asteroid') {
     const marker = body.movedTo;
     const name = workName(world, marker.host) ?? body.name;
     const target = bodyName(world, marker.bodyId);

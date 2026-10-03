@@ -153,14 +153,55 @@ describe('LabelLayer (content from the store)', () => {
     expect(entry?.priority).toBe(5);
   });
 
-  it('clicking a label is clicking its body (select + fly; info card for no agent)', () => {
+  it("a label is no click target (picking resolves it); the hovered body's label is marked", () => {
     render(<LabelLayer />);
     fireEvent.click(label('b-jupiter'), { clientX: 40, clientY: 30 });
-    expect(selected()).toBe('waykeeper:a-wk-old');
-    expect(useCameraStore.getState().focusedId).toBe('b-jupiter');
-    fireEvent.click(label('b-ast-9'));
-    expect(usePickingStore.getState().popover).toMatchObject({ kind: 'info' });
-    expect(selected()).toBe('waykeeper:a-wk-old');
+    expect(selected()).toBe('harmonizer');
+    expect(useCameraStore.getState().focusedId).toBeUndefined();
+    act(() =>
+      usePickingStore
+        .getState()
+        .setHover({ bodyId: 'b-jupiter', name: 'Jupiter', others: 0, x: 1, y: 1 }),
+    );
+    expect(label('b-jupiter').className).toContain('is-hovered');
+    expect(label('b-io').className).not.toContain('is-hovered');
+  });
+
+  it('re-measures a label only when what it shows changes, not on every world change', () => {
+    render(<LabelLayer />);
+    const reads: string[] = [];
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      reads.push(this.dataset['body'] ?? '');
+      return 0;
+    });
+    // Every label is rebuilt, but none shows anything new (a body's meta changed): none measured.
+    act(() => {
+      const world = useAppStore.getState().world;
+      const jupiter = world.bodies['b-jupiter']!;
+      useAppStore.setState({
+        world: {
+          ...world,
+          bodies: { ...world.bodies, 'b-jupiter': { ...jupiter, meta: { note: 'x' } } },
+        },
+      });
+    });
+    expect(reads).toEqual([]);
+    // Jupiter's project changes state: only Jupiter's label is measured again.
+    act(() => {
+      const world = useAppStore.getState().world;
+      useAppStore.setState({
+        world: {
+          ...world,
+          projects: {
+            ...world.projects,
+            'p-big': { ...world.projects['p-big']!, state: 'paused' },
+          },
+        },
+      });
+    });
+    expect(reads).toEqual(['b-jupiter']);
   });
 
   it('an unassigned body loses its label', () => {
@@ -287,6 +328,39 @@ describe('LabelProjector (one pass for every label)', () => {
     }
   });
 
+  it("a label whose body's anchor registers later shows on the next pass (demand loop)", () => {
+    r3f.state = { ...r3f.state, frameloop: 'demand' };
+    act(() => {
+      const world = useAppStore.getState().world;
+      const mars = world.bodies['b-mars']!;
+      useAppStore.setState({
+        world: {
+          ...world,
+          bodies: {
+            ...world.bodies,
+            'b-mars': { ...mars, host: { kind: 'project', id: 'p-new' } },
+          },
+        },
+      });
+    });
+    render(
+      <>
+        <LabelLayer />
+        <LabelProjector hz={30} />
+      </>,
+    );
+    frame();
+    expect(shown('b-mars')).toBe(false); // no anchor yet
+    const invalidate = r3f.state['invalidate'] as ReturnType<typeof vi.fn>;
+    invalidate.mockClear();
+    resetLabelStats();
+    anchor('b-mars', [-10, -20, 0], 'planet');
+    expect(invalidate).toHaveBeenCalled(); // the demand loop renders again…
+    frame(1); // …and that frame, well inside the throttle's interval, is a forced pass
+    expect(labelStats.updates).toBe(1);
+    expect(shown('b-mars')).toBe(true);
+  });
+
   it('de-clutters overlapping labels by priority (selected first)', () => {
     anchor('b-ast-9', [30, 4, 0], 'asteroid'); // just above Jupiter: the labels overlap
     render(
@@ -323,6 +397,24 @@ describe('LabelProjector (one pass for every label)', () => {
     frame(40);
     expect(shown('b-ast-9')).toBe(true);
     expect(shown('b-jupiter')).toBe(false);
+  });
+
+  it("the focused body's label is clamped to the top edge instead of hidden above it", () => {
+    anchor('b-jupiter', [30, 40, 0], 'planet'); // near the top: its label would stick out above
+    render(
+      <>
+        <LabelLayer />
+        <LabelProjector hz={30} />
+      </>,
+    );
+    for (const e of labelEntries()) updateLabel(e.bodyId, { priority: e.priority, w: 90, h: 16 });
+    frame(40);
+    expect(shown('b-jupiter')).toBe(false);
+    useCameraStore.setState({ focusedId: 'b-jupiter' });
+    frame(40);
+    expect(shown('b-jupiter')).toBe(true);
+    const [, y] = /translate3d\([-\d.]+px, ([-\d.]+)px/.exec(label('b-jupiter').style.transform)!;
+    expect(Number(y)).toBe(16); // its bottom; its top on the viewport's edge
   });
 
   it('hides labels behind the camera, off screen, without an anchor, and all on unmount', () => {

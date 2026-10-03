@@ -48,8 +48,9 @@ export function useQualityTier(): QualityTier | undefined {
  * the canvas; while the scene is shown, a selection made in the panel flies the camera to the
  * selected agent's body (`useSelectionSync`).
  *
- * Labels (P3-07): the domain labels' layer (`LabelLayer`) sits over the canvas, under the hover
- * label and the popover; the projector inside the canvas positions it.
+ * Labels (P3-07): the domain labels' layer (`LabelLayer`) sits over the canvas, under the scene
+ * chrome (fps meter, breadcrumb, scale toggle) and picking's hover label and popover — the
+ * stacking order is in `scene.css`; the projector inside the canvas positions it.
  */
 export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }) {
   const quality = sceneQuality(useQualityTier());

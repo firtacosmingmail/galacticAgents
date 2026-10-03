@@ -5,6 +5,9 @@
  * no React state: positions never go through a render.
  *
  * `labelStats` counts the projector's updates and DOM writes (for the perf notes and tests).
+ *
+ * The labels take no pointer events (CSS): picking (`Picking.tsx`) asks `labelAt` which shown
+ * label is under the pointer, so wheel, drag and click all reach the canvas first.
  */
 export interface LabelEntry {
   bodyId: string;
@@ -78,6 +81,24 @@ export function writePosition(entry: LabelEntry, x: number, y: number): void {
   entry.written = { x, y };
   entry.el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%)`;
   labelStats.writes++;
+}
+
+/**
+ * The body whose shown label covers the point (CSS pixels from the canvas's top-left), from what
+ * the projector last wrote: the label's bottom centre at `written`, its measured size around it.
+ * De-clutter keeps shown labels apart; should two still meet, the higher priority wins (the one
+ * drawn on top).
+ */
+export function labelAt(x: number, y: number): string | undefined {
+  let best: LabelEntry | undefined;
+  for (const entry of entries.values()) {
+    const at = entry.written;
+    if (!entry.shown || !at) continue;
+    const inside =
+      x >= at.x - entry.w / 2 && x <= at.x + entry.w / 2 && y >= at.y - entry.h && y <= at.y;
+    if (inside && (!best || entry.priority > best.priority)) best = entry;
+  }
+  return best?.bodyId;
 }
 
 /** Hides every label (the projector unmounted: the scene hidden, the context lost). */

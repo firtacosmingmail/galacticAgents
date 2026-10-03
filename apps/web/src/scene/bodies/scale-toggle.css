@@ -13,6 +13,8 @@
   background: rgba(0, 0, 0, 0.55);
   color: #8a91a6;
   font-size: 12px;
+  /* Over the domain labels (stacking order: scene.css). */
+  z-index: var(--scene-z-chrome);
 }
 .pnl-scene-scale-note {
   min-width: 0;
