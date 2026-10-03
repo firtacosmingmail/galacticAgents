@@ -19,6 +19,10 @@ import { HistoryPage } from './history/HistoryPage.js';
 import { SceneArea } from '../scene/SceneArea.js';
 import { useScene } from '../scene/visibility.js';
 import { INBOX_ID, TopBar } from './TopBar.js';
+import {
+  useManagedAgentsVisibility,
+  type ManagedAgentsControl,
+} from './managed-agents-visibility.js';
 import './panel.css';
 
 /**
@@ -28,7 +32,8 @@ import './panel.css';
  * beside it; hidden ("list mode") the panel is the Phase 2.5 layout. Everything comes from the store (TECHNOLOGY §6.3); the selection is the
  * store's too, mirrored in the URL. The main area is the chat with a brain (P25-03) or the
  * Steward view (P25-05); the right column holds the managed-agents cards (P25-04) and the inbox
- * (P25-06).
+ * (P25-06). The managed-agents section can be hidden per browser (P4-09): the inbox stays, and the
+ * grid reflows (`pnl-grid-no-agents`) so the conversation and the scene take the space.
  */
 export function Panel({
   token,
@@ -44,12 +49,14 @@ export function Panel({
   const route = useAppStore((s) => s.route);
   const scene = useScene();
   const showScene = route === 'panel' && scene.shown;
+  const agents = useManagedAgentsVisibility();
+  const gridClass = `pnl-grid${showScene ? ' pnl-grid-scene' : ''}${agents.visible ? '' : ' pnl-grid-no-agents'}`;
   return (
     <ApiContext.Provider value={api}>
       <SettingsProvider api={api}>
         <CardLinksContext.Provider value={true}>
           <div className={showScene ? 'pnl pnl-with-scene' : 'pnl'}>
-            <TopBar scene={scene} {...(onForget ? { onForget } : {})} />
+            <TopBar scene={scene} agents={agents} {...(onForget ? { onForget } : {})} />
             {route === 'settings' ? (
               // The settings page (P25-08), in the panel's frame.
               <SettingsPage token={token} />
@@ -59,11 +66,11 @@ export function Panel({
             ) : (
               // A fresh install walks through the first-run wizard first (P25-08).
               <FirstRunGate>
-                <div className={showScene ? 'pnl-grid pnl-grid-scene' : 'pnl-grid'}>
+                <div className={gridClass}>
                   <Navigation />
                   {showScene && <SceneArea onFailure={scene.fail} />}
                   <MainArea />
-                  <SideColumn />
+                  <SideColumn agents={agents} />
                 </div>
               </FirstRunGate>
             )}
@@ -160,17 +167,41 @@ function Empty({ children }: { children: ReactNode }) {
   return <p className="pnl-empty pnl-empty-main">{children}</p>;
 }
 
-function SideColumn() {
+/**
+ * The right column: the managed-agents section (P25-04) and the inbox (P25-06). Hiding the
+ * managed agents (P4-09) unmounts only their section; the inbox always stays.
+ */
+function SideColumn({ agents }: { agents: ManagedAgentsControl }) {
   const world = useAppStore((s) => s.world);
   const selection = useAppStore((s) => s.selection);
   const agent = selectedAgent(world, selection);
   const supervisor: Id | undefined = agent?.role === 'steward' ? agent.supervisorId : undefined;
   return (
-    <aside className="pnl-side" aria-label="managed agents and inbox">
-      <section aria-label="managed agents">
-        <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
-        {supervisor ? <AgentLinks ids={[supervisor]} /> : <ManagedAgentCards supervisor={agent} />}
-      </section>
+    <aside
+      className="pnl-side"
+      aria-label={agents.visible ? 'managed agents and inbox' : 'inbox column'}
+    >
+      {agents.visible && (
+        <section aria-label="managed agents">
+          <div className="pnl-side-head">
+            <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
+            <button
+              type="button"
+              className="pnl-side-hide"
+              aria-label="Hide managed agents"
+              title="Hide managed agents (bring them back from the top bar)"
+              onClick={() => agents.setVisible(false)}
+            >
+              Hide
+            </button>
+          </div>
+          {supervisor ? (
+            <AgentLinks ids={[supervisor]} />
+          ) : (
+            <ManagedAgentCards supervisor={agent} />
+          )}
+        </section>
+      )}
       <section className="pnl-inbox" aria-label="inbox" id={INBOX_ID} tabIndex={-1}>
         <Inbox />
       </section>

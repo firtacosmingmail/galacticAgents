@@ -10,7 +10,13 @@ import {
   type Selection,
 } from '../state/selection.js';
 import { currentHarmonizer } from '../console/hierarchy/HierarchyConsole.js';
-import { buildNav, containsAgent, hasBlockedChild, type NavItem } from './nav-model.js';
+import {
+  buildNav,
+  childContainsAgent,
+  hasBlockedChild,
+  type NavItem,
+  type StewardCount,
+} from './nav-model.js';
 
 /**
  * The panel's left navigation (P25-02): the Harmonizer first and always one click away, then the
@@ -93,9 +99,10 @@ function NavRow({
   selection: Selection;
   selectedAgent: Id | undefined;
 }) {
-  // Nested work shows while the item or something in it is selected, or something in it waits
-  // for the user; the disclosure button overrides that.
-  const auto = containsAgent(item, selectedAgent) || hasBlockedChild(item);
+  // Nested work shows while something in it is selected or waits for the user; selecting the
+  // item itself (a project's Waykeeper) keeps the row compact (P4-09). The disclosure button
+  // overrides both.
+  const auto = childContainsAgent(item, selectedAgent) || hasBlockedChild(item);
   const [toggled, setToggled] = useState<boolean | undefined>();
   const open = toggled ?? auto;
   const current = item.selection !== undefined && sameSelection(item.selection, selection);
@@ -103,6 +110,7 @@ function NavRow({
     <>
       <span className="pnl-nav-name">{item.label}</span>
       <span className={`pnl-nav-sub state-${item.state}`}>{item.state.replace(/_/g, ' ')}</span>
+      {item.stewards && item.stewards.total > 0 && <StewardBadge count={item.stewards} />}
       {item.blocked && <Beacon>blocked on you</Beacon>}
     </>
   );
@@ -143,6 +151,22 @@ function NavRow({
         </ul>
       )}
     </li>
+  );
+}
+
+/**
+ * A project's Steward count (P4-09), compact: "2/5 Stewards" reads as running / total; screen
+ * readers and the tooltip get the words.
+ */
+function StewardBadge({ count }: { count: StewardCount }) {
+  const words = `${count.running} ${count.running === 1 ? 'Steward' : 'Stewards'} working, ${count.total} in total`;
+  return (
+    <span className={`pnl-nav-stewards${count.running > 0 ? ' is-busy' : ''}`} title={words}>
+      <span aria-hidden="true">
+        {count.running}/{count.total} {count.total === 1 ? 'Steward' : 'Stewards'}
+      </span>
+      <span className="pnl-visually-hidden">{words}</span>
+    </span>
   );
 }
 
