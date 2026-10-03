@@ -13,6 +13,7 @@ import { waitingForUserCount } from './inbox-model.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
 import { StewardPanelView } from './steward/StewardPanelView.js';
 import { ManagedAgentCards } from './AgentCards.js';
+import { NotificationsControl } from './notifications/NotificationsControl.js';
 import { FirstRunGate } from './settings/FirstRunGate.js';
 import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
@@ -86,6 +87,7 @@ function TopBar({ onForget }: { onForget?: () => void }) {
         <span>{summary.blockedItems} blocked</span>
       </span>
       <span className="pnl-spacer" />
+      <NotificationsControl />
       <NavLink
         to={{ route: 'settings', selection }}
         current={route === 'settings'}

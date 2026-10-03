@@ -1,5 +1,6 @@
 import { useAppStore } from '../../state/store.js';
 import { NavLink } from '../Navigation.js';
+import { NotificationSettings } from '../notifications/NotificationSettings.js';
 import { AccessToken } from './AccessToken.js';
 import { PreflightCheck } from './PreflightCheck.js';
 import { useSettingsData } from './SettingsData.js';
@@ -43,11 +44,12 @@ export function SettingsPage({ token }: { token: string }) {
         SECTIONS.map((spec) => <PageSection key={spec.field} spec={spec} />)}
 
       <section className="set-section" aria-label="Notifications">
-        {/* P25-07 mounts NotificationSettings here (the per-type desktop-notification toggles). */}
         <div className="set-head">
           <h2 className="set-title">Notifications</h2>
         </div>
-        <p className="set-muted">Desktop notification toggles appear here.</p>
+        {/* P25-07's per-browser toggles. Not in the first-run wizard: the browser's permission
+            prompt needs a click, and the toggles are this browser's, not the server's. */}
+        <NotificationSettings heading={false} />
       </section>
 
       <AccessToken token={token} />

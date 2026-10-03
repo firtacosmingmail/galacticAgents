@@ -111,7 +111,7 @@ function fakeServer(initial: SettingsResponse) {
       const next = structuredClone(state.response);
       const { setupCompleted, defaultPermissionPolicy, caps, ...rest } = patch;
       Object.assign(next.settings, rest);
-      if (caps) next.settings.caps = { ...next.settings.caps, ...caps };
+      if (caps) Object.assign(next.settings.caps, caps);
       if (defaultPermissionPolicy !== undefined)
         next.settings.defaultPermissionPolicy =
           defaultPermissionPolicy ?? structuredClone(DEFAULT_PERMISSION_POLICY);
@@ -310,7 +310,10 @@ describe('settings page (P25-08)', () => {
     await click(screen.getByRole('link', { name: 'Settings' }));
     expect(window.location.pathname).toBe('/settings');
     await screen.findByRole('main', { name: 'settings' });
-    expect(section('Notifications')).toBeTruthy();
+    // P25-07's desktop-notification toggles, mounted in the page.
+    expect(
+      within(section('Notifications')).getByRole('region', { name: 'desktop notifications' }),
+    ).toBeTruthy();
     await click(screen.getByRole('link', { name: /Back to the panel/ }));
     expect(window.location.pathname).toBe('/');
     expect(screen.getByRole('navigation', { name: 'navigation' })).toBeTruthy();

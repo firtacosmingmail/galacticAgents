@@ -1,6 +1,7 @@
 import { GalacticClient } from './client.js';
 import { conversationSince } from '../state/conversation.js';
 import { useAppStore } from '../state/store.js';
+import { createNotifier } from '../panel/notifications/notifier.js';
 
 export const TOKEN_KEY = 'galactic.token';
 /** Written by earlier builds; removed on start so a stale value can never be sent (P0-12). */
@@ -72,10 +73,15 @@ export function forgetToken(): void {
 export function startSession(token: string): () => void {
   storage.remove(LEGACY_LAST_EVENT_KEY);
   const store = useAppStore.getState();
+  // Desktop notifications fold the same messages, after the store applied them (P25-07).
+  const notifier = createNotifier({ token });
   const client = new GalacticClient({
     url: wsUrl(),
     token,
-    onMessage: (m) => useAppStore.getState().apply(m),
+    onMessage: (m) => {
+      useAppStore.getState().apply(m);
+      notifier.onMessage(m);
+    },
     onStatus: (status, detail) => useAppStore.getState().setStatus(status, detail),
     // An open chat starts the live transcript where its history page ended (P25-03).
     transcriptSince: (agentId) =>
@@ -92,6 +98,7 @@ export function startSession(token: string): () => void {
   client.connect();
   return () => {
     useAppStore.setState({ subscribeTranscript: undefined, unsubscribeTranscript: undefined });
+    notifier.stop();
     client.close();
   };
 }
