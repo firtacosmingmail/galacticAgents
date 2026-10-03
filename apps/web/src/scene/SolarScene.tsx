@@ -7,7 +7,8 @@ import { FpsCounter, type FpsSample } from './fps.js';
 import { BLOOM_SMOOTHING, SUN_EMISSIVE, type SceneQuality } from './quality.js';
 import { generateStarField } from './starfield.js';
 import { Bodies } from './bodies/Bodies.js';
-import { attachAnchor, SUN_BODY_ID } from './bodies/anchor-binding.js';
+import { SUN_ANCHOR_ID } from './anchors.js';
+import { attachAnchor } from './bodies/anchor-binding.js';
 import { motionEnabled, sceneFrameloop, useReducedMotion } from './bodies/motion.js';
 import { Belt } from './belt/Belt.js';
 import { CameraRig } from './camera/CameraRig.js';
@@ -132,11 +133,11 @@ function StarField({ count }: { count: number }) {
 function Sun({ glow }: { glow: boolean }) {
   const ref = useRef<Group>(null);
   useEffect(
-    () => attachAnchor({ bodyId: SUN_BODY_ID, radius: SUN_RADIUS, kind: 'star' }, ref.current),
+    () => attachAnchor({ bodyId: SUN_ANCHOR_ID, radius: SUN_RADIUS, kind: 'star' }, ref.current),
     [],
   );
   return (
-    <group ref={ref} name="sun" userData={{ bodyId: SUN_BODY_ID }}>
+    <group ref={ref} name="sun" userData={{ bodyId: SUN_ANCHOR_ID }}>
       <mesh>
         <sphereGeometry args={[SUN_RADIUS, 64, 32]} />
         <meshStandardMaterial

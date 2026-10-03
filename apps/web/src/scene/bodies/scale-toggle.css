@@ -6,7 +6,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: calc(100% - 16px);
+  /* Leaves the bottom-left to the camera breadcrumb (P3-04). */
+  max-width: calc(50% - 12px);
   padding: 4px 6px 4px 10px;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.55);

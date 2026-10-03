@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Body } from '@galactic/protocol';
-import { allAnchors, getAnchor } from '../anchors.js';
+import { allAnchors, getAnchor, SUN_ANCHOR_ID } from '../anchors.js';
 import {
   auToScene,
   FAKE_SPACING,
@@ -13,7 +13,7 @@ import {
 } from '../scale.js';
 import { STAR_SHELL } from '../starfield.js';
 import { DEFAULT_LOOK, DEFAULT_MOON_LOOK, MOON_LOOKS, PLANET_LOOKS } from './appearance.js';
-import { attachAnchor, SUN_BODY_ID } from './anchor-binding.js';
+import { attachAnchor } from './anchor-binding.js';
 import {
   anchorSpecs,
   angleBetween,
@@ -374,6 +374,6 @@ describe('anchors', () => {
   });
 
   it('the Sun registers under the catalogue id', () => {
-    expect(SUN_BODY_ID).toBe(CATALOGUE.find((b) => b.kind === 'star')!.id);
+    expect(SUN_ANCHOR_ID).toBe(CATALOGUE.find((b) => b.kind === 'star')!.id);
   });
 });

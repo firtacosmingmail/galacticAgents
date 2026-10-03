@@ -12,9 +12,6 @@ import { registerAnchor, type BodyAnchor } from '../anchors.js';
  */
 export type AnchorBinding = Omit<BodyAnchor, 'object'>;
 
-/** The catalogue Sun's id (migration 0005): the Sun registers under it, like every other body. */
-export const SUN_BODY_ID = 'b-sun';
-
 /** Registers `object` as `binding.bodyId`'s anchor; returns the cleanup (a no-op without an object). */
 export function attachAnchor(binding: AnchorBinding, object: Object3D | null): () => void {
   if (!object) return () => {};
