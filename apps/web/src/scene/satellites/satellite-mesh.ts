@@ -9,7 +9,7 @@ import {
   type Matrix4,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { BEAM } from './look.js';
+import { BEAM, beamProfile } from './look.js';
 import type { SatelliteFrame } from './director.js';
 
 /**
@@ -48,17 +48,16 @@ export function satelliteGeometry(): BufferGeometry {
 
 /**
  * The beam: an open cone, apex at the origin, base one unit down (−y) with radius 1, brightest at
- * the apex (vertex colours fade to `BEAM.baseFade` at the base). Scaled per frame to reach the
- * body's surface.
+ * the apex: the vertex colours follow `beamProfile` down `BEAM.segments` rings (a steep falloff to
+ * `BEAM.baseFade` at the base). Scaled per frame to reach the body's surface.
  */
 export function beamGeometry(): BufferGeometry {
-  const cone = new ConeGeometry(1, 1, 20, 1, true);
+  const cone = new ConeGeometry(1, 1, 20, BEAM.segments, true);
   cone.translate(0, -0.5, 0);
   const pos = cone.getAttribute('position');
   const colors = new Float32Array(pos.count * 3);
   for (let i = 0; i < pos.count; i++) {
-    const along = -pos.getY(i); // 0 at the apex, 1 at the base
-    const v = 1 + (BEAM.baseFade - 1) * along;
+    const v = beamProfile(-pos.getY(i)); // along: 0 at the apex, 1 at the base
     colors.set([v, v, v], i * 3);
   }
   cone.setAttribute('color', new Float32BufferAttribute(colors, 3));
