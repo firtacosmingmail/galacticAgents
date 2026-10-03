@@ -1,11 +1,12 @@
-import type {
-  Body,
-  BodyChoice,
-  BodyOccupancy,
-  BodyRequest,
-  Id,
-  Project,
-  Task,
+import {
+  asteroidSpec,
+  type Body,
+  type BodyChoice,
+  type BodyOccupancy,
+  type BodyRequest,
+  type Id,
+  type Project,
+  type Task,
 } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
@@ -198,84 +199,11 @@ export function describeRefusal(choice: Exclude<BodyChoice, { ok: true }>): stri
 // Procedural asteroids (decision 1: unlimited, generated as needed)
 // ---------------------------------------------------------------------------
 
-/** A small deterministic PRNG (mulberry32): the same seed always gives the same asteroid. */
-function prng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-const ONSETS = [
-  '',
-  'b',
-  'c',
-  'd',
-  'f',
-  'g',
-  'k',
-  'l',
-  'm',
-  'n',
-  'p',
-  'r',
-  's',
-  't',
-  'v',
-  'z',
-  'th',
-  'kr',
-  'st',
-];
-const VOWELS = ['a', 'e', 'i', 'o', 'u', 'ae', 'io'];
-const CODAS = ['', '', 'n', 'r', 's', 'l', 'x'];
-
-/** The fixed seed of the belt: asteroid `n` is derived from it and `n` alone. */
-export const BELT_SEED = 0x5eed_2026;
-
-export interface AsteroidSpec {
-  id: Id;
-  name: string;
-  meta: {
-    number: number;
-    seed: number;
-    /** Decorative orbit in the belt (TECHNOLOGY §2 scene; corner case 26): AU, radians, radians. */
-    orbit: { radius: number; phase: number; inclination: number };
-  };
-}
-
 /**
- * Asteroid number `n` of the belt: id, name ("(n) Name", after minor-planet designations) and
- * orbit, all a pure function of `n` — a replayed log or a second server builds the same belt.
+ * The generator itself (mulberry32, the belt seed, `asteroidSpec(n)`) lives in `@galactic/protocol`
+ * since P3-03, so the web client draws the decorative belt from the same seed and ranges.
  */
-export function asteroidSpec(n: number): AsteroidSpec {
-  const seed = (BELT_SEED ^ Math.imul(n, 0x9e3779b1)) >>> 0;
-  const rand = prng(seed);
-  const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)]!;
-  const syllables = 2 + Math.floor(rand() * 2);
-  let word = '';
-  for (let i = 0; i < syllables; i++) word += pick(ONSETS) + pick(VOWELS);
-  word += pick(CODAS);
-  const name = `(${n}) ${word[0]!.toUpperCase()}${word.slice(1)}`;
-  const round = (x: number) => Math.round(x * 1000) / 1000;
-  return {
-    id: `b-asteroid-${n}`,
-    name,
-    meta: {
-      number: n,
-      seed,
-      orbit: {
-        radius: round(2.2 + rand() * 1.1),
-        phase: round(rand() * 2 * Math.PI),
-        inclination: round((rand() - 0.5) * 0.3),
-      },
-    },
-  };
-}
+export { BELT_SEED, asteroidSpec, type AsteroidSpec } from '@galactic/protocol';
 
 /** The next asteroid number: one past the highest generated so far. */
 export function nextAsteroidNumber(ctx: Reader): number {
