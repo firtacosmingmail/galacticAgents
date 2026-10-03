@@ -16,7 +16,15 @@ import { useAppStore } from '../../state/store.js';
 import { bodyName, outlineBody, selectionBody } from './body-action.js';
 import { ClickTracker } from './click.js';
 import { pickBodies, pixelScale, type PickResult } from './pick.js';
-import { outlineMeshes, sameMeshes } from './outline.js';
+import {
+  bodyInView,
+  depthPassWithoutDecor,
+  outlineMeshes,
+  sameMeshes,
+  viewScratch,
+  type OutlineDepthPassOwner,
+} from './outline.js';
+import { DECOR_LAYER } from '../layers.js';
 import { activateBody, usePickingStore, type Point } from './store.js';
 import { noteUserCameraInput } from './sync.js';
 
@@ -285,7 +293,14 @@ function HighlightRing({
     ring.scale.setScalar(Math.max(anchor.radius * RING_SCALE, RING_MIN_PX * perPx));
   });
   return (
-    <mesh ref={ref} visible={false} renderOrder={10} frustumCulled={false} name="pick-highlight">
+    <mesh
+      ref={ref}
+      visible={false}
+      renderOrder={10}
+      frustumCulled={false}
+      name="pick-highlight"
+      layers={DECOR_LAYER}
+    >
       <ringGeometry args={[0.95, 1, 96]} />
       <meshBasicMaterial
         color={color}
@@ -303,6 +318,10 @@ function HighlightRing({
  * Keeps the outline effect's selection on the outlined body's meshes (LOD-proof, per frame). A
  * recreated effect (the composer remounted) gets the selection again even if the meshes are the
  * same.
+ *
+ * Cost (P3-08): a non-empty selection re-renders the scene into the effect's depth pass every
+ * frame. So the selection is emptied while the body is off screen (`bodyInView`), and the depth
+ * pass leaves out the decorations (`depthPassWithoutDecor`, `layers.ts`).
  */
 export function OutlineSync({
   effect,
@@ -316,11 +335,17 @@ export function OutlineSync({
     meshes: [],
   });
   const invalidate = useThree((s) => s.invalidate);
-  useFrame(() => {
+  const [scratch] = useState(viewScratch);
+  useFrame((state) => {
     const outline = effect.current;
     if (!outline) return;
+    depthPassWithoutDecor(outline as unknown as Partial<OutlineDepthPassOwner>);
     const anchor = bodyId ? getAnchor(bodyId) : undefined;
-    const meshes = anchor ? outlineMeshes(anchor.object, anchor.bodyId) : [];
+    // Off screen, nothing to outline: an empty selection skips the effect's passes (P3-08).
+    const meshes =
+      anchor && bodyInView(state.camera, anchor.object, anchor.radius, scratch)
+        ? outlineMeshes(anchor.object, anchor.bodyId)
+        : [];
     const was = current.current;
     if (was.effect === outline && sameMeshes(meshes, was.meshes)) return;
     current.current = { effect: outline, meshes };

@@ -5,6 +5,7 @@ import { useAppStore } from '../../state/store.js';
 import { getAnchor } from '../anchors.js';
 import { anchorPosition } from '../camera/store.js';
 import { pixelScale } from '../picking/pick.js';
+import { DECOR_LAYER } from '../layers.js';
 import { independentMoons } from './label-model.js';
 
 /**
@@ -56,7 +57,13 @@ function OwnProjectRing({ bodyId }: { bodyId: string }) {
     );
   });
   return (
-    <mesh ref={ref} visible={false} frustumCulled={false} name={`own-project:${bodyId}`}>
+    <mesh
+      ref={ref}
+      visible={false}
+      frustumCulled={false}
+      name={`own-project:${bodyId}`}
+      layers={DECOR_LAYER}
+    >
       <ringGeometry args={[0.9, 1, 64]} />
       <meshBasicMaterial
         color={OWN_PROJECT_RING.color}
