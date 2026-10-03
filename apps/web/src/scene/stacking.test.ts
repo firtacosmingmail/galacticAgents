@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * The scene area's stacking order and the labels' pointer handling, read from the stylesheets
  * (jsdom applies no CSS): canvas < domain labels < scene chrome < hover label < popover, and the
- * labels never take the pointer (P3-07).
+ * labels never take the pointer (P3-07); a finished label's text stays readable.
  */
 const css = (file: string) => readFileSync(resolve(import.meta.dirname, file), 'utf8');
 const sheets = [
@@ -59,5 +59,61 @@ describe('scene stacking order', () => {
     expect(rule('.scene-label')['pointer-events']).toBe('none');
     const anyAuto = sheets[3]!.match(/pointer-events:\s*(?!none)\w+/g);
     expect(anyAuto).toBeNull();
+  });
+});
+
+type Rgb = [number, number, number];
+
+function color(value: string): { rgb: Rgb; alpha: number } {
+  const hex = /^#([\da-f]{6})$/i.exec(value)?.[1];
+  if (hex) return { rgb: [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)) as Rgb, alpha: 1 };
+  const rgba = /^rgba\(([^)]+)\)$/.exec(value)?.[1];
+  if (!rgba) throw new Error(`unparsed colour ${value}`);
+  const [r, g, b, a] = rgba.split(',').map(Number);
+  return { rgb: [r!, g!, b!], alpha: a! };
+}
+
+const over = (top: string, under: Rgb): Rgb => {
+  const { rgb, alpha } = color(top);
+  return rgb.map((c, i) => c * alpha + under[i]! * (1 - alpha)) as Rgb;
+};
+
+function luminance(rgb: Rgb): number {
+  const [r, g, b] = rgb.map((c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+
+const contrast = (a: Rgb, b: Rgb) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+};
+
+describe('finished labels: dimmer, still readable (WCAG AA, 4.5:1)', () => {
+  // The label's background over the scene's own background.
+  const scene = color(rule('.pnl-scene').background!).rgb;
+  const label = over(rule('.scene-label').background!, scene);
+
+  it('no opacity on a finished label (it would dim the text below AA)', () => {
+    expect(rule('.scene-label.tone-done').opacity).toBeUndefined();
+  });
+
+  it('title, state pill and "part of" line keep at least 4.5:1', () => {
+    const title = color(rule('.scene-label.tone-done').color!).rgb;
+    expect(contrast(title, label)).toBeGreaterThanOrEqual(4.5);
+    const pill = rule('.scene-label.tone-done .scene-label-state');
+    expect(contrast(color(pill.color!).rgb, over(pill.background!, label))).toBeGreaterThanOrEqual(
+      4.5,
+    );
+    const part = color(rule('.scene-label-part').color!).rgb;
+    expect(contrast(part, label)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('and still dimmer than an open label', () => {
+    const open = color(rule('.scene-label').color!).rgb;
+    const done = color(rule('.scene-label.tone-done').color!).rgb;
+    expect(luminance(done)).toBeLessThan(luminance(open));
   });
 });

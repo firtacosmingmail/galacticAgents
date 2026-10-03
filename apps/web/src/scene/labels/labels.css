@@ -120,10 +120,19 @@
     animation: none;
   }
 }
-/* finished work and "moved to …" markers recede */
+/*
+ * Finished work and "moved to …" markers recede: a dashed, fainter frame, a fainter pill and a
+ * greyer title. Never `opacity` on the label: its text (title, pill, "part of") keeps at least
+ * 4.5:1 against the label's background (stacking.test.ts checks it).
+ */
 .scene-label.tone-done {
-  opacity: 0.6;
   border-style: dashed;
+  border-color: rgba(120, 140, 190, 0.22);
+  color: #aab2c6;
+}
+.scene-label.tone-done .scene-label-state {
+  color: #9ea6bb;
+  background: rgba(138, 145, 166, 0.1);
 }
 .scene-label.is-moved .scene-label-title {
   font-style: italic;
@@ -131,6 +140,5 @@
 /* the selected agent's body: the panel's blue */
 .scene-label.is-selected {
   border-color: #7fb2ff;
-  opacity: 1;
   z-index: 1;
 }
