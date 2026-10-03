@@ -7,9 +7,9 @@ Desktop notifications in the browser, all under `apps/web/src/panel/notification
 | File | What it does |
 | --- | --- |
 | `notifier.ts` | `createNotifier({token})`. It folds every stream message through the protocol's `notificationOf` after the store has applied it, so names come from the updated world. On a snapshot it backfills `GET /api/notifications?after=`. `showNotification` creates the `Notification`, using the notification id as its `tag`, and handles the click. |
-| `ledger.ts` | A per-browser ledger in `localStorage` (`galactic.notifications.ledger`): `{logId, seq, ids}`, holding the last 500 ids. Every read goes to storage, so tabs share it. If storage fails, it falls back to memory. |
-| `prefs.ts` | A zustand store `useNotificationPrefs` saved in `localStorage` (`galactic.notifications.prefs`): `enabled` (the user's opt-in), `kinds` (one boolean per `NotificationKind`, all on by default), and `permission` (`default` / `granted` / `denied` / `unsupported`). `enable()` calls `Notification.requestPermission()` only when the permission is still `default`, and only the Enable button's click calls it. |
-| `focus.ts` | `focusFor(world, target)` (pure) and `focusTarget(target)`, which focuses the window, navigates, and scrolls the inbox into view when needed. |
+| `ledger.ts` | A per-browser ledger in `localStorage` (`galactic.notifications.ledger`): `{logId, seq, ids}`, holding the last 500 ids. Every read goes to storage, so tabs share it. If storage cannot be read, it falls back to memory; once a write throws (quota, private mode) the memory copy wins for the rest of the page life, since storage then holds a stale ledger. |
+| `prefs.ts` | A zustand store `useNotificationPrefs` saved in `localStorage` (`galactic.notifications.prefs`): `enabled` (the user's opt-in), `kinds` (one boolean per `NotificationKind`, all on by default), and `permission` (`default` / `granted` / `denied` / `unsupported`). `enable()` calls `Notification.requestPermission()` only when the permission is still `default`, and only the Enable button's click calls it. It follows another tab's change (a `storage` listener for its key), and every show/suppress decision reads the stored preferences at decision time (`currentPrefs`), so a tab whose event has not arrived yet still decides on what the user just chose. |
+| `focus.ts` | `focusFor(world, target)` (pure) and `focusTarget(target)`, which focuses the window, navigates, and scrolls the inbox into view when needed (deferred a frame, retried twice, so it works after navigating from `/settings`). |
 | `NotificationSettings.tsx` | A self-contained settings block: browser status, Enable / Turn off / Send a test, and eight per-kind checkboxes. |
 | `NotificationsControl.tsx` | The top bar button "Notifications: on/off/blocked/unavailable". It opens a popover with `NotificationSettings`, and Escape or a click outside closes it. |
 | `notifications.css`, `index.ts`, `fake-notification.ts` | Styles (they reuse the panel's `--pnl-*` tokens and have fallbacks), the exports, and the test double. |
@@ -21,13 +21,14 @@ Desktop notifications in the browser, all under `apps/web/src/panel/notification
   - Ids come from `notificationOf` on both paths: the live stream and the REST backfill.
   - The ledger skips an event whose `seq` is at or below the stored `seq`, and any id already handled. A question has one id however often it reaches the user, so it notifies once.
   - The `tag` makes the OS replace a duplicate rather than stack it.
-  - Two tabs share the ledger, so only one of them notifies.
+  - Two tabs share the ledger, so usually only one of them notifies. This is best effort for tabs racing on the same event (both can read before either writes); the `tag` then makes the OS replace the second copy.
+  - A tab decides (show, or suppress per the current preferences) before it claims an id, and the decision reads the stored preferences, so a tab with stale preferences cannot claim and drop what another tab would have shown.
 - **First sight of a log: no replay.** A fresh browser, cleared storage or a new database (`logId` changed) takes the snapshot as the baseline. Nothing older is notified and nothing is fetched.
 - **Reload, or a reconnect answered with a snapshot.**
   - When the log is the same and the snapshot is past the ledger's `seq`, the client backfills `after=<ledger seq>`: pages of 100, at most 10 pages.
   - Only notifications at most 24 h old are shown. The server already leaves out questions answered meanwhile.
   - At most 5 are shown one by one, chosen permission first, then question, then interrupted, then the rest, newest first. Anything beyond that becomes one summary notification, "N more updates while the page was closed".
-  - The ledger's `seq` moves forward before the fetch, so a reload during a backfill loses that backfill rather than notifying twice.
+  - The ledger's `seq` moves forward before the fetch, so a reload during a backfill loses that backfill rather than notifying twice. Likewise a backfill page that fails (network, a non-2xx reply, an unparseable body) drops the rest of the backfill, by design: `seq` has already advanced and it is not retried.
 - **While off** (not enabled, browser refused, or unsupported):
   - Nothing is shown and no backfill is fetched.
   - The ledger still advances, so turning notifications on later notifies only what happens from then on.
@@ -84,12 +85,11 @@ Desktop notifications in the browser, all under `apps/web/src/panel/notification
 
 - **Suppress while focused.** Not done (§8 question above).
 - **Service-worker notifications** (needed by some mobile browsers, which refuse `new Notification`) and phone push come with Phase 7's PWA. The constructor is wrapped in try/catch, so those browsers simply show nothing.
-- **Cross-tab live sync of the preferences.** Another tab's change is read on its next reload (`useNotificationPrefs.reload` exists; there is no `storage` event listener yet).
 - **Backfill on a reconnect while the page is closed beyond 24 h** shows nothing older. The inbox still lists every open question.
 
 ## Tests
 
-`apps/web/src/panel/notifications/notifier.test.ts` (15) and `NotificationSettings.test.tsx` (5), Vitest with jsdom and a fake `Notification` global:
+`apps/web/src/panel/notifications/notifier.test.ts` (20) and `NotificationSettings.test.tsx` (5), Vitest with jsdom and a fake `Notification` global:
 
 - each of the seven trigger events notifies exactly once, with a title and body;
 - a question escalated, reassigned and escalated again notifies once;
@@ -98,6 +98,10 @@ Desktop notifications in the browser, all under `apps/web/src/panel/notification
 - a resumed stream that repeats events causes no duplicates;
 - a reload backfills only what is new, and a second reload does nothing;
 - a second tab does not notify again;
+- a tab with stale preferences decides on what another tab just saved (no claim-and-drop), and follows the `storage` event;
+- once storage refuses writes, the memory ledger wins: no repeats;
+- a shown notification is held until it closes;
+- the inbox scroll waits for the panel to render after the navigation;
 - the backfill caps: the 24 h age limit, 5 shown in importance order, and the summary;
 - a kind switched off is suppressed and marked handled;
 - while off, the cursor advances, and after enabling only new events notify;
