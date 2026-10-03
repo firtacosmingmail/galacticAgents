@@ -41,7 +41,7 @@ Desktop notifications in the browser, all under `apps/web/src/panel/notification
   - The backfill summary also opens the Harmonizer with the inbox in view.
 - Notifications show even while the panel's tab is focused (see Deferred).
 
-## Proposed SPEC text
+## Proposed SPEC text (recorded as SPEC decision 59 and a §8 open question; TECHNOLOGY §6.3 "Desktop notifications")
 
 **SPEC §7, decision 59: Desktop notifications (2026-10-03, P25-07; §4.5).**
 
