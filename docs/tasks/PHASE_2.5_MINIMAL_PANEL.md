@@ -1,7 +1,7 @@
 # Phase 2.5 — Minimal side panel
 
-**Current task:** P25-09, P25-10 (wave 4, branch `p25-wave4-dogfood`) · **Task status:** in progress
-**Phase status:** in progress (8/10 done) — on branch `phase-2.5`
+**Current task:** P25-09 (wave 4, branch `p25-wave4-dogfood`; needs Cosmin's dogfood run) · **Task status:** in progress
+**Phase status:** in progress (9/10 done) — on branch `phase-2.5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -83,7 +83,7 @@ A daily-usable product before any 3D (SPEC decision 19): the spec's side panel i
 - **Acceptance:** exit criteria below met; notes committed.
 
 ### P25-10 — History view (added 2026-10-03)
-- **Status:** in progress · **Depends on:** P25-01, P25-02 · **Parallel with:** P25-09
+- **Status:** done (2026-10-03) · **Depends on:** P25-01, P25-02 · **Parallel with:** P25-09
 - Found while preparing the dogfood run: SPEC §4.2 asks for "a history view of archived work and past questions", and the panel has only the cards' "show archived work" and the inbox's last ten supervisor answers. A `/history` page in the panel's frame: archived and finished projects and tasks (with reopen / unpin, and a link to their agents' transcripts), and past questions (answered, cancelled, withdrawn — who answered, the answer, when), searchable by text and paged over REST.
 - **Acceptance:** archived work can be found and reopened, and any past question with its answer can be found, from the panel alone.
 
