@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { Html } from '@react-three/drei';
 import {
   AdditiveBlending,
   BackSide,
@@ -30,8 +29,9 @@ import { useReducedMotion } from '../motion.js';
 /**
  * The asteroid belt (P3-03): thousands of background rocks in ONE instanced mesh (one draw call,
  * TECHNOLOGY §2.1), and the task-hosting asteroids as individual meshes that stand out (bigger,
- * lighter, a warm emissive and a cyan halo), each with an invisible pick target and a name label,
- * registered in the anchor registry under its `Body.id`.
+ * lighter, a warm emissive and a cyan halo), each with an invisible pick target, registered in the
+ * anchor registry under its `Body.id`. Their labels (the task and its state) are the scene's
+ * domain labels (P3-07, `labels/`), drawn in one DOM layer for every body.
  *
  * The rock count is the tier's `beltRocks` (decision 51), passed in by `SolarScene` with the rest
  * of the quality table.
@@ -63,23 +63,11 @@ export function Belt({ rocks }: { rocks: number }) {
   );
   useEffect(() => () => Object.values(shapes).forEach((g) => g.dispose()), [shapes]);
 
-  // The labels' DOM layer, fixed from the start: drei's `Html` otherwise appends to the event
-  // layer once the events connect, and that switch remounts its root during a render (React
-  // warns, and a label can stay empty).
-  const layer = useThree((s) => s.gl.domElement.parentNode as HTMLElement | null);
-  const labels = useMemo(() => (layer ? { current: layer } : undefined), [layer]);
-
   return (
     <group name="asteroid-belt" ref={spin}>
       <BackgroundRocks count={rocks} mode={mode} />
       {asteroids.map((asteroid) => (
-        <TaskAsteroidMesh
-          key={asteroid.bodyId}
-          asteroid={asteroid}
-          mode={mode}
-          shapes={shapes}
-          labels={labels}
-        />
+        <TaskAsteroidMesh key={asteroid.bodyId} asteroid={asteroid} mode={mode} shapes={shapes} />
       ))}
     </group>
   );
@@ -112,25 +100,14 @@ function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
   );
 }
 
-const LABEL_STYLE = {
-  color: '#cfe9ff',
-  font: '11px/1.2 system-ui, sans-serif',
-  whiteSpace: 'nowrap',
-  textShadow: '0 0 3px #000, 0 0 6px #000',
-  pointerEvents: 'none',
-  userSelect: 'none',
-} as const;
-
 function TaskAsteroidMesh({
   asteroid,
   mode,
   shapes,
-  labels,
 }: {
   asteroid: TaskAsteroid;
   mode: ScaleMode;
   shapes: { rock: BufferGeometry; halo: BufferGeometry; pick: BufferGeometry };
-  labels: { current: HTMLElement } | undefined;
 }) {
   const anchor = useRef<Group>(null);
   useBodyAnchor(anchor, {
@@ -190,15 +167,6 @@ function TaskAsteroidMesh({
       >
         <meshBasicMaterial visible={false} />
       </mesh>
-      <Html
-        {...(labels ? { portal: labels } : {})}
-        center
-        position={[0, TASK_ASTEROID_RADIUS * 2.2, 0]}
-        style={LABEL_STYLE}
-        zIndexRange={[20, 0]}
-      >
-        {asteroid.name}
-      </Html>
     </group>
   );
 }

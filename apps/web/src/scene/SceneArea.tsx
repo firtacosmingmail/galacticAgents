@@ -17,6 +17,7 @@ import { fpsMeterEnabled, type FpsSample } from './fps.js';
 import { sceneQuality } from './quality.js';
 import { ScaleToggle } from './bodies/ScaleToggle.js';
 import { PickingOverlay } from './picking/PickingOverlay.js';
+import { LabelLayer } from './labels/LabelLayer.js';
 import { activateBody, usePickingStore } from './picking/store.js';
 import { useSelectionSync } from './picking/sync.js';
 import './scene.css';
@@ -46,6 +47,9 @@ export function useQualityTier(): QualityTier | undefined {
  * `Escape` closes the picking popover first. The hover label and the popover are drawn here, over
  * the canvas; while the scene is shown, a selection made in the panel flies the camera to the
  * selected agent's body (`useSelectionSync`).
+ *
+ * Labels (P3-07): the domain labels' layer (`LabelLayer`) sits over the canvas, under the hover
+ * label and the popover; the projector inside the canvas positions it.
  */
 export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }) {
   const quality = sceneQuality(useQualityTier());
@@ -71,6 +75,7 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
           />
         </Suspense>
       </SceneErrorBoundary>
+      <LabelLayer />
       <PickingOverlay />
       <CameraBreadcrumb />
       {showFps && <FpsMeter sample={sample} tier={quality.tier} />}
