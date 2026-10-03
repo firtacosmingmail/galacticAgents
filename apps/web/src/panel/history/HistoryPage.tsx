@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type {
   Agent,
   ControlBody,
@@ -28,11 +28,13 @@ import './history.css';
 /**
  * The history view (P25-10; SPEC §4.2 "a history view of archived work and past questions") at
  * `/history`, in the panel's frame: finished and archived projects and tasks, with reopen, pin /
- * unpin and archive-now and links to their agents (decision 53); and past questions — answered
- * or withdrawn — with their kind, origin agent, who answered, the answer and when. One search
+ * unpin and archive-now and links to their agents (decision 53); and past questions — answered,
+ * or withdrawn or ended with their agent — with their kind, origin agent, who answered, the answer and when. One search
  * box drives both lists; each has its own filters and pages back over REST
  * (`GET /api/history/work`, `GET /api/history/questions`). A row shows the stream's current
- * copy of its item when the page has one, so a reopen or a pin shows at once.
+ * copy of its item when the page has one, so a reopen or a pin shows at once. When the stream
+ * sees work finish or a question resolve, the list offers a refresh ("New items") instead of
+ * splicing the row in; a refresh keeps the rows on screen until the new first page arrives.
  */
 export function HistoryPage() {
   const selection = useAppStore((s) => s.selection);
@@ -84,8 +86,43 @@ const WORK_STATES: { value: '' | HistoryWorkState; label: string }[] = [
 /** The controls a history row offers: reopen, pin / unpin and archive now, as the state allows. */
 const HISTORY_ACTIONS: ReadonlySet<CardAction['action']> = new Set(['reopen', 'pin', 'archive']);
 
+const WORK_HISTORY_STATES: ReadonlySet<string> = new Set(['completed', 'failed', 'archived']);
+const QUESTION_HISTORY_STATUSES: ReadonlySet<string> = new Set(['answered', 'cancelled']);
+const workState = (item: { state: string }) => item.state;
+const questionStatus = (item: { status: string }) => item.status;
+
+/**
+ * Calls `onArrive` when the stream moves an item of `records` into one of `states` (work
+ * finishing or being archived, a question resolving) after the page opened. The first snapshot
+ * only sets the baseline: what it holds is what the first page read.
+ */
+function useArrivals<T>(
+  records: Record<string, T>,
+  stateOf: (item: T) => string,
+  states: ReadonlySet<string>,
+  onArrive: () => void,
+) {
+  const snapshots = useAppStore((s) => s.snapshots);
+  const prev = useRef({ records, snapshots });
+  useEffect(() => {
+    const before = prev.current;
+    prev.current = { records, snapshots };
+    if (before.records === records || before.snapshots === 0) return;
+    for (const [id, item] of Object.entries(records)) {
+      const was = before.records[id];
+      const now = stateOf(item);
+      if (states.has(now) && (was === undefined || stateOf(was) !== now)) {
+        onArrive();
+        return;
+      }
+    }
+  }, [records, snapshots, stateOf, states, onArrive]);
+}
+
 function WorkHistory({ search }: { search: string }) {
   const api = useApi();
+  const projects = useAppStore((s) => s.world.projects);
+  const tasks = useAppStore((s) => s.world.tasks);
   const [kind, setKind] = useState<'' | HostKind>('');
   const [state, setState] = useState<'' | HistoryWorkState>('');
   const list = usePaged<HistoryWorkItem>(
@@ -100,6 +137,8 @@ function WorkHistory({ search }: { search: string }) {
       }),
     (i) => `${i.kind}:${i.item.id}`,
   );
+  useArrivals(projects, workState, WORK_HISTORY_STATES, list.markStale);
+  useArrivals(tasks, workState, WORK_HISTORY_STATES, list.markStale);
   return (
     <section className="his-section" aria-label="past work">
       <div className="his-section-head">
@@ -141,6 +180,7 @@ function liveWork(world: WorldState, entry: HistoryWorkItem): CardWork {
 function WorkRow({ entry }: { entry: HistoryWorkItem }) {
   const api = useApi();
   const world = useAppStore((s) => s.world);
+  const nameId = useId();
   const { run, error, busy } = useAction();
   const [confirming, setConfirming] = useState<CardAction | undefined>();
   const work = liveWork(world, entry);
@@ -171,12 +211,14 @@ function WorkRow({ entry }: { entry: HistoryWorkItem }) {
   };
 
   return (
-    <li className="his-row" aria-label={`${work.kind} ${name}`}>
+    <li className="his-row" aria-labelledby={nameId}>
       <div className="his-row-head">
         <span className="his-kind">{work.kind}</span>
         <StatePill state={item.state} />
         {item.pinned && <span className="his-tag">pinned</span>}
-        <span className="his-name">{name}</span>
+        <span className="his-name" id={nameId}>
+          {name}
+        </span>
       </div>
       <dl className="his-facts">
         {project && <Fact term={work.kind === 'task' ? 'project' : 'part of'}>{project.name}</Fact>}
@@ -250,6 +292,7 @@ function AgentLink({ agent, earlier }: { agent: Agent; earlier: boolean }) {
 
 function QuestionHistory({ search }: { search: string }) {
   const api = useApi();
+  const records = useAppStore((s) => s.world.questions);
   const [kind, setKind] = useState<'' | QuestionKind>('');
   const [status, setStatus] = useState<'' | HistoryQuestionStatus>('');
   const list = usePaged<HistoryQuestion>(
@@ -264,11 +307,12 @@ function QuestionHistory({ search }: { search: string }) {
       }),
     (i) => i.question.id,
   );
+  useArrivals(records, questionStatus, QUESTION_HISTORY_STATUSES, list.markStale);
   return (
     <section className="his-section" aria-label="past questions">
       <div className="his-section-head">
         <h2 className="his-title">Past questions</h2>
-        <p className="his-hint">Answered and withdrawn, newest first.</p>
+        <p className="his-hint">Answered, withdrawn or ended with their agent, newest first.</p>
         <span className="pnl-spacer" />
         <Select label="Question kind" value={kind} onChange={setKind}>
           <option value="">any kind</option>
@@ -276,9 +320,9 @@ function QuestionHistory({ search }: { search: string }) {
           <option value="permission">permissions</option>
         </Select>
         <Select label="Question status" value={status} onChange={setStatus}>
-          <option value="">answered or withdrawn</option>
+          <option value="">answered, withdrawn or ended</option>
           <option value="answered">answered</option>
-          <option value="cancelled">withdrawn</option>
+          <option value="cancelled">withdrawn or ended</option>
         </Select>
         <button type="button" className="secondary" onClick={list.reload}>
           Refresh
@@ -296,16 +340,17 @@ function QuestionHistory({ search }: { search: string }) {
 function QuestionRow({ entry }: { entry: HistoryQuestion }) {
   const world = useAppStore((s) => s.world);
   const q = world.questions[entry.question.id] ?? entry.question;
+  const nameId = useId();
   const answered = q.status === 'answered';
   const tool = q.context.toolCall?.toolName;
   return (
-    <li className="his-row" aria-label={`question ${q.context.text}`}>
+    <li className="his-row" aria-labelledby={nameId}>
       <div className="his-row-head">
         <span className={`his-kind his-kind-${q.kind}`}>{q.kind}</span>
-        <span className="his-tag">
-          {answered ? 'answered' : q.status === 'open' ? 'open again' : 'withdrawn'}
+        <span className="his-tag">{answered ? 'answered' : 'withdrawn or ended'}</span>
+        <span className="his-name" id={nameId}>
+          {q.context.text}
         </span>
-        <span className="his-name">{q.context.text}</span>
       </div>
       <dl className="his-facts">
         <Fact term="asked by">
@@ -323,7 +368,7 @@ function QuestionRow({ entry }: { entry: HistoryQuestion }) {
             </Fact>
           </>
         ) : (
-          <Fact term="withdrawn">
+          <Fact term="withdrawn or ended">
             <When at={q.updatedAt} />
           </Fact>
         )}
@@ -361,6 +406,19 @@ function ListBody<T extends { cursor: string }>({
     );
   return (
     <>
+      {list.stale && (
+        <p className="his-fresh" role="status">
+          New items —{' '}
+          <button
+            type="button"
+            className="secondary"
+            disabled={list.refreshing}
+            onClick={list.reload}
+          >
+            refresh
+          </button>
+        </p>
+      )}
       {list.items.length === 0 ? (
         <p className="his-muted">{empty}</p>
       ) : (
