@@ -1,7 +1,7 @@
 # Phase 3 — Solar system scene
 
-**Current task:** P3-09 (added to wave 3, branch `p3-wave3-picking-lod`) · **Task status:** in progress
-**Phase status:** in progress (6/9 done) — on branch `phase-3`
+**Current task:** P3-07 (wave 4, after wave 3 is merged into `phase-3`) · **Task status:** todo
+**Phase status:** in progress (7/9 done) — on branch `phase-3`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -82,7 +82,7 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 - **Acceptance:** exit criteria numbers recorded.
 
 ### P3-09 — Earth with its real continents (added 2026-10-03)
-- **Status:** in progress · **Depends on:** P3-02, P3-06 · **Parallel with:** —
+- **Status:** done (2026-10-03) · **Depends on:** P3-02, P3-06 · **Parallel with:** —
 - Cosmin, after looking at the scene: "Planet Earth does not look like Earth." Earth's procedural surface gets the real coastlines: a small equirectangular land/sea mask generated once from public-domain Natural Earth data (script and source recorded), committed as a compact data file, and used by the surface painter (colour by land/sea, latitude biomes and ice caps, noise for texture; the detail map's ocean gloss follows the mask) at every LOD level and tier, in the worker and the main-thread fallback alike.
 - **Acceptance:** the continents are recognisable at the close-up level on every tier; the mask adds at most ~20 kB to the scene chunk and nothing to the panel's first chunk; the licence is recorded.
 

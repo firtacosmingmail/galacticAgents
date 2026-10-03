@@ -15,4 +15,6 @@ An independent review found no blocker: every body → selection case maps right
 
 Open for Cosmin (exit criteria, recorded in P3-08): 60 fps at "high" on the Mac, ≥ 30 fps at "mobile" in Safari on the phone over the LAN (and whether the 30 fps cap feels smooth), taps on the phone. Open question (SPEC §8): a per-device quality tier.
 
-Gates on the merged branch: build, typecheck, lint, format:check green; protocol 67, server 842 (+1 skipped), web 417.
+P3-09 (added after Cosmin's look at the scene): Earth painted from a 1024×512 land/sea mask rasterised from public-domain Natural Earth 1:50m land (+13.6 kB to the scene chunk, nothing to the panel's), with latitude biomes, desert regions and ice; checked by 30 tests (known land/sea points, orientation against a real `SphereGeometry`, other bodies byte-identical) and headless screenshots. While merging it, two real-git server tests timed out at Vitest's 5 s default on a machine loaded by a stray headless Chrome; the server suite now has a 20 s test timeout.
+
+Gates on the merged branch: build, typecheck, lint, format:check green; protocol 67, server 842 (+1 skipped), web 447.
