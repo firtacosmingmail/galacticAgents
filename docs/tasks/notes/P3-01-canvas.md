@@ -118,7 +118,7 @@ Screenshots showed the star field and the bloomed Sun, and the mobile glow sprit
 
 1. `pnpm dev` (or `pnpm build && pnpm start`), then open the panel in Chrome or Safari on the Mac.
 2. Settings → Rendering quality → **High** → Save, then go back to the panel. The scene is in the centre. If it isn't, click **Show scene** in the top bar.
-3. Add `?fps=1` to the URL (e.g. `http://localhost:5173/?fps=1`) and reload. A green readout appears at the scene's top-left: `60 fps · 16.7 ms · dpr 2 · high`. The flag is remembered in this browser; `?fps=0` turns it off.
+3. Add `?fps=1` to the URL (e.g. `http://localhost:5173/?fps=1`) and reload. A green readout appears at the scene's top-left: `60 fps · 16.7 ms · dpr 2 · high`. The flag is remembered in this browser; `?fps=0` turns it off. (Until P3-11 the panel's URL rewrite dropped the query before the scene mounted, so this step showed nothing; see `P3-11-fps.md`.)
 4. Check that it holds about 60 (or the display's refresh rate) with the window at full size. `dpr 2` confirms the Retina cap is in effect.
 5. Try **Hide scene**: the scene disappears and the panel works in list mode. In Activity Monitor or the browser's task manager, GPU use drops. Reload: still hidden. **Show scene** brings it back.
 6. Optionally switch the tier to Balanced or Mobile on the settings page, and check the readout's tier and dpr when you return. Mobile has no bloom: a soft sprite glow is used instead.
