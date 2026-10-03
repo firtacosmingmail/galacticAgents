@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { useLayoutEffect, useRef } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Group, Mesh, MeshStandardMaterial, Object3D, PerspectiveCamera, Vector3 } from 'three';
 import { QualityTier, type Body } from '@galactic/protocol';
 import { getAnchor, onAnchorsChanged } from '../anchors.js';
@@ -11,7 +11,8 @@ import { cappedFrameloop, frameDue, FRAME_CAP_SLACK_MS } from '../frame-cap.js';
 import { MOON_LOOKS, PLANET_LOOKS } from './appearance.js';
 import { buildRenderList, planetAnchor, type PlanetItem } from './layout.js';
 import { distanceInRadii, selectLodLevel } from './lod.js';
-import { paintAsync, paintBacklog } from './painter.js';
+import { paintAsync, paintBacklog, setPaintWorkerFactoryForTest } from './painter.js';
+import { FakePaintWorker } from './paint-worker-fake.js';
 import {
   extraOctaves,
   hasRelief,
@@ -377,6 +378,9 @@ describe('near texture cache', () => {
 
 describe('body maps per level, and a tier change', () => {
   const mars = PLANET_LOOKS['Mars']!;
+  // A paint worker (jsdom has none; without one the near maps would be capped).
+  beforeEach(() => setPaintWorkerFactoryForTest(FakePaintWorker.factory()));
+  afterEach(() => setPaintWorkerFactoryForTest(undefined));
 
   it('shows the far map at once, the near maps once painted, and frees them on a tier change', async () => {
     const high = QUALITY_TIERS.high.lod;
