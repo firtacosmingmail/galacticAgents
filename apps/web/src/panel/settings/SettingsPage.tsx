@@ -1,0 +1,61 @@
+import { useAppStore } from '../../state/store.js';
+import { NavLink } from '../Navigation.js';
+import { AccessToken } from './AccessToken.js';
+import { PreflightCheck } from './PreflightCheck.js';
+import { useSettingsData } from './SettingsData.js';
+import { SaveButton, SECTIONS, SectionFrame, useSection, type AnySectionSpec } from './sections.js';
+import './settings.css';
+
+/**
+ * The settings page (P25-08; SPEC §4.6, decision 51) at `/settings`: the runtime check, every
+ * setting with its own Save, the notification toggles, and the access token. The first-run
+ * wizard walks the same editors.
+ */
+export function SettingsPage({ token }: { token: string }) {
+  const data = useSettingsData();
+  const selection = useAppStore((s) => s.selection);
+  return (
+    <main className="set-page" aria-label="settings">
+      <div className="set-page-head">
+        <h1 className="pnl-title">Settings</h1>
+        <NavLink to={{ route: 'panel', selection }} className="pnl-back">
+          ← Back to the panel
+        </NavLink>
+      </div>
+
+      <PreflightCheck />
+
+      {data.status === 'loading' && <p className="set-muted">Loading the settings…</p>}
+      {data.status === 'unavailable' && (
+        <p className="set-note" role="note">
+          This Mission Control has no settings endpoint; update it to edit the settings here.
+        </p>
+      )}
+      {data.status === 'error' && (
+        <p className="set-error" role="alert">
+          Could not read the settings: {data.error}{' '}
+          <button type="button" className="set-secondary" onClick={data.reload}>
+            Try again
+          </button>
+        </p>
+      )}
+      {data.status === 'ready' &&
+        SECTIONS.map((spec) => <PageSection key={spec.field} spec={spec} />)}
+
+      <section className="set-section" aria-label="Notifications">
+        {/* P25-07 mounts NotificationSettings here (the per-type desktop-notification toggles). */}
+        <div className="set-head">
+          <h2 className="set-title">Notifications</h2>
+        </div>
+        <p className="set-muted">Desktop notification toggles appear here.</p>
+      </section>
+
+      <AccessToken token={token} />
+    </main>
+  );
+}
+
+function PageSection({ spec }: { spec: AnySectionSpec }) {
+  const state = useSection(spec);
+  return <SectionFrame state={state} footer={<SaveButton state={state} />} />;
+}

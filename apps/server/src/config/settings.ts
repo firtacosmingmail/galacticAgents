@@ -165,9 +165,7 @@ export class SettingsService {
 
     // The first-run marker (P25-08): stamped once, never moved back.
     const setupCompletedAt =
-      patch.setupCompleted && !this.config.setupCompletedAt
-        ? new Date().toISOString()
-        : undefined;
+      patch.setupCompleted && !this.config.setupCompletedAt ? new Date().toISOString() : undefined;
 
     this.persist(patch, next, policyOnDisk, setupCompletedAt);
     this.apply(patch, next);
