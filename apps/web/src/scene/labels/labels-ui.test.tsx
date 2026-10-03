@@ -153,14 +153,18 @@ describe('LabelLayer (content from the store)', () => {
     expect(entry?.priority).toBe(5);
   });
 
-  it('clicking a label is clicking its body (select + fly; info card for no agent)', () => {
+  it('a label is no click target (picking resolves it); the hovered body\'s label is marked', () => {
     render(<LabelLayer />);
     fireEvent.click(label('b-jupiter'), { clientX: 40, clientY: 30 });
-    expect(selected()).toBe('waykeeper:a-wk-old');
-    expect(useCameraStore.getState().focusedId).toBe('b-jupiter');
-    fireEvent.click(label('b-ast-9'));
-    expect(usePickingStore.getState().popover).toMatchObject({ kind: 'info' });
-    expect(selected()).toBe('waykeeper:a-wk-old');
+    expect(selected()).toBe('harmonizer');
+    expect(useCameraStore.getState().focusedId).toBeUndefined();
+    act(() =>
+      usePickingStore
+        .getState()
+        .setHover({ bodyId: 'b-jupiter', name: 'Jupiter', others: 0, x: 1, y: 1 }),
+    );
+    expect(label('b-jupiter').className).toContain('is-hovered');
+    expect(label('b-io').className).not.toContain('is-hovered');
   });
 
   it('re-measures a label only when what it shows changes, not on every world change', () => {

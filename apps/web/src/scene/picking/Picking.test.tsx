@@ -5,9 +5,10 @@ import { Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Quaternion, Vecto
 import type { OutlineEffect } from 'postprocessing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerAnchor } from '../anchors.js';
+import { labelEntries, registerLabel, setShown, writePosition } from '../labels/registry.js';
 import { useCameraStore } from '../camera/store.js';
 import { useAppStore } from '../../state/store.js';
-import { HARMONIZER } from '../../state/selection.js';
+import { HARMONIZER, selectionKey } from '../../state/selection.js';
 import { pickingWorld } from './fixtures.js';
 import { usePickingStore } from './store.js';
 
@@ -70,8 +71,36 @@ function anchorAt(bodyId: string, x: number, withMesh = false): Object3D {
   return object;
 }
 
-const pointer = (type: 'pointerMove' | 'pointerDown', x: number, y: number, buttons = 0) =>
-  fireEvent[type](canvas, { clientX: x, clientY: y, buttons, pointerId: 1, button: 0 });
+const pointer = (
+  type: 'pointerMove' | 'pointerDown' | 'pointerUp',
+  x: number,
+  y: number,
+  buttons = 0,
+) => fireEvent[type](canvas, { clientX: x, clientY: y, buttons, pointerId: 1, button: 0 });
+
+/** A click on the canvas (press and release at the same point). */
+function click(x: number, y: number): void {
+  pointer('pointerDown', x, y, 1);
+  pointer('pointerUp', x, y);
+}
+
+/** A body's anchor anywhere (radius in world units; the camera at z 10 sees ≈ 72 px per unit). */
+function anchorAtPoint(bodyId: string, at: [number, number, number], radius: number): void {
+  const object = new Object3D();
+  object.position.set(...at);
+  unregister.push(registerAnchor({ bodyId, kind: 'moon', object, radius }));
+}
+
+/** A shown label as the projector leaves it: bottom centre at (x, y), `w` × `h`. */
+function shownLabel(bodyId: string, x: number, y: number, w = 100, h = 20, priority = 2): void {
+  const el = document.createElement('div');
+  unregister.push(registerLabel({ bodyId, el, priority, w, h }));
+  const entry = [...labelEntries()].find((e) => e.bodyId === bodyId)!;
+  writePosition(entry, x, y);
+  setShown(entry, true);
+}
+
+const selected = () => selectionKey(useAppStore.getState().selection);
 
 beforeEach(() => {
   camera = new PerspectiveCamera(45, 800 / 600, 0.1, 1000);
@@ -155,6 +184,58 @@ describe('Picking (canvas side)', () => {
     act(() => useAppStore.getState().select(HARMONIZER));
     frame();
     expect(set).toHaveBeenLastCalledWith([]);
+  });
+});
+
+describe('labels as pick targets (P3-07)', () => {
+  // Jupiter far right (x ≈ 762 px); its label drawn over the middle of the canvas.
+  beforeEach(() => {
+    anchorAt('b-jupiter', 5);
+    shownLabel('b-jupiter', 400, 310); // covers x 350–450, y 290–310
+  });
+
+  it("a click on a label's rectangle is a click on its body", () => {
+    render(<Picking />);
+    frame();
+    click(420, 300);
+    expect(selected()).toBe('waykeeper:a-wk-old');
+    expect(useCameraStore.getState().focusedId).toBe('b-jupiter');
+  });
+
+  it("a moon under a planet's label stays clickable: a body under the pointer wins", () => {
+    anchorAtPoint('b-io', [0, 0, 0], 0.1); // under the label's middle, ≈ 7 px on screen
+    render(<Picking />);
+    frame();
+    click(400, 300);
+    expect(useCameraStore.getState().focusedId).toBe('b-io');
+    // Beside the moon, still on the label: the label's body.
+    click(445, 295);
+    expect(useCameraStore.getState().focusedId).toBe('b-jupiter');
+  });
+
+  it('a drag that starts on a label selects nothing (decision 65)', () => {
+    render(<Picking />);
+    frame();
+    pointer('pointerDown', 420, 300, 1);
+    pointer('pointerMove', 470, 330, 1);
+    pointer('pointerUp', 470, 330);
+    expect(selected()).toBe('harmonizer');
+    expect(useCameraStore.getState().focusedId).toBeUndefined();
+  });
+
+  it("hovering a label hovers its body; a hidden label is no target", () => {
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 420, 300);
+    flushRaf();
+    expect(usePickingStore.getState().hover).toMatchObject({ bodyId: 'b-jupiter', others: 0 });
+    expect(canvas.style.cursor).toBe('pointer');
+    setShown([...labelEntries()].find((e) => e.bodyId === 'b-jupiter')!, false);
+    pointer('pointerMove', 421, 300);
+    flushRaf();
+    expect(usePickingStore.getState().hover).toBeUndefined();
+    click(420, 300);
+    expect(useCameraStore.getState().focusedId).toBeUndefined();
   });
 });
 

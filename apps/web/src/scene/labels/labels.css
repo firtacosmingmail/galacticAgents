@@ -33,12 +33,12 @@
     'Segoe UI',
     sans-serif;
   white-space: nowrap;
-  pointer-events: auto;
-  cursor: pointer;
+  /* Never a pointer target: wheel, drag and click reach the canvas; picking resolves label hits. */
+  pointer-events: none;
   user-select: none;
   will-change: transform;
 }
-.scene-label:hover {
+.scene-label.is-hovered {
   border-color: rgba(200, 215, 255, 0.7);
 }
 .scene-label-line {

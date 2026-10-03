@@ -1,7 +1,7 @@
-import { useLayoutEffect, useMemo, useRef, type MouseEvent } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useAppStore } from '../../state/store.js';
 import { selectionBody } from '../picking/body-action.js';
-import { activateBody } from '../picking/store.js';
+import { usePickingStore } from '../picking/store.js';
 import { bodyLabels, type BodyLabel } from './label-model.js';
 import { registerLabel, updateLabel } from './registry.js';
 import './labels.css';
@@ -14,9 +14,12 @@ import './labels.css';
  * canvas (`LabelProjector.tsx`) writes each label's transform and visibility directly. A label
  * starts hidden until the projector places it.
  *
- * Clicking a label does what clicking its body does (`activateBody`, P3-05). The labels are not
- * in the tab order (the panel's navigation and the scene's `]` / `[` + `Enter` are the keyboard
- * path), and the layer is hidden from assistive technology, which reads the same work in the panel.
+ * The labels take no pointer events (CSS): a wheel, a drag or a click on a label reaches the
+ * canvas, and picking (`Picking.tsx`, `labelUnder`) treats a click on a label as a click on its
+ * body (P3-05) unless a body is under the pointer; the label of the hovered body is highlighted.
+ * The labels are pointer-only extras: not in the tab order (the panel's navigation and the
+ * scene's `]` / `[` + `Enter` are the keyboard path), and the layer is `aria-hidden` — the panel
+ * carries the same work and states for assistive technology.
  *
  * No three.js: this module is in the panel's chunk.
  */
@@ -25,6 +28,7 @@ export function LabelLayer() {
   const projects = useAppStore((s) => s.world.projects);
   const tasks = useAppStore((s) => s.world.tasks);
   const selected = useAppStore((s) => selectionBody(s.world, s.selection));
+  const hovered = usePickingStore((s) => s.hover?.bodyId);
   const labels = useMemo(
     () => bodyLabels({ bodies, projects, tasks }, selected),
     [bodies, projects, tasks, selected],
@@ -32,24 +36,25 @@ export function LabelLayer() {
   return (
     <div className="scene-labels" aria-hidden="true">
       {labels.map((label) => (
-        <SceneLabel key={label.bodyId} label={label} />
+        <SceneLabel key={label.bodyId} label={label} hovered={label.bodyId === hovered} />
       ))}
     </div>
   );
 }
 
-const classes = (label: BodyLabel) =>
+const classes = (label: BodyLabel, hovered: boolean) =>
   [
     'scene-label',
     `tone-${label.tone}`,
     label.selected && 'is-selected',
+    hovered && 'is-hovered',
     label.kind === 'moved' && 'is-moved',
     label.moon && `moon-${label.moon}`,
   ]
     .filter(Boolean)
     .join(' ');
 
-export function SceneLabel({ label }: { label: BodyLabel }) {
+export function SceneLabel({ label, hovered = false }: { label: BodyLabel; hovered?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const { bodyId, title, stateText, moon, partOf, priority, selected } = label;
   useLayoutEffect(() => {
@@ -66,22 +71,8 @@ export function SceneLabel({ label }: { label: BodyLabel }) {
     updateLabel(bodyId, { priority, w: el.offsetWidth, h: el.offsetHeight });
   }, [bodyId, title, stateText, moon, partOf, priority, selected]);
 
-  const onClick = (event: MouseEvent<HTMLDivElement>) => {
-    const area = event.currentTarget.offsetParent?.getBoundingClientRect();
-    activateBody(bodyId, {
-      x: event.clientX - (area?.left ?? 0),
-      y: event.clientY - (area?.top ?? 0),
-    });
-  };
-
   return (
-    <div
-      ref={ref}
-      className={classes(label)}
-      data-body={bodyId}
-      title={tooltip(label)}
-      onClick={onClick}
-    >
+    <div ref={ref} className={classes(label, hovered)} data-body={bodyId}>
       <span className="scene-label-line">
         <span className="scene-label-title">{label.title}</span>
         <span className="scene-label-state">{label.stateText}</span>
@@ -92,14 +83,4 @@ export function SceneLabel({ label }: { label: BodyLabel }) {
       )}
     </div>
   );
-}
-
-function tooltip(label: BodyLabel): string {
-  const extra =
-    label.moon === 'independent'
-      ? ' · a project of its own'
-      : label.partOf !== undefined
-        ? ` · sub-project of ${label.partOf}`
-        : '';
-  return `${label.fullTitle} · ${label.stateText}${extra}`;
 }
