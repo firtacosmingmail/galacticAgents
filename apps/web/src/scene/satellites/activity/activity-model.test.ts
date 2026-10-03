@@ -40,6 +40,7 @@ function frame(
     animated: true,
     presence: 1,
     tint: '#fff',
+    beamTint: [1, 1, 1],
     brightness: 1,
     ...over,
   };

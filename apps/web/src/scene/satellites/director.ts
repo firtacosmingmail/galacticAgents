@@ -22,7 +22,15 @@ import {
   type SatelliteOrbit,
   type SlotHolder,
 } from './orbits.js';
-import { BEAM, SATELLITE_LOOK, satelliteBrightness, satelliteTint } from './look.js';
+import {
+  BEAM,
+  beamTint,
+  SATELLITE_LOOK,
+  satelliteBrightness,
+  satelliteOrbitRate,
+  satelliteScale,
+  satelliteTint,
+} from './look.js';
 import type { SatelliteSpec } from './satellite-model.js';
 import { publishSatellites } from './registry.js';
 
@@ -53,6 +61,10 @@ import { publishSatellites } from './registry.js';
  *   (`PRESENCE` seconds of scale; the leaving satellite stays in `frames` until then); a beam cut
  *   short (the scan ended early, the budget went elsewhere) fades out over `BEAM_FADE_OUT`
  *   instead of popping. Reduced motion makes both instant.
+ * - **State look** (P4-02, `look.ts`): each frame takes its agent's state's tint, pulsing
+ *   brightness, size multiplier and beam colour; each satellite runs its own orbit clock at its
+ *   state's `orbitRate` (a paused satellite holds still where it is, a failed one drifts; a rate
+ *   change never makes it jump), held while it lands.
  */
 export interface SatelliteFrame {
   agentId: Id;
@@ -79,9 +91,11 @@ export interface SatelliteFrame {
   animated: boolean;
   /** 0 → 1: grows in when its agent starts, back to 0 when it ends (`size` includes it). */
   presence: number;
-  /** Colour (CSS) and its multiplier (`look.ts`). */
+  /** Colour (CSS) and its multiplier (`look.ts`; P4-02: per agent state, pulsing). */
   tint: string;
   brightness: number;
+  /** The beam's colour, linear RGB before its gain (`beamTint`). */
+  beamTint: readonly [number, number, number];
 }
 
 /** A body's live centre (written into `out`) and visual radius; `undefined` = not drawn. */
@@ -190,6 +204,13 @@ interface Entry {
   frame: SatelliteFrame;
   /** Where the current flight started (captured on its first frame), by flight start time. */
   flightFrom?: { start: number; point: Vec3Tuple } | undefined;
+  /**
+   * Its own orbit clock (P4-02): seconds of orbit travelled, at its state's `orbitRate` (a paused
+   * satellite holds still, a failed one drifts; landing holds the angle it came down at), last
+   * advanced at `clockAt`. At rate 1 it equals the motion clock.
+   */
+  clock: number;
+  clockAt: number;
 }
 
 const scratch: Vec3Tuple = [0, 0, 0];
@@ -238,6 +259,7 @@ export class SatelliteDirector {
       const key = orbitKeyOf(spec.role, slot);
       const known = this.entries.get(spec.agentId);
       if (known) {
+        this.advanceClock(known, now); // up to now at the old state's orbit rate
         known.spec = spec;
         known.input = input;
         // Taken now, not at the next drawn frame: a flight or landing starts when the world
@@ -282,7 +304,10 @@ export class SatelliteDirector {
           presence: reduced ? 1 : 0,
           tint: satelliteTint(spec),
           brightness: 1,
+          beamTint: beamTint(spec),
         },
+        clock: now,
+        clockAt: now,
       });
     }
     // Ended agents shrink out (at once under reduced motion), then go.
@@ -322,7 +347,7 @@ export class SatelliteDirector {
     const orbit = satelliteOrbit(spec.agentId, spec.role, slot);
     if (!this.options.reducedMotion && e.actor.mode !== 'flying') {
       const current = { ...this.orbitAt(e, now) };
-      orbit.phase = orbitAngle(current, now) - orbit.speed * now;
+      orbit.phase = orbitAngle(current, e.clock) - orbit.speed * e.clock;
       e.orbitFrom = { orbit: current, start: now };
     } else e.orbitFrom = undefined;
     e.orbit = orbit;
@@ -339,6 +364,15 @@ export class SatelliteDirector {
       return e.orbit;
     }
     return blendOrbit(from.orbit, e.orbit, easeInOut(k), e.blended);
+  }
+
+  /** Advances a satellite's orbit clock to `now` at its current rate; returns it. */
+  private advanceClock(e: Entry, now: number): number {
+    const mode = e.actor.mode;
+    const rate = mode === 'landing' || mode === 'landed' ? 0 : satelliteOrbitRate(e.spec);
+    e.clock += (now - e.clockAt) * rate;
+    e.clockAt = now;
+    return e.clock;
   }
 
   private presenceAt(e: Entry, now: number): number {
@@ -367,12 +401,13 @@ export class SatelliteDirector {
     focusBodyId?: Id,
   ): SatelliteFrame[] {
     const reduced = this.options.reducedMotion;
-    const t = reduced ? 0 : now;
     if (this.ordered.some((e) => this.gone(e, now))) {
       const kept = this.ordered.filter((e) => !this.gone(e, now));
       this.setEntries(new Map(kept.map((e) => [e.spec.agentId, e])));
     }
     for (const e of this.ordered) {
+      const clock = this.advanceClock(e, now);
+      const t = reduced ? 0 : clock;
       e.actor = advance(e.actor, e.input, now, { reducedMotion: reduced });
       const view = sampleActor(e.actor, now);
       const f = e.frame;
@@ -380,7 +415,8 @@ export class SatelliteDirector {
       f.bodyId = e.actor.bodyId;
       f.view = view;
       f.tint = satelliteTint(e.spec);
-      f.brightness = satelliteBrightness(e.spec, view, now);
+      f.brightness = satelliteBrightness(e.spec, view, now, reduced);
+      f.beamTint = beamTint(e.spec);
       f.presence = this.presenceAt(e, now);
       const radius = anchors(e.actor.bodyId, scratchCentre);
       if (radius === undefined) {
@@ -399,7 +435,7 @@ export class SatelliteDirector {
         this.placeFlight(e, f, t, view.flight, anchors);
       } else if (e.actor.mode === 'landing' || e.actor.mode === 'landed') {
         e.flightFrom = undefined;
-        const angle = orbitAngle(orbit, reduced ? 0 : e.actor.tween.start);
+        const angle = orbitAngle(orbit, t); // the clock holds while landing
         const r = (orbit.radius + (SURFACE - orbit.radius) * view.landing) * radius;
         orbitOffset(orbit, angle, r, scratch);
         this.place(f, scratch);
@@ -413,7 +449,7 @@ export class SatelliteDirector {
       const look = SATELLITE_LOOK[e.spec.role];
       let size = look.size * radius;
       if (pixelSize) size = Math.max(size, look.minPx * pixelSize(f.position));
-      f.size = Math.min(size, look.maxSize * radius) * f.presence;
+      f.size = Math.min(size, look.maxSize * radius) * f.presence * satelliteScale(e.spec);
       f.beam = view.beam;
       const scan = e.actor.scan;
       if (scan && !reduced)
