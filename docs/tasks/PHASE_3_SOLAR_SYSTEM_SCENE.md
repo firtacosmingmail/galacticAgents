@@ -1,7 +1,7 @@
 # Phase 3 — Solar system scene
 
-**Current task:** P3-08 (device run on Cosmin's Mac and phone, after wave 6 is merged into `phase-3`) · **Task status:** in progress
-**Phase status:** in progress (11/12 done) — on branch `phase-3`
+**Current task:** — (phase complete) · **Task status:** —
+**Phase status:** done (2026-10-03) — 12/12; merged into `main` — on branch `phase-3`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -77,7 +77,7 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 - **Acceptance:** every assigned body shows the right name and state; a state change in the store updates the label within a second.
 
 ### P3-08 — Performance pass and phone test
-- **Status:** in progress · **Depends on:** P3-06, P3-07 · **Parallel with:** —
+- **Status:** done (2026-10-03; Cosmin's look on the Mac and the phone accepted as the device run — its findings became P3-10…P3-12; his fps numbers are recorded when he sends them) · **Depends on:** P3-06, P3-07 · **Parallel with:** —
 - Profile with many assigned bodies and labels; cap simultaneous label updates; verify 60 fps at "high" on the Mac and ≥30 fps at "mobile" in Safari on the phone over LAN (Tailscale not yet needed); record numbers in `docs/tasks/notes/P3-08-perf.md`.
 - **Acceptance:** exit criteria numbers recorded.
 
@@ -104,3 +104,10 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 ## Exit criteria (from the plan)
 
 60 fps on your Mac at "high", ≥30 fps at "mobile" tier in Safari on the phone over the LAN; every assigned body can be clicked and shows the right project/task.
+
+## Exit check (2026-10-03)
+
+- **"Every assigned body can be clicked and shows the right project/task":** met. Picking through the anchor registry selects the right Waykeeper or Steward for every planet, moon and task asteroid (P3-05, decision 65), labels show each body's work and state and follow the store within a second (P3-07, decision 66); both are covered by tests through `<App/>` and by headless-browser checks.
+- **"60 fps on your Mac at 'high', ≥ 30 fps at 'mobile' in Safari on the phone over the LAN":** measured headless on an M3 Pro with a heavy world (11 projects, 30 task asteroids, 42 labels): 60 fps (vsync) on high and balanced in every view, a steady 30 on capped mobile, also 30 in software GL at phone size (P3-08 notes). Cosmin looked at the scene on his Mac and his phone; what he found (planet-sized shadows, the fps meter, the phone's top bar) was fixed in wave 6 (P3-10…P3-12, faster at high than before). He accepted the phase on 2026-10-03 and asked for the merge; his own fps readings (`?show_fps=true`) go into the P3-08 notes' Device runs table when he sends them.
+- Open questions carried forward (SPEC §8): a per-device quality tier (before Phase 7); moved asteroids keeping a marker; notifications while the tab is focused.
+- Gates on `phase-3`: build, typecheck, lint, format:check green; protocol 67, server 845 (+1 skipped), web 549.
