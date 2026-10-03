@@ -68,7 +68,7 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 
 ### P3-06 — LOD and quality setting
 - **Status:** in progress · **Depends on:** P3-02, P3-03 · **Parallel with:** P3-05
-- LOD tiers per body (low-poly at system scale, textured with normal/specular when zoomed); quality setting toggles effects, pixel ratio, belt density; mobile tier defined for the phone.
+- LOD tiers per body (low-poly at system scale, textured with bump/roughness detail when zoomed); quality setting toggles effects, pixel ratio, belt density; mobile tier defined for the phone.
 - **Acceptance:** switching tiers at runtime works; mobile tier ≥30 fps on the phone over LAN.
 
 ### P3-07 — Domain binding and labels
