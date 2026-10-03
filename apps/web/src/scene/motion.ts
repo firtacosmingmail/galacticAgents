@@ -36,6 +36,20 @@ export function useReducedMotion(): boolean {
   return useSyncExternalStore(subscribe, prefersReducedMotion, () => false);
 }
 
+/**
+ * The decorative motion's clock, in seconds: wall time since the first frame that asked for it.
+ * Not R3F's `clock.elapsedTime`, which restarts at 0 whenever the canvas's frame loop changes (a
+ * tier switch to or from the capped mobile loop, the fps meter turned on or off) and would make
+ * every planet jump back to its starting angle. Shared by every body, so the orbits stay in step;
+ * it keeps running while the scene is hidden.
+ */
+let motionOrigin: number | undefined;
+
+export function motionSeconds(now: number = performance.now()): number {
+  motionOrigin ??= now;
+  return (now - motionOrigin) / 1000;
+}
+
 /** Whether the decorative motion runs. */
 export function motionEnabled(reducedMotion: boolean): boolean {
   return !reducedMotion;

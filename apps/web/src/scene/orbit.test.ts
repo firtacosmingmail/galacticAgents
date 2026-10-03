@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { Group, Object3D, Vector3 } from 'three';
 import { orbitPoint, placeOnOrbit } from './orbit.js';
+import { motionSeconds } from './motion.js';
 import { orbitPosition } from './belt/belt-model.js';
 import { auToScene } from './scale.js';
+
+describe('the motion clock', () => {
+  it('is wall time from its first use, whatever the frame loop does', () => {
+    const start = performance.now();
+    const t0 = motionSeconds(start);
+    expect(motionSeconds(start + 2500) - t0).toBeCloseTo(2.5);
+    // It never restarts: a later reading is later still.
+    expect(motionSeconds(start + 4000)).toBeGreaterThan(motionSeconds(start + 2500));
+  });
+});
 
 describe('one orbit convention (planets, moons, belt)', () => {
   it('angle 0 is +x, π/2 is −z: counter-clockwise seen from above', () => {

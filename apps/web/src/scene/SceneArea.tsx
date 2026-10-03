@@ -16,6 +16,9 @@ import { useCameraStore } from './camera/store.js';
 import { fpsMeterEnabled, type FpsSample } from './fps.js';
 import { sceneQuality } from './quality.js';
 import { ScaleToggle } from './bodies/ScaleToggle.js';
+import { PickingOverlay } from './picking/PickingOverlay.js';
+import { activateBody, usePickingStore } from './picking/store.js';
+import { useSelectionSync } from './picking/sync.js';
 import './scene.css';
 
 /** The reason reported when the browser takes the scene's WebGL context away. */
@@ -38,18 +41,24 @@ export function useQualityTier(): QualityTier | undefined {
  * The area takes keyboard focus (a click on the scene gives it focus too) for the camera's
  * shortcuts (P3-04): `]` / `[` next / previous body, `Escape` / `Home` back to the whole system.
  * The breadcrumb over the scene shows where the camera is.
+ *
+ * Picking (P3-05): `Enter` on the area selects the body the camera is on (as a click would);
+ * `Escape` closes the picking popover first. The hover label and the popover are drawn here, over
+ * the canvas; while the scene is shown, a selection made in the panel flies the camera to the
+ * selected agent's body (`useSelectionSync`).
  */
 export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }) {
   const quality = sceneQuality(useQualityTier());
   const [showFps] = useState(fpsMeterEnabled);
   const [sample, setSample] = useState<(FpsSample & { dpr: number }) | undefined>();
+  useSelectionSync();
   return (
     <section
       className="pnl-scene"
       aria-label="solar system"
       data-tier={quality.tier}
       tabIndex={0}
-      aria-keyshortcuts={SCENE_SHORTCUTS}
+      aria-keyshortcuts={`${SCENE_SHORTCUTS} Enter`}
       onKeyDown={onSceneKey}
       onPointerDown={focusScene}
     >
@@ -62,6 +71,7 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
           />
         </Suspense>
       </SceneErrorBoundary>
+      <PickingOverlay />
       <CameraBreadcrumb />
       {showFps && <FpsMeter sample={sample} tier={quality.tier} />}
       <ScaleToggle />
@@ -71,6 +81,7 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
 
 /** The camera's keyboard shortcuts while the scene area has focus (typing in a field is ignored). */
 export function onSceneKey(event: KeyboardEvent<HTMLElement>) {
+  if (pickingKey(event)) return;
   const action = sceneKeyAction({
     key: event.key,
     ctrlKey: event.ctrlKey,
@@ -85,6 +96,29 @@ export function onSceneKey(event: KeyboardEvent<HTMLElement>) {
   if (action === 'back') camera.back();
   else if (action === 'next') camera.next();
   else camera.previous();
+}
+
+/**
+ * Picking's keys (P3-05): `Escape` closes an open popover (before the camera's "back"); `Enter` on
+ * the area itself (not on a button or field inside it) activates the body the camera is focused
+ * on — selects who works there, or shows what it is. True when the key was handled.
+ */
+function pickingKey(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return false;
+  const picking = usePickingStore.getState();
+  if (event.key === 'Escape' && picking.popover) {
+    event.preventDefault();
+    picking.closePopover();
+    event.currentTarget.focus({ preventScroll: true });
+    return true;
+  }
+  if (event.key !== 'Enter' || event.target !== event.currentTarget) return false;
+  const bodyId = useCameraStore.getState().focusedId;
+  if (!bodyId) return false;
+  event.preventDefault();
+  const area = event.currentTarget;
+  activateBody(bodyId, { x: area.clientWidth / 2, y: area.clientHeight / 2 }, { fly: false });
+  return true;
 }
 
 /** The canvas's drag handling may swallow the click's focus: give it to the area explicitly. */
