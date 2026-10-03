@@ -4,6 +4,7 @@ import type { Vec3Tuple } from '../orbit.js';
 import {
   advance,
   createActor,
+  easeInOut,
   sampleActor,
   TIMING,
   type SatelliteActor,
@@ -12,11 +13,14 @@ import {
   type SatelliteView,
 } from './machine.js';
 import {
+  blendOrbit,
+  ORBIT_TWEEN,
   orbitAngle,
   orbitOffset,
   orbitSlots,
   satelliteOrbit,
   type SatelliteOrbit,
+  type SlotHolder,
 } from './orbits.js';
 import { BEAM, SATELLITE_LOOK, satelliteBrightness, satelliteTint } from './look.js';
 import type { SatelliteSpec } from './satellite-model.js';
@@ -38,9 +42,17 @@ import { publishSatellites } from './registry.js';
  * - **Reduced motion**: orbits stand still at their seeded phase, nothing scans, flights and
  *   landings are instant (the machine's `reducedMotion`).
  * - **The animation cap** (`maxAnimated`, corner case 21): flights and landings always animate;
- *   the remaining budget goes to scans and activity archetypes, Waykeepers before Stewards, by
- *   agent id (the focused body's satellites first, when one is given). A satellite past the
- *   budget orbits without its beam or archetype.
+ *   the remaining budget goes to scans and activity archetypes — the focused body's satellites
+ *   first (when one is given), then those that already had it (no pre-emption), then Waykeepers
+ *   before Stewards, by agent id. A satellite past the budget orbits without its beam or
+ *   archetype; a satellite whose body has no anchor takes no budget.
+ * - **Orbits are sticky** (`orbitSlots`): a satellite keeps its slot while it lives on a body, so
+ *   arrivals and departures never move the others; an orbit change that does happen (a role
+ *   change) is blended over `ORBIT_TWEEN` from where the satellite is, not jumped.
+ * - **Fades**: a satellite grows in when its agent starts and shrinks out when it ends
+ *   (`PRESENCE` seconds of scale; the leaving satellite stays in `frames` until then); a beam cut
+ *   short (the scan ended early, the budget went elsewhere) fades out over `BEAM_FADE_OUT`
+ *   instead of popping. Reduced motion makes both instant.
  */
 export interface SatelliteFrame {
   agentId: Id;
@@ -65,6 +77,8 @@ export interface SatelliteFrame {
   sweep: number;
   /** Whether it is within the animation budget this frame. */
   animated: boolean;
+  /** 0 → 1: grows in when its agent starts, back to 0 when it ends (`size` includes it). */
+  presence: number;
   /** Colour (CSS) and its multiplier (`look.ts`). */
   tint: string;
   brightness: number;
@@ -85,6 +99,10 @@ export interface DirectorOptions {
 export const FLIGHT_ARC = 0.18;
 /** Where a landed satellite sits, in body radii. */
 export const SURFACE = 1.03;
+/** Seconds a satellite takes to grow in (agent started) or shrink out (agent ended). */
+export const PRESENCE = 0.4;
+/** Seconds a beam cut short takes to fade out (a scan's own end fade is slower, so never cut). */
+export const BEAM_FADE_OUT = 0.3;
 
 /** Whether `count` satellites take the instanced path. */
 export function instancedPath(count: number, quality: SatelliteQuality): boolean {
@@ -99,30 +117,46 @@ const OPTIONAL_ANIMATED: ReadonlySet<SatelliteMode> = new Set([
   'building',
 ]);
 
+type CapFrame = Pick<SatelliteFrame, 'mode' | 'role' | 'bodyId' | 'animated'> & {
+  visible?: boolean;
+};
+
+/** The budget's passes, in order (hoisted: no allocation per frame). */
+const CAP_PASSES: readonly ((f: CapFrame, had: boolean, focus: Id | undefined) => boolean)[] = [
+  (f, _had, focus) => focus !== undefined && f.bodyId === focus,
+  (_f, had) => had,
+  (f) => f.role !== 'steward',
+  () => true,
+];
+let hadBudget = new Uint8Array(64);
+
 /**
  * The animation budget (pure, in place): sets `animated` on every frame. Flights and landings
- * always; then scans and archetypes in order — the focused body's, Waykeepers', then Stewards'
- * (frames are in agent-id order) — until `cap` is reached.
+ * always; then scans and archetypes in order — the focused body's, those that were animated
+ * before this call (a running scan keeps its budget), Waykeepers', then Stewards' (frames are in
+ * agent-id order) — until `cap` is reached. A frame with `visible: false` (its body has no
+ * anchor) is never animated and takes no budget.
  */
 export function applyAnimationCap(
-  frames: readonly Pick<SatelliteFrame, 'mode' | 'role' | 'bodyId' | 'animated'>[],
+  frames: readonly CapFrame[],
   cap: number,
   focusBodyId?: Id,
 ): number {
+  if (hadBudget.length < frames.length) hadBudget = new Uint8Array(frames.length * 2);
   let used = 0;
-  for (const f of frames) {
-    f.animated = ALWAYS_ANIMATED.has(f.mode);
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i];
+    if (!f) continue;
+    hadBudget[i] = f.animated ? 1 : 0;
+    f.animated = f.visible !== false && ALWAYS_ANIMATED.has(f.mode);
     if (f.animated) used++;
   }
-  const passes: ((f: Pick<SatelliteFrame, 'role' | 'bodyId'>) => boolean)[] = [
-    (f) => focusBodyId !== undefined && f.bodyId === focusBodyId,
-    (f) => f.role !== 'steward',
-    () => true,
-  ];
-  for (const wants of passes) {
-    for (const f of frames) {
+  for (const wants of CAP_PASSES) {
+    for (let i = 0; i < frames.length; i++) {
       if (used >= cap) return used;
-      if (f.animated || !OPTIONAL_ANIMATED.has(f.mode) || !wants(f)) continue;
+      const f = frames[i];
+      if (!f || f.animated || f.visible === false || !OPTIONAL_ANIMATED.has(f.mode)) continue;
+      if (!wants(f, hadBudget[i] === 1, focusBodyId)) continue;
       f.animated = true;
       used++;
     }
@@ -130,11 +164,29 @@ export function applyAnimationCap(
   return used;
 }
 
+interface Presence {
+  from: number;
+  to: number;
+  start: number;
+}
+
 interface Entry {
   spec: SatelliteSpec;
   input: SatelliteInput;
   actor: SatelliteActor;
+  /** The orbit it is going to (or on); `orbitKey` names it (role and slot). */
   orbit: SatelliteOrbit;
+  orbitKey: string;
+  /** An orbit change in progress: blended from `orbit` since `start` (`ORBIT_TWEEN`). */
+  orbitFrom?: { orbit: SatelliteOrbit; start: number } | undefined;
+  /** Scratch for the blended orbit (no allocation per frame). */
+  blended: SatelliteOrbit;
+  presence: Presence;
+  /** Its agent ended: it shrinks out, then is dropped. */
+  leaving: boolean;
+  /** The beam as last drawn and when (the fade-out of a beam cut short). */
+  beamShown: number;
+  beamAt: number;
   frame: SatelliteFrame;
   /** Where the current flight started (captured on its first frame), by flight start time. */
   flightFrom?: { start: number; point: Vec3Tuple } | undefined;
@@ -143,11 +195,15 @@ interface Entry {
 const scratch: Vec3Tuple = [0, 0, 0];
 const scratchCentre: Vec3Tuple = [0, 0, 0];
 
+const orbitKeyOf = (role: AgentRole, slot: number) => `${role}:${slot}`;
+
 export class SatelliteDirector {
   private entries = new Map<Id, Entry>();
+  /** Every satellite's slot and the body it holds it on (sticky slots, `orbitSlots`). */
+  private slotHolders: ReadonlyMap<Id, SlotHolder> = new Map();
   private ordered: Entry[] = [];
   private options: DirectorOptions;
-  /** The frames in agent-id order (the renderers' and the cap's order). */
+  /** The frames in the specs' order (agent id), then those shrinking out (renderers', cap's). */
   frames: SatelliteFrame[] = [];
 
   constructor(options: DirectorOptions) {
@@ -160,11 +216,16 @@ export class SatelliteDirector {
 
   /**
    * The world's satellites changed: new agents get an actor (orbiting their body, no flight in
-   * from anywhere), ended ones are dropped, the others keep their actor and get the new input — a
-   * new body makes the next `update` start a flight.
+   * from anywhere) and grow in; ended ones shrink out and are then dropped; the others keep their
+   * actor, slot and orbit and get the new input — a new body makes the next `update` start a
+   * flight (to the lowest free slot there).
    */
   setSpecs(specs: readonly SatelliteSpec[], now: number): void {
-    const slots = orbitSlots(specs);
+    const reduced = this.options.reducedMotion;
+    const slots = orbitSlots(specs, this.slotHolders);
+    this.slotHolders = new Map(
+      specs.map((s) => [s.agentId, { bodyId: s.bodyId, slot: slots.get(s.agentId) ?? 0 }]),
+    );
     const next = new Map<Id, Entry>();
     for (const spec of specs) {
       const input: SatelliteInput = {
@@ -173,27 +234,37 @@ export class SatelliteDirector {
         archetype: spec.archetype,
         landed: spec.landed,
       };
-      const orbit = satelliteOrbit(spec.agentId, spec.role, slots.get(spec.agentId) ?? 0);
+      const slot = slots.get(spec.agentId) ?? 0;
+      const key = orbitKeyOf(spec.role, slot);
       const known = this.entries.get(spec.agentId);
       if (known) {
         known.spec = spec;
         known.input = input;
         // Taken now, not at the next drawn frame: a flight or landing starts when the world
         // changed, so it ends on time even if no frame is drawn meanwhile.
-        known.actor = advance(known.actor, input, now, {
-          reducedMotion: this.options.reducedMotion,
-        });
-        known.orbit = orbit;
+        known.actor = advance(known.actor, input, now, { reducedMotion: reduced });
+        if (known.orbitKey !== key) this.changeOrbit(known, spec, slot, key, now);
+        if (known.leaving) {
+          known.leaving = false;
+          known.presence = { from: this.presenceAt(known, now), to: 1, start: now };
+        }
         known.frame.role = spec.role;
         next.set(spec.agentId, known);
         continue;
       }
       const actor = createActor(spec.agentId, input, now);
+      const orbit = satelliteOrbit(spec.agentId, spec.role, slot);
       next.set(spec.agentId, {
         spec,
         input,
         actor,
         orbit,
+        orbitKey: key,
+        blended: { ...orbit },
+        presence: { from: reduced ? 1 : 0, to: 1, start: now },
+        leaving: false,
+        beamShown: 0,
+        beamAt: now,
         frame: {
           agentId: spec.agentId,
           role: spec.role,
@@ -208,17 +279,76 @@ export class SatelliteDirector {
           beam: 0,
           sweep: 0,
           animated: false,
+          presence: reduced ? 1 : 0,
           tint: satelliteTint(spec),
           brightness: 1,
         },
       });
     }
+    // Ended agents shrink out (at once under reduced motion), then go.
+    for (const [id, e] of this.entries) {
+      if (next.has(id) || reduced) continue;
+      if (!e.leaving) {
+        e.leaving = true;
+        e.presence = { from: this.presenceAt(e, now), to: 0, start: now };
+      } else if (this.gone(e, now)) continue;
+      next.set(id, e);
+    }
+    this.setEntries(next);
+  }
+
+  /** Forgets every satellite and publishes none (the scene unmounts, or StrictMode rehearses it). */
+  reset(): void {
+    this.slotHolders = new Map();
+    this.setEntries(new Map());
+  }
+
+  private setEntries(next: Map<Id, Entry>): void {
     const changed =
       next.size !== this.entries.size || [...next.keys()].some((id) => !this.entries.has(id));
     this.entries = next;
     this.ordered = [...next.values()];
     this.frames = this.ordered.map((e) => e.frame);
     if (changed) publishSatellites(new Map(this.ordered.map((e) => [e.spec.agentId, e.frame])));
+  }
+
+  /**
+   * A satellite's orbit changes in place (a role change; a body change flies to the new orbit
+   * instead): blended over `ORBIT_TWEEN` from where it is, its phase chosen so its angle carries
+   * on — no jump. Instant during a flight (the flight aims at the new orbit) and under reduced
+   * motion.
+   */
+  private changeOrbit(e: Entry, spec: SatelliteSpec, slot: number, key: string, now: number): void {
+    const orbit = satelliteOrbit(spec.agentId, spec.role, slot);
+    if (!this.options.reducedMotion && e.actor.mode !== 'flying') {
+      const current = { ...this.orbitAt(e, now) };
+      orbit.phase = orbitAngle(current, now) - orbit.speed * now;
+      e.orbitFrom = { orbit: current, start: now };
+    } else e.orbitFrom = undefined;
+    e.orbit = orbit;
+    e.orbitKey = key;
+  }
+
+  /** The orbit to draw at `now` (blended while an orbit change runs). */
+  private orbitAt(e: Entry, now: number): SatelliteOrbit {
+    const from = e.orbitFrom;
+    if (!from) return e.orbit;
+    const k = (now - from.start) / ORBIT_TWEEN;
+    if (k >= 1 || this.options.reducedMotion) {
+      e.orbitFrom = undefined;
+      return e.orbit;
+    }
+    return blendOrbit(from.orbit, e.orbit, easeInOut(k), e.blended);
+  }
+
+  private presenceAt(e: Entry, now: number): number {
+    const p = e.presence;
+    if (this.options.reducedMotion) return p.to;
+    return p.from + (p.to - p.from) * easeInOut((now - p.start) / PRESENCE);
+  }
+
+  private gone(e: Entry, now: number): boolean {
+    return e.leaving && (this.options.reducedMotion || now - e.presence.start >= PRESENCE - 1e-9);
   }
 
   /** The actor of an agent (tests, the debug harness of P4-06). */
@@ -238,6 +368,10 @@ export class SatelliteDirector {
   ): SatelliteFrame[] {
     const reduced = this.options.reducedMotion;
     const t = reduced ? 0 : now;
+    if (this.ordered.some((e) => this.gone(e, now))) {
+      const kept = this.ordered.filter((e) => !this.gone(e, now));
+      this.setEntries(new Map(kept.map((e) => [e.spec.agentId, e])));
+    }
     for (const e of this.ordered) {
       e.actor = advance(e.actor, e.input, now, { reducedMotion: reduced });
       const view = sampleActor(e.actor, now);
@@ -247,6 +381,7 @@ export class SatelliteDirector {
       f.view = view;
       f.tint = satelliteTint(e.spec);
       f.brightness = satelliteBrightness(e.spec, view, now);
+      f.presence = this.presenceAt(e, now);
       const radius = anchors(e.actor.bodyId, scratchCentre);
       if (radius === undefined) {
         f.visible = false;
@@ -258,7 +393,7 @@ export class SatelliteDirector {
       f.target[0] = scratchCentre[0];
       f.target[1] = scratchCentre[1];
       f.target[2] = scratchCentre[2];
-      const orbit = e.orbit;
+      const orbit = this.orbitAt(e, now);
 
       if (e.actor.mode === 'flying' && e.actor.flight && view.flight !== undefined) {
         this.placeFlight(e, f, t, view.flight, anchors);
@@ -278,16 +413,24 @@ export class SatelliteDirector {
       const look = SATELLITE_LOOK[e.spec.role];
       let size = look.size * radius;
       if (pixelSize) size = Math.max(size, look.minPx * pixelSize(f.position));
-      f.size = Math.min(size, look.maxSize * radius);
+      f.size = Math.min(size, look.maxSize * radius) * f.presence;
       f.beam = view.beam;
       const scan = e.actor.scan;
-      f.sweep =
-        scan && !reduced
-          ? BEAM.sweep * Math.sin((2 * Math.PI * (now - scan.start)) / TIMING.scan)
-          : 0;
+      if (scan && !reduced)
+        f.sweep = BEAM.sweep * Math.sin((2 * Math.PI * (now - scan.start)) / TIMING.scan);
+      else if (e.beamShown <= 0) f.sweep = 0; // a fading beam keeps its last swing
     }
     applyAnimationCap(this.frames, this.options.satellites.maxAnimated, focusBodyId);
-    for (const f of this.frames) if (!f.animated || !f.visible) f.beam = 0;
+    for (const e of this.ordered) {
+      // A beam out of the budget, or cut short, fades out at most this fast: it never pops.
+      const f = e.frame;
+      const wanted = f.animated && f.visible ? f.beam : 0;
+      let fading = e.beamShown - Math.max(0, now - e.beamAt) / BEAM_FADE_OUT;
+      if (fading < 1e-6) fading = 0;
+      f.beam = !f.visible || reduced ? 0 : Math.max(0, wanted, fading);
+      e.beamShown = f.beam;
+      e.beamAt = now;
+    }
     return this.frames;
   }
 
@@ -311,7 +454,7 @@ export class SatelliteDirector {
   ): void {
     const flight = e.actor.flight;
     if (!flight) return;
-    const orbit = e.orbit;
+    const orbit = e.orbit; // a flight aims at the new orbit (no blend)
     orbitOffset(orbit, orbitAngle(orbit, t), orbit.radius * f.bodyRadius, scratch);
     const dx = f.target[0] + scratch[0];
     const dy = f.target[1] + scratch[1];

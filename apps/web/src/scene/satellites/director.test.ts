@@ -4,13 +4,16 @@ import type { Vec3Tuple } from '../orbit.js';
 import { QUALITY_TIERS } from '../quality.js';
 import {
   applyAnimationCap,
+  BEAM_FADE_OUT,
   instancedPath,
+  PRESENCE,
   SatelliteDirector,
   SURFACE,
   type AnchorLookup,
   type SatelliteFrame,
 } from './director.js';
 import { TIMING } from './machine.js';
+import { BASE_SHELL, ORBIT_TWEEN, SHELL_STEP } from './orbits.js';
 import { SATELLITE_LOOK } from './look.js';
 import type { SatelliteSpec } from './satellite-model.js';
 import { allSatellites, getSatellite, onSatellitesChanged, publishSatellites } from './registry.js';
@@ -108,16 +111,73 @@ describe('placement', () => {
 });
 
 describe('the satellite list over time', () => {
-  it('keeps actors across list changes, adds new ones, drops ended ones', () => {
+  it('keeps actors across list changes, adds new ones, drops ended ones once shrunk out', () => {
     const d = director();
     d.setSpecs([spec('a-1', 'b-mars'), spec('a-2', 'b-mars')], 0);
     d.update(2, world);
     const actor = d.actor('a-1');
     d.setSpecs([spec('a-1', 'b-mars', 'idle'), spec('a-3', 'b-io')], 3);
     expect(d.actor('a-1')?.seed).toBe(actor?.seed);
-    expect(d.actor('a-2')).toBeUndefined();
     expect(d.actor('a-3')?.mode).toBe('orbiting');
+    // a-2 ended: it shrinks out (still drawn, last), then is gone.
+    expect(d.frames.map((f) => f.agentId)).toEqual(['a-1', 'a-3', 'a-2']);
+    d.update(3 + PRESENCE + 0.01, world);
+    expect(d.actor('a-2')).toBeUndefined();
     expect(d.frames.map((f) => f.agentId)).toEqual(['a-1', 'a-3']);
+  });
+
+  it('grows in when its agent starts and shrinks out when it ends', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars', 'idle')], 0);
+    const [f] = d.update(0, world) as [SatelliteFrame];
+    expect(f.presence).toBe(0);
+    expect(f.size).toBe(0);
+    d.update(PRESENCE / 2, world);
+    expect(f.presence).toBeCloseTo(0.5);
+    d.update(PRESENCE, world);
+    expect(f.presence).toBe(1);
+    const full = f.size;
+    d.setSpecs([], 1);
+    expect(getSatellite('a-1')).toBe(f); // still published while it shrinks
+    d.update(1 + PRESENCE / 2, world);
+    expect(f.size).toBeCloseTo(full / 2);
+    d.update(1 + PRESENCE, world);
+    expect(d.frames).toEqual([]);
+    expect(getSatellite('a-1')).toBeUndefined();
+  });
+
+  it('an agent back before it shrank out grows back from where it was', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars', 'idle')], 0);
+    d.update(1, world);
+    d.setSpecs([], 1);
+    const [f] = d.update(1 + PRESENCE / 2, world) as [SatelliteFrame];
+    const seed = d.actor('a-1')?.seed;
+    d.setSpecs([spec('a-1', 'b-mars', 'idle')], 1 + PRESENCE / 2);
+    d.update(1 + PRESENCE / 2, world);
+    expect(f.presence).toBeCloseTo(0.5);
+    d.update(2 + PRESENCE, world);
+    expect(f.presence).toBe(1);
+    expect(d.actor('a-1')?.seed).toBe(seed);
+  });
+
+  it('reduced motion: satellites appear and disappear at once', () => {
+    const d = director('high', true);
+    d.setSpecs([spec('a-1', 'b-mars', 'idle')], 0);
+    const [f] = d.update(0, world) as [SatelliteFrame];
+    expect(f.presence).toBe(1);
+    d.setSpecs([], 1);
+    expect(d.frames).toEqual([]);
+  });
+
+  it('reset forgets every satellite and publishes none', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars')], 0);
+    expect(getSatellite('a-1')).toBeDefined();
+    d.reset();
+    expect(getSatellite('a-1')).toBeUndefined();
+    d.setSpecs([spec('a-1', 'b-mars')], 1);
+    expect(getSatellite('a-1')).toBeDefined();
   });
 
   it('publishes the frames for the rest of the scene (and later picking)', () => {
@@ -174,6 +234,109 @@ describe('the satellite list over time', () => {
   });
 });
 
+describe('sticky orbits', () => {
+  const W = 'b-mars';
+  /** Each satellite's offset from its body at time `t`. */
+  const offsets = (d: SatelliteDirector, t: number) =>
+    new Map(
+      d
+        .update(t, world)
+        .map((f) => [f.agentId, f.position.map((v, i) => v - (f.target[i] ?? 0))] as const),
+    );
+  const shell = (o: Map<string, readonly number[]>, id: string) =>
+    Math.hypot(...(o.get(id) ?? [])) / 2; // Mars' radius is 2
+  const expectSame = (
+    a: Map<string, readonly number[]>,
+    b: Map<string, readonly number[]>,
+    ids: string[],
+  ) => {
+    for (const id of ids) {
+      expect(b.get(id)).toBeDefined();
+      a.get(id)?.forEach((v, i) => expect(b.get(id)?.[i] ?? NaN).toBeCloseTo(v, 9));
+    }
+  };
+  /** A director that never saw the change, as the reference. */
+  const reference = (specs: SatelliteSpec[], t: number) => {
+    const d = director();
+    d.setSpecs(specs, 0);
+    return offsets(d, t);
+  };
+
+  it('a new Steward spawning moves nobody', () => {
+    const before = [
+      spec('a-w', W, 'idle', 'waykeeper'),
+      spec('a-s2', W, 'idle'),
+      spec('a-s4', W, 'idle'),
+    ];
+    const d = director();
+    d.setSpecs(before, 0);
+    // a-s1 sorts first by id: ranked slots would have pushed a-s2 and a-s4 outward.
+    d.setSpecs([spec('a-s1', W, 'idle'), ...before], 1);
+    const after = offsets(d, 5);
+    expectSame(reference(before, 5), after, ['a-w', 'a-s2', 'a-s4']);
+    expect(shell(after, 'a-s1')).toBeCloseTo(BASE_SHELL + 3 * SHELL_STEP, 6);
+  });
+
+  it('a Waykeeper replaced: the Stewards stay, the new Waykeeper takes the free slot 0', () => {
+    const stewards = [spec('a-s1', W, 'idle'), spec('a-s2', W, 'idle')];
+    const d = director();
+    d.setSpecs([spec('a-w1', W, 'idle', 'waykeeper'), ...stewards], 0);
+    d.setSpecs([spec('a-w2', W, 'idle', 'waykeeper'), ...stewards], 1);
+    const after = offsets(d, 5);
+    const ref = reference([spec('a-w1', W, 'idle', 'waykeeper'), ...stewards], 5);
+    expectSame(ref, after, ['a-s1', 'a-s2']);
+    expect(shell(after, 'a-w2')).toBeCloseTo(BASE_SHELL, 6);
+  });
+
+  it('a Waykeeper arriving after a Steward took slot 0 takes the lowest free slot', () => {
+    const d = director();
+    d.setSpecs([spec('a-s1', W, 'idle')], 0);
+    d.setSpecs([spec('a-s1', W, 'idle'), spec('a-w', W, 'idle', 'waykeeper')], 1);
+    const o = offsets(d, 5);
+    expect(shell(o, 'a-s1')).toBeCloseTo(BASE_SHELL, 6);
+    expect(shell(o, 'a-w')).toBeCloseTo(BASE_SHELL + SHELL_STEP, 6);
+  });
+
+  it('a flight arriving at a crowded body leaves the residents where they were', () => {
+    const residents = [
+      spec('a-w', W, 'idle', 'waykeeper'),
+      spec('a-s3', W, 'idle'),
+      spec('a-s5', W, 'idle'),
+    ];
+    const d = director();
+    d.setSpecs([spec('a-s1', 'b-io', 'idle'), ...residents], 0);
+    d.update(1, world);
+    d.setSpecs([spec('a-s1', W, 'idle'), ...residents], 1); // a-s1's task moved to Mars
+    const t = 1 + TIMING.flight + 1;
+    const after = offsets(d, t);
+    expectSame(
+      reference(residents, t),
+      after,
+      residents.map((r) => r.agentId),
+    );
+    // The newcomer orbits the next free shell.
+    expect(shell(after, 'a-s1')).toBeCloseTo(BASE_SHELL + 3 * SHELL_STEP, 6);
+  });
+
+  it('an orbit change that does happen is blended, not jumped', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', W, 'idle'), spec('a-2', W, 'idle')], 0);
+    const [, f] = d.update(2, world) as [SatelliteFrame, SatelliteFrame];
+    const at: Vec3Tuple = [...f.position];
+    // a-2 becomes a Waykeeper (its orbit's period changes): no jump at the change…
+    d.setSpecs([spec('a-1', W, 'idle'), spec('a-2', W, 'idle', 'waykeeper')], 2);
+    d.update(2, world);
+    expect(dist(f.position, at)).toBeLessThan(1e-9);
+    // …and small steps all the way through the blend.
+    let last: Vec3Tuple = [...f.position];
+    for (let t = 2; t <= 2 + ORBIT_TWEEN + 0.1; t += 1 / 60) {
+      d.update(t, world);
+      expect(dist(f.position, last)).toBeLessThan(0.1);
+      last = [...f.position];
+    }
+  });
+});
+
 describe('scanning beams', () => {
   it('a working satellite beams at its body during a scan, and only then', () => {
     const d = director();
@@ -187,6 +350,36 @@ describe('scanning beams', () => {
     expect(f.beam).toBe(1);
     expect(Math.abs(f.sweep)).toBeLessThanOrEqual(0.2 + 1e-9);
     d.update(scanAt + TIMING.scan + 0.1, world);
+    expect(f.beam).toBe(0);
+  });
+
+  it('a scan cut short (the agent stopped working) fades its beam out instead of popping', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars')], 0);
+    const scanAt = d.actor('a-1')?.nextScanAt ?? NaN;
+    d.update(scanAt, world);
+    const [f] = d.update(scanAt + 1, world) as [SatelliteFrame];
+    expect(f.beam).toBe(1);
+    d.setSpecs([spec('a-1', 'b-mars', 'idle')], scanAt + 1);
+    d.update(scanAt + 1 + BEAM_FADE_OUT / 2, world);
+    expect(f.mode).toBe('orbiting');
+    expect(f.beam).toBeCloseTo(0.5);
+    d.update(scanAt + 1 + BEAM_FADE_OUT, world);
+    expect(f.beam).toBe(0);
+  });
+
+  it('a beam that loses the animation budget fades out too', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars')], 0);
+    const scanAt = d.actor('a-1')?.nextScanAt ?? NaN;
+    d.update(scanAt, world);
+    const [f] = d.update(scanAt + 1, world) as [SatelliteFrame];
+    expect(f.beam).toBe(1);
+    d.setOptions({ satellites: { instanceAbove: 12, maxAnimated: 0 }, reducedMotion: false });
+    d.update(scanAt + 1 + BEAM_FADE_OUT / 2, world);
+    expect(f.animated).toBe(false);
+    expect(f.beam).toBeCloseTo(0.5);
+    d.update(scanAt + 1 + BEAM_FADE_OUT, world);
     expect(f.beam).toBe(0);
   });
 });
@@ -215,6 +408,22 @@ describe('the animation cap', () => {
     const frames = [frame('flying'), frame('flying'), frame('scanning', 'waykeeper')];
     expect(applyAnimationCap(frames, 1)).toBe(2);
     expect(frames.map((f) => f.animated)).toEqual([true, true, false]);
+  });
+
+  it('a running scan keeps its budget against a newcomer (no pre-emption)', () => {
+    const frames = [frame('scanning', 'waykeeper'), { ...frame('scanning'), animated: true }];
+    applyAnimationCap(frames, 1);
+    expect(frames.map((f) => f.animated)).toEqual([false, true]);
+  });
+
+  it('satellites whose body has no anchor take no budget', () => {
+    const frames = [
+      { ...frame('scanning', 'waykeeper'), visible: false },
+      { ...frame('flying'), visible: false },
+      frame('scanning'),
+    ];
+    expect(applyAnimationCap(frames, 1)).toBe(1);
+    expect(frames.map((f) => f.animated)).toEqual([false, false, true]);
   });
 
   it('the focused body gets its share first', () => {

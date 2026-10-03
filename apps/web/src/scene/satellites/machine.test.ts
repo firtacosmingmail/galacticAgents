@@ -235,6 +235,20 @@ describe('reduced motion', () => {
     expect(a.mode).toBe('scanning');
     expect(advance(a, working, a.nextScanAt + 0.1, { reducedMotion: true }).mode).toBe('orbiting');
   });
+
+  it('a flight or landing running when reduced motion turns on ends at once', () => {
+    let a = createActor('a-rm3', idle, 0);
+    a = advance(a, { ...idle, bodyId: 'b-io' }, 1);
+    expect(a.mode).toBe('flying');
+    a = advance(a, { ...idle, bodyId: 'b-io' }, 1.2, { reducedMotion: true });
+    expect(a.mode).toBe('orbiting');
+    expect(a.bodyId).toBe('b-io');
+    expect(a.tween.start).toBe(1.2); // arrived when asked, not at the flight's planned end
+    a = advance(a, { ...idle, bodyId: 'b-io', landed: true }, 2);
+    expect(a.mode).toBe('landing');
+    a = advance(a, { ...idle, bodyId: 'b-io', landed: true }, 2.1, { reducedMotion: true });
+    expect(a.mode).toBe('landed');
+  });
 });
 
 describe('helpers', () => {

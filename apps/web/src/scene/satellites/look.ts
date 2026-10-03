@@ -22,22 +22,43 @@ export const SATELLITE_LOOK: Readonly<
 };
 
 /**
- * The scanning beam: a cone from the satellite to its body's surface, additive, brighter at the
- * satellite. `color` is linear RGB; with bloom (`bloomGain`) its luminance passes the bloom
- * threshold (1.0, `quality.ts`) only near the apex, so the beam glows there and stays a thin
- * translucent ray along its length (front faces only: an additive double-sided cone doubled it);
- * without a composer (the mobile tier, `plainGain`) it is a soft translucent cone. `width` is the footprint's radius in body
- * radii; `sweep` the half-angle (radians) the beam swings across the surface during a scan.
+ * The scanning beam: a cone from the satellite to its body's surface, additive, bright only at
+ * the satellite. `color` is linear RGB; with bloom (`bloomGain`) its luminance passes the bloom
+ * threshold (1.0, `quality.ts`) only at the apex, so the beam glows there; along its length the
+ * brightness falls off steeply (`beamProfile`: `(1 − along)^falloff`), so where the beam crosses
+ * the body it adds at most ≈ 0.15 luminance (`MAX_BODY_LUMINANCE`) — a linear fade washed bright
+ * planets out into a pale spot (front faces only: an additive double-sided cone doubled it).
+ * Without a composer (the mobile tier, `plainGain`) it is a soft translucent cone. `width` is the
+ * footprint's radius in body radii; `sweep` the half-angle (radians) the beam swings across the
+ * surface during a scan; `segments` the cone's rings along its length (the profile is sampled
+ * there: one ring would interpolate it linearly again).
  */
 export const BEAM = {
   color: [0.4, 0.95, 1.3] as const,
-  bloomGain: 1.3,
+  bloomGain: 1.25,
   plainGain: 0.35,
   width: 0.22,
   sweep: 0.2,
   /** The base end's brightness relative to the apex (vertex colours). */
-  baseFade: 0.08,
+  baseFade: 0.02,
+  /** The exponent of the falloff from the apex. */
+  falloff: 3,
+  segments: 12,
 } as const;
+
+/** The most luminance the beam adds over its body: from halfway down the beam to its footprint. */
+export const MAX_BODY_LUMINANCE = 0.155;
+
+/** The beam's brightness at `along` (0 at the apex, 1 at the footprint), relative to the apex. */
+export function beamProfile(along: number): number {
+  const a = Math.min(1, Math.max(0, along));
+  return BEAM.baseFade + (1 - BEAM.baseFade) * (1 - a) ** BEAM.falloff;
+}
+
+/** Relative luminance (Rec. 709) of a linear RGB colour. */
+export function luminance(rgb: readonly [number, number, number]): number {
+  return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+}
 
 /** A satellite's colour (P4-02 maps the agent's state here). */
 export function satelliteTint(spec: Pick<SatelliteSpec, 'role' | 'state'>): string {

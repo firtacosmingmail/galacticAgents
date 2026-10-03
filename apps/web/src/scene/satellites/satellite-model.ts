@@ -9,7 +9,12 @@ import type { ActivityArchetype } from './machine.js';
  * One satellite per **live** Waykeeper and Steward: the agent has a status record (the server's
  * projection, TECHNOLOGY §4) whose state is not an ended one (`ENDED_STATES`: finished, failed,
  * stopped, interrupted). An agent that ends loses its satellite; an agent never started (no
- * record) has none yet.
+ * record) has none yet. The rule is one predicate, `showsSatellite`, with two switches that are
+ * off for now (P4-01 draws live agents only):
+ * - `keepFailed` (P4-02): a `failed` agent keeps its satellite, drawn in its failure colour;
+ * - `keepLanded` (P4-04): a `finished` Steward whose task is `completed` keeps its satellite,
+ *   `landed: true`, while the server retains its record (the satellite lands and the body is
+ *   colonised).
  *
  * Its body is the body of its work — a Waykeeper's project's body, a Steward's task's body (a
  * project task lives on the project's body, decision 9) — falling back to the agent's own `bodyId`
@@ -29,7 +34,7 @@ export interface SatelliteSpec {
   activity: string | undefined;
   /** The archetype the machine is driven with (P4-03 fills it; `undefined` for now). */
   archetype: ActivityArchetype | undefined;
-  /** P4-04: the work completed and the satellite lands (never set for live agents yet). */
+  /** P4-04: the work completed and the satellite lands (only with `keepLanded`, `hasLanded`). */
   landed: boolean;
   /** The agent's supervisor (a Steward's Waykeeper): P4-03's transport shuttles fly to it. */
   supervisorId: Id | undefined;
@@ -37,7 +42,15 @@ export interface SatelliteSpec {
 
 export type SatelliteWorld = Pick<WorldState, 'agents' | 'statuses' | 'tasks' | 'projects'>;
 
-export interface SatelliteListOptions {
+/** Which ended agents keep a satellite (both off by default: today only live agents show). */
+export interface SatelliteRuleOptions {
+  /** P4-02: a `failed` agent keeps its satellite (shown in its failure colour). */
+  keepFailed?: boolean;
+  /** P4-04: a `finished` Steward whose task is `completed` keeps its satellite, landed. */
+  keepLanded?: boolean;
+}
+
+export interface SatelliteListOptions extends SatelliteRuleOptions {
   /** P4-02: include the Harmonizer's HQ station, orbiting Earth. */
   harmonizer?: boolean;
 }
@@ -56,10 +69,33 @@ export function workBody(world: SatelliteWorld, agentId: Id): Id | undefined {
   }
 }
 
-/** Whether an agent's satellite shows: a status record in a live state. */
+/** Whether an agent is live: a status record in a state that is not an ended one. */
 export function isLive(world: SatelliteWorld, agentId: Id): boolean {
   const status = world.statuses[agentId];
   return status !== undefined && !ENDED_STATES.has(status.state);
+}
+
+/** Whether an agent's work completed and its satellite lands: a finished Steward, task completed. */
+export function hasLanded(world: SatelliteWorld, agentId: Id): boolean {
+  const agent = world.agents[agentId];
+  const status = world.statuses[agentId];
+  if (agent?.role !== 'steward' || status?.state !== 'finished' || !agent.taskId) return false;
+  return world.tasks[agent.taskId]?.state === 'completed';
+}
+
+/**
+ * The list rule: whether an agent has a satellite. A live agent always does; an ended one only
+ * when an option keeps it (`failed` with `keepFailed`, landed with `keepLanded`).
+ */
+export function showsSatellite(
+  world: SatelliteWorld,
+  agentId: Id,
+  options: SatelliteRuleOptions = {},
+): boolean {
+  if (isLive(world, agentId)) return true;
+  const state = world.statuses[agentId]?.state;
+  if (options.keepFailed && state === 'failed') return true;
+  return options.keepLanded === true && hasLanded(world, agentId);
 }
 
 /** The satellites of a world, by agent id (a stable order). */
@@ -71,7 +107,7 @@ export function satelliteList(
   for (const agentId of Object.keys(world.agents).sort()) {
     const agent = world.agents[agentId];
     const status = world.statuses[agentId];
-    if (!agent || !status || !isLive(world, agentId)) continue;
+    if (!agent || !status || !showsSatellite(world, agentId, options)) continue;
     if (agent.role === 'harmonizer' && !options.harmonizer) continue;
     const bodyId = workBody(world, agentId);
     if (!bodyId) continue;
@@ -82,7 +118,7 @@ export function satelliteList(
       state: status.state,
       activity: status.currentActivity,
       archetype: undefined,
-      landed: false,
+      landed: options.keepLanded === true && hasLanded(world, agentId),
       supervisorId: agent.supervisorId,
     });
   }

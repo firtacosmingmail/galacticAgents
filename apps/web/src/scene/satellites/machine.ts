@@ -195,7 +195,10 @@ function step(
         },
       });
     }
-    const arrival = flight.start + flight.duration;
+    // Reduced motion turned on mid-flight: arrive now rather than finish the flight.
+    const arrival = reduced
+      ? Math.min(now, flight.start + flight.duration)
+      : flight.start + flight.duration;
     if (now < arrival) return actor;
     // Arrived at `arrival`, not at `now`: an arrival seen late is already settled in.
     return enter(actor, 'orbiting', arrival, 0, {
@@ -223,7 +226,8 @@ function step(
   if (input.landed) {
     if (actor.mode === 'landed') return actor;
     if (actor.mode === 'landing') {
-      const down = actor.tween.start + actor.tween.duration;
+      const end = actor.tween.start + actor.tween.duration;
+      const down = reduced ? Math.min(now, end) : end;
       return now >= down ? enter(actor, 'landed', down, 0) : actor;
     }
     return enter(actor, 'landing', now, reduced ? 0 : TIMING.landing, { scan: undefined });

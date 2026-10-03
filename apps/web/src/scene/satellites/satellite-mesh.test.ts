@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Color, Matrix4, Vector3 } from 'three';
 import type { SatelliteFrame } from './director.js';
 import { sampleActor, createActor } from './machine.js';
-import { BEAM } from './look.js';
+import { BEAM, beamProfile, luminance, MAX_BODY_LUMINANCE } from './look.js';
 import {
   beamColor,
   beamGeometry,
@@ -27,6 +27,7 @@ const frame = (over: Partial<SatelliteFrame> = {}): SatelliteFrame => ({
   beam: 1,
   sweep: 0,
   animated: true,
+  presence: 1,
   tint: '#ffffff',
   brightness: 1,
   ...over,
@@ -49,7 +50,25 @@ describe('satellite geometry', () => {
     for (let i = 0; i < pos.count; i++) {
       if (Math.abs(pos.getY(i)) < 1e-6) expect(col.getX(i)).toBeCloseTo(1);
       if (Math.abs(pos.getY(i) + 1) < 1e-6) expect(col.getX(i)).toBeCloseTo(BEAM.baseFade);
+      expect(col.getX(i)).toBeCloseTo(beamProfile(-pos.getY(i)), 6);
     }
+    // The steep profile is sampled along the length (one ring would make it linear again).
+    const rings = new Set(Array.from({ length: pos.count }, (_, i) => pos.getY(i).toFixed(4)));
+    expect(rings.size).toBe(BEAM.segments + 1);
+  });
+
+  it('glows at the apex but barely brightens the body it crosses (no pale spot)', () => {
+    const c = new Color();
+    const apex = beamColor(frame(), true, c);
+    const apexLum = luminance([apex.r, apex.g, apex.b]);
+    expect(apexLum).toBeGreaterThan(1); // over the bloom threshold: the apex glows
+    for (let along = 0.5; along <= 1 + 1e-9; along += 0.05)
+      expect(apexLum * beamProfile(along)).toBeLessThanOrEqual(MAX_BODY_LUMINANCE);
+    // The old linear fade added ≈ 0.6 halfway down; the footprint now adds almost nothing.
+    expect(apexLum * beamProfile(1)).toBeLessThan(0.03);
+    // Monotonic falloff from the apex.
+    for (let a = 0.05; a <= 1; a += 0.05)
+      expect(beamProfile(a)).toBeLessThanOrEqual(beamProfile(a - 0.05));
   });
 });
 
