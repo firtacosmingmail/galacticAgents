@@ -100,9 +100,14 @@ function fakeServer(initial: SettingsResponse) {
   const preflightCalls: string[] = [];
   let preflights: PreflightResponse[] = [ready];
   let refuse: (patch: SettingsPatch) => Refusal | undefined = () => undefined;
+  /** Holds the settings read until it resolves (to a reply other than the settings, if given). */
+  let readGate: Promise<Refusal | void> | undefined;
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url === '/api/settings' && (init?.method ?? 'GET') === 'GET') return json(state.response);
+    if (url === '/api/settings' && (init?.method ?? 'GET') === 'GET') {
+      const instead = readGate ? await readGate : undefined;
+      return instead ? json(instead.body, instead.status) : json(state.response);
+    }
     if (url === '/api/settings' && init?.method === 'PATCH') {
       const patch = JSON.parse(String(init.body)) as SettingsPatch;
       patches.push(patch);
@@ -136,6 +141,7 @@ function fakeServer(initial: SettingsResponse) {
     fetchImpl,
     setPreflights: (list: PreflightResponse[]) => (preflights = list),
     setRefuse: (fn: typeof refuse) => (refuse = fn),
+    setReadGate: (gate: Promise<Refusal | void>) => (readGate = gate),
   };
 }
 
@@ -154,9 +160,15 @@ afterEach(() => {
   window.history.replaceState(null, '', '/');
 });
 
-async function open(path: string, initial: SettingsResponse, preflights?: PreflightResponse[]) {
+async function open(
+  path: string,
+  initial: SettingsResponse,
+  preflights?: PreflightResponse[],
+  setup?: (s: ReturnType<typeof fakeServer>) => void,
+) {
   server = fakeServer(initial);
   if (preflights) server.setPreflights(preflights);
+  setup?.(server);
   vi.stubGlobal('fetch', server.fetchImpl);
   window.history.replaceState(null, '', path);
   render(<App />);
@@ -297,6 +309,60 @@ describe('first-run wizard (P25-08)', () => {
     await click(within(wizard()).getByRole('button', { name: /Continue without saving/ }));
     await screen.findByRole('navigation', { name: 'navigation' });
   });
+
+  it('shows a failed skip at once, with the way on, on whatever step it happens', async () => {
+    await open('/', freshSettings());
+    server.setRefuse((p) =>
+      p.setupCompleted
+        ? { status: 500, body: { error: 'internal', message: 'disk full' } }
+        : undefined,
+    );
+    await screen.findByRole('main', { name: 'first-run setup' });
+    await click(screen.getByRole('button', { name: /Skip setup/ }));
+    // Still on the first step: the refusal and the way on are next to the Skip button.
+    expect(within(wizard()).getByRole('alert').textContent).toMatch(/Could not save \(500\)/);
+    await click(within(wizard()).getByRole('button', { name: /Continue without saving/ }));
+    await screen.findByRole('navigation', { name: 'navigation' });
+  });
+
+  it('is not offered to a client that may not finish it; a note says where to (decision 51)', async () => {
+    await open('/', { ...freshSettings(), writable: 'limited' });
+    await waitFor(() =>
+      expect(server.fetchImpl).toHaveBeenCalledWith('/api/settings', expect.anything()),
+    );
+    const note = await screen.findByRole('note', { name: 'setup not finished' });
+    expect(note.textContent).toMatch(
+      /Setup is not finished — finish it on the computer running Mission Control/,
+    );
+    expect(screen.getByRole('navigation', { name: 'navigation' })).toBeTruthy();
+    expect(screen.queryByRole('main', { name: 'first-run setup' })).toBeNull();
+    await click(within(note).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('note', { name: 'setup not finished' })).toBeNull();
+    expect(server.patches).toEqual([]);
+  });
+
+  it('shows neither panel nor wizard while the settings load, and the panel if the read fails', async () => {
+    let answer!: (r: Refusal | void) => void;
+    await open('/', freshSettings(), undefined, (s) =>
+      s.setReadGate(new Promise((r) => (answer = r))),
+    );
+    expect(screen.queryByRole('navigation', { name: 'navigation' })).toBeNull();
+    expect(screen.queryByRole('main', { name: 'first-run setup' })).toBeNull();
+    await act(async () => answer({ status: 500, body: { error: 'internal' } }));
+    await screen.findByRole('navigation', { name: 'navigation' });
+    expect(screen.queryByRole('main', { name: 'first-run setup' })).toBeNull();
+  });
+
+  it('after the load, a fresh install gets the wizard without the panel showing first', async () => {
+    let answer!: (r: Refusal | void) => void;
+    await open('/', freshSettings(), undefined, (s) =>
+      s.setReadGate(new Promise((r) => (answer = r))),
+    );
+    expect(screen.queryByRole('navigation', { name: 'navigation' })).toBeNull();
+    await act(async () => answer());
+    await screen.findByRole('main', { name: 'first-run setup' });
+    expect(screen.queryByRole('navigation', { name: 'navigation' })).toBeNull();
+  });
 });
 
 describe('settings page (P25-08)', () => {
@@ -385,8 +451,9 @@ describe('settings page (P25-08)', () => {
       return undefined;
     });
     await click(within(caps).getByRole('button', { name: 'Save caps' }));
+    // Only the caps that changed are sent.
     expect(server.patches.at(-1)).toEqual({
-      caps: { ...done().settings.caps, maxConcurrentAgents: 8, maxWallClockMs: 1_800_000 },
+      caps: { maxConcurrentAgents: 8, maxWallClockMs: 1_800_000 },
     });
     expect(within(caps).getByRole('alert').textContent).toMatch(
       /Fixed by an environment variable: set by an environment variable/,
@@ -407,6 +474,21 @@ describe('settings page (P25-08)', () => {
     expect(within(retention).getByRole('alert').textContent).toMatch(
       /Not accepted by the server — retentionDays: Too big/,
     );
+  });
+
+  it('saves an unrelated cap when the stored wall-clock cap is not a whole number of minutes', async () => {
+    const stored = done();
+    stored.settings.caps.maxWallClockMs = 90_000; // legal on the server: 1.5 min
+    await open('/settings', stored);
+    const caps = await screen.findByRole('region', { name: 'Caps' });
+    expect(
+      (within(caps).getByLabelText('Wall-clock time per agent') as HTMLInputElement).value,
+    ).toBe('1.5');
+    type(within(caps).getByLabelText('Stewards working at once'), '8');
+    expect(within(caps).queryByRole('alert')).toBeNull();
+    await click(within(caps).getByRole('button', { name: 'Save caps' }));
+    expect(server.patches).toEqual([{ caps: { maxConcurrentAgents: 8 } }]);
+    expect(within(caps).getByRole('status').textContent).toBe('Saved.');
   });
 
   it('resets the default table to the §3.6 table', async () => {

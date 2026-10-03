@@ -54,14 +54,26 @@ export function FirstRunWizard({ onDone }: { onDone: () => void }) {
           <h1 className="pnl-title">Welcome to GalacticAgents</h1>
         </div>
         {step.kind !== 'done' && (
-          <button
-            type="button"
-            className="set-secondary"
-            disabled={finishing}
-            onClick={() => void finish()}
-          >
-            Skip setup — keep the defaults
-          </button>
+          <div className="set-wizard-skip">
+            <button
+              type="button"
+              className="set-secondary"
+              disabled={finishing}
+              onClick={() => void finish()}
+            >
+              Skip setup — keep the defaults
+            </button>
+            {finishError && (
+              <>
+                <p className="set-error" role="alert">
+                  {finishError}
+                </p>
+                <button type="button" className="set-secondary" onClick={onDone}>
+                  Continue without saving that setup is done
+                </button>
+              </>
+            )}
+          </div>
         )}
       </div>
       <ol className="set-steps" aria-label="setup steps">

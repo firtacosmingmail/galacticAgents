@@ -203,7 +203,8 @@ describe('panel shell and selection (P25-02)', () => {
     expect(screen.getByText('seq 10')).toBeTruthy();
     fireEvent.click(screen.getByRole('link', { name: 'back to the panel' }));
     expect(window.location.pathname).toBe('/');
-    expect(screen.getByRole('navigation', { name: 'navigation' })).toBeTruthy();
+    // The panel mounts afresh and shows once its settings read has answered (P25-08's gate).
+    expect(await screen.findByRole('navigation', { name: 'navigation' })).toBeTruthy();
     fireEvent.click(screen.getByRole('link', { name: 'Ops console' }));
     expect(window.location.pathname).toBe('/debug');
     expect(screen.getByRole('tab', { name: 'Hierarchy' })).toBeTruthy();

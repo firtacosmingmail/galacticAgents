@@ -70,6 +70,16 @@
   border-radius: 6px;
   background: var(--pnl-raised);
 }
+.set-gate-note {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 16px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--pnl-raised);
+}
 .set-error,
 .set-field-error {
   margin: 0;
@@ -293,6 +303,23 @@
 }
 .set-wizard-nav {
   margin-top: 4px;
+}
+.set-wizard-skip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  max-width: 100%;
+}
+.set-gate-note button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--pnl-line);
+  background: var(--pnl-surface);
+  color: var(--pnl-ink);
 }
 
 .pnl-settings-link.pnl-link {
