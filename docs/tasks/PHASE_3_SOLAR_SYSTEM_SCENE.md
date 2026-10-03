@@ -1,7 +1,7 @@
 # Phase 3 — Solar system scene
 
-**Current task:** P3-07 (wave 4, branch `p3-wave4-labels`) · **Task status:** in progress
-**Phase status:** in progress (7/9 done) — on branch `phase-3`
+**Current task:** P3-08 (wave 5, after wave 4 is merged into `phase-3`; needs Cosmin's Mac and phone) · **Task status:** todo
+**Phase status:** in progress (8/9 done) — on branch `phase-3`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -72,7 +72,7 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 - **Acceptance:** switching tiers at runtime works; mobile tier ≥30 fps on the phone over LAN.
 
 ### P3-07 — Domain binding and labels
-- **Status:** in progress · **Depends on:** P3-05, P2-15 · **Parallel with:** —
+- **Status:** done (2026-10-03) · **Depends on:** P3-05, P2-15 · **Parallel with:** —
 - Bodies bound to the domain model from the store: hosted project/task name and derived state as one HTML label layer projected in a throttled pass (no drei `Html`; decision 66), throttled updates; independent-project moons visibly distinct from sub-project moons (SPEC §3.2); reserved bodies unlabelled; `moved` and `completed` markers as label states (animations come in Phase 4).
 - **Acceptance:** every assigned body shows the right name and state; a state change in the store updates the label within a second.
 
