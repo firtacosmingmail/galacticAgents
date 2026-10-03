@@ -18,6 +18,7 @@ import {
 } from '@galactic/protocol';
 import { ClaudeSdkAdapter } from '../adapters/claude-sdk/claude-sdk-adapter.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
+import { loadConfig } from '../config/config.js';
 import { SettingsService } from '../config/settings.js';
 import { openDatabase } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
@@ -572,6 +573,47 @@ describe('settings (P25-01; SPEC §4.6)', () => {
     const locked = await patch(t, { retentionDays: 3 });
     expect(locked).toMatchObject({ status: 409, body: { error: 'env_override' } });
     expect(String(locked.body['message'])).toMatch(/retentionDays/);
+  });
+
+  it('stamps the first-run marker once, locally only (P25-08)', async () => {
+    const { t, file, config } = await settingsApp();
+    const before = SettingsResponse.parse((await get(t, '/api/settings')).body);
+    expect(before.setupCompletedAt).toBeUndefined();
+
+    const remote = { origin: 'https://mymac.tail1234.ts.net' };
+    const refused = await patch(t, { setupCompleted: true }, remote);
+    expect(refused).toMatchObject({ status: 403, body: { error: 'remote_settings' } });
+    expect(file()['setupCompletedAt']).toBeUndefined();
+    expect((await patch(t, { setupCompleted: false })).status).toBe(400);
+
+    const done = SettingsResponse.parse((await patch(t, { setupCompleted: true })).body);
+    expect(done.setupCompletedAt).toBeDefined();
+    expect(file()).toMatchObject({ token: TEST_TOKEN, setupCompletedAt: done.setupCompletedAt });
+    const again = SettingsResponse.parse((await patch(t, { setupCompleted: true })).body);
+    expect(again.setupCompletedAt).toBe(done.setupCompletedAt);
+    // The next start reads it back.
+    const reloaded = loadConfig({ GALACTIC_HOME: config.dataDir, GALACTIC_TOKEN: TEST_TOKEN });
+    expect(reloaded.config.setupCompletedAt).toBe(done.setupCompletedAt);
+  });
+
+  it('tells each client what it may change, as the patch decides it (P25-08, decision 51)', async () => {
+    const remote = { origin: 'https://mymac.tail1234.ts.net' };
+    const { t } = await settingsApp();
+    const writable = async (headers: Record<string, string> = {}) =>
+      SettingsResponse.parse((await get(t, '/api/settings', headers)).body).writable;
+    expect(await writable()).toBe('all');
+    expect(await writable(remote)).toBe('limited');
+    // A patch reply says the same.
+    const tier = SettingsResponse.parse((await patch(t, { qualityTier: 'balanced' }, remote)).body);
+    expect(tier.writable).toBe('limited');
+    const local = SettingsResponse.parse((await patch(t, { qualityTier: 'high' })).body);
+    expect(local.writable).toBe('all');
+
+    // With autoApproveRemote a remote client may write everything, the marker included.
+    const open = await settingsApp({ autoApproveRemote: true });
+    const remoteOpen = SettingsResponse.parse((await get(open.t, '/api/settings', remote)).body);
+    expect(remoteOpen.writable).toBe('all');
+    expect((await patch(open.t, { setupCompleted: true }, remote)).status).toBe(200);
   });
 });
 

@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import {
   DEFAULT_PERMISSION_POLICY,
+  Timestamp,
   type PermissionPolicy,
   type Settings,
   type SettingName,
@@ -33,6 +34,9 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `qualityTier` | live (stored for the renderer, Phase 3) |
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
+ *
+ * Besides the settings, a patch may mark the panel's first-run setup as done (`setupCompleted`,
+ * P25-08): `setupCompletedAt` is stamped once in `config.json` and reported by `response()`.
  *
  * A setting an environment variable decided is read-only (`envOverrides`): the file would be
  * shadowed at the next start, so a patch of it is refused.
@@ -72,6 +76,25 @@ export interface SettingsServiceOptions {
 /** What a remote client may patch (decision 51): the policy only floored (decision 37). */
 const REMOTE_WRITABLE: readonly SettingName[] = ['defaultPermissionPolicy', 'qualityTier'];
 
+/**
+ * What a client may change, as `update` decides it (decision 51): `limited` for a remote or
+ * unknown-origin request unless `autoApproveRemote`, else `all`. Reported as `writable`.
+ */
+export function writableFor(write: PolicyWrite): 'all' | 'limited' {
+  return write.origin !== 'local' && !write.autoApproveRemote ? 'limited' : 'all';
+}
+
+/**
+ * The first-run marker as the protocol's timestamp. `config.json` is read leniently (a
+ * hand-edited value must not stop the server): a date it can parse is normalised, anything else
+ * still counts as done and is reported as the epoch.
+ */
+function asTimestamp(value: string): string {
+  if (Timestamp.safeParse(value).success) return value;
+  const at = Date.parse(value);
+  return new Date(Number.isNaN(at) ? 0 : at).toISOString();
+}
+
 export class SettingsService {
   private readonly config: ServerConfig;
   /** What the running process uses for the settings that need a restart. */
@@ -92,11 +115,14 @@ export class SettingsService {
     return structuredClone(this.saved);
   }
 
-  response(extra: Partial<Pick<SettingsResponse, 'floored'>> = {}): SettingsResponse {
+  response(extra: Partial<Pick<SettingsResponse, 'floored' | 'writable'>> = {}): SettingsResponse {
     return {
       settings: this.current(),
       envOverrides: [...(this.config.envOverrides ?? [])],
       restartRequired: RESTART.filter((k) => this.saved[k] !== this.running[k]),
+      ...(this.config.setupCompletedAt
+        ? { setupCompletedAt: asTimestamp(this.config.setupCompletedAt) }
+        : {}),
       ...extra,
     };
   }
@@ -106,7 +132,7 @@ export class SettingsService {
    * `SettingsError` before anything is written when a field is env-decided or invalid.
    */
   update(patch: SettingsPatch, write: PolicyWrite = {}): SettingsResponse {
-    const remote = write.origin !== 'local' && !write.autoApproveRemote;
+    const remote = writableFor(write) === 'limited';
     const refused = (Object.keys(patch) as SettingName[]).filter(
       (k) => patch[k] !== undefined && !REMOTE_WRITABLE.includes(k),
     );
@@ -159,8 +185,13 @@ export class SettingsService {
     if (patch.stewardsLoadUserSettings !== undefined)
       next.stewardsLoadUserSettings = patch.stewardsLoadUserSettings;
 
-    this.persist(patch, next, policyOnDisk);
+    // The first-run marker (P25-08): stamped once, never moved back.
+    const setupCompletedAt =
+      patch.setupCompleted && !this.config.setupCompletedAt ? new Date().toISOString() : undefined;
+
+    this.persist(patch, next, policyOnDisk, setupCompletedAt);
     this.apply(patch, next);
+    if (setupCompletedAt) this.config.setupCompletedAt = setupCompletedAt;
     this.saved = next;
     return this.response(patch.defaultPermissionPolicy !== undefined ? { floored } : {});
   }
@@ -193,6 +224,7 @@ export class SettingsService {
     patch: SettingsPatch,
     next: Settings,
     policy: PermissionPolicy | undefined | null,
+    setupCompletedAt?: string,
   ): void {
     const path = this.config.configPath;
     const raw: Record<string, unknown> = existsSync(path)
@@ -206,6 +238,7 @@ export class SettingsService {
     if (patch.qualityTier !== undefined) raw['qualityTier'] = next.qualityTier;
     if (patch.stewardsLoadUserSettings !== undefined)
       raw['stewardsLoadUserSettings'] = next.stewardsLoadUserSettings;
+    if (setupCompletedAt) raw['setupCompletedAt'] = setupCompletedAt;
     const checked = ConfigFile.safeParse(raw);
     if (!checked.success) {
       throw new SettingsError(

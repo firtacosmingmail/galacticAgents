@@ -176,6 +176,12 @@ export const SettingsPatch = z
     caps: SettingsCaps.partial().strict().optional(),
     qualityTier: QualityTier.optional(),
     stewardsLoadUserSettings: z.boolean().optional(),
+    /**
+     * Marks the first-run setup as done (P25-08): the server stamps `setupCompletedAt` in
+     * `config.json` (kept if already set). Local requests only, like every setting but the tier
+     * and the policy (decision 51).
+     */
+    setupCompleted: z.literal(true).optional(),
   })
   .strict();
 export type SettingsPatch = z.infer<typeof SettingsPatch>;
@@ -192,6 +198,18 @@ export const SettingsResponse = z.object({
   restartRequired: z.array(SettingName),
   /** Set on a patch reply when a remote client's policy was floored at the default (decision 37). */
   floored: z.boolean().optional(),
+  /**
+   * When the first-run setup was finished or skipped (P25-08). Absent: the panel walks the user
+   * through the first-run wizard before showing the panel.
+   */
+  setupCompletedAt: Timestamp.optional(),
+  /**
+   * What the requesting client may change (P25-08, decision 51), decided from the request's
+   * origin as the patch decides it: `all` for a local request (or any request when
+   * `autoApproveRemote`), `limited` for a remote or unknown-origin one (the quality tier and a
+   * tighter default policy only — not the first-run marker). Absent (an older server): `all`.
+   */
+  writable: z.enum(['all', 'limited']).optional(),
 });
 export type SettingsResponse = z.infer<typeof SettingsResponse>;
 

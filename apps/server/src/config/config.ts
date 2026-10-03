@@ -59,6 +59,11 @@ export const ConfigFile = z.object({
    * repository's (SPEC §8 open question). Default `true` (keep loading them).
    */
   stewardsLoadUserSettings: z.boolean().optional(),
+  /**
+   * When the panel's first-run setup was finished or skipped (P25-08); absent = not yet. Written
+   * as an ISO timestamp, but read leniently: a hand-edited value must not stop the server.
+   */
+  setupCompletedAt: z.string().min(1).optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -106,6 +111,8 @@ export interface ServerConfig {
   stewardsLoadUserSettings?: boolean;
   /** Settings an environment variable decided at startup (P25-01): read-only in the panel. */
   envOverrides?: SettingName[];
+  /** When the panel's first-run setup was done (P25-08); absent = the wizard shows. */
+  setupCompletedAt?: string;
 }
 
 export interface LoadedConfig {
@@ -234,6 +241,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
         ? { stewardsLoadUserSettings: file.stewardsLoadUserSettings }
         : {}),
       envOverrides,
+      ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
     },
     tokenGenerated,
   };

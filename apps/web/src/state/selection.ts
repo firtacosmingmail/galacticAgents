@@ -11,8 +11,11 @@ export type Selection = { kind: 'harmonizer' } | { kind: 'waykeeper' | 'steward'
 /** The compact form: `harmonizer`, `waykeeper:<id>` or `steward:<id>`. */
 export type SelectionKey = 'harmonizer' | `waykeeper:${Id}` | `steward:${Id}`;
 
-/** `/` is the panel ("list mode", the only mode for now); `/debug` is the ops console. */
-export type Route = 'panel' | 'debug';
+/**
+ * `/` is the panel ("list mode", the only mode for now); `/debug` is the ops console; `/settings`
+ * is the settings page (P25-08), shown in the panel's frame.
+ */
+export type Route = 'panel' | 'debug' | 'settings';
 
 export interface PageLocation {
   route: Route;
@@ -36,9 +39,10 @@ export function sameSelection(a: Selection, b: Selection): boolean {
   return selectionKey(a) === selectionKey(b);
 }
 
-/** The URL of a page location: `/`, `/waykeeper/<id>`, `/steward/<id>` or `/debug`. */
+/** The URL of a page location: `/`, `/waykeeper/<id>`, `/steward/<id>`, `/debug` or `/settings`. */
 export function pathFor(location: PageLocation): string {
   if (location.route === 'debug') return '/debug';
+  if (location.route === 'settings') return '/settings';
   const s = location.selection;
   return s.kind === 'harmonizer' ? '/' : `/${s.kind}/${encodeURIComponent(s.id)}`;
 }
@@ -47,6 +51,7 @@ export function pathFor(location: PageLocation): string {
 export function locationFromPath(pathname: string): PageLocation {
   const path = pathname.replace(/\/+$/, '') || '/';
   if (path === '/debug') return { route: 'debug', selection: HARMONIZER };
+  if (path === '/settings') return { route: 'settings', selection: HARMONIZER };
   const match = /^\/(waykeeper|steward)\/([^/]+)$/.exec(path);
   if (match) {
     let id: string;

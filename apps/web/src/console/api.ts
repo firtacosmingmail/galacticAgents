@@ -6,10 +6,13 @@ import type {
   ConversationResponse,
   DecideResponse,
   MessagesResponse,
+  PreflightResponse,
   ProposalDecisionBody,
   RuntimesInfo,
   SendBody,
   SendResponse,
+  SettingsPatch,
+  SettingsResponse,
   SpawnBody,
   SpawnResponse,
   TranscriptResponse,
@@ -26,13 +29,19 @@ export class ApiError extends Error {
     message: string,
     /** The refusal's code (`stale`, `rejected`, `not_found`, `invalid`, …). */
     readonly code?: string,
+    /** The whole error body (e.g. a 400's zod `issues`, P25-08). */
+    readonly body?: Record<string, unknown>,
   ) {
     super(message);
   }
 }
 
 export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
-  const call = async <T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> => {
+  const call = async <T>(
+    method: 'GET' | 'POST' | 'PATCH',
+    path: string,
+    body?: unknown,
+  ): Promise<T> => {
     const res = await fetchImpl(path, {
       method,
       headers: {
@@ -48,7 +57,7 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         (data['message'] as string | undefined) ??
         (data['error'] as string | undefined) ??
         `${res.status}`;
-      throw new ApiError(res.status, message, data['error'] as string | undefined);
+      throw new ApiError(res.status, message, data['error'] as string | undefined, data);
     }
     return data as T;
   };
@@ -98,6 +107,13 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         `/api/agents/${encodeURIComponent(agentId)}/conversation${qs ? `?${qs}` : ''}`,
       );
     },
+    /** The settings page (P25-08; endpoints P25-01). */
+    settings: () => call<SettingsResponse>('GET', '/api/settings'),
+    patchSettings: (patch: SettingsPatch) =>
+      call<SettingsResponse>('PATCH', '/api/settings', patch),
+    /** The runtime preflight; `refresh` runs the checks again instead of the cached result. */
+    preflight: (refresh = false) =>
+      call<PreflightResponse>('GET', `/api/preflight${refresh ? '?refresh=1' : ''}`),
   };
 }
 

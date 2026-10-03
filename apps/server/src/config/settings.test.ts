@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { setGlobalDefaultPolicy } from '../domain/permissions.js';
 import { loadConfig } from './config.js';
-import { SettingsError, SettingsService } from './settings.js';
+import { SettingsError, SettingsService, writableFor } from './settings.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -121,5 +121,22 @@ describe('SettingsService (P25-01)', () => {
       { origin: 'remote', autoApproveRemote: true },
     );
     expect(trusted.settings.caps.maxConcurrentAgents).toBe(8);
+  });
+
+  it('reports a hand-edited first-run marker as a timestamp, still done (P25-08)', () => {
+    const { config, settings } = setup();
+    config.setupCompletedAt = '2026-10-01';
+    expect(settings.response().setupCompletedAt).toBe('2026-10-01T00:00:00.000Z');
+    config.setupCompletedAt = 'yesterday';
+    expect(settings.response().setupCompletedAt).toBe('1970-01-01T00:00:00.000Z');
+    config.setupCompletedAt = '2026-10-02T10:00:00.000Z';
+    expect(settings.response().setupCompletedAt).toBe('2026-10-02T10:00:00.000Z');
+  });
+
+  it('decides what a client may write as the patch does (P25-08)', () => {
+    expect(writableFor({ origin: 'local' })).toBe('all');
+    expect(writableFor({ origin: 'remote' })).toBe('limited');
+    expect(writableFor({})).toBe('limited'); // unknown origin fails closed
+    expect(writableFor({ origin: 'remote', autoApproveRemote: true })).toBe('all');
   });
 });

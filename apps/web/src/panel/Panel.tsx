@@ -13,6 +13,10 @@ import { waitingForUserCount } from './inbox-model.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
 import { StewardPanelView } from './steward/StewardPanelView.js';
 import { ManagedAgentCards } from './AgentCards.js';
+import { NotificationsControl } from './notifications/NotificationsControl.js';
+import { FirstRunGate } from './settings/FirstRunGate.js';
+import { SettingsProvider } from './settings/SettingsData.js';
+import { SettingsPage } from './settings/SettingsPage.js';
 import './panel.css';
 
 /**
@@ -34,24 +38,37 @@ export function Panel({
   onForget?: () => void;
 }) {
   const api = useMemo(() => given ?? createApi(token), [given, token]);
+  const route = useAppStore((s) => s.route);
   return (
     <ApiContext.Provider value={api}>
-      <CardLinksContext.Provider value={true}>
-        <div className="pnl">
-          <TopBar {...(onForget ? { onForget } : {})} />
-          <div className="pnl-grid">
-            <Navigation />
-            <MainArea />
-            <SideColumn />
+      <SettingsProvider api={api}>
+        <CardLinksContext.Provider value={true}>
+          <div className="pnl">
+            <TopBar {...(onForget ? { onForget } : {})} />
+            {route === 'settings' ? (
+              // The settings page (P25-08), in the panel's frame.
+              <SettingsPage token={token} />
+            ) : (
+              // A fresh install walks through the first-run wizard first (P25-08).
+              <FirstRunGate>
+                <div className="pnl-grid">
+                  <Navigation />
+                  <MainArea />
+                  <SideColumn />
+                </div>
+              </FirstRunGate>
+            )}
           </div>
-        </div>
-      </CardLinksContext.Provider>
+        </CardLinksContext.Provider>
+      </SettingsProvider>
     </ApiContext.Provider>
   );
 }
 
 function TopBar({ onForget }: { onForget?: () => void }) {
   const status = useAppStore((s) => s.status);
+  const route = useAppStore((s) => s.route);
+  const selection = useAppStore((s) => s.selection);
   const world = useAppStore((s) => s.world);
   const summary = summaryOf(world);
   // The inbox header's number too: questions the user holds and cards awaiting their decision.
@@ -70,6 +87,14 @@ function TopBar({ onForget }: { onForget?: () => void }) {
         <span>{summary.blockedItems} blocked</span>
       </span>
       <span className="pnl-spacer" />
+      <NotificationsControl />
+      <NavLink
+        to={{ route: 'settings', selection }}
+        current={route === 'settings'}
+        className="pnl-settings-link"
+      >
+        Settings
+      </NavLink>
       <NavLink to={{ route: 'debug', selection: HARMONIZER }} className="pnl-debug-link">
         Ops console
       </NavLink>

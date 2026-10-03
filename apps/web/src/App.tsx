@@ -78,7 +78,8 @@ export function App() {
     setToken(undefined);
   };
 
-  if (route === 'panel') return <Panel token={token} onForget={forget} />;
+  // The settings page (P25-08) lives in the panel's frame.
+  if (route === 'panel' || route === 'settings') return <Panel token={token} onForget={forget} />;
 
   return (
     <main className="page">
