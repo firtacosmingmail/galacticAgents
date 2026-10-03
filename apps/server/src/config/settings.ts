@@ -34,6 +34,9 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
  *
+ * Besides the settings, a patch may mark the panel's first-run setup as done (`setupCompleted`,
+ * P25-08): `setupCompletedAt` is stamped once in `config.json` and reported by `response()`.
+ *
  * A setting an environment variable decided is read-only (`envOverrides`): the file would be
  * shadowed at the next start, so a patch of it is refused.
  *
@@ -97,6 +100,7 @@ export class SettingsService {
       settings: this.current(),
       envOverrides: [...(this.config.envOverrides ?? [])],
       restartRequired: RESTART.filter((k) => this.saved[k] !== this.running[k]),
+      ...(this.config.setupCompletedAt ? { setupCompletedAt: this.config.setupCompletedAt } : {}),
       ...extra,
     };
   }
@@ -159,8 +163,15 @@ export class SettingsService {
     if (patch.stewardsLoadUserSettings !== undefined)
       next.stewardsLoadUserSettings = patch.stewardsLoadUserSettings;
 
-    this.persist(patch, next, policyOnDisk);
+    // The first-run marker (P25-08): stamped once, never moved back.
+    const setupCompletedAt =
+      patch.setupCompleted && !this.config.setupCompletedAt
+        ? new Date().toISOString()
+        : undefined;
+
+    this.persist(patch, next, policyOnDisk, setupCompletedAt);
     this.apply(patch, next);
+    if (setupCompletedAt) this.config.setupCompletedAt = setupCompletedAt;
     this.saved = next;
     return this.response(patch.defaultPermissionPolicy !== undefined ? { floored } : {});
   }
@@ -193,6 +204,7 @@ export class SettingsService {
     patch: SettingsPatch,
     next: Settings,
     policy: PermissionPolicy | undefined | null,
+    setupCompletedAt?: string,
   ): void {
     const path = this.config.configPath;
     const raw: Record<string, unknown> = existsSync(path)
@@ -206,6 +218,7 @@ export class SettingsService {
     if (patch.qualityTier !== undefined) raw['qualityTier'] = next.qualityTier;
     if (patch.stewardsLoadUserSettings !== undefined)
       raw['stewardsLoadUserSettings'] = next.stewardsLoadUserSettings;
+    if (setupCompletedAt) raw['setupCompletedAt'] = setupCompletedAt;
     const checked = ConfigFile.safeParse(raw);
     if (!checked.success) {
       throw new SettingsError(
