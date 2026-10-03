@@ -18,6 +18,7 @@ import {
 import { motionEnabled, motionSeconds, useReducedMotion } from '../motion.js';
 import { placeOnOrbit } from '../orbit.js';
 import type { SceneQuality } from '../quality.js';
+import { DECOR_LAYER } from '../layers.js';
 import { useLodLevel } from './lod.js';
 import {
   sphereFor,
@@ -244,7 +245,7 @@ function OrbitLine({
 }) {
   const positions = useMemo(() => circlePoints(radius, segments), [radius, segments]);
   return (
-    <lineLoop>
+    <lineLoop layers={DECOR_LAYER}>
       <bufferGeometry key={positions.length + ':' + radius}>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>

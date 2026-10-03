@@ -1,6 +1,6 @@
 # Phase 3 — Solar system scene
 
-**Current task:** P3-08 (wave 5, after wave 4 is merged into `phase-3`; needs Cosmin's Mac and phone) · **Task status:** todo
+**Current task:** P3-08 (wave 5, branch `p3-wave5-perf`; the Mac and phone numbers are Cosmin's) · **Task status:** in progress
 **Phase status:** in progress (8/9 done) — on branch `phase-3`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -77,7 +77,7 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 - **Acceptance:** every assigned body shows the right name and state; a state change in the store updates the label within a second.
 
 ### P3-08 — Performance pass and phone test
-- **Status:** todo · **Depends on:** P3-06, P3-07 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P3-06, P3-07 · **Parallel with:** —
 - Profile with many assigned bodies and labels; cap simultaneous label updates; verify 60 fps at "high" on the Mac and ≥30 fps at "mobile" in Safari on the phone over LAN (Tailscale not yet needed); record numbers in `docs/tasks/notes/P3-08-perf.md`.
 - **Acceptance:** exit criteria numbers recorded.
 

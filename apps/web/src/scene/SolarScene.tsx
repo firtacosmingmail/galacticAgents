@@ -12,7 +12,7 @@ import {
   type Points,
 } from 'three';
 import { FpsCounter, type FpsSample } from './fps.js';
-import { BLOOM_SMOOTHING, SUN_EMISSIVE, type SceneQuality } from './quality.js';
+import { BLOOM_SMOOTHING, contextAntialias, SUN_EMISSIVE, type SceneQuality } from './quality.js';
 import { centreOnCamera, generateStarField } from './starfield.js';
 import { Bodies } from './bodies/Bodies.js';
 import { SUN_ANCHOR_ID } from './anchors.js';
@@ -24,6 +24,7 @@ import { cappedFrameloop, FrameCap } from './frame-cap.js';
 import { Picking } from './picking/Picking.js';
 import { LabelProjector } from './labels/LabelProjector.js';
 import { MoonMarkers } from './labels/MoonMarkers.js';
+import { DECOR_LAYER, showDecor } from './layers.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -75,13 +76,14 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
   const outline = useRef<OutlineEffect>(null);
   return (
     <Canvas
-      // `antialias` is a context parameter: a tier that changes it gets a new context.
-      key={quality.antialias ? 'aa' : 'no-aa'}
+      // `antialias` is a context parameter: a tier that changes it gets a new context. With a
+      // composer the composer multisamples and the context does not (`contextAntialias`, P3-08).
+      key={contextAntialias(quality) ? 'aa' : 'no-aa'}
       gl={(defaults) =>
         new WebGLRenderer({
           ...defaults,
           canvas: defaults.canvas as HTMLCanvasElement,
-          antialias: quality.antialias,
+          antialias: contextAntialias(quality),
           powerPreference: 'high-performance',
         })
       }
@@ -93,6 +95,8 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       frameloop={frameloop}
       shadows={quality.shadows ? 'percentage' : false}
       camera={{ position: [0, 40, 140], fov: 45, near: 0.1, far: 6000 }}
+      // The camera sees the decorations' layer too (P3-08, `layers.ts`).
+      onCreated={({ camera }) => showDecor(camera)}
     >
       <color attach="background" args={[BACKGROUND]} />
       <ambientLight intensity={0.04} />
@@ -158,7 +162,13 @@ function StarField({ count }: { count: number }) {
   }, []);
   return (
     // A new geometry per count: buffer attributes cannot grow in place.
-    <points key={count} ref={ref} frustumCulled={false} onBeforeRender={follow}>
+    <points
+      key={count}
+      ref={ref}
+      frustumCulled={false}
+      onBeforeRender={follow}
+      layers={DECOR_LAYER}
+    >
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
         <bufferAttribute attach="attributes-color" args={[colors, 3]} />

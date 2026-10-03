@@ -5,6 +5,7 @@ import { Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Quaternion, Vecto
 import type { OutlineEffect } from 'postprocessing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerAnchor } from '../anchors.js';
+import { DECOR_LAYER, showDecor } from '../layers.js';
 import { labelEntries, registerLabel, setShown, writePosition } from '../labels/registry.js';
 import { useCameraStore } from '../camera/store.js';
 import { useAppStore } from '../../state/store.js';
@@ -256,5 +257,42 @@ describe('OutlineSync', () => {
     effect.current = second as unknown as OutlineEffect;
     frame();
     expect(second.selection.set).toHaveBeenCalledWith([mars.children[0]]);
+  });
+
+  it('empties the selection while the body is off screen, and restores it when back (P3-08)', () => {
+    const mars = anchorAt('b-mars', 0, true);
+    const set = vi.fn();
+    const effect = { current: { selection: { set, clear: vi.fn() } } as unknown as OutlineEffect };
+    render(<OutlineSync effect={effect} bodyId="b-mars" />);
+    frame();
+    expect(set).toHaveBeenLastCalledWith([mars.children[0]]);
+    // The camera turns away: Mars is behind it.
+    camera.lookAt(0, 0, 20);
+    frame();
+    expect(set).toHaveBeenLastCalledWith([]);
+    camera.lookAt(0, 0, 0);
+    frame();
+    expect(set).toHaveBeenLastCalledWith([mars.children[0]]);
+    expect(set).toHaveBeenCalledTimes(3);
+  });
+
+  it("leaves the decorations' layer out of the effect's depth pass (P3-08)", () => {
+    anchorAt('b-mars', 0, true);
+    const seen: boolean[] = [];
+    const depthPass = { render: () => seen.push(camera.layers.isEnabled(DECOR_LAYER)) };
+    const effect = {
+      current: {
+        selection: { set: vi.fn(), clear: vi.fn() },
+        camera,
+        depthPass,
+      } as unknown as OutlineEffect,
+    };
+    showDecor(camera);
+    render(<OutlineSync effect={effect} bodyId="b-mars" />);
+    frame();
+    frame();
+    depthPass.render();
+    expect(seen).toEqual([false]);
+    expect(camera.layers.isEnabled(DECOR_LAYER)).toBe(true);
   });
 });

@@ -9,6 +9,7 @@ import {
   type InstancedMesh,
 } from 'three';
 import { useSceneScale, type ScaleMode } from '../scale.js';
+import { DECOR_LAYER } from '../layers.js';
 import { useAppStore } from '../../state/store.js';
 import {
   asteroidSquash,
@@ -93,6 +94,8 @@ function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
       key={count}
       ref={mesh}
       name="belt-rocks"
+      // Stays on layer 0: the rocks really hide task asteroids, so the outline's depth pass needs
+      // them (one instanced draw) to draw a covered outline as hidden (P3-08 review).
       args={[geometry, undefined, Math.max(1, count)]}
     >
       <meshStandardMaterial flatShading roughness={1} metalness={0} />
@@ -147,7 +150,7 @@ function TaskAsteroidMesh({
         />
       </mesh>
       {/* A soft halo: the back faces of a larger sphere, added on top (below the bloom threshold). */}
-      <mesh geometry={shapes.halo} scale={TASK_ASTEROID_RADIUS * 1.5}>
+      <mesh geometry={shapes.halo} scale={TASK_ASTEROID_RADIUS * 1.5} layers={DECOR_LAYER}>
         <meshBasicMaterial
           color="#5fd4ff"
           transparent
