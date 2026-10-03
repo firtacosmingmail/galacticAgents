@@ -38,7 +38,7 @@ useCameraStore((s) => s.flying);
 - **Keyboard**: the scene section is focusable (`tabIndex=0`, `aria-keyshortcuts`, a focus ring on `:focus-visible`). A pointer-down on the scene focuses it, so the shortcuts work right after a click.
 - **Order of next/previous**: the Sun, then the planets, the moons, the asteroids; within a kind, by distance from the Sun (for asteroids, by orbit radius); ties by id. It wraps around. With nothing focused, `]` starts at the Sun and `[` at the last body.
 
-## Proposed SPEC / TECHNOLOGY text
+## Proposed SPEC / TECHNOLOGY text (recorded: SPEC decisions 63, 64 and TECHNOLOGY §2.1)
 
 **SPEC §7, new decision (camera navigation):**
 

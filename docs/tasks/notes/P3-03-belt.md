@@ -40,7 +40,7 @@ All of it lives in `apps/web/src/scene/belt/`, apart from the generator move and
   - `packages/protocol/src/belt.test.ts` pins `asteroidSpec(1, 2, 7, 42, 1000)` to the values captured from the server before the move. The server's `catalogue.test.ts` (19 tests) is unchanged and passes.
 - Not touched: `SolarScene.tsx`, `scale.ts`, `anchors.ts`, `bodies/`, `camera/`, the phase file, the task README, SPEC and TECHNOLOGY.
 
-## Proposed SPEC / TECHNOLOGY text (for the coordinator to apply)
+## Proposed SPEC / TECHNOLOGY text (recorded: SPEC decisions 63, 64 and TECHNOLOGY §2.1)
 
 **TECHNOLOGY §2.1**, a new bullet after the quality-tier bullet:
 

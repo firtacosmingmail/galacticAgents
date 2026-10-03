@@ -21,7 +21,7 @@ Branch `p3-02-bodies`, from `p3-wave2-bodies-belt-camera`. It has the wave-2 bra
 
 Only `high` has `shadows: true`. The point-light shadow map is six cube-face depth passes over about 30 meshes; at the system view it shows the planets' night sides as solid. Its visible pay-off comes when zoomed in: Saturn's shadow on its rings, and moons eclipsed by their planet. Rings only receive. A transparent ring casting would throw a solid annulus, because the depth pass ignores alpha. The cost on the Mac should be checked with `?fps=1`, and P3-06/P3-08 can drop it.
 
-## Proposed SPEC / TECHNOLOGY text
+## Proposed SPEC / TECHNOLOGY text (recorded: SPEC decisions 63, 64 and TECHNOLOGY §2.1)
 
 **SPEC §7, new decision (scene scale and motion):**
 
