@@ -1,0 +1,309 @@
+/*
+ * The settings page and the first-run wizard (P25-08), on the panel's tokens (panel.css).
+ * One column, readable width; red only for refusals, amber stays the panel's "blocked on you".
+ */
+.set-page {
+  flex: 1;
+  width: 100%;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 16px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.set-page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.set-section {
+  background: var(--pnl-surface);
+  border: 1px solid var(--pnl-line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.set-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.set-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.set-intro {
+  margin: 0;
+  color: var(--pnl-muted);
+}
+.set-muted {
+  color: var(--pnl-muted);
+}
+.set-tag {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--pnl-line);
+  color: var(--pnl-muted);
+}
+.set-tag-ok {
+  color: #3fb67a;
+  border-color: currentColor;
+}
+.set-tag-bad {
+  color: #e0605b;
+  border-color: currentColor;
+}
+.set-note {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--pnl-raised);
+}
+.set-error,
+.set-field-error {
+  margin: 0;
+  color: #e0605b;
+}
+.set-field-error {
+  font-size: 12px;
+}
+.set-restart {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--pnl-here-soft);
+}
+.set-saved {
+  margin: 0;
+  color: #3fb67a;
+}
+.set-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.set-inline {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.set-input,
+.set-section select {
+  font: inherit;
+  color: var(--pnl-ink);
+  background: var(--pnl-bg);
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.set-input-wide {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--pnl-mono);
+}
+.set-input-num {
+  width: 8em;
+}
+.set-input[aria-invalid='true'] {
+  border-color: #e0605b;
+}
+.set-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.set-section button,
+.set-page-head button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--pnl-here);
+  background: var(--pnl-here);
+  color: #fff;
+}
+.set-section button.set-secondary,
+.set-page-head button.set-secondary {
+  background: var(--pnl-raised);
+  color: var(--pnl-ink);
+  border-color: var(--pnl-line);
+}
+.set-section button:disabled,
+.set-page-head button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* permission table */
+.set-policy {
+  width: 100%;
+  border-collapse: collapse;
+}
+.set-policy th,
+.set-policy td {
+  text-align: left;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--pnl-line);
+  vertical-align: middle;
+}
+.set-policy thead th {
+  font-size: 12px;
+  color: var(--pnl-muted);
+  font-weight: 500;
+}
+.set-policy tbody th {
+  font-weight: 400;
+}
+.set-policy tr.is-changed th {
+  font-weight: 600;
+}
+.set-policy td.set-muted {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* caps */
+.set-caps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.set-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.set-radios {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.set-radio,
+.set-check {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+/* runtime check */
+.set-runtime {
+  border-top: 1px solid var(--pnl-line);
+  padding-top: 8px;
+}
+.set-runtime-name {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+.set-ok {
+  color: #3fb67a;
+}
+.set-bad {
+  color: #e0605b;
+}
+.set-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+.set-facts div {
+  display: flex;
+  gap: 6px;
+}
+.set-facts dt {
+  color: var(--pnl-muted);
+}
+.set-facts dd {
+  margin: 0;
+  font-family: var(--pnl-mono);
+}
+.set-problems {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.set-problem-error {
+  color: #e0605b;
+}
+.set-fix {
+  color: var(--pnl-ink);
+}
+
+/* access */
+.set-token {
+  font-family: var(--pnl-mono);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--pnl-raised);
+  overflow-wrap: anywhere;
+}
+.set-qr {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.set-qr > span {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--pnl-line);
+  border-radius: 8px;
+  color: var(--pnl-muted);
+  font-family: var(--pnl-mono);
+}
+.set-qr p {
+  margin: 0;
+}
+
+/* wizard */
+.set-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--pnl-muted);
+}
+.set-steps li[aria-current='step'] {
+  color: var(--pnl-here);
+  font-weight: 600;
+}
+.set-steps li.is-past {
+  color: var(--pnl-ink);
+}
+.set-wizard-nav {
+  margin-top: 4px;
+}
+
+.pnl-settings-link.pnl-link {
+  font-size: 13px;
+}
+
+.set-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
