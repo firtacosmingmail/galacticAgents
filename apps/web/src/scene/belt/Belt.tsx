@@ -26,6 +26,7 @@ import {
 import { rockGeometry, writeBeltInstances } from './belt-mesh.js';
 import { useBodyAnchor } from '../anchor-binding.js';
 import { useReducedMotion } from '../motion.js';
+import { PLACE_BODIES } from '../frame-order.js';
 
 /**
  * The asteroid belt (P3-03): thousands of background rocks in ONE instanced mesh (one draw call,
@@ -48,10 +49,11 @@ export function Belt({ rocks }: { rocks: number }) {
   const asteroids = useMemo(() => taskAsteroids(bodies), [bodies]);
   const spin = useRef<Group>(null);
 
+  // The task asteroids ride the spin: placed before their readers (`frame-order.ts`).
   useFrame((_, delta) => {
     const group = spin.current;
     if (group) group.rotation.y += beltSpin(delta, reducedMotion);
-  });
+  }, PLACE_BODIES);
 
   // Shared by every task asteroid: one rock shape (detail 1), one halo sphere, one pick sphere.
   const shapes = useMemo(
