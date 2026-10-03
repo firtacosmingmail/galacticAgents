@@ -11,8 +11,12 @@ import type { QualityTier } from '@galactic/protocol';
  *   The threshold is 1.0 (linear luminance before tone mapping): only HDR emitters bloom, never
  *   the stars (capped at `STAR_MAX_BRIGHTNESS`, below it);
  * - `stars`: points in the star-field skybox;
- * - `shadows`: whether the tier may use a shadow map. Not wired yet: nothing receives shadows, so
- *   the canvas has no shadow map and the Sun's light casts none until P3-02 adds the planets.
+ * - `beltRocks`: background rocks in the asteroid belt (P3-03): one instanced mesh, one draw call
+ *   whatever the count; a lighter tier draws a prefix of the same deterministic belt;
+ * - `shadows`: the shadow map and the Sun light's point shadow (P3-02): planets and the largest
+ *   moons cast (each caster is drawn into all six cube faces every frame, so small moons do not:
+ *   `bodies/layout.ts` `castsShadow`), every body and the rings receive (Saturn's shadow on its
+ *   rings, eclipses of moons).
  */
 /** Linear luminance a pixel needs (before tone mapping) to bloom. */
 export const BLOOM_THRESHOLD = 1.0;
@@ -31,6 +35,7 @@ export interface SceneQuality {
   antialias: boolean;
   bloom: { intensity: number; threshold: number; mipmapBlur: boolean } | null;
   stars: number;
+  beltRocks: number;
   shadows: boolean;
 }
 
@@ -41,6 +46,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     antialias: true,
     bloom: { intensity: 1.4, threshold: BLOOM_THRESHOLD, mipmapBlur: true },
     stars: 9000,
+    beltRocks: 6000,
     shadows: true,
   },
   balanced: {
@@ -49,6 +55,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     antialias: true,
     bloom: { intensity: 1.0, threshold: BLOOM_THRESHOLD, mipmapBlur: true },
     stars: 5000,
+    beltRocks: 3500,
     shadows: false,
   },
   mobile: {
@@ -57,6 +64,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     antialias: false,
     bloom: null,
     stars: 2000,
+    beltRocks: 1200,
     shadows: false,
   },
 };

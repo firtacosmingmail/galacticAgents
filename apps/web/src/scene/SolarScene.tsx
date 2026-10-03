@@ -1,20 +1,37 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bloom, EffectComposer, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
-import { AdditiveBlending, CanvasTexture, SRGBColorSpace, WebGLRenderer } from 'three';
+import {
+  AdditiveBlending,
+  CanvasTexture,
+  SRGBColorSpace,
+  WebGLRenderer,
+  type Camera,
+  type Group,
+  type Points,
+} from 'three';
 import { FpsCounter, type FpsSample } from './fps.js';
 import { BLOOM_SMOOTHING, SUN_EMISSIVE, type SceneQuality } from './quality.js';
-import { generateStarField } from './starfield.js';
+import { centreOnCamera, generateStarField } from './starfield.js';
+import { Bodies } from './bodies/Bodies.js';
+import { SUN_ANCHOR_ID } from './anchors.js';
+import { attachAnchor } from './anchor-binding.js';
+import { motionEnabled, sceneFrameloop, useReducedMotion } from './motion.js';
+import { Belt } from './belt/Belt.js';
+import { CameraRig } from './camera/CameraRig.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
- * sRGB output with ACES filmic tone mapping, the star-field skybox and the Sun with bloom. This is
- * the only module of the scene that imports three.js; the panel loads it lazily (`SceneArea`), so
- * three.js stays out of the panel's first chunk and out of jsdom tests.
+ * sRGB output with ACES filmic tone mapping, the star-field skybox and the Sun with bloom, and the
+ * wave 2 parts (bodies, belt, camera rig). The panel loads this module lazily (`SceneArea`), so
+ * three.js and everything that imports it at runtime (this module and the parts under it) stay
+ * out of the panel's first chunk; modules the panel imports directly (`scale.ts`, `motion.ts`,
+ * `anchors.ts`, `camera/store.ts`) use type-only three imports.
  *
- * Nothing moves yet, so the canvas renders on demand (resize, a setting change); the fps meter
- * switches it to a continuous loop so the meter measures a real frame rate.
+ * The frame loop is continuous while the decorative orbital motion runs (P3-02) or the fps meter
+ * measures; with `prefers-reduced-motion` and no meter it renders on demand (resize, a change).
+ * The tier's `shadows` flag turns on the shadow map and the Sun light's shadow (P3-02).
  */
 export interface SolarSceneProps {
   quality: SceneQuality;
@@ -25,6 +42,13 @@ export interface SolarSceneProps {
 }
 
 export const SUN_RADIUS = 6;
+/**
+ * The Sun light's shadow (P3-02, tiers with `shadows`): one point-light shadow map, PCF filtered,
+ * reaching past Neptune's moons in true scale. Its main effect is Saturn's shadow on its rings
+ * and moons eclipsed by their planet.
+ */
+const SHADOW_MAP_SIZE = 1024;
+const SHADOW_FAR = 1300;
 const BACKGROUND = '#02030a';
 
 export default function SolarScene({ quality, onFps, onContextLost }: SolarSceneProps) {
@@ -42,18 +66,36 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       }
       // sRGB output and ACES filmic tone mapping are R3F's defaults (not `flat`, not `linear`).
       dpr={[1, quality.dprCap]}
-      // No shadow map yet: nothing receives shadows. P3-02 turns it on from `quality.shadows`
-      // (PCF, `shadows="percentage"`: three r18x dropped the PCFSoft that `shadows={true}` asks
-      // for) together with the Sun light's `castShadow`.
-      frameloop={onFps ? 'always' : 'demand'}
+      // The shadow map follows `quality.shadows` (PCF, `shadows="percentage"`: three r18x dropped
+      // the PCFSoft that `shadows={true}` asks for), together with the Sun light's `castShadow`,
+      // so a tier change also changes the lights' state and the materials recompile.
+      frameloop={sceneFrameloop({
+        motion: motionEnabled(useReducedMotion()),
+        fpsMeter: onFps !== undefined,
+      })}
+      shadows={quality.shadows ? 'percentage' : false}
       camera={{ position: [0, 40, 140], fov: 45, near: 0.1, far: 6000 }}
     >
       <color attach="background" args={[BACKGROUND]} />
       <ambientLight intensity={0.04} />
       {/* The Sun lights the planets (P3-02); decay 0 so spacing does not change their brightness. */}
-      <pointLight position={[0, 0, 0]} intensity={3} decay={0} />
+      <pointLight
+        position={[0, 0, 0]}
+        intensity={3}
+        decay={0}
+        castShadow={quality.shadows}
+        shadow-mapSize={[SHADOW_MAP_SIZE, SHADOW_MAP_SIZE]}
+        shadow-camera-near={SUN_RADIUS}
+        shadow-camera-far={SHADOW_FAR}
+        shadow-bias={-0.0005}
+        shadow-normalBias={0.02}
+      />
       <StarField count={quality.stars} />
       <Sun glow={quality.bloom === null} />
+      {/* Phase 3 wave 2: each task owns its folder; they meet through `anchors.ts`. */}
+      <Bodies />
+      <Belt rocks={quality.beltRocks} />
+      <CameraRig />
       {quality.bloom && (
         <EffectComposer multisampling={quality.antialias ? 4 : 0}>
           <Bloom
@@ -72,11 +114,20 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
   );
 }
 
+/**
+ * The sky: a shell of points centred on the camera, moved to it just before it is drawn, so the
+ * stars surround the viewer at any zoom and in either scale (the true-scale overview sits farther
+ * from the Sun than the shell's radius) and show no parallax, like a skybox.
+ */
 function StarField({ count }: { count: number }) {
   const { positions, colors } = useMemo(() => generateStarField(count), [count]);
+  const ref = useRef<Points>(null);
+  const follow = useCallback((_gl: unknown, _scene: unknown, camera: Camera) => {
+    if (ref.current) centreOnCamera(ref.current, camera);
+  }, []);
   return (
     // A new geometry per count: buffer attributes cannot grow in place.
-    <points key={count} frustumCulled={false}>
+    <points key={count} ref={ref} frustumCulled={false} onBeforeRender={follow}>
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
         <bufferAttribute attach="attributes-color" args={[colors, 3]} />
@@ -94,12 +145,18 @@ function StarField({ count }: { count: number }) {
 
 /**
  * An emissive sphere bright enough (luminance well above the bloom threshold before tone mapping)
- * for the bloom pass to pick up; the stars stay below it. Without bloom (the mobile tier) a sprite with a radial gradient stands in for the glow: one
- * quad, a texture drawn at runtime (no image asset).
+ * for the bloom pass to pick up; the stars stay below it. Without bloom (the mobile tier) a sprite
+ * with a radial gradient stands in for the glow: one quad, a texture drawn at runtime (no image
+ * asset). Registers as the catalogue Sun's anchor (`b-sun`, P3-02).
  */
 function Sun({ glow }: { glow: boolean }) {
+  const ref = useRef<Group>(null);
+  useEffect(
+    () => attachAnchor({ bodyId: SUN_ANCHOR_ID, radius: SUN_RADIUS, kind: 'star' }, ref.current),
+    [],
+  );
   return (
-    <group name="sun">
+    <group ref={ref} name="sun" userData={{ bodyId: SUN_ANCHOR_ID }}>
       <mesh>
         <sphereGeometry args={[SUN_RADIUS, 64, 32]} />
         <meshStandardMaterial

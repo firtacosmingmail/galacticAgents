@@ -1,7 +1,7 @@
 # Phase 3 — Solar system scene
 
-**Current task:** P3-02, P3-03, P3-04 (wave 2, after wave 1 is merged into `phase-3`) · **Task status:** todo
-**Phase status:** in progress (1/8 done) — on branch `phase-3`
+**Current task:** P3-05, P3-06 (wave 3, after wave 2 is merged into `phase-3`) · **Task status:** todo
+**Phase status:** in progress (4/8 done) — on branch `phase-3`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -47,17 +47,17 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 - **Acceptance:** scene renders at 60 fps on the Mac at "high"; hiding it leaves the panel fully functional.
 
 ### P3-02 — Planets, moons, orbits and scale
-- **Status:** todo · **Depends on:** P3-01 · **Parallel with:** P3-03, P3-04
+- **Status:** done (2026-10-03) · **Depends on:** P3-01 · **Parallel with:** P3-03, P3-04
 - `<Planet>` / `<Moon>` components: textures, axial tilt, rings for Saturn and Uranus, major moons on orbits around their planet; hand-tuned spacing table; slow decorative orbital motion; "true scale" toggle (with the UI note from corner case 25).
 - **Acceptance:** all 8 planets and the seeded moons visible and identifiable; toggle switches scale without breaking selection.
 
 ### P3-03 — Asteroid belt
-- **Status:** todo · **Depends on:** P3-01 · **Parallel with:** P3-02, P3-04
+- **Status:** done (2026-10-03) · **Depends on:** P3-01 · **Parallel with:** P3-02, P3-04
 - Instanced belt (thousands of rocks) from the deterministic generator seed (P2-02) so the belt looks stable across runs; task-hosting asteroids rendered as individual meshes with labels and pick targets; belt navigable.
 - **Acceptance:** one draw call for the belt; task asteroids stand out and are pickable.
 
 ### P3-04 — Camera controls and fly-to
-- **Status:** todo · **Depends on:** P3-01 · **Parallel with:** P3-02, P3-03
+- **Status:** done (2026-10-03) · **Depends on:** P3-01 · **Parallel with:** P3-02, P3-03
 - Orbit/pan/zoom controls (drei), click-to-focus with smooth flight to a body, breadcrumb "back to system", focus always reachable (corner case 26), keyboard shortcuts for next/previous body.
 - **Acceptance:** flying to any body and back works from any camera state.
 

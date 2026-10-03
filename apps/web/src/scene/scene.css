@@ -31,3 +31,49 @@
     monospace;
   pointer-events: none;
 }
+.pnl-scene:focus-visible {
+  outline: 2px solid #5b8cff;
+  outline-offset: -2px;
+}
+/* Where the camera is (P3-04): "Solar system › Jupiter › Europa", over the scene's bottom-left. */
+.pnl-scene-crumbs {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  font-size: 13px;
+}
+.pnl-scene-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pnl-scene-crumbs li + li::before {
+  content: '›';
+  margin: 0 6px;
+  color: #8a91a6;
+}
+.pnl-scene-crumbs button {
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: #9db8ff;
+  font: inherit;
+  cursor: pointer;
+}
+.pnl-scene-crumbs button:hover {
+  text-decoration: underline;
+}
+.pnl-scene-crumbs button[aria-current] {
+  color: #d8dcea;
+}
+.pnl-scene-crumbs span {
+  padding: 2px 4px;
+  color: #d8dcea;
+}
