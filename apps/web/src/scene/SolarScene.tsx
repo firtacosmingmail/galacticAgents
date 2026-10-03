@@ -6,6 +6,9 @@ import { AdditiveBlending, CanvasTexture, SRGBColorSpace, WebGLRenderer } from '
 import { FpsCounter, type FpsSample } from './fps.js';
 import { BLOOM_SMOOTHING, SUN_EMISSIVE, type SceneQuality } from './quality.js';
 import { generateStarField } from './starfield.js';
+import { Bodies } from './bodies/Bodies.js';
+import { Belt } from './belt/Belt.js';
+import { CameraRig } from './camera/CameraRig.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -54,6 +57,10 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <pointLight position={[0, 0, 0]} intensity={3} decay={0} />
       <StarField count={quality.stars} />
       <Sun glow={quality.bloom === null} />
+      {/* Phase 3 wave 2: each task owns its folder; they meet through `anchors.ts`. */}
+      <Bodies />
+      <Belt />
+      <CameraRig />
       {quality.bloom && (
         <EffectComposer multisampling={quality.antialias ? 4 : 0}>
           <Bloom
