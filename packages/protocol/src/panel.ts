@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
-import { AgentRole, AgentRuntime, QuestionKind } from './enums.js';
-import { Actor, PermissionPolicy, TranscriptChunk, type Question } from './domain.js';
+import { AgentRole, AgentRuntime, HostKind, QuestionKind } from './enums.js';
+import { Actor, PermissionPolicy, Project, Question, Task, TranscriptChunk } from './domain.js';
 import type { EventEnvelope } from './events.js';
 
 // ---------------------------------------------------------------------------
@@ -426,3 +426,94 @@ export function notificationOf(
       return undefined;
   }
 }
+
+// --- history (P25-10) -------------------------------------------------------------------------
+
+/**
+ * SPEC §4.2's history view: finished and archived work and past questions, read over REST (the
+ * snapshot carries every row today, but the history grows without bound and is searched, so the
+ * server pages it rather than the client folding it). Both lists are newest first by the row's
+ * `updatedAt` — when the work last changed (finished, archived, pinned) or the question was
+ * answered or cancelled — and page back with the opaque `cursor` of the last item (`before`).
+ */
+
+/** The work states the history lists (SPEC §4.4): finished (closed, failed or cancelled) and archived. */
+export const HistoryWorkState = z.enum(['completed', 'failed', 'archived']);
+export type HistoryWorkState = z.infer<typeof HistoryWorkState>;
+
+/** The question statuses the history lists: answered, and cancelled (withdrawn, or ended with its agent). */
+export const HistoryQuestionStatus = z.enum(['answered', 'cancelled']);
+export type HistoryQuestionStatus = z.infer<typeof HistoryQuestionStatus>;
+
+/** Free-text search: trimmed, matched as a case-insensitive substring; blank means no search. */
+const SearchText = z
+  .string()
+  .trim()
+  .max(200)
+  .transform((s) => (s === '' ? undefined : s))
+  .optional();
+
+/**
+ * `GET /api/history/work?before=&q=&kind=&state=&limit=`: finished and archived projects and
+ * tasks. `q` searches a project's name and a task's description; `kind` keeps projects or tasks
+ * only; `state` keeps some of the history states (comma-separated, e.g. `completed,failed`).
+ */
+export const HistoryWorkQuery = z.object({
+  before: z.string().min(1).optional(),
+  q: SearchText,
+  kind: HostKind.optional(),
+  state: z
+    .string()
+    .transform((s) => s.split(',').filter(Boolean))
+    .pipe(z.array(HistoryWorkState).min(1))
+    .optional(),
+  limit: Limit,
+});
+export type HistoryWorkQuery = z.input<typeof HistoryWorkQuery>;
+
+/** One finished or archived project or task, as the domain table holds it, with its position. */
+export const HistoryWorkItem = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('project'), item: Project, cursor: z.string().min(1) }),
+  z.object({ kind: z.literal('task'), item: Task, cursor: z.string().min(1) }),
+]);
+export type HistoryWorkItem = z.infer<typeof HistoryWorkItem>;
+
+export const HistoryWorkResponse = z.object({
+  /** Newest first. */
+  items: z.array(HistoryWorkItem),
+  /** Older items exist: page again with `before` = the last item's `cursor`. */
+  hasMore: z.boolean(),
+});
+export type HistoryWorkResponse = z.infer<typeof HistoryWorkResponse>;
+
+/**
+ * `GET /api/history/questions?before=&q=&kind=&status=&limit=`: answered and cancelled
+ * questions. `q` searches the question's text and its answer.
+ */
+export const HistoryQuestionsQuery = z.object({
+  before: z.string().min(1).optional(),
+  q: SearchText,
+  kind: QuestionKind.optional(),
+  status: HistoryQuestionStatus.optional(),
+  limit: Limit,
+});
+export type HistoryQuestionsQuery = z.input<typeof HistoryQuestionsQuery>;
+
+/**
+ * One past question as the domain table (and the stream) holds it: who answered (`answeredBy`),
+ * the answer, and when (`updatedAt`). A cancelled one carries the `reason` of its
+ * `question.cancelled` (withdrawn by its agent, ended with its agent, …).
+ */
+export const HistoryQuestion = z.object({
+  question: Question,
+  reason: z.string().optional(),
+  cursor: z.string().min(1),
+});
+export type HistoryQuestion = z.infer<typeof HistoryQuestion>;
+
+export const HistoryQuestionsResponse = z.object({
+  /** Newest first. */
+  items: z.array(HistoryQuestion),
+  hasMore: z.boolean(),
+});
+export type HistoryQuestionsResponse = z.infer<typeof HistoryQuestionsResponse>;

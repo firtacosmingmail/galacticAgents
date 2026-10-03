@@ -5,6 +5,11 @@ import type {
   ConversationQuery,
   ConversationResponse,
   DecideResponse,
+  HistoryQuestionsQuery,
+  HistoryQuestionsResponse,
+  HistoryWorkQuery,
+  HistoryWorkResponse,
+  HistoryWorkState,
   MessagesResponse,
   PreflightResponse,
   ProposalDecisionBody,
@@ -114,7 +119,27 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     /** The runtime preflight; `refresh` runs the checks again instead of the cached result. */
     preflight: (refresh = false) =>
       call<PreflightResponse>('GET', `/api/preflight${refresh ? '?refresh=1' : ''}`),
+    /** The history view (P25-10): finished and archived work, newest first, paged by `before`. */
+    historyWork: (query: HistoryWorkFilter = {}) =>
+      call<HistoryWorkResponse>('GET', `/api/history/work${queryString(query)}`),
+    /** The history view (P25-10): answered and cancelled questions, newest first. */
+    historyQuestions: (query: HistoryQuestionsQuery = {}) =>
+      call<HistoryQuestionsResponse>('GET', `/api/history/questions${queryString(query)}`),
   };
 }
 
 export type Api = ReturnType<typeof createApi>;
+
+/** `GET /api/history/work`'s query as the client builds it (`state` as a list). */
+export type HistoryWorkFilter = Omit<HistoryWorkQuery, 'state'> & { state?: HistoryWorkState[] };
+
+/** `?k=v&…` of the defined values (a list joined by commas), or `''`. */
+function queryString(query: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v === undefined || v === '') continue;
+    params.set(k, Array.isArray(v) ? v.join(',') : String(v));
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
