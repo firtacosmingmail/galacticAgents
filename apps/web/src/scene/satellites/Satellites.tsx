@@ -16,6 +16,7 @@ import type { Id } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { getAnchor, onAnchorsChanged } from '../anchors.js';
 import { useCameraStore } from '../camera/store.js';
+import { PLACE_SATELLITES } from '../frame-order.js';
 import { DECOR_LAYER } from '../layers.js';
 import { motionSeconds, useReducedMotion } from '../motion.js';
 import type { Vec3Tuple } from '../orbit.js';
@@ -45,6 +46,7 @@ import {
 import { getSatellite, onSatellitesChanged, satelliteIds } from './registry.js';
 import { HqStation, HqTargets, writeHq } from './hq/HqStation.js';
 import { ordinarySatellites } from './hq/hq-model.js';
+import { useHeldArchetypes } from './activity/use-held-archetypes.js';
 
 /**
  * The satellites (P4-01; SPEC §4.1, TECHNOLOGY §2.1): one per live Waykeeper and Steward, orbiting
@@ -78,6 +80,7 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
     () => satelliteList({ agents, statuses, tasks, projects }, SCENE_SATELLITES),
     [agents, statuses, tasks, projects],
   );
+  const held = useHeldArchetypes(list); // P4-03: Steward archetypes, held against flicker
   const reducedMotion = useReducedMotion();
   const invalidate = useThree((s) => s.invalidate);
 
@@ -93,11 +96,11 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
   // The director keeps its actors across list changes; only a real change reaches it.
   const applied = useRef<SatelliteSpec[]>([]);
   useLayoutEffect(() => {
-    if (sameSatellites(applied.current, list)) return;
-    applied.current = list;
-    director.setSpecs(list, motionSeconds());
+    if (sameSatellites(applied.current, held)) return;
+    applied.current = held;
+    director.setSpecs(held, motionSeconds());
     invalidate();
-  }, [director, list, invalidate]);
+  }, [director, held, invalidate]);
   // Unmount forgets everything, and so does StrictMode's rehearsed unmount — which re-runs the
   // layout effect above next, so `applied` must forget too or the satellites never come back.
   useEffect(
@@ -137,7 +140,7 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
     if (instanced) writeInstanced(frames, targets, bloom);
     else writeMeshes(frames, targets, bloom);
     writeHq(frames, hq, { bloom, now: motionSeconds(), reducedMotion, state: hqState });
-  });
+  }, PLACE_SATELLITES);
 
   if (agentIds.length === 0) return null;
   const station = hqId ? (

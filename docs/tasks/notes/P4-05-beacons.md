@@ -50,7 +50,7 @@ TECHNOLOGY §2.1: a "Question beacons" bullet was added after the Satellites bul
 - `beacons-ui.test.tsx` (6, jsdom): **click → inbox reveal** (the permission card is focused, scrolled into view and highlighted, then the highlight clears; the selection is unchanged; the popover closes); no beacon → nothing; waits for the inbox, then falls back to the inbox; a card mounted a frame later is found; the hover card's content; the card follows answers made elsewhere and disappears.
 - `Picking.test.tsx` (+2): a beacon wins over the moon under it on hover; a click on a beacon reveals the question, selects nothing and flies nowhere.
 - `Legend.test.tsx`: asserts the beacon row.
-- Gates from the repo root, after merging P4-02: build, typecheck, lint, format:check and test all green. protocol 67, server 845 (+1 skipped), web 814 (36 new for P4-05).
+- Gates from the repo root, after merging P4-02: build, typecheck, lint, format:check and test all green. protocol 67, server 845 (+1 skipped), web 912 after merging P4-03 too (36 new for P4-05).
 
 ### Smoke check in a real browser (throwaway harness, deleted, not committed)
 
@@ -82,7 +82,7 @@ This check found the frame-order bug above (the mobile tier with reduced motion 
 
 ## Shared files touched
 
-- `apps/web/src/scene/SolarScene.tsx`: one import and `<Beacons />` mounted right after `<CameraRig />`, with a comment.
+- `apps/web/src/scene/SolarScene.tsx`: one import and `<Beacons />` mounted right after `<CameraRig />`, with a comment. (After merging P4-03: the order is Satellites, Activities, CameraRig, Beacons, Picking; beacons run at the default frame priority 0, after bodies (−1) and satellites (`PLACE_SATELLITES`, −0.5).)
 - `apps/web/src/scene/picking/Picking.tsx`: `aim()` was factored out of `pick()`. The beacon check is first in `hoverNow` and in `onUp` (`at` is computed earlier there). The repick condition gained `beaconsDrawn()`, plus one doc paragraph.
 - `apps/web/src/scene/picking/store.ts`: the `BeaconHover` type, a `sameHover` branch and a `hoveredBody` doc.
 - `apps/web/src/scene/picking/PickingOverlay.tsx`: renders `BeaconHoverCard`.
