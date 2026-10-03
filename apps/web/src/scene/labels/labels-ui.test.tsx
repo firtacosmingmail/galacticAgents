@@ -287,6 +287,36 @@ describe('LabelProjector (one pass for every label)', () => {
     }
   });
 
+  it("a label whose body's anchor registers later shows on the next pass (demand loop)", () => {
+    r3f.state = { ...r3f.state, frameloop: 'demand' };
+    act(() => {
+      const world = useAppStore.getState().world;
+      const mars = world.bodies['b-mars']!;
+      useAppStore.setState({
+        world: {
+          ...world,
+          bodies: { ...world.bodies, 'b-mars': { ...mars, host: { kind: 'project', id: 'p-new' } } },
+        },
+      });
+    });
+    render(
+      <>
+        <LabelLayer />
+        <LabelProjector hz={30} />
+      </>,
+    );
+    frame();
+    expect(shown('b-mars')).toBe(false); // no anchor yet
+    const invalidate = r3f.state['invalidate'] as ReturnType<typeof vi.fn>;
+    invalidate.mockClear();
+    resetLabelStats();
+    anchor('b-mars', [-10, -20, 0], 'planet');
+    expect(invalidate).toHaveBeenCalled(); // the demand loop renders again…
+    frame(1); // …and that frame, well inside the throttle's interval, is a forced pass
+    expect(labelStats.updates).toBe(1);
+    expect(shown('b-mars')).toBe(true);
+  });
+
   it('de-clutters overlapping labels by priority (selected first)', () => {
     anchor('b-ast-9', [30, 4, 0], 'asteroid'); // just above Jupiter: the labels overlap
     render(

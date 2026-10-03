@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Matrix4, type PerspectiveCamera } from 'three';
-import { allAnchors, getAnchor } from '../anchors.js';
+import { allAnchors, getAnchor, onAnchorsChanged } from '../anchors.js';
 import { anchorPosition } from '../camera/store.js';
 import { pixelScale } from '../picking/pick.js';
 import {
@@ -33,7 +33,8 @@ import {
  * the Sun or a planet, de-clutters overlaps by priority, and writes a label's transform only when
  * it moved by more than half a pixel (and its visibility only when that changed).
  *
- * A new label, a content change (size, priority) or a resize forces the next update. Under the
+ * A new label, a new or removed anchor, a content change (size, priority) or a resize forces the
+ * next update. Under the
  * on-demand loop a skipped frame schedules one render for when the next update is due, so a
  * camera that stops between two updates still leaves its labels in place.
  */
@@ -48,14 +49,18 @@ export function LabelProjector({ hz }: { hz: number }) {
   useEffect(() => tools.throttle.setRate(hz), [tools, hz]);
 
   useEffect(() => {
-    const stop = onLabelsChanged(() => {
+    const refresh = () => {
       tools.throttle.force();
       invalidate();
-    });
-    tools.throttle.force();
-    invalidate();
+    };
+    // A label and its body's anchor register independently (the label in a layout effect, the
+    // anchor in the body's passive effect, in either order): either one arriving forces a pass.
+    const stopLabels = onLabelsChanged(refresh);
+    const stopAnchors = onAnchorsChanged(refresh);
+    refresh();
     return () => {
-      stop();
+      stopLabels();
+      stopAnchors();
       if (timer.current) clearTimeout(timer.current);
       timer.current = undefined;
       hideAll();
