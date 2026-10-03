@@ -1,4 +1,5 @@
 import type { BodyLook, RingLook } from './appearance.js';
+import { maskLevelFor, sampleLand } from './earth-mask.js';
 
 /**
  * Procedural surfaces (P3-02): equirectangular RGBA pixels painted from a body's look, as plain
@@ -86,6 +87,186 @@ export function extraOctaves(width: number): number {
   return Math.max(0, Math.min(2, Math.floor(Math.log2(width / 256))));
 }
 
+/** Earth's colours (sRGB) for the masked surface (P3-09). */
+const EARTH = {
+  deep: [11, 34, 78],
+  ocean: [20, 56, 112],
+  shallow: [38, 104, 156],
+  rainforest: [36, 78, 30],
+  forest: [54, 96, 40],
+  grass: [104, 128, 58],
+  savanna: [128, 128, 70],
+  boreal: [38, 70, 40],
+  tundra: [100, 102, 76],
+  sand: [214, 184, 128],
+  rock: [170, 140, 100],
+  ice: [238, 243, 248],
+} satisfies Record<string, [number, number, number]>;
+
+/** Land colour by |latitude| in degrees (equator → poles), before deserts and ice. */
+const LATITUDE_BIOMES: readonly [number, readonly [number, number, number]][] = [
+  [0, EARTH.rainforest],
+  [10, EARTH.rainforest],
+  [18, EARTH.savanna],
+  [26, EARTH.grass],
+  [40, EARTH.forest],
+  [52, EARTH.boreal],
+  [62, EARTH.boreal],
+  [70, EARTH.tundra],
+  [90, EARTH.tundra],
+];
+
+/**
+ * The great dry regions, as soft ellipses: [lat, lon, lat radius, lon radius, strength] in
+ * degrees. Deserts sit in the subtropical bands, but not all along them (Florida, southern China
+ * and Brazil are green): a pure latitude rule would paint them sand.
+ */
+const ARID: readonly (readonly [number, number, number, number, number])[] = [
+  [22, 10, 10, 32, 1], // Sahara
+  [23, 47, 9, 12, 1], // Arabia
+  [30, 60, 6, 11, 0.85], // Iran, Afghanistan, Pakistan
+  [26, 71, 4, 4, 0.7], // Thar
+  [42, 61, 5, 9, 0.75], // Karakum, Kyzylkum
+  [41, 94, 5, 17, 0.85], // Taklamakan, Gobi
+  [-25, 132, 10, 16, 0.95], // Australian outback
+  [-24, 19, 6, 6, 0.75], // Kalahari, Namib
+  [-21, -70, 9, 3, 0.8], // Atacama
+  [-44, -68, 6, 4, 0.55], // Patagonia
+  [32, -112, 7, 8, 0.8], // North American deserts
+  [7, 46, 5, 5, 0.6], // Horn of Africa
+];
+
+/**
+ * How dry the land is at a place, 0..1: the strongest of the arid regions, each fading out over its
+ * outer part, its edge pushed in and out by noise (`warp()`, about ±0.5, asked for only near a
+ * region) so no region reads as an ellipse.
+ */
+function aridity(latDeg: number, lonDeg: number, warp: () => number): number {
+  let a = 0;
+  let w: number | undefined;
+  for (const [la, lo, rl, rn, k] of ARID) {
+    let dl = Math.abs(lonDeg - lo);
+    if (dl > 180) dl = 360 - dl;
+    const r = Math.sqrt(((latDeg - la) / rl) ** 2 + (dl / rn) ** 2);
+    if (r > 1.6) continue;
+    w ??= warp();
+    const d = r + w;
+    if (d < 1) a = Math.max(a, k * smooth(Math.min(1, (1 - d) / 0.45)));
+  }
+  return a;
+}
+
+/** A colour being mixed (sRGB bytes as floats); scratch space, so a texel allocates nothing. */
+type Rgb = [number, number, number];
+
+/** `out` ← `a` + (`b` − `a`) · `t` (`out` may be `a` or `b`). */
+function mixInto(out: Rgb, a: readonly number[], b: readonly number[], t: number): Rgb {
+  out[0] = a[0]! + (b[0]! - a[0]!) * t;
+  out[1] = a[1]! + (b[1]! - a[1]!) * t;
+  out[2] = a[2]! + (b[2]! - a[2]!) * t;
+  return out;
+}
+
+function biomeInto(out: Rgb, absLat: number): Rgb {
+  for (let k = 1; k < LATITUDE_BIOMES.length; k++) {
+    const [l1, c1] = LATITUDE_BIOMES[k]!;
+    if (absLat <= l1) {
+      const [l0, c0] = LATITUDE_BIOMES[k - 1]!;
+      return mixInto(out, c0, c1, (absLat - l0) / (l1 - l0));
+    }
+  }
+  return mixInto(out, EARTH.tundra, EARTH.tundra, 0);
+}
+
+function clamp01(x: number): number {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
+/** One texel of Earth's surface, as `earthTexel` leaves it. */
+interface EarthTexel {
+  rgb: Rgb;
+  relief: number;
+  rough: number;
+}
+
+const ground: Rgb = [0, 0, 0];
+const desert: Rgb = [0, 0, 0];
+
+/**
+ * One texel of Earth's masked surface (P3-09), written into `out`: land or sea from the real mask
+ * (bilinear, at the pyramid level matching the texture's size, with a noisy threshold so coasts
+ * are not pixel stairs), latitude biomes and the great deserts on land, ice on Antarctica,
+ * Greenland and the high Arctic, shallow seas along the coasts, the seeded noise on top for
+ * texture. `lat` and `lon` are the painter's radians (lon 0..2π from u = 0, i.e. from 180°W).
+ */
+function earthTexel(
+  out: EarthTexel,
+  lat: number,
+  lon: number,
+  sx: number,
+  sy: number,
+  sz: number,
+  seed: number,
+  extra: number,
+  maskLevel: number,
+): void {
+  const latDeg = (lat * 180) / Math.PI;
+  const lonDeg = (lon * 180) / Math.PI - 180;
+  const land = sampleLand(latDeg, lonDeg, maskLevel);
+  // Land fraction → land weight `a`, through a threshold wobbled by noise along the coasts only
+  // (open sea and inland texels skip the noise: they are 0 or 1 whatever the threshold).
+  let a: number;
+  if (land > 0.02 && land < 0.98) {
+    const threshold = 0.5 + (fbm(sx * 22, sy * 22, sz * 22, seed + 3, 3 + extra) - 0.5) * 0.4;
+    a = smooth(clamp01((land - threshold) / 0.24 + 0.5));
+  } else a = land < 0.5 ? 0 : 1;
+
+  // Sea: deep far out, shallow along the coasts (a coarse level of the mask).
+  const n = fbm(sx * 2.2, sy * 2.2, sz * 2.2, seed, 5 + extra);
+  const rgb = out.rgb;
+  if (a < 1) {
+    const near = sampleLand(latDeg, lonDeg, Math.max(maskLevel, 2));
+    mixInto(rgb, EARTH.deep, EARTH.ocean, clamp01(near * 2.5 + (n - 0.5) * 0.6));
+    mixInto(rgb, rgb, EARTH.shallow, clamp01(near * 2 - 0.1) * 0.55);
+  }
+  out.relief = 0.3;
+  out.rough = OCEAN_ROUGHNESS;
+  if (a <= 0) return;
+
+  const d = fbm(sx * 5, sy * 5, sz * 5, seed + 5, 3 + extra);
+  biomeInto(ground, Math.max(0, Math.abs(latDeg) + (d - 0.5) * 12 + (n - 0.5) * 8));
+  const dry = aridity(latDeg, lonDeg, () => {
+    const w = fbm(sx * 9, sy * 9, sz * 9, seed + 17, 3 + extra) - 0.5;
+    return w * 1.6 + (d - 0.5) * 0.6;
+  });
+  if (dry > 0) {
+    mixInto(desert, EARTH.sand, EARTH.rock, contrast(n, 2));
+    mixInto(ground, ground, desert, dry);
+  }
+  // Texture: brighter and darker patches.
+  const shade = 0.86 + d * 0.28;
+  ground[0] *= shade;
+  ground[1] *= shade;
+  ground[2] *= shade;
+  // Ice sheets: Antarctica, Greenland, the high Arctic islands.
+  const iceEdge = latDeg < 0 ? -62 + (d - 0.5) * 6 : 72 + (d - 0.5) * 6;
+  const polar = latDeg < 0 ? latDeg < iceEdge : latDeg > iceEdge;
+  // Greenland: east of a line along Baffin Bay and the Davis Strait (Baffin Island stays brown).
+  const greenland = latDeg > 59 && lonDeg < -10 && lonDeg > -48 - (latDeg - 60) * 1.3;
+  const ice = polar ? 1 : greenland ? smooth(clamp01((latDeg - 59) / 2)) : 0;
+  if (ice > 0) mixInto(ground, ground, EARTH.ice, ice);
+  if (a >= 1) {
+    rgb[0] = ground[0];
+    rgb[1] = ground[1];
+    rgb[2] = ground[2];
+  } else mixInto(rgb, rgb, ground, a);
+  const landRelief = clamp01((0.45 + (n - 0.5) * 1.1 + (d - 0.5) * 0.4) * (1 - ice * 0.5));
+  out.relief = 0.3 + (landRelief - 0.3) * a;
+  const landRough = MATTE_ROUGHNESS + (0.7 - MATTE_ROUGHNESS) * ice;
+  out.rough =
+    a >= 1 && ice === 0 ? MATTE_ROUGHNESS : OCEAN_ROUGHNESS + (landRough - OCEAN_ROUGHNESS) * a;
+}
+
 /** A painted surface: the colour map and, when asked for, the detail map. */
 export interface SurfaceLayers {
   /** `width` × `height` RGBA bytes (sRGB). */
@@ -127,6 +308,8 @@ export function paintSurfaceLayers(
   const seed = look.seed * 7919;
   const extra = extraOctaves(width);
   const matte = Math.round(MATTE_ROUGHNESS * 255);
+  const maskLevel = look.landMask === 'earth' ? maskLevelFor(width) : 0;
+  const texel: EarthTexel = { rgb: [0, 0, 0], relief: 0, rough: 0 };
   for (let j = 0; j < height; j++) {
     const lat = ((j + 0.5) / height) * Math.PI - Math.PI / 2;
     const cosLat = Math.cos(lat);
@@ -160,6 +343,14 @@ export function paintSurfaceLayers(
           break;
         }
         case 'earth': {
+          if (look.landMask === 'earth') {
+            earthTexel(texel, lat, lon, sx, sy, sz, seed, extra, maskLevel);
+            rgb = texel.rgb;
+            relief = texel.relief;
+            rough = texel.rough;
+            break;
+          }
+          // Noise continents (an Earth-like body without a mask).
           // palette: deep ocean, shallow ocean, land, dry land.
           const n = fbm(sx * 2.2, sy * 2.2, sz * 2.2, seed, 5 + extra);
           const [deep, shallow, land, dry] = [palette[0]!, palette[1]!, palette[2]!, palette[3]!];
