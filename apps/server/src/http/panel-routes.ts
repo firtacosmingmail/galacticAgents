@@ -14,7 +14,7 @@ import {
   type TranscriptResponse,
 } from '@galactic/protocol';
 import type { ServerConfig } from '../config/config.js';
-import { SettingsError, type SettingsService } from '../config/settings.js';
+import { SettingsError, writableFor, type SettingsService } from '../config/settings.js';
 import type { EventLog } from '../domain/event-log.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
 import { History } from '../runtime/history.js';
@@ -107,15 +107,23 @@ export function registerPanelRoutes(
 
     const { settings } = opts;
     if (settings) {
-      app.get('/api/settings', async (): Promise<SettingsResponse> => settings.response());
+      // `writable` tells the client what it may change, decided as the patch decides it.
+      const writeOf = (req: Parameters<typeof originOf>[0]) => ({
+        origin: originOf(req),
+        autoApproveRemote: config.autoApproveRemote,
+      });
+      app.get('/api/settings', async (req): Promise<SettingsResponse> =>
+        settings.response({ writable: writableFor(writeOf(req)) }),
+      );
       app.patch('/api/settings', async (req, reply) => {
         const patch = parse(SettingsPatch, req.body, reply, 'invalid_body');
         if (!patch) return;
         try {
-          return settings.update(patch, {
-            origin: originOf(req),
-            autoApproveRemote: config.autoApproveRemote,
-          }) satisfies SettingsResponse;
+          const write = writeOf(req);
+          return {
+            ...settings.update(patch, write),
+            writable: writableFor(write),
+          } satisfies SettingsResponse;
         } catch (error) {
           if (error instanceof SettingsError) {
             return reply

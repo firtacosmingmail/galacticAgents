@@ -59,8 +59,11 @@ export const ConfigFile = z.object({
    * repository's (SPEC §8 open question). Default `true` (keep loading them).
    */
   stewardsLoadUserSettings: z.boolean().optional(),
-  /** When the panel's first-run setup was finished or skipped (P25-08); absent = not yet. */
-  setupCompletedAt: z.iso.datetime({ offset: true }).optional(),
+  /**
+   * When the panel's first-run setup was finished or skipped (P25-08); absent = not yet. Written
+   * as an ISO timestamp, but read leniently: a hand-edited value must not stop the server.
+   */
+  setupCompletedAt: z.string().min(1).optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
