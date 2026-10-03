@@ -97,6 +97,21 @@ describe('label placement and de-clutter', () => {
     expect(onScreen(box('a', 100, 700, 1), 800, 600)).toBe(false);
     expect(onScreen(box('a', 100, -20, 1), 800, 600)).toBe(false);
     expect(onScreen(box('a', -30, 100, 1), 800, 600)).toBe(true); // partly visible
+    expect(onScreen(box('a', 100, 15, 1), 800, 600)).toBe(true); // label partly above the top
+  });
+
+  it('a label pushed above the viewport is hidden, unless pinned (selected, focused): clamped', () => {
+    // The body's top is on screen (y 8, radius 5), its label entirely above the top edge.
+    expect(labelRect(box('a', 100, 8, 1)).bottom).toBeLessThan(0);
+    expect(onScreen(box('a', 100, 8, 1), 800, 600)).toBe(false);
+    const pinned = { ...box('a', 100, 8, 5), pinTop: true };
+    expect(onScreen(pinned, 800, 600)).toBe(true);
+    expect(labelRect(pinned)).toMatchObject({ top: 0, bottom: 16 });
+    // Pinning changes nothing for a label that fits, nor for a body above the viewport.
+    expect(labelRect({ ...box('a', 100, 100, 5), pinTop: true })).toEqual(
+      labelRect(box('a', 100, 100, 5)),
+    );
+    expect(onScreen({ ...box('a', 100, -20, 5), pinTop: true }, 800, 600)).toBe(false);
   });
 
   it('keeps every label that does not overlap', () => {

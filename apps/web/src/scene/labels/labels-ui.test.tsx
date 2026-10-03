@@ -392,6 +392,24 @@ describe('LabelProjector (one pass for every label)', () => {
     expect(shown('b-jupiter')).toBe(false);
   });
 
+  it("the focused body's label is clamped to the top edge instead of hidden above it", () => {
+    anchor('b-jupiter', [30, 40, 0], 'planet'); // near the top: its label would stick out above
+    render(
+      <>
+        <LabelLayer />
+        <LabelProjector hz={30} />
+      </>,
+    );
+    for (const e of labelEntries()) updateLabel(e.bodyId, { priority: e.priority, w: 90, h: 16 });
+    frame(40);
+    expect(shown('b-jupiter')).toBe(false);
+    useCameraStore.setState({ focusedId: 'b-jupiter' });
+    frame(40);
+    expect(shown('b-jupiter')).toBe(true);
+    const [, y] = /translate3d\([-\d.]+px, ([-\d.]+)px/.exec(label('b-jupiter').style.transform)!;
+    expect(Number(y)).toBe(16); // its bottom; its top on the viewport's edge
+  });
+
   it('hides labels behind the camera, off screen, without an anchor, and all on unmount', () => {
     const { rerender } = render(
       <>

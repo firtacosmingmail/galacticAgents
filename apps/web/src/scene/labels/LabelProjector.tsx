@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Matrix4, type PerspectiveCamera } from 'three';
 import { allAnchors, getAnchor, onAnchorsChanged } from '../anchors.js';
-import { anchorPosition } from '../camera/store.js';
+import { anchorPosition, useCameraStore } from '../camera/store.js';
 import { pixelScale } from '../picking/pick.js';
+import { PRIORITY } from './label-model.js';
 import {
   declutter,
-  LABEL_GAP_PX,
+  labelRect,
   movedEnough,
   occluded,
   onScreen,
@@ -30,7 +31,8 @@ import {
  * drei `<Html>` per body. On a rendered frame, at most `hz` times a second (30 on high and
  * balanced, 15 on mobile — and never more often than the capped loop renders), it projects every
  * registered label's anchor, hides labels whose body is behind the camera, off screen or behind
- * the Sun or a planet, de-clutters overlaps by priority, and writes a label's transform only when
+ * the Sun or a planet (the selected and the focused body's label is clamped to the top edge
+ * rather than hidden above it), de-clutters overlaps by priority, and writes a label's transform only when
  * it moved by more than half a pixel (and its visibility only when that changed).
  *
  * A new label, a new or removed anchor, a content change (size, priority) or a resize forces the
@@ -115,6 +117,8 @@ export function projectLabels(
       .filter((a) => a.kind === 'star' || a.kind === 'planet')
       .map((a) => ({ bodyId: a.bodyId, center: anchorPosition(a), radius: a.radius })));
 
+  // Kept inside the top edge rather than hidden there: the selection's and the camera focus's.
+  const focusedId = useCameraStore.getState().focusedId;
   const candidates: LabelBox[] = [];
   const byId = new Map<string, LabelEntry>();
   for (const entry of labelEntries()) {
@@ -133,6 +137,7 @@ export function projectLabels(
       h: entry.h,
       priority: entry.priority,
       depth: point.depth,
+      pinTop: entry.priority === PRIORITY.selected || entry.bodyId === focusedId,
     };
     if (!onScreen(box, size.width, size.height)) continue;
     if (occluded(eye, position, entry.bodyId, occluderList())) continue;
@@ -148,7 +153,7 @@ export function projectLabels(
       continue;
     }
     const x = box.x;
-    const y = box.y - box.r - LABEL_GAP_PX;
+    const y = labelRect(box).bottom;
     if (movedEnough(entry.written, x, y)) writePosition(entry, x, y);
     setShown(entry, true);
   }

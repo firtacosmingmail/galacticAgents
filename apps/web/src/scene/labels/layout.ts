@@ -95,23 +95,43 @@ export interface LabelBox {
   h: number;
   priority: number;
   depth: number;
+  /**
+   * Kept inside the viewport's top edge (the selected body's label, and the camera's focus): when
+   * the body is near the top of the screen its label slides down over the body instead of
+   * disappearing above the viewport.
+   */
+  pinTop?: boolean;
 }
 
-/** The label's rectangle: centred horizontally on the body, its bottom just above the body. */
+/**
+ * The label's rectangle: centred horizontally on the body, its bottom just above the body. A
+ * `pinTop` label that would stick out above the viewport is clamped to its top edge.
+ */
 export function labelRect(b: LabelBox): {
   left: number;
   top: number;
   right: number;
   bottom: number;
 } {
-  const bottom = b.y - b.r - LABEL_GAP_PX;
+  let bottom = b.y - b.r - LABEL_GAP_PX;
+  if (b.pinTop && bottom - b.h < 0) bottom = b.h;
   return { left: b.x - b.w / 2, right: b.x + b.w / 2, top: bottom - b.h, bottom };
 }
 
-/** Whether any part of the label (or the body under it) is inside the viewport. */
+/**
+ * Whether the label can show: some of it inside the viewport (its bottom below the top edge, so
+ * a label pushed entirely above the viewport is hidden — unless `pinTop` clamps it back) and its
+ * body not entirely above the viewport.
+ */
 export function onScreen(b: LabelBox, width: number, height: number): boolean {
   const rect = labelRect(b);
-  return rect.right >= 0 && rect.left <= width && rect.top <= height && b.y + b.r >= 0;
+  return (
+    rect.right >= 0 &&
+    rect.left <= width &&
+    rect.top <= height &&
+    rect.bottom >= 0 &&
+    b.y + b.r >= 0
+  );
 }
 
 /** Ordering of `declutter`: priority first, then the nearer body, then the id (stable). */
