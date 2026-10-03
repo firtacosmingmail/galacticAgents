@@ -1,0 +1,68 @@
+/* Picking's overlay (P3-05): the hover label and the popover over the scene. */
+.pick-hover {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #e6ecff;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 30;
+}
+.pick-hover-more {
+  color: #8a91a6;
+}
+.pick-popover {
+  position: absolute;
+  z-index: 40;
+  min-width: 160px;
+  max-width: min(280px, calc(100% - 16px));
+  padding: 8px 28px 8px 10px;
+  border: 1px solid #2a3350;
+  border-radius: 6px;
+  background: rgba(10, 14, 28, 0.94);
+  color: #d8dcea;
+  font-size: 13px;
+}
+.pick-title {
+  display: block;
+  margin-bottom: 4px;
+}
+.pick-detail {
+  margin: 0;
+  color: #aab2c8;
+}
+.pick-close {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  border: 0;
+  background: none;
+  color: #8a91a6;
+  font-size: 16px;
+  cursor: pointer;
+}
+.pick-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pick-list button {
+  display: block;
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: #9db8ff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pick-list button:hover,
+.pick-list button:focus-visible {
+  background: rgba(91, 140, 255, 0.18);
+}
