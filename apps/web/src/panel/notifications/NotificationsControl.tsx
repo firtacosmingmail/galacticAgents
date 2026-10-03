@@ -1,7 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useNotificationPrefs } from './prefs.js';
 import { NotificationSettings } from './NotificationSettings.js';
 import './notifications.css';
+
+/** The one-word state the top bar shows: "on", "off", "blocked" or "unavailable". */
+export function useNotificationState(): 'on' | 'off' | 'blocked' | 'unavailable' {
+  const enabled = useNotificationPrefs((s) => s.enabled);
+  const permission = useNotificationPrefs((s) => s.permission);
+  return permission === 'unsupported'
+    ? 'unavailable'
+    : permission === 'denied'
+      ? 'blocked'
+      : enabled && permission === 'granted'
+        ? 'on'
+        : 'off';
+}
 
 /**
  * The top bar's notifications control (P25-07): shows whether desktop notifications are on and
@@ -9,8 +22,7 @@ import './notifications.css';
  */
 export function NotificationsControl() {
   const [open, setOpen] = useState(false);
-  const enabled = useNotificationPrefs((s) => s.enabled);
-  const permission = useNotificationPrefs((s) => s.permission);
+  const state = useNotificationState();
   const ref = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -29,15 +41,6 @@ export function NotificationsControl() {
     };
   }, [open]);
 
-  const state =
-    permission === 'unsupported'
-      ? 'unavailable'
-      : permission === 'denied'
-        ? 'blocked'
-        : enabled && permission === 'granted'
-          ? 'on'
-          : 'off';
-
   return (
     <span className="ntf-control" ref={ref}>
       <button
@@ -55,5 +58,31 @@ export function NotificationsControl() {
         </div>
       )}
     </span>
+  );
+}
+
+/**
+ * The same control inside the compact top bar's menu (P3-12): a disclosure that unfolds the
+ * settings in place instead of a popover, which has no room to float on a phone.
+ */
+export function NotificationsDisclosure() {
+  const [open, setOpen] = useState(false);
+  const state = useNotificationState();
+  const id = useId();
+  return (
+    <div className="ntf-disclosure">
+      <button
+        type="button"
+        className="ntf-toggle"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((o) => !o)}
+      >
+        Notifications: {state}
+      </button>
+      <div id={id} className="ntf-inline" hidden={!open}>
+        {open && <NotificationSettings heading={false} />}
+      </div>
+    </div>
   );
 }
