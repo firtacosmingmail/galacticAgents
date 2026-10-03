@@ -26,7 +26,12 @@ export const BELT_SEED = 0x5eed_2026;
  * The belt's extent: orbit radius in AU (between Mars and Jupiter; `innerAu + widthAu` =
  * `outerAu`) and the largest tilt of an orbit's plane, in radians, either way.
  */
-export const BELT_ORBIT = { innerAu: 2.2, widthAu: 1.1, outerAu: 3.3, maxInclination: 0.15 } as const;
+export const BELT_ORBIT = {
+  innerAu: 2.2,
+  widthAu: 1.1,
+  outerAu: 3.3,
+  maxInclination: 0.15,
+} as const;
 
 /** A decorative orbit in the belt (TECHNOLOGY §2.1; corner case 26): AU, radians, radians. */
 export interface BeltOrbit {
