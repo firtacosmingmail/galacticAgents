@@ -64,6 +64,13 @@
   color: var(--pnl-muted);
   font-size: 13px;
 }
+.his-fresh {
+  margin: 0;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .his-select {
   font: inherit;
   font-size: 13px;

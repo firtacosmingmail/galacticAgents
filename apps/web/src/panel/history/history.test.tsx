@@ -94,11 +94,14 @@ const questionItem = (question: Question, reason?: string): HistoryQuestion => (
 function fakeServer() {
   const calls: string[] = [];
   const controls: ControlBody[] = [];
+  /** While set, the history endpoints wait for it before answering. */
+  const gate: { wait?: Promise<void> | undefined } = {};
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
     calls.push(url);
     const u = new URL(url, 'http://x');
     const q = u.searchParams.get('q')?.toLowerCase();
+    if (u.pathname.startsWith('/api/history/') && gate.wait) await gate.wait;
     if (u.pathname === '/api/history/work') {
       // Two pages: the task, then (before its cursor) the project.
       const all = [workItem(archivedTask), workItem(doneProject)].filter(
@@ -127,7 +130,7 @@ function fakeServer() {
     if (url.endsWith('/messages')) return json({ messages: [] });
     return json({});
   });
-  return { calls, controls, fetchImpl };
+  return { calls, controls, gate, fetchImpl };
 }
 
 let server: ReturnType<typeof fakeServer>;
@@ -190,13 +193,13 @@ describe('history view (P25-10)', () => {
 
   it('finds an archived task by text and reopens it', async () => {
     await open('/history');
-    await within(work()).findByRole('listitem', { name: 'task Fix the flaky date test' });
+    await within(work()).findByRole('listitem', { name: 'Fix the flaky date test' });
     await search('flaky');
     expect(server.calls).toContain('/api/history/work?q=flaky&limit=25');
     const row = await within(work()).findByRole('listitem', {
-      name: 'task Fix the flaky date test',
+      name: 'Fix the flaky date test',
     });
-    expect(within(work()).queryByRole('listitem', { name: 'project CSV tool' })).toBeNull();
+    expect(within(work()).queryByRole('listitem', { name: 'CSV tool' })).toBeNull();
     expect(within(row).getByText('archived')).toBeTruthy();
     expect(within(row).getByText('Ceres-1')).toBeTruthy(); // its body
 
@@ -230,10 +233,10 @@ describe('history view (P25-10)', () => {
 
   it('pages back through the work, and unpins finished work', async () => {
     await open('/history');
-    await within(work()).findByRole('listitem', { name: 'task Fix the flaky date test' });
-    expect(within(work()).queryByRole('listitem', { name: 'project CSV tool' })).toBeNull();
+    await within(work()).findByRole('listitem', { name: 'Fix the flaky date test' });
+    expect(within(work()).queryByRole('listitem', { name: 'CSV tool' })).toBeNull();
     await click(within(work()).getByRole('button', { name: 'Show older' }));
-    const row = await within(work()).findByRole('listitem', { name: 'project CSV tool' });
+    const row = await within(work()).findByRole('listitem', { name: 'CSV tool' });
     expect(server.calls).toContain(
       `/api/history/work?${new URLSearchParams({ before: '2026-10-01T09:00:00.000Z~tt-old', limit: '25' })}`,
     );
@@ -260,7 +263,7 @@ describe('history view (P25-10)', () => {
     await open('/history');
     await search('cookie');
     const row = await within(questions()).findByRole('listitem', {
-      name: 'question Keep the legacy cookie name?',
+      name: 'Keep the legacy cookie name?',
     });
     expect(server.calls).toContain('/api/history/questions?q=cookie&limit=25');
     expect(within(row).getByText('clarification')).toBeTruthy();
@@ -271,7 +274,7 @@ describe('history view (P25-10)', () => {
     expect(within(row).getByText('Harmonizer')).toBeTruthy(); // answered by
     expect(
       within(questions()).queryByRole('listitem', {
-        name: 'question Which timezone for the fixtures?',
+        name: 'Which timezone for the fixtures?',
       }),
     ).toBeNull();
     await click(within(row).getByRole('link', { name: /^open Steward/ }));
@@ -281,21 +284,96 @@ describe('history view (P25-10)', () => {
   it('filters past questions to the withdrawn ones, with the reason', async () => {
     await open('/history');
     await within(questions()).findByRole('listitem', {
-      name: 'question Keep the legacy cookie name?',
+      name: 'Keep the legacy cookie name?',
     });
     fireEvent.change(within(questions()).getByRole('combobox', { name: 'Question status' }), {
       target: { value: 'cancelled' },
     });
     const row = await within(questions()).findByRole('listitem', {
-      name: 'question Which timezone for the fixtures?',
+      name: 'Which timezone for the fixtures?',
     });
     expect(server.calls).toContain('/api/history/questions?status=cancelled&limit=25');
-    expect(within(row).getByText('withdrawn', { selector: '.his-tag' })).toBeTruthy();
+    expect(within(row).getByText('withdrawn or ended', { selector: '.his-tag' })).toBeTruthy();
     expect(within(row).getByText('Why: no longer needed')).toBeTruthy();
     expect(
       within(questions()).queryByRole('listitem', {
-        name: 'question Keep the legacy cookie name?',
+        name: 'Keep the legacy cookie name?',
       }),
     ).toBeNull();
+  });
+
+  it('offers a refresh when work finishes, and keeps the rows on screen while it reads', async () => {
+    await open('/history');
+    const row = await within(work()).findByRole('listitem', { name: 'Fix the flaky date test' });
+    expect(within(work()).queryByRole('status')).toBeNull();
+    const taskMoves = async (seq: number, from: Task['state'], to: Task['state']) => {
+      await act(async () => {
+        socket.serverSends({
+          type: 'event',
+          seq,
+          at: `2026-10-03T10:0${seq - 10}:00.000Z`,
+          event: { type: 'task.state_changed', taskId: 't-old', from, to, by: { type: 'user' } },
+        });
+      });
+    };
+    // Leaving the history is not new history.
+    await taskMoves(11, 'archived', 'in_progress');
+    expect(within(work()).queryByRole('status')).toBeNull();
+    await taskMoves(12, 'in_progress', 'completed');
+    const hint = within(work()).getByRole('status');
+    expect(hint.textContent).toContain('New items');
+    expect(within(questions()).queryByRole('status')).toBeNull();
+
+    // The refresh reads the newest page again; the rows stay until it arrives.
+    let release!: () => void;
+    server.gate.wait = new Promise<void>((r) => (release = r));
+    const reads = server.calls.filter((c) => c === '/api/history/work?limit=25').length;
+    await click(within(hint).getByRole('button', { name: 'refresh' }));
+    expect(server.calls.filter((c) => c === '/api/history/work?limit=25')).toHaveLength(reads + 1);
+    expect(within(work()).getByRole('listitem', { name: 'Fix the flaky date test' })).toBe(row);
+    expect(within(work()).queryByText('Loading…')).toBeNull();
+    server.gate.wait = undefined;
+    await act(async () => {
+      release();
+    });
+    await vi.waitFor(() => expect(within(work()).queryByRole('status')).toBeNull());
+    expect(within(work()).getByRole('listitem', { name: 'Fix the flaky date test' })).toBeTruthy();
+  });
+
+  it('offers a refresh when a question resolves', async () => {
+    await open('/history');
+    await within(questions()).findByRole('listitem', { name: 'Keep the legacy cookie name?' });
+    const asked: Question = {
+      ...fx.question,
+      id: 'q-new',
+      context: { text: 'Squash the commits?' },
+      status: 'open',
+      version: 0,
+    };
+    await act(async () => {
+      socket.serverSends({
+        type: 'event',
+        seq: 11,
+        at: '2026-10-03T10:00:00.000Z',
+        event: { type: 'question.opened', question: asked },
+      });
+    });
+    expect(within(questions()).queryByRole('status')).toBeNull();
+    await act(async () => {
+      socket.serverSends({
+        type: 'event',
+        seq: 12,
+        at: '2026-10-03T10:01:00.000Z',
+        event: {
+          type: 'question.answered',
+          questionId: 'q-new',
+          answer: 'yes',
+          answeredBy: { type: 'user' },
+          version: 1,
+        },
+      });
+    });
+    expect(within(questions()).getByRole('status').textContent).toContain('New items');
+    expect(within(work()).queryByRole('status')).toBeNull();
   });
 });
