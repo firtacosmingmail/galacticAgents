@@ -86,9 +86,18 @@ describe('state → look table (P4-02)', () => {
 
   it('under reduced motion, the problem states still differ by size or brightness alone', () => {
     const still = (s: AgentState) => `${STATE_LOOK[s].scale}|${STATE_LOOK[s].still}`;
-    for (const s of ['failed', 'waiting_for_input', 'paused', 'idle'] as const)
-      for (const t of ['failed', 'waiting_for_input', 'paused', 'idle'] as const)
-        if (s !== t) expect(still(s)).not.toBe(still(t));
+    const shown = ['working', 'failed', 'waiting_for_input', 'stalled', 'paused', 'idle'] as const;
+    for (const s of shown) for (const t of shown) if (s !== t) expect(still(s)).not.toBe(still(t));
+  });
+
+  it('every problem state differs from working in still brightness or size (no pulse to tell)', () => {
+    const working = STATE_LOOK.working;
+    for (const s of ['waiting_for_input', 'stalled', 'failed', 'paused'] as const) {
+      const look = STATE_LOOK[s];
+      const apart =
+        Math.abs(look.still - working.still) >= 0.2 || Math.abs(look.scale - working.scale) >= 0.1;
+      expect(apart, s).toBe(true);
+    }
   });
 
   it('paused holds still, failed drifts, the others orbit at full speed', () => {
@@ -148,6 +157,15 @@ describe('beam tint', () => {
     const amber = beamTint({ role: 'steward', state: 'waiting_for_input' });
     expect(luminance(amber as [number, number, number])).toBeCloseTo(luminance(BEAM.color), 6);
     expect(amber[0]).toBeGreaterThan(amber[2]);
+  });
+
+  it('is one cached tuple per role and state (no allocation per frame)', () => {
+    for (const role of ['steward', 'waykeeper', 'harmonizer'] as const)
+      for (const state of STATES) expect(beamTint({ role, state })).toBe(beamTint({ role, state }));
+    // The role colour is per role: a finished Waykeeper's fading beam is not a Steward's.
+    expect(beamTint({ role: 'waykeeper', state: 'finished' })).not.toEqual(
+      beamTint({ role: 'steward', state: 'finished' }),
+    );
   });
 
   it('linearRgb matches the sRGB transfer', () => {
