@@ -168,6 +168,76 @@
   }
 }
 
+/* with the solar-system scene (P3-01): the scene in the centre, the conversation and the side
+   column beside it; the page no longer grows, each column scrolls on its own */
+.pnl.pnl-with-scene {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+}
+.pnl-grid.pnl-grid-scene {
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(340px, 420px);
+  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+  grid-template-areas:
+    'nav scene main'
+    'nav scene side';
+}
+.pnl-grid-scene > .pnl-nav {
+  grid-area: nav;
+}
+.pnl-grid-scene > .pnl-main {
+  grid-area: main;
+}
+.pnl-grid-scene > .pnl-side {
+  grid-area: side;
+  border-top: 1px solid var(--pnl-line);
+}
+@media (min-width: 1700px) {
+  .pnl-grid.pnl-grid-scene {
+    grid-template-columns:
+      minmax(180px, 220px) minmax(0, 1fr) minmax(360px, 440px)
+      minmax(260px, 320px);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: 'nav scene main side';
+  }
+  .pnl-grid-scene > .pnl-side {
+    border-top: 0;
+  }
+}
+@media (max-width: 1100px) {
+  .pnl.pnl-with-scene {
+    height: auto;
+    min-height: 100vh;
+  }
+  .pnl-grid.pnl-grid-scene {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 45vh auto auto auto;
+    grid-template-areas: 'scene' 'nav' 'main' 'side';
+  }
+  .pnl-grid-scene > .pnl-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--pnl-line);
+  }
+  .pnl-grid-scene > .pnl-side {
+    border-left: 0;
+  }
+}
+
+.pnl-scene-toggle {
+  font: inherit;
+  font-size: 13px;
+  color: var(--pnl-ink);
+  background: var(--pnl-raised);
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.pnl-scene-off {
+  font-size: 13px;
+  color: var(--pnl-muted);
+}
+
 /* type */
 .pnl-eyebrow {
   margin: 16px 4px 6px;

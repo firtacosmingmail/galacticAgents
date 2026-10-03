@@ -18,12 +18,15 @@ import { FirstRunGate } from './settings/FirstRunGate.js';
 import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
 import { HistoryPage } from './history/HistoryPage.js';
+import { SceneArea } from '../scene/SceneArea.js';
+import { useScene, type SceneControl } from '../scene/visibility.js';
 import './panel.css';
 
 /**
- * The side panel (P25-02, SPEC §4.2) in "list mode", the only mode for now: the navigation on
- * the left, the selected conversation or Steward view in the middle, the managed agents and the
- * inbox on the right. Everything comes from the store (TECHNOLOGY §6.3); the selection is the
+ * The side panel (P25-02, SPEC §4.2): the navigation on the left, the selected conversation or
+ * Steward view in the middle, the managed agents and the inbox on the right. With the solar-system
+ * scene shown (P3-01) the scene takes the centre and the conversation and the side column sit
+ * beside it; hidden ("list mode") the panel is the Phase 2.5 layout. Everything comes from the store (TECHNOLOGY §6.3); the selection is the
  * store's too, mirrored in the URL. The main area is the chat with a brain (P25-03) or the
  * Steward view (P25-05); the right column holds the managed-agents cards (P25-04) and the inbox
  * (P25-06).
@@ -40,12 +43,14 @@ export function Panel({
 }) {
   const api = useMemo(() => given ?? createApi(token), [given, token]);
   const route = useAppStore((s) => s.route);
+  const scene = useScene();
+  const showScene = route === 'panel' && scene.shown;
   return (
     <ApiContext.Provider value={api}>
       <SettingsProvider api={api}>
         <CardLinksContext.Provider value={true}>
-          <div className="pnl">
-            <TopBar {...(onForget ? { onForget } : {})} />
+          <div className={showScene ? 'pnl pnl-with-scene' : 'pnl'}>
+            <TopBar scene={scene} {...(onForget ? { onForget } : {})} />
             {route === 'settings' ? (
               // The settings page (P25-08), in the panel's frame.
               <SettingsPage token={token} />
@@ -55,8 +60,9 @@ export function Panel({
             ) : (
               // A fresh install walks through the first-run wizard first (P25-08).
               <FirstRunGate>
-                <div className="pnl-grid">
+                <div className={showScene ? 'pnl-grid pnl-grid-scene' : 'pnl-grid'}>
                   <Navigation />
+                  {showScene && <SceneArea onFailure={scene.fail} />}
                   <MainArea />
                   <SideColumn />
                 </div>
@@ -69,7 +75,7 @@ export function Panel({
   );
 }
 
-function TopBar({ onForget }: { onForget?: () => void }) {
+function TopBar({ scene, onForget }: { scene: SceneControl; onForget?: () => void }) {
   const status = useAppStore((s) => s.status);
   const route = useAppStore((s) => s.route);
   const selection = useAppStore((s) => s.selection);
@@ -91,6 +97,7 @@ function TopBar({ onForget }: { onForget?: () => void }) {
         <span>{summary.blockedItems} blocked</span>
       </span>
       <span className="pnl-spacer" />
+      <SceneToggle scene={scene} />
       <NotificationsControl />
       <NavLink
         to={{ route: 'history', selection }}
@@ -115,6 +122,30 @@ function TopBar({ onForget }: { onForget?: () => void }) {
         </button>
       )}
     </header>
+  );
+}
+
+/**
+ * Shows or hides the solar-system scene (P3-01; hidden = list mode, SPEC §4.2). Where the scene
+ * cannot run (no WebGL, or it failed to start) a note says so instead and the panel stays in list
+ * mode.
+ */
+function SceneToggle({ scene }: { scene: SceneControl }) {
+  if (scene.failure)
+    return (
+      <span className="pnl-scene-off" role="note" title={scene.failure}>
+        3D scene unavailable — list mode
+      </span>
+    );
+  return (
+    <button
+      type="button"
+      className="pnl-scene-toggle"
+      aria-pressed={!scene.visible}
+      onClick={() => scene.setVisible(!scene.visible)}
+    >
+      {scene.visible ? 'Hide scene' : 'Show scene'}
+    </button>
   );
 }
 
