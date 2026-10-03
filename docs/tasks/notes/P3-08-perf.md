@@ -246,3 +246,7 @@ Also worth a line: the phone's warmth and battery after about 5 minutes with the
 - `apps/web/src/scene/bodies/Bodies.tsx` (orbit lines), `belt/Belt.tsx` (background rocks, halos), `labels/MoonMarkers.tsx` (own-project rings): `layers={DECOR_LAYER}`.
 - Tests, +7: `outline.test.ts` +4 (on-screen test with its margin; the depth pass without the decor layer, idempotent, tolerant of other effects; restoring on a throw; layer visibility); `Picking.test.tsx` +2 (`OutlineSync` empties and restores the selection off and on screen; leaves the decor layer out of the effect's depth pass); `scene-model.test.ts` +1 (`contextAntialias` per tier).
 - `docs/TECHNOLOGY.md` §2.1: a "Performance pass (P3-08)" bullet; the quality-tier bullet's MSAA wording.
+
+## Security finding — fixed (2026-10-03)
+
+The coordinator fixed the `/health` token leak found here: the token is now handed out only when `!isRemoteRequest(req)` (`apps/server/src/app.ts`), so a LAN or Tailscale client behind a proxy on this machine (a remote `Host`, no `Origin`) no longer gets it; `app.test.ts` reproduces the leak (it failed before the fix). For the phone run, paste the token on the phone (it is printed by `galactic start` and shown on the settings page's Access section).
