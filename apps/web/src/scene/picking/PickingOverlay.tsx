@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useCameraStore } from '../camera/store.js';
 import { activateBody, usePickingStore, type Popover } from './store.js';
 import './picking.css';
 
@@ -7,7 +8,11 @@ import './picking.css';
  * "+n" when others are there too) and the popover — a body's info (what it is, when a click
  * selects nothing) or the "what's here" list (corner case 24). One element each, whatever the
  * number of bodies. Escape (handled by the scene area), a click elsewhere in the scene or the
- * close button closes the popover.
+ * close button closes the popover; closing it, or choosing from the list, gives the keyboard focus
+ * back to the scene area (as Escape does), not to the page.
+ *
+ * A body's info card opens at the click and, once the camera lands on that body, moves to the
+ * scene's centre where the body now is (the same place `Enter` opens it).
  */
 export function PickingOverlay() {
   const hover = usePickingStore((s) => s.hover);
@@ -29,9 +34,36 @@ export function PickingOverlay() {
   );
 }
 
+/** The scene area the popover sits in (the positioned parent of the overlay). */
+function sceneArea(el: HTMLElement | null): HTMLElement | null {
+  return el?.closest<HTMLElement>('.pnl-scene') ?? (el?.offsetParent as HTMLElement | null) ?? null;
+}
+
 export function PickPopover({ popover }: { popover: Popover }) {
-  const close = usePickingStore((s) => s.closePopover);
   const ref = useRef<HTMLDivElement>(null);
+  /** Runs `action` (which may unmount the popover), then puts the focus back on the scene area. */
+  const thenFocusScene = (action: () => void) => {
+    const area = sceneArea(ref.current);
+    action();
+    area?.focus({ preventScroll: true });
+  };
+  const close = () => thenFocusScene(() => usePickingStore.getState().closePopover());
+  // An info card follows its body to the centre when the camera's flight there ends.
+  useEffect(() => {
+    if (popover.kind !== 'info') return;
+    const bodyId = popover.action.bodyId;
+    let wasFlying = useCameraStore.getState().flying;
+    return useCameraStore.subscribe((camera) => {
+      const landed = wasFlying && !camera.flying && camera.focusedId === bodyId;
+      wasFlying = camera.flying;
+      const area = sceneArea(ref.current);
+      if (!landed || !area) return;
+      if (usePickingStore.getState().popover !== popover) return;
+      usePickingStore.setState({
+        popover: { ...popover, x: area.clientWidth / 2, y: area.clientHeight / 2 },
+      });
+    });
+  }, [popover]);
   // The list takes the focus so the keyboard can choose; the info leaves it on the scene.
   useEffect(() => {
     if (popover.kind === 'here')
@@ -74,7 +106,10 @@ export function PickPopover({ popover }: { popover: Popover }) {
           <ul className="pick-list">
             {popover.bodies.map((b) => (
               <li key={b.bodyId}>
-                <button type="button" onClick={() => activateBody(b.bodyId, at)}>
+                <button
+                  type="button"
+                  onClick={() => thenFocusScene(() => void activateBody(b.bodyId, at))}
+                >
                   {b.name}
                 </button>
               </li>

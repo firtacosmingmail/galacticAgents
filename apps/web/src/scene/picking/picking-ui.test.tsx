@@ -112,6 +112,55 @@ describe('the overlay', () => {
   });
 });
 
+describe('the popover and the focus', () => {
+  function SceneWithOverlay() {
+    return (
+      <section className="pnl-scene" tabIndex={0} aria-label="scene">
+        <PickingOverlay />
+      </section>
+    );
+  }
+
+  it('choosing from "what\'s here" or closing a card gives the focus back to the scene', () => {
+    render(<SceneWithOverlay />);
+    const area = screen.getByRole('region', { name: 'scene' });
+    act(() => usePickingStore.getState().showHere(AT, ['b-jupiter', 'b-io']));
+    expect(document.activeElement?.textContent).toBe('Jupiter');
+    // A body with an agent: selected, the list closes, the scene keeps the keyboard.
+    fireEvent.click(screen.getByRole('button', { name: 'Jupiter' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(area);
+    // A free body: its card replaces the list, the focus is on the scene, not the page.
+    act(() => usePickingStore.getState().showHere(AT, ['b-jupiter', 'b-io']));
+    fireEvent.click(screen.getByRole('button', { name: 'Io' }));
+    expect(screen.getByRole('dialog', { name: 'Io' })).toBeTruthy();
+    expect(document.activeElement).toBe(area);
+    // The close button too.
+    fireEvent.click(screen.getByRole('button', { name: 'close' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(area);
+  });
+
+  it("a body's card follows it to the centre when the camera lands there", () => {
+    render(<SceneWithOverlay />);
+    const area = screen.getByRole('region', { name: 'scene' });
+    Object.defineProperty(area, 'clientWidth', { value: 600, configurable: true });
+    Object.defineProperty(area, 'clientHeight', { value: 400, configurable: true });
+    act(() => void activateBody('b-mars', AT));
+    expect(usePickingStore.getState().popover).toMatchObject({ x: AT.x, y: AT.y });
+    act(() => camera().flightStarted());
+    expect(usePickingStore.getState().popover).toMatchObject({ x: AT.x, y: AT.y });
+    act(() => camera().arrived());
+    expect(usePickingStore.getState().popover).toMatchObject({ kind: 'info', x: 300, y: 200 });
+    // Landing elsewhere (the user flew on) leaves a card alone.
+    act(() => void activateBody('b-io', AT));
+    act(() => camera().flyTo('b-mars'));
+    act(() => camera().flightStarted());
+    act(() => camera().arrived());
+    expect(usePickingStore.getState().popover).toMatchObject({ x: AT.x, y: AT.y });
+  });
+});
+
 describe('scene keys', () => {
   function Area() {
     return (
