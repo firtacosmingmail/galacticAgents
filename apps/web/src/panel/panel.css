@@ -310,6 +310,17 @@
 /* The shell is exactly the viewport (P4-10): the top bar, then the body; the page itself never
    scrolls. Each column scrolls on its own; the settings, history and first-run pages scroll in
    the body. No grid row has a fixed length that could push the shell past the viewport. */
+/* Each scroll container is the containing block of what it holds: an absolutely positioned
+   descendant (a visually hidden label) scrolls and clips with its column, instead of stretching
+   the page from its static position far down a long column. */
+.pnl,
+.pnl-body,
+.pnl-nav,
+.pnl-side,
+.pnl-stack,
+.pnl-dock-body {
+  position: relative;
+}
 .pnl-body {
   flex: 1 1 0;
   min-height: 0;
