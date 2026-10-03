@@ -7,6 +7,7 @@ import type {
   TranscriptChunk,
   TranscriptResponse,
 } from '@galactic/protocol';
+import { CursorError } from './cursor-error.js';
 
 /**
  * Paged reads for the side panel (P25-01): an agent's conversation and its transcript, straight
@@ -72,7 +73,7 @@ export class History {
   ): ConversationResponse {
     const raw = q.before ?? q.after;
     const cursor = raw === undefined ? undefined : decodeCursor(raw);
-    if (raw !== undefined && !cursor) throw new RangeError(`not a conversation cursor: ${raw}`);
+    if (raw !== undefined && !cursor) throw new CursorError(`not a conversation cursor: ${raw}`);
     const forward = q.after !== undefined;
     const take = q.limit + 1;
 

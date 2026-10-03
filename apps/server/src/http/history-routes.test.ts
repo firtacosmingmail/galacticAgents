@@ -10,6 +10,7 @@ import {
 import { openDatabase } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
 import { EventLog } from '../domain/event-log.js';
+import { CursorError } from '../runtime/cursor-error.js';
 import { HistoryView } from '../runtime/history-view.js';
 import { startTestApp, TEST_TOKEN } from '../test/harness.js';
 
@@ -290,6 +291,32 @@ describe('history reads (P25-10)', () => {
         .join(' | ');
       expect(plan, sql).not.toMatch(/TEMP B-TREE/);
       expect(plan, sql).toMatch(/USING INDEX (projects_history|tasks_history|questions_history)/);
+      // The page size is bound, so one statement serves every limit.
+      expect(sql).toMatch(/LIMIT \?$/);
     }
+    // A cancelled question's reason: a lookup by (type, questionId), not a walk of the type range.
+    const reasons = [...(view as unknown as { stmts: Map<string, unknown> }).stmts.keys()].filter(
+      (sql) => sql.includes('FROM events'),
+    );
+    expect(reasons.length).toBeGreaterThanOrEqual(1);
+    for (const sql of reasons) {
+      const params = (sql.match(/\?/g) ?? []).map(() => 'x');
+      const plan = (
+        log.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[]
+      )
+        .map((p) => p.detail)
+        .join(' | ');
+      expect(plan, sql).toMatch(
+        /SEARCH events USING INDEX events_type_question \(type=\? AND <expr>=\?\)/,
+      );
+      expect(plan, sql).not.toMatch(/SCAN events/);
+    }
+  });
+
+  it('refuses a foreign cursor with a CursorError (the routes map only that to 400)', async () => {
+    const { log } = await historyApp();
+    const view = new HistoryView(log.db, log.tables);
+    expect(() => view.work({ before: 'nope', limit: 1 })).toThrow(CursorError);
+    expect(() => view.questions({ before: `${at(1)}~pp1`, limit: 1 })).toThrow(CursorError);
   });
 });

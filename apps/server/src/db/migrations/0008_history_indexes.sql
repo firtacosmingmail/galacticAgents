@@ -10,3 +10,7 @@ CREATE INDEX tasks_history ON tasks(updated_at, id)
   WHERE state IN ('completed', 'failed', 'archived');
 CREATE INDEX questions_history ON questions(updated_at, id)
   WHERE status IN ('answered', 'cancelled');
+-- A cancelled question's reason lives only on its `question.cancelled` event: the history reads it
+-- for one page's ids by `type` and the payload's `questionId` (as 0006's `events_type_agent` does
+-- for `agentId`), a lookup per id instead of a walk of every cancellation in the log.
+CREATE INDEX events_type_question ON events(type, json_extract(payload, '$.questionId'));

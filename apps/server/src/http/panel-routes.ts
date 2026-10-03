@@ -21,6 +21,7 @@ import type { ServerConfig } from '../config/config.js';
 import { SettingsError, writableFor, type SettingsService } from '../config/settings.js';
 import type { EventLog } from '../domain/event-log.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
+import { CursorError } from '../runtime/cursor-error.js';
 import { History } from '../runtime/history.js';
 import { HistoryView } from '../runtime/history-view.js';
 import { notificationFeed } from '../runtime/notifications.js';
@@ -91,7 +92,7 @@ export function registerPanelRoutes(
       try {
         return history.conversation(id, q) satisfies ConversationResponse;
       } catch (error) {
-        if (error instanceof RangeError) {
+        if (error instanceof CursorError) {
           return reply.code(400).send({ error: 'invalid_query', message: error.message });
         }
         throw error;
@@ -112,7 +113,7 @@ export function registerPanelRoutes(
       try {
         return read();
       } catch (error) {
-        if (error instanceof RangeError) {
+        if (error instanceof CursorError) {
           void reply.code(400).send({ error: 'invalid_query', message: error.message });
           return undefined;
         }

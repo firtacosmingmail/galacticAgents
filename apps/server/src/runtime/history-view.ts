@@ -1,16 +1,16 @@
 import type { Database, Statement } from 'better-sqlite3';
+import type { z } from 'zod';
 import type {
   HistoryQuestion,
-  HistoryQuestionStatus,
+  HistoryQuestionsQuery,
   HistoryQuestionsResponse,
   HistoryWorkItem,
+  HistoryWorkQuery,
   HistoryWorkResponse,
-  HistoryWorkState,
-  HostKind,
   Id,
-  QuestionKind,
 } from '@galactic/protocol';
 import type { Tables } from '../db/tables.js';
+import { CursorError } from './cursor-error.js';
 
 /**
  * The history view's reads (P25-10; SPEC §4.2 "a history view of archived work and past
@@ -62,21 +62,10 @@ interface KeyRow {
   updated_at: string;
 }
 
-export interface WorkHistoryQuery {
-  before?: string | undefined;
-  q?: string | undefined;
-  kind?: HostKind | undefined;
-  state?: HistoryWorkState[] | undefined;
-  limit: number;
-}
-
-export interface QuestionHistoryQuery {
-  before?: string | undefined;
-  q?: string | undefined;
-  kind?: QuestionKind | undefined;
-  status?: HistoryQuestionStatus | undefined;
-  limit: number;
-}
+/** A parsed `GET /api/history/work` query. */
+export type WorkHistoryQuery = z.output<typeof HistoryWorkQuery>;
+/** A parsed `GET /api/history/questions` query. */
+export type QuestionHistoryQuery = z.output<typeof HistoryQuestionsQuery>;
 
 export class HistoryView {
   private readonly stmts = new Map<string, Statement>();
@@ -98,7 +87,7 @@ export class HistoryView {
   private cursor(raw: string | undefined, kinds: Cursor['k'][]): Cursor | undefined {
     if (raw === undefined) return undefined;
     const c = decodeHistoryCursor(raw);
-    if (!c || !kinds.includes(c.k)) throw new RangeError(`not a history cursor: ${raw}`);
+    if (!c || !kinds.includes(c.k)) throw new CursorError(`not a history cursor: ${raw}`);
     return c;
   }
 
@@ -130,8 +119,8 @@ export class HistoryView {
     }
     return this.stmt(
       `SELECT id, updated_at FROM ${table} INDEXED BY ${table}_history WHERE ${where.join(' AND ')}
-        ORDER BY updated_at DESC, id DESC LIMIT ${take}`,
-    ).all(...args) as KeyRow[];
+        ORDER BY updated_at DESC, id DESC LIMIT ?`,
+    ).all(...args, take) as KeyRow[];
   }
 
   work(q: WorkHistoryQuery): HistoryWorkResponse {
@@ -204,7 +193,8 @@ export class HistoryView {
 
   /**
    * Why each of these questions was cancelled: the `reason` of its latest `question.cancelled`
-   * (the row does not keep it). One read over the indexed `type`, for one page's ids.
+   * (the row does not keep it). One read through migration 0008's `events_type_question`: a
+   * lookup per id of the page, not a walk of every `question.cancelled` in the log.
    */
   private cancelReasons(ids: Id[]): Map<Id, string> {
     if (ids.length === 0) return new Map();
