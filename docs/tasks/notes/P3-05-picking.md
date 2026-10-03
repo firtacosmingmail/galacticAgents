@@ -44,7 +44,7 @@ The camera flies to the selected agent's body only when the user changes the sel
 
 Picking never raycasts a mesh. It runs a ray-vs-bounding-sphere test over the anchor registry: about 40 spheres (the Sun, 8 planets, the seeded moons, the task asteroids), O(n) with no allocations beyond the result. That is cheap enough to run on every hover frame. It is independent of whatever mesh P3-06's LOD draws, and the instanced background belt is never a candidate. A BVH speeds up ray-vs-triangle tests, and none are done here, so the dependency was not added. The asteroids' invisible pick spheres (`belt/`) are not used, because the anchor sphere does the same job; they could be removed in P3-08 if nothing else needs them. If Phase 4 satellites ever need triangle-exact picks, add the BVH then.
 
-## Proposed SPEC / TECHNOLOGY text (for Cosmin; not written into the docs)
+## Proposed SPEC / TECHNOLOGY text (recorded: SPEC decision 65, a §8 question on a per-device tier, TECHNOLOGY §2.1)
 
 **SPEC §7, new decision (scene picking and selection):**
 

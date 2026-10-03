@@ -63,7 +63,7 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 
 ### P3-05 — Picking, hover and selection
 - **Status:** in progress · **Depends on:** P3-02, P3-03, P3-04 · **Parallel with:** P3-06
-- Raycast picking with `three-mesh-bvh` for dense scenes; hover highlight; selection outline (postprocessing); "what's here" popover listing all bodies under the pointer (corner case 24); click mapping into the shared selection store (planet/moon → project, asteroid → task).
+- Picking by ray vs the anchors' bounding spheres (decided in P3-05 instead of `three-mesh-bvh`: about 40 spheres, LOD-independent); hover highlight; selection outline (postprocessing); "what's here" popover listing all bodies under the pointer (corner case 24); click mapping into the shared selection store (planet/moon → project, asteroid → task).
 - **Acceptance:** selecting a body in the scene selects the right Waykeeper/task in the panel and vice versa.
 
 ### P3-06 — LOD and quality setting

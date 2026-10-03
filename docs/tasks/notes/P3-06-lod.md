@@ -40,7 +40,7 @@ Distances are in body radii. Each level holds while the camera is closer than it
 - Ringed planets are framed on their outer radius, about 19 sphere radii away, so they show the mid level (1024 on high).
 - On a portrait phone the narrower field of view is horizontal, so framed bodies sit at about 17.7 radii and stay on the far 256 map. That map is sharp enough there: about 120 px across.
 
-## Proposed SPEC / TECHNOLOGY text
+## Proposed SPEC / TECHNOLOGY text (recorded: SPEC decision 65, a §8 question on a per-device tier, TECHNOLOGY §2.1)
 
 No SPEC change. Product question for §8 (Cosmin): the tier is one server-wide setting (decision 51), so choosing `mobile` for the phone also downgrades the Mac (after a reload). Should the tier be per-device (stored in the browser, with the server value as the default)? Until that is decided, the conservative behaviour stays as it is.
 
