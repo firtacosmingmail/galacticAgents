@@ -8,6 +8,7 @@ import {
   STEADY_PULSE,
 } from './beacon-look.js';
 import { drawGlyph, drawPillar } from './glyph-draw.js';
+import { PULSE, pulseAt } from '../satellites/look.js';
 import { beaconUnder, type BeaconFrame } from './registry.js';
 
 describe('beaconLayout', () => {
@@ -38,6 +39,19 @@ describe('beaconPulse', () => {
     expect(again.haloScale).toBeCloseTo(start.haloScale, 9);
     expect(again.haloOpacity).toBeCloseTo(start.haloOpacity, 9);
     expect(beaconPulse(-0.4, false).haloOpacity).toBeGreaterThanOrEqual(0);
+  });
+
+  it("is in step with a waiting satellite's blink: same period, both peak together", () => {
+    expect(BEACON.pulseSeconds).toBe(PULSE.blink);
+    for (const t of [0, PULSE.blink, PULSE.blink * 7]) {
+      expect(beaconPulse(t, false).pillarOpacity).toBeCloseTo(0.9, 9);
+      expect(beaconPulse(t, false).haloOpacity).toBeCloseTo(0.7, 9);
+      expect(pulseAt('blink', t)).toBeCloseTo(1.9, 9);
+    }
+    // Half a period later both are at their low.
+    const half = PULSE.blink / 2;
+    expect(beaconPulse(half, false).pillarOpacity).toBeCloseTo(0.4, 9);
+    expect(pulseAt('blink', half)).toBeCloseTo(0.4, 9);
   });
 
   it('is steady under reduced motion, whatever the time', () => {

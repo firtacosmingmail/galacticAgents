@@ -14,7 +14,7 @@ import {
 } from './director.js';
 import { TIMING } from './machine.js';
 import { BASE_SHELL, ORBIT_TWEEN, SHELL_STEP } from './orbits.js';
-import { SATELLITE_LOOK } from './look.js';
+import { BEAM, SATELLITE_LOOK, STATE_LOOK, WAITING_AMBER } from './look.js';
 import type { SatelliteSpec } from './satellite-model.js';
 import { allSatellites, getSatellite, onSatellitesChanged, publishSatellites } from './registry.js';
 
@@ -499,5 +499,75 @@ describe('reduced motion', () => {
     const still: Vec3Tuple = [...f.position];
     d.update(9, world);
     expect(f.position).toEqual(still);
+  });
+});
+
+describe('state look (P4-02)', () => {
+  it('every frame carries its state’s tint, pulse, size and beam colour', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars', 'waiting_for_input'), spec('a-2', 'b-mars', 'working')], 0);
+    const frames = d.update(1, world);
+    const [waiting, working] = frames as [SatelliteFrame, SatelliteFrame];
+    expect(waiting.tint).toBe(WAITING_AMBER);
+    expect(working.tint).toBe(SATELLITE_LOOK.steward.color);
+    expect(waiting.size / working.size).toBeCloseTo(STATE_LOOK.waiting_for_input.scale, 6);
+    expect(working.beamTint).toBe(BEAM.color);
+    const seen: number[] = [];
+    for (let t = 1; t < 3; t += 0.05) {
+      d.update(t, world);
+      seen.push(waiting.brightness);
+    }
+    expect(Math.max(...seen) - Math.min(...seen)).toBeGreaterThan(1); // it blinks
+  });
+
+  it('reduced motion: brightness is the still level, constant', () => {
+    const d = director('high', true);
+    d.setSpecs([spec('a-1', 'b-mars', 'waiting_for_input')], 0);
+    const values = new Set<number>();
+    for (let t = 1; t < 4; t += 0.1) values.add(d.update(t, world)[0]!.brightness);
+    expect([...values]).toEqual([STATE_LOOK.waiting_for_input.still]);
+  });
+
+  it('a paused satellite holds still where it is; resuming carries on without a jump', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars', 'working')], 0);
+    const [f] = d.update(2, world) as [SatelliteFrame];
+    d.setSpecs([spec('a-1', 'b-mars', 'paused')], 2);
+    const held: Vec3Tuple = [...f.position];
+    d.update(5, world);
+    expect(dist(f.position, held)).toBeLessThan(1e-9);
+    d.setSpecs([spec('a-1', 'b-mars', 'working')], 5);
+    d.update(5, world);
+    expect(dist(f.position, held)).toBeLessThan(1e-9);
+    d.update(5.05, world);
+    expect(dist(f.position, held)).toBeGreaterThan(0);
+    expect(dist(f.position, held)).toBeLessThan(0.1); // a small step, not a jump
+  });
+
+  it('a failed satellite drifts at its slower rate', () => {
+    const rate = STATE_LOOK.failed.orbitRate;
+    const a = director();
+    const b = director();
+    a.setSpecs([spec('a-1', 'b-mars', 'working')], 0);
+    b.setSpecs([spec('a-1', 'b-mars', 'failed')], 0);
+    const fa = a.update(0, world)[0]!;
+    const start: Vec3Tuple = [...fa.position];
+    a.update(rate, world);
+    const working: Vec3Tuple = [...fa.position];
+    const fb = b.update(0, world)[0]!;
+    b.update(1, world);
+    // One second failed travels as far as `rate` seconds working.
+    expect(dist(fb.position, working)).toBeLessThan(1e-9);
+    expect(dist(working, start)).toBeGreaterThan(0.05);
+  });
+
+  it('the Harmonizer’s HQ is a frame like the others, on its body', () => {
+    const d = director();
+    const earth = anchors({ 'b-earth': { at: [50, 0, 0], radius: 1 } });
+    d.setSpecs([spec('a-harmonizer', 'b-earth', 'idle', 'harmonizer')], 0);
+    const [f] = d.update(1, earth) as [SatelliteFrame];
+    expect(f).toMatchObject({ role: 'harmonizer', bodyId: 'b-earth', visible: true });
+    expect(f.size).toBeCloseTo(SATELLITE_LOOK.harmonizer.size, 6);
+    expect(getSatellite('a-harmonizer')).toBe(f);
   });
 });

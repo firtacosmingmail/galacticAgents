@@ -118,8 +118,9 @@ export function bodyColor(f: SatelliteFrame, out: Color): Color {
   return out.copy(base).multiplyScalar(f.brightness);
 }
 
-/** The beam's colour (additive: brightness is strength), with or without bloom. */
+/** The beam's colour (`f.beamTint`; additive: brightness is strength), with or without bloom. */
 export function beamColor(f: SatelliteFrame, bloom: boolean, out: Color): Color {
   const gain = (bloom ? BEAM.bloomGain : BEAM.plainGain) * f.beam;
-  return out.setRGB(BEAM.color[0] * gain, BEAM.color[1] * gain, BEAM.color[2] * gain);
+  const c = f.beamTint;
+  return out.setRGB(c[0] * gain, c[1] * gain, c[2] * gain);
 }

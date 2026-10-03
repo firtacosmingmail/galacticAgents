@@ -1,4 +1,5 @@
 import type { QuestionKind } from '@galactic/protocol';
+import { PULSE } from '../satellites/look.js';
 
 /**
  * How a beacon looks (P4-05), as numbers and pure functions. No three.js.
@@ -10,7 +11,9 @@ import type { QuestionKind } from '@galactic/protocol';
  *   angle — a world-vertical pillar would vanish in a top-down view);
  * - on top of it, the **glyph**: an amber diamond with a padlock for a permission, an amber disc
  *   with "?" for a clarification, and a count badge when several questions wait on that body;
- * - a **halo** ring around the glyph that pulses outwards (steady under reduced motion).
+ * - a **halo** ring around the glyph that pulses outwards, in step with the amber blink of a
+ *   satellite waiting for the user (P4-02), steady under reduced motion. A beacon is a pillar and
+ *   a glyph above the body, never another dot: the waiting satellite is the dot.
  * The glyph sits `LIFT_PX` above the body's top, clear of the body's label (which sits right
  * above the body, P3-07), and is kept inside the top of the viewport when the body is big on
  * screen (close up), sliding down over the body rather than leaving the view.
@@ -33,8 +36,12 @@ export const BEACON = {
   topMarginPx: 22,
   /** The click / tap target's radius around the glyph's centre, in pixels (36 px across: a tap). */
   targetPx: 18,
-  /** One pulse of the halo, in seconds. */
-  pulseSeconds: 1.6,
+  /**
+   * One pulse of the halo, in seconds: the waiting satellites' blink (P4-02, `PULSE.blink`), on
+   * the same motion clock and in phase (both peak at whole periods), so the scene has one
+   * "waiting for you" rhythm, not two.
+   */
+  pulseSeconds: PULSE.blink,
 } as const;
 
 export interface BeaconLayout {

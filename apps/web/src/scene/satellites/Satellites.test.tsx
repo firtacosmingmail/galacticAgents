@@ -97,3 +97,41 @@ describe('Satellites under StrictMode', () => {
     expect(satelliteIds()).toEqual([]);
   });
 });
+
+describe('Satellites (P4-02)', () => {
+  it('draws the Harmonizer as the HQ station with its own meshes, and keeps failed agents', () => {
+    seedWorld(['a-steward-1', 'a-steward-2']);
+    const w = useAppStore.getState().world;
+    w.agents[fx.harmonizer.id] = fx.harmonizer;
+    w.statuses[fx.harmonizer.id] = { ...fx.status, agentId: fx.harmonizer.id, state: 'idle' };
+    // Failed on another task (a live Steward on the same task would supersede it).
+    w.agents['a-steward-2'] = { ...steward('a-steward-2'), taskId: 't-other' };
+    w.statuses['a-steward-2'] = { ...working('a-steward-2'), state: 'failed' };
+    useAppStore.setState({ world: { ...w } });
+    const { container } = render(<Satellites quality={QUALITY_TIERS.high} />);
+    expect(getSatellite(fx.harmonizer.id)?.bodyId).toBe('b-earth');
+    expect(getSatellite('a-steward-2')).toBeDefined();
+    const names = [...container.querySelectorAll('mesh')].map((m) => m.getAttribute('name'));
+    expect(names.filter((n) => n?.startsWith('hq'))).toEqual([
+      `hq:${fx.harmonizer.id}`,
+      `hq-ring:${fx.harmonizer.id}`,
+      `hq-beam:${fx.harmonizer.id}`,
+    ]);
+    // Two ordinary satellites, a mesh pair each; none for the Harmonizer.
+    expect(names.filter((n) => n?.startsWith('satellite:'))).toEqual([
+      'satellite:a-steward-1',
+      'satellite:a-steward-2',
+    ]);
+  });
+
+  it('only the HQ: no ordinary satellite meshes', () => {
+    const w = emptyWorld();
+    w.agents[fx.harmonizer.id] = fx.harmonizer;
+    w.statuses[fx.harmonizer.id] = { ...fx.status, agentId: fx.harmonizer.id, state: 'working' };
+    useAppStore.setState({ world: w });
+    const { container } = render(<Satellites quality={QUALITY_TIERS.high} />);
+    expect(container.querySelectorAll('mesh')).toHaveLength(3);
+    for (const run of r3f.frames) run(r3f.state); // no anchor for Earth: hidden, no crash
+    expect(getSatellite(fx.harmonizer.id)?.visible).toBe(false);
+  });
+});
