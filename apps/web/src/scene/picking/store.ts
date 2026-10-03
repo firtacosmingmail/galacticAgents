@@ -58,7 +58,6 @@ export interface SatelliteHover {
 export interface BeaconHover {
   kind: 'beacon';
   bodyId: string;
-  others: number;
 }
 
 export type Hover = BodyHover | SatelliteHover | BeaconHover;
@@ -116,10 +115,10 @@ export const usePickingStore = create<PickingState>((set, get) => ({
 }));
 
 function sameHover(a: Hover, b: Hover): boolean {
-  if (a.others !== b.others) return false;
   if (a.kind === 'beacon' || b.kind === 'beacon') {
     return a.kind === 'beacon' && b.kind === 'beacon' && a.bodyId === b.bodyId;
   }
+  if (a.others !== b.others) return false;
   if (a.kind === 'satellite' || b.kind === 'satellite') {
     return (
       a.kind === 'satellite' &&

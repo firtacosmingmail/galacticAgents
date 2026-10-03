@@ -239,7 +239,7 @@ export function Picking({ outline }: PickingProps) {
       if (beacon) {
         grace = undefined;
         moveHover(at.x, at.y);
-        picking.setHover({ kind: 'beacon', bodyId: beacon, others: 0 });
+        picking.setHover({ kind: 'beacon', bodyId: beacon });
         canvas.style.cursor = 'pointer';
         if (usePickingStore.getState().hover !== was) invalidate();
         return;

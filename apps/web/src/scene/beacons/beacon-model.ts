@@ -35,10 +35,26 @@ export interface BeaconSpec {
   questionIds: Id[];
 }
 
+/**
+ * What the beacons read. Not the status records: they change many times a second (every status
+ * flush) and the only thing beacons need from them is which Harmonizer is the current one, whose
+ * body is headquarters — `hqBodyId` (`beaconHq`: a string, so a store selector over it re-renders
+ * only when headquarters moves). Without it, the newest Harmonizer's body.
+ */
 export type BeaconWorld = Pick<
   WorldState,
-  'questions' | 'agents' | 'tasks' | 'projects' | 'bodies' | 'statuses'
->;
+  'questions' | 'agents' | 'tasks' | 'projects' | 'bodies'
+> & {
+  hqBodyId?: Id;
+};
+
+/** Headquarters' body for the beacons: the current Harmonizer's (it reads the status records). */
+export const beaconHq = (world: Pick<WorldState, 'agents' | 'statuses'>): Id =>
+  headquartersBody(world);
+
+const NO_STATUSES: WorldState['statuses'] = {};
+const hqOf = (world: Pick<BeaconWorld, 'agents' | 'hqBodyId'>): Id =>
+  world.hqBodyId ?? headquartersBody({ agents: world.agents, statuses: NO_STATUSES });
 
 /** Whether a question lights a beacon: open and held by the user. */
 export function waitsForUser(q: Question): boolean {
@@ -47,12 +63,12 @@ export function waitsForUser(q: Question): boolean {
 
 /** The body a question belongs to in the scene (see above); `undefined` when none is known. */
 export function questionBody(
-  world: Pick<BeaconWorld, 'agents' | 'tasks' | 'projects' | 'statuses'>,
+  world: Pick<BeaconWorld, 'agents' | 'tasks' | 'projects' | 'hqBodyId'>,
   q: Question,
 ): Id | undefined {
   const agent = world.agents[q.originAgentId];
   if (agent) {
-    if (agent.role === 'harmonizer') return headquartersBody(world);
+    if (agent.role === 'harmonizer') return hqOf(world);
     if (agent.role === 'waykeeper') {
       const project = agent.projectId ? world.projects[agent.projectId] : undefined;
       return project?.bodyId ?? agent.bodyId;
@@ -62,7 +78,7 @@ export function questionBody(
   }
   const origin = q.context.origin;
   if (!origin) return undefined;
-  if (origin.role === 'harmonizer') return headquartersBody(world);
+  if (origin.role === 'harmonizer') return hqOf(world);
   const task = origin.taskId ? world.tasks[origin.taskId] : undefined;
   if (task) return task.bodyId;
   const project = origin.projectId ? world.projects[origin.projectId] : undefined;

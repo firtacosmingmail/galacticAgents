@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react';
+import { Profiler } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../state/store.js';
 import { HARMONIZER, selectionKey } from '../../state/selection.js';
@@ -7,6 +8,7 @@ import { INBOX_ID, REVEALED_CLASS, revealQuestion } from '../../panel/inbox-reve
 import { usePickingStore } from '../picking/store.js';
 import { PickingOverlay } from '../picking/PickingOverlay.js';
 import { activateBeacon } from './activate.js';
+import { BeaconHoverCard } from './BeaconHoverCard.js';
 import { question, worldWith } from './fixtures.js';
 
 /** The inbox as `Panel.tsx` renders it: the section and one card per question id. */
@@ -98,9 +100,7 @@ describe('clicking a beacon opens its question in the inbox', () => {
 describe('the beacon hover card', () => {
   it('shows the first question, who asks, and how many more', () => {
     render(<PickingOverlay />);
-    act(() =>
-      usePickingStore.getState().setHover({ kind: 'beacon', bodyId: 'b-jupiter', others: 0 }),
-    );
+    act(() => usePickingStore.getState().setHover({ kind: 'beacon', bodyId: 'b-jupiter' }));
     const card = screen.getByRole('tooltip');
     expect(card.textContent).toContain('Permission:');
     expect(card.textContent).toContain('question q-p');
@@ -108,11 +108,26 @@ describe('the beacon hover card', () => {
     expect(card.textContent).toContain('+1 more on Jupiter');
   });
 
+  it('a status flush does not re-render the card', () => {
+    let commits = 0;
+    render(
+      <Profiler id="card" onRender={() => void commits++}>
+        <BeaconHoverCard bodyId="b-jupiter" />
+      </Profiler>,
+    );
+    const card = screen.getByRole('tooltip');
+    const before = commits;
+    act(() => {
+      const world = useAppStore.getState().world;
+      useAppStore.setState({ world: { ...world, statuses: { ...world.statuses } } });
+    });
+    expect(commits).toBe(before);
+    expect(screen.getByRole('tooltip')).toBe(card);
+  });
+
   it('follows the store: answering the question elsewhere updates, then removes the card', () => {
     render(<PickingOverlay />);
-    act(() =>
-      usePickingStore.getState().setHover({ kind: 'beacon', bodyId: 'b-jupiter', others: 0 }),
-    );
+    act(() => usePickingStore.getState().setHover({ kind: 'beacon', bodyId: 'b-jupiter' }));
     const answer = (id: string) =>
       act(() => {
         const world = useAppStore.getState().world;
