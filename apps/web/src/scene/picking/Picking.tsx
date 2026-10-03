@@ -1,11 +1,18 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { Raycaster, Vector2, type Mesh, type Object3D, type PerspectiveCamera } from 'three';
+import {
+  Matrix4,
+  Raycaster,
+  Vector2,
+  type Mesh,
+  type Object3D,
+  type PerspectiveCamera,
+} from 'three';
 import type { OutlineEffect } from 'postprocessing';
 import { allAnchors, getAnchor } from '../anchors.js';
 import { anchorPosition } from '../camera/store.js';
 import { useAppStore } from '../../state/store.js';
-import { bodyName, selectionBody } from './body-action.js';
+import { bodyName, outlineBody, selectionBody } from './body-action.js';
 import { ClickTracker } from './click.js';
 import { pickBodies, pixelScale, type PickResult } from './pick.js';
 import { outlineMeshes, sameMeshes } from './outline.js';
@@ -16,8 +23,9 @@ import { noteUserCameraInput } from './sync.js';
  * Picking, hover and the selection highlight inside the canvas (P3-05).
  *
  * Pointer events on the canvas element itself (R3F's own raycasting stays off: no object has a
- * handler): a hover pick on move (at most once per animation frame), a click pick on a release
- * that was not a drag (`ClickTracker`). Picks are ray-vs-sphere over the anchor registry
+ * handler): a hover pick on move, and again when the camera moves under a still pointer (at most
+ * once per animation frame either way), a click pick on a release that was not a drag
+ * (`ClickTracker`, with a wider slop for touch). Picks are ray-vs-sphere over the anchor registry
  * (`pick.ts`). One pick → `activateBody` (fly there; select who works on it or show what it is);
  * several bodies under the pointer → the "what's here" list (corner case 24); none → closes the
  * popover.
@@ -26,8 +34,14 @@ import { noteUserCameraInput } from './sync.js';
  * agent's body — billboards drawn over everything, never smaller than a few pixels, so they read
  * at system scale and on the mobile tier (no composer). With a composer, the selected body also
  * gets the postprocessing outline (`outline` ref, `SolarScene`) and its ring shows only while the
- * body is small on screen. The outline's meshes are re-collected every frame from the anchor's
- * subtree, so a mesh swapped by LOD (P3-06) is followed.
+ * body is small on screen — except Earth for the default Harmonizer selection, which keeps its
+ * ring and gets no outline (`outlineBody`: an empty outline selection skips the effect's depth
+ * pass over the whole scene). The `<Outline>` stays mounted either way (no shader recompiles).
+ * The outline's meshes are re-collected every frame from the anchor's subtree, so a mesh swapped
+ * by LOD (P3-06) is followed.
+ *
+ * Unmounting (the scene hidden, the WebGL context lost) clears the hover label and closes the
+ * popover: they live in a module store that outlives the canvas.
  */
 export interface PickingProps {
   /** The composer's outline effect; absent on tiers without a composer. */
@@ -44,13 +58,20 @@ export function Picking({ outline }: PickingProps) {
   const gl = useThree((s) => s.gl);
   const get = useThree((s) => s.get);
   const invalidate = useThree((s) => s.invalidate);
-  const [tools] = useState(() => ({ raycaster: new Raycaster(), ndc: new Vector2() }));
+  const [tools] = useState(() => ({
+    raycaster: new Raycaster(),
+    ndc: new Vector2(),
+    seenCamera: new Matrix4(),
+  }));
+  /** Asks for a hover pick at the last pointer position (set by the listeners' effect). */
+  const repick = useRef<(() => void) | undefined>(undefined);
 
   useEffect(() => {
     const canvas = gl.domElement;
     const tracker = new ClickTracker();
     let frame = 0;
     let last: PointerEvent | undefined;
+    let pressed = false;
 
     const pointAt = (e: { clientX: number; clientY: number }): Point => {
       const rect = canvas.getBoundingClientRect();
@@ -98,7 +119,17 @@ export function Picking({ outline }: PickingProps) {
       invalidate();
     };
 
+    const requestHover = () => {
+      if (!frame) frame = requestAnimationFrame(hoverNow);
+    };
+    // The camera moved under a still pointer (a flight, a follow, the keyboard): the body under it
+    // may have changed. Not while a button is held (a drag: OrbitControls' business).
+    repick.current = () => {
+      if (last && !pressed) requestHover();
+    };
+
     const onDown = (e: PointerEvent) => {
+      pressed = true;
       tracker.down({
         pointerId: e.pointerId,
         button: e.button,
@@ -111,9 +142,10 @@ export function Picking({ outline }: PickingProps) {
       tracker.move({ pointerId: e.pointerId, ...xy(e) });
       if (e.buttons !== 0) return; // dragging: OrbitControls' business
       last = e;
-      if (!frame) frame = requestAnimationFrame(hoverNow);
+      requestHover();
     };
     const onUp = (e: PointerEvent) => {
+      pressed = false;
       if (!tracker.up({ pointerId: e.pointerId, ...xy(e), at: e.timeStamp })) {
         noteUserCameraInput();
         return;
@@ -121,7 +153,7 @@ export function Picking({ outline }: PickingProps) {
       const at = pointAt(e);
       const result = pick(at);
       const picking = usePickingStore.getState();
-      // The camera is about to move: the label comes back with the next pointer move.
+      // The camera is about to move: the label comes back once it does (`repick`).
       picking.setHover(undefined);
       if (result.choice) activateBody(result.choice, at);
       else if (result.candidates.length > 1) {
@@ -131,7 +163,10 @@ export function Picking({ outline }: PickingProps) {
         );
       } else picking.closePopover();
     };
-    const onCancel = () => tracker.cancel();
+    const onCancel = () => {
+      pressed = false;
+      tracker.cancel();
+    };
     const onLeave = () => {
       last = undefined;
       usePickingStore.getState().setHover(undefined);
@@ -155,13 +190,26 @@ export function Picking({ outline }: PickingProps) {
       canvas.removeEventListener('pointerleave', onLeave);
       canvas.removeEventListener('wheel', onWheel);
       canvas.style.cursor = '';
-      usePickingStore.getState().setHover(undefined);
+      repick.current = undefined;
+      const picking = usePickingStore.getState();
+      picking.setHover(undefined);
+      picking.closePopover();
     };
   }, [gl, get, invalidate, tools]);
 
+  useFrame((state) => {
+    const m = state.camera.matrixWorld;
+    if (tools.seenCamera.equals(m)) return;
+    tools.seenCamera.copy(m);
+    repick.current?.();
+  });
+
   const hovered = usePickingStore((s) => s.hover?.bodyId);
   const selected = useAppStore((s) => selectionBody(s.world, s.selection));
+  const outlined = useAppStore((s) => outlineBody(s.world, s.selection));
   useEffect(() => invalidate(), [hovered, selected, invalidate]);
+  // The ring yields to the outline only where there is one.
+  const outlineShown = outline !== undefined && outlined !== undefined && outlined === selected;
 
   return (
     <>
@@ -174,9 +222,9 @@ export function Picking({ outline }: PickingProps) {
         bodyId={selected}
         color="#7fb2ff"
         opacity={0.9}
-        {...(outline ? { hideAbovePx: RING_WITH_OUTLINE_PX } : {})}
+        {...(outlineShown ? { hideAbovePx: RING_WITH_OUTLINE_PX } : {})}
       />
-      {outline && <OutlineSync effect={outline} bodyId={selected} />}
+      {outline && <OutlineSync effect={outline} bodyId={outlined} />}
     </>
   );
 }
@@ -231,30 +279,38 @@ function HighlightRing({
   );
 }
 
-/** Keeps the outline effect's selection on the selected body's meshes (LOD-proof, per frame). */
-function OutlineSync({
+/**
+ * Keeps the outline effect's selection on the outlined body's meshes (LOD-proof, per frame). A
+ * recreated effect (the composer remounted) gets the selection again even if the meshes are the
+ * same.
+ */
+export function OutlineSync({
   effect,
   bodyId,
 }: {
   effect: RefObject<OutlineEffect | null>;
   bodyId: string | undefined;
 }) {
-  const current = useRef<Object3D[]>([]);
+  const current = useRef<{ effect: OutlineEffect | null; meshes: Object3D[] }>({
+    effect: null,
+    meshes: [],
+  });
   const invalidate = useThree((s) => s.invalidate);
   useFrame(() => {
     const outline = effect.current;
     if (!outline) return;
     const anchor = bodyId ? getAnchor(bodyId) : undefined;
     const meshes = anchor ? outlineMeshes(anchor.object, anchor.bodyId) : [];
-    if (sameMeshes(meshes, current.current)) return;
-    current.current = meshes;
+    const was = current.current;
+    if (was.effect === outline && sameMeshes(meshes, was.meshes)) return;
+    current.current = { effect: outline, meshes };
     outline.selection.set(meshes);
     invalidate();
   });
   useEffect(
     () => () => {
       effect.current?.selection.clear();
-      current.current = [];
+      current.current = { effect: null, meshes: [] };
     },
     [effect],
   );

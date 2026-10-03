@@ -73,7 +73,7 @@ export function bodyAction(world: World, bodyId: string): BodyAction {
 }
 
 /**
- * The body a selection is about, for the outline and the panel → scene flight: the Harmonizer's
+ * The body a selection is about, for the selection ring and the panel → scene flight: the Harmonizer's
  * headquarters; a Waykeeper's project's body; a Steward's task's body (a project task lives on
  * its project's body). Falls back to the agent's own `bodyId`; `undefined` for an unknown agent.
  */
@@ -86,4 +86,14 @@ export function selectionBody(world: World, selection: Selection): string | unde
   if (agent.role === 'waykeeper') return fromWork(agent.projectId, world.projects) ?? agent.bodyId;
   if (agent.role === 'steward') return fromWork(agent.taskId, world.tasks) ?? agent.bodyId;
   return agent.bodyId;
+}
+
+/**
+ * The body the postprocessing outline draws for a selection: the selection's body, except for the
+ * Harmonizer (the default selection). Earth keeps its ring but gets no outline, because a non-empty
+ * outline selection costs a depth pass over the whole scene every frame (about +68 draw calls at
+ * the high tier's system view), which the default view should not pay.
+ */
+export function outlineBody(world: World, selection: Selection): string | undefined {
+  return selection.kind === 'harmonizer' ? undefined : selectionBody(world, selection);
 }
