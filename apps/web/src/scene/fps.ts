@@ -34,9 +34,13 @@ export class FpsCounter {
 
 export const FPS_FLAG_KEY = 'galactic.scene.fps';
 
+/** The URL's choice taken at page load, for a browser without storage (private mode). */
+let fromLoad: boolean | undefined;
+
 /**
  * Whether the meter is on: `?fps=1` in the URL turns it on (and remembers it in this browser),
- * `?fps=0` turns it off; otherwise the remembered choice; otherwise off.
+ * `?fps=0` turns it off; otherwise the remembered choice (or, without storage, the choice taken
+ * at page load by `captureFpsFlag`); otherwise off.
  */
 export function fpsMeterEnabled(search: string = globalThis.location?.search ?? ''): boolean {
   const flag = new URLSearchParams(search).get('fps');
@@ -52,6 +56,17 @@ export function fpsMeterEnabled(search: string = globalThis.location?.search ?? 
   try {
     return localStorage.getItem(FPS_FLAG_KEY) === '1';
   } catch {
-    return false;
+    return fromLoad ?? false;
   }
+}
+
+/**
+ * Takes `?fps=` from the URL the page was loaded with (P3-11), before anything rewrites the URL:
+ * the app calls it once at start-up. The scene mounts later (after the token, the settings, the
+ * first-run gate, or a "Show scene" click), by which time a navigation may have dropped the query.
+ */
+export function captureFpsFlag(search: string = globalThis.location?.search ?? ''): void {
+  const flag = new URLSearchParams(search).get('fps');
+  if (flag !== '1' && flag !== '0') return;
+  fromLoad = fpsMeterEnabled(search);
 }
