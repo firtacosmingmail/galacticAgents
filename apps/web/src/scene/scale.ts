@@ -25,7 +25,8 @@ export const useSceneScale = create<{ mode: ScaleMode; setMode: (mode: ScaleMode
 
 /**
  * Scene units per AU in true scale. Neptune (30.07 AU) and its outermost moon stay inside the
- * star-field shell (`STAR_SHELL.inner` = 1200), so the sky remains a backdrop in both modes.
+ * star-field shell's radius (`STAR_SHELL.inner` = 1200); the shell is centred on the camera every
+ * frame, so the sky stays a backdrop wherever the camera goes, the overview included.
  */
 export const TRUE_UNITS_PER_AU = 35;
 

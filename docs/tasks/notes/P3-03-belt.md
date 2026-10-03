@@ -76,3 +76,9 @@ And in the quality-tier bullet, add "belt rocks 6000 / 3500 / 1200" to the three
 - `packages/protocol/src/belt.test.ts` (3 tests) covers the pinned pre-move `asteroidSpec` values, the seed and ranges, and PRNG determinism.
 - Gates on `p3-03-belt`: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check` and `pnpm test` are all green. Counts: protocol 67 (was 64), server 842 (+1 skipped, unchanged), web 235 (was 219).
 - Bundle: three.js stays out of the panel's first chunk (no `WebGLRenderer` in `index-*.js`). The lazy `SolarScene` chunk is about 995 kB, about 272 kB gzip; drei `Html` is now in it.
+
+## Review fixes (2026-10-03, branch `p3-wave2-fixes`)
+
+- **Orbit sign**: `orbitPosition(orbit, mode)` now goes through the scene's one convention (`scene/orbit.ts`): `phase` counts counter-clockwise seen from +y, like the planets, so π/2 is on −z. The belt was mirrored in z before. The protocol's `phase` is a uniform angle with no handedness, so the server's meaning is kept; the belt's spin (`rotation.y` positive) now turns the same way the planets go. Behaviour change: every rock and task asteroid moves to its mirror image across the x axis (decorative, once).
+- **Rock count as a prop**: `<Belt rocks={quality.beltRocks} />` from `SolarScene`; the belt no longer reads the settings context inside the canvas.
+- **Anchor binding**: `belt/hooks.ts` is gone; the belt uses the shared `scene/anchor-binding.ts` (`useBodyAnchor(ref, { bodyId, radius, kind, order })`) and `useReducedMotion` from `scene/motion.ts`. A task asteroid's anchor `order` is its `meta.number` (`TaskAsteroid.number`), for the camera's next / previous.

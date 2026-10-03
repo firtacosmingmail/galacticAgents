@@ -1,23 +1,33 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bloom, EffectComposer, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
-import { AdditiveBlending, CanvasTexture, SRGBColorSpace, WebGLRenderer, type Group } from 'three';
+import {
+  AdditiveBlending,
+  CanvasTexture,
+  SRGBColorSpace,
+  WebGLRenderer,
+  type Camera,
+  type Group,
+  type Points,
+} from 'three';
 import { FpsCounter, type FpsSample } from './fps.js';
 import { BLOOM_SMOOTHING, SUN_EMISSIVE, type SceneQuality } from './quality.js';
-import { generateStarField } from './starfield.js';
+import { centreOnCamera, generateStarField } from './starfield.js';
 import { Bodies } from './bodies/Bodies.js';
 import { SUN_ANCHOR_ID } from './anchors.js';
-import { attachAnchor } from './bodies/anchor-binding.js';
+import { attachAnchor } from './anchor-binding.js';
 import { motionEnabled, sceneFrameloop, useReducedMotion } from './motion.js';
 import { Belt } from './belt/Belt.js';
 import { CameraRig } from './camera/CameraRig.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
- * sRGB output with ACES filmic tone mapping, the star-field skybox and the Sun with bloom. This is
- * the only module of the scene that imports three.js; the panel loads it lazily (`SceneArea`), so
- * three.js stays out of the panel's first chunk and out of jsdom tests.
+ * sRGB output with ACES filmic tone mapping, the star-field skybox and the Sun with bloom, and the
+ * wave 2 parts (bodies, belt, camera rig). The panel loads this module lazily (`SceneArea`), so
+ * three.js and everything that imports it at runtime (this module and the parts under it) stay
+ * out of the panel's first chunk; modules the panel imports directly (`scale.ts`, `motion.ts`,
+ * `anchors.ts`, `camera/store.ts`) use type-only three imports.
  *
  * The frame loop is continuous while the decorative orbital motion runs (P3-02) or the fps meter
  * measures; with `prefers-reduced-motion` and no meter it renders on demand (resize, a change).
@@ -84,7 +94,7 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <Sun glow={quality.bloom === null} />
       {/* Phase 3 wave 2: each task owns its folder; they meet through `anchors.ts`. */}
       <Bodies />
-      <Belt />
+      <Belt rocks={quality.beltRocks} />
       <CameraRig />
       {quality.bloom && (
         <EffectComposer multisampling={quality.antialias ? 4 : 0}>
@@ -104,11 +114,20 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
   );
 }
 
+/**
+ * The sky: a shell of points centred on the camera, moved to it just before it is drawn, so the
+ * stars surround the viewer at any zoom and in either scale (the true-scale overview sits farther
+ * from the Sun than the shell's radius) and show no parallax, like a skybox.
+ */
 function StarField({ count }: { count: number }) {
   const { positions, colors } = useMemo(() => generateStarField(count), [count]);
+  const ref = useRef<Points>(null);
+  const follow = useCallback((_gl: unknown, _scene: unknown, camera: Camera) => {
+    if (ref.current) centreOnCamera(ref.current, camera);
+  }, []);
   return (
     // A new geometry per count: buffer attributes cannot grow in place.
-    <points key={count} frustumCulled={false}>
+    <points key={count} ref={ref} frustumCulled={false} onBeforeRender={follow}>
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
         <bufferAttribute attach="attributes-color" args={[colors, 3]} />

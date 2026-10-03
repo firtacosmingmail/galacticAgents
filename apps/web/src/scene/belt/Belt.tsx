@@ -9,8 +9,6 @@ import {
   type Group,
   type InstancedMesh,
 } from 'three';
-import { useSettingsData } from '../../panel/settings/SettingsData.js';
-import { sceneQuality } from '../quality.js';
 import { useSceneScale, type ScaleMode } from '../scale.js';
 import { useAppStore } from '../../state/store.js';
 import {
@@ -26,7 +24,8 @@ import {
   type TaskAsteroid,
 } from './belt-model.js';
 import { rockGeometry, writeBeltInstances } from './belt-mesh.js';
-import { useBodyAnchor, usePrefersReducedMotion } from './hooks.js';
+import { useBodyAnchor } from '../anchor-binding.js';
+import { useReducedMotion } from '../motion.js';
 
 /**
  * The asteroid belt (P3-03): thousands of background rocks in ONE instanced mesh (one draw call,
@@ -34,14 +33,16 @@ import { useBodyAnchor, usePrefersReducedMotion } from './hooks.js';
  * lighter, a warm emissive and a cyan halo), each with an invisible pick target and a name label,
  * registered in the anchor registry under its `Body.id`.
  *
+ * The rock count is the tier's `beltRocks` (decision 51), passed in by `SolarScene` with the rest
+ * of the quality table.
+ *
  * Everything sits in one group that spins slowly about the Sun (decorative, corner case 26). The
  * spin advances in `useFrame` by the frame's delta, so it is still while the canvas renders on
  * demand, and it stops altogether with `prefers-reduced-motion`.
  */
-export function Belt() {
-  const rocks = useBeltRockCount();
+export function Belt({ rocks }: { rocks: number }) {
   const mode = useSceneScale((s) => s.mode);
-  const reducedMotion = usePrefersReducedMotion();
+  const reducedMotion = useReducedMotion();
   const bodies = useAppStore((s) => s.world.bodies);
   const asteroids = useMemo(() => taskAsteroids(bodies), [bodies]);
   const spin = useRef<Group>(null);
@@ -82,11 +83,6 @@ export function Belt() {
       ))}
     </group>
   );
-}
-
-/** The tier's rock count (decision 51): the settings' tier, `high` until they are read. */
-function useBeltRockCount(): number {
-  return sceneQuality(useSettingsData().response?.settings.qualityTier).beltRocks;
 }
 
 function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
@@ -137,7 +133,12 @@ function TaskAsteroidMesh({
   labels: { current: HTMLElement } | undefined;
 }) {
   const anchor = useRef<Group>(null);
-  useBodyAnchor(asteroid.bodyId, anchor, TASK_ASTEROID_RADIUS, 'asteroid');
+  useBodyAnchor(anchor, {
+    bodyId: asteroid.bodyId,
+    radius: TASK_ASTEROID_RADIUS,
+    kind: 'asteroid',
+    ...(asteroid.number !== undefined ? { order: asteroid.number } : {}),
+  });
   const position = useMemo(() => orbitPosition(asteroid.orbit, mode), [asteroid.orbit, mode]);
   const scale = useMemo(
     () =>

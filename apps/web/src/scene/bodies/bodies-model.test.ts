@@ -13,16 +13,16 @@ import {
 } from '../scale.js';
 import { STAR_SHELL } from '../starfield.js';
 import { DEFAULT_LOOK, DEFAULT_MOON_LOOK, MOON_LOOKS, PLANET_LOOKS } from './appearance.js';
-import { attachAnchor } from './anchor-binding.js';
+import { attachAnchor } from '../anchor-binding.js';
 import {
   anchorSpecs,
   angleBetween,
   buildRenderList,
+  castsShadow,
   circlePoints,
   FAR_SIDE_ANGLE,
   FAR_SIDE_MARGIN,
   orbitAngle,
-  orbitPosition,
   safePhase,
   type PlanetItem,
 } from './layout.js';
@@ -32,6 +32,7 @@ import {
   REDUCED_MOTION_QUERY,
   sceneFrameloop,
 } from '../motion.js';
+import { orbitPoint } from '../orbit.js';
 import { paintRings, paintSurface } from './surface.js';
 import type { Object3D } from 'three';
 
@@ -275,7 +276,7 @@ describe('orbits and motion', () => {
         expect(angleBetween(p.phase, FAR_SIDE_ANGLE)).toBeGreaterThanOrEqual(
           FAR_SIDE_MARGIN - 1e-9,
         );
-        const [x, z] = orbitPosition(p.distance, orbitAngle(p.phase, p.period, 0));
+        const [x, , z] = orbitPoint(p.distance, orbitAngle(p.phase, p.period, 0));
         // Not hidden by the Sun's disc: either in front of it, or off to the side by more than it.
         expect(z > 0 || Math.abs(x) > 6 + p.radius).toBe(true);
       }
@@ -297,7 +298,7 @@ describe('orbits and motion', () => {
     expect(list[0]!.period).toBeGreaterThanOrEqual(60);
     const p = list[0]!;
     expect(orbitAngle(p.phase, p.period, p.period) - p.phase).toBeCloseTo(Math.PI * 2);
-    const [x, z] = orbitPosition(10, Math.PI / 2);
+    const [x, , z] = orbitPoint(10, Math.PI / 2);
     expect(x).toBeCloseTo(0);
     expect(z).toBeCloseTo(-10); // the far side from a camera on +z
   });
@@ -373,7 +374,32 @@ describe('anchors', () => {
     expect(allAnchors()).toHaveLength(before);
   });
 
+  it('anchors carry a stable order: planets by orbit, moons by planet orbit then rank', () => {
+    for (const mode of MODES) {
+      const specs = anchorSpecs(buildRenderList(CATALOGUE, mode));
+      const order = (id: string) => specs.find((a) => a.bodyId === id)!.order;
+      expect(order('b-mercury')).toBe(1);
+      expect(order('b-neptune')).toBe(8);
+      expect(order('b-phobos')).toBeLessThan(order('b-deimos'));
+      expect(order('b-deimos')).toBeLessThan(order('b-io'));
+      expect(order('b-io')).toBeLessThan(order('b-europa'));
+      expect(order('b-triton')).toBeLessThan(order('b-nereid'));
+    }
+  });
+
   it('the Sun registers under the catalogue id', () => {
     expect(SUN_ANCHOR_ID).toBe(CATALOGUE.find((b) => b.kind === 'star')!.id);
+  });
+});
+
+describe('shadows', () => {
+  it('planets cast; only the largest moons do (the small ones are not worth six more draws)', () => {
+    const list = buildRenderList(CATALOGUE, 'fake');
+    const casters = list.flatMap((p) => p.moons.filter((m) => m.castShadow).map((m) => m.name));
+    expect(casters.sort()).toEqual(
+      ['Callisto', 'Europa', 'Ganymede', 'Io', 'Moon', 'Titan', 'Triton'].sort(),
+    );
+    expect(castsShadow(MOON_LOOKS['Phobos']!)).toBe(false);
+    expect(castsShadow(DEFAULT_MOON_LOOK)).toBe(false);
   });
 });

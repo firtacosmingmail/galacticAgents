@@ -6,7 +6,8 @@ import { onAnchorsChanged } from '../anchors.js';
 import { useSceneScale } from '../scale.js';
 import { CameraDirector } from './director.js';
 import type { Pose, Vec3, View } from './flight.js';
-import { anchorWorld, prefersReducedMotion, useCameraStore } from './store.js';
+import { prefersReducedMotion } from '../motion.js';
+import { AnchorWorld, handledOnMount, pendingRequest, useCameraStore } from './store.js';
 
 type Controls = ComponentRef<typeof OrbitControls>;
 
@@ -19,14 +20,24 @@ const DAMPING = 0.08;
  * the breadcrumb, the keyboard, picking later); the `CameraDirector` runs them every frame against
  * the live anchors and this component writes its pose to the camera and the controls' target.
  *
- * The frame loop is `demand`: a new request, an anchor change and every frame of a flight call
- * `invalidate()`; OrbitControls invalidates on user input and while its damping settles.
+ * The frame loop is continuous while the decorative motion runs and `demand` under reduced
+ * motion (`scene/motion.ts`); for the latter, a new request, an anchor change and every frame of a
+ * flight call `invalidate()`, and OrbitControls invalidates on user input and while its damping
+ * settles.
+ *
+ * Per frame, a free camera reads no anchor: the world (`AnchorWorld`) reads the focused body's
+ * position only while flying to or following it, and keeps the Sun's radius and the system's
+ * extent until the anchors or the scale change.
  */
 export function CameraRig() {
   const controls = useRef<Controls>(null);
   const [director] = useState(() => new CameraDirector());
+  const [world] = useState(() => new AnchorWorld());
   const invalidate = useThree((s) => s.invalidate);
-  const handled = useRef(0);
+  // A request made before this rig mounted (a previous rig's, now handled or abandoned) is not
+  // replayed: the scene hidden and shown, or a tier switch, must not fly to an old body.
+  const handled = useRef<number | null>(null);
+  if (handled.current === null) handled.current = handledOnMount();
   /** No request handled and no user input yet: the overview follows the bodies as they register. */
   const pristine = useRef(true);
   const snapOverview = useRef(true);
@@ -41,21 +52,23 @@ export function CameraRig() {
   useEffect(
     () =>
       onAnchorsChanged(() => {
+        world.invalidate();
         if (pristine.current) snapOverview.current = true;
         invalidate();
       }),
-    [invalidate],
+    [invalidate, world],
   );
   useEffect(
     () =>
       // The scale toggle moves every body: frame the focused one again, or the new overview.
       useSceneScale.subscribe((state, prev) => {
         if (state.mode === prev.mode) return;
+        world.invalidate();
         const cam = useCameraStore.getState();
         if (cam.focusedId) cam.flyTo(cam.focusedId);
         else if (!pristine.current) cam.back();
       }),
-    [],
+    [world],
   );
   useEffect(() => () => useCameraStore.getState().released(), []);
 
@@ -65,7 +78,6 @@ export function CameraRig() {
     // The frame state's camera, not a captured one: the frame callback owns its mutation.
     const camera = state.camera as PerspectiveCamera;
     const now = performance.now() / 1000;
-    const world = anchorWorld();
     const view: View = {
       fovDeg: camera.fov,
       aspect: state.size.width / Math.max(1, state.size.height),
@@ -74,8 +86,8 @@ export function CameraRig() {
     const store = useCameraStore.getState();
     const reduced = prefersReducedMotion();
 
-    const request = store.request;
-    if (request && request.seq !== handled.current) {
+    const request = pendingRequest(store.request, handled.current ?? 0);
+    if (request) {
       handled.current = request.seq;
       pristine.current = false;
       snapOverview.current = false;

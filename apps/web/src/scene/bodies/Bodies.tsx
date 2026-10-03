@@ -4,17 +4,19 @@ import { DoubleSide, RingGeometry, type Group, type Mesh, type Object3D } from '
 import { useAppStore } from '../../state/store.js';
 import { useSceneScale } from '../scale.js';
 import type { RingLook } from './appearance.js';
-import { attachAnchor, type AnchorBinding } from './anchor-binding.js';
+import { useBodyAnchor } from '../anchor-binding.js';
 import {
   buildRenderList,
   circlePoints,
+  moonAnchor,
   orbitAngle,
-  orbitPosition,
+  planetAnchor,
   SPIN_PERIOD,
   type MoonItem,
   type PlanetItem,
 } from './layout.js';
 import { motionEnabled, useReducedMotion } from '../motion.js';
+import { placeOnOrbit } from '../orbit.js';
 import { MOON_TEXTURE, PLANET_TEXTURE } from './surface.js';
 import { useRingTexture, useSurfaceTexture } from './textures.js';
 
@@ -31,8 +33,9 @@ import { useRingTexture, useSurfaceTexture } from './textures.js';
  * `prefers-reduced-motion` everything sits at its starting angle (never behind the Sun from the
  * default camera) and the canvas goes back to rendering on demand.
  *
- * Shadows: planets and moons cast and receive, rings receive; they show only when the tier turns
- * the shadow map on (`SolarScene`).
+ * Shadows: planets and the largest moons cast (`castsShadow`: each caster is drawn six more times
+ * a frame into the Sun's cube shadow map), every body receives, rings receive; they show only when
+ * the tier turns the shadow map on (`SolarScene`).
  */
 export function Bodies() {
   const bodies = useAppStore((s) => s.world.bodies);
@@ -56,7 +59,7 @@ function Planet({ item, motion }: { item: PlanetItem; motion: boolean }) {
   const anchor = useRef<Group>(null);
   const spin = useRef<Mesh>(null);
   useOrbit(anchor, item.distance, item.phase, item.period, motion);
-  useBodyAnchor(anchor, { bodyId: item.bodyId, radius: item.outerRadius, kind: 'planet' });
+  useBodyAnchor(anchor, planetAnchor(item));
   useFrame((state) => {
     if (!motion || !spin.current) return;
     spin.current.rotation.y = (state.clock.elapsedTime / SPIN_PERIOD) * Math.PI * 2;
@@ -87,13 +90,13 @@ function Planet({ item, motion }: { item: PlanetItem; motion: boolean }) {
 function Moon({ item, motion }: { item: MoonItem; motion: boolean }) {
   const anchor = useRef<Group>(null);
   useOrbit(anchor, item.distance, item.phase, item.period, motion);
-  useBodyAnchor(anchor, { bodyId: item.bodyId, radius: item.radius, kind: 'moon' });
+  useBodyAnchor(anchor, moonAnchor(item));
   const texture = useSurfaceTexture(item.look, MOON_TEXTURE);
   return (
     <>
       <OrbitLine radius={item.distance} segments={MOON_ORBIT_SEGMENTS} opacity={0.12} />
       <group ref={anchor} name={item.name} userData={{ bodyId: item.bodyId }}>
-        <mesh castShadow receiveShadow>
+        <mesh castShadow={item.castShadow} receiveShadow>
           <sphereGeometry args={[item.radius, 24, 16]} />
           <meshStandardMaterial map={texture} roughness={1} metalness={0} />
         </mesh>
@@ -178,23 +181,11 @@ function useOrbit(
 ) {
   const invalidate = useThree((s) => s.invalidate);
   useLayoutEffect(() => {
-    place(ref.current, distance, orbitAngle(phase, period, 0));
+    if (ref.current) placeOnOrbit(ref.current, distance, orbitAngle(phase, period, 0));
     invalidate();
   }, [ref, distance, phase, period, motion, invalidate]);
   useFrame((state) => {
-    if (!motion) return;
-    place(ref.current, distance, orbitAngle(phase, period, state.clock.elapsedTime));
+    if (!motion || !ref.current) return;
+    placeOnOrbit(ref.current, distance, orbitAngle(phase, period, state.clock.elapsedTime));
   });
-}
-
-function place(object: Object3D | null, distance: number, angle: number) {
-  if (!object) return;
-  const [x, z] = orbitPosition(distance, angle);
-  object.position.set(x, 0, z);
-}
-
-/** Registers the body's anchor while it is drawn; re-registers when its radius changes (scale). */
-function useBodyAnchor(ref: RefObject<Object3D | null>, binding: AnchorBinding) {
-  const { bodyId, radius, kind } = binding;
-  useEffect(() => attachAnchor({ bodyId, radius, kind }, ref.current), [ref, bodyId, radius, kind]);
 }

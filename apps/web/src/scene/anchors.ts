@@ -15,6 +15,18 @@ export interface BodyAnchor {
   /** Visual radius in scene units at the current scale (the camera frames the body with it). */
   radius: number;
   kind: 'star' | 'planet' | 'moon' | 'asteroid';
+  /**
+   * A stable place within its kind, for the camera's next / previous body (P3-04): planets by
+   * catalogue orbit, moons by `moonOrder(parent orbit, rank)`, asteroids by `meta.number`. Never a
+   * live position (a moon's distance from the Sun changes as it orbits). Without one, a body
+   * comes after the ordered ones of its kind, by id.
+   */
+  order?: number;
+}
+
+/** A moon's `order`: its planet's orbit first, then its rank among that planet's moons. */
+export function moonOrder(parentOrbit: number, rank: number): number {
+  return parentOrbit * 1000 + rank;
 }
 
 /** The catalogue Sun's `Body.id` (migration 0005); the Sun registers under it. */

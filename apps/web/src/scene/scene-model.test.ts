@@ -10,7 +10,8 @@ import {
   sceneQuality,
   SUN_EMISSIVE,
 } from './quality.js';
-import { generateStarField, STAR_MAX_BRIGHTNESS, STAR_SHELL } from './starfield.js';
+import { PerspectiveCamera, Points, Vector3 } from 'three';
+import { centreOnCamera, generateStarField, STAR_MAX_BRIGHTNESS, STAR_SHELL } from './starfield.js';
 import { readSceneVisible, SCENE_VISIBLE_KEY, writeSceneVisible } from './visibility.js';
 
 afterEach(() => localStorage.clear());
@@ -82,6 +83,18 @@ function srgbHexToLinear(hex: string): [number, number, number] {
 }
 
 describe('star field', () => {
+  it('is centred on the camera, so the true-scale overview (≈ 2800 out) is still inside it', () => {
+    const stars = new Points();
+    const camera = new PerspectiveCamera();
+    camera.position.set(0, 760, 2660);
+    centreOnCamera(stars, camera);
+    expect(stars.position.toArray()).toEqual([0, 760, 2660]);
+    expect(stars.position).not.toBe(camera.position);
+    // Its world matrix is current at once: a star's world distance from the camera is its shell radius.
+    const star = new Vector3(STAR_SHELL.inner, 0, 0).applyMatrix4(stars.matrixWorld);
+    expect(star.distanceTo(camera.position)).toBeCloseTo(STAR_SHELL.inner);
+  });
+
   it('places the requested number of stars inside the shell', () => {
     const { positions, colors } = generateStarField(500, 7);
     expect(positions).toHaveLength(1500);
