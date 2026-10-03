@@ -5,7 +5,7 @@ import type { Object3D } from 'three';
  * carries its world position, keyed by its domain `Body.id`, with its visual radius. The camera
  * (P3-04) flies to an anchor by id, picking (P3-05) maps a hit back to an id, labels (P3-07)
  * anchor to it. Bodies own their anchors (P3-02 planets and moons, P3-03 task asteroids, the Sun
- * as `SUN_ANCHOR_ID` when no catalogue Sun is in the world); nothing else writes here.
+ * under `SUN_ANCHOR_ID`, the catalogue's 'b-sun'); nothing else writes here.
  *
  * Type-only import of three: this module stays out of the panel's first chunk's runtime.
  */
@@ -17,7 +17,8 @@ export interface BodyAnchor {
   kind: 'star' | 'planet' | 'moon' | 'asteroid';
 }
 
-export const SUN_ANCHOR_ID = 'sun';
+/** The catalogue Sun's `Body.id` (migration 0005); the Sun registers under it. */
+export const SUN_ANCHOR_ID = 'b-sun';
 
 const anchors = new Map<string, BodyAnchor>();
 const listeners = new Set<() => void>();

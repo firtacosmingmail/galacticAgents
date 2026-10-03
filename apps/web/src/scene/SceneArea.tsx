@@ -1,6 +1,18 @@
-import { Component, lazy, Suspense, useState, type ErrorInfo, type ReactNode } from 'react';
+import {
+  Component,
+  lazy,
+  Suspense,
+  useState,
+  type ErrorInfo,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+} from 'react';
 import type { QualityTier } from '@galactic/protocol';
 import { useSettingsData } from '../panel/settings/SettingsData.js';
+import { CameraBreadcrumb } from './camera/Breadcrumb.js';
+import { sceneKeyAction, SCENE_SHORTCUTS } from './camera/keys.js';
+import { useCameraStore } from './camera/store.js';
 import { fpsMeterEnabled, type FpsSample } from './fps.js';
 import { sceneQuality } from './quality.js';
 import { ScaleToggle } from './bodies/ScaleToggle.js';
@@ -22,13 +34,25 @@ export function useQualityTier(): QualityTier | undefined {
  * context; unmounting it (list mode) releases the context and stops the frame loop. A scene that
  * fails to start (no context, a lost driver) or loses its GPU context while running reports
  * through `onFailure` and the panel falls back to list mode (with a "Retry").
+ *
+ * The area takes keyboard focus (a click on the scene gives it focus too) for the camera's
+ * shortcuts (P3-04): `]` / `[` next / previous body, `Escape` / `Home` back to the whole system.
+ * The breadcrumb over the scene shows where the camera is.
  */
 export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }) {
   const quality = sceneQuality(useQualityTier());
   const [showFps] = useState(fpsMeterEnabled);
   const [sample, setSample] = useState<(FpsSample & { dpr: number }) | undefined>();
   return (
-    <section className="pnl-scene" aria-label="solar system" data-tier={quality.tier}>
+    <section
+      className="pnl-scene"
+      aria-label="solar system"
+      data-tier={quality.tier}
+      tabIndex={0}
+      aria-keyshortcuts={SCENE_SHORTCUTS}
+      onKeyDown={onSceneKey}
+      onPointerDown={focusScene}
+    >
       <SceneErrorBoundary onError={onFailure}>
         <Suspense fallback={<p className="pnl-scene-loading">Loading the solar system…</p>}>
           <SolarScene
@@ -38,10 +62,36 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
           />
         </Suspense>
       </SceneErrorBoundary>
+      <CameraBreadcrumb />
       {showFps && <FpsMeter sample={sample} tier={quality.tier} />}
       <ScaleToggle />
     </section>
   );
+}
+
+/** The camera's keyboard shortcuts while the scene area has focus (typing in a field is ignored). */
+export function onSceneKey(event: KeyboardEvent<HTMLElement>) {
+  const action = sceneKeyAction({
+    key: event.key,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    altKey: event.altKey,
+    isComposing: event.nativeEvent.isComposing,
+    target: event.target,
+  });
+  if (!action) return;
+  event.preventDefault();
+  const camera = useCameraStore.getState();
+  if (action === 'back') camera.back();
+  else if (action === 'next') camera.next();
+  else camera.previous();
+}
+
+/** The canvas's drag handling may swallow the click's focus: give it to the area explicitly. */
+function focusScene(event: PointerEvent<HTMLElement>) {
+  const area = event.currentTarget;
+  if (event.target instanceof HTMLButtonElement) return;
+  if (!area.contains(document.activeElement)) area.focus({ preventScroll: true });
 }
 
 /** The development frame-rate readout (`?fps=1`), drawn over the canvas as ordinary DOM. */
