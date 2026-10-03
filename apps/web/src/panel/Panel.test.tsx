@@ -96,7 +96,7 @@ async function open(path: string, initial: ServerMessage = snapshot) {
   });
 }
 
-const main = () => screen.getByRole('main', { name: 'main area' });
+const main = () => screen.getByRole('main');
 const nav = () => screen.getByRole('navigation', { name: 'navigation' });
 
 describe('panel shell and selection (P25-02)', () => {

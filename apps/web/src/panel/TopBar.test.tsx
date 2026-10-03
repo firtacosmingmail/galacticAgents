@@ -193,7 +193,7 @@ describe('the compact top bar (P3-12)', () => {
     expect(document.activeElement).toBe(menuButton());
 
     openMenu();
-    fireEvent.pointerDown(screen.getByRole('main', { name: 'main area' }));
+    fireEvent.pointerDown(screen.getByRole('main'));
     expect(menu().hidden).toBe(true);
 
     // A tap inside the menu keeps it open.
@@ -206,7 +206,7 @@ describe('the compact top bar (P3-12)', () => {
     await open();
     openMenu();
     const last = within(menu()).getByRole('link', { name: 'Ops console' });
-    fireEvent.blur(last, { relatedTarget: screen.getByRole('main', { name: 'main area' }) });
+    fireEvent.blur(last, { relatedTarget: screen.getByRole('main') });
     expect(menu().hidden).toBe(true);
   });
 

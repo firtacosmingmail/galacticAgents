@@ -85,6 +85,10 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       }
       // sRGB output and ACES filmic tone mapping are R3F's defaults (not `flat`, not `linear`).
       dpr={[1, quality.dprCap]}
+      // The canvas follows its box; dragging the dock's handle (P4-10) changes that box on every
+      // pointer move. Debounced, the renderer and the composer are resized once the drag pauses
+      // (the canvas is stretched by CSS meanwhile), not on every frame of it.
+      resize={{ debounce: { resize: 50, scroll: 50 } }}
       frameloop={frameloop}
       // No shadow map (P3-10): the Sun is a point light, whose cube shadow magnified an inner
       // planet's shadow over a whole outer planet; the bodies compute their eclipses themselves.

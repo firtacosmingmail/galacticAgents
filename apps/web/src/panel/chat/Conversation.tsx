@@ -145,6 +145,8 @@ export function Conversation({ agentId }: { agentId: Id }) {
   // lines in view where they were.
   const scroller = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+  /** Where the user last left the thread while it was visible (see the resize observer). */
+  const lastTop = useRef<number | undefined>(undefined);
   const restore = useRef<{ height: number; top: number } | undefined>(undefined);
   const first = entries[0]?.id;
   const count = items.length + waiting.length;
@@ -159,12 +161,16 @@ export function Conversation({ agentId }: { agentId: Id }) {
     }
   }, [first, count]);
   // The thread changes height (the dock resized, minimised and restored, P4-10): stay at the
-  // bottom when the user was there.
+  // bottom when the user was there, else where they left it (a browser may reset a box's scroll
+  // position when it collapses). Collapsed (minimised: no height), there is nothing to keep.
   useEffect(() => {
     const el = scroller.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
+      if (el.clientHeight <= 0) return;
       if (atBottom.current) el.scrollTop = el.scrollHeight;
+      else if (lastTop.current !== undefined && el.scrollTop !== lastTop.current)
+        el.scrollTop = lastTop.current;
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -176,8 +182,10 @@ export function Conversation({ agentId }: { agentId: Id }) {
   };
   const onScroll = () => {
     const el = scroller.current;
-    if (!el) return;
+    // Collapsed (the dock minimised): a scroll event then says nothing about where the user is.
+    if (!el || el.clientHeight <= 0) return;
     atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < EDGE;
+    lastTop.current = el.scrollTop;
     if (el.scrollTop < EDGE && thread.hasOlder && !thread.loadingOlder) older();
   };
 
@@ -323,7 +331,11 @@ function Composer({
 }) {
   const api = useApi();
   const { run, error, busy } = useAction();
-  const [text, setText] = useState('');
+  // The draft lives in the conversation store (P4-10): a remount (another agent and back, the
+  // stacked layout's breakpoint) finds it again.
+  const text = useConversationStore((s) => s.drafts[agentId] ?? '');
+  const setDraft = useConversationStore((s) => s.setDraft);
+  const setText = (t: string) => setDraft(agentId, t);
   const [interrupt, setInterrupt] = useState(false);
   const send = async (e?: FormEvent) => {
     e?.preventDefault();

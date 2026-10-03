@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 /**
  * Per browser: whether the managed-agents section of the panel's side column is shown (P4-09).
@@ -34,5 +34,6 @@ export function useManagedAgentsVisibility(): ManagedAgentsControl {
     writeManagedAgentsVisible(next);
     setVisibleState(next);
   }, []);
-  return { visible, setVisible };
+  // Stable while nothing changes, so the memoised side column skips unrelated renders.
+  return useMemo(() => ({ visible, setVisible }), [visible, setVisible]);
 }
