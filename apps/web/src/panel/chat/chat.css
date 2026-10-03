@@ -20,13 +20,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The thread fills what the dock leaves between the chat's header and the composer (P4-10): the
+   composer always stays in view. (It used to be capped at 100vh - 290px, sized for a full-height
+   column; in a shorter column it pushed the composer out of sight.) */
 .pnl-thread {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: calc(100vh - 290px);
-  min-height: 240px;
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px 2px 8px;
 }
 .pnl-older {
@@ -121,9 +125,6 @@
   gap: 12px;
 }
 @media (max-width: 720px) {
-  .pnl-thread {
-    max-height: none;
-  }
   .pnl-line {
     max-width: 100%;
   }

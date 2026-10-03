@@ -10,8 +10,10 @@ import { labelEntries, registerLabel, setShown, writePosition } from '../labels/
 import { useCameraStore } from '../camera/store.js';
 import { useAppStore } from '../../state/store.js';
 import { HARMONIZER, selectionKey } from '../../state/selection.js';
-import { pickingWorld } from './fixtures.js';
-import { usePickingStore } from './store.js';
+import { publishSatellites } from '../satellites/registry.js';
+import type { SatelliteFrame } from '../satellites/director.js';
+import { pickingWorld, satelliteFrame } from './fixtures.js';
+import { hoverAt, usePickingStore } from './store.js';
 
 /**
  * `Picking` and `OutlineSync` without WebGL: R3F's hooks are replaced by a fake canvas state and a
@@ -39,7 +41,8 @@ vi.mock('@react-three/fiber', async () => {
   };
 });
 
-const { Picking, OutlineSync } = await import('./Picking.js');
+const { Picking, OutlineSync, bodySpheres, satelliteSpheres, satellitesDrawn } =
+  await import('./Picking.js');
 
 let camera: PerspectiveCamera;
 let canvas: HTMLCanvasElement;
@@ -240,6 +243,342 @@ describe('labels as pick targets (P3-07)', () => {
     expect(usePickingStore.getState().hover).toBeUndefined();
     click(420, 300);
     expect(useCameraStore.getState().focusedId).toBeUndefined();
+  });
+});
+
+describe('satellites as pick targets (P4-08)', () => {
+  // The camera at z 10 sees ≈ 72 px per world unit at z 0 (≈ 90 at z 2); (0, 0) is (400, 300).
+  let frames: Map<string, SatelliteFrame>;
+  const publish = (...list: SatelliteFrame[]) => {
+    frames = new Map(list.map((f) => [f.agentId, f]));
+    publishSatellites(frames);
+  };
+  afterEach(() => publishSatellites(new Map()));
+  const hover = () => usePickingStore.getState().hover;
+
+  it('a satellite in front of its planet is hovered, not the planet; the card sits on it', () => {
+    anchorAt('b-jupiter', 0); // 72 px of radius: clearly a target
+    publish(satelliteFrame('a-st-in', 'b-jupiter', [0.2, 0, 2]));
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 420, 302);
+    flushRaf();
+    expect(hover()).toMatchObject({ kind: 'satellite', agentId: 'a-st-in', mode: 'orbiting' });
+    expect(hoverAt().x).toBeCloseTo(418, -0.5);
+    expect(hoverAt().y).toBe(300);
+    expect(canvas.style.cursor).toBe('pointer');
+    // Off the satellite, on the planet: the planet.
+    pointer('pointerMove', 400, 350);
+    flushRaf();
+    expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+  });
+
+  it('follows the satellite as it orbits under a still pointer, and its mode', () => {
+    anchorAt('b-jupiter', 0);
+    publish(satelliteFrame('a-st-in', 'b-jupiter', [0, 0, 2]));
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 400, 300);
+    flushRaf();
+    expect(hover()).toMatchObject({ kind: 'satellite' });
+    expect(hoverAt()).toEqual({ x: 400, y: 300 });
+    // The director moves the frame in place; the camera stays still.
+    const f = frames.get('a-st-in')!;
+    f.position[0] = 0.04;
+    f.mode = 'scanning';
+    frame();
+    flushRaf();
+    expect(hover()).toMatchObject({ kind: 'satellite', mode: 'scanning' });
+    expect(hoverAt().x).toBeGreaterThan(402);
+    // It orbits away from the pointer, which moves on: the planet behind it is hovered again.
+    f.position[0] = 0.5;
+    frame();
+    pointer('pointerMove', 400, 330);
+    flushRaf();
+    expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+  });
+
+  it('a satellite behind its planet is hidden by it', () => {
+    anchorAt('b-jupiter', 0);
+    publish(satelliteFrame('a-st-in', 'b-jupiter', [0, 0, -2]));
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 400, 300);
+    flushRaf();
+    expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+    click(400, 300);
+    expect(selected()).toBe('waykeeper:a-wk-old');
+  });
+
+  it("a click selects the satellite's agent and flies to its body; a drag selects nothing", () => {
+    anchorAt('b-jupiter', 0);
+    publish(satelliteFrame('a-st-in', 'b-jupiter', [0, 0, 2]));
+    render(<Picking />);
+    frame();
+    pointer('pointerDown', 400, 300, 1);
+    pointer('pointerMove', 450, 330, 1);
+    pointer('pointerUp', 450, 330);
+    expect(selected()).toBe('harmonizer');
+    expect(useCameraStore.getState().focusedId).toBeUndefined();
+    click(400, 300);
+    expect(selected()).toBe('steward:a-st-in');
+    expect(useCameraStore.getState().focusedId).toBe('b-jupiter');
+  });
+
+  it('a satellite under the pointer wins over a label covering it', () => {
+    anchorAt('b-jupiter', 5);
+    shownLabel('b-jupiter', 400, 310); // covers x 350–450, y 290–310
+    publish(satelliteFrame('a-st', 'b-ast-7', [0, 0, 0]));
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 402, 300);
+    flushRaf();
+    expect(hover()).toMatchObject({ kind: 'satellite', agentId: 'a-st' });
+    click(402, 300);
+    expect(selected()).toBe('steward:a-st');
+    // Beside the satellite, still on the label: the label's body.
+    click(440, 300);
+    expect(useCameraStore.getState().focusedId).toBe('b-jupiter');
+  });
+
+  it('a speck of a body and satellites under the pointer: "what\'s here" lists them all', () => {
+    anchorAtPoint('b-mars', [0, 0, 0], 0.02); // ≈ 1.5 px: a speck
+    publish(
+      satelliteFrame('a-st', 'b-mars', [0.04, 0, 0]),
+      satelliteFrame('a-wk-old', 'b-mars', [-0.03, 0, 0], { role: 'waykeeper' }),
+    );
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 400, 300);
+    flushRaf();
+    // The hover names the planet, which stands still, "+2" — not a satellite (review item 1).
+    expect(hover()).toMatchObject({ bodyId: 'b-mars', others: 2 });
+    const named = hover();
+    // The satellites orbit and swap places around the pointer: the hover does not flicker.
+    const [st, wk] = [frames.get('a-st')!, frames.get('a-wk-old')!];
+    st.position[0] = -0.03;
+    wk.position[0] = 0.04;
+    frame();
+    expect(hover()).toBe(named);
+    click(400, 300);
+    const popover = usePickingStore.getState().popover;
+    expect(popover).toMatchObject({
+      kind: 'here',
+      bodies: [{ bodyId: 'b-mars', name: 'Mars' }],
+      satellites: [
+        { agentId: 'a-wk-old', name: 'Waykeeper · Big project' },
+        { agentId: 'a-st', name: 'Steward · Fix the date test' },
+      ],
+    });
+    expect(selected()).toBe('harmonizer');
+  });
+
+  it('a click on a satellite that orbited out from under the pointer still selects it', () => {
+    anchorAt('b-jupiter', 0);
+    publish(satelliteFrame('a-st-in', 'b-jupiter', [0, 0, 2]));
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 400, 300);
+    flushRaf();
+    expect(hover()).toMatchObject({ kind: 'satellite', agentId: 'a-st-in' });
+    pointer('pointerDown', 400, 300, 1);
+    // Between press and release it moves ≈ 45 px away: a re-pick would find the planet.
+    frames.get('a-st-in')!.position[0] = 0.5;
+    frame();
+    pointer('pointerUp', 400, 300);
+    expect(selected()).toBe('steward:a-st-in');
+    expect(useCameraStore.getState().focusedId).toBe('b-jupiter');
+  });
+
+  it('…but not once it went behind its planet or away: then the click picks again', () => {
+    anchorAt('b-jupiter', 0);
+    publish(satelliteFrame('a-st-in', 'b-jupiter', [0, 0, 2]));
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 400, 300);
+    flushRaf();
+    pointer('pointerDown', 400, 300, 1);
+    frames.get('a-st-in')!.position[2] = -2; // behind Jupiter
+    frame();
+    pointer('pointerUp', 400, 300);
+    expect(selected()).toBe('waykeeper:a-wk-old');
+    // Gone (shrunk out) between press and release: the same.
+    act(() => useAppStore.getState().select(HARMONIZER));
+    frames.get('a-st-in')!.position[2] = 2;
+    frame();
+    pointer('pointerMove', 400, 301);
+    flushRaf();
+    expect(hover()).toMatchObject({ kind: 'satellite' });
+    pointer('pointerDown', 400, 301, 1);
+    frames.get('a-st-in')!.presence = 0;
+    pointer('pointerUp', 400, 301);
+    expect(selected()).toBe('waykeeper:a-wk-old');
+  });
+
+  describe('hover grace (review item 3)', () => {
+    let now = 1000;
+    beforeEach(() => {
+      now = 1000;
+      vi.spyOn(performance, 'now').mockImplementation(() => now);
+      anchorAt('b-jupiter', 0);
+      publish(satelliteFrame('a-st-in', 'b-jupiter', [0, 0, 2]));
+      render(<Picking />);
+      frame();
+      pointer('pointerMove', 400, 300);
+      flushRaf();
+      expect(hover()).toMatchObject({ kind: 'satellite', agentId: 'a-st-in' });
+    });
+    const orbitTo = (x: number, z = 2) => {
+      const f = frames.get('a-st-in')!;
+      f.position[0] = x;
+      f.position[2] = z;
+      frame();
+    };
+
+    it('keeps an orbiting satellite under a still pointer; the card and ring follow it', () => {
+      orbitTo(0.5); // ≈ 45 px away
+      expect(hover()).toMatchObject({ kind: 'satellite', agentId: 'a-st-in' });
+      expect(hoverAt().x).toBeGreaterThan(440);
+      // A small move (within 6 px of where it was picked) keeps it too.
+      pointer('pointerMove', 404, 302);
+      flushRaf();
+      expect(hover()).toMatchObject({ kind: 'satellite' });
+    });
+
+    it('once the pointer moves on, keeps it only while the pointer follows it closely', () => {
+      orbitTo(0.2); // ≈ 18 px right: (418, 300)
+      pointer('pointerMove', 410, 300); // left the pick point, 8 px from the satellite
+      flushRaf();
+      expect(hover()).toMatchObject({ kind: 'satellite' });
+      orbitTo(0.4); // ≈ 36 px right: 26 px from the pointer
+      expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+    });
+
+    it('releases after 3 s without a pointer move', () => {
+      orbitTo(0.5);
+      now += 2900;
+      orbitTo(0.5);
+      expect(hover()).toMatchObject({ kind: 'satellite' });
+      now += 200;
+      orbitTo(0.5);
+      expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+    });
+
+    it('releases when the satellite goes behind a body, or is gone', () => {
+      orbitTo(0.5, -2);
+      expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+      orbitTo(0, 2);
+      expect(hover()).toMatchObject({ kind: 'satellite' });
+      frames.get('a-st-in')!.visible = false;
+      orbitTo(0.3);
+      expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+    });
+
+    it('releases when the popover opens or the pointer leaves the canvas', () => {
+      act(() => usePickingStore.getState().showHere({ x: 1, y: 1 }, ['b-jupiter', 'b-io']));
+      orbitTo(0.5);
+      expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+      act(() => usePickingStore.getState().closePopover());
+      orbitTo(0);
+      expect(hover()).toMatchObject({ kind: 'satellite' });
+      fireEvent.pointerLeave(canvas);
+      expect(hover()).toBeUndefined();
+      orbitTo(0.5);
+      expect(hover()).toBeUndefined();
+    });
+
+    it('a click while it is kept selects it', () => {
+      orbitTo(0.5);
+      click(400, 300);
+      expect(selected()).toBe('steward:a-st-in');
+    });
+  });
+
+  it('no grace under reduced motion: the ordinary rule only', () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('reduce'),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    anchorAt('b-jupiter', 0);
+    publish(satelliteFrame('a-st-in', 'b-jupiter', [0, 0, 2]));
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 400, 300);
+    flushRaf();
+    expect(hover()).toMatchObject({ kind: 'satellite' });
+    frames.get('a-st-in')!.position[0] = 0.5;
+    frame();
+    expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+  });
+
+  it('a hidden or shrunk-out satellite is no target', () => {
+    anchorAt('b-jupiter', 0);
+    const gone = satelliteFrame('a-st-in', 'b-jupiter', [0, 0, 2]);
+    gone.visible = false;
+    const leaving = satelliteFrame('a-st', 'b-jupiter', [0, 0, 2]);
+    leaving.presence = 0;
+    publish(gone, leaving);
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 400, 300);
+    flushRaf();
+    expect(hover()).toMatchObject({ bodyId: 'b-jupiter' });
+  });
+});
+
+describe('per-frame cost (review item 4)', () => {
+  afterEach(() => publishSatellites(new Map()));
+
+  it('reuses the pick spheres: same array and objects from frame to frame', () => {
+    anchorAt('b-jupiter', 0);
+    anchorAt('b-mars', 5);
+    publishSatellites(
+      new Map([
+        ['a-st', satelliteFrame('a-st', 'b-mars', [5, 0, 2])],
+        ['a-wk-old', satelliteFrame('a-wk-old', 'b-jupiter', [0, 0, 2], { role: 'waykeeper' })],
+      ]),
+    );
+    const bodies: Parameters<typeof bodySpheres>[0] = [];
+    const first = bodySpheres(bodies);
+    const objects = [...first];
+    const again = bodySpheres(bodies);
+    expect(again).toBe(first);
+    expect([...again]).toEqual(objects);
+    expect(again.map((b) => b.bodyId)).toEqual(['b-jupiter', 'b-mars']);
+    expect(again[1]!.center).toEqual([5, 0, 0]);
+
+    const sats: Parameters<typeof satelliteSpheres>[0] = [];
+    const s1 = satelliteSpheres(sats);
+    const s1Objects = [...s1];
+    const s2 = satelliteSpheres(sats);
+    expect(s2).toBe(s1);
+    expect([...s2]).toEqual(s1Objects);
+    expect(s2.map((s) => [s.agentId, s.role])).toEqual([
+      ['a-st', 'steward'],
+      ['a-wk-old', 'waykeeper'],
+    ]);
+    expect(satellitesDrawn()).toBe(true);
+  });
+
+  it("reads the canvas's position once, again after a resize or a scroll", () => {
+    anchorAt('b-jupiter', 0);
+    const rect = vi.spyOn(canvas, 'getBoundingClientRect');
+    render(<Picking />);
+    frame();
+    for (const x of [400, 401, 402]) {
+      pointer('pointerMove', x, 300);
+      flushRaf();
+    }
+    expect(rect).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new Event('resize'));
+    pointer('pointerMove', 403, 300);
+    flushRaf();
+    expect(rect).toHaveBeenCalledTimes(2);
+    document.dispatchEvent(new Event('scroll'));
+    pointer('pointerMove', 404, 300);
+    flushRaf();
+    expect(rect).toHaveBeenCalledTimes(3);
   });
 });
 

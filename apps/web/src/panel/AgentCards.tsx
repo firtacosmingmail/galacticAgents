@@ -1,15 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import type { Agent, ControlBody } from '@galactic/protocol';
+import { useEffect, useState } from 'react';
+import type { Agent } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { HARMONIZER } from '../state/selection.js';
-import { EditForm } from '../console/hierarchy/WorkTree.js';
-import {
-  agentLabel,
-  ErrorLine,
-  StatePill,
-  useAction,
-  useApi,
-} from '../console/hierarchy/shared.js';
+import { agentLabel, StatePill } from '../console/hierarchy/shared.js';
 import { Beacon, NavLink } from './Navigation.js';
 import {
   agentActions,
@@ -21,8 +14,8 @@ import {
   workActions,
   workTitle,
   type AgentCardModel,
-  type CardAction,
 } from './agent-cards-model.js';
+import { ActionRow, ControlFeedback, useControls } from './controls.js';
 import './agent-cards.css';
 
 /**
@@ -70,15 +63,11 @@ export function useNow(ticking: boolean): number {
   return now;
 }
 
-type Scope = 'agent' | 'work';
-
 function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
-  const api = useApi();
   const world = useAppStore((s) => s.world);
-  const { run, error, busy } = useAction();
-  const [pending, setPending] = useState<{ scope: Scope; action: CardAction } | undefined>();
-  const [editing, setEditing] = useState(false);
   const { agent, status, work, blocked, openQuestions } = card;
+  const controls = useControls(agent?.id, work);
+  const { busy } = controls;
   // A work-only card (no agent runs the work yet) is named after its work.
   const name = agent ? agentLabel(agent, world) : work ? workTitle(work) : '—';
   const workName = work
@@ -86,25 +75,6 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
       ? work.item.description
       : work.item.name
     : undefined;
-
-  const send = (scope: Scope, body: ControlBody['action']) =>
-    run(() =>
-      api.control({
-        target:
-          scope === 'work' && work
-            ? { kind: work.kind, id: work.item.id }
-            : { kind: 'agent', id: agent!.id },
-        action: body,
-      }),
-    );
-  const perform = (scope: Scope, a: CardAction) => {
-    setPending(undefined);
-    if (a.action === 'edit') return setEditing((e) => !e);
-    if (a.action === 'pin') return send(scope, { action: 'pin', pinned: !work?.item.pinned });
-    return send(scope, { action: a.action } as ControlBody['action']);
-  };
-  const click = (scope: Scope, a: CardAction) =>
-    a.confirm ? setPending({ scope, action: a }) : void perform(scope, a);
 
   const to = agent
     ? agent.role === 'harmonizer'
@@ -197,17 +167,10 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
           title="agent"
           actions={agentActions(status)}
           busy={busy}
-          onClick={(a) => click('agent', a)}
+          onClick={(a) => controls.click('agent', a)}
           extra={
             status?.state === 'interrupted' ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  setPending(undefined);
-                  void run(() => api.recover(agent.id));
-                }}
-              >
+              <button type="button" disabled={busy} onClick={controls.recover}>
                 Resume session
               </button>
             ) : null
@@ -220,72 +183,11 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
           title={work.kind}
           actions={workActions(work)}
           busy={busy}
-          onClick={(a) => click('work', a)}
+          onClick={(a) => controls.click('work', a)}
         />
       )}
-      {pending && (
-        <div className="agc-confirm" role="group" aria-label="confirm">
-          <span>{pending.action.confirm}</span>
-          <button
-            type="button"
-            className="danger"
-            disabled={busy}
-            onClick={() => void perform(pending.scope, pending.action)}
-          >
-            Yes, {pending.action.label.toLowerCase()}
-          </button>
-          <button type="button" className="secondary" onClick={() => setPending(undefined)}>
-            Keep
-          </button>
-        </div>
-      )}
-      {editing && work && (
-        <EditForm
-          target={{ kind: work.kind }}
-          item={work.item}
-          busy={busy}
-          onSave={async (changes) => {
-            if (await send('work', { action: 'edit', changes })) setEditing(false);
-          }}
-        />
-      )}
-      <ErrorLine error={error} />
+      <ControlFeedback controls={controls} work={work} />
     </article>
-  );
-}
-
-function ActionRow({
-  label,
-  title,
-  actions,
-  busy,
-  onClick,
-  extra,
-}: {
-  label: string;
-  title: string;
-  actions: CardAction[];
-  busy: boolean;
-  onClick: (a: CardAction) => void;
-  extra?: ReactNode;
-}) {
-  if (actions.length === 0 && !extra) return null;
-  return (
-    <div className="agc-actions" role="group" aria-label={label}>
-      <span className="agc-actions-title">{title}</span>
-      {actions.map((a) => (
-        <button
-          key={a.action}
-          type="button"
-          disabled={busy}
-          className={a.confirm ? 'agc-destructive' : 'secondary'}
-          onClick={() => onClick(a)}
-        >
-          {a.label}
-        </button>
-      ))}
-      {extra}
-    </div>
   );
 }
 

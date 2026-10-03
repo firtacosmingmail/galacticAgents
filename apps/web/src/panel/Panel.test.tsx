@@ -96,7 +96,7 @@ async function open(path: string, initial: ServerMessage = snapshot) {
   });
 }
 
-const main = () => screen.getByRole('main', { name: 'main area' });
+const main = () => screen.getByRole('main');
 const nav = () => screen.getByRole('navigation', { name: 'navigation' });
 
 describe('panel shell and selection (P25-02)', () => {
@@ -114,7 +114,12 @@ describe('panel shell and selection (P25-02)', () => {
       within(main()).getByRole('region', { name: 'chat with Waykeeper · Auth refactor' }),
     ).toBeTruthy();
 
-    // Its task (shown nested while the project is selected) opens the Steward's read-only view.
+    // Selecting the project keeps its row compact (P4-09): the task shows once it is opened, and
+    // opens the Steward's read-only view.
+    expect(
+      within(nav()).queryByRole('link', { name: /Replace the session middleware/ }),
+    ).toBeNull();
+    fireEvent.click(within(nav()).getByRole('button', { name: 'Show the work in Auth refactor' }));
     fireEvent.click(within(nav()).getByRole('link', { name: /Replace the session middleware/ }));
     expect(useAppStore.getState().selection).toEqual({ kind: 'steward', id: 'a-steward-1' });
     expect(window.location.pathname).toBe('/steward/a-steward-1');

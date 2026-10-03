@@ -10,6 +10,7 @@ import { useAppStore } from '../state/store.js';
 import { summaryOf } from '../state/reduce.js';
 import { HARMONIZER } from '../state/selection.js';
 import type { SceneControl } from '../scene/visibility.js';
+import type { ManagedAgentsControl } from './managed-agents-visibility.js';
 import { waitingForUserCount } from './inbox-model.js';
 import { Beacon, NavLink } from './Navigation.js';
 import { NotificationsControl, NotificationsDisclosure } from './notifications/index.js';
@@ -21,6 +22,8 @@ const MENU_ID = 'pnl-top-menu';
 
 interface TopBarProps {
   scene: SceneControl;
+  /** The managed-agents section's visibility (P4-09); absent, no toggle shows. */
+  agents?: ManagedAgentsControl;
   onForget?: () => void;
 }
 
@@ -35,7 +38,7 @@ export function TopBar(props: TopBarProps) {
   return compact ? <CompactTopBar {...props} /> : <WideTopBar {...props} />;
 }
 
-function WideTopBar({ scene, onForget }: TopBarProps) {
+function WideTopBar({ scene, agents, onForget }: TopBarProps) {
   const status = useAppStore((s) => s.status);
   const route = useAppStore((s) => s.route);
   const selection = useAppStore((s) => s.selection);
@@ -57,6 +60,8 @@ function WideTopBar({ scene, onForget }: TopBarProps) {
       </span>
       <span className="pnl-spacer" />
       <SceneToggle scene={scene} />
+      {/* Hiding is the column header's button; the bar brings the section back (P4-09). */}
+      {agents && !agents.visible && <ManagedAgentsToggle agents={agents} />}
       <NotificationsControl />
       <NavLink
         to={{ route: 'history', selection }}
@@ -100,7 +105,7 @@ function revealInbox(triesLeft = 60) {
   if (triesLeft > 0) requestAnimationFrame(() => revealInbox(triesLeft - 1));
 }
 
-function CompactTopBar({ scene, onForget }: TopBarProps) {
+function CompactTopBar({ scene, agents, onForget }: TopBarProps) {
   const status = useAppStore((s) => s.status);
   const route = useAppStore((s) => s.route);
   const selection = useAppStore((s) => s.selection);
@@ -169,7 +174,8 @@ function CompactTopBar({ scene, onForget }: TopBarProps) {
   const onMenuClick = (e: ReactMouseEvent<HTMLDivElement>) => {
     const item = (e.target as HTMLElement).closest('a, button');
     if (!item || item.closest('.ntf-disclosure')) return;
-    if (item.classList.contains('pnl-scene-toggle') || item.tagName === 'A') close(true);
+    // Links, and the buttons marked `data-closes-menu` (the scene and managed-agents toggles).
+    if (item.hasAttribute('data-closes-menu') || item.tagName === 'A') close(true);
   };
 
   const openInbox = () => {
@@ -234,6 +240,7 @@ function CompactTopBar({ scene, onForget }: TopBarProps) {
               <span>{summary.blockedItems} blocked</span>
             </p>
             <SceneToggle scene={scene} />
+            {agents && <ManagedAgentsToggle agents={agents} />}
             <NotificationsDisclosure />
             <NavLink
               to={{ route: 'history', selection }}
@@ -278,7 +285,12 @@ function SceneToggle({ scene }: { scene: SceneControl }) {
           3D scene unavailable — list mode
         </span>
         {scene.retry && (
-          <button type="button" className="pnl-scene-toggle" onClick={scene.retry}>
+          <button
+            type="button"
+            className="pnl-scene-toggle"
+            data-closes-menu=""
+            onClick={scene.retry}
+          >
             Retry
           </button>
         )}
@@ -288,9 +300,27 @@ function SceneToggle({ scene }: { scene: SceneControl }) {
     <button
       type="button"
       className="pnl-scene-toggle"
+      data-closes-menu=""
       onClick={() => scene.setVisible(!scene.visible)}
     >
       {scene.visible ? 'Hide scene' : 'Show scene'}
+    </button>
+  );
+}
+
+/**
+ * Shows or hides the side column's managed-agents section (P4-09). The wide bar offers it only
+ * while the section is hidden (the section's own header hides it); the phone menu always does.
+ */
+function ManagedAgentsToggle({ agents }: { agents: ManagedAgentsControl }) {
+  return (
+    <button
+      type="button"
+      className="pnl-scene-toggle pnl-agents-toggle"
+      data-closes-menu=""
+      onClick={() => agents.setVisible(!agents.visible)}
+    >
+      {agents.visible ? 'Hide managed agents' : 'Show managed agents'}
     </button>
   );
 }

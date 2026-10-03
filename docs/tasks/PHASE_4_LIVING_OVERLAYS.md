@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** — (phase not started; first task will be P4-01) · **Task status:** —
-**Phase status:** not started (0/7 done)
+**Current task:** P4-02, P4-03, P4-05 (wave 2, after wave 1 is merged into `phase-4`) · **Task status:** todo
+**Phase status:** in progress (4/10 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -39,7 +39,7 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 ## Tasks
 
 ### P4-01 — Satellite actor and state machine
-- **Status:** todo · **Depends on:** P3-07 · **Parallel with:** —
+- **Status:** done (2026-10-03) · **Depends on:** P3-07 · **Parallel with:** —
 - `<Satellite agent>` component with the state machine above, orbit parameters per body, periodic scanning cone/beam (bloom), tweened transitions, instanced rendering path when count is high, animation cap.
 - **Acceptance:** a satellite per active Waykeeper/Steward orbits the right body; state switches animate smoothly.
 
@@ -72,6 +72,21 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Status:** todo · **Depends on:** P4-04 · **Parallel with:** P4-06
 - Replay the `events` stream for a project over a time range to see how it unfolded; read-only; can be deferred to Phase 8.
 - **Acceptance:** scrubbing replays body assignments, moves and completions.
+
+### P4-08 — Satellite hover card (added 2026-10-03)
+- **Status:** done (2026-10-03) · **Depends on:** P4-01, P3-05 · **Parallel with:** P4-09
+- Cosmin, after seeing the satellites: "I would want to be able to see information about them when I hover them with the mouse. Information like what agents they are and small info on what they are doing, like a title." Satellites become hover targets in the scene's picking (they win over the body under them); the hover card shows the agent's role and name (Waykeeper of <project> / Steward of <task>), its state, and a one-line title of its current activity. Clicking a satellite selects its agent (SPEC §4.1: "clicking a satellite selects that agent").
+- **Acceptance:** hovering any visible satellite shows the right agent and activity within a frame; clicking selects that agent in the panel; tests.
+
+### P4-09 — Hidable managed agents, compact project rows (added 2026-10-03)
+- **Status:** done (2026-10-03) · **Depends on:** P25-04, P25-02 · **Parallel with:** P4-08
+- Cosmin: "I don't need the Managed agents side panel. I want it hidable." and "in the projects side panel, when I select a Waykeeper, I want to see less information, but I want to know how many Stewards it uses." The managed-agents column gets a hide/show toggle remembered per browser (the panel layout reflows); a selected project's navigation row stays compact (its tasks collapsed unless opened) and shows how many Stewards it uses (running / total).
+- **Acceptance:** the managed-agents column hides and stays hidden after a reload, with nothing lost (its controls remain reachable elsewhere: the agent's own view, the history); a selected project row shows its Steward count; tests.
+
+### P4-10 — Chat docked at the bottom, minimisable (added 2026-10-03)
+- **Status:** done (2026-10-03) · **Depends on:** P4-09, P3-12 · **Parallel with:** —
+- Cosmin, after hiding the managed agents: "The inbox panel is now below and on top of the chat window. Now I cannot reach the chat. Move the chat to the bottom part of the screen, between the side panels. I want to be able to minimise the chat as well, and pull it back up." Also reported: "a big scroll on the page; the bottom of the page is empty and I can scroll to it." New layout: the scene fills the centre; the conversation (or the Steward view) is a panel docked at the bottom between the navigation (left) and the side column (inbox and, when shown, the managed agents — right); it can be minimised to a bar (keeping its title, the unread/typing hint and the controls strip's essentials) and pulled back up (button and drag handle for its height), remembered per browser; nothing ever overlaps another panel, and the page never scrolls. List mode (scene hidden) gives the conversation the centre. Phone widths keep a stacked layout with the same minimise bar.
+- **Acceptance:** at every width from 320 px to 2560 px, with the scene and the managed agents shown or hidden and the chat open or minimised, no panel covers another and `document.scrollingElement.scrollHeight == innerHeight`; the chat minimises and comes back, its state remembered after a reload; tests.
 
 ## Exit criteria (from the plan)
 

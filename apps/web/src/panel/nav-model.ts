@@ -20,7 +20,18 @@ export interface NavItem {
   selection?: Selection | undefined;
   /** The agent ids the item stands for (to highlight it when one of them is selected). */
   agentIds: Id[];
+  /** A project's Stewards (P4-09): see `stewardCount`. Undefined on tasks. */
+  stewards?: StewardCount | undefined;
   children: NavItem[];
+}
+
+/**
+ * How many Stewards a project uses, by task: the tasks whose Steward is active now, and all the
+ * tasks that have had one in the client's world.
+ */
+export interface StewardCount {
+  active: number;
+  total: number;
 }
 
 export interface NavModel {
@@ -46,12 +57,44 @@ const byRank = (a: NavItem & { createdAt: string }, b: NavItem & { createdAt: st
 /** The agent an item opens: the newest one still running, else the newest one. */
 export function primaryAgent(world: Pick<WorldState, 'statuses'>, agents: Agent[]) {
   const newestFirst = [...agents].reverse();
-  return (
-    newestFirst.find((a) => {
-      const s = world.statuses[a.id]?.state;
-      return s !== undefined && !ENDED_STATES.has(s);
-    }) ?? newestFirst[0]
-  );
+  return newestFirst.find((a) => isRunning(world, a.id)) ?? newestFirst[0];
+}
+
+/** Whether an agent is running: it has a status and the status is not an ended one. */
+function isRunning(world: Pick<WorldState, 'statuses'>, agentId: Id): boolean {
+  const s = world.statuses[agentId]?.state;
+  return s !== undefined && !ENDED_STATES.has(s);
+}
+
+/**
+ * How many Stewards a project uses (P4-09), counted by task — the work being done, not every
+ * Steward process ever spawned: `total` is the project's own tasks that have had a Steward (a
+ * sub-project's tasks count on the sub-project's own row, under its own Waykeeper; a respawned
+ * task counts once), leaving out archived tasks unless archived work is shown, like the row's
+ * nested list. `active` is those whose newest Steward (`primaryAgent`, the one the task opens) is
+ * live and not paused: waiting for input still counts (it is live and needs the user), paused
+ * does not.
+ */
+export function stewardCount(
+  world: Pick<WorldState, 'agents' | 'tasks' | 'statuses'>,
+  projectId: Id,
+  opts: { showArchived?: boolean } = {},
+): StewardCount {
+  const tasks = new Set<Id>();
+  for (const a of Object.values(world.agents)) {
+    if (a.role !== 'steward' || !a.taskId) continue;
+    const task = world.tasks[a.taskId];
+    if (!task || task.projectId !== projectId) continue;
+    if (task.state === 'archived' && opts.showArchived !== true) continue;
+    tasks.add(a.taskId);
+  }
+  let active = 0;
+  for (const taskId of tasks) {
+    const newest = primaryAgent(world, agentsFor(world, { taskId }));
+    const state = newest ? world.statuses[newest.id]?.state : undefined;
+    if (state !== undefined && !ENDED_STATES.has(state) && state !== 'paused') active += 1;
+  }
+  return { active, total: tasks.size };
 }
 
 type Sortable = NavItem & { createdAt: string };
@@ -100,6 +143,7 @@ export function buildNav(world: WorldState, opts: { showArchived?: boolean } = {
       blocked: project.state === 'blocked_on_user',
       selection: agent ? { kind: 'waykeeper', id: agent.id } : undefined,
       agentIds: agents.map((a) => a.id),
+      stewards: stewardCount(world, project.id, opts),
       children: [...subs.map(projectItem), ...tasks.map(taskItem)].sort(byRank),
       createdAt: project.createdAt,
     };
@@ -120,6 +164,14 @@ export function buildNav(world: WorldState, opts: { showArchived?: boolean } = {
 export function containsAgent(item: NavItem, agentId: Id | undefined): boolean {
   if (agentId === undefined) return false;
   return item.agentIds.includes(agentId) || item.children.some((c) => containsAgent(c, agentId));
+}
+
+/**
+ * Whether something nested in the item (not the item itself) stands for this agent: selecting a
+ * project's own Waykeeper keeps its row compact (P4-09), selecting work inside it opens the path.
+ */
+export function childContainsAgent(item: NavItem, agentId: Id | undefined): boolean {
+  return item.children.some((c) => containsAgent(c, agentId));
 }
 
 /** Whether anything nested in the item is blocked on the user. */
