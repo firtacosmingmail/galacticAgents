@@ -36,7 +36,7 @@ useCameraStore((s) => s.flying);
 - **Corner case 26**: a body is always reachable: every anchor can be flown to from any camera state, and the zoom limits always allow its framing distance, down to a 0.05-radius asteroid. A flight never ends with the Sun between the camera and the body, because the approach is turned whenever the line of sight would pass within 1.5 Sun radii. Following keeps that geometry because the offset turns with the orbit. Flights detour around the Sun, and the camera is never inside it.
 - **Reduced motion**: `prefers-reduced-motion: reduce` makes every flight an instant jump and turns damping off.
 - **Keyboard**: the scene section is focusable (`tabIndex=0`, `aria-keyshortcuts`, a focus ring on `:focus-visible`). A pointer-down on the scene focuses it, so the shortcuts work right after a click.
-- **Order of next/previous**: the Sun, then the planets, the moons, the asteroids; within a kind, by distance from the Sun (for asteroids, by orbit radius); ties by id. It wraps around. With nothing focused, `]` starts at the Sun and `[` at the last body.
+- **Order of next/previous**: the Sun, then the planets, the moons, the asteroids; within a kind, by the anchor's stable `order` (planets by catalogue orbit, moons by planet orbit then rank, asteroids by `meta.number`; bodies without one after the others); ties by id. It wraps around. With nothing focused, `]` starts at the Sun and `[` at the last body.
 
 ## Proposed SPEC / TECHNOLOGY text (recorded: SPEC decisions 63, 64 and TECHNOLOGY §2.1)
 
@@ -103,3 +103,11 @@ No console errors; only R3F's own `THREE.Clock` deprecation warning.
 7. Focus a moon: the breadcrumb shows "Solar system › planet › moon"; clicking the planet flies to it.
 8. macOS System Settings → Accessibility → Display → Reduce motion: flights become instant jumps.
 9. Flip the true-scale toggle (P3-02) while focused: the camera reframes the same body.
+
+## Review fixes (2026-10-03, branch `p3-wave2-fixes`)
+
+- **No replay on remount.** A rig started with `handled = 0`, so a remounted rig (scene hidden and shown, a switch to or from the mobile tier) replayed the store's last request and flew to the old body while `focusedId` was `undefined`. Now `released()` clears `request` (the rig releases on unmount), and a new rig starts from `handledOnMount()` (the current request's seq); `pendingRequest(request, handled)` decides what to start.
+- **Stable next / previous order**: `bodyOrder` sorts by kind, then `BodyAnchor.order`, then id; never by live distance (moons orbiting reshuffled it).
+- **Overview extent** (`systemExtent`): stars, planets (radius × `OVERVIEW_PLANET_REACH` = 3) and asteroids; moons ignored, so Nereid does not zoom true scale out.
+- **Per-frame cost**: `AnchorWorld` replaces the per-frame `anchorWorld()` snapshot. `body(id)` reads one anchor when asked (flying or following only); the Sun's radius and the extent are cached until `invalidate()` (anchors added/removed, scale change). A free camera reads no anchor per frame.
+- Reduced motion comes from `scene/motion.ts` (the store's own copy is gone).
