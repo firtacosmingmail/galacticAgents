@@ -29,21 +29,35 @@ export interface SceneControl {
   /** Whether the scene is mounted: chosen and able to run. */
   shown: boolean;
   setVisible: (visible: boolean) => void;
-  /** Reports a scene that failed to start: list mode for the rest of this page's life. */
+  /** Reports a scene that failed (to start, or lost its GPU context): list mode until a retry. */
   fail: (reason: string) => void;
+  /**
+   * Clears a reported failure so the scene mounts again (a fresh canvas and context). Undefined
+   * when retrying cannot help: this browser has no WebGL at all.
+   */
+  retry: (() => void) | undefined;
 }
 
 export const NO_WEBGL = 'WebGL is not available in this browser';
 
 export function useScene(): SceneControl {
   const [visible, setVisibleState] = useState(readSceneVisible);
-  const [failure, setFailure] = useState<string | undefined>(() =>
-    webglAvailable() ? undefined : NO_WEBGL,
-  );
+  const [failed, setFailed] = useState<string | undefined>();
   const setVisible = useCallback((next: boolean) => {
     writeSceneVisible(next);
     setVisibleState(next);
   }, []);
-  const fail = useCallback((reason: string) => setFailure(reason), []);
-  return { visible, failure, shown: visible && failure === undefined, setVisible, fail };
+  const fail = useCallback((reason: string) => setFailed(reason), []);
+  const retry = useCallback(() => setFailed(undefined), []);
+  // The WebGL probe runs only once the scene is to be shown: list mode never creates a context.
+  const noWebgl = visible && !webglAvailable();
+  const failure = noWebgl ? NO_WEBGL : failed;
+  return {
+    visible,
+    failure,
+    shown: visible && failure === undefined,
+    setVisible,
+    fail,
+    retry: noWebgl ? undefined : retry,
+  };
 }

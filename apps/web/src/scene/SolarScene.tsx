@@ -1,16 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bloom, EffectComposer, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode } from 'postprocessing';
-import {
-  ACESFilmicToneMapping,
-  AdditiveBlending,
-  CanvasTexture,
-  SRGBColorSpace,
-  WebGLRenderer,
-} from 'three';
+import { AdditiveBlending, CanvasTexture, SRGBColorSpace, WebGLRenderer } from 'three';
 import { FpsCounter, type FpsSample } from './fps.js';
-import type { SceneQuality } from './quality.js';
+import { BLOOM_SMOOTHING, SUN_EMISSIVE, type SceneQuality } from './quality.js';
 import { generateStarField } from './starfield.js';
 
 /**
@@ -26,12 +20,14 @@ export interface SolarSceneProps {
   quality: SceneQuality;
   /** Called about twice a second with the measured frame rate; turns the frame loop continuous. */
   onFps?: (sample: FpsSample & { dpr: number }) => void;
+  /** Called when the browser takes the WebGL context away (driver reset, GPU pressure). */
+  onContextLost?: () => void;
 }
 
 export const SUN_RADIUS = 6;
 const BACKGROUND = '#02030a';
 
-export default function SolarScene({ quality, onFps }: SolarSceneProps) {
+export default function SolarScene({ quality, onFps, onContextLost }: SolarSceneProps) {
   return (
     <Canvas
       // `antialias` is a context parameter: a tier that changes it gets a new context.
@@ -44,20 +40,18 @@ export default function SolarScene({ quality, onFps }: SolarSceneProps) {
           powerPreference: 'high-performance',
         })
       }
-      onCreated={({ gl }) => {
-        gl.outputColorSpace = SRGBColorSpace;
-        gl.toneMapping = ACESFilmicToneMapping;
-      }}
+      // sRGB output and ACES filmic tone mapping are R3F's defaults (not `flat`, not `linear`).
       dpr={[1, quality.dprCap]}
-      // PCF: three r18x dropped PCFSoftShadowMap, which R3F's `shadows={true}` asks for.
-      shadows={quality.shadows ? 'percentage' : false}
+      // No shadow map yet: nothing receives shadows. P3-02 turns it on from `quality.shadows`
+      // (PCF, `shadows="percentage"`: three r18x dropped the PCFSoft that `shadows={true}` asks
+      // for) together with the Sun light's `castShadow`.
       frameloop={onFps ? 'always' : 'demand'}
       camera={{ position: [0, 40, 140], fov: 45, near: 0.1, far: 6000 }}
     >
       <color attach="background" args={[BACKGROUND]} />
       <ambientLight intensity={0.04} />
       {/* The Sun lights the planets (P3-02); decay 0 so spacing does not change their brightness. */}
-      <pointLight position={[0, 0, 0]} intensity={3} decay={0} castShadow={quality.shadows} />
+      <pointLight position={[0, 0, 0]} intensity={3} decay={0} />
       <StarField count={quality.stars} />
       <Sun glow={quality.bloom === null} />
       {quality.bloom && (
@@ -65,7 +59,7 @@ export default function SolarScene({ quality, onFps }: SolarSceneProps) {
           <Bloom
             intensity={quality.bloom.intensity}
             luminanceThreshold={quality.bloom.threshold}
-            luminanceSmoothing={0.2}
+            luminanceSmoothing={BLOOM_SMOOTHING}
             mipmapBlur={quality.bloom.mipmapBlur}
           />
           {/* The composer renders without the renderer's tone mapping; it is applied here. */}
@@ -73,6 +67,7 @@ export default function SolarScene({ quality, onFps }: SolarSceneProps) {
         </EffectComposer>
       )}
       {onFps && <FpsProbe onFps={onFps} />}
+      {onContextLost && <ContextLossWatch onLost={onContextLost} />}
     </Canvas>
   );
 }
@@ -98,8 +93,8 @@ function StarField({ count }: { count: number }) {
 }
 
 /**
- * An emissive sphere bright enough (well above 1 before tone mapping) for the bloom pass to pick
- * up. Without bloom (the mobile tier) a sprite with a radial gradient stands in for the glow: one
+ * An emissive sphere bright enough (luminance well above the bloom threshold before tone mapping)
+ * for the bloom pass to pick up; the stars stay below it. Without bloom (the mobile tier) a sprite with a radial gradient stands in for the glow: one
  * quad, a texture drawn at runtime (no image asset).
  */
 function Sun({ glow }: { glow: boolean }) {
@@ -107,7 +102,11 @@ function Sun({ glow }: { glow: boolean }) {
     <group name="sun">
       <mesh>
         <sphereGeometry args={[SUN_RADIUS, 64, 32]} />
-        <meshStandardMaterial color="#000000" emissive="#ffa630" emissiveIntensity={3.2} />
+        <meshStandardMaterial
+          color="#000000"
+          emissive={SUN_EMISSIVE.color}
+          emissiveIntensity={SUN_EMISSIVE.intensity}
+        />
       </mesh>
       {glow && <SunGlow />}
     </group>
@@ -153,5 +152,27 @@ function FpsProbe({ onFps }: { onFps: NonNullable<SolarSceneProps['onFps']> }) {
     const sample = counter.current.tick(performance.now());
     if (sample) onFps({ ...sample, dpr: state.viewport.dpr });
   });
+  return null;
+}
+
+/**
+ * Reports a lost WebGL context. `preventDefault` tells the browser the page handles the loss; the
+ * panel then unmounts the scene (list mode with a "Retry", which mounts a fresh canvas). Watches
+ * the current canvas, so a canvas recreated for a new tier is watched too; removed on unmount.
+ */
+function ContextLossWatch({ onLost }: { onLost: () => void }) {
+  const canvas = useThree((s) => s.gl.domElement);
+  const latest = useRef(onLost);
+  useEffect(() => {
+    latest.current = onLost;
+  });
+  useEffect(() => {
+    const lost = (event: Event) => {
+      event.preventDefault();
+      latest.current();
+    };
+    canvas.addEventListener('webglcontextlost', lost);
+    return () => canvas.removeEventListener('webglcontextlost', lost);
+  }, [canvas]);
   return null;
 }

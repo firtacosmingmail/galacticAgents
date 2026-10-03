@@ -7,22 +7,22 @@ Everything is in `apps/web/src/scene/`. Only `SolarScene.tsx` imports three.js, 
 | File | What |
 | --- | --- |
 | `quality.ts` | `QUALITY_TIERS`, one table for `high`, `balanced` and `mobile`, plus `sceneQuality(tier)` (undefined → `high`, the server's `DEFAULT_QUALITY_TIER`). Fields: `dprCap`, `antialias`, `bloom` (`{intensity, threshold, mipmapBlur}` or `null`), `stars`, `shadows`. P3-06 extends this table. |
-| `SolarScene.tsx` | The R3F `<Canvas>`. The `gl` factory builds a classic `WebGLRenderer` explicitly (decision 20; no WebGPU path). Output is sRGB with ACES filmic tone mapping. Resizing is R3F's own (`react-use-measure`). `dpr={[1, dprCap]}`. Shadows use PCF (`'percentage'`), because three r18x removed PCFSoft, which `shadows={true}` asks for. The scene has the star-field skybox and the Sun: an emissive sphere (intensity 3.2) and a point light at the origin with `decay=0`, ready for P3-02. With bloom on, `EffectComposer` → `Bloom` (mipmap blur) → `ToneMapping(ACES_FILMIC)`; the composer sets the renderer to `NoToneMapping`, so tone mapping has to be an effect there. With bloom off (mobile), there is no composer, and a sprite with a gradient texture drawn at runtime (no image asset) stands in for the glow. The canvas is keyed on `antialias` (a context parameter), so only a tier change that flips it recreates the context. Every other tier change reconfigures the live canvas. |
-| `starfield.ts` | `generateStarField(count, seed)`: plain data, seeded (mulberry32), uniform on a 1200–2400 shell, with a cool-to-warm tint and a brightness spread. It is drawn as one `THREE.Points` with vertex colours and a fixed pixel size: one draw call, no shader code. |
+| `SolarScene.tsx` | The R3F `<Canvas>`. The `gl` factory builds a classic `WebGLRenderer` explicitly (decision 20; no WebGPU path). Output is sRGB with ACES filmic tone mapping: R3F's defaults, so there is no `onCreated` repeating them. Resizing is R3F's own (`react-use-measure`). `dpr={[1, dprCap]}`. No shadow map and no `castShadow` yet: nothing receives shadows (P3-02 wires the tier's `shadows` flag with the planets). A `ContextLossWatch` child listens for `webglcontextlost` on the canvas (`preventDefault`, then `onContextLost` → `onFailure("the GPU context was lost")`), and removes the listener on unmount. The scene has the star-field skybox and the Sun: an emissive sphere (`#ffa630` × 4, linear luminance ≈ 1.95, well above the bloom threshold of 1.0) and a point light at the origin with `decay=0`, ready for P3-02. With bloom on, `EffectComposer` → `Bloom` (mipmap blur) → `ToneMapping(ACES_FILMIC)`; the composer sets the renderer to `NoToneMapping`, so tone mapping has to be an effect there. With bloom off (mobile), there is no composer, and a sprite with a gradient texture drawn at runtime (no image asset) stands in for the glow. The canvas is keyed on `antialias` (a context parameter), so only a tier change that flips it recreates the context. Every other tier change reconfigures the live canvas. |
+| `starfield.ts` | `generateStarField(count, seed)`: plain data, seeded (mulberry32), uniform on a 1200–2400 shell, with a cool-to-warm tint and a brightness spread capped at `STAR_MAX_BRIGHTNESS` = 0.85, below the bloom threshold, so stars never bloom. It is drawn as one `THREE.Points` with vertex colours and a fixed pixel size: one draw call, no shader code. |
 | `fps.ts` | `FpsCounter` (a 500 ms window) and `fpsMeterEnabled()`: `?fps=1` turns the meter on and remembers it in `localStorage` (`galactic.scene.fps`), and `?fps=0` turns it off. |
-| `webgl.ts` | `webglAvailable()`: tries `webgl2`, then `webgl`, on a throwaway canvas, then releases that context. The result is cached for the page. jsdom (detected by user agent) answers `false` without probing, so the panel tests don't fill the log with "not implemented". |
-| `visibility.ts` | `useScene()`: the user's show/hide choice (`galactic.scene.visible`, read and written inside try/catch, shown by default), the failure reason (no WebGL, or the scene threw while starting), and `shown = visible && !failure`. |
+| `webgl.ts` | `webglAvailable()`: tries `webgl2` only (three 0.186 needs WebGL2) on a throwaway canvas, then releases that context. It runs lazily, only once the scene is to be shown (list mode never probes), and the result is cached for the page. jsdom (detected by user agent) answers `false` without probing, so the panel tests don't fill the log with "not implemented". |
+| `visibility.ts` | `useScene()`: the user's show/hide choice (`galactic.scene.visible`, read and written inside try/catch, shown by default), the failure reason (no WebGL, the scene threw while starting, or its GPU context was lost), `shown = visible && !failure`, and `retry()` (undefined when there is no WebGL). |
 | `SceneArea.tsx` | The scene's slot in the panel: `React.lazy(() => import('./SolarScene.js'))`, wrapped in an error boundary and a Suspense fallback ("Loading the solar system…"). It reads the tier from `useSettingsData()` (decision 51), so a saved tier reaches the mounted scene immediately. Also contains the DOM fps meter (`fps · ms · dpr · tier`). |
 | `scene.css` | The slot and the meter. |
 
 ### Panel integration (shared files)
 
 - `apps/web/src/panel/Panel.tsx`
-  - The top bar has a **Hide scene / Show scene** button (`aria-pressed` when hidden). Where the scene can't run, the button is replaced by a note, "3D scene unavailable — list mode", with the reason in its `title`.
+  - The top bar has a **Hide scene / Show scene** button. The label names the action, so it is a plain button with no `aria-pressed` (a pressed state on a changing label reads backwards). Where the scene can't run, the button is replaced by a note, "3D scene unavailable — list mode", with the reason in its `title`, followed by a **Retry** button (except when the browser has no WebGL at all) that clears the failure and mounts a fresh scene.
   - On the `panel` route with the scene shown, the grid gets `pnl-grid-scene` and the `<SceneArea>` goes between the navigation and the conversation, and the root gets `pnl-with-scene`.
   - The scene is **not** mounted on `/settings` or `/history` (those pages replace the grid).
 - `apps/web/src/panel/panel.css`: the layout with the scene (see below), plus the toggle and note styles. List mode is still the Phase 2.5 layout, byte for byte.
-- `apps/web/src/panel/settings/sections.tsx`: the tier section's intro now reads "…a change applies to the scene at once." It used to say "the scene arrives in a later version".
+- `apps/web/src/panel/settings/sections.tsx`: the tier section's intro now reads "…a change applies at once in this browser (another device's change after a reload)." It used to say "the scene arrives in a later version".
 - `apps/web/vite.config.ts`: `build.chunkSizeWarningLimit: 1200`, because the lazy scene chunk is expected to weigh about 1 MB.
 
 Layout with the scene:
@@ -37,7 +37,7 @@ Layout with the scene:
 
 - **Hidden = unmounted.** "Hide scene" removes `<SceneArea>`, so R3F unmounts the root, disposes the renderer and calls `forceContextLoss()`. No GL context, no frame loop. The choice is stored per browser.
 - **Frame loop.** It is `demand` while nothing moves: R3F renders on mount, on resize and when a prop changes. The fps meter switches it to `always`, so the meter measures a real per-frame cost. Decorative motion (P3-02) will need `always` or `invalidate()`.
-- **WebGL fallback.** The probe fails → a note, and list mode. If the canvas fails later (`Error creating WebGL context` from R3F's configure, or any throw inside the scene), R3F rethrows to `SceneErrorBoundary`. That calls `fail(reason)`, the panel goes to list mode with the note for the rest of the page's life, and the saved choice stays as it was.
+- **WebGL fallback.** The probe fails → a note, and list mode. If the canvas fails later (`Error creating WebGL context` from R3F's configure, or any throw inside the scene), R3F rethrows to `SceneErrorBoundary`. If the browser takes the context away while the scene runs, `webglcontextlost` is reported the same way. Either calls `fail(reason)`: the panel goes to list mode with the note and a **Retry**, and the saved choice stays as it was. Retry clears the failure for this page and mounts a fresh scene (a new error boundary, canvas and context).
 - **Tier at runtime.** Changing the tier on the settings page and saving updates `useSettingsData().response`. `SceneArea` reads it on the next render, and `dpr`, `shadows`, the star count and bloom are reconfigured without a reload. Only a change of `antialias` (to or from `mobile`) recreates the context.
 
 ## Proposed SPEC / TECHNOLOGY text (recorded as SPEC decision 62 and TECHNOLOGY §2.1)
@@ -48,7 +48,7 @@ Layout with the scene:
 
 **TECHNOLOGY §2.1, after "Postprocessing":**
 
-> - **Quality tiers** (`apps/web/src/scene/quality.ts`, one table): `high` = DPR ≤ 2, MSAA, bloom 1.4, 9000 stars, shadow map on; `balanced` = DPR ≤ 1.5, MSAA, bloom 1.0, 5000 stars, no shadows; `mobile` = DPR 1, no MSAA, no composer (a gradient sprite fakes the Sun's glow), 2000 stars, no shadows. The tier comes from the server's settings (`qualityTier`, decision 51) and applies live. Only a change of `antialias` recreates the GL context.
+> - **Quality tiers** (`apps/web/src/scene/quality.ts`, one table): `high` = DPR ≤ 2, MSAA, bloom 1.4, 9000 stars, shadows allowed (not wired until P3-02); `balanced` = DPR ≤ 1.5, MSAA, bloom 1.0, 5000 stars, no shadows; `mobile` = DPR 1, no MSAA, no composer (a gradient sprite fakes the Sun's glow), 2000 stars, no shadows. The tier comes from the server's settings (`qualityTier`, decision 51) and applies at once in this browser (another device's change after a reload). Only a change of `antialias` recreates the GL context.
 > - **Renderer setup.** The canvas's `gl` factory builds a `WebGLRenderer` explicitly. Output is sRGB with ACES filmic tone mapping. When the postprocessing composer is active it forces `NoToneMapping` on the renderer, so ACES is applied as the composer's last `ToneMapping` effect. The frame loop is `demand` until something moves. `?fps=1` shows a dev frame-rate meter and switches the loop to `always`.
 > - **Bundle.** three.js, R3F and postprocessing live in a lazily loaded `SolarScene` chunk. The panel's first chunk carries none of them, so list mode and a WebGL-less browser never download them.
 
@@ -79,24 +79,27 @@ The first chunk contains no three.js (`grep WebGLRenderer` on it finds nothing).
 
 ## Tests (Vitest, jsdom; no WebGL is rendered)
 
-- `scene/scene-model.test.ts` (10 tests):
+- `scene/scene-model.test.ts` (11 tests):
   - the tier table has one entry per protocol tier, gets lighter from tier to tier, has mobile's effects off, and falls back to the default;
+  - bloom: every tier's threshold is 1.0, the brightest star of a 20 000-star sky stays ≤ 0.85, and the Sun's emissive luminance is well past the full-bloom point;
   - the star field's count, shell bounds and colour range, its determinism, and an empty sky;
   - `FpsCounter` measures 60 fps;
   - the `?fps=` flag sets and clears the remembered setting;
   - the visibility default and its persistence.
-- `scene/scene.test.tsx` (7 tests). The lazy `SolarScene` module is mocked with a stub that records its mounts and the config it receives, and `webgl.js` is mocked:
+- `scene/scene.test.tsx` (9 tests). The lazy `SolarScene` module is mocked with a stub that records its mounts and the config it receives, and `webgl.js` is mocked:
   - shown by default at the tier the settings hold (`balanced`);
   - "Hide scene" unmounts it (mount count 0), stores `'0'`, and keeps the chat, the navigation and the side column working; it stays hidden after a reload, and "Show scene" brings it back;
   - not mounted on `/settings`;
   - no WebGL → the note, no toggle, no scene, and the panel works;
-  - a scene that throws on start → the error boundary falls back to list mode with the reason in the note's title;
+  - a scene that throws on start → the error boundary falls back to list mode with the reason in the note's title; Retry brings the scene back;
+  - a lost GPU context (the stub calls `onContextLost`) → list mode with "the GPU context was lost"; Retry brings the scene back;
+  - list mode never probes for WebGL; "Show scene" does;
   - a tier patched through `SettingsProvider` reaches the mounted scene (high → mobile: bloom off, 2000 stars) without remounting it;
   - `?fps=1` shows the meter.
 - Gates on `p3-01-canvas`: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check` and `pnpm test` all pass:
   - protocol: 64 tests;
   - server: 842 tests (1 skipped);
-  - web: 216 tests (was 199).
+  - web: 219 tests (was 199; 216 before the review fixes).
 
 ### Smoke check in a real browser (not committed)
 
@@ -126,5 +129,5 @@ Screenshots showed the star field and the bloomed Sun, and the mobile glow sprit
 - No camera controls yet (P3-04); the camera is fixed at `(0, 40, 140)`, looking at the Sun.
 - `frameloop="demand"`: P3-02's orbital motion needs `always` (or `invalidate()` from a clock). The tier table is the place for a mobile frame cap, if one is needed.
 - A slight 8-bit banding is visible in the bloom halo on dark backgrounds. A dithering pass or `Noise` at very low opacity can fix it in P3-08 if it bothers.
-- The "3D scene unavailable" state lasts for the page's life; there is no retry button (a reload retries).
+- P3-02: enable the shadow map (`shadows="percentage"` from `quality.shadows`: PCF, because three r18x removed the PCFSoft that `shadows={true}` asks for) and the Sun light's `castShadow` once planets receive shadows.
 - drei is installed but unused.
