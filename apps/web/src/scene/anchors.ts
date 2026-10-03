@@ -34,13 +34,17 @@ export const SUN_ANCHOR_ID = 'b-sun';
 
 const anchors = new Map<string, BodyAnchor>();
 const listeners = new Set<() => void>();
+/** `anchors`' values, rebuilt on register / unregister only (per-frame readers do not copy). */
+let list: readonly BodyAnchor[] = [];
 
 export function registerAnchor(anchor: BodyAnchor): () => void {
   anchors.set(anchor.bodyId, anchor);
+  list = [...anchors.values()];
   listeners.forEach((l) => l());
   return () => {
     if (anchors.get(anchor.bodyId) === anchor) {
       anchors.delete(anchor.bodyId);
+      list = [...anchors.values()];
       listeners.forEach((l) => l());
     }
   };
@@ -51,7 +55,12 @@ export function getAnchor(bodyId: string): BodyAnchor | undefined {
 }
 
 export function allAnchors(): BodyAnchor[] {
-  return [...anchors.values()];
+  return [...list];
+}
+
+/** The registered anchors: the same array until the next register / unregister. Do not mutate. */
+export function anchorList(): readonly BodyAnchor[] {
+  return list;
 }
 
 /** Called whenever an anchor is added or removed (not when it moves). */

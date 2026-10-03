@@ -15,6 +15,11 @@ import { satelliteSelection } from './satellite-card.js';
  * reads it. No three.js: this module is in the panel's chunk.
  *
  * Positions are in CSS pixels from the scene area's top-left corner (the canvas fills the area).
+ * The hover's position is not in the store's state (P4-08 review): it changes every frame while a
+ * satellite is followed, and the overlay must not re-render at frame rate. It lives in a plain
+ * module value (`hoverAt`) with its own listeners (`onHoverMove`), notified from the canvas's
+ * frame; the hover label and the card write their `transform` from it. The store's `hover` only
+ * changes when *what* is hovered does.
  *
  * Satellites (P4-08) are pick targets too: hovering one shows its agent's card (`SatelliteHover`,
  * positioned at the satellite, not at the pointer), a click selects its agent
@@ -25,8 +30,8 @@ export interface Point {
   y: number;
 }
 
-/** The pointer over a body: its name, at the pointer. */
-export interface BodyHover extends Point {
+/** The pointer over a body: its name, at the pointer (`hoverAt`). */
+export interface BodyHover {
   kind?: 'body';
   bodyId: string;
   name: string;
@@ -34,8 +39,8 @@ export interface BodyHover extends Point {
   others: number;
 }
 
-/** The pointer over a satellite: its agent's card, at the satellite's point on screen. */
-export interface SatelliteHover extends Point {
+/** The pointer over a satellite: its agent's card, at the satellite's point on screen (`hoverAt`). */
+export interface SatelliteHover {
   kind: 'satellite';
   agentId: string;
   /** What the satellite is doing (the card says "scanning · …", "flying to …"). */
@@ -60,7 +65,8 @@ export type Popover =
 export interface PickingState {
   hover: Hover | undefined;
   popover: Popover | undefined;
-  setHover: (hover: Hover | undefined) => void;
+  /** What is hovered; with `x` / `y`, moves the hover there too (`moveHover`). */
+  setHover: (hover: (Hover & Partial<Point>) | undefined) => void;
   showHere: (at: Point, bodyIds: string[], agentIds?: string[]) => void;
   closePopover: () => void;
 }
@@ -68,7 +74,13 @@ export interface PickingState {
 export const usePickingStore = create<PickingState>((set, get) => ({
   hover: undefined,
   popover: undefined,
-  setHover: (hover) => {
+  setHover: (input) => {
+    let hover: Hover | undefined = input;
+    if (input && input.x !== undefined && input.y !== undefined) {
+      const { x, y, ...rest } = input;
+      moveHover(x, y);
+      hover = rest as Hover;
+    }
     const was = get().hover;
     if (was === hover) return;
     if (was && hover && sameHover(was, hover)) return;
@@ -94,7 +106,7 @@ export const usePickingStore = create<PickingState>((set, get) => ({
 }));
 
 function sameHover(a: Hover, b: Hover): boolean {
-  if (a.others !== b.others || a.x !== b.x || a.y !== b.y) return false;
+  if (a.others !== b.others) return false;
   if (a.kind === 'satellite' || b.kind === 'satellite') {
     return (
       a.kind === 'satellite' &&
@@ -105,6 +117,28 @@ function sameHover(a: Hover, b: Hover): boolean {
     );
   }
   return a.bodyId === b.bodyId && a.name === b.name;
+}
+
+const hoverPoint: Point = { x: 0, y: 0 };
+const moveListeners = new Set<(at: Readonly<Point>) => void>();
+
+/** Where the hover is (live: the same object, rewritten in place). */
+export function hoverAt(): Readonly<Point> {
+  return hoverPoint;
+}
+
+/** Moves the hover (the canvas, once per frame at most); listeners hear only real moves. */
+export function moveHover(x: number, y: number): void {
+  if (hoverPoint.x === x && hoverPoint.y === y) return;
+  hoverPoint.x = x;
+  hoverPoint.y = y;
+  moveListeners.forEach((l) => l(hoverPoint));
+}
+
+/** Called when the hover moves (not when what is hovered changes: that is the store's `hover`). */
+export function onHoverMove(listener: (at: Readonly<Point>) => void): () => void {
+  moveListeners.add(listener);
+  return () => void moveListeners.delete(listener);
 }
 
 /** The body a hover is about (`undefined` over a satellite: its body is not what is hovered). */

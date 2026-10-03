@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { Profiler } from 'react';
 import { Object3D } from 'three';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { registerAnchor, type BodyAnchor } from '../anchors.js';
@@ -13,8 +14,10 @@ import { PickingOverlay } from './PickingOverlay.js';
 import {
   activateBody,
   activateSatellite,
+  moveHover,
   selectFromScene,
   usePickingStore,
+  type Point,
   type SatelliteHover,
 } from './store.js';
 import { setDeepLinkForTest, useSelectionSync } from './sync.js';
@@ -120,7 +123,7 @@ describe('the overlay', () => {
 });
 
 describe("a satellite's hover card (P4-08)", () => {
-  const hoverSatellite = (agentId: string, extra: Partial<SatelliteHover> = {}) =>
+  const hoverSatellite = (agentId: string, extra: Partial<SatelliteHover & Point> = {}) =>
     act(() =>
       usePickingStore.getState().setHover({
         kind: 'satellite',
@@ -187,6 +190,30 @@ describe("a satellite's hover card (P4-08)", () => {
     hoverSatellite('a-st', { x: 130, y: 60 });
     expect(screen.getByRole('tooltip')).toBe(card);
     expect(card.style.transform).toBe('translate(144px, 67px)');
+  });
+
+  it('the overlay does not re-render when only the hover moves (review item 4)', () => {
+    let commits = 0;
+    render(
+      <Profiler id="overlay" onRender={() => commits++}>
+        <PickingOverlay />
+      </Profiler>,
+    );
+    hoverSatellite('a-st', { x: 100, y: 50 });
+    const card = screen.getByRole('tooltip');
+    const before = commits;
+    for (let i = 1; i <= 30; i++) act(() => moveHover(100 + i, 50));
+    expect(commits).toBe(before);
+    expect(card.style.transform).toBe('translate(144px, 57px)');
+    // The body label too.
+    act(() =>
+      usePickingStore.getState().setHover({ bodyId: 'b-jupiter', name: 'Jupiter', others: 0 }),
+    );
+    const label = screen.getByRole('tooltip');
+    const atLabel = commits;
+    act(() => moveHover(10, 20));
+    expect(commits).toBe(atLabel);
+    expect(label.style.transform).toBe('translate(24px, 30px)');
   });
 
   it('"what\'s here" lists the satellites first; choosing one selects its agent', () => {
