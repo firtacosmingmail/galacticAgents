@@ -5,6 +5,7 @@ import { openDatabase, type Database } from '../db/database.js';
 import { answerQuestion } from '../domain/questions.js';
 import { RESUME_PROMPT } from './agent-runtime.js';
 import { composeRuntime, type ComposedRuntime } from './compose.js';
+import { notificationFeed } from './notifications.js';
 
 /**
  * Restart recovery (P1-14, P1-15) with the fake adapter. "The server" is a `composeRuntime`
@@ -86,6 +87,13 @@ describe('restart recovery', () => {
       () => second.statuses.get(id)?.state === 'waiting_for_input',
       'question re-asked',
     );
+    // Resumed: the shutdown's interruption is not news (P25-01, SPEC §4.5).
+    expect(eventsOf(second, id)).not.toContain('recovery.needs_attention');
+    expect(
+      notificationFeed(second.log, { limit: 50 }).notifications.filter(
+        (n) => n.kind === 'interrupted',
+      ),
+    ).toEqual([]);
     expect(eventsOf(second, id).filter((t) => t === 'agent.spawned')).toHaveLength(2);
     const q = second.statuses.get(id)!.pendingQuestionId!;
     await second.runtime.answer(q, 'ISO 8601', USER);
@@ -325,6 +333,16 @@ describe('restart recovery', () => {
     const report = await second.recover();
     expect(report).toEqual({ resumed: [], needAttention: [id] });
     expect(second.statuses.get(id)?.state).toBe('interrupted');
+    // One "work interrupted" notification, for the recovery outcome (P25-01, SPEC §4.5).
+    expect(eventsOf(second, id).filter((t) => t === 'recovery.needs_attention')).toHaveLength(1);
+    expect(
+      notificationFeed(second.log, { limit: 50 })
+        .notifications.filter((n) => n.kind === 'interrupted')
+        .map((n) => [n.target.id, n.role]),
+    ).toEqual([[id, 'steward']]);
+    // A second resume attempt that fails again logs nothing new for the same interruption.
+    expect((await second.runtime.recoverAgent(id)).ok).toBe(false);
+    expect(eventsOf(second, id).filter((t) => t === 'recovery.needs_attention')).toHaveLength(1);
     await sleep(20);
     expect(second.runtime.liveAgents()).toEqual([]);
   });

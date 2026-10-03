@@ -7,6 +7,8 @@ import { FakeWebSocket } from './client/fake-socket.js';
 import { useAppStore } from './state/store.js';
 
 beforeEach(() => {
+  // The event page is the ops console's (`/debug`, P25-02); `/` is the panel.
+  window.history.replaceState(null, '', '/debug');
   FakeWebSocket.instances = [];
   localStorage.clear();
   useAppStore.getState().reset();
@@ -23,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  window.history.replaceState(null, '', '/');
 });
 
 describe('event page', () => {

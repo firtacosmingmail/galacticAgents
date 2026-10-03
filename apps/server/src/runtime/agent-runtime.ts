@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  DEFAULT_PERMISSION_POLICY,
   type Actor,
   type Agent,
   type AgentAdapter,
@@ -31,6 +30,7 @@ import {
   type QuestionRouting,
 } from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
+import { globalDefaultPolicy } from '../domain/permissions.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import {
   CapsEnforcer,
@@ -558,6 +558,7 @@ export class AgentRuntime {
       text,
       interrupt: opts.interrupt ?? false,
       ...(opts.origin ? { origin: opts.origin } : {}),
+      ...(opts.turn ? { turn: true as const } : {}),
     });
     if (live.mailbox && !opts.turn) {
       // Logged only: the brain's mailbox picks it up from the log and folds it into a turn.
@@ -865,6 +866,7 @@ export class AgentRuntime {
       if (passedOver.has(record.agentId)) {
         report.needAttention.push(record.agentId);
         this.releaseHeld(record.agentId, 'was not resumed (one Harmonizer at a time)');
+        this.flagNeedsAttention(record.agentId, 'not resumed: one Harmonizer at a time');
         continue;
       }
       let result: SpawnResult;
@@ -878,6 +880,7 @@ export class AgentRuntime {
         this.onError(new Error(result.reason), `recover ${record.agentId}`);
         report.needAttention.push(record.agentId);
         this.releaseHeld(record.agentId, 'could not be resumed');
+        this.flagNeedsAttention(record.agentId, result.reason);
       }
     }
     this.reserved.clear();
@@ -1205,8 +1208,9 @@ export class AgentRuntime {
     const { tables } = this.opts.log;
     const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
     const project = projectId ? tables.projects.get(projectId) : undefined;
-    if (project) return project.permissionPolicy ?? DEFAULT_PERMISSION_POLICY;
-    return req.permissionPolicy ?? DEFAULT_PERMISSION_POLICY;
+    // No table of its own: the global default as it is now (P25-01: the settings may change it).
+    if (project) return project.permissionPolicy ?? globalDefaultPolicy();
+    return req.permissionPolicy ?? globalDefaultPolicy();
   }
 
   /**
@@ -1457,6 +1461,7 @@ export class AgentRuntime {
     const fresh = probation.fresh;
     if (!fresh) {
       this.recordEnd(live, { type: 'agent.interrupted', agentId, reason }, 'agent.interrupted');
+      this.flagNeedsAttention(agentId, reason);
       return;
     }
     let settle!: (result: SpawnResult) => void;
@@ -1490,9 +1495,24 @@ export class AgentRuntime {
       if (!result.ok) {
         this.onError(new Error(result.reason), `fresh session after ${reason} (${agentId})`);
         this.releaseHeld(agentId, 'could not be resumed');
+        this.flagNeedsAttention(agentId, `${reason}; a fresh session failed: ${result.reason}`);
       }
       settle(result);
     })();
+  }
+
+  /**
+   * Logs `recovery.needs_attention` (P25-01; SPEC §4.5): the agent stays interrupted until the
+   * user resumes it — what the "work interrupted by a restart" notification keys on. Once per
+   * interruption: not again before the agent is spawned again.
+   */
+  private flagNeedsAttention(agentId: Id, reason: string): void {
+    if (this.live.has(agentId)) return;
+    const { log } = this.opts;
+    const [flagged] = log.latestOf('recovery.needs_attention', agentId, 1);
+    const [spawned] = log.latestOf('agent.spawned', agentId, 1);
+    if (flagged && (!spawned || flagged.seq > spawned.seq)) return;
+    this.command(({ emit }) => emit({ type: 'recovery.needs_attention', agentId, reason }));
   }
 
   /**

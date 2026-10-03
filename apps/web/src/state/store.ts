@@ -8,9 +8,23 @@ import type {
 } from '@galactic/protocol';
 import { applyEvent, applySnapshot, emptyWorld, type WorldState } from './reduce.js';
 import type { ConnectionStatus } from '../client/client.js';
+import {
+  currentLocation,
+  HARMONIZER,
+  pathFor,
+  sameSelection,
+  type PageLocation,
+  type Route,
+  type Selection,
+} from './selection.js';
+import { createTranscriptViewSlice, type TranscriptViewSlice } from './transcript-view.js';
 
 export const MAX_LOG = 200;
-/** Transcript chunks kept per agent (oldest dropped). */
+/**
+ * Transcript chunks kept per agent: live chunks past it drop the oldest — except while a Steward
+ * view has paged back (`transcriptViews[id].pagedBack`), whose older pages the user asked for.
+ * Paged-back history is bounded by the scrolling, and the view's next newest page resets it.
+ */
 export const MAX_TRANSCRIPT = 2_000;
 /** Chat messages kept per agent (oldest dropped). */
 export const MAX_MESSAGES = 500;
@@ -27,7 +41,7 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): 
   return [...current, ...fresh].sort((a, b) => a.seq - b.seq).slice(-MAX_MESSAGES);
 }
 
-export interface AppState {
+export interface AppState extends TranscriptViewSlice {
   world: WorldState;
   /** The most recent events, newest first, for the event page. */
   log: EventEnvelope[];
@@ -55,13 +69,50 @@ export interface AppState {
   reset: () => void;
   /** Adds an agent's messages read from the REST history. */
   addMessages: (agentId: Id, messages: ChatMessage[]) => void;
+  /**
+   * The page's route and the panel's selection (P25-02). These are the only fields not derived
+   * from the stream: they are the user's navigation, mirrored in the URL (history API) so a deep
+   * link or a reload restores them. `reset()` leaves them alone.
+   */
+  route: Route;
+  selection: Selection;
+  /** Selects who the main area shows, on the panel; pushes a history entry when it changes. */
+  select: (selection: Selection) => void;
+  /** Selects an agent by id, by its role (unknown ids and roles keep the selection). */
+  selectAgent: (agentId: Id) => void;
+  /** Goes to a route and selection; `replace` rewrites the current history entry instead. */
+  navigate: (location: PageLocation, opts?: { replace?: boolean }) => void;
+  /** Reads the route and selection back from the URL (on load and on back/forward). */
+  syncFromLocation: () => void;
   /** Set while a session runs: open / close the transcript stream of an agent. */
   subscribeTranscript?: ((agentId: Id) => void) | undefined;
   unsubscribeTranscript?: ((agentId: Id) => void) | undefined;
 }
 
 /** Client state is derived from the stream only: the store has no other inputs. */
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
+  ...createTranscriptViewSlice(set),
+  ...currentLocation(),
+  select: (selection) => get().navigate({ route: 'panel', selection }),
+  selectAgent: (agentId) => {
+    const agent = get().world.agents[agentId];
+    if (!agent) return;
+    get().select(agent.role === 'harmonizer' ? HARMONIZER : { kind: agent.role, id: agent.id });
+  },
+  navigate: (location, opts) => {
+    const { route, selection } = get();
+    const unchanged = route === location.route && sameSelection(selection, location.selection);
+    if (typeof window !== 'undefined') {
+      const path = pathFor(location);
+      if (opts?.replace) window.history.replaceState(null, '', path);
+      else if (window.location.pathname !== path) window.history.pushState(null, '', path);
+    }
+    if (!unchanged) set({ route: location.route, selection: location.selection });
+  },
+  syncFromLocation: () => {
+    const location = currentLocation();
+    get().navigate(location, { replace: true }); // canonicalises an unrecognised path
+  },
   world: emptyWorld(),
   log: [],
   transcripts: {},
@@ -80,7 +131,7 @@ export const useAppStore = create<AppState>((set) => ({
             logId: message.logId,
             snapshots: s.snapshots + 1,
             ...(s.logId !== undefined && s.logId !== message.logId
-              ? { transcripts: {}, messages: {} }
+              ? { transcripts: {}, messages: {}, transcriptViews: {} }
               : {}),
           };
         case 'event': {
@@ -101,6 +152,7 @@ export const useAppStore = create<AppState>((set) => ({
                         at: envelope.at,
                         sender: event.sender,
                         text: event.text,
+                        ...(event.turn ? { turn: true as const } : {}),
                       },
                     ]),
                   },
@@ -127,7 +179,11 @@ export const useAppStore = create<AppState>((set) => ({
           const lastSeq = current.at(-1)?.seq ?? 0;
           const fresh = message.chunks.filter((c) => c.seq > lastSeq);
           if (fresh.length === 0) return {};
-          const merged = [...current, ...fresh].slice(-MAX_TRANSCRIPT);
+          const all = [...current, ...fresh];
+          // The cap never undoes a deliberate scroll back (see MAX_TRANSCRIPT).
+          const merged = s.transcriptViews[message.agentId]?.pagedBack
+            ? all
+            : all.slice(-MAX_TRANSCRIPT);
           return { transcripts: { ...s.transcripts, [message.agentId]: merged } };
         }
       }
@@ -149,6 +205,7 @@ export const useAppStore = create<AppState>((set) => ({
       log: [],
       transcripts: {},
       messages: {},
+      transcriptViews: {},
       logId: undefined,
       snapshots: 0,
       status: 'idle',

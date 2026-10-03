@@ -63,11 +63,42 @@ export interface PolicyVerdict extends Classification {
 // Policy merge and decision
 // ---------------------------------------------------------------------------
 
+/**
+ * The global default table (SPEC §3.6, decision 22): the SPEC's table unless the settings say
+ * otherwise (P25-01, `defaultPermissionPolicy` in `config.json`). Process-wide on purpose: every
+ * pure function here merges over it and floors at it, and a settings write applies to the next
+ * tool call of every agent, like a project's table (decision 31). Set at startup and by
+ * `PATCH /api/settings` only; tests that set it reset it.
+ */
+let globalDefault: PermissionPolicy = DEFAULT_PERMISSION_POLICY;
+
+/** The global default table now (always complete: every category has a value). */
+export function globalDefaultPolicy(): PermissionPolicy {
+  return globalDefault;
+}
+
+/**
+ * Replaces the global default: `policy` merged over the SPEC's table (a category it leaves out
+ * keeps the SPEC's value), or the SPEC's table itself for `null`/`undefined`. Validation and the
+ * remote floor (decision 37) are the caller's (`SettingsService`).
+ */
+export function setGlobalDefaultPolicy(policy: PermissionPolicy | null | undefined): void {
+  if (!policy) {
+    globalDefault = DEFAULT_PERMISSION_POLICY;
+    return;
+  }
+  const unclassified = policy.unclassified ?? DEFAULT_PERMISSION_POLICY.unclassified;
+  globalDefault = {
+    rules: { ...DEFAULT_PERMISSION_POLICY.rules, ...policy.rules },
+    ...(unclassified !== undefined ? { unclassified } : {}),
+  };
+}
+
 /** The per-project policy over the global default: missing actions fall back to the default. */
 export function resolvePolicy(override?: PermissionPolicy | null): PermissionPolicy {
-  const unclassified = override?.unclassified ?? DEFAULT_PERMISSION_POLICY.unclassified;
+  const unclassified = override?.unclassified ?? globalDefault.unclassified;
   return {
-    rules: { ...DEFAULT_PERMISSION_POLICY.rules, ...(override?.rules ?? {}) },
+    rules: { ...globalDefault.rules, ...(override?.rules ?? {}) },
     ...(unclassified !== undefined ? { unclassified } : {}),
   };
 }
@@ -79,7 +110,7 @@ export function resolvePolicy(override?: PermissionPolicy | null): PermissionPol
  */
 export function noLooserThan(
   policy: PermissionPolicy,
-  floor: PermissionPolicy = DEFAULT_PERMISSION_POLICY,
+  floor: PermissionPolicy = globalDefault,
 ): PermissionPolicy {
   const own = resolvePolicy(policy);
   const base = resolvePolicy(floor);

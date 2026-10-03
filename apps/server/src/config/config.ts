@@ -4,6 +4,14 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  PermissionPolicy,
+  QualityTier,
+  SettingsCaps,
+  type AgentCaps,
+  type SettingName,
+} from '@galactic/protocol';
+import {
+  DEFAULT_CAPS,
   DEFAULT_MAX_CONCURRENT_AGENTS,
   DEFAULT_SPAWN_CAPS,
   type SpawnCaps,
@@ -37,8 +45,25 @@ export const ConfigFile = z.object({
       maxStewardsPerWaykeeper: z.number().int().positive().optional(),
       maxSpawnsPerHour: z.number().int().positive().optional(),
       maxSpawnsPerHourPerBrain: z.number().int().positive().optional(),
+      /** A new agent's wall-clock and tool-call caps (P1-02; settable from the panel, P25-01). */
+      maxWallClockMs: SettingsCaps.shape.maxWallClockMs.optional(),
+      maxToolCalls: SettingsCaps.shape.maxToolCalls.optional(),
     })
     .optional(),
+  /** The global default permission table (P25-01; SPEC §3.6, decision 22); absent = the SPEC's. */
+  defaultPermissionPolicy: PermissionPolicy.optional(),
+  /** The renderer's quality tier (SPEC §4.6; used from Phase 3). Default `high`. */
+  qualityTier: QualityTier.optional(),
+  /**
+   * Whether Stewards load the user's own Claude Code settings (`~/.claude`) besides the
+   * repository's (SPEC §8 open question). Default `true` (keep loading them).
+   */
+  stewardsLoadUserSettings: z.boolean().optional(),
+  /**
+   * When the panel's first-run setup was finished or skipped (P25-08); absent = not yet. Written
+   * as an ISO timestamp, but read leniently: a hand-edited value must not stop the server.
+   */
+  setupCompletedAt: z.string().min(1).optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -77,7 +102,17 @@ export interface ServerConfig {
    * `GALACTIC_MAX_STEWARDS_PER_WAYKEEPER`, `GALACTIC_MAX_SPAWNS_PER_HOUR`,
    * `GALACTIC_MAX_SPAWNS_PER_HOUR_PER_BRAIN`; defaults 4, 3, 30 and 20.
    */
-  caps: SpawnCaps & { maxConcurrentAgents: number };
+  caps: SpawnCaps & { maxConcurrentAgents: number; defaults?: AgentCaps };
+  /** The global default permission table from the file (P25-01); absent = the SPEC's table. */
+  defaultPermissionPolicy?: PermissionPolicy;
+  /** The renderer's quality tier (P25-01); absent = `high`. */
+  qualityTier?: QualityTier;
+  /** Whether Stewards load `~/.claude` too (P25-01; SPEC §8); absent = `true`. */
+  stewardsLoadUserSettings?: boolean;
+  /** Settings an environment variable decided at startup (P25-01): read-only in the panel. */
+  envOverrides?: SettingName[];
+  /** When the panel's first-run setup was done (P25-08); absent = the wizard shows. */
+  setupCompletedAt?: string;
 }
 
 export interface LoadedConfig {
@@ -171,6 +206,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     caps[key] = value;
   }
 
+  const defaults: AgentCaps = {
+    maxWallClockMs: file.caps?.maxWallClockMs ?? DEFAULT_CAPS.maxWallClockMs,
+    maxToolCalls: file.caps?.maxToolCalls ?? DEFAULT_CAPS.maxToolCalls,
+  };
+  const envOverrides: SettingName[] = [];
+  if (env['GALACTIC_PROJECTS_ROOT'] !== undefined) envOverrides.push('projectsRoot');
+  if (retentionEnv !== undefined) envOverrides.push('retentionDays');
+  if (CAP_ENV.some(([, name]) => env[name] !== undefined)) envOverrides.push('caps');
+
   return {
     config: {
       host: '127.0.0.1',
@@ -188,7 +232,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
             env['GALACTIC_AUTO_APPROVE_REMOTE'] === 'true'
           : (file.autoApproveRemote ?? false),
       retentionMs: Math.round(retentionDays * DAY_MS),
-      caps,
+      caps: { ...caps, defaults },
+      ...(file.defaultPermissionPolicy
+        ? { defaultPermissionPolicy: file.defaultPermissionPolicy }
+        : {}),
+      ...(file.qualityTier ? { qualityTier: file.qualityTier } : {}),
+      ...(file.stewardsLoadUserSettings !== undefined
+        ? { stewardsLoadUserSettings: file.stewardsLoadUserSettings }
+        : {}),
+      envOverrides,
+      ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
     },
     tokenGenerated,
   };

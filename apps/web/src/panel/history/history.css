@@ -1,0 +1,188 @@
+/*
+ * The history view (P25-10), on the panel's tokens (panel.css): one readable column like the
+ * settings page, a list per section, rows as quiet cards. Amber stays the panel's "blocked on you".
+ */
+.his-page {
+  flex: 1;
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 16px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.his-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.his-search {
+  display: flex;
+  gap: 8px;
+}
+.his-search input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--pnl-line);
+  background: var(--pnl-surface);
+  color: var(--pnl-ink);
+}
+.his-search input:focus-visible,
+.his-select:focus-visible {
+  outline: 2px solid var(--pnl-here);
+  outline-offset: 1px;
+}
+.his-section {
+  background: var(--pnl-surface);
+  border: 1px solid var(--pnl-line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.his-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.his-title {
+  margin: 0;
+  font-size: 15px;
+}
+.his-hint,
+.his-muted {
+  margin: 0;
+  color: var(--pnl-muted);
+  font-size: 13px;
+}
+.his-fresh {
+  margin: 0;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.his-select {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--pnl-line);
+  background: var(--pnl-raised);
+  color: var(--pnl-ink);
+}
+.his-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.his-row {
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  background: var(--pnl-raised);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.his-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.his-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.his-kind,
+.his-tag {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pnl-muted);
+  border: 1px solid var(--pnl-line);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+.his-kind-permission {
+  color: var(--pnl-here);
+  border-color: var(--pnl-here);
+}
+.his-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+.his-facts > div {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+.his-facts dt {
+  color: var(--pnl-muted);
+}
+.his-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.his-agents {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 13px;
+}
+.his-agent-link.pnl-link {
+  color: var(--pnl-here);
+}
+.his-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.his-answer {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--pnl-here);
+  background: var(--pnl-here-soft);
+  border-radius: 0 6px 6px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.his-reason {
+  margin: 0;
+  font-size: 13px;
+  color: var(--pnl-muted);
+}
+.his-error {
+  margin: 0;
+  color: #e5484d;
+}
+.his-more {
+  align-self: flex-start;
+}
+@media (max-width: 600px) {
+  .his-page {
+    padding: 12px;
+  }
+  .his-section {
+    padding: 12px;
+  }
+}

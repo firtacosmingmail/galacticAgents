@@ -1,0 +1,343 @@
+/*
+ * The side panel (P25-02). Calm and dense: a deep-space slate, one blue for "here", and the amber
+ * beacon reserved for "blocked on you" (SPEC §4.4) — nothing else on the page uses that colour.
+ * Phase 5 polishes this; the tokens below are the surface it builds on.
+ */
+.pnl {
+  --pnl-bg: #10131c;
+  --pnl-surface: #161a26;
+  --pnl-raised: #1d2232;
+  --pnl-line: #262c40;
+  --pnl-ink: #dfe3ee;
+  --pnl-muted: #8a91a6;
+  --pnl-here: #5b8def;
+  --pnl-here-soft: rgba(91, 141, 239, 0.16);
+  --pnl-beacon: #ffb547;
+  --pnl-beacon-ink: #1d1300;
+  --pnl-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  color-scheme: dark;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--pnl-bg);
+  color: var(--pnl-ink);
+  font:
+    14px/1.45 system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  .pnl {
+    --pnl-bg: #eef1f6;
+    --pnl-surface: #ffffff;
+    --pnl-raised: #f4f6fa;
+    --pnl-line: #d9dee8;
+    --pnl-ink: #1a1f2b;
+    --pnl-muted: #5d6578;
+    --pnl-here: #2f62d0;
+    --pnl-here-soft: rgba(47, 98, 208, 0.1);
+    --pnl-beacon: #d9820f;
+    --pnl-beacon-ink: #ffffff;
+    color-scheme: light;
+  }
+  .pnl .muted {
+    color: var(--pnl-muted);
+  }
+  .pnl .pill {
+    background: var(--pnl-raised);
+    color: var(--pnl-ink);
+    border: 1px solid var(--pnl-line);
+  }
+  .pnl button.secondary {
+    background: var(--pnl-raised);
+    color: var(--pnl-ink);
+    border: 1px solid var(--pnl-line);
+  }
+}
+.pnl a {
+  color: inherit;
+}
+.pnl :focus-visible {
+  outline: 2px solid var(--pnl-here);
+  outline-offset: 2px;
+}
+
+/* top bar */
+.pnl-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--pnl-line);
+  background: var(--pnl-surface);
+}
+.pnl-brand.pnl-link {
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  padding: 0;
+}
+.pnl-conn {
+  font: 12px var(--pnl-mono);
+  color: var(--pnl-muted);
+}
+.pnl-conn-live::before {
+  content: '● ';
+  color: #3fb67a;
+}
+.pnl-conn-disconnected::before,
+.pnl-conn-unauthorized::before {
+  content: '● ';
+  color: #e0605b;
+}
+.pnl-top-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  color: var(--pnl-muted);
+  font-size: 13px;
+}
+.pnl-spacer {
+  flex: 1;
+}
+.pnl-debug-link.pnl-link {
+  font-size: 13px;
+  color: var(--pnl-muted);
+}
+
+.pnl-forget {
+  font: inherit;
+  font-size: 13px;
+  color: var(--pnl-muted);
+  background: none;
+  border: 1px solid var(--pnl-line, currentColor);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+/* the three columns */
+.pnl-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(260px, 360px);
+  min-height: 0;
+}
+.pnl-nav,
+.pnl-side {
+  background: var(--pnl-surface);
+  padding: 12px;
+  overflow-y: auto;
+  min-width: 0;
+}
+.pnl-nav {
+  border-right: 1px solid var(--pnl-line);
+}
+.pnl-side {
+  border-left: 1px solid var(--pnl-line);
+}
+.pnl-main {
+  padding: 16px 20px;
+  min-width: 0;
+  overflow-y: auto;
+}
+@media (max-width: 1100px) {
+  .pnl-grid {
+    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  }
+  .pnl-side {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid var(--pnl-line);
+  }
+}
+@media (max-width: 720px) {
+  .pnl-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pnl-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--pnl-line);
+    max-height: 40vh;
+  }
+  .pnl-main {
+    padding: 12px;
+  }
+}
+
+/* type */
+.pnl-eyebrow {
+  margin: 16px 4px 6px;
+  font:
+    600 11px/1.2 system-ui,
+    sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pnl-muted);
+}
+.pnl-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+.pnl-empty {
+  margin: 4px;
+  color: var(--pnl-muted);
+  font-size: 13px;
+}
+.pnl-empty-main {
+  margin: 24px 0;
+  font-size: 14px;
+}
+
+/* navigation */
+.pnl-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  text-decoration: none;
+  border-left: 3px solid transparent;
+}
+a.pnl-link:hover {
+  background: var(--pnl-raised);
+}
+.pnl-link.is-current {
+  background: var(--pnl-here-soft);
+  border-left-color: var(--pnl-here);
+}
+.pnl-link.is-inert {
+  opacity: 0.7;
+  cursor: default;
+}
+.pnl-nav-hq {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.pnl-nav-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pnl-nav-sub {
+  font: 11px var(--pnl-mono);
+  color: var(--pnl-muted);
+}
+.pnl-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pnl-tree-nested {
+  margin-left: 12px;
+  padding-left: 6px;
+  border-left: 1px dashed var(--pnl-line);
+}
+.pnl-row-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+}
+.pnl .pnl-disclose {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 6px;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--pnl-muted);
+  font: 14px/1 var(--pnl-mono);
+}
+.pnl .pnl-disclose:hover {
+  background: var(--pnl-raised);
+}
+.pnl-disclose-gap {
+  flex: none;
+  width: 20px;
+}
+.pnl-check {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 16px 4px 0;
+  font-size: 12px;
+  color: var(--pnl-muted);
+}
+
+/* the beacon: "blocked on you" is the loudest thing on the page */
+.pnl-beacon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--pnl-beacon);
+  color: var(--pnl-beacon-ink);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pnl-beacon::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pnl-pulse 1.6s ease-in-out infinite;
+}
+.pnl-row.is-blocked > .pnl-row-line .pnl-link {
+  border-left-color: var(--pnl-beacon);
+}
+@keyframes pnl-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pnl-beacon::before {
+    animation: none;
+  }
+}
+
+/* main area */
+.pnl-main-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  margin-bottom: 12px;
+}
+.pnl-main-head .pnl-eyebrow {
+  flex-basis: 100%;
+  margin: 0;
+}
+.pnl-back.pnl-link {
+  flex: none;
+  padding: 2px 6px;
+  font-size: 13px;
+  color: var(--pnl-muted);
+}
+.pnl-main .chat,
+.pnl-main .steward {
+  background: var(--pnl-surface);
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+/* right column */
+.pnl-agents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pnl-inbox {
+  margin-top: 8px;
+}

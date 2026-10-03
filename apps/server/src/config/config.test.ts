@@ -71,6 +71,7 @@ describe('loadConfig', () => {
       maxStewardsPerWaykeeper: 3,
       maxSpawnsPerHour: 30,
       maxSpawnsPerHourPerBrain: 20,
+      defaults: { maxWallClockMs: 7_200_000, maxToolCalls: 500 },
     });
     writeFileSync(
       join(home, 'config.json'),
@@ -86,6 +87,7 @@ describe('loadConfig', () => {
       maxStewardsPerWaykeeper: 2,
       maxSpawnsPerHour: 10,
       maxSpawnsPerHourPerBrain: 5,
+      defaults: { maxWallClockMs: 7_200_000, maxToolCalls: 500 },
     });
     expect(
       loadConfig({ GALACTIC_HOME: home, GALACTIC_MAX_CONCURRENT_AGENTS: '8' }).config.caps
@@ -97,6 +99,47 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_MAX_SPAWNS_PER_HOUR: 'x' })).toThrow(
       /maxSpawnsPerHour/,
     );
+  });
+
+  it('reads the panel settings and records what the environment decides (P25-01)', () => {
+    const plain = loadConfig({ GALACTIC_HOME: home }).config;
+    expect(plain.defaultPermissionPolicy).toBeUndefined();
+    expect(plain.qualityTier).toBeUndefined();
+    expect(plain.stewardsLoadUserSettings).toBeUndefined();
+    expect(plain.envOverrides).toEqual([]);
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        caps: { maxWallClockMs: 600_000, maxToolCalls: 50 },
+        defaultPermissionPolicy: { rules: { network: 'allow' } },
+        qualityTier: 'mobile',
+        stewardsLoadUserSettings: false,
+      }),
+    );
+    const { config } = loadConfig({
+      GALACTIC_HOME: home,
+      GALACTIC_RETENTION_DAYS: '3',
+      GALACTIC_MAX_SPAWNS_PER_HOUR: '9',
+    });
+    expect(config.caps.defaults).toEqual({ maxWallClockMs: 600_000, maxToolCalls: 50 });
+    expect(config.defaultPermissionPolicy).toEqual({ rules: { network: 'allow' } });
+    expect(config.qualityTier).toBe('mobile');
+    expect(config.stewardsLoadUserSettings).toBe(false);
+    expect(config.envOverrides).toEqual(['retentionDays', 'caps']);
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef', qualityTier: 'ultra' }),
+    );
+    expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow();
+  });
+
+  it('reads a hand-edited first-run marker leniently (P25-08)', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef', setupCompletedAt: 'yesterday' }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.setupCompletedAt).toBe('yesterday');
   });
 
   it('enables the dev routes only with GALACTIC_DEV (P0-16)', () => {

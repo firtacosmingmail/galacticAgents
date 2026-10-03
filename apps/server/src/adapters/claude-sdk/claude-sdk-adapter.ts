@@ -7,6 +7,7 @@ import type {
   GateVerdict,
   Id,
   PermissionGate,
+  RuntimePreflight,
   SendOptions,
   SpawnHandle,
   SpawnOptions,
@@ -20,6 +21,7 @@ import type {
   ProcessSupervisor,
 } from '../../runtime/supervisor.js';
 import { jsonSchemaToZodShape } from './json-schema-to-zod.js';
+import { claudePreflight } from './preflight.js';
 import {
   loadSdk,
   type SdkCanUseToolOptions,
@@ -95,6 +97,8 @@ export interface ClaudeSdkAdapterOptions {
    */
   streamEndGraceMs?: number;
   onError?: (error: unknown, context: string) => void;
+  /** The runtime check (P25-01); default `claudePreflight()` (runs `claude`). Tests inject one. */
+  preflight?: () => Promise<RuntimePreflight>;
 }
 
 /** Credentials and routing the CLI needs that the supervisor's allow-list does not carry. */
@@ -250,6 +254,11 @@ export class ClaudeSdkAdapter implements AgentAdapter {
 
   async spawn(opts: SpawnOptions): Promise<SpawnHandle> {
     return this.open(opts, undefined);
+  }
+
+  /** Installed, logged in, versions (P25-01): `claude --version` and `claude auth status`. */
+  preflight(): Promise<RuntimePreflight> {
+    return (this.opts.preflight ?? (() => claudePreflight()))();
   }
 
   async resumeSession(sessionRef: string, opts: SpawnOptions): Promise<SpawnHandle> {

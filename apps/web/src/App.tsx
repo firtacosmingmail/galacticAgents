@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { PROTOCOL_VERSION } from '@galactic/protocol';
 import { useAppStore } from './state/store.js';
 import {
@@ -10,6 +10,9 @@ import {
 } from './client/session.js';
 import { AgentsConsole } from './console/AgentsConsole.js';
 import { HierarchyConsole } from './console/hierarchy/HierarchyConsole.js';
+import { Panel } from './panel/Panel.js';
+import { NavLink } from './panel/Navigation.js';
+import { HARMONIZER } from './state/selection.js';
 import './app.css';
 
 export function App() {
@@ -21,6 +24,8 @@ export function App() {
     }
   });
   const [discovering, setDiscovering] = useState(token === undefined);
+  const route = useAppStore((s) => s.route);
+  useLocationSync();
   // How many refused tokens this page life may still recover from by re-discovering (P0-17).
   const rediscoveries = useRef(1);
 
@@ -57,7 +62,7 @@ export function App() {
   if (!token) {
     return (
       <main className="page">
-        <Header />
+        <Header debug={false} />
         {discovering ? (
           <p>Looking for a local Mission Control…</p>
         ) : (
@@ -67,20 +72,37 @@ export function App() {
     );
   }
 
+  const forget = () => {
+    forgetToken();
+    useAppStore.getState().reset();
+    setToken(undefined);
+  };
+
+  // The settings page (P25-08) and the history view (P25-10) live in the panel's frame.
+  if (route === 'panel' || route === 'settings' || route === 'history')
+    return <Panel token={token} onForget={forget} />;
+
   return (
     <main className="page">
-      <Header />
-      <StatusBar
-        token={token}
-        onForget={() => {
-          forgetToken();
-          useAppStore.getState().reset();
-          setToken(undefined);
-        }}
-      />
+      <Header debug />
+      <StatusBar token={token} onForget={forget} />
       <Consoles token={token} />
     </main>
   );
+}
+
+/**
+ * The route and the panel's selection follow the URL (P25-02): read on load (a deep link or a
+ * reload restores them) and on back/forward; the store pushes history entries as the user
+ * navigates.
+ */
+function useLocationSync() {
+  useLayoutEffect(() => {
+    const sync = () => useAppStore.getState().syncFromLocation();
+    sync();
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
 }
 
 type Tab = 'hierarchy' | 'agents';
@@ -119,11 +141,20 @@ function Consoles({ token }: { token: string }) {
   );
 }
 
-function Header() {
+function Header({ debug }: { debug: boolean }) {
   return (
     <header>
       <h1>GalacticAgents</h1>
-      <p className="muted">Mission Control · protocol v{PROTOCOL_VERSION} · ops console</p>
+      <p className="muted">
+        Mission Control · protocol v{PROTOCOL_VERSION}
+        {debug && (
+          <>
+            {' '}
+            · ops console ·{' '}
+            <NavLink to={{ route: 'panel', selection: HARMONIZER }}>back to the panel</NavLink>
+          </>
+        )}
+      </p>
     </header>
   );
 }
