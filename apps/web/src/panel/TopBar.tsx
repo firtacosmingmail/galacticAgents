@@ -174,8 +174,8 @@ function CompactTopBar({ scene, agents, onForget }: TopBarProps) {
   const onMenuClick = (e: ReactMouseEvent<HTMLDivElement>) => {
     const item = (e.target as HTMLElement).closest('a, button');
     if (!item || item.closest('.ntf-disclosure')) return;
-    // (The managed-agents toggle shares the scene toggle's class.)
-    if (item.classList.contains('pnl-scene-toggle') || item.tagName === 'A') close(true);
+    // Links, and the buttons marked `data-closes-menu` (the scene and managed-agents toggles).
+    if (item.hasAttribute('data-closes-menu') || item.tagName === 'A') close(true);
   };
 
   const openInbox = () => {
@@ -285,7 +285,12 @@ function SceneToggle({ scene }: { scene: SceneControl }) {
           3D scene unavailable — list mode
         </span>
         {scene.retry && (
-          <button type="button" className="pnl-scene-toggle" onClick={scene.retry}>
+          <button
+            type="button"
+            className="pnl-scene-toggle"
+            data-closes-menu=""
+            onClick={scene.retry}
+          >
             Retry
           </button>
         )}
@@ -295,6 +300,7 @@ function SceneToggle({ scene }: { scene: SceneControl }) {
     <button
       type="button"
       className="pnl-scene-toggle"
+      data-closes-menu=""
       onClick={() => scene.setVisible(!scene.visible)}
     >
       {scene.visible ? 'Hide scene' : 'Show scene'}
@@ -311,6 +317,7 @@ function ManagedAgentsToggle({ agents }: { agents: ManagedAgentsControl }) {
     <button
       type="button"
       className="pnl-scene-toggle pnl-agents-toggle"
+      data-closes-menu=""
       onClick={() => agents.setVisible(!agents.visible)}
     >
       {agents.visible ? 'Hide managed agents' : 'Show managed agents'}
