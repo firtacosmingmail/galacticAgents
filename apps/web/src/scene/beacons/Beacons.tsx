@@ -64,10 +64,10 @@ import { placeBeacon, publishBeacons, type BeaconFrame } from './registry.js';
  *
  * Picking reads the glyphs' positions from `registry.ts` (a beacon wins over the body under it).
  *
- * Mounted after the camera rig (`SolarScene`): frame callbacks of one priority run in mount order,
- * and a beacon is laid out in the camera's pixels, so it must see this frame's camera — mounted
- * before the rig, the on-demand loop's last frame left the beacons where the previous camera
- * pose put them (off screen after the rig's first placement).
+ * A beacon is laid out in the camera's pixels, so it must see this frame's camera: the camera rig
+ * runs at `PLACE_CAMERA`, before the beacons' default priority (`frame-order.ts`), whatever the
+ * mount order (before that, a beacon mounted before the rig was left by the on-demand loop's last
+ * frame where the previous camera pose put it — off screen after the rig's first placement).
  */
 export function Beacons() {
   const list = useBeaconList();
