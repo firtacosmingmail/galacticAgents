@@ -1,0 +1,138 @@
+/* The managed-agents cards (P25-04): dense, on the panel's tokens (panel.css). Amber stays the
+   "blocked on you" beacon's alone; a destructive button is outlined in red, not filled. */
+.agc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agc {
+  background: var(--pnl-raised);
+  border: 1px solid var(--pnl-line);
+  border-left: 3px solid var(--pnl-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+.agc.is-blocked {
+  border-left-color: var(--pnl-beacon);
+}
+.agc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.agc-name.pnl-link {
+  flex-basis: 100%;
+  padding: 2px 0;
+  border-left: 0;
+  font-weight: 600;
+}
+.agc-qbadge {
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--pnl-here);
+  color: var(--pnl-here);
+  font-size: 11px;
+  font-weight: 600;
+}
+.agc-activity {
+  margin: 2px 0 6px;
+  font-size: 12px;
+  color: var(--pnl-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agc-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 8px;
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+.agc-facts dt {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pnl-muted);
+}
+.agc-facts dd {
+  margin: 0;
+  font-family: var(--pnl-mono);
+}
+.agc-wide {
+  grid-column: 1 / -1;
+}
+.agc-wide dd {
+  font-family: inherit;
+  overflow-wrap: anywhere;
+}
+.agc-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agc-meter {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--pnl-line);
+  overflow: hidden;
+}
+.agc-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--pnl-here);
+}
+.agc-usage.is-high .agc-meter > span {
+  background: #e0605b;
+}
+.agc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.agc-actions-title {
+  min-width: 48px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pnl-muted);
+}
+.pnl .agc-actions button,
+.pnl .agc-confirm button {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.pnl .agc-actions button.agc-destructive {
+  background: transparent;
+  color: var(--pnl-ink);
+  border: 1px solid #e0605b;
+}
+.agc-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #e0605b;
+  font-size: 12px;
+}
+.agc-confirm > span {
+  flex-basis: 100%;
+}
+.agc .edit {
+  margin-top: 6px;
+}
+.agc .error {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+.agc-archived {
+  margin-top: 4px;
+}

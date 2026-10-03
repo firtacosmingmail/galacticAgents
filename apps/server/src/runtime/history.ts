@@ -13,7 +13,8 @@ import type {
  * from the two streams of TECHNOLOGY §6.2 — never a scan of the whole log.
  *
  * **The conversation** of an agent is what the chat shows: every `message.sent` to it (the user's
- * lines, its subordinates' reports, the system's notices) and every `text` chunk of its own
+ * lines, its subordinates' reports, the system's notices — but not a brain's turn prompts,
+ * `turn: true`, P25-03) and every `text` chunk of its own
  * transcript (its replies: the SDK adapter emits one chunk per assistant text block, so a chunk
  * is a whole reply); both read through migration 0007's partial indexes. The two are merged by
  * time — (`at`, messages first, then `seq`) — and the position in that order is the cursor:
@@ -101,7 +102,8 @@ export class History {
     const dir = forward ? 'ASC' : 'DESC';
     const messages = this.stmt(
       `SELECT id, at, payload FROM events
-        WHERE type = 'message.sent' AND json_extract(payload, '$.agentId') = ? ${msgWhere}
+        WHERE type = 'message.sent' AND json_extract(payload, '$.agentId') = ?
+          AND json_extract(payload, '$.turn') IS NULL ${msgWhere}
         ORDER BY at ${dir}, id ${dir} LIMIT ${take}`,
     ).all(...msgArgs) as EventRow[];
     const replies = this.stmt(

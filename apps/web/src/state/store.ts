@@ -17,9 +17,14 @@ import {
   type Route,
   type Selection,
 } from './selection.js';
+import { createTranscriptViewSlice, type TranscriptViewSlice } from './transcript-view.js';
 
 export const MAX_LOG = 200;
-/** Transcript chunks kept per agent (oldest dropped). */
+/**
+ * Transcript chunks kept per agent: live chunks past it drop the oldest — except while a Steward
+ * view has paged back (`transcriptViews[id].pagedBack`), whose older pages the user asked for.
+ * Paged-back history is bounded by the scrolling, and the view's next newest page resets it.
+ */
 export const MAX_TRANSCRIPT = 2_000;
 /** Chat messages kept per agent (oldest dropped). */
 export const MAX_MESSAGES = 500;
@@ -36,7 +41,7 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): 
   return [...current, ...fresh].sort((a, b) => a.seq - b.seq).slice(-MAX_MESSAGES);
 }
 
-export interface AppState {
+export interface AppState extends TranscriptViewSlice {
   world: WorldState;
   /** The most recent events, newest first, for the event page. */
   log: EventEnvelope[];
@@ -86,6 +91,7 @@ export interface AppState {
 
 /** Client state is derived from the stream only: the store has no other inputs. */
 export const useAppStore = create<AppState>((set, get) => ({
+  ...createTranscriptViewSlice(set),
   ...currentLocation(),
   select: (selection) => get().navigate({ route: 'panel', selection }),
   selectAgent: (agentId) => {
@@ -125,7 +131,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             logId: message.logId,
             snapshots: s.snapshots + 1,
             ...(s.logId !== undefined && s.logId !== message.logId
-              ? { transcripts: {}, messages: {} }
+              ? { transcripts: {}, messages: {}, transcriptViews: {} }
               : {}),
           };
         case 'event': {
@@ -146,6 +152,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                         at: envelope.at,
                         sender: event.sender,
                         text: event.text,
+                        ...(event.turn ? { turn: true as const } : {}),
                       },
                     ]),
                   },
@@ -172,7 +179,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           const lastSeq = current.at(-1)?.seq ?? 0;
           const fresh = message.chunks.filter((c) => c.seq > lastSeq);
           if (fresh.length === 0) return {};
-          const merged = [...current, ...fresh].slice(-MAX_TRANSCRIPT);
+          const all = [...current, ...fresh];
+          // The cap never undoes a deliberate scroll back (see MAX_TRANSCRIPT).
+          const merged = s.transcriptViews[message.agentId]?.pagedBack
+            ? all
+            : all.slice(-MAX_TRANSCRIPT);
           return { transcripts: { ...s.transcripts, [message.agentId]: merged } };
         }
       }
@@ -194,6 +205,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       log: [],
       transcripts: {},
       messages: {},
+      transcriptViews: {},
       logId: undefined,
       snapshots: 0,
       status: 'idle',

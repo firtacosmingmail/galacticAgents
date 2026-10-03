@@ -1,0 +1,30 @@
+/* The panel's inbox (P25-06): groups in "blocked on user first" order; the cards are P2-18's. */
+.pnl .pnl-inbox-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pnl .pnl-inbox-group {
+  margin: 10px 0 14px;
+}
+.pnl .pnl-inbox-group > h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pnl-muted);
+}
+.pnl .pnl-inbox-group.is-blocked > h3 {
+  color: var(--pnl-ink);
+}
+.pnl .pnl-inbox-group.is-blocked > .card {
+  border-left: 3px solid var(--pnl-beacon);
+}
+.pnl .card-open-agent {
+  font-size: 12px;
+  text-decoration: underline;
+}
+.pnl .pnl-inbox-drafts > summary {
+  cursor: pointer;
+  color: var(--pnl-muted);
+  font-size: 13px;
+}

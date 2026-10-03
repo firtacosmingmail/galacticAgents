@@ -1,0 +1,130 @@
+/*
+ * The panel's chat (P25-03), on the panel's tokens (panel.css). The user's lines sit right in
+ * the "here" blue, the brain's left on the raised surface, subordinates' reports are set apart
+ * with a rule, system notices are small and centred. Amber stays reserved for "blocked on you".
+ */
+.pnl-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+.pnl-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pnl-chat-activity {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pnl-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 290px);
+  min-height: 240px;
+  overflow-y: auto;
+  padding: 4px 2px 8px;
+}
+.pnl-older {
+  align-self: center;
+}
+.pnl-line {
+  display: flex;
+  flex-direction: column;
+  max-width: min(78ch, 88%);
+}
+.pnl-meta {
+  font-size: 11px;
+  margin: 0 4px 2px;
+}
+.pnl-bubble {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--pnl-raised);
+  border: 1px solid var(--pnl-line);
+}
+.pnl-line-user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+.pnl-line-user .pnl-bubble {
+  background: var(--pnl-here-soft);
+  border-color: var(--pnl-here);
+}
+.pnl-line-user.is-pending .pnl-bubble {
+  opacity: 0.6;
+  border-style: dashed;
+}
+.pnl-line-brain {
+  align-self: flex-start;
+}
+.pnl-line-report {
+  align-self: stretch;
+  max-width: none;
+}
+.pnl-line-report .pnl-bubble {
+  border-radius: 6px;
+  border-left: 3px solid var(--pnl-muted);
+  background: transparent;
+}
+.pnl-line-notice {
+  align-self: center;
+  max-width: 90%;
+}
+.pnl-line-notice .pnl-bubble {
+  font-size: 12px;
+  padding: 4px 10px;
+  background: transparent;
+  border-style: dashed;
+}
+.thread-card {
+  align-self: stretch;
+}
+.thread-card .card {
+  margin: 0;
+}
+.pnl-typing {
+  margin: 0 4px;
+  font-size: 12px;
+  font-style: italic;
+}
+.pnl-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--pnl-line);
+  padding-top: 8px;
+}
+.pnl-composer textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 2.6em;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--pnl-line);
+  background: var(--pnl-bg);
+  color: var(--pnl-ink);
+  font: inherit;
+}
+.pnl-composer-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+@media (max-width: 720px) {
+  .pnl-thread {
+    max-height: none;
+  }
+  .pnl-line {
+    max-width: 100%;
+  }
+}
