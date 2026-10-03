@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { Agent, AgentState, StatusRecord } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { emptyWorld, type WorldState } from '../../state/reduce.js';
-import { isLive, sameSatellites, satelliteList, workBody } from './satellite-model.js';
+import {
+  hasLanded,
+  isLive,
+  sameSatellites,
+  satelliteList,
+  showsSatellite,
+  workBody,
+} from './satellite-model.js';
 
 const waykeeper: Agent = {
   ...fx.agent,
@@ -118,6 +125,40 @@ describe('satelliteList', () => {
     expect(isLive(w, 'a-steward-1')).toBe(true);
     expect(isLive(w, 'a-steward-2')).toBe(false);
     expect(isLive(w, 'a-waykeeper-1')).toBe(false);
+  });
+});
+
+describe('the list rule (showsSatellite)', () => {
+  const completed = (w: WorldState): WorldState => {
+    w.tasks = { ...w.tasks, [fx.task.id]: { ...fx.task, state: 'completed' } };
+    return w;
+  };
+
+  it('defaults to live agents only: failed and landed agents are dropped (P4-01)', () => {
+    const w = completed(world({ 'a-steward-1': 'finished', 'a-steward-2': 'failed' }));
+    expect(hasLanded(w, 'a-steward-1')).toBe(true);
+    expect(showsSatellite(w, 'a-steward-1')).toBe(false);
+    expect(showsSatellite(w, 'a-steward-2')).toBe(false);
+    expect(satelliteList(w)).toEqual([]);
+  });
+
+  it('keepFailed (P4-02) keeps a failed agent, still not landed', () => {
+    const w = world({ 'a-steward-2': 'failed', 'a-steward-1': 'stopped' });
+    const list = satelliteList(w, { keepFailed: true });
+    expect(list.map((s) => [s.agentId, s.state, s.landed])).toEqual([
+      ['a-steward-2', 'failed', false],
+    ]);
+  });
+
+  it('keepLanded (P4-04) keeps a finished Steward whose task completed, landed', () => {
+    const w = completed(world({ 'a-steward-1': 'finished', 'a-steward-2': 'finished' }));
+    // a-steward-2's task is not completed: dropped; a-steward-1 lands.
+    const list = satelliteList(w, { keepLanded: true });
+    expect(list.map((s) => [s.agentId, s.landed])).toEqual([['a-steward-1', true]]);
+    // A live agent on a completed task is not landed; a finished one on an open task is not either.
+    expect(hasLanded(completed(world({ 'a-steward-1': 'working' })), 'a-steward-1')).toBe(false);
+    expect(hasLanded(world({ 'a-steward-1': 'finished' }), 'a-steward-1')).toBe(false);
+    expect(hasLanded(w, 'a-waykeeper-1')).toBe(false);
   });
 });
 
