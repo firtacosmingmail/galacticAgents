@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** — (phase not started; first task will be P4-01) · **Task status:** —
-**Phase status:** not started (0/7 done)
+**Current task:** P4-01 (wave 1, branch `p4-wave1-satellite`) · **Task status:** in progress
+**Phase status:** in progress (0/7 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -39,7 +39,7 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 ## Tasks
 
 ### P4-01 — Satellite actor and state machine
-- **Status:** todo · **Depends on:** P3-07 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P3-07 · **Parallel with:** —
 - `<Satellite agent>` component with the state machine above, orbit parameters per body, periodic scanning cone/beam (bloom), tweened transitions, instanced rendering path when count is high, animation cap.
 - **Acceptance:** a satellite per active Waykeeper/Steward orbits the right body; state switches animate smoothly.
 
