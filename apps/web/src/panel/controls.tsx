@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { ControlBody, Id, StatusRecord } from '@galactic/protocol';
 import { EditForm } from '../console/hierarchy/WorkTree.js';
 import { ErrorLine, useAction, useApi } from '../console/hierarchy/shared.js';
@@ -150,6 +150,33 @@ export function ActionRow({
   );
 }
 
+/** Room kept between the menu and the viewport's edges (px). */
+const MENU_MARGIN = 8;
+
+/**
+ * Places the open "More" menu (P4-10): below its row unless there is not enough room below and
+ * more room above (a dock bar low on the screen: minimised at the bottom, or the stacked layout),
+ * then upwards; capped to the room on that side, and shifted sideways to stay on screen. Written
+ * on the element (`data-placement`, inline styles), which React does not manage.
+ */
+export function placeMenu(menu: HTMLElement, anchor: HTMLElement): 'above' | 'below' {
+  menu.style.maxHeight = '';
+  menu.style.right = '';
+  const row = anchor.getBoundingClientRect();
+  const height = menu.getBoundingClientRect().height;
+  const below = window.innerHeight - row.bottom - MENU_MARGIN;
+  const above = row.top - MENU_MARGIN;
+  const placement = below < height && above > below ? 'above' : 'below';
+  menu.dataset['placement'] = placement;
+  menu.style.maxHeight = `${Math.max(0, Math.floor(placement === 'above' ? above : below))}px`;
+  const box = menu.getBoundingClientRect();
+  const width = window.innerWidth || document.documentElement.clientWidth;
+  if (box.left < MENU_MARGIN) menu.style.right = `${box.left - MENU_MARGIN}px`;
+  else if (box.right > width - MENU_MARGIN)
+    menu.style.right = `${box.right - (width - MENU_MARGIN)}px`;
+  return placement;
+}
+
 /** Pause and resume stay in the strip; everything else goes into its "More" menu. */
 const INLINE: ReadonlySet<CardAction['action']> = new Set(['pause', 'resume']);
 
@@ -178,6 +205,13 @@ export function ControlsStrip({
   const c = useControls(agentId, work);
   const [open, setOpen] = useState(false);
   const stripRef = useRef<HTMLDivElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Opens where it fits (see `placeMenu`), before it is painted.
+  useLayoutEffect(() => {
+    if (open && menuRef.current && rowRef.current) placeMenu(menuRef.current, rowRef.current);
+  }, [open]);
 
   // A click or tap outside closes the menu; Escape closes it and returns focus to "More".
   useEffect(() => {
@@ -215,7 +249,7 @@ export function ControlsStrip({
   };
   return (
     <div className="ctl" ref={stripRef}>
-      <div className="ctl-row" role="group" aria-label={`controls of ${name}`}>
+      <div className="ctl-row" role="group" aria-label={`controls of ${name}`} ref={rowRef}>
         {groups.map((g) => {
           const inline = g.actions.filter((a) => INLINE.has(a.action));
           if (inline.length === 0) return null;
@@ -253,7 +287,7 @@ export function ControlsStrip({
           </button>
         )}
         {open && (
-          <div className="ctl-menu" role="group" aria-label="more controls">
+          <div className="ctl-menu" role="group" aria-label="more controls" ref={menuRef}>
             {overflow.map((g) => (
               <ActionRow
                 key={g.scope}

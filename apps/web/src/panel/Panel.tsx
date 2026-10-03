@@ -1,4 +1,5 @@
 import {
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -31,10 +32,17 @@ import {
   useManagedAgentsVisibility,
   type ManagedAgentsControl,
 } from './managed-agents-visibility.js';
-import { DockHandle, DOCK_BODY_ID, useUnreadReplies } from './Dock.js';
+import { DockHandle, DOCK_BODY_ID, UnreadReplies } from './Dock.js';
 import { useDockPrefs, type DockControl } from './dock-state.js';
 import { STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
 import './panel.css';
+
+/*
+ * Memoised: a change of the dock (minimise, a resize) or of the selection must not re-render the
+ * scene area (and its canvas), the navigation or the side column when their props did not change.
+ */
+const SceneAreaMemo = memo(SceneArea);
+const NavigationMemo = memo(Navigation);
 
 /**
  * The side panel (P25-02, SPEC §4.2): the navigation on the left, the managed agents and the inbox
@@ -101,17 +109,17 @@ export function Panel({
                     // Narrow: one scrolling stack, the dock under it.
                     <div className={gridClass} ref={centre}>
                       <div className="pnl-stack">
-                        {showScene && <SceneArea onFailure={scene.fail} />}
-                        <Navigation />
+                        {showScene && <SceneAreaMemo onFailure={scene.fail} />}
+                        <NavigationMemo />
                         <SideColumn agents={agents} />
                       </div>
                       {main}
                     </div>
                   ) : (
                     <div className={gridClass}>
-                      <Navigation />
+                      <NavigationMemo />
                       <div className="pnl-centre" ref={centre}>
-                        {showScene && <SceneArea onFailure={scene.fail} />}
+                        {showScene && <SceneAreaMemo onFailure={scene.fail} />}
                         {main}
                       </div>
                       <SideColumn agents={agents} />
@@ -150,11 +158,14 @@ function selectedAgent(world: WorldState, selection: Selection): Agent | undefin
 }
 
 /**
- * The main area, docked (P4-10): a bar — what is selected, its state, a typing or "new replies"
- * hint, the Waykeeper's controls, and the minimise / restore button — over the chat or the
- * Steward view. Minimised, only the bar stays; the content stays mounted (hidden), so a draft, the
- * scroll position and the live thread survive. Not collapsible (list mode on a wide screen), it is
- * simply the centre.
+ * The main area, docked (P4-10): a bar — what is selected, its state, its current activity (the
+ * status record's, not a typing indicator), the "N new" replies while minimised, the Waykeeper's
+ * controls, and the minimise / restore button — over the chat or the Steward view. Minimised,
+ * only the bar shows: the body stays mounted and laid out, collapsed to no height and invisible
+ * (not `display: none`, which would drop the thread's scroll position), and `inert` and
+ * `aria-hidden` so neither the keyboard nor a screen reader reaches it. The live thread, its
+ * scroll position and the "N new" count survive; a draft lives in the conversation store. Not
+ * collapsible (list mode on a wide screen), it is simply the centre.
  */
 function MainArea({
   dock,
@@ -205,10 +216,16 @@ function MainArea({
     .join(' ');
   const style =
     collapsible && open ? ({ '--pnl-dock-size': `${dock.size}%` } as CSSProperties) : undefined;
+  // The landmark says who it is about: "Conversation with Harmonizer", "Steward · <task>".
+  const label = !agent
+    ? 'main area'
+    : agent.role === 'steward'
+      ? agentLabel(agent, world)
+      : `Conversation with ${agentLabel(agent, world)}`;
   return (
     <main
       className={className}
-      aria-label="main area"
+      aria-label={label}
       data-selection={selectionKey(selection)}
       style={style}
     >
@@ -220,7 +237,12 @@ function MainArea({
         selection={selection}
         {...(collapsible ? { toggle: { open, set: dock.setOpen } } : {})}
       />
-      <div className="pnl-dock-body" id={DOCK_BODY_ID} hidden={!open}>
+      <div
+        className="pnl-dock-body"
+        id={DOCK_BODY_ID}
+        inert={!open}
+        {...(open ? {} : { 'aria-hidden': true })}
+      >
         {content}
       </div>
     </main>
@@ -246,10 +268,6 @@ function MainHeader({
   const role = agent?.role ?? selection.kind;
   const status = agent ? world.statuses[agent.id] : undefined;
   const minimised = toggle !== undefined && !toggle.open;
-  const unread = useUnreadReplies(
-    agent && agent.role !== 'steward' ? agent.id : undefined,
-    minimised,
-  );
   const blocked =
     agent?.role === 'steward' &&
     openQuestionsOf(world, agent.id).some((q) => q.holder.type === 'user');
@@ -270,10 +288,8 @@ function MainHeader({
         <span className="pnl-dock-state">
           {blocked && <Beacon>blocked on you</Beacon>}
           <StatePill state={status?.state} />
-          {unread > 0 && (
-            <span className="pnl-dock-unread" role="status" aria-label={`${unread} new replies`}>
-              {unread} new
-            </span>
+          {minimised && agent.role !== 'steward' && (
+            <UnreadReplies key={agent.id} agentId={agent.id} />
           )}
         </span>
       )}
@@ -336,7 +352,7 @@ function Empty({ children }: { children: ReactNode }) {
  * The right column: the managed-agents section (P25-04) and the inbox (P25-06). Hiding the
  * managed agents (P4-09) unmounts only their section; the inbox always stays.
  */
-function SideColumn({ agents }: { agents: ManagedAgentsControl }) {
+const SideColumn = memo(function SideColumn({ agents }: { agents: ManagedAgentsControl }) {
   const world = useAppStore((s) => s.world);
   const selection = useAppStore((s) => s.selection);
   const agent = selectedAgent(world, selection);
@@ -372,7 +388,7 @@ function SideColumn({ agents }: { agents: ManagedAgentsControl }) {
       </section>
     </aside>
   );
-}
+});
 
 function AgentLinks({ ids }: { ids: Id[] }) {
   const world = useAppStore((s) => s.world);

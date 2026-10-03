@@ -408,7 +408,9 @@
 }
 .pnl-dock.is-collapsible.is-open {
   flex: none;
-  height: var(--pnl-dock-size, 45%);
+  /* the share of the centre, but never under 160 px while 160 px is within the largest share
+     (short windows: a share of a short centre would leave only a line of the thread) */
+  height: max(var(--pnl-dock-size, 45%), min(160px, 75%));
 }
 .pnl-dock.is-minimised {
   flex: none;
@@ -422,8 +424,14 @@
   overscroll-behavior: contain;
   padding: 0 20px 12px;
 }
-.pnl-dock-body[hidden] {
-  display: none;
+/* minimised: collapsed and invisible but still laid out (display: none would drop the thread's
+   scroll position); the element is `inert` and `aria-hidden` too */
+.pnl-dock.is-minimised > .pnl-dock-body {
+  flex: none;
+  height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  visibility: hidden;
 }
 .pnl-dock-body > .pnl-chat {
   flex: 1 1 0;
@@ -511,6 +519,10 @@
   }
   .pnl-dock-handle::before {
     top: 5px;
+  }
+  /* the bar starts under the handle, so the handle never takes a tap meant for its 44 px buttons */
+  .pnl-dock-handle + .pnl-dock-bar {
+    padding-top: 14px;
   }
 }
 
@@ -737,12 +749,6 @@ a.pnl-link:hover {
 }
 .pnl-dock-bar .ctl {
   flex-basis: auto;
-}
-/* the bar can sit at the bottom of the viewport: its "More" menu opens upwards */
-.pnl-dock-bar .ctl-menu {
-  top: auto;
-  bottom: 100%;
-  margin: 0 0 4px;
 }
 .pnl .pnl-dock-toggle {
   flex: none;

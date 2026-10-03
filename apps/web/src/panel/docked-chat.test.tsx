@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
+import { Profiler } from 'react';
 import { resolve } from 'node:path';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +9,7 @@ import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
 import { useAppStore } from '../state/store.js';
+import { useConversationStore } from '../state/conversation.js';
 import { SCENE_VISIBLE_KEY } from '../scene/visibility.js';
 import { MANAGED_AGENTS_VISIBLE_KEY } from './managed-agents-visibility.js';
 import {
@@ -60,6 +62,7 @@ const snapshot: ServerMessage = {
 };
 
 beforeEach(() => {
+  useConversationStore.getState().reset();
   localStorage.clear();
   localStorage.setItem('galactic.token', 'tok');
   vi.stubGlobal('WebSocket', FakeWebSocket);
@@ -82,6 +85,8 @@ afterEach(() => {
 async function open(
   path = '/',
   prefs: { scene?: boolean; agents?: boolean; dock?: unknown } = {},
+  /** Counts React commits of the whole page (a `Profiler` around it). */
+  onCommit?: () => void,
 ): Promise<void> {
   if (prefs.scene !== undefined) localStorage.setItem(SCENE_VISIBLE_KEY, prefs.scene ? '1' : '0');
   if (prefs.agents !== undefined)
@@ -90,7 +95,15 @@ async function open(
   FakeWebSocket.instances = [];
   useAppStore.getState().reset();
   window.history.replaceState(null, '', path);
-  render(<App />);
+  render(
+    onCommit ? (
+      <Profiler id="page" onRender={onCommit}>
+        <App />
+      </Profiler>
+    ) : (
+      <App />
+    ),
+  );
   await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
   const socket = FakeWebSocket.instances[0]!;
   await act(async () => {
@@ -115,8 +128,16 @@ function narrow(phone = false) {
 }
 
 const grid = () => document.querySelector('.pnl-grid')!;
-const main = () => screen.getByRole('main', { name: 'main area' });
+const main = () => screen.getByRole('main');
 const dockBody = () => document.getElementById('pnl-dock-body')!;
+/** Minimised: the body is collapsed by CSS (still laid out), `inert` and `aria-hidden`. */
+const collapsed = () => {
+  const body = dockBody();
+  const inert = body.hasAttribute('inert');
+  expect(body.getAttribute('aria-hidden') === 'true').toBe(inert);
+  expect(body.hidden).toBe(false); // never display: none (it would drop the scroll position)
+  return inert;
+};
 const sceneRegion = () => screen.queryByRole('region', { name: 'solar system' });
 const minimise = () => screen.getByRole('button', { name: 'Minimise the conversation' });
 const restore = () => screen.getByRole('button', { name: 'Restore the conversation' });
@@ -153,7 +174,7 @@ describe('the docked conversation (P4-10)', () => {
     expect(restore().getAttribute('aria-expanded')).toBe('false');
     expect(main().classList.contains('is-minimised')).toBe(true);
     expect(grid().classList.contains('pnl-grid-dock-min')).toBe(true);
-    expect(dockBody().hidden).toBe(true);
+    expect(collapsed()).toBe(true);
     // Still mounted, only hidden: a draft and the live thread survive.
     expect(
       within(dockBody()).getByRole('region', { name: 'chat with Harmonizer', hidden: true }),
@@ -165,11 +186,11 @@ describe('the docked conversation (P4-10)', () => {
 
     await reload('/');
     expect(main().classList.contains('is-minimised')).toBe(true);
-    expect(dockBody().hidden).toBe(true);
+    expect(collapsed()).toBe(true);
 
     fireEvent.click(restore());
     expect(minimise().getAttribute('aria-expanded')).toBe('true');
-    expect(dockBody().hidden).toBe(false);
+    expect(collapsed()).toBe(false);
     expect(stored()).toEqual({ open: true, size: DOCK_DEFAULT });
     await reload('/');
     expect(main().classList.contains('is-open')).toBe(true);
@@ -248,6 +269,144 @@ describe('the docked conversation (P4-10)', () => {
     fireEvent.pointerUp(handle(), { pointerId: 1, clientY: 600 }); // 50 %
     expect(handle().getAttribute('aria-valuenow')).toBe('50');
     expect(stored()).toEqual({ open: true, size: 50 });
+    expect(main().style.getPropertyValue('--pnl-dock-size')).toBe('50%');
+  });
+
+  it('a drag writes the height straight to the dock and renders only when it ends', async () => {
+    let commits = 0;
+    await open('/', {}, () => commits++);
+    const centre = document.querySelector('.pnl-centre') as HTMLElement;
+    centre.getBoundingClientRect = () =>
+      ({ top: 200, bottom: 1000, height: 800, left: 0, right: 800, width: 800 }) as DOMRect;
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    commits = 0;
+    fireEvent.pointerDown(handle(), { button: 0, pointerId: 1, clientY: 640 });
+    for (let i = 0; i < 40; i++) {
+      fireEvent.pointerMove(handle(), { pointerId: 1, clientY: 640 - i * 5 });
+    }
+    // On screen at once, without a single React render.
+    expect(main().style.getPropertyValue('--pnl-dock-size')).toBe('69%'); // (1000 - 445) / 800
+    expect(handle().getAttribute('aria-valuenow')).toBe('69');
+    expect(commits).toBe(0);
+    fireEvent.pointerUp(handle(), { pointerId: 1, clientY: 440 }); // 70 %
+    // One state update (the dock height), then at most one follow-up commit; never one per move.
+    expect(commits).toBeGreaterThan(0);
+    expect(commits).toBeLessThanOrEqual(2);
+    expect(setItem.mock.calls.filter(([key]) => key === DOCK_KEY)).toHaveLength(1);
+    expect(stored()).toEqual({ open: true, size: 70 });
+    expect(main().style.getPropertyValue('--pnl-dock-size')).toBe('70%');
+    expect(handle().getAttribute('aria-valuenow')).toBe('70');
+    setItem.mockRestore();
+  });
+
+  it('a drag back to where it started still leaves the dock at that height', async () => {
+    await open('/');
+    const centre = document.querySelector('.pnl-centre') as HTMLElement;
+    centre.getBoundingClientRect = () =>
+      ({ top: 200, bottom: 1000, height: 800, left: 0, right: 800, width: 800 }) as DOMRect;
+    fireEvent.pointerDown(handle(), { button: 0, pointerId: 1, clientY: 640 });
+    fireEvent.pointerMove(handle(), { pointerId: 1, clientY: 400 });
+    fireEvent.pointerUp(handle(), { pointerId: 1, clientY: 640 }); // 45 %, the stored value
+    expect(main().style.getPropertyValue('--pnl-dock-size')).toBe(`${DOCK_DEFAULT}%`);
+    expect(handle().getAttribute('aria-valuenow')).toBe(String(DOCK_DEFAULT));
+  });
+
+  it('keeps the thread’s scroll position across minimise and restore', async () => {
+    // jsdom has no layout: a ResizeObserver stub and a thread with a measured box.
+    const observers: (() => void)[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private readonly cb: () => void) {
+          observers.push(() => this.cb());
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    await open('/');
+    const thread = screen.getByRole('log', { name: 'conversation with Harmonizer' });
+    let clientHeight = 300;
+    Object.defineProperty(thread, 'clientHeight', { configurable: true, get: () => clientHeight });
+    Object.defineProperty(thread, 'scrollHeight', { configurable: true, get: () => 2000 });
+    const resized = () => observers.forEach((notify) => notify());
+
+    thread.scrollTop = 500; // the user scrolled up, away from the bottom
+    fireEvent.scroll(thread);
+    fireEvent.click(minimise());
+    expect(collapsed()).toBe(true);
+    // Collapsed: no height; the browser may reset the box's position meanwhile.
+    clientHeight = 0;
+    resized();
+    thread.scrollTop = 0;
+    fireEvent.scroll(thread);
+    fireEvent.click(restore());
+    expect(collapsed()).toBe(false);
+    clientHeight = 300;
+    resized();
+    expect(thread.scrollTop).toBe(500);
+    // Same element all along: nothing was unmounted.
+    expect(screen.getByRole('log', { name: 'conversation with Harmonizer' })).toBe(thread);
+  });
+
+  it('the minimise button’s aria-expanded follows the dock', async () => {
+    await open('/');
+    const button = minimise();
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(button.getAttribute('aria-label')).toBe('Restore the conversation');
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    expect(button.getAttribute('aria-label')).toBe('Minimise the conversation');
+  });
+
+  it('names the dock after who it is about', async () => {
+    await open('/');
+    expect(screen.getByRole('main', { name: 'Conversation with Harmonizer' })).toBe(main());
+    await reload('/waykeeper/a-waykeeper-1');
+    expect(screen.getByRole('main', { name: /^Conversation with Waykeeper · / })).toBe(main());
+    await reload('/steward/a-steward-1');
+    expect(screen.getByRole('main', { name: /^Steward · / })).toBe(main());
+  });
+
+  it('keeps a draft when the chat remounts (a reload of the view, the breakpoint)', async () => {
+    await open('/');
+    fireEvent.change(screen.getByRole('textbox', { name: 'message to Harmonizer' }), {
+      target: { value: 'half a thought' },
+    });
+    // Crossing 1100 px renders the other layout's tree: the chat mounts afresh.
+    cleanup();
+    narrow();
+    await open('/');
+    expect(grid().classList.contains('pnl-grid-stacked')).toBe(true);
+    expect(
+      (screen.getByRole('textbox', { name: 'message to Harmonizer' }) as HTMLTextAreaElement).value,
+    ).toBe('half a thought');
+  });
+
+  it('keeps each agent’s draft when switching between them, and clears it when sent', async () => {
+    await open('/');
+    const box = (name: RegExp) => screen.getByRole('textbox', { name }) as HTMLTextAreaElement;
+    fireEvent.change(box(/^message to Harmonizer$/), { target: { value: 'for the Harmonizer' } });
+    act(() => useAppStore.getState().select({ kind: 'waykeeper', id: 'a-waykeeper-1' }));
+    expect(box(/^message to Waykeeper/).value).toBe('');
+    fireEvent.change(box(/^message to Waykeeper/), { target: { value: 'for the Waykeeper' } });
+    act(() => useAppStore.getState().select({ kind: 'harmonizer' }));
+    expect(box(/^message to Harmonizer$/).value).toBe('for the Harmonizer');
+    act(() => useAppStore.getState().select({ kind: 'waykeeper', id: 'a-waykeeper-1' }));
+    expect(box(/^message to Waykeeper/).value).toBe('for the Waykeeper');
+
+    vi.mocked(fetch).mockImplementation(async (url) =>
+      String(url).includes('/send')
+        ? new Response(JSON.stringify({ messageId: 'm-1' }))
+        : new Response(JSON.stringify({ entries: [], hasMore: false, lastSeq: 0 })),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await vi.waitFor(() => expect(box(/^message to Waykeeper/).value).toBe(''));
+    expect(useConversationStore.getState().drafts).toEqual({
+      'a-harmonizer': 'for the Harmonizer',
+    });
   });
 
   it('clamps and validates what the browser stored', () => {
@@ -339,7 +498,7 @@ describe('layouts (P4-10)', () => {
       expect(main().classList.contains('is-collapsible')).toBe(false);
       expect(screen.queryByRole('button', { name: /the conversation$/ })).toBeNull();
       expect(screen.queryByRole('separator')).toBeNull();
-      expect(dockBody().hidden).toBe(false);
+      expect(collapsed()).toBe(false);
     }
   });
 
@@ -358,7 +517,7 @@ describe('layouts (P4-10)', () => {
     // The bar minimises here in list mode too.
     const toggle = c.open ? minimise() : restore();
     expect(toggle.getAttribute('aria-expanded')).toBe(String(c.open));
-    expect(dockBody().hidden).toBe(!c.open);
+    expect(collapsed()).toBe(!c.open);
   });
 
   it('on the phone, the compact top bar and the stacked dock work together', async () => {
@@ -416,6 +575,33 @@ describe('the shell fits the viewport (P4-10)', () => {
     const rows = [...panel.matchAll(/grid-template-rows:\s*([^;]+);/g)].map((m) => m[1]!.trim());
     expect(rows.length).toBeGreaterThan(0);
     for (const r of rows) expect(r, r).not.toMatch(/\d(px|vh|dvh|svh|lvh|em|rem)\b/);
+  });
+
+  it('on the phone the bar starts under the handle, so the handle takes no tap from its buttons', () => {
+    const handleHeights = rule(panel, '.pnl-dock-handle')['height']!.map((h) => parseFloat(h));
+    const pad = rule(panel, '.pnl-dock-handle + .pnl-dock-bar')['padding-top'];
+    expect(pad).toBeDefined();
+    expect(parseFloat(pad!.at(-1)!)).toBeGreaterThanOrEqual(Math.max(...handleHeights));
+  });
+
+  it('the open dock has a pixel floor, within its largest share', () => {
+    const height = rule(panel, '.pnl-dock.is-collapsible.is-open')['height']!;
+    expect(height).toEqual(['max(var(--pnl-dock-size, 45%), min(160px, 75%))']);
+  });
+
+  it('minimised, the body collapses but stays laid out (no display: none)', () => {
+    const body = rule(panel, '.pnl-dock.is-minimised > .pnl-dock-body');
+    expect(body['height']).toEqual(['0']);
+    expect(body['visibility']).toEqual(['hidden']);
+    expect(body['display']).toBeUndefined();
+    expect(panel).not.toMatch(/\.pnl-dock-body\[hidden\]/);
+  });
+
+  it('the "More" menu is not forced upwards in every dock bar (it measures where it fits)', () => {
+    expect(panel).not.toMatch(/\.pnl-dock-bar \.ctl-menu/);
+    const cards = read('agent-cards.css');
+    expect(rule(cards, ".ctl-menu[data-placement='above']")['bottom']).toEqual(['100%']);
+    expect(rule(cards, '.ctl-menu')['top']).toEqual(['100%']);
   });
 
   it('the chat thread fills the dock instead of a viewport-sized cap', () => {

@@ -258,6 +258,13 @@ export interface ConversationState {
   absorb: (agentId: Id, entries: ChatEntry[]) => void;
   /** The chat closed: the live transcript no longer starts at its `liveFrom`. */
   close: (agentId: Id) => void;
+  /**
+   * The composer's unsent text per agent (P4-10), so it outlives the composer: switching agents,
+   * or crossing the stacked layout's breakpoint (which remounts the chat), keeps each draft. Kept
+   * across logs (it is what the user typed, not history); cleared when sent, and by `reset`.
+   */
+  drafts: Record<Id, string>;
+  setDraft: (agentId: Id, text: string) => void;
   reset: () => void;
 }
 
@@ -326,6 +333,7 @@ export const useConversationStore = create<ConversationState>((set, get) => {
 
   return {
     threads: {},
+    drafts: {},
     forLog: (logId) => {
       const current = get().logId;
       if (logId === undefined || logId === current) return;
@@ -371,7 +379,14 @@ export const useConversationStore = create<ConversationState>((set, get) => {
     close: (agentId) => {
       if (get().threads[agentId]) patch(agentId, () => ({ liveFrom: undefined }));
     },
-    reset: () => set({ threads: {}, logId: undefined }),
+    setDraft: (agentId, text) =>
+      set((s) => {
+        if ((s.drafts[agentId] ?? '') === text) return {};
+        if (text !== '') return { drafts: { ...s.drafts, [agentId]: text } };
+        const { [agentId]: _sent, ...rest } = s.drafts;
+        return { drafts: rest };
+      }),
+    reset: () => set({ threads: {}, drafts: {}, logId: undefined }),
   };
 });
 

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 /**
  * Per browser: the docked conversation's state (P4-10) — open or minimised, and its height as a
@@ -49,8 +49,8 @@ export function writeDockPrefs(prefs: DockPrefs): void {
 
 export interface DockControl extends DockPrefs {
   setOpen: (open: boolean) => void;
-  /** Sets the height (clamped); `persist: false` while a drag is in progress. */
-  setSize: (size: number, persist?: boolean) => void;
+  /** Sets the height (clamped) and saves it; a drag calls it once, when it ends. */
+  setSize: (size: number) => void;
 }
 
 export function useDockPrefs(): DockControl {
@@ -62,12 +62,12 @@ export function useDockPrefs(): DockControl {
       return next;
     });
   }, []);
-  const setSize = useCallback((size: number, persist = true) => {
+  const setSize = useCallback((size: number) => {
     setPrefs((p) => {
       const next = { ...p, size: clampDockSize(size) };
-      if (persist) writeDockPrefs(next);
+      writeDockPrefs(next);
       return next;
     });
   }, []);
-  return { ...prefs, setOpen, setSize };
+  return useMemo(() => ({ ...prefs, setOpen, setSize }), [prefs, setOpen, setSize]);
 }

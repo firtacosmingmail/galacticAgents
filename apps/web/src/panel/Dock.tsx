@@ -16,6 +16,11 @@ export const DOCK_BODY_ID = 'pnl-dock-body';
  * Down for bigger steps, Home / End for the smallest and the largest), to set the dock's height as
  * a share of `container` (the centre column; the whole stacked layout on narrow screens), clamped
  * to DOCK_MIN–DOCK_MAX. A drag is saved when it ends.
+ *
+ * While dragging, the height is written straight onto the dock element (`--pnl-dock-size` on the
+ * handle's parent, and the handle's own `aria-valuenow`), not through React state: re-rendering
+ * the panel on every pointer move made the drag stutter. The state is set once, when the drag
+ * ends (and then matches what is on screen).
  */
 export function DockHandle({
   size,
@@ -23,7 +28,7 @@ export function DockHandle({
   container,
 }: {
   size: number;
-  onSize: (size: number, persist?: boolean) => void;
+  onSize: (size: number) => void;
   container: RefObject<HTMLElement | null>;
 }) {
   const dragging = useRef(false);
@@ -42,10 +47,16 @@ export function DockHandle({
       // Not an active pointer (a synthetic event): the drag still works while over the handle.
     }
   };
+  /** Shows a height on screen without a render (the drag in progress). */
+  const show = (el: HTMLElement, next: number) => {
+    el.parentElement?.style.setProperty('--pnl-dock-size', `${next}%`);
+    el.setAttribute('aria-valuenow', String(next));
+    el.setAttribute('aria-valuetext', `${next}% of the height`);
+  };
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     if (!dragging.current) return;
     const next = fromPointer(e.clientY);
-    if (next !== undefined) onSize(next, false);
+    if (next !== undefined) show(e.currentTarget, clampDockSize(next));
   };
   const end = (e: PointerEvent<HTMLDivElement>) => {
     if (!dragging.current) return;
@@ -55,7 +66,11 @@ export function DockHandle({
     } catch {
       // Already released.
     }
-    onSize(fromPointer(e.clientY) ?? size, true);
+    const final = clampDockSize(fromPointer(e.clientY) ?? size);
+    // The state may already hold this value (dragged away and back): then React will not touch
+    // the element, so it must show it already.
+    show(e.currentTarget, final);
+    onSize(final);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const next =
@@ -101,19 +116,22 @@ const NO_CHUNKS: TranscriptChunk[] = [];
 const isReply = (c: TranscriptChunk) => c.kind === 'text' && c.text.trim() !== '';
 
 /**
- * How many replies the agent wrote since the dock was minimised (0 while it is open). The chat
- * stays mounted while minimised, so its live transcript keeps arriving in the store.
+ * The "N new" badge of a minimised dock: the replies the agent wrote since it was minimised. The
+ * chat stays mounted while minimised, so its live transcript keeps arriving in the store. Mounted
+ * only while minimised and keyed by the agent, so the baseline is simply taken when it mounts
+ * (minimising, or selecting another agent while minimised) — no state to reset during a render
+ * or in an effect.
  */
-export function useUnreadReplies(agentId: Id | undefined, minimised: boolean): number {
-  const chunks = useAppStore((s) => (agentId ? s.transcripts[agentId] : undefined)) ?? NO_CHUNKS;
-  const last = chunks.reduce((max, c) => (isReply(c) && c.seq > max ? c.seq : max), 0);
-  const key = minimised ? (agentId ?? '') : undefined;
-  const [base, setBase] = useState({ key, seq: last });
-  if (base.key !== key) {
-    // Minimised (or another agent selected while minimised): count from here.
-    setBase({ key, seq: last });
-    return 0;
-  }
-  if (!minimised) return 0;
-  return chunks.filter((c) => isReply(c) && c.seq > base.seq).length;
+export function UnreadReplies({ agentId }: { agentId: Id }) {
+  const chunks = useAppStore((s) => s.transcripts[agentId]) ?? NO_CHUNKS;
+  const [since] = useState(() =>
+    chunks.reduce((max, c) => (isReply(c) && c.seq > max ? c.seq : max), 0),
+  );
+  const unread = chunks.filter((c) => isReply(c) && c.seq > since).length;
+  if (unread === 0) return null;
+  return (
+    <span className="pnl-dock-unread" role="status" aria-label={`${unread} new replies`}>
+      {unread} new
+    </span>
+  );
 }

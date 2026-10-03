@@ -138,7 +138,7 @@ async function open(path = '/', first: ServerMessage = snapshot) {
   });
 }
 
-const main = () => screen.getByRole('main', { name: 'main area' });
+const main = () => screen.getByRole('main');
 const sceneRegion = () => screen.queryByRole('region', { name: 'solar system' });
 
 describe('the scene beside the panel (P3-01)', () => {
