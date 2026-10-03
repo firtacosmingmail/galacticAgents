@@ -7,8 +7,9 @@ import { useThree } from '@react-three/fiber';
  * times a second (every other frame of a 60 Hz display at 30), which roughly halves the GPU work
  * and the battery drain on the phone. Under `never` R3F ignores `invalidate()`, so a camera that
  * follows a body (and invalidates every frame) is capped too; flights and resizes simply show on
- * the next capped frame. The scene clock is driven from here (seconds since the cap started, as
- * R3F restarts its clock at 0 on any loop change), so the motion keeps its speed at any rate.
+ * the next capped frame. R3F's clock is driven from here (seconds since the cap started: R3F
+ * restarts it at 0 on any loop change); the orbits do not use it but `motionSeconds()`, a clock of
+ * their own, so they keep their speed at any rate and their place across loop switches.
  */
 
 /** Slack so a 60 Hz display's 16.7 ms ticks land on 30 fps rather than 20 (timer jitter). */
