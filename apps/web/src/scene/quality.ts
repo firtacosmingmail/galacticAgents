@@ -13,11 +13,11 @@ import type { QualityTier } from '@galactic/protocol';
  * - `stars`: points in the star-field skybox;
  * - `beltRocks`: background rocks in the asteroid belt (P3-03): one instanced mesh, one draw call
  *   whatever the count; a lighter tier draws a prefix of the same deterministic belt;
- * - `shadows`: the shadow map and the Sun light's point shadow (P3-02): planets and the largest
- *   moons cast (each caster is drawn into all six cube faces every frame, so small moons do not:
- *   `bodies/layout.ts` `castsShadow`), every body and the rings receive (Saturn's shadow on its
- *   rings, eclipses of moons). `shadowMapSize` is that cube map's face size (only read when
- *   `shadows` is on; the light is recreated when it changes: three never resizes a cube map);
+ * - `shadows`: the bodies' eclipse shadows (P3-10, `bodies/eclipse.ts`): each planet, moon and
+ *   ring system is darkened, in its own fragment shader, by the casters of its own planet system
+ *   (the planet and its largest moons, `bodies/layout.ts` `castsShadow`): Saturn's shadow on its
+ *   rings, moons' spots on their planet, moons eclipsed by it. No shadow map (the Sun's point-light
+ *   cube shadow it replaces let inner planets eclipse whole outer ones);
  * - `lod` (P3-06): the bodies' levels of detail, near → far, each holding while the camera is
  *   closer than `within` body radii (so they work in both scales), with `hysteresis` so a camera
  *   sitting on a boundary does not flicker: sphere segments, the procedural texture width (height
@@ -36,7 +36,7 @@ import type { QualityTier } from '@galactic/protocol';
  *   the frame cap;
  * - `maxFps`: a frame-rate cap while the decorative motion runs (`null` = the display's rate); the
  *   mobile tier renders every other frame of a 60 Hz display to save the phone's battery. The fps
- *   meter (`?fps=1`) lifts the cap so it measures the headroom.
+ *   meter (`?show_fps=true`) lifts the cap so it measures the headroom.
  */
 /** Linear luminance a pixel needs (before tone mapping) to bloom. */
 export const BLOOM_THRESHOLD = 1.0;
@@ -57,7 +57,6 @@ export interface SceneQuality {
   stars: number;
   beltRocks: number;
   shadows: boolean;
-  shadowMapSize: number;
   lod: LodConfig;
   textureBudgetMB: number;
   ringSegments: number;
@@ -99,7 +98,6 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     stars: 9000,
     beltRocks: 6000,
     shadows: true,
-    shadowMapSize: 1024,
     lod: {
       levels: [
         {
@@ -143,7 +141,6 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     stars: 5000,
     beltRocks: 3500,
     shadows: false,
-    shadowMapSize: 512,
     lod: {
       levels: [
         {
@@ -187,7 +184,6 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     stars: 2000,
     beltRocks: 1200,
     shadows: false,
-    shadowMapSize: 256,
     lod: {
       levels: [
         {

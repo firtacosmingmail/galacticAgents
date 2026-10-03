@@ -62,9 +62,9 @@ export const MIN_TRUE_RADIUS = 0.02;
 
 /**
  * Shadows (tiers with `shadows`): a moon casts only from this real radius up (the Moon, the
- * Galilean moons, Titan, Triton). The Sun's point-light shadow renders every caster into all six
- * faces of a cube map each frame, so each caster costs six extra draws; the small moons' shadows
- * are a few pixels at most. Planets always cast.
+ * Galilean moons, Titan, Triton). Each caster is one more sphere test per fragment of every body
+ * in its planet's system (`eclipse.ts`, at most `MAX_ECLIPSE_CASTERS`); the small moons' shadows
+ * would be a few pixels at most. Planets always cast, on their own system only.
  */
 export const SHADOW_MOON_MIN_KM = 1000;
 

@@ -12,6 +12,6 @@ Branch `p3-wave1-canvas` against `phase-3`, 2026-10-03. One agent built the canv
 
 Watch in P3-02: R3F's peer range is react `>=19 <19.4` (the next React minor needs an R3F bump); respect `prefers-reduced-motion` for orbital motion and camera flights; check the middle layout (1101–1699 px) in a real browser.
 
-Open: the 60 fps at "high" check on Cosmin's Mac (`/?fps=1`, steps in `P3-01-canvas.md`).
+Open: the 60 fps at "high" check on Cosmin's Mac (`/?show_fps=true`, steps in `P3-01-canvas.md`).
 
 Gates on the merged branch: build, typecheck, lint, format:check green; protocol 64, server 842 (+1 skipped), web 219.

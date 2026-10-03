@@ -9,7 +9,7 @@ Everything is in `apps/web/src/scene/`. Only `SolarScene.tsx` imports three.js, 
 | `quality.ts` | `QUALITY_TIERS`, one table for `high`, `balanced` and `mobile`, plus `sceneQuality(tier)` (undefined → `high`, the server's `DEFAULT_QUALITY_TIER`). Fields: `dprCap`, `antialias`, `bloom` (`{intensity, threshold, mipmapBlur}` or `null`), `stars`, `shadows`. P3-06 extends this table. |
 | `SolarScene.tsx` | The R3F `<Canvas>`. The `gl` factory builds a classic `WebGLRenderer` explicitly (decision 20; no WebGPU path). Output is sRGB with ACES filmic tone mapping: R3F's defaults, so there is no `onCreated` repeating them. Resizing is R3F's own (`react-use-measure`). `dpr={[1, dprCap]}`. No shadow map and no `castShadow` yet: nothing receives shadows (P3-02 wires the tier's `shadows` flag with the planets). A `ContextLossWatch` child listens for `webglcontextlost` on the canvas (`preventDefault`, then `onContextLost` → `onFailure("the GPU context was lost")`), and removes the listener on unmount. The scene has the star-field skybox and the Sun: an emissive sphere (`#ffa630` × 4, linear luminance ≈ 1.95, well above the bloom threshold of 1.0) and a point light at the origin with `decay=0`, ready for P3-02. With bloom on, `EffectComposer` → `Bloom` (mipmap blur) → `ToneMapping(ACES_FILMIC)`; the composer sets the renderer to `NoToneMapping`, so tone mapping has to be an effect there. With bloom off (mobile), there is no composer, and a sprite with a gradient texture drawn at runtime (no image asset) stands in for the glow. The canvas is keyed on `antialias` (a context parameter), so only a tier change that flips it recreates the context. Every other tier change reconfigures the live canvas. |
 | `starfield.ts` | `generateStarField(count, seed)`: plain data, seeded (mulberry32), uniform on a 1200–2400 shell, with a cool-to-warm tint and a brightness spread capped at `STAR_MAX_BRIGHTNESS` = 0.85, below the bloom threshold, so stars never bloom. It is drawn as one `THREE.Points` with vertex colours and a fixed pixel size: one draw call, no shader code. |
-| `fps.ts` | `FpsCounter` (a 500 ms window) and `fpsMeterEnabled()`: `?fps=1` turns the meter on and remembers it in `localStorage` (`galactic.scene.fps`), and `?fps=0` turns it off. |
+| `fps.ts` | `FpsCounter` (a 500 ms window) and `fpsMeterEnabled()`: `?show_fps=true` turns the meter on and remembers it in `localStorage` (`galactic.scene.fps`), and `?show_fps=false` turns it off. |
 | `webgl.ts` | `webglAvailable()`: tries `webgl2` only (three 0.186 needs WebGL2) on a throwaway canvas, then releases that context. It runs lazily, only once the scene is to be shown (list mode never probes), and the result is cached for the page. jsdom (detected by user agent) answers `false` without probing, so the panel tests don't fill the log with "not implemented". |
 | `visibility.ts` | `useScene()`: the user's show/hide choice (`galactic.scene.visible`, read and written inside try/catch, shown by default), the failure reason (no WebGL, the scene threw while starting, or its GPU context was lost), `shown = visible && !failure`, and `retry()` (undefined when there is no WebGL). |
 | `SceneArea.tsx` | The scene's slot in the panel: `React.lazy(() => import('./SolarScene.js'))`, wrapped in an error boundary and a Suspense fallback ("Loading the solar system…"). It reads the tier from `useSettingsData()` (decision 51), so a saved tier reaches the mounted scene immediately. Also contains the DOM fps meter (`fps · ms · dpr · tier`). |
@@ -49,7 +49,7 @@ Layout with the scene:
 **TECHNOLOGY §2.1, after "Postprocessing":**
 
 > - **Quality tiers** (`apps/web/src/scene/quality.ts`, one table): `high` = DPR ≤ 2, MSAA, bloom 1.4, 9000 stars, shadows allowed (not wired until P3-02); `balanced` = DPR ≤ 1.5, MSAA, bloom 1.0, 5000 stars, no shadows; `mobile` = DPR 1, no MSAA, no composer (a gradient sprite fakes the Sun's glow), 2000 stars, no shadows. The tier comes from the server's settings (`qualityTier`, decision 51) and applies at once in this browser (another device's change after a reload). Only a change of `antialias` recreates the GL context.
-> - **Renderer setup.** The canvas's `gl` factory builds a `WebGLRenderer` explicitly. Output is sRGB with ACES filmic tone mapping. When the postprocessing composer is active it forces `NoToneMapping` on the renderer, so ACES is applied as the composer's last `ToneMapping` effect. The frame loop is `demand` until something moves. `?fps=1` shows a dev frame-rate meter and switches the loop to `always`.
+> - **Renderer setup.** The canvas's `gl` factory builds a `WebGLRenderer` explicitly. Output is sRGB with ACES filmic tone mapping. When the postprocessing composer is active it forces `NoToneMapping` on the renderer, so ACES is applied as the composer's last `ToneMapping` effect. The frame loop is `demand` until something moves. `?show_fps=true` shows a dev frame-rate meter and switches the loop to `always`.
 > - **Bundle.** three.js, R3F and postprocessing live in a lazily loaded `SolarScene` chunk. The panel's first chunk carries none of them, so list mode and a WebGL-less browser never download them.
 
 **TECHNOLOGY, versions (if the doc keeps a list):** three 0.186, @react-three/fiber 9.8, @react-three/drei 10.7, @react-three/postprocessing 3.1, postprocessing 6.39.
@@ -84,7 +84,7 @@ The first chunk contains no three.js (`grep WebGLRenderer` on it finds nothing).
   - bloom: every tier's threshold is 1.0, the brightest star of a 20 000-star sky stays ≤ 0.85, and the Sun's emissive luminance is well past the full-bloom point;
   - the star field's count, shell bounds and colour range, its determinism, and an empty sky;
   - `FpsCounter` measures 60 fps;
-  - the `?fps=` flag sets and clears the remembered setting;
+  - the `?show_fps=` flag sets and clears the remembered setting;
   - the visibility default and its persistence.
 - `scene/scene.test.tsx` (9 tests). The lazy `SolarScene` module is mocked with a stub that records its mounts and the config it receives, and `webgl.js` is mocked:
   - shown by default at the tier the settings hold (`balanced`);
@@ -95,7 +95,7 @@ The first chunk contains no three.js (`grep WebGLRenderer` on it finds nothing).
   - a lost GPU context (the stub calls `onContextLost`) → list mode with "the GPU context was lost"; Retry brings the scene back;
   - list mode never probes for WebGL; "Show scene" does;
   - a tier patched through `SettingsProvider` reaches the mounted scene (high → mobile: bloom off, 2000 stars) without remounting it;
-  - `?fps=1` shows the meter.
+  - `?show_fps=true` shows the meter.
 - Gates on `p3-01-canvas`: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check` and `pnpm test` all pass:
   - protocol: 64 tests;
   - server: 842 tests (1 skipped);
@@ -103,7 +103,7 @@ The first chunk contains no three.js (`grep WebGLRenderer` on it finds nothing).
 
 ### Smoke check in a real browser (not committed)
 
-A throwaway page mounted `SolarScene` with `?fps=1` and was driven through headless Chrome over CDP:
+A throwaway page mounted `SolarScene` with `?show_fps=true` and was driven through headless Chrome over CDP:
 
 | Tier | Mode | Result |
 | --- | --- | --- |
@@ -118,7 +118,7 @@ Screenshots showed the star field and the bloomed Sun, and the mobile glow sprit
 
 1. `pnpm dev` (or `pnpm build && pnpm start`), then open the panel in Chrome or Safari on the Mac.
 2. Settings → Rendering quality → **High** → Save, then go back to the panel. The scene is in the centre. If it isn't, click **Show scene** in the top bar.
-3. Add `?fps=1` to the URL (e.g. `http://localhost:5173/?fps=1`) and reload. A green readout appears at the scene's top-left: `60 fps · 16.7 ms · dpr 2 · high`. The flag is remembered in this browser; `?fps=0` turns it off.
+3. Add `?show_fps=true` to the URL (e.g. `http://localhost:5173/?show_fps=true`) and reload. A green readout appears at the scene's top-left: `60 fps · 16.7 ms · dpr 2 · high`. The flag is remembered in this browser; `?show_fps=false` turns it off. (Until P3-11 the panel's URL rewrite dropped the query before the scene mounted, so this step showed nothing; see `P3-11-fps.md`.)
 4. Check that it holds about 60 (or the display's refresh rate) with the window at full size. `dpr 2` confirms the Retina cap is in effect.
 5. Try **Hide scene**: the scene disappears and the panel works in list mode. In Activity Monitor or the browser's task manager, GPU use drops. Reload: still hidden. **Show scene** brings it back.
 6. Optionally switch the tier to Balanced or Mobile on the settings page, and check the readout's tier and dpr when you return. Mobile has no bloom: a soft sprite glow is used instead.

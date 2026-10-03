@@ -18,6 +18,8 @@ import {
 import { motionEnabled, motionSeconds, useReducedMotion } from '../motion.js';
 import { placeOnOrbit } from '../orbit.js';
 import type { SceneQuality } from '../quality.js';
+import { eclipseReceivers, ringsId, type EclipseReceiver } from './eclipse.js';
+import { EclipseSystem, useEclipse, type EclipseBinding } from './eclipse-binding.js';
 import { DECOR_LAYER } from '../layers.js';
 import { useLodLevel } from './lod.js';
 import {
@@ -43,9 +45,11 @@ import {
  * `prefers-reduced-motion` everything sits at its starting angle (never behind the Sun from the
  * default camera) and the canvas goes back to rendering on demand.
  *
- * Shadows: planets and the largest moons cast (`castsShadow`: each caster is drawn six more times
- * a frame into the Sun's cube shadow map), every body receives, rings receive; they show only when
- * the tier turns the shadow map on (`SolarScene`).
+ * Shadows (P3-10, `eclipse.ts`): on tiers with `shadows`, each planet, moon and ring system is
+ * darkened analytically by the casters of its own planet system only (the planet and its largest
+ * moons, `castsShadow`): a moon's shadow is a spot on its planet, the planet's shadow falls on its
+ * rings and eclipses its moons, and no planet ever eclipses another (the Sun's point light used to
+ * magnify an inner planet's shadow over a whole outer planet). There is no shadow map.
  *
  * Level of detail (P3-06): each planet and moon picks a level from the tier's `lod` table by the
  * camera's distance in body radii (`lod.ts`, with hysteresis). A level swaps only the sphere mesh's
@@ -54,7 +58,7 @@ import {
  * lazily off the main thread). The anchor group is never replaced and its binding does not depend
  * on the level, so picking, the camera and labels see the same anchor and radius throughout.
  */
-export function Bodies({ quality }: { quality: SceneQuality }) {
+export function Bodies({ quality, sunRadius }: { quality: SceneQuality; sunRadius: number }) {
   const bodies = useAppStore((s) => s.world.bodies);
   const mode = useSceneScale((s) => s.mode);
   const motion = motionEnabled(useReducedMotion());
@@ -70,6 +74,7 @@ export function Bodies({ quality }: { quality: SceneQuality }) {
           motion={motion}
           quality={quality}
           spheres={spheres}
+          sunRadius={sunRadius}
         />
       ))}
     </group>
@@ -81,6 +86,8 @@ const DEG = Math.PI / 180;
 interface DetailProps {
   quality: SceneQuality;
   spheres: SphereSet;
+  /** The Sun's radius: the eclipses' penumbra (`eclipse.ts`). */
+  sunRadius: number;
 }
 
 function Planet({
@@ -88,9 +95,17 @@ function Planet({
   motion,
   quality,
   spheres,
+  sunRadius,
 }: { item: PlanetItem; motion: boolean } & DetailProps) {
   const anchor = useRef<Group>(null);
   const spin = useRef<Mesh>(null);
+  const system = useMemo(() => new EclipseSystem(), []);
+  const receivers = useMemo(
+    () => new Map(eclipseReceivers(item).map((r) => [r.id, r] as const)),
+    [item],
+  );
+  const eclipse = useEclipse(system, receivers.get(item.bodyId), quality.shadows, sunRadius);
+  useLayoutEffect(() => system.register(item.bodyId, spin.current), [system, item.bodyId]);
   useOrbit(anchor, item.distance, item.phase, item.period, motion);
   useBodyAnchor(anchor, planetAnchor(item));
   const level = useLodLevel(anchor, item.radius, quality.lod);
@@ -110,13 +125,26 @@ function Planet({
             ref={spin}
             geometry={sphereFor(spheres, 'planet', level)}
             scale={item.radius}
-            castShadow
-            receiveShadow
+            onBeforeRender={eclipse.onBeforeRender}
           >
-            <SurfaceMaterial look={item.look} kind="planet" quality={quality} level={level} />
+            <SurfaceMaterial
+              look={item.look}
+              kind="planet"
+              quality={quality}
+              level={level}
+              eclipse={eclipse}
+            />
           </mesh>
           {item.look.rings && (
-            <Rings rings={item.look.rings} radius={item.radius} segments={quality.ringSegments} />
+            <Rings
+              rings={item.look.rings}
+              radius={item.radius}
+              segments={quality.ringSegments}
+              system={system}
+              receiver={receivers.get(ringsId(item.bodyId))}
+              shadows={quality.shadows}
+              sunRadius={sunRadius}
+            />
           )}
           {item.moons.map((moon) => (
             <Moon
@@ -125,6 +153,9 @@ function Planet({
               motion={motion}
               quality={quality}
               spheres={spheres}
+              sunRadius={sunRadius}
+              system={system}
+              receiver={receivers.get(moon.bodyId)}
             />
           ))}
         </group>
@@ -138,8 +169,19 @@ function Moon({
   motion,
   quality,
   spheres,
-}: { item: MoonItem; motion: boolean } & DetailProps) {
+  sunRadius,
+  system,
+  receiver,
+}: {
+  item: MoonItem;
+  motion: boolean;
+  system: EclipseSystem;
+  receiver: EclipseReceiver | undefined;
+} & DetailProps) {
   const anchor = useRef<Group>(null);
+  const sphere = useRef<Mesh>(null);
+  const eclipse = useEclipse(system, receiver, quality.shadows, sunRadius);
+  useLayoutEffect(() => system.register(item.bodyId, sphere.current), [system, item.bodyId]);
   useOrbit(anchor, item.distance, item.phase, item.period, motion);
   useBodyAnchor(anchor, moonAnchor(item));
   const level = useLodLevel(anchor, item.radius, quality.lod);
@@ -148,12 +190,18 @@ function Moon({
       <OrbitLine radius={item.distance} segments={quality.orbitSegments.moon} opacity={0.12} />
       <group ref={anchor} name={item.name} userData={{ bodyId: item.bodyId }}>
         <mesh
+          ref={sphere}
           geometry={sphereFor(spheres, 'moon', level)}
           scale={item.radius}
-          castShadow={item.castShadow}
-          receiveShadow
+          onBeforeRender={eclipse.onBeforeRender}
         >
-          <SurfaceMaterial look={item.look} kind="moon" quality={quality} level={level} />
+          <SurfaceMaterial
+            look={item.look}
+            kind="moon"
+            quality={quality}
+            level={level}
+            eclipse={eclipse}
+          />
         </mesh>
       </group>
     </>
@@ -174,11 +222,13 @@ function SurfaceMaterial({
   kind,
   quality,
   level,
+  eclipse,
 }: {
   look: PlanetItem['look'];
   kind: BodyKind;
   quality: SceneQuality;
   level: number;
+  eclipse: EclipseBinding;
 }) {
   const { map, detail } = useBodyMaps(look, kind, quality.lod, level);
   const matte = kind === 'planet' ? 0.95 : 1;
@@ -191,19 +241,45 @@ function SurfaceMaterial({
       roughnessMap={detail}
       roughness={1}
       metalness={0}
+      onBeforeCompile={eclipse.onBeforeCompile}
+      customProgramCacheKey={eclipse.customProgramCacheKey}
     />
   ) : (
-    <meshStandardMaterial key="plain" map={map} roughness={matte} metalness={0} />
+    <meshStandardMaterial
+      key="plain"
+      map={map}
+      roughness={matte}
+      metalness={0}
+      onBeforeCompile={eclipse.onBeforeCompile}
+      customProgramCacheKey={eclipse.customProgramCacheKey}
+    />
   );
 }
 
 /**
  * A flat ring system in the planet's equatorial plane, its texture laid out radially (u = 0 at
- * the inner edge, 1 at the outer). Receives the planet's shadow; a faint emissive term keeps the
- * rings readable when the Sun grazes them edge-on.
+ * the inner edge, 1 at the outer). Receives the planet's shadow (and its moons', `eclipse.ts`); a
+ * faint emissive term keeps the rings readable when the Sun grazes them edge-on.
  */
-function Rings({ rings, radius, segments }: { rings: RingLook; radius: number; segments: number }) {
+function Rings({
+  rings,
+  radius,
+  segments,
+  system,
+  receiver,
+  shadows,
+  sunRadius,
+}: {
+  rings: RingLook;
+  radius: number;
+  segments: number;
+  system: EclipseSystem;
+  receiver: EclipseReceiver | undefined;
+  shadows: boolean;
+  sunRadius: number;
+}) {
   const texture = useRingTexture(rings);
+  const eclipse = useEclipse(system, receiver, shadows, sunRadius);
   const geometry = useMemo(() => {
     const inner = radius * rings.inner;
     const outer = radius * rings.outer;
@@ -218,8 +294,14 @@ function Rings({ rings, radius, segments }: { rings: RingLook; radius: number; s
   }, [radius, rings.inner, rings.outer, segments]);
   useEffect(() => () => geometry.dispose(), [geometry]);
   return (
-    <mesh geometry={geometry} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+    <mesh
+      geometry={geometry}
+      rotation={[-Math.PI / 2, 0, 0]}
+      onBeforeRender={eclipse.onBeforeRender}
+    >
       <meshStandardMaterial
+        onBeforeCompile={eclipse.onBeforeCompile}
+        customProgramCacheKey={eclipse.customProgramCacheKey}
         map={texture}
         emissiveMap={texture}
         emissive="#ffffff"

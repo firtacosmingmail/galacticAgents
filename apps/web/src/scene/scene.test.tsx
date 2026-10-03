@@ -17,6 +17,7 @@ import { SettingsProvider, useSettingsData } from '../panel/settings/SettingsDat
 import { useAppStore } from '../state/store.js';
 import { SceneArea } from './SceneArea.js';
 import type { SolarSceneProps } from './SolarScene.js';
+import { FPS_FLAG_KEY } from './fps.js';
 import { SCENE_VISIBLE_KEY } from './visibility.js';
 
 /**
@@ -126,14 +127,14 @@ afterEach(() => {
   window.history.replaceState(null, '', '/');
 });
 
-async function open(path = '/') {
+async function open(path = '/', first: ServerMessage = snapshot) {
   window.history.replaceState(null, '', path);
   render(<App />);
   await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
   const socket = FakeWebSocket.instances.at(-1)!;
   await act(async () => {
     socket.serverOpens();
-    socket.serverSends(snapshot);
+    socket.serverSends(first);
   });
 }
 
@@ -292,8 +293,8 @@ describe('the quality tier reaches the scene (decision 51)', () => {
     expect(scene.mounted).toBe(1); // the same scene, reconfigured
   });
 
-  it('shows the fps meter with ?fps=1', async () => {
-    window.history.replaceState(null, '', '/?fps=1');
+  it('shows the fps meter with ?show_fps=true (the area alone)', async () => {
+    window.history.replaceState(null, '', '/?show_fps=true');
     const api = { settings: async () => settingsWith('high') } as unknown as Api;
     render(
       <SettingsProvider api={api}>
@@ -302,5 +303,76 @@ describe('the quality tier reaches the scene (decision 51)', () => {
     );
     expect(await screen.findByTestId('solar-scene')).toBeTruthy();
     expect(screen.getByLabelText('frame rate').textContent).toMatch(/fps/);
+  });
+});
+
+/**
+ * P3-11: `?show_fps=true` from a cold load of the whole app. The panel rewrites the URL to its canonical
+ * form on load (`syncFromLocation`) before the scene mounts (the first-run gate waits for the
+ * settings), so the flag must survive that rewrite or be read before it.
+ */
+describe('the fps meter from a cold load (P3-11)', () => {
+  const meter = () => screen.queryByLabelText('frame rate');
+
+  it.each(['/', '/waykeeper/a-waykeeper-1', '/steward/a-steward-1'])(
+    'shows on %s?show_fps=true, keeps the query in the URL and remembers the flag',
+    async (path) => {
+      await open(`${path}?show_fps=true`);
+      expect(await screen.findByTestId('solar-scene')).toBeTruthy();
+      expect(meter()?.textContent).toMatch(/fps · balanced/);
+      // Drawn in the scene area, after the canvas: the chrome layer over it (`stacking.test.ts`).
+      expect(meter()?.closest('.pnl-scene')).toBe(sceneRegion());
+      expect(meter()?.className).toBe('pnl-scene-fps');
+      expect(window.location.pathname).toBe(path);
+      expect(window.location.search).toBe('?show_fps=true');
+      expect(localStorage.getItem(FPS_FLAG_KEY)).toBe('1');
+    },
+  );
+
+  it('survives the canonical rewrite of a link whose kind is not the agent role', async () => {
+    const withSteward: ServerMessage = {
+      ...snapshot,
+      agents: [fx.harmonizer, fx.agent],
+      statuses: [{ ...fx.status, agentId: fx.harmonizer.id }],
+    } as ServerMessage;
+    await open(`/waykeeper/${fx.agent.id}?show_fps=true&other=x#here`, withSteward);
+    await vi.waitFor(() => expect(window.location.pathname).toBe(`/steward/${fx.agent.id}`));
+    expect(window.location.search).toBe('?show_fps=true&other=x');
+    expect(window.location.hash).toBe('#here');
+    expect(await screen.findByLabelText('frame rate')).toBeTruthy();
+  });
+
+  it('is remembered without the query, and ?show_fps=false clears it', async () => {
+    await open('/?show_fps=true');
+    expect(await screen.findByLabelText('frame rate')).toBeTruthy();
+
+    cleanup();
+    useAppStore.getState().reset();
+    await open('/waykeeper/a-waykeeper-1');
+    await screen.findByTestId('solar-scene');
+    expect(meter()).toBeTruthy();
+
+    cleanup();
+    useAppStore.getState().reset();
+    await open('/?show_fps=false');
+    await screen.findByTestId('solar-scene');
+    expect(meter()).toBeNull();
+    expect(localStorage.getItem(FPS_FLAG_KEY)).toBeNull();
+  });
+
+  it('is read even when the scene mounts later (list mode first, then "Show scene")', async () => {
+    localStorage.setItem(SCENE_VISIBLE_KEY, '0');
+    await open('/?show_fps=true');
+    expect(sceneRegion()).toBeNull();
+    // A navigation in the panel drops the query; the flag was taken at load.
+    act(() =>
+      useAppStore.getState().navigate({ route: 'settings', selection: { kind: 'harmonizer' } }),
+    );
+    act(() =>
+      useAppStore.getState().navigate({ route: 'panel', selection: { kind: 'harmonizer' } }),
+    );
+    expect(window.location.search).toBe('');
+    fireEvent.click(await screen.findByRole('button', { name: 'Show scene' }));
+    expect(await screen.findByLabelText('frame rate')).toBeTruthy();
   });
 });

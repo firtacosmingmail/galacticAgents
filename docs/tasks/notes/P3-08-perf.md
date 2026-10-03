@@ -7,7 +7,7 @@ Branch `p3-08-perf` (from `p3-wave5-perf`), 2026-10-03. The automatable part: pr
 From the phase file:
 
 1. **60 fps on the Mac at "high".**
-2. **≥ 30 fps at "mobile" in Safari on the phone over the LAN.** The mobile tier caps itself at 30 fps while the planets move (`maxFps`, P3-06). So "≥ 30" means the capped scene holds 30, and the uncapped headroom (`?fps=1`) stays above 30.
+2. **≥ 30 fps at "mobile" in Safari on the phone over the LAN.** The mobile tier caps itself at 30 fps while the planets move (`maxFps`, P3-06). So "≥ 30" means the capped scene holds 30, and the uncapped headroom (`?show_fps=true`) stays above 30.
 3. **Every assigned body can be clicked and shows the right project/task.** Taps must work on the phone (10 px touch slop, P3-05).
 
 ## Profiling
@@ -177,7 +177,7 @@ Found while writing the phone steps; verified with curl against a throwaway serv
    - `pnpm dev` (`http://localhost:5173`) works too, but dev React costs main-thread time.
 2. Settings (`/settings`): quality tier **high**. The tier is server-wide (decision 51): another device picks it up after a reload.
 3. Have some work in the scene: real projects and tasks, or a few **Seed demo project** runs. Ideally a few planets and moons with projects, some task asteroids, and one question waiting for you.
-4. Open `http://127.0.0.1:4321/?fps=1`. The meter at the top left reads `NN fps · ms · dpr 2 · high`. `?fps=1` is remembered in this browser; `?fps=0` clears it.
+4. Open `http://127.0.0.1:4321/?show_fps=true`. The meter at the top left reads `NN fps · ms · dpr 2 · high`. `?show_fps=true` is remembered in this browser; `?show_fps=false` clears it.
 5. Rows:
    - **system view**: `Escape` or `Home`, then wait 5 s;
    - **close to Jupiter**: click Jupiter, or `]` until Jupiter, and wait 5 s for the near textures;
@@ -200,9 +200,9 @@ Steps:
 4. Terminal 2, the production page on the LAN, proxied to the server: `pnpm --filter @galactic/web preview --host --port 4173`. `vite preview` uses the same proxy table as `vite dev`.
    - For the dev server instead: `pnpm --filter @galactic/web dev --host`, with `pnpm --filter @galactic/server dev` in terminal 1 under the same `GALACTIC_ALLOWED_HOSTS`. `pnpm dev` from the root cannot pass `--host`.
 5. On the Mac, set the quality tier to **mobile** in `/settings`.
-6. On the iPhone, open `http://<mac-ip>:4173/?fps=1` in Safari. If it asks for the token, paste the one `pnpm start` printed (it is also `token` in `~/.galactic/config.json`). See the security finding: today the phone is usually handed it automatically.
+6. On the iPhone, open `http://<mac-ip>:4173/?show_fps=true` in Safari. If it asks for the token, paste the one `pnpm start` printed (it is also `token` in `~/.galactic/config.json`). See the security finding: today the phone is usually handed it automatically.
    - The meter lifts the 30 fps cap, so it shows the headroom; that must be ≥ 30.
-   - Then open `http://<mac-ip>:4173/?fps=0` to clear the meter and judge the capped 30 fps by eye.
+   - Then open `http://<mac-ip>:4173/?show_fps=false` to clear the meter and judge the capped 30 fps by eye.
 7. Rows: as on the Mac. **System view**: the breadcrumb's "Solar system". **Close to Jupiter**: tap Jupiter. **During a flight**: tap one body after another.
 8. **Taps:** tap 10 different bodies (planets, a moon, task asteroids, a label). Count how many select the right Waykeeper or task in the panel, and how many open the "what's here" list when they should not.
 9. Stop both terminals afterwards: `Ctrl-C`. The LAN opt-ins live only in those commands.
@@ -223,7 +223,7 @@ Steps:
 | iPhone Safari, LAN | mobile | 30 fps cap (no meter): feels smooth? | — | (30) | | |
 | iPhone Safari, LAN | mobile | taps select reliably? (n right / 10) | — | — | | |
 
-Also worth a line: the phone's warmth and battery after about 5 minutes with the scene open, capped versus `?fps=1` (P3-06 notes).
+Also worth a line: the phone's warmth and battery after about 5 minutes with the scene open, capped versus `?show_fps=true` (P3-06 notes).
 
 ### Then
 

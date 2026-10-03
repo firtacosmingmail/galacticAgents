@@ -134,7 +134,7 @@ function focusScene(event: PointerEvent<HTMLElement>) {
   if (!area.contains(document.activeElement)) area.focus({ preventScroll: true });
 }
 
-/** The development frame-rate readout (`?fps=1`), drawn over the canvas as ordinary DOM. */
+/** The development frame-rate readout (`?show_fps=true`), drawn over the canvas as ordinary DOM. */
 export function FpsMeter({
   sample,
   tier,

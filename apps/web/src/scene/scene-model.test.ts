@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QualityTier } from '@galactic/protocol';
-import { FPS_FLAG_KEY, FpsCounter, fpsMeterEnabled } from './fps.js';
+import { captureFpsFlag, FPS_FLAG_KEY, FpsCounter, fpsMeterEnabled, fpsParam } from './fps.js';
 import {
   BLOOM_SMOOTHING,
   BLOOM_THRESHOLD,
@@ -144,13 +144,50 @@ describe('fps meter', () => {
     expect(sample?.frameMs).toBeCloseTo(16.67, 1);
   });
 
-  it('is turned on by ?fps=1, remembered, and turned off by ?fps=0', () => {
+  it('reads show_fps as true/false (also 1/0, any case) and ignores anything else', () => {
+    expect(fpsParam('?show_fps=true')).toBe(true);
+    expect(fpsParam('?show_fps=TRUE')).toBe(true);
+    expect(fpsParam('?show_fps=1')).toBe(true);
+    expect(fpsParam('?show_fps=false')).toBe(false);
+    expect(fpsParam('?show_fps=0')).toBe(false);
+    expect(fpsParam('?show_fps=yes')).toBeUndefined();
+    expect(fpsParam('?fps=1')).toBeUndefined();
+    expect(fpsParam('')).toBeUndefined();
+  });
+
+  it('is turned on by ?show_fps=true, remembered, and turned off by ?show_fps=false', () => {
     expect(fpsMeterEnabled('')).toBe(false);
-    expect(fpsMeterEnabled('?fps=1')).toBe(true);
+    expect(fpsMeterEnabled('?show_fps=true')).toBe(true);
     expect(localStorage.getItem(FPS_FLAG_KEY)).toBe('1');
     expect(fpsMeterEnabled('')).toBe(true);
-    expect(fpsMeterEnabled('?fps=0')).toBe(false);
+    expect(fpsMeterEnabled('?show_fps=false')).toBe(false);
     expect(fpsMeterEnabled('')).toBe(false);
+  });
+
+  it('takes the flag at start-up (P3-11): stored, so a later read without the query sees it', () => {
+    captureFpsFlag('?other=1');
+    expect(fpsMeterEnabled('')).toBe(false);
+    captureFpsFlag('?x=2&show_fps=true');
+    expect(fpsMeterEnabled('')).toBe(true);
+    captureFpsFlag('?show_fps=false');
+    expect(fpsMeterEnabled('')).toBe(false);
+  });
+
+  it('without storage, the start-up flag still holds for the page', () => {
+    const throwing = () => {
+      throw new Error('no storage');
+    };
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(throwing);
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(throwing);
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(throwing);
+    try {
+      captureFpsFlag('?show_fps=true');
+      expect(fpsMeterEnabled('')).toBe(true);
+      captureFpsFlag('?show_fps=false');
+      expect(fpsMeterEnabled('')).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

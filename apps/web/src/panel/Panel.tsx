@@ -1,7 +1,7 @@
 import { useEffect, useMemo, type ReactNode } from 'react';
 import type { Agent, Id } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
-import { summaryOf, type WorldState } from '../state/reduce.js';
+import type { WorldState } from '../state/reduce.js';
 import { HARMONIZER, selectionKey, type Selection } from '../state/selection.js';
 import { createApi, type Api } from '../console/api.js';
 import { currentHarmonizer } from '../console/hierarchy/HierarchyConsole.js';
@@ -9,17 +9,16 @@ import { ApiContext, agentLabel, StatePill } from '../console/hierarchy/shared.j
 import { Conversation } from './chat/Conversation.js';
 import { CardLinksContext } from './cards/index.js';
 import { Inbox } from './Inbox.js';
-import { waitingForUserCount } from './inbox-model.js';
-import { Beacon, Navigation, NavLink } from './Navigation.js';
+import { Navigation, NavLink } from './Navigation.js';
 import { StewardPanelView } from './steward/StewardPanelView.js';
 import { ManagedAgentCards } from './AgentCards.js';
-import { NotificationsControl } from './notifications/NotificationsControl.js';
 import { FirstRunGate } from './settings/FirstRunGate.js';
 import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
 import { HistoryPage } from './history/HistoryPage.js';
 import { SceneArea } from '../scene/SceneArea.js';
-import { useScene, type SceneControl } from '../scene/visibility.js';
+import { useScene } from '../scene/visibility.js';
+import { INBOX_ID, TopBar } from './TopBar.js';
 import './panel.css';
 
 /**
@@ -72,87 +71,6 @@ export function Panel({
         </CardLinksContext.Provider>
       </SettingsProvider>
     </ApiContext.Provider>
-  );
-}
-
-function TopBar({ scene, onForget }: { scene: SceneControl; onForget?: () => void }) {
-  const status = useAppStore((s) => s.status);
-  const route = useAppStore((s) => s.route);
-  const selection = useAppStore((s) => s.selection);
-  const world = useAppStore((s) => s.world);
-  const summary = summaryOf(world);
-  // The inbox header's number too: questions the user holds and cards awaiting their decision.
-  const waiting = waitingForUserCount(world);
-  return (
-    <header className="pnl-top">
-      <NavLink to={{ route: 'panel', selection: HARMONIZER }} className="pnl-brand">
-        GalacticAgents
-      </NavLink>
-      <span className={`pnl-conn pnl-conn-${status}`} aria-label="connection">
-        {status.replace(/_/g, ' ')}
-      </span>
-      <span className="pnl-top-counts" aria-label="summary">
-        {waiting > 0 && <Beacon>{waiting} waiting for you</Beacon>}
-        <span>{summary.openQuestions} open questions</span>
-        <span>{summary.blockedItems} blocked</span>
-      </span>
-      <span className="pnl-spacer" />
-      <SceneToggle scene={scene} />
-      <NotificationsControl />
-      <NavLink
-        to={{ route: 'history', selection }}
-        current={route === 'history'}
-        className="pnl-history-link"
-      >
-        History
-      </NavLink>
-      <NavLink
-        to={{ route: 'settings', selection }}
-        current={route === 'settings'}
-        className="pnl-settings-link"
-      >
-        Settings
-      </NavLink>
-      <NavLink to={{ route: 'debug', selection: HARMONIZER }} className="pnl-debug-link">
-        Ops console
-      </NavLink>
-      {onForget && (
-        <button type="button" className="pnl-forget" onClick={onForget}>
-          Forget token
-        </button>
-      )}
-    </header>
-  );
-}
-
-/**
- * Shows or hides the solar-system scene (P3-01; hidden = list mode, SPEC §4.2). Where the scene
- * cannot run (no WebGL, it failed to start, its GPU context was lost) a note says so instead and
- * the panel stays in list mode; "Retry" mounts a fresh scene where retrying can help. The label
- * names the action, so the button is a plain button (no `aria-pressed`).
- */
-function SceneToggle({ scene }: { scene: SceneControl }) {
-  if (scene.failure)
-    return (
-      <span className="pnl-scene-off">
-        <span role="note" title={scene.failure}>
-          3D scene unavailable — list mode
-        </span>
-        {scene.retry && (
-          <button type="button" className="pnl-scene-toggle" onClick={scene.retry}>
-            Retry
-          </button>
-        )}
-      </span>
-    );
-  return (
-    <button
-      type="button"
-      className="pnl-scene-toggle"
-      onClick={() => scene.setVisible(!scene.visible)}
-    >
-      {scene.visible ? 'Hide scene' : 'Show scene'}
-    </button>
   );
 }
 
@@ -253,7 +171,7 @@ function SideColumn() {
         <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
         {supervisor ? <AgentLinks ids={[supervisor]} /> : <ManagedAgentCards supervisor={agent} />}
       </section>
-      <section className="pnl-inbox" aria-label="inbox">
+      <section className="pnl-inbox" aria-label="inbox" id={INBOX_ID} tabIndex={-1}>
         <Inbox />
       </section>
     </aside>

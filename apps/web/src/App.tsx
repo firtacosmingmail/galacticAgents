@@ -13,6 +13,7 @@ import { HierarchyConsole } from './console/hierarchy/HierarchyConsole.js';
 import { Panel } from './panel/Panel.js';
 import { NavLink } from './panel/Navigation.js';
 import { HARMONIZER } from './state/selection.js';
+import { captureFpsFlag } from './scene/fps.js';
 import './app.css';
 
 export function App() {
@@ -94,10 +95,12 @@ export function App() {
 /**
  * The route and the panel's selection follow the URL (P25-02): read on load (a deep link or a
  * reload restores them) and on back/forward; the store pushes history entries as the user
- * navigates.
+ * navigates. The scene's `?show_fps=` flag (P3-11) is taken from the loaded URL first, before any
+ * navigation can drop the query; the canonical rewrite itself keeps it.
  */
 function useLocationSync() {
   useLayoutEffect(() => {
+    captureFpsFlag();
     const sync = () => useAppStore.getState().syncFromLocation();
     sync();
     window.addEventListener('popstate', sync);

@@ -19,7 +19,7 @@ Branch `p3-02-bodies`, from `p3-wave2-bodies-belt-camera`. It has the wave-2 bra
 
 ### Why shadows are on (high tier only)
 
-Only `high` has `shadows: true`. The point-light shadow map is six cube-face depth passes over every caster, each frame; since the wave 2 review only the planets and the moons of real radius ≥ 1000 km cast (`castsShadow`, `SHADOW_MOON_MIN_KM`: 15 casters instead of 30, so 90 depth draws a frame instead of 180), and every body still receives; at the system view it shows the planets' night sides as solid. Its visible pay-off comes when zoomed in: Saturn's shadow on its rings, and moons eclipsed by their planet. Rings only receive. A transparent ring casting would throw a solid annulus, because the depth pass ignores alpha. The cost on the Mac should be checked with `?fps=1`, and P3-06/P3-08 can drop it.
+Only `high` has `shadows: true`. The point-light shadow map is six cube-face depth passes over every caster, each frame; since the wave 2 review only the planets and the moons of real radius ≥ 1000 km cast (`castsShadow`, `SHADOW_MOON_MIN_KM`: 15 casters instead of 30, so 90 depth draws a frame instead of 180), and every body still receives; at the system view it shows the planets' night sides as solid. Its visible pay-off comes when zoomed in: Saturn's shadow on its rings, and moons eclipsed by their planet. Rings only receive. A transparent ring casting would throw a solid annulus, because the depth pass ignores alpha. The cost on the Mac should be checked with `?show_fps=true`, and P3-06/P3-08 can drop it.
 
 ## Proposed SPEC / TECHNOLOGY text (recorded: SPEC decisions 63, 64 and TECHNOLOGY §2.1)
 
@@ -89,7 +89,7 @@ I used a throwaway page that seeds the store with the parsed catalogue and mount
 
 1. `pnpm dev` with the scene shown. Check that all 8 planets and the moons are identifiable: Saturn's and Uranus's rings, Uranus tipped over, Earth's blue and green with its Moon, Jupiter's four moons.
 2. Click **True scale** at the bottom-right. Read the note, then use the breadcrumb or `]` to fly to Earth, then toggle back. The camera should stay on the same body.
-3. `?fps=1` at **High** (shadows on): does it hold 60 fps? If not, shadows are the first thing to drop (set `shadows: false` in the tier table).
+3. `?show_fps=true` at **High** (shadows on): does it hold 60 fps? If not, shadows are the first thing to drop (set `shadows: false` in the tier table).
 4. macOS Reduce motion: the planets stop, none sits behind the Sun, and the fps meter (if on) is the only thing keeping the loop running.
 5. Taste: the procedural look (palettes, band contrast), orbit-line opacity, and whether the moon orbit lines are too busy at system scale.
 
