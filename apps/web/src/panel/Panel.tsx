@@ -17,6 +17,7 @@ import { NotificationsControl } from './notifications/NotificationsControl.js';
 import { FirstRunGate } from './settings/FirstRunGate.js';
 import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
+import { HistoryPage } from './history/HistoryPage.js';
 import './panel.css';
 
 /**
@@ -48,6 +49,9 @@ export function Panel({
             {route === 'settings' ? (
               // The settings page (P25-08), in the panel's frame.
               <SettingsPage token={token} />
+            ) : route === 'history' ? (
+              // The history view (P25-10), in the panel's frame.
+              <HistoryPage />
             ) : (
               // A fresh install walks through the first-run wizard first (P25-08).
               <FirstRunGate>
@@ -88,6 +92,13 @@ function TopBar({ onForget }: { onForget?: () => void }) {
       </span>
       <span className="pnl-spacer" />
       <NotificationsControl />
+      <NavLink
+        to={{ route: 'history', selection }}
+        current={route === 'history'}
+        className="pnl-history-link"
+      >
+        History
+      </NavLink>
       <NavLink
         to={{ route: 'settings', selection }}
         current={route === 'settings'}

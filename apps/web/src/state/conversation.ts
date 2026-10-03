@@ -159,10 +159,21 @@ export function questionOwner(
 }
 
 /**
+ * A project's clarification that reached the user — held by them now, or answered by them. It
+ * shows in the Harmonizer's thread as well as its project's (decision 55): the Harmonizer is the
+ * user's single contact, so what it passed on is visible there; it is the same card in both, so
+ * an answer in one resolves the other. Permission questions go to the user directly and stay in
+ * the inbox and the project's thread.
+ */
+function reachedUser(q: Question): boolean {
+  return q.kind === 'clarification' && (q.holder.type === 'user' || q.answeredBy?.type === 'user');
+}
+
+/**
  * The cards of a brain's thread: for a Waykeeper, its project's plan cards and promotion
  * requests (a successor on the same project owns them too); for the Harmonizer, every other card.
  * Questions go by project the same way (`questionOwner`): a project's questions to its Waykeeper,
- * the rest to the Harmonizer.
+ * the rest to the Harmonizer — which also shows a project's clarifications that reached the user.
  */
 export function threadCards(
   world: Pick<WorldState, 'agents' | 'tasks' | 'proposals' | 'questions'>,
@@ -186,7 +197,8 @@ export function threadCards(
     const mine =
       owner.role === 'harmonizer'
         ? agent.role === 'harmonizer'
-        : agent.role === 'waykeeper' && agent.projectId === owner.projectId;
+        : (agent.role === 'waykeeper' && agent.projectId === owner.projectId) ||
+          (agent.role === 'harmonizer' && reachedUser(q));
     if (mine) cards.push({ kind: 'question', id: q.id, at: q.createdAt, question: q });
   }
   return cards.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));

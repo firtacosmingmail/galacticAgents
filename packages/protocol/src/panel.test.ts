@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { EventEnvelope } from './events.js';
 import {
   ConversationQuery,
+  HistoryQuestionsQuery,
+  HistoryQuestionsResponse,
+  HistoryWorkQuery,
+  HistoryWorkResponse,
   NotificationsQuery,
   Settings,
   SettingsPatch,
@@ -206,5 +210,41 @@ describe('notificationOf (P25-01; SPEC §4.5)', () => {
     expect(
       notificationOf(env(15, { type: 'proposal.approved', proposalId: 'pr1' })),
     ).toBeUndefined();
+  });
+});
+
+describe('history query schemas (P25-10)', () => {
+  it('reads the work filters: kind, a comma list of history states, a trimmed search', () => {
+    expect(HistoryWorkQuery.parse({})).toEqual({ limit: 50 });
+    expect(
+      HistoryWorkQuery.parse({ q: '  parser ', kind: 'task', state: 'completed,archived' }),
+    ).toEqual({ q: 'parser', kind: 'task', state: ['completed', 'archived'], limit: 50 });
+    expect(HistoryWorkQuery.parse({ q: '   ' })).toEqual({ limit: 50 });
+    expect(HistoryWorkQuery.safeParse({ state: 'in_progress' }).success).toBe(false);
+    expect(HistoryWorkQuery.safeParse({ kind: 'agent' }).success).toBe(false);
+    expect(HistoryWorkQuery.safeParse({ q: 'x'.repeat(201) }).success).toBe(false);
+  });
+
+  it('reads the question filters: kind and status of a past question only', () => {
+    expect(HistoryQuestionsQuery.parse({ kind: 'permission', status: 'answered' })).toEqual({
+      kind: 'permission',
+      status: 'answered',
+      limit: 50,
+    });
+    expect(HistoryQuestionsQuery.safeParse({ status: 'open' }).success).toBe(false);
+  });
+
+  it('types an item by its kind', () => {
+    const parsed = HistoryQuestionsResponse.parse({
+      items: [{ question: question({ status: 'cancelled' }), reason: 'not needed', cursor: 'c' }],
+      hasMore: false,
+    });
+    expect(parsed.items[0]!.reason).toBe('not needed');
+    expect(
+      HistoryWorkResponse.safeParse({
+        items: [{ kind: 'task', item: { id: 'p1' }, cursor: 'c' }],
+        hasMore: false,
+      }).success,
+    ).toBe(false);
   });
 });

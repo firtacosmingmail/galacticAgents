@@ -1,7 +1,7 @@
 # Phase 2.5 — Minimal side panel
 
-**Current task:** P25-09 (wave 4, after wave 3 is merged into `phase-2.5`) · **Task status:** todo
-**Phase status:** in progress (8/9 done) — on branch `phase-2.5`
+**Current task:** — (phase complete) · **Task status:** —
+**Phase status:** done (2026-10-03) — 10/10; merged into `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -33,7 +33,7 @@ A daily-usable product before any 3D (SPEC decision 19): the spec's side panel i
 | 1 (parallel) | P25-01, P25-02 | Server endpoints and the app shell/selection model. |
 | 2 (parallel) | P25-03, P25-04, P25-05, P25-06 | Chat, managed agents, Steward view, inbox/cards — independent UI pieces on the shell. |
 | 3 (parallel) | P25-07, P25-08 | Notifications and settings/preflight. |
-| 4 | P25-09 | Dogfood week and fixes. |
+| 4 | P25-09, P25-10 | Dogfood week and fixes; the history view (added) alongside. |
 
 ## Tasks
 
@@ -78,10 +78,21 @@ A daily-usable product before any 3D (SPEC decision 19): the spec's side panel i
 - **Acceptance:** a fresh install walks through the wizard and lands in the panel; invalid settings are rejected with messages.
 
 ### P25-09 — Dogfood run and fixes
-- **Status:** todo · **Depends on:** P25-03 … P25-08 · **Parallel with:** —
+- **Status:** done (2026-10-03; Cosmin's run accepted — later friction is fixed in Phase 3) · **Depends on:** P25-03 … P25-08 · **Parallel with:** —
 - Use the panel for a real small project for a few days without opening `/debug`; log friction in `docs/tasks/notes/P25-09-dogfood.md`; fix the blocking items; feed spec changes back into SPEC.md.
 - **Acceptance:** exit criteria below met; notes committed.
+
+### P25-10 — History view (added 2026-10-03)
+- **Status:** done (2026-10-03) · **Depends on:** P25-01, P25-02 · **Parallel with:** P25-09
+- Found while preparing the dogfood run: SPEC §4.2 asks for "a history view of archived work and past questions", and the panel has only the cards' "show archived work" and the inbox's last ten supervisor answers. A `/history` page in the panel's frame: archived and finished projects and tasks (with reopen / unpin, and a link to their agents' transcripts), and past questions (answered, cancelled, withdrawn — who answered, the answer, when), searchable by text and paged over REST.
+- **Acceptance:** archived work can be found and reopened, and any past question with its answer can be found, from the panel alone.
 
 ## Exit criteria (from the plan)
 
 Everything in `SPEC.md` §4.2–4.3 that does not require the scene is doable from the panel; you can run a real project for a day without opening the ops console.
+
+## Exit check (2026-10-03)
+
+- **SPEC §4.2–4.3 from the panel:** chat with the Harmonizer and Waykeepers (P25-03), managed-agents cards with every control action (P25-04), the Steward view (P25-05), the question inbox and proposal / plan cards (P25-06), desktop notifications (P25-07), settings and first-run setup (P25-08), the history view (P25-10). Each has tests through `<App/>`, and the chat and the history have real-server round trips.
+- **A real project without the ops console:** Cosmin dogfooded the panel on a real project (`docs/tasks/notes/P25-09-dogfood.md`); the one friction point found (a project's questions not visible in the Harmonizer window) was fixed (decision 55 amended). Cosmin accepted the phase on 2026-10-03 and asked for it to be merged; anything found later is fixed in Phase 3.
+- Gates on `phase-2.5`: build, typecheck, lint, format:check green; protocol 64, server 842 (+1 skipped), web 199.
