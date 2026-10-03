@@ -21,6 +21,7 @@ import {
   type SurfaceLayers,
 } from './surface.js';
 import { TextureCache } from './texture-cache.js';
+import { EARTH_MASK_VERSION } from './earth-mask.js';
 
 /**
  * Wraps the procedural pixels of `surface.ts` in three.js textures (P3-02, P3-06).
@@ -63,8 +64,13 @@ function detailTexture(data: Uint8Array, width: number, height: number): DataTex
   return t;
 }
 
+/**
+ * A look's texture identity: everything the painter reads. A masked surface (Earth) includes the
+ * mask's version, so new mask data never reuses maps painted from the old one.
+ */
 export function surfaceKey(look: BodyLook): string {
-  return `${look.style}|${look.seed}|${look.palette.join(',')}|${look.polarCaps ? 1 : 0}`;
+  const base = `${look.style}|${look.seed}|${look.palette.join(',')}|${look.polarCaps ? 1 : 0}`;
+  return look.landMask ? `${base}|mask:${look.landMask}@${EARTH_MASK_VERSION}` : base;
 }
 
 export type BodyKind = 'planet' | 'moon';

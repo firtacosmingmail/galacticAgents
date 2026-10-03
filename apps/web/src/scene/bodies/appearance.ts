@@ -4,7 +4,8 @@
  * dresses them. A body with a name not in the table (a future catalogue entry) gets `DEFAULT_LOOK`.
  *
  * Surfaces are procedural (`surface.ts` paints them at runtime from `style` and `palette`): no
- * image assets, nothing to download or license.
+ * image assets. Earth alone also has real coastlines (`landMask`, P3-09): a small land/sea mask
+ * generated from public-domain Natural Earth data (`earth-mask.ts`).
  *
  * Sizes: `radius` is the readable-layout ("fake scale") radius in scene units, hand-tuned so the
  * giants read as giants without swallowing their moons; `radiusKm` and `distanceKm` are the real
@@ -36,6 +37,8 @@ export interface BodyLook {
   tiltDeg: number;
   /** Polar ice caps (Earth, Mars). */
   polarCaps?: boolean;
+  /** Real coastlines from a land/sea mask instead of noise continents (Earth, P3-09). */
+  landMask?: 'earth';
   rings?: RingLook;
   /** Moons: real mean distance from the planet, km (true scale). */
   distanceKm?: number;
@@ -67,6 +70,7 @@ export const PLANET_LOOKS: Readonly<Record<string, BodyLook>> = {
     radiusKm: 6371,
     tiltDeg: 23.44,
     polarCaps: true,
+    landMask: 'earth',
     seed: 13,
   },
   Mars: {
