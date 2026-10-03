@@ -11,6 +11,7 @@ import { useSettingsData } from './SettingsData.js';
 import {
   CAP_FIELDS,
   capsDraft,
+  changedCaps,
   DECISIONS,
   ENV_VARIABLES,
   isSpecTable,
@@ -51,7 +52,8 @@ export interface SectionSpec<D> {
   fromSettings: (settings: Settings) => D;
   /** A client-side check of the draft (the server re-checks everything). */
   validate: (draft: D) => string | undefined;
-  toPatch: (draft: D) => SettingsPatch;
+  /** The patch a draft sends; `saved` is what it started from (to send only what changed). */
+  toPatch: (draft: D, saved: Settings) => SettingsPatch;
   Editor: ComponentType<EditorProps<D>>;
 }
 
@@ -128,9 +130,9 @@ export function useSection<D>(spec: SectionSpec<D>): SectionState<D> {
     locked,
     restartPending: data.response?.restartRequired.includes(spec.field) ?? false,
     save: async () => {
-      if (!dirty || draft === undefined) return true;
+      if (!dirty || draft === undefined || settings === undefined) return true;
       if (clientError) return false;
-      return saveWith(spec.toPatch(draft));
+      return saveWith(spec.toPatch(draft, settings));
     },
     saveWith,
   };
@@ -336,10 +338,10 @@ function CapsEditor({ id, draft, setDraft, disabled }: EditorProps<CapsDraft>) {
                 id={`${id}-${f.key}`}
                 className="set-input set-input-num"
                 type="number"
-                inputMode="numeric"
+                inputMode={f.scale === 1 ? 'numeric' : 'decimal'}
                 min={f.min}
                 max={f.max}
-                step={1}
+                step={f.scale === 1 ? 1 : 'any'}
                 value={draft[f.key]}
                 disabled={disabled}
                 aria-invalid={error ? true : undefined}
@@ -443,7 +445,7 @@ export const CAPS: SectionSpec<CapsDraft> = {
     'Hard limits that keep agents from running away. New agents get the new per-agent caps; running agents keep theirs, and lowering a cap stops nobody.',
   fromSettings: (s) => capsDraft(s.caps),
   validate: (d) => (parseCaps(d).errors ? 'Fix the caps marked above.' : undefined),
-  toPatch: (d) => ({ caps: parseCaps(d).caps! }),
+  toPatch: (d, saved) => ({ caps: changedCaps(parseCaps(d, saved.caps).caps!, saved.caps) }),
   Editor: CapsEditor,
 };
 

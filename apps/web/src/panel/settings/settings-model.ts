@@ -165,25 +165,46 @@ export const CAP_FIELDS: readonly CapField[] = [
 
 export type CapsDraft = Record<keyof SettingsCaps, string>;
 
+/** A stored value in the form's unit: minutes may be fractional (90 000 ms is 1.5). */
+const formValue = (f: CapField, stored: number) =>
+  String(f.scale === 1 ? stored : Math.round((stored / f.scale) * 10_000) / 10_000);
+
 export function capsDraft(caps: SettingsCaps): CapsDraft {
-  return Object.fromEntries(
-    CAP_FIELDS.map((f) => [f.key, String(Math.round((caps[f.key] / f.scale) * 100) / 100)]),
-  ) as CapsDraft;
+  return Object.fromEntries(CAP_FIELDS.map((f) => [f.key, formValue(f, caps[f.key])])) as CapsDraft;
 }
 
-/** The caps a draft stands for, or the first problem found, per field. */
+/**
+ * The caps a draft stands for, or the problems found, per field. Minutes may be decimal; the
+ * stored value (`Math.round(minutes × 60 000)` ms) is checked against the protocol's bounds, so
+ * any value the server accepts (90 000 ms = 1.5 min) is accepted here. Given the saved caps
+ * (`base`), a field whose text was not touched keeps its stored value exactly.
+ */
 export function parseCaps(
   draft: CapsDraft,
+  base?: SettingsCaps,
 ): { caps: SettingsCaps; errors?: undefined } | { caps?: undefined; errors: Partial<CapsDraft> } {
   const errors: Partial<CapsDraft> = {};
   const caps: Partial<SettingsCaps> = {};
   for (const f of CAP_FIELDS) {
     const raw = draft[f.key].trim();
+    if (base && raw === formValue(f, base[f.key])) {
+      caps[f.key] = base[f.key];
+      continue;
+    }
     const n = Number(raw);
-    if (raw === '' || !Number.isInteger(n) || n < f.min || n > f.max) {
-      errors[f.key] = `Whole number from ${f.min} to ${f.max.toLocaleString('en')}.`;
+    const value = f.scale === 1 ? n : Math.round(n * f.scale);
+    const whole = f.scale === 1;
+    if (
+      raw === '' ||
+      !Number.isFinite(n) ||
+      (whole && !Number.isInteger(n)) ||
+      !SettingsCaps.shape[f.key].safeParse(value).success
+    ) {
+      errors[f.key] = whole
+        ? `Whole number from ${f.min} to ${f.max.toLocaleString('en')}.`
+        : `From ${f.min} to ${f.max.toLocaleString('en')} ${f.unit}.`;
     } else {
-      caps[f.key] = n * f.scale;
+      caps[f.key] = value;
     }
   }
   if (Object.keys(errors).length > 0) return { errors };
@@ -191,6 +212,13 @@ export function parseCaps(
   if (!checked.success)
     return { errors: { maxToolCalls: checked.error.issues[0]?.message ?? 'Invalid' } };
   return { caps: checked.data };
+}
+
+/** Only the caps that differ from the saved ones (the server merges a caps patch key by key). */
+export function changedCaps(caps: SettingsCaps, base: SettingsCaps): Partial<SettingsCaps> {
+  return Object.fromEntries(
+    CAP_FIELDS.filter((f) => caps[f.key] !== base[f.key]).map((f) => [f.key, caps[f.key]]),
+  ) as Partial<SettingsCaps>;
 }
 
 /**
