@@ -124,11 +124,12 @@ export const STATE_LOOK: Readonly<Record<AgentState, StateLook>> = {
     color: '#ff7a45',
     pulse: 'stutter',
     level: 1,
-    still: 1,
-    scale: 1,
+    // Dimmer and a little smaller than working when still: reduced motion has no hiccup.
+    still: 0.75,
+    scale: 0.9,
     orbitRate: 1,
     label: 'Stalled',
-    hint: 'orange, hiccups',
+    hint: 'orange, a little smaller, hiccups',
   },
   failed: {
     color: '#ff4d5a',
@@ -322,15 +323,26 @@ export function linearRgb(hex: string): readonly [number, number, number] {
 export function beamTint(
   spec: Pick<SatelliteSpec, 'role' | 'state'>,
 ): readonly [number, number, number] {
-  if (spec.state === 'working' || spec.state === 'starting') return BEAM.color;
-  const tint = satelliteTint(spec);
-  const key = `beam:${tint}`;
-  let out = LINEAR_CACHE.get(key);
-  if (!out) {
-    const rgb = linearRgb(tint);
-    const k = luminance(BEAM.color) / Math.max(1e-6, luminance(rgb));
-    out = [rgb[0] * k, rgb[1] * k, rgb[2] * k] as const;
-    LINEAR_CACHE.set(key, out);
-  }
-  return out;
+  return BEAM_TINTS[spec.role][spec.state];
 }
+
+/** `beamTint` per role and state, computed once (read every frame: no string key, no allocation). */
+const BEAM_TINTS: Readonly<
+  Record<AgentRole, Readonly<Record<AgentState, readonly [number, number, number]>>>
+> = (() => {
+  const byRole = {} as Record<AgentRole, Record<AgentState, readonly [number, number, number]>>;
+  for (const role of Object.keys(SATELLITE_LOOK) as AgentRole[]) {
+    const byState = {} as Record<AgentState, readonly [number, number, number]>;
+    for (const state of Object.keys(STATE_LOOK) as AgentState[]) {
+      if (state === 'working' || state === 'starting') {
+        byState[state] = BEAM.color;
+        continue;
+      }
+      const rgb = linearRgb(satelliteTint({ role, state }));
+      const k = luminance(BEAM.color) / Math.max(1e-6, luminance(rgb));
+      byState[state] = [rgb[0] * k, rgb[1] * k, rgb[2] * k] as const;
+    }
+    byRole[role] = byState;
+  }
+  return byRole;
+})();

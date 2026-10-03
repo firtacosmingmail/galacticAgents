@@ -2,7 +2,7 @@ import type { Id } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { revealQuestion } from '../../panel/inbox-reveal.js';
 import { usePickingStore } from '../picking/store.js';
-import { beaconFor } from './beacon-model.js';
+import { beaconFor, beaconHq } from './beacon-model.js';
 
 /**
  * Clicking a beacon (P4-05): opens its first question (the inbox's order: permissions first,
@@ -15,7 +15,8 @@ import { beaconFor } from './beacon-model.js';
  */
 export function activateBeacon(bodyId: Id): Id | undefined {
   const store = useAppStore.getState();
-  const questionId = beaconFor(store.world, bodyId)?.questionIds[0];
+  const world = { ...store.world, hqBodyId: beaconHq(store.world) };
+  const questionId = beaconFor(world, bodyId)?.questionIds[0];
   usePickingStore.getState().closePopover();
   if (!questionId) return undefined;
   if (store.route !== 'panel') store.navigate({ route: 'panel', selection: store.selection });

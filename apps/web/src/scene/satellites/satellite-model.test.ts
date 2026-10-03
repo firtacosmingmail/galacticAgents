@@ -6,6 +6,7 @@ import {
   hasLanded,
   isLive,
   isSuperseded,
+  isWorkOver,
   SCENE_SATELLITES,
   sameSatellites,
   satelliteList,
@@ -168,22 +169,60 @@ describe('the list rule (showsSatellite)', () => {
     ]);
   });
 
-  it('keepFailed: a failed agent goes once a live agent of its role takes over its work', () => {
+  it('keepFailed: a failed agent goes once a newer agent of its role is given its work', () => {
     const w = world({ 'a-steward-1': 'failed' });
     expect(showsSatellite(w, 'a-steward-1', { keepFailed: true })).toBe(true);
     // The Waykeeper respawns a Steward on the same task: the failed satellite gives way.
-    const respawned: Agent = { ...steward, id: 'a-steward-9' };
+    const respawned: Agent = { ...steward, id: 'a-steward-9', createdAt: '2026-10-03T12:00:00Z' };
     w.agents[respawned.id] = respawned;
     w.statuses[respawned.id] = status(respawned.id, 'starting');
     expect(isSuperseded(w, 'a-steward-1')).toBe(true);
-    expect(satelliteList(w, { keepFailed: true }).map((s) => s.agentId)).toEqual(['a-steward-9']);
-    // A replacement that failed too supersedes nothing; the Harmonizer is never superseded.
+    expect(satelliteList(w, SCENE_SATELLITES).map((s) => s.agentId)).toEqual(['a-steward-9']);
+    // The replacement finishes: the old failure does not come back (respawn → finish).
+    w.statuses[respawned.id] = status(respawned.id, 'finished');
+    expect(isSuperseded(w, 'a-steward-1')).toBe(true);
+    expect(satelliteList(w, { keepFailed: true })).toEqual([]);
+    // The replacement fails too: only the newest failure shows.
     w.statuses[respawned.id] = status(respawned.id, 'failed');
-    expect(isSuperseded(w, 'a-steward-1')).toBe(false);
+    expect(satelliteList(w, { keepFailed: true }).map((s) => s.agentId)).toEqual(['a-steward-9']);
+    // An older Steward on the task supersedes nothing; the Harmonizer is never superseded.
+    expect(isSuperseded(w, 'a-steward-9')).toBe(false);
     expect(isSuperseded(w, fx.harmonizer.id)).toBe(false);
-    // Another task's live Steward does not count.
+    // Another task's Steward does not count.
     const w2 = world({ 'a-steward-1': 'failed', 'a-steward-2': 'working' });
     expect(isSuperseded(w2, 'a-steward-1')).toBe(false);
+  });
+
+  it('keepFailed: a failed agent goes when its work is over (closed, cancelled, moved)', () => {
+    const shown = (w: WorldState, id: string) => showsSatellite(w, id, { keepFailed: true });
+    // A failed Steward's own task is `failed` (derived): the satellite stays.
+    const w = world({ 'a-steward-1': 'failed', 'a-waykeeper-1': 'failed' });
+    w.tasks[fx.task.id] = { ...fx.task, state: 'failed' };
+    expect(isWorkOver(w, 'a-steward-1')).toBe(false);
+    expect(shown(w, 'a-steward-1')).toBe(true);
+    expect(shown(w, 'a-waykeeper-1')).toBe(true);
+    // The task is closed, archived or moved away: gone.
+    for (const state of ['completed', 'archived', 'moved'] as const) {
+      w.tasks[fx.task.id] = { ...fx.task, state };
+      expect(shown(w, 'a-steward-1')).toBe(false);
+    }
+    // The project is cancelled (its tasks and itself `failed`): its Steward and Waykeeper go.
+    w.tasks[fx.task.id] = { ...fx.task, state: 'failed' };
+    w.projects[fx.project.id] = { ...fx.project, state: 'failed' };
+    expect(shown(w, 'a-steward-1')).toBe(false);
+    expect(shown(w, 'a-waykeeper-1')).toBe(false);
+    // The project is closed (completed) or archived: same.
+    for (const state of ['completed', 'archived'] as const) {
+      w.projects[fx.project.id] = { ...fx.project, state };
+      expect(shown(w, 'a-steward-1')).toBe(false);
+      expect(shown(w, 'a-waykeeper-1')).toBe(false);
+    }
+    // A cancelled standalone task: its Steward was stopped, not failed — no satellite either.
+    const w3 = world({ 'a-steward-2': 'stopped' });
+    w3.tasks[fx.asteroidTask.id] = { ...fx.asteroidTask, state: 'failed' };
+    expect(satelliteList(w3, SCENE_SATELLITES).some((s) => s.agentId === 'a-steward-2')).toBe(
+      false,
+    );
   });
 
   it('the scene keeps failed agents and draws the HQ station on Earth (SCENE_SATELLITES)', () => {

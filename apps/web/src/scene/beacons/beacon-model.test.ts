@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { Event } from '@galactic/protocol';
 import { applyEvent, type WorldState } from '../../state/reduce.js';
-import { beaconCard, beaconFor, beaconList, questionBody, sameBeacons } from './beacon-model.js';
+import {
+  beaconCard,
+  beaconFor,
+  beaconHq,
+  beaconList,
+  questionBody,
+  sameBeacons,
+} from './beacon-model.js';
 import { question, worldWith } from './fixtures.js';
 
 const T = (n: number) => `2026-10-03T10:0${n}:00.000Z`;
@@ -17,6 +24,12 @@ describe('beaconList: which body', () => {
   it("puts a Waykeeper's on its project's body and the Harmonizer's on Earth", () => {
     const w = worldWith(question('q-w', 'a-wk-old'), question('q-h', 'a-h'));
     expect(beaconList(w).map((b) => b.bodyId)).toEqual(['b-earth', 'b-jupiter']);
+  });
+
+  it("puts the Harmonizer's on headquarters as given, without reading the status records", () => {
+    const w = worldWith(question('q-h', 'a-h'));
+    expect(beaconHq(w)).toBe('b-earth');
+    expect(beaconList({ ...w, hqBodyId: 'b-mars' }).map((b) => b.bodyId)).toEqual(['b-mars']);
   });
 
   it('follows a task that moved: the beacon is on its new body', () => {

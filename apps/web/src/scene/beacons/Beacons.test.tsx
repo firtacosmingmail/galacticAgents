@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, render } from '@testing-library/react';
-import { StrictMode } from 'react';
+import { Profiler, StrictMode } from 'react';
 import { Object3D, PerspectiveCamera, Quaternion, Vector3 } from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../state/store.js';
@@ -36,7 +36,7 @@ vi.mock('@react-three/fiber', async () => {
   };
 });
 
-const { Beacons } = await import('./Beacons.js');
+const { Beacons, BeaconShapes } = await import('./Beacons.js');
 
 type Dressed = HTMLElement & {
   position: Vector3;
@@ -196,6 +196,93 @@ describe('Beacons', () => {
     expect(container.querySelector('[name="beacon-glyph-clarification"]')).not.toBeNull();
     expect(beaconFrames().map((f) => f.bodyId)).toEqual(['b-ast-7']);
     expect(r3f.invalidations).toBeGreaterThan(before);
+  });
+
+  it('a status flush neither republishes nor re-renders the beacons', () => {
+    let commits = 0;
+    render(
+      <Profiler id="beacons" onRender={() => void commits++}>
+        <Beacons />
+      </Profiler>,
+    );
+    const published = beaconFrames();
+    const [before, invalidations] = [commits, r3f.invalidations];
+    for (let i = 0; i < 5; i++) {
+      act(() => {
+        const world = useAppStore.getState().world;
+        const id = Object.keys(world.statuses)[0] ?? 'a-st';
+        useAppStore.setState({
+          world: {
+            ...world,
+            statuses: { ...world.statuses, [id]: { ...world.statuses[id]!, lastEventAt: `t${i}` } },
+          },
+        });
+      });
+    }
+    expect(commits).toBe(before);
+    expect(beaconFrames()).toBe(published);
+    expect(r3f.invalidations).toBe(invalidations);
+    // A world change that draws the same beacons (an unrelated question answered) neither.
+    act(() => {
+      const world = useAppStore.getState().world;
+      useAppStore.setState({
+        world: {
+          ...world,
+          questions: {
+            ...world.questions,
+            'q-3': { ...world.questions['q-3']!, status: 'answered' },
+          },
+        },
+      });
+    });
+    expect(beaconFrames()).toBe(published);
+  });
+
+  it('a beacon keeps its placement when the list is rebuilt (the hover stays)', () => {
+    render(<Beacons />);
+    anchor('b-jupiter', [0, 0, 0]);
+    frame();
+    const jupiter = () => beaconFrames().find((f) => f.bodyId === 'b-jupiter')!;
+    const { center, perPx } = jupiter();
+    expect(jupiter().visible).toBe(true);
+    // Another body's beacon goes out: the frames are rebuilt, Jupiter's is still placed.
+    act(() => {
+      const world = useAppStore.getState().world;
+      useAppStore.setState({
+        world: {
+          ...world,
+          questions: {
+            ...world.questions,
+            'q-2': { ...world.questions['q-2']!, status: 'answered' },
+          },
+        },
+      });
+    });
+    expect(beaconFrames().map((f) => f.bodyId)).toEqual(['b-jupiter']);
+    expect(jupiter()).toMatchObject({ visible: true, center, perPx });
+  });
+
+  it('hides a beacon whose glyph is off screen', () => {
+    render(<Beacons />);
+    anchor('b-jupiter', [40, 0, 0]); // far right of a camera at z = 10 looking down −z
+    frame();
+    const jupiter = beaconFrames().find((f) => f.bodyId === 'b-jupiter');
+    expect(jupiter?.visible).toBe(false);
+    const group = document.querySelector<Dressed & { visible: boolean }>(
+      'group[name="beacon:b-jupiter"]',
+    );
+    expect(group?.visible).toBe(false);
+  });
+
+  it('every beacon shares one plane and one ring geometry', () => {
+    const made = BeaconShapes.count;
+    const { container } = render(<Beacons />);
+    expect(container.querySelectorAll('group')).toHaveLength(2);
+    expect(BeaconShapes.count - made).toBe(1);
+    // No per-beacon geometry element.
+    expect(container.querySelectorAll('planeGeometry, ringGeometry, planegeometry')).toHaveLength(
+      0,
+    );
   });
 
   it('publishes none once unmounted', () => {

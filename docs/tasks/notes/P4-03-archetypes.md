@@ -45,12 +45,13 @@ Only a **working Steward** gets an archetype. Waykeepers scan, and the Harmonize
 | tool | read tool | `Read`, `Grep`, `Glob`, `LS`, `WebFetch`, `WebSearch`, `NotebookRead`, `BashOutput` | gathering |
 | tool | edit tool | `Edit`, `MultiEdit`, `Write`, `NotebookEdit` (an **edit**: the file is counted) | transporting |
 | tool | neutral tool | `TodoWrite`, `Task`, `Agent`, `ExitPlanMode`, `KillShell`, `SlashCommand`, `Skill` | none |
-| tool | mcp read | `mcp__*get*`, `*list*`, `*search*`, `*fetch*`, `*query*`… | gathering |
-| tool | mcp write | `mcp__*create*`, `*update*`, `*send*`, `*post*`, `*push*`, `*comment*`… | transporting |
+| tool | mcp read (on the tool after the last `__`, not the server's name) | `mcp__<server>__*get*`, `*list*`, `*search*`, `*fetch*`, `*query*`… | gathering |
+| tool | mcp write (likewise) | `mcp__<server>__*create*`, `*update*`, `*send*`, `*post*`, `*push*`, `*comment*`, `*report*`, `*notify*`, `*submit*`… | transporting |
 | command | commit / push / PR | `git commit\|push\|merge\|tag`, `gh pr create\|merge`, `gh release` | transporting |
 | command | look around (anchored at the start, after an optional `cd x &&`) | `git status\|diff\|log\|show\|blame`, `ls`, `cat`, `head`, `tail`, `grep`, `rg`, `find`, `tree`, `wc`, `jq`, `curl` | gathering |
 | command | build / test / lint | `test`, `vitest`, `jest`, `pytest`, `build`, `tsc`, `typecheck`, `lint`, `eslint`, `prettier`, `make`, `gradle`, `mvn`, `cargo build\|test`, `go test`, `xcodebuild`, `install`, `ci`… | building |
 | command | (other) | `sleep 5`, `node scripts/seed.mjs` | none |
+| command | (compound) | each part of `a && b`, `a \|\| b`, `a; b` (not pipes) is classified alone; the strongest wins — transporting, then building, then gathering: `ls src && pnpm build` is building | — |
 | text | waiting | `Permission: …`, `Question: …` | none |
 | text | many edits | "Editing 5 files", "Updating several files", "changed 12 files" | building |
 | text | running builds / tests | "Running (the) (full) tests\|builds\|lint\|checks\|gates\|suite", "testing", "building", "compiling", "type-checking", "installing", "refactoring", "implementing", "scaffolding", "migrating" | building |
@@ -64,10 +65,10 @@ Only a **working Steward** gets an archetype. Waykeepers scan, and the Harmonize
 - **Escalation.** Edits to **3 distinct files within 90 s** turn an edit's `transporting` into `building` ("editing many files"). The same file again counts once.
 - **Hysteresis.**
   - A new archetype must stay the latest for **0.4 s** (confirm).
-  - The archetype on screen stays at least **2 s** (dwell) before another replaces it.
-  - Dropping to none waits **3 s** (release), so a `TodoWrite` between two edits keeps the shuttle.
+  - The archetype on screen stays at least **1 s** (dwell) before another replaces it.
+  - Dropping to none waits **1.5 s** (release), so a `TodoWrite` between two edits keeps the shuttle.
   - An agent that stops `working` drops it at once.
-- **Timing.** A stable change after the dwell lands in 0.4 s. The acceptance ("switching activity in the harness changes the archetype within a second") holds whenever the previous archetype has been on screen for 1.6 s or more. Right after a switch, the next one waits out the remainder of the 2 s dwell.
+- **Timing.** A stable change after the dwell lands in 0.4 s. The acceptance ("switching activity in the harness changes the archetype within a second") always holds: a change that stays steady shows within max(0.4 s confirm, 1 s dwell) = 1 s, and within 0.4 s once the previous archetype has been on screen 1 s (wave-2 review: the first cut's 2 s dwell could break it right after a switch; the release went from 3 s to 1.5 s with it).
 
 ## The visuals
 
@@ -94,7 +95,7 @@ There are 98 new tests:
   - rule names and edited files;
   - `deriveArchetype` per role and state;
   - the hold:
-    - a stable switch in under 1 s after the dwell (the acceptance);
+    - a stable switch in under 1 s after the dwell (the acceptance), and within 1 s whatever the previous archetype's time on screen (0.4 s once it has shown 1 s);
     - no flicker under 20 s of activities alternating every 0.2 s;
     - confirm plus dwell timing;
     - the release delay across an unclear step;

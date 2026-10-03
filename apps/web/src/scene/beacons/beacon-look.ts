@@ -54,15 +54,45 @@ export interface BeaconLayout {
 
 /**
  * Where the parts go, in pixels above the body's centre on screen: `radiusPx` is the body's radius
- * on screen, `bodyY` its centre's distance from the top of the viewport (CSS pixels).
+ * on screen, `bodyY` its centre's distance from the top of the viewport (CSS pixels). Written into
+ * `out` (the renderer passes one scratch object: no allocation per frame).
  */
-export function beaconLayout(radiusPx: number, bodyY: number): BeaconLayout {
+export function beaconLayout(
+  radiusPx: number,
+  bodyY: number,
+  out: BeaconLayout = { glyphY: 0, pillarFrom: 0, pillarTo: 0 },
+): BeaconLayout {
   let glyphY = radiusPx + BEACON.liftPx;
   // Close up the body fills the screen: keep the glyph inside the viewport's top edge.
   if (bodyY - glyphY < BEACON.topMarginPx) glyphY = Math.max(0, bodyY - BEACON.topMarginPx);
   const pillarTo = glyphY - BEACON.glyphPx / 2;
-  const pillarFrom = Math.min(radiusPx, pillarTo);
-  return { glyphY, pillarFrom, pillarTo };
+  out.glyphY = glyphY;
+  out.pillarTo = pillarTo;
+  out.pillarFrom = Math.min(radiusPx, pillarTo);
+  return out;
+}
+
+/** The halo's largest radius, in pixels (the pulse's peak scale times the glyph's half size). */
+export const HALO_MAX_PX = (BEACON.glyphPx / 2) * 2;
+
+/**
+ * Whether a beacon's glyph (with its halo at its widest) is on screen: `ndcX`/`ndcY` are its body
+ * centre's normalised device coordinates, `glyphY` the glyph's lift above it in pixels (screen
+ * up), `width`/`height` the viewport in CSS pixels. The pillar runs from the body up to the glyph,
+ * and the glyph is held inside the top edge while the body is on screen, so a glyph off screen
+ * means the whole beacon is: it is not drawn (three draw calls saved) nor clickable.
+ */
+export function glyphInView(
+  ndcX: number,
+  ndcY: number,
+  glyphY: number,
+  width: number,
+  height: number,
+): boolean {
+  const x = ((ndcX + 1) / 2) * width;
+  const y = ((1 - ndcY) / 2) * height - glyphY;
+  const r = HALO_MAX_PX;
+  return x + r >= 0 && x - r <= width && y + r >= 0 && y - r <= height;
 }
 
 export interface BeaconPulse {
@@ -73,20 +103,28 @@ export interface BeaconPulse {
 }
 
 /** The steady look (reduced motion): a visible halo, a full pillar, no change over time. */
-export const STEADY_PULSE: BeaconPulse = { haloScale: 1.35, haloOpacity: 0.45, pillarOpacity: 0.8 };
+export const STEADY_PULSE: Readonly<BeaconPulse> = {
+  haloScale: 1.35,
+  haloOpacity: 0.45,
+  pillarOpacity: 0.8,
+};
 
 /**
  * The pulse at time `t` (seconds, the shared motion clock): the halo grows from the glyph's edge
- * outwards and fades, the pillar breathes a little. Under reduced motion: `STEADY_PULSE`.
+ * outwards (to `HALO_MAX_PX`) and fades, the pillar breathes a little. Under reduced motion:
+ * `STEADY_PULSE`. Written into `out` otherwise (the renderer's scratch object).
  */
-export function beaconPulse(t: number, reducedMotion: boolean): BeaconPulse {
+export function beaconPulse(
+  t: number,
+  reducedMotion: boolean,
+  out: BeaconPulse = { haloScale: 0, haloOpacity: 0, pillarOpacity: 0 },
+): Readonly<BeaconPulse> {
   if (reducedMotion) return STEADY_PULSE;
   const phase = (((t / BEACON.pulseSeconds) % 1) + 1) % 1;
-  return {
-    haloScale: 1.1 + 0.9 * phase,
-    haloOpacity: 0.7 * (1 - phase) * (1 - phase),
-    pillarOpacity: 0.65 + 0.25 * Math.cos(phase * 2 * Math.PI),
-  };
+  out.haloScale = 1.1 + 0.9 * phase;
+  out.haloOpacity = 0.7 * (1 - phase) * (1 - phase);
+  out.pillarOpacity = 0.65 + 0.25 * Math.cos(phase * 2 * Math.PI);
+  return out;
 }
 
 /** What a glyph shows: its shape and symbol by kind, and the badge's text when several wait. */

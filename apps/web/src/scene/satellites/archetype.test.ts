@@ -55,6 +55,9 @@ const TABLE: readonly [string | undefined, ActivityArchetype | undefined][] = [
   ['Bash: gh pr create --fill', 'transporting'],
   ['mcp__github__create_pull_request', 'transporting'],
   ['mcp__slack__send_message', 'transporting'],
+  ['mcp__x__report_status', 'transporting'], // classified on the tool, after the last `__`
+  ['mcp__reader__create_page', 'transporting'], // not "read" from the server's name
+  ['mcp__writer__get_doc', 'gathering'],
   ['Committing the changes', 'transporting'],
   ['Opening a PR for review', 'transporting'],
   ['Writing the summary for the Waykeeper', 'transporting'],
@@ -71,6 +74,10 @@ const TABLE: readonly [string | undefined, ActivityArchetype | undefined][] = [
   ['Bash: make -j8', 'building'],
   ['Bash: ./gradlew assembleDebug', 'building'],
   ['Bash: pytest -q tests/', 'building'],
+  ['Bash: ls src && pnpm build', 'building'], // the strongest part of a compound command wins
+  ['Bash: git status; pnpm test', 'building'],
+  ['Bash: pnpm test && git commit -am wip', 'transporting'],
+  ['Bash: grep -rn foo src | wc -l', 'gathering'], // a pipe is one part
   ['Running tests', 'building'], // the fake adapter's scenario
   ['Running the full gates', 'building'],
   ['Refactoring auth module, 3 files edited, running tests', 'building'], // TECHNOLOGY §4
@@ -183,6 +190,26 @@ describe('ArchetypeHold', () => {
     expect((firstAt(second, 'building') ?? Infinity) - switchAt).toBeLessThan(1);
   });
 
+  it('within a second whenever the previous archetype has shown ≥ 1 s — and at most 1 s anyway', () => {
+    expect(Math.max(HOLD.confirm, HOLD.minDwell)).toBeLessThanOrEqual(1);
+    const lines = ['Read: a.ts', 'Bash: pnpm test', 'Edit: b.ts', 'Bash: git push'];
+    const shows = ['gathering', 'building', 'transporting', 'transporting'] as const;
+    // The previous archetype has been on screen for `shown` seconds when the new one turns steady.
+    for (const shown of [0, 0.3, 0.6, 1, 1.5, 4]) {
+      for (let i = 1; i < 3; i++) {
+        const h = new Harness();
+        h.set(lines[i - 1]);
+        const appeared = firstAt(h.run(1), shows[i - 1]) ?? Infinity;
+        h.run(Math.max(0, appeared + shown - h.now));
+        const steady = h.now;
+        h.set(lines[i]);
+        const delay = (firstAt(h.run(2, 0.01), shows[i]) ?? Infinity) - steady;
+        expect(delay).toBeLessThanOrEqual(1 + 0.011);
+        if (shown >= HOLD.minDwell) expect(delay).toBeLessThanOrEqual(HOLD.confirm + 0.011);
+      }
+    }
+  });
+
   it('never flickers: activities alternating every 0.2 s change what shows at most every dwell', () => {
     const h = new Harness();
     const lines = ['Read: a.ts', 'Bash: pnpm test', 'Edit: b.ts', 'TodoWrite'];
@@ -201,11 +228,11 @@ describe('ArchetypeHold', () => {
     h.run(0.5);
     expect(h.shown).toBe('gathering');
     h.set('Bash: pnpm test');
-    h.run(0.6); // confirmed after 0.4 s, but gathering has been shown only 0.6 + 0.1 s
+    h.run(0.45); // confirmed after 0.4 s, but gathering has been shown only 0.45 + 0.1 s
     expect(h.shown).toBe('gathering');
     const history = h.run(2);
     const at = firstAt(history, 'building') ?? Infinity;
-    // Gathering appeared at ≈ 0.4 s; building waits for its 2 s dwell.
+    // Gathering appeared at ≈ 0.4 s; building waits for its 1 s dwell.
     expect(at).toBeGreaterThanOrEqual(0.4 + HOLD.minDwell - 0.05);
     expect(at).toBeLessThanOrEqual(0.4 + HOLD.minDwell + 0.1);
   });

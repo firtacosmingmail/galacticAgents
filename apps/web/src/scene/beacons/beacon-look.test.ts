@@ -3,8 +3,10 @@ import {
   BEACON,
   beaconLayout,
   beaconPulse,
+  glyphInView,
   glyphKey,
   glyphSpec,
+  HALO_MAX_PX,
   STEADY_PULSE,
 } from './beacon-look.js';
 import { drawGlyph, drawPillar } from './glyph-draw.js';
@@ -158,5 +160,39 @@ describe('beaconUnder (picking a beacon)', () => {
     expect(beaconUnder(ray(0, 0), [frame('b-a', 0, 0, false)])).toBeUndefined();
     const behind: BeaconFrame = { bodyId: 'b-z', visible: true, center: [0, 0, 20], perPx: 1 };
     expect(beaconUnder(ray(0, 0), [behind])).toBeUndefined();
+  });
+});
+
+describe('glyphInView (off-screen beacons are not drawn)', () => {
+  const [w, h] = [800, 600];
+  it('is true for a glyph on screen, and for one whose halo still reaches in', () => {
+    expect(glyphInView(0, 0, 80, w, h)).toBe(true);
+    // The body just right of the edge: its glyph's halo still pokes in.
+    const justOut = 1 + ((HALO_MAX_PX - 1) / w) * 2;
+    expect(glyphInView(justOut, 0, 80, w, h)).toBe(true);
+  });
+
+  it('is false once the glyph and its widest halo are past any edge', () => {
+    const past = 1 + ((HALO_MAX_PX + 1) / w) * 2;
+    expect(glyphInView(past, 0, 80, w, h)).toBe(false);
+    expect(glyphInView(-past, 0, 80, w, h)).toBe(false);
+    // Above the top: the glyph is lifted 80 px over a body already at the top edge.
+    expect(glyphInView(0, 1, 80, w, h)).toBe(false);
+    // Below the bottom: the body far below, its glyph too.
+    expect(glyphInView(0, -1.5, 80, w, h)).toBe(false);
+    // A body just below the bottom edge whose glyph is lifted into view is drawn.
+    expect(glyphInView(0, -1.05, 80, w, h)).toBe(true);
+  });
+});
+
+describe('no allocation per frame', () => {
+  it('beaconLayout and beaconPulse write into the scratch object they are given', () => {
+    const layout = { glyphY: 0, pillarFrom: 0, pillarTo: 0 };
+    expect(beaconLayout(3, 300, layout)).toBe(layout);
+    expect(layout.glyphY).toBe(3 + BEACON.liftPx);
+    const pulse = { haloScale: 0, haloOpacity: 0, pillarOpacity: 0 };
+    expect(beaconPulse(0.3, false, pulse)).toBe(pulse);
+    expect(pulse.haloScale).toBeGreaterThan(1);
+    expect(beaconPulse(0.3, true, pulse)).toBe(STEADY_PULSE);
   });
 });

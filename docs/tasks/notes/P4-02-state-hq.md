@@ -9,7 +9,7 @@ Branch `p4-02-state` (from `p4-wave2-state-activity-beacons`), 2026-10-03.
 | `scene/satellites/look.ts` | `STATE_LOOK`: one entry per `AgentState` (all 10). Each entry has a tint, a pulse, a level, a reduced-motion level (`still`), a size multiplier, an orbit rate, and the legend's words. `satelliteTint`, `satelliteBrightness(spec, view, now, reducedMotion)`, `satelliteScale`, `satelliteOrbitRate`, `beamTint`, `pulseAt`, `linearRgb`. The Waykeeper's colour moved from gold `#ffd27a` to warm white `#ffe6b0`, so it no longer looks like the amber. The Harmonizer's look grew to 0.42 R (at least 7 px). | no |
 | `scene/satellites/director.ts` | Each frame takes the state's tint, brightness, size multiplier and beam tint (`SatelliteFrame.beamTint`, new). Each satellite now has its own **orbit clock** that runs at its state's rate. On a state change the clock first advances to "now" at the old rate, so pausing or resuming never makes the satellite jump. The clock stops while the satellite lands, which keeps the angle it came down at (the same behaviour as before). | no |
 | `scene/satellites/satellite-mesh.ts` | `beamColor` uses `f.beamTint`. | yes |
-| `scene/satellites/satellite-model.ts` | `SCENE_SATELLITES = { keepFailed: true, harmonizer: true }` (P4-04 adds `keepLanded` here). `isSuperseded`: a failed agent's satellite goes once a **live** agent of the same role works on the same task (Steward) or project (Waykeeper). The predicate change is one line in `showsSatellite`; the archetype path is untouched. | no |
+| `scene/satellites/satellite-model.ts` | `SCENE_SATELLITES = { keepFailed: true, harmonizer: true }` (P4-04 adds `keepLanded` here). `isSuperseded`: a failed agent's satellite goes once a **newer** agent (by `createdAt`, then id) of the same role has the same task (Steward) or project (Waykeeper), live or not, so the old failure never comes back when the replacement ends (wave-2 review: the first cut asked for a *live* replacement, and a respawned Steward that finished brought the failed one's red satellite back). `isWorkOver`: it also goes when its work is over — the task `completed`, `archived` or `moved`, or the project (the task's, or the Waykeeper's) `completed`, `archived`, `moved` or `failed` (a project only fails by a cancel; a task's own `failed` is what its failed Steward made it, so it keeps the satellite). The predicate change is in `showsSatellite`; the archetype path is untouched. | no |
 | `scene/satellites/Satellites.tsx` | Uses `SCENE_SATELLITES`. Keeps the HQ out of the ordinary renderers (`ordinarySatellites`; `writeInstanced` skips the harmonizer frame and packs the instances). Writes the HQ in the same frame loop, right after the director (`writeHq`). | yes |
 | `scene/satellites/hq/hq-model.ts` | `HQ.ringSpin` (0.22 rad/s idle, 1.6 rad/s thinking), `hqThinking`, `hqRingSpeed` (0 under reduced motion, paused or failed), `RingSpin` (an integrated angle, so a speed change never jumps), `hqFrame`, `ordinarySatellites`. | no |
 | `scene/satellites/hq/hq-mesh.ts` | The procedural station. The core is a hub, a top module, a dish facing Earth (−y, the same orientation as a satellite), a truss with two blue wings, and a beacon. The ring is a torus with six light and dark segments plus two spokes, so you can see it turn. | yes |
@@ -44,14 +44,14 @@ When idle it is grey and steady, with the ring turning slowly. When it waits for
 | **waiting_for_input** | **amber `#ffb547`** (the panel's `--pnl-beacon`, the labels' beacon) | **blink**, 1.6 s, 0.4 ↔ 1.9 (blooms when on), synchronised across satellites | **×1.35** | ×1 | 1.7 |
 | idle | grey `#8e97ad` | steady 0.7 | ×1 | ×1 | 0.7 |
 | paused | violet `#a58fff` | steady 0.85 | ×1 | **0** (holds still) | 0.85 |
-| stalled | orange `#ff7a45` | stutter: a double hiccup every 2.4 s | ×1 | ×1 | 1.0 |
+| stalled | orange `#ff7a45` | stutter: a double hiccup every 2.4 s | ×0.9 | ×1 | 0.75 |
 | failed | red `#ff4d5a` | flicker: level 0.6 with seeded drop-outs (14 % of 0.12 s cells) | **×0.8** | **0.3** (drifts) | 0.5 |
 | finished (P4-04, landed) | the role's colour | steady 0.6 | ×1 | ×1 | 0.6 |
 | stopped / interrupted | grey `#6f7891` | steady 0.5 | ×1 | ×1 | 0.5 (not shown today) |
 
 **Colour-blind safety.**
 - Every state that is shown differs from every other state in pulse, size, orbit or level, not only in colour (tested).
-- Under reduced motion, waiting, failed, paused and idle still differ by size or brightness (tested).
+- Under reduced motion, working, waiting, stalled, failed, paused and idle all differ by size or brightness, and every problem state (waiting, stalled, failed, paused) differs from working by at least 0.2 in still brightness or 0.1 in size (tested; wave-2 review: stalled was 1.0 at ×1 against working's 1.1 at ×1, so it read as working under reduced motion).
 - No state or role other than waiting uses the amber (tested).
 
 **Beams.** A beam is cyan while the agent works, which is the only time it scans. If the state changes during a scan, the fading beam takes the new state's colour at the cyan's luminance, so the beam turns amber as the agent starts waiting. `MAX_BODY_LUMINANCE` still holds.
@@ -123,7 +123,7 @@ There are 33 new tests: 24 in 3 new files and 9 added to existing ones (web 745 
 **Reading it.**
 - The state look costs **no draw calls**: mixed states equal all-working, because colour is per instance.
 - The +4 at the system view are the two instanced meshes plus the HQ's core and ring (its beam adds one while it scans). At Jupiter the HQ is culled out of view: +2.
-- About 20k of the extra triangles are not the HQ (it is ≈ 0.9k). They are the instanced **beams**: the 12-ring cone has 480 triangles, and the instanced beam mesh draws every instance, zero-scaled or not (40 × 480 ≈ 19k). That cost came from P4-01's review fix, whose P4-01 measurement of +2.6k predates the 12-ring cone. It is not P4-02's cost. A follow-up could set the instanced beams' `count` to only the scanning ones, or reorder them.
+- About 20k of the extra triangles are not the HQ (it is ≈ 0.9k). They are the instanced **beams**: the 12-ring cone has 480 triangles, and the instanced beam mesh draws every instance, zero-scaled or not (40 × 480 ≈ 19k). That cost came from P4-01's review fix, whose P4-01 measurement of +2.6k predates the 12-ring cone. It is not P4-02's cost. Fixed after the wave-2 review: `writeInstanced` writes beam instances only for visible, scanning satellites (`beams.count = m`) and hides the beam mesh when none scans, so between scans the beams cost no triangles and no draw call.
 - The machine was loaded (load average 3.5–5.4) during the run.
 
 **Bundle.** three.js is still out of the panel's first chunk; the legend imports only `look.ts` and `machine.ts`, which import no three.js.

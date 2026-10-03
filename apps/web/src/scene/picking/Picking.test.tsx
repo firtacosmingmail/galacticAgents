@@ -671,7 +671,6 @@ describe('question beacons as pick targets (P4-05)', () => {
     expect(usePickingStore.getState().hover).toEqual({
       kind: 'beacon',
       bodyId: 'b-jupiter',
-      others: 0,
     });
     // Off the glyph: the moon under the pointer again.
     pointer('pointerMove', 400, 200);

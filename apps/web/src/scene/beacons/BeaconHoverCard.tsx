@@ -1,7 +1,7 @@
 import { memo, useLayoutEffect, useMemo, useRef } from 'react';
 import { useAppStore } from '../../state/store.js';
 import { hoverAt, onHoverMove, type Point } from '../picking/store.js';
-import { beaconCard } from './beacon-model.js';
+import { beaconCard, beaconHq } from './beacon-model.js';
 import './beacons.css';
 
 /**
@@ -14,8 +14,17 @@ import './beacons.css';
  */
 export const BeaconHoverCard = memo(function BeaconHoverCard({ bodyId }: { bodyId: string }) {
   const ref = useRef<HTMLDivElement>(null);
-  const world = useAppStore((s) => s.world);
-  const card = useMemo(() => beaconCard(world, bodyId), [world, bodyId]);
+  // What the card reads, not the whole world: a status flush does not re-render it.
+  const questions = useAppStore((s) => s.world.questions);
+  const agents = useAppStore((s) => s.world.agents);
+  const tasks = useAppStore((s) => s.world.tasks);
+  const projects = useAppStore((s) => s.world.projects);
+  const bodies = useAppStore((s) => s.world.bodies);
+  const hqBodyId = useAppStore((s) => beaconHq(s.world));
+  const card = useMemo(
+    () => beaconCard({ questions, agents, tasks, projects, bodies, hqBodyId }, bodyId),
+    [questions, agents, tasks, projects, bodies, hqBodyId, bodyId],
+  );
 
   useLayoutEffect(() => {
     const place = (at: Point) => {

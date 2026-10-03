@@ -80,14 +80,15 @@ export const TOOL_RULES: readonly Rule[] = [
   },
   {
     name: 'mcp write',
-    test: /^mcp__.*(create|update|write|post|send|push|publish|comment|upload|save|edit)/i,
+    test: /^mcp__.*(create|update|write|post|send|push|publish|comment|upload|save|edit|report|notify|submit)/i,
     archetype: 'transporting',
   },
 ];
 
 /**
- * Shell commands (`Bash: <command>`); the first match wins. Looking around is anchored at the
- * start of the command, so `cat test/x.ts` is gathering but `cd app && pnpm test` building.
+ * Shell commands (`Bash: <command>`), on each part of a compound command (`classifyCommand`); the
+ * first match wins for a part. Looking around is anchored at the start of the part, so
+ * `cat test/x.ts` is gathering but `cd app && pnpm test` building.
  */
 export const COMMAND_RULES: readonly Rule[] = [
   {
@@ -166,6 +167,42 @@ function matchText(text: string): ActivitySignal {
 }
 
 /**
+ * An MCP tool (`mcp__<server>__<tool>`) as the rules see it: `mcp__<tool>`, the segment after the
+ * last `__` — the server's name says nothing about what the call does (`mcp__x__report_status` is
+ * a report, `mcp__reader__create_page` a write).
+ */
+function mcpSubject(name: string): string {
+  if (!/^mcp__/i.test(name)) return name;
+  return `mcp__${name.slice(name.lastIndexOf('__') + 2)}`;
+}
+
+/** Which archetype wins in a compound command: producing output, then building, then reading. */
+const COMMAND_RANK: Record<ActivityArchetype, number> = {
+  transporting: 3,
+  building: 2,
+  gathering: 1,
+};
+
+/**
+ * A shell command: each part of a compound command (`&&`, `||`, `;` — not pipes) is classified on
+ * its own by `COMMAND_RULES`, and the strongest part wins: `ls src && pnpm build` is building,
+ * `cd app && grep x src` gathering, `git add -A && git commit` transporting.
+ */
+function classifyCommand(command: string): ActivitySignal {
+  let best: Rule | undefined;
+  for (const part of command.split(/\s*(?:&&|\|\||;)\s*/)) {
+    if (!part) continue;
+    const rule = COMMAND_RULES.find((r) => r.test.test(part));
+    if (!rule?.archetype) continue;
+    if (!best?.archetype || COMMAND_RANK[rule.archetype] > COMMAND_RANK[best.archetype])
+      best = rule;
+  }
+  return best
+    ? { archetype: best.archetype, rule: best.name }
+    : { archetype: undefined, rule: 'other command' };
+}
+
+/**
  * What an activity line says about the archetype. Structured first — a tool name before `": "`
  * (`describeTool`'s format), a shell command after `Bash: ` — then keywords in free text.
  */
@@ -176,13 +213,10 @@ export function classifyActivity(activity: string | undefined): ActivitySignal {
   if (tool) {
     const name = tool[1] ?? '';
     const detail = (tool[2] ?? '').trim();
-    if (/^(bash|shell|terminal|run_command|exec)$/i.test(name)) {
-      for (const rule of COMMAND_RULES)
-        if (rule.test.test(detail)) return { archetype: rule.archetype, rule: rule.name };
-      return { archetype: undefined, rule: 'other command' };
-    }
+    if (/^(bash|shell|terminal|run_command|exec)$/i.test(name)) return classifyCommand(detail);
+    const subject = mcpSubject(name);
     for (const rule of TOOL_RULES) {
-      if (!rule.test.test(name)) continue;
+      if (!rule.test.test(subject)) continue;
       return {
         archetype: rule.archetype,
         rule: rule.name,
@@ -215,10 +249,14 @@ export function deriveArchetype(
 export const HOLD = {
   /** A new archetype must stay the latest this long before it shows. */
   confirm: 0.4,
-  /** A shown archetype stays at least this long before another replaces it. */
-  minDwell: 2,
+  /**
+   * A shown archetype stays at least this long before another replaces it. With `confirm` it
+   * bounds the delay: a new activity that stays steady shows within `max(confirm, minDwell)` = 1 s
+   * of becoming steady, and within `confirm` once the previous one has been on screen 1 s.
+   */
+  minDwell: 1,
   /** No archetype (an unclear activity) must last this long before the satellite drops it. */
-  release: 3,
+  release: 1.5,
 } as const;
 
 /** Distinct files edited within `EDIT_WINDOW` seconds that make it "editing many files". */
