@@ -1,7 +1,7 @@
 # Phase 2.5 — Minimal side panel
 
-**Current task:** P25-09 (wave 4, after wave 3 is merged into `phase-2.5`) · **Task status:** todo
-**Phase status:** in progress (8/9 done) — on branch `phase-2.5`
+**Current task:** P25-09, P25-10 (wave 4, branch `p25-wave4-dogfood`) · **Task status:** in progress
+**Phase status:** in progress (8/10 done) — on branch `phase-2.5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -33,7 +33,7 @@ A daily-usable product before any 3D (SPEC decision 19): the spec's side panel i
 | 1 (parallel) | P25-01, P25-02 | Server endpoints and the app shell/selection model. |
 | 2 (parallel) | P25-03, P25-04, P25-05, P25-06 | Chat, managed agents, Steward view, inbox/cards — independent UI pieces on the shell. |
 | 3 (parallel) | P25-07, P25-08 | Notifications and settings/preflight. |
-| 4 | P25-09 | Dogfood week and fixes. |
+| 4 | P25-09, P25-10 | Dogfood week and fixes; the history view (added) alongside. |
 
 ## Tasks
 
@@ -78,9 +78,14 @@ A daily-usable product before any 3D (SPEC decision 19): the spec's side panel i
 - **Acceptance:** a fresh install walks through the wizard and lands in the panel; invalid settings are rejected with messages.
 
 ### P25-09 — Dogfood run and fixes
-- **Status:** todo · **Depends on:** P25-03 … P25-08 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P25-03 … P25-08 · **Parallel with:** —
 - Use the panel for a real small project for a few days without opening `/debug`; log friction in `docs/tasks/notes/P25-09-dogfood.md`; fix the blocking items; feed spec changes back into SPEC.md.
 - **Acceptance:** exit criteria below met; notes committed.
+
+### P25-10 — History view (added 2026-10-03)
+- **Status:** in progress · **Depends on:** P25-01, P25-02 · **Parallel with:** P25-09
+- Found while preparing the dogfood run: SPEC §4.2 asks for "a history view of archived work and past questions", and the panel has only the cards' "show archived work" and the inbox's last ten supervisor answers. A `/history` page in the panel's frame: archived and finished projects and tasks (with reopen / unpin, and a link to their agents' transcripts), and past questions (answered, cancelled, withdrawn — who answered, the answer, when), searchable by text and paged over REST.
+- **Acceptance:** archived work can be found and reopened, and any past question with its answer can be found, from the panel alone.
 
 ## Exit criteria (from the plan)
 
