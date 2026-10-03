@@ -10,7 +10,8 @@
   inset: 0;
   overflow: hidden;
   pointer-events: none;
-  z-index: 20;
+  /* Over the canvas, under the scene chrome and picking's overlay (stacking order: scene.css). */
+  z-index: var(--scene-z-labels);
 }
 .scene-label {
   position: absolute;

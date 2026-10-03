@@ -1,5 +1,20 @@
 /* The solar-system scene's slot in the panel (P3-01). */
+/*
+ * Stacking inside the scene area, bottom to top (every layer below is a positioned child of
+ * `.pnl-scene`, which isolates them from the rest of the panel):
+ *   1. the canvas (z-index auto);
+ *   2. the domain labels (P3-07, --scene-z-labels) — paint-only, they take no pointer events;
+ *   3. the scene chrome: fps meter, camera breadcrumb, scale toggle (--scene-z-chrome) — a label
+ *      sliding under them never covers them;
+ *   4. picking's hover label (--scene-z-hover) and popover (--scene-z-popover), over everything.
+ * `stacking.test.ts` checks the order.
+ */
 .pnl-scene {
+  --scene-z-labels: 10;
+  --scene-z-chrome: 20;
+  --scene-z-hover: 30;
+  --scene-z-popover: 40;
+  isolation: isolate;
   grid-area: scene;
   position: relative;
   min-width: 0;
@@ -30,6 +45,7 @@
     Menlo,
     monospace;
   pointer-events: none;
+  z-index: var(--scene-z-chrome);
 }
 .pnl-scene:focus-visible {
   outline: 2px solid #5b8cff;
@@ -45,6 +61,7 @@
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.6);
   font-size: 13px;
+  z-index: var(--scene-z-chrome);
 }
 .pnl-scene-crumbs ol {
   display: flex;
