@@ -1,8 +1,11 @@
 import { useState } from 'react';
 
-/** The token as shown by default: its last four characters only. */
+/**
+ * The token as shown by default: its last four characters only — or nothing of it when it is
+ * shorter than 12 characters (four would then give away too much of it).
+ */
 export function maskToken(token: string): string {
-  return `${'•'.repeat(12)}${token.slice(-4)}`;
+  return `${'•'.repeat(12)}${token.length < 12 ? '' : token.slice(-4)}`;
 }
 
 /**

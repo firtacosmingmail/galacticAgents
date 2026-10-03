@@ -134,6 +134,14 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow();
   });
 
+  it('reads a hand-edited first-run marker leniently (P25-08)', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef', setupCompletedAt: 'yesterday' }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.setupCompletedAt).toBe('yesterday');
+  });
+
   it('enables the dev routes only with GALACTIC_DEV (P0-16)', () => {
     expect(loadConfig({ GALACTIC_HOME: home }).config.dev).toBe(false);
     expect(loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '1' }).config.dev).toBe(true);

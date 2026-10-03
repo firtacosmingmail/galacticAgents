@@ -595,6 +595,26 @@ describe('settings (P25-01; SPEC §4.6)', () => {
     const reloaded = loadConfig({ GALACTIC_HOME: config.dataDir, GALACTIC_TOKEN: TEST_TOKEN });
     expect(reloaded.config.setupCompletedAt).toBe(done.setupCompletedAt);
   });
+
+  it('tells each client what it may change, as the patch decides it (P25-08, decision 51)', async () => {
+    const remote = { origin: 'https://mymac.tail1234.ts.net' };
+    const { t } = await settingsApp();
+    const writable = async (headers: Record<string, string> = {}) =>
+      SettingsResponse.parse((await get(t, '/api/settings', headers)).body).writable;
+    expect(await writable()).toBe('all');
+    expect(await writable(remote)).toBe('limited');
+    // A patch reply says the same.
+    const tier = SettingsResponse.parse((await patch(t, { qualityTier: 'balanced' }, remote)).body);
+    expect(tier.writable).toBe('limited');
+    const local = SettingsResponse.parse((await patch(t, { qualityTier: 'high' })).body);
+    expect(local.writable).toBe('all');
+
+    // With autoApproveRemote a remote client may write everything, the marker included.
+    const open = await settingsApp({ autoApproveRemote: true });
+    const remoteOpen = SettingsResponse.parse((await get(open.t, '/api/settings', remote)).body);
+    expect(remoteOpen.writable).toBe('all');
+    expect((await patch(open.t, { setupCompleted: true }, remote)).status).toBe(200);
+  });
 });
 
 describe('GET /api/preflight (P25-01)', () => {

@@ -203,6 +203,13 @@ export const SettingsResponse = z.object({
    * through the first-run wizard before showing the panel.
    */
   setupCompletedAt: Timestamp.optional(),
+  /**
+   * What the requesting client may change (P25-08, decision 51), decided from the request's
+   * origin as the patch decides it: `all` for a local request (or any request when
+   * `autoApproveRemote`), `limited` for a remote or unknown-origin one (the quality tier and a
+   * tighter default policy only — not the first-run marker). Absent (an older server): `all`.
+   */
+  writable: z.enum(['all', 'limited']).optional(),
 });
 export type SettingsResponse = z.infer<typeof SettingsResponse>;
 

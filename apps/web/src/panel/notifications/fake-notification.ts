@@ -22,6 +22,7 @@ export class FakeNotification {
   }
 
   onclick: (() => void) | null = null;
+  onclose: (() => void) | null = null;
   closed = false;
 
   constructor(
@@ -33,6 +34,7 @@ export class FakeNotification {
 
   close(): void {
     this.closed = true;
+    this.onclose?.();
   }
 
   get tag(): string | undefined {
