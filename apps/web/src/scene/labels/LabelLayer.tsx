@@ -51,18 +51,20 @@ const classes = (label: BodyLabel) =>
 
 export function SceneLabel({ label }: { label: BodyLabel }) {
   const ref = useRef<HTMLDivElement>(null);
-  const { bodyId } = label;
+  const { bodyId, title, stateText, moon, partOf, priority, selected } = label;
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     return registerLabel({ bodyId, el, priority: 0, w: 0, h: 0 });
   }, [bodyId]);
-  // Re-measured when the content changes (not on every render: offsetWidth forces a layout).
+  // Re-measured only when what it shows changes — not on every world change (`label` is a new
+  // object each time): offsetWidth forces a layout. `selected` changes the border, `priority`
+  // only the registry entry.
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    updateLabel(bodyId, { priority: label.priority, w: el.offsetWidth, h: el.offsetHeight });
-  }, [bodyId, label]);
+    updateLabel(bodyId, { priority, w: el.offsetWidth, h: el.offsetHeight });
+  }, [bodyId, title, stateText, moon, partOf, priority, selected]);
 
   const onClick = (event: MouseEvent<HTMLDivElement>) => {
     const area = event.currentTarget.offsetParent?.getBoundingClientRect();

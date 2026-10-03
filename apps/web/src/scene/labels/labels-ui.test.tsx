@@ -163,6 +163,43 @@ describe('LabelLayer (content from the store)', () => {
     expect(selected()).toBe('waykeeper:a-wk-old');
   });
 
+  it('re-measures a label only when what it shows changes, not on every world change', () => {
+    render(<LabelLayer />);
+    const reads: string[] = [];
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      reads.push(this.dataset['body'] ?? '');
+      return 0;
+    });
+    // Every label is rebuilt, but none shows anything new (a body's meta changed): none measured.
+    act(() => {
+      const world = useAppStore.getState().world;
+      const jupiter = world.bodies['b-jupiter']!;
+      useAppStore.setState({
+        world: {
+          ...world,
+          bodies: { ...world.bodies, 'b-jupiter': { ...jupiter, meta: { note: 'x' } } },
+        },
+      });
+    });
+    expect(reads).toEqual([]);
+    // Jupiter's project changes state: only Jupiter's label is measured again.
+    act(() => {
+      const world = useAppStore.getState().world;
+      useAppStore.setState({
+        world: {
+          ...world,
+          projects: {
+            ...world.projects,
+            'p-big': { ...world.projects['p-big']!, state: 'paused' },
+          },
+        },
+      });
+    });
+    expect(reads).toEqual(['b-jupiter']);
+  });
+
   it('an unassigned body loses its label', () => {
     render(<LabelLayer />);
     act(() => {
