@@ -1,6 +1,6 @@
 # Phase 3 — Solar system scene
 
-**Current task:** P3-05, P3-06 (wave 3, after wave 2 is merged into `phase-3`) · **Task status:** todo
+**Current task:** P3-05, P3-06 (wave 3, branch `p3-wave3-picking-lod`) · **Task status:** in progress
 **Phase status:** in progress (4/8 done) — on branch `phase-3`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -62,12 +62,12 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 - **Acceptance:** flying to any body and back works from any camera state.
 
 ### P3-05 — Picking, hover and selection
-- **Status:** todo · **Depends on:** P3-02, P3-03, P3-04 · **Parallel with:** P3-06
+- **Status:** in progress · **Depends on:** P3-02, P3-03, P3-04 · **Parallel with:** P3-06
 - Raycast picking with `three-mesh-bvh` for dense scenes; hover highlight; selection outline (postprocessing); "what's here" popover listing all bodies under the pointer (corner case 24); click mapping into the shared selection store (planet/moon → project, asteroid → task).
 - **Acceptance:** selecting a body in the scene selects the right Waykeeper/task in the panel and vice versa.
 
 ### P3-06 — LOD and quality setting
-- **Status:** todo · **Depends on:** P3-02, P3-03 · **Parallel with:** P3-05
+- **Status:** in progress · **Depends on:** P3-02, P3-03 · **Parallel with:** P3-05
 - LOD tiers per body (low-poly at system scale, textured with normal/specular when zoomed); quality setting toggles effects, pixel ratio, belt density; mobile tier defined for the phone.
 - **Acceptance:** switching tiers at runtime works; mobile tier ≥30 fps on the phone over LAN.
 
