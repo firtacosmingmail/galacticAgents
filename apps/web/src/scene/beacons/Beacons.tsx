@@ -77,16 +77,13 @@ export function Beacons() {
   // One live frame per beacon, published for picking; rebuilt when the set changes, carrying each
   // surviving beacon's last placement over (picking and the hover keep it until the next frame).
   const previous = useRef<readonly BeaconFrame[]>([]);
-  const frames = useMemo(() => {
-    const next = carryFrames(previous.current, list);
-    previous.current = next;
-    return next;
-  }, [list]);
   useEffect(() => {
+    const frames = carryFrames(previous.current, list);
+    previous.current = frames;
     publishBeacons(frames);
     invalidate();
     return () => publishBeacons([]);
-  }, [frames, invalidate]);
+  }, [list, invalidate]);
   useEffect(() => onAnchorsChanged(() => invalidate()), [invalidate]);
   useEffect(() => invalidate(), [reducedMotion, invalidate]);
 
@@ -124,12 +121,17 @@ export function useBeaconList(): BeaconSpec[] {
   const projects = useAppStore((s) => s.world.projects);
   const bodies = useAppStore((s) => s.world.bodies);
   const hqBodyId = useAppStore((s) => beaconHq(s.world));
-  const kept = useRef<BeaconSpec[]>([]);
-  return useMemo(() => {
-    const next = beaconList({ questions, agents, tasks, projects, bodies, hqBodyId });
-    if (!sameBeacons(kept.current, next)) kept.current = next;
-    return kept.current;
-  }, [questions, agents, tasks, projects, bodies, hqBodyId]);
+  const next = useMemo(
+    () => beaconList({ questions, agents, tasks, projects, bodies, hqBodyId }),
+    [questions, agents, tasks, projects, bodies, hqBodyId],
+  );
+  // The previous list while it draws the same (state from the previous render, React's pattern).
+  const [kept, setKept] = useState(next);
+  if (kept !== next && !sameBeacons(kept, next)) {
+    setKept(next);
+    return next;
+  }
+  return kept;
 }
 
 /** The frames of a new beacon list: a beacon still there keeps its last placement. */
