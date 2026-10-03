@@ -16,11 +16,15 @@
   --pnl-beacon-ink: #1d1300;
   --pnl-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   color-scheme: dark;
-  min-height: 100vh;
+  /* exactly the viewport (P4-10): the page never scrolls */
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   /* the page reaches under the iPhone's notch and home bar (viewport-fit=cover, P3-12): keep the
-     content inside the safe area; the top bar pads for the top inset itself */
+     content inside the safe area (the docked conversation's minimised bar sits above the home
+     bar); the top bar pads for the top inset itself */
   box-sizing: border-box;
   padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   background: var(--pnl-bg);
@@ -303,19 +307,63 @@
   color: var(--pnl-muted);
 }
 
-/* the three columns */
+/* The shell is exactly the viewport (P4-10): the top bar, then the body; the page itself never
+   scrolls. Each column scrolls on its own; the settings, history and first-run pages scroll in
+   the body. No grid row has a fixed length that could push the shell past the viewport. */
+/* Each scroll container is the containing block of what it holds: an absolutely positioned
+   descendant (a visually hidden label) scrolls and clips with its column, instead of stretching
+   the page from its static position far down a long column. */
+.pnl,
+.pnl-body,
+.pnl-nav,
+.pnl-side,
+.pnl-stack,
+.pnl-dock-body {
+  position: relative;
+}
+.pnl-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* three columns: the navigation, the centre (scene + docked conversation), the side column */
 .pnl-grid {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(260px, 360px);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'nav centre side';
+}
+.pnl-grid > .pnl-nav {
+  grid-area: nav;
+}
+.pnl-grid > .pnl-side {
+  grid-area: side;
+}
+.pnl-centre {
+  grid-area: centre;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   min-height: 0;
+}
+.pnl-centre > .pnl-scene {
+  flex: 1 1 0;
 }
 .pnl-nav,
 .pnl-side {
+  box-sizing: border-box;
   background: var(--pnl-surface);
   padding: 12px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   min-width: 0;
+  min-height: 0;
 }
 .pnl-nav {
   border-right: 1px solid var(--pnl-line);
@@ -323,116 +371,146 @@
 .pnl-side {
   border-left: 1px solid var(--pnl-line);
 }
-.pnl-main {
-  padding: 16px 20px;
-  min-width: 0;
-  overflow-y: auto;
+/* with the scene: a narrower navigation, the side column a little wider than in list mode */
+.pnl-grid.pnl-grid-scene {
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(300px, 360px);
 }
-@media (max-width: 1100px) {
-  .pnl-grid {
-    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
-  }
-  .pnl-side {
-    grid-column: 1 / -1;
-    border-left: 0;
-    border-top: 1px solid var(--pnl-line);
-  }
+/* managed agents hidden (P4-09): only the inbox is left in the side column, which narrows */
+.pnl-grid.pnl-grid-no-agents {
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(240px, 320px);
 }
-@media (max-width: 720px) {
-  .pnl-grid {
-    grid-template-columns: minmax(0, 1fr);
+.pnl-grid.pnl-grid-scene.pnl-grid-no-agents {
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(280px, 340px);
+}
+@media (min-width: 1700px) {
+  .pnl-grid.pnl-grid-scene {
+    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(340px, 420px);
   }
-  .pnl-nav {
-    border-right: 0;
-    border-bottom: 1px solid var(--pnl-line);
-    max-height: 40vh;
-  }
-  .pnl-main {
-    padding: 12px;
+  .pnl-grid.pnl-grid-scene.pnl-grid-no-agents {
+    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(300px, 380px);
   }
 }
 
-/* with the solar-system scene (P3-01): the scene in the centre, the conversation and the side
-   column beside it; the page no longer grows, each column scrolls on its own */
-.pnl.pnl-with-scene {
-  height: 100vh;
-  height: 100dvh;
+/* the docked main area (P4-10): under the scene, splitting the centre with it; in list mode, the
+   whole centre. A handle on its top edge sets its height; minimised, only its bar is left. */
+.pnl-dock {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--pnl-bg);
 }
-.pnl-grid.pnl-grid-scene {
-  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(340px, 420px);
-  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
-  grid-template-areas:
-    'nav scene main'
-    'nav scene side';
-}
-.pnl-grid-scene > .pnl-nav {
-  grid-area: nav;
-}
-.pnl-grid-scene > .pnl-main {
-  grid-area: main;
-}
-.pnl-grid-scene > .pnl-side {
-  grid-area: side;
+.pnl-dock.is-collapsible {
   border-top: 1px solid var(--pnl-line);
 }
-@media (min-width: 1700px) {
-  .pnl-grid.pnl-grid-scene {
-    grid-template-columns:
-      minmax(180px, 220px) minmax(0, 1fr) minmax(360px, 440px)
-      minmax(260px, 320px);
-    grid-template-rows: minmax(0, 1fr);
-    grid-template-areas: 'nav scene main side';
-  }
-  .pnl-grid-scene > .pnl-side {
-    border-top: 0;
-  }
+.pnl-dock.is-collapsible.is-open {
+  flex: none;
+  height: var(--pnl-dock-size, 45%);
 }
-@media (max-width: 1100px) {
-  .pnl.pnl-with-scene {
-    height: auto;
-    min-height: 100vh;
-  }
-  .pnl-grid.pnl-grid-scene {
+.pnl-dock.is-minimised {
+  flex: none;
+}
+.pnl-dock-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 20px 12px;
+}
+.pnl-dock-body[hidden] {
+  display: none;
+}
+.pnl-dock-body > .pnl-chat {
+  flex: 1 1 0;
+}
+.pnl-dock-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 10px;
+  cursor: row-resize;
+  touch-action: none;
+}
+.pnl-dock-handle::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 40px;
+  height: 4px;
+  margin-left: -20px;
+  border-radius: 2px;
+  background: var(--pnl-line);
+}
+.pnl-dock-handle:hover::before,
+.pnl-dock-handle:focus-visible::before {
+  background: var(--pnl-here);
+}
+.pnl .pnl-dock-handle:focus-visible {
+  outline-offset: -2px;
+}
+
+/* stacked (≤1100 px, STACKED_LAYOUT_QUERY): the scene, the navigation and the side column scroll
+   together; the dock sits under them (minimised: its bar, at the bottom of the viewport, above the
+   safe area the shell pads for) */
+.pnl-grid.pnl-grid-stacked {
+  display: flex;
+  flex-direction: column;
+}
+.pnl-stack {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+  grid-template-areas:
+    'scene scene'
+    'nav side';
+  align-content: start;
+}
+.pnl-stack > .pnl-scene {
+  grid-area: scene;
+  height: 40vh;
+  height: 40dvh;
+  min-height: 200px;
+}
+/* in the stack they keep their content's height (the stack scrolls, not they) */
+.pnl-stack > .pnl-nav {
+  grid-area: nav;
+  overflow: visible;
+  min-height: auto;
+}
+.pnl-stack > .pnl-side {
+  grid-area: side;
+  overflow: visible;
+  min-height: auto;
+  border-left: 0;
+}
+@media (max-width: 760px) {
+  .pnl-stack {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 45vh auto auto auto;
-    grid-template-areas: 'scene' 'nav' 'main' 'side';
+    grid-template-areas: 'scene' 'nav' 'side';
   }
-  .pnl-grid-scene > .pnl-nav {
+  .pnl-stack > .pnl-nav {
     border-right: 0;
     border-bottom: 1px solid var(--pnl-line);
   }
-  .pnl-grid-scene > .pnl-side {
-    border-left: 0;
+  .pnl-dock-body {
+    padding: 0 12px 12px;
   }
-}
-
-/* managed agents hidden (P4-09): only the inbox is left in the side column. In list mode the
-   column narrows; beside the scene the inbox sits under the conversation, sized to its content
-   and capped at about the share it had before (2fr of 5), so the conversation keeps at least its
-   height; at ≥1700 px the fourth column goes and the scene takes its width. Stacked layouts
-   (≤1100 px) are unchanged. */
-@media (min-width: 1101px) {
-  .pnl-grid.pnl-grid-no-agents:not(.pnl-grid-scene) {
-    grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(240px, 320px);
+  .pnl-dock-handle {
+    height: 14px;
   }
-  .pnl-grid.pnl-grid-scene.pnl-grid-no-agents {
-    grid-template-rows: minmax(0, 1fr) auto;
-  }
-  .pnl-grid-scene.pnl-grid-no-agents > .pnl-side {
-    box-sizing: border-box;
-    max-height: 36vh;
-  }
-}
-@media (min-width: 1700px) {
-  .pnl-grid.pnl-grid-scene.pnl-grid-no-agents {
-    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(360px, 440px);
-    grid-template-areas:
-      'nav scene main'
-      'nav scene side';
-  }
-  .pnl-grid-scene.pnl-grid-no-agents > .pnl-side {
-    border-top: 1px solid var(--pnl-line);
+  .pnl-dock-handle::before {
+    top: 5px;
   }
 }
 
@@ -609,17 +687,104 @@ a.pnl-link:hover {
   }
 }
 
-/* main area */
-.pnl-main-head {
+/* main area: the dock's bar (P4-10) */
+.pnl-dock-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 20px 8px;
+  min-width: 0;
+}
+.pnl-dock-titles {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 4px 16px;
-  margin-bottom: 12px;
+  gap: 2px 10px;
+  min-width: 0;
 }
-.pnl-main-head .pnl-eyebrow {
-  flex-basis: 100%;
+.pnl-dock-titles .pnl-eyebrow {
   margin: 0;
+}
+.pnl-dock-bar .pnl-title {
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+.pnl-dock-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.pnl-dock-unread {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--pnl-here);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.pnl-dock-hint {
+  flex: 1 1 10em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.pnl-dock-spacer {
+  flex: 1 1 0;
+}
+.pnl-dock-bar .ctl {
+  flex-basis: auto;
+}
+/* the bar can sit at the bottom of the viewport: its "More" menu opens upwards */
+.pnl-dock-bar .ctl-menu {
+  top: auto;
+  bottom: 100%;
+  margin: 0 0 4px;
+}
+.pnl .pnl-dock-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: var(--pnl-raised);
+  color: var(--pnl-ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pnl .pnl-dock-toggle:hover {
+  border-color: var(--pnl-here);
+}
+/* in the dock the bar carries the state and the activity: the chat's own header line goes */
+.pnl-dock-body .pnl-chat-head {
+  display: none;
+}
+/* the phone: one row when it fits — no eyebrow, the button an icon (its name stays spoken) */
+@media (max-width: 760px) {
+  .pnl-dock-bar {
+    gap: 4px 8px;
+    padding: 6px 12px;
+  }
+  .pnl-dock-bar .pnl-eyebrow,
+  .pnl-dock-toggle-text {
+    display: none;
+  }
+  .pnl-dock-hint {
+    flex-basis: 4em;
+  }
+  .pnl .pnl-dock-toggle {
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 8px;
+    font-size: 16px;
+  }
 }
 .pnl-back.pnl-link {
   flex: none;
