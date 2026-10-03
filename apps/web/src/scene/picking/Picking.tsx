@@ -115,6 +115,8 @@ export function Picking({ outline }: PickingProps) {
       const at = pointAt(e);
       const result = pick(at);
       const picking = usePickingStore.getState();
+      // The camera is about to move: the label comes back with the next pointer move.
+      picking.setHover(undefined);
       if (result.choice) activateBody(result.choice, at);
       else if (result.candidates.length > 1) {
         picking.showHere(
@@ -210,7 +212,7 @@ function HighlightRing({
   });
   return (
     <mesh ref={ref} visible={false} renderOrder={10} frustumCulled={false} name="pick-highlight">
-      <ringGeometry args={[0.9, 1, 64]} />
+      <ringGeometry args={[0.95, 1, 96]} />
       <meshBasicMaterial
         color={color}
         transparent

@@ -75,8 +75,19 @@ describe('pickBodies (ray vs bounding spheres over the anchors)', () => {
     const result = pickBodies(rayThrough(0.1, 0), spheres, PX);
     expect(result.choice).toBeUndefined();
     expect(result.candidates.map((c) => c.bodyId).sort()).toEqual(['europa', 'io', 'jupiter']);
-    // The hits come first (the planet under the pointer, then the moon it also grazes).
-    expect(result.candidates[0]!.hit).toBe(true);
+    // The planet the pointer is on comes first, then the moons closest to the pointer.
+    expect(result.candidates.map((c) => c.bodyId)).toEqual(['jupiter', 'io', 'europa']);
+  });
+
+  it('lists the body under the pointer before a speck in front of it', () => {
+    // A 1 px moon 3 px off the ray, in front of an 8 px planet: within the moon's minimum target.
+    const spheres = [sphere('planet', 0, 0, 0, 0.8), sphere('moon', 0.3, 0, 20, 0.08)];
+    const result = pickBodies(rayThrough(0, 0), spheres, PX);
+    expect(result.choice).toBeUndefined();
+    expect(result.candidates.map((c) => [c.bodyId, c.hit, c.onBody])).toEqual([
+      ['planet', true, true],
+      ['moon', true, false],
+    ]);
   });
 
   it('a body big on screen is clearly the target even with a small moon nearby', () => {

@@ -1,4 +1,4 @@
-import { Group, Mesh, MeshBasicMaterial, SphereGeometry } from 'three';
+import { AdditiveBlending, Group, Mesh, MeshBasicMaterial, SphereGeometry } from 'three';
 import { describe, expect, it } from 'vitest';
 import { PICK_TARGET_NAME } from '../belt/belt-model.js';
 import { outlineMeshes, sameMeshes } from './outline.js';
@@ -11,7 +11,7 @@ const mesh = (name: string, visible = true) => {
 };
 
 describe('outlineMeshes (what the selection outline draws)', () => {
-  it("takes the body's meshes, not its moons' nor the invisible pick target", () => {
+  it("takes the body's meshes, not its moons', its halo nor the invisible pick target", () => {
     const planet = new Group();
     planet.userData = { bodyId: 'b-jupiter' };
     const tilt = new Group();
@@ -30,7 +30,9 @@ describe('outlineMeshes (what the selection outline draws)', () => {
     const rock = mesh('rock');
     const pick = mesh(PICK_TARGET_NAME);
     pick.userData = { ...asteroid.userData };
-    asteroid.add(rock, pick, mesh('hidden', false));
+    const halo = mesh('halo');
+    (halo.material as MeshBasicMaterial).blending = AdditiveBlending;
+    asteroid.add(rock, halo, pick, mesh('hidden', false));
     expect(outlineMeshes(asteroid, 'b-ast-7')).toEqual([rock]);
   });
 

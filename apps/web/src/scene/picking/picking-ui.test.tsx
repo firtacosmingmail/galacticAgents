@@ -188,6 +188,16 @@ describe('useSelectionSync (panel → scene)', () => {
     expect(camera().request?.seq).toBe(seq);
   });
 
+  it("a panel selection closes a body's info popover; the scene's own does not", () => {
+    render(<Sync />);
+    act(() => void activateBody('b-mars', AT));
+    expect(usePickingStore.getState().popover?.kind).toBe('info');
+    act(() => selectFromScene({ kind: 'steward', id: 'a-st' }));
+    expect(usePickingStore.getState().popover?.kind).toBe('info');
+    act(() => useAppStore.getState().select({ kind: 'waykeeper', id: 'a-wk-old' }));
+    expect(usePickingStore.getState().popover).toBeUndefined();
+  });
+
   it('a deep link flies once the body is drawn', () => {
     useAppStore.setState({ selection: { kind: 'waykeeper', id: 'a-wk-old' } });
     setDeepLinkForTest({ kind: 'waykeeper', id: 'a-wk-old' });

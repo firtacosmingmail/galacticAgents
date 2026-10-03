@@ -1,4 +1,4 @@
-import type { Material, Mesh, Object3D } from 'three';
+import { AdditiveBlending, type Material, type Mesh, type Object3D } from 'three';
 import { PICK_TARGET_NAME } from '../belt/belt-model.js';
 
 /**
@@ -6,8 +6,9 @@ import { PICK_TARGET_NAME } from '../belt/belt-model.js';
  * whatever mesh the body currently draws (an LOD tier, P3-06), except
  * - other bodies nested inside it (a planet's anchor carries its moons: their own anchors, marked
  *   by a different `userData.bodyId`, are not descended into),
- * - never-drawn meshes (a task asteroid's invisible pick target, a `visible: false` material).
- * Type-only three imports: plain duck typing over `Object3D`.
+ * - never-drawn meshes (a task asteroid's invisible pick target, a `visible: false` material),
+ * - glows (additive materials: a task asteroid's halo would outline a disc around the rock).
+ * Only used inside the canvas (the scene's chunk).
  */
 export function outlineMeshes(root: Object3D, bodyId: string): Mesh[] {
   const out: Mesh[] = [];
@@ -25,7 +26,8 @@ export function outlineMeshes(root: Object3D, bodyId: string): Mesh[] {
 }
 
 function drawn(material: Material | Material[]): boolean {
-  return Array.isArray(material) ? material.some((m) => m.visible) : material.visible;
+  const solid = (m: Material) => m.visible && m.blending !== AdditiveBlending;
+  return Array.isArray(material) ? material.some(solid) : solid(material);
 }
 
 /** Whether two mesh lists hold the same meshes in the same order (no outline update needed). */

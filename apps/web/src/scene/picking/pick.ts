@@ -34,10 +34,15 @@ export interface PickCandidate {
   screenRadius: number;
   /** The ray passes through the body (or through its minimum target, for a tiny one). */
   hit: boolean;
+  /** The ray passes through the drawn body itself (not only its minimum target). */
+  onBody: boolean;
 }
 
 export interface PickResult {
-  /** Everything under the pointer, nearest hit first, then the near misses by screen distance. */
+  /**
+   * Everything under the pointer, for the "what's here" list: the bodies the ray passes through,
+   * nearest first, then the others (a speck's target, a near miss) closest to the pointer first.
+   */
   candidates: PickCandidate[];
   /** The body the pointer means, when that is clear; `undefined` with several candidates. */
   choice: string | undefined;
@@ -92,18 +97,21 @@ export function pickBodies(
     const entry = hit
       ? depth - Math.sqrt(Math.max(0, target * target - perpendicular * perpendicular))
       : Infinity;
-    candidates.push({ bodyId: s.bodyId, depth, entry, screenDistance, screenRadius, hit });
+    const onBody = perpendicular <= s.radius;
+    candidates.push({ bodyId: s.bodyId, depth, entry, screenDistance, screenRadius, hit, onBody });
   }
+  // The nearest body in the way: it hides whatever is behind it.
+  let nearest: PickCandidate | undefined;
+  for (const c of candidates) if (c.hit && (!nearest || c.entry < nearest.entry)) nearest = c;
   candidates.sort(
     (a, b) =>
-      Number(b.hit) - Number(a.hit) ||
-      (a.hit ? a.entry - b.entry : a.screenDistance - b.screenDistance) ||
+      Number(b.onBody) - Number(a.onBody) ||
+      (a.onBody ? a.entry - b.entry : a.screenDistance - b.screenDistance) ||
       (a.bodyId < b.bodyId ? -1 : a.bodyId > b.bodyId ? 1 : 0),
   );
   const listed = candidates.slice(0, MAX_CANDIDATES);
-  const nearest = listed[0];
-  if (nearest?.hit && nearest.screenRadius >= CLEAR_TARGET_PX) {
+  if (nearest && nearest.screenRadius >= CLEAR_TARGET_PX) {
     return { candidates: listed, choice: nearest.bodyId };
   }
-  return { candidates: listed, choice: listed.length === 1 ? nearest!.bodyId : undefined };
+  return { candidates: listed, choice: listed.length === 1 ? listed[0]!.bodyId : undefined };
 }

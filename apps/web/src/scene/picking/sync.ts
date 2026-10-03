@@ -4,7 +4,7 @@ import { sameSelection, type Selection } from '../../state/selection.js';
 import { getAnchor, onAnchorsChanged } from '../anchors.js';
 import { useCameraStore } from '../camera/store.js';
 import { selectionBody } from './body-action.js';
-import { isSceneSelection } from './store.js';
+import { isSceneSelection, usePickingStore } from './store.js';
 
 /**
  * Panel → scene (P3-05): when the selection changes outside the scene (the navigation, a card's
@@ -20,6 +20,7 @@ import { isSceneSelection } from './store.js';
  *   scene again later does not fly;
  * - a flight waiting for its body (the snapshot or the anchor not there yet) is dropped when the
  *   user moves the camera or selects something else.
+ * A selection change from outside the scene also closes the picking popover.
  */
 export interface SyncDeps {
   bodyFor: (selection: Selection) => string | undefined;
@@ -103,6 +104,8 @@ export function useSelectionSync(): void {
     const stopApp = useAppStore.subscribe((state, prev) => {
       if (state.selection !== prev.selection) {
         deepLink = undefined;
+        // A body's info popover is about the old view; the scene's own selection closed it.
+        if (!isSceneSelection(state.selection)) usePickingStore.getState().closePopover();
         sync.selectionChanged(state.selection, isSceneSelection(state.selection));
       } else if (state.world !== prev.world) {
         sync.retry();
