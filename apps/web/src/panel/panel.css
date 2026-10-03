@@ -19,6 +19,10 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  /* the page reaches under the iPhone's notch and home bar (viewport-fit=cover, P3-12): keep the
+     content inside the safe area; the top bar pads for the top inset itself */
+  box-sizing: border-box;
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   background: var(--pnl-bg);
   color: var(--pnl-ink);
   font:
@@ -70,6 +74,7 @@
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
+  padding-top: max(8px, env(safe-area-inset-top));
   border-bottom: 1px solid var(--pnl-line);
   background: var(--pnl-surface);
 }
@@ -117,6 +122,184 @@
   border-radius: 6px;
   padding: 2px 8px;
   cursor: pointer;
+}
+/* The navigation's links grow and shrink to fill their rows; in the top bar they keep their
+   width, or a wrapping bar squeezes them under their neighbours (P3-12). */
+.pnl-top .pnl-link {
+  flex: none;
+}
+
+/* the compact top bar (P3-12, below COMPACT_TOP_BAR_QUERY): brand, connection dot, the
+   "waiting for you" count and a menu button in one row; everything else in the menu */
+.pnl-top.pnl-top-compact {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-height: 52px;
+  box-sizing: border-box;
+  padding: max(4px, env(safe-area-inset-top)) 12px 4px;
+}
+.pnl-top-compact .pnl-brand.pnl-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  white-space: nowrap;
+}
+.pnl-conn.pnl-conn-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pnl-muted);
+}
+.pnl-conn-dot.pnl-conn-live {
+  background: #3fb67a;
+}
+.pnl-conn-dot.pnl-conn-disconnected,
+.pnl-conn-dot.pnl-conn-unauthorized {
+  background: #e0605b;
+}
+.pnl-conn-dot::before {
+  content: none;
+}
+.pnl-top-waiting {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 2px;
+  margin: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+}
+.pnl-top-waiting .pnl-beacon {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+@media (max-width: 374px) {
+  /* "N waiting" at 320–374 px; the full words stay in the accessible name */
+  .pnl-top-waiting-tail {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+.pnl-menu-button {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  background: var(--pnl-raised);
+  color: var(--pnl-ink);
+  cursor: pointer;
+}
+.pnl-menu-button[aria-expanded='true'] {
+  background: var(--pnl-here-soft);
+  border-color: var(--pnl-here);
+}
+/* three bars drawn with one element and its shadows */
+.pnl-menu-icon {
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  box-shadow:
+    0 -6px 0 currentColor,
+    0 6px 0 currentColor;
+}
+.pnl-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 64px);
+  max-height: calc(100dvh - 64px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  padding: 8px 12px max(12px, env(safe-area-inset-bottom));
+  background: var(--pnl-surface);
+  border-bottom: 1px solid var(--pnl-line);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+}
+.pnl-menu[hidden] {
+  display: none;
+}
+.pnl-menu-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0 0 4px;
+  padding: 8px 4px;
+  color: var(--pnl-muted);
+  font-size: 13px;
+}
+/* every item is a full-width row, at least 44 px tall */
+.pnl-menu > .pnl-link,
+.pnl-menu > button,
+.pnl-menu > .pnl-scene-off,
+.pnl-menu .ntf-toggle {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-top: 1px solid var(--pnl-line);
+  border-radius: 0;
+  background: none;
+  color: var(--pnl-ink);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+/* links and buttons line up: each keeps room for the "current" marker */
+.pnl-menu > .pnl-link,
+.pnl-menu > button,
+.pnl-menu > .pnl-scene-off,
+.pnl-menu .ntf-toggle {
+  border-left: 3px solid transparent;
+}
+.pnl-menu .ntf-button {
+  min-height: 44px;
+}
+.pnl-menu > .pnl-link.is-current {
+  border-left-color: var(--pnl-here);
+}
+.pnl-menu > .pnl-scene-off {
+  flex-wrap: wrap;
+  gap: 8px;
+  cursor: default;
+}
+.pnl-menu > .pnl-scene-off .pnl-scene-toggle {
+  min-height: 36px;
+  padding: 4px 12px;
+}
+.pnl-menu .ntf-inline {
+  padding: 4px 12px 12px;
+}
+.pnl-menu > .pnl-debug-link.pnl-link {
+  min-height: 40px;
+  font-size: 13px;
+  color: var(--pnl-muted);
 }
 
 /* the three columns */
