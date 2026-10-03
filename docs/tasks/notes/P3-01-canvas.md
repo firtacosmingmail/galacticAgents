@@ -40,7 +40,7 @@ Layout with the scene:
 - **WebGL fallback.** The probe fails → a note, and list mode. If the canvas fails later (`Error creating WebGL context` from R3F's configure, or any throw inside the scene), R3F rethrows to `SceneErrorBoundary`. That calls `fail(reason)`, the panel goes to list mode with the note for the rest of the page's life, and the saved choice stays as it was.
 - **Tier at runtime.** Changing the tier on the settings page and saving updates `useSettingsData().response`. `SceneArea` reads it on the next render, and `dpr`, `shadows`, the star count and bloom are reconfigured without a reload. Only a change of `antialias` (to or from `mobile`) recreates the context.
 
-## Proposed SPEC / TECHNOLOGY text (for the coordinator to place)
+## Proposed SPEC / TECHNOLOGY text (recorded as SPEC decision 62 and TECHNOLOGY §2.1)
 
 **SPEC §7, new decision (scene visibility and list mode):**
 
