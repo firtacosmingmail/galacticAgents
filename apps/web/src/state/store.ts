@@ -82,7 +82,7 @@ export interface AppState extends TranscriptViewSlice {
   selectAgent: (agentId: Id) => void;
   /**
    * Goes to a route and selection; `replace` rewrites the current history entry instead, keeping
-   * its query and hash (a canonical rewrite must not drop flags such as `?fps=1`).
+   * its query and hash (a canonical rewrite must not drop flags such as `?show_fps=true`).
    */
   navigate: (location: PageLocation, opts?: { replace?: boolean }) => void;
   /** Reads the route and selection back from the URL (on load and on back/forward). */
@@ -108,7 +108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (typeof window !== 'undefined') {
       const path = pathFor(location);
       // A rewrite in place (the canonical form of the URL) keeps the query and the hash: they
-      // carry flags that are not the panel's (`?fps=1`, P3-11) and must outlive it.
+      // carry flags that are not the panel's (`?show_fps=true`, P3-11) and must outlive it.
       if (opts?.replace)
         window.history.replaceState(null, '', path + window.location.search + window.location.hash);
       else if (window.location.pathname !== path) window.history.pushState(null, '', path);

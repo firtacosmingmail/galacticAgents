@@ -95,7 +95,7 @@ export function App() {
 /**
  * The route and the panel's selection follow the URL (P25-02): read on load (a deep link or a
  * reload restores them) and on back/forward; the store pushes history entries as the user
- * navigates. The scene's `?fps=` flag (P3-11) is taken from the loaded URL first, before any
+ * navigates. The scene's `?show_fps=` flag (P3-11) is taken from the loaded URL first, before any
  * navigation can drop the query; the canonical rewrite itself keeps it.
  */
 function useLocationSync() {

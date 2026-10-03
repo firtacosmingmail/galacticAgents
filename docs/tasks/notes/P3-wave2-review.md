@@ -13,7 +13,7 @@ An independent review found no blocker: the generator moved to `packages/protoco
 | 7–9 | per-frame anchor world in free mode; per-frame tuples; 30 shadow casters on high | lazy `AnchorWorld` with cached extent; allocation-free `placeOnOrbit`; moons cast from 1000 km up (15 casters) |
 | 10–12 | stale comments; duplicate anchor hook; opposite orbit conventions | rewritten; `scene/anchor-binding.ts`; `scene/orbit.ts` (the belt is mirrored once as a result) |
 
-Not checked in a real browser after the fixes: the star field following the camera and the reduced shadows. Open for Cosmin: the fps check at "high" (`/?fps=1`), a look at the scene and the true-scale toggle.
+Not checked in a real browser after the fixes: the star field following the camera and the reduced shadows. Open for Cosmin: the fps check at "high" (`/?show_fps=true`), a look at the scene and the true-scale toggle.
 
 Watch in P3-08: drei `Html` labels project every frame (P3-07 adds ~31); shadows remain the first thing to drop if "high" misses 60 fps.
 

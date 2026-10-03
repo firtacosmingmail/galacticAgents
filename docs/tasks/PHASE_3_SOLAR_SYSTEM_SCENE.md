@@ -93,8 +93,8 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 
 ### P3-11 — The fps meter does not show (added 2026-10-03)
 - **Status:** in progress · **Depends on:** P3-01 · **Parallel with:** P3-10, P3-12
-- Cosmin: adding `?fps=1` to the localhost URL shows nothing. Find why (URL rewriting, the scene hidden, the stacking order, the dev server) and fix it so `?fps=1` on any panel URL shows the meter at the scene's top-left and `?fps=0` hides it.
-- **Acceptance:** `?fps=1` works from a cold load of `/`, `/waykeeper/<id>` and `/steward/<id>`, in `pnpm dev` and in a build; a test.
+- Cosmin: adding `?show_fps=true` to the localhost URL shows nothing. Find why (URL rewriting, the scene hidden, the stacking order, the dev server) and fix it so `?show_fps=true` on any panel URL shows the meter at the scene's top-left and `?show_fps=false` hides it.
+- **Acceptance:** `?show_fps=true` works from a cold load of `/`, `/waykeeper/<id>` and `/steward/<id>`, in `pnpm dev` and in a build; a test.
 
 ### P3-12 — Top bar on small screens (added 2026-10-03)
 - **Status:** in progress · **Depends on:** P25-02 · **Parallel with:** P3-10, P3-11

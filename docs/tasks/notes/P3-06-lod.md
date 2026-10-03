@@ -14,7 +14,7 @@ Branch `p3-06-lod`, from `p3-wave3-picking-lod`, with P3-05 merged back in. Ever
 | `scene/bodies/textures.ts` | `nearTextures`: one shared cache of `SurfaceMaps` (colour + optional detail `DataTexture`).<br>• Keys come from `surfaceMapsKey(look, width, detail)`; byte estimates from `surfaceMapsBytes` (CPU copy + GPU copy with mipmaps).<br>• `useBodyMaps(look, kind, lod, level)` returns the far map, painted at once and owned by the body, until the level's own maps are ready, then those. On a level change it keeps showing the previous level's maps (and holds their cache reference) until the new ones resolve, then releases them, so flying into Jupiter goes 1024 → 2048, never 1024 → 256 → 2048.<br>• `nearMapsSpec`: without a paint worker, near levels are capped at the middle level's size (high: 1024 planet / 512 moon) and paint no detail map, so the main thread never paints 2048 + detail (about 1.5 s).<br>• `useNearTextureBudget(budgetMB, tier)` sets the budget and drops idle maps on a tier change or unmount, in a microtask after the bodies' own releases.<br>• `useSphereGeometries(lod)` builds one unit sphere per level and kind, shared by all bodies and disposed on a tier change. |
 | `scene/bodies/Bodies.tsx` | `Bodies` takes `quality`. A planet or moon mesh uses the shared sphere for its level, scaled by its radius, and a `SurfaceMaterial`. That material is keyed on whether a detail map is present (adding a bump map needs a new shader), and its detail map serves as both `bumpMap` and `roughnessMap`. Orbit lines and rings take their segment counts from the tier. |
 | `scene/motion.ts` | `motionSeconds()`: the orbits' and spins' own clock (wall time since first use). R3F's `clock.elapsedTime` restarts at 0 on every frame-loop change (a tier switch to or from the capped mobile loop, the fps meter), which made every planet jump back to its starting angle. |
-| `scene/frame-cap.tsx` | `cappedFrameloop` and `FrameCap`. While motion runs, a capped tier switches the loop to `never`, and `FrameCap` calls `advance()` at most `maxFps` times a second (`frameDue`, with 4 ms of slack for timer jitter). Under `never`, R3F ignores `invalidate()`, so the camera following a body is capped too. The fps meter (`?fps=1`) lifts the cap so it measures the headroom. |
+| `scene/frame-cap.tsx` | `cappedFrameloop` and `FrameCap`. While motion runs, a capped tier switches the loop to `never`, and `FrameCap` calls `advance()` at most `maxFps` times a second (`frameDue`, with 4 ms of slack for timer jitter). Under `never`, R3F ignores `invalidate()`, so the camera following a body is capped too. The fps meter (`?show_fps=true`) lifts the cap so it measures the headroom. |
 
 ### The tier table
 
@@ -178,11 +178,11 @@ A focused planet's 2048 map therefore arrives about 1–2 s after the flight on 
 
 ## What Cosmin should check
 
-1. **The Mac at "high" with `?fps=1`.** 60 fps at the system view and near Jupiter? The P3-05 outline costs about 4 fps headless; see above.
+1. **The Mac at "high" with `?show_fps=true`.** 60 fps at the system view and near Jupiter? The P3-05 outline costs about 4 fps headless; see above.
 2. **Zoom right into Earth and Mars on high.** After about 1–2 s the surface sharpens (2048 map) and gains relief. Earth's oceans should show a sun glint, and the polar caps' stepped edge from P3-02 should be gone. Fly away and back: the map should not take another 1–2 s (it is cached).
 3. **Switch tiers on the settings page while looking at Jupiter.** There should be no reload and nothing left blank. Mobile recreates the context (antialias), so the camera returns to the system view.
 4. **The phone** (Safari over the LAN, tier "mobile"):
-   - With `?fps=1` the meter shows the uncapped rate: it should be ≥ 30 at the system view and focused on a planet.
+   - With `?show_fps=true` the meter shows the uncapped rate: it should be ≥ 30 at the system view and focused on a planet.
    - Without the meter the scene runs at 30 fps while the planets move. Check that motion and camera follow still look smooth enough at 30. If not, set `maxFps: null` for mobile in `quality.ts`.
    - In portrait, focused planets stay on the 256 map (they are about 120 px across). Say if they look soft.
-5. **The phone's battery and heat** over a few minutes with the scene open, capped versus uncapped (`?fps=1`).
+5. **The phone's battery and heat** over a few minutes with the scene open, capped versus uncapped (`?show_fps=true`).

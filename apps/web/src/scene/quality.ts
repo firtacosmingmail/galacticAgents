@@ -36,7 +36,7 @@ import type { QualityTier } from '@galactic/protocol';
  *   the frame cap;
  * - `maxFps`: a frame-rate cap while the decorative motion runs (`null` = the display's rate); the
  *   mobile tier renders every other frame of a 60 Hz display to save the phone's battery. The fps
- *   meter (`?fps=1`) lifts the cap so it measures the headroom.
+ *   meter (`?show_fps=true`) lifts the cap so it measures the headroom.
  */
 /** Linear luminance a pixel needs (before tone mapping) to bloom. */
 export const BLOOM_THRESHOLD = 1.0;
