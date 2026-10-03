@@ -34,11 +34,18 @@ interface StoredPrefs {
   kinds: NotificationKinds;
 }
 
-function readPrefs(): StoredPrefs {
-  const fallback: StoredPrefs = { enabled: false, kinds: allKindsOn() };
+/**
+ * Set once a write to storage fails (quota, private mode): from then on this page's own copy is
+ * the truth, since what storage holds is stale.
+ */
+let storageBroken = false;
+
+/** The preferences in storage, or undefined when there are none (or storage cannot be read). */
+function readStoredPrefs(): StoredPrefs | undefined {
+  if (storageBroken) return undefined;
   try {
     const raw = localStorage.getItem(PREFS_KEY);
-    if (!raw) return fallback;
+    if (!raw) return undefined;
     const parsed = JSON.parse(raw) as Partial<StoredPrefs>;
     const kinds = allKindsOn();
     for (const k of NotificationKind.options) {
@@ -47,8 +54,12 @@ function readPrefs(): StoredPrefs {
     }
     return { enabled: parsed.enabled === true, kinds };
   } catch {
-    return fallback;
+    return undefined;
   }
+}
+
+function readPrefs(): StoredPrefs {
+  return readStoredPrefs() ?? { enabled: false, kinds: allKindsOn() };
 }
 
 function writePrefs(prefs: StoredPrefs): void {
@@ -56,6 +67,7 @@ function writePrefs(prefs: StoredPrefs): void {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
   } catch {
     // Private mode or blocked storage: the preference lasts for this page only.
+    storageBroken = true;
   }
 }
 
@@ -92,6 +104,9 @@ export interface NotificationPrefsState {
   reload: () => void;
 }
 
+const samePrefs = (a: StoredPrefs, b: StoredPrefs) =>
+  a.enabled === b.enabled && NotificationKind.options.every((k) => a.kinds[k] === b.kinds[k]);
+
 export const useNotificationPrefs = create<NotificationPrefsState>((set, get) => ({
   ...readPrefs(),
   permission: browserPermission(),
@@ -123,16 +138,45 @@ export const useNotificationPrefs = create<NotificationPrefsState>((set, get) =>
     writePrefs({ enabled: get().enabled, kinds });
   },
   refreshPermission: () => set({ permission: browserPermission() }),
-  reload: () => set({ ...readPrefs(), permission: browserPermission() }),
+  reload: () => {
+    if (storageBroken) set({ permission: browserPermission() });
+    else set({ ...readPrefs(), permission: browserPermission() });
+  },
 }));
 
-/** Whether a notification of this kind should be shown now. */
+// Another tab changed the preferences (the user turned notifications on there): follow it, so
+// this tab decides as the user just chose.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === PREFS_KEY || e.key === null) useNotificationPrefs.getState().reload();
+  });
+}
+
+/**
+ * The preferences as they stand now: what storage holds (another tab may have changed them, and
+ * its `storage` event may not have arrived yet), else this page's copy. The store is brought up
+ * to date when they differ.
+ */
+export function currentPrefs(): StoredPrefs {
+  const state = useNotificationPrefs.getState();
+  const stored = readStoredPrefs();
+  if (!stored) return { enabled: state.enabled, kinds: state.kinds };
+  if (!samePrefs(stored, state)) useNotificationPrefs.setState(stored);
+  return stored;
+}
+
+/** Whether a notification of this kind should be shown now (decided on the current prefs). */
 export function shouldShow(kind: NotificationKind): boolean {
-  const { enabled, kinds } = useNotificationPrefs.getState();
+  const { enabled, kinds } = currentPrefs();
   return enabled && kinds[kind] && browserPermission() === 'granted';
 }
 
 /** Whether notifications are on at all (opted in and allowed by the browser). */
 export function notificationsActive(): boolean {
-  return useNotificationPrefs.getState().enabled && browserPermission() === 'granted';
+  return currentPrefs().enabled && browserPermission() === 'granted';
+}
+
+/** Forgets that storage refused a write (tests). */
+export function resetPrefsStorage(): void {
+  storageBroken = false;
 }

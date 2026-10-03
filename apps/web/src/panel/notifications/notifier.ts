@@ -62,6 +62,15 @@ const lookupOf = (world: WorldState): NotificationLookup => ({
 const importance = (n: PanelNotification) =>
   n.kind === 'permission' ? 0 : n.kind === 'question' ? 1 : n.kind === 'interrupted' ? 2 : 3;
 
+/**
+ * The notifications on screen, held until they close: a Notification nobody references may be
+ * garbage-collected while still shown, and its `onclick` lost with it.
+ */
+const liveNotifications = new Set<Notification>();
+
+/** How many shown notifications are still held (tests). */
+export const liveNotificationCount = () => liveNotifications.size;
+
 /** Shows one desktop notification; its click focuses the window and selects the item. */
 export function showNotification(n: {
   id: string;
@@ -75,9 +84,14 @@ export function showNotification(n: {
   try {
     // The tag makes the OS replace rather than stack a second copy (another tab, a race).
     const shown = new Api(n.title, { tag: n.id, ...(n.body ? { body: n.body } : {}) });
+    liveNotifications.add(shown);
+    shown.onclose = () => {
+      liveNotifications.delete(shown);
+    };
     shown.onclick = () => {
       focusTarget(n.target);
       shown.close();
+      liveNotifications.delete(shown);
     };
   } catch {
     // Some browsers allow notifications only from a service worker; nothing to show then.
@@ -112,12 +126,18 @@ export function createNotifier(opts: NotifierOptions): Notifier {
     if (!current || current.logId !== logId || envelope.seq <= current.seq) return;
     writeLedger({ ...current, seq: envelope.seq });
     const n = notificationOf(envelope, lookupOf(useAppStore.getState().world));
-    if (n && claim(n.id) && shouldShow(n.kind)) showNotification(n);
+    if (!n) return;
+    // Decide on the current preferences (another tab may have just turned them on) before
+    // claiming: the claim then means "shown or deliberately suppressed by what the user chose".
+    const show = shouldShow(n.kind);
+    if (claim(n.id) && show) showNotification(n);
   };
 
   const backfill = async (after: number) => {
     const found: PanelNotification[] = [];
     let cursor = after;
+    // A page that fails drops the rest of the backfill (by design): the ledger's seq has already
+    // advanced, so it is not retried — losing a catch-up beats raising it twice.
     for (let page = 0; page < BACKFILL_MAX_PAGES && !stopped; page++) {
       let parsed;
       try {
@@ -137,7 +157,10 @@ export function createNotifier(opts: NotifierOptions): Notifier {
     if (stopped) return;
     const fresh = found.filter((n) => now() - Date.parse(n.at) <= BACKFILL_MAX_AGE_MS);
     const toShow: PanelNotification[] = [];
-    for (const n of fresh) if (claim(n.id) && shouldShow(n.kind)) toShow.push(n);
+    for (const n of fresh) {
+      const show = shouldShow(n.kind);
+      if (claim(n.id) && show) toShow.push(n);
+    }
     toShow.sort((a, b) => importance(a) - importance(b) || b.seq - a.seq);
     for (const n of toShow.slice(0, BACKFILL_MAX_SHOWN)) showNotification(n);
     const rest = toShow.length - BACKFILL_MAX_SHOWN;

@@ -69,8 +69,22 @@ export function focusTarget(target: NotificationTarget | undefined): void {
   const store = useAppStore.getState();
   const focus = target ? focusFor(store.world, target) : { selection: HARMONIZER, inbox: true };
   store.navigate({ route: 'panel', selection: focus.selection });
-  if (focus.inbox) {
+  if (focus.inbox) scrollInboxIntoView();
+}
+
+const nextFrame = (fn: () => void) => {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => fn());
+  else setTimeout(fn, 16);
+};
+
+/**
+ * Scrolls the inbox into view once the panel has rendered: after a navigation (from the settings
+ * page, say) it is not in the document yet, so this waits a frame and retries a couple of times.
+ */
+export function scrollInboxIntoView(retries = 2): void {
+  nextFrame(() => {
     const inbox = document.querySelector('[aria-label="inbox"]');
     if (inbox && typeof inbox.scrollIntoView === 'function') inbox.scrollIntoView();
-  }
+    else if (retries > 0) scrollInboxIntoView(retries - 1);
+  });
 }

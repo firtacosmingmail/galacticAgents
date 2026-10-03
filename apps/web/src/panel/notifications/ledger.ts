@@ -1,8 +1,12 @@
 /**
  * What this browser has already been notified about (P25-07): the log it follows, the last event
  * `seq` it looked at, and the ids of the recent notifications. Kept in `localStorage` so a reload
- * or a second tab never notifies twice; every read goes to storage, so tabs share one ledger.
- * Without storage (private mode, blocked site data) it lasts for the page only.
+ * does not notify twice; every read goes to storage, so tabs share one ledger. Across tabs open
+ * at the same moment this is best effort (two tabs can read before either writes); the
+ * notification's tag then makes the OS replace rather than stack the second copy.
+ * Without storage (private mode, blocked site data) — or once a write to it fails (quota) — it
+ * lasts for the page only: from the first failed write the memory copy wins, since what storage
+ * still holds is stale.
  */
 
 export const LEDGER_KEY = 'galactic.notifications.ledger';
@@ -18,8 +22,11 @@ export interface Ledger {
 }
 
 let memory: Ledger | undefined;
+/** Set when a write to storage threw: storage reads would return a stale ledger from then on. */
+let storageBroken = false;
 
 export function readLedger(): Ledger | undefined {
+  if (storageBroken) return memory;
   try {
     const raw = localStorage.getItem(LEDGER_KEY);
     if (raw) {
@@ -48,11 +55,13 @@ export function writeLedger(ledger: Ledger): void {
   try {
     localStorage.setItem(LEDGER_KEY, JSON.stringify(trimmed));
   } catch {
-    // Kept in memory only.
+    // Kept in memory only, from now on.
+    storageBroken = true;
   }
 }
 
-/** Forgets the in-memory fallback (tests). */
+/** Forgets the in-memory fallback and any failed write (tests). */
 export function clearLedgerMemory(): void {
   memory = undefined;
+  storageBroken = false;
 }

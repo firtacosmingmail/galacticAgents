@@ -12,10 +12,15 @@ import type {
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { useAppStore } from '../../state/store.js';
 import { FakeNotification } from './fake-notification.js';
-import { createNotifier, BACKFILL_MAX_SHOWN, type Notifier } from './notifier.js';
+import {
+  createNotifier,
+  BACKFILL_MAX_SHOWN,
+  liveNotificationCount,
+  type Notifier,
+} from './notifier.js';
 import { clearLedgerMemory, LEDGER_KEY, readLedger } from './ledger.js';
-import { PREFS_KEY, useNotificationPrefs } from './prefs.js';
-import { focusFor } from './focus.js';
+import { PREFS_KEY, resetPrefsStorage, useNotificationPrefs } from './prefs.js';
+import { focusFor, focusTarget } from './focus.js';
 
 /** The notification of one stream message, as the server's feed would list it. */
 function notificationOfMessage(m: ServerMessage): PanelNotification | undefined {
@@ -140,6 +145,7 @@ const shown = () => FakeNotification.instances.map((n) => n.tag);
 beforeEach(() => {
   localStorage.clear();
   clearLedgerMemory();
+  resetPrefsStorage();
   FakeNotification.reset();
   vi.stubGlobal('Notification', FakeNotification);
   feed = [];
@@ -315,6 +321,77 @@ describe('desktop notifications (P25-07)', () => {
     notifierA.onMessage(first!);
     tabB(first!);
     expect(shown()).toEqual(['question:q-c']);
+  });
+
+  it('decides on the preferences another tab just saved, so the claim never hides a notification', () => {
+    enable(false);
+    const feedPage = openPage();
+    feedPage(snapshot(10));
+    // The user turns notifications on in another tab: storage has it, this tab's store does not
+    // yet (its `storage` event has not arrived). This tab must show, not claim and drop it.
+    FakeNotification.permission = 'granted';
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ enabled: true }));
+    expect(useNotificationPrefs.getState().enabled).toBe(false);
+    feedPage(triggers()[0]!);
+    expect(shown()).toEqual(['question:q-c']);
+    expect(useNotificationPrefs.getState().enabled).toBe(true);
+  });
+
+  it('follows another tab’s change through the storage event', () => {
+    enable(false);
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ enabled: true, kinds: { question: false } }));
+    window.dispatchEvent(new StorageEvent('storage', { key: PREFS_KEY }));
+    expect(useNotificationPrefs.getState()).toMatchObject({
+      enabled: true,
+      kinds: { question: false, permission: true },
+    });
+  });
+
+  it('once storage refuses writes, the page’s own ledger wins: no repeats', () => {
+    const feedPage = openPage();
+    feedPage(snapshot(10));
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    try {
+      const [first, second] = triggers();
+      feedPage(first!, second!);
+      feedPage(first!, second!); // a resumed stream repeating them
+      expect(shown()).toEqual(['question:q-c', 'question:q-p']);
+      expect(readLedger()).toMatchObject({ seq: 12, ids: ['question:q-c', 'question:q-p'] });
+      // Storage still holds the stale ledger; it is not read back.
+      expect(JSON.parse(localStorage.getItem(LEDGER_KEY)!)).toMatchObject({ seq: 10 });
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it('holds a shown notification until it closes', () => {
+    const before = liveNotificationCount();
+    const feedPage = openPage();
+    feedPage(snapshot(10), triggers()[0]!);
+    expect(liveNotificationCount()).toBe(before + 1);
+    FakeNotification.instances.at(-1)!.close();
+    expect(liveNotificationCount()).toBe(before);
+  });
+
+  it('scrolls the inbox into view once the panel has rendered after the navigation', async () => {
+    vi.spyOn(window, 'focus').mockImplementation(() => {});
+    useAppStore.getState().reset();
+    window.history.replaceState(null, '', '/settings');
+    focusTarget(undefined);
+    // The panel renders after the navigation: the inbox appears only now.
+    const inbox = document.createElement('section');
+    inbox.setAttribute('aria-label', 'inbox');
+    const scroll = vi.fn();
+    inbox.scrollIntoView = scroll;
+    document.body.appendChild(inbox);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+      expect(scroll).toHaveBeenCalled();
+    } finally {
+      inbox.remove();
+    }
   });
 
   it('caps the backfill: a day old at most, five shown, the rest in one summary', async () => {
