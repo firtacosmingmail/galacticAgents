@@ -2,8 +2,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { QualityTier } from '@galactic/protocol';
 import { FPS_FLAG_KEY, FpsCounter, fpsMeterEnabled } from './fps.js';
-import { DEFAULT_QUALITY_TIER, QUALITY_TIERS, sceneQuality } from './quality.js';
-import { generateStarField, STAR_SHELL } from './starfield.js';
+import {
+  BLOOM_SMOOTHING,
+  BLOOM_THRESHOLD,
+  DEFAULT_QUALITY_TIER,
+  QUALITY_TIERS,
+  sceneQuality,
+  SUN_EMISSIVE,
+} from './quality.js';
+import { generateStarField, STAR_MAX_BRIGHTNESS, STAR_SHELL } from './starfield.js';
 import { readSceneVisible, SCENE_VISIBLE_KEY, writeSceneVisible } from './visibility.js';
 
 afterEach(() => localStorage.clear());
@@ -30,8 +37,28 @@ describe('quality tiers (P3-01)', () => {
       bloom: null,
       shadows: false,
     });
-    expect(QUALITY_TIERS.high.shadows).toBe(true);
+    expect(QUALITY_TIERS.high.shadows).toBe(true); // allowed; not wired until P3-02
     expect(QUALITY_TIERS.balanced.shadows).toBe(false);
+  });
+
+  it('blooms the Sun but never the stars', () => {
+    expect(BLOOM_THRESHOLD).toBe(1);
+    for (const tier of QualityTier.options) {
+      const bloom = QUALITY_TIERS[tier].bloom;
+      if (bloom) expect(bloom.threshold).toBe(BLOOM_THRESHOLD);
+    }
+    expect(STAR_MAX_BRIGHTNESS).toBeLessThan(BLOOM_THRESHOLD);
+    // The brightest star of a large sky, as rendered (vertex colours, not tone mapped).
+    const { colors } = generateStarField(20_000, 1);
+    let brightest = 0;
+    for (let i = 0; i < colors.length; i += 3)
+      brightest = Math.max(brightest, luminance(colors[i]!, colors[i + 1]!, colors[i + 2]!));
+    expect(brightest).toBeLessThanOrEqual(STAR_MAX_BRIGHTNESS);
+    expect(brightest).toBeGreaterThan(0.7); // a few stars are still bright
+    // The Sun's emissive luminance is past the bloom's full-strength point, with room to spare.
+    const [r, g, b] = srgbHexToLinear(SUN_EMISSIVE.color);
+    const sun = luminance(r, g, b) * SUN_EMISSIVE.intensity;
+    expect(sun).toBeGreaterThan((BLOOM_THRESHOLD + BLOOM_SMOOTHING) * 1.5);
   });
 
   it('falls back to the server default when the settings say nothing', () => {
@@ -40,6 +67,19 @@ describe('quality tiers (P3-01)', () => {
     expect(sceneQuality('mobile')).toBe(QUALITY_TIERS.mobile);
   });
 });
+
+/** Rec. 709 luminance of a linear rgb colour (what the bloom's luminance pass computes). */
+function luminance(r: number, g: number, b: number): number {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function srgbHexToLinear(hex: string): [number, number, number] {
+  const channel = (i: number) => {
+    const c = parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return [channel(0), channel(1), channel(2)];
+}
 
 describe('star field', () => {
   it('places the requested number of stars inside the shell', () => {

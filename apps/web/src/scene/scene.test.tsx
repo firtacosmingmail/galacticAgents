@@ -23,11 +23,18 @@ import { SCENE_VISIBLE_KEY } from './visibility.js';
  * The scene's three.js module never loads in jsdom: a stub stands in for it and records what the
  * panel hands it (the tier's config) and whether it is mounted.
  */
-const scene = vi.hoisted(() => ({ mounted: 0, throwOnMount: false, webgl: true }));
+const scene = vi.hoisted(() => ({
+  mounted: 0,
+  throwOnMount: false,
+  webgl: true,
+  probes: 0,
+  loseContext: undefined as (() => void) | undefined,
+}));
 
 vi.mock('./SolarScene.js', () => ({
-  default: function StubScene({ quality }: SolarSceneProps) {
+  default: function StubScene({ quality, onContextLost }: SolarSceneProps) {
     if (scene.throwOnMount) throw new Error('Error creating WebGL context.');
+    scene.loseContext = onContextLost;
     useEffect(() => {
       scene.mounted++;
       return () => {
@@ -44,7 +51,12 @@ vi.mock('./SolarScene.js', () => ({
     );
   },
 }));
-vi.mock('./webgl.js', () => ({ webglAvailable: () => scene.webgl }));
+vi.mock('./webgl.js', () => ({
+  webglAvailable: () => {
+    scene.probes++;
+    return scene.webgl;
+  },
+}));
 
 const snapshot: ServerMessage = {
   type: 'snapshot',
@@ -81,7 +93,13 @@ const settingsWith = (qualityTier: QualityTier): SettingsResponse => ({
 });
 
 beforeEach(() => {
-  Object.assign(scene, { mounted: 0, throwOnMount: false, webgl: true });
+  Object.assign(scene, {
+    mounted: 0,
+    throwOnMount: false,
+    webgl: true,
+    probes: 0,
+    loseContext: undefined,
+  });
   FakeWebSocket.instances = [];
   localStorage.clear();
   localStorage.setItem('galactic.token', 'tok');
@@ -142,8 +160,9 @@ describe('the scene beside the panel (P3-01)', () => {
     expect(sceneRegion()).toBeNull();
     expect(scene.mounted).toBe(0); // no canvas, no context, no frame loop
     expect(localStorage.getItem(SCENE_VISIBLE_KEY)).toBe('0');
-    expect(screen.getByRole('button', { name: 'Show scene' }).getAttribute('aria-pressed')).toBe(
-      'true',
+    // The label names the action; no toggle state to read backwards.
+    expect(screen.getByRole('button', { name: 'Show scene' }).hasAttribute('aria-pressed')).toBe(
+      false,
     );
     // List mode: the chat, the navigation and the side column are all there.
     expect(within(main()).getByRole('region', { name: 'chat with Harmonizer' })).toBeTruthy();
@@ -174,6 +193,8 @@ describe('the scene beside the panel (P3-01)', () => {
     await open();
     expect(screen.getByRole('note').textContent).toMatch(/3D scene unavailable — list mode/);
     expect(screen.queryByRole('button', { name: /scene/ })).toBeNull();
+    // Retrying cannot conjure WebGL: no Retry here.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
     expect(sceneRegion()).toBeNull();
     expect(within(main()).getByRole('region', { name: 'chat with Harmonizer' })).toBeTruthy();
   });
@@ -191,6 +212,46 @@ describe('the scene beside the panel (P3-01)', () => {
     expect(within(main()).getByRole('region', { name: 'chat with Harmonizer' })).toBeTruthy();
     // The choice itself is untouched: another browser session with WebGL shows the scene.
     expect(localStorage.getItem(SCENE_VISIBLE_KEY)).toBeNull();
+
+    // "Retry" mounts a fresh scene.
+    scene.throwOnMount = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('solar-scene')).toBeTruthy();
+    expect(scene.mounted).toBe(1);
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Hide scene' })).toBeTruthy();
+  });
+
+  it('a lost GPU context is reported: list mode with a Retry that brings the scene back', async () => {
+    await open();
+    await screen.findByTestId('solar-scene');
+    expect(scene.loseContext).toBeTypeOf('function');
+
+    act(() => scene.loseContext!());
+    expect(sceneRegion()).toBeNull();
+    expect(scene.mounted).toBe(0);
+    const note = screen.getByRole('note');
+    expect(note.textContent).toMatch(/3D scene unavailable — list mode/);
+    expect(note.getAttribute('title')).toBe('the GPU context was lost');
+    expect(within(main()).getByRole('region', { name: 'chat with Harmonizer' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('solar-scene')).toBeTruthy();
+    expect(scene.mounted).toBe(1);
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('list mode never probes for WebGL; showing the scene does', async () => {
+    localStorage.setItem(SCENE_VISIBLE_KEY, '0');
+    await open();
+    expect(screen.getByRole('button', { name: 'Show scene' })).toBeTruthy();
+    expect(scene.probes).toBe(0);
+
+    scene.webgl = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Show scene' }));
+    expect(scene.probes).toBeGreaterThan(0);
+    expect(screen.getByRole('note').textContent).toMatch(/3D scene unavailable/);
+    expect(sceneRegion()).toBeNull();
   });
 });
 

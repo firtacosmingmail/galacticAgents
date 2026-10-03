@@ -5,6 +5,9 @@ import { fpsMeterEnabled, type FpsSample } from './fps.js';
 import { sceneQuality } from './quality.js';
 import './scene.css';
 
+/** The reason reported when the browser takes the scene's WebGL context away. */
+export const CONTEXT_LOST = 'the GPU context was lost';
+
 /** The three.js part, fetched on first show: its own chunk, never in jsdom unless mocked. */
 const SolarScene = lazy(() => import('./SolarScene.js'));
 
@@ -16,8 +19,8 @@ export function useQualityTier(): QualityTier | undefined {
 /**
  * The scene's slot in the panel (P3-01): the centre of the layout. Mounting it creates the WebGL
  * context; unmounting it (list mode) releases the context and stops the frame loop. A scene that
- * fails to start (no context, a lost driver) reports through `onFailure` and the panel falls back
- * to list mode.
+ * fails to start (no context, a lost driver) or loses its GPU context while running reports
+ * through `onFailure` and the panel falls back to list mode (with a "Retry").
  */
 export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }) {
   const quality = sceneQuality(useQualityTier());
@@ -27,7 +30,11 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
     <section className="pnl-scene" aria-label="solar system" data-tier={quality.tier}>
       <SceneErrorBoundary onError={onFailure}>
         <Suspense fallback={<p className="pnl-scene-loading">Loading the solar system…</p>}>
-          <SolarScene quality={quality} {...(showFps ? { onFps: setSample } : {})} />
+          <SolarScene
+            quality={quality}
+            onContextLost={() => onFailure(CONTEXT_LOST)}
+            {...(showFps ? { onFps: setSample } : {})}
+          />
         </Suspense>
       </SceneErrorBoundary>
       {showFps && <FpsMeter sample={sample} tier={quality.tier} />}

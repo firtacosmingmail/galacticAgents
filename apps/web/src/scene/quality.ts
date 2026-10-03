@@ -7,10 +7,24 @@ import type { QualityTier } from '@galactic/protocol';
  * - `dprCap`: the highest device pixel ratio the canvas renders at (R3F `dpr={[1, cap]}`);
  * - `antialias`: MSAA on the context (and the composer's multisampling) — a context parameter,
  *   so a change recreates the canvas;
- * - `bloom`: the postprocessing bloom on emissive surfaces (the Sun); `null` = no composer at all;
+ * - `bloom`: the postprocessing bloom on emissive surfaces (the Sun); `null` = no composer at all.
+ *   The threshold is 1.0 (linear luminance before tone mapping): only HDR emitters bloom, never
+ *   the stars (capped at `STAR_MAX_BRIGHTNESS`, below it);
  * - `stars`: points in the star-field skybox;
- * - `shadows`: the renderer's shadow map (nothing casts shadows yet; reserved for P3-02/P3-06).
+ * - `shadows`: whether the tier may use a shadow map. Not wired yet: nothing receives shadows, so
+ *   the canvas has no shadow map and the Sun's light casts none until P3-02 adds the planets.
  */
+/** Linear luminance a pixel needs (before tone mapping) to bloom. */
+export const BLOOM_THRESHOLD = 1.0;
+/** The bloom's soft knee: full bloom from `BLOOM_THRESHOLD + BLOOM_SMOOTHING` up. */
+export const BLOOM_SMOOTHING = 0.2;
+
+/**
+ * The Sun's emissive colour (sRGB) and intensity: its linear luminance (≈ 0.49 × 4 ≈ 1.95) sits
+ * clearly above the bloom's full-strength point (1.2).
+ */
+export const SUN_EMISSIVE = { color: '#ffa630', intensity: 4 } as const;
+
 export interface SceneQuality {
   tier: QualityTier;
   dprCap: number;
@@ -25,7 +39,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     tier: 'high',
     dprCap: 2,
     antialias: true,
-    bloom: { intensity: 1.4, threshold: 0.9, mipmapBlur: true },
+    bloom: { intensity: 1.4, threshold: BLOOM_THRESHOLD, mipmapBlur: true },
     stars: 9000,
     shadows: true,
   },
@@ -33,7 +47,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     tier: 'balanced',
     dprCap: 1.5,
     antialias: true,
-    bloom: { intensity: 1.0, threshold: 0.9, mipmapBlur: true },
+    bloom: { intensity: 1.0, threshold: BLOOM_THRESHOLD, mipmapBlur: true },
     stars: 5000,
     shadows: false,
   },

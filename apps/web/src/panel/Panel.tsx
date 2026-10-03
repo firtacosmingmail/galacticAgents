@@ -127,21 +127,28 @@ function TopBar({ scene, onForget }: { scene: SceneControl; onForget?: () => voi
 
 /**
  * Shows or hides the solar-system scene (P3-01; hidden = list mode, SPEC §4.2). Where the scene
- * cannot run (no WebGL, or it failed to start) a note says so instead and the panel stays in list
- * mode.
+ * cannot run (no WebGL, it failed to start, its GPU context was lost) a note says so instead and
+ * the panel stays in list mode; "Retry" mounts a fresh scene where retrying can help. The label
+ * names the action, so the button is a plain button (no `aria-pressed`).
  */
 function SceneToggle({ scene }: { scene: SceneControl }) {
   if (scene.failure)
     return (
-      <span className="pnl-scene-off" role="note" title={scene.failure}>
-        3D scene unavailable — list mode
+      <span className="pnl-scene-off">
+        <span role="note" title={scene.failure}>
+          3D scene unavailable — list mode
+        </span>
+        {scene.retry && (
+          <button type="button" className="pnl-scene-toggle" onClick={scene.retry}>
+            Retry
+          </button>
+        )}
       </span>
     );
   return (
     <button
       type="button"
       className="pnl-scene-toggle"
-      aria-pressed={!scene.visible}
       onClick={() => scene.setVisible(!scene.visible)}
     >
       {scene.visible ? 'Hide scene' : 'Show scene'}

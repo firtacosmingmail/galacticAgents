@@ -12,6 +12,13 @@ export interface StarField {
 
 export const STAR_SHELL = { inner: 1200, outer: 2400 } as const;
 
+/**
+ * The brightest a star channel gets (linear). Kept below the bloom threshold (1.0, `quality.ts`)
+ * so the stars never bloom: only the Sun does.
+ */
+export const STAR_MAX_BRIGHTNESS = 0.85;
+const STAR_MIN_BRIGHTNESS = 0.25;
+
 /** mulberry32: a tiny deterministic PRNG in [0, 1). */
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -49,7 +56,8 @@ export function generateStarField(count: number, seed = 1): StarField {
     positions[i * 3 + 1] = z * radius;
     positions[i * 3 + 2] = r * Math.sin(phi) * radius;
     // Most stars are dim; a few are bright.
-    const brightness = 0.25 + 0.75 * random() ** 3;
+    const brightness =
+      STAR_MIN_BRIGHTNESS + (STAR_MAX_BRIGHTNESS - STAR_MIN_BRIGHTNESS) * random() ** 3;
     const tint = TINTS[Math.floor(random() * TINTS.length)] ?? TINTS[2]!;
     colors[i * 3] = tint[0] * brightness;
     colors[i * 3 + 1] = tint[1] * brightness;

@@ -234,6 +234,9 @@
   cursor: pointer;
 }
 .pnl-scene-off {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   color: var(--pnl-muted);
 }
