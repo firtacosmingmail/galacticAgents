@@ -24,6 +24,7 @@ describe('selection model (P25-02)', () => {
       [{ route: 'panel', selection: { kind: 'steward', id: 'a b/c' } }, '/steward/a%20b%2Fc'],
       [{ route: 'debug', selection: HARMONIZER }, '/debug'],
       [{ route: 'settings', selection: HARMONIZER }, '/settings'],
+      [{ route: 'history', selection: HARMONIZER }, '/history'],
     ];
     for (const [location, path] of cases) {
       expect(pathFor(location)).toBe(path);
@@ -37,5 +38,6 @@ describe('selection model (P25-02)', () => {
     expect(locationFromPath('/debug/')).toEqual({ route: 'debug', selection: HARMONIZER });
     expect(locationFromPath('/settings/')).toEqual({ route: 'settings', selection: HARMONIZER });
     expect(locationFromPath('/settings/x')).toEqual({ route: 'panel', selection: HARMONIZER });
+    expect(locationFromPath('/history/')).toEqual({ route: 'history', selection: HARMONIZER });
   });
 });
