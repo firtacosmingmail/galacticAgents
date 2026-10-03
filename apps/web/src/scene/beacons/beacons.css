@@ -1,5 +1,5 @@
 /* Question beacons (P4-05): the hover card over the scene, and the inbox card a click reveals. */
-.beacon-card {
+.pick-hover.beacon-card {
   display: flex;
   flex-direction: column;
   gap: 2px;

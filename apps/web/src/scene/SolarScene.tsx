@@ -108,9 +108,9 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <Belt rocks={quality.beltRocks} />
       {/* P4-01: a satellite per live Waykeeper / Steward, on its work's body (`satellites/`). */}
       <Satellites quality={quality} />
+      <CameraRig />
       {/* P4-05: a beacon above every body with an open question for the user (`beacons/`). */}
       <Beacons />
-      <CameraRig />
       <Picking outline={quality.bloom ? outline : undefined} />
       <MoonMarkers />
       <LabelProjector hz={quality.labelHz} />

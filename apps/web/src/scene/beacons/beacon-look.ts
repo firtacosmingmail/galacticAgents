@@ -26,7 +26,7 @@ export const BEACON = {
   /** The glyph's centre above the body's top edge, in pixels. */
   liftPx: 64,
   /** The glyph's drawn size (its texture's quad), in pixels. */
-  glyphPx: 30,
+  glyphPx: 34,
   /** The pillar's width, in pixels (its texture fades to the sides). */
   pillarPx: 6,
   /** The glyph's centre never closer than this to the top of the viewport, in pixels. */

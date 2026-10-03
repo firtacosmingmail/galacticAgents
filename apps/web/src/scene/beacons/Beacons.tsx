@@ -39,7 +39,7 @@ import { placeBeacon, publishBeacons, type BeaconFrame } from './registry.js';
  *
  * Each beacon is a group facing the camera, scaled to world units per screen pixel at its body's
  * depth, so its parts are laid out in pixels: the same size at the whole-system view and up close,
- * and never smaller than the glyph (30 px) and its 36 px click target. Drawn over everything (no
+ * and never smaller than the glyph (34 px) and its 36 px click target. Drawn over everything (no
  * depth test, after the highlight rings), on the decorations' layer (`DECOR_LAYER`: the selection
  * outline's depth pass skips it). Three draw calls per beacon (pillar, halo, glyph); one glyph
  * texture per kind and count, drawn at runtime.
@@ -52,6 +52,11 @@ import { placeBeacon, publishBeacons, type BeaconFrame } from './registry.js';
  * the halo pulses on the shared motion clock (the continuous loop is running then anyway).
  *
  * Picking reads the glyphs' positions from `registry.ts` (a beacon wins over the body under it).
+ *
+ * Mounted after the camera rig (`SolarScene`): frame callbacks of one priority run in mount order,
+ * and a beacon is laid out in the camera's pixels, so it must see this frame's camera — mounted
+ * before the rig, the on-demand loop's last frame left the beacons where the previous camera
+ * pose put them (off screen after the rig's first placement).
  */
 export function Beacons() {
   const questions = useAppStore((s) => s.world.questions);

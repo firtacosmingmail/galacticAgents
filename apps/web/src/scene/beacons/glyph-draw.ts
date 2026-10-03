@@ -81,7 +81,7 @@ export function drawGlyph(ctx: Ctx, spec: GlyphSpec, size = GLYPH_TEXTURE_PX): v
   }
 
   if (spec.badge) {
-    const br = size * 0.17;
+    const br = size * 0.21;
     const bx = size - br - size * 0.02;
     const by = br + size * 0.02;
     ctx.beginPath();
@@ -93,7 +93,7 @@ export function drawGlyph(ctx: Ctx, spec: GlyphSpec, size = GLYPH_TEXTURE_PX): v
     ctx.stroke();
     ctx.fillStyle = BEACON_COLOR;
     const chars = spec.badge.length;
-    ctx.font = `bold ${Math.round(size * (chars > 1 ? 0.15 : 0.2))}px system-ui, -apple-system, 'Segoe UI', sans-serif`;
+    ctx.font = `bold ${Math.round(size * (chars > 1 ? 0.2 : 0.27))}px system-ui, -apple-system, 'Segoe UI', sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(spec.badge, bx, by + size * 0.01);
