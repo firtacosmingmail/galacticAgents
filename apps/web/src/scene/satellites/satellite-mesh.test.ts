@@ -30,6 +30,7 @@ const frame = (over: Partial<SatelliteFrame> = {}): SatelliteFrame => ({
   presence: 1,
   tint: '#ffffff',
   brightness: 1,
+  beamTint: BEAM.color,
   ...over,
 });
 

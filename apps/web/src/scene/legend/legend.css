@@ -1,0 +1,185 @@
+/*
+ * The satellites' legend (P4-02), top-right over the canvas, in the scene chrome's layer
+ * (stacking order: scene.css). The swatches pulse like the satellites (`satellites/look.ts`:
+ * breathe 3.2 s, blink 1.6 s, stutter 2.4 s, flicker) and stand still under reduced motion,
+ * where size still tells "waiting" (larger) and "failed" (smaller) apart.
+ */
+.scene-legend {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: var(--scene-z-chrome);
+  max-width: min(300px, calc(100% - 16px));
+  max-height: calc(100% - 56px);
+  overflow: auto;
+  padding: 6px 8px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #c9cfdd;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.scene-legend.is-closed {
+  padding: 0;
+  background: none;
+  overflow: visible;
+}
+.scene-legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.scene-legend-title {
+  color: #8a91a6;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.scene-legend-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid #3a4258;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #c9cfdd;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.scene-legend-toggle:hover {
+  border-color: #5b6684;
+}
+.scene-legend-mini {
+  display: inline-flex;
+  gap: 3px;
+}
+.scene-legend-body {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.scene-legend-body li {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  align-items: center;
+  gap: 6px;
+}
+.scene-legend-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 14px;
+}
+.scene-legend-text b {
+  color: #e3e7f1;
+  font-weight: 600;
+}
+.scene-legend-hint {
+  color: #9aa2b6;
+}
+.scene-legend-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--legend-dot);
+  box-shadow: 0 0 4px var(--legend-dot);
+  transform: scale(var(--legend-scale, 1));
+}
+.scene-legend-dot.pulse-breathe {
+  animation: scene-legend-breathe 3.2s ease-in-out infinite;
+}
+.scene-legend-dot.pulse-blink {
+  animation: scene-legend-blink 1.6s ease-in-out infinite;
+}
+.scene-legend-dot.pulse-stutter {
+  animation: scene-legend-stutter 2.4s linear infinite;
+}
+.scene-legend-dot.pulse-flicker {
+  opacity: 0.75;
+  animation: scene-legend-flicker 1.9s steps(1, end) infinite;
+}
+/* The HQ: a ring of light and dark segments around a hub, turning like the station's. */
+.scene-legend-hq {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, #e8f0ff 0 2px, transparent 2.5px),
+    conic-gradient(
+      #e8f0ff 0 60deg,
+      #5d6680 0 120deg,
+      #e8f0ff 0 180deg,
+      #5d6680 0 240deg,
+      #e8f0ff 0 300deg,
+      #5d6680 0
+    );
+  -webkit-mask: radial-gradient(circle, #000 0 2.5px, transparent 3px 3.5px, #000 4px);
+  mask: radial-gradient(circle, #000 0 2.5px, transparent 3px 3.5px, #000 4px);
+  animation: scene-legend-spin 2.4s linear infinite;
+}
+@keyframes scene-legend-breathe {
+  50% {
+    opacity: 0.6;
+  }
+}
+@keyframes scene-legend-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+@keyframes scene-legend-stutter {
+  0%,
+  2%,
+  8%,
+  14%,
+  20%,
+  100% {
+    opacity: 1;
+  }
+  3%,
+  7%,
+  15%,
+  19% {
+    opacity: 0.25;
+  }
+}
+@keyframes scene-legend-flicker {
+  0% {
+    opacity: 0.75;
+  }
+  31% {
+    opacity: 0.2;
+  }
+  37% {
+    opacity: 0.75;
+  }
+  70% {
+    opacity: 0.2;
+  }
+  74% {
+    opacity: 0.75;
+  }
+}
+@keyframes scene-legend-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene-legend-dot,
+  .scene-legend-hq {
+    animation: none !important;
+  }
+}

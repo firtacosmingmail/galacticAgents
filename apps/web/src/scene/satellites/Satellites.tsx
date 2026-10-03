@@ -36,8 +36,15 @@ import {
   bodyMatrix,
   satelliteGeometry,
 } from './satellite-mesh.js';
-import { sameSatellites, satelliteList, type SatelliteSpec } from './satellite-model.js';
-import { onSatellitesChanged, satelliteIds } from './registry.js';
+import {
+  sameSatellites,
+  SCENE_SATELLITES,
+  satelliteList,
+  type SatelliteSpec,
+} from './satellite-model.js';
+import { getSatellite, onSatellitesChanged, satelliteIds } from './registry.js';
+import { HqStation, HqTargets, writeHq } from './hq/HqStation.js';
+import { ordinarySatellites } from './hq/hq-model.js';
 
 /**
  * The satellites (P4-01; SPEC §4.1, TECHNOLOGY §2.1): one per live Waykeeper and Steward, orbiting
@@ -52,6 +59,11 @@ import { onSatellitesChanged, satelliteIds } from './registry.js';
  * all satellites and one for all beams — two draw calls whatever the count. Everything is on the
  * decorations' layer (`DECOR_LAYER`), so the selection outline's depth pass skips it (P3-08).
  *
+ * P4-02: the list keeps failed agents and adds the Harmonizer's HQ station (`SCENE_SATELLITES`);
+ * every frame carries its state's tint and pulse (`look.ts`), copied here into the material or
+ * instance colour (no extra draw call). The HQ is the Harmonizer's frame drawn with its own model
+ * (`hq/HqStation.tsx`, outside the instancing), written in this same frame loop.
+ *
  * Under `prefers-reduced-motion` the satellites stand still on their orbits and never scan; the
  * frame loop is then on demand, so a change of satellites, of anchors or of the scale asks for one
  * frame (`invalidate`). The mobile frame cap needs nothing: the satellites move by the motion
@@ -63,7 +75,7 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
   const tasks = useAppStore((s) => s.world.tasks);
   const projects = useAppStore((s) => s.world.projects);
   const list = useMemo(
-    () => satelliteList({ agents, statuses, tasks, projects }),
+    () => satelliteList({ agents, statuses, tasks, projects }, SCENE_SATELLITES),
     [agents, statuses, tasks, projects],
   );
   const reducedMotion = useReducedMotion();
@@ -99,7 +111,11 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
 
   // What is drawn is what the director publishes: the live satellites and those shrinking out.
   const agentIds = useSyncExternalStore(onSatellitesChanged, satelliteIds);
-  const instanced = instancedPath(agentIds.length, quality.satellites);
+  const { hq: hqId, others } = useMemo(
+    () => ordinarySatellites(agentIds, (id) => getSatellite(id)?.role),
+    [agentIds],
+  );
+  const instanced = instancedPath(others.length, quality.satellites);
   const bloom = quality.bloom !== null;
 
   const shapes = useMemo(() => ({ body: satelliteGeometry(), beam: beamGeometry() }), []);
@@ -107,6 +123,8 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
 
   const [targets] = useState(() => new RenderTargets());
   const [pixels] = useState(() => new PixelSizer());
+  const [hq] = useState(() => new HqTargets());
+  const hqState = list.find((s) => s.role === 'harmonizer')?.state;
 
   useFrame((state) => {
     pixels.follow(state.camera as PerspectiveCamera, state.size.height);
@@ -118,22 +136,32 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
     );
     if (instanced) writeInstanced(frames, targets, bloom);
     else writeMeshes(frames, targets, bloom);
+    writeHq(frames, hq, { bloom, now: motionSeconds(), reducedMotion, state: hqState });
   });
 
   if (agentIds.length === 0) return null;
-  return instanced ? (
-    <InstancedSatellites
-      key={instanceCapacity(agentIds.length)}
-      capacity={instanceCapacity(agentIds.length)}
-      shapes={shapes}
-      targets={targets}
-    />
-  ) : (
-    <group name="satellites">
-      {agentIds.map((id) => (
-        <SatelliteMeshes key={id} agentId={id} shapes={shapes} targets={targets} />
-      ))}
-    </group>
+  const station = hqId ? (
+    <HqStation key={hqId} agentId={hqId} beamShape={shapes.beam} targets={hq} />
+  ) : null;
+  if (others.length === 0) return station;
+  return (
+    <>
+      {station}
+      {instanced ? (
+        <InstancedSatellites
+          key={instanceCapacity(others.length)}
+          capacity={instanceCapacity(others.length)}
+          shapes={shapes}
+          targets={targets}
+        />
+      ) : (
+        <group name="satellites">
+          {others.map((id) => (
+            <SatelliteMeshes key={id} agentId={id} shapes={shapes} targets={targets} />
+          ))}
+        </group>
+      )}
+    </>
   );
 }
 
@@ -235,14 +263,16 @@ function writeInstanced(
 ): void {
   const { bodies, beams } = targets;
   if (!bodies || !beams) return;
-  const n = Math.min(frames.length, bodies.instanceMatrix.count);
-  for (let i = 0; i < n; i++) {
-    const f = frames[i];
-    if (!f) continue;
-    bodies.setMatrixAt(i, bodyMatrix(f, matrix));
-    bodies.setColorAt(i, bodyColor(f, color));
-    beams.setMatrixAt(i, beamMatrix(f, matrix));
-    beams.setColorAt(i, beamColor(f, bloom, color));
+  const capacity = bodies.instanceMatrix.count;
+  let n = 0;
+  for (const f of frames) {
+    if (n >= capacity) break;
+    if (f.role === 'harmonizer') continue; // the HQ station has its own meshes
+    bodies.setMatrixAt(n, bodyMatrix(f, matrix));
+    bodies.setColorAt(n, bodyColor(f, color));
+    beams.setMatrixAt(n, beamMatrix(f, matrix));
+    beams.setColorAt(n, beamColor(f, bloom, color));
+    n++;
   }
   bodies.count = n;
   beams.count = n;
