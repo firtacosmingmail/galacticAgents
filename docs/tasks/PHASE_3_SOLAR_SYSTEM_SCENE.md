@@ -1,7 +1,7 @@
 # Phase 3 — Solar system scene
 
-**Current task:** P3-01 (wave 1, branch `p3-wave1-canvas`) · **Task status:** in progress
-**Phase status:** in progress (0/8 done) — on branch `phase-3`
+**Current task:** P3-02, P3-03, P3-04 (wave 2, after wave 1 is merged into `phase-3`) · **Task status:** todo
+**Phase status:** in progress (1/8 done) — on branch `phase-3`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -42,7 +42,7 @@ The spectacular map, driven by real data: Sun, planets, moons and the asteroid b
 ## Tasks
 
 ### P3-01 — Canvas, renderer and quality tiers
-- **Status:** in progress · **Depends on:** P25-02 · **Parallel with:** —
+- **Status:** done (2026-10-03; the 60 fps check on the Mac is Cosmin's) · **Depends on:** P25-02 · **Parallel with:** —
 - R3F `<Canvas>` with `WebGLRenderer`, colour management, resize handling; quality tier config read from settings (pixel ratio, shadow/effects flags); star-field skybox; Sun with emissive material and bloom via `@react-three/postprocessing`; scene mounted beside the panel with a toggle to hide it (list mode).
 - **Acceptance:** scene renders at 60 fps on the Mac at "high"; hiding it leaves the panel fully functional.
 
