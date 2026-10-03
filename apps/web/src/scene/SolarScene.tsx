@@ -22,6 +22,8 @@ import { Belt } from './belt/Belt.js';
 import { CameraRig } from './camera/CameraRig.js';
 import { cappedFrameloop, FrameCap } from './frame-cap.js';
 import { Picking } from './picking/Picking.js';
+import { LabelProjector } from './labels/LabelProjector.js';
+import { MoonMarkers } from './labels/MoonMarkers.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -38,6 +40,10 @@ import { Picking } from './picking/Picking.js';
  * Picking (P3-05) listens on the canvas and draws the hover / selection rings; on tiers with a
  * composer the selected body also gets the outline effect (the composer then runs with
  * `autoClear={false}`, which the outline needs; the render pass still clears).
+ *
+ * Domain labels (P3-07): the label layer is DOM over the canvas (`SceneArea`); `LabelProjector`
+ * places all of it in one throttled pass (`quality.labelHz`), and `MoonMarkers` rings the moons
+ * that host an independent project.
  */
 export interface SolarSceneProps {
   quality: SceneQuality;
@@ -111,6 +117,8 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <Belt rocks={quality.beltRocks} />
       <CameraRig />
       <Picking outline={quality.bloom ? outline : undefined} />
+      <MoonMarkers />
+      <LabelProjector hz={quality.labelHz} />
       {quality.bloom && (
         <EffectComposer multisampling={quality.antialias ? 4 : 0} autoClear={false}>
           <Outline

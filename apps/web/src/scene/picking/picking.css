@@ -10,14 +10,14 @@
   font-size: 12px;
   white-space: nowrap;
   pointer-events: none;
-  z-index: 30;
+  z-index: var(--scene-z-hover);
 }
 .pick-hover-more {
   color: #8a91a6;
 }
 .pick-popover {
   position: absolute;
-  z-index: 40;
+  z-index: var(--scene-z-popover);
   min-width: 160px;
   max-width: min(280px, calc(100% - 16px));
   padding: 8px 28px 8px 10px;

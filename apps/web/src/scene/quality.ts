@@ -31,6 +31,9 @@ import type { QualityTier } from '@galactic/protocol';
  *   estimated) may stay cached once nothing uses them; everything idle is dropped on a tier change;
  * - `ringSegments`, `orbitSegments`: tessellation of Saturn's and Uranus's rings and of the orbit
  *   lines;
+ * - `labelHz` (P3-07): how many times a second the domain labels are re-projected at most (one pass
+ *   for all of them; a label is rewritten only when it moved by more than half a pixel), on top of
+ *   the frame cap;
  * - `maxFps`: a frame-rate cap while the decorative motion runs (`null` = the display's rate); the
  *   mobile tier renders every other frame of a 60 Hz display to save the phone's battery. The fps
  *   meter (`?fps=1`) lifts the cap so it measures the headroom.
@@ -59,6 +62,7 @@ export interface SceneQuality {
   textureBudgetMB: number;
   ringSegments: number;
   orbitSegments: { planet: number; moon: number };
+  labelHz: number;
   maxFps: number | null;
 }
 
@@ -128,6 +132,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     textureBudgetMB: 96,
     ringSegments: 128,
     orbitSegments: { planet: 192, moon: 96 },
+    labelHz: 30,
     maxFps: null,
   },
   balanced: {
@@ -171,6 +176,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     textureBudgetMB: 32,
     ringSegments: 96,
     orbitSegments: { planet: 128, moon: 64 },
+    labelHz: 30,
     maxFps: null,
   },
   mobile: {
@@ -206,6 +212,7 @@ export const QUALITY_TIERS: Readonly<Record<QualityTier, SceneQuality>> = {
     textureBudgetMB: 8,
     ringSegments: 64,
     orbitSegments: { planet: 96, moon: 48 },
+    labelHz: 15,
     maxFps: 30,
   },
 };
