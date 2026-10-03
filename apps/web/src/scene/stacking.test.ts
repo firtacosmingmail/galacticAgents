@@ -13,6 +13,7 @@ const sheets = [
   'bodies/scale-toggle.css',
   'picking/picking.css',
   'labels/labels.css',
+  'legend/legend.css',
 ].map(css);
 
 /** The declarations of the rule whose selector is exactly `selector` (comments stripped). */
@@ -45,10 +46,15 @@ function z(selector: string): number {
 }
 
 describe('scene stacking order', () => {
-  it('canvas < labels < chrome (fps, breadcrumb, scale toggle) < hover label < popover', () => {
+  it('canvas < labels < chrome (fps, breadcrumb, scale toggle, legend) < hover label < popover', () => {
     const labels = z('.scene-labels');
     expect(labels).toBeGreaterThan(0);
-    for (const chrome of ['.pnl-scene-fps', '.pnl-scene-crumbs', '.pnl-scene-scale'])
+    for (const chrome of [
+      '.pnl-scene-fps',
+      '.pnl-scene-crumbs',
+      '.pnl-scene-scale',
+      '.scene-legend',
+    ])
       expect(z(chrome)).toBeGreaterThan(labels);
     expect(z('.pick-hover')).toBeGreaterThan(z('.pnl-scene-crumbs'));
     expect(z('.pick-popover')).toBeGreaterThan(z('.pick-hover'));

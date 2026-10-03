@@ -5,6 +5,8 @@ import { emptyWorld, type WorldState } from '../../state/reduce.js';
 import {
   hasLanded,
   isLive,
+  isSuperseded,
+  SCENE_SATELLITES,
   sameSatellites,
   satelliteList,
   showsSatellite,
@@ -148,6 +150,41 @@ describe('the list rule (showsSatellite)', () => {
     expect(list.map((s) => [s.agentId, s.state, s.landed])).toEqual([
       ['a-steward-2', 'failed', false],
     ]);
+  });
+
+  it('keepFailed: a failed agent goes once a live agent of its role takes over its work', () => {
+    const w = world({ 'a-steward-1': 'failed' });
+    expect(showsSatellite(w, 'a-steward-1', { keepFailed: true })).toBe(true);
+    // The Waykeeper respawns a Steward on the same task: the failed satellite gives way.
+    const respawned: Agent = { ...steward, id: 'a-steward-9' };
+    w.agents[respawned.id] = respawned;
+    w.statuses[respawned.id] = status(respawned.id, 'starting');
+    expect(isSuperseded(w, 'a-steward-1')).toBe(true);
+    expect(satelliteList(w, { keepFailed: true }).map((s) => s.agentId)).toEqual(['a-steward-9']);
+    // A replacement that failed too supersedes nothing; the Harmonizer is never superseded.
+    w.statuses[respawned.id] = status(respawned.id, 'failed');
+    expect(isSuperseded(w, 'a-steward-1')).toBe(false);
+    expect(isSuperseded(w, fx.harmonizer.id)).toBe(false);
+    // Another task's live Steward does not count.
+    const w2 = world({ 'a-steward-1': 'failed', 'a-steward-2': 'working' });
+    expect(isSuperseded(w2, 'a-steward-1')).toBe(false);
+  });
+
+  it('the scene keeps failed agents and draws the HQ station on Earth (SCENE_SATELLITES)', () => {
+    expect(SCENE_SATELLITES).toMatchObject({ keepFailed: true, harmonizer: true });
+    const w = world({ ...allWorking, 'a-steward-1': 'failed' });
+    const list = satelliteList(w, SCENE_SATELLITES);
+    expect(list.find((s) => s.agentId === 'a-steward-1')?.state).toBe('failed');
+    const hq = list.filter((s) => s.role === 'harmonizer');
+    expect(hq).toHaveLength(1);
+    expect(hq[0]).toMatchObject({ agentId: fx.harmonizer.id, bodyId: 'b-earth', state: 'working' });
+    // The HQ follows its status record: idle, and gone without one.
+    w.statuses[fx.harmonizer.id] = status(fx.harmonizer.id, 'idle');
+    expect(satelliteList(w, SCENE_SATELLITES).find((s) => s.role === 'harmonizer')?.state).toBe(
+      'idle',
+    );
+    delete w.statuses[fx.harmonizer.id];
+    expect(satelliteList(w, SCENE_SATELLITES).some((s) => s.role === 'harmonizer')).toBe(false);
   });
 
   it('keepLanded (P4-04) keeps a finished Steward whose task completed, landed', () => {
