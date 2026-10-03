@@ -13,6 +13,8 @@ import { HARMONIZER, selectionKey } from '../../state/selection.js';
 import { publishSatellites } from '../satellites/registry.js';
 import type { SatelliteFrame } from '../satellites/director.js';
 import { pickingWorld, satelliteFrame } from './fixtures.js';
+import { publishBeacons } from '../beacons/registry.js';
+import { question } from '../beacons/fixtures.js';
 import { hoverAt, usePickingStore } from './store.js';
 
 /**
@@ -633,5 +635,58 @@ describe('OutlineSync', () => {
     depthPass.render();
     expect(seen).toEqual([false]);
     expect(camera.layers.isEnabled(DECOR_LAYER)).toBe(true);
+  });
+});
+
+describe('question beacons as pick targets (P4-05)', () => {
+  // Jupiter at the centre; its beacon's glyph 72 px above it (y ≈ 228 px), over Jupiter's moon Io.
+  const perPx = 10 / (300 / Math.tan((22.5 * Math.PI) / 180));
+  beforeEach(() => {
+    anchorAt('b-jupiter', 0);
+    anchorAtPoint('b-io', [0, 1, 0], 0.3);
+    const world = pickingWorld();
+    world.questions = {
+      'q-p': question('q-p', 'a-st-in', { kind: 'permission', text: 'Run the migration?' }),
+    };
+    useAppStore.setState({ world });
+    publishBeacons([{ bodyId: 'b-jupiter', visible: true, center: [0, 1, 0], perPx }]);
+    const inbox = document.createElement('section');
+    inbox.id = 'pnl-inbox';
+    const card = document.createElement('article');
+    card.dataset['questionId'] = 'q-p';
+    inbox.append(card);
+    document.body.append(inbox);
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  afterEach(() => {
+    publishBeacons([]);
+    document.getElementById('pnl-inbox')?.remove();
+  });
+
+  it('a beacon under the pointer wins over the body under it; its card shows', () => {
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 400, 228);
+    flushRaf();
+    expect(usePickingStore.getState().hover).toEqual({
+      kind: 'beacon',
+      bodyId: 'b-jupiter',
+      others: 0,
+    });
+    // Off the glyph: the moon under the pointer again.
+    pointer('pointerMove', 400, 200);
+    flushRaf();
+    expect(usePickingStore.getState().hover?.kind).not.toBe('beacon');
+  });
+
+  it('a click opens the question in the inbox and selects nothing, flies nowhere', () => {
+    render(<Picking />);
+    frame();
+    click(402, 230);
+    const card = document.querySelector('[data-question-id="q-p"]');
+    expect(document.activeElement).toBe(card);
+    expect(selected()).toBe('harmonizer');
+    expect(useCameraStore.getState().request).toBeUndefined();
+    expect(usePickingStore.getState().popover).toBeUndefined();
   });
 });

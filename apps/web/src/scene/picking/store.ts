@@ -51,7 +51,17 @@ export interface SatelliteHover {
   bodyId?: undefined;
 }
 
-export type Hover = BodyHover | SatelliteHover;
+/**
+ * The pointer over a question beacon (P4-05): its first question's card, at the pointer
+ * (`beacons/BeaconHoverCard.tsx`). `bodyId` is the beacon's body (it gets the faint hover ring).
+ */
+export interface BeaconHover {
+  kind: 'beacon';
+  bodyId: string;
+  others: number;
+}
+
+export type Hover = BodyHover | SatelliteHover | BeaconHover;
 
 export type Popover =
   | (Point & { kind: 'info'; action: Extract<BodyAction, { kind: 'info' }> })
@@ -107,6 +117,9 @@ export const usePickingStore = create<PickingState>((set, get) => ({
 
 function sameHover(a: Hover, b: Hover): boolean {
   if (a.others !== b.others) return false;
+  if (a.kind === 'beacon' || b.kind === 'beacon') {
+    return a.kind === 'beacon' && b.kind === 'beacon' && a.bodyId === b.bodyId;
+  }
   if (a.kind === 'satellite' || b.kind === 'satellite') {
     return (
       a.kind === 'satellite' &&
@@ -141,7 +154,10 @@ export function onHoverMove(listener: (at: Readonly<Point>) => void): () => void
   return () => void moveListeners.delete(listener);
 }
 
-/** The body a hover is about (`undefined` over a satellite: its body is not what is hovered). */
+/**
+ * The body a hover is about (`undefined` over a satellite: its body is not what is hovered; a
+ * beacon's body, P4-05).
+ */
 export function hoveredBody(hover: Hover | undefined): string | undefined {
   return hover?.kind === 'satellite' ? undefined : hover?.bodyId;
 }

@@ -26,6 +26,7 @@ import { LabelProjector } from './labels/LabelProjector.js';
 import { MoonMarkers } from './labels/MoonMarkers.js';
 import { DECOR_LAYER, showDecor } from './layers.js';
 import { Satellites } from './satellites/Satellites.js';
+import { Beacons } from './beacons/Beacons.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -107,6 +108,8 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <Belt rocks={quality.beltRocks} />
       {/* P4-01: a satellite per live Waykeeper / Steward, on its work's body (`satellites/`). */}
       <Satellites quality={quality} />
+      {/* P4-05: a beacon above every body with an open question for the user (`beacons/`). */}
+      <Beacons />
       <CameraRig />
       <Picking outline={quality.bloom ? outline : undefined} />
       <MoonMarkers />
