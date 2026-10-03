@@ -3,10 +3,14 @@ import type { z } from 'zod';
 import {
   AgentRuntime as RuntimeName,
   ConversationQuery,
+  HistoryQuestionsQuery,
+  HistoryWorkQuery,
   NotificationsQuery,
   SettingsPatch,
   TranscriptQuery,
   type ConversationResponse,
+  type HistoryQuestionsResponse,
+  type HistoryWorkResponse,
   type NotificationsResponse,
   type PreflightResponse,
   type RuntimePreflight,
@@ -18,6 +22,7 @@ import { SettingsError, writableFor, type SettingsService } from '../config/sett
 import type { EventLog } from '../domain/event-log.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
 import { History } from '../runtime/history.js';
+import { HistoryView } from '../runtime/history-view.js';
 import { notificationFeed } from '../runtime/notifications.js';
 import { redactSecrets } from '../runtime/redact.js';
 import type { TranscriptPipeline } from '../runtime/transcripts.js';
@@ -32,7 +37,9 @@ import { bearerGuard, originOf } from './security.js';
  * - `GET /api/agents/:id/transcript` — its transcript chunks, paged by `seq`;
  * - `GET /api/settings`, `PATCH /api/settings` — the settings page (SPEC §4.6);
  * - `GET /api/preflight` — every registered runtime's check;
- * - `GET /api/notifications` — the SPEC §4.5 feed.
+ * - `GET /api/notifications` — the SPEC §4.5 feed;
+ * - `GET /api/history/work`, `GET /api/history/questions` — the history view (P25-10): finished
+ *   and archived work, past questions, searched and paged back by an opaque cursor.
  *
  * Errors: 400 `invalid_query` / `invalid_body` (zod issues) or `invalid` (a value the settings
  * refuse, with a message), 403 `remote_settings` (a remote client may change only the quality
@@ -97,6 +104,30 @@ export function registerPanelRoutes(
       if (!q) return;
       if (!knownAgent(id)) return reply.code(404).send({ error: 'not_found' });
       return history.transcript(id, q) satisfies TranscriptResponse;
+    });
+
+    // The history view (P25-10): finished and archived work, past questions.
+    const past = new HistoryView(log.db, log.tables);
+    const page = <T>(read: () => T, reply: FastifyReply): T | undefined => {
+      try {
+        return read();
+      } catch (error) {
+        if (error instanceof RangeError) {
+          void reply.code(400).send({ error: 'invalid_query', message: error.message });
+          return undefined;
+        }
+        throw error;
+      }
+    };
+    app.get('/api/history/work', async (req, reply) => {
+      const q = parse(HistoryWorkQuery, req.query, reply, 'invalid_query');
+      if (!q) return;
+      return page(() => past.work(q) satisfies HistoryWorkResponse, reply);
+    });
+    app.get('/api/history/questions', async (req, reply) => {
+      const q = parse(HistoryQuestionsQuery, req.query, reply, 'invalid_query');
+      if (!q) return;
+      return page(() => past.questions(q) satisfies HistoryQuestionsResponse, reply);
     });
 
     app.get('/api/notifications', async (req, reply) => {
