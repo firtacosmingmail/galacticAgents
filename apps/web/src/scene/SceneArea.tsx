@@ -3,6 +3,7 @@ import type { QualityTier } from '@galactic/protocol';
 import { useSettingsData } from '../panel/settings/SettingsData.js';
 import { fpsMeterEnabled, type FpsSample } from './fps.js';
 import { sceneQuality } from './quality.js';
+import { ScaleToggle } from './bodies/ScaleToggle.js';
 import './scene.css';
 
 /** The reason reported when the browser takes the scene's WebGL context away. */
@@ -38,6 +39,7 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
         </Suspense>
       </SceneErrorBoundary>
       {showFps && <FpsMeter sample={sample} tier={quality.tier} />}
+      <ScaleToggle />
     </section>
   );
 }

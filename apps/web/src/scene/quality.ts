@@ -11,8 +11,8 @@ import type { QualityTier } from '@galactic/protocol';
  *   The threshold is 1.0 (linear luminance before tone mapping): only HDR emitters bloom, never
  *   the stars (capped at `STAR_MAX_BRIGHTNESS`, below it);
  * - `stars`: points in the star-field skybox;
- * - `shadows`: whether the tier may use a shadow map. Not wired yet: nothing receives shadows, so
- *   the canvas has no shadow map and the Sun's light casts none until P3-02 adds the planets.
+ * - `shadows`: the shadow map and the Sun light's point shadow (P3-02): planets and moons cast and
+ *   receive, rings receive (Saturn's shadow on its rings, eclipses of moons).
  */
 /** Linear luminance a pixel needs (before tone mapping) to bloom. */
 export const BLOOM_THRESHOLD = 1.0;
