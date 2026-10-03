@@ -28,6 +28,9 @@ export class EclipseSystem {
 /** Every patched material shares one program (the patch does not depend on the receiver). */
 const cacheKey = () => 'eclipse-p3-10';
 
+/** Logged once per page: a failed patch would otherwise log on every material compile. */
+let warnedPatchFailure = false;
+
 export interface EclipseInputs {
   system: EclipseSystem;
   receiver: EclipseReceiver | undefined;
@@ -58,9 +61,19 @@ export class EclipseBinding {
   /** For the material: adds the uniforms and patches the shader. */
   readonly onBeforeCompile = (shader: WebGLProgramParametersWithUniforms): void => {
     Object.assign(shader.uniforms, this.uniforms);
-    const patched = patchEclipseShader(shader.vertexShader, shader.fragmentShader);
-    shader.vertexShader = patched.vertexShader;
-    shader.fragmentShader = patched.fragmentShader;
+    // This runs inside `renderer.render`, in R3F's frame loop, where a throw never reaches the
+    // scene's error boundary and repeats every frame. If three renamed an anchor chunk (the unit
+    // test fails loudly on that), draw the body without eclipses rather than break the scene.
+    try {
+      const patched = patchEclipseShader(shader.vertexShader, shader.fragmentShader);
+      shader.vertexShader = patched.vertexShader;
+      shader.fragmentShader = patched.fragmentShader;
+    } catch (error) {
+      if (!warnedPatchFailure) {
+        warnedPatchFailure = true;
+        console.error('Eclipse shading disabled: could not patch the shader.', error);
+      }
+    }
   };
 
   readonly customProgramCacheKey = cacheKey;

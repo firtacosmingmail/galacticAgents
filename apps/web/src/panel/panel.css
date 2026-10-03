@@ -227,7 +227,8 @@
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 64px);
-  max-height: calc(100dvh - 64px);
+  /* The compact bar is 52 px plus the notch inset (its top padding). */
+  max-height: calc(100dvh - 52px - env(safe-area-inset-top, 0px));
   overflow-y: auto;
   overscroll-behavior: contain;
   box-sizing: border-box;

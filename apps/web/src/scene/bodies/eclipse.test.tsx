@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { renderHook } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Mesh, ShaderLib, type WebGLProgramParametersWithUniforms } from 'three';
 import type { Body } from '@galactic/protocol';
 import { orbitPoint } from '../orbit.js';
@@ -304,5 +304,20 @@ describe('useEclipse (the binding)', () => {
     expect(shader.fragmentShader).toContain('eclipseLight');
     const other = setup(true).hook.result.current;
     expect(other.customProgramCacheKey()).toBe(b.customProgramCacheKey());
+  });
+
+  it('leaves the shader unpatched, instead of throwing in the frame loop, if an anchor is gone', () => {
+    const { hook } = setup(true);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const renamed = ShaderLib.standard.fragmentShader.replaceAll('lights_fragment_end', 'renamed');
+    const shader = {
+      uniforms: {},
+      vertexShader: ShaderLib.standard.vertexShader,
+      fragmentShader: renamed,
+    } as unknown as WebGLProgramParametersWithUniforms;
+    expect(() => hook.result.current.onBeforeCompile(shader)).not.toThrow();
+    expect(shader.fragmentShader).toBe(renamed);
+    expect(error).toHaveBeenCalledTimes(1);
+    error.mockRestore();
   });
 });

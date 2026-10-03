@@ -87,7 +87,8 @@ function WideTopBar({ scene, onForget }: TopBarProps) {
 /**
  * Scrolls the inbox into view and focuses it, once it is mounted: from the settings or history
  * page the panel first navigates back to the main view, whose columns may wait for the settings
- * read (P25-08's gate), so this looks for the inbox over a few frames.
+ * read (P25-08's gate), so this looks for the inbox over a few frames. While the first-run wizard
+ * shows, the inbox never mounts: it gives up after about a second, having still navigated home.
  */
 function revealInbox(triesLeft = 60) {
   const inbox = document.getElementById(INBOX_ID);
