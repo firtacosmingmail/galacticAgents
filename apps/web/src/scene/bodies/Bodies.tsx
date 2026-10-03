@@ -17,8 +17,17 @@ import {
 } from './layout.js';
 import { motionEnabled, useReducedMotion } from '../motion.js';
 import { placeOnOrbit } from '../orbit.js';
-import { MOON_TEXTURE, PLANET_TEXTURE } from './surface.js';
-import { useRingTexture, useSurfaceTexture } from './textures.js';
+import type { SceneQuality } from '../quality.js';
+import { useLodLevel } from './lod.js';
+import {
+  sphereFor,
+  useBodyMaps,
+  useNearTextureBudget,
+  useRingTexture,
+  useSphereGeometries,
+  type BodyKind,
+  type SphereSet,
+} from './textures.js';
 
 /**
  * Planets, moons, orbits and scale (P3-02). The bodies come from the world (`world.bodies`, the
@@ -36,30 +45,54 @@ import { useRingTexture, useSurfaceTexture } from './textures.js';
  * Shadows: planets and the largest moons cast (`castsShadow`: each caster is drawn six more times
  * a frame into the Sun's cube shadow map), every body receives, rings receive; they show only when
  * the tier turns the shadow map on (`SolarScene`).
+ *
+ * Level of detail (P3-06): each planet and moon picks a level from the tier's `lod` table by the
+ * camera's distance in body radii (`lod.ts`, with hysteresis). A level swaps only the sphere mesh's
+ * geometry (unit spheres shared by all bodies, scaled by the mesh) and its material's maps (the far
+ * map at once; nearer maps, with bump/roughness detail on rocky and Earth-like surfaces, painted
+ * lazily off the main thread). The anchor group is never replaced and its binding does not depend
+ * on the level, so picking, the camera and labels see the same anchor and radius throughout.
  */
-export function Bodies() {
+export function Bodies({ quality }: { quality: SceneQuality }) {
   const bodies = useAppStore((s) => s.world.bodies);
   const mode = useSceneScale((s) => s.mode);
   const motion = motionEnabled(useReducedMotion());
   const list = useMemo(() => buildRenderList(bodies, mode), [bodies, mode]);
+  const spheres = useSphereGeometries(quality.lod);
+  useNearTextureBudget(quality.textureBudgetMB, quality.tier);
   return (
     <group name="bodies">
       {list.map((planet) => (
-        <Planet key={planet.bodyId} item={planet} motion={motion} />
+        <Planet
+          key={planet.bodyId}
+          item={planet}
+          motion={motion}
+          quality={quality}
+          spheres={spheres}
+        />
       ))}
     </group>
   );
 }
 
 const DEG = Math.PI / 180;
-const ORBIT_SEGMENTS = 192;
-const MOON_ORBIT_SEGMENTS = 96;
 
-function Planet({ item, motion }: { item: PlanetItem; motion: boolean }) {
+interface DetailProps {
+  quality: SceneQuality;
+  spheres: SphereSet;
+}
+
+function Planet({
+  item,
+  motion,
+  quality,
+  spheres,
+}: { item: PlanetItem; motion: boolean } & DetailProps) {
   const anchor = useRef<Group>(null);
   const spin = useRef<Mesh>(null);
   useOrbit(anchor, item.distance, item.phase, item.period, motion);
   useBodyAnchor(anchor, planetAnchor(item));
+  const level = useLodLevel(anchor, item.radius, quality.lod);
   useFrame((state) => {
     if (!motion || !spin.current) return;
     spin.current.rotation.y = (state.clock.elapsedTime / SPIN_PERIOD) * Math.PI * 2;
@@ -67,19 +100,31 @@ function Planet({ item, motion }: { item: PlanetItem; motion: boolean }) {
   useLayoutEffect(() => {
     if (!motion && spin.current) spin.current.rotation.y = 0;
   }, [motion]);
-  const texture = useSurfaceTexture(item.look, PLANET_TEXTURE);
   return (
     <>
-      <OrbitLine radius={item.distance} segments={ORBIT_SEGMENTS} opacity={0.22} />
+      <OrbitLine radius={item.distance} segments={quality.orbitSegments.planet} opacity={0.22} />
       <group ref={anchor} name={item.name} userData={{ bodyId: item.bodyId }}>
         <group rotation={[0, 0, item.look.tiltDeg * DEG]}>
-          <mesh ref={spin} castShadow receiveShadow>
-            <sphereGeometry args={[item.radius, 48, 32]} />
-            <meshStandardMaterial map={texture} roughness={0.95} metalness={0} />
+          <mesh
+            ref={spin}
+            geometry={sphereFor(spheres, 'planet', level)}
+            scale={item.radius}
+            castShadow
+            receiveShadow
+          >
+            <SurfaceMaterial look={item.look} kind="planet" quality={quality} level={level} />
           </mesh>
-          {item.look.rings && <Rings rings={item.look.rings} radius={item.radius} />}
+          {item.look.rings && (
+            <Rings rings={item.look.rings} radius={item.radius} segments={quality.ringSegments} />
+          )}
           {item.moons.map((moon) => (
-            <Moon key={moon.bodyId} item={moon} motion={motion} />
+            <Moon
+              key={moon.bodyId}
+              item={moon}
+              motion={motion}
+              quality={quality}
+              spheres={spheres}
+            />
           ))}
         </group>
       </group>
@@ -87,21 +132,67 @@ function Planet({ item, motion }: { item: PlanetItem; motion: boolean }) {
   );
 }
 
-function Moon({ item, motion }: { item: MoonItem; motion: boolean }) {
+function Moon({
+  item,
+  motion,
+  quality,
+  spheres,
+}: { item: MoonItem; motion: boolean } & DetailProps) {
   const anchor = useRef<Group>(null);
   useOrbit(anchor, item.distance, item.phase, item.period, motion);
   useBodyAnchor(anchor, moonAnchor(item));
-  const texture = useSurfaceTexture(item.look, MOON_TEXTURE);
+  const level = useLodLevel(anchor, item.radius, quality.lod);
   return (
     <>
-      <OrbitLine radius={item.distance} segments={MOON_ORBIT_SEGMENTS} opacity={0.12} />
+      <OrbitLine radius={item.distance} segments={quality.orbitSegments.moon} opacity={0.12} />
       <group ref={anchor} name={item.name} userData={{ bodyId: item.bodyId }}>
-        <mesh castShadow={item.castShadow} receiveShadow>
-          <sphereGeometry args={[item.radius, 24, 16]} />
-          <meshStandardMaterial map={texture} roughness={1} metalness={0} />
+        <mesh
+          geometry={sphereFor(spheres, 'moon', level)}
+          scale={item.radius}
+          castShadow={item.castShadow}
+          receiveShadow
+        >
+          <SurfaceMaterial look={item.look} kind="moon" quality={quality} level={level} />
         </mesh>
       </group>
     </>
+  );
+}
+
+/** How strongly the detail map's relief shades the surface (three's `bumpScale`). */
+const BUMP_SCALE = 1.5;
+
+/**
+ * A body's surface material at its LOD level: the colour map, and on near levels of rocky and
+ * Earth-like bodies the detail map as bump (R) and roughness (G: Earth's oceans glossy). Keyed on
+ * whether the detail map is there, so adding or removing it builds a new material (three compiles
+ * a different shader) instead of mutating the old one.
+ */
+function SurfaceMaterial({
+  look,
+  kind,
+  quality,
+  level,
+}: {
+  look: PlanetItem['look'];
+  kind: BodyKind;
+  quality: SceneQuality;
+  level: number;
+}) {
+  const { map, detail } = useBodyMaps(look, kind, quality.lod, level);
+  const matte = kind === 'planet' ? 0.95 : 1;
+  return detail ? (
+    <meshStandardMaterial
+      key="detail"
+      map={map}
+      bumpMap={detail}
+      bumpScale={BUMP_SCALE}
+      roughnessMap={detail}
+      roughness={1}
+      metalness={0}
+    />
+  ) : (
+    <meshStandardMaterial key="plain" map={map} roughness={matte} metalness={0} />
   );
 }
 
@@ -110,12 +201,12 @@ function Moon({ item, motion }: { item: MoonItem; motion: boolean }) {
  * the inner edge, 1 at the outer). Receives the planet's shadow; a faint emissive term keeps the
  * rings readable when the Sun grazes them edge-on.
  */
-function Rings({ rings, radius }: { rings: RingLook; radius: number }) {
+function Rings({ rings, radius, segments }: { rings: RingLook; radius: number; segments: number }) {
   const texture = useRingTexture(rings);
   const geometry = useMemo(() => {
     const inner = radius * rings.inner;
     const outer = radius * rings.outer;
-    const g = new RingGeometry(inner, outer, 128, 1);
+    const g = new RingGeometry(inner, outer, segments, 1);
     const pos = g.attributes['position']!;
     const uv = g.attributes['uv']!;
     for (let i = 0; i < pos.count; i++) {
@@ -123,7 +214,7 @@ function Rings({ rings, radius }: { rings: RingLook; radius: number }) {
       uv.setXY(i, (r - inner) / (outer - inner), 0.5);
     }
     return g;
-  }, [radius, rings.inner, rings.outer]);
+  }, [radius, rings.inner, rings.outer, segments]);
   useEffect(() => () => geometry.dispose(), [geometry]);
   return (
     <mesh geometry={geometry} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>

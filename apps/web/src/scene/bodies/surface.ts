@@ -72,15 +72,61 @@ function contrast(n: number, k = 2.2): number {
   return Math.min(1, Math.max(0, (n - 0.5) * k + 0.5));
 }
 
+/** Whether a surface has relief worth a bump map (P3-06): rocky bodies and Earth-like ones. */
+export function hasRelief(look: BodyLook): boolean {
+  return look.style === 'rocky' || look.style === 'earth';
+}
+
+/**
+ * Extra noise octaves for a texture wider than the 256-texel base (one per doubling, at most
+ * two): a near-level texture gains fine relief instead of just smoother blur. The added octaves
+ * are faint (1/32 and 1/64 of the first), so a level switch does not shift the pattern.
+ */
+export function extraOctaves(width: number): number {
+  return Math.max(0, Math.min(2, Math.floor(Math.log2(width / 256))));
+}
+
+/** A painted surface: the colour map and, when asked for, the detail map. */
+export interface SurfaceLayers {
+  /** `width` × `height` RGBA bytes (sRGB). */
+  color: Uint8Array;
+  /**
+   * `width` × `height` RG bytes (linear) or `null`: R = height (the bump map reads `.r`), G =
+   * roughness (the roughness map reads `.g`; Earth's oceans are glossy, everything else matte).
+   */
+  detail: Uint8Array | null;
+}
+
+/** Roughness of a matte surface and of Earth's oceans, as painted into the detail map. */
+export const MATTE_ROUGHNESS = 0.95;
+export const OCEAN_ROUGHNESS = 0.4;
+
 /**
  * Paints a body's surface: `width` × `height` RGBA bytes, equirectangular (u = longitude,
  * v = latitude): row 0 is the south pole, as three's `SphereGeometry` (v = 0 at the bottom) reads a
  * `DataTexture` (no flip).
  */
 export function paintSurface(look: BodyLook, width: number, height: number): Uint8Array {
+  return paintSurfaceLayers(look, width, height, false).color;
+}
+
+/**
+ * Paints the colour map and, with `withDetail` (and a surface with relief, `hasRelief`), the
+ * detail map from the same noise in the same pass (P3-06): the bumps sit exactly under the colours.
+ * Pure data, so it runs in a worker (`paint-worker.ts`) and in jsdom alike.
+ */
+export function paintSurfaceLayers(
+  look: BodyLook,
+  width: number,
+  height: number,
+  withDetail: boolean,
+): SurfaceLayers {
   const data = new Uint8Array(width * height * 4);
+  const detail = withDetail && hasRelief(look) ? new Uint8Array(width * height * 2) : null;
   const palette = look.palette.map(hexToRgb);
   const seed = look.seed * 7919;
+  const extra = extraOctaves(width);
+  const matte = Math.round(MATTE_ROUGHNESS * 255);
   for (let j = 0; j < height; j++) {
     const lat = ((j + 0.5) / height) * Math.PI - Math.PI / 2;
     const cosLat = Math.cos(lat);
@@ -90,6 +136,9 @@ export function paintSurface(look: BodyLook, width: number, height: number): Uin
       const sx = cosLat * Math.cos(lon);
       const sz = cosLat * Math.sin(lon);
       let rgb: number[];
+      // Relief (0..1) and roughness (0..1) for the detail map; only rocky and Earth set relief.
+      let relief = 0.5;
+      let rough = MATTE_ROUGHNESS;
       switch (look.style) {
         case 'gas': {
           // Latitude bands, wobbled by noise; a few strong stripes and fine streaks.
@@ -112,22 +161,28 @@ export function paintSurface(look: BodyLook, width: number, height: number): Uin
         }
         case 'earth': {
           // palette: deep ocean, shallow ocean, land, dry land.
-          const n = fbm(sx * 2.2, sy * 2.2, sz * 2.2, seed, 5);
+          const n = fbm(sx * 2.2, sy * 2.2, sz * 2.2, seed, 5 + extra);
           const [deep, shallow, land, dry] = [palette[0]!, palette[1]!, palette[2]!, palette[3]!];
           if (n < 0.5) {
             const t = Math.max(0, (n - 0.35) / 0.15);
             rgb = samplePalette([deep, shallow], t);
+            // The sea is flat and glossy.
+            relief = 0.3;
+            rough = OCEAN_ROUGHNESS;
           } else {
-            const d = fbm(sx * 5, sy * 5, sz * 5, seed + 5, 3);
+            const d = fbm(sx * 5, sy * 5, sz * 5, seed + 5, 3 + extra);
             rgb = samplePalette([land, dry], contrast(d, 2.5));
+            relief = 0.3 + (n - 0.5) * 1.4 + (d - 0.5) * 0.3;
           }
           break;
         }
         case 'rocky':
         default: {
-          const n = fbm(sx * 3, sy * 3, sz * 3, seed, 5);
+          const n = fbm(sx * 3, sy * 3, sz * 3, seed, 5 + extra);
           const speck = valueNoise(sx * 40, sy * 40, sz * 40, seed + 31);
-          rgb = samplePalette(palette, contrast(n) * 0.85 + speck * 0.15);
+          const t = contrast(n) * 0.85 + speck * 0.15;
+          rgb = samplePalette(palette, t);
+          relief = t;
           break;
         }
       }
@@ -135,16 +190,24 @@ export function paintSurface(look: BodyLook, width: number, height: number): Uin
         // Caps above ≈ 75° latitude, with a ragged edge blended over a few degrees.
         const edge = 0.965 + (fbm(sx * 8, sy * 8, sz * 8, seed + 9, 3) - 0.5) * 0.04;
         const ice = Math.min(1, Math.max(0, (Math.abs(sy) - edge) / 0.012 + 0.5));
-        if (ice > 0) rgb = rgb.map((c, n) => c + ([236, 241, 246][n]! - c) * ice);
+        if (ice > 0) {
+          rgb = rgb.map((c, n) => c + ([236, 241, 246][n]! - c) * ice);
+          rough = rough + (0.7 - rough) * ice;
+        }
       }
       const k = (j * width + i) * 4;
       data[k] = rgb[0]!;
       data[k + 1] = rgb[1]!;
       data[k + 2] = rgb[2]!;
       data[k + 3] = 255;
+      if (detail) {
+        const d = (j * width + i) * 2;
+        detail[d] = Math.round(Math.min(1, Math.max(0, relief)) * 255);
+        detail[d + 1] = rough === MATTE_ROUGHNESS ? matte : Math.round(rough * 255);
+      }
     }
   }
-  return data;
+  return { color: data, detail };
 }
 
 /**
@@ -171,7 +234,8 @@ export function paintRings(rings: RingLook, width: number): Uint8Array {
   return data;
 }
 
-/** Texture sizes (power of two, so mipmaps work): planets get more texels than moons. */
-export const PLANET_TEXTURE = { width: 256, height: 128 } as const;
-export const MOON_TEXTURE = { width: 128, height: 64 } as const;
+/**
+ * The rings' radial texture width. Body texture sizes are per LOD level in the tier table
+ * (`quality.ts`, powers of two so mipmaps work; planets get more texels than moons).
+ */
 export const RING_TEXTURE_WIDTH = 256;

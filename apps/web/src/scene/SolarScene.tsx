@@ -20,6 +20,7 @@ import { attachAnchor } from './anchor-binding.js';
 import { motionEnabled, sceneFrameloop, useReducedMotion } from './motion.js';
 import { Belt } from './belt/Belt.js';
 import { CameraRig } from './camera/CameraRig.js';
+import { cappedFrameloop, FrameCap } from './frame-cap.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -44,14 +45,19 @@ export interface SolarSceneProps {
 export const SUN_RADIUS = 6;
 /**
  * The Sun light's shadow (P3-02, tiers with `shadows`): one point-light shadow map, PCF filtered,
- * reaching past Neptune's moons in true scale. Its main effect is Saturn's shadow on its rings
+ * its size from the tier (`shadowMapSize`, P3-06), reaching past Neptune's moons in true scale. Its main effect is Saturn's shadow on its rings
  * and moons eclipsed by their planet.
  */
-const SHADOW_MAP_SIZE = 1024;
 const SHADOW_FAR = 1300;
 const BACKGROUND = '#02030a';
 
 export default function SolarScene({ quality, onFps, onContextLost }: SolarSceneProps) {
+  // A capped tier (P3-06 `maxFps`, mobile) renders on demand, driven by `FrameCap`.
+  const { frameloop, capFps } = cappedFrameloop(
+    sceneFrameloop({ motion: motionEnabled(useReducedMotion()), fpsMeter: onFps !== undefined }),
+    quality.maxFps,
+    onFps !== undefined,
+  );
   return (
     <Canvas
       // `antialias` is a context parameter: a tier that changes it gets a new context.
@@ -69,10 +75,7 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       // The shadow map follows `quality.shadows` (PCF, `shadows="percentage"`: three r18x dropped
       // the PCFSoft that `shadows={true}` asks for), together with the Sun light's `castShadow`,
       // so a tier change also changes the lights' state and the materials recompile.
-      frameloop={sceneFrameloop({
-        motion: motionEnabled(useReducedMotion()),
-        fpsMeter: onFps !== undefined,
-      })}
+      frameloop={frameloop}
       shadows={quality.shadows ? 'percentage' : false}
       camera={{ position: [0, 40, 140], fov: 45, near: 0.1, far: 6000 }}
     >
@@ -80,11 +83,13 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <ambientLight intensity={0.04} />
       {/* The Sun lights the planets (P3-02); decay 0 so spacing does not change their brightness. */}
       <pointLight
+        // three never resizes a point light's cube shadow map: a new size gets a new light.
+        key={quality.shadowMapSize}
         position={[0, 0, 0]}
         intensity={3}
         decay={0}
         castShadow={quality.shadows}
-        shadow-mapSize={[SHADOW_MAP_SIZE, SHADOW_MAP_SIZE]}
+        shadow-mapSize={[quality.shadowMapSize, quality.shadowMapSize]}
         shadow-camera-near={SUN_RADIUS}
         shadow-camera-far={SHADOW_FAR}
         shadow-bias={-0.0005}
@@ -93,7 +98,7 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <StarField count={quality.stars} />
       <Sun glow={quality.bloom === null} />
       {/* Phase 3 wave 2: each task owns its folder; they meet through `anchors.ts`. */}
-      <Bodies />
+      <Bodies quality={quality} />
       <Belt rocks={quality.beltRocks} />
       <CameraRig />
       {quality.bloom && (
@@ -108,6 +113,7 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
           <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
         </EffectComposer>
       )}
+      {capFps !== null && <FrameCap fps={capFps} />}
       {onFps && <FpsProbe onFps={onFps} />}
       {onContextLost && <ContextLossWatch onLost={onContextLost} />}
     </Canvas>
