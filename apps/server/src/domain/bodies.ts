@@ -92,6 +92,11 @@ export function occupy(ctx: CommandContext, body: Body, host: Host): Body {
  * The work on `from` left for `toBodyId` (SPEC §3.4): `from` loses its host and shows the "moved
  * to …" marker, stamped with the command's clock, and `body.moved` announces it (the satellite
  * flies). With `intoProjectId` a standalone task joined that project's body, whose host stays.
+ *
+ * Keep `body.moved` in the same command as the move's `task.updated` (`moveTask`'s path, and
+ * `rehome` / `setTaskBody` here): both must carry the same `ctx.now`. The history view folds the
+ * two into one move by that equal instant and `intoProjectId` (`HistoryView.trail`, either order),
+ * so stamping them apart would list one join twice.
  */
 export function markMoved(
   ctx: CommandContext,

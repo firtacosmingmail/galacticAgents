@@ -13,6 +13,7 @@ import { registerAnchor } from './anchors.js';
 import { useCameraStore } from './camera/store.js';
 import { activateBody, deselectFromScene } from './picking/store.js';
 import { setDeepLinkForTest } from './picking/sync.js';
+import { SCENE_VISIBLE_KEY } from './visibility.js';
 
 /**
  * P5-01: every selection path of SPEC §4.1–§4.2 end to end, through the real panel (`App`) with
@@ -191,6 +192,19 @@ describe('panel → scene: every panel path selects, rewrites the URL and flies 
     expect(selected()).toBe('steward:a-steward-2');
     expect(window.location.pathname).toBe('/steward/a-steward-2');
     expect(focused()).toBe('b-ast-1');
+  });
+
+  it('a return to the panel in list mode does not fly when the scene is shown later', async () => {
+    localStorage.setItem(SCENE_VISIBLE_KEY, '0');
+    await open('/settings', false);
+    act(() => focusTarget({ kind: 'task', id: 't-2' }));
+    await vi.waitFor(() => expect(useAppStore.getState().route).toBe('panel'));
+    expect(selected()).toBe('steward:a-steward-2');
+    expect(screen.queryByTestId('solar-scene')).toBeNull();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show scene' })[0]!);
+    await vi.waitFor(() => expect(screen.getByTestId('solar-scene')).toBeTruthy());
+    expect(focused()).toBeUndefined();
+    expect(flights()).toBe(0);
   });
 });
 

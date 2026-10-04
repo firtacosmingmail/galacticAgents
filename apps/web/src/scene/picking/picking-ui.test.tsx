@@ -36,7 +36,12 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/');
   useAppStore.setState({ world: pickingWorld(), route: 'panel', selection: HARMONIZER });
   usePickingStore.setState({ hover: undefined, popover: undefined });
-  useCameraStore.setState({ focusedId: undefined, request: undefined, flying: false });
+  useCameraStore.setState({
+    focusedId: undefined,
+    request: undefined,
+    flying: false,
+    atSystem: false,
+  });
   setDeepLinkForTest(undefined);
   for (const id of ['b-sun', 'b-earth', 'b-moon', 'b-mars', 'b-jupiter', 'b-io', 'b-ast-7'])
     anchor(id);
@@ -375,6 +380,38 @@ describe('scene keys', () => {
     act(() => void area.dispatchEvent(event));
     expect(selected()).toBe('harmonizer');
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('an Escape that changes nothing is left to the replay bar (wave-1 review)', () => {
+    render(<Area />);
+    const area = screen.getByRole('region', { name: 'scene' });
+    const escape = () => {
+      const event = new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => void area.dispatchEvent(event));
+      return event;
+    };
+    // The Harmonizer selected, the camera somewhere free: Escape frames the system, taken.
+    expect(escape().defaultPrevented).toBe(true);
+    expect(camera().request).toMatchObject({ kind: 'overview' });
+    // The overview flight arrived: nothing left to unwind — not taken, no new request.
+    act(() => camera().atOverview());
+    const seq = camera().request?.seq;
+    expect(escape().defaultPrevented).toBe(false);
+    expect(camera().request?.seq).toBe(seq);
+    // A fresh rig starts at the framing too; the user's orbit leaves it.
+    act(() => camera().rigMounted());
+    expect(escape().defaultPrevented).toBe(false);
+    act(() => camera().userMoved());
+    expect(escape().defaultPrevented).toBe(true);
+    // Home always goes back to the system.
+    act(() => camera().atOverview());
+    const home = new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true });
+    act(() => void area.dispatchEvent(home));
+    expect(home.defaultPrevented).toBe(true);
   });
 });
 

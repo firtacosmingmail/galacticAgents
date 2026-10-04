@@ -38,9 +38,12 @@ export function WorkInspector({
   back,
   onBack,
   onClose,
+  onName,
 }: {
   target: WorkTarget;
   back: string | undefined;
+  /** Reports the item's name once read, for the "Back to <name>" of the item opened after it. */
+  onName?: (target: WorkTarget, name: string) => void;
   onBack: () => void;
   onClose: () => void;
 }) {
@@ -77,6 +80,10 @@ export function WorkInspector({
   const detail = current.status === 'ready' ? current.detail : undefined;
   const work = detail ? liveWork(world, detail.work) : undefined;
   const name = work ? workName(work) : target.id;
+  const loadedName = work ? name : undefined;
+  useEffect(() => {
+    if (loadedName !== undefined) onName?.(target, loadedName);
+  }, [loadedName, onName, target]);
 
   return (
     <section className="his-section his-inspector" aria-label={`details of ${name}`}>

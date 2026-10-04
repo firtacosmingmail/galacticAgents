@@ -140,14 +140,14 @@
   border-left-color: var(--pnl-beacon);
 }
 .sts-attn.tone-failed {
-  border-left-color: #c0504d;
+  border-left-color: var(--pnl-failed);
 }
 .sts-attn.tone-interrupted {
-  border-left-color: #8a5ac0;
+  border-left-color: var(--pnl-interrupted);
 }
 .sts-attn.tone-stalled,
 .sts-attn.tone-cap {
-  border-left-color: #c07a3a;
+  border-left-color: var(--pnl-stalled);
 }
 .sts-tone {
   font-size: 11px;

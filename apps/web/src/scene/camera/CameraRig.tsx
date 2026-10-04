@@ -71,7 +71,10 @@ export function CameraRig() {
       }),
     [world],
   );
-  useEffect(() => () => useCameraStore.getState().released(), []);
+  useEffect(() => {
+    useCameraStore.getState().rigMounted();
+    return () => useCameraStore.getState().released();
+  }, []);
 
   useFrame((state) => {
     const c = controls.current;
@@ -136,6 +139,7 @@ export function CameraRig() {
       onStart={() => {
         pristine.current = false;
         snapOverview.current = false;
+        useCameraStore.getState().userMoved();
         // Grabbing the controls stops a flight where it is; orbit and zoom keep a focus.
         if (director.interrupt()) useCameraStore.getState().released();
       }}

@@ -33,8 +33,43 @@ export interface WorkTarget {
   id: Id;
 }
 
-/** Opens a project or task in the history's inspector (P5-03). */
-export const InspectContext = createContext<(target: WorkTarget) => void>(() => {});
+/**
+ * Opens a project or task in the history's inspector (P5-03), with its name when the caller
+ * knows it (the "Back to <name>" label of the item opened after it).
+ */
+export const InspectContext = createContext<(target: WorkTarget, name?: string) => void>(() => {});
+
+/** One item of the inspector's trail; `name` once known (the caller's, or read by the inspector). */
+export interface TrailEntry {
+  target: WorkTarget;
+  name: string | undefined;
+}
+
+/**
+ * The name "Back to <name>" shows for a trail entry: its known name, else the stream's copy's,
+ * else "…" until one is known — never the raw id (wave-1 review).
+ */
+export function trailName(
+  entry: TrailEntry,
+  world: Pick<WorldState, 'tasks' | 'projects'>,
+): string {
+  const t = entry.target;
+  return (
+    entry.name ??
+    (t.kind === 'task' ? world.tasks[t.id]?.description : world.projects[t.id]?.name) ??
+    '…'
+  );
+}
+
+/**
+ * The trail after opening `target` (with `name` when known): pushed on top, or — when it is
+ * already on the trail (A → B → A) — the trail goes back to it, without a duplicate.
+ */
+export function openOnTrail(trail: TrailEntry[], target: WorkTarget, name?: string): TrailEntry[] {
+  const at = trail.findIndex((e) => e.target.kind === target.kind && e.target.id === target.id);
+  if (at >= 0) return at === trail.length - 1 ? trail : trail.slice(0, at + 1);
+  return [...trail, { target, name }];
+}
 
 /** The live copy of a history item, when the stream has it. */
 export function liveWork(
@@ -59,7 +94,7 @@ export function WorkLink({ target, name }: { target: WorkTarget; name: string })
       type="button"
       className="his-link"
       aria-label={`inspect ${target.kind} ${name}`}
-      onClick={() => inspect(target)}
+      onClick={() => inspect(target, name)}
     >
       {name}
     </button>

@@ -154,6 +154,54 @@ describe('the status views', () => {
     expect(await within(view).findByText('2 / 4')).toBeTruthy();
   });
 
+  it('words the costs and the caps without overclaiming (wave-1 review)', async () => {
+    show(<SystemStatusView />);
+    const view = screen.getByRole('region', { name: 'system status' });
+    expect(within(view).getByText('agents active today (lifetime cost)')).toBeTruthy();
+    expect(within(view).queryByText('active today')).toBeNull();
+    expect(within(view).getByText(/live, or ended in the\s+last 24 h/)).toBeTruthy();
+    const spawns = within(view).getByText('spawns in the last hour').closest('dt')!;
+    expect(spawns.title).toMatch(/in-memory window/);
+    cleanup();
+    show(<ProjectStatusView projectId="p-1" />);
+    const project = screen.getByRole('region', { name: 'status of Auth refactor' });
+    expect(within(project).getByText(/ended in the last 24 h/)).toBeTruthy();
+    const cap = within(project).getByText('live Stewards (Waykeeper cap)').closest('dt')!;
+    expect(cap.title).toMatch(/by supervisor/);
+    cleanup();
+    show(<TaskStatusFacts agentId="a-steward-1" />);
+    expect(screen.getByText('(runs live or ended in the last 24 h)')).toBeTruthy();
+  });
+
+  it('keeps "task last changed" ticking for an ended Steward', () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    try {
+      vi.setSystemTime(Date.parse('2026-10-04T12:00:00.000Z'));
+      useAppStore.setState((s) => ({
+        world: {
+          ...s.world,
+          tasks: {
+            ...s.world.tasks,
+            [fx.task.id]: { ...fx.task, updatedAt: '2026-10-04T11:59:00.000Z' },
+          },
+          statuses: {
+            ...s.world.statuses,
+            'a-steward-1': st('a-steward-1', { state: 'finished' }),
+          },
+        },
+      }));
+      show(<TaskStatusFacts agentId="a-steward-1" />);
+      const changed = () =>
+        screen.getByText('task last changed').closest('.sts-fact')!.querySelector('dd')!
+          .textContent;
+      const before = changed();
+      act(() => void vi.advanceTimersByTime(120_000));
+      expect(changed()).not.toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('selects the agent of an attention entry with one click', () => {
     show(<SystemStatusView />);
     fireEvent.click(screen.getByRole('link', { name: 'Rotate the signing keys' }));
@@ -269,6 +317,35 @@ describe('the dock’s Chat | Status switch', () => {
     useDockView.getState().reload();
     await open('/waykeeper/a-waykeeper-1');
     expect(screen.getByRole('region', { name: 'status of Auth refactor' })).toBeTruthy();
+  });
+
+  it('offers the switch and the system status with no Harmonizer row (decision 44)', async () => {
+    FakeWebSocket.instances = [];
+    useAppStore.getState().reset();
+    window.history.replaceState(null, '', '/');
+    render(<App />);
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      socket.serverOpens();
+      socket.serverSends({
+        ...snapshot,
+        agents: [waykeeper, fx.agent, blockedSteward],
+        statuses: snapshot.type === 'snapshot' ? snapshot.statuses.slice(1) : [],
+      } as ServerMessage);
+    });
+    expect(screen.getByText(/No Harmonizer is running/)).toBeTruthy();
+    fireEvent.click(within(toggle()).getByRole('button', { name: 'Status' }));
+    const view = screen.getByRole('region', { name: 'system status' });
+    expect(within(view).getByRole('link', { name: 'Rotate the signing keys' })).toBeTruthy();
+    expect(
+      (
+        within(view).getByRole('button', {
+          name: 'Ask the Harmonizer for a narrative status',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.queryByText(/No Harmonizer is running\. Start/)).toBeNull();
   });
 
   it('offers no switch on a Steward: its view is its status', async () => {

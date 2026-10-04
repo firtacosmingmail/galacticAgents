@@ -213,6 +213,54 @@ describe('systemStatus', () => {
     expect(systemStatus(system(), { now: NOW }).caps.liveStewards.limit).toBeUndefined();
   });
 
+  it('counts "today" as the lifetime cost of the agents active today (no per-day split)', () => {
+    // a-fail's whole cost is out (its last event was 30 h ago); everyone else's whole cost is in
+    expect(s.cost.today.agents).toBe(5);
+    expect(s.cost.today.usd).toBeCloseTo(s.cost.total.usd - 0.5);
+  });
+
+  it('folds a blocked task into its blocked project: one question, one entry', () => {
+    const w = system();
+    w.projects['p-1'] = { ...w.projects['p-1']!, state: 'blocked_on_user' };
+    const keys = systemStatus(w, { now: NOW }).attention.filter((a) => a.tone === 'blocked');
+    expect(keys.map((a) => a.key).sort()).toEqual([
+      'agent:a-harmonizer:blocked',
+      'project:p-1:blocked',
+    ]);
+    expect(keys.find((a) => a.kind === 'project')!.detail).toBe(
+      '1 question for you · 1 blocked task',
+    );
+    // a blocked task of a project that is not blocked keeps its own entry (the fixture above)
+    expect(s.attention.map((a) => a.key)).toContain('task:t-block:blocked');
+  });
+
+  it('leaves the scene harness out and reads the current Harmonizer (newest live)', () => {
+    const w = system();
+    const harness = { harness: true };
+    // a newer Harmonizer that ended, and an older live one: the live one is the Harmonizer
+    w.agents['a-harmonizer-old'] = { ...fx.harmonizer, id: 'a-harmonizer-old', createdAt: at(1) };
+    w.statuses['a-harmonizer-old'] = status('a-harmonizer-old', 'finished');
+    w.agents['a-harmonizer'] = { ...w.agents['a-harmonizer']!, createdAt: at(20 * 3_600_000) };
+    // a harness Harmonizer and a harness Steward: stalled, near a cap, asking, costing, just spawned
+    w.agents['a-fake-h'] = { ...fx.harmonizer, id: 'a-fake-h', createdAt: at(0), meta: harness };
+    w.statuses['a-fake-h'] = status('a-fake-h', 'working', { costSoFar: { usd: 100 } });
+    w.agents['a-fake'] = agent('a-fake', { taskId: 't-run', createdAt: at(1_000), meta: harness });
+    w.statuses['a-fake'] = status('a-fake', 'stalled', { costSoFar: { usd: 100 } });
+    w.questions['q-fake'] = question('q-fake', {
+      originAgentId: 'a-fake',
+      holder: { type: 'user' },
+    });
+    const h = systemStatus(w, { now: NOW, caps: CAPS });
+    expect(h.live.harmonizer).toBe('idle');
+    expect(h.attention.map((a) => a.id)).not.toContain('a-fake');
+    expect(h.attention.map((a) => a.id)).not.toContain('a-fake-h');
+    expect(h.cost.total.usd).toBeCloseTo(s.cost.total.usd + 0.5); // + the old Harmonizer
+    expect(h.caps).toEqual(s.caps);
+    expect(h.agents.reduce((n, c) => n + c.count, 0)).toBe(7); // the old Harmonizer joins
+    // the inbox's numbers still count the harness's question
+    expect(h.waiting).toBe(s.waiting + 1);
+  });
+
   it('is empty but well formed for an empty world', () => {
     const e = systemStatus(emptyWorld(), { now: NOW });
     expect(e.attention).toEqual([]);
