@@ -45,7 +45,7 @@ export function PickingOverlay() {
           others={hover.others}
         />
       )}
-      {hover?.kind === 'beacon' && !popover && <BeaconHoverCard bodyId={hover.bodyId} />}
+      {hover?.kind === 'beacon' && !popover && <BeaconHoverCard questionId={hover.questionId} />}
       {hover && hover.kind !== 'satellite' && hover.kind !== 'beacon' && !popover && (
         <BodyHoverLabel name={hover.name} others={hover.others} />
       )}

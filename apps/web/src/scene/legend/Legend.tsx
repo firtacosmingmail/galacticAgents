@@ -142,8 +142,8 @@ export function SatelliteLegend() {
           <span className="scene-legend-text">
             <b>Question beacon</b>{' '}
             <span className="scene-legend-hint">
-              a pillar above a body: a question waits for you (a padlock: a permission); click it to
-              open it in the inbox
+              a pillar above a body: a question waits for you, one per question (a padlock: a
+              permission); click it to go to the agent asking and open it in the inbox
             </span>
           </span>
         </li>

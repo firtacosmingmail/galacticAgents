@@ -89,8 +89,9 @@ import { activateBeacon } from '../beacons/activate.js';
  *
  * Question beacons (P4-05, `beacons/`) are tested first: a beacon's glyph under the pointer wins
  * over everything (satellites, bodies, labels, a satellite kept by the hover grace) — it is drawn
- * over everything too. Hovering one shows its question's card; a click opens that question in the
- * inbox (`activateBeacon`) and selects nothing.
+ * over everything too. There is one per question (P4-13), each hit on its own. Hovering one shows
+ * its question's card; a click selects the asking agent, flies to its body and opens that question
+ * in the inbox (`activateBeacon`).
  *
  * Per-frame cost: the pick spheres, the ray and the anchors' positions are scratch buffers reused
  * from pick to pick; the canvas's page position is cached (dropped on resize, scroll, re-entry);
@@ -239,7 +240,7 @@ export function Picking({ outline }: PickingProps) {
       if (beacon) {
         grace = undefined;
         moveHover(at.x, at.y);
-        picking.setHover({ kind: 'beacon', bodyId: beacon });
+        picking.setHover({ kind: 'beacon', bodyId: beacon.bodyId, questionId: beacon.questionId });
         canvas.style.cursor = 'pointer';
         if (usePickingStore.getState().hover !== was) invalidate();
         return;
@@ -326,10 +327,10 @@ export function Picking({ outline }: PickingProps) {
       picking.setHover(undefined);
       grace = undefined;
       const at = pointAt(e);
-      // A question beacon opens its question in the inbox (P4-05).
+      // A question beacon goes to its asker and opens its question in the inbox (P4-05, P4-13).
       const beacon = beaconAt(at);
       if (beacon) {
-        activateBeacon(beacon);
+        activateBeacon(beacon.questionId);
         return;
       }
       // The satellite hovered at the press (picked, or kept by the grace) may have orbited out
