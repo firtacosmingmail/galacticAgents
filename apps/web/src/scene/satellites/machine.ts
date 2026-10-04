@@ -114,7 +114,7 @@ export const TRANSITIONS: Readonly<Record<SatelliteMode, readonly SatelliteMode[
   building: ['orbiting', 'gathering', 'transporting', 'flying', 'landing'],
   flying: ['orbiting', 'flying'],
   landing: ['landed', 'orbiting', 'flying'],
-  landed: ['orbiting', 'flying'],
+  landed: ['orbiting', 'flying', 'landed'],
 };
 
 export function canTransition(from: SatelliteMode, to: SatelliteMode): boolean {
@@ -209,6 +209,12 @@ function step(
   }
 
   // 2. The work moved to another body: fly there (from wherever the satellite is).
+  if (input.bodyId !== actor.bodyId && input.landed && actor.mode === 'landed') {
+    // P4-04: completed work whose body moved (a promotion carries a project's landed Stewards
+    // along): it is re-created landed on the new body — no flight over, no second landing. The
+    // director grows it in there (`PRESENCE`), the quietest way to say "it is here now".
+    return enter(actor, 'landed', now, 0, { bodyId: input.bodyId, flight: undefined });
+  }
   if (input.bodyId !== actor.bodyId) {
     return enter(actor, 'flying', now, 0, {
       bodyId: input.bodyId,

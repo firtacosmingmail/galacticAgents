@@ -1,20 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { BufferAttribute, BufferGeometry, PointsMaterial, type Points } from 'three';
-import type { Id } from '@galactic/protocol';
+import { BufferAttribute, BufferGeometry, DynamicDrawUsage, Matrix4, PointsMaterial } from 'three';
 import { useAppStore } from '../../state/store.js';
-import { getAnchor, onAnchorsChanged } from '../anchors.js';
+import { getAnchor, onAnchorsChanged, SUN_ANCHOR_ID } from '../anchors.js';
+import { ASTEROID_ROCK_NAME } from '../belt/belt-model.js';
 import { READ_BODIES } from '../frame-order.js';
 import { DECOR_LAYER } from '../layers.js';
-import { COLONY, colonyLights, colonyList, sameColonies, type ColonySpec } from './colony-model.js';
+import {
+  COLONY,
+  colonyLights,
+  colonyList,
+  sameColonies,
+  writeColony,
+  type ColonySpec,
+} from './colony-model.js';
 
 /**
  * The colonised mark (P4-04; SPEC §4.1, decision 4): small warm "settlement" lights on the surface
- * of every body whose own work is completed (`colony-model.ts` says which and where). One `Points`
- * per colonised body, its lights fixed in pixels (`sizeAttenuation: false`), depth-tested so the
- * far side's lights hide behind the body, placed on its anchor each frame (after the bodies,
- * `READ_BODIES`). Still: nothing animates, so reduced motion changes nothing and the on-demand
- * loop only needs a frame when the list or the anchors change.
+ * of every body whose own work is completed (`colony-model.ts` says which and where). **One**
+ * `Points` for every colony together (one draw call): each frame (after the bodies,
+ * `READ_BODIES`) every colony's lights are written in world space on its anchor (`writeColony`),
+ * an asteroid's through its rock's own matrix so they follow its lumpy shape. Lights fixed in
+ * pixels (`sizeAttenuation: false`), depth-tested so the far side's hide behind the body, and
+ * per-light opacity by the Sun's angle (brightest at night). A colony whose body is not drawn is
+ * skipped. Still: nothing animates, so reduced motion changes nothing and the on-demand loop only
+ * needs a frame when the list or the anchors change.
  */
 export function Colonies() {
   const bodies = useAppStore((s) => s.world.bodies);
@@ -39,6 +49,7 @@ export function Colonies() {
         color: COLONY.color,
         size: COLONY.sizePx,
         sizeAttenuation: false,
+        vertexColors: true, // rgba: per-light opacity (`writeColony`)
         transparent: true,
         opacity: COLONY.opacity,
         depthWrite: false,
@@ -47,67 +58,78 @@ export function Colonies() {
   );
   useEffect(() => () => material.dispose(), [material]);
 
-  const [points] = useState(() => new Map<Id, Points>());
-  useFrame(() => placeColonies(points), READ_BODIES);
+  /** The lights (unit vectors) of each colony, and buffers sized for all of them. */
+  const drawn = useMemo(() => {
+    const lights = list.map((c) => colonyLights(c.seed));
+    const vertices = lights.reduce((n, l) => n + l.length / 3, 0);
+    const geometry = new BufferGeometry();
+    const positions = new BufferAttribute(new Float32Array(vertices * 3), 3);
+    const colors = new BufferAttribute(new Float32Array(vertices * 4), 4);
+    positions.setUsage(DynamicDrawUsage);
+    colors.setUsage(DynamicDrawUsage);
+    geometry.setAttribute('position', positions);
+    geometry.setAttribute('color', colors);
+    geometry.setDrawRange(0, 0);
+    return { list, lights, geometry, positions, colors };
+  }, [list]);
+  useEffect(() => () => drawn.geometry.dispose(), [drawn]);
+
+  useFrame(() => placeColonies(drawn), READ_BODIES);
 
   if (list.length === 0) return null;
   return (
-    <group name="colonies">
-      {list.map((c) => (
-        <Colony key={c.bodyId} spec={c} material={material} registry={points} />
-      ))}
-    </group>
-  );
-}
-
-/** Puts every colony on its body's anchor (hidden while the body is not drawn). */
-function placeColonies(points: ReadonlyMap<Id, Points>): void {
-  for (const [bodyId, p] of points) {
-    const anchor = getAnchor(bodyId);
-    p.visible = anchor !== undefined;
-    if (!anchor) continue;
-    anchor.object.updateWorldMatrix(true, false);
-    const e = anchor.object.matrixWorld.elements;
-    p.position.set(e[12] ?? 0, e[13] ?? 0, e[14] ?? 0);
-    const lift = anchor.kind === 'asteroid' ? COLONY.asteroidLift : COLONY.lift;
-    p.scale.setScalar(anchor.radius * lift);
-  }
-}
-
-function Colony({
-  spec,
-  material,
-  registry,
-}: {
-  spec: ColonySpec;
-  material: PointsMaterial;
-  registry: Map<Id, Points>;
-}) {
-  const geometry = useMemo(() => {
-    const g = new BufferGeometry();
-    g.setAttribute('position', new BufferAttribute(colonyLights(spec.seed), 3));
-    g.computeBoundingSphere();
-    return g;
-  }, [spec.seed]);
-  useEffect(() => () => geometry.dispose(), [geometry]);
-  const ref = useRef<Points>(null);
-  useEffect(() => {
-    const p = ref.current;
-    if (!p) return;
-    registry.set(spec.bodyId, p);
-    return () => {
-      if (registry.get(spec.bodyId) === p) registry.delete(spec.bodyId);
-    };
-  }, [registry, spec.bodyId]);
-  return (
     <points
-      ref={ref}
-      name={`colony:${spec.bodyId}`}
-      geometry={geometry}
+      name="colonies"
+      geometry={drawn.geometry}
       material={material}
-      visible={false}
       layers={DECOR_LAYER}
       frustumCulled={false}
     />
   );
+}
+
+const matrix = new Matrix4();
+const sun: [number, number, number] = [0, 0, 0];
+
+/** Writes every drawn colony's lights on its body's anchor; the rest are left out of the range. */
+function placeColonies(drawn: {
+  list: readonly ColonySpec[];
+  lights: readonly Float32Array[];
+  geometry: BufferGeometry;
+  positions: BufferAttribute;
+  colors: BufferAttribute;
+}): void {
+  const star = getAnchor(SUN_ANCHOR_ID);
+  if (star) {
+    star.object.updateWorldMatrix(true, false);
+    const e = star.object.matrixWorld.elements;
+    sun[0] = e[12] ?? 0;
+    sun[1] = e[13] ?? 0;
+    sun[2] = e[14] ?? 0;
+  } else sun[0] = sun[1] = sun[2] = 0;
+  const positions = drawn.positions.array as Float32Array;
+  const colors = drawn.colors.array as Float32Array;
+  let at = 0;
+  for (let i = 0; i < drawn.list.length; i++) {
+    const anchor = getAnchor(drawn.list[i]!.bodyId);
+    const lights = drawn.lights[i];
+    if (!anchor || !lights) continue;
+    anchor.object.updateWorldMatrix(true, true);
+    const rock =
+      anchor.kind === 'asteroid' ? anchor.object.getObjectByName(ASTEROID_ROCK_NAME) : undefined;
+    let lift: number = COLONY.lift;
+    if (rock) {
+      matrix.copy(rock.matrixWorld); // the rock's squash and rotation: lights follow its shape
+      lift = COLONY.asteroidLift;
+    } else {
+      const e = anchor.object.matrixWorld.elements;
+      matrix.makeScale(anchor.radius, anchor.radius, anchor.radius);
+      matrix.setPosition(e[12] ?? 0, e[13] ?? 0, e[14] ?? 0);
+      if (anchor.kind === 'asteroid') lift = COLONY.asteroidLift;
+    }
+    at = writeColony(lights, matrix.elements, lift, sun, positions, colors, at);
+  }
+  drawn.geometry.setDrawRange(0, at);
+  drawn.positions.needsUpdate = true;
+  drawn.colors.needsUpdate = true;
 }
