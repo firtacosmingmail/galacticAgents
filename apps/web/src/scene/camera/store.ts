@@ -74,8 +74,7 @@ export const useCameraStore = create<CameraState>((set, get) => ({
   flightStarted: () => set({ flying: true }),
   arrived: () => set({ flying: false }),
   atOverview: () => set({ flying: false, focusedId: undefined, atSystem: true }),
-  released: () =>
-    set({ flying: false, focusedId: undefined, atSystem: false, request: undefined }),
+  released: () => set({ flying: false, focusedId: undefined, atSystem: false, request: undefined }),
   userMoved: () => set({ atSystem: false }),
   rigMounted: () => set((s) => ({ atSystem: s.focusedId === undefined && !s.flying })),
 }));
