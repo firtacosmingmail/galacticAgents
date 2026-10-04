@@ -129,7 +129,7 @@ function StateChips<S extends string>({
       {counts.map(({ state, count }) => (
         <li
           key={state}
-          className={`sts-chip state-${state}${state === 'blocked_on_user' || state === 'waiting_for_input' ? ' is-blocked' : ''}`}
+          className={`sts-chip state-${state}${state === 'blocked_on_user' ? ' is-blocked' : ''}`}
         >
           <span className="sts-chip-count">{count}</span> {stateWords(state)}
         </li>

@@ -41,3 +41,91 @@ What "ask for the status of anything" still lacked without asking the Harmonizer
 - The task-state history (every transition) lives in the event log; the client keeps only its
   last 200 events, so a complete history is the history view's job (P5-03, `/api/history/events`)
   and is not rebuilt here.
+
+## 2. What was built
+
+All of it in `apps/web/src/panel/status/`; computed in the browser from the client world (the
+folded log and the server's status records) and the settings' caps. No new server endpoint, no
+protocol change, no LLM call.
+
+- **`status-model.ts`** (pure):
+  - `systemStatus(world, {now, caps})`: projects and tasks counted by work state (in
+    `WORK_STATE_ORDER`, blocked on you first, archived last); agents with a status record by
+    state (waiting for input first) and the live Harmonizer / Waykeepers / Stewards; a
+    **needs-attention** list — blocked on you, failed, interrupted, stalled, close to a cap (80 %
+    of tool calls or of the running wall clock), in that order and oldest first within each —
+    whose entries carry the selection of their agent (decision 53's newest live, else newest); a
+    user-held question whose work is not (yet) `blocked_on_user` — the Harmonizer's own
+    `ask_user`, a question that arrives before the projection — is listed by its agent so nothing
+    blocked on the user is missed; open questions by kind and by holder; decision 58's "waiting
+    for you" number and the cards to decide; cost total, "active today" (records whose last event
+    is after local midnight), brains vs Stewards; caps: live Stewards against
+    `maxConcurrentAgents` (decision 43: Stewards only) and spawns in the last hour against
+    `maxSpawnsPerHour`.
+  - `projectStatus(world, projectId, …)`: its tasks by state, its task rows (blocked first —
+    including a task whose Steward has a user-held question before the derived state says so —
+    then by state, oldest first; archived tasks only counted), each with its Steward's state, how
+    many Stewards it had and their summed cost; "N active, M in total" (P4-09's `stewardCount`);
+    live Stewards against `maxStewardsPerWaykeeper`; its attention list (also a Waykeeper's own
+    question for the user); questions; cost of its Waykeepers and its tasks' Stewards (a
+    sub-project counts on its own); its sub-projects; its parent.
+  - `taskStatus(world, taskId, …)`: what the Steward header lacked — priority, last change of the
+    task, how many Stewards it had, their total cost, its open questions by kind, how long the
+    Steward has been silent.
+  - `formatCostTotal` ("$1.00 + 4,000 tokens": tokens only for agents without a dollar figure,
+    so nothing counts twice), `nearCap`, `narrativeRequest`.
+- **`StatusViews.tsx`**: `SystemStatusView`, `ProjectStatusView`, `TaskStatusFacts`,
+  `DockViewToggle`, `BrainDock`, `AskNarrative`. Blocked rows have the amber left edge and the
+  panel's `Beacon`; the amber chip is used only for "blocked on you" (an agent "waiting for input" may wait on
+  its supervisor, so it is not amber).
+  Every work and agent name is a `NavLink` that selects its agent (and fits P5-01's selection
+  store: it only calls `navigate`).
+- **`dock-view.ts`**: the per-browser "Chat | Status" choice (`galactic.panel.dock.view`), one for
+  both brains.
+- **Mounts** (minimal edits to shared files): `Panel.tsx` wraps the brain's `Conversation` in
+  `BrainDock` and adds `DockViewToggle` to the dock bar for the Harmonizer and Waykeepers;
+  `StewardPanelView.tsx` renders `TaskStatusFacts` under its header. The conversation stays
+  mounted under the status view (collapsed, invisible, `inert`, `aria-hidden` — as when the dock is
+  minimised), so its scroll position, live thread and draft survive the switch.
+- **"Ask the Harmonizer for a narrative status"**: a secondary button at the bottom of the system
+  and project views; one click sends one ordinary chat message to the running Harmonizer (which
+  answers with its `report_status` tool), switches the dock back to Chat and selects the
+  Harmonizer, where the answer arrives. Disabled when no Harmonizer runs.
+
+Choices worth knowing:
+
+- **Placement:** a Chat | Status switch in the dock bar rather than a block above the chat: the
+  status view gets the whole dock, the chat keeps all of its height when shown, and the choice is
+  remembered per device like the dock's other preferences (decision 71).
+- **The Steward view gets no switch:** it is already the agent's status (decision 57); only the
+  task facts it lacked were added.
+- **Costs are honest about retention:** the server drops ended status records after 24 h / 500
+  (P1-16), so the totals cover the agents it still reports, and the view says so. An all-time
+  cost needs a server-side sum over the log (left for Phase 8's dollar budgets).
+- **Task state history** is not rebuilt from the client's last 200 events; the history view
+  (P5-03) reads it from the server.
+
+## 3. Proposed SPEC decision
+
+| # | Question | Decision |
+|---|---|---|
+| 80 | Status views | **Computed, never asked; blocked on you first** (2026-10-04, P5-02; §4.2, §4.3, §4.4, decisions 43, 53, 56, 57, 58, 69, 71): the status of the whole system, a project, a task or an agent is shown by the panel without an LLM call, from the derived states, the status records and the settings' caps. The dock bar of the Harmonizer and of a Waykeeper has a "Chat \| Status" switch, remembered per browser; the conversation stays as it was behind it. The Harmonizer's status is the system's: projects and tasks by state, agents by state, a "needs attention" list (blocked on you, then failed, interrupted, stalled, close to a cap; oldest first within each; every entry selects its agent), open questions by kind and holder, the "waiting for you" number of decision 58, cost (total, active today, brains and Stewards — over the agents the server still reports) and the caps in use (live Stewards against the concurrency cap, spawns in the last hour). A Waykeeper's status is its project's: its tasks blocked first with each task's Steward state and cost, "N active, M in total" and its live Stewards against the per-Waykeeper cap, its questions, its cost, its sub-projects. The Steward view stays the agent's and task's status (decision 57), adding the task's priority, its last change, how many Stewards it has had and their total cost, its open questions by kind and how long the Steward has been silent. "Blocked on you" leads every list and is the only amber. A secondary "Ask the Harmonizer for a narrative status" button sends one chat message to the Harmonizer and opens its chat — the only LLM path. |
+
+## 4. Tests
+
+- `apps/web/src/panel/status/status-model.test.ts` (19): system counts by state and their order;
+  agents by state and live counts; the attention order (blocked → failed → interrupted → stalled →
+  cap, oldest first) with its selections; archived work left out; question counts by kind and
+  holder; the waiting number; cost sums (dollars, token-only agents, today, by role); caps with
+  and without settings; an empty world; the project's task rows blocked first (including a task
+  blocked by a question before its state), respawned Stewards (newest live opens, costs summed),
+  its attention list, its cap, questions, cost, sub-projects and parent; task facts; cost
+  formatting; never counting tokens next to dollars; near-cap only for live agents; the narrative
+  request's words.
+- `apps/web/src/panel/status/status-views.test.tsx` (8): the system view renders blocked first
+  with the beacon, amber chip, question counts, cost and the settings' caps; an attention link
+  selects its agent (URL too); the project view's rows blocked first and their links; the
+  narrative button sends exactly one message to the Harmonizer, then selects it and switches to
+  Chat; the task facts; in the full app, the switch shows the system status and back while the
+  chat stays mounted (`inert`, `aria-hidden`, composer present), the choice is remembered per
+  browser and a Waykeeper shows its project; a Steward has no switch and shows the task facts.
