@@ -26,6 +26,7 @@ import { ControlsStrip } from '../controls.js';
 import { ClarificationComposer } from './ClarificationComposer.js';
 import { StewardProcesses } from './StewardProcesses.js';
 import { TranscriptLog } from './TranscriptLog.js';
+import { TaskStatusFacts } from '../status/StatusViews.js';
 import { useStewardTranscript } from './useStewardTranscript.js';
 import './steward.css';
 
@@ -54,6 +55,7 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
   return (
     <section className="steward stw" aria-label={`view of ${name}`}>
       <StatusHeader agent={agent} status={status} blocked={blocked} />
+      <TaskStatusFacts agentId={agentId} />
       <div className="stw-controls-row">
         <Controls agentId={agentId} status={status} />
         {task && (

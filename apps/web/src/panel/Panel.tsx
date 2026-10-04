@@ -37,6 +37,7 @@ import { useInboxVisibility, type InboxControl } from './inbox-visibility.js';
 import { DockHandle, DOCK_BODY_ID, UnreadReplies } from './Dock.js';
 import { useDockPrefs, type DockControl } from './dock-state.js';
 import { STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
+import { BrainDock, DockViewToggle } from './status/StatusViews.js';
 import './panel.css';
 
 /*
@@ -216,8 +217,12 @@ function MainArea({
     // Read-only except an open clarification's answer (decision 13; P25-05).
     content = <StewardPanelView key={agent.id} agentId={agent.id} />;
   } else {
-    // The Harmonizer or a Waykeeper: the conversation (P25-03).
-    content = <Conversation key={agent.id} agentId={agent.id} />;
+    // The Harmonizer or a Waykeeper: the conversation (P25-03), or its status view (P5-02).
+    content = (
+      <BrainDock agent={agent}>
+        <Conversation key={agent.id} agentId={agent.id} />
+      </BrainDock>
+    );
   }
 
   const className = [
@@ -320,6 +325,7 @@ function MainHeader({
         </NavLink>
       )}
       {agent?.role === 'waykeeper' && <WaykeeperControls agent={agent} />}
+      {agent && agent.role !== 'steward' && <DockViewToggle />}
       {toggle && (
         <button
           type="button"
