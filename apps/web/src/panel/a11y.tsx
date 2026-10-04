@@ -29,6 +29,18 @@ export function focusElement(el: HTMLElement | null | undefined): boolean {
   return document.activeElement === el;
 }
 
+/**
+ * After a control removes itself (a column's "Hide"), puts the focus on the first of `selectors`
+ * that exists — the top bar's button that brings the thing back — if the focus was lost meanwhile.
+ */
+export function focusAfterRemoval(...selectors: string[]): void {
+  setTimeout(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    for (const s of selectors) if (focusElement(document.querySelector<HTMLElement>(s))) return;
+  }, 0);
+}
+
 function isNativelyFocusable(el: HTMLElement): boolean {
   return el.matches('a[href], button, input, select, textarea, summary, [contenteditable="true"]');
 }

@@ -31,10 +31,13 @@ export function NotificationsControl() {
   useEffect(() => {
     if (!open) return;
     const popover = ref.current?.querySelector<HTMLElement>('.ntf-popover');
-    (
-      popover?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled])') ??
-      popover
-    )?.focus();
+    if (!popover) return;
+    // Its first control that can take the focus (one in a disabled fieldset cannot), else itself.
+    const controls = popover.querySelectorAll<HTMLElement>('button, input, select');
+    for (const el of [...controls, popover]) {
+      el.focus();
+      if (document.activeElement === el) return;
+    }
   }, [open]);
 
   useEffect(() => {

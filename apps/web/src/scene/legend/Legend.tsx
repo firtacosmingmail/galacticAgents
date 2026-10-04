@@ -1,4 +1,4 @@
-import { useCallback, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { AgentState } from '@galactic/protocol';
 import { STACKED_LAYOUT_QUERY } from '../../panel/use-media-query.js';
 import {
@@ -59,13 +59,22 @@ function Swatch({ color, pulse, scale }: { color: string; pulse: Pulse; scale: n
 
 export function SatelliteLegend() {
   const [open, setOpenState] = useState(readLegendOpen);
+  // P5-04: the toggle is a different button open and closed; the focus follows it across.
+  const root = useRef<HTMLDivElement>(null);
+  const refocus = useRef(false);
   const setOpen = useCallback((next: boolean) => {
     writeLegendOpen(next);
+    refocus.current = true;
     setOpenState(next);
   }, []);
+  useEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    root.current?.querySelector<HTMLButtonElement>('.scene-legend-toggle')?.focus();
+  }, [open]);
   if (!open) {
     return (
-      <div className="scene-legend is-closed">
+      <div className="scene-legend is-closed" ref={root}>
         <button
           type="button"
           className="scene-legend-toggle"
@@ -83,7 +92,7 @@ export function SatelliteLegend() {
     );
   }
   return (
-    <div className="scene-legend">
+    <div className="scene-legend" ref={root}>
       <div className="scene-legend-head">
         <span className="scene-legend-title">Satellites</span>
         <button

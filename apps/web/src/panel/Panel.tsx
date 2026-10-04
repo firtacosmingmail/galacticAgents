@@ -40,7 +40,13 @@ import { useDockPrefs, type DockControl } from './dock-state.js';
 import { STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
 import { BrainDock, DockViewToggle, SystemStatusView } from './status/StatusViews.js';
 import { useDockView } from './status/dock-view.js';
-import { listKeys, useFocusRescue, useRouteFocus, WaitingAnnouncer } from './a11y.js';
+import {
+  focusAfterRemoval,
+  listKeys,
+  useFocusRescue,
+  useRouteFocus,
+  WaitingAnnouncer,
+} from './a11y.js';
 import './panel.css';
 
 /*
@@ -434,7 +440,10 @@ const SideColumn = memo(function SideColumn({
               className="pnl-side-hide"
               aria-label="Hide managed agents"
               title="Hide managed agents (bring them back from the top bar)"
-              onClick={() => agents.setVisible(false)}
+              onClick={() => {
+                agents.setVisible(false);
+                focusAfterRemoval('.pnl-agents-toggle', '.pnl-menu-button', '.pnl-inbox');
+              }}
             >
               Hide
             </button>
@@ -455,7 +464,12 @@ const SideColumn = memo(function SideColumn({
           ref={inboxRef}
           onKeyDown={listKeys(INBOX_CARD)}
         >
-          <Inbox onHide={() => inbox.setVisible(false)} />
+          <Inbox
+            onHide={() => {
+              inbox.setVisible(false);
+              focusAfterRemoval('.pnl-inbox-toggle', '.pnl-menu-button', '.pnl-nav-hq');
+            }}
+          />
         </section>
       )}
     </aside>
