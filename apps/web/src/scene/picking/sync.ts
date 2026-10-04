@@ -23,7 +23,9 @@ import { isSceneSelection, usePickingStore } from './store.js';
  * - a selection that came with a switch back to the panel's main view from a page without the
  *   scene (the settings or history page: a history row's agent link, a notification clicked
  *   there, back / forward onto an agent's URL) flies like a deep link: the scene mounts with it
- *   (P5-01). Changing the selection in list mode and showing the scene later still does not fly;
+ *   (P5-01). Changing the selection in list mode and showing the scene later still does not fly,
+ *   nor does such a return made while the scene was hidden (the panel drops the deep link when
+ *   its main view renders in list mode, `dropDeepLink`);
  * - during a replay (P4-07) the flight goes to the agent's body in the replayed world; an agent
  *   that has no body there yet does not wait for one (the camera would jump mid-playback when it
  *   appears): the flight is dropped (P5-01).
@@ -97,6 +99,15 @@ useAppStore.subscribe((state, prev) => {
   deepLink =
     entering && !sameSelection(state.selection, prev.selection) ? state.selection : undefined;
 });
+
+/**
+ * The panel's main view rendered without the scene (list mode): a deep link captured now (a page
+ * load, a return from the settings or history page) is not for a scene shown later — showing the
+ * scene never flies (P5-01, wave-1 review). Called by the panel.
+ */
+export function dropDeepLink(): void {
+  deepLink = undefined;
+}
 
 /** For tests: what the page "loaded with". */
 export function setDeepLinkForTest(selection: Selection | undefined): void {

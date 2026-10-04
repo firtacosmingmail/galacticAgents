@@ -28,6 +28,7 @@ import { HistoryPage } from './history/HistoryPage.js';
 import { SceneArea } from '../scene/SceneArea.js';
 import { ReplayBar } from '../replay/ReplayBar.js';
 import { useScene } from '../scene/visibility.js';
+import { dropDeepLink } from '../scene/picking/sync.js';
 import { INBOX_ID, TopBar } from './TopBar.js';
 import {
   useManagedAgentsVisibility,
@@ -75,6 +76,11 @@ export function Panel({
   const route = useAppStore((s) => s.route);
   const scene = useScene();
   const showScene = route === 'panel' && scene.shown;
+  // The main view in list mode: a deep link (a load, a return from another page) is spent — a
+  // scene shown later must not fly to it (P5-01).
+  useEffect(() => {
+    if (route === 'panel' && !scene.shown) dropDeepLink();
+  }, [route, scene.shown]);
   const agents = useManagedAgentsVisibility();
   const inbox = useInboxVisibility();
   // Both sections hidden (P4-12): no side column; the centre takes its width.
