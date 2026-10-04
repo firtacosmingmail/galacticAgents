@@ -15,6 +15,7 @@ import {
   type DecideResponse,
   type MessagesResponse,
   type ProposalDecision,
+  type RestartHarmonizerResponse,
   type RuntimesInfo,
   type SendResponse,
   type SpawnResponse,
@@ -47,6 +48,8 @@ export interface AgentRoutesOptions {
   commands?: Commands;
   /** A Steward's processes (P4-14): enables `GET /api/agents/:id/processes` and its stop. */
   processes?: StewardProcessControl;
+  /** The Harmonizer's restart (P5-06): enables `POST /api/harmonizer/restart`. */
+  restartHarmonizer?: () => Promise<RestartHarmonizerResponse>;
 }
 
 const USER: Actor = { type: 'user' };
@@ -151,6 +154,25 @@ export function registerAgentRoutes(
     app.post('/api/agents/:id/stop', (req, reply) =>
       attempt(reply, () => runtime.stop(agentId(req), USER)),
     );
+
+    /**
+     * The panel's "Restart Harmonizer" (P5-06; SPEC decision 82): stops the running Harmonizer as
+     * the user's stop and starts a fresh one on the same runtime; the reply names the new one.
+     * Any authenticated client may ask, like stopping any agent (`/api/agents/:id/stop`, the
+     * panel's controls): it is a control action, not a settings write. 409 when it cannot (a
+     * restart under way, no runtime configured, the start refused).
+     */
+    const { restartHarmonizer } = opts;
+    if (restartHarmonizer) {
+      app.post('/api/harmonizer/restart', async (req, reply) => {
+        try {
+          return (await restartHarmonizer()) satisfies RestartHarmonizerResponse;
+        } catch (error) {
+          req.log.warn(error);
+          return reply.code(409).send(refusal('refused', (error as Error).message));
+        }
+      });
+    }
 
     /**
      * Reopens an interrupted agent from its session ref (the manual half of P1-14): the same

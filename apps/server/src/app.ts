@@ -34,6 +34,8 @@ export interface AppOptions {
   commands?: AgentRoutesOptions['commands'];
   /** A Steward's processes (P4-14): enables `GET`/`POST /api/agents/:id/processes…`. */
   processes?: AgentRoutesOptions['processes'];
+  /** The Harmonizer's restart (P5-06): enables `POST /api/harmonizer/restart`. */
+  restartHarmonizer?: AgentRoutesOptions['restartHarmonizer'];
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
   logger?: boolean;
@@ -113,6 +115,7 @@ export function buildApp(opts: AppOptions): App {
       ...(opts.scenarios ? { scenarios: opts.scenarios } : {}),
       ...(opts.commands ? { commands: opts.commands } : {}),
       ...(opts.processes ? { processes: opts.processes } : {}),
+      ...(opts.restartHarmonizer ? { restartHarmonizer: opts.restartHarmonizer } : {}),
     });
   }
   // The side panel's history, settings, preflight and notifications (P25-01).

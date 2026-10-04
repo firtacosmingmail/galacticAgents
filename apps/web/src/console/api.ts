@@ -17,6 +17,7 @@ import type {
   MessagesResponse,
   PreflightResponse,
   ProposalDecisionBody,
+  RestartHarmonizerResponse,
   RuntimesInfo,
   SendBody,
   SendResponse,
@@ -99,6 +100,8 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     interrupt: (agentId: string) => call('POST', `/api/agents/${agentId}/interrupt`),
     stop: (agentId: string) => call('POST', `/api/agents/${agentId}/stop`),
     recover: (agentId: string) => call('POST', `/api/agents/${agentId}/recover`),
+    /** Stops the Harmonizer and starts a fresh one on the same runtime (P5-06, decision 82). */
+    restartHarmonizer: () => call<RestartHarmonizerResponse>('POST', '/api/harmonizer/restart'),
     /** `version`: the question's version as the page saw it (a stale answer is refused). */
     answer: (questionId: string, answer: string, version?: number) =>
       call('POST', `/api/questions/${questionId}/answer`, {

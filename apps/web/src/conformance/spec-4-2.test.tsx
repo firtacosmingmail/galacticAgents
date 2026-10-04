@@ -3,6 +3,7 @@ import { act, cleanup, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentState, ControlBody } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
+import { FakeWebSocket } from '../client/fake-socket.js';
 import { useAppStore } from '../state/store.js';
 import { activateBody, activateSatellite, deselectFromScene } from '../scene/picking/store.js';
 import {
@@ -537,6 +538,65 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
       expect(posts(fetchMock, '/api/control')).toEqual([row.sent]);
       // A direct panel action: one control call, no message to any brain (no LLM in the loop).
       expect(postedPaths(fetchMock)).toEqual(['/api/control']);
+    });
+
+    // The Harmonizer itself (P5-06, decision 82): pause / resume, "Resume session" when
+    // interrupted, and a confirmed restart; never a plain Stop.
+    const HQ = { kind: 'agent', id: 'a-harmonizer' } as const;
+    const withHq = (state: AgentState, agents = snapshot()) => {
+      const snap = agents as Extract<ReturnType<typeof snapshot>, { type: 'snapshot' }>;
+      return {
+        ...snap,
+        statuses: snap.statuses.map((r) => (r.agentId === 'a-harmonizer' ? { ...r, state } : r)),
+      };
+    };
+
+    it('§4.2.42h pause and resume the Harmonizer itself', async () => {
+      await openPanel(mode);
+      expect(strip(HARMONIZER).queryByRole('button', { name: /stop/i })).toBeNull();
+      await click(strip(HARMONIZER).getByRole('button', { name: 'Pause the Harmonizer' }));
+      expect(posts(fetchMock, '/api/control')).toEqual([
+        { target: HQ, action: { action: 'pause' } },
+      ]);
+      cleanup();
+      fetchMock = resetPage(mode);
+      await openPanel(mode, '/', withHq('paused'));
+      await click(strip(HARMONIZER).getByRole('button', { name: 'Resume the Harmonizer' }));
+      expect(posts(fetchMock, '/api/control')).toEqual([
+        { target: HQ, action: { action: 'resume' } },
+      ]);
+      expect(strip(HARMONIZER).queryByRole('button', { name: 'Resume session' })).toBeNull();
+    });
+
+    it('§4.2.42h resume the session of an interrupted Harmonizer', async () => {
+      await openPanel(mode, '/', withHq('interrupted'));
+      await click(strip(HARMONIZER).getByRole('button', { name: 'Resume session' }));
+      expect(postedPaths(fetchMock)).toEqual(['/api/agents/a-harmonizer/recover']);
+    });
+
+    it('§4.2.42h restart the Harmonizer (confirmed); the dock follows the new one', async () => {
+      await openPanel(mode);
+      await click(strip(HARMONIZER).getByRole('button', { name: 'Restart Harmonizer' }));
+      // Destructive: nothing goes out before the confirmation, which starts on "Keep".
+      expect(postedPaths(fetchMock)).toEqual([]);
+      expect(document.activeElement?.textContent).toBe('Keep');
+      await click(within(main()).getByRole('button', { name: 'Yes, restart' }));
+      expect(postedPaths(fetchMock)).toEqual(['/api/harmonizer/restart']);
+
+      // The server's answer arrives on the stream: the old one stopped, a new one running.
+      const before = snapshot() as Extract<ReturnType<typeof snapshot>, { type: 'snapshot' }>;
+      const old = before.agents.find((a) => a.id === 'a-harmonizer')!;
+      const fresh = { ...old, id: 'a-harmonizer-2', createdAt: '2999-01-01T00:00:00.000Z' };
+      const after = withHq('stopped', { ...before, agents: [...before.agents, fresh] });
+      after.statuses = [...after.statuses, { ...fx.status, agentId: fresh.id }];
+      const socket = FakeWebSocket.instances.at(-1)!;
+      await act(async () => socket.serverSends({ ...after, seq: 20 }));
+      await flush();
+      expect(selection()).toEqual({ kind: 'harmonizer' });
+      await click(strip(HARMONIZER).getByRole('button', { name: 'Pause the Harmonizer' }));
+      expect(posts(fetchMock, '/api/control')).toEqual([
+        { target: { kind: 'agent', id: 'a-harmonizer-2' }, action: { action: 'pause' } },
+      ]);
     });
 
     it('§4.2.27 edit a task’s description', async () => {
