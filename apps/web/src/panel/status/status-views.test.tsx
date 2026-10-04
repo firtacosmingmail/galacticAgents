@@ -271,6 +271,35 @@ describe('the dock’s Chat | Status switch', () => {
     expect(screen.getByRole('region', { name: 'status of Auth refactor' })).toBeTruthy();
   });
 
+  it('offers the switch and the system status with no Harmonizer row (decision 44)', async () => {
+    FakeWebSocket.instances = [];
+    useAppStore.getState().reset();
+    window.history.replaceState(null, '', '/');
+    render(<App />);
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      socket.serverOpens();
+      socket.serverSends({
+        ...snapshot,
+        agents: [waykeeper, fx.agent, blockedSteward],
+        statuses: snapshot.type === 'snapshot' ? snapshot.statuses.slice(1) : [],
+      } as ServerMessage);
+    });
+    expect(screen.getByText(/No Harmonizer is running/)).toBeTruthy();
+    fireEvent.click(within(toggle()).getByRole('button', { name: 'Status' }));
+    const view = screen.getByRole('region', { name: 'system status' });
+    expect(within(view).getByRole('link', { name: 'Rotate the signing keys' })).toBeTruthy();
+    expect(
+      (
+        within(view).getByRole('button', {
+          name: 'Ask the Harmonizer for a narrative status',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.queryByText(/No Harmonizer is running\. Start/)).toBeNull();
+  });
+
   it('offers no switch on a Steward: its view is its status', async () => {
     await open('/steward/a-steward-1');
     expect(screen.queryByRole('group', { name: 'show the chat or the status' })).toBeNull();

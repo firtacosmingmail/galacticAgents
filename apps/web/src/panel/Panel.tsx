@@ -38,7 +38,8 @@ import { useInboxVisibility, type InboxControl } from './inbox-visibility.js';
 import { DockHandle, DOCK_BODY_ID, UnreadReplies } from './Dock.js';
 import { useDockPrefs, type DockControl } from './dock-state.js';
 import { STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
-import { BrainDock, DockViewToggle } from './status/StatusViews.js';
+import { BrainDock, DockViewToggle, SystemStatusView } from './status/StatusViews.js';
+import { useDockView } from './status/dock-view.js';
 import './panel.css';
 
 /*
@@ -203,14 +204,23 @@ function MainArea({
   const agent = selectedAgent(world, selection);
   useCanonicalSelection(agent, selection);
   const open = !collapsible || dock.open;
+  const view = useDockView((s) => s.view);
 
   let content;
   if (!agent) {
     content =
       selection.kind === 'harmonizer' ? (
-        <Empty>
-          No Harmonizer is running. Start Mission Control with <code>galactic start</code>.
-        </Empty>
+        // No Harmonizer row (decision 44; where every deselect lands): the system status still
+        // shows — it needs no agent; only its "Ask the Harmonizer" button is disabled (P5-02).
+        view === 'status' ? (
+          <div className="sts-pane sts-pane-status">
+            <SystemStatusView />
+          </div>
+        ) : (
+          <Empty>
+            No Harmonizer is running. Start Mission Control with <code>galactic start</code>.
+          </Empty>
+        )
       ) : status === 'live' ? (
         <Empty>
           This {selection.kind} is not in the current log.{' '}
@@ -331,7 +341,9 @@ function MainHeader({
         </NavLink>
       )}
       {agent?.role === 'waykeeper' && <WaykeeperControls agent={agent} />}
-      {agent && agent.role !== 'steward' && <DockViewToggle />}
+      {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && (
+        <DockViewToggle />
+      )}
       {toggle && (
         <button
           type="button"
