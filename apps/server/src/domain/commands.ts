@@ -26,6 +26,7 @@ import {
   type Task,
   type WorkState,
   type WriteOptions,
+  type ControlOptions,
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
@@ -59,6 +60,7 @@ import {
   answerQuestion,
   cancelQuestion,
   checkAnswer,
+  consumeConfirmation,
   escalateQuestion,
   reassignQuestion,
   COMMAND_SOURCE,
@@ -586,9 +588,12 @@ export class Commands implements DomainCommands {
     target: ControlTarget,
     action: ControlAction,
     by: Actor,
-    write?: WriteOptions,
+    write?: ControlOptions,
   ): Promise<CommandResult<void>> {
     if (target.kind === 'agent') {
+      if (write?.confirmation) {
+        throw new DomainError('invalid', 'a confirmation goes with a task or project control');
+      }
       const run = (fn: (r: AgentControl) => Promise<void>) =>
         this.agentCommand(target.id, by, fn).then((r) => ({ value: undefined, events: r.events }));
       switch (action.action) {
@@ -612,12 +617,17 @@ export class Commands implements DomainCommands {
           .map((a) => a.id)
           .filter((id) => live.has(id))
       : [];
-    const own = await this.run((ctx) =>
+    const confirmation = write?.confirmation;
+    const own = await this.run((ctx) => {
+      // One transaction (P5-07): the answer is used up exactly when the control is recorded.
+      if (confirmation) {
+        consumeConfirmation(ctx, confirmation, `${action.action} ${target.kind} ${target.id}`);
+      }
       recordControl(ctx, target, action, by, {
         isLive: (id) => live.has(id),
         write: this.policyWrite(write),
-      }),
-    );
+      });
+    });
     const since = this.log.currentSeq();
     if (effect && affected.length > 0) {
       const runtime = this.runtime();

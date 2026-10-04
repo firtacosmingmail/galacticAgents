@@ -4,6 +4,8 @@ import {
   ConversationQuery,
   HistoryQuestionsQuery,
   HistoryQuestionsResponse,
+  HistoryWorkDetail,
+  HistoryWorkParams,
   HistoryWorkQuery,
   HistoryWorkResponse,
   NotificationsQuery,
@@ -245,6 +247,45 @@ describe('history query schemas (P25-10)', () => {
         items: [{ kind: 'task', item: { id: 'p1' }, cursor: 'c' }],
         hasMore: false,
       }).success,
+    ).toBe(false);
+  });
+});
+
+describe('history detail schemas (P5-03)', () => {
+  it('reads the detail route’s parameters: a project or a task', () => {
+    expect(HistoryWorkParams.parse({ kind: 'project', id: 'p1' })).toEqual({
+      kind: 'project',
+      id: 'p1',
+    });
+    expect(HistoryWorkParams.safeParse({ kind: 'body', id: 'b1' }).success).toBe(false);
+  });
+
+  it('carries a question’s holder chain, in order, and refuses an unknown step', () => {
+    const holders = [
+      { holder: { type: 'agent', id: 'w1' }, at, via: 'asked' },
+      { holder: { type: 'agent', id: 'h1' }, at, via: 'reassigned', reason: 'w1 ended' },
+      { holder: { type: 'user' }, at, via: 'escalated' },
+    ];
+    const parsed = HistoryQuestionsResponse.parse({
+      items: [{ question: question({ status: 'answered' }), cursor: 'c', holders }],
+      hasMore: false,
+    });
+    expect(parsed.items[0]!.holders).toEqual(holders);
+    expect(
+      HistoryQuestionsResponse.safeParse({
+        items: [
+          { question: question(), cursor: 'c', holders: [{ ...holders[0], via: 'guessed' }] },
+        ],
+        hasMore: false,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('types the detail by its kind', () => {
+    const empty = { trail: { moves: [] }, states: [], tasks: [], subProjects: [], agents: [] };
+    const rest = { ...empty, questions: [], moreQuestions: false };
+    expect(
+      HistoryWorkDetail.safeParse({ work: { kind: 'task', item: { id: 't1' } }, ...rest }).success,
     ).toBe(false);
   });
 });

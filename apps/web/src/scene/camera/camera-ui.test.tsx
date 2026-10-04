@@ -29,7 +29,12 @@ beforeEach(() => {
     anchor('b-europa', 'moon', 104),
     anchor(SUN_ANCHOR_ID, 'star', 0),
   ];
-  useCameraStore.setState({ focusedId: undefined, flying: false, request: undefined });
+  useCameraStore.setState({
+    focusedId: undefined,
+    flying: false,
+    request: undefined,
+    atSystem: false,
+  });
   const s = useAppStore.getState();
   useAppStore.setState({ world: { ...s.world, bodies: { ...s.world.bodies, ...bodies } } });
 });

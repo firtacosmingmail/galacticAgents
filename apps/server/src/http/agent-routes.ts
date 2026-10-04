@@ -15,6 +15,7 @@ import {
   type DecideResponse,
   type MessagesResponse,
   type ProposalDecision,
+  type RestartHarmonizerResponse,
   type RuntimesInfo,
   type SendResponse,
   type SpawnResponse,
@@ -47,6 +48,8 @@ export interface AgentRoutesOptions {
   commands?: Commands;
   /** A Steward's processes (P4-14): enables `GET /api/agents/:id/processes` and its stop. */
   processes?: StewardProcessControl;
+  /** The Harmonizer's restart (P5-06): enables `POST /api/harmonizer/restart`. */
+  restartHarmonizer?: () => Promise<RestartHarmonizerResponse>;
 }
 
 const USER: Actor = { type: 'user' };
@@ -151,6 +154,38 @@ export function registerAgentRoutes(
     app.post('/api/agents/:id/stop', (req, reply) =>
       attempt(reply, () => runtime.stop(agentId(req), USER)),
     );
+
+    /**
+     * The panel's "Restart Harmonizer" (P5-06; SPEC decision 82): stops the running Harmonizer as
+     * the user's stop and starts a fresh one on the same runtime; the reply names the new one.
+     * Any authenticated client may ask, like stopping any agent (`/api/agents/:id/stop`, the
+     * panel's controls): it is a control action, not a settings write. 409 when it refuses (a
+     * restart or a resume of the Harmonizer under way, no runtime configured, the start refused),
+     * 429 with `Retry-After` past the restart window (3 in 10 min), 500 for anything unexpected.
+     */
+    const { restartHarmonizer } = opts;
+    if (restartHarmonizer) {
+      app.post('/api/harmonizer/restart', async (req, reply) => {
+        try {
+          return (await restartHarmonizer()) satisfies RestartHarmonizerResponse;
+        } catch (error) {
+          if (!(error instanceof DomainError)) {
+            req.log.error(error);
+            return reply.code(500).send({
+              error: 'internal',
+              message: redactSecrets(String((error as Error).message ?? error)),
+            });
+          }
+          req.log.warn(error);
+          const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;
+          if (typeof retryAfterMs === 'number') {
+            void reply.header('retry-after', String(Math.max(Math.ceil(retryAfterMs / 1000), 1)));
+            return reply.code(429).send(refusal('refused', error.message));
+          }
+          return reply.code(409).send(refusal('refused', error.message));
+        }
+      });
+    }
 
     /**
      * Reopens an interrupted agent from its session ref (the manual half of P1-14): the same

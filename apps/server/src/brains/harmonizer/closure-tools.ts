@@ -15,7 +15,8 @@ import { asInput, oneOf, S, str } from './input.js';
  *     and Stewards are stopped, `completed`, the retention clock starts);
  *   - `finished_work`: archive now, pin, unpin or reopen a project or task (the panel's actions,
  *     conversationally);
- *   - `ask_confirmation`: asks the user to confirm one of those actions.
+ *   - `ask_confirmation`: asks the user to confirm one of those actions, or a stop or cancel of
+ *     work for `control_work` (P5-07, decision 83; `control-tools.ts`).
  *
  * The user's word is checked in code, never left to the prompt (decision 11): `close_project`
  * and `finished_work` act only on a question the user answered with that choice — the project's
@@ -76,10 +77,13 @@ export const askClosureTool: BrainTool = {
   },
 };
 
-type Confirmable = 'close' | (typeof ACTIONS)[number];
+/** The work controls that need the user's confirmation in conversation (decision 83). */
+export const CONFIRMED_CONTROLS = ['stop', 'cancel'] as const;
+
+export type Confirmable = 'close' | (typeof ACTIONS)[number] | (typeof CONFIRMED_CONTROLS)[number];
 
 /** What the target is called on a confirmation question. */
-function labelOf(ctx: BrainToolContext, kind: 'project' | 'task', id: Id): string {
+export function labelOf(ctx: BrainToolContext, kind: 'project' | 'task', id: Id): string {
   if (kind === 'project') return must(ctx.queries.project(id), 'project', id).name;
   const task = must(ctx.queries.task(id), 'task', id);
   const line = task.description.split('\n')[0]!.trim();
@@ -99,6 +103,10 @@ function choiceOf(action: Confirmable, label: string): string {
       return `Unpin ${label}`;
     case 'reopen':
       return `Reopen ${label}`;
+    case 'stop':
+      return `Stop ${label} (its agents stop)`;
+    case 'cancel':
+      return `Cancel ${label} (it fails, its agents stop)`;
   }
 }
 
@@ -117,7 +125,7 @@ function userChose(q: Question | undefined, choice: string, yes = true): boolean
  * first option or yes. For a close, the project's "Anything else?" question answered "Close …"
  * counts too.
  */
-function checkUserAgreed(
+export function checkUserAgreed(
   ctx: BrainToolContext,
   action: Confirmable,
   kind: 'project' | 'task',
@@ -152,14 +160,15 @@ function checkUserAgreed(
 export const askConfirmationTool: BrainTool = {
   name: 'ask_confirmation',
   description:
-    'Asks the user to confirm closing a project or a finished-work action (archive, pin, unpin, ' +
-    'reopen) they asked for in conversation. Ends your turn; once the user answers with the ' +
-    'first choice, call close_project / finished_work with this questionId.',
+    'Asks the user to confirm closing a project, a finished-work action (archive, pin, unpin, ' +
+    'reopen) or stopping or cancelling work (stop, cancel) they asked for in conversation. Ends ' +
+    'your turn; once the user answers with the first choice, call close_project / finished_work ' +
+    '/ control_work with this questionId.',
   inputSchema: S.obj(
     {
       kind: { type: 'string', enum: ['project', 'task'] },
       id: S.str('The project or task.'),
-      action: { type: 'string', enum: ['close', ...ACTIONS] },
+      action: { type: 'string', enum: ['close', ...ACTIONS, ...CONFIRMED_CONTROLS] },
     },
     ['kind', 'id', 'action'],
   ),
@@ -168,7 +177,7 @@ export const askConfirmationTool: BrainTool = {
     const input = asInput(raw);
     const kind = oneOf(input, 'kind', ['project', 'task'] as const);
     const id = str(input, 'id');
-    const action = oneOf(input, 'action', ['close', ...ACTIONS] as const);
+    const action = oneOf(input, 'action', ['close', ...ACTIONS, ...CONFIRMED_CONTROLS] as const);
     if (action === 'close' && kind !== 'project') {
       throw new DomainError('invalid', 'only a project is closed; a task is closed by close_task');
     }

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { REPLAY_SPEEDS, useReplayStore, type ReplaySpeed } from './store.js';
 import { tickOf } from './replay-model.js';
 import './replay.css';
@@ -89,13 +89,35 @@ export function ReplayBar({ sceneShown }: { sceneShown: boolean }) {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
+  // P5-04: exiting gives the focus back to what opened the replay ("Replay history" in a row's
+  // "⋯", "Replay" in the history) when the focus was in the bar, or to the main area's heading.
+  const opener = useRef<HTMLElement | null>(null);
+  const bar = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    // Captured after the route change: a replay opened from the history page finds the focus on
+    // the body (the history unmounted), which is no opener at all — exit falls back to the h1.
+    const o = document.activeElement as HTMLElement | null;
+    opener.current = o && o !== document.body ? o : null;
+    const section = bar.current;
+    return () => {
+      const active = document.activeElement;
+      const lost = !active || active === document.body || !active.isConnected;
+      if (!lost && !section?.contains(active)) return;
+      const to = opener.current?.isConnected
+        ? opener.current
+        : document.querySelector<HTMLElement>('.pnl-body main h1');
+      if (to && !to.hasAttribute('tabindex') && to.tagName === 'H1') to.tabIndex = -1;
+      to?.focus({ preventScroll: true });
+    };
+  }, [open]);
   if (r.phase === 'closed') return null;
   const title = r.name ? `Replay · ${r.name}` : 'Replay';
   const span = Math.max(1, r.end - r.start);
   const events = r.timeline?.events ?? [];
   const shown = r.timeline ? r.timeline.countAt(r.time) : 0;
   return (
-    <section className="rpl" aria-label={title}>
+    <section className="rpl" aria-label={title} ref={bar}>
       <div className="rpl-head">
         <strong className="rpl-title">{title}</strong>
         <span className="rpl-note">

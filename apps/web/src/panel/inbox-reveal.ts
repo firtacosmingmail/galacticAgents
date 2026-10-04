@@ -1,4 +1,5 @@
 import { showInbox } from './inbox-visibility.js';
+import { prefersReducedMotion } from '../scene/motion.js';
 
 /**
  * Bringing the inbox — or one question's card in it — into view (P3-12's "N waiting for you"
@@ -13,6 +14,9 @@ export const INBOX_ID = 'pnl-inbox';
 export const REVEAL_HIGHLIGHT_MS = 1600;
 /** The class a revealed card carries meanwhile. */
 export const REVEALED_CLASS = 'is-revealed';
+
+/** Smooth scrolling, unless the user asked for reduced motion (P5-04): then it jumps. */
+export const scrollBehavior = (): ScrollBehavior => (prefersReducedMotion() ? 'auto' : 'smooth');
 
 const nextFrame = (fn: () => void) => {
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => fn());
@@ -29,7 +33,7 @@ export function revealInbox(triesLeft = 60): void {
   showInbox();
   const inbox = document.getElementById(INBOX_ID);
   if (inbox) {
-    inbox.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    inbox.scrollIntoView?.({ block: 'start', behavior: scrollBehavior() });
     inbox.focus({ preventScroll: true });
     return;
   }
@@ -59,7 +63,7 @@ export function revealQuestion(questionId: string, triesLeft = 30): boolean {
   const card = inboxCard(questionId);
   if (card) {
     if (!card.hasAttribute('tabindex')) card.setAttribute('tabindex', '-1');
-    card.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+    card.scrollIntoView?.({ block: 'nearest', behavior: scrollBehavior() });
     card.focus({ preventScroll: true });
     card.classList.add(REVEALED_CLASS);
     setTimeout(() => card.classList.remove(REVEALED_CLASS), REVEAL_HIGHLIGHT_MS);

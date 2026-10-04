@@ -1,7 +1,15 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
-import { AgentRole, AgentRuntime, HostKind, QuestionKind } from './enums.js';
-import { Actor, PermissionPolicy, Project, Question, Task, TranscriptChunk } from './domain.js';
+import { AgentRole, AgentRuntime, HostKind, QuestionKind, WorkState } from './enums.js';
+import {
+  Actor,
+  Agent,
+  PermissionPolicy,
+  Project,
+  Question,
+  Task,
+  TranscriptChunk,
+} from './domain.js';
 import type { EventEnvelope } from './events.js';
 
 // ---------------------------------------------------------------------------
@@ -471,10 +479,66 @@ export const HistoryWorkQuery = z.object({
 });
 export type HistoryWorkQuery = z.input<typeof HistoryWorkQuery>;
 
-/** One finished or archived project or task, as the domain table holds it, with its position. */
+/**
+ * One move of a project or task (P5-03; SPEC §3.4, decision 15 "the history view keeps the
+ * link"): from the log, oldest first. A `body.moved` gives `fromBodyId` → `toBodyId` (and
+ * `intoProjectId` when a standalone task joined that project); a project task handed to another
+ * project (a Waykeeper's promotion, `task.updated` with a new `projectId`) gives `intoProjectId`
+ * and the body it lives on now. Names are resolved by the server so the link reads even when the
+ * client no longer holds the rows.
+ */
+export const HistoryMove = z.object({
+  at: Timestamp,
+  fromBodyId: Id.optional(),
+  fromBodyName: z.string().optional(),
+  toBodyId: Id.optional(),
+  toBodyName: z.string().optional(),
+  intoProjectId: Id.optional(),
+  intoProjectName: z.string().optional(),
+});
+export type HistoryMove = z.infer<typeof HistoryMove>;
+
+/** A project or task named in a history link: its kind, id and name (a task's description). */
+export const HistoryWorkRef = z.object({ kind: HostKind, id: Id, name: z.string() });
+export type HistoryWorkRef = z.infer<typeof HistoryWorkRef>;
+
+/**
+ * What the log says about a piece of work beyond its row (P5-03), derived from its
+ * `*.state_changed`, `body.moved` and `task.updated` events: when it was closed (its last move
+ * into `completed`, `failed` or `moved`, while it is still finished), archived (while it is) and
+ * last reopened; where it moved; and the promotion link both ways — the project a task was
+ * promoted into (`promotedTo`), the task a project was promoted from (`promotedFrom`, from the
+ * project's `meta.promotedFrom`).
+ */
+export const HistoryWorkTrail = z.object({
+  closedAt: Timestamp.optional(),
+  archivedAt: Timestamp.optional(),
+  reopenedAt: Timestamp.optional(),
+  moves: z.array(HistoryMove),
+  promotedTo: HistoryWorkRef.optional(),
+  promotedFrom: HistoryWorkRef.optional(),
+});
+export type HistoryWorkTrail = z.infer<typeof HistoryWorkTrail>;
+
+/**
+ * One finished or archived project or task, as the domain table holds it, with its position, the
+ * name of the body it lives (or lived) on, and its trail (P5-03; absent from servers before it).
+ */
 export const HistoryWorkItem = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('project'), item: Project, cursor: z.string().min(1) }),
-  z.object({ kind: z.literal('task'), item: Task, cursor: z.string().min(1) }),
+  z.object({
+    kind: z.literal('project'),
+    item: Project,
+    cursor: z.string().min(1),
+    bodyName: z.string().optional(),
+    trail: HistoryWorkTrail.optional(),
+  }),
+  z.object({
+    kind: z.literal('task'),
+    item: Task,
+    cursor: z.string().min(1),
+    bodyName: z.string().optional(),
+    trail: HistoryWorkTrail.optional(),
+  }),
 ]);
 export type HistoryWorkItem = z.infer<typeof HistoryWorkItem>;
 
@@ -500,6 +564,20 @@ export const HistoryQuestionsQuery = z.object({
 export type HistoryQuestionsQuery = z.input<typeof HistoryQuestionsQuery>;
 
 /**
+ * One holder of a question, in order (P5-03): the first is who it was routed to when it was asked
+ * (the asker's supervisor, or the user for a permission), then one step per `question.escalated`
+ * (up the hierarchy, e.g. Waykeeper → Harmonizer → user) or `question.reassigned` (its holder
+ * ended; `reason` says why). `at` is when that holder got it.
+ */
+export const HolderStep = z.object({
+  holder: Actor,
+  at: Timestamp,
+  via: z.enum(['asked', 'escalated', 'reassigned']),
+  reason: z.string().optional(),
+});
+export type HolderStep = z.infer<typeof HolderStep>;
+
+/**
  * One past question as the domain table (and the stream) holds it: who answered (`answeredBy`),
  * the answer, and when (`updatedAt`). A cancelled one carries the `reason` of its
  * `question.cancelled` (withdrawn by its agent, ended with its agent, …).
@@ -508,6 +586,8 @@ export const HistoryQuestion = z.object({
   question: Question,
   reason: z.string().optional(),
   cursor: z.string().min(1),
+  /** Who held it, in order (P5-03; absent from servers before it). */
+  holders: z.array(HolderStep).optional(),
 });
 export type HistoryQuestion = z.infer<typeof HistoryQuestion>;
 
@@ -517,3 +597,43 @@ export const HistoryQuestionsResponse = z.object({
   hasMore: z.boolean(),
 });
 export type HistoryQuestionsResponse = z.infer<typeof HistoryQuestionsResponse>;
+
+// --- history detail (P5-03) -------------------------------------------------------------------
+
+/** One state change of a piece of work, from its `*.state_changed` event. */
+export const HistoryStateStep = z.object({
+  at: Timestamp,
+  from: WorkState,
+  to: WorkState,
+  by: Actor.optional(),
+});
+export type HistoryStateStep = z.infer<typeof HistoryStateStep>;
+
+/** `GET /api/history/work/:kind/:id`'s path parameters. */
+export const HistoryWorkParams = z.object({ kind: HostKind, id: Id });
+export type HistoryWorkParams = z.infer<typeof HistoryWorkParams>;
+
+/**
+ * `GET /api/history/work/:kind/:id` (P5-03): one project or task inspected from the history, in
+ * any state (a moved-to link may lead to live work). Its row and trail, the body name, every
+ * state change oldest first, its project (a task's, or a sub-project's parent), a project's tasks
+ * and sub-projects, the agents that ran it (a project's Waykeepers and Stewards, a task's
+ * Stewards), and the questions those agents asked — newest first, at most 50
+ * (`moreQuestions` when there were more) — each with its holder chain.
+ */
+export const HistoryWorkDetail = z.object({
+  work: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('project'), item: Project }),
+    z.object({ kind: z.literal('task'), item: Task }),
+  ]),
+  bodyName: z.string().optional(),
+  trail: HistoryWorkTrail,
+  states: z.array(HistoryStateStep),
+  project: Project.optional(),
+  tasks: z.array(Task),
+  subProjects: z.array(Project),
+  agents: z.array(Agent),
+  questions: z.array(HistoryQuestion),
+  moreQuestions: z.boolean(),
+});
+export type HistoryWorkDetail = z.infer<typeof HistoryWorkDetail>;

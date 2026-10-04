@@ -1,0 +1,212 @@
+/*
+ * The status views (P5-02): dense, readable lists over the panel's tokens. Amber (the beacon) is
+ * still reserved for "blocked on you" (SPEC §4.4): the chips and rows that wait for the user use
+ * it, nothing else does.
+ */
+
+/* the dock bar's "Chat | Status" switch */
+.sts-toggle {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.pnl .sts-toggle-option {
+  padding: 2px 10px;
+  border: 0;
+  border-radius: 0;
+  background: var(--pnl-raised);
+  color: var(--pnl-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pnl .sts-toggle-option + .sts-toggle-option {
+  border-left: 1px solid var(--pnl-line);
+}
+.pnl .sts-toggle-option.is-on {
+  background: var(--pnl-here-soft);
+  color: var(--pnl-ink);
+  font-weight: 600;
+}
+@media (max-width: 760px) {
+  .pnl .sts-toggle-option {
+    min-height: 44px;
+  }
+}
+
+/* the dock body's panes: the chat stays laid out under the status view (scroll position kept) */
+.sts-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.sts-pane-chat {
+  flex: 1 1 0;
+}
+.sts-pane-chat > .pnl-chat {
+  flex: 1 1 0;
+}
+.sts-pane-chat.is-hidden {
+  flex: none;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+.sts-pane-status {
+  flex: 1 0 auto;
+}
+
+.sts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0 8px;
+}
+.sts-section .pnl-eyebrow {
+  margin: 0 0 4px;
+}
+.sts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px 20px;
+}
+.sts-line,
+.sts-waiting {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.sts-empty,
+.sts-note {
+  margin: 0;
+  font-size: 13px;
+}
+.sts-note {
+  margin-top: 4px;
+}
+
+.sts-chips {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.sts-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--pnl-line);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sts-chip-count {
+  font-weight: 700;
+}
+.sts-chip.is-blocked {
+  background: var(--pnl-beacon);
+  border-color: var(--pnl-beacon);
+  color: var(--pnl-beacon-ink);
+  font-weight: 700;
+}
+
+.sts-attention,
+.sts-tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sts-attn,
+.sts-task {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 4px 8px;
+  border-left: 3px solid var(--pnl-line);
+  border-radius: 4px;
+  background: var(--pnl-surface);
+  min-width: 0;
+}
+.sts-attn.tone-blocked,
+.sts-task.is-blocked {
+  border-left-color: var(--pnl-beacon);
+}
+.sts-attn.tone-failed {
+  border-left-color: var(--pnl-failed);
+}
+.sts-attn.tone-interrupted {
+  border-left-color: var(--pnl-interrupted);
+}
+.sts-attn.tone-stalled,
+.sts-attn.tone-cap {
+  border-left-color: var(--pnl-stalled);
+}
+.sts-tone {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.sts-attn-kind {
+  font-size: 12px;
+}
+.sts-attn-name,
+.sts-task-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sts-attn-detail,
+.sts-task-meta {
+  font-size: 12px;
+}
+.sts-task-meta {
+  flex-basis: 100%;
+}
+
+.sts-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+}
+.sts-fact,
+.sts-meter {
+  display: contents;
+}
+.sts-facts dt {
+  color: var(--pnl-muted);
+}
+.sts-facts dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.sts-meter meter {
+  width: 6em;
+}
+.sts-meter.is-full .sts-full {
+  font-weight: 700;
+}
+.sts-task-facts {
+  margin: 4px 0 8px;
+  font-size: 13px;
+}
+
+.sts-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--pnl-line);
+}

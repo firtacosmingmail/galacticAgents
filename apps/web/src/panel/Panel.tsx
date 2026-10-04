@@ -20,7 +20,7 @@ import { Inbox } from './Inbox.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
 import { openQuestionsOf, StewardPanelView } from './steward/StewardPanelView.js';
 import { ManagedAgentCards } from './AgentCards.js';
-import { ControlsStrip } from './controls.js';
+import { ControlsStrip, HarmonizerControls, type RestartFocus } from './controls.js';
 import { FirstRunGate } from './settings/FirstRunGate.js';
 import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
@@ -28,6 +28,7 @@ import { HistoryPage } from './history/HistoryPage.js';
 import { SceneArea } from '../scene/SceneArea.js';
 import { ReplayBar } from '../replay/ReplayBar.js';
 import { useScene } from '../scene/visibility.js';
+import { dropDeepLink } from '../scene/picking/sync.js';
 import { INBOX_ID, TopBar } from './TopBar.js';
 import {
   useManagedAgentsVisibility,
@@ -37,6 +38,15 @@ import { useInboxVisibility, type InboxControl } from './inbox-visibility.js';
 import { DockHandle, DOCK_BODY_ID, UnreadReplies } from './Dock.js';
 import { useDockPrefs, type DockControl } from './dock-state.js';
 import { STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
+import { BrainDock, DockViewToggle, SystemStatusView } from './status/StatusViews.js';
+import { useDockView } from './status/dock-view.js';
+import {
+  focusAfterRemoval,
+  listKeys,
+  useFocusRescue,
+  useRouteFocus,
+  WaitingAnnouncer,
+} from './a11y.js';
 import './panel.css';
 
 /*
@@ -74,6 +84,11 @@ export function Panel({
   const route = useAppStore((s) => s.route);
   const scene = useScene();
   const showScene = route === 'panel' && scene.shown;
+  // The main view in list mode: a deep link (a load, a return from another page) is spent — a
+  // scene shown later must not fly to it (P5-01).
+  useEffect(() => {
+    if (route === 'panel' && !scene.shown) dropDeepLink();
+  }, [route, scene.shown]);
   const agents = useManagedAgentsVisibility();
   const inbox = useInboxVisibility();
   // Both sections hidden (P4-12): no side column; the centre takes its width.
@@ -95,12 +110,14 @@ export function Panel({
   ]
     .filter(Boolean)
     .join(' ');
+  useRouteFocus();
   const main = <MainArea dock={dock} collapsible={collapsible} container={centre} />;
   return (
     <ApiContext.Provider value={api}>
       <SettingsProvider api={api}>
         <CardLinksContext.Provider value={true}>
           <div className={showScene ? 'pnl pnl-with-scene' : 'pnl'}>
+            <WaitingAnnouncer />
             <TopBar
               scene={scene}
               agents={agents}
@@ -196,14 +213,33 @@ function MainArea({
   const agent = selectedAgent(world, selection);
   useCanonicalSelection(agent, selection);
   const open = !collapsible || dock.open;
+  const view = useDockView((s) => s.view);
+  // An answered question, a closed confirmation: the focus stays in the main area (P5-04) — on
+  // the next open question's card (the thread's inline cards, the Steward view's question cards
+  // and its clarification box) when one is left, else on the main area's title.
+  const mainRef = useRef<HTMLElement>(null);
+  useFocusRescue(mainRef, {
+    items: MAIN_QUESTION,
+    target: (item) =>
+      item.matches('form') ? (item.querySelector<HTMLElement>('textarea') ?? item) : item,
+    fallback: (main) => main.querySelector<HTMLElement>('h1'),
+  });
 
   let content;
   if (!agent) {
     content =
       selection.kind === 'harmonizer' ? (
-        <Empty>
-          No Harmonizer is running. Start Mission Control with <code>galactic start</code>.
-        </Empty>
+        // No Harmonizer row (decision 44; where every deselect lands): the system status still
+        // shows — it needs no agent; only its "Ask the Harmonizer" button is disabled (P5-02).
+        view === 'status' ? (
+          <div className="sts-pane sts-pane-status">
+            <SystemStatusView />
+          </div>
+        ) : (
+          <Empty>
+            No Harmonizer is running. Start Mission Control with <code>galactic start</code>.
+          </Empty>
+        )
       ) : status === 'live' ? (
         <Empty>
           This {selection.kind} is not in the current log.{' '}
@@ -216,8 +252,12 @@ function MainArea({
     // Read-only except an open clarification's answer (decision 13; P25-05).
     content = <StewardPanelView key={agent.id} agentId={agent.id} />;
   } else {
-    // The Harmonizer or a Waykeeper: the conversation (P25-03).
-    content = <Conversation key={agent.id} agentId={agent.id} />;
+    // The Harmonizer or a Waykeeper: the conversation (P25-03), or its status view (P5-02).
+    content = (
+      <BrainDock agent={agent}>
+        <Conversation key={agent.id} agentId={agent.id} />
+      </BrainDock>
+    );
   }
 
   const className = [
@@ -238,6 +278,7 @@ function MainArea({
       : `Conversation with ${agentLabel(agent, world)}`;
   return (
     <main
+      ref={mainRef}
       className={className}
       aria-label={label}
       data-selection={selectionKey(selection)}
@@ -266,7 +307,8 @@ function MainArea({
 /**
  * The dock's bar (P4-10): who is selected, its state ("blocked on you" first for a Steward), the
  * "N new" replies that came while minimised, its activity, the way back to the Harmonizer, the
- * Waykeeper's controls (P4-09), and the minimise / restore button where the dock can minimise.
+ * Waykeeper's controls (P4-09) or the Harmonizer's (P5-06), and the minimise / restore button
+ * where the dock can minimise.
  */
 function MainHeader({
   agent,
@@ -292,11 +334,16 @@ function MainHeader({
         ? 'Talking to the project’s Waykeeper'
         : 'Watching (read-only)';
   const activity = status?.currentActivity;
+  // Survives the remount of the Harmonizer's controls (keyed by its id) across a restart.
+  const restartFocusRef = useRef<RestartFocus | undefined>(undefined);
   return (
     <div className="pnl-main-head pnl-dock-bar">
       <div className="pnl-dock-titles">
         <p className="pnl-eyebrow">{eyebrow}</p>
-        <h1 className="pnl-title">{agent ? agentLabel(agent, world) : role}</h1>
+        {/* Focusable for the Harmonizer's restart (P5-06): focus waits here meanwhile. */}
+        <h1 className="pnl-title" tabIndex={-1}>
+          {agent ? agentLabel(agent, world) : role}
+        </h1>
       </div>
       {agent && (
         <span className="pnl-dock-state">
@@ -320,6 +367,17 @@ function MainHeader({
         </NavLink>
       )}
       {agent?.role === 'waykeeper' && <WaykeeperControls agent={agent} />}
+      {agent?.role === 'harmonizer' && (
+        // P5-06 (decision 82): pause / resume, "Resume session" when interrupted, and restart.
+        <HarmonizerControls
+          key={agent.id}
+          agentId={agent.id}
+          status={status}
+          name={agentLabel(agent, world)}
+          restartFocusRef={restartFocusRef}
+        />
+      )}
+      {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && <DockViewToggle />}
       {toggle && (
         <button
           type="button"
@@ -377,6 +435,14 @@ const SideColumn = memo(function SideColumn({
   const selection = useAppStore((s) => s.selection);
   const agent = selectedAgent(world, selection);
   const supervisor: Id | undefined = agent?.role === 'steward' ? agent.supervisorId : undefined;
+  // P5-04: arrow keys between the cards, and the focus kept in the list when a card goes away.
+  const agentsRef = useRef<HTMLElement>(null);
+  const inboxRef = useRef<HTMLElement>(null);
+  useFocusRescue(agentsRef, {
+    items: AGENT_CARD,
+    fallback: (s) => s.querySelector<HTMLElement>('h2'),
+  });
+  useFocusRescue(inboxRef, { items: INBOX_CARD, fallback: (s) => s });
   return (
     <aside
       className="pnl-side"
@@ -389,7 +455,7 @@ const SideColumn = memo(function SideColumn({
       }
     >
       {agents.visible && (
-        <section aria-label="managed agents">
+        <section aria-label="managed agents" ref={agentsRef} onKeyDown={listKeys(AGENT_CARD)}>
           <div className="pnl-side-head">
             <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
             <button
@@ -397,7 +463,10 @@ const SideColumn = memo(function SideColumn({
               className="pnl-side-hide"
               aria-label="Hide managed agents"
               title="Hide managed agents (bring them back from the top bar)"
-              onClick={() => agents.setVisible(false)}
+              onClick={() => {
+                agents.setVisible(false);
+                focusAfterRemoval('.pnl-agents-toggle', '.pnl-menu-button', '.pnl-inbox');
+              }}
             >
               Hide
             </button>
@@ -410,13 +479,31 @@ const SideColumn = memo(function SideColumn({
         </section>
       )}
       {inbox.visible && (
-        <section className="pnl-inbox" aria-label="inbox" id={INBOX_ID} tabIndex={-1}>
-          <Inbox onHide={() => inbox.setVisible(false)} />
+        <section
+          className="pnl-inbox"
+          aria-label="inbox"
+          id={INBOX_ID}
+          tabIndex={-1}
+          ref={inboxRef}
+          onKeyDown={listKeys(INBOX_CARD)}
+        >
+          <Inbox
+            onHide={() => {
+              inbox.setVisible(false);
+              focusAfterRemoval('.pnl-inbox-toggle', '.pnl-menu-button', '.pnl-nav-hq');
+            }}
+          />
         </section>
       )}
     </aside>
   );
 });
+
+/** The items the arrow keys move between (P5-04): the managed agents' cards, the inbox's cards. */
+const AGENT_CARD = 'article.agc, .pnl-agents > li > a';
+const INBOX_CARD = 'article.card';
+/** The main area's open questions: their cards and the Steward view's clarification box. */
+const MAIN_QUESTION = 'article.card.question:not(.answered), form.stw-composer';
 
 function AgentLinks({ ids }: { ids: Id[] }) {
   const world = useAppStore((s) => s.world);

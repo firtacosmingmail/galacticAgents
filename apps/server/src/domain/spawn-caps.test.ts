@@ -131,20 +131,21 @@ describe('spawn caps through Commands.spawnAgent (P2-17)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'galactic-caps-'));
     dirs.push(dir);
     const path = join(dir, 'galactic.sqlite');
-    // Harmonizer + Waykeeper + one Steward = 3 spawns in this hour.
+    // Waykeeper + one Steward = 2 spawns in this hour; the Harmonizer is not counted (decision
+    // 43, P5-06: its restarts must not use up the window).
     const c1 = boot({ maxSpawnsPerHour: 4 }, path);
     const { waykeeper, tasks } = await projectWithTasks(c1, 2);
     await steward(c1, tasks[0]!, waykeeper.id, 'scenario:fails');
-    expect(c1.runtime.caps.spawnsInLastHour()).toBe(3);
+    expect(c1.runtime.caps.spawnsInLastHour()).toBe(2);
     await c1.dispose();
     lives.splice(lives.indexOf(c1), 1);
 
-    const c2 = boot({ maxSpawnsPerHour: 3 }, path);
-    expect(c2.runtime.caps.spawnsInLastHour()).toBe(3);
+    const c2 = boot({ maxSpawnsPerHour: 2 }, path);
+    expect(c2.runtime.caps.spawnsInLastHour()).toBe(2);
     expect(c2.runtime.caps.spawnsInLastHour(waykeeper.id)).toBe(1);
     const error = await refusal(steward(c2, tasks[1]!, waykeeper.id));
     expect(error.message).toMatch(
-      /^spawn-rate cap: 3 of 3 agents spawned in the last hour \(all brains and the panel\); frees at /,
+      /^spawn-rate cap: 2 of 2 agents spawned in the last hour \(all brains and the panel\); frees at /,
     );
   });
 });

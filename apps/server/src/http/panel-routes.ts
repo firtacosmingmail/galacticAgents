@@ -5,6 +5,7 @@ import {
   ConversationQuery,
   HistoryEventsQuery,
   HistoryQuestionsQuery,
+  HistoryWorkParams,
   HistoryWorkQuery,
   NotificationsQuery,
   SettingsPatch,
@@ -12,6 +13,7 @@ import {
   type ConversationResponse,
   type HistoryEventsResponse,
   type HistoryQuestionsResponse,
+  type HistoryWorkDetail,
   type HistoryWorkResponse,
   type NotificationsResponse,
   type PreflightResponse,
@@ -43,7 +45,10 @@ import { bearerGuard, originOf } from './security.js';
  * - `GET /api/preflight` — every registered runtime's check;
  * - `GET /api/notifications` — the SPEC §4.5 feed;
  * - `GET /api/history/work`, `GET /api/history/questions` — the history view (P25-10): finished
- *   and archived work, past questions, searched and paged back by an opaque cursor;
+ *   and archived work, past questions, searched and paged back by an opaque cursor; each row
+ *   with its trail (closure dates, moves) or holder chain (P5-03);
+ * - `GET /api/history/work/:kind/:id` — one project or task inspected from the history (P5-03):
+ *   its trail, state changes, tasks, agents and their questions; 404 when there is none;
  * - `GET /api/history/events` — the timeline scrubber (P4-07): the events that touch one project,
  *   oldest first, paged forward by `seq` (read-only; `runtime/history-events.ts`).
  *
@@ -129,6 +134,14 @@ export function registerPanelRoutes(
       const q = parse(HistoryWorkQuery, req.query, reply, 'invalid_query');
       if (!q) return;
       return page(() => past.work(q) satisfies HistoryWorkResponse, reply);
+    });
+    // One project or task inspected from the history (P5-03), in any state.
+    app.get('/api/history/work/:kind/:id', async (req, reply) => {
+      const params = parse(HistoryWorkParams, req.params, reply, 'invalid_query');
+      if (!params) return;
+      const detail = past.detail(params.kind, params.id);
+      if (!detail) return reply.code(404).send({ error: 'not_found' });
+      return detail satisfies HistoryWorkDetail;
     });
     app.get('/api/history/questions', async (req, reply) => {
       const q = parse(HistoryQuestionsQuery, req.query, reply, 'invalid_query');

@@ -26,6 +26,7 @@ import { ControlsStrip } from '../controls.js';
 import { ClarificationComposer } from './ClarificationComposer.js';
 import { StewardProcesses } from './StewardProcesses.js';
 import { TranscriptLog } from './TranscriptLog.js';
+import { TaskStatusFacts } from '../status/StatusViews.js';
 import { useStewardTranscript } from './useStewardTranscript.js';
 import './steward.css';
 
@@ -54,6 +55,7 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
   return (
     <section className="steward stw" aria-label={`view of ${name}`}>
       <StatusHeader agent={agent} status={status} blocked={blocked} />
+      <TaskStatusFacts agentId={agentId} />
       <div className="stw-controls-row">
         <Controls agentId={agentId} status={status} />
         {task && (
@@ -153,7 +155,10 @@ function StatusHeader({
         <StatePill state={status?.state} />
         {task && <span className="muted">task {task.state.replace(/_/g, ' ')}</span>}
       </div>
-      <p className="stw-activity" aria-label="current activity">
+      <p className="stw-activity">
+        {/* Read out, not shown (its place in the header says it on screen); a `<p>` takes no
+            ARIA name. */}
+        <span className="pnl-visually-hidden">Current activity: </span>
         {status?.currentActivity ?? (status ? 'no activity reported' : 'no status yet')}
       </p>
       <dl className="stw-facts">

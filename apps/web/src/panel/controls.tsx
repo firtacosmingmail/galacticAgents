@@ -1,4 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import type { ControlBody, Id, StatusRecord } from '@galactic/protocol';
 import { EditForm } from '../console/hierarchy/WorkTree.js';
 import { ErrorLine, useAction, useApi } from '../console/hierarchy/shared.js';
@@ -24,6 +33,8 @@ export interface Controls {
   /** Recovers an interrupted agent's session ("Resume session"). */
   recover: () => void;
   pending: { scope: ControlScope; action: CardAction } | undefined;
+  /** What had the focus when the confirmation opened: it gets the focus back (P5-04). */
+  opener: RefObject<HTMLElement | null>;
   confirm: () => void;
   keep: () => void;
   editing: boolean;
@@ -35,6 +46,7 @@ export function useControls(agentId: Id | undefined, work: CardWork | undefined)
   const { run, error, busy } = useAction();
   const [pending, setPending] = useState<Controls['pending']>();
   const [editing, setEditing] = useState(false);
+  const opener = useRef<HTMLElement | null>(null);
 
   const send = (scope: ControlScope, body: ControlBody['action']) =>
     run(() =>
@@ -55,12 +67,17 @@ export function useControls(agentId: Id | undefined, work: CardWork | undefined)
   return {
     busy,
     error,
-    click: (scope, a) => (a.confirm ? setPending({ scope, action: a }) : perform(scope, a)),
+    click: (scope, a) => {
+      if (!a.confirm) return perform(scope, a);
+      opener.current = document.activeElement as HTMLElement | null;
+      setPending({ scope, action: a });
+    },
     recover: () => {
       setPending(undefined);
       if (agentId) void run(() => api.recover(agentId));
     },
     pending,
+    opener,
     confirm: () => pending && perform(pending.scope, pending.action),
     keep: () => setPending(undefined),
     editing,
@@ -80,21 +97,80 @@ export function ControlFeedback({
   return (
     <>
       {c.pending && (
-        <div className="agc-confirm" role="group" aria-label="confirm">
-          <span>{c.pending.action.confirm}</span>
-          <button type="button" className="danger" disabled={c.busy} onClick={c.confirm}>
-            Yes, {c.pending.action.label.toLowerCase()}
-          </button>
-          <button type="button" className="secondary" onClick={c.keep}>
-            Keep
-          </button>
-        </div>
+        <ConfirmBox
+          key={`${c.pending.scope}:${c.pending.action.action}`}
+          question={c.pending.action.confirm ?? ''}
+          yes={`Yes, ${c.pending.action.label.toLowerCase()}`}
+          busy={c.busy}
+          opener={c.opener}
+          onConfirm={c.confirm}
+          onKeep={c.keep}
+        />
       )}
       {c.editing && work && (
         <EditForm target={{ kind: work.kind }} item={work.item} busy={c.busy} onSave={c.saveEdit} />
       )}
       <ErrorLine error={c.error} />
     </>
+  );
+}
+
+/**
+ * An inline confirmation (decision 56): the question, the destructive answer and "Keep".
+ * P5-04: it takes the focus (on "Keep", the safe answer, decision 81), Escape keeps, and when it
+ * closes it gives the focus back to what opened it — or, gone (an action in the closed "More"
+ * menu), to "More" or the first button near the confirmation — unless the user has put the focus
+ * elsewhere.
+ */
+export function ConfirmBox({
+  question,
+  yes,
+  busy,
+  opener,
+  onConfirm,
+  onKeep,
+}: {
+  question: string;
+  yes: string;
+  busy: boolean;
+  opener: RefObject<HTMLElement | null>;
+  onConfirm: () => void;
+  onKeep: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = box.current;
+    const around = el?.parentElement;
+    const from = opener.current;
+    el?.querySelector<HTMLButtonElement>('button.secondary')?.focus();
+    return () => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active.isConnected) return;
+      const usable = (b: HTMLElement | null | undefined) =>
+        b?.isConnected && !(b as HTMLButtonElement).disabled ? b : undefined;
+      const to =
+        usable(from) ??
+        usable(around?.querySelector<HTMLElement>('.ctl-more')) ??
+        usable(around?.querySelector<HTMLElement>('button:not([disabled])'));
+      to?.focus();
+    };
+  }, [opener]);
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    onKeep();
+  };
+  return (
+    <div className="agc-confirm" role="group" aria-label="confirm" ref={box} onKeyDown={onKeyDown}>
+      <span>{question}</span>
+      <button type="button" className="danger" disabled={busy} onClick={onConfirm}>
+        {yes}
+      </button>
+      <button type="button" className="secondary" onClick={onKeep}>
+        Keep
+      </button>
+    </div>
   );
 }
 
@@ -204,6 +280,7 @@ export function ControlsStrip({
 }) {
   const c = useControls(agentId, work);
   const [open, setOpen] = useState(false);
+  const menuId = useId();
   const stripRef = useRef<HTMLDivElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -280,7 +357,7 @@ export function ControlsStrip({
             type="button"
             className="secondary ctl-more"
             aria-expanded={open}
-            aria-haspopup="true"
+            aria-controls={open ? menuId : undefined}
             onClick={() => setOpen((o) => !o)}
           >
             More
@@ -288,6 +365,7 @@ export function ControlsStrip({
         )}
         {open && (
           <div
+            id={menuId}
             className="ctl-menu"
             role="group"
             aria-label="more controls"
@@ -308,6 +386,132 @@ export function ControlsStrip({
         )}
       </div>
       <ControlFeedback controls={c} work={work} />
+    </div>
+  );
+}
+
+/** What "Restart Harmonizer" asks before it acts (decision 82). */
+export const RESTART_HARMONIZER_CONFIRM =
+  'Restart the Harmonizer? It is stopped and a fresh one starts, seeded from the database; ' +
+  'the questions it asked you are withdrawn and it asks again what still matters.';
+
+/**
+ * The Harmonizer's own controls in its dock bar (P5-06; SPEC decision 82): Pause or Resume like
+ * any agent's (`POST /api/control` on the agent), "Resume session" only while it is interrupted,
+ * and "Restart Harmonizer" behind a confirmation (`POST /api/harmonizer/restart`). Never a plain
+ * Stop: the user is never left without a Harmonizer (decision 44 does not replace one the user
+ * stopped). The selection stays on the Harmonizer, which is the newest one (`currentHarmonizer`).
+ */
+/**
+ * Focus across a restart (wave-3 review): "Yes, restart" moves focus to the dock bar's heading
+ * while the restart runs (the Restart button is disabled meanwhile), and the controls of the new
+ * Harmonizer — a remount, keyed by its id — take it back on their Restart button. The dock bar
+ * keeps this between the two mounts; a mount long after the restart leaves focus alone.
+ */
+export interface RestartFocus {
+  /** The Harmonizer that was restarted. */
+  from: Id;
+  since: number;
+}
+const RESTART_FOCUS_MS = 30_000;
+
+export function HarmonizerControls({
+  agentId,
+  status,
+  name,
+  restartFocusRef,
+}: {
+  agentId: Id;
+  status: StatusRecord | undefined;
+  name: string;
+  restartFocusRef?: RefObject<RestartFocus | undefined>;
+}) {
+  const c = useControls(agentId, undefined);
+  const api = useApi();
+  const restart = useAction();
+  const [confirming, setConfirming] = useState(false);
+  const opener = useRef<HTMLElement | null>(null);
+  const restartButton = useRef<HTMLButtonElement>(null);
+  /** Set by "Yes, restart": a restart that fails gives focus back to the Restart button. */
+  const refocusRef = useRef(false);
+  useEffect(() => {
+    // Mounted for the new Harmonizer after "Yes, restart": focus comes back to Restart.
+    const pending = restartFocusRef?.current;
+    if (!restartFocusRef || !pending || pending.from === agentId) return;
+    restartFocusRef.current = undefined;
+    if (Date.now() - pending.since < RESTART_FOCUS_MS) restartButton.current?.focus();
+  }, [agentId, restartFocusRef]);
+  useEffect(() => {
+    // The restart failed: the same controls, the Restart button enabled again.
+    if (restart.busy || restart.error === undefined || !refocusRef.current) return;
+    refocusRef.current = false;
+    if (restartFocusRef) restartFocusRef.current = undefined;
+    restartButton.current?.focus();
+  }, [restart.busy, restart.error, restartFocusRef]);
+  const actions = agentActions(status).filter((a) => INLINE.has(a.action));
+  const recoverable = status?.state === 'interrupted';
+  const busy = c.busy || restart.busy;
+  return (
+    <div className="ctl">
+      <div className="ctl-row" role="group" aria-label={`controls of ${name}`}>
+        {actions.length > 0 && (
+          <span className="ctl-group">
+            <span className="agc-actions-title" aria-hidden="true">
+              agent
+            </span>
+            {actions.map((a) => (
+              <ActionButton
+                key={a.action}
+                action={a}
+                busy={busy}
+                onClick={(x) => {
+                  setConfirming(false);
+                  c.click('agent', x);
+                }}
+                ariaLabel={`${a.label} the Harmonizer`}
+              />
+            ))}
+          </span>
+        )}
+        {recoverable && (
+          <button type="button" className="secondary" disabled={busy} onClick={c.recover}>
+            Resume session
+          </button>
+        )}
+        <button
+          type="button"
+          className="agc-destructive"
+          ref={restartButton}
+          disabled={busy}
+          onClick={(e) => {
+            opener.current = e.currentTarget;
+            setConfirming(true);
+          }}
+        >
+          Restart Harmonizer
+        </button>
+      </div>
+      {confirming && (
+        <ConfirmBox
+          question={RESTART_HARMONIZER_CONFIRM}
+          yes="Yes, restart"
+          busy={busy}
+          opener={opener}
+          onConfirm={() => {
+            setConfirming(false);
+            if (restartFocusRef) restartFocusRef.current = { from: agentId, since: Date.now() };
+            refocusRef.current = true;
+            opener.current
+              ?.closest('.pnl-dock-bar')
+              ?.querySelector<HTMLElement>('.pnl-title')
+              ?.focus();
+            void restart.run(() => api.restartHarmonizer());
+          }}
+          onKeep={() => setConfirming(false)}
+        />
+      )}
+      <ControlFeedback controls={c} work={undefined} />
+      <ErrorLine error={restart.error} />
     </div>
   );
 }

@@ -29,6 +29,36 @@ export const COMMAND_SOURCE = 'command';
 
 const USER: Actor = { type: 'user' };
 
+/**
+ * `meta.usedFor` of a confirmation question whose answer already allowed a control (P5-07,
+ * decision 83): "stop task t-1". Written by `consumeConfirmation` in the control's transaction.
+ */
+export const USED_FOR = 'usedFor';
+
+/** What a confirmation's answer was used for, if it was. */
+export function usedFor(question: Pick<Question, 'meta'> | undefined): string | undefined {
+  const used = question?.meta?.[USED_FOR];
+  return typeof used === 'string' ? used : undefined;
+}
+
+/**
+ * Uses up the answer to a confirmation question (P5-07): one answer, one control. Runs inside the
+ * control's command, so two calls with the same answer cannot both pass (commands run one at a
+ * time) and a control the domain refuses rolls the mark back with it. Recorded on the question's
+ * row (`meta.usedFor`), not on the work it controlled, so the work's history shows no extra edit.
+ */
+export function consumeConfirmation(ctx: CommandContext, questionId: Id, use: string): void {
+  const question = must(ctx.tables.questions.get(questionId), 'question', questionId);
+  const used = usedFor(question);
+  if (used !== undefined) {
+    throw new DomainError(
+      'invalid',
+      `the user's answer to ${questionId} was already used (${used}): ask_confirmation again`,
+    );
+  }
+  ctx.tables.questions.upsert({ ...question, meta: { ...question.meta, [USED_FOR]: use } });
+}
+
 /** "the user", "agent a-1", "the system": how an actor reads in a refusal. */
 export function describeActor(actor: Actor): string {
   if (actor.type === 'agent') return `agent ${actor.id ?? '?'}`;
