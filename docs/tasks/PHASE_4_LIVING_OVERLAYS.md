@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** — (all tasks done; exit check with the scene harness, after wave 4 is merged into `phase-4`) · **Task status:** —
-**Phase status:** in progress (14/14 done) — exit check pending (Cosmin's harness run) — on branch `phase-4`
+**Current task:** — (phase complete) · **Task status:** —
+**Phase status:** done (2026-10-04) — 14/14; merged into `main` — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -111,3 +111,11 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 ## Exit criteria (from the plan)
 
 Switching an agent's state in a test harness changes its satellite behaviour within a second; moving a task to a project flies its satellite there; a designer or friend can tell which planets are busy without reading text.
+
+## Exit check (2026-10-04)
+
+- **"Switching an agent's state in a test harness changes its satellite behaviour within a second":** met in an automated end-to-end test — `apps/web/src/console/scene-harness.test.tsx` runs the real composed runtime and Fastify routes, clicks each state in the harness tab and asserts the satellite's spec and look change within 1000 ms; the tab shows the measured latency for a manual run.
+- **"Moving a task to a project flies its satellite there":** met — `apps/web/src/scene/satellites/transitions.test.ts` feeds the server's real event shapes for a move through the client reducer and asserts the flight starts at the event and arrives in 3 s; the harness's Move button exercises it in the scene.
+- **"A designer or friend can tell which planets are busy without reading text":** state looks pair colour with pulse, size and motion (decision 72; colour-blind and reduced-motion cues tested). The human check with the harness (steps in `docs/tasks/notes/P4-06-harness-toasts.md`) is Cosmin's; he accepted the phase on 2026-10-04 and asked for the merge, with the check recorded here when he runs it.
+- Open choices carried forward: whether a failed Steward of a task closed anyway lands with a failure tint; whether 6 landed satellites per body is right (decision 77).
+- Gates on `phase-4`: build, typecheck, lint, format:check green; protocol 67, server 939 (+1 skipped), web 1034.
