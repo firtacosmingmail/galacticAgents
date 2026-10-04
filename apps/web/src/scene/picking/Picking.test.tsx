@@ -719,3 +719,60 @@ describe('question beacons as pick targets (P4-05, P4-13)', () => {
     expect(document.activeElement).toBe(document.querySelector('[data-question-id="q-h"]'));
   });
 });
+
+describe('deselecting and the HQ station (P5-01)', () => {
+  afterEach(() => {
+    publishSatellites(new Map());
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('a click on empty space goes back to the Harmonizer; the camera stays', () => {
+    anchorAt('b-jupiter', 5);
+    window.history.replaceState(null, '', '/waykeeper/a-wk-old');
+    useAppStore.setState({ selection: { kind: 'waykeeper', id: 'a-wk-old' } });
+    useCameraStore.setState({ focusedId: 'b-jupiter' });
+    render(<Picking />);
+    frame();
+    click(100, 500);
+    expect(selected()).toBe('harmonizer');
+    expect(window.location.pathname).toBe('/');
+    expect(useCameraStore.getState().request).toBeUndefined();
+    expect(useCameraStore.getState().focusedId).toBe('b-jupiter');
+  });
+
+  it('with a card open, the first click on empty space only closes it', () => {
+    anchorAt('b-jupiter', 5);
+    useAppStore.setState({ selection: { kind: 'steward', id: 'a-st' } });
+    usePickingStore.getState().showHere({ x: 1, y: 1 }, ['b-jupiter', 'b-io']);
+    render(<Picking />);
+    frame();
+    click(100, 500);
+    expect(usePickingStore.getState().popover).toBeUndefined();
+    expect(selected()).toBe('steward:a-st');
+    click(100, 500);
+    expect(selected()).toBe('harmonizer');
+  });
+
+  it('a drag over empty space deselects nothing', () => {
+    useAppStore.setState({ selection: { kind: 'steward', id: 'a-st' } });
+    render(<Picking />);
+    frame();
+    pointer('pointerDown', 100, 500, 1);
+    pointer('pointerMove', 160, 520, 1);
+    pointer('pointerUp', 160, 520);
+    expect(selected()).toBe('steward:a-st');
+  });
+
+  it("a click on the Harmonizer's HQ station selects the Harmonizer and flies to Earth", () => {
+    anchorAt('b-earth', 0);
+    publishSatellites(
+      new Map([['a-h', satelliteFrame('a-h', 'b-earth', [0, 0, 2], { role: 'harmonizer' })]]),
+    );
+    useAppStore.setState({ selection: { kind: 'waykeeper', id: 'a-wk-old' } });
+    render(<Picking />);
+    frame();
+    click(400, 300);
+    expect(selected()).toBe('harmonizer');
+    expect(useCameraStore.getState().request).toMatchObject({ kind: 'focus', bodyId: 'b-earth' });
+  });
+});

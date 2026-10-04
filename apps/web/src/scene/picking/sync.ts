@@ -20,6 +20,13 @@ import { isSceneSelection, usePickingStore } from './store.js';
  *   scene again later does not fly;
  * - a flight waiting for its body (the snapshot or the anchor not there yet) is dropped when the
  *   user moves the camera or selects something else.
+ * - a selection that came with a switch back to the panel's main view from a page without the
+ *   scene (the settings or history page: a history row's agent link, a notification clicked
+ *   there, back / forward onto an agent's URL) flies like a deep link: the scene mounts with it
+ *   (P5-01). Changing the selection in list mode and showing the scene later still does not fly;
+ * - during a replay (P4-07) the flight goes to the agent's body in the replayed world; an agent
+ *   that has no body there yet does not wait for one (the camera would jump mid-playback when it
+ *   appears): the flight is dropped (P5-01).
  * A selection change from outside the scene also closes the picking popover.
  */
 export interface SyncDeps {
@@ -27,6 +34,8 @@ export interface SyncDeps {
   hasAnchor: (bodyId: string) => boolean;
   focusedId: () => string | undefined;
   flyTo: (bodyId: string) => void;
+  /** Whether the scene shows a replay (P4-07): a flight then never waits for its body. */
+  replaying?: () => boolean;
 }
 
 export class SelectionSync {
@@ -49,6 +58,10 @@ export class SelectionSync {
   selectionChanged(selection: Selection, fromScene: boolean): void {
     this.pending = fromScene || selection.kind === 'harmonizer' ? undefined : selection;
     this.retry();
+    // A replay's world is the past: an agent not in it yet has no body to wait for.
+    if (this.pending && this.deps.replaying?.() && !this.deps.bodyFor(this.pending)) {
+      this.pending = undefined;
+    }
   }
 
   /** The world or the anchors changed: a waiting flight may go now. */
@@ -71,8 +84,19 @@ export class SelectionSync {
   }
 }
 
-/** The page's deep-linked selection, once: consumed by the first scene that sees it through. */
+/**
+ * The page's deep-linked selection, once: consumed by the first scene that sees it through. Also
+ * set by a navigation that comes back to the panel's main view with a new selection (P5-01), and
+ * dropped by any other selection change.
+ */
 let deepLink: Selection | undefined = useAppStore.getState().selection;
+
+useAppStore.subscribe((state, prev) => {
+  if (state.selection === prev.selection) return;
+  const entering = prev.route !== 'panel' && state.route === 'panel';
+  deepLink =
+    entering && !sameSelection(state.selection, prev.selection) ? state.selection : undefined;
+});
 
 /** For tests: what the page "loaded with". */
 export function setDeepLinkForTest(selection: Selection | undefined): void {
@@ -98,6 +122,7 @@ export function useSelectionSync(): void {
         deepLink = undefined;
         useCameraStore.getState().flyTo(bodyId);
       },
+      replaying: () => useAppStore.getState().replayWorld !== undefined,
     });
     active = sync;
     sync.start(useAppStore.getState().selection, deepLink);
