@@ -171,12 +171,10 @@ export function registerAgentRoutes(
         } catch (error) {
           if (!(error instanceof DomainError)) {
             req.log.error(error);
-            return reply
-              .code(500)
-              .send({
-                error: 'internal',
-                message: redactSecrets(String((error as Error).message ?? error)),
-              });
+            return reply.code(500).send({
+              error: 'internal',
+              message: redactSecrets(String((error as Error).message ?? error)),
+            });
           }
           req.log.warn(error);
           const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;

@@ -335,7 +335,7 @@ function MainHeader({
         : 'Watching (read-only)';
   const activity = status?.currentActivity;
   // Survives the remount of the Harmonizer's controls (keyed by its id) across a restart.
-  const restartFocus = useRef<RestartFocus | undefined>(undefined);
+  const restartFocusRef = useRef<RestartFocus | undefined>(undefined);
   return (
     <div className="pnl-main-head pnl-dock-bar">
       <div className="pnl-dock-titles">
@@ -374,7 +374,7 @@ function MainHeader({
           agentId={agent.id}
           status={status}
           name={agentLabel(agent, world)}
-          restartFocus={restartFocus}
+          restartFocusRef={restartFocusRef}
         />
       )}
       {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && <DockViewToggle />}

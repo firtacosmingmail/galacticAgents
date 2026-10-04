@@ -419,12 +419,12 @@ export function HarmonizerControls({
   agentId,
   status,
   name,
-  restartFocus,
+  restartFocusRef,
 }: {
   agentId: Id;
   status: StatusRecord | undefined;
   name: string;
-  restartFocus?: RefObject<RestartFocus | undefined>;
+  restartFocusRef?: RefObject<RestartFocus | undefined>;
 }) {
   const c = useControls(agentId, undefined);
   const api = useApi();
@@ -432,20 +432,22 @@ export function HarmonizerControls({
   const [confirming, setConfirming] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
   const restartButton = useRef<HTMLButtonElement>(null);
-  const [refocus, setRefocus] = useState(false);
+  /** Set by "Yes, restart": a restart that fails gives focus back to the Restart button. */
+  const refocusRef = useRef(false);
   useEffect(() => {
     // Mounted for the new Harmonizer after "Yes, restart": focus comes back to Restart.
-    const pending = restartFocus?.current;
-    if (!pending || pending.from === agentId || !restartFocus) return;
-    restartFocus.current = undefined;
+    const pending = restartFocusRef?.current;
+    if (!restartFocusRef || !pending || pending.from === agentId) return;
+    restartFocusRef.current = undefined;
     if (Date.now() - pending.since < RESTART_FOCUS_MS) restartButton.current?.focus();
-  }, [agentId, restartFocus]);
+  }, [agentId, restartFocusRef]);
   useEffect(() => {
-    // A restart that failed: the same controls, the Restart button enabled again.
-    if (!refocus || restart.busy) return;
-    setRefocus(false);
+    // The restart failed: the same controls, the Restart button enabled again.
+    if (restart.busy || restart.error === undefined || !refocusRef.current) return;
+    refocusRef.current = false;
+    if (restartFocusRef) restartFocusRef.current = undefined;
     restartButton.current?.focus();
-  }, [refocus, restart.busy]);
+  }, [restart.busy, restart.error, restartFocusRef]);
   const actions = agentActions(status).filter((a) => INLINE.has(a.action));
   const recoverable = status?.state === 'interrupted';
   const busy = c.busy || restart.busy;
@@ -497,18 +499,13 @@ export function HarmonizerControls({
           opener={opener}
           onConfirm={() => {
             setConfirming(false);
-            if (restartFocus) restartFocus.current = { from: agentId, since: Date.now() };
+            if (restartFocusRef) restartFocusRef.current = { from: agentId, since: Date.now() };
+            refocusRef.current = true;
             opener.current
               ?.closest('.pnl-dock-bar')
               ?.querySelector<HTMLElement>('.pnl-title')
               ?.focus();
-            void restart
-              .run(() => api.restartHarmonizer())
-              .then((ok) => {
-                if (ok) return; // the new Harmonizer's controls take focus when they mount
-                if (restartFocus) restartFocus.current = undefined;
-                setRefocus(true);
-              });
+            void restart.run(() => api.restartHarmonizer());
           }}
           onKeep={() => setConfirming(false)}
         />
