@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** P4-06, P4-07 (wave 4, branch `p4-wave4-harness-scrubber`) · **Task status:** in progress
-**Phase status:** in progress (12/14 done) — on branch `phase-4`
+**Current task:** P4-06 (wave 4, branch `p4-wave4-harness-scrubber`) · **Task status:** in progress
+**Phase status:** in progress (13/14 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -69,7 +69,7 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Acceptance:** exit criterion "switching an agent's state changes its satellite within a second" verifiable from the harness.
 
 ### P4-07 — Timeline scrubber (nice-to-have)
-- **Status:** in progress · **Depends on:** P4-04 · **Parallel with:** P4-06
+- **Status:** done (2026-10-04) · **Depends on:** P4-04 · **Parallel with:** P4-06
 - Replay the `events` stream for a project over a time range to see how it unfolded; read-only; can be deferred to Phase 8.
 - **Acceptance:** scrubbing replays body assignments, moves and completions.
 
