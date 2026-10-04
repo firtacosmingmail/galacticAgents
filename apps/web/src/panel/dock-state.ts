@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useDockView } from './status/dock-view.js';
 
 /**
  * Per browser: the docked conversation's state (P4-10) — open or minimised, and its height as a
@@ -53,15 +54,48 @@ export interface DockControl extends DockPrefs {
   setSize: (size: number) => void;
 }
 
+/** The mounted docks' "restore" handlers (`requestDockOpen`). */
+const openRequests = new Set<() => void>();
+
+/**
+ * Restores the docked conversation from outside the panel (P6-05: a click on the scene's HQ
+ * station opens the Harmonizer's chat). The mounted dock restores (and remembers it, like its own
+ * button); with none mounted, the stored preference is set to open for the next one.
+ */
+export function requestDockOpen(): void {
+  if (openRequests.size > 0) {
+    openRequests.forEach((restore) => restore());
+    return;
+  }
+  const prefs = readDockPrefs();
+  if (!prefs.open) writeDockPrefs({ ...prefs, open: true });
+}
+
+/**
+ * Shows the conversation of the selected brain: the dock restored if minimised (decision 71) and
+ * its "Chat | Status" switch on Chat (decision 80). Used with the Harmonizer selected by the HQ
+ * station's click (P6-05).
+ */
+export function revealChat(): void {
+  requestDockOpen();
+  if (useDockView.getState().view !== 'chat') useDockView.getState().setView('chat');
+}
+
 export function useDockPrefs(): DockControl {
   const [prefs, setPrefs] = useState(readDockPrefs);
   const setOpen = useCallback((open: boolean) => {
     setPrefs((p) => {
+      if (p.open === open) return p;
       const next = { ...p, open };
       writeDockPrefs(next);
       return next;
     });
   }, []);
+  useEffect(() => {
+    const restore = () => setOpen(true);
+    openRequests.add(restore);
+    return () => void openRequests.delete(restore);
+  }, [setOpen]);
   const setSize = useCallback((size: number) => {
     setPrefs((p) => {
       const next = { ...p, size: clampDockSize(size) };
