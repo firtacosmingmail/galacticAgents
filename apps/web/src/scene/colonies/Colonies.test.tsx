@@ -34,13 +34,13 @@ vi.mock('@react-three/fiber', async () => {
 
 const { Colonies } = await import('./Colonies.js');
 
-function seed(projectState: 'in_progress' | 'completed'): void {
+function seed(projectState: 'in_progress' | 'completed', asteroidDone = false): void {
   const w: WorldState = emptyWorld();
   w.bodies = { [fx.moon.id]: fx.moon, [fx.asteroid.id]: fx.asteroid };
   w.projects = { [fx.project.id]: { ...fx.project, state: projectState } };
   w.tasks = {
     [fx.task.id]: { ...fx.task, state: 'completed' },
-    [fx.asteroidTask.id]: fx.asteroidTask,
+    [fx.asteroidTask.id]: { ...fx.asteroidTask, ...(asteroidDone ? { state: 'completed' } : {}) },
   };
   useAppStore.setState({ world: w });
 }
@@ -69,10 +69,13 @@ describe('Colonies (P4-04)', () => {
     expect(names(container)).toEqual([]);
     const before = r3f.invalidations;
     act(() => seed('completed'));
-    expect(names(container)).toEqual(['colony:b-luna']);
+    expect(names(container)).toEqual(['colonies']);
     expect(r3f.invalidations).toBeGreaterThan(before);
-    // No anchor yet: hidden, no crash.
+    // No anchor yet: nothing written, no crash.
     for (const run of r3f.frames) run();
+    // Two colonised bodies: still one Points (one draw call).
+    act(() => seed('completed', true));
+    expect(names(container)).toEqual(['colonies']);
     act(() => seed('in_progress'));
     expect(names(container)).toEqual([]);
   });

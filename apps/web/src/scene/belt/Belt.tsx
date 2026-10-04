@@ -17,6 +17,7 @@ import {
   beltSpin,
   generateBelt,
   orbitPosition,
+  ASTEROID_ROCK_NAME,
   pickData,
   PICK_TARGET_NAME,
   TASK_ASTEROID_RADIUS,
@@ -138,6 +139,7 @@ function TaskAsteroidMesh({
   return (
     <group ref={anchor} name={`asteroid:${asteroid.bodyId}`} position={position} userData={data}>
       <mesh
+        name={ASTEROID_ROCK_NAME}
         geometry={shapes.rock}
         scale={scale}
         rotation={[asteroid.orbit.phase, asteroid.seed % 7, 0]}

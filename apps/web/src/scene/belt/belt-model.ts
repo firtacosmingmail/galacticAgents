@@ -191,6 +191,9 @@ export function beltSpin(delta: number, reducedMotion: boolean): number {
 /** The name of a body's pick target mesh (P3-05 raycasts these). */
 export const PICK_TARGET_NAME = 'pick-target';
 
+/** The name of a task asteroid's rock mesh (P4-04: its colony lights follow the rock's shape). */
+export const ASTEROID_ROCK_NAME = 'asteroid-rock';
+
 /**
  * What a task asteroid's group and pick target carry in `userData`: P3-05 maps a raycast hit back
  * to the body (and through it to the task, SPEC §4.1).
