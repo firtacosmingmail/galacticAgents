@@ -69,7 +69,7 @@ The sub-scene is drawn at the anchor's visual radius (`DetailBody.radius`; a rin
 
 **Replay.** The sub-scene and the scope read `sceneWorld`, so a replay shows the replayed world's body. Opening or closing a replay keeps the view while the body exists (planets and moons always do).
 
-## Proposed SPEC decision (for Cosmin to number and add to §7)
+## SPEC decision 84 (recorded)
 
 > **Planet detail view** (2026-10-04, P6-01; §4.1, decisions 53, 63, 64, 65, 66, 68, 74, 81): coming close to a planet, moon or asteroid opens its **detail view**: zoom in until the body fills most of the view (closer than about three of its radii), click "Detail view" in the scene's breadcrumb, or press `Enter` a second time on the body the camera is on (the first `Enter` still selects it). The camera flies closer and the rest of the solar system fades out behind the body, leaving the stars and the Sun in its real direction. A planet keeps its rings and its moons going round; the breadcrumb reads "Solar system › Jupiter › Detail". The selection does not change, and nothing about it goes in the URL: a reload opens the whole system. Satellites, labels and question beacons of the body and its moons stay as they are; those of other bodies are hidden. Only the body and its moons (a moon's planet and siblings) can be clicked: clicking the body selects as usual without leaving, clicking a moon or another body leaves for it. The user leaves by zooming back out (past about four and a half radii), with `Escape` (after any open card, before the camera's body), with the body's crumb, which returns to the system view framed on the body, or with "Solar system" / `Home`. With reduced motion the switch is instant.
 
