@@ -20,6 +20,8 @@ export interface NavItem {
   selection?: Selection | undefined;
   /** The agent ids the item stands for (to highlight it when one of them is selected). */
   agentIds: Id[];
+  /** Completed or archived (P4-12): listed only with "Show closed", or while selected. */
+  closed: boolean;
   /** A project's Stewards (P4-09): see `stewardCount`. Undefined on tasks. */
   stewards?: StewardCount | undefined;
   children: NavItem[];
@@ -37,6 +39,22 @@ export interface StewardCount {
 export interface NavModel {
   projects: NavItem[];
   asteroids: NavItem[];
+  /** How many closed items "Show closed" would bring back (each counted with its nested work). */
+  hiddenClosed: number;
+}
+
+/**
+ * Closed work (P4-12): a completed project or task (closed by the user or its Waykeeper) and
+ * archived work. A failed (cancelled) item is not closed: it can still be picked up again, and it
+ * is what Archive applies to.
+ */
+export const CLOSED: ReadonlySet<WorkState> = new Set<WorkState>(['completed', 'archived']);
+
+export interface NavOptions {
+  /** List closed work too (P4-12's "Show closed"). */
+  showClosed?: boolean;
+  /** The selected agent: its task or project is listed even when closed (a deep link). */
+  selectedAgent?: Id | undefined;
 }
 
 const FINISHED: ReadonlySet<WorkState> = new Set(['completed', 'failed', 'moved']);
@@ -70,22 +88,22 @@ function isRunning(world: Pick<WorldState, 'statuses'>, agentId: Id): boolean {
  * How many Stewards a project uses (P4-09), counted by task — the work being done, not every
  * Steward process ever spawned: `total` is the project's own tasks that have had a Steward (a
  * sub-project's tasks count on the sub-project's own row, under its own Waykeeper; a respawned
- * task counts once), leaving out archived tasks unless archived work is shown, like the row's
- * nested list. `active` is those whose newest Steward (`primaryAgent`, the one the task opens) is
+ * task counts once), leaving out archived tasks unless closed work is shown (P4-12; a completed
+ * task still counts: it is work its Stewards did). `active` is those whose newest Steward (`primaryAgent`, the one the task opens) is
  * live and not paused: waiting for input still counts (it is live and needs the user), paused
  * does not.
  */
 export function stewardCount(
   world: Pick<WorldState, 'agents' | 'tasks' | 'statuses'>,
   projectId: Id,
-  opts: { showArchived?: boolean } = {},
+  opts: { showClosed?: boolean } = {},
 ): StewardCount {
   const tasks = new Set<Id>();
   for (const a of Object.values(world.agents)) {
     if (a.role !== 'steward' || !a.taskId) continue;
     const task = world.tasks[a.taskId];
     if (!task || task.projectId !== projectId) continue;
-    if (task.state === 'archived' && opts.showArchived !== true) continue;
+    if (task.state === 'archived' && opts.showClosed !== true) continue;
     tasks.add(a.taskId);
   }
   let active = 0;
@@ -104,9 +122,13 @@ const strip = ({ createdAt: _c, children, ...item }: Sortable): NavItem => ({
   children: (children as Sortable[]).map(strip),
 });
 
-export function buildNav(world: WorldState, opts: { showArchived?: boolean } = {}): NavModel {
-  const visible = (state: WorkState) => opts.showArchived === true || state !== 'archived';
-
+/**
+ * The navigation (P25-02). Closed work (P4-12) — completed or archived projects with everything
+ * nested in them, completed or archived tasks — is left out unless `showClosed`; the item that
+ * holds the selected agent (and the path to it) is listed anyway, so a deep link to closed work
+ * still shows where it is.
+ */
+export function buildNav(world: WorldState, opts: NavOptions = {}): NavModel {
   const taskItem = (taskId: Id): Sortable => {
     const task = world.tasks[taskId]!;
     const agents = agentsFor(world, { taskId });
@@ -118,6 +140,7 @@ export function buildNav(world: WorldState, opts: { showArchived?: boolean } = {
       label: task.description,
       state: task.state,
       blocked: task.state === 'blocked_on_user',
+      closed: CLOSED.has(task.state),
       selection: agent ? { kind: 'steward', id: agent.id } : undefined,
       agentIds: agents.map((a) => a.id),
       children: [],
@@ -125,14 +148,14 @@ export function buildNav(world: WorldState, opts: { showArchived?: boolean } = {
     };
   };
 
-  const projects = Object.values(world.projects).filter((p) => visible(p.state));
+  const projects = Object.values(world.projects);
   const projectItem = (projectId: Id): Sortable => {
     const project = world.projects[projectId]!;
     const agents = agentsFor(world, { projectId });
     const agent = primaryAgent(world, agents);
     const subs = projects.filter((p) => p.parentProjectId === project.id).map((p) => p.id);
     const tasks = Object.values(world.tasks)
-      .filter((t) => t.projectId === project.id && visible(t.state))
+      .filter((t) => t.projectId === project.id)
       .map((t) => t.id);
     return {
       key: `project:${project.id}`,
@@ -141,6 +164,7 @@ export function buildNav(world: WorldState, opts: { showArchived?: boolean } = {
       label: project.name,
       state: project.state,
       blocked: project.state === 'blocked_on_user',
+      closed: CLOSED.has(project.state),
       selection: agent ? { kind: 'waykeeper', id: agent.id } : undefined,
       agentIds: agents.map((a) => a.id),
       stewards: stewardCount(world, project.id, opts),
@@ -154,10 +178,24 @@ export function buildNav(world: WorldState, opts: { showArchived?: boolean } = {
     .map((p) => projectItem(p.id))
     .sort(byRank);
   const asteroids = Object.values(world.tasks)
-    .filter((t) => !t.projectId && visible(t.state))
+    .filter((t) => !t.projectId)
     .map((t) => taskItem(t.id))
     .sort(byRank);
-  return { projects: top.map(strip), asteroids: asteroids.map(strip) };
+
+  let hiddenClosed = 0;
+  const prune = (items: NavItem[]): NavItem[] =>
+    items.flatMap((item) => {
+      if (opts.showClosed !== true && item.closed && !containsAgent(item, opts.selectedAgent)) {
+        hiddenClosed += 1;
+        return [];
+      }
+      return [{ ...item, children: prune(item.children) }];
+    });
+  return {
+    projects: prune(top.map(strip)),
+    asteroids: prune(asteroids.map(strip)),
+    hiddenClosed,
+  };
 }
 
 /** Whether an item, or anything nested in it, stands for one of these agents. */

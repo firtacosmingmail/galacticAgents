@@ -32,6 +32,7 @@ import {
   useManagedAgentsVisibility,
   type ManagedAgentsControl,
 } from './managed-agents-visibility.js';
+import { useInboxVisibility, type InboxControl } from './inbox-visibility.js';
 import { DockHandle, DOCK_BODY_ID, UnreadReplies } from './Dock.js';
 import { useDockPrefs, type DockControl } from './dock-state.js';
 import { STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
@@ -55,8 +56,8 @@ const NavigationMemo = memo(Navigation);
  * exactly the viewport: the page never scrolls, every column scrolls on its own.
  *
  * Everything comes from the store (TECHNOLOGY §6.3); the selection is the store's too, mirrored in
- * the URL. The managed-agents section can be hidden per browser (P4-09): the inbox stays, and the
- * side column holds only it.
+ * the URL. The managed-agents section (P4-09) and the inbox (P4-12) can each be hidden per
+ * browser: the side column holds what is left, and goes when both are hidden.
  */
 export function Panel({
   token,
@@ -73,6 +74,9 @@ export function Panel({
   const scene = useScene();
   const showScene = route === 'panel' && scene.shown;
   const agents = useManagedAgentsVisibility();
+  const inbox = useInboxVisibility();
+  // Both sections hidden (P4-12): no side column; the centre takes its width.
+  const side = agents.visible || inbox.visible;
   const stacked = useMediaQuery(STACKED_LAYOUT_QUERY);
   const dock = useDockPrefs();
   // Minimising makes sense where something else shares the space: the scene, or the stack.
@@ -82,7 +86,9 @@ export function Panel({
   const gridClass = [
     'pnl-grid',
     showScene && 'pnl-grid-scene',
-    !agents.visible && 'pnl-grid-no-agents',
+    side && !agents.visible && 'pnl-grid-no-agents',
+    side && !inbox.visible && 'pnl-grid-no-inbox',
+    !side && 'pnl-grid-no-side',
     stacked && 'pnl-grid-stacked',
     collapsible && (open ? 'pnl-grid-dock-open' : 'pnl-grid-dock-min'),
   ]
@@ -94,7 +100,12 @@ export function Panel({
       <SettingsProvider api={api}>
         <CardLinksContext.Provider value={true}>
           <div className={showScene ? 'pnl pnl-with-scene' : 'pnl'}>
-            <TopBar scene={scene} agents={agents} {...(onForget ? { onForget } : {})} />
+            <TopBar
+              scene={scene}
+              agents={agents}
+              inbox={inbox}
+              {...(onForget ? { onForget } : {})}
+            />
             <div className="pnl-body">
               {route === 'settings' ? (
                 // The settings page (P25-08), in the panel's frame.
@@ -111,7 +122,7 @@ export function Panel({
                       <div className="pnl-stack">
                         {showScene && <SceneAreaMemo onFailure={scene.fail} />}
                         <NavigationMemo />
-                        <SideColumn agents={agents} />
+                        {side && <SideColumn agents={agents} inbox={inbox} />}
                       </div>
                       {main}
                     </div>
@@ -122,7 +133,7 @@ export function Panel({
                         {showScene && <SceneAreaMemo onFailure={scene.fail} />}
                         {main}
                       </div>
-                      <SideColumn agents={agents} />
+                      {side && <SideColumn agents={agents} inbox={inbox} />}
                     </div>
                   )}
                 </FirstRunGate>
@@ -349,10 +360,16 @@ function Empty({ children }: { children: ReactNode }) {
 }
 
 /**
- * The right column: the managed-agents section (P25-04) and the inbox (P25-06). Hiding the
- * managed agents (P4-09) unmounts only their section; the inbox always stays.
+ * The right column: the managed-agents section (P25-04) and the inbox (P25-06). Each hides on its
+ * own (P4-09, P4-12) and comes back from the top bar; the panel drops the column when both are.
  */
-const SideColumn = memo(function SideColumn({ agents }: { agents: ManagedAgentsControl }) {
+const SideColumn = memo(function SideColumn({
+  agents,
+  inbox,
+}: {
+  agents: ManagedAgentsControl;
+  inbox: InboxControl;
+}) {
   const world = useAppStore((s) => s.world);
   const selection = useAppStore((s) => s.selection);
   const agent = selectedAgent(world, selection);
@@ -360,7 +377,13 @@ const SideColumn = memo(function SideColumn({ agents }: { agents: ManagedAgentsC
   return (
     <aside
       className="pnl-side"
-      aria-label={agents.visible ? 'managed agents and inbox' : 'inbox column'}
+      aria-label={
+        agents.visible && inbox.visible
+          ? 'managed agents and inbox'
+          : agents.visible
+            ? 'managed agents column'
+            : 'inbox column'
+      }
     >
       {agents.visible && (
         <section aria-label="managed agents">
@@ -383,9 +406,11 @@ const SideColumn = memo(function SideColumn({ agents }: { agents: ManagedAgentsC
           )}
         </section>
       )}
-      <section className="pnl-inbox" aria-label="inbox" id={INBOX_ID} tabIndex={-1}>
-        <Inbox />
-      </section>
+      {inbox.visible && (
+        <section className="pnl-inbox" aria-label="inbox" id={INBOX_ID} tabIndex={-1}>
+          <Inbox onHide={() => inbox.setVisible(false)} />
+        </section>
+      )}
     </aside>
   );
 });

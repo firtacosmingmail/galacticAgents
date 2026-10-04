@@ -50,7 +50,7 @@ const stewards = [
   steward('a-steward-1', 't-1'), // working
   steward('a-steward-4', 't-4'), // working
   steward('a-steward-9', 't-4'), // an earlier Steward on t-4, finished
-  steward('a-steward-6', 't-6'), // on an archived task: counted only with archived work shown
+  steward('a-steward-6', 't-6'), // on an archived task: counted only with closed work shown
   steward('a-steward-5', 't-5', 'a-waykeeper-3'), // the sub-project's
   steward('a-steward-2', 't-2', 'a-harmonizer'), // an asteroid's
 ];
@@ -236,7 +236,7 @@ describe('Steward counts (P4-09)', () => {
     const world = worldOf();
     // t-1 and t-4 (respawned: two Stewards, counted once); t-6 is archived.
     expect(stewardCount(world, 'p-1')).toEqual({ active: 2, total: 2 });
-    expect(stewardCount(world, 'p-1', { showArchived: true })).toEqual({ active: 2, total: 3 });
+    expect(stewardCount(world, 'p-1', { showClosed: true })).toEqual({ active: 2, total: 3 });
     expect(stewardCount(world, 'p-3')).toEqual({ active: 1, total: 1 });
     expect(stewardCount(world, 'p-unknown')).toEqual({ active: 0, total: 0 });
 

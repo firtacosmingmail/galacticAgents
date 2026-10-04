@@ -180,9 +180,18 @@
   cursor: pointer;
   font: inherit;
 }
+/* the wide bar's count (P4-12): a button too, sized like the text around it */
+.pnl-top-waiting.pnl-top-waiting-wide {
+  min-height: 0;
+  padding: 0;
+}
 .pnl-top-waiting .pnl-beacon {
   font-size: 12px;
   padding: 4px 10px;
+}
+.pnl-top-waiting-wide .pnl-beacon {
+  font-size: 11px;
+  padding: 1px 8px;
 }
 @media (max-width: 374px) {
   /* "N waiting" at 320–374 px; the full words stay in the accessible name */
@@ -382,12 +391,33 @@
 .pnl-grid.pnl-grid-scene.pnl-grid-no-agents {
   grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(280px, 340px);
 }
+/* inbox hidden (P4-12): only the managed agents are left, the column narrows the same way */
+.pnl-grid.pnl-grid-no-inbox {
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) minmax(240px, 320px);
+}
+.pnl-grid.pnl-grid-scene.pnl-grid-no-inbox {
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(280px, 340px);
+}
 @media (min-width: 1700px) {
   .pnl-grid.pnl-grid-scene {
     grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(340px, 420px);
   }
-  .pnl-grid.pnl-grid-scene.pnl-grid-no-agents {
+  .pnl-grid.pnl-grid-scene.pnl-grid-no-agents,
+  .pnl-grid.pnl-grid-scene.pnl-grid-no-inbox {
     grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(300px, 380px);
+  }
+}
+/* both hidden (P4-12): no side column; the centre (scene + dock) takes its width */
+.pnl-grid.pnl-grid-no-side {
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+  grid-template-areas: 'nav centre';
+}
+.pnl-grid.pnl-grid-scene.pnl-grid-no-side {
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+}
+@media (min-width: 1700px) {
+  .pnl-grid.pnl-grid-scene.pnl-grid-no-side {
+    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
   }
 }
 
@@ -501,6 +531,14 @@
   overflow: visible;
   min-height: auto;
   border-left: 0;
+}
+/* stacked with no side column (P4-12): the navigation takes the row under the scene */
+.pnl-grid-no-side > .pnl-stack {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'scene' 'nav';
+}
+.pnl-grid-no-side > .pnl-stack > .pnl-nav {
+  border-right: 0;
 }
 @media (max-width: 760px) {
   .pnl-stack {
@@ -662,6 +700,73 @@ a.pnl-link:hover {
   margin: 16px 4px 0;
   font-size: 12px;
   color: var(--pnl-muted);
+}
+
+/* closed work (P4-12): listed only with "Show closed" (or while selected), dimmed */
+.pnl-check-count {
+  font-size: 11px;
+}
+.pnl-row.is-closed > .pnl-row-line .pnl-link {
+  opacity: 0.6;
+}
+.pnl-row.is-closed > .pnl-row-line .pnl-link.is-current {
+  opacity: 0.85;
+}
+/* a row's "⋯" (P4-12): its work actions; shown on hover or focus, always on touch screens */
+.pnl .pnl-row-more {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--pnl-muted);
+  font: 16px/1 var(--pnl-mono);
+  cursor: pointer;
+  opacity: 0;
+}
+.pnl-row-line:hover > .pnl-row-more,
+.pnl-row-line:focus-within > .pnl-row-more,
+.pnl .pnl-row-more.is-open {
+  opacity: 1;
+}
+.pnl .pnl-row-more:hover,
+.pnl .pnl-row-more.is-open {
+  background: var(--pnl-raised);
+  color: var(--pnl-ink);
+}
+@media (hover: none) {
+  .pnl .pnl-row-more {
+    opacity: 1;
+  }
+}
+.pnl-row-actions {
+  margin: 2px 0 8px 22px;
+  padding: 4px 8px 6px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: var(--pnl-raised);
+  font-size: 12px;
+}
+.pnl-row-actions .agc-actions-title {
+  min-width: 0;
+}
+.pnl-row-actions .agc-confirm,
+.pnl-row-actions .error,
+.pnl-row-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+.pnl-row-note {
+  color: var(--pnl-muted);
+}
+.pnl-row-actions .agc-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
 }
 
 /* the beacon: "blocked on you" is the loudest thing on the page */

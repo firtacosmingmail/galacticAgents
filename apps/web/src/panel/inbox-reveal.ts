@@ -1,6 +1,9 @@
+import { showInbox } from './inbox-visibility.js';
+
 /**
  * Bringing the inbox — or one question's card in it — into view (P3-12's "N waiting for you"
- * button; P4-05's question beacons). No React, no three.js.
+ * button; P4-05's question beacons). No React, no three.js. A hidden inbox (P4-12) is shown
+ * first: both look for it over a few frames, while it mounts.
  */
 
 /** The inbox section's id (`Panel.tsx`). */
@@ -23,6 +26,7 @@ const nextFrame = (fn: () => void) => {
  * shows, the inbox never mounts: it gives up after about a second, having still navigated home.
  */
 export function revealInbox(triesLeft = 60): void {
+  showInbox();
   const inbox = document.getElementById(INBOX_ID);
   if (inbox) {
     inbox.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
@@ -51,6 +55,7 @@ export function inboxCard(questionId: string): HTMLElement | null {
  * itself. `true` when the card was found at once.
  */
 export function revealQuestion(questionId: string, triesLeft = 30): boolean {
+  showInbox();
   const card = inboxCard(questionId);
   if (card) {
     if (!card.hasAttribute('tabindex')) card.setAttribute('tabindex', '-1');
