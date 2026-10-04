@@ -16,6 +16,8 @@ import { pickingWorld, satelliteFrame } from './fixtures.js';
 import { publishBeacons } from '../beacons/registry.js';
 import { question } from '../beacons/fixtures.js';
 import { hoverAt, usePickingStore } from './store.js';
+import { useDetailStore } from '../detail/mode.js';
+import { registerStandIn } from '../detail/stand-ins.js';
 
 /**
  * `Picking` and `OutlineSync` without WebGL: R3F's hooks are replaced by a fake canvas state and a
@@ -635,6 +637,68 @@ describe('OutlineSync', () => {
     depthPass.render();
     expect(seen).toEqual([false]);
     expect(camera.layers.isEnabled(DECOR_LAYER)).toBe(true);
+  });
+});
+
+describe('in a detail view (P6-01)', () => {
+  afterEach(() => {
+    useDetailStore.getState().reset();
+    publishSatellites(new Map());
+  });
+
+  it("only the view's bodies and their satellites are pick targets", () => {
+    anchorAt('b-jupiter', 0);
+    anchorAt('b-io', 2);
+    anchorAt('b-mars', 5);
+    publishSatellites(
+      new Map([
+        ['a-st', satelliteFrame('a-st', 'b-mars', [5, 0, 2])],
+        ['a-wk-old', satelliteFrame('a-wk-old', 'b-jupiter', [0, 0, 2], { role: 'waykeeper' })],
+      ]),
+    );
+    expect(bodySpheres().map((b) => b.bodyId)).toEqual(['b-jupiter', 'b-io', 'b-mars']);
+    useDetailStore.getState().enter('b-jupiter', { fly: false, reducedMotion: true });
+    expect(bodySpheres().map((b) => b.bodyId)).toEqual(['b-jupiter', 'b-io']);
+    expect(satelliteSpheres().map((s) => s.agentId)).toEqual(['a-wk-old']);
+    useDetailStore.getState().exit({ fly: false, reducedMotion: true });
+    expect(bodySpheres().map((b) => b.bodyId)).toEqual(['b-jupiter', 'b-io', 'b-mars']);
+  });
+
+  it("a click on another body, behind the backdrop, picks nothing; the view's body still selects", () => {
+    anchorAt('b-jupiter', -3);
+    anchorAt('b-ast-7', 3);
+    render(<Picking />);
+    frame();
+    click(617, 300); // over the asteroid (x 3 at z 10 ≈ 217 px right of centre)
+    expect(selected()).toBe('steward:a-st');
+    act(() => useAppStore.getState().select(HARMONIZER));
+    useDetailStore.getState().enter('b-jupiter', { fly: false, reducedMotion: true });
+    click(617, 300);
+    expect(selected()).toBe('harmonizer');
+    expect(usePickingStore.getState().popover).toBeUndefined();
+    click(183, 300);
+    expect(selected()).toBe('waykeeper:a-wk-old');
+  });
+
+  it("outlines the sub-scene's stand-in, and nothing behind the backdrop", () => {
+    const jupiter = anchorAt('b-jupiter', 0, true);
+    anchorAt('b-mars', 1, true);
+    const standIn = new Object3D();
+    standIn.userData = { bodyId: 'b-jupiter' };
+    standIn.add(new Mesh(undefined, new MeshBasicMaterial()));
+    const set = vi.fn();
+    const effect = { current: { selection: { set, clear: vi.fn() } } as unknown as OutlineEffect };
+    const { rerender } = render(<OutlineSync effect={effect} bodyId="b-jupiter" />);
+    frame();
+    expect(set).toHaveBeenLastCalledWith([jupiter.children[0]]);
+    const stop = registerStandIn('b-jupiter', standIn);
+    useDetailStore.getState().enter('b-jupiter', { fly: false, reducedMotion: true });
+    frame();
+    expect(set).toHaveBeenLastCalledWith([standIn.children[0]]);
+    rerender(<OutlineSync effect={effect} bodyId="b-mars" />);
+    frame();
+    expect(set).toHaveBeenLastCalledWith([]);
+    stop();
   });
 });
 

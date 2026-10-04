@@ -5,13 +5,16 @@ import {
   distance,
   flightDuration,
   flightPose,
+  focusDistance,
   focusPose,
   framingDistance,
   leaveDistance,
   length,
+  normalize,
   overviewPose,
   pushOutside,
   rotateY,
+  scale,
   sub,
   type Pose,
   type Vec3,
@@ -42,7 +45,8 @@ export interface StepResult {
   event?: DirectorEvent;
 }
 
-type Goal = { kind: 'focus'; bodyId: string; dir: Vec3 } | { kind: 'overview' };
+/** `radii`: the flight ends that many body radii from the centre (else the framing distance). */
+type Goal = { kind: 'focus'; bodyId: string; dir: Vec3; radii?: number } | { kind: 'overview' };
 
 type Mode =
   | { kind: 'free' }
@@ -53,6 +57,12 @@ type Mode =
 export const SUN_KEEP_OUT = 1.3;
 /** A flight path keeps this many Sun radii from the Sun's centre (it goes around, not through). */
 export const SUN_FLIGHT_CLEARANCE = 2;
+/**
+ * The camera never comes closer than this many body radii to the centre of the body it follows or
+ * holds (P6-01: the detail body after a pan — OrbitControls' `minDistance` only bounds the
+ * distance to the target, which a pan moves off the body).
+ */
+export const BODY_KEEP_OUT = 1.3;
 
 /**
  * The camera's behaviour, without three.js (P3-04): free (OrbitControls alone), flying to a body
@@ -79,7 +89,10 @@ export class CameraDirector {
     return undefined;
   }
 
-  /** Starts a flight that frames `bodyId`; false (and nothing changes) when it is not in the scene. */
+  /**
+   * Starts a flight that frames `bodyId` (at `radii` body radii when given: the detail view, P6-01);
+   * false (and nothing changes) when it is not in the scene.
+   */
   focus(
     bodyId: string,
     pose: Pose,
@@ -87,6 +100,7 @@ export class CameraDirector {
     world: DirectorWorld,
     now: number,
     reducedMotion: boolean,
+    radii?: number,
   ): boolean {
     const body = world.body(bodyId);
     if (!body) return false;
@@ -94,12 +108,15 @@ export class CameraDirector {
       body.position,
       pose.position,
       world.sunRadius,
-      framingDistance(body.radius, view),
+      focusDistance(body.radius, view, radii),
     );
-    const goal = focusPose(body.position, body.radius, dir, view);
+    const goal = focusPose(body.position, body.radius, dir, view, radii);
     this.mode = {
       kind: 'flying',
-      goal: { kind: 'focus', bodyId, dir },
+      goal:
+        radii === undefined
+          ? { kind: 'focus', bodyId, dir }
+          : { kind: 'focus', bodyId, dir, radii },
       start: pose,
       startedAt: now,
       duration: flightDuration(pose, goal, reducedMotion),
@@ -130,8 +147,21 @@ export class CameraDirector {
     this.mode = { kind: 'free' };
   }
 
-  /** One frame: the pose to apply (the user's pose, adjusted) and what happened. */
-  step(pose: Pose, view: View, world: DirectorWorld, now: number): StepResult {
+  /**
+   * One frame: the pose to apply (the user's pose, adjusted) and what happened. `holdId`: a body
+   * the camera stays out of even with no focus (P6-01: the detail view's body, `limits`).
+   */
+  step(pose: Pose, view: View, world: DirectorWorld, now: number, holdId?: string): StepResult {
+    const result = this.move(pose, view, world, now);
+    if (this.mode.kind === 'flying') return result;
+    const id = this.bodyId ?? holdId;
+    const body = id ? world.body(id) : undefined;
+    if (!body) return result;
+    const kept = keepOutOfBody(result.pose, body.position, body.radius * BODY_KEEP_OUT);
+    return kept === result.pose ? result : { ...result, pose: kept };
+  }
+
+  private move(pose: Pose, view: View, world: DirectorWorld, now: number): StepResult {
     const keepOut = world.sunRadius * SUN_KEEP_OUT;
     const mode = this.mode;
     if (mode.kind === 'flying') {
@@ -170,14 +200,19 @@ export class CameraDirector {
     return { pose: keepOutOfSun(pose, keepOut), animating: false };
   }
 
-  /** OrbitControls' zoom limits for this frame. */
+  /**
+   * OrbitControls' zoom limits for this frame. `holdId`: a body whose limits apply while the
+   * camera has no focus (P6-01: the detail view's body, after the user panned off it), so zooming
+   * never goes inside it.
+   */
   limits(
     pose: Pose,
     view: View,
     world: DirectorWorld,
+    holdId?: string,
   ): { minDistance: number; maxDistance: number } {
     const maxDistance = Math.max(length(overviewPose(world.extent, view).position) * 1.6, 200);
-    const id = this.bodyId;
+    const id = this.bodyId ?? holdId;
     const body = id ? world.body(id) : undefined;
     if (body) {
       // Close enough to fill the view with a tiny asteroid, never inside the body.
@@ -194,7 +229,7 @@ export class CameraDirector {
   private goalPose(goal: Goal, view: View, world: DirectorWorld): Pose | undefined {
     if (goal.kind === 'overview') return overviewPose(world.extent, view);
     const body = world.body(goal.bodyId);
-    return body ? focusPose(body.position, body.radius, goal.dir, view) : undefined;
+    return body ? focusPose(body.position, body.radius, goal.dir, view, goal.radii) : undefined;
   }
 }
 
@@ -210,6 +245,17 @@ export function follow(pose: Pose, from: Vec3, to: Vec3, sunRadius: number): Pos
   const orbiting = length(from) > sunRadius && length(to) > sunRadius;
   const turned = orbiting ? rotateY(offset, azimuth(to) - azimuth(from)) : offset;
   return { target, position: add(target, turned) };
+}
+
+/**
+ * `pose` with the camera moved straight out from `centre` to `minDistance` when it is closer (the
+ * target stays: the view keeps its aim). Unchanged when it is far enough.
+ */
+export function keepOutOfBody(pose: Pose, centre: Vec3, minDistance: number): Pose {
+  const offset = sub(pose.position, centre);
+  if (length(offset) >= minDistance) return pose;
+  const away = normalize(offset, normalize(sub(pose.position, pose.target)));
+  return { ...pose, position: add(centre, scale(away, minDistance)) };
 }
 
 function keepOutOfSun(pose: Pose, keepOut: number): Pose {

@@ -1,7 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { PLACE_BODIES } from '../frame-order.js';
-import { DoubleSide, RingGeometry, type Group, type Mesh, type Object3D } from 'three';
+import { PLACE_BODIES, READ_BODIES } from '../frame-order.js';
+import {
+  DoubleSide,
+  RingGeometry,
+  type Group,
+  type LineBasicMaterial,
+  type LineLoop,
+  type Mesh,
+  type Object3D,
+} from 'three';
 import { sceneWorld, useAppStore } from '../../state/store.js';
 import { useSceneScale } from '../scale.js';
 import type { RingLook } from './appearance.js';
@@ -23,6 +31,15 @@ import { eclipseReceivers, ringsId, type EclipseReceiver } from './eclipse.js';
 import { EclipseSystem, useEclipse, type EclipseBinding } from './eclipse-binding.js';
 import { DECOR_LAYER } from '../layers.js';
 import { useLodLevel } from './lod.js';
+import { detailMix, useDetailStore } from '../detail/mode.js';
+import {
+  drawnBehindBackdrop,
+  orbitLineFactor,
+  orbitOutsideDome,
+  sphereOutsideDome,
+} from '../detail/dome.js';
+import { useBackdropCulling } from '../detail/dome-binding.js';
+import { planetReach } from '../detail/detail-body.js';
 import {
   sphereFor,
   useBodyMaps,
@@ -117,11 +134,23 @@ function Planet({
   useLayoutEffect(() => {
     if (!motion && spin.current) spin.current.rotation.y = 0;
   }, [motion]);
+  // P6-01: the detail view draws this planet (and its moons) itself; a settled detail view's
+  // backdrop hides it when it is wholly outside (`detail/dome.ts`). The anchor group stays (its
+  // world position is read either way).
+  const detailHere = useDetailStore((s) => s.shown === item.bodyId);
+  const reach = useMemo(() => planetReach(item), [item]);
+  useBackdropCulling(anchor, (dome, at) => sphereOutsideDome(at, reach, dome));
   return (
     <>
-      <OrbitLine radius={item.distance} segments={quality.orbitSegments.planet} opacity={0.22} />
+      <OrbitLine
+        radius={item.distance}
+        segments={quality.orbitSegments.planet}
+        opacity={0.22}
+        bodyId={item.bodyId}
+        aboutSun
+      />
       <group ref={anchor} name={item.name} userData={{ bodyId: item.bodyId }}>
-        <group rotation={[0, 0, item.look.tiltDeg * DEG]}>
+        <group rotation={[0, 0, item.look.tiltDeg * DEG]} visible={!detailHere}>
           <mesh
             ref={spin}
             geometry={sphereFor(spheres, 'planet', level)}
@@ -186,12 +215,21 @@ function Moon({
   useOrbit(anchor, item.distance, item.phase, item.period, motion);
   useBodyAnchor(anchor, moonAnchor(item));
   const level = useLodLevel(anchor, item.radius, quality.lod);
+  // P6-01: in its own detail view the sub-scene draws this moon (its orbit line, which runs
+  // through it, fades out with the cross-fade).
+  const detailHere = useDetailStore((s) => s.shown === item.bodyId);
   return (
     <>
-      <OrbitLine radius={item.distance} segments={quality.orbitSegments.moon} opacity={0.12} />
+      <OrbitLine
+        radius={item.distance}
+        segments={quality.orbitSegments.moon}
+        opacity={0.12}
+        bodyId={item.bodyId}
+      />
       <group ref={anchor} name={item.name} userData={{ bodyId: item.bodyId }}>
         <mesh
           ref={sphere}
+          visible={!detailHere}
           geometry={sphereFor(spheres, 'moon', level)}
           scale={item.radius}
           onBeforeRender={eclipse.onBeforeRender}
@@ -209,7 +247,10 @@ function Moon({
   );
 }
 
-/** How strongly the detail map's relief shades the surface (three's `bumpScale`). */
+/**
+ * How strongly the detail map's relief shades the surface (three's `bumpScale`).
+ * `SurfaceMaterial`, `Rings` and `OrbitLine` are shared with the detail view (`detail/`, P6-01).
+ */
 const BUMP_SCALE = 1.5;
 
 /**
@@ -218,7 +259,7 @@ const BUMP_SCALE = 1.5;
  * whether the detail map is there, so adding or removing it builds a new material (three compiles
  * a different shader) instead of mutating the old one.
  */
-function SurfaceMaterial({
+export function SurfaceMaterial({
   look,
   kind,
   quality,
@@ -262,7 +303,7 @@ function SurfaceMaterial({
  * the inner edge, 1 at the outer). Receives the planet's shadow (and its moons', `eclipse.ts`); a
  * faint emissive term keeps the rings readable when the Sun grazes them edge-on.
  */
-function Rings({
+export function Rings({
   rings,
   radius,
   segments,
@@ -317,18 +358,41 @@ function Rings({
   );
 }
 
-function OrbitLine({
+/**
+ * An orbit line. P6-01: `bodyId`, the body on this orbit — its line fades out while that body is
+ * shown in detail (`orbitLineFactor`); `aboutSun`, the line is centred on the Sun — a settled
+ * detail view's backdrop hides it when it is wholly outside (`orbitOutsideDome`; a moon's line
+ * goes with its planet's group). Without either (the sub-scene's own lines) it is always drawn.
+ */
+export function OrbitLine({
   radius,
   segments,
   opacity,
+  bodyId,
+  aboutSun = false,
 }: {
   radius: number;
   segments: number;
   opacity: number;
+  bodyId?: string;
+  aboutSun?: boolean;
 }) {
   const positions = useMemo(() => circlePoints(radius, segments), [radius, segments]);
+  const line = useRef<LineLoop>(null);
+  useFrame(() => {
+    const l = line.current;
+    if (!l || (bodyId === undefined && !aboutSun)) return;
+    const s = useDetailStore.getState();
+    const own = bodyId !== undefined && s.shown === bodyId;
+    const factor = orbitLineFactor(own, own ? detailMix(s, performance.now() / 1000) : 0);
+    const drawn =
+      factor > 0.001 &&
+      (!aboutSun || drawnBehindBackdrop(s.covered, (dome) => orbitOutsideDome(radius, dome)));
+    if (l.visible !== drawn) l.visible = drawn;
+    (l.material as LineBasicMaterial).opacity = opacity * factor;
+  }, READ_BODIES);
   return (
-    <lineLoop layers={DECOR_LAYER}>
+    <lineLoop ref={line} layers={DECOR_LAYER}>
       <bufferGeometry key={positions.length + ':' + radius}>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>

@@ -33,6 +33,7 @@ import {
 import { beaconHq, beaconList, sameBeacons, type BeaconSpec } from './beacon-model.js';
 import { drawGlyph, drawPillar, GLYPH_TEXTURE_PX, PILLAR_TEXTURE } from './glyph-draw.js';
 import { placeBeacon, publishBeacons, type BeaconFrame } from './registry.js';
+import { detailScope, useDetailStore } from '../detail/mode.js';
 
 /**
  * The question beacons (P4-05, P4-13; SPEC §4.1): a beacon for every open question the user holds,
@@ -71,7 +72,16 @@ import { placeBeacon, publishBeacons, type BeaconFrame } from './registry.js';
  * frame where the previous camera pose put it — off screen after the rig's first placement).
  */
 export function Beacons() {
-  const list = useBeaconList();
+  const all = useBeaconList();
+  // P6-01: a beacon is drawn over everything; in a detail view only its own bodies' show.
+  const detail = useDetailStore((s) => (s.mode.kind === 'detail' ? s.mode.bodyId : undefined));
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
+  const list = useMemo(() => {
+    if (detail === undefined) return all;
+    const scope = detailScope(bodies, detail);
+    const kept = all.filter((b) => scope.has(b.bodyId));
+    return kept.length === all.length ? all : kept;
+  }, [all, detail, bodies]);
   const reducedMotion = useReducedMotion();
   const invalidate = useThree((s) => s.invalidate);
 

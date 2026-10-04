@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BODY_KEEP_OUT,
   CameraDirector,
   follow,
+  keepOutOfBody,
   SUN_KEEP_OUT,
   type BodyView,
   type DirectorWorld,
@@ -204,6 +206,38 @@ describe('CameraDirector', () => {
         expect(limits.maxDistance).toBeGreaterThan(distance(pose.position, pose.target));
       }
     }
+  });
+});
+
+describe('keeping out of the held body (P6-01 review, S3)', () => {
+  it('moves the camera straight out from the centre to the minimum, keeping the target', () => {
+    const pose: Pose = { position: [10.5, 0, 0], target: [14, 3, 0] };
+    const kept = keepOutOfBody(pose, [10, 0, 0], 1.3);
+    expect(kept.position[0]).toBeCloseTo(11.3);
+    expect(kept.position[1]).toBeCloseTo(0);
+    expect(kept.target).toEqual(pose.target);
+    // Far enough: the same pose object.
+    const far: Pose = { position: [20, 0, 0], target: [10, 0, 0] };
+    expect(keepOutOfBody(far, [10, 0, 0], 1.3)).toBe(far);
+    // At the very centre: out along the view's axis, away from the target.
+    const centre = keepOutOfBody({ position: [10, 0, 0], target: [10, 0, -5] }, [10, 0, 0], 2);
+    expect(centre.position).toEqual([10, 0, 2]);
+  });
+
+  it('after a pan off the detail body, zooming toward it stops at BODY_KEEP_OUT radii', () => {
+    const d = new CameraDirector(); // free: the pan released the focus
+    const w = world({ jupiter: { position: [100, 0, 0], radius: 4 } });
+    // The target was panned off the body; the camera dollied in toward it, ending inside the body.
+    const pose: Pose = { position: [101, 0.5, 1], target: [100, 0, -30] };
+    const r = d.step(pose, VIEW, w, 0, 'jupiter');
+    expect(distance(r.pose.position, [100, 0, 0])).toBeCloseTo(4 * BODY_KEEP_OUT);
+    expect(r.pose.target).toEqual(pose.target);
+    // No held body: the camera is left where the user put it (outside the Sun).
+    expect(d.step(pose, VIEW, w, 0).pose).toBe(pose);
+    // A flight owns the camera: no clamp while it runs.
+    d.focus('jupiter', START, VIEW, w, 0, false);
+    const mid = d.step(START, VIEW, w, 0.01, 'jupiter');
+    expect(mid.animating).toBe(true);
   });
 });
 
