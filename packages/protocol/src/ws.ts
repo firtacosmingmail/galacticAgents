@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Id } from './primitives.js';
+import { Id, Timestamp } from './primitives.js';
 import {
   Agent,
   Body,
@@ -74,6 +74,11 @@ export const SnapshotMessage = z.object({
   questions: z.array(Question),
   proposals: z.array(Proposal),
   statuses: z.array(StatusRecord),
+  /**
+   * The server's clock when it sent this (P4-06 review): the client's offset to it, so "is this
+   * event news?" compares event times with the server's clock, not a skewed client's.
+   */
+  serverTime: Timestamp.optional(),
 });
 export type SnapshotMessage = z.infer<typeof SnapshotMessage>;
 export type Snapshot = Omit<SnapshotMessage, 'type'>;
@@ -86,6 +91,8 @@ export type EventMessage = z.infer<typeof EventMessage>;
 export const CaughtUpMessage = z.object({
   type: z.literal('caught_up'),
   seq: z.number().int().nonnegative(),
+  /** The server's clock when the catch-up ended (see `SnapshotMessage.serverTime`). */
+  serverTime: Timestamp.optional(),
 });
 export type CaughtUpMessage = z.infer<typeof CaughtUpMessage>;
 

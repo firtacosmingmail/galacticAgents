@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
+import { PLACE_BODIES } from '../frame-order.js';
 import { DoubleSide, RingGeometry, type Group, type Mesh, type Object3D } from 'three';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { useSceneScale } from '../scale.js';
 import type { RingLook } from './appearance.js';
 import { useBodyAnchor } from '../anchor-binding.js';
@@ -59,7 +60,7 @@ import {
  * on the level, so picking, the camera and labels see the same anchor and radius throughout.
  */
 export function Bodies({ quality, sunRadius }: { quality: SceneQuality; sunRadius: number }) {
-  const bodies = useAppStore((s) => s.world.bodies);
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
   const mode = useSceneScale((s) => s.mode);
   const motion = motionEnabled(useReducedMotion());
   const list = useMemo(() => buildRenderList(bodies, mode), [bodies, mode]);
@@ -346,7 +347,7 @@ function OrbitLine({
  * Places `ref` on its orbit: once at the starting angle (mount, a scale change, motion turned
  * off — then one frame is requested, for the on-demand loop), and every frame while motion runs.
  */
-function useOrbit(
+export function useOrbit(
   ref: RefObject<Object3D | null>,
   distance: number,
   phase: number,
@@ -358,8 +359,9 @@ function useOrbit(
     if (ref.current) placeOnOrbit(ref.current, distance, orbitAngle(phase, period, 0));
     invalidate();
   }, [ref, distance, phase, period, motion, invalidate]);
+  // Before every reader of the anchors (satellites, labels, picking): see `frame-order.ts`.
   useFrame(() => {
     if (!motion || !ref.current) return;
     placeOnOrbit(ref.current, distance, orbitAngle(phase, period, motionSeconds()));
-  });
+  }, PLACE_BODIES);
 }

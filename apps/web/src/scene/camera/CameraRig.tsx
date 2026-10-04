@@ -3,6 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import type { PerspectiveCamera, Vector3 } from 'three';
 import { onAnchorsChanged } from '../anchors.js';
+import { PLACE_CAMERA } from '../frame-order.js';
 import { useSceneScale } from '../scale.js';
 import { CameraDirector } from './director.js';
 import type { Pose, Vec3, View } from './flight.js';
@@ -124,7 +125,7 @@ export function CameraRig() {
       camera.updateProjectionMatrix();
     }
     if (result.animating) invalidate();
-  });
+  }, PLACE_CAMERA); // after the bodies and satellites, before their readers (`frame-order.ts`)
 
   return (
     <OrbitControls

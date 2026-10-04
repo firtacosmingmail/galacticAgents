@@ -1,0 +1,70 @@
+import { memo, useLayoutEffect, useMemo, useRef } from 'react';
+import { sceneWorld, useAppStore } from '../../state/store.js';
+import { hoverAt, onHoverMove, type Point } from '../picking/store.js';
+import { beaconCard, beaconHq } from './beacon-model.js';
+import './beacons.css';
+
+/**
+ * The hover card of one question's beacon (P4-05, P4-13): "Permission: <text…>" or
+ * "Question: <text…>", the agent asking, and "+n more on <body>" on a full row's last beacon; the
+ * click goes to the asker and opens the question in the inbox. One element over the canvas in the
+ * hover label's place (`pointer-events: none`), positioned by the hover's position channel (`onHoverMove`, no React render per move), flipped
+ * near the scene area's edges like the satellite card. Its content follows the store: a question
+ * answered elsewhere changes the card (or removes it, with the beacon) at once.
+ */
+export const BeaconHoverCard = memo(function BeaconHoverCard({
+  questionId,
+}: {
+  questionId: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // What the card reads, not the whole world: a status flush does not re-render it.
+  const questions = useAppStore((s) => sceneWorld(s).questions);
+  const agents = useAppStore((s) => sceneWorld(s).agents);
+  const tasks = useAppStore((s) => sceneWorld(s).tasks);
+  const projects = useAppStore((s) => sceneWorld(s).projects);
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
+  const hqBodyId = useAppStore((s) => beaconHq(sceneWorld(s)));
+  const card = useMemo(
+    () => beaconCard({ questions, agents, tasks, projects, bodies, hqBodyId }, questionId),
+    [questions, agents, tasks, projects, bodies, hqBodyId, questionId],
+  );
+
+  useLayoutEffect(() => {
+    const place = (at: Point) => {
+      const el = ref.current;
+      if (!el) return;
+      const area = el.offsetParent as HTMLElement | null;
+      const gap = 14;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const left = area ? at.x + gap + w > area.clientWidth : false;
+      const up = area ? at.y + gap + h > area.clientHeight : false;
+      const x = Math.max(0, left ? at.x - gap - w : at.x + gap);
+      const y = Math.max(0, up ? at.y - gap - h : at.y + gap / 2);
+      el.style.transform = `translate(${x}px, ${y}px)`;
+    };
+    place(hoverAt());
+    return onHoverMove(place);
+  }, [card]);
+
+  if (!card) return null;
+  return (
+    <div
+      ref={ref}
+      className={`pick-hover beacon-card beacon-card-${card.kind}`}
+      role="tooltip"
+      data-body={card.bodyId}
+      data-question={card.questionId}
+    >
+      <span className="beacon-card-head">
+        <strong className="beacon-card-kind">{card.heading}:</strong> {card.text}
+      </span>
+      <span className="beacon-card-asker">{card.asker}</span>
+      <span className="beacon-card-hint">
+        {card.more > 0 ? `+${card.more} more on ${card.where} · ` : ''}click to go there and open it
+        in the inbox
+      </span>
+    </div>
+  );
+});

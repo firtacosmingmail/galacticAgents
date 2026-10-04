@@ -128,6 +128,7 @@ export function QuestionCard({
     <article
       className={`card question question-${q.kind}`}
       aria-label={`${q.kind} question ${q.context.text}`}
+      data-question-id={q.id}
     >
       <header>
         <span className={`pill kind-${q.kind}`}>{q.kind}</span>

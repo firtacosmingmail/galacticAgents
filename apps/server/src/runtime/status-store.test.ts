@@ -168,6 +168,59 @@ describe('StatusStore — folding', () => {
       currentActivity: 'still paused',
     });
   });
+
+  it('stays waiting_for_input while any of two open questions is unanswered (P4-11)', () => {
+    const { store } = make();
+    const ask = (questionId: string): Event => ({
+      type: 'agent.needs_input',
+      agentId: 'a-1',
+      questionId,
+      kind: 'permission',
+      question: { text: `allow ${questionId}?` },
+    });
+    const answer = (questionId: string): Event => ({
+      type: 'question.answered',
+      questionId,
+      answer: 'allow',
+      answeredBy: { type: 'user' },
+      version: 1,
+    });
+    const events = log([spawned, ask('q-1'), ask('q-2'), answer('q-2'), answer('q-1')]);
+    const seen: Partial<StatusRecord>[] = [];
+    for (const e of events) {
+      store.fold(e);
+      const { state, pendingQuestionId } = store.get('a-1')!;
+      seen.push({ state, ...(pendingQuestionId ? { pendingQuestionId } : {}) });
+    }
+    expect(seen.slice(1)).toEqual([
+      { state: 'waiting_for_input', pendingQuestionId: 'q-1' },
+      { state: 'waiting_for_input', pendingQuestionId: 'q-2' },
+      // The newer one answered: the older is still open.
+      { state: 'waiting_for_input', pendingQuestionId: 'q-1' },
+      { state: 'working' },
+    ]);
+
+    // A cancelled question leaves the other one waiting too; a rebuild agrees.
+    const second = make().store;
+    second.rebuild(
+      log([
+        spawned,
+        ask('q-1'),
+        ask('q-2'),
+        {
+          type: 'question.cancelled',
+          questionId: 'q-1',
+          agentId: 'a-1',
+          reason: 'gone',
+          version: 1,
+        },
+      ]),
+    );
+    expect(second.get('a-1')).toMatchObject({
+      state: 'waiting_for_input',
+      pendingQuestionId: 'q-2',
+    });
+  });
 });
 
 describe('StatusStore — rebuild and diffs', () => {

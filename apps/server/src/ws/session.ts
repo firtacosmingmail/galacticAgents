@@ -83,7 +83,7 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
         lastSent = envelope.seq;
         send(socket, { type: 'event', ...envelope });
       }
-      send(socket, { type: 'caught_up', seq: lastSent });
+      send(socket, { type: 'caught_up', seq: lastSent, serverTime: new Date().toISOString() });
       // Records are server-owned (TECHNOLOGY §4): a replaying client cannot derive them, so it
       // gets the current set right after the replay, like a snapshot would have carried it. The
       // set replaces the client's (P1-38): records retention dropped while it was away go too.
@@ -93,7 +93,7 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
     } else {
       const snapshot = buildSnapshot(log, opts.statuses);
       lastSent = snapshot.seq;
-      send(socket, { type: 'snapshot', ...snapshot });
+      send(socket, { type: 'snapshot', ...snapshot, serverTime: new Date().toISOString() });
       opts.log?.info(`ws session started with snapshot at ${snapshot.seq}`);
     }
 

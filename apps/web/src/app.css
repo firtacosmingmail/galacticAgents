@@ -380,3 +380,23 @@ button.danger {
 .node-head code {
   overflow-wrap: anywhere;
 }
+
+/* The scene harness tab (P4-06). */
+.harness h3 {
+  font-size: 0.9rem;
+  margin: 14px 0 4px;
+  color: #b8c0d6;
+}
+.harness .exit-criteria {
+  margin-top: 20px;
+  border-top: 1px solid #222840;
+  padding-top: 8px;
+}
+.harness .exit-criteria summary h3 {
+  display: inline;
+}
+.harness .exit-criteria ol ol {
+  margin: 4px 0 12px;
+  color: #b8c0d6;
+  font-size: 0.9rem;
+}

@@ -25,6 +25,11 @@ import { Picking } from './picking/Picking.js';
 import { LabelProjector } from './labels/LabelProjector.js';
 import { MoonMarkers } from './labels/MoonMarkers.js';
 import { DECOR_LAYER, showDecor } from './layers.js';
+import { Satellites } from './satellites/Satellites.js';
+import { Activities } from './satellites/activity/Activities.js';
+import { Beacons } from './beacons/Beacons.js';
+import { Colonies } from './colonies/Colonies.js';
+import { Toasts } from './toasts/Toasts.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -84,6 +89,10 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       }
       // sRGB output and ACES filmic tone mapping are R3F's defaults (not `flat`, not `linear`).
       dpr={[1, quality.dprCap]}
+      // The canvas follows its box; dragging the dock's handle (P4-10) changes that box on every
+      // pointer move. Debounced, the renderer and the composer are resized once the drag pauses
+      // (the canvas is stretched by CSS meanwhile), not on every frame of it.
+      resize={{ debounce: { resize: 50, scroll: 50 } }}
       frameloop={frameloop}
       // No shadow map (P3-10): the Sun is a point light, whose cube shadow magnified an inner
       // planet's shadow over a whole outer planet; the bodies compute their eclipses themselves.
@@ -100,7 +109,16 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       {/* Phase 3 wave 2: each task owns its folder; they meet through `anchors.ts`. */}
       <Bodies quality={quality} sunRadius={SUN_RADIUS} />
       <Belt rocks={quality.beltRocks} />
+      {/* P4-04: settlement lights on bodies whose work is completed (`colonies/`). */}
+      <Colonies />
+      {/* P4-01: a satellite per live Waykeeper / Steward, on its work's body (`satellites/`). */}
+      <Satellites quality={quality} />
+      <Activities quality={quality} />
       <CameraRig />
+      {/* P4-05: a beacon above every body with an open question for the user (`beacons/`). */}
+      <Beacons />
+      {/* P4-06: a brief flare on a body when work completes or a question waits (`toasts/`). */}
+      <Toasts />
       <Picking outline={quality.bloom ? outline : undefined} />
       <MoonMarkers />
       <LabelProjector hz={quality.labelHz} />

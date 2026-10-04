@@ -150,6 +150,8 @@ describe('the compact top bar (P3-12)', () => {
     // jsdom has no WebGL: the scene control is the "unavailable" note (no Retry there).
     expect(within(m).getByRole('note').textContent).toBe('3D scene unavailable — list mode');
     expect(items).toEqual([
+      'Hide managed agents', // P4-09: after the scene control
+      'Hide inbox', // P4-12
       'Notifications: unavailable', // jsdom has no Notification API
       'History',
       'Settings',
@@ -157,7 +159,9 @@ describe('the compact top bar (P3-12)', () => {
       'Ops console',
     ]);
     expect(within(m).getByLabelText('summary').textContent).toBe('live2 open questions1 blocked');
-    expect(document.activeElement).toBe(within(m).getByRole('button', { name: /^Notifications/ }));
+    expect(document.activeElement).toBe(
+      within(m).getByRole('button', { name: 'Hide managed agents' }),
+    );
   });
 
   it('offers Hide / Show scene from the menu where the scene can run', async () => {
@@ -190,7 +194,7 @@ describe('the compact top bar (P3-12)', () => {
     expect(document.activeElement).toBe(menuButton());
 
     openMenu();
-    fireEvent.pointerDown(screen.getByRole('main', { name: 'main area' }));
+    fireEvent.pointerDown(screen.getByRole('main'));
     expect(menu().hidden).toBe(true);
 
     // A tap inside the menu keeps it open.
@@ -203,7 +207,7 @@ describe('the compact top bar (P3-12)', () => {
     await open();
     openMenu();
     const last = within(menu()).getByRole('link', { name: 'Ops console' });
-    fireEvent.blur(last, { relatedTarget: screen.getByRole('main', { name: 'main area' }) });
+    fireEvent.blur(last, { relatedTarget: screen.getByRole('main') });
     expect(menu().hidden).toBe(true);
   });
 

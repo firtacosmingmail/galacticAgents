@@ -32,6 +32,8 @@ export interface AppOptions {
   scenarios?: () => string[];
   /** The command surface (P2-01): enables `POST /api/control` (P2-14). */
   commands?: AgentRoutesOptions['commands'];
+  /** A Steward's processes (P4-14): enables `GET`/`POST /api/agents/:id/processes…`. */
+  processes?: AgentRoutesOptions['processes'];
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
   logger?: boolean;
@@ -96,13 +98,21 @@ export function buildApp(opts: AppOptions): App {
     info: (m: string) => fastify.log.info(m),
     warn: (m: string) => fastify.log.warn(m),
   };
-  if (opts.log && config.dev) registerDevRoutes(fastify, config, opts.log);
+  if (opts.log && config.dev) {
+    registerDevRoutes(fastify, config, {
+      log: opts.log,
+      ...(opts.commands ? { commands: opts.commands } : {}),
+      ...(opts.statuses ? { statuses: opts.statuses } : {}),
+      ...(opts.runtime ? { runtime: opts.runtime } : {}),
+    });
+  }
   if (opts.log && opts.runtime) {
     registerAgentRoutes(fastify, config, {
       runtime: opts.runtime,
       log: opts.log,
       ...(opts.scenarios ? { scenarios: opts.scenarios } : {}),
       ...(opts.commands ? { commands: opts.commands } : {}),
+      ...(opts.processes ? { processes: opts.processes } : {}),
     });
   }
   // The side panel's history, settings, preflight and notifications (P25-01).

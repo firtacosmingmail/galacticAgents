@@ -7,6 +7,8 @@ import type {
   DecideResponse,
   HistoryQuestionsQuery,
   HistoryQuestionsResponse,
+  HistoryEventsQuery,
+  HistoryEventsResponse,
   HistoryWorkQuery,
   HistoryWorkResponse,
   HistoryWorkState,
@@ -20,6 +22,9 @@ import type {
   SettingsResponse,
   SpawnBody,
   SpawnResponse,
+  StewardProcessesResponse,
+  StopProcessesBody,
+  StopProcessesResponse,
   TranscriptResponse,
 } from '@galactic/protocol';
 
@@ -112,6 +117,16 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         `/api/agents/${encodeURIComponent(agentId)}/conversation${qs ? `?${qs}` : ''}`,
       );
     },
+    /** A Steward's processes still running (P4-14). */
+    processes: (agentId: string) =>
+      call<StewardProcessesResponse>('GET', `/api/agents/${encodeURIComponent(agentId)}/processes`),
+    /** Stops a Steward's processes: these pids, or all of them (P4-14). */
+    stopProcesses: (agentId: string, pids?: number[]) =>
+      call<StopProcessesResponse>(
+        'POST',
+        `/api/agents/${encodeURIComponent(agentId)}/processes/stop`,
+        (pids ? { pids } : {}) satisfies StopProcessesBody,
+      ),
     /** The settings page (P25-08; endpoints P25-01). */
     settings: () => call<SettingsResponse>('GET', '/api/settings'),
     patchSettings: (patch: SettingsPatch) =>
@@ -125,6 +140,9 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     /** The history view (P25-10): answered and cancelled questions, newest first. */
     historyQuestions: (query: HistoryQuestionsQuery = {}) =>
       call<HistoryQuestionsResponse>('GET', `/api/history/questions${queryString(query)}`),
+    /** The timeline scrubber (P4-07): one project's events, oldest first, paged by `after`. */
+    historyEvents: (query: HistoryEventsQuery) =>
+      call<HistoryEventsResponse>('GET', `/api/history/events${queryString(query)}`),
   };
 }
 

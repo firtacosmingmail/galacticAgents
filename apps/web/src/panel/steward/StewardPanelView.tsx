@@ -22,7 +22,9 @@ import {
 import { Beacon, NavLink } from '../Navigation.js';
 import { useNow } from '../AgentCards.js';
 import { formatCost, formatDuration, wallClockUsed } from '../agent-cards-model.js';
+import { ControlsStrip } from '../controls.js';
 import { ClarificationComposer } from './ClarificationComposer.js';
+import { StewardProcesses } from './StewardProcesses.js';
 import { TranscriptLog } from './TranscriptLog.js';
 import { useStewardTranscript } from './useStewardTranscript.js';
 import './steward.css';
@@ -47,11 +49,26 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
   const clarification = open.find((q) => q.kind === 'clarification');
   const permissions = open.filter((q) => q.kind === 'permission');
   const blocked = blockedOnUser(world, agentId, open);
+  const task = agent?.taskId ? world.tasks[agent.taskId] : undefined;
 
   return (
     <section className="steward stw" aria-label={`view of ${name}`}>
       <StatusHeader agent={agent} status={status} blocked={blocked} />
-      <Controls agentId={agentId} status={status} />
+      <div className="stw-controls-row">
+        <Controls agentId={agentId} status={status} />
+        {task && (
+          // The task's own controls (P4-09), next to the agent's: reachable with the cards hidden.
+          <ControlsStrip
+            key={task.id}
+            agentId={agentId}
+            status={status}
+            work={{ kind: 'task', item: task }}
+            withAgent={false}
+            name={name}
+          />
+        )}
+      </div>
+      <StewardProcesses agentId={agentId} state={status?.state} />
       {open.length > 0 && (
         <section className="stw-open" aria-label="open question">
           <h2 className="pnl-eyebrow">

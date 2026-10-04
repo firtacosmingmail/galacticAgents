@@ -2,6 +2,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { uptime } from 'node:os';
 import { basename } from 'node:path';
 import type { Actor, Id } from '@galactic/protocol';
+import { AGENT_ID_ENV, type AgentGroup, type Session } from './process-attribution.js';
 import { MemoryProcessStore, type ProcessRecord, type ProcessStore } from './process-store.js';
 
 /**
@@ -16,7 +17,10 @@ import { MemoryProcessStore, type ProcessRecord, type ProcessStore } from './pro
  *     → SIGKILL to the group.
  *
  * SIGTERM is never the first signal (corner case 8b). Killing by group takes the agent's own
- * children (shells, dev servers, watchers) with it (corner case 4).
+ * children that stayed in its group with it (corner case 4). Not all of them do: Claude Code runs
+ * each Bash command in a process group of its own, so a tool command's shell (a
+ * `run_in_background` one, a dev server it started) is outside the CLI's group — process
+ * attribution (P4-14: `process-attribution.ts`, `steward-processes.ts`) finds and sweeps those.
  *
  * The supervisor reports what only it can know as `ProcessOutcome`s (a crash, a start failure,
  * a completed stop, a clean exit, a restart) through the spec's `onOutcome` hook — never as
@@ -405,6 +409,20 @@ export class ProcessSupervisor {
   private readonly inherited: readonly string[];
   private readonly probe: ProcessProbe;
   private readonly bootAt = bootTime();
+  /**
+   * Every process group this supervisor started in this server run, per agent, in order (P4-14):
+   * one per spawn, restart or resume, with the real clock's start and the end this run observed.
+   * Never rows of an earlier run: a pgid from before this server started may name anything now.
+   */
+  private readonly runGroups = new Map<
+    Id,
+    { pgid: number; startedAt: number; endedAt?: number }[]
+  >();
+  /**
+   * An agent's latest session from an earlier server run of this boot (its PID-table row), taken
+   * before this run's first spawn of the agent overwrites the row (P4-14, N3). `undefined`: none.
+   */
+  private readonly earlierSessions = new Map<Id, Session | undefined>();
   private disposed = false;
 
   constructor(opts: SupervisorOptions = {}) {
@@ -429,6 +447,9 @@ export class ProcessSupervisor {
       if (value === undefined) delete env[name];
       else env[name] = value;
     }
+    // The agent marker (P4-14): every process the agent starts inherits it, so an orphan in a
+    // Steward's worktree can be told from the user's own daemon there. Never overridable.
+    env[AGENT_ID_ENV] = spec.agentId;
     return env;
   }
 
@@ -493,6 +514,9 @@ export class ProcessSupervisor {
     if (existing && existing.state !== 'exited') {
       throw new Error(`agent ${spec.agentId} already has a running process (pid ${existing.pid})`);
     }
+    if (!this.earlierSessions.has(spec.agentId)) {
+      this.earlierSessions.set(spec.agentId, this.storedSession(spec.agentId));
+    }
     const child = this.launch(spec);
     const managed = new Managed(spec.agentId, spec, child, this.now());
     this.procs.set(spec.agentId, managed);
@@ -505,7 +529,8 @@ export class ProcessSupervisor {
     return spawn(spec.command, spec.args ?? [], {
       cwd: spec.cwd,
       env: this.childEnv(spec),
-      // Own process group (setsid): the group kill takes the agent's own children along.
+      // Own process group (setsid): the group kill takes the agent's children that stayed in it
+      // along (not a tool command's shell in a group of its own: see the class comment).
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -519,10 +544,15 @@ export class ProcessSupervisor {
     child.stderr?.on('data', (chunk: string) => this.safely(spec, () => spec.onStderr?.(chunk)));
     child.stdin?.on('error', () => {}); // EPIPE after the child died is not an error for us
     let started = false;
+    // `spawn()` forks synchronously: the child started no later than now.
+    const launchedAt = Date.now();
     child.once('spawn', () => {
       started = true;
       if (child.pid !== undefined) {
         managed.pid = child.pid;
+        const groups = this.runGroups.get(spec.agentId) ?? [];
+        groups.push({ pgid: child.pid, startedAt: launchedAt });
+        this.runGroups.set(spec.agentId, groups);
         this.record(managed, 'running');
       }
     });
@@ -540,7 +570,11 @@ export class ProcessSupervisor {
       // stdio may still drain after `exit`; wait for `close` briefly so output precedes the verdict.
       const closed = new Promise<void>((r) => child.once('close', () => r()));
       const at = this.now();
+      // The same moment on the real clock (`now` may be injected): the group's lifetime ends at
+      // the leader's exit, not after the drain and reap — a pgid recycled meanwhile is not its.
+      const exitedAt = Date.now();
       const pgid = child.pid ?? -1;
+      this.endRunGroup(spec.agentId, pgid, exitedAt);
       void withTimeout(closed, DRAIN_MS)
         .then(() => this.reapGroup(pgid, managed.reapMs ?? this.termMs))
         .catch((error: unknown) => this.onError(error, spec.agentId))
@@ -558,8 +592,9 @@ export class ProcessSupervisor {
 
   /**
    * The leader is gone (clean exit, crash, external signal, completed stop) but its group may
-   * still hold the agent's own children — a dev server, a watcher, a background shell (corner
-   * case 4). SIGTERM the group (and SIGCONT, in case it was paused), then SIGKILL after `termMs`
+   * still hold the agent's own children that stayed in it — a dev server, a watcher (corner case
+   * 4). A Bash tool command's shell is not among them under Claude Code (its own group): process
+   * attribution's sweep handles those (P4-14). SIGTERM the group (and SIGCONT, in case it was paused), then SIGKILL after `termMs`
    * if members remain. A group id is not reused while the group has members, so the signal
    * cannot reach a stranger. `exited` settles only afterwards.
    */
@@ -695,7 +730,9 @@ export class ProcessSupervisor {
    * session refs. A pid is only trusted when the row comes from this boot and the live process
    * still runs the recorded command with the recorded start time — pids are recycled, and
    * killing a stranger is worse than leaving an orphan. When the leader is dead but its group
-   * still has members (the CLI's background shells), the group is killed too.
+   * still has members (children that stayed in the CLI's group), the group is killed too. A
+   * Bash tool command's shell runs in a group of its own under Claude Code and is not reached
+   * here (P4-14's attribution looks for it, with the marker).
    */
   reconcile(): ReconcileResult {
     const result: ReconcileResult = { dead: [], orphans: [] };
@@ -764,6 +801,84 @@ export class ProcessSupervisor {
   /** The persisted row for an agent (running, exited or interrupted). */
   processRecord(agentId: Id): ProcessRecord | undefined {
     return this.store.get(agentId);
+  }
+
+  /** The leader exited at `at` (real clock, epoch ms): the group's lifetime ends there (N2). */
+  private endRunGroup(agentId: Id, pgid: number, at: number): void {
+    const group = this.runGroups
+      .get(agentId)
+      ?.find((g) => g.pgid === pgid && g.endedAt === undefined);
+    if (group) group.endedAt = at;
+  }
+
+  /**
+   * The process groups agents got in THIS server run (P4-14): the anchors of process attribution
+   * (rule 3). Every spawn, restart and resume, with the leader's lifetime as this run saw it, so a
+   * member that started after the group ended (a recycled pgid) is not taken for one of its own.
+   * Rows of the PID table from an earlier run are never used: the server was not watching during
+   * the downtime, so their pgids may since name the user's processes (and their end is only the
+   * time of `reconcile()`).
+   */
+  agentGroups(): AgentGroup[] {
+    const groups: AgentGroup[] = [];
+    for (const [agentId, list] of this.runGroups) {
+      for (const g of list) {
+        groups.push({
+          agentId,
+          pgid: g.pgid,
+          startedAt: g.startedAt,
+          ...(g.endedAt !== undefined ? { endedAt: g.endedAt } : {}),
+        });
+      }
+    }
+    return groups;
+  }
+
+  /**
+   * An agent's sessions (P4-14: the time windows of attribution's worktree rule): the PID table's
+   * latest row from an earlier run of this boot, from its start to the end recorded for it (its
+   * exit, or `reconcile()`'s time for an interrupted one, an upper bound) — kept after this run
+   * resumes the agent (N3), since that spawn overwrites the row — and every spawn, restart and
+   * resume of this run to its end (now while it runs). The rule also requires the agent's
+   * environment marker, so the wider earlier window cannot take the user's processes; it lets a
+   * sweep still find the escaped processes of a Steward from before a restart.
+   */
+  agentSessions(agentId: Id): Session[] {
+    const now = Date.now();
+    const run = this.runGroups.get(agentId) ?? [];
+    const earlier = this.earlierSessions.has(agentId)
+      ? this.earlierSessions.get(agentId)
+      : this.storedSession(agentId);
+    return [
+      ...(earlier ? [earlier] : []),
+      ...run.map((g) => ({ start: g.startedAt, end: g.endedAt ?? now })),
+    ];
+  }
+
+  /** The PID table's row as a session of an earlier run of this boot, if it is one. */
+  private storedSession(agentId: Id): Session | undefined {
+    const row = this.store.get(agentId);
+    if (!row || row.status === 'running') return undefined;
+    if (typeof row.meta?.['bootAt'] !== 'string' || this.fromOtherBoot(row)) return undefined;
+    const start = Date.parse(row.startedAt);
+    const end = row.endedAt ? Date.parse(row.endedAt) : NaN;
+    if (Number.isNaN(start) || Number.isNaN(end) || end < start) return undefined;
+    return { start, end };
+  }
+
+  /** The pid of the agent's CLI while it runs in this server run (P4-14: its helpers are held). */
+  livePid(agentId: Id): number | undefined {
+    const managed = this.procs.get(agentId);
+    return managed && managed.state !== 'exited' && managed.pid > 1 ? managed.pid : undefined;
+  }
+
+  /**
+   * Resolves once the agent's process is gone and its group reaped (P4-14: the safety-net sweep
+   * waits for the supervisor's own clean-up first); `undefined` when nothing of it runs here.
+   */
+  whenExited(agentId: Id): Promise<unknown> | undefined {
+    const managed = this.procs.get(agentId);
+    return managed && managed.state !== 'exited' ? managed.exited : undefined;
   }
 
   /** Stops every live process (graceful). */

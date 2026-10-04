@@ -75,6 +75,14 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     reason: 'resume failed: no session',
   },
   'agent.stopped': { type: 'agent.stopped', ...steward, by: waykeeper },
+  'agent.processes_stopped': {
+    type: 'agent.processes_stopped',
+    ...steward,
+    pids: [4242, 4243],
+    commands: ['node server.js', 'sleep 300'],
+    forced: [4243],
+    by: waykeeper,
+  },
 
   'message.sent': {
     type: 'message.sent',

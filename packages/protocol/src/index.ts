@@ -18,3 +18,5 @@ export * from './commands.js';
 export * from './summary.js';
 export * from './panel.js';
 export * from './belt.js';
+export * from './dev.js';
+export * from './replay.js';

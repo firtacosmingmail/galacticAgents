@@ -193,6 +193,29 @@ describe('ClaudeSdkAdapter — message mapping', () => {
 });
 
 describe('ClaudeSdkAdapter — questions', () => {
+  it('two permission requests at once (parallel tool calls) are both pending and both answerable', async () => {
+    // The real CLI calls canUseTool for parallel tool calls concurrently (two WebSearch calls in one
+    // turn). One pending slot per session let the second overwrite the first: answering the first
+    // threw "no pending question" (a 500 in the panel) and its tool call waited forever.
+    const { sdk, adapter, events } = make(() => [{ delayMs: 200 }, { text: 'done' }]);
+    await adapter.spawn(spawnOpts('search twice'));
+    await events.waitFor(() => sdk.calls.length > 0);
+    const canUseTool = sdk.calls[0]!.options.canUseTool!;
+    const signal = new AbortController().signal;
+    const first = canUseTool('WebSearch', { query: 'a' }, { signal, toolUseID: 'tu-1' });
+    const second = canUseTool('WebSearch', { query: 'b' }, { signal, toolUseID: 'tu-2' });
+    await events.waitFor((e) => e.filter((x) => x.type === 'agent.needs_input').length === 2);
+    const [q1, q2] = events.items.filter((x) => x.type === 'agent.needs_input') as Extract<
+      AgentEvent,
+      { type: 'agent.needs_input' }
+    >[];
+    await adapter.answer(q1!.questionId, 'allow');
+    await adapter.answer(q2!.questionId, 'no');
+    await expect(first).resolves.toMatchObject({ behavior: 'allow' });
+    await expect(second).resolves.toMatchObject({ behavior: 'deny' });
+    await expect(adapter.answer(q1!.questionId, 'again')).rejects.toThrow(/no pending question/);
+  });
+
   it('a gate "ask" becomes a permission question; allow runs the tool, no refuses it', async () => {
     const { adapter, events } = make(() => [
       { tool: 'Bash', input: { command: 'rm -rf dist' }, result: 'removed' },

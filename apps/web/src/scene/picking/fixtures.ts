@@ -1,6 +1,8 @@
-import type { Agent, Body, StatusRecord } from '@galactic/protocol';
+import type { Agent, AgentRole, Body, StatusRecord } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { emptyWorld, type WorldState } from '../../state/reduce.js';
+import type { SatelliteFrame } from '../satellites/director.js';
+import type { SatelliteMode } from '../satellites/machine.js';
 
 /**
  * A small world for picking's tests (P3-05): the reserved Sun, Earth (the Harmonizer's) and Moon,
@@ -123,5 +125,37 @@ export function pickingWorld(): WorldState {
       status('a-st', 'working'),
       status('a-st-in', 'working'),
     ]),
+  };
+}
+
+/**
+ * A drawn satellite's frame as the director publishes it (P4-08 tests): visible, fully present,
+ * at `position` with span `size`; everything picking does not read is neutral.
+ */
+export function satelliteFrame(
+  agentId: string,
+  bodyId: string,
+  position: [number, number, number],
+  opts: { size?: number; mode?: SatelliteMode; role?: AgentRole } = {},
+): SatelliteFrame {
+  const mode = opts.mode ?? 'orbiting';
+  return {
+    agentId,
+    role: opts.role ?? 'steward',
+    bodyId,
+    mode,
+    view: { mode, from: mode, blend: 1, flight: undefined, beam: 0, landing: 0 },
+    visible: true,
+    position,
+    target: [0, 0, 0],
+    bodyRadius: 1,
+    size: opts.size ?? 0.05,
+    beam: 0,
+    sweep: 0,
+    animated: false,
+    presence: 1,
+    tint: '#ffffff',
+    brightness: 1,
+    beamTint: [0.4, 0.95, 1.3],
   };
 }

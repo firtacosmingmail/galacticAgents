@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { Profiler } from 'react';
 import { Object3D } from 'three';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { registerAnchor, type BodyAnchor } from '../anchors.js';
@@ -7,9 +8,18 @@ import { useCameraStore } from '../camera/store.js';
 import { onSceneKey } from '../SceneArea.js';
 import { useAppStore } from '../../state/store.js';
 import { HARMONIZER, selectionKey } from '../../state/selection.js';
-import { pickingWorld } from './fixtures.js';
+import { publishSatellites } from '../satellites/registry.js';
+import { pickingWorld, satelliteFrame } from './fixtures.js';
 import { PickingOverlay } from './PickingOverlay.js';
-import { activateBody, selectFromScene, usePickingStore } from './store.js';
+import {
+  activateBody,
+  activateSatellite,
+  moveHover,
+  selectFromScene,
+  usePickingStore,
+  type Point,
+  type SatelliteHover,
+} from './store.js';
 import { setDeepLinkForTest, useSelectionSync } from './sync.js';
 
 const AT = { x: 120, y: 80 };
@@ -109,6 +119,125 @@ describe('the overlay', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Jupiter' }));
     expect(selected()).toBe('waykeeper:a-wk-old');
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe("a satellite's hover card (P4-08)", () => {
+  const hoverSatellite = (agentId: string, extra: Partial<SatelliteHover & Point> = {}) =>
+    act(() =>
+      usePickingStore.getState().setHover({
+        kind: 'satellite',
+        agentId,
+        mode: 'orbiting',
+        satelliteBodyId: 'b-ast-7',
+        others: 0,
+        ...AT,
+        ...extra,
+      }),
+    );
+  const setActivity = (agentId: string, currentActivity: string | undefined) =>
+    act(() => {
+      const world = useAppStore.getState().world;
+      useAppStore.setState({
+        world: {
+          ...world,
+          statuses: {
+            ...world.statuses,
+            [agentId]: { ...world.statuses[agentId]!, currentActivity },
+          },
+        },
+      });
+    });
+  afterEach(() => publishSatellites(new Map()));
+
+  it('shows the agent, its state and what it is doing, and follows the store live', () => {
+    setActivity('a-st', 'Reading src/date.ts');
+    render(<PickingOverlay />);
+    hoverSatellite('a-st');
+    const card = screen.getByRole('tooltip');
+    expect(card.querySelector('.pick-sat-name')?.textContent).toBe('Steward · Fix the date test');
+    expect(card.querySelector('.pill')?.textContent).toBe('working');
+    expect(card.querySelector('.pill')?.className).toContain('state-working');
+    expect(card.querySelector('.pick-sat-activity')?.textContent).toBe('Reading src/date.ts');
+    expect(card.querySelector('.pick-sat-where')?.textContent).toBe('7 Iris');
+    // While hovering, the status changes: the card says so at once.
+    setActivity('a-st', 'Running the tests');
+    act(() => {
+      const world = useAppStore.getState().world;
+      useAppStore.setState({
+        world: {
+          ...world,
+          statuses: { ...world.statuses, 'a-st': { ...world.statuses['a-st']!, state: 'stalled' } },
+        },
+      });
+    });
+    expect(card.querySelector('.pick-sat-activity')?.textContent).toBe('Running the tests');
+    expect(card.querySelector('.pill')?.textContent).toBe('stalled');
+    // The mode and the "+n" count reach it too.
+    hoverSatellite('a-st', { mode: 'scanning', others: 2 });
+    expect(screen.getByRole('tooltip').querySelector('.pick-sat-where')?.textContent).toBe(
+      'scanning · 7 Iris +2',
+    );
+    act(() => usePickingStore.getState().setHover(undefined));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('is placed at the satellite and moves with it without re-rendering its content', () => {
+    render(<PickingOverlay />);
+    hoverSatellite('a-st', { x: 100, y: 50 });
+    const card = screen.getByRole('tooltip');
+    expect(card.style.transform).toBe('translate(114px, 57px)');
+    hoverSatellite('a-st', { x: 130, y: 60 });
+    expect(screen.getByRole('tooltip')).toBe(card);
+    expect(card.style.transform).toBe('translate(144px, 67px)');
+  });
+
+  it('the overlay does not re-render when only the hover moves (review item 4)', () => {
+    let commits = 0;
+    render(
+      <Profiler id="overlay" onRender={() => commits++}>
+        <PickingOverlay />
+      </Profiler>,
+    );
+    hoverSatellite('a-st', { x: 100, y: 50 });
+    const card = screen.getByRole('tooltip');
+    const before = commits;
+    for (let i = 1; i <= 30; i++) act(() => moveHover(100 + i, 50));
+    expect(commits).toBe(before);
+    expect(card.style.transform).toBe('translate(144px, 57px)');
+    // The body label too.
+    act(() =>
+      usePickingStore.getState().setHover({ bodyId: 'b-jupiter', name: 'Jupiter', others: 0 }),
+    );
+    const label = screen.getByRole('tooltip');
+    const atLabel = commits;
+    act(() => moveHover(10, 20));
+    expect(commits).toBe(atLabel);
+    expect(label.style.transform).toBe('translate(24px, 30px)');
+  });
+
+  it('"what\'s here" lists the satellites first; choosing one selects its agent', () => {
+    publishSatellites(new Map([['a-st', satelliteFrame('a-st', 'b-ast-7', [0, 0, 0])]]));
+    render(<PickingOverlay />);
+    act(() => usePickingStore.getState().showHere(AT, ['b-ast-7'], ['a-st', 'a-wk-old']));
+    const list = screen.getByRole('dialog', { name: "what's here" });
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Steward · Fix the date test', 'Waykeeper · Big project', '7 Iris']);
+    fireEvent.click(within(list).getByRole('button', { name: 'Steward · Fix the date test' }));
+    expect(selected()).toBe('steward:a-st');
+    expect(camera().focusedId).toBe('b-ast-7');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it("activateSatellite without a drawn satellite flies to the agent's work body; unknown: nothing", () => {
+    act(() => void activateSatellite('a-wk-old'));
+    expect(selected()).toBe('waykeeper:a-wk-old');
+    expect(camera().focusedId).toBe('b-jupiter');
+    expect(activateSatellite('nobody')).toBe(false);
+    expect(selected()).toBe('waykeeper:a-wk-old');
   });
 });
 

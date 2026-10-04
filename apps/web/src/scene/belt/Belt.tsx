@@ -10,13 +10,14 @@ import {
 } from 'three';
 import { useSceneScale, type ScaleMode } from '../scale.js';
 import { DECOR_LAYER } from '../layers.js';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import {
   asteroidSquash,
   BACKGROUND_BELT_SEED,
   beltSpin,
   generateBelt,
   orbitPosition,
+  ASTEROID_ROCK_NAME,
   pickData,
   PICK_TARGET_NAME,
   TASK_ASTEROID_RADIUS,
@@ -26,6 +27,7 @@ import {
 import { rockGeometry, writeBeltInstances } from './belt-mesh.js';
 import { useBodyAnchor } from '../anchor-binding.js';
 import { useReducedMotion } from '../motion.js';
+import { PLACE_BODIES } from '../frame-order.js';
 
 /**
  * The asteroid belt (P3-03): thousands of background rocks in ONE instanced mesh (one draw call,
@@ -44,14 +46,15 @@ import { useReducedMotion } from '../motion.js';
 export function Belt({ rocks }: { rocks: number }) {
   const mode = useSceneScale((s) => s.mode);
   const reducedMotion = useReducedMotion();
-  const bodies = useAppStore((s) => s.world.bodies);
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
   const asteroids = useMemo(() => taskAsteroids(bodies), [bodies]);
   const spin = useRef<Group>(null);
 
+  // The task asteroids ride the spin: placed before their readers (`frame-order.ts`).
   useFrame((_, delta) => {
     const group = spin.current;
     if (group) group.rotation.y += beltSpin(delta, reducedMotion);
-  });
+  }, PLACE_BODIES);
 
   // Shared by every task asteroid: one rock shape (detail 1), one halo sphere, one pick sphere.
   const shapes = useMemo(
@@ -136,6 +139,7 @@ function TaskAsteroidMesh({
   return (
     <group ref={anchor} name={`asteroid:${asteroid.bodyId}`} position={position} userData={data}>
       <mesh
+        name={ASTEROID_ROCK_NAME}
         geometry={shapes.rock}
         scale={scale}
         rotation={[asteroid.orbit.phase, asteroid.seed % 7, 0]}

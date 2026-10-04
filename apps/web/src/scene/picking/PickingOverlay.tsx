@@ -1,6 +1,16 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useCameraStore } from '../camera/store.js';
-import { activateBody, usePickingStore, type Popover } from './store.js';
+import { SatelliteHoverCard } from './SatelliteHoverCard.js';
+import { BeaconHoverCard } from '../beacons/BeaconHoverCard.js';
+import {
+  activateBody,
+  activateSatellite,
+  hoverAt,
+  onHoverMove,
+  usePickingStore,
+  type Point,
+  type Popover,
+} from './store.js';
 import './picking.css';
 
 /**
@@ -11,26 +21,54 @@ import './picking.css';
  * close button closes the popover; closing it, or choosing from the list, gives the keyboard focus
  * back to the scene area (as Escape does), not to the page.
  *
+ * Over a satellite (P4-08) the hover label is its agent's card instead (`SatelliteHoverCard`), and
+ * the "what's here" list names the satellites under the pointer (by their agent) before the
+ * bodies; choosing one selects that agent. Over a question beacon (P4-05) it is the beacon's
+ * question card (`BeaconHoverCard`).
+ *
  * A body's info card opens at the click and, once the camera lands on that body, moves to the
  * scene's centre where the body now is (the same place `Enter` opens it).
+ *
+ * The overlay re-renders only when *what* is hovered changes: the label and the card follow the
+ * hover's position (`onHoverMove`) by writing their own `transform`.
  */
 export function PickingOverlay() {
   const hover = usePickingStore((s) => s.hover);
   const popover = usePickingStore((s) => s.popover);
   return (
     <>
-      {hover && !popover && (
-        <div
-          className="pick-hover"
-          role="tooltip"
-          style={{ transform: `translate(${hover.x + 14}px, ${hover.y + 10}px)` }}
-        >
-          {hover.name}
-          {hover.others > 0 && <span className="pick-hover-more"> +{hover.others}</span>}
-        </div>
+      {hover?.kind === 'satellite' && !popover && (
+        <SatelliteHoverCard
+          agentId={hover.agentId}
+          mode={hover.mode}
+          bodyId={hover.satelliteBodyId}
+          others={hover.others}
+        />
+      )}
+      {hover?.kind === 'beacon' && !popover && <BeaconHoverCard questionId={hover.questionId} />}
+      {hover && hover.kind !== 'satellite' && hover.kind !== 'beacon' && !popover && (
+        <BodyHoverLabel name={hover.name} others={hover.others} />
       )}
       {popover && <PickPopover popover={popover} />}
     </>
+  );
+}
+
+/** The body's name at the pointer, "+n" when others are there too; follows `hoverAt`. */
+function BodyHoverLabel({ name, others }: { name: string; others: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const place = (at: Readonly<Point>) => {
+      if (ref.current) ref.current.style.transform = `translate(${at.x + 14}px, ${at.y + 10}px)`;
+    };
+    place(hoverAt());
+    return onHoverMove(place);
+  }, []);
+  return (
+    <div ref={ref} className="pick-hover" role="tooltip">
+      {name}
+      {others > 0 && <span className="pick-hover-more"> +{others}</span>}
+    </div>
   );
 }
 
@@ -104,6 +142,17 @@ export function PickPopover({ popover }: { popover: Popover }) {
         <>
           <strong className="pick-title">What's here</strong>
           <ul className="pick-list">
+            {popover.satellites.map((s) => (
+              <li key={`satellite:${s.agentId}`}>
+                <button
+                  type="button"
+                  className="pick-list-satellite"
+                  onClick={() => thenFocusScene(() => void activateSatellite(s.agentId))}
+                >
+                  {s.name}
+                </button>
+              </li>
+            ))}
             {popover.bodies.map((b) => (
               <li key={b.bodyId}>
                 <button

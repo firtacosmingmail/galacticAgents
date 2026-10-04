@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import type { Mesh, PerspectiveCamera } from 'three';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { getAnchor } from '../anchors.js';
 import { anchorPosition } from '../camera/store.js';
 import { pixelScale } from '../picking/pick.js';
@@ -18,8 +18,8 @@ import { independentMoons } from './label-model.js';
 export const OWN_PROJECT_RING = { color: '#3cc8b4', opacity: 0.55, scale: 1.7, minPx: 5 } as const;
 
 export function MoonMarkers() {
-  const bodies = useAppStore((s) => s.world.bodies);
-  const projects = useAppStore((s) => s.world.projects);
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
+  const projects = useAppStore((s) => sceneWorld(s).projects);
   const moons = useMemo(
     () => independentMoons({ bodies, projects, tasks: {} }),
     [bodies, projects],

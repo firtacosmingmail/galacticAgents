@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ENDED_STATES, type Agent, type Id } from '@galactic/protocol';
+import { ENDED_STATES, isHarnessMeta, type Agent, type Id } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
 import { createApi, type Api } from '../api.js';
@@ -63,12 +63,15 @@ export function HierarchyConsole({ token, api: given }: { token: string; api?: A
   );
 }
 
-/** The Harmonizer the user talks to: the newest one still running, else the newest one. */
+/**
+ * The Harmonizer the user talks to: the newest one still running, else the newest one. Never the
+ * scene harness's dormant Harmonizer (P4-06): with no real Harmonizer there is none to talk to.
+ */
 export function currentHarmonizer(
   world: Pick<WorldState, 'agents' | 'statuses'>,
 ): Agent | undefined {
   const all = Object.values(world.agents)
-    .filter((a) => a.role === 'harmonizer')
+    .filter((a) => a.role === 'harmonizer' && !isHarnessMeta(a.meta))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
   return (
     all.find((a) => {

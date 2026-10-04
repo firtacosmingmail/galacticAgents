@@ -18,6 +18,7 @@ import { sceneQuality } from './quality.js';
 import { ScaleToggle } from './bodies/ScaleToggle.js';
 import { PickingOverlay } from './picking/PickingOverlay.js';
 import { LabelLayer } from './labels/LabelLayer.js';
+import { SatelliteLegend } from './legend/Legend.js';
 import { activateBody, usePickingStore } from './picking/store.js';
 import { useSelectionSync } from './picking/sync.js';
 import './scene.css';
@@ -51,6 +52,8 @@ export function useQualityTier(): QualityTier | undefined {
  * Labels (P3-07): the domain labels' layer (`LabelLayer`) sits over the canvas, under the scene
  * chrome (fps meter, breadcrumb, scale toggle) and picking's hover label and popover — the
  * stacking order is in `scene.css`; the projector inside the canvas positions it.
+ *
+ * Legend (P4-02): what the satellites' colours and pulses mean, top-right, collapsible.
  */
 export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }) {
   const quality = sceneQuality(useQualityTier());
@@ -81,6 +84,7 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
       <CameraBreadcrumb />
       {showFps && <FpsMeter sample={sample} tier={quality.tier} />}
       <ScaleToggle />
+      <SatelliteLegend />
     </section>
   );
 }
