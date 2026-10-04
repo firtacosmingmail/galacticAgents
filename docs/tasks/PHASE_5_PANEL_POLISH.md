@@ -1,7 +1,7 @@
 # Phase 5 — Side panel polish and scene integration
 
-**Current task:** P5-01, P5-02, P5-03 (wave 1, branch `p5-wave1-selection-status-history`) · **Task status:** in progress
-**Phase status:** in progress (0/5 done) — on branch `phase-5`
+**Current task:** P5-02, P5-03 (wave 1, branch `p5-wave1-selection-status-history`) · **Task status:** in progress
+**Phase status:** in progress (1/5 done) — on branch `phase-5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -36,7 +36,7 @@ The Phase 2.5 panel becomes the spec's panel, wired to the scene: selection flow
 ## Tasks
 
 ### P5-01 — Bidirectional selection and Earth = Harmonizer
-- **Status:** in progress · **Depends on:** P3-05, P25-02 · **Parallel with:** P5-02, P5-03
+- **Status:** done (2026-10-04) · **Depends on:** P3-05, P25-02 · **Parallel with:** P5-02, P5-03
 - Scene pick ↔ panel selection in both directions with camera fly-to on panel selection; clicking Earth or deselecting returns to the Harmonizer chat; selecting a satellite selects that agent.
 - **Acceptance:** every selection path in `SPEC.md` §4.1–4.2 works in both directions.
 
