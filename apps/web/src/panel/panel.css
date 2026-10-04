@@ -78,6 +78,41 @@
   outline-offset: 2px;
 }
 
+/* P5-04: the skip link, first on the page and shown only while focused */
+.pnl-skip {
+  position: absolute;
+  top: max(6px, env(safe-area-inset-top));
+  left: 8px;
+  z-index: 100;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--pnl-here);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.pnl .pnl-skip:focus {
+  transform: none;
+  outline: 2px solid var(--pnl-ink);
+  outline-offset: 2px;
+}
+
+/* P5-04: reduced motion everywhere in the panel — no pulse, no blink, no transition, no smooth
+   scrolling; what changes still changes, at once. The scene's own motion follows the same
+   preference in `scene/motion.ts`. */
+@media (prefers-reduced-motion: reduce) {
+  .pnl *,
+  .pnl *::before,
+  .pnl *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* top bar */
 .pnl-top {
   display: flex;

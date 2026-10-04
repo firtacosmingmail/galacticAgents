@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   proposalParking,
   proposalPlan,
@@ -178,7 +178,7 @@ export function WorkCard({ proposal: p }: { proposal: Proposal }) {
         {p.kind !== 'asteroid' && (
           <div className="wide">
             <dt>trust level</dt>
-            <dd aria-label="trust level">
+            <dd role="definition" aria-label="trust level">
               {trust} <span className="muted">— {TRUST_HINTS[trust]}</span>
             </dd>
           </div>
@@ -208,7 +208,12 @@ export function WorkCard({ proposal: p }: { proposal: Proposal }) {
             Approve
           </button>
         )}
-        <button disabled={busy} className="secondary" onClick={() => setEditing((e) => !e)}>
+        <button
+          disabled={busy}
+          className="secondary"
+          aria-expanded={editing}
+          onClick={() => setEditing((e) => !e)}
+        >
           Edit
         </button>
       </div>
@@ -269,7 +274,7 @@ function Parked({
         </ul>
       )}
       {parking.offers && parking.offers.length > 0 && (
-        <div className="controls" aria-label="offers">
+        <div className="controls" role="group" aria-label="offers">
           {parking.offers.map((offer) =>
             offer === 'downsize_moon' || offer === 'downsize_asteroid' ? (
               <button
@@ -323,6 +328,9 @@ function EditCard({
   const [initGit, setInitGit] = useState(p.meta?.['initGit'] === true);
   const [trust, setTrust] = useState<TrustLevel>(proposalTrust(p));
   const choices = freeBodies(world, kind);
+  // P5-04: opening the form puts the keyboard on its first field.
+  const form = useRef<HTMLFormElement>(null);
+  useEffect(() => form.current?.querySelector<HTMLElement>('select, input')?.focus(), []);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const chosen = bodyId ? world.bodies[bodyId] : undefined;
@@ -347,7 +355,7 @@ function EditCard({
     });
   };
   return (
-    <form className="edit" onSubmit={submit} aria-label="edit card">
+    <form className="edit" onSubmit={submit} aria-label="edit card" ref={form}>
       <label>
         size
         <select

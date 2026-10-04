@@ -287,7 +287,12 @@ function Line({ entry: e, agentId, name }: { entry: ChatEntry; agentId: Id; name
     // A subordinate's status report (or a superior's instruction), with a link to its sender.
     const from = world.agents[s.id];
     return (
-      <div className="pnl-line pnl-line-report" data-entry={e.id} aria-label="status report">
+      <div
+        className="pnl-line pnl-line-report"
+        data-entry={e.id}
+        role="group"
+        aria-label="status report"
+      >
         <span className="pnl-meta muted">
           report from{' '}
           {from ? (

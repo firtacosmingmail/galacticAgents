@@ -90,7 +90,7 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
         <StatePill state={status?.state} />
         {blocked && <Beacon>blocked on you</Beacon>}
         {questions > 0 && (
-          <span className="agc-qbadge" aria-label="open questions">
+          <span className="agc-qbadge">
             {questions} open question{questions === 1 ? '' : 's'}
           </span>
         )}
@@ -127,11 +127,13 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
           <>
             <div>
               <dt>cost</dt>
-              <dd aria-label="cost so far">{formatCost(status)}</dd>
+              <dd role="definition" aria-label="cost so far">
+                {formatCost(status)}
+              </dd>
             </div>
             <div>
               <dt>wall clock</dt>
-              <dd aria-label="wall clock">
+              <dd role="definition" aria-label="wall clock">
                 {status && wall !== undefined ? (
                   <Usage
                     used={wall}
@@ -145,7 +147,7 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
             </div>
             <div>
               <dt>tool calls</dt>
-              <dd aria-label="tool calls">
+              <dd role="definition" aria-label="tool calls">
                 {status ? (
                   <Usage
                     used={status.caps.toolCalls.used}

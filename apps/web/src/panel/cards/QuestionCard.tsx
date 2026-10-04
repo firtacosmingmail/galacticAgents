@@ -272,7 +272,7 @@ export function QuestionView({ questionId }: { questionId: Id }) {
       ) : q.status === 'answered' ? (
         <AnsweredQuestionCard question={q} />
       ) : (
-        <p className="muted" aria-label={`withdrawn question ${q.context.text}`}>
+        <p className="muted" role="group" aria-label={`withdrawn question ${q.context.text}`}>
           Withdrawn: {q.context.text}
         </p>
       )}

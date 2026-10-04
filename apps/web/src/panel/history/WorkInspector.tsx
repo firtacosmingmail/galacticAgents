@@ -189,7 +189,7 @@ export function WorkInspector({
           {detail.agents.length > 0 && (
             <div className="his-block">
               <h3 className="his-subtitle">Agents</h3>
-              <p className="his-agents" aria-label={`agents of ${name}`}>
+              <p className="his-agents" role="group" aria-label={`agents of ${name}`}>
                 {[...detail.agents].reverse().map((a, i, all) => {
                   // "earlier" only among agents of the same role, newest first.
                   const earlier = all.slice(0, i).some((b) => b.role === a.role);

@@ -84,6 +84,7 @@ describe('the wide top bar (desktop layout, unchanged by P3-12)', () => {
     const bar = top();
     expect(within(bar).queryByRole('button', { name: 'Menu' })).toBeNull();
     expect(Array.from(bar.children).map((c) => c.className)).toEqual([
+      'pnl-skip', // P5-04: the skip link, shown only while focused
       'pnl-link pnl-brand',
       'pnl-conn pnl-conn-live',
       'pnl-top-counts',
@@ -218,7 +219,8 @@ describe('the compact top bar (P3-12)', () => {
     expect(useAppStore.getState().route).toBe('history');
     expect(window.location.pathname).toBe('/history');
     expect(menu().hidden).toBe(true);
-    expect(document.activeElement).toBe(menuButton());
+    // A link to another page puts the focus on that page's heading (P5-04), not back on the menu.
+    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: 'History' }));
 
     openMenu();
     expect(within(menu()).getByRole('link', { name: 'History' }).getAttribute('aria-current')).toBe(

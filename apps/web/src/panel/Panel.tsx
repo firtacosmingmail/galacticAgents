@@ -40,6 +40,7 @@ import { useDockPrefs, type DockControl } from './dock-state.js';
 import { STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
 import { BrainDock, DockViewToggle, SystemStatusView } from './status/StatusViews.js';
 import { useDockView } from './status/dock-view.js';
+import { listKeys, useFocusRescue, useRouteFocus, WaitingAnnouncer } from './a11y.js';
 import './panel.css';
 
 /*
@@ -103,12 +104,14 @@ export function Panel({
   ]
     .filter(Boolean)
     .join(' ');
+  useRouteFocus();
   const main = <MainArea dock={dock} collapsible={collapsible} container={centre} />;
   return (
     <ApiContext.Provider value={api}>
       <SettingsProvider api={api}>
         <CardLinksContext.Provider value={true}>
           <div className={showScene ? 'pnl pnl-with-scene' : 'pnl'}>
+            <WaitingAnnouncer />
             <TopBar
               scene={scene}
               agents={agents}
@@ -205,6 +208,9 @@ function MainArea({
   useCanonicalSelection(agent, selection);
   const open = !collapsible || dock.open;
   const view = useDockView((s) => s.view);
+  // An answered clarification, a closed confirmation: the focus stays in the main area (P5-04).
+  const mainRef = useRef<HTMLElement>(null);
+  useFocusRescue(mainRef, { fallback: (main) => main.querySelector<HTMLElement>('h1') });
 
   let content;
   if (!agent) {
@@ -259,6 +265,7 @@ function MainArea({
       : `Conversation with ${agentLabel(agent, world)}`;
   return (
     <main
+      ref={mainRef}
       className={className}
       aria-label={label}
       data-selection={selectionKey(selection)}
@@ -399,6 +406,14 @@ const SideColumn = memo(function SideColumn({
   const selection = useAppStore((s) => s.selection);
   const agent = selectedAgent(world, selection);
   const supervisor: Id | undefined = agent?.role === 'steward' ? agent.supervisorId : undefined;
+  // P5-04: arrow keys between the cards, and the focus kept in the list when a card goes away.
+  const agentsRef = useRef<HTMLElement>(null);
+  const inboxRef = useRef<HTMLElement>(null);
+  useFocusRescue(agentsRef, {
+    items: AGENT_CARD,
+    fallback: (s) => s.querySelector<HTMLElement>('h2'),
+  });
+  useFocusRescue(inboxRef, { items: INBOX_CARD, fallback: (s) => s });
   return (
     <aside
       className="pnl-side"
@@ -411,7 +426,7 @@ const SideColumn = memo(function SideColumn({
       }
     >
       {agents.visible && (
-        <section aria-label="managed agents">
+        <section aria-label="managed agents" ref={agentsRef} onKeyDown={listKeys(AGENT_CARD)}>
           <div className="pnl-side-head">
             <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
             <button
@@ -432,13 +447,24 @@ const SideColumn = memo(function SideColumn({
         </section>
       )}
       {inbox.visible && (
-        <section className="pnl-inbox" aria-label="inbox" id={INBOX_ID} tabIndex={-1}>
+        <section
+          className="pnl-inbox"
+          aria-label="inbox"
+          id={INBOX_ID}
+          tabIndex={-1}
+          ref={inboxRef}
+          onKeyDown={listKeys(INBOX_CARD)}
+        >
           <Inbox onHide={() => inbox.setVisible(false)} />
         </section>
       )}
     </aside>
   );
 });
+
+/** The items the arrow keys move between (P5-04): the managed agents' cards, the inbox's cards. */
+const AGENT_CARD = 'article.agc, .pnl-agents > li > a';
+const INBOX_CARD = 'article.card';
 
 function AgentLinks({ ids }: { ids: Id[] }) {
   const world = useAppStore((s) => s.world);
