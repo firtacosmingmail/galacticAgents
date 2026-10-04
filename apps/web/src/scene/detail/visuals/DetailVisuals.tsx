@@ -140,6 +140,8 @@ export function Atmosphere({
         atmospherePower: { value: u.power },
         atmosphereOpacity: { value: 0 },
       },
+      // The cutaway (P6-03) gives the shell its clipping planes: cut with the surface.
+      clipping: true,
       transparent: true,
       blending: AdditiveBlending,
       depthWrite: false,
@@ -219,6 +221,8 @@ const CLOUD_ORDER = 1;
  * alpha map (white, lit by the Sun like the surface, eclipse-shaded with it), turning with the
  * surface plus a slow drift; still under reduced motion. Fades in with the cross-fade. The texture
  * is painted in the worker at the tier's size (mobile: 512 × 256); nothing is drawn until then.
+ * A sphere under the body's group, so P6-03's cutaway cuts it with the surface (a cloud deck
+ * floating over the open wedge would hide the layers).
  */
 export function Clouds({
   clouds,

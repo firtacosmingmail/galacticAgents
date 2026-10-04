@@ -280,6 +280,9 @@ export function applyFeatures(
       texel.relief += line * 0.08;
     }
   }
+
+  // Brightening (chevrons, rims, collars) may pass 255: a Uint8Array would wrap it, not clamp.
+  for (let c = 0; c < 3; c++) rgb[c] = Math.min(255, Math.max(0, rgb[c]!));
 }
 
 /** A stable text form of a body's features, for texture cache keys. */

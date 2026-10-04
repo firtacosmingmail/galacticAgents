@@ -11,20 +11,25 @@ import { atmosphereScale } from './looks.js';
  * (just past the limb) and raised to `power`: brightest as a thin ring at the limb, fading
  * smoothly to nothing at the shell's edge and to a faint veil over the disc — no hard rim. Only
  * the day side glows (the Sun is at the world origin), softly past the terminator. It casts and
- * receives no eclipse (a moon's shadow on a glow is not worth a second patch).
+ * receives no eclipse (a moon's shadow on a glow is not worth a second patch). It takes material
+ * clipping planes (`clipping: true` and three's clipping chunks), so P6-03's cutaway cuts the
+ * glow's wedge with the surface's instead of leaving a veil over the cut faces.
  */
 export const ATMOSPHERE_VERTEX = /* glsl */ `
 varying vec3 vShell;
 varying vec3 vCamera;
 varying vec3 vWorld;
 varying vec3 vNormalWorld;
+#include <clipping_planes_pars_vertex>
 void main() {
   vShell = position;
   vCamera = ( inverse( modelMatrix ) * vec4( cameraPosition, 1.0 ) ).xyz;
   vec4 world = modelMatrix * vec4( position, 1.0 );
   vWorld = world.xyz;
   vNormalWorld = normalize( mat3( modelMatrix ) * normal );
-  gl_Position = projectionMatrix * viewMatrix * world;
+  vec4 mvPosition = viewMatrix * world;
+  gl_Position = projectionMatrix * mvPosition;
+  #include <clipping_planes_vertex>
 }
 `;
 
@@ -38,7 +43,9 @@ varying vec3 vShell;
 varying vec3 vCamera;
 varying vec3 vWorld;
 varying vec3 vNormalWorld;
+#include <clipping_planes_pars_fragment>
 void main() {
+  #include <clipping_planes_fragment>
   vec3 dir = normalize( vShell - vCamera );
   float along = dot( vCamera, dir );
   float b2 = max( dot( vCamera, vCamera ) - along * along, 0.0 );
