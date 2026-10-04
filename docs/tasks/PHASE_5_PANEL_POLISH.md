@@ -1,7 +1,7 @@
 # Phase 5 — Side panel polish and scene integration
 
 **Current task:** — (all tasks done) · **Task status:** —
-**Phase status:** in progress (7/7 done) — exit check below; merge into `main` is Cosmin's — on branch `phase-5`
+**Phase status:** done (2026-10-04) — 7/7; merged into `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 

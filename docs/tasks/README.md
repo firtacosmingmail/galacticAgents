@@ -12,7 +12,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 2.5 — Minimal side panel | `PHASE_2.5_MINIMAL_PANEL.md` | done (2026-10-03) | 10/10 | — |
 | 3 — Solar system scene | `PHASE_3_SOLAR_SYSTEM_SCENE.md` | done (2026-10-03) | 12/12 | — |
 | 4 — Living overlays | `PHASE_4_LIVING_OVERLAYS.md` | done (2026-10-04) | 14/14 | — |
-| 5 — Panel polish and scene integration | `PHASE_5_PANEL_POLISH.md` | in progress (branch `phase-5`) | 7/7 | exit check met; review and merge pending |
+| 5 — Panel polish and scene integration | `PHASE_5_PANEL_POLISH.md` | done (2026-10-04) | 7/7 | — |
 | 6 — Planet zoom and structure | `PHASE_6_PLANET_ZOOM.md` | not started | 0/5 | — |
 | 7 — Remote and mobile access | `PHASE_7_REMOTE_MOBILE.md` | not started | 0/6 | — |
 | 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | not started | 0/8 | — |
