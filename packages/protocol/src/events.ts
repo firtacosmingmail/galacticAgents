@@ -164,6 +164,24 @@ export const RecoveryNeedsAttention = z.object({
   reason: z.string(),
 });
 
+/**
+ * The server stopped processes attributed to a Steward (P4-14; SPEC decision pending): leftovers its
+ * supervisor (a Waykeeper, or the Harmonizer for an asteroid task) or the user stopped, or the
+ * server's safety-net sweep when the Steward ended (`sweep: 'agent_ended'`) or its task closed
+ * (`sweep: 'task_closed'`). `commands` are the processes' command lines, clipped and redacted, in
+ * the order of `pids`; `forced` the pids that needed SIGKILL after SIGTERM. Logged only when
+ * something was stopped. Emitted by the server, never by an adapter.
+ */
+export const AgentProcessesStopped = z.object({
+  type: z.literal('agent.processes_stopped'),
+  agentId: Id,
+  pids: z.array(z.number().int().positive()).min(1),
+  commands: z.array(z.string()),
+  forced: z.array(z.number().int().positive()).optional(),
+  by: Actor,
+  sweep: z.enum(['agent_ended', 'task_closed']).optional(),
+});
+
 /** Everything an adapter (or the runtime, for `agent.spawned`) may emit about a running agent. */
 export const AgentEvent = z.discriminatedUnion('type', [
   AgentSpawned,
@@ -512,6 +530,7 @@ export const Event = z.discriminatedUnion('type', [
   AgentStopped,
   AgentInterrupted,
   RecoveryNeedsAttention,
+  AgentProcessesStopped,
   MessageSent,
   MessageDelivered,
   QuestionOpened,

@@ -141,3 +141,29 @@
   margin: 0;
   font-size: 13px;
 }
+/* Leftover processes (P4-14): a quiet line with the list on demand and a confirmed stop. */
+.stw-procs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+.stw-procs details {
+  min-width: 0;
+  flex: 1 1 240px;
+}
+.stw-procs-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.stw-procs-list code {
+  font: 12px var(--pnl-mono);
+}
+.stw-procs-cmd {
+  overflow-wrap: anywhere;
+}

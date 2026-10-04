@@ -7,6 +7,7 @@ import {
   ProposalDecisionBody,
   SendBody,
   SpawnBody,
+  StopProcessesBody,
   type Actor,
   type ChatMessage,
   type ControlAction,
@@ -17,6 +18,8 @@ import {
   type RuntimesInfo,
   type SendResponse,
   type SpawnResponse,
+  type StewardProcessesResponse,
+  type StopProcessesResponse,
 } from '@galactic/protocol';
 import type { ServerConfig } from '../config/config.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
@@ -24,6 +27,7 @@ import type { Commands } from '../domain/commands.js';
 import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
+import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { policyForWrite } from '../domain/permissions.js';
 import { bearerGuard, originOf } from './security.js';
 
@@ -41,6 +45,8 @@ export interface AgentRoutesOptions {
   scenarios?: () => string[];
   /** The command surface (P2-01): enables `POST /api/control` (P2-14). */
   commands?: Commands;
+  /** A Steward's processes (P4-14): enables `GET /api/agents/:id/processes` and its stop. */
+  processes?: StewardProcessControl;
 }
 
 const USER: Actor = { type: 'user' };
@@ -256,6 +262,35 @@ export function registerAgentRoutes(
       }
       return { messages } satisfies MessagesResponse;
     });
+
+    /**
+     * A Steward's processes (P4-14; SPEC decision pending): what attribution gives it now (its own CLI
+     * left out while it runs), and the user's stop — of the given pids, every one of which must
+     * be attributable (400 otherwise, nothing signalled), or of all of them. 404 for an unknown
+     * agent, 400 for an agent that is not a Steward.
+     */
+    const { processes } = opts;
+    if (processes) {
+      app.get('/api/agents/:id/processes', async (req, reply) => {
+        try {
+          return (await processes.list(agentId(req))) satisfies StewardProcessesResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      app.post('/api/agents/:id/processes/stop', async (req, reply) => {
+        const body = parse(StopProcessesBody, req.body, reply);
+        if (!body) return;
+        try {
+          return (await processes.stop(agentId(req), {
+            by: USER,
+            ...(body.pids ? { pids: body.pids } : {}),
+          })) satisfies StopProcessesResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+    }
 
     /**
      * Answers a question as the user (SPEC §2.6). With the command surface it is

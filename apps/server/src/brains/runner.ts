@@ -10,6 +10,7 @@ import type {
 } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 import type { ReopenOptions, ReopenResult, SpawnResult } from '../runtime/agent-runtime.js';
+import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import type { Workspaces } from '../workspace/workspaces.js';
 import {
   CARRY_SUMMARY_TOOL,
@@ -89,6 +90,8 @@ export interface BrainRunnerOptions {
   reset?: SessionResetPolicy;
   /** Handed to the brain's tools as `ctx.workspaces` (P2-10). */
   workspaces?: Workspaces;
+  /** Handed to the brain's tools as `ctx.processes` (P4-14). */
+  processes?: StewardProcessControl;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -699,6 +702,7 @@ export class BrainRunner {
         messageId: this.opts.runtime.send(agentId, text, { sender: actor }).id,
       }),
       ...(this.opts.workspaces ? { workspaces: this.opts.workspaces } : {}),
+      ...(this.opts.processes ? { processes: this.opts.processes } : {}),
     };
   }
 
