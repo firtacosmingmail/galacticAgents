@@ -24,11 +24,29 @@ export function NotificationsControl() {
   const [open, setOpen] = useState(false);
   const state = useNotificationState();
   const ref = useRef<HTMLSpanElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+
+  // P5-04: opening moves the focus into the popover; Escape closes it and gives the focus back to
+  // the button (a click outside leaves the focus where the user put it).
+  useEffect(() => {
+    if (!open) return;
+    const popover = ref.current?.querySelector<HTMLElement>('.ntf-popover');
+    if (!popover) return;
+    // Its first control that can take the focus (one in a disabled fieldset cannot), else itself.
+    const controls = popover.querySelectorAll<HTMLElement>('button, input, select');
+    for (const el of [...controls, popover]) {
+      el.focus();
+      if (document.activeElement === el) return;
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key !== 'Escape') return;
+      const inside = ref.current?.contains(document.activeElement) ?? false;
+      setOpen(false);
+      if (inside) toggle.current?.focus();
     };
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
@@ -44,6 +62,7 @@ export function NotificationsControl() {
   return (
     <span className="ntf-control" ref={ref}>
       <button
+        ref={toggle}
         type="button"
         className="pnl-forget ntf-toggle"
         aria-expanded={open}
@@ -57,6 +76,7 @@ export function NotificationsControl() {
           className="ntf-popover"
           role="dialog"
           aria-label="notification settings"
+          tabIndex={-1}
           data-escape-layer=""
         >
           <NotificationSettings />

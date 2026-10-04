@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent,
   type ReactNode,
 } from 'react';
 import type {
@@ -19,6 +20,7 @@ import type {
 import { useAppStore } from '../../state/store.js';
 import { agentsFor, ErrorLine, StatePill, useApi } from '../../console/hierarchy/shared.js';
 import { NavLink } from '../Navigation.js';
+import { focusElement, listKeys, usesOwnArrows } from '../a11y.js';
 import { usePaged, type Paged } from './usePaged.js';
 import {
   AgentLink,
@@ -56,6 +58,9 @@ import './history.css';
  * project, task or moved-to link there opens that item in its place, with "Back" to the one
  * before. Each past question shows its holder chain.
  */
+/** The history's rows, for the arrow keys (P5-04): past work and past questions. */
+const HISTORY_ROW = 'li.his-row';
+
 export function HistoryPage() {
   const selection = useAppStore((s) => s.selection);
   const [text, setText] = useState('');
@@ -75,10 +80,29 @@ export function HistoryPage() {
   // one is known (never the raw id, wave-1 review).
   const [trail, setTrail] = useState<TrailEntry[]>([]);
   const world = useAppStore((s) => s.world);
-  const inspect = useCallback(
-    (target: WorkTarget, name?: string) => setTrail((now) => openOnTrail(now, target, name)),
-    [],
-  );
+  // P5-04: closing the inspector gives the focus back to what opened it (an "Inspect" button, a
+  // work link), or to the page's heading when that is gone.
+  const opener = useRef<HTMLElement | null>(null);
+  const inspect = useCallback((target: WorkTarget, name?: string) => {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active?.closest('.his-inspector')) opener.current = active;
+    setTrail((now) => openOnTrail(now, target, name));
+  }, []);
+  const page = useRef<HTMLElement>(null);
+  const closing = useRef(false);
+  const close = () => {
+    closing.current = true;
+    setTrail([]);
+  };
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
+    // Escape closes the inspector (not while typing in the search).
+    if (e.key === 'Escape' && trail.length > 0 && !usesOwnArrows(e.target as Element)) {
+      e.preventDefault();
+      close();
+      return;
+    }
+    listKeys(HISTORY_ROW)(e);
+  };
   const named = useCallback(
     (target: WorkTarget, name: string) =>
       setTrail((now) => {
@@ -91,10 +115,19 @@ export function HistoryPage() {
   );
   const shown = trail.at(-1);
   const before = trail.at(-2);
+  useEffect(() => {
+    if (shown || !closing.current) return;
+    closing.current = false;
+    const from = opener.current;
+    opener.current = null;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    focusElement(from?.isConnected ? from : page.current?.querySelector<HTMLElement>('h1'));
+  }, [shown]);
 
   return (
     <InspectContext.Provider value={inspect}>
-      <main className="his-page" aria-label="history">
+      <main className="his-page" aria-label="history" ref={page} onKeyDown={onKeyDown}>
         <div className="his-head">
           <h1 className="pnl-title">History</h1>
           <NavLink to={{ route: 'panel', selection }} className="pnl-back">
@@ -118,7 +151,7 @@ export function HistoryPage() {
             back={before ? trailName(before, world) : undefined}
             onName={named}
             onBack={() => setTrail((now) => now.slice(0, -1))}
-            onClose={() => setTrail([])}
+            onClose={close}
           />
         )}
         <WorkHistory search={search} />
@@ -278,7 +311,7 @@ function WorkRow({ entry }: { entry: HistoryWorkItem }) {
       </dl>
       <Moves moves={entry.trail?.moves} name={name} />
       {agents.length > 0 && (
-        <p className="his-agents" aria-label={`agents of ${name}`}>
+        <p className="his-agents" role="group" aria-label={`agents of ${name}`}>
           {agents.map((a, i) => (
             <AgentLink key={a.id} agent={a} earlier={i > 0} />
           ))}

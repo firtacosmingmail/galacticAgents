@@ -1,4 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import type { ControlBody, Id, StatusRecord } from '@galactic/protocol';
 import { EditForm } from '../console/hierarchy/WorkTree.js';
 import { ErrorLine, useAction, useApi } from '../console/hierarchy/shared.js';
@@ -24,6 +33,8 @@ export interface Controls {
   /** Recovers an interrupted agent's session ("Resume session"). */
   recover: () => void;
   pending: { scope: ControlScope; action: CardAction } | undefined;
+  /** What had the focus when the confirmation opened: it gets the focus back (P5-04). */
+  opener: RefObject<HTMLElement | null>;
   confirm: () => void;
   keep: () => void;
   editing: boolean;
@@ -35,6 +46,7 @@ export function useControls(agentId: Id | undefined, work: CardWork | undefined)
   const { run, error, busy } = useAction();
   const [pending, setPending] = useState<Controls['pending']>();
   const [editing, setEditing] = useState(false);
+  const opener = useRef<HTMLElement | null>(null);
 
   const send = (scope: ControlScope, body: ControlBody['action']) =>
     run(() =>
@@ -55,12 +67,17 @@ export function useControls(agentId: Id | undefined, work: CardWork | undefined)
   return {
     busy,
     error,
-    click: (scope, a) => (a.confirm ? setPending({ scope, action: a }) : perform(scope, a)),
+    click: (scope, a) => {
+      if (!a.confirm) return perform(scope, a);
+      opener.current = document.activeElement as HTMLElement | null;
+      setPending({ scope, action: a });
+    },
     recover: () => {
       setPending(undefined);
       if (agentId) void run(() => api.recover(agentId));
     },
     pending,
+    opener,
     confirm: () => pending && perform(pending.scope, pending.action),
     keep: () => setPending(undefined),
     editing,
@@ -77,10 +94,45 @@ export function ControlFeedback({
   controls: Controls;
   work: CardWork | undefined;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  const { pending, opener } = c;
+  // P5-04: the confirmation takes the focus (on "Keep", the safe answer) and gives it back to what
+  // opened it — or, gone (an action in the closed "More" menu), to "More" or the first button
+  // near the confirmation — when it closes, unless the user has put the focus elsewhere.
+  useEffect(() => {
+    if (!pending) return;
+    const el = box.current;
+    const around = el?.parentElement;
+    const from = opener.current;
+    el?.querySelector<HTMLButtonElement>('button.secondary')?.focus();
+    return () => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active.isConnected) return;
+      const usable = (b: HTMLElement | null | undefined) =>
+        b?.isConnected && !(b as HTMLButtonElement).disabled ? b : undefined;
+      const to =
+        usable(from) ??
+        usable(around?.querySelector<HTMLElement>('.ctl-more')) ??
+        usable(around?.querySelector<HTMLElement>('button:not([disabled])'));
+      to?.focus();
+    };
+  }, [pending, opener]);
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    c.keep();
+  };
   return (
     <>
       {c.pending && (
-        <div className="agc-confirm" role="group" aria-label="confirm">
+        <div
+          className="agc-confirm"
+          role="group"
+          aria-label="confirm"
+          ref={box}
+          onKeyDown={onKeyDown}
+        >
           <span>{c.pending.action.confirm}</span>
           <button type="button" className="danger" disabled={c.busy} onClick={c.confirm}>
             Yes, {c.pending.action.label.toLowerCase()}
@@ -204,6 +256,7 @@ export function ControlsStrip({
 }) {
   const c = useControls(agentId, work);
   const [open, setOpen] = useState(false);
+  const menuId = useId();
   const stripRef = useRef<HTMLDivElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -280,7 +333,7 @@ export function ControlsStrip({
             type="button"
             className="secondary ctl-more"
             aria-expanded={open}
-            aria-haspopup="true"
+            aria-controls={open ? menuId : undefined}
             onClick={() => setOpen((o) => !o)}
           >
             More
@@ -288,6 +341,7 @@ export function ControlsStrip({
         )}
         {open && (
           <div
+            id={menuId}
             className="ctl-menu"
             role="group"
             aria-label="more controls"

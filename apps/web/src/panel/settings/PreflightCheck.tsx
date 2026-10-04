@@ -116,7 +116,7 @@ function RuntimeRow({ runtime: r }: { runtime: RuntimePreflight }) {
     ['Agent SDK', r.sdkVersion],
   ];
   return (
-    <div className="set-runtime" aria-label={`runtime ${r.runtime}`}>
+    <div className="set-runtime" role="group" aria-label={`runtime ${r.runtime}`}>
       <p className="set-runtime-name">
         <span className={r.ok ? 'set-ok' : 'set-bad'} aria-hidden="true">
           ●

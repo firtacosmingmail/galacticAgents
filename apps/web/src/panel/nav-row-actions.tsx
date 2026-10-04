@@ -15,11 +15,14 @@ import { startReplay } from '../replay/store.js';
  * The row stays open after an action: a cancelled project then offers "Archive now".
  */
 export function NavRowActions({
+  groupId,
   kind,
   id,
   label,
   onDone,
 }: {
+  /** The group's element id, for the "⋯" button's `aria-controls`. */
+  groupId?: string;
   kind: 'project' | 'task';
   id: Id;
   label: string;
@@ -46,6 +49,7 @@ export function NavRowActions({
   };
   return (
     <div
+      id={groupId}
       className="pnl-row-actions"
       role="group"
       aria-label={`actions for ${label}`}

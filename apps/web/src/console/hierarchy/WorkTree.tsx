@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   PERMISSION_POLICY_PRESETS,
   TaskPriority,
@@ -294,6 +294,9 @@ export function EditForm({
   const [text, setText] = useState(isTask ? task.description : project.name);
   const [priority, setPriority] = useState(isTask ? task.priority : 'normal');
   const [policy, setPolicy] = useState<'' | 'clear' | PermissionPolicyPreset>('');
+  // P5-04: opening the form puts the keyboard on its first field.
+  const form = useRef<HTMLFormElement>(null);
+  useEffect(() => form.current?.querySelector<HTMLElement>('input')?.focus(), []);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const changes: EditChanges = {};
@@ -308,7 +311,7 @@ export function EditForm({
     onSave(changes);
   };
   return (
-    <form className="edit" onSubmit={submit}>
+    <form className="edit" onSubmit={submit} ref={form}>
       <label className="grow">
         {isTask ? 'description' : 'name'}
         <input value={text} onChange={(e) => setText(e.target.value)} />

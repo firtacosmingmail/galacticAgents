@@ -155,7 +155,7 @@ function StatusHeader({
         <StatePill state={status?.state} />
         {task && <span className="muted">task {task.state.replace(/_/g, ' ')}</span>}
       </div>
-      <p className="stw-activity" aria-label="current activity">
+      <p className="stw-activity" role="group" aria-label="current activity">
         {status?.currentActivity ?? (status ? 'no activity reported' : 'no status yet')}
       </p>
       <dl className="stw-facts">
