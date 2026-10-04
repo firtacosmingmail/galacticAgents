@@ -3,12 +3,14 @@ import type { z } from 'zod';
 import {
   AgentRuntime as RuntimeName,
   ConversationQuery,
+  HistoryEventsQuery,
   HistoryQuestionsQuery,
   HistoryWorkQuery,
   NotificationsQuery,
   SettingsPatch,
   TranscriptQuery,
   type ConversationResponse,
+  type HistoryEventsResponse,
   type HistoryQuestionsResponse,
   type HistoryWorkResponse,
   type NotificationsResponse,
@@ -23,6 +25,7 @@ import type { EventLog } from '../domain/event-log.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
 import { CursorError } from '../runtime/cursor-error.js';
 import { History } from '../runtime/history.js';
+import { HistoryEvents } from '../runtime/history-events.js';
 import { HistoryView } from '../runtime/history-view.js';
 import { notificationFeed } from '../runtime/notifications.js';
 import { redactSecrets } from '../runtime/redact.js';
@@ -40,7 +43,9 @@ import { bearerGuard, originOf } from './security.js';
  * - `GET /api/preflight` — every registered runtime's check;
  * - `GET /api/notifications` — the SPEC §4.5 feed;
  * - `GET /api/history/work`, `GET /api/history/questions` — the history view (P25-10): finished
- *   and archived work, past questions, searched and paged back by an opaque cursor.
+ *   and archived work, past questions, searched and paged back by an opaque cursor;
+ * - `GET /api/history/events` — the timeline scrubber (P4-07): the events that touch one project,
+ *   oldest first, paged forward by `seq` (read-only; `runtime/history-events.ts`).
  *
  * Errors: 400 `invalid_query` / `invalid_body` (zod issues) or `invalid` (a value the settings
  * refuse, with a message), 403 `remote_settings` (a remote client may change only the quality
@@ -129,6 +134,15 @@ export function registerPanelRoutes(
       const q = parse(HistoryQuestionsQuery, req.query, reply, 'invalid_query');
       if (!q) return;
       return page(() => past.questions(q) satisfies HistoryQuestionsResponse, reply);
+    });
+
+    // The timeline scrubber (P4-07): one project's events, for a replay folded on the client.
+    const replay = new HistoryEvents(log.db);
+    app.get('/api/history/events', async (req, reply) => {
+      const q = parse(HistoryEventsQuery, req.query, reply, 'invalid_query');
+      if (!q) return;
+      if (!replay.has(q.projectId)) return reply.code(404).send({ error: 'not_found' });
+      return replay.read(q) satisfies HistoryEventsResponse;
     });
 
     app.get('/api/notifications', async (req, reply) => {
