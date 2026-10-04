@@ -279,7 +279,7 @@ describe('history reads (P25-10)', () => {
     view.questions({ before: qs.items[0]!.cursor, limit: 5, q: 'x', kind: 'permission' });
     view.questions({ limit: 5, status: 'answered' });
     const sqls = [...(view as unknown as { stmts: Map<string, unknown> }).stmts.keys()].filter(
-      (sql) => !sql.includes('FROM events'),
+      (sql) => /INDEXED BY \w+_history/.test(sql),
     );
     expect(sqls.length).toBeGreaterThanOrEqual(8);
     for (const sql of sqls) {
@@ -296,7 +296,7 @@ describe('history reads (P25-10)', () => {
     }
     // A cancelled question's reason: a lookup by (type, questionId), not a walk of the type range.
     const reasons = [...(view as unknown as { stmts: Map<string, unknown> }).stmts.keys()].filter(
-      (sql) => sql.includes('FROM events'),
+      (sql) => sql.includes('question.cancelled'),
     );
     expect(reasons.length).toBeGreaterThanOrEqual(1);
     for (const sql of reasons) {
