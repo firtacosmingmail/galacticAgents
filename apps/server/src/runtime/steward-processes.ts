@@ -14,45 +14,63 @@ import type { EventLog } from '../domain/event-log.js';
 import { WORKTREES_DIR } from '../workspace/workspaces.js';
 import {
   attribute,
+  heldBy,
   withDescendants,
   worktreeRootOf,
   type AgentGroup,
   type AttributedProcess,
   type ProcEntry,
+  type Session,
 } from './process-attribution.js';
 import { osProcessTable, type ProcessTable } from './process-table.js';
 import { redactSecrets } from './redact.js';
 import type { StatusStore } from './status-store.js';
 
 /**
- * A Steward's processes (P4-14; SPEC decision pending; TECHNOLOGY §2.2 "Process cleanup"): what the
+ * A Steward's processes (P4-14; SPEC decision 76; TECHNOLOGY §2.2 "Process cleanup"): what the
  * Waykeeper's (and the Harmonizer's) `list_steward_processes` / `stop_steward_processes` tools and
  * the panel's Steward view read and stop, and the server's safety-net sweep.
  *
  *   list(agentId)          the processes attribution gives the Steward (`process-attribution.ts`),
  *                          with working directory and listening ports; its own CLI is left out
- *                          while the Steward runs (stopping that is `stop_agent`'s job)
+ *                          while the Steward runs (stopping that is `stop_agent`'s job), and what
+ *                          the running CLI uses — its direct children (MCP servers, the shell of
+ *                          a tool command) and their descendants — is marked `held`
  *   stop(agentId, {pids})  SIGTERM (and SIGCONT, should one be frozen), up to `termMs`, then SIGKILL
  *                          to what is left. Every pid must be attributable to the Steward now —
  *                          otherwise nothing is signalled and the call is refused; the attributed
- *                          descendants of the chosen pids go too. Each signal goes to one pid whose
- *                          identity (pid + start time) was just re-read, never to a group: a
- *                          recycled pid is never hit. Logs `agent.processes_stopped`.
+ *                          descendants of the chosen pids go too, except held ones not named
+ *                          themselves (or under a named held one). Without pids ("stop all"): only
+ *                          for a Steward that ended — a running one's stop must name its pids.
+ *                          Right before SIGTERM the table is read again and a pid whose start time
+ *                          or parent changed is left alone (`skipped`); a pid that started in the
+ *                          same second as the attribution snapshot (where `lstart`'s one-second
+ *                          resolution cannot tell it from a recycled pid) is re-attributed after
+ *                          that second, and skipped if still that young. Each signal goes to one
+ *                          pid, never to a group. Logs `agent.processes_stopped`.
  *   sweep                  when a Steward ends (finished, failed, stopped) — after the supervisor
  *                          reaped its group — and when its task is closed (completed, failed,
  *                          archived) for every ended Steward of the task, everything still
  *                          attributable is stopped. An idle Steward that still runs is never swept:
- *                          its dev server may be intentional; its supervisor decides.
+ *                          its dev server may be intentional; its supervisor decides. The
+ *                          liveness check is repeated right before the signals (a resume races).
  */
 
 export interface StewardProcessControl {
   list(agentId: Id): Promise<StewardProcessesResponse>;
+  /** Several Stewards from one `ps` snapshot. */
+  listMany(agentIds: readonly Id[]): Promise<StewardProcessesResponse[]>;
   stop(agentId: Id, opts: { pids?: number[]; by: Actor }): Promise<StopProcessesResponse>;
 }
 
-/** Where the process groups come from: the supervisor (`ProcessSupervisor` fits). */
+/** Where the process groups and sessions come from: the supervisor (`ProcessSupervisor` fits). */
 export interface GroupSource {
+  /** The groups the supervisor started in this server run. */
   agentGroups(): AgentGroup[];
+  /** The agent's sessions (spawn or resume → end). Absent or empty: the orphan rule is off. */
+  agentSessions?(agentId: Id): Session[];
+  /** The agent's CLI pid while it runs. */
+  livePid?(agentId: Id): number | undefined;
   /** Resolves once the agent's process exited and its group was reaped. */
   whenExited?(agentId: Id): Promise<unknown> | undefined;
 }
@@ -60,7 +78,7 @@ export interface GroupSource {
 export interface StewardProcessesOptions {
   log: EventLog;
   statuses: StatusStore;
-  /** The supervisor; without one only the worktree rule finds anything. */
+  /** The supervisor; without one nothing is attributed (no groups, no sessions). */
   groups?: GroupSource;
   /** Default: `osProcessTable()`. */
   table?: ProcessTable;
@@ -70,17 +88,17 @@ export interface StewardProcessesOptions {
   termMs?: number;
   /** How long a sweep waits for the supervisor's own reaping first. Default 15 s. */
   settleMs?: number;
-  now?: () => number;
   onError?: (error: unknown, context: string) => void;
 }
 
 const SYSTEM: Actor = { type: 'system' };
 const TERMINAL = new Set<Event['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
-const ENDINGS = ['agent.finished', 'agent.failed', 'agent.stopped', 'agent.interrupted'] as const;
 /** Task states after which nothing of the task should run. */
 const CLOSED_TASK = new Set(['completed', 'failed', 'archived']);
 /** A command line as the model, the panel and the log see it. */
 const COMMAND_CHARS = 200;
+/** `ps lstart` resolution. */
+const SECOND = 1_000;
 
 const clipCommand = (command: string) => {
   const text = redactSecrets(command);
@@ -88,6 +106,7 @@ const clipCommand = (command: string) => {
 };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const floorSecond = (ms: number) => Math.floor(ms / SECOND) * SECOND;
 
 function realpathOr(path: string): string {
   try {
@@ -97,12 +116,25 @@ function realpathOr(path: string): string {
   }
 }
 
+/** One `ps` snapshot and when it was taken (just before `ps` ran). */
+interface Snapshot {
+  procs: ProcEntry[];
+  takenAt: number;
+}
+
+interface Attributed {
+  snapshot: Snapshot;
+  mine: AttributedProcess[];
+  /** What the running CLI uses (empty once the Steward ended). */
+  held: Set<number>;
+  live: boolean;
+}
+
 export class StewardProcesses implements StewardProcessControl {
   private readonly table: ProcessTable;
   private readonly self: { pid: number; uid: number };
   private readonly termMs: number;
   private readonly settleMs: number;
-  private readonly now: () => number;
   private readonly onError: (error: unknown, context: string) => void;
   /** One stop or sweep at a time per Steward. */
   private readonly busy = new Map<Id, Promise<unknown>>();
@@ -116,7 +148,6 @@ export class StewardProcesses implements StewardProcessControl {
     this.self = opts.self ?? { pid: process.pid, uid: process.getuid?.() ?? -1 };
     this.termMs = opts.termMs ?? 3_000;
     this.settleMs = opts.settleMs ?? 15_000;
-    this.now = opts.now ?? Date.now;
     this.onError = opts.onError ?? (() => {});
   }
 
@@ -135,14 +166,18 @@ export class StewardProcesses implements StewardProcessControl {
     return status !== undefined && !ENDED_STATES.has(status.state);
   }
 
-  /** The Steward's session: from its creation to its last end (or now while it runs). */
-  private windowOf(agent: Agent): { start: number; end: number } {
-    const start = Date.parse(agent.createdAt);
-    if (this.isLive(agent.id)) return { start, end: this.now() };
-    const ends = ENDINGS.flatMap((type) => this.opts.log.latestOf(type, agent.id, 1)).map((e) =>
-      Date.parse(e.at),
-    );
-    return { start, end: ends.length > 0 ? Math.max(...ends) : this.now() };
+  /** The Steward's sessions, as the supervisor recorded them (none without one). */
+  private sessionsOf(agent: Agent): Session[] {
+    return this.opts.groups?.agentSessions?.(agent.id) ?? [];
+  }
+
+  /** The Steward's CLI while it runs here. */
+  private cliOf(agent: Agent, groups: readonly AgentGroup[]): number | undefined {
+    const source = this.opts.groups;
+    if (source?.livePid) return source.livePid(agent.id);
+    // A source without `livePid`: the agent's latest group that has not ended.
+    const open = groups.filter((g) => g.agentId === agent.id && g.endedAt === undefined);
+    return open.at(-1)?.pgid;
   }
 
   /** The task worktree the Steward works in, or `undefined` (a serialised project's workspace). */
@@ -153,40 +188,44 @@ export class StewardProcesses implements StewardProcessControl {
     return root === undefined ? undefined : realpathOr(root);
   }
 
-  /** What attribution gives the Steward now; `undefined` when the table cannot be read. */
-  private async attributed(
-    agent: Agent,
-  ): Promise<{ procs: ProcEntry[]; mine: AttributedProcess[] } | undefined> {
+  private async snapshot(): Promise<Snapshot | undefined> {
+    const takenAt = Date.now();
     const procs = await this.table.list();
-    if (!procs) return undefined;
-    const groups = this.opts.groups?.agentGroups() ?? [];
-    // Its own CLI while it runs: stopping the Steward is `stop_agent`, not a cleanup.
-    const own = groups.find((g) => g.agentId === agent.id);
-    const exclude = new Set<number>(
-      own && this.isLive(agent.id) && own.endedAt === undefined ? [own.pgid] : [],
-    );
-    const worktree = this.worktreeOf(agent);
-    const mine = await attribute({
-      agentId: agent.id,
-      procs,
-      groups,
-      self: this.self,
-      window: this.windowOf(agent),
-      ...(worktree ? { worktree } : {}),
-      cwdOf: (pids) => this.table.cwds(pids),
-      exclude,
-    });
-    return { procs, mine };
+    return procs ? { procs, takenAt } : undefined;
   }
 
-  async list(agentId: Id): Promise<StewardProcessesResponse> {
-    const agent = this.steward(agentId);
-    const found = await this.attributed(agent);
-    if (!found) return { agentId, supported: false, processes: [] };
+  /** What attribution gives the Steward in `snapshot` (a fresh one by default). */
+  private async attributed(agent: Agent, given?: Snapshot): Promise<Attributed | undefined> {
+    const snapshot = given ?? (await this.snapshot());
+    if (!snapshot) return undefined;
+    const groups = this.opts.groups?.agentGroups() ?? [];
+    const live = this.isLive(agent.id);
+    // Its own CLI while it runs: stopping the Steward is `stop_agent`, not a cleanup.
+    const cli = live ? this.cliOf(agent, groups) : undefined;
+    const worktree = this.worktreeOf(agent);
+    const commandOf = new Map(snapshot.procs.map((p) => [p.pid, p.command]));
+    const mine = await attribute({
+      agentId: agent.id,
+      procs: snapshot.procs,
+      groups,
+      self: this.self,
+      sessions: this.sessionsOf(agent),
+      ...(worktree ? { worktree } : {}),
+      cwdOf: (pids) => this.table.cwds(pids),
+      markerOf: (pids) =>
+        this.table.markers?.(pids.map((pid) => ({ pid, command: commandOf.get(pid) ?? '' }))) ??
+        new Map(),
+      exclude: new Set(cli !== undefined ? [cli] : []),
+    });
+    const held = cli !== undefined ? heldBy(mine, cli) : new Set<number>();
+    return { snapshot, mine, held, live };
+  }
+
+  private async describe(found: Attributed): Promise<StewardProcess[]> {
     const pids = found.mine.map((p) => p.pid);
     const missing = found.mine.filter((p) => p.cwd === undefined).map((p) => p.pid);
     const [cwds, ports] = await Promise.all([this.table.cwds(missing), this.table.ports(pids)]);
-    const processes: StewardProcess[] = found.mine.map((p) => {
+    return found.mine.map((p) => {
       const cwd = p.cwd ?? cwds.get(p.pid);
       return {
         pid: p.pid,
@@ -196,9 +235,30 @@ export class StewardProcesses implements StewardProcessControl {
         ports: ports.get(p.pid) ?? [],
         startedAt: new Date(p.startedAt).toISOString(),
         why: p.why,
+        ...(found.held.has(p.pid) ? { held: true as const } : {}),
       };
     });
-    return { agentId, supported: true, processes };
+  }
+
+  async list(agentId: Id): Promise<StewardProcessesResponse> {
+    return (await this.listMany([agentId]))[0]!;
+  }
+
+  async listMany(agentIds: readonly Id[]): Promise<StewardProcessesResponse[]> {
+    const agents = agentIds.map((id) => this.steward(id));
+    if (agents.length === 0) return [];
+    const snapshot = await this.snapshot();
+    if (!snapshot) return agents.map((a) => ({ agentId: a.id, supported: false, processes: [] }));
+    const out: StewardProcessesResponse[] = [];
+    for (const agent of agents) {
+      const found = (await this.attributed(agent, snapshot))!;
+      out.push({
+        agentId: agent.id,
+        supported: true,
+        processes: await this.describe(found),
+      });
+    }
+    return out;
   }
 
   async stop(
@@ -220,32 +280,92 @@ export class StewardProcesses implements StewardProcessControl {
     }
   }
 
+  /**
+   * The processes a stop takes from `found`: the named pids (each must be attributable unless
+   * `lenient`) and their attributed descendants — a held process only when it, or a held ancestor
+   * of it, was named. Without pids: everything not held.
+   */
+  private targets(
+    agentId: Id,
+    found: Attributed,
+    pids: number[] | undefined,
+    lenient: boolean,
+  ): { targets: AttributedProcess[]; gone: number[] } {
+    if (!pids) return { targets: found.mine.filter((p) => !found.held.has(p.pid)), gone: [] };
+    const known = new Set(found.mine.map((p) => p.pid));
+    const foreign = pids.filter((pid) => !known.has(pid));
+    if (foreign.length > 0 && !lenient) {
+      throw new DomainError(
+        'invalid',
+        `not processes of Steward ${agentId} (or no longer running): ${foreign.join(', ')}; ` +
+          'list them again with list_steward_processes',
+      );
+    }
+    const named = pids.filter((pid) => known.has(pid));
+    const heldNamed = new Set(
+      withDescendants(
+        found.mine,
+        named.filter((pid) => found.held.has(pid)),
+      ).map((p) => p.pid),
+    );
+    const targets = withDescendants(found.mine, named).filter(
+      (p) => !found.held.has(p.pid) || heldNamed.has(p.pid),
+    );
+    return { targets, gone: foreign };
+  }
+
   private async stopNow(
     agent: Agent,
     opts: { pids?: number[]; by: Actor; sweep?: 'agent_ended' | 'task_closed' },
   ): Promise<StopProcessesResponse> {
     const agentId = agent.id;
     const empty: StopProcessesResponse = { agentId, stopped: [], forced: [], alive: [] };
-    const found = await this.attributed(agent);
+    if (opts.sweep && this.isLive(agentId)) return empty;
+    if (!opts.pids && !opts.sweep && this.isLive(agentId)) {
+      throw new DomainError(
+        'invalid',
+        `Steward ${agentId} is still running: name the pids to stop (from list_steward_processes); ` +
+          'stopping all of them is only for a Steward that ended',
+      );
+    }
+    let found = await this.attributed(agent);
     if (!found) {
       if (opts.pids?.length) {
         throw new DomainError('invalid', 'processes cannot be inspected on this platform');
       }
       return empty;
     }
-    const byPid = new Map(found.mine.map((p) => [p.pid, p]));
-    if (opts.pids) {
-      const foreign = opts.pids.filter((pid) => !byPid.has(pid));
-      if (foreign.length > 0) {
-        throw new DomainError(
-          'invalid',
-          `not processes of Steward ${agentId} (or no longer running): ${foreign.join(', ')}; ` +
-            'list them again with list_steward_processes',
-        );
-      }
+    let { targets, gone } = this.targets(agentId, found, opts.pids, false);
+    // `lstart` has a one-second resolution: a process that started in the snapshot's own second
+    // cannot be told from one that replaced it under the same pid within that second. Look again
+    // once that second is over; whatever is still that young is left alone.
+    const young = (f: Attributed) => (p: ProcEntry) =>
+      p.startedAt >= floorSecond(f.snapshot.takenAt);
+    if (targets.some(young(found))) {
+      await sleep(floorSecond(found.snapshot.takenAt) + SECOND + 50 - Date.now());
+      const again = await this.attributed(agent);
+      if (!again) return empty;
+      found = again;
+      ({ targets, gone } = this.targets(agentId, found, opts.pids, true));
     }
-    const targets = opts.pids ? withDescendants(found.mine, opts.pids) : found.mine;
-    if (targets.length === 0) return empty;
+    const skipped = new Set<number>(gone);
+    for (const p of targets.filter(young(found))) skipped.add(p.pid);
+    targets = targets.filter((p) => !skipped.has(p.pid));
+
+    // A sweep never stops a Steward that came back meanwhile (a resume raced the attribution).
+    if (opts.sweep && this.isLive(agentId)) return empty;
+    // Identity right before the signal: the same start time and the same parent.
+    const fresh = new Map(((await this.table.list()) ?? []).map((p) => [p.pid, p]));
+    targets = targets.filter((p) => {
+      const q = fresh.get(p.pid);
+      const same = q !== undefined && !q.zombie && q.startedAt === p.startedAt && q.ppid === p.ppid;
+      if (!same) skipped.add(p.pid);
+      return same;
+    });
+    const skippedList = [...skipped].sort((a, b) => a - b);
+    if (targets.length === 0) {
+      return { ...empty, ...(skippedList.length > 0 ? { skipped: skippedList } : {}) };
+    }
 
     for (const p of targets) {
       this.table.kill(p.pid, 'SIGTERM');
@@ -264,6 +384,7 @@ export class StewardProcesses implements StewardProcessControl {
       stopped: stopped.map((p) => p.pid),
       forced: forced.filter((pid) => !left.has(pid)),
       alive: alive.map((p) => p.pid),
+      ...(skippedList.length > 0 ? { skipped: skippedList } : {}),
     };
     if (stopped.length > 0 && !this.disposed) {
       try {
@@ -287,7 +408,8 @@ export class StewardProcesses implements StewardProcessControl {
 
   /**
    * Polls the table until none of `procs` runs any more, at most `ms`; returns the ones still
-   * running — the same pid with the same start time (a recycled pid is someone else: gone).
+   * running — the same pid with the same start time (a recycled pid is someone else: gone). The
+   * parent is not compared here: it changes legitimately once a stopped parent is gone.
    */
   private async waitGone(procs: readonly ProcEntry[], ms: number): Promise<ProcEntry[]> {
     const end = Date.now() + ms;
@@ -306,7 +428,8 @@ export class StewardProcesses implements StewardProcessControl {
   /**
    * The safety net for one Steward: waits for the supervisor's own reaping of its group, then
    * stops whatever is still attributable. Never for a Steward that is running again (a resumed or
-   * sent-back session): its processes are its own business while it lives.
+   * sent-back session): its processes are its own business while it lives — checked here and
+   * again right before the signals.
    */
   async sweep(
     agentId: Id,

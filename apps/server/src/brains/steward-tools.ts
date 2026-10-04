@@ -81,24 +81,54 @@ export const tellStewardTool: BrainTool = {
 };
 
 /**
- * A Steward's processes (P4-14; SPEC decision pending): the dev servers, watchers and headless browsers
+ * A Steward's processes (P4-14; SPEC decision 76): the dev servers, watchers and headless browsers
  * it started and left running. Its supervisor lists them and stops the leftovers before it merges
  * or closes the task, and when the Steward stopped or failed; the server sweeps what is left when
- * the Steward ends or its task closes, as a safety net. Reach: the caller's own Stewards (direct
- * reports), like `tell_steward`; which processes are a Steward's is the server's attribution
- * (`runtime/process-attribution.ts`), never the model's — a pid outside it is refused.
+ * the Steward ends or its task closes, as a safety net. Which processes are a Steward's is the
+ * server's attribution (`runtime/process-attribution.ts`), never the model's — a pid outside it is
+ * refused.
+ *
+ * Reach (decision 32: supervisors are matched by role and project, so a replacement Waykeeper
+ * takes Stewards over): the Steward's recorded supervisor; or, for a project task, the project's
+ * newest live Waykeeper; or, for a standalone task, the live Harmonizer. (`tell_steward` still
+ * checks the recorded supervisor only — the same gap, left as it was.)
  */
+export function maySupervise(ctx: BrainToolContext, steward: Agent): boolean {
+  if (steward.role !== 'steward') return false;
+  if (steward.supervisorId === ctx.brainId) return true;
+  const caller = ctx.queries.agent(ctx.brainId);
+  if (!caller || !isLive(ctx.queries.status(caller.id))) return false;
+  const task = steward.taskId ? ctx.queries.task(steward.taskId) : undefined;
+  if (!task) return false;
+  if (task.projectId === undefined) return caller.role === 'harmonizer';
+  if (caller.role !== 'waykeeper' || caller.projectId !== task.projectId) return false;
+  const newest = ctx.queries
+    .agents()
+    .filter(
+      (a) =>
+        a.role === 'waykeeper' &&
+        a.projectId === task.projectId &&
+        isLive(ctx.queries.status(a.id)),
+    )
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    .at(-1);
+  return newest?.id === caller.id;
+}
+
 function ownSteward(ctx: BrainToolContext, agentId: unknown): Agent {
   if (typeof agentId !== 'string' || agentId === '') {
     throw new DomainError('invalid', 'agentId must be a non-empty string');
   }
   const agent = ctx.queries.agent(agentId);
   if (!agent) throw new DomainError('not_found', `no agent ${agentId}`);
-  if (agent.role !== 'steward' || agent.supervisorId !== ctx.brainId) {
+  if (!maySupervise(ctx, agent)) {
     throw new DomainError('invalid', `agent ${agentId} is not one of your Stewards`);
   }
   return agent;
 }
+
+/** How long after its end a Steward is still listed by `list_steward_processes` without agentId. */
+export const RECENTLY_ENDED_MS = 24 * 60 * 60 * 1000;
 
 function processControl(ctx: BrainToolContext) {
   if (!ctx.processes) {
@@ -112,8 +142,10 @@ export const listStewardProcessesTool: BrainTool = {
   description:
     'Lists the processes one of your Stewards started that are still running (dev servers, ' +
     'watchers, headless browsers, background jobs): pid, command, working directory, listening ' +
-    "ports, start time and why it counts as the Steward's. Its own session is not listed. Without " +
-    'agentId: every Steward of yours that has any.',
+    "ports, start time and why it counts as the Steward's. Its own session is not listed; while " +
+    'it runs, what its session is using (MCP servers, the shell of a tool command, and their ' +
+    'children) is marked held. Without agentId: every Steward of yours that runs or ended in ' +
+    'the last day and has any.',
   inputSchema: {
     type: 'object',
     properties: { agentId: { type: 'string', description: 'The Steward (a-…).' } },
@@ -131,16 +163,26 @@ export const listStewardProcessesTool: BrainTool = {
         state: ctx.queries.status(agent.id)?.state ?? 'unknown',
       };
     }
+    const now = Date.now();
     const stewards = ctx.queries
-      .supervisedAgents(ctx.brainId)
-      .filter(({ agent }) => agent.role === 'steward');
-    const listed = await Promise.all(
-      stewards.map(async ({ agent, status }) => ({
-        ...(await control.list(agent.id)),
+      .agents()
+      .filter((agent) => agent.role === 'steward' && maySupervise(ctx, agent))
+      .map((agent) => ({ agent, status: ctx.queries.status(agent.id) }))
+      .filter(
+        ({ status }) =>
+          status !== undefined &&
+          (isLive(status) || now - Date.parse(status.lastEventAt) <= RECENTLY_ENDED_MS),
+      );
+    // One `ps` snapshot for all of them.
+    const responses = await control.listMany(stewards.map(({ agent }) => agent.id));
+    const listed = responses.map((response, i) => {
+      const { agent, status } = stewards[i]!;
+      return {
+        ...response,
         ...(agent.taskId ? { taskId: agent.taskId } : {}),
         state: status?.state ?? 'unknown',
-      })),
-    );
+      };
+    });
     const withProcesses = listed.filter((s) => s.processes.length > 0);
     return {
       supported: listed.every((s) => s.supported),
@@ -154,8 +196,10 @@ export const stopStewardProcessesTool: BrainTool = {
   name: 'stop_steward_processes',
   description:
     'Stops processes one of your Stewards left running: SIGTERM, then SIGKILL after a few ' +
-    'seconds. Give the pids from list_steward_processes (their child processes go too), or none ' +
-    "to stop all of them. Only the Steward's own processes can be stopped; any other pid is " +
+    'seconds. Give the pids from list_steward_processes (their child processes go too, except ' +
+    'held ones you did not name), or none to stop all of them — only once the Steward ended; ' +
+    'while it runs, name the pids, and name a held one only if you mean to break what its ' +
+    "session is using. Only the Steward's own processes can be stopped; any other pid is " +
     'refused. Does not stop the Steward itself (stop_agent does).',
   inputSchema: {
     type: 'object',
@@ -164,7 +208,7 @@ export const stopStewardProcessesTool: BrainTool = {
       pids: {
         type: 'array',
         items: { type: 'integer', minimum: 2 },
-        description: 'The pids to stop; default: all of its processes.',
+        description: 'The pids to stop; default: all of its processes (a Steward that ended only).',
       },
     },
     required: ['agentId'],

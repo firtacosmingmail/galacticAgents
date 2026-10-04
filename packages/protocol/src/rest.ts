@@ -179,7 +179,7 @@ const _controlAction: (b: ControlBody['action']) => ControlActionType = (b) => b
 void _controlAction;
 
 // ---------------------------------------------------------------------------
-// A Steward's processes (P4-14; SPEC decision pending, TECHNOLOGY §2.2 "Process cleanup")
+// A Steward's processes (P4-14; SPEC decision 76, TECHNOLOGY §2.2 "Process cleanup")
 // ---------------------------------------------------------------------------
 
 /**
@@ -201,6 +201,12 @@ export const StewardProcess = z.object({
   ports: z.array(z.number().int().positive()),
   startedAt: Timestamp,
   why: ProcessAttribution,
+  /**
+   * In use by the running Steward: a direct child of its CLI (an MCP server it launched, the
+   * shell of a tool command) or a descendant of one. Never stopped by "stop all": only when named
+   * one by one. Absent once the Steward ended.
+   */
+  held: z.literal(true).optional(),
 });
 export type StewardProcess = z.infer<typeof StewardProcess>;
 
@@ -215,17 +221,26 @@ export const StewardProcessesResponse = z.object({
 });
 export type StewardProcessesResponse = z.infer<typeof StewardProcessesResponse>;
 
-/** `POST /api/agents/:id/processes/stop`: these pids (all attributable), or all of them. */
+/**
+ * `POST /api/agents/:id/processes/stop`: these pids (all attributable; their attributed descendants
+ * go too, except held ones not named), or — only for a Steward that ended — all of them.
+ */
 export const StopProcessesBody = z.object({
   pids: z.array(z.number().int().positive()).min(1).optional(),
 });
 export type StopProcessesBody = z.infer<typeof StopProcessesBody>;
 
-/** What a stop did: `stopped` ended (SIGTERM or SIGKILL), `forced` needed SIGKILL, `alive` survived. */
+/**
+ * What a stop did: `stopped` ended (SIGTERM or SIGKILL), `forced` needed SIGKILL, `alive` survived;
+ * `skipped` were left alone because they exited or changed (another start time or parent: the pid
+ * now names another process) between the attribution and the signal, or started too recently to
+ * be told apart from a recycled pid.
+ */
 export const StopProcessesResponse = z.object({
   agentId: z.string().min(1),
   stopped: z.array(z.number().int().positive()),
   forced: z.array(z.number().int().positive()),
   alive: z.array(z.number().int().positive()),
+  skipped: z.array(z.number().int().positive()).optional(),
 });
 export type StopProcessesResponse = z.infer<typeof StopProcessesResponse>;

@@ -2,30 +2,41 @@ import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { Id, ProcessAttribution } from '@galactic/protocol';
 
 /**
- * Which OS processes belong to a Steward (P4-14; SPEC decision pending; TECHNOLOGY §2.2 "Process
+ * Which OS processes belong to a Steward (P4-14; SPEC decision 76; TECHNOLOGY §2.2 "Process
  * cleanup"). Pure: it works on a snapshot of the process table (`ProcEntry[]`, from `ps`) and the
- * process groups the supervisor started (`AgentGroup[]`, from its PID table), and asks for working
- * directories only of the few processes the worktree rule needs. The OS layer is
- * `process-table.ts`; the service that lists, stops and sweeps is `steward-processes.ts`.
+ * process groups the supervisor started in this server run (`AgentGroup[]`), and asks the OS layer
+ * for working directories and agent markers only of the few processes the orphan rule needs. The
+ * OS layer is `process-table.ts`; the service that lists, stops and sweeps is
+ * `steward-processes.ts`.
  *
  * A process P (of the server's own user, not a zombie) is the Steward's when, walking up its
  * parent chain, the first thing that decides says so:
  *
  *   1. P is a reaper (pid ≤ 1, `launchd`, `init`, `systemd`)           → never anyone's.
  *   2. P is the server, one of its ancestors, or in the server's group → never anyone's.
- *   3. P is a member of an agent's recorded process group (its pgid is the group's and P started
- *      inside the group's lifetime, so a recycled pgid does not count) → that agent's: the
- *      Steward's (`group`) or another agent's (never the Steward's).
+ *   3. P is a member of a process group the supervisor started in THIS server run (its pgid is the
+ *      group's and P started inside the group's lifetime, so a recycled pgid does not count) →
+ *      that agent's: the Steward's (`group`) or another agent's (never the Steward's).
  *   4. P's parent is the Steward's                                     → the Steward's (`descendant`:
- *      escaped its group with `setsid`, still a child).
+ *      escaped its group with `setsid`, still a child) — but when the chain reaches the Steward
+ *      only through an orphan (rule 5), P must carry the Steward's marker too.
  *   5. P's parent is a reaper (P was orphaned: daemonised, `nohup … &` whose shell exited) → the
- *      Steward's (`worktree`) only if the Steward has a task worktree, P started inside the
- *      Steward's session, and P's working directory is inside that worktree.
+ *      Steward's (`worktree`) only if ALL of: the Steward has a task worktree; P started inside
+ *      one of the Steward's sessions (a spawn or resume to its end, as the supervisor recorded
+ *      them); P's working directory is inside that worktree; and P's environment carries
+ *      `GALACTIC_AGENT_ID=<this Steward>` (`AGENT_ID_ENV`, set by the supervisor on every agent
+ *      child and inherited by its descendants). An environment that cannot be read is no marker.
  *   6. Anything else (a child of the server, of another agent, of the user's shell or terminal,
  *      of an orphan that is not the Steward's)                          → not the Steward's.
  *
  * The safety argument (rule by rule) is written up in `docs/tasks/notes/P4-14-process-cleanup.md`.
  */
+
+/**
+ * The variable the supervisor puts in every agent child's environment (`<agentId>`); descendants
+ * inherit it. Rule 5 needs it: a daemon the user started in the worktree does not have it.
+ */
+export const AGENT_ID_ENV = 'GALACTIC_AGENT_ID';
 
 /** One row of the process table. `startedAt` is epoch ms, floored to the second (`ps lstart`). */
 export interface ProcEntry {
@@ -38,7 +49,10 @@ export interface ProcEntry {
   zombie?: boolean;
 }
 
-/** A process group the supervisor started for an agent (its CLI is the leader: pgid = pid). */
+/**
+ * A process group the supervisor started for an agent in this server run (its CLI is the leader:
+ * pgid = pid). One per spawn, restart or resume.
+ */
 export interface AgentGroup {
   agentId: Id;
   pgid: number;
@@ -48,18 +62,32 @@ export interface AgentGroup {
   endedAt?: number;
 }
 
+/** One session of an agent (epoch ms): a spawn or resume, to its end (now while it runs). */
+export interface Session {
+  start: number;
+  end: number;
+}
+
+type PidMap<T> = Promise<Map<number, T>> | Map<number, T>;
+
 export interface AttributionInput {
   agentId: Id;
   procs: readonly ProcEntry[];
+  /** The groups the supervisor started in this server run (never rows of an earlier run). */
   groups: readonly AgentGroup[];
   /** The server itself: its pid and its user. */
   self: { pid: number; uid: number };
-  /** The Steward's session (epoch ms): from its creation to its end, or now while it runs. */
-  window: { start: number; end: number };
+  /** The Steward's sessions, as the supervisor recorded them. None: rule 5 is off. */
+  sessions: readonly Session[];
   /** The task worktree's root. Absent (a serialised project, no worktree): rule 5 is off. */
   worktree?: string;
   /** Working directories of the given pids (the OS layer); missing pids are unknown. */
-  cwdOf: (pids: number[]) => Promise<Map<number, string>> | Map<number, string>;
+  cwdOf: (pids: number[]) => PidMap<string>;
+  /**
+   * The `AGENT_ID_ENV` value in each given process's environment (the OS layer); a pid that is
+   * missing has none, or its environment could not be read — either way it is not the Steward's.
+   */
+  markerOf: (pids: number[]) => PidMap<string>;
   /** Pids never listed (the Steward's own CLI while it runs). */
   exclude?: ReadonlySet<number>;
 }
@@ -105,8 +133,14 @@ export function worktreeRootOf(
   return cwd.slice(0, at + marker.length) + task;
 }
 
-type Verdict = ProcessAttribution | 'reaper' | 'server' | 'other' | 'foreign';
-const MINE: ReadonlySet<Verdict> = new Set(['group', 'descendant', 'worktree']);
+/** `orphan-descendant`: below a rule-5 orphan, marked at every step (reported as `descendant`). */
+type Verdict = ProcessAttribution | 'orphan-descendant' | 'reaper' | 'server' | 'other' | 'foreign';
+const MINE: ReadonlySet<Verdict> = new Set([
+  'group',
+  'descendant',
+  'orphan-descendant',
+  'worktree',
+]);
 
 /** The pids of the server's own tree: itself, its ancestors (below pid 1) and its process group. */
 export function serverTree(procs: readonly ProcEntry[], selfPid: number): Set<number> {
@@ -142,11 +176,13 @@ function groupOwner(p: ProcEntry, groups: readonly AgentGroup[]): Id | null | un
 
 /** The Steward's processes, by the rules above. */
 export async function attribute(input: AttributionInput): Promise<AttributedProcess[]> {
-  const { agentId, procs, groups, self, window, worktree } = input;
+  const { agentId, procs, groups, self, sessions, worktree } = input;
   const byPid = new Map(procs.map((p) => [p.pid, p]));
   const server = serverTree(procs, self.pid);
-  const inWindow = (p: ProcEntry) =>
-    p.startedAt >= window.start - START_SLACK_MS && p.startedAt <= window.end + START_SLACK_MS;
+  const inSession = (p: ProcEntry) =>
+    sessions.some(
+      (s) => p.startedAt >= s.start - START_SLACK_MS && p.startedAt <= s.end + START_SLACK_MS,
+    );
   // A server that is itself pid 1 (a container) reaps orphans: its children are its own, never
   // orphans of the Steward's — rule 5 is then off, which is the safe side.
   const parentIsReaper = (p: ProcEntry) => {
@@ -154,24 +190,56 @@ export async function attribute(input: AttributionInput): Promise<AttributedProc
     const parent = byPid.get(p.ppid);
     return p.ppid <= 1 || (parent !== undefined && isReaper(parent));
   };
+  const ours = (p: ProcEntry) => p.uid === self.uid && !p.zombie;
 
-  // Rule 5 needs working directories: only of orphans of ours that started in the session.
-  const orphanCandidates = worktree
-    ? procs.filter(
-        (p) =>
-          p.uid === self.uid &&
-          !p.zombie &&
-          !isReaper(p) &&
-          !server.has(p.pid) &&
-          groupOwner(p, groups) === undefined &&
-          parentIsReaper(p) &&
-          inWindow(p),
-      )
-    : [];
-  const cwds =
-    orphanCandidates.length > 0
-      ? await input.cwdOf(orphanCandidates.map((p) => p.pid))
-      : new Map<number, string>();
+  // Rule 5 needs working directories and markers: only of orphans of ours that started in one of
+  // the Steward's sessions, and markers also of everything below them (rule 4 under rule 5).
+  const orphanCandidates = new Set(
+    worktree !== undefined && sessions.length > 0
+      ? procs
+          .filter(
+            (p) =>
+              ours(p) &&
+              !isReaper(p) &&
+              !server.has(p.pid) &&
+              groupOwner(p, groups) === undefined &&
+              parentIsReaper(p) &&
+              inSession(p),
+          )
+          .map((p) => p.pid)
+      : [],
+  );
+  const below = new Map<number, boolean>();
+  const underCandidate = (p: ProcEntry, depth = 0): boolean => {
+    const known = below.get(p.pid);
+    if (known !== undefined) return known;
+    let v: boolean;
+    if (orphanCandidates.has(p.pid)) v = true;
+    else if (
+      depth > 256 ||
+      isReaper(p) ||
+      server.has(p.pid) ||
+      groupOwner(p, groups) !== undefined ||
+      parentIsReaper(p)
+    ) {
+      v = false;
+    } else {
+      const parent = byPid.get(p.ppid);
+      v = parent !== undefined && underCandidate(parent, depth + 1);
+    }
+    below.set(p.pid, v);
+    return v;
+  };
+  let cwds = new Map<number, string>();
+  let markers = new Map<number, string>();
+  if (orphanCandidates.size > 0) {
+    const markerPids = procs.filter((p) => ours(p) && underCandidate(p)).map((p) => p.pid);
+    [cwds, markers] = await Promise.all([
+      input.cwdOf([...orphanCandidates]),
+      input.markerOf(markerPids),
+    ]);
+  }
+  const marked = (p: ProcEntry) => markers.get(p.pid) === agentId;
 
   const memo = new Map<number, Verdict>();
   const verdict = (p: ProcEntry, depth = 0): Verdict => {
@@ -186,14 +254,24 @@ export async function attribute(input: AttributionInput): Promise<AttributedProc
       else if (parentIsReaper(p)) {
         const cwd = cwds.get(p.pid);
         v =
-          worktree !== undefined && inWindow(p) && cwd !== undefined && isInside(cwd, worktree)
+          worktree !== undefined &&
+          orphanCandidates.has(p.pid) &&
+          cwd !== undefined &&
+          isInside(cwd, worktree) &&
+          marked(p)
             ? 'worktree'
             : 'foreign';
       } else {
         const parent = byPid.get(p.ppid);
         // A parent gone from the snapshot (it exited between the two reads) decides nothing.
         if (!parent || depth > 256) v = 'foreign';
-        else v = MINE.has(verdict(parent, depth + 1)) ? 'descendant' : 'foreign';
+        else {
+          const up = verdict(parent, depth + 1);
+          if (up === 'worktree' || up === 'orphan-descendant') {
+            // Below an orphan the Steward's marker is required at every step.
+            v = marked(p) ? 'orphan-descendant' : 'foreign';
+          } else v = MINE.has(up) ? 'descendant' : 'foreign';
+        }
       }
     }
     memo.set(p.pid, v);
@@ -202,13 +280,24 @@ export async function attribute(input: AttributionInput): Promise<AttributedProc
 
   const out: AttributedProcess[] = [];
   for (const p of procs) {
-    if (p.uid !== self.uid || p.zombie || input.exclude?.has(p.pid)) continue;
+    if (!ours(p) || input.exclude?.has(p.pid)) continue;
     const v = verdict(p);
     if (!MINE.has(v)) continue;
+    const why = (v === 'orphan-descendant' ? 'descendant' : v) as ProcessAttribution;
     const cwd = cwds.get(p.pid);
-    out.push({ ...p, why: v as ProcessAttribution, ...(cwd !== undefined ? { cwd } : {}) });
+    out.push({ ...p, why, ...(cwd !== undefined ? { cwd } : {}) });
   }
   return out.sort((a, b) => a.startedAt - b.startedAt || a.pid - b.pid);
+}
+
+/**
+ * What a live Steward's CLI is using right now: its direct children — the MCP servers it launched,
+ * the shell of a tool command (running, or a background one) — and every attributed descendant of
+ * them. Stopped only when named one by one (TECHNOLOGY §2.2 "Process cleanup").
+ */
+export function heldBy(attributed: readonly AttributedProcess[], cliPid: number): Set<number> {
+  const direct = attributed.filter((p) => p.ppid === cliPid).map((p) => p.pid);
+  return new Set(withDescendants(attributed, direct).map((p) => p.pid));
 }
 
 /** The attributed processes `pids` and every attributed descendant of them. */

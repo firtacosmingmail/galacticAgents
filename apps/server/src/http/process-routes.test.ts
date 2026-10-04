@@ -36,6 +36,7 @@ const processes: StewardProcessControl = {
       ],
     });
   },
+  listMany: (agentIds) => Promise.all(agentIds.map((id) => processes.list(id))),
   stop: (agentId, opts) => {
     if (opts.pids?.includes(1234)) {
       return Promise.reject(new DomainError('invalid', 'not processes of Steward a-st: 1234'));
