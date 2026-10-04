@@ -14,6 +14,13 @@ An independent review found no blocker. A fix agent closed its findings, each wi
 | 6 | Stalled ≈ working under reduced motion for colour-blind viewers | stalled is dimmer and smaller (SPEC 72) |
 | nits | MCP names and compound shell commands misclassified; beacons depended on mount order after the camera rig; per-frame allocations; a "reporting back" rule that never fires | classified by part; camera at its own frame priority (`PLACE_CAMERA`, −0.25); scratch objects; SPEC 73 reworded |
 
-Gates on the merged branch: build, typecheck, lint, format:check green; protocol 67, server 845 (+1 skipped), web 935.
+## Added after Cosmin's feedback (P4-11 … P4-14)
+
+- **P4-11** — Allow on "May WebSearch run?" showed "Internal": two parallel tool calls shared one pending-question slot in the Claude adapter, the second overwrote the first, the first's answer threw after it was written and rolled back. Pending questions are now by id; the status store keeps every open question (the agent stays waiting while any is open).
+- **P4-12** — the inbox hides like the managed agents (decision 75), "N waiting" and beacons bring it back; closed work is out of the navigation behind "Show closed"; every row has "⋯" with the strip's actions to clear leftover demo projects.
+- **P4-13** — one beacon per question (40 px apart, at most 6 per body, Cosmin approved); clicking selects the asker, flies there and opens the question; non-catalogue planets are drawn only while something is on them (decisions 74, 63).
+- **P4-14** — Waykeepers clean up their Stewards' processes, the server sweeps as a safety net (decision 76). Two reviews: the first found the cleanup could stop the user's daemonised programs started in a worktree (tmux, `code .`, nohup) and a reused process group from a previous server run — fixed with an agent marker in every agent's environment (unreadable → not taken), session-exact windows and this run's groups only, held helpers for live Stewards, a re-check before every signal; the second found user-facing apps a Steward itself opens (VS Code, tmux) would take the user's work in them, and that macOS hides the marker of Apple shells — fixed: app bundles and multiplexers never taken through an orphan, identities remembered while the Steward ran. Residual risks are listed in the P4-14 notes.
+
+Gates on the merged branch: build, typecheck, lint, format:check green; protocol 67, server 845 (+1 skipped), web 966; server 910.
 
 Open for Cosmin: the three beacon choices (a beacon on Earth for the Harmonizer's own questions; one beacon per body; a click opens the question without moving the selection or camera), and how the looks, activities and beacons read in motion.
