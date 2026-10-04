@@ -62,3 +62,14 @@ Open question for §8:
 
 - New: 6 in `scene/selection-paths.test.tsx`, 4 in `Picking.test.tsx`, 9 in `picking-ui.test.tsx` (19).
 - The three tests of gap #24 fail with the fix disabled (checked).
+
+## Wave-1 review fixes (2026-10-04)
+
+- **Escape that changes nothing is not taken.** The camera store tracks `atSystem` (a fresh rig, or
+  an overview flight that arrived; any flight, release or grab of the controls clears it). With the
+  Harmonizer selected and the camera resting at the system's framing, the scene's Escape does not
+  call `preventDefault`, so the replay bar's document listener exits a replay. Home is always
+  taken. Test: `picking-ui.test.tsx`.
+- **A deep link captured while the scene is hidden is spent.** The panel calls `dropDeepLink()`
+  whenever its main view renders in list mode, so a return from `/history` or `/settings` in list
+  mode does not fly when the scene is shown later. Test: `selection-paths.test.tsx`.
