@@ -475,8 +475,11 @@ export function satelliteSpheres(out: ScratchSatelliteSphere[] = []): readonly S
     const f = frames[i]!;
     if (!f.visible || f.presence <= 0 || f.size <= 0) continue;
     const s = (out[n++] ??= { agentId: '', center: f.position, radius: 0 });
+    // P4-04: landed satellites are picked only by a direct hit up close (`pickScene`).
     s.agentId = f.agentId;
     s.role = f.role;
+    s.landed = f.mode === 'landed';
+    s.bodyId = f.bodyId;
     s.center = f.position;
     s.radius = f.size / 2;
   }

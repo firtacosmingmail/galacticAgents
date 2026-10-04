@@ -154,3 +154,74 @@ describe('pickScene (bodies and satellites, P4-08)', () => {
     expect(pickScene(rayThrough(0, 0), [], [sat('behind', 0, 0, 150)], PX).candidates).toEqual([]);
   });
 });
+
+describe('landed satellites (P4-04)', () => {
+  /** A ray from the camera (0, 0, 100) through a world point. */
+  const rayAt = (p: readonly [number, number, number]): PickRay => {
+    const d = [p[0], p[1], p[2] - 100] as const;
+    const len = Math.hypot(...d);
+    return { origin: [0, 0, 100], direction: [d[0] / len, d[1] / len, d[2] / len] };
+  };
+  /** `n` landed satellites on a body of radius `r` at the origin, over the near hemisphere. */
+  const landedOn = (n: number, r: number, size: number): SatelliteSphere[] =>
+    Array.from({ length: n }, (_, i) => {
+      const lon = (2 * Math.PI * i) / n;
+      const lat = 0.3 + (0.9 * ((i * 7) % n)) / n; // off the line of sight's centre
+      const dir = [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
+      return {
+        agentId: `a-st-${String(i).padStart(2, '0')}`,
+        role: 'steward',
+        bodyId: 'b-kepler',
+        landed: true,
+        center: [dir[0]! * r * 1.03, dir[1]! * r * 1.03, dir[2]! * r * 1.03],
+        radius: size / 2,
+      };
+    });
+
+  it('the system view: a completed planet with 30 landed satellites is the body, no list', () => {
+    // Kepler 0.2 units (2 px): its 30 landed satellites all sit within a few pixels.
+    const kepler = [body('b-kepler', 0, 0, 0, 0.2)];
+    const result = pickScene(rayThrough(0, 0), kepler, landedOn(30, 0.2, 0.05), PX);
+    expect(result.satellites).toEqual([]);
+    expect(result.candidates).toEqual([{ kind: 'body', bodyId: 'b-kepler' }]);
+    expect(result.choice).toEqual({ kind: 'body', bodyId: 'b-kepler' });
+    expect(hoverTarget(result)).toEqual({
+      target: { kind: 'body', bodyId: 'b-kepler' },
+      others: 0,
+    });
+    // The same satellites orbiting (not landed) would make the list, as before.
+    const orbiting = landedOn(30, 0.2, 0.05).map((s) => ({ ...s, landed: false }));
+    expect(pickScene(rayThrough(0, 0), kepler, orbiting, PX).choice).toBeUndefined();
+  });
+
+  it('up close: a click on the surface between them is the body', () => {
+    // Kepler 5 units (50 px): clearly a target.
+    const kepler = [body('b-kepler', 0, 0, 0, 5)];
+    const sats = landedOn(30, 5, 0.1);
+    const result = pickScene(rayAt([0, 0, 5]), kepler, sats, PX); // the sub-camera point
+    expect(result.satellites).toEqual([]);
+    expect(result.choice).toEqual({ kind: 'body', bodyId: 'b-kepler' });
+    // Next to a landed satellite but off its drawn size (no minimum target for landed ones).
+    const s = sats[0]!;
+    const beside: [number, number, number] = [s.center[0], s.center[1] + 0.2, s.center[2]];
+    expect(pickScene(rayAt(beside), kepler, sats, PX).choice).toEqual({
+      kind: 'body',
+      bodyId: 'b-kepler',
+    });
+  });
+
+  it('up close: a direct hit on a landed satellite is that agent', () => {
+    const kepler = [body('b-kepler', 0, 0, 0, 5)];
+    const sats = landedOn(30, 5, 0.1);
+    const s = sats[3]!;
+    const result = pickScene(rayAt(s.center), kepler, sats, PX);
+    expect(result.choice).toEqual({ kind: 'satellite', agentId: s.agentId });
+    // The same hit while the body is a speck is not a target: the body decides.
+    const far = [body('b-kepler', 0, 0, 0, 5)];
+    const ray = {
+      origin: [0, 0, 5000] as [number, number, number],
+      direction: [0, 0, -1] as [number, number, number],
+    };
+    expect(pickScene(ray, far, [{ ...s, center: [0, 0, 5.15] }], PX).satellites).toEqual([]);
+  });
+});

@@ -25,6 +25,12 @@ import {
  *    pointer goes to the "what's here" list, satellites first (corner case 24), and the hover
  *    names the body with "+n" (`hoverTarget`);
  * 4. no satellite under the pointer: the bodies' result, unchanged.
+ * **Landed satellites** (P4-04: completed work's, sitting on the surface) are not candidates and
+ * not in the "+n" count — a completed project's planet may carry several, and clicking it must do
+ * what clicking the body does (select its Waykeeper, decision 65), not open a list — EXCEPT a
+ * direct hit at their real drawn size (no `MIN_TARGET_PX` floor) while their body is clearly a
+ * target (`CLEAR_TARGET_PX`: the camera is close). A landed satellite whose body is not drawn
+ * (no sphere) is never a candidate.
  * Satellites merely near the pointer (within `CLUSTER_PX` of their target) are not candidates:
  * they orbit, and a list that flickers with them would be noise. For the same reason the
  * satellites in `candidates` are in a stable order (role, then agent id), never by their per-frame
@@ -37,6 +43,10 @@ export interface SatelliteSphere {
   role?: string | undefined;
   center: Vec3;
   radius: number;
+  /** P4-04: it sits landed on its body (completed work): picked only by a direct, close hit. */
+  landed?: boolean | undefined;
+  /** The body it belongs to (a landed satellite's body must be clearly a target). */
+  bodyId?: string | undefined;
 }
 
 export interface SatelliteCandidate {
@@ -115,7 +125,10 @@ export function pickScene(
     const perPx = depth / pxScale;
     const screenDistance = Math.sqrt(Math.max(0, distSq - depth * depth)) / perPx;
     const screenRadius = s.radius / perPx;
-    if (screenDistance > Math.max(screenRadius, MIN_TARGET_PX)) continue;
+    if (s.landed) {
+      if (screenDistance > screenRadius) continue; // its real size: no minimum target
+      if (!clearTarget(ray.origin, s.bodyId, bodySpheres, pxScale)) continue;
+    } else if (screenDistance > Math.max(screenRadius, MIN_TARGET_PX)) continue;
     if (occluded(ray.origin, s.center, bodySpheres)) continue; // behind a body
     satellites.push({ agentId: s.agentId, depth, screenDistance, screenRadius });
     listed.push(s);
@@ -146,6 +159,26 @@ export function pickScene(
     candidates,
     choice: speck ? undefined : satellite(satellites[0]!.agentId),
   };
+}
+
+/** Whether a body is at least `CLEAR_TARGET_PX` of radius on screen (from `origin`). */
+function clearTarget(
+  origin: Vec3,
+  bodyId: string | undefined,
+  spheres: readonly PickSphere[],
+  pxScale: number,
+): boolean {
+  if (bodyId === undefined) return false;
+  for (const b of spheres) {
+    if (b.bodyId !== bodyId) continue;
+    const distance = Math.hypot(
+      b.center[0] - origin[0],
+      b.center[1] - origin[1],
+      b.center[2] - origin[2],
+    );
+    return distance > 0 && (b.radius * pxScale) / distance >= CLEAR_TARGET_PX;
+  }
+  return false;
 }
 
 const ROLE_RANK: Record<string, number> = { harmonizer: 0, waykeeper: 1, steward: 2 };
