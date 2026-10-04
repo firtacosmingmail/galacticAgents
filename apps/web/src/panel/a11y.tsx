@@ -111,6 +111,13 @@ export function usesOwnArrows(el: Element): boolean {
   return !!el.closest(OWN_ARROWS);
 }
 
+/**
+ * What is open and waits for an answer: a menu or popover (`data-escape-layer`, the "More" menu)
+ * and a pending confirmation. The arrows would leave it open behind the focus, so they do nothing
+ * there; Escape or an answer closes it first.
+ */
+const OPEN_LAYER = '[data-escape-layer], .agc-confirm';
+
 /** The items of a list that are on screen: not in a closed `<details>`, nor hidden, nor inert. */
 export function listItems(container: Element, selector: string): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(selector)).filter(
@@ -123,14 +130,15 @@ export function listItems(container: Element, selector: string): HTMLElement[] {
  * previous item (the item itself, made focusable with `tabindex="-1"`, so a screen reader reads
  * its name), Home / End to the first and the last. From a button inside a card they move to the
  * neighbouring card too. Tab is untouched: it still walks every control in order, so the arrows
- * are a shortcut, not the only way. Ignored in fields and widgets that use the arrows themselves.
+ * are a shortcut, not the only way. Ignored in fields and widgets that use the arrows themselves,
+ * and in an open menu or a pending confirmation (they would be left open behind the focus).
  */
 export function listKeys(selector: string) {
   return (e: KeyboardEvent<HTMLElement>) => {
     if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
     const target = e.target as HTMLElement;
-    if (usesOwnArrows(target)) return;
+    if (usesOwnArrows(target) || target.closest(OPEN_LAYER)) return;
     const items = listItems(e.currentTarget, selector);
     // The innermost item holding the focus (an answered question's card sits in a card view).
     let current = -1;

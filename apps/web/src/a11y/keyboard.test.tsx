@@ -190,6 +190,34 @@ describe('arrow keys through the cards', () => {
     expect(focused()).toBe(cards()[0]);
   });
 
+  it('leaves the arrows alone in a pending confirmation and an open menu', async () => {
+    await openApp('/');
+    const section = screen.getByRole('region', { name: 'managed agents' });
+    const cards = () => Array.from(section.querySelectorAll<HTMLElement>('article.agc'));
+    const card = cards().find((c) => within(c).queryAllByRole('button', { name: 'Stop' })[0])!;
+    const stop = within(card).getAllByRole('button', { name: 'Stop' })[0]!;
+    stop.focus();
+    await click(stop);
+    const confirm = within(card).getByRole('group', { name: 'confirm' });
+    const keep = within(confirm).getByRole('button', { name: 'Keep' });
+    expect(focused()).toBe(keep);
+    await key(keep, 'ArrowDown');
+    await key(keep, 'End');
+    // Not stranded open behind the focus: still there, still holding it.
+    expect(confirm.isConnected).toBe(true);
+    expect(focused()).toBe(keep);
+    // An open menu (a `data-escape-layer`) in a card: the same.
+    await key(keep, 'Escape');
+    const menu = document.createElement('div');
+    menu.setAttribute('data-escape-layer', '');
+    const item = document.createElement('button');
+    menu.append(item);
+    card.append(menu);
+    item.focus();
+    await key(item, 'ArrowDown');
+    expect(focused()).toBe(item);
+  });
+
   it('moves between the history’s rows; Escape closes the inspector and returns the focus', async () => {
     await openApp('/history');
     const inspect = await screen.findByRole('button', { name: 'Inspect Fix the flaky date test' });

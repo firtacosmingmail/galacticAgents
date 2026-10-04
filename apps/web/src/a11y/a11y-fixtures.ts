@@ -22,6 +22,7 @@ import type {
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
+import { useAppStore } from '../state/store.js';
 
 /**
  * P5-04: one world with every panel surface populated — a Harmonizer, a project's Waykeeper with a
@@ -238,6 +239,10 @@ export async function openApp(
   initial: ServerMessage = fullSnapshot(),
 ): Promise<void> {
   window.history.replaceState(null, '', path);
+  // The store keeps the route across tests (`reset()` leaves it): start from this URL's, or the
+  // previous test's route changes to this one after mount and the route focus moves the focus
+  // to the main heading in the middle of this test.
+  useAppStore.getState().syncFromLocation();
   render(createElement(App));
   await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
   const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1]!;
