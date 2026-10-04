@@ -6,6 +6,7 @@ import type {
   ControlBody,
   HistoryQuestion,
   HistoryQuestionsResponse,
+  HistoryWorkDetail,
   HistoryWorkItem,
   HistoryWorkResponse,
   Project,
@@ -67,15 +68,58 @@ const withdrawn: Question = {
   updatedAt: '2026-10-01T07:00:00.000Z',
 };
 
+// P5-03: an archived project with a task, a Waykeeper and an escalated question.
+const oldSite: Project = {
+  ...fx.project,
+  id: 'p-arch',
+  name: 'Old site',
+  bodyId: 'b-kepler',
+  state: 'archived',
+  createdAt: '2026-09-20T08:00:00.000Z',
+  updatedAt: '2026-09-28T08:00:00.000Z',
+};
+const oldSiteTask: Task = {
+  ...fx.asteroidTask,
+  id: 't-arch',
+  projectId: 'p-arch',
+  bodyId: 'b-kepler',
+  description: 'Port the landing page',
+  blockedBy: [],
+  state: 'completed',
+};
+const oldSiteKeeper: Agent = {
+  ...fx.agent,
+  id: 'a-wk-arch',
+  role: 'waykeeper',
+  taskId: undefined,
+  projectId: 'p-arch',
+  bodyId: 'b-kepler',
+} as Agent;
+const oldSiteQuestion: Question = {
+  ...fx.question,
+  id: 'q-arch',
+  originAgentId: 'a-wk-arch',
+  context: { text: 'Keep the old URLs?' },
+  holder: { type: 'user' },
+  status: 'answered',
+  answeredBy: { type: 'user' },
+  answer: 'Yes, with redirects',
+  version: 2,
+  createdAt: '2026-09-21T10:00:00.000Z',
+  updatedAt: '2026-09-21T11:00:00.000Z',
+};
+const CLOSED_AT = '2026-09-25T16:00:00.000Z';
+const ARCHIVED_AT = '2026-09-28T08:00:00.000Z';
+
 const snapshot: ServerMessage = {
   type: 'snapshot',
   logId: 'log-a',
   seq: 10,
-  agents: [fx.harmonizer, oldSteward, waykeeper],
+  agents: [fx.harmonizer, oldSteward, waykeeper, oldSiteKeeper],
   bodies: [fx.body, fx.asteroid],
-  projects: [doneProject],
-  tasks: [archivedTask],
-  questions: [pastQuestion, withdrawn],
+  projects: [doneProject, oldSite],
+  tasks: [archivedTask, oldSiteTask],
+  questions: [pastQuestion, withdrawn, oldSiteQuestion],
   proposals: [],
   statuses: [{ ...fx.status, agentId: fx.harmonizer.id }],
 };
@@ -90,6 +134,13 @@ const questionItem = (question: Question, reason?: string): HistoryQuestion => (
   cursor: `${question.updatedAt}~q${question.id}`,
 });
 
+/** What a test adds to the fake server's lists, and the details it serves (P5-03). */
+const extra: {
+  work: HistoryWorkItem[];
+  questions: HistoryQuestion[];
+  details: Record<string, HistoryWorkDetail>;
+} = { work: [], questions: [], details: {} };
+
 /** A stand-in Mission Control for the history endpoints (and `/api/control`). */
 function fakeServer() {
   const calls: string[] = [];
@@ -103,8 +154,12 @@ function fakeServer() {
     const q = u.searchParams.get('q')?.toLowerCase();
     if (u.pathname.startsWith('/api/history/') && gate.wait) await gate.wait;
     if (u.pathname === '/api/history/work') {
-      // Two pages: the task, then (before its cursor) the project.
-      const all = [workItem(archivedTask), workItem(doneProject)].filter(
+      // Two pages: the task, then (before its cursor) the project; a test's rows replace them by id.
+      const base = [workItem(archivedTask), workItem(doneProject)];
+      const all = [
+        ...base.map((i) => extra.work.find((e) => e.item.id === i.item.id) ?? i),
+        ...extra.work.filter((e) => !base.some((i) => i.item.id === e.item.id)),
+      ].filter(
         (i) =>
           !q || (i.kind === 'task' ? i.item.description : i.item.name).toLowerCase().includes(q),
       );
@@ -113,8 +168,17 @@ function fakeServer() {
       const page = all.slice(from, from + 1);
       return json({ items: page, hasMore: from + 1 < all.length } satisfies HistoryWorkResponse);
     }
+    const detail = /^\/api\/history\/work\/(project|task)\/([^/]+)$/.exec(u.pathname);
+    if (detail) {
+      const d = extra.details[`${detail[1]}:${decodeURIComponent(detail[2]!)}`];
+      return d ? json(d) : json({ error: 'not_found' }, 404);
+    }
     if (u.pathname === '/api/history/questions') {
-      const all = [questionItem(pastQuestion), questionItem(withdrawn, 'no longer needed')].filter(
+      const all = [
+        questionItem(pastQuestion),
+        questionItem(withdrawn, 'no longer needed'),
+        ...extra.questions,
+      ].filter(
         (i) =>
           (!q ||
             i.question.context.text.toLowerCase().includes(q) ||
@@ -137,6 +201,9 @@ let server: ReturnType<typeof fakeServer>;
 let socket: FakeWebSocket;
 
 beforeEach(() => {
+  extra.work = [];
+  extra.questions = [];
+  extra.details = {};
   FakeWebSocket.instances = [];
   localStorage.clear();
   localStorage.setItem('galactic.token', TOKEN);
@@ -375,5 +442,243 @@ describe('history view (P25-10)', () => {
     });
     expect(within(questions()).getByRole('status').textContent).toContain('New items');
     expect(within(work()).queryByRole('status')).toBeNull();
+  });
+});
+
+describe('history inspector (P5-03)', () => {
+  const oldSiteDetail: HistoryWorkDetail = {
+    work: { kind: 'project', item: oldSite },
+    bodyName: 'Kepler',
+    trail: {
+      closedAt: CLOSED_AT,
+      archivedAt: ARCHIVED_AT,
+      moves: [
+        {
+          at: '2026-09-22T09:00:00.000Z',
+          fromBodyId: 'b-luna',
+          fromBodyName: 'Luna',
+          toBodyId: 'b-kepler',
+          toBodyName: 'Kepler',
+        },
+      ],
+    },
+    states: [
+      { at: '2026-09-20T09:00:00.000Z', from: 'approved', to: 'in_progress' },
+      { at: CLOSED_AT, from: 'awaiting_closure', to: 'completed', by: { type: 'user' } },
+      { at: ARCHIVED_AT, from: 'completed', to: 'archived' },
+    ],
+    tasks: [oldSiteTask],
+    subProjects: [],
+    agents: [oldSiteKeeper],
+    questions: [
+      {
+        question: oldSiteQuestion,
+        cursor: `${oldSiteQuestion.updatedAt}~qq-arch`,
+        holders: [
+          {
+            holder: { type: 'agent', id: fx.harmonizer.id },
+            at: oldSiteQuestion.createdAt,
+            via: 'asked',
+          },
+          { holder: { type: 'user' }, at: '2026-09-21T10:05:00.000Z', via: 'escalated' },
+        ],
+      },
+    ],
+    moreQuestions: false,
+  };
+  const oldSiteItem = {
+    ...workItem(oldSite),
+    bodyName: 'Kepler',
+    trail: oldSiteDetail.trail,
+  } as HistoryWorkItem;
+  const inspector = (name: string) => screen.getByRole('region', { name: `details of ${name}` });
+  const timeOf = (scope: HTMLElement, term: string) =>
+    within(scope).getByText(term, { selector: 'dt' }).nextElementSibling!.querySelector('time')!
+      .dateTime;
+
+  it('finds an archived project, inspects it and reopens it (acceptance)', async () => {
+    extra.work = [oldSiteItem];
+    extra.details = { 'project:p-arch': oldSiteDetail };
+    await open('/history');
+    await search('old site');
+    const row = await within(work()).findByRole('listitem', { name: 'Old site' });
+    // Its closure dates and its move, right on the row.
+    expect(timeOf(row, 'closed')).toBe(CLOSED_AT);
+    expect(timeOf(row, 'archived')).toBe(ARCHIVED_AT);
+    expect(within(row).getByRole('list', { name: 'moves of Old site' }).textContent).toContain(
+      'from Luna to Kepler',
+    );
+
+    await click(within(row).getByRole('button', { name: 'Inspect Old site' }));
+    expect(server.calls).toContain('/api/history/work/project/p-arch');
+    const panel = await vi.waitFor(() => inspector('Old site'));
+    const steps = await within(panel).findByRole('list', { name: 'state changes of Old site' });
+    expect(within(panel).getByText('lived on').nextElementSibling!.textContent).toBe('Kepler');
+    expect(timeOf(panel, 'closed')).toBe(CLOSED_AT);
+    expect(timeOf(panel, 'archived')).toBe(ARCHIVED_AT);
+    expect(
+      within(steps)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual([
+      expect.stringContaining('in progress'),
+      expect.stringMatching(/completed.*by you/),
+      expect.stringContaining('archived'),
+    ]);
+    // Its task opens here; its Waykeeper's chat is one click away.
+    expect(
+      within(panel).getByRole('button', { name: 'inspect task Port the landing page' }),
+    ).toBeTruthy();
+    expect(within(panel).getByRole('link', { name: 'Waykeeper chat' }).getAttribute('href')).toBe(
+      '/waykeeper/a-wk-arch',
+    );
+    // Its question, with who held it and who answered.
+    const q = within(panel).getByRole('listitem', { name: 'Keep the old URLs?' });
+    const chain = within(q).getByRole('list', { name: 'holder chain' });
+    expect(
+      within(chain)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Harmonizer', 'you']);
+    expect(within(q).getByText('answered by').nextElementSibling!.textContent).toBe('you');
+
+    await click(within(panel).getByRole('button', { name: 'Reopen' }));
+    expect(server.controls).toEqual([
+      { target: { kind: 'project', id: 'p-arch' }, action: { action: 'reopen' } },
+    ]);
+    await act(async () => {
+      socket.serverSends({
+        type: 'event',
+        seq: 11,
+        at: '2026-10-04T10:00:00.000Z',
+        event: {
+          type: 'project.state_changed',
+          projectId: 'p-arch',
+          from: 'archived',
+          to: 'approved',
+          by: { type: 'user' },
+        },
+      });
+    });
+    expect(within(inspector('Old site')).queryByRole('button', { name: 'Reopen' })).toBeNull();
+    expect(within(row).getByText('approved')).toBeTruthy();
+  });
+
+  it('follows a moved-to link to the project the task joined, and back', async () => {
+    const movedTask = {
+      ...workItem(archivedTask),
+      trail: {
+        archivedAt: '2026-10-01T09:00:00.000Z',
+        moves: [
+          {
+            at: '2026-09-30T12:00:00.000Z',
+            fromBodyId: 'b-ast-1',
+            fromBodyName: 'Ceres-1',
+            toBodyId: 'b-kepler',
+            toBodyName: 'Kepler',
+            intoProjectId: 'p-done',
+            intoProjectName: 'CSV tool',
+          },
+        ],
+      },
+    } as HistoryWorkItem;
+    extra.details = {
+      'project:p-done': {
+        work: { kind: 'project', item: doneProject },
+        bodyName: 'Kepler',
+        trail: { moves: [] },
+        states: [],
+        tasks: [archivedTask],
+        subProjects: [],
+        agents: [waykeeper],
+        questions: [],
+        moreQuestions: false,
+      },
+      'task:t-old': {
+        work: { kind: 'task', item: archivedTask },
+        bodyName: 'Ceres-1',
+        trail: movedTask.trail!,
+        states: [],
+        project: doneProject,
+        tasks: [],
+        subProjects: [],
+        agents: [oldSteward],
+        questions: [],
+        moreQuestions: false,
+      },
+    };
+    // The moved task is the only work row.
+    extra.work = [movedTask];
+    await open('/history');
+    await search('flaky');
+    const moved = await vi.waitFor(() => {
+      const rows = within(work()).getAllByRole('listitem', { name: 'Fix the flaky date test' });
+      const withMove = rows.find((r) => within(r).queryByRole('list', { name: /^moves of/ }));
+      if (!withMove) throw new Error('no moved row yet');
+      return withMove;
+    });
+    const moves = within(moved).getByRole('list', { name: 'moves of Fix the flaky date test' });
+    expect(moves.textContent).toContain('from Ceres-1 to Kepler, into project CSV tool');
+    await click(within(moves).getByRole('button', { name: 'inspect project CSV tool' }));
+    const project = await vi.waitFor(() => inspector('CSV tool'));
+    await within(project).findByRole('list', { name: 'work of CSV tool' });
+
+    // From the project to its task, then back.
+    await click(
+      within(project).getByRole('button', { name: 'inspect task Fix the flaky date test' }),
+    );
+    const task = await vi.waitFor(() => inspector('Fix the flaky date test'));
+    await within(task).findByRole('list', { name: 'moves of Fix the flaky date test' });
+    // Its project (a fact) and the move into it both lead back to the project.
+    expect(within(task).getAllByRole('button', { name: 'inspect project CSV tool' })).toHaveLength(
+      2,
+    );
+    await click(within(task).getByRole('button', { name: '← Back to CSV tool' }));
+    await vi.waitFor(() => inspector('CSV tool'));
+    await click(within(inspector('CSV tool')).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('region', { name: /^details of/ })).toBeNull();
+  });
+
+  it('shows each past question’s holder chain, escalations and reassignments in order', async () => {
+    extra.questions = [
+      {
+        question: oldSiteQuestion,
+        cursor: `${oldSiteQuestion.updatedAt}~qq-arch`,
+        holders: [
+          {
+            holder: { type: 'agent', id: 'a-wk-done' },
+            at: '2026-09-21T10:00:00.000Z',
+            via: 'asked',
+          },
+          {
+            holder: { type: 'agent', id: fx.harmonizer.id },
+            at: '2026-09-21T10:02:00.000Z',
+            via: 'reassigned',
+            reason: 'holder a-wk-done ended',
+          },
+          { holder: { type: 'user' }, at: '2026-09-21T10:05:00.000Z', via: 'escalated' },
+        ],
+      },
+    ];
+    await open('/history');
+    await search('old urls');
+    const row = await within(questions()).findByRole('listitem', { name: 'Keep the old URLs?' });
+    const chain = within(row).getByRole('list', { name: 'holder chain' });
+    expect(
+      within(chain)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Waykeeper · CSV tool', 'Harmonizer (reassigned: holder a-wk-done ended)', 'you']);
+    expect(within(row).getByText('answered by').nextElementSibling!.textContent).toBe('you');
+  });
+
+  it('says so when the item cannot be read', async () => {
+    extra.work = [oldSiteItem];
+    await open('/history');
+    await search('old site');
+    const row = await within(work()).findByRole('listitem', { name: 'Old site' });
+    await click(within(row).getByRole('button', { name: 'Inspect Old site' }));
+    const panel = await vi.waitFor(() => screen.getByRole('region', { name: /^details of/ }));
+    expect(await within(panel).findByRole('alert')).toBeTruthy();
   });
 });
