@@ -8,9 +8,9 @@ Branch `p6-01-detail` (from `p6-wave1-detail-scene`). Code in `apps/web/src/scen
   - A planet: at its nearest LOD level (sphere segments and maps, the maps shared through the near-texture cache with the system body), with its rings, its moons on their orbits with orbit lines, and eclipse shading among them as in the system view.
   - A moon: at its nearest level, shaded by its planet and its large siblings.
   - An asteroid: the task rock. Its halo fades out with the cross-fade, because at 2.4 radii it filled the whole view with cyan.
-- **Transition.** A camera flight plus a cross-fade over a backdrop: a dark sphere about the body, the sky's own stars, and the Sun in its real direction. The fade takes 0.9 s in and 0.7 s out with smoothstep, can reverse mid-way, and is an instant switch under reduced motion. Once the fade in has ended, the rest of the solar system is not drawn at all.
+- **Transition.** A camera flight plus a cross-fade over a backdrop: a dark sphere about the body, the sky's own stars, and the Sun in its real direction. The fade takes 0.9 s in and 0.7 s out with smoothstep, can reverse mid-way, and is an instant switch under reduced motion. Once the fade in has ended and the camera is in place, the parts of the solar system wholly outside the backdrop are not drawn (see the review fixes).
 - **Ways in:**
-  - zooming in: the camera focused on a body, not flying, and closer than **3 body radii**;
+  - zooming in: the camera focused on a body, not flying, and closer than **3 body radii** (framed radii: never below the camera's 0.05, see B1 below);
   - the breadcrumb's **"Detail view"** button, shown when the camera is on a planet, moon or asteroid;
   - a **second `Enter`** on the focused body. The first `Enter` still selects, as in P5-01. The second, which would change nothing (the body's agent is already selected, or its card is already open), goes in.
 
@@ -41,11 +41,11 @@ Branch `p6-01-detail` (from `p6-wave1-detail-scene`). Code in `apps/web/src/scen
 The sub-scene is drawn at the anchor's visual radius (`DetailBody.radius`; a ringed planet's includes its rings), from the same layout the system uses (`resolveDetailBody` → `buildRenderList` / `taskAsteroids`). So:
 - **The anchors stay the system's.** Nothing re-registers. Camera, picking, labels, satellites, activities, beacons, colonies and toasts keep working around the big body unchanged. The system anchors are neither suspended nor replaced (tested: the anchor list is identical across enter and exit).
 - The system hides only its own meshes of the shown body (`useDetailStore` `shown`), and the swap is seamless because the detail meshes start out identical:
-  - a planet: its tilt group with its moons, and its orbit line;
-  - a moon: its mesh and its orbit line;
+  - a planet: its tilt group with its moons (its orbit line fades out with the mix);
+  - a moon: its mesh (its orbit line fades out with the mix);
   - an asteroid: its rock and halo.
 - **Stand-ins** (`stand-ins.ts`): `registerStandIn(bodyId, object)` tells the selection outline which meshes draw a body now. Each detail group registers itself. A group must carry `userData.bodyId`, so a planet's outline does not descend into its moons' groups.
-- The **anchor registry stacks** registrations of one id: the newest wins, and removing it restores the one below. A later view that draws a body *elsewhere* (P6-02 might spread the moons out for the detail view) can call `registerAnchor({ ...systemAnchor, object: detailObject })` while mounted. Picking, labels and satellites then follow the detail object, and the system anchor comes back on unmount. Satellites of that body would jump to the new place at that moment, so do it under the fade.
+- The **anchor registry stacks** registrations of one id (no user in P6-01; kept because `mode.test.ts` covers it, reserved for a P6-0x view): the newest wins, and removing it restores the one below. A later view that draws a body *elsewhere* (P6-02 might spread the moons out for the detail view) can call `registerAnchor({ ...systemAnchor, object: detailObject })` while mounted. Picking, labels and satellites then follow the detail object, and the system anchor comes back on unmount. Satellites of that body would jump to the new place at that moment, so do it under the fade.
 
 **Modules:**
 
@@ -59,7 +59,8 @@ The sub-scene is drawn at the anchor's visual radius (`DetailBody.radius`; a rin
 
 **Camera additions:**
 - `CameraRequest` focus carries an optional `radii`.
-- `CameraDirector.focus(…, radii?)`, and `limits(…, holdId?)`, so zooming never goes inside the detail body after a pan.
+- `CameraDirector.focus(…, radii?)`, `limits(…, holdId?)` and `step(…, holdId?)`: the camera stays ≥ `BODY_KEEP_OUT` (1.3) radii from the detail body's centre after a pan.
+- `framedRadius(radius)` in `flight.ts`: the unit of every camera distance in body radii.
 - `focusPose(…, radii?)` and `focusDistance` in `flight.ts`.
 - `setFocusFraming(provider)` in `camera/store.ts`; `mode.ts` installs it.
 
@@ -136,6 +137,15 @@ The sub-scene is drawn at the anchor's visual radius (`DetailBody.radius`; a rin
   1. The backdrop stars were drawn over Saturn's rings, which write no depth. Once settled, the stars now go first among the transparent objects.
   2. The asteroid's halo filled the view at the detail framing. It now fades with the mix.
 - Every process started for the check was stopped: Chrome on 9471 and `vite preview` on 7431. Checked with `pgrep` and `lsof` (nothing listening, no process left).
+
+## Review fixes (branch `p6-01-fixes`)
+
+- **B1, true-scale moons left at once.** The camera lands a detail flight at `max(R, 0.05) × 2.4`, while the watcher and the backdrop divided by the raw radius (0.02 for 15 of the 22 moons in true scale), so the landed camera read 6 radii, past `EXIT_RADII`. One unit everywhere now: `framedRadius` (`flight.ts`), used by the flight, the watcher (`radiiFrom`) and `backdropRadius`. Tested for every catalogue body and a task asteroid, in both scales and a portrait viewport: lands at 2.4, settles, stays.
+- **S1, covered before the camera arrived.** "Detail view" or a second `Enter` mid-flight: the flight (0.8–1.5 s) outlasted the fade (0.9 s), so the system was hidden while the camera was still outside the backdrop. `settleDue` now covers only once the fade has ended **and** the camera is not flying and within `EXIT_RADII`; reduced motion switches the mix at once but covers on arrival too. Fade outs end whatever the camera does.
+- **S2, pops when the fade ended.** The backdrop's opaque dome writes depth, so the system now skips only what is wholly outside it (`dome.ts`, per frame against the dome the backdrop publishes): belt rocks (as a shell), task asteroids, planets with their systems, Sun-centred orbit lines. What may be inside — the belt and other task asteroids around an asteroid's view, a moon's planet and its orbit line — stays drawn. The shown body's own orbit line fades with the mix instead of popping.
+- **S3, into the body after a pan.** `CameraDirector.step(…, holdId)` clamps the camera to ≥ 1.3 radii from the held (detail) or followed body's centre (`keepOutOfBody`); OrbitControls' `minDistance` is from the target, which a pan moves.
+- **N1** stacking kept (tested). **N2** picking follows the scope, not the fade: other bodies become unclickable when the fade in starts and clickable again when the fade out starts. **N3** `backdropSun` writes into a scratch object; no spread `set`. **N4** the culling is evaluated per frame from the stores, so a body added while settled is drawn right. **N6** one `sunGlowTexture` (`scene/sun-glow.ts`) for the Sun sprite and the backdrop Sun. **N7** texture budget: Saturn's view holds the planet, rings and six moons at the nearest level at once, the largest near-texture working set; on low tiers a candidate for a per-tier cap (moons one level coarser), noted in TECHNOLOGY §2.1.
+- **SPEC 84 wording.** "those of other bodies are hidden" is precise once settled: during the fade they fade out with the system behind the backdrop.
 
 ## Deferred, or for later tasks
 
