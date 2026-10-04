@@ -304,9 +304,7 @@ export function SystemStatusView() {
         <Section title="Cost">
           <dl className="sts-facts">
             <Fact label="total">{formatCostTotal(s.cost.total)}</Fact>
-            <Fact label="agents active today (lifetime cost)">
-              {formatCostTotal(s.cost.today)}
-            </Fact>
+            <Fact label="agents active today (lifetime cost)">{formatCostTotal(s.cost.today)}</Fact>
             <Fact label="Harmonizer and Waykeepers">{formatCostTotal(s.cost.brains)}</Fact>
             <Fact label="Stewards">{formatCostTotal(s.cost.stewards)}</Fact>
           </dl>

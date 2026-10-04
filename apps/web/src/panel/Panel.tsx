@@ -341,9 +341,7 @@ function MainHeader({
         </NavLink>
       )}
       {agent?.role === 'waykeeper' && <WaykeeperControls agent={agent} />}
-      {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && (
-        <DockViewToggle />
-      )}
+      {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && <DockViewToggle />}
       {toggle && (
         <button
           type="button"
