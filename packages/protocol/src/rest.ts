@@ -40,6 +40,16 @@ export type SpawnBody = z.input<typeof SpawnBody>;
 export const SpawnResponse = z.object({ agentId: z.string().min(1) });
 export type SpawnResponse = z.infer<typeof SpawnResponse>;
 
+/**
+ * `POST /api/harmonizer/restart` (P5-06; SPEC decision 82): the running Harmonizer is stopped and
+ * a fresh one started on the same runtime. `agentId` is the new one; `replaced` the stopped one.
+ */
+export const RestartHarmonizerResponse = z.object({
+  agentId: z.string().min(1),
+  replaced: z.string().min(1).optional(),
+});
+export type RestartHarmonizerResponse = z.infer<typeof RestartHarmonizerResponse>;
+
 /** `POST /api/agents/:id/send`. */
 export const SendBody = z.object({ text: z.string().min(1), interrupt: z.boolean().optional() });
 export type SendBody = z.infer<typeof SendBody>;

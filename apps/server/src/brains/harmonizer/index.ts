@@ -61,6 +61,11 @@ export interface StartHarmonizerOptions {
   cwd: string;
   deps: HarmonizerDeps;
   runner?: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'>;
+  /**
+   * Lines for the first turn of the Harmonizer this call starts, before its own start notes (P5-06:
+   * "the user restarted you"). Ignored when one already runs.
+   */
+  notes?: string[];
 }
 
 export type StartHarmonizerResult =
@@ -89,8 +94,20 @@ export async function startHarmonizer(
   // One on another runtime (a fake one from an earlier dev run that recovery brought back) gives
   // way: stopped by the system, it is not resumed again, and one Harmonizer runs (decision 32).
   if (live) await host.runtime.stop(live.id, { type: 'system' });
+  const definition = harmonizerBrain(opts.deps);
+  const notes = opts.notes ?? [];
+  if (notes.length > 0) {
+    // Once: the first session's first turn (a later session's start notes are its own).
+    let pending = notes;
+    const own = definition.startNotes;
+    definition.startNotes = async (ctx) => {
+      const first = pending;
+      pending = [];
+      return [...first, ...((await own?.(ctx)) ?? [])];
+    };
+  }
   const runner = await host.startBrain(
-    harmonizerBrain(opts.deps),
+    definition,
     { runtime: opts.runtime, cwd: opts.cwd },
     opts.runner ?? {},
   );
