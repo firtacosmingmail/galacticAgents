@@ -354,4 +354,71 @@ describe('a promotion flies the Waykeeper (P4-04)', () => {
     w = fold(w, { type: 'body.freed', bodyId: 'b-luna' });
     expect(bodyLabel(w, 'b-luna')).toBeUndefined();
   });
+
+  it('landed Stewards of its completed tasks are re-created landed on the new body', () => {
+    seq = 0;
+    const moonProject: Project = { ...project, id: 'p-dark', bodyId: 'b-luna' };
+    const wk = agent({ id: 'a-wk2', role: 'waykeeper', bodyId: 'b-luna', projectId: 'p-dark' });
+    const done = (i: number): Task => ({
+      ...fx.task,
+      id: `t-done-${i}`,
+      projectId: 'p-dark',
+      bodyId: 'b-luna',
+      blockedBy: [],
+      state: 'completed',
+    });
+    const st = (i: number) =>
+      agent({ id: `a-st-${i}`, role: 'steward', bodyId: 'b-luna', taskId: `t-done-${i}` });
+    let w = fold(
+      emptyWorld(),
+      ...[kepler, luna, jupiter].map((body): Event => ({ type: 'body.created', body })),
+      { type: 'project.created', project: moonProject },
+      { type: 'body.assigned', bodyId: 'b-luna', host: { kind: 'project', id: 'p-dark' } },
+      { type: 'agent.created', agent: wk },
+      ...[1, 2].map((i): Event => ({ type: 'task.created', task: done(i) })),
+      ...[1, 2].map((i): Event => ({ type: 'agent.created', agent: st(i) })),
+    );
+    w = setStatus(w, 'a-wk2', 'idle');
+    w = setStatus(setStatus(w, 'a-st-1', 'finished'), 'a-st-2', 'stopped');
+    const d = director();
+    d.setSpecs(satelliteList(w, SCENE_SATELLITES), 0);
+    d.update(5, anchorsOf(w));
+    expect(['a-st-1', 'a-st-2'].map((id) => frameOf(d, id).mode)).toEqual(['landed', 'landed']);
+    w = fold(
+      w,
+      {
+        type: 'body.moved',
+        host: { kind: 'project', id: 'p-dark' },
+        fromBodyId: 'b-luna',
+        toBodyId: 'b-jupiter',
+      },
+      { type: 'project.updated', projectId: 'p-dark', changes: { bodyId: 'b-jupiter' } },
+      ...[1, 2].map((i): Event => ({
+        type: 'task.updated',
+        taskId: `t-done-${i}`,
+        changes: { bodyId: 'b-jupiter' },
+      })),
+      ...['a-wk2', 'a-st-1', 'a-st-2'].map((agentId): Event => ({
+        type: 'agent.updated',
+        agentId,
+        changes: { bodyId: 'b-jupiter' },
+      })),
+    );
+    d.setSpecs(satelliteList(w, SCENE_SATELLITES), 6);
+    const jupiterAt = PLACES['b-jupiter']!;
+    // Over the Waykeeper's whole flight, the landed Stewards never fly nor land again.
+    for (let t = 6; t <= 6 + TIMING.flight + 0.1; t += 0.25) {
+      d.update(t, anchorsOf(w));
+      for (const id of ['a-st-1', 'a-st-2']) {
+        const f = frameOf(d, id);
+        expect([f.mode, f.bodyId, f.animated]).toEqual(['landed', 'b-jupiter', false]);
+        expect(dist(f.position, jupiterAt.at)).toBeCloseTo(SURFACE * jupiterAt.radius, 5);
+      }
+    }
+    expect(frameOf(d, 'a-wk2').bodyId).toBe('b-jupiter');
+    // They grow in on the new body (re-created), not slide across from the moon.
+    d.setSpecs(satelliteList(w, SCENE_SATELLITES), 20);
+    d.update(20, anchorsOf(w));
+    expect(frameOf(d, 'a-st-1').presence).toBe(1);
+  });
 });

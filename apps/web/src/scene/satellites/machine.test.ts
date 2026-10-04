@@ -187,10 +187,13 @@ describe('landing', () => {
     expect(reopened.mode).toBe('orbiting');
   });
 
-  it('a move after landing flies the satellite away', () => {
+  it('a move after landing re-creates it landed on the new body (no flight, no landing)', () => {
     let a = createActor('a-l2', { ...idle, landed: true }, 0);
     a = advance(a, { ...idle, bodyId: 'b-io', landed: true }, 1);
-    expect(a.mode).toBe('flying');
+    expect(a).toMatchObject({ mode: 'landed', bodyId: 'b-io', flight: undefined });
+    expect(sampleActor(a, 1).landing).toBe(1);
+    // A move that also reopens the work flies it, as any move does.
+    expect(advance(a, { ...idle, bodyId: 'b-titan' }, 2).mode).toBe('flying');
   });
 });
 

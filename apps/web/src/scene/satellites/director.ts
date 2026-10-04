@@ -269,6 +269,9 @@ export class SatelliteDirector {
         landed: spec.landed,
       };
       const known = this.entries.get(spec.agentId);
+      // P4-04: a landed satellite whose body moved (a promotion) is re-created landed there.
+      const relanded =
+        spec.landed && known?.actor.mode === 'landed' && known.actor.bodyId !== spec.bodyId;
       const slot = slots.get(spec.agentId) ?? parked.get(spec.agentId) ?? 0;
       // A satellite landing where it orbits keeps its orbit (it comes down from it).
       const keep = spec.landed && known !== undefined && known.actor.bodyId === spec.bodyId;
@@ -280,7 +283,14 @@ export class SatelliteDirector {
         // Taken now, not at the next drawn frame: a flight or landing starts when the world
         // changed, so it ends on time even if no frame is drawn meanwhile.
         known.actor = advance(known.actor, input, now, { reducedMotion: reduced });
-        if (known.orbitKey !== key) this.changeOrbit(known, spec, slot, key, now);
+        if (relanded && known.actor.mode === 'landed') {
+          // No orbit blend across the surface and a fresh grow-in on the new body.
+          known.orbit = satelliteOrbit(spec.agentId, spec.role, slot);
+          known.orbitKey = key;
+          known.orbitFrom = undefined;
+          known.presence = { from: reduced ? 1 : 0, to: 1, start: now };
+          known.lastDrawn = undefined;
+        } else if (known.orbitKey !== key) this.changeOrbit(known, spec, slot, key, now);
         if (known.leaving) {
           known.leaving = false;
           known.presence = { from: this.presenceAt(known, now), to: 1, start: now };
