@@ -78,7 +78,7 @@ Worker paint times (dev build, M3 Pro, high): Earth 8.0 s, Mars 8.5 s, Mercury 5
 - **Neptune:** deep blue with soft bands and a faint limb glow.
 - **Fixed during the check:** Venus showed teal blotches. Brightening features pushed colour channels past 255, and the `Uint8Array` wrapped them instead of clamping. Feature colours are now clamped, and a test covers it.
 
-## Proposed SPEC text (decision, for Cosmin to record)
+## SPEC text (recorded as decision 87)
 
 > **Detail-view visuals** (2026-10-04, P6-02; §4.1, decisions 51, 84): in its detail view a planet or moon looks like the real one — Earth with its coastlines, drifting clouds and blue atmosphere, Jupiter's bands and Great Red Spot, Saturn's pale bands and its rings with the Cassini division, Mars's ochre with dark plains and polar caps, Venus's yellow cloud deck, Mercury and the Moon cratered grey, Uranus and Neptune cyan and blue — with relief that catches the sunlight. The sharper surface arrives a few seconds after entering (the body is shown as in the system view meanwhile). The same features, at lower resolution, are visible in the system view. The quality setting decides the detail: "mobile" draws smaller surfaces without relief and coarser clouds but keeps the atmosphere glow. With reduced motion the clouds stand still.
 

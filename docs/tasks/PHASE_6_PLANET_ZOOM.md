@@ -1,7 +1,7 @@
 # Phase 6 — Planet zoom and structure
 
-**Current task:** P6-02 (wave 2, branch `p6-wave2-visuals-cutaway-hq`) · **Task status:** in progress
-**Phase status:** in progress (3/5 done) — on branch `phase-6`
+**Current task:** P6-04 (wave 3, after wave 2 is merged into `phase-6`) · **Task status:** todo
+**Phase status:** in progress (4/5 done) — on branch `phase-6`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -41,7 +41,7 @@ Zooming into a planet shows it "as it is in our solar system" — high-detail su
 - **Acceptance:** smooth transition from system scale to planet scale and back for every planet.
 
 ### P6-02 — High-detail visuals
-- **Status:** in progress · **Depends on:** P6-01 · **Parallel with:** P6-03, P6-05
+- **Status:** done (2026-10-04) · **Depends on:** P6-01 · **Parallel with:** P6-03, P6-05
 - High-res textures with normal/specular maps, atmosphere shader, clouds for Earth, rings for Saturn/Uranus, the planet's moons orbiting in the detail view; quality tier respected.
 - **Acceptance:** each planet recognisably itself at detail scale at 60 fps on the Mac.
 
