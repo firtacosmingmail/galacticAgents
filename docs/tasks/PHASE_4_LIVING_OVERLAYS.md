@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** P4-12, P4-13 (added to wave 2, branch `p4-wave2-state-activity-beacons`) · **Task status:** in progress
-**Phase status:** in progress (8/13 done) — on branch `phase-4`
+**Current task:** P4-12, P4-13, P4-14 (added to wave 2, branch `p4-wave2-state-activity-beacons`) · **Task status:** in progress
+**Phase status:** in progress (8/14 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -102,6 +102,11 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Status:** in progress · **Depends on:** P4-05 · **Parallel with:** P4-12
 - Cosmin's answers on the beacon choices: the Harmonizer's own questions put a beacon on Earth (kept); one beacon per **question**, not per body; clicking a beacon also selects the asking agent and flies the camera to it (as well as opening the question in the inbox). Also: bodies that are not in the catalogue (demo planets made by the early dev buttons) are not drawn once nothing is on them.
 - **Acceptance:** two questions on one body show two beacons; clicking one selects its asker, flies there and opens the question; a free non-catalogue body is not drawn; tests.
+
+### P4-14 — Waykeepers clean up their Stewards' processes (added 2026-10-04)
+- **Status:** in progress · **Depends on:** P1-01, P2-10, P2-11 · **Parallel with:** P4-12, P4-13
+- Cosmin, after stray headless browsers and dev servers kept running on his machine: "I want the process cleanup to be done by Waykeepers" (in GalacticAgents). Today the supervisor starts each agent in its own process group and a stop kills the group (corner case 4), but processes that leave the group (`setsid`, `nohup`, daemons), and background servers of a Steward that is alive but idle, survive; and no one checks. Build: attribution of a Steward's processes (its process group, plus processes whose working directory is inside the task's worktree and that descend from or were started during the Steward's session — never the server, never processes outside the worktree that the Steward did not start); Waykeeper tools to list them (pid, command, working directory, listening ports, age) and stop them (gracefully, then by force), limited to its own Stewards; the Waykeeper's prompt makes the check part of finishing a task (before merge/close) and of handling a stopped or failed Steward, and it reports what it stopped; the server sweeps a Steward's attributable processes when the Steward ends or its task closes, as a safety net; the panel's Steward view shows leftovers with a stop action.
+- **Acceptance:** a Steward that starts a background server (in-group and escaped) and finishes leaves nothing running after its Waykeeper closes the task; processes outside the worktree or not started by the Steward are never touched; tests with real child processes.
 
 ## Exit criteria (from the plan)
 
