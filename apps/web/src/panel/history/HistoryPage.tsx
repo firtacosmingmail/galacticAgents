@@ -10,6 +10,7 @@ import type {
   QuestionKind,
 } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
+import { startReplay } from '../../replay/store.js';
 import type { WorldState } from '../../state/reduce.js';
 import {
   actorLabel,
@@ -237,8 +238,18 @@ function WorkRow({ entry }: { entry: HistoryWorkItem }) {
           ))}
         </p>
       )}
-      {actions.length > 0 && (
+      {(actions.length > 0 || work.kind === 'project') && (
         <div className="his-actions" role="group" aria-label={`${work.kind} controls of ${name}`}>
+          {work.kind === 'project' && (
+            // The timeline scrubber (P4-07): back to the scene, replaying this project.
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => startReplay(api, item.id, name)}
+            >
+              Replay
+            </button>
+          )}
           {actions.map((a) => (
             <button
               key={a.action}

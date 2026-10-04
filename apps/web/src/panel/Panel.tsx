@@ -26,6 +26,7 @@ import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
 import { HistoryPage } from './history/HistoryPage.js';
 import { SceneArea } from '../scene/SceneArea.js';
+import { ReplayBar } from '../replay/ReplayBar.js';
 import { useScene } from '../scene/visibility.js';
 import { INBOX_ID, TopBar } from './TopBar.js';
 import {
@@ -124,6 +125,7 @@ export function Panel({
                         <NavigationMemo />
                         {side && <SideColumn agents={agents} inbox={inbox} />}
                       </div>
+                      <ReplayBar sceneShown={showScene} />
                       {main}
                     </div>
                   ) : (
@@ -131,6 +133,7 @@ export function Panel({
                       <NavigationMemo />
                       <div className="pnl-centre" ref={centre}>
                         {showScene && <SceneAreaMemo onFailure={scene.fail} />}
+                        <ReplayBar sceneShown={showScene} />
                         {main}
                       </div>
                       {side && <SideColumn agents={agents} inbox={inbox} />}

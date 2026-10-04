@@ -13,7 +13,7 @@ import type { OutlineEffect } from 'postprocessing';
 import { anchorList, getAnchor } from '../anchors.js';
 import { labelAt } from '../labels/registry.js';
 import { anchorPosition } from '../camera/store.js';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { getSatellite, satelliteFrames } from '../satellites/registry.js';
 import { prefersReducedMotion } from '../motion.js';
 import { bodyName, outlineBody, selectionBody } from './body-action.js';
@@ -271,7 +271,7 @@ export function Picking({ outline }: PickingProps) {
           grace = startGrace(hit.target.agentId, at);
         }
       } else {
-        const world = useAppStore.getState().world;
+        const world = sceneWorld(useAppStore.getState());
         moveHover(at.x, at.y);
         picking.setHover({
           bodyId: hit.target.bodyId,
@@ -417,8 +417,8 @@ export function Picking({ outline }: PickingProps) {
 
   const hovered = usePickingStore((s) => hoveredBody(s.hover));
   const hoveredAgent = usePickingStore((s) => hoveredSatellite(s.hover));
-  const selected = useAppStore((s) => selectionBody(s.world, s.selection));
-  const outlined = useAppStore((s) => outlineBody(s.world, s.selection));
+  const selected = useAppStore((s) => selectionBody(sceneWorld(s), s.selection));
+  const outlined = useAppStore((s) => outlineBody(sceneWorld(s), s.selection));
   useEffect(() => invalidate(), [hovered, hoveredAgent, selected, invalidate]);
   // The ring yields to the outline only where there is one.
   const outlineShown = outline !== undefined && outlined !== undefined && outlined === selected;

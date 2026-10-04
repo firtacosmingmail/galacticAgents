@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from 'rea
 import { useFrame, useThree } from '@react-three/fiber';
 import { PLACE_BODIES } from '../frame-order.js';
 import { DoubleSide, RingGeometry, type Group, type Mesh, type Object3D } from 'three';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { useSceneScale } from '../scale.js';
 import type { RingLook } from './appearance.js';
 import { useBodyAnchor } from '../anchor-binding.js';
@@ -60,7 +60,7 @@ import {
  * on the level, so picking, the camera and labels see the same anchor and radius throughout.
  */
 export function Bodies({ quality, sunRadius }: { quality: SceneQuality; sunRadius: number }) {
-  const bodies = useAppStore((s) => s.world.bodies);
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
   const mode = useSceneScale((s) => s.mode);
   const motion = motionEnabled(useReducedMotion());
   const list = useMemo(() => buildRenderList(bodies, mode), [bodies, mode]);

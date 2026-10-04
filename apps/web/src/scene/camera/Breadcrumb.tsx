@@ -1,4 +1,4 @@
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { SUN_ANCHOR_ID } from '../anchors.js';
 import { SCENE_SHORTCUTS } from './keys.js';
 import { useCameraStore } from './store.js';
@@ -12,8 +12,10 @@ export function CameraBreadcrumb() {
   const focusedId = useCameraStore((s) => s.focusedId);
   const back = useCameraStore((s) => s.back);
   const flyTo = useCameraStore((s) => s.flyTo);
-  const body = useAppStore((s) => (focusedId ? s.world.bodies[focusedId] : undefined));
-  const parent = useAppStore((s) => (body?.parentId ? s.world.bodies[body.parentId] : undefined));
+  const body = useAppStore((s) => (focusedId ? sceneWorld(s).bodies[focusedId] : undefined));
+  const parent = useAppStore((s) =>
+    body?.parentId ? sceneWorld(s).bodies[body.parentId] : undefined,
+  );
   return (
     <nav
       className="pnl-scene-crumbs"

@@ -138,3 +138,5 @@ export {
   EXTERNAL_COMMITS_SHOWN,
 } from './workspace/workspaces.js';
 export { gitRunner, GitError, SAFE_GIT_CONFIG, type Git } from './workspace/git.js';
+/** The timeline scrubber's read (P4-07), for the web client's replay conformance test. */
+export { HistoryEvents } from './runtime/history-events.js';
