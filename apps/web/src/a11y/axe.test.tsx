@@ -75,6 +75,10 @@ describe('axe-core over the main views (P5-04)', () => {
 
   it('a Steward selected, with its clarification box', async () => {
     await openApp('/steward/a-steward-1');
+    // The Steward's view itself, not a loading state: its open questions and the answer box.
+    const view = await screen.findByRole('region', { name: /^view of / });
+    await within(view).findByRole('heading', { name: /^Open question/ });
+    within(view).getByRole('form', { name: 'answer the clarification' });
     await check('steward');
   });
 
@@ -111,6 +115,7 @@ describe('axe-core over the main views (P5-04)', () => {
   it('the first-run wizard', async () => {
     vi.stubGlobal('fetch', quietFetch(undefined, { setupDone: false }));
     await openApp('/');
+    await screen.findByRole('heading', { level: 1, name: 'Welcome to GalacticAgents' });
     await check('wizard');
   });
 
