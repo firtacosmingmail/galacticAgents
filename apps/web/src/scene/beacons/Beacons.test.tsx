@@ -295,6 +295,17 @@ describe('Beacons', () => {
     expect(
       container.querySelector('[name="beacon:q-2"] [name="beacon-glyph-clarification"]'),
     ).not.toBeNull();
+    // The pillars fan out from the body's top: each leans towards its own glyph.
+    const pillar = (id: string) =>
+      document.querySelector<Dressed>(`[name="beacon:${id}"] mesh[name="beacon-pillar"]`)!;
+    const lean = (id: string) => {
+      const up = new Vector3(0, 1, 0).applyEuler(pillar(id).rotation);
+      return { x: up.x, top: pillar(id).position.x + (up.x * pillar(id).scale.y) / 2 };
+    };
+    expect(lean('q-1').x).toBeLessThan(0);
+    expect(lean('q-2').x).toBeGreaterThan(0);
+    expect(lean('q-1').top).toBeCloseTo(-BEACON.spacingPx / 2, 6);
+    expect(lean('q-2').top).toBeCloseTo(BEACON.spacingPx / 2, 6);
     // Stable: another frame, the same places.
     frame();
     expect(placed()).toEqual(first);
