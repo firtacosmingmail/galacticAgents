@@ -13,7 +13,7 @@ import {
 } from 'three';
 import { FpsCounter, type FpsSample } from './fps.js';
 import { BLOOM_SMOOTHING, contextAntialias, SUN_EMISSIVE, type SceneQuality } from './quality.js';
-import { centreOnCamera, generateStarField } from './starfield.js';
+import { centreOnCamera, generateStarField, STAR_POINT_PX } from './starfield.js';
 import { Bodies } from './bodies/Bodies.js';
 import { SUN_ANCHOR_ID } from './anchors.js';
 import { attachAnchor } from './anchor-binding.js';
@@ -30,6 +30,8 @@ import { Activities } from './satellites/activity/Activities.js';
 import { Beacons } from './beacons/Beacons.js';
 import { Colonies } from './colonies/Colonies.js';
 import { Toasts } from './toasts/Toasts.js';
+import { DetailLayer } from './detail/DetailLayer.js';
+import { useDetailStore } from './detail/mode.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -115,6 +117,8 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <Satellites quality={quality} />
       <Activities quality={quality} />
       <CameraRig />
+      {/* P6-01: the detail view's sub-scene, swapped in when the camera comes close to a body. */}
+      <DetailLayer quality={quality} sunRadius={SUN_RADIUS} />
       {/* P4-05: a beacon above every body with an open question for the user (`beacons/`). */}
       <Beacons />
       {/* P4-06: a brief flare on a body when work completes or a question waits (`toasts/`). */}
@@ -159,11 +163,14 @@ function StarField({ count }: { count: number }) {
   const follow = useCallback((_gl: unknown, _scene: unknown, camera: Camera) => {
     if (ref.current) centreOnCamera(ref.current, camera);
   }, []);
+  // P6-01: a settled detail view draws its own stars on its backdrop.
+  const covered = useDetailStore((s) => s.covered);
   return (
     // A new geometry per count: buffer attributes cannot grow in place.
     <points
       key={count}
       ref={ref}
+      visible={!covered}
       frustumCulled={false}
       onBeforeRender={follow}
       layers={DECOR_LAYER}
@@ -174,7 +181,7 @@ function StarField({ count }: { count: number }) {
       </bufferGeometry>
       <pointsMaterial
         vertexColors
-        size={1.6}
+        size={STAR_POINT_PX}
         sizeAttenuation={false}
         depthWrite={false}
         toneMapped={false}
@@ -195,8 +202,10 @@ function Sun({ glow }: { glow: boolean }) {
     () => attachAnchor({ bodyId: SUN_ANCHOR_ID, radius: SUN_RADIUS, kind: 'star' }, ref.current),
     [],
   );
+  // P6-01: behind a settled detail view's backdrop (which draws its own Sun) it is not drawn.
+  const covered = useDetailStore((s) => s.covered);
   return (
-    <group ref={ref} name="sun" userData={{ bodyId: SUN_ANCHOR_ID }}>
+    <group ref={ref} name="sun" userData={{ bodyId: SUN_ANCHOR_ID }} visible={!covered}>
       <mesh>
         <sphereGeometry args={[SUN_RADIUS, 64, 32]} />
         <meshStandardMaterial

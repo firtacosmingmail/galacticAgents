@@ -8,6 +8,7 @@ import { useSceneScale } from '../scale.js';
 import { CameraDirector } from './director.js';
 import type { Pose, Vec3, View } from './flight.js';
 import { prefersReducedMotion } from '../motion.js';
+import { detailBodyId } from '../detail/mode.js';
 import { AnchorWorld, handledOnMount, pendingRequest, useCameraStore } from './store.js';
 
 type Controls = ComponentRef<typeof OrbitControls>;
@@ -96,7 +97,8 @@ export function CameraRig() {
       pristine.current = false;
       snapOverview.current = false;
       if (request.kind === 'focus') {
-        if (director.focus(request.bodyId, pose, view, world, now, reduced)) store.flightStarted();
+        if (director.focus(request.bodyId, pose, view, world, now, reduced, request.radii))
+          store.flightStarted();
         else store.released();
       } else {
         director.overview(pose, view, world, now, reduced || request.instant === true);
@@ -117,7 +119,7 @@ export function CameraRig() {
     else if (result.event === 'overview') store.atOverview();
     else if (result.event === 'left' || result.event === 'lost') store.released();
 
-    const limits = director.limits(result.pose, view, world);
+    const limits = director.limits(result.pose, view, world, detailBodyId());
     c.minDistance = limits.minDistance;
     c.maxDistance = limits.maxDistance;
     // A flight owns the camera: no leftover inertia fights it. Reduced motion: no glide at all.

@@ -5,6 +5,7 @@ import {
   distance,
   flightDuration,
   flightPose,
+  focusDistance,
   focusPose,
   framingDistance,
   leaveDistance,
@@ -42,7 +43,8 @@ export interface StepResult {
   event?: DirectorEvent;
 }
 
-type Goal = { kind: 'focus'; bodyId: string; dir: Vec3 } | { kind: 'overview' };
+/** `radii`: the flight ends that many body radii from the centre (else the framing distance). */
+type Goal = { kind: 'focus'; bodyId: string; dir: Vec3; radii?: number } | { kind: 'overview' };
 
 type Mode =
   | { kind: 'free' }
@@ -79,7 +81,10 @@ export class CameraDirector {
     return undefined;
   }
 
-  /** Starts a flight that frames `bodyId`; false (and nothing changes) when it is not in the scene. */
+  /**
+   * Starts a flight that frames `bodyId` (at `radii` body radii when given: the detail view, P6-01);
+   * false (and nothing changes) when it is not in the scene.
+   */
   focus(
     bodyId: string,
     pose: Pose,
@@ -87,6 +92,7 @@ export class CameraDirector {
     world: DirectorWorld,
     now: number,
     reducedMotion: boolean,
+    radii?: number,
   ): boolean {
     const body = world.body(bodyId);
     if (!body) return false;
@@ -94,12 +100,15 @@ export class CameraDirector {
       body.position,
       pose.position,
       world.sunRadius,
-      framingDistance(body.radius, view),
+      focusDistance(body.radius, view, radii),
     );
-    const goal = focusPose(body.position, body.radius, dir, view);
+    const goal = focusPose(body.position, body.radius, dir, view, radii);
     this.mode = {
       kind: 'flying',
-      goal: { kind: 'focus', bodyId, dir },
+      goal:
+        radii === undefined
+          ? { kind: 'focus', bodyId, dir }
+          : { kind: 'focus', bodyId, dir, radii },
       start: pose,
       startedAt: now,
       duration: flightDuration(pose, goal, reducedMotion),
@@ -170,14 +179,19 @@ export class CameraDirector {
     return { pose: keepOutOfSun(pose, keepOut), animating: false };
   }
 
-  /** OrbitControls' zoom limits for this frame. */
+  /**
+   * OrbitControls' zoom limits for this frame. `holdId`: a body whose limits apply while the
+   * camera has no focus (P6-01: the detail view's body, after the user panned off it), so zooming
+   * never goes inside it.
+   */
   limits(
     pose: Pose,
     view: View,
     world: DirectorWorld,
+    holdId?: string,
   ): { minDistance: number; maxDistance: number } {
     const maxDistance = Math.max(length(overviewPose(world.extent, view).position) * 1.6, 200);
-    const id = this.bodyId;
+    const id = this.bodyId ?? holdId;
     const body = id ? world.body(id) : undefined;
     if (body) {
       // Close enough to fill the view with a tiny asteroid, never inside the body.
@@ -194,7 +208,7 @@ export class CameraDirector {
   private goalPose(goal: Goal, view: View, world: DirectorWorld): Pose | undefined {
     if (goal.kind === 'overview') return overviewPose(world.extent, view);
     const body = world.body(goal.bodyId);
-    return body ? focusPose(body.position, body.radius, goal.dir, view) : undefined;
+    return body ? focusPose(body.position, body.radius, goal.dir, view, goal.radii) : undefined;
   }
 }
 

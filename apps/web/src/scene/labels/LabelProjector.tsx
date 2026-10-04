@@ -4,6 +4,7 @@ import { Matrix4, type PerspectiveCamera } from 'three';
 import { allAnchors, getAnchor, onAnchorsChanged } from '../anchors.js';
 import { anchorPosition, useCameraStore } from '../camera/store.js';
 import { pixelScale } from '../picking/pick.js';
+import { currentDetailScope, useDetailStore } from '../detail/mode.js';
 import { PRIORITY } from './label-model.js';
 import {
   declutter,
@@ -59,10 +60,15 @@ export function LabelProjector({ hz }: { hz: number }) {
     // anchor in the body's passive effect, in either order): either one arriving forces a pass.
     const stopLabels = onLabelsChanged(refresh);
     const stopAnchors = onAnchorsChanged(refresh);
+    // P6-01: entering or leaving a detail view changes which labels may show.
+    const stopMode = useDetailStore.subscribe((s, prev) => {
+      if (s.mode !== prev.mode) refresh();
+    });
     refresh();
     return () => {
       stopLabels();
       stopAnchors();
+      stopMode();
       if (timer.current) clearTimeout(timer.current);
       timer.current = undefined;
       hideAll();
@@ -119,10 +125,13 @@ export function projectLabels(
 
   // Kept inside the top edge rather than hidden there: the selection's and the camera focus's.
   const focusedId = useCameraStore.getState().focusedId;
+  // P6-01: in a detail view only its own bodies are labelled (the rest is behind its backdrop).
+  const scope = currentDetailScope();
   const candidates: LabelBox[] = [];
   const byId = new Map<string, LabelEntry>();
   for (const entry of labelEntries()) {
     byId.set(entry.bodyId, entry);
+    if (scope && !scope.has(entry.bodyId)) continue;
     const anchor = getAnchor(entry.bodyId);
     if (!anchor) continue;
     const position = anchorPosition(anchor);

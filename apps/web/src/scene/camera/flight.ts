@@ -121,9 +121,19 @@ export function approachDirection(
   );
 }
 
-/** The pose that frames a body: looking at its centre from `dir` at its framing distance. */
-export function focusPose(body: Vec3, radius: number, dir: Vec3, view: View): Pose {
-  return { target: body, position: add(body, scale(dir, framingDistance(radius, view))) };
+/**
+ * The pose that frames a body: looking at its centre from `dir` at its framing distance, or at
+ * `radii` body radii when given (P6-01: the detail view comes closer than the system framing).
+ */
+export function focusPose(body: Vec3, radius: number, dir: Vec3, view: View, radii?: number): Pose {
+  return { target: body, position: add(body, scale(dir, focusDistance(radius, view, radii))) };
+}
+
+/** How far from a body's centre a focus flight ends: `radii` body radii, else the framing distance. */
+export function focusDistance(radius: number, view: View, radii?: number): number {
+  return radii === undefined
+    ? framingDistance(radius, view)
+    : Math.max(radius, MIN_FRAMED_RADIUS) * radii;
 }
 
 /** The overview looks down at the orbital plane at this slope (the initial camera's, 40 over 140). */

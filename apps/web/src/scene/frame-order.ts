@@ -7,6 +7,9 @@
  *   along their orbits) and the belt's spin (task asteroids ride it). It runs first, so every
  *   reader of an anchor's world position this frame sees where the body is now. (drei's
  *   OrbitControls applies its damping at −1 too.)
+ * - `PLACE_DETAIL` (−0.75): the detail view's sub-scene (P6-01, `detail/`) copies its body's anchor
+ *   matrix into its own frame and places its backdrop, after the bodies moved and before anything
+ *   reads them.
  * - `PLACE_SATELLITES` (−0.5): the satellites' director (`satellites/Satellites.tsx`) reads the
  *   bodies and writes the satellites' frames (the registry), before their own readers. Its pixel
  *   floor reads the camera as the previous frame left it (a pixel, at most, a frame late).
@@ -20,6 +23,7 @@
  *   late.
  */
 export const PLACE_BODIES = -1;
+export const PLACE_DETAIL = -0.75;
 export const PLACE_SATELLITES = -0.5;
 export const PLACE_CAMERA = -0.25;
 export const READ_BODIES = 0;

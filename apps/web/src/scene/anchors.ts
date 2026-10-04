@@ -32,26 +32,43 @@ export function moonOrder(parentOrbit: number, rank: number): number {
 /** The catalogue Sun's `Body.id` (migration 0005); the Sun registers under it. */
 export const SUN_ANCHOR_ID = 'b-sun';
 
-const anchors = new Map<string, BodyAnchor>();
+/**
+ * The registrations per id, newest last: the newest one is the body's anchor. A second
+ * registration of an id overrides the first (P6-01: a detail view that draws a body somewhere else
+ * may stand in for its system anchor) and unregistering it restores the one below, so the
+ * system's anchor is suspended, never lost. Today every id has a single registration: the detail
+ * view draws its bodies where the system's anchors are (`detail/`).
+ */
+const anchors = new Map<string, BodyAnchor[]>();
 const listeners = new Set<() => void>();
-/** `anchors`' values, rebuilt on register / unregister only (per-frame readers do not copy). */
+/** The anchors in force (each id's newest), rebuilt on register / unregister only. */
 let list: readonly BodyAnchor[] = [];
 
-export function registerAnchor(anchor: BodyAnchor): () => void {
-  anchors.set(anchor.bodyId, anchor);
-  list = [...anchors.values()];
+function rebuild(): void {
+  const next: BodyAnchor[] = [];
+  for (const stack of anchors.values()) next.push(stack[stack.length - 1]!);
+  list = next;
   listeners.forEach((l) => l());
+}
+
+export function registerAnchor(anchor: BodyAnchor): () => void {
+  const stack = anchors.get(anchor.bodyId);
+  if (stack) stack.push(anchor);
+  else anchors.set(anchor.bodyId, [anchor]);
+  rebuild();
   return () => {
-    if (anchors.get(anchor.bodyId) === anchor) {
-      anchors.delete(anchor.bodyId);
-      list = [...anchors.values()];
-      listeners.forEach((l) => l());
-    }
+    const now = anchors.get(anchor.bodyId);
+    const at = now ? now.lastIndexOf(anchor) : -1;
+    if (!now || at < 0) return;
+    now.splice(at, 1);
+    if (now.length === 0) anchors.delete(anchor.bodyId);
+    rebuild();
   };
 }
 
 export function getAnchor(bodyId: string): BodyAnchor | undefined {
-  return anchors.get(bodyId);
+  const stack = anchors.get(bodyId);
+  return stack?.[stack.length - 1];
 }
 
 export function allAnchors(): BodyAnchor[] {
