@@ -37,9 +37,7 @@ export interface WorkTarget {
  * Opens a project or task in the history's inspector (P5-03), with its name when the caller
  * knows it (the "Back to <name>" label of the item opened after it).
  */
-export const InspectContext = createContext<(target: WorkTarget, name?: string) => void>(
-  () => {},
-);
+export const InspectContext = createContext<(target: WorkTarget, name?: string) => void>(() => {});
 
 /** One item of the inspector's trail; `name` once known (the caller's, or read by the inspector). */
 export interface TrailEntry {
@@ -51,7 +49,10 @@ export interface TrailEntry {
  * The name "Back to <name>" shows for a trail entry: its known name, else the stream's copy's,
  * else "…" until one is known — never the raw id (wave-1 review).
  */
-export function trailName(entry: TrailEntry, world: Pick<WorldState, 'tasks' | 'projects'>): string {
+export function trailName(
+  entry: TrailEntry,
+  world: Pick<WorldState, 'tasks' | 'projects'>,
+): string {
   const t = entry.target;
   return (
     entry.name ??
