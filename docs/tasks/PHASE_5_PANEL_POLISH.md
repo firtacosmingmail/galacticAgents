@@ -1,7 +1,7 @@
 # Phase 5 — Side panel polish and scene integration
 
-**Current task:** P5-02, P5-03 (wave 1, branch `p5-wave1-selection-status-history`) · **Task status:** in progress
-**Phase status:** in progress (1/5 done) — on branch `phase-5`
+**Current task:** P5-03 (wave 1, branch `p5-wave1-selection-status-history`) · **Task status:** in progress
+**Phase status:** in progress (2/5 done) — on branch `phase-5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -41,7 +41,7 @@ The Phase 2.5 panel becomes the spec's panel, wired to the scene: selection flow
 - **Acceptance:** every selection path in `SPEC.md` §4.1–4.2 works in both directions.
 
 ### P5-02 — Status views
-- **Status:** in progress · **Depends on:** P2-15, P25-02 · **Parallel with:** P5-01, P5-03
+- **Status:** done (2026-10-04) · **Depends on:** P2-15, P25-02 · **Parallel with:** P5-01, P5-03
 - System / project / task / agent summary views from the derived states (counts, blocked items first, cost totals, open questions); "blocked on user" is the loudest everywhere; optional "ask the Harmonizer for a narrative status" button.
 - **Acceptance:** "ask for the status of anything" (SPEC §4.3) is answerable without an LLM call.
 
