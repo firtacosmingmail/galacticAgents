@@ -145,6 +145,11 @@ describe('the Steward view (P25-05)', () => {
 
     const text = view().textContent ?? '';
     expect(text).toMatch(/Editing src\/session\.ts/); // current activity
+    // Its activity line is a plain paragraph that says what it is (no ARIA name on a `<p>`).
+    const activity = view().querySelector<HTMLElement>('p.stw-activity')!;
+    expect(activity.textContent).toBe('Current activity: Editing src/session.ts');
+    expect(activity.getAttribute('role')).toBeNull();
+    expect(activity.getAttribute('aria-label')).toBeNull();
     expect(text).toMatch(/\/home\/cosmin\/work\/auth\/\.worktrees\/t-1/);
     expect(text).toMatch(/task\/t-1-session-middleware/);
     expect(text).toMatch(/Auth refactor/);

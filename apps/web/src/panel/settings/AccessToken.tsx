@@ -35,7 +35,8 @@ export function AccessToken({ token }: { token: string }) {
       </p>
       <div className="set-field set-inline">
         <span>Token</span>
-        <code className="set-token" role="group" aria-label="access token">
+        {/* Named by the visible "Token" before it; a `<code>` takes no ARIA name. */}
+        <code className="set-token">
           {revealed ? token : maskToken(token)}
         </code>
         <button type="button" className="set-secondary" onClick={() => setRevealed(!revealed)}>
