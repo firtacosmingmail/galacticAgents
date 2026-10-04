@@ -29,6 +29,7 @@ import { Satellites } from './satellites/Satellites.js';
 import { Activities } from './satellites/activity/Activities.js';
 import { Beacons } from './beacons/Beacons.js';
 import { Colonies } from './colonies/Colonies.js';
+import { Toasts } from './toasts/Toasts.js';
 
 /**
  * The solar-system scene (P3-01): the R3F canvas on the classic `WebGLRenderer` (decision 20),
@@ -116,6 +117,8 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
       <CameraRig />
       {/* P4-05: a beacon above every body with an open question for the user (`beacons/`). */}
       <Beacons />
+      {/* P4-06: a brief flare on a body when work completes or a question waits (`toasts/`). */}
+      <Toasts />
       <Picking outline={quality.bloom ? outline : undefined} />
       <MoonMarkers />
       <LabelProjector hz={quality.labelHz} />
