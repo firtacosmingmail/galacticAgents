@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { sameSelection, type Selection } from '../../state/selection.js';
 import { getAnchor, onAnchorsChanged } from '../anchors.js';
 import { useCameraStore } from '../camera/store.js';
@@ -91,7 +91,7 @@ export function noteUserCameraInput(): void {
 export function useSelectionSync(): void {
   useEffect(() => {
     const sync = new SelectionSync({
-      bodyFor: (selection) => selectionBody(useAppStore.getState().world, selection),
+      bodyFor: (selection) => selectionBody(sceneWorld(useAppStore.getState()), selection),
       hasAnchor: (bodyId) => getAnchor(bodyId) !== undefined,
       focusedId: () => useCameraStore.getState().focusedId,
       flyTo: (bodyId) => {
@@ -107,7 +107,7 @@ export function useSelectionSync(): void {
         // A body's info popover is about the old view; the scene's own selection closed it.
         if (!isSceneSelection(state.selection)) usePickingStore.getState().closePopover();
         sync.selectionChanged(state.selection, isSceneSelection(state.selection));
-      } else if (state.world !== prev.world) {
+      } else if (sceneWorld(state) !== sceneWorld(prev)) {
         sync.retry();
       }
     });

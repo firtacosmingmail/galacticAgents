@@ -1,4 +1,5 @@
 import {
+  describeTool,
   ENDED_STATES,
   type AgentCaps,
   type AgentRuntime,
@@ -437,14 +438,4 @@ export class StatusStore {
       this.flush();
     }, this.flushMs);
   }
-}
-
-function describeTool(toolName: string, input: unknown): string {
-  if (input && typeof input === 'object') {
-    const i = input as Record<string, unknown>;
-    const detail = i['command'] ?? i['file_path'] ?? i['pattern'] ?? i['path'] ?? i['url'];
-    // Events reach the store redacted (AgentRuntime); a rebuild reads the same redacted log.
-    if (typeof detail === 'string') return `${toolName}: ${detail.slice(0, 120)}`;
-  }
-  return toolName;
 }

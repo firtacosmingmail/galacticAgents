@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { selectionKey, type Selection, type SelectionKey } from '../../state/selection.js';
 import { agentLabel } from '../../console/hierarchy/shared.js';
 import { useCameraStore } from '../camera/store.js';
@@ -98,7 +98,7 @@ export const usePickingStore = create<PickingState>((set, get) => ({
     set({ hover });
   },
   showHere: (at, bodyIds, agentIds = []) => {
-    const world = useAppStore.getState().world;
+    const world = sceneWorld(useAppStore.getState());
     set({
       popover: {
         kind: 'here',
@@ -199,7 +199,7 @@ export function selectFromScene(selection: Selection): void {
  * `fly: false` when the camera is already there (Enter on the camera's focus).
  */
 export function activateBody(bodyId: string, at: Point, opts: { fly?: boolean } = {}): BodyAction {
-  const action = bodyAction(useAppStore.getState().world, bodyId);
+  const action = bodyAction(sceneWorld(useAppStore.getState()), bodyId);
   const picking = usePickingStore.getState();
   if (opts.fly !== false) useCameraStore.getState().flyTo(bodyId);
   if (action.kind === 'select') {
@@ -217,7 +217,7 @@ export function activateBody(bodyId: string, at: Point, opts: { fly?: boolean } 
  * `false` when the agent is unknown (nothing happens).
  */
 export function activateSatellite(agentId: string): boolean {
-  const world = useAppStore.getState().world;
+  const world = sceneWorld(useAppStore.getState());
   const selection = satelliteSelection(world, agentId);
   if (!selection) return false;
   const bodyId = getSatellite(agentId)?.bodyId ?? selectionBody(world, selection);

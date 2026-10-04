@@ -13,7 +13,7 @@ import {
   type PerspectiveCamera,
 } from 'three';
 import type { Id } from '@galactic/protocol';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { getAnchor, onAnchorsChanged } from '../anchors.js';
 import { useCameraStore } from '../camera/store.js';
 import { PLACE_SATELLITES } from '../frame-order.js';
@@ -73,10 +73,10 @@ beam mesh holds only the scanning satellites' beams and is hidden when none scan
  * clock, not by frames.
  */
 export function Satellites({ quality }: { quality: SceneQuality }) {
-  const agents = useAppStore((s) => s.world.agents);
-  const statuses = useAppStore((s) => s.world.statuses);
-  const tasks = useAppStore((s) => s.world.tasks);
-  const projects = useAppStore((s) => s.world.projects);
+  const agents = useAppStore((s) => sceneWorld(s).agents);
+  const statuses = useAppStore((s) => sceneWorld(s).statuses);
+  const tasks = useAppStore((s) => sceneWorld(s).tasks);
+  const projects = useAppStore((s) => sceneWorld(s).projects);
   const list = useMemo(
     () => satelliteList({ agents, statuses, tasks, projects }, SCENE_SATELLITES),
     [agents, statuses, tasks, projects],

@@ -1,5 +1,5 @@
 import type { Id } from '@galactic/protocol';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { revealQuestion } from '../../panel/inbox-reveal.js';
 import { useCameraStore } from '../camera/store.js';
 import { usePickingStore, selectFromScene } from '../picking/store.js';
@@ -25,11 +25,11 @@ import { beaconHq, questionBody, waitsForUser } from './beacon-model.js';
 export function activateBeacon(questionId: Id): Id | undefined {
   const store = useAppStore.getState();
   usePickingStore.getState().closePopover();
-  const q = store.world.questions[questionId];
+  const q = sceneWorld(store).questions[questionId];
   if (!q || !waitsForUser(q)) return undefined;
-  const bodyId = questionBody({ ...store.world, hqBodyId: beaconHq(store.world) }, q);
+  const bodyId = questionBody({ ...sceneWorld(store), hqBodyId: beaconHq(sceneWorld(store)) }, q);
   if (bodyId) useCameraStore.getState().flyTo(bodyId);
-  const selection = satelliteSelection(store.world, q.originAgentId);
+  const selection = satelliteSelection(sceneWorld(store), q.originAgentId);
   if (selection) selectFromScene(selection);
   else if (store.route !== 'panel') store.navigate({ route: 'panel', selection: store.selection });
   revealQuestion(questionId);
