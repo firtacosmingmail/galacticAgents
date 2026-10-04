@@ -182,7 +182,15 @@ class Session {
   stopping = false;
   /** The one terminal event was emitted; nothing else may follow. */
   terminal: 'finished' | 'failed' | 'stopped' | undefined;
-  pending: PendingQuestion | undefined;
+  /**
+   * Questions waiting for an answer, by question id. Several at once: the CLI asks `canUseTool`
+   * for parallel tool calls concurrently (two WebSearch calls in one turn).
+   */
+  readonly pending = new Map<Id, PendingQuestion>();
+  /** Settles every waiting question with no answer (interrupt, stop, end of session). */
+  settlePending(): void {
+    for (const q of [...this.pending.values()]) q.resolve(undefined);
+  }
   lastCost: Cost | undefined;
   lastResult: string | undefined;
   /** The `PreToolUse` hook's verdict per `toolUseId`, reused by `canUseTool` (one gate check per call). */
@@ -776,14 +784,14 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     const id = `q-${randomUUID()}`;
     return new Promise((resolve) => {
       const done = (answer: string | undefined) => {
-        if (session.pending?.id === id) session.pending = undefined;
+        session.pending.delete(id);
         this.byQuestion.delete(id);
         signal.removeEventListener('abort', onAbort);
         resolve(answer);
       };
       const onAbort = () => done(undefined);
       signal.addEventListener('abort', onAbort, { once: true });
-      session.pending = { id, resolve: done };
+      session.pending.set(id, { id, resolve: done });
       this.byQuestion.set(id, session);
       this.emit(session, {
         type: 'agent.needs_input',
@@ -814,9 +822,9 @@ export class ClaudeSdkAdapter implements AgentAdapter {
 
   async answer(questionId: Id, answer: string): Promise<void> {
     const session = this.byQuestion.get(questionId);
-    if (!session || session.pending?.id !== questionId)
-      throw new Error(`no pending question ${questionId}`);
-    session.pending.resolve(answer);
+    const pending = session?.pending.get(questionId);
+    if (!pending) throw new Error(`no pending question ${questionId}`);
+    pending.resolve(answer);
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -825,7 +833,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     // A frozen CLI cannot read the control request: thaw it first.
     if (session.paused) this.thaw(session);
     session.interrupting = true;
-    session.pending?.resolve(undefined);
+    session.settlePending();
     try {
       await session.query?.interrupt();
     } catch (error) {
@@ -862,7 +870,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     if (session.stopDone) return session.stopDone;
     session.stopping = true;
     session.stopDone = (async () => {
-      session.pending?.resolve(undefined);
+      session.settlePending();
       if (session.process) {
         // The supervisor runs the sequence: our interrupt hook (turn end, then the input is
         // closed so the CLI can exit on its own) → SIGTERM → SIGKILL.
@@ -930,7 +938,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         : event.type === 'agent.failed'
           ? 'failed'
           : 'stopped';
-    session.pending?.resolve(undefined);
+    session.settlePending();
     session.closeTurn();
     session.inbox.close();
     this.forget(session);

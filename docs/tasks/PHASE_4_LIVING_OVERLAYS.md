@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** P4-04 (wave 3, after wave 2 is merged into `phase-4`) · **Task status:** todo
-**Phase status:** in progress (7/10 done) — on branch `phase-4`
+**Current task:** P4-12, P4-13 (added to wave 2, branch `p4-wave2-state-activity-beacons`) · **Task status:** in progress
+**Phase status:** in progress (8/13 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -87,6 +87,21 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Status:** done (2026-10-03) · **Depends on:** P4-09, P3-12 · **Parallel with:** —
 - Cosmin, after hiding the managed agents: "The inbox panel is now below and on top of the chat window. Now I cannot reach the chat. Move the chat to the bottom part of the screen, between the side panels. I want to be able to minimise the chat as well, and pull it back up." Also reported: "a big scroll on the page; the bottom of the page is empty and I can scroll to it." New layout: the scene fills the centre; the conversation (or the Steward view) is a panel docked at the bottom between the navigation (left) and the side column (inbox and, when shown, the managed agents — right); it can be minimised to a bar (keeping its title, the unread/typing hint and the controls strip's essentials) and pulled back up (button and drag handle for its height), remembered per browser; nothing ever overlaps another panel, and the page never scrolls. List mode (scene hidden) gives the conversation the centre. Phone widths keep a stacked layout with the same minimise bar.
 - **Acceptance:** at every width from 320 px to 2560 px, with the scene and the managed agents shown or hidden and the chat open or minimised, no panel covers another and `document.scrollingElement.scrollHeight == innerHeight`; the chat minimises and comes back, its state remembered after a reload; tests.
+
+### P4-11 — Parallel permission requests (added 2026-10-04)
+- **Status:** done (2026-10-04) · **Depends on:** P1-09 · **Parallel with:** P4-12, P4-13
+- Cosmin: the Harmonizer asked "May WebSearch run?"; pressing Allow showed "Internal" and nothing happened. Root cause (his database, read-only): the Harmonizer made two WebSearch calls in one turn; the Claude adapter kept one pending question per session, so the second `canUseTool` overwrote the first; answering the first threw "no pending question" after the answer was written, the command rolled back (500 `internal`), and the first tool call waited forever. Fix: pending questions by id (`Session.pending` is a map; interrupt, stop and the session's end settle all of them). Test: two concurrent `canUseTool` calls, both answered.
+- **Acceptance:** met — the regression test fails before the fix and passes after; adapter suite green.
+
+### P4-12 — Hidable inbox; closed projects out of the navigation (added 2026-10-04)
+- **Status:** in progress · **Depends on:** P4-09, P4-10 · **Parallel with:** P4-13
+- Cosmin: "I want to be able to hide the inbox as well" and "I want to be able to remove closed projects from the projects bar. There are a few demo projects that seem to be working on invented planets." The inbox gets a hide/show toggle like the managed agents (decision 69), with "N waiting" still visible and a way back; when the inbox and the managed agents are both hidden the side column goes and the centre takes the space. The navigation hides closed work (completed and archived projects and tasks) behind a "Show closed" toggle; a project can be closed and archived from the navigation (the controls strip's actions), so leftover demo projects can be cleared.
+- **Acceptance:** the inbox hides and comes back, remembered per browser, with no overlap at any width; completed or archived projects are not listed unless "Show closed" is on; tests.
+
+### P4-13 — A beacon per question, clicking it goes to the asker; no made-up planets (added 2026-10-04)
+- **Status:** in progress · **Depends on:** P4-05 · **Parallel with:** P4-12
+- Cosmin's answers on the beacon choices: the Harmonizer's own questions put a beacon on Earth (kept); one beacon per **question**, not per body; clicking a beacon also selects the asking agent and flies the camera to it (as well as opening the question in the inbox). Also: bodies that are not in the catalogue (demo planets made by the early dev buttons) are not drawn once nothing is on them.
+- **Acceptance:** two questions on one body show two beacons; clicking one selects its asker, flies there and opens the question; a free non-catalogue body is not drawn; tests.
 
 ## Exit criteria (from the plan)
 
