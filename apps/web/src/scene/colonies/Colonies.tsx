@@ -47,28 +47,31 @@ export function Colonies() {
   );
   useEffect(() => () => material.dispose(), [material]);
 
-  const points = useRef(new Map<Id, Points>());
-  useFrame(() => {
-    for (const [bodyId, p] of points.current) {
-      const anchor = getAnchor(bodyId);
-      p.visible = anchor !== undefined;
-      if (!anchor) continue;
-      anchor.object.updateWorldMatrix(true, false);
-      const e = anchor.object.matrixWorld.elements;
-      p.position.set(e[12] ?? 0, e[13] ?? 0, e[14] ?? 0);
-      const lift = anchor.kind === 'asteroid' ? COLONY.asteroidLift : COLONY.lift;
-      p.scale.setScalar(anchor.radius * lift);
-    }
-  }, READ_BODIES);
+  const [points] = useState(() => new Map<Id, Points>());
+  useFrame(() => placeColonies(points), READ_BODIES);
 
   if (list.length === 0) return null;
   return (
     <group name="colonies">
       {list.map((c) => (
-        <Colony key={c.bodyId} spec={c} material={material} registry={points.current} />
+        <Colony key={c.bodyId} spec={c} material={material} registry={points} />
       ))}
     </group>
   );
+}
+
+/** Puts every colony on its body's anchor (hidden while the body is not drawn). */
+function placeColonies(points: ReadonlyMap<Id, Points>): void {
+  for (const [bodyId, p] of points) {
+    const anchor = getAnchor(bodyId);
+    p.visible = anchor !== undefined;
+    if (!anchor) continue;
+    anchor.object.updateWorldMatrix(true, false);
+    const e = anchor.object.matrixWorld.elements;
+    p.position.set(e[12] ?? 0, e[13] ?? 0, e[14] ?? 0);
+    const lift = anchor.kind === 'asteroid' ? COLONY.asteroidLift : COLONY.lift;
+    p.scale.setScalar(anchor.radius * lift);
+  }
 }
 
 function Colony({

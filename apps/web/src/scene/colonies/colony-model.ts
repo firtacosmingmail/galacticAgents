@@ -52,7 +52,8 @@ export const COLONY = {
 export function isColonised(world: ColonyWorld, body: Body): boolean {
   const host = body.host;
   if (!host) return false;
-  const state = host.kind === 'project' ? world.projects[host.id]?.state : world.tasks[host.id]?.state;
+  const state =
+    host.kind === 'project' ? world.projects[host.id]?.state : world.tasks[host.id]?.state;
   return state === 'completed';
 }
 
@@ -70,8 +71,7 @@ export function colonyList(world: ColonyWorld): ColonySpec[] {
 /** Two lists draw the same thing (the list is rebuilt on every world change). */
 export function sameColonies(a: readonly ColonySpec[], b: readonly ColonySpec[]): boolean {
   return (
-    a.length === b.length &&
-    a.every((c, i) => c.bodyId === b[i]?.bodyId && c.host === b[i]?.host)
+    a.length === b.length && a.every((c, i) => c.bodyId === b[i]?.bodyId && c.host === b[i]?.host)
   );
 }
 
