@@ -1,5 +1,4 @@
-import type { BodyLook } from './appearance.js';
-import { paintSurfaceLayers, type SurfaceLayers } from './surface.js';
+import { runPaintJob, type PaintLayers, type PaintRequest } from '../detail/visuals/paint-jobs.js';
 
 /**
  * Asynchronous surface painting (P3-06). Near-level textures are painted in a worker
@@ -11,27 +10,20 @@ import { paintSurfaceLayers, type SurfaceLayers } from './surface.js';
  * but such painting blocks the UI, so `paintsOffMainThread()` tells the bodies to ask for lighter
  * maps then (`textures.ts`).
  */
-export interface PaintRequest {
-  look: BodyLook;
-  width: number;
-  height: number;
-  detail: boolean;
-}
+export type { PaintLayers, PaintRequest };
 
-/** What the worker receives… */
-export interface PaintJob extends PaintRequest {
-  id: number;
-}
+/** What the worker receives (P6-02: also detail levels and clouds, `detail/visuals/paint-jobs.ts`)… */
+export type PaintJob = PaintRequest & { id: number };
 
 /** …and sends back. */
-export interface PaintReply extends SurfaceLayers {
+export interface PaintReply extends PaintLayers {
   id: number;
 }
 
 interface Queued {
   job: PaintJob;
   signal: AbortSignal | undefined;
-  resolve: (layers: SurfaceLayers) => void;
+  resolve: (layers: PaintLayers) => void;
   reject: (reason: unknown) => void;
 }
 
@@ -70,7 +62,8 @@ function getWorker(): Worker | null {
       const current = running;
       if (worker !== w || !current || current.job.id !== event.data.id) return;
       running = undefined;
-      current.resolve({ color: event.data.color, detail: event.data.detail });
+      const { color, detail, normal } = event.data;
+      current.resolve({ color, detail, normal: normal ?? null });
       pump();
     };
     w.onerror = (event) => {
@@ -119,9 +112,7 @@ function pump(): void {
     if (job.signal?.aborted) job.reject(abortError());
     else {
       try {
-        job.resolve(
-          paintSurfaceLayers(job.job.look, job.job.width, job.job.height, job.job.detail),
-        );
+        job.resolve(runPaintJob(job.job));
       } catch (error) {
         job.reject(error);
       }
@@ -131,7 +122,7 @@ function pump(): void {
 }
 
 /** Paints `request` off the main thread when possible; rejects with an `AbortError` if `signal` fires first. */
-export function paintAsync(request: PaintRequest, signal?: AbortSignal): Promise<SurfaceLayers> {
+export function paintAsync(request: PaintRequest, signal?: AbortSignal): Promise<PaintLayers> {
   if (signal?.aborted) return Promise.reject(abortError());
   return new Promise((resolve, reject) => {
     const entry: Queued = { job: { ...request, id: nextId++ }, signal, resolve, reject };

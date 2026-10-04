@@ -251,7 +251,7 @@ function Moon({
  * How strongly the detail map's relief shades the surface (three's `bumpScale`).
  * `SurfaceMaterial`, `Rings` and `OrbitLine` are shared with the detail view (`detail/`, P6-01).
  */
-const BUMP_SCALE = 1.5;
+export const BUMP_SCALE = 1.5;
 
 /**
  * A body's surface material at its LOD level: the colour map, and on near levels of rocky and
@@ -311,6 +311,7 @@ export function Rings({
   receiver,
   shadows,
   sunRadius,
+  textureWidth,
 }: {
   rings: RingLook;
   radius: number;
@@ -319,8 +320,10 @@ export function Rings({
   receiver: EclipseReceiver | undefined;
   shadows: boolean;
   sunRadius: number;
+  /** The radial texture's width (P6-02: wider in the detail view); default the system's 256. */
+  textureWidth?: number;
 }) {
-  const texture = useRingTexture(rings);
+  const texture = useRingTexture(rings, textureWidth);
   const eclipse = useEclipse(system, receiver, shadows, sunRadius);
   const geometry = useMemo(() => {
     const inner = radius * rings.inner;
