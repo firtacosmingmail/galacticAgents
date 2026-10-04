@@ -9,7 +9,7 @@ Phase 5's exit criterion: "Everything in `SPEC.md` §4.2 and §4.3 is doable fro
 - **`apps/server/src/brains/harmonizer/control-mapping.test.ts`** (new) proves the Harmonizer's conversational mappings that no brain test exercised through the Harmonizer (last section).
 - Existing tests are listed as extra evidence where they cover the same row more deeply (component level, or against the real server).
 
-Result: **77 rows** (§4.2: 51, §4.3: 26). With the scene: **75 ✓, 1 ✗, 1 partial**. List mode: the same, **75 ✓, 1 ✗, 1 partial**. The ✗ is §4.2.42h (controls of the Harmonizer itself), an open product question rather than a missing feature (Follow-up F2). The partial row is §4.3.25, the Harmonizer's conversational controls (Follow-up F1); it is not a panel requirement, so it does not bear on the exit criterion, but it is listed so the gap is not lost. Gaps fixed in place: one (§4.2.21, the Harmonizer's own cost).
+Result: **77 rows** (§4.2: 51, §4.3: 26). With the scene: **77 ✓**. List mode: **77 ✓**. The two rows open at first — §4.2.42h (controls of the Harmonizer itself) and §4.3.25 (conversational control) — were closed by P5-06 (decision 82) and P5-07 (decision 83), Cosmin's choices on 2026-10-04.
 
 ## §4.2 Side panel
 
@@ -171,8 +171,8 @@ No decision contradicts a §4.2/§4.3 requirement the panel implements. Found:
 
 ## Follow-ups (for the coordinator to file)
 
-- **F1 — The Harmonizer's work-level controls (§4.3 last line, decision 11b).** Proposed task: *"P5-06 (or Phase 6) — Conversational work controls. Give the Harmonizer a `control_work {kind: task|project, id, action: pause|resume|stop|cancel|edit, changes?}` tool calling `DomainCommands.control` with the Harmonizer as `by`, reaching any task or project (a project task's close stays the Waykeeper's `close_task`, or is relayed to it). Decide in SPEC §7 whether the destructive ones (stop, cancel) need `ask_confirmation` like close/archive (decision 42) or act on the user's message (conversational requests need no card, decision 3). Prompt: map "pause the CSV project" to the project, not to `pause_agent` on its Waykeeper. Acceptance: a brain-harness test per action; TECHNOLOGY §5.3's map has no gap left."*
-- **F2 — Controls for the Harmonizer itself (§4.2 "any … agent").** Proposed task: *"Decide (SPEC §8 → §7) whether the panel offers pause / resume / stop and "Resume session" for the Harmonizer. If yes: the Harmonizer's dock bar gets the agent's strip (agent actions only, stop confirmed, warning that the Harmonizer is not replaced after a user stop — decision 44 — and how to start one again); update `controls-strip.test.tsx › … not for the Harmonizer`. Acceptance: §4.2.42h ticked in both modes."* Conservative meanwhile: no controls (as today).
+- **F1 — done in P5-07 (decision 83):** the Harmonizer's `control_work` tool; stop and cancel need a confirmation.
+- **F2 — done in P5-06 (decision 82):** the Harmonizer's dock offers Pause, Resume, Resume session (interrupted only) and a confirmed Restart Harmonizer; no plain Stop.
 
 ## Proposed SPEC changes (not applied; SPEC is the coordinator's)
 

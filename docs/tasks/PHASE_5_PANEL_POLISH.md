@@ -1,7 +1,7 @@
 # Phase 5 — Side panel polish and scene integration
 
-**Current task:** P5-05 (closes when P5-06 and P5-07 land), P5-06 (wave 3, branch `p5-wave3-conformance`) · **Task status:** in progress
-**Phase status:** in progress (5/7 done) — on branch `phase-5`
+**Current task:** — (all tasks done) · **Task status:** —
+**Phase status:** in progress (7/7 done) — exit check below; merge into `main` is Cosmin's — on branch `phase-5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -56,12 +56,12 @@ The Phase 2.5 panel becomes the spec's panel, wired to the scene: selection flow
 - **Acceptance:** panel usable with keyboard only and with the scene hidden.
 
 ### P5-05 — Spec §4.2/§4.3 conformance checklist
-- **Status:** in progress · **Depends on:** P5-04 · **Parallel with:** —
+- **Status:** done (2026-10-04) · **Depends on:** P5-04 · **Parallel with:** —
 - Walk every line of `SPEC.md` §4.2 and §4.3 with and without the scene; record gaps in `docs/tasks/notes/P5-05-checklist.md` and fix them or file follow-ups.
 - **Acceptance:** checklist fully ticked and committed.
 
 ### P5-06 — Controls for the Harmonizer (added 2026-10-04)
-- **Status:** in progress · **Depends on:** P5-05 · **Parallel with:** P5-07
+- **Status:** done (2026-10-04) · **Depends on:** P5-05 · **Parallel with:** P5-07
 - From P5-05's checklist (row §4.2.42h) and Cosmin's choice (decision 82): the Harmonizer's dock offers Pause, Resume and a confirmed "Restart Harmonizer" (stop + a fresh one on the same runtime, seeded from the database), never a plain Stop; "Resume session" only for an interrupted Harmonizer.
 - **Acceptance:** each control works from the dock with and without the scene; a restart leaves exactly one live Harmonizer and the user informed; tests; the conformance row §4.2.42h ticked.
 
@@ -73,3 +73,7 @@ The Phase 2.5 panel becomes the spec's panel, wired to the scene: selection flow
 ## Exit criteria (from the plan)
 
 Everything in `SPEC.md` §4.2 and §4.3 is doable from the panel, with and without the scene.
+
+## Exit check (2026-10-04)
+
+"Everything in `SPEC.md` §4.2 and §4.3 is doable from the panel, with and without the scene": **met**. `docs/tasks/notes/P5-05-checklist.md` splits §4.2 and §4.3 into 77 requirements; all 77 are ✓ with the scene and in list mode, each linked to a test in `apps/web/src/conformance/` (run in both modes) or a brain-harness test for the conversational mappings. The two rows open after the first pass were closed by P5-06 (the Harmonizer's own controls, decision 82) and P5-07 (work controls in conversation, decision 83), on Cosmin's choices. Gates on the wave-3 branch: see `docs/tasks/notes/P5-wave3-review.md`.
