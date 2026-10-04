@@ -1,6 +1,7 @@
 import { sceneWorld, useAppStore } from '../../state/store.js';
 import { SUN_ANCHOR_ID } from '../anchors.js';
 import { breadcrumbTrail, detailKind, useDetailStore } from '../detail/mode.js';
+import { CutawayToggle } from '../detail/cutaway/CutawayToggle.js';
 import { SCENE_SHORTCUTS } from './keys.js';
 import { useCameraStore } from './store.js';
 
@@ -12,7 +13,8 @@ import { useCameraStore } from './store.js';
  * The detail view (P6-01): with the camera on a planet, moon or asteroid, a "Detail view" button
  * follows the trail and goes in (the camera flies close, the sub-scene fades in); in the detail
  * view the trail ends "› Jupiter › Detail", and the body's crumb goes back out to the system view
- * framed on the body (as `Escape` does).
+ * framed on the body (as `Escape` does). There, a body with layer data gets the "Cutaway" toggle
+ * after the trail (P6-03, `detail/cutaway/CutawayToggle.tsx`).
  */
 export function CameraBreadcrumb() {
   const focusedId = useCameraStore((s) => s.focusedId);
@@ -84,6 +86,7 @@ export function CameraBreadcrumb() {
             </button>
           </li>
         )}
+        <CutawayToggle />
       </ol>
     </nav>
   );
