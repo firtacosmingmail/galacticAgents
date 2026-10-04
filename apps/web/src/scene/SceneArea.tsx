@@ -102,14 +102,20 @@ export function onSceneKey(event: KeyboardEvent<HTMLElement>) {
     target: event.target,
   });
   if (!action) return;
-  event.preventDefault();
   const camera = useCameraStore.getState();
   // Escape unwinds one step at a time (P5-01): the popover (above), the camera's body, then the
   // selection — back to the Harmonizer, the camera staying — and only then the system's framing.
-  // Home always goes back to the system.
-  if (action === 'back' && event.key === 'Escape' && !camera.focusedId && deselectFromScene()) {
-    return;
+  // Home always goes back to the system. An Escape that changes nothing here (the Harmonizer
+  // selected, the camera resting at the system's framing) is not taken: it reaches the replay
+  // bar's document listener, which exits a replay (`escapeExitsReplay` skips a handled key).
+  if (action === 'back' && event.key === 'Escape') {
+    if (!camera.focusedId && deselectFromScene()) {
+      event.preventDefault();
+      return;
+    }
+    if (camera.focusedId === undefined && !camera.flying && camera.atSystem) return;
   }
+  event.preventDefault();
   if (action === 'back') camera.back();
   else if (action === 'next') camera.next();
   else camera.previous();
