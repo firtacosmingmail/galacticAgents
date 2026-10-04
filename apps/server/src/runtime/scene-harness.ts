@@ -21,6 +21,8 @@ import {
   type HarnessState,
   type HarnessStateBody,
   type Id,
+  type Project,
+  type Task,
 } from '@galactic/protocol';
 import { checkPlacement, createAgent, recordSpawned } from '../domain/agents.js';
 import { EARTH_ID } from '../domain/catalogue.js';
@@ -50,7 +52,16 @@ import type { StatusStore } from './status-store.js';
  *   opens a permission question from `agent.needs_input` and settles an ending agent's questions
  *   exactly as the runtime does. So the status store, the work-state deriver and the client see
  *   real events; a status diff reaches the page within the store's 100 ms batch.
- * - **Work** (projects, tasks, moves, closes, questions, answers) goes through `Commands`.
+ * - **Work** (projects, tasks, moves, closes, questions, answers) goes through `Commands`; a
+ *   close is `Commands.closeTask` / `closeProject` (no `control.close`, so no supervisor's brain
+ *   is concerned by it), as `clear` does.
+ *
+ * **Harness rows only** (P4-06 review): every action refuses (`NotHarnessError`, 409
+ * `not_harness`) an agent, task, project or question that the harness did not make — a real
+ * agent given a fake state would be resumed by `recover()` from its real session in its real
+ * worktree; a real permission question answered `allow`; a real task or project closed would wake
+ * the real Harmonizer or Waykeeper. A fake agent is only ever placed on harness work under
+ * harness supervisors.
  *
  * A harness project's Waykeeper and a harness asteroid's Stewards answer to a **dormant harness
  * Harmonizer**: an agent row that never runs (no session, no status record, `createdAt` at the
@@ -69,6 +80,16 @@ export interface SceneHarnessOptions {
 }
 
 const USER: Actor = { type: 'user' };
+
+/**
+ * The harness was asked to act on something it did not make (a real agent, task, project or
+ * question): refused, nothing written. The dev routes answer 409 `not_harness`.
+ */
+export class NotHarnessError extends DomainError {
+  constructor(what: string, id: Id) {
+    super('conflict', `${what} ${id} is not the scene harness's: the harness only drives its own`);
+  }
+}
 
 /** States in which a fake agent keeps its open questions (an ending settles them itself). */
 const KEEPS_QUESTIONS: ReadonlySet<HarnessState> = new Set<HarnessState>([
@@ -183,6 +204,8 @@ export class SceneHarness {
    * task of a project, or for a new standalone task on a fresh asteroid. It starts `starting`.
    */
   async createAgent(input: HarnessAgentBody): Promise<HarnessAgentResponse> {
+    if (input.projectId) this.harnessProject(input.projectId);
+    if (input.taskId) this.harnessTask(input.taskId);
     if (input.role === 'waykeeper') {
       if (!input.projectId) throw new DomainError('invalid', 'a Waykeeper needs a project');
       const agent = this.fake({ role: 'waykeeper', projectId: input.projectId });
@@ -208,10 +231,7 @@ export class SceneHarness {
    * question; `working` logs a progress line (`activity`, or a default).
    */
   async setState(agentId: Id, input: HarnessStateBody): Promise<HarnessActionResponse> {
-    const agent = must(this.log.tables.agents.get(agentId), 'agent', agentId);
-    if (agent.role === 'harmonizer' && isHarnessMeta(agent.meta)) {
-      throw new DomainError('invalid', 'the dormant harness Harmonizer never runs');
-    }
+    const agent = this.fakeAgent(agentId);
     const ending = ENDED_STATES.has(input.state);
     if (this.hasSession(agentId) && (ending || input.state === 'starting')) {
       throw new DomainError(
@@ -229,7 +249,7 @@ export class SceneHarness {
     }
     // A fake agent that moves on from waiting no longer needs its open questions: they are
     // withdrawn (their beacons go out), as a session that stopped asking would leave none open.
-    if (isHarnessMeta(agent.meta) && !KEEPS_QUESTIONS.has(input.state)) {
+    if (!KEEPS_QUESTIONS.has(input.state)) {
       this.log.runCommand((ctx) =>
         cancelQuestionsOf(ctx, agentId, 'the agent moved on (scene harness)'),
       );
@@ -275,7 +295,7 @@ export class SceneHarness {
 
   /** A working agent's activity: a preset tool call (one per archetype) or a progress line. */
   async setActivity(agentId: Id, input: HarnessActivityBody): Promise<HarnessActionResponse> {
-    const agent = must(this.log.tables.agents.get(agentId), 'agent', agentId);
+    const agent = this.fakeAgent(agentId);
     const state = this.statuses.get(agentId)?.state;
     if (state === undefined || ENDED_STATES.has(state)) {
       if (this.hasSession(agentId)) {
@@ -306,7 +326,7 @@ export class SceneHarness {
    * clarification is opened for the user (`toUser`) and the agent waits on it.
    */
   async ask(agentId: Id, input: HarnessQuestionBody): Promise<HarnessActionResponse> {
-    const agent = must(this.log.tables.agents.get(agentId), 'agent', agentId);
+    const agent = this.fakeAgent(agentId);
     if (this.hasSession(agentId)) {
       throw new DomainError('conflict', `agent ${agentId} has a live session: it asks for itself`);
     }
@@ -347,9 +367,14 @@ export class SceneHarness {
     return { seq: this.log.currentSeq(), questionId: question.id };
   }
 
-  /** The user answers (first answer wins; the agent goes back to work). */
+  /**
+   * The user answers a fake agent's question (first answer wins; the agent goes back to work). A
+   * real agent's question — a real permission above all — is never the harness's to answer.
+   */
   async answer(questionId: Id, answer?: string): Promise<HarnessActionResponse> {
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    const origin = this.log.tables.agents.get(question.originAgentId);
+    if (!origin || !isHarnessMeta(origin.meta)) throw new NotHarnessError('question', questionId);
     await this.commands.answerQuestion({
       questionId,
       answer: answer ?? (question.kind === 'permission' ? 'allow' : 'Blue'),
@@ -358,34 +383,38 @@ export class SceneHarness {
     return { seq: this.log.currentSeq() };
   }
 
-  /** A standalone task joins a project (its Stewards fly there, decision 9). */
+  /** A harness standalone task joins a harness project (its Stewards fly there, decision 9). */
   async move(taskId: Id, projectId: Id): Promise<HarnessActionResponse> {
+    this.harnessTask(taskId);
+    this.harnessProject(projectId);
     await this.commands.moveTask(taskId, projectId, USER);
     return { seq: this.log.currentSeq() };
   }
 
   /**
    * The task completes: its live fake Stewards finish (as a Steward reports done), then the task is
-   * closed as the panel closes it (`control.close`). Its newest Steward lands (decision 77).
+   * closed (`Commands.closeTask`: no `control.close`, so no supervisor's brain is concerned). Its
+   * newest Steward lands (decision 77).
    */
   async complete(taskId: Id): Promise<HarnessActionResponse> {
-    const task = must(this.log.tables.tasks.get(taskId), 'task', taskId);
+    const task = this.harnessTask(taskId);
     if (task.state === 'completed') {
       throw new DomainError('invalid_transition', `task ${taskId} is already completed`);
     }
     await this.finishFakes((a) => a.role === 'steward' && a.taskId === taskId);
-    await this.commands.control({ kind: 'task', id: taskId }, { action: 'close' }, USER);
+    await this.commands.closeTask(taskId, USER);
     return { seq: this.log.currentSeq() };
   }
 
   /**
-   * The user closes the project (decision 11): its fake Waykeeper finishes, then `control.close`.
-   * Unfinished tasks are left as they are (decision 75: Close leaves them).
+   * The user closes the project (decision 11): its fake Waykeeper finishes, then
+   * `Commands.closeProject` (no `control.close`). Unfinished tasks are left as they are (decision
+   * 75: Close leaves them).
    */
   async closeProject(projectId: Id): Promise<HarnessActionResponse> {
-    must(this.log.tables.projects.get(projectId), 'project', projectId);
+    this.harnessProject(projectId);
     await this.finishFakes((a) => a.role === 'waykeeper' && a.projectId === projectId);
-    await this.commands.control({ kind: 'project', id: projectId }, { action: 'close' }, USER);
+    await this.commands.closeProject(projectId, USER);
     return { seq: this.log.currentSeq() };
   }
 
@@ -451,6 +480,28 @@ export class SceneHarness {
 
   // ---------------------------------------------------------------------------------------------
 
+  /** A fake agent the harness made (never the dormant Harmonizer), or a refusal. */
+  private fakeAgent(agentId: Id): Agent {
+    const agent = must(this.log.tables.agents.get(agentId), 'agent', agentId);
+    if (!isHarnessMeta(agent.meta)) throw new NotHarnessError('agent', agentId);
+    if (agent.role === 'harmonizer') {
+      throw new DomainError('invalid', 'the dormant harness Harmonizer never runs');
+    }
+    return agent;
+  }
+
+  private harnessTask(taskId: Id): Task {
+    const task = must(this.log.tables.tasks.get(taskId), 'task', taskId);
+    if (!isHarnessMeta(task.meta)) throw new NotHarnessError('task', taskId);
+    return task;
+  }
+
+  private harnessProject(projectId: Id): Project {
+    const project = must(this.log.tables.projects.get(projectId), 'project', projectId);
+    if (!isHarnessMeta(project.meta)) throw new NotHarnessError('project', projectId);
+    return project;
+  }
+
   private hasSession(agentId: Id): boolean {
     return (this.opts.liveSessions?.() ?? []).some((a) => a.id === agentId);
   }
@@ -502,6 +553,9 @@ export class SceneHarness {
       const project = projectId
         ? must(tables.projects.get(projectId), 'project', projectId)
         : undefined;
+      // Defence in depth: a fake agent only ever sits on harness work.
+      if (task && !isHarnessMeta(task.meta)) throw new NotHarnessError('task', task.id);
+      if (project && !isHarnessMeta(project.meta)) throw new NotHarnessError('project', project.id);
       if (task && FINISHED_WORK.has(task.state)) {
         throw new DomainError('invalid_transition', `task ${task.id} is ${task.state}`);
       }
@@ -543,11 +597,14 @@ export class SceneHarness {
     }).value;
   }
 
-  /** A project task's Steward answers to the project's Waykeeper: the live one, else the newest. */
+  /**
+   * A project task's Steward answers to the project's harness Waykeeper: the live one, else the
+   * newest. Never a real Waykeeper (its brain would wake on a fake Steward's events).
+   */
   private newestWaykeeper(ctx: CommandContext, projectId: Id): Id {
     const waykeepers = ctx.tables.agents
       .all()
-      .filter((a) => a.role === 'waykeeper' && a.projectId === projectId)
+      .filter((a) => a.role === 'waykeeper' && a.projectId === projectId && isHarnessMeta(a.meta))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
     const live = waykeepers.find((a) => {
       const state = this.statuses.get(a.id)?.state;

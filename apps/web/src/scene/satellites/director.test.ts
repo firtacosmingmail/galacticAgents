@@ -195,6 +195,25 @@ describe('the satellite list over time', () => {
     off();
   });
 
+  it('snaps instead of flying or landing when the scene swaps worlds (a replay opens or exits)', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars'), spec('a-2', 'b-io')], 0);
+    const frames = d.update(1, world);
+    const [f1, f2] = frames as [SatelliteFrame, SatelliteFrame];
+    d.setSpecs([spec('a-1', 'b-jupiter'), { ...spec('a-2', 'b-io'), landed: true }], 1, {
+      snap: true,
+    });
+    d.update(1.01, world);
+    expect(f1.mode).toBe('orbiting');
+    expect(f1.target).toEqual([0, 0, -80]);
+    expect(dist(f1.position, f1.target) / 5).toBeGreaterThan(1.5); // already on the new orbit
+    expect(f2.mode).toBe('landed');
+    // Without the snap the same change is a flight.
+    d.setSpecs([spec('a-1', 'b-mars'), { ...spec('a-2', 'b-io'), landed: true }], 2);
+    d.update(2.01, world);
+    expect(f1.mode).toBe('flying');
+  });
+
   it('a new body flies the satellite there along an arc; it then orbits the new body', () => {
     const d = director();
     d.setSpecs([spec('a-1', 'b-mars')], 0);

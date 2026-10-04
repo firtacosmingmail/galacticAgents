@@ -260,8 +260,12 @@ export class SatelliteDirector {
    * project body collecting its finished Stewards must not push its live satellites outwards. One
    * that lands keeps the orbit it came down from; one that appears already landed (a reload) gets
    * a slot among its body's landed satellites, which only spreads them over the surface.
+   *
+   * `snap` (P4-07 review): the scene jumped to another world (a timeline replay opened or exited),
+   * so a satellite whose body or landing differs is placed there at once — no flight, no landing.
+   * Satellites only in one of the worlds still grow in or shrink out.
    */
-  setSpecs(specs: readonly SatelliteSpec[], now: number): void {
+  setSpecs(specs: readonly SatelliteSpec[], now: number, opts: { snap?: boolean } = {}): void {
     const reduced = this.options.reducedMotion;
     const flying = specs.filter((s) => !s.landed);
     const slots = orbitSlots(flying, this.slotHolders);
@@ -289,17 +293,29 @@ export class SatelliteDirector {
         this.advanceClock(known, now); // up to now at the old state's orbit rate
         known.spec = spec;
         known.input = input;
-        // Taken now, not at the next drawn frame: a flight or landing starts when the world
-        // changed, so it ends on time even if no frame is drawn meanwhile.
-        known.actor = advance(known.actor, input, now, { reducedMotion: reduced });
-        if (relanded && known.actor.mode === 'landed') {
-          // No orbit blend across the surface and a fresh grow-in on the new body.
+        const elsewhere =
+          known.actor.bodyId !== spec.bodyId || (known.actor.mode === 'landed') !== spec.landed;
+        if (opts.snap && elsewhere) {
+          // Placed where the new world has it, as if it had always been there.
+          known.actor = createActor(spec.agentId, input, now);
           known.orbit = satelliteOrbit(spec.agentId, spec.role, slot);
           known.orbitKey = key;
           known.orbitFrom = undefined;
-          known.presence = { from: reduced ? 1 : 0, to: 1, start: now };
+          known.flightFrom = undefined;
           known.lastDrawn = undefined;
-        } else if (known.orbitKey !== key) this.changeOrbit(known, spec, slot, key, now);
+        } else {
+          // Taken now, not at the next drawn frame: a flight or landing starts when the world
+          // changed, so it ends on time even if no frame is drawn meanwhile.
+          known.actor = advance(known.actor, input, now, { reducedMotion: reduced });
+          if (relanded && known.actor.mode === 'landed') {
+            // No orbit blend across the surface and a fresh grow-in on the new body.
+            known.orbit = satelliteOrbit(spec.agentId, spec.role, slot);
+            known.orbitKey = key;
+            known.orbitFrom = undefined;
+            known.presence = { from: reduced ? 1 : 0, to: 1, start: now };
+            known.lastDrawn = undefined;
+          } else if (known.orbitKey !== key) this.changeOrbit(known, spec, slot, key, now);
+        }
         if (known.leaving) {
           known.leaving = false;
           known.presence = { from: this.presenceAt(known, now), to: 1, start: now };

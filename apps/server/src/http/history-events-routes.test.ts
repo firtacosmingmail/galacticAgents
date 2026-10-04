@@ -211,7 +211,47 @@ describe('GET /api/history/events (P4-07)', () => {
       events: [],
       seq: after,
       hasMore: false,
+      membership: expect.any(String),
     });
+  });
+
+  it('keeps one read’s members across its pages (the membership token)', async () => {
+    const { log, alpha, beta } = await scenario();
+    const view = new HistoryEvents(log.db);
+    const first = view.read({ projectId: alpha.id, limit: 2 });
+    expect(first.hasMore).toBe(true);
+    const token = first.membership!;
+    // Work joins the project while the read goes on.
+    const commands = new Commands({ log });
+    const late = (await commands.createTask({ description: 'Late', projectId: alpha.id })).value;
+    const rest = (membership?: string) => {
+      const events: EventEnvelope[] = [];
+      let after = first.seq;
+      for (let more = true; more;) {
+        const page = view.read({
+          projectId: alpha.id,
+          after,
+          limit: 2,
+          ...(membership ? { membership } : {}),
+        });
+        if (membership) expect(page.membership).toBe(membership);
+        events.push(...page.events);
+        after = page.seq;
+        more = page.hasMore;
+      }
+      return events;
+    };
+    const isLate = (e: EventEnvelope) =>
+      e.event.type === 'task.created' && e.event.task.id === late.id;
+    // With the first page's token: the members it started with (the late task is not one).
+    expect(rest(token).some(isLate)).toBe(false);
+    // Without it (a fresh read): members as they are now.
+    expect(rest().some(isLate)).toBe(true);
+    // A token is only reused for its project; an unknown one gets fresh members and a new token.
+    const other = view.read({ projectId: beta.id, limit: 2, membership: token });
+    expect(other.membership).not.toBe(token);
+    const unknown = view.read({ projectId: alpha.id, limit: 2, membership: 'nope' });
+    expect(unknown.membership).not.toBe('nope');
   });
 
   it('narrows to a time range by the events’ time', async () => {

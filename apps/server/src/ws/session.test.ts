@@ -81,7 +81,7 @@ describe('websocket stream', () => {
       { type: 'event', seq: 3, at: fx.NOW, event: idle(3) },
       { type: 'event', seq: 4, at: fx.NOW, event: idle(4) },
       { type: 'event', seq: 5, at: fx.NOW, event: idle(5) },
-      { type: 'caught_up', seq: 5 },
+      { type: 'caught_up', seq: 5, serverTime: expect.any(String) },
     ]);
     emit(6);
     expect((await c.upTo(5))[4]).toEqual({ type: 'event', seq: 6, at: fx.NOW, event: idle(6) });
@@ -91,7 +91,9 @@ describe('websocket stream', () => {
   it('a client that is fully up to date gets only caught_up', async () => {
     emit(1);
     const c = open(1);
-    expect(await c.upTo(1)).toEqual([{ type: 'caught_up', seq: 1 }]);
+    expect(await c.upTo(1)).toEqual([
+      { type: 'caught_up', seq: 1, serverTime: expect.any(String) },
+    ]);
     c.ws.close();
   });
 

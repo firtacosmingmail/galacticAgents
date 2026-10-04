@@ -45,7 +45,7 @@ export function SceneHarness({ token }: { token: string }) {
   );
 
   const rows = harnessRows(world);
-  const current = rows.find((r) => r.agent.id === selected) ?? rows.find((r) => r.fake) ?? rows[0];
+  const current = rows.find((r) => r.agent.id === selected) ?? rows[0];
 
   /** Runs one harness call; a refusal is shown, a success may leave a note. */
   const run = async (action: () => Promise<unknown>, done?: string) => {
@@ -77,7 +77,9 @@ export function SceneHarness({ token }: { token: string }) {
       )}
       {note && <p className="muted">{note}</p>}
       {rows.length === 0 ? (
-        <p className="muted">No Waykeepers or Stewards yet — seed a demo scenario above.</p>
+        <p className="muted">
+          No harness agents yet — seed a demo scenario above (real agents are never listed).
+        </p>
       ) : (
         <div className="console-grid">
           <ul className="agent-list" aria-label="Agents">
@@ -90,7 +92,6 @@ export function SceneHarness({ token }: { token: string }) {
                 >
                   <span className={`pill state-${row.state ?? 'unknown'}`}>{row.state ?? '…'}</span>
                   <span className="agent-name">{row.label}</span>
-                  <span className="muted agent-id">{row.fake ? 'fake' : 'real'}</span>
                   <span className="muted activity">
                     {row.bodyName ? `${row.bodyName} · ` : ''}
                     {row.activity ?? ''}
@@ -216,7 +217,7 @@ function AgentControls({
       <header>
         <strong>{row.label}</strong>
         <span className="muted">
-          {row.fake ? 'fake agent (no process)' : 'real agent'}
+          fake agent (no process)
           {row.bodyName ? ` · orbits ${row.bodyName}` : ''}
         </span>
       </header>

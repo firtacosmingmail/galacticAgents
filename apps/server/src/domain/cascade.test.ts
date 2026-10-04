@@ -193,6 +193,38 @@ describe('concernedSupervisors', () => {
     ).toEqual(['a-h', 'a-w']);
   });
 
+  it('a scene-harness target concerns no brain (P4-06): never the real Harmonizer or Waykeeper', () => {
+    const { run, tables } = setup();
+    const project = run((ctx) =>
+      createProject(ctx, { name: 'H', workspace: '/h', meta: { harness: true } }),
+    ).value;
+    const task = run((ctx) =>
+      createTask(ctx, { description: 'h', projectId: project.id, meta: { harness: true } }),
+    ).value;
+    const solo = run((ctx) =>
+      createTask(ctx, { description: 'hs', meta: { harness: true } }),
+    ).value;
+    run((ctx) => {
+      agent(ctx, 'a-hw', 'waykeeper', {
+        projectId: project.id,
+        supervisorId: 'a-h',
+        meta: { harness: true },
+      });
+      agent(ctx, 'a-hs', 'steward', {
+        taskId: solo.id,
+        supervisorId: 'a-h',
+        meta: { harness: true },
+      });
+    });
+    expect(concernedSupervisors(tables, control('control.close', 'project', project.id))).toEqual(
+      [],
+    );
+    expect(concernedSupervisors(tables, control('control.close', 'task', task.id))).toEqual([]);
+    expect(concernedSupervisors(tables, control('control.close', 'task', solo.id))).toEqual([]);
+    expect(concernedSupervisors(tables, control('control.stop', 'agent', 'a-hs'))).toEqual([]);
+    expect(concernedSupervisors(tables, control('control.stop', 'agent', 'a-hw'))).toEqual([]);
+  });
+
   it('never the actor itself, only live brains when asked, nothing for other events', () => {
     const { tables, project, t1 } = setup();
     const byHarmonizer = control('control.cancel', 'project', project.id, {

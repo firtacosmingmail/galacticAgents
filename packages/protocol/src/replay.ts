@@ -18,6 +18,12 @@ export const HistoryEventsQuery = z.object({
   to: Timestamp.optional(),
   /** Continue after this `seq` (the previous page's `seq`). */
   after: z.coerce.number().int().nonnegative().optional(),
+  /**
+   * The first page's `membership`: later pages filter by the same members (which work belongs to
+   * the project), so one read is consistent even if work joins or leaves the project meanwhile.
+   * Unknown or expired: the members are computed afresh (and a new token returned).
+   */
+  membership: z.string().min(1).max(64).optional(),
   limit: z.coerce.number().int().min(1).max(2_000).default(500),
 });
 export type HistoryEventsQuery = z.input<typeof HistoryEventsQuery>;
@@ -31,6 +37,8 @@ export const HistoryEventsResponse = z.object({
   seq: z.number().int().nonnegative(),
   /** More of the log is left to read after `seq`. */
   hasMore: z.boolean(),
+  /** The members this page was filtered by: pass it back as the next page's `membership`. */
+  membership: z.string().optional(),
 });
 export type HistoryEventsResponse = z.infer<typeof HistoryEventsResponse>;
 

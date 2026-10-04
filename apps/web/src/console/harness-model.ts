@@ -16,9 +16,8 @@ import type { WorldState } from '../state/reduce.js';
  */
 
 export interface HarnessRow {
+  /** A fake agent the harness made (no process): the only agents the harness may drive. */
   agent: Agent;
-  /** The harness made it (a fake agent without a process). */
-  fake: boolean;
   state: AgentState | undefined;
   activity: string | undefined;
   /** "Waykeeper · <project>" / "Steward · <task>". */
@@ -27,12 +26,15 @@ export interface HarnessRow {
   bodyName: string | undefined;
 }
 
-/** Waykeepers and Stewards, live ones first, the harness's before real ones, newest first. */
+/**
+ * The harness's fake Waykeepers and Stewards, live ones first, newest first. Real agents are
+ * never listed: the server refuses to drive them (409 `not_harness`).
+ */
 export function harnessRows(
   world: Pick<WorldState, 'agents' | 'statuses' | 'tasks' | 'projects' | 'bodies'>,
 ): HarnessRow[] {
   const rows = Object.values(world.agents)
-    .filter((a) => a.role !== 'harmonizer')
+    .filter((a) => a.role !== 'harmonizer' && isHarnessMeta(a.meta))
     .map((agent): HarnessRow => {
       const status = world.statuses[agent.id];
       const task = agent.taskId ? world.tasks[agent.taskId] : undefined;
@@ -43,7 +45,6 @@ export function harnessRows(
           : (project?.bodyId ?? agent.bodyId);
       return {
         agent,
-        fake: isHarnessMeta(agent.meta),
         state: status?.state,
         activity: status?.currentActivity,
         label:
@@ -57,7 +58,6 @@ export function harnessRows(
   return rows.sort(
     (a, b) =>
       Number(live(b)) - Number(live(a)) ||
-      Number(b.fake) - Number(a.fake) ||
       b.agent.createdAt.localeCompare(a.agent.createdAt) ||
       a.agent.id.localeCompare(b.agent.id),
   );
@@ -94,16 +94,12 @@ export function openQuestionsOf(world: Pick<WorldState, 'questions'>, agentId: I
   );
 }
 
-/** Projects a standalone task can move into: open ones (not finished), named. */
+/** Harness projects a harness standalone task can move into: open ones (not finished), named. */
 export function moveTargets(world: Pick<WorldState, 'projects'>): { id: Id; name: string }[] {
   const closed = new Set(['completed', 'archived', 'failed', 'moved']);
   return Object.values(world.projects)
-    .filter((p) => !closed.has(p.state))
-    .sort(
-      (a, b) =>
-        Number(isHarnessMeta(b.meta)) - Number(isHarnessMeta(a.meta)) ||
-        a.name.localeCompare(b.name),
-    )
+    .filter((p) => isHarnessMeta(p.meta) && !closed.has(p.state))
+    .sort((a, b) => a.name.localeCompare(b.name))
     .map((p) => ({ id: p.id, name: p.name }));
 }
 

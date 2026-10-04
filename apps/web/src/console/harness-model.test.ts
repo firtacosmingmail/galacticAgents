@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { emptyWorld, type WorldState } from '../state/reduce.js';
+import { currentHarmonizer } from './hierarchy/HierarchyConsole.js';
 import {
   EXIT_CRITERIA,
   STATE_BUTTONS,
@@ -46,17 +47,38 @@ function world(): WorldState {
 }
 
 describe('the scene harness tab model (P4-06)', () => {
-  it('lists Waykeepers and Stewards (live first, fake first), named by their work', () => {
-    const rows = harnessRows(world());
-    expect(rows.map((r) => r.agent.id)).toEqual(['a-fake', fx.agent.id, 'a-wk']);
+  it('lists only the harness’s fake Waykeepers and Stewards (live first), named by their work', () => {
+    const w = world();
+    w.agents['a-fake-wk'] = {
+      ...w.agents['a-wk']!,
+      id: 'a-fake-wk',
+      projectId: 'p-h',
+      meta: { harness: true },
+    };
+    const rows = harnessRows(w);
+    // Real agents (fx.agent, a-wk) and the dormant harness Harmonizer are never listed.
+    expect(rows.map((r) => r.agent.id)).toEqual(['a-fake', 'a-fake-wk']);
     expect(rows[0]).toMatchObject({
-      fake: true,
       state: 'idle',
       activity: 'Grep: TODO',
       label: `Steward · ${fx.asteroidTask.description}`,
     });
-    expect(rows[2]!.label).toBe(`Waykeeper · ${fx.project.name}`);
-    expect(rows[2]!.state).toBeUndefined();
+    expect(rows[1]!.label).toBe('Waykeeper · Harness project 1');
+    expect(rows[1]!.state).toBeUndefined();
+  });
+
+  it('the panel’s Harmonizer is never the dormant harness one', () => {
+    const w = world();
+    const dormant = {
+      ...fx.harmonizer,
+      id: 'a-harness-hq',
+      createdAt: '2099-01-01T00:00:00.000Z',
+      meta: { harness: true, dormant: true },
+    };
+    w.agents[dormant.id] = dormant;
+    expect(currentHarmonizer(w)?.id).toBe(fx.harmonizer.id);
+    delete w.agents[fx.harmonizer.id];
+    expect(currentHarmonizer(w)).toBeUndefined();
   });
 
   it('offers move for a standalone task, complete for any open task, close for a project', () => {
@@ -66,8 +88,8 @@ describe('the scene harness tab model (P4-06)', () => {
     expect(workActions(w, w.agents['a-wk']!)).toEqual({ closeProject: 'p-1' });
     w.tasks['t-1'] = { ...fx.task, state: 'completed' };
     expect(workActions(w, w.agents[fx.agent.id]!)).toEqual({});
-    // Open projects only, the harness's first.
-    expect(moveTargets(w).map((p) => p.id)).toEqual(['p-h', 'p-1']);
+    // Open harness projects only: a real project is never a move target.
+    expect(moveTargets(w).map((p) => p.id)).toEqual(['p-h']);
   });
 
   it('times a state switch from the click to the status on the page', () => {
