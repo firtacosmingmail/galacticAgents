@@ -1,4 +1,4 @@
-import { useEffect, type KeyboardEvent } from 'react';
+import { useEffect } from 'react';
 import { REPLAY_SPEEDS, useReplayStore, type ReplaySpeed } from './store.js';
 import { tickOf } from './replay-model.js';
 import './replay.css';
@@ -21,6 +21,51 @@ const when = (ms: number) =>
   });
 
 /**
+ * Open layers that close on Escape wherever the focus is (a document-level listener): the panel
+ * menu, the controls' "More" menu and the notification settings mark themselves
+ * `data-escape-layer`; a modal dialog too. While one is open, Escape is its, not the replay's.
+ */
+const PAGE_LAYERS = '[data-escape-layer]:not([hidden]), [aria-modal="true"], dialog[open]';
+/** Layers that take Escape while the focus is inside them (a popover, a menu, a row's actions). */
+const FOCUS_LAYERS =
+  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], .pnl-row-actions';
+
+/** A field Escape belongs to while typing (a select inside the bar is the bar's own). */
+function isTypingIn(target: EventTarget | null, bar: Element | null): boolean {
+  if (!target || typeof (target as Element).closest !== 'function') return false;
+  const el = target as HTMLElement;
+  if (el.isContentEditable) return true;
+  if (el.closest('textarea, [contenteditable=""], [contenteditable="true"]')) return true;
+  const input = el.closest('input');
+  if (input) return !NON_TEXT_INPUTS.has(input.type);
+  return el.closest('select') !== null && !(bar?.contains(el) ?? false);
+}
+const NON_TEXT_INPUTS = new Set(['range', 'button', 'submit', 'reset', 'checkbox', 'radio']);
+
+/**
+ * Whether a document-level Escape exits the replay (wave-4 review): not when something else
+ * already took it (`defaultPrevented`, e.g. the scene's camera "back" or the picking popover's
+ * close), with a modifier, while composing, while typing in a field, with the focus in a dialog /
+ * menu / popover, or while a page-wide menu or popover is open (it closes first; the next Escape
+ * exits the replay).
+ */
+export function escapeExitsReplay(
+  event: Pick<
+    globalThis.KeyboardEvent,
+    'key' | 'defaultPrevented' | 'ctrlKey' | 'metaKey' | 'altKey' | 'isComposing' | 'target'
+  >,
+  doc: Document,
+  bar: Element | null,
+): boolean {
+  if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return false;
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  if (isTypingIn(event.target, bar)) return false;
+  const target = event.target as Element | null;
+  if (typeof target?.closest === 'function' && target.closest(FOCUS_LAYERS)) return false;
+  return doc.querySelector(PAGE_LAYERS) === null;
+}
+
+/**
  * The timeline scrubber's bar (P4-07), docked between the scene and the
  * conversation while a replay is open. It says that the scene shows the past and the panel stays
  * live; a slider over the project's lifetime with a tick per assignment, move, completion and
@@ -31,20 +76,26 @@ export function ReplayBar({ sceneShown }: { sceneShown: boolean }) {
   const r = useReplayStore();
   // Playback stops when the bar goes (another page); the replay itself stays open until exited.
   useEffect(() => () => useReplayStore.getState().pause(), []);
+  // While a replay is open, Escape anywhere on the page ends it — after any popover, dialog, menu
+  // or field that wants it (bubbling: their own handlers run first).
+  const open = r.phase !== 'closed';
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!escapeExitsReplay(e, document, document.querySelector('section.rpl'))) return;
+      e.preventDefault();
+      useReplayStore.getState().close();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
   if (r.phase === 'closed') return null;
   const title = r.name ? `Replay · ${r.name}` : 'Replay';
-  // Escape anywhere in the bar ends the replay.
-  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      r.close();
-    }
-  };
   const span = Math.max(1, r.end - r.start);
   const events = r.timeline?.events ?? [];
   const shown = r.timeline ? r.timeline.countAt(r.time) : 0;
   return (
-    <section className="rpl" aria-label={title} onKeyDown={onKeyDown}>
+    <section className="rpl" aria-label={title}>
       <div className="rpl-head">
         <strong className="rpl-title">{title}</strong>
         <span className="rpl-note">
@@ -56,7 +107,12 @@ export function ReplayBar({ sceneShown }: { sceneShown: boolean }) {
           Exit replay
         </button>
       </div>
-      {r.phase === 'loading' && <p className="rpl-status">Reading the history…</p>}
+      {r.phase === 'loading' && (
+        <p className="rpl-status" role="status">
+          Reading the history…
+          {r.progress ? ` ${r.progress.events} events so far (log #${r.progress.seq})` : ''}
+        </p>
+      )}
       {r.phase === 'error' && (
         <p className="rpl-status" role="alert">
           The history could not be read: {r.error}

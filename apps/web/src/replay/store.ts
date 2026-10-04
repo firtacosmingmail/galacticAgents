@@ -10,9 +10,12 @@ export type ReplaySpeed = (typeof REPLAY_SPEEDS)[number];
 
 /** How long before the first event the slider starts: the system before anything happened. */
 export const LEAD_MS = 1_000;
-/** Page size and a bound on the pages read (2 000 × 200: far beyond one project's log). */
+/**
+ * Page size. The read goes on until the server says the log is done (`hasMore: false`): every
+ * request is bounded server-side (one scan window), so a long log is many cheap pages, shown as
+ * progress, never a silently truncated history.
+ */
 const PAGE = 2_000;
-const MAX_PAGES = 200;
 
 export interface ReplayState {
   phase: 'closed' | 'loading' | 'ready' | 'error';
@@ -20,6 +23,8 @@ export interface ReplayState {
   /** The project's name when the replay opened (the bar's title). */
   name?: string | undefined;
   error?: string | undefined;
+  /** While loading: the events read so far and how far into the log (`seq`) the read is. */
+  progress?: { events: number; seq: number } | undefined;
   timeline?: ReplayTimeline | undefined;
   /** Indexes of the events that get a tick on the bar, in order. */
   ticks: number[];
@@ -48,6 +53,7 @@ const closed = {
   projectId: undefined,
   name: undefined,
   error: undefined,
+  progress: undefined,
   timeline: undefined,
   ticks: [],
   start: 0,
@@ -118,16 +124,25 @@ export const useReplayStore = create<ReplayState>((set, get) => {
       try {
         const events: EventEnvelope[] = [];
         let after: number | undefined;
-        for (let page = 0; page < MAX_PAGES; page++) {
+        // The first page's members, passed back so every page filters the same way.
+        let membership: string | undefined;
+        for (;;) {
           const res = await api.historyEvents({
             projectId,
             limit: PAGE,
             ...(after !== undefined ? { after } : {}),
+            ...(membership !== undefined ? { membership } : {}),
           });
           if (token !== opening) return; // closed or reopened meanwhile
           events.push(...res.events);
-          after = res.seq;
+          membership = res.membership ?? membership;
           if (!res.hasMore) break;
+          // A server that does not move on would loop for ever: that is an error, not a replay.
+          if (after !== undefined && res.seq <= after) {
+            throw new Error(`the history read stopped moving at seq ${res.seq}`);
+          }
+          after = res.seq;
+          set({ progress: { events: events.length, seq: res.seq } });
         }
         const live = useAppStore.getState();
         const timeline = createReplayTimeline(replayBase(live.world.bodies), events);
@@ -139,6 +154,7 @@ export const useReplayStore = create<ReplayState>((set, get) => {
         });
         set({
           phase: 'ready',
+          progress: undefined,
           timeline,
           ticks,
           start: first - LEAD_MS,

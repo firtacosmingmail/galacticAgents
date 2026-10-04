@@ -243,6 +243,8 @@ function CompactTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
         role="region"
         aria-label="menu"
         hidden={!open}
+        // Escape closes the menu before anything page-wide (a timeline replay) takes it.
+        data-escape-layer={open ? '' : undefined}
         onBlur={onBlur}
         onClick={onMenuClick}
       >

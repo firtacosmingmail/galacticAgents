@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
 import {
   REPLAY_SKIPPED_EVENT_TYPES,
@@ -13,7 +14,9 @@ import {
  * The timeline scrubber's read (P4-07; TECHNOLOGY §6.3 "Timeline replay"): the events of the log
  * that touch one project, oldest first, paged forward by `seq`.
  *
- * **Which events.** What belongs to the project is decided from the tables as they are now: the
+ * **Which events.** What belongs to the project is decided from the tables as they are when a read
+ * starts (its first page; later pages pass the `membership` token back and reuse those members, so
+ * the pages of one read agree): the
  * project and its sub-projects (by `parentProjectId`, transitively), their tasks, every agent
  * working on one of them, the questions those agents asked, and the Waykeeper's plan cards
  * (`meta.plan.projectId`). Bodies are those the project, its tasks or its agents live on, plus every
@@ -21,6 +24,9 @@ import {
  * the project, a promotion's old body), found by `type` (indexed) — moves and assignments are rare.
  * An event is returned when it is about one of those (see `touches`), unless its type changes
  * nothing the scene draws (`REPLAY_SKIPPED_EVENT_TYPES`: chat, panel actions, notifications).
+ * Known limit: membership comes from the current tables, so work that has *left* the project (a
+ * task moved to another project, an agent handed elsewhere) is not a member and its past here is
+ * missing from the replay.
  *
  * **Why no snapshot.** The client folds the returned events from the log's start with its ordinary
  * reducer (`applyEvent`), so the server never folds a world at `from`. A project's own events are a
@@ -40,6 +46,13 @@ import {
  */
 export const SCAN_WINDOW = 20_000;
 
+/**
+ * How many read sequences keep their members, and for how long: a replay reads its pages back to
+ * back, so a few minutes and a handful of concurrent reads are plenty.
+ */
+const MEMBERSHIP_SLOTS = 32;
+const MEMBERSHIP_TTL_MS = 10 * 60_000;
+
 interface Members {
   projects: Set<Id>;
   tasks: Set<Id>;
@@ -51,6 +64,8 @@ interface Members {
 
 export class HistoryEvents {
   private readonly stmts = new Map<string, Statement>();
+  /** Members by token (insertion order = age), so a read's later pages filter as its first did. */
+  private readonly memberships = new Map<string, { projectId: Id; members: Members; at: number }>();
 
   constructor(
     private readonly db: Database,
@@ -77,7 +92,7 @@ export class HistoryEvents {
     const from = query.from ? Date.parse(query.from) : undefined;
     const to = query.to ? Date.parse(query.to) : undefined;
     return this.db.transaction(() => {
-      const members = this.members(projectId);
+      const { token: membership, members } = this.membersFor(projectId, query.membership);
       const end = after + this.window;
       const rows = this.stmt(
         'SELECT id, at, type, payload FROM events WHERE id > ? AND id <= ? ORDER BY id LIMIT ?',
@@ -102,8 +117,31 @@ export class HistoryEvents {
       ).seq;
       // A full page stops at its last event; otherwise the whole window was read.
       const seq = filled ?? Math.max(after, Math.min(end, last));
-      return { projectId, events, seq, hasMore: seq < last };
+      return { projectId, events, seq, hasMore: seq < last, membership };
     })();
+  }
+
+  /**
+   * The members a read sequence filters by: those its first page computed (by `token`), else
+   * computed now under a new token. Bounded: the oldest token goes past `MEMBERSHIP_SLOTS`, and a
+   * token older than `MEMBERSHIP_TTL_MS` is not reused.
+   */
+  private membersFor(
+    projectId: Id,
+    token: string | undefined,
+  ): { token: string; members: Members } {
+    const now = Date.now();
+    for (const [key, entry] of this.memberships) {
+      if (now - entry.at > MEMBERSHIP_TTL_MS) this.memberships.delete(key);
+    }
+    const known = token ? this.memberships.get(token) : undefined;
+    if (token && known && known.projectId === projectId) return { token, members: known.members };
+    const fresh = { token: randomUUID(), members: this.members(projectId) };
+    this.memberships.set(fresh.token, { projectId, members: fresh.members, at: now });
+    while (this.memberships.size > MEMBERSHIP_SLOTS) {
+      this.memberships.delete(this.memberships.keys().next().value!);
+    }
+    return fresh;
   }
 
   /** The ids that belong to the project now (see the class comment). */

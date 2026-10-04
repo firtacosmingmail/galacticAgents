@@ -247,6 +247,43 @@ describe('replay store (P4-07)', () => {
     expect(useAppStore.getState().replayWorld).toBeUndefined();
   });
 
+  it('reads to the end however many pages it takes, with progress and one membership (review S5)', async () => {
+    // A long log: 300 scan windows with nothing of the project's, then its history.
+    const progress: (number | undefined)[] = [];
+    const off = useReplayStore.subscribe((r) => progress.push(r.progress?.seq));
+    const historyEvents = vi.fn(async (q: HistoryEventsQuery): Promise<HistoryEventsResponse> => {
+      const after = Number(q.after ?? 0);
+      if (after < 300) {
+        return { projectId: 'p-a', events: [], seq: after + 1, hasMore: true, membership: 'm-1' };
+      }
+      const events = history.map((e, i) => ({ ...e, seq: 301 + i }));
+      return { projectId: 'p-a', events, seq: 400, hasMore: false, membership: 'm-1' };
+    });
+    await useReplayStore.getState().open({ historyEvents }, 'p-a');
+    off();
+    expect(historyEvents).toHaveBeenCalledTimes(301);
+    expect(useReplayStore.getState().timeline?.events).toHaveLength(history.length);
+    expect(useReplayStore.getState()).toMatchObject({ phase: 'ready', progress: undefined });
+    // The first page's membership goes back with every later page.
+    expect(historyEvents.mock.calls[0]![0].membership).toBeUndefined();
+    expect(historyEvents.mock.calls.slice(1).every(([q]) => q.membership === 'm-1')).toBe(true);
+    // Progress was shown while reading.
+    expect(progress).toContain(150);
+  });
+
+  it('a server that stops moving is an error, not an endless read', async () => {
+    const historyEvents = vi.fn(async (): Promise<HistoryEventsResponse> => ({
+      projectId: 'p-a',
+      events: [],
+      seq: 5,
+      hasMore: true,
+    }));
+    await useReplayStore.getState().open({ historyEvents }, 'p-a');
+    expect(useReplayStore.getState().phase).toBe('error');
+    expect(useReplayStore.getState().error).toMatch(/stopped moving/);
+    expect(historyEvents).toHaveBeenCalledTimes(2);
+  });
+
   it('startReplay goes back to the panel from the history page', async () => {
     useAppStore.getState().navigate({ route: 'history', selection: { kind: 'harmonizer' } });
     startReplay(fakeApi(), 'p-a', 'Alpha');
