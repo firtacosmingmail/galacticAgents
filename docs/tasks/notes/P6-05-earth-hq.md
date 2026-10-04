@@ -13,7 +13,7 @@ Branch `p6-05-earth-hq` (from `p6-wave2-visuals-cutaway-hq`), 2026-10-04. The te
 | `scene/satellites/hq/hq-model.ts` | `claimHqStation()` / `hqClaimed()`: a counted claim (StrictMode-safe). | no |
 | `scene/satellites/hq/HqStation.tsx` | `writeHq` hides core and ring while claimed; the beam is still drawn. | yes |
 | `scene/picking/store.ts` | `activateSatellite`: with the Harmonizer selected, `revealChat()`. | no |
-| `panel/dock-state.ts` | `requestDockOpen()` (a listener set `useDockPrefs` registers; with no dock mounted it writes `open: true` to the stored preference), `revealChat()` (restore + Chat view). `setOpen` no longer rewrites storage when the value is unchanged. | no |
+| `panel/dock-state.ts` | `requestDockOpen()` (a listener set `useDockPrefs` registers; with no dock mounted it writes `open: true` to the stored preference), `revealChat()` (restore + a transient Chat view, not stored; review fix). `setOpen` no longer rewrites storage when the value is unchanged. | no |
 
 ### How the station works
 
@@ -33,7 +33,7 @@ Branch `p6-05-earth-hq` (from `p6-wave2-visuals-cutaway-hq`), 2026-10-04. The te
   | reduced motion | as above, still | still | steady (failed/none off) | steady 0.6 while thinking |
 
 - **No Harmonizer.** No frame is published, so the station rests dark at a fixed place (innermost shell, a little above the equator, `restingPose`). It is not a pick target; a click on it lands on Earth (selects the Harmonizer, decision 65) or empty space (deselects to the Harmonizer). The dock is where decision 82's Restart lives.
-- **Click → chat.** `activateSatellite` selects the Harmonizer and flies to Earth (in Earth's detail view the flight keeps the detail framing, P6-01), then `revealChat()`: the dock restores if it was minimised (decision 71, the stored preference updated as with its own button) and the "Chat | Status" switch goes to Chat (decision 80). This applies to **every HQ click**, the system view's too: the HQ is the Harmonizer's home and clicking it means "talk to the Harmonizer". Clicking Earth itself is unchanged (selects, does not restore the dock), and other satellites are unchanged.
+- **Click → chat.** `activateSatellite` selects the Harmonizer and flies to Earth (in Earth's detail view the flight keeps the detail framing, P6-01), then `revealChat()`: the dock restores if it was minimised (decision 71, the stored preference updated as with its own button) and the dock shows Chat for this click only: a transient override in `useDockView` (`showTransient`), not stored, so the remembered Chat/Status choice (decision 80, device-wide, also used for Waykeepers) is unchanged and shows again when the selection changes or the user picks a view (review fix; first version stored Chat). This applies to **every HQ click**, the system view's too: the HQ is the Harmonizer's home and clicking it means "talk to the Harmonizer". Clicking Earth itself is unchanged (selects, does not restore the dock), and other satellites are unchanged.
 - **Cross-fade.** The swap of models happens when the part mounts (start of the fade in, the camera still far: the station is a few pixels). The navigation lights, strobe and glow fade in with `mix()`.
 - **Quality and cost.** High/balanced: core, ring, nav, strobe, + glow while thinking = 4–5 draw calls (the system HQ's 2 are hidden, so +2–3 net). Mobile: the simple model, no glow (thinking reads by the ring and the breathing). The glow is a vertex-coloured `RingGeometry` disc billboarded in Earth's frame — no canvas texture.
 - **Disposal.** Every geometry is disposed on unmount (tested); materials are R3F-owned JSX and disposed with their meshes.
@@ -62,10 +62,11 @@ Decision 72's "clicking it selects the Harmonizer" could become "clicking it sel
   - geometry: vertex-coloured, about one unit across, −y toward Earth; more than twice the system core's vertices; the mobile model under 60 % of the full one; the ring in the spine's plane;
   - `writeEarthHq`: placed at the frame in Earth's frame with the frame's size and colour; the ring integrates fast while thinking and slow while idle, glow on/off; no Harmonizer → dark at the resting place, lights and glow off, ring still; a hidden frame hides it; lights fade with the mix; reduced motion gives the same picture at any time; no glow target on mobile; a released target writes nothing;
   - **no double HQ**: while claimed, `writeHq` hides the system core and ring and keeps the beam; release restores; claims count (StrictMode).
-- **`detail/earth-hq/earth-hq-ui.test.tsx` (4, jsdom):**
+- **`detail/earth-hq/earth-hq-ui.test.tsx` (5, jsdom):**
   - the part claims the HQ while mounted (under StrictMode) and releases and disposes its geometry on unmount;
   - the mobile tier mounts the station without the glow;
-  - **click → Harmonizer**: the whole app on a Waykeeper link with the dock minimised and on Status; `activateSatellite('a-harmonizer')` selects the Harmonizer, restores the dock (and the stored preference), switches to Chat and shows "chat with Harmonizer";
+  - **click → Harmonizer**: the whole app on a Waykeeper link with the dock minimised and on Status; `activateSatellite('a-harmonizer')` selects the Harmonizer, restores the dock (and the stored preference), shows Chat and "chat with Harmonizer" without storing it (the stored view stays Status, and shows again once a Waykeeper is selected);
+  - the user's own pick during the reveal is stored and ends the override;
   - another satellite's click leaves the dock and its view alone.
 - Gates: `pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test` all green (protocol 70, server 976 + 1 skipped, web 1373). three.js is still absent from the panel's first chunk (`index-*.js`: no `WebGLRenderer`, `Object3D`, `Matrix4`); the station is in the `SolarScene` chunk.
 
@@ -95,4 +96,4 @@ Decision 72's "clicking it selects the Harmonizer" could become "clicking it sel
 1. With a Harmonizer running, click Earth, then "Detail view". The HQ station is the detailed one; send it a message and watch the ring speed up and the cyan glow breathe; when it asks you something it turns amber and blinks.
 2. Minimise the dock, switch it to Status, then click the station: the dock comes back on the chat.
 3. Turn on reduced motion: the ring stops, the lights are steady, the glow is steady while thinking.
-4. Decide whether the "click HQ opens the chat" rule should hold in the whole-system view too (implemented) or only in Earth's detail view.
+4. Decide whether the "click HQ opens the chat" rule should hold in the whole-system view too (implemented) or only in Earth's detail view (now an open question in `SPEC.md` §8).
