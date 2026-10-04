@@ -117,7 +117,7 @@ function placeColonies(drawn: {
     anchor.object.updateWorldMatrix(true, true);
     const rock =
       anchor.kind === 'asteroid' ? anchor.object.getObjectByName(ASTEROID_ROCK_NAME) : undefined;
-    let lift = COLONY.lift;
+    let lift: number = COLONY.lift;
     if (rock) {
       matrix.copy(rock.matrixWorld); // the rock's squash and rotation: lights follow its shape
       lift = COLONY.asteroidLift;
