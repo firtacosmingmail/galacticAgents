@@ -94,13 +94,51 @@ export function ControlFeedback({
   controls: Controls;
   work: CardWork | undefined;
 }) {
+  return (
+    <>
+      {c.pending && (
+        <ConfirmBox
+          key={`${c.pending.scope}:${c.pending.action.action}`}
+          question={c.pending.action.confirm ?? ''}
+          yes={`Yes, ${c.pending.action.label.toLowerCase()}`}
+          busy={c.busy}
+          opener={c.opener}
+          onConfirm={c.confirm}
+          onKeep={c.keep}
+        />
+      )}
+      {c.editing && work && (
+        <EditForm target={{ kind: work.kind }} item={work.item} busy={c.busy} onSave={c.saveEdit} />
+      )}
+      <ErrorLine error={c.error} />
+    </>
+  );
+}
+
+/**
+ * An inline confirmation (decision 56): the question, the destructive answer and "Keep".
+ * P5-04: it takes the focus (on "Keep", the safe answer, decision 81), Escape keeps, and when it
+ * closes it gives the focus back to what opened it — or, gone (an action in the closed "More"
+ * menu), to "More" or the first button near the confirmation — unless the user has put the focus
+ * elsewhere.
+ */
+export function ConfirmBox({
+  question,
+  yes,
+  busy,
+  opener,
+  onConfirm,
+  onKeep,
+}: {
+  question: string;
+  yes: string;
+  busy: boolean;
+  opener: RefObject<HTMLElement | null>;
+  onConfirm: () => void;
+  onKeep: () => void;
+}) {
   const box = useRef<HTMLDivElement>(null);
-  const { pending, opener } = c;
-  // P5-04: the confirmation takes the focus (on "Keep", the safe answer) and gives it back to what
-  // opened it — or, gone (an action in the closed "More" menu), to "More" or the first button
-  // near the confirmation — when it closes, unless the user has put the focus elsewhere.
   useEffect(() => {
-    if (!pending) return;
     const el = box.current;
     const around = el?.parentElement;
     const from = opener.current;
@@ -116,37 +154,23 @@ export function ControlFeedback({
         usable(around?.querySelector<HTMLElement>('button:not([disabled])'));
       to?.focus();
     };
-  }, [pending, opener]);
+  }, [opener]);
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Escape') return;
     e.preventDefault();
     e.stopPropagation();
-    c.keep();
+    onKeep();
   };
   return (
-    <>
-      {c.pending && (
-        <div
-          className="agc-confirm"
-          role="group"
-          aria-label="confirm"
-          ref={box}
-          onKeyDown={onKeyDown}
-        >
-          <span>{c.pending.action.confirm}</span>
-          <button type="button" className="danger" disabled={c.busy} onClick={c.confirm}>
-            Yes, {c.pending.action.label.toLowerCase()}
-          </button>
-          <button type="button" className="secondary" onClick={c.keep}>
-            Keep
-          </button>
-        </div>
-      )}
-      {c.editing && work && (
-        <EditForm target={{ kind: work.kind }} item={work.item} busy={c.busy} onSave={c.saveEdit} />
-      )}
-      <ErrorLine error={c.error} />
-    </>
+    <div className="agc-confirm" role="group" aria-label="confirm" ref={box} onKeyDown={onKeyDown}>
+      <span>{question}</span>
+      <button type="button" className="danger" disabled={busy} onClick={onConfirm}>
+        {yes}
+      </button>
+      <button type="button" className="secondary" onClick={onKeep}>
+        Keep
+      </button>
+    </div>
   );
 }
 
@@ -362,6 +386,93 @@ export function ControlsStrip({
         )}
       </div>
       <ControlFeedback controls={c} work={work} />
+    </div>
+  );
+}
+
+/** What "Restart Harmonizer" asks before it acts (decision 82). */
+export const RESTART_HARMONIZER_CONFIRM =
+  'Restart the Harmonizer? It is stopped and a fresh one starts, seeded from the database; ' +
+  'the questions it asked you are withdrawn and it asks again what still matters.';
+
+/**
+ * The Harmonizer's own controls in its dock bar (P5-06; SPEC decision 82): Pause or Resume like
+ * any agent's (`POST /api/control` on the agent), "Resume session" only while it is interrupted,
+ * and "Restart Harmonizer" behind a confirmation (`POST /api/harmonizer/restart`). Never a plain
+ * Stop: the user is never left without a Harmonizer (decision 44 does not replace one the user
+ * stopped). The selection stays on the Harmonizer, which is the newest one (`currentHarmonizer`).
+ */
+export function HarmonizerControls({
+  agentId,
+  status,
+  name,
+}: {
+  agentId: Id;
+  status: StatusRecord | undefined;
+  name: string;
+}) {
+  const c = useControls(agentId, undefined);
+  const api = useApi();
+  const restart = useAction();
+  const [confirming, setConfirming] = useState(false);
+  const opener = useRef<HTMLElement | null>(null);
+  const actions = agentActions(status).filter((a) => INLINE.has(a.action));
+  const recoverable = status?.state === 'interrupted';
+  const busy = c.busy || restart.busy;
+  return (
+    <div className="ctl">
+      <div className="ctl-row" role="group" aria-label={`controls of ${name}`}>
+        {actions.length > 0 && (
+          <span className="ctl-group">
+            <span className="agc-actions-title" aria-hidden="true">
+              agent
+            </span>
+            {actions.map((a) => (
+              <ActionButton
+                key={a.action}
+                action={a}
+                busy={busy}
+                onClick={(x) => {
+                  setConfirming(false);
+                  c.click('agent', x);
+                }}
+                ariaLabel={`${a.label} the Harmonizer`}
+              />
+            ))}
+          </span>
+        )}
+        {recoverable && (
+          <button type="button" className="secondary" disabled={busy} onClick={c.recover}>
+            Resume session
+          </button>
+        )}
+        <button
+          type="button"
+          className="agc-destructive"
+          disabled={busy}
+          onClick={(e) => {
+            opener.current = e.currentTarget;
+            setConfirming(true);
+          }}
+        >
+          Restart Harmonizer
+        </button>
+      </div>
+      {confirming && (
+        <ConfirmBox
+          question={RESTART_HARMONIZER_CONFIRM}
+          yes="Yes, restart"
+          busy={busy}
+          opener={opener}
+          onConfirm={() => {
+            setConfirming(false);
+            void restart.run(() => api.restartHarmonizer());
+          }}
+          onKeep={() => setConfirming(false)}
+        />
+      )}
+      <ControlFeedback controls={c} work={undefined} />
+      <ErrorLine error={restart.error} />
     </div>
   );
 }

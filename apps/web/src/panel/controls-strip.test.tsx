@@ -223,7 +223,7 @@ describe('controls strip in a Waykeeper’s conversation (P4-09)', () => {
     expect(strip(WAYKEEPER).queryByRole('button', { name: 'Pause the agent' })).toBeNull();
   });
 
-  it('shows with the cards shown too, and not for the Harmonizer', async () => {
+  it('shows with the cards shown too; the Harmonizer gets its own controls, not this strip', async () => {
     localStorage.setItem(MANAGED_AGENTS_VISIBLE_KEY, '1');
     await open('/waykeeper/a-waykeeper-1');
     expect(screen.getByRole('region', { name: 'managed agents' })).toBeTruthy();
@@ -231,7 +231,84 @@ describe('controls strip in a Waykeeper’s conversation (P4-09)', () => {
 
     cleanup();
     await open('/');
-    expect(main().queryByRole('group', { name: /^controls of/ })).toBeNull();
+    // P5-06 (decision 82) replaced P4-09's "no controls for the Harmonizer": pause / resume and
+    // a confirmed restart; no work actions, no plain Stop, no More menu.
+    const hq = strip('Harmonizer');
+    expect(hq.getByRole('button', { name: 'Pause the Harmonizer' })).toBeTruthy();
+    expect(hq.getByRole('button', { name: 'Restart Harmonizer' })).toBeTruthy();
+    expect(hq.queryByRole('button', { name: /stop/i })).toBeNull();
+    expect(hq.queryByRole('button', { name: 'More' })).toBeNull();
+    expect(main().getAllByRole('group', { name: /^controls of/ })).toHaveLength(1);
+  });
+});
+
+describe('the Harmonizer’s controls in its dock bar (P5-06, decision 82)', () => {
+  const HQ = 'Harmonizer';
+  const posted = (suffix: string) =>
+    vi
+      .mocked(fetch)
+      .mock.calls.filter(([url, init]) => String(url).endsWith(suffix) && init?.method === 'POST');
+  const withHq = (state: AgentState) => {
+    const snap = snapshot() as Extract<ServerMessage, { type: 'snapshot' }>;
+    return {
+      ...snap,
+      statuses: snap.statuses.map((s) =>
+        s.agentId === 'a-harmonizer' ? status(s.agentId, state) : s,
+      ),
+    };
+  };
+
+  it('pauses and resumes the Harmonizer like any agent', async () => {
+    await open('/');
+    fireEvent.click(strip(HQ).getByRole('button', { name: 'Pause the Harmonizer' }));
+    await vi.waitFor(() =>
+      expect(controls).toEqual([
+        { target: { kind: 'agent', id: 'a-harmonizer' }, action: { action: 'pause' } },
+      ]),
+    );
+    cleanup();
+    await open('/', withHq('paused'));
+    expect(strip(HQ).queryByRole('button', { name: 'Pause the Harmonizer' })).toBeNull();
+    fireEvent.click(strip(HQ).getByRole('button', { name: 'Resume the Harmonizer' }));
+    await vi.waitFor(() =>
+      expect(controls[1]).toEqual({
+        target: { kind: 'agent', id: 'a-harmonizer' },
+        action: { action: 'resume' },
+      }),
+    );
+    expect(strip(HQ).queryByRole('button', { name: 'Resume session' })).toBeNull();
+  });
+
+  it('offers "Resume session" only for an interrupted Harmonizer', async () => {
+    await open('/', withHq('interrupted'));
+    expect(strip(HQ).queryByRole('button', { name: /^(Pause|Resume) the Harmonizer$/ })).toBeNull();
+    fireEvent.click(strip(HQ).getByRole('button', { name: 'Resume session' }));
+    await vi.waitFor(() => expect(posted('/api/agents/a-harmonizer/recover')).toHaveLength(1));
+    // Restart stays offered: the user is never left without a Harmonizer.
+    expect(strip(HQ).getByRole('button', { name: 'Restart Harmonizer' })).toBeTruthy();
+  });
+
+  it('asks before restarting, starting on Keep; Escape and Keep do nothing', async () => {
+    await open('/');
+    const button = strip(HQ).getByRole('button', { name: 'Restart Harmonizer' });
+    fireEvent.click(button);
+    const confirm = within(main().getByRole('group', { name: 'confirm' }));
+    expect(
+      confirm.getByText(/Restart the Harmonizer\? It is stopped and a fresh one starts/),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(confirm.getByRole('button', { name: 'Keep' }));
+    fireEvent.keyDown(confirm.getByRole('button', { name: 'Keep' }), { key: 'Escape' });
+    expect(main().queryByRole('group', { name: 'confirm' })).toBeNull();
+
+    fireEvent.click(button);
+    fireEvent.click(main().getByRole('button', { name: 'Keep' }));
+    expect(main().queryByRole('group', { name: 'confirm' })).toBeNull();
+    expect(posted('/api/harmonizer/restart')).toHaveLength(0);
+
+    fireEvent.click(button);
+    fireEvent.click(main().getByRole('button', { name: 'Yes, restart' }));
+    await vi.waitFor(() => expect(posted('/api/harmonizer/restart')).toHaveLength(1));
+    expect(controls).toEqual([]);
   });
 });
 
