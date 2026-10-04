@@ -18,6 +18,7 @@ import {
   type HarnessQuestionBody,
   type HarnessScenarioBody,
   type HarnessScenarioResponse,
+  type HarnessState,
   type HarnessStateBody,
   type Id,
 } from '@galactic/protocol';
@@ -27,6 +28,7 @@ import type { Commands } from '../domain/commands.js';
 import { DomainError, must } from '../domain/errors.js';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { FINISHED_WORK } from '../domain/states.js';
+import { cancelQuestionsOf } from '../domain/questions.js';
 import { DEFAULT_CAPS } from './caps.js';
 import type { StatusStore } from './status-store.js';
 
@@ -67,6 +69,15 @@ export interface SceneHarnessOptions {
 }
 
 const USER: Actor = { type: 'user' };
+
+/** States in which a fake agent keeps its open questions (an ending settles them itself). */
+const KEEPS_QUESTIONS: ReadonlySet<HarnessState> = new Set<HarnessState>([
+  'waiting_for_input',
+  'paused',
+  'finished',
+  'failed',
+  'stopped',
+]);
 
 /** The tool call each activity preset logs (P4-03's archetypes read it from `currentActivity`). */
 export const ACTIVITY_PRESETS: Record<HarnessActivity, { toolName: string; input: unknown }> = {
@@ -215,6 +226,13 @@ export class SceneHarness {
     }
     if (current === 'paused' && input.state !== 'paused') {
       await this.record({ type: 'agent.resumed', agentId, by: USER });
+    }
+    // A fake agent that moves on from waiting no longer needs its open questions: they are
+    // withdrawn (their beacons go out), as a session that stopped asking would leave none open.
+    if (isHarnessMeta(agent.meta) && !KEEPS_QUESTIONS.has(input.state)) {
+      this.log.runCommand((ctx) =>
+        cancelQuestionsOf(ctx, agentId, 'the agent moved on (scene harness)'),
+      );
     }
     switch (input.state) {
       case 'starting':

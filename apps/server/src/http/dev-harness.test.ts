@@ -350,10 +350,17 @@ describe('/dev/harness work events (P4-06)', () => {
       context: { text: 'Tabs or spaces?' },
     });
     expect(state(id)).toBe('waiting_for_input');
-    // `waiting_for_input` as a state asks a permission question.
+    // `waiting_for_input` as a state asks a permission question; moving on withdraws it.
     const other = await scenario({ stewards: 1, asteroid: false });
-    await post(`/dev/harness/agents/${other.stewardIds[0]}/state`, { state: 'waiting_for_input' });
-    expect(state(other.stewardIds[0]!)).toBe('waiting_for_input');
+    const otherId = other.stewardIds[0]!;
+    await post(`/dev/harness/agents/${otherId}/state`, { state: 'waiting_for_input' });
+    expect(state(otherId)).toBe('waiting_for_input');
+    const pending = composed.statuses.get(otherId)!.pendingQuestionId!;
+    await post(`/dev/harness/agents/${otherId}/state`, { state: 'paused' });
+    expect(composed.log.tables.questions.get(pending)?.status).toBe('open');
+    await post(`/dev/harness/agents/${otherId}/state`, { state: 'idle' });
+    expect(composed.log.tables.questions.get(pending)?.status).toBe('cancelled');
+    expect(composed.statuses.get(otherId)).toMatchObject({ state: 'idle' });
     // Failing the agent cancels its question (the runtime's ending path).
     await post(`/dev/harness/agents/${id}/state`, { state: 'failed' });
     expect(composed.log.tables.questions.get(question.id)?.status).toBe('cancelled');
