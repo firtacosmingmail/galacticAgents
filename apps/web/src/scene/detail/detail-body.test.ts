@@ -225,6 +225,11 @@ describe('parts (extension slots for P6-02…P6-05)', () => {
     ];
     expect(partsFor(earth, parts).map((p) => p.id)).toEqual(['overlay', 'hq']);
     expect(partsFor(jupiter, parts).map((p) => p.id)).toEqual(['overlay', 'cutaway']);
-    expect(partsFor(earth)).toEqual([]);
+    // The registered parts: P6-05's station on Earth only (earth-hq.test.ts covers it).
+    expect(partsFor(earth).map((p) => p.id)).toContain('earth-hq');
+    expect(partsFor(jupiter).map((p) => p.id)).not.toContain('earth-hq');
+    // P6-03's cutaway too, for a body with layer data (cutaway.test.ts covers it).
+    expect(partsFor(earth).map((p) => p.id)).toContain('cutaway');
+    expect(partsFor(earth, [])).toEqual([]);
   });
 });
