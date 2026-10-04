@@ -1,7 +1,7 @@
 # Phase 6 — Planet zoom and structure
 
-**Current task:** P6-02, P6-03, P6-05 (wave 2, branch `p6-wave2-visuals-cutaway-hq`) · **Task status:** in progress
-**Phase status:** in progress (1/5 done) — on branch `phase-6`
+**Current task:** P6-02, P6-03 (wave 2, branch `p6-wave2-visuals-cutaway-hq`) · **Task status:** in progress
+**Phase status:** in progress (2/5 done) — on branch `phase-6`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -56,7 +56,7 @@ Zooming into a planet shows it "as it is in our solar system" — high-detail su
 - **Acceptance:** project tasks are placed and clickable in the detail view; selecting one selects the task in the panel.
 
 ### P6-05 — Earth as headquarters
-- **Status:** in progress · **Depends on:** P6-01, P4-02 · **Parallel with:** P6-02, P6-03
+- **Status:** done (2026-10-04) · **Depends on:** P6-01, P4-02 · **Parallel with:** P6-02, P6-03
 - Distinct HQ station in Earth orbit as the Harmonizer's home; idle/thinking indication; clicking it opens the Harmonizer chat.
 - **Acceptance:** Earth detail view shows the station and links to the Harmonizer.
 

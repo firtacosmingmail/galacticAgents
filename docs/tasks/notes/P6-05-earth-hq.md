@@ -38,7 +38,7 @@ Branch `p6-05-earth-hq` (from `p6-wave2-visuals-cutaway-hq`), 2026-10-04. The te
 - **Quality and cost.** High/balanced: core, ring, nav, strobe, + glow while thinking = 4–5 draw calls (the system HQ's 2 are hidden, so +2–3 net). Mobile: the simple model, no glow (thinking reads by the ring and the breathing). The glow is a vertex-coloured `RingGeometry` disc billboarded in Earth's frame — no canvas texture.
 - **Disposal.** Every geometry is disposed on unmount (tested); materials are R3F-owned JSX and disposed with their meshes.
 
-## Proposed SPEC text
+## SPEC text (recorded as decision 85; decision 72 amended)
 
 A sentence for decision 84 (or a new decision 8x "Earth as headquarters"):
 
