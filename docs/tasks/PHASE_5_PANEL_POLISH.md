@@ -1,7 +1,7 @@
 # Phase 5 — Side panel polish and scene integration
 
-**Current task:** P5-03 (wave 1, branch `p5-wave1-selection-status-history`) · **Task status:** in progress
-**Phase status:** in progress (2/5 done) — on branch `phase-5`
+**Current task:** P5-04 (wave 2, after wave 1 is merged into `phase-5`) · **Task status:** todo
+**Phase status:** in progress (3/5 done) — on branch `phase-5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -46,7 +46,7 @@ The Phase 2.5 panel becomes the spec's panel, wired to the scene: selection flow
 - **Acceptance:** "ask for the status of anything" (SPEC §4.3) is answerable without an LLM call.
 
 ### P5-03 — History view
-- **Status:** in progress · **Depends on:** P2-13, P25-01 · **Parallel with:** P5-01, P5-02
+- **Status:** done (2026-10-04) · **Depends on:** P2-13, P25-01 · **Parallel with:** P5-01, P5-02
 - Archived projects/tasks with their bodies, moved-to links, closure dates; past questions with kind, holder chain and who answered; search/filter; reopen from history.
 - **Acceptance:** an archived project can be found, inspected and reopened.
 

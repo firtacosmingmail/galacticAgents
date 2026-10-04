@@ -47,7 +47,7 @@ Task text: *"Archived projects/tasks with their bodies, moved-to links, closure 
 - `history.css`: the inspector, in-page links, moves, steps and the holder chain (arrows between holders), on the panel's tokens.
 - `apps/web/src/console/api.ts`: `historyDetail(kind, id)`.
 
-## Proposed SPEC text (amend decision 61)
+## SPEC text (recorded in decision 61)
 
 Append to decision 61:
 
