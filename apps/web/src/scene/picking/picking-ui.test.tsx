@@ -341,6 +341,41 @@ describe('scene keys', () => {
     fireEvent.keyDown(area, { key: 'Escape' });
     expect(camera().focusedId).toBeUndefined();
   });
+
+  it('Escape then deselects (back to the Harmonizer, the camera staying); Home never does (P5-01)', () => {
+    window.history.replaceState(null, '', '/steward/a-st');
+    useAppStore.setState({ selection: { kind: 'steward', id: 'a-st' } });
+    render(<Area />);
+    act(() => void camera().flyTo('b-ast-7'));
+    const area = screen.getByRole('region', { name: 'scene' });
+    fireEvent.keyDown(area, { key: 'Home' });
+    expect(camera().request).toMatchObject({ kind: 'overview' });
+    fireEvent.keyDown(area, { key: 'Home' });
+    expect(selected()).toBe('steward:a-st');
+
+    act(() => void camera().flyTo('b-ast-7'));
+    fireEvent.keyDown(area, { key: 'Escape' }); // the camera's body first
+    expect(camera().focusedId).toBeUndefined();
+    expect(selected()).toBe('steward:a-st');
+    const seq = camera().request?.seq;
+    fireEvent.keyDown(area, { key: 'Escape' }); // then the selection
+    expect(selected()).toBe('harmonizer');
+    expect(window.location.pathname).toBe('/');
+    expect(camera().request?.seq).toBe(seq);
+    fireEvent.keyDown(area, { key: 'Escape' }); // nothing left: the system's framing
+    expect(camera().request?.seq).toBeGreaterThan(seq!);
+    expect(camera().request).toMatchObject({ kind: 'overview' });
+  });
+
+  it('a deselecting Escape is taken (the replay does not also exit on it)', () => {
+    useAppStore.setState({ selection: { kind: 'waykeeper', id: 'a-wk-old' } });
+    render(<Area />);
+    const area = screen.getByRole('region', { name: 'scene' });
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    act(() => void area.dispatchEvent(event));
+    expect(selected()).toBe('harmonizer');
+    expect(event.defaultPrevented).toBe(true);
+  });
 });
 
 describe('useSelectionSync (panel → scene)', () => {
@@ -391,5 +426,102 @@ describe('useSelectionSync (panel → scene)', () => {
     useAppStore.setState({ selection: { kind: 'waykeeper', id: 'a-wk-old' } });
     render(<Sync />);
     expect(camera().request).toBeUndefined();
+  });
+
+  it('a selection that comes back to the panel from the history page flies (P5-01)', () => {
+    // On /history the scene is not mounted; a history row's agent link selects and returns.
+    useAppStore.setState({ route: 'history' });
+    act(() =>
+      useAppStore
+        .getState()
+        .navigate({ route: 'panel', selection: { kind: 'steward', id: 'a-st' } }),
+    );
+    render(<Sync />);
+    expect(camera().focusedId).toBe('b-ast-7');
+  });
+
+  it('…as does a notification clicked on the settings page, once the body is drawn', () => {
+    unregister.forEach((u) => u());
+    unregister = [];
+    useAppStore.setState({ route: 'settings' });
+    act(() =>
+      useAppStore
+        .getState()
+        .navigate({ route: 'panel', selection: { kind: 'waykeeper', id: 'a-wk-old' } }),
+    );
+    render(<Sync />);
+    expect(camera().request).toBeUndefined();
+    act(() => anchor('b-jupiter'));
+    expect(camera().focusedId).toBe('b-jupiter');
+  });
+
+  it('returning to the panel with the same selection, or to the Harmonizer, does not fly', () => {
+    useAppStore.setState({ selection: { kind: 'steward', id: 'a-st' } });
+    useAppStore.setState({ route: 'history' });
+    act(() =>
+      useAppStore
+        .getState()
+        .navigate({ route: 'panel', selection: { kind: 'steward', id: 'a-st' } }),
+    );
+    const first = render(<Sync />);
+    expect(camera().request).toBeUndefined();
+    first.unmount();
+
+    useAppStore.setState({ route: 'settings' });
+    act(() => useAppStore.getState().navigate({ route: 'panel', selection: HARMONIZER }));
+    render(<Sync />);
+    expect(camera().request).toBeUndefined();
+  });
+
+  it('a selection changed in list mode does not fly when the scene is shown later', () => {
+    act(() => useAppStore.getState().select({ kind: 'steward', id: 'a-st' }));
+    render(<Sync />);
+    expect(camera().request).toBeUndefined();
+  });
+
+  describe('during a replay (P4-07)', () => {
+    /** The replayed past: the big project still on Mars, the asteroid's Steward not spawned. */
+    function past() {
+      const world = pickingWorld();
+      const { 'a-st': _gone, ...agents } = world.agents;
+      const { host: _moved, ...jupiter } = world.bodies['b-jupiter']!;
+      return {
+        ...world,
+        agents,
+        bodies: {
+          ...world.bodies,
+          'b-jupiter': jupiter,
+          'b-mars': { ...world.bodies['b-mars']!, host: { kind: 'project' as const, id: 'p-big' } },
+        },
+        projects: { ...world.projects, 'p-big': { ...world.projects['p-big']!, bodyId: 'b-mars' } },
+      };
+    }
+
+    it("a panel selection flies to the agent's body in the replayed world", () => {
+      useAppStore.setState({ replayWorld: past() });
+      render(<Sync />);
+      act(() => useAppStore.getState().select({ kind: 'waykeeper', id: 'a-wk-old' }));
+      expect(camera().focusedId).toBe('b-mars');
+      useAppStore.setState({ replayWorld: undefined });
+    });
+
+    it('an agent not in the replayed world yet: no flight, and none when it appears', () => {
+      useAppStore.setState({ replayWorld: past() });
+      render(<Sync />);
+      act(() => useAppStore.getState().select({ kind: 'steward', id: 'a-st' }));
+      expect(camera().request).toBeUndefined();
+      act(() => useAppStore.setState({ replayWorld: pickingWorld() })); // playback reaches it
+      expect(camera().request).toBeUndefined();
+      act(() => useAppStore.setState({ replayWorld: undefined })); // exit replay
+      expect(camera().request).toBeUndefined();
+    });
+
+    it('picking selects from the replayed world; the panel keeps the live agent', () => {
+      useAppStore.setState({ replayWorld: past() });
+      act(() => void activateBody('b-mars', AT));
+      expect(selected()).toBe('waykeeper:a-wk-old');
+      expect(camera().focusedId).toBe('b-mars');
+      useAppStore.setState({ replayWorld: undefined });
+    });
   });
 });

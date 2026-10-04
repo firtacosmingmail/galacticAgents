@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { sceneWorld, useAppStore } from '../../state/store.js';
-import { selectionKey, type Selection, type SelectionKey } from '../../state/selection.js';
+import {
+  HARMONIZER,
+  selectionKey,
+  type Selection,
+  type SelectionKey,
+} from '../../state/selection.js';
 import { agentLabel } from '../../console/hierarchy/shared.js';
 import { useCameraStore } from '../camera/store.js';
 import { getSatellite } from '../satellites/registry.js';
@@ -191,6 +196,19 @@ export function selectFromScene(selection: Selection): void {
   } finally {
     sceneSelection = undefined;
   }
+}
+
+/**
+ * Deselects from the scene (P5-01; SPEC §4.2: "the Harmonizer is always one click away (deselect,
+ * or click Earth)"): a click on empty space, or `Escape` once nothing else is left to close,
+ * goes back to the Harmonizer's chat. The camera stays where it is (decision 65: going back to the
+ * Harmonizer never flies). False when the Harmonizer is already selected (nothing to deselect).
+ */
+export function deselectFromScene(): boolean {
+  if (useAppStore.getState().selection.kind === 'harmonizer') return false;
+  usePickingStore.getState().closePopover();
+  selectFromScene(HARMONIZER);
+  return true;
 }
 
 /**
