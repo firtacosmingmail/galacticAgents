@@ -305,7 +305,7 @@ function PlanetSystemDetail({ planet, quality, sunRadius, children }: PlanetDeta
 
 /**
  * A moon on its orbit in its planet's view, at its nearest LOD level (the detail level is only for
- * the shown body), lit by planetshine on its night side and wearing its atmosphere if it has one
+ * the shown body), lit by planetshine (a faint uniform glow, `usePlanetshine`) and wearing its atmosphere if it has one
  * (Titan).
  */
 function OrbitingMoon({

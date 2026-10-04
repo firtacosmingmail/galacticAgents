@@ -166,8 +166,9 @@ export function cloudFadeIn(
 }
 
 /**
- * Planetshine (P6-02, the moons' lighting in a detail view): a moon's night side faintly lit by
- * its planet's day side. The planet's colour is its palette's mean (sRGB hex); the strength
+ * Planetshine (P6-02, the moons' lighting in a detail view): a moon faintly lit by its planet's
+ * day side — a faint uniform glow over the whole moon (an emissive has no direction: it shows on the
+ * night side, while the Sun's light swamps it on the day side). The planet's colour is its palette's mean (sRGB hex); the strength
  * follows how much of the planet's lit hemisphere faces the moon — `(1 + cos θ) / 2`, θ the angle
  * at the planet between the Sun (at the world origin) and the moon — and the planet's apparent size
  * from the moon, `(R / d)²`, capped at `PLANETSHINE_MAX`. Applied as the moon material's emissive,
