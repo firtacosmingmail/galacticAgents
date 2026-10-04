@@ -3,6 +3,7 @@ import {
   attribute,
   heldBy,
   isInside,
+  isUserFacingApp,
   serverTree,
   withDescendants,
   worktreeRootOf,
@@ -360,6 +361,162 @@ describe('process attribution (P4-14)', () => {
     );
     const found = await attribute(input(procs, { exclude: new Set([200]) }));
     expect(withDescendants(found, [201]).map((x) => x.pid)).toEqual([201, 202]);
+  });
+
+  describe('user-facing apps are never taken through an orphan (S2)', () => {
+    const ELECTRON = '/Applications/Visual Studio Code.app/Contents/MacOS/Electron';
+    const inWorktree = (ps: number[]) => new Map(ps.map((pid) => [pid, WT]));
+
+    it('an Electron app the Steward started (`code .`), marked, and everything below it: not taken', async () => {
+      const procs = world(
+        p(710, 1, { pgid: 710, command: `${ELECTRON} .` }),
+        p(711, 710, {
+          pgid: 710,
+          command:
+            '/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin) --type=utility',
+        }),
+        p(712, 710, { pgid: 712, command: '/bin/zsh -il' }), // an integrated terminal
+        p(713, 712, { pgid: 713, command: 'node other-project/server.js' }), // the user's work
+      );
+      // Everything carries this Steward's marker (inherited) and works in the worktree.
+      const i = input(procs, { cwdOf: inWorktree, exclude: new Set([200]) });
+      expect(await pids(i)).toEqual([]);
+      // Not even when remembered (the Electron main was briefly the CLI's descendant).
+      expect(await pids({ ...i, remembered: () => true })).toEqual([]);
+    });
+
+    it('a tmux (or screen) server the Steward started, marked, and its panes: not taken', async () => {
+      for (const server of ['tmux new -d -s work', 'tmux: server', '/usr/bin/SCREEN -dmS work']) {
+        const procs = world(
+          p(700, 1, { pgid: 700, command: server }),
+          p(701, 700, { pgid: 701, command: '-zsh' }),
+          p(702, 701, { pgid: 702, command: 'npm run dev' }),
+        );
+        const i = input(procs, { cwdOf: inWorktree, exclude: new Set([200]) });
+        expect(await pids(i)).toEqual([]);
+        expect(await pids({ ...i, remembered: () => true })).toEqual([]);
+      }
+    });
+
+    it('below a marked orphan of the Steward, a user-facing app and what is under it are not taken', async () => {
+      const procs = world(
+        p(400, 1, { pgid: 400, command: 'node script.js' }),
+        p(401, 400, { pgid: 401, command: `${ELECTRON} --new-window` }),
+        p(402, 401, { pgid: 401, command: 'node helper.js' }),
+        p(403, 400, { pgid: 400, command: 'node worker.js' }),
+      );
+      const i = input(procs, { cwdOf: inWorktree, exclude: new Set([200]) });
+      expect(await pids(i)).toEqual([
+        [400, 'worktree'],
+        [403, 'descendant'],
+      ]);
+    });
+
+    it('a plain node orphan with the marker is still taken', async () => {
+      const procs = world(p(400, 1, { pgid: 400, command: 'node server.js' }));
+      const i = input(procs, { cwdOf: inWorktree, exclude: new Set([200]) });
+      expect(await pids(i)).toEqual([[400, 'worktree']]);
+    });
+
+    it('a user-facing app in the live Steward’s own group is still its (rule 3)', async () => {
+      // e.g. a headless browser from an app bundle that an MCP server started in the group.
+      const procs = world(
+        p(201, 200, {
+          pgid: 200,
+          command: '/cache/Chromium.app/Contents/MacOS/Chromium --headless',
+        }),
+      );
+      expect(await pids(input(procs, { exclude: new Set([200]) }))).toEqual([[201, 'group']]);
+    });
+
+    it('recognises the bundles and multiplexers', () => {
+      expect(isUserFacingApp({ command: `${ELECTRON} .` })).toBe(true);
+      expect(isUserFacingApp({ command: '/Applications/iTerm.app/Contents/MacOS/iTerm2' })).toBe(
+        true,
+      );
+      expect(isUserFacingApp({ command: 'tmux' })).toBe(true);
+      expect(isUserFacingApp({ command: '/opt/homebrew/bin/tmux -L x new -d' })).toBe(true);
+      expect(isUserFacingApp({ command: 'SCREEN -dmS x' })).toBe(true);
+      expect(isUserFacingApp({ command: 'node server.js' })).toBe(false);
+      expect(isUserFacingApp({ command: '/bin/zsh -c npm run dev' })).toBe(false);
+    });
+  });
+
+  describe('remembered identities (S1)', () => {
+    // After the CLI died: a tool command's shell (its own group under Claude Code, an Apple
+    // binary whose environment `ps -E` hides — no marker) and what it started, now orphans.
+    const procs = () =>
+      world(
+        p(500, 1, { pgid: 500, command: '/bin/zsh -c npm run dev' }),
+        p(501, 500, { pgid: 500, command: 'sh -c vite & tsc -w' }),
+        p(502, 501, { pgid: 500, command: 'node vite' }),
+        p(503, 501, { pgid: 500, command: 'node tsc -w' }),
+        p(600, 1, { pgid: 600, command: '/bin/zsh -c sleep 1000' }), // the user's, never seen
+      ).filter((x) => x.pid !== 200);
+    const seen = (...ids: number[]) => {
+      const set = new Set(ids.map((pid) => `${pid}@${T0 + 10 * S}`));
+      return (x: ProcEntry) => set.has(`${x.pid}@${x.startedAt}`);
+    };
+    const noMarker = { markerOf: () => new Map<number, string>() };
+
+    it('takes a remembered orphan and its remembered descendants without a marker', async () => {
+      const i = input(procs(), { ...noMarker, remembered: seen(500, 501, 502, 503) });
+      expect(await pids(i)).toEqual([
+        [500, 'remembered'],
+        [501, 'remembered'],
+        [502, 'remembered'],
+        [503, 'remembered'],
+      ]);
+      // Without a worktree (a serialised project) or a session: the same, it is an observed fact.
+      const { worktree: _w, ...noWorktree } = i;
+      expect(await pids({ ...noWorktree, sessions: [] })).toHaveLength(4);
+    });
+
+    it('below a remembered orphan, what was never seen needs the marker', async () => {
+      const marks = new Map([[503, 'a-st']]);
+      const i = input(procs(), { markerOf: () => marks, remembered: seen(500, 501) });
+      expect(await pids(i)).toEqual([
+        [500, 'remembered'],
+        [501, 'remembered'],
+        [503, 'descendant'],
+      ]);
+    });
+
+    it('takes nothing that was not remembered and carries no marker', async () => {
+      expect(await pids(input(procs(), noMarker))).toEqual([]);
+      // Another start time under the same pid is another process.
+      const other = (x: ProcEntry) => x.pid === 500 && x.startedAt === T0 + 99 * S;
+      expect(await pids(input(procs(), { ...noMarker, remembered: other }))).toEqual([]);
+    });
+
+    it('never overrides another agent’s group or the server’s tree', async () => {
+      const mixed = world(
+        p(301, 300, { pgid: 300 }), // the other agent's group member
+        p(502, 100, { pgid: 90 }), // the server's group
+      );
+      const i = input(mixed, { ...noMarker, remembered: () => true, exclude: new Set([200]) });
+      expect(await pids(i)).toEqual([]);
+    });
+
+    it('marks what rules 3–4 took through its groups as anchored, nothing else', async () => {
+      const found = await attribute(
+        input(
+          world(
+            p(201, 200, { pgid: 200 }),
+            p(210, 200, { pgid: 210 }),
+            p(400, 1, { pgid: 400 }),
+            p(401, 400, { pgid: 400 }),
+          ),
+          { cwdOf: (ps) => new Map(ps.map((x) => [x, WT])), exclude: new Set([200]) },
+        ),
+      );
+      expect(found.map((x) => [x.pid, x.why, x.anchored ?? false])).toEqual([
+        [201, 'group', true],
+        [210, 'descendant', true],
+        [400, 'worktree', false],
+        [401, 'descendant', false],
+      ]);
+    });
   });
 });
 

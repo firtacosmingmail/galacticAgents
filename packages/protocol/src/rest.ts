@@ -184,10 +184,13 @@ void _controlAction;
 
 /**
  * Why a process counts as the Steward's: a member of its CLI's process group (`group`), a
- * descendant of one (`descendant`: escaped with `setsid`, still a child), or an orphan started
- * during the Steward's session whose working directory is inside the task's worktree (`worktree`).
+ * descendant of one (`descendant`: escaped with `setsid`, still a child), an orphan the server saw
+ * as the live Steward's descendant earlier in this run, by pid and start time (`remembered`: a
+ * tool command's shell left behind when the CLI died), or an orphan started during the Steward's
+ * session whose working directory is inside the task's worktree and that carries the Steward's
+ * marker (`worktree`).
  */
-export const ProcessAttribution = z.enum(['group', 'descendant', 'worktree']);
+export const ProcessAttribution = z.enum(['group', 'descendant', 'worktree', 'remembered']);
 export type ProcessAttribution = z.infer<typeof ProcessAttribution>;
 
 /** One process attributed to a Steward. `command` is clipped and redacted. */

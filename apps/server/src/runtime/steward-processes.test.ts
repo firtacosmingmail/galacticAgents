@@ -39,6 +39,21 @@ process.stdout.write('PIDS ' + srv.pid + ' ' + esc.pid + '\\n');
 ${IDLE};
 `;
 
+/**
+ * A CLI stand-in that runs a tool command the way Claude Code runs Bash: a shell in a process group
+ * of its own (`detached`), here `/bin/sh -c '<node leaf> & wait'` — on macOS an Apple binary
+ * whose environment `ps -E` hides, so it shows no marker.
+ */
+const BASH_LEADER = `
+const { spawn } = require('child_process');
+const tag = process.argv[1];
+const leaf = '"' + process.execPath + '" -e "${IDLE}" ' + tag + '-leaf >/dev/null 2>&1 & echo LEAF $!; wait';
+const sh = spawn('/bin/sh', ['-c', leaf], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+sh.stdout.on('data', (d) => process.stdout.write(d));
+process.stdout.write('SH ' + sh.pid + '\\n');
+${IDLE};
+`;
+
 let tmp: string;
 let worktree: string;
 let elsewhere: string;
@@ -302,6 +317,64 @@ describe.skipIf(!POSIX)('a Steward’s processes (P4-14, real processes)', () =>
     );
   });
 
+  it('finds a tool command’s shell left behind when its CLI died, by remembered identity (S1)', async () => {
+    const st = await steward();
+    let out = '';
+    const proc = await supervisor.spawn({
+      agentId: st.id,
+      command: NODE,
+      args: ['-e', BASH_LEADER, `${MARK}-bash-leader`],
+      cwd: worktree,
+      onStdout: (chunk) => (out += chunk),
+    });
+    seen.add(proc.pid);
+    await until(async () => /SH \d+/.test(out) && /LEAF \d+/.test(out), 'the shell and its leaf');
+    const sh = Number(/SH (\d+)/.exec(out)![1]);
+    const leaf = Number(/LEAF (\d+)/.exec(out)![1]);
+    seen.add(sh);
+    seen.add(leaf);
+    await until(async () => (await row(leaf)) !== undefined, 'the leaf running');
+    // The user's own daemon in the worktree: never seen as the Steward's, no marker.
+    const users = await orphan(worktree, 'orphan-user');
+
+    // While the CLI runs: the shell (its own group) and its leaf descend from it — remembered.
+    const before = await composed.processes!.list(st.id);
+    expect(before.processes.map((p) => [p.pid, p.why, p.held]).sort()).toEqual(
+      [
+        [sh, 'descendant', true],
+        [leaf, 'descendant', true],
+      ].sort(),
+    );
+
+    // The CLI dies alone (its own group is reaped; the shell's group is not that group).
+    process.kill(proc.pid, 'SIGKILL');
+    await proc.exited;
+    await until(async () => (await row(sh))?.ppid !== proc.pid, 'the shell orphaned');
+    expect(await running(sh)).toBe(true);
+    if (process.platform === 'darwin') {
+      // macOS hides the Apple shell's environment: the marker alone could not find it.
+      const shRow = (await row(sh))!;
+      expect((await table.markers!([shRow])).has(sh)).toBe(false);
+    }
+
+    const after = await composed.processes!.list(st.id);
+    const byPid = new Map(after.processes.map((p) => [p.pid, p]));
+    expect([...byPid.keys()].sort()).toEqual([sh, leaf].sort());
+    expect(byPid.get(sh)).toMatchObject({ why: 'remembered' });
+    expect(byPid.get(sh)).not.toHaveProperty('held');
+    expect(byPid.get(leaf)).toMatchObject({ why: 'remembered' });
+
+    // The Steward ends: the sweep stops the shell and its leaf, never the user's daemon.
+    await composed.runtime.stop(st.id, USER);
+    await until(async () => stoppedEvents().length > 0, 'the sweep');
+    await composed.processes!.idle();
+    for (const pid of [sh, leaf]) expect(await running(pid)).toBe(false);
+    expect(await running(users)).toBe(true);
+    expect((stoppedEvents()[0]!.event as { pids: number[] }).pids.sort()).toEqual(
+      [sh, leaf].sort(),
+    );
+  });
+
   it('never takes a worktree process that was running before the Steward’s session, even marked', async () => {
     const st = await steward();
     const before = await orphan(worktree, 'orphan-before', st.id);
@@ -473,6 +546,96 @@ describe('the sweeps and the stop path (P4-14, a scripted process table)', () =>
     const again = await composed.processes!.stop(st.id, { pids: [9007], by: USER });
     expect(again).toMatchObject({ stopped: [], skipped: [9007] });
     expect(fake.signals).toEqual([]);
+  });
+
+  it('a stop that waited out the snapshot’s second signals nothing once the service is disposed (N4)', async () => {
+    const { fake, st } = await ended();
+    fake.alive.set(9008, 0);
+    // Every read shows it as started in that read's own second: the stop waits that second out.
+    fake.hooks.startOf = (pid) => (pid === 9008 ? Math.floor(Date.now() / 1000) * 1000 : during);
+    const stopping = composed.processes!.stop(st.id, { pids: [9008], by: USER });
+    await sleep(50);
+    composed.processes!.dispose(); // shutdown, while the stop sleeps
+    const result = await stopping;
+    expect(result).toMatchObject({ stopped: [], forced: [] });
+    expect(fake.signals).toEqual([]);
+    expect(fake.alive.has(9008)).toBe(true);
+  });
+
+  it('remembers what a live Steward’s CLI owns after a tool call, and finds it once orphaned (S1)', async () => {
+    const T = Date.now() - 30_000;
+    const launchd = { pid: 1, ppid: 0, pgid: 1, uid: 501, startedAt: 0, command: '/sbin/launchd' };
+    const cli = { pid: 700, ppid: 4, pgid: 700, uid: 501, startedAt: T, command: 'claude' };
+    const shell = (ppid: number) => ({
+      pid: 710,
+      ppid,
+      pgid: 710, // its own group, as Claude Code runs a Bash command
+      uid: 501,
+      startedAt: T + 2_000,
+      command: '/bin/zsh -c npm run dev',
+    });
+    let procs: ProcEntry[] = [launchd, cli, shell(700)];
+    let lists = 0;
+    const killed: number[] = [];
+    let cliAlive = true;
+    let agentId: Id = '';
+    await composed.dispose();
+    composed = composeRuntime(openDatabase(':memory:'), {
+      processes: {
+        table: {
+          list: () => {
+            lists++;
+            return Promise.resolve(procs);
+          },
+          cwds: () => Promise.resolve(new Map()),
+          // No marker anywhere (an Apple binary on macOS), no session: only memory can find it.
+          markers: () => Promise.resolve(new Map()),
+          ports: () => Promise.resolve(new Map()),
+          kill: (pid, sig) => {
+            if (sig === 'SIGTERM') {
+              killed.push(pid);
+              procs = procs.filter((p) => p.pid !== pid);
+            }
+            return true;
+          },
+        },
+        self: { pid: 4, uid: 501 },
+        termMs: 200,
+        settleMs: 200,
+        refreshMs: 10,
+        groups: {
+          agentGroups: () => [{ agentId, pgid: 700, startedAt: T }],
+          agentSessions: () => [],
+          livePid: () => (cliAlive ? 700 : undefined),
+        },
+      },
+    });
+    const st = await steward();
+    agentId = st.id;
+    await composed.processes!.idle();
+    const listsBefore = lists;
+
+    // A tool call of the live Steward: its processes are looked at again shortly after.
+    composed.log.runCommand(({ emit }) =>
+      emit({ type: 'agent.tool_call', agentId: st.id, toolName: 'Bash' }),
+    );
+    await composed.processes!.idle();
+    expect(lists).toBeGreaterThan(listsBefore);
+
+    // The CLI dies: the shell is an orphan; another unmarked shell started after the last look.
+    cliAlive = false;
+    procs = [
+      launchd,
+      shell(1),
+      { ...shell(1), pid: 720, pgid: 720, startedAt: T + 9_000, command: '/bin/zsh -c sleep 99' },
+    ];
+    const listed = await composed.processes!.list(st.id);
+    expect(listed.processes.map((p) => [p.pid, p.why])).toEqual([[710, 'remembered']]);
+
+    // A pid that comes back with another start time is someone else.
+    procs = [launchd, { ...shell(1), startedAt: T + 20_000 }];
+    expect((await composed.processes!.list(st.id)).processes).toEqual([]);
+    expect(killed).toEqual([]);
   });
 
   it('refuses a non-Steward and an unknown agent', async () => {

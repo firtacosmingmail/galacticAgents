@@ -19,14 +19,23 @@ import type { Id, ProcessAttribution } from '@galactic/protocol';
  *      that agent's: the Steward's (`group`) or another agent's (never the Steward's).
  *   4. P's parent is the Steward's                                     → the Steward's (`descendant`:
  *      escaped its group with `setsid`, still a child) — but when the chain reaches the Steward
- *      only through an orphan (rule 5), P must carry the Steward's marker too.
- *   5. P's parent is a reaper (P was orphaned: daemonised, `nohup … &` whose shell exited) → the
- *      Steward's (`worktree`) only if ALL of: the Steward has a task worktree; P started inside
- *      one of the Steward's sessions (a spawn or resume to its end, as the supervisor recorded
- *      them); P's working directory is inside that worktree; and P's environment carries
- *      `GALACTIC_AGENT_ID=<this Steward>` (`AGENT_ID_ENV`, set by the supervisor on every agent
- *      child and inherited by its descendants). An environment that cannot be read is no marker.
- *   6. Anything else (a child of the server, of another agent, of the user's shell or terminal,
+ *      only through an orphan (rules 5–6), P must be remembered (rule 5) or carry the Steward's
+ *      marker too.
+ *   5. P's parent is a reaper (P was orphaned: daemonised, `nohup … &` whose shell exited, a tool
+ *      command's shell whose CLI died), or P is below such an orphan of the Steward's, and P's
+ *      identity (pid, start time) was REMEMBERED: this server run saw it as the live Steward's by
+ *      rule 3 or 4 while its CLI ran (`remembered`) → the Steward's (`remembered`), no marker needed.
+ *   6. P's parent is a reaper → the Steward's (`worktree`) only if ALL of: the Steward has a task
+ *      worktree; P started inside one of the Steward's sessions (a spawn or resume to its end, as
+ *      the supervisor recorded them); P's working directory is inside that worktree; and P's
+ *      environment carries `GALACTIC_AGENT_ID=<this Steward>` (`AGENT_ID_ENV`, set by the
+ *      supervisor on every agent child and inherited by its descendants). An environment that
+ *      cannot be read is no marker.
+ *      Rules 5 and 6 never take a user-facing app (`isUserFacingApp`: an executable inside a macOS
+ *      `*.app/Contents/` bundle, a terminal multiplexer server such as tmux or screen) nor anything
+ *      below one: a `code .` or `tmux new -d` the Steward started becomes the user's once the
+ *      user works in it (other folders, terminals, extension hosts, panes).
+ *   7. Anything else (a child of the server, of another agent, of the user's shell or terminal,
  *      of an orphan that is not the Steward's)                          → not the Steward's.
  *
  * The safety argument (rule by rule) is written up in `docs/tasks/notes/P4-14-process-cleanup.md`.
@@ -90,11 +99,21 @@ export interface AttributionInput {
   markerOf: (pids: number[]) => PidMap<string>;
   /** Pids never listed (the Steward's own CLI while it runs). */
   exclude?: ReadonlySet<number>;
+  /**
+   * Whether this process (pid and start time) was seen as the live Steward's by rule 3 or 4 in
+   * this server run (rule 5). Absent: nothing is remembered.
+   */
+  remembered?: (p: ProcEntry) => boolean;
 }
 
 export interface AttributedProcess extends ProcEntry {
   why: ProcessAttribution;
   cwd?: string;
+  /**
+   * Taken by rule 3 or 4 through the Steward's own groups (kernel facts, no orphan on the way):
+   * what the caller remembers while the Steward's CLI runs (rule 5).
+   */
+  anchored?: true;
 }
 
 /** `ps lstart` has a one-second resolution (floored): every time comparison allows this much. */
@@ -111,6 +130,33 @@ export function executable(command: string): string {
 
 export function isReaper(p: ProcEntry): boolean {
   return p.pid <= 1 || REAPERS.has(executable(p.command));
+}
+
+/**
+ * Terminal multiplexer servers: what the user attaches to later. Compared lower-case, without a
+ * trailing colon (Linux tmux renames itself `tmux: server`; the screen server runs as `SCREEN`).
+ */
+export const MULTIPLEXERS: ReadonlySet<string> = new Set([
+  'tmux',
+  'screen',
+  'zellij',
+  'dtach',
+  'abduco',
+]);
+
+/** A macOS application bundle: the executable, or an argument, lies inside `<name>.app/Contents/`. */
+const APP_BUNDLE = /\.app\/Contents\//;
+
+/**
+ * A user-facing app (S2 of the second P4-14 review): a GUI application from a macOS `.app` bundle
+ * (`code .` → Electron, its helpers, a terminal emulator) or a terminal multiplexer server. Even
+ * when the Steward started it, what the user later does in it (other folders, integrated
+ * terminals, extension hosts, new panes) inherits its marker — so the orphan rules (5 and 6)
+ * never take one, nor anything below it. Matching an argument as well errs on the safe side.
+ */
+export function isUserFacingApp(p: Pick<ProcEntry, 'command'>): boolean {
+  if (APP_BUNDLE.test(p.command)) return true;
+  return MULTIPLEXERS.has(executable(p.command).replace(/:$/, '').toLowerCase());
 }
 
 /** Whether `child` is `parent` or inside it (both absolute). */
@@ -133,14 +179,22 @@ export function worktreeRootOf(
   return cwd.slice(0, at + marker.length) + task;
 }
 
-/** `orphan-descendant`: below a rule-5 orphan, marked at every step (reported as `descendant`). */
-type Verdict = ProcessAttribution | 'orphan-descendant' | 'reaper' | 'server' | 'other' | 'foreign';
+/**
+ * Internal verdicts. `orphan-descendant`: below an orphan of the Steward's, marked at every step
+ * (reported as `descendant`); `user-app`: a user-facing app on an orphan path, or below one —
+ * never the Steward's, nor anything below it.
+ */
+type Verdict =
+  ProcessAttribution | 'orphan-descendant' | 'user-app' | 'reaper' | 'server' | 'other' | 'foreign';
 const MINE: ReadonlySet<Verdict> = new Set([
   'group',
   'descendant',
   'orphan-descendant',
   'worktree',
+  'remembered',
 ]);
+/** Verdicts reached through an orphan: below them, rule 5 or the marker is required. */
+const ORPHAN_PATH: ReadonlySet<Verdict> = new Set(['worktree', 'orphan-descendant', 'remembered']);
 
 /** The pids of the server's own tree: itself, its ancestors (below pid 1) and its process group. */
 export function serverTree(procs: readonly ProcEntry[], selfPid: number): Set<number> {
@@ -179,64 +233,72 @@ export async function attribute(input: AttributionInput): Promise<AttributedProc
   const { agentId, procs, groups, self, sessions, worktree } = input;
   const byPid = new Map(procs.map((p) => [p.pid, p]));
   const server = serverTree(procs, self.pid);
+  const remembered = (p: ProcEntry) => input.remembered?.(p) === true;
   const inSession = (p: ProcEntry) =>
     sessions.some(
       (s) => p.startedAt >= s.start - START_SLACK_MS && p.startedAt <= s.end + START_SLACK_MS,
     );
   // A server that is itself pid 1 (a container) reaps orphans: its children are its own, never
-  // orphans of the Steward's — rule 5 is then off, which is the safe side.
+  // orphans of the Steward's — the orphan rules are then off, which is the safe side.
   const parentIsReaper = (p: ProcEntry) => {
     if (server.has(p.ppid)) return false;
     const parent = byPid.get(p.ppid);
     return p.ppid <= 1 || (parent !== undefined && isReaper(parent));
   };
   const ours = (p: ProcEntry) => p.uid === self.uid && !p.zombie;
+  const orphan = (p: ProcEntry) =>
+    ours(p) &&
+    !isReaper(p) &&
+    !server.has(p.pid) &&
+    groupOwner(p, groups) === undefined &&
+    parentIsReaper(p) &&
+    !isUserFacingApp(p);
 
-  // Rule 5 needs working directories and markers: only of orphans of ours that started in one of
-  // the Steward's sessions, and markers also of everything below them (rule 4 under rule 5).
-  const orphanCandidates = new Set(
+  // Rule 6 needs working directories and markers: only of orphans of ours that started in one of
+  // the Steward's sessions. Rule 5's remembered orphans need neither, but what is below an orphan
+  // of either kind needs its marker (or to be remembered itself).
+  const worktreeCandidates = new Set(
     worktree !== undefined && sessions.length > 0
-      ? procs
-          .filter(
-            (p) =>
-              ours(p) &&
-              !isReaper(p) &&
-              !server.has(p.pid) &&
-              groupOwner(p, groups) === undefined &&
-              parentIsReaper(p) &&
-              inSession(p),
-          )
-          .map((p) => p.pid)
+      ? procs.filter((p) => orphan(p) && inSession(p)).map((p) => p.pid)
       : [],
   );
+  const roots = new Set([
+    ...worktreeCandidates,
+    ...procs.filter((p) => orphan(p) && remembered(p)).map((p) => p.pid),
+  ]);
   const below = new Map<number, boolean>();
-  const underCandidate = (p: ProcEntry, depth = 0): boolean => {
+  const underRoot = (p: ProcEntry, depth = 0): boolean => {
     const known = below.get(p.pid);
     if (known !== undefined) return known;
     let v: boolean;
-    if (orphanCandidates.has(p.pid)) v = true;
+    if (roots.has(p.pid)) v = true;
     else if (
       depth > 256 ||
       isReaper(p) ||
       server.has(p.pid) ||
       groupOwner(p, groups) !== undefined ||
-      parentIsReaper(p)
+      parentIsReaper(p) ||
+      isUserFacingApp(p)
     ) {
       v = false;
     } else {
       const parent = byPid.get(p.ppid);
-      v = parent !== undefined && underCandidate(parent, depth + 1);
+      v = parent !== undefined && underRoot(parent, depth + 1);
     }
     below.set(p.pid, v);
     return v;
   };
   let cwds = new Map<number, string>();
   let markers = new Map<number, string>();
-  if (orphanCandidates.size > 0) {
-    const markerPids = procs.filter((p) => ours(p) && underCandidate(p)).map((p) => p.pid);
+  if (roots.size > 0) {
+    const markerPids = procs
+      .filter((p) => ours(p) && underRoot(p) && !remembered(p))
+      .map((p) => p.pid);
     [cwds, markers] = await Promise.all([
-      input.cwdOf([...orphanCandidates]),
-      input.markerOf(markerPids),
+      worktreeCandidates.size > 0
+        ? input.cwdOf([...worktreeCandidates])
+        : new Map<number, string>(),
+      markerPids.length > 0 ? input.markerOf(markerPids) : new Map<number, string>(),
     ]);
   }
   const marked = (p: ProcEntry) => markers.get(p.pid) === agentId;
@@ -253,23 +315,29 @@ export async function attribute(input: AttributionInput): Promise<AttributedProc
       if (owner !== undefined) v = owner === agentId ? 'group' : 'other';
       else if (parentIsReaper(p)) {
         const cwd = cwds.get(p.pid);
-        v =
-          worktree !== undefined &&
-          orphanCandidates.has(p.pid) &&
-          cwd !== undefined &&
-          isInside(cwd, worktree) &&
-          marked(p)
-            ? 'worktree'
-            : 'foreign';
+        if (isUserFacingApp(p)) v = 'user-app';
+        else if (remembered(p)) v = 'remembered';
+        else
+          v =
+            worktree !== undefined &&
+            worktreeCandidates.has(p.pid) &&
+            cwd !== undefined &&
+            isInside(cwd, worktree) &&
+            marked(p)
+              ? 'worktree'
+              : 'foreign';
       } else {
         const parent = byPid.get(p.ppid);
         // A parent gone from the snapshot (it exited between the two reads) decides nothing.
         if (!parent || depth > 256) v = 'foreign';
         else {
           const up = verdict(parent, depth + 1);
-          if (up === 'worktree' || up === 'orphan-descendant') {
-            // Below an orphan the Steward's marker is required at every step.
-            v = marked(p) ? 'orphan-descendant' : 'foreign';
+          if (up === 'user-app') v = 'user-app';
+          else if (ORPHAN_PATH.has(up)) {
+            // Below an orphan: never a user-facing app; else remembered, or marked at every step.
+            if (isUserFacingApp(p)) v = 'user-app';
+            else if (remembered(p)) v = 'remembered';
+            else v = marked(p) ? 'orphan-descendant' : 'foreign';
           } else v = MINE.has(up) ? 'descendant' : 'foreign';
         }
       }
@@ -285,7 +353,12 @@ export async function attribute(input: AttributionInput): Promise<AttributedProc
     if (!MINE.has(v)) continue;
     const why = (v === 'orphan-descendant' ? 'descendant' : v) as ProcessAttribution;
     const cwd = cwds.get(p.pid);
-    out.push({ ...p, why, ...(cwd !== undefined ? { cwd } : {}) });
+    out.push({
+      ...p,
+      why,
+      ...(cwd !== undefined ? { cwd } : {}),
+      ...(v === 'group' || v === 'descendant' ? { anchored: true as const } : {}),
+    });
   }
   return out.sort((a, b) => a.startedAt - b.startedAt || a.pid - b.pid);
 }
