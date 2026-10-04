@@ -90,7 +90,7 @@ function startDriver(advance: (ms: number) => void): () => void {
 }
 
 /**
- * The timeline scrubber (P4-07; SPEC decision 78): one project's history replayed in the scene.
+ * The timeline scrubber (P4-07): one project's history replayed in the scene.
  * Opening reads `GET /api/history/events` to the end, folds it (`replay-model.ts`) and hands the
  * world at the slider's time to the app store's `replayWorld`, which the scene draws instead of
  * the live world (`sceneWorld`). The panel stays live; live events keep folding into `world`. The

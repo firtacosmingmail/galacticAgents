@@ -21,7 +21,7 @@ const when = (ms: number) =>
   });
 
 /**
- * The timeline scrubber's bar (P4-07; SPEC decision 78), docked between the scene and the
+ * The timeline scrubber's bar (P4-07), docked between the scene and the
  * conversation while a replay is open. It says that the scene shows the past and the panel stays
  * live; a slider over the project's lifetime with a tick per assignment, move, completion and
  * question; play / pause at 1×, 10× or 60×; previous / next marked event; the time shown; and

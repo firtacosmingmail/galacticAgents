@@ -1,0 +1,56 @@
+# P4-07 — Timeline scrubber
+
+Branch `p4-07-scrubber` (from `p4-wave4-harness-scrubber`). A minimal, complete version of the nice-to-have: a read-only route, a pure replay fold, one world switch for the scene, and a bar to scrub, play and step. Code in `apps/server/src/runtime/history-events.ts`, `packages/protocol/src/replay.ts`, `apps/web/src/replay/`; TECHNOLOGY §2.1 ("Timeline replay") and §6.3 (the endpoint) describe it.
+
+## What was built
+
+### Server: `GET /api/history/events?projectId=&from=&to=&after=&limit=`
+
+- Bearer-guarded in the panel routes' scope, zod-validated (`HistoryEventsQuery`: `limit` 1–2 000, default 500; `after` a non-negative seq; `from` / `to` ISO timestamps), 400 `invalid_query`, 404 `not_found` for an unknown project.
+- Returns `{projectId, events, seq, hasMore}`: the envelopes that touch the project, oldest first; `seq` is the next `after`.
+- **Membership** from the tables as they are now: the project and its sub-projects (transitively by `parentProjectId`), their tasks, agents with one of those `projectId` / `taskId`, the questions those agents asked, plan cards (`meta.plan.projectId`), and bodies: the project's, its tasks', its agents', plus every body a `body.assigned` / `body.moved` ever put one of them on or moved one from (read through the `events_type` index — placements are rare). A standalone task that later joined the project therefore brings its whole history: its asteroid, its `task.created`, its Steward's events.
+- `touches(event, members)` is an exhaustive switch over every event type (`body.freed` by body, `body.assigned` by host, `question.*` by question id, `agent.*` by agent id, …); `REPLAY_SKIPPED_EVENT_TYPES` drops what the scene never draws (`message.*` — the chat has its own endpoint — `control.*`, `permission.decided`, `recovery.needs_attention`, `agent.processes_stopped`).
+- **No snapshot at `from`**: the client folds from the log's start. Justification: a project's events are a small share of the log (its rows' lifecycle plus its agents' `agent.*` events, mostly one `agent.tool_call` per tool use), and a server-side fold would be a second implementation of the client reducer (the one the conformance test holds to the tables). `from` / `to` only filter by `at` (for callers that want a window; the bar does not use them).
+- **Cost and index**: each request reads one rowid window, `id > after AND id <= after + 20 000` (`SEARCH events USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)`, no sort — a query-plan test guards it), parses only rows of kept types, and stops when the page is full. Reading a whole project walks the log once. No index can serve "any of a dozen payload paths is one of these ids", and the walk is bounded per request, so **no migration** was added. Measured (in-memory DB, Node 22, M-series Mac; probe not committed):
+
+  | Log | Project's share | Pages (limit 2 000) | Total | Slowest page |
+  |---|---|---|---|---|
+  | 200 000 events | 10 003 | 11 | 163 ms | 19 ms |
+  | 1 000 000 events | 50 003 | 51 | 810 ms | 19 ms |
+
+- **Redaction parity**: rows are returned exactly as `EventLog.eventsSince` (the stream) returns them; secrets were redacted before the events were logged. The route test compares every returned envelope with the stream's for the same seq and checks a `[redacted:…]` value comes through unchanged.
+- `describeTool` moved from the status store to the protocol (`replay.ts`) so the client's replay words tool activities exactly like live records (the satellites' archetypes parse that text).
+
+### Client: replay world and the one switch
+
+- `AppState.replayWorld` (set only by the replay store) and `sceneWorld(s) = s.replayWorld ?? s.world`. Every scene component and scene helper (bodies, belt, colonies, labels, moon markers, satellites, activities, beacons, hover cards, picking, the selection → camera sync, breadcrumb) reads through it; a source test fails if anything under `scene/` reads `s.world` / `getState().world` directly. The panel (navigation, cards, inbox, dock) keeps the live `world`; live events keep folding into it during a replay. A snapshot of another log clears `replayWorld` and closes the replay; `reset()` clears it.
+- `replay-model.ts` (pure, no three.js): `replayBase(bodies)` — the client's bodies without host or marker, and no work (other projects are off the map during a replay); the fold is the page's `applyEvent` plus `foldReplayStatus`, which replays the log's `agent.*` events into status records (spawned → starting, tool call / progress → working with the activity, needs_input → waiting with the question, idle, stalled, paused / resumed, finished, failed, stopped, interrupted; `question.answered` / `cancelled` release a waiting agent). It is **not** the status projection (that stays server-owned, TECHNOLOGY §4): no output-driven "working", no silence timer, no cap usage. An agent never spawned has no record, hence no satellite, as live; finished work's satellite lands through the existing P4-04 rules once the task is completed.
+- `createReplayTimeline(base, events)`: `worldAt(n)` after the first n events, a checkpoint every 64 events (any seek folds ≤ 64; a forward step folds one), `countAt(time)` by binary search. 50 000 events: 21 ms to build, ≈ 10 µs per random seek.
+- `useReplayStore` (`replay/store.ts`): `open` reads every page (2 000 per page, ≤ 200 pages), builds the timeline, starts at the slider's start (1 s before the first event: the empty system); `seek`, `step(±1)` between marked events (ticks), `play` / `pause`, `setSpeed(1 | 10 | 60)`, `advance(ms)`; `close` returns the scene to live. A read in flight is dropped if the replay is closed or reopened. The replay is the history as it was when opened (later live events are not appended).
+- Playback: `requestAnimationFrame` × speed (frames capped at 250 ms). With `prefers-reduced-motion`, a 1 s interval instead, so the slider and the scene change in discrete steps (the scene's own reduced-motion rules already make flights instant and satellites still).
+
+### Timeline UI
+
+- `ReplayBar` (plain React, panel chunk; three.js stays in `SolarScene`'s chunk — checked in the build output) docked between the scene and the conversation (wide: in `.pnl-centre`; narrow: between the stack and the dock), a `flex: none` row, so the page still never scrolls. It shows "Replay · <project>" and "The scene shows the past; the panel stays live." (or "Show the scene to watch the replay." in list mode), Exit replay (also Escape inside the bar), previous / play-pause / next, the speed, the slider over the project's lifetime with ticks (assignment grey, move blue, completion green, question amber — the beacon's colour), the time and "n / N events".
+- Entry points: a navigation project row's "⋯" → "Replay history"; a project row of the history page → "Replay" (goes back to the panel's main view first).
+
+## Proposed SPEC decision (for §7, next free number)
+
+> **Timeline replay** — *A project's history replays in the scene; the panel stays live* (P4-07; §4.1, §4.2, decisions 61, 63, 68, 77): "Replay history" in a project's "⋯" in the navigation, or "Replay" on a project in the history view, opens a bar between the scene and the conversation. The scene then shows that project as it was at the bar's time — its planet or moon, its tasks' bodies and "moved to …" markers, its satellites with the states the log recorded, landings, colonised lights and question beacons — and nothing of other projects; the navigation, the inbox and the conversation stay live, and the bar says so. The bar has a slider over the project's lifetime with a mark for every assignment to a body, move, completion and question; previous / next mark; play and pause at 1×, 10× or 60×; the time shown; and "Exit replay" (or Escape), which returns the scene to the present. Replaying is read-only. With reduced motion, playback moves in whole-second steps. A replay shows the history up to when it was opened; satellites show only what the log recorded (state, activity, question), so a satellite may look calmer than it did live.
+
+## Tests
+
+- `apps/server/src/http/history-events-routes.test.ts` (5): auth (401), validation (400) and 404; filtering by project (tasks, a task that joined later with its asteroid, agents, questions, completion; nothing of the other project; no chat, no panel actions); seq order; redaction parity with the stream; paging with small pages and with a 4-row scan window (concatenations equal the whole read; `seq` always advances; `hasMore` false at the end); `from` / `to`; query plans (rowid range, no temp B-tree; placements through `events_type`).
+- `apps/web/src/replay/replay-conformance.test.ts` (2, node, real commands and fake agents): at every commit the replay (through the route's reader, 25 per page) holds exactly the server's rows for the project's projects, tasks, agents, questions and bodies, and none of another project's; at the end the replayed agent states equal the status store's. Scrubbing across the move (asteroid host → "moved to Mars"; the Steward's satellite body asteroid → Mars) and the completion (finished Steward without a satellite → landed on Mars); a waiting satellite at the question; scrubbing back gives the same world; t = 0 is empty.
+- `apps/web/src/replay/store.test.ts` (8): paging, the scene reads the replay while the panel stays live, seek before / after move and completion, step / play / speed / stop at the end, live events fold into the live world only, exit back to live, another log closes the replay, a failed read and a replay closed while reading, `startReplay` from the history route; the source guard on `scene/`.
+- `apps/web/src/replay/replay-ui.test.tsx` (2): from a navigation row's actions and from the history page, the bar opens, steps, scrubs, plays / pauses, exits (button and Escape).
+- Gates: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` green (protocol 67, server 915 + 1 skipped, web 1 011).
+
+## Deferred (Phase 8 or later)
+
+- Skipping idle gaps during playback (a day-long project at 60× still takes 24 minutes); a zoomable time range on the bar (`from` / `to` exist on the route).
+- Extending an open replay with live events of the project.
+- Replaying the whole system (all projects) or a standalone task; replaying sub-project moons independently.
+- Status fidelity: output-only activity and stall periods are not in the log (a server-annotated status per event would need a paged status fold on the server).
+- Membership by the log rather than the current tables (work that left the project — a task transferred out — is not replayed with it).
+- A browser check of the bar over the WebGL scene (not done here: jsdom covers list mode; the scene's components are unchanged except for their world selector).
