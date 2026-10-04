@@ -14,6 +14,7 @@ import { bodyName } from './body-action.js';
  * - `state`: `StatusRecord.state`, drawn as the panel's state pill (same words, same colours);
  * - `activity`: `StatusRecord.currentActivity` on one line, cut at a word near `ACTIVITY_CHARS`;
  *   without one, what the agent cards say ("no activity yet", or "not running" once it ended);
+ *   a landed satellite (P4-04) says "work completed";
  * - `where`: the body it orbits, and what the satellite is doing when that is not plain orbiting
  *   ("scanning · Jupiter", "flying to Saturn").
  */
@@ -49,14 +50,18 @@ export function satelliteCard(
   const status = world.statuses[agentId];
   const state = status?.state;
   const raw = status?.currentActivity?.trim();
-  const activity = raw
-    ? oneLine(raw)
-    : state && ENDED_STATES.has(state)
-      ? 'not running'
-      : 'no activity yet';
+  const mode = frame?.mode;
+  // P4-04: a landed satellite is completed work, whatever its agent's record still says.
+  const landed = mode === 'landing' || mode === 'landed';
+  const activity = landed
+    ? 'work completed'
+    : raw
+      ? oneLine(raw)
+      : state && ENDED_STATES.has(state)
+        ? 'not running'
+        : 'no activity yet';
   const bodyId = frame?.bodyId ?? agent?.bodyId;
   const body = bodyId ? bodyName(world, bodyId) : undefined;
-  const mode = frame?.mode;
   let where = body ?? '';
   if (mode === 'flying') where = body ? `flying to ${body}` : 'flying';
   else if (mode && mode !== 'orbiting') where = body ? `${mode} · ${body}` : mode;

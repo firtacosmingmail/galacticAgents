@@ -234,6 +234,66 @@ describe('the satellite list over time', () => {
   });
 });
 
+describe('landed satellites (P4-04)', () => {
+  const landed = (agentId: string, bodyId: string): SatelliteSpec => ({
+    ...spec(agentId, bodyId, 'finished'),
+    landed: true,
+  });
+
+  it('come down from the orbit they had, without a jump, and hold no orbit slot', () => {
+    const d = director();
+    d.setSpecs([spec('a-0', 'b-mars', 'idle', 'waykeeper'), spec('a-1', 'b-mars', 'idle')], 0);
+    d.update(1, world);
+    const before = [...(d.frames[1] as SatelliteFrame).position] as Vec3Tuple;
+    // a-1's task completes: it lands from where it is (its angle holds while it lands).
+    d.setSpecs([spec('a-0', 'b-mars', 'idle', 'waykeeper'), landed('a-1', 'b-mars')], 1);
+    const f = d.update(1, world)[1] as SatelliteFrame;
+    expect(f.mode).toBe('landing');
+    expect(dist(f.position, before)).toBeLessThan(1e-6);
+    d.update(1 + TIMING.landing + 0.01, world);
+    expect(f.mode).toBe('landed');
+    expect(dist(f.position, f.target)).toBeCloseTo(SURFACE * 2, 9);
+    // A new Steward arriving takes the slot a-1 left (slot 1), not an outer one.
+    d.setSpecs(
+      [spec('a-0', 'b-mars', 'idle', 'waykeeper'), landed('a-1', 'b-mars'), spec('a-2', 'b-mars')],
+      3,
+    );
+    const g = d.update(3, world)[2] as SatelliteFrame;
+    expect(dist(g.position, g.target) / 2).toBeCloseTo(BASE_SHELL + SHELL_STEP, 9);
+  });
+
+  it('a body full of completed work spreads its landed satellites over the surface', () => {
+    const d = director();
+    d.setSpecs(
+      ['a-1', 'a-2', 'a-3', 'a-4'].map((id) => landed(id, 'b-mars')),
+      0,
+    );
+    const frames = d.update(1, world);
+    for (const f of frames) {
+      expect(f.mode).toBe('landed');
+      expect(dist(f.position, f.target)).toBeCloseTo(SURFACE * 2, 9);
+    }
+    for (let i = 0; i < frames.length; i++)
+      for (let j = i + 1; j < frames.length; j++)
+        expect(dist(frames[i]!.position, frames[j]!.position)).toBeGreaterThan(0.2);
+  });
+
+  it('keep a flight origin while the destination is not drawn yet', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars', 'idle')], 0);
+    d.update(1, world);
+    const start = [...(d.frames[0] as SatelliteFrame).position] as Vec3Tuple;
+    d.setSpecs([spec('a-1', 'b-jupiter', 'idle')], 1);
+    d.update(1.1, world); // origin captured: where it was drawn
+    const onlyMars = anchors({ 'b-mars': { at: [30, 0, 0], radius: 2 } });
+    d.update(1.2, onlyMars); // the destination vanishes for a frame
+    const f = d.update(1.3, world)[0] as SatelliteFrame;
+    expect(f.mode).toBe('flying');
+    // Still on the arc from the take-off point (not restarted from somewhere else).
+    expect(dist(f.position, start)).toBeLessThan(dist(f.position, [0, 0, -80]));
+  });
+});
+
 describe('sticky orbits', () => {
   const W = 'b-mars';
   /** Each satellite's offset from its body at time `t`. */
