@@ -4,7 +4,7 @@ Phase 5's exit criterion: "Everything in `SPEC.md` §4.2 and §4.3 is doable fro
 
 ## How the rows are proven
 
-- **`apps/web/src/conformance/spec-4-2.test.tsx`** and **`spec-4-3.test.tsx`** (new, P5-05) walk every row through the real panel (`<App/>`, the fake socket feeding it a snapshot and live events, every POST recorded). Each file is one `describe.each(MODES)`: every test runs twice, under `SPEC §4.2 side panel — with scene` / `— list mode` (and `SPEC §4.3 requests … — with scene` / `— list mode`). With the scene, its three.js part is stubbed as in `selection-paths.test.tsx` (bodies are registered anchors, picks go through `activateBody` / `activateSatellite` / `deselectFromScene`, the camera is its store). List mode is the per-browser "scene hidden" preference (decision 62); the suite asserts no scene is mounted. The shared world and page live in `apps/web/src/conformance/harness.ts`. Test names start with the row number (`§4.2.12 …`), so a row is found with `vitest -t "§4.2.12"`.
+- **`apps/web/src/conformance/spec-4-2.test.tsx`** and **`spec-4-3.test.tsx`** (new, P5-05) walk every row through the real panel (`<App/>`, the fake socket feeding it a snapshot and live events, every POST recorded). Each file is one `describe.each(MODES)`: every test runs twice, under `SPEC §4.2 side panel — with scene` / `— list mode` (and `SPEC §4.3 requests … — with scene` / `— list mode`). With the scene, its three.js part is stubbed as in `selection-paths.test.tsx` (bodies are registered anchors, picks go through `activateBody` / `activateSatellite` / `deselectFromScene`, the camera is its store). List mode is the per-browser "scene hidden" preference (decision 62); the suite asserts no scene is mounted. The shared world and page live in `apps/web/src/conformance/harness.ts`. Test names start with the row number (`§4.2.12 …`), so a row is found with `vitest -t "§4.2.12 "`; each title carries exactly one row id (wave-3 review): a row split into a/b has one test per letter (`§4.2.11a`, `§4.2.11b`), a row proven by several tests numbers them (`§4.2.31-1`, `-2`; `§4.2.42h-1` … `-3`), and `§4.2.38`'s test also names `§4.3.21a`, which it proves. Rows with no title of their own point at the §4.2 rows or server tests that prove them.
 - Where a scene-only gesture has no list-mode equivalent (clicking a planet, a satellite, Earth, empty space), the list-mode run takes the panel's equivalent path, named in the row; the list-mode ✓ means "doable without the scene by that path".
 - **`apps/server/src/brains/harmonizer/control-mapping.test.ts`** (new) proves the Harmonizer's conversational mappings that no brain test exercised through the Harmonizer (last section).
 - Existing tests are listed as extra evidence where they cover the same row more deeply (component level, or against the real server).
@@ -34,8 +34,8 @@ Paths: "dock bar" is the main area's header (decision 71); "strip" is its contro
 | 4.2.8 | … its work | Header facts: task, project, body, worktree, branch | ✓ | ✓ | `§4.2.8 … its work (task, project, body, worktree, branch)` | Plus the task facts of P5-02 (`status-views.test.tsx › adds the task facts to the Steward view`). |
 | 4.2.9 | … its thought process (transcript) | "Transcript": thinking (collapsed), tool calls, text | ✓ | ✓ | `§4.2.9 … its thought process (the transcript: thinking, tool calls, text)` | Backfill + live: `StewardPanelView.test.tsx › backfills over REST, then goes live …`. |
 | 4.2.10 | … its open question, if any | "Open question" section | ✓ | ✓ | `§4.2.10 … its open question` | |
-| 4.2.11a | A message box appears only while it has an open clarification | "answer the clarification" form; gone once answered, replaced by the read-only note | ✓ | ✓ | `§4.2.11 a message box appears only while the Steward has an open clarification` | Also `StewardPanelView.test.tsx › has no composer without an open question …`. |
-| 4.2.11b | No message box for a permission request (allow / refuse only) | The permission card in the view | ✓ | ✓ | `§4.2.11 … and none for a Steward with only a permission request (allow / refuse only)` | Decision 57. |
+| 4.2.11a | A message box appears only while it has an open clarification | "answer the clarification" form; gone once answered, replaced by the read-only note | ✓ | ✓ | `§4.2.11a a message box appears only while the Steward has an open clarification` | Also `StewardPanelView.test.tsx › has no composer without an open question …`. |
+| 4.2.11b | No message box for a permission request (allow / refuse only) | The permission card in the view | ✓ | ✓ | `§4.2.11b … and none for a Steward with only a permission request (allow / refuse only)` | Decision 57. |
 | 4.2.12 | Stop / pause remain available | The view's "controls": Pause / Resume, Stop → "Confirm stop" | ✓ | ✓ | `§4.2.12 stop and pause remain available on the Steward` | |
 
 ### Bullet 3 — the managed-agents section
@@ -77,21 +77,21 @@ Every row below runs one control through the strip and asserts the only POST is 
 | 4.2.28 | Edit a task's priority | More → task → Edit → "priority" → Save | ✓ | ✓ | `§4.2.28 edit a task’s priority` | |
 | 4.2.29 | Close a task now | More → task → Close → "Yes, close" | ✓ | ✓ | `§4.2.29 close a task now` | |
 | 4.2.30 | Archive a task now | More → task → Archive now → confirm | ✓ | ✓ | `§4.2.30 archive a task now` | Also from history (`history.test.tsx`). |
-| 4.2.31 | Pin a task (keep visible) / unpin | More → task → Pin / Unpin | ✓ | ✓ | `§4.2.31 pin a task (keep it visible)`, `§4.2.31 unpin a task` | |
+| 4.2.31 | Pin a task (keep visible) / unpin | More → task → Pin / Unpin | ✓ | ✓ | `§4.2.31-1 pin a task (keep it visible)`, `§4.2.31-2 unpin a task` | |
 | 4.2.32 | Reopen a task | More → task → Reopen | ✓ | ✓ | `§4.2.32 reopen a task` | Archived: §4.3.24. |
 | 4.2.33 | Pause a project | Waykeeper dock bar strip: "Pause the project" | ✓ | ✓ | `§4.2.33 pause a project` | |
 | 4.2.34 | Resume a project | "Resume the project" | ✓ | ✓ | `§4.2.34 resume a project` | |
 | 4.2.35 | Stop a project | More → project → Stop → confirm | ✓ | ✓ | `§4.2.35 stop a project` | |
 | 4.2.36 | Cancel a project | More → project → Cancel → confirm | ✓ | ✓ | `§4.2.36 cancel a project` | |
 | 4.2.37 | Edit a project | More → project → Edit → "name" (and "trust level") → Save | ✓ | ✓ | `§4.2.37 edit a project (its name; its trust level)` | A project has no description or priority; decision 56 makes "edit" its name or trust level (trust: `AgentCards.test.tsx › edits a project’s trust level`). See S1. |
-| 4.2.38 | Close a project now | More → project → Close → confirm | ✓ | ✓ | `§4.2.38 close a project now` | |
+| 4.2.38 | Close a project now | More → project → Close → confirm | ✓ | ✓ | `§4.2.38 close a project now (and §4.3.21a: from the panel)` | |
 | 4.2.39 | Archive a project now | More → project → Archive now → confirm | ✓ | ✓ | `§4.2.39 archive a project now` | |
 | 4.2.40 | Pin a project | More → project → Pin | ✓ | ✓ | `§4.2.40 pin a project` | |
 | 4.2.41 | Reopen a project | More → project → Reopen | ✓ | ✓ | `§4.2.41 reopen a project` | |
 | 4.2.42 | Pause an agent | Waykeeper strip "Pause the agent"; Steward view Pause (4.2.12); cards | ✓ | ✓ | `§4.2.42 pause an agent` | |
 | 4.2.43 | Resume an agent | "Resume the agent"; "Resume session" for an interrupted one | ✓ | ✓ | `§4.2.43 resume an agent` | Resume session: `controls-strip.test.tsx › offers Resume and Resume session …`. |
 | 4.2.44 | Stop (= cancel) an agent | More → agent → Stop → confirm | ✓ | ✓ | `§4.2.44 stop an agent` | An agent-level cancel is a stop (decision 56); cancel is offered on the work. |
-| 4.2.42h | Pause / resume the Harmonizer itself; restart it (decision 82: no plain Stop) | Harmonizer dock bar: "Pause the Harmonizer" / "Resume the Harmonizer"; "Resume session" when interrupted; "Restart Harmonizer" → confirm (starts on Keep) → `POST /api/harmonizer/restart` | ✓ | ✓ | `§4.2.42h pause and resume the Harmonizer itself`, `§4.2.42h resume the session of an interrupted Harmonizer`, `§4.2.42h restart the Harmonizer (confirmed); the dock follows the new one` | P5-06 (was ✗, F2). Also `controls-strip.test.tsx › the Harmonizer’s controls in its dock bar …`; server: `brains/harmonizer/restart.test.ts`, `http/harmonizer-restart-route.test.ts`. |
+| 4.2.42h | Pause / resume the Harmonizer itself; restart it (decision 82: no plain Stop) | Harmonizer dock bar: "Pause the Harmonizer" / "Resume the Harmonizer"; "Resume session" when interrupted; "Restart Harmonizer" → confirm (starts on Keep) → `POST /api/harmonizer/restart` | ✓ | ✓ | `§4.2.42h-1 pause and resume the Harmonizer itself`, `§4.2.42h-2 resume the session of an interrupted Harmonizer`, `§4.2.42h-3 restart the Harmonizer (confirmed); the dock follows the new one` | P5-06 (was ✗, F2). Also `controls-strip.test.tsx › the Harmonizer’s controls in its dock bar …`; server: `brains/harmonizer/restart.test.ts`, `http/harmonizer-restart-route.test.ts`. |
 | 4.2.45 | The same actions from a row's ⋯ and from a card | Navigation row ⋯ "Actions for …"; a card's task controls | ✓ | ✓ | `§4.2.45 the same actions from a navigation row’s “⋯” and from the managed-agents card` | |
 | 4.2.45s | The affected supervisors are informed so they adjust | Server: `control.*` events wake the agent's supervisor, a task's Stewards' supervisor and project Waykeeper (or the Harmonizer), a project's Waykeeper(s), parent and the Harmonizer | ✓ | ✓ | `apps/server/src/brains/wake.test.ts › wakes on control actions on the brain, its agents, its tasks and its projects`, `› control wake-ups through concernedSupervisors` | Same server path in both modes. |
 
@@ -99,8 +99,8 @@ Every row below runs one control through the strip and asserts the only POST is 
 
 | # | Requirement | How in the panel | Scene | List | Test (`spec-4-2.test.tsx`) | Notes |
 |---|---|---|---|---|---|---|
-| 4.2.46a | A history view of archived work (`/history`) | Top bar → History: "Finished and archived work" | ✓ | ✓ | `§4.2.46 a history view of archived work and past questions (/history)` | Inspect / reopen: `history.test.tsx › history inspector`. |
-| 4.2.46b | … and of past questions | Same page: "Past questions" | ✓ | ✓ | (same test) | Holder chain: `history.test.tsx › shows each past question’s holder chain …`. |
+| 4.2.46a | A history view of archived work (`/history`) | Top bar → History: "Finished and archived work" | ✓ | ✓ | `§4.2.46a a history view of archived work (/history)` | Inspect / reopen: `history.test.tsx › history inspector`. |
+| 4.2.46b | … and of past questions | Same page: "Past questions" | ✓ | ✓ | `§4.2.46b … and of past questions (/history)` | Holder chain: `history.test.tsx › shows each past question’s holder chain …`. |
 | 4.2.47 | The panel works with the 3D scene hidden (list mode) | Top bar → Hide scene / Show scene | ✓ (hides it) | ✓ | `§4.2.47 the panel works with the 3D scene hidden (list mode)` | And the whole list-mode run of both suites; `a11y/list-mode.test.tsx`. |
 
 ## §4.3 Requests the user must be able to make
@@ -127,8 +127,8 @@ Every row below runs one control through the strip and asserts the only POST is 
 | 4.3.18 | Decline a promotion | Promotion card → Reject | ✓ | ✓ | `§4.3.18 decline a promotion` | |
 | 4.3.19 | Stop, cancel, pause or resume a task, project or agent | As §4.2.23–26, 33–36, 42–44 | ✓ | ✓ | `spec-4-2.test.tsx › §4.2.23 … §4.2.26, §4.2.33 … §4.2.36, §4.2.42 … §4.2.44` | |
 | 4.3.20 | Edit a task's description or priority | As §4.2.27–28 | ✓ | ✓ | `spec-4-2.test.tsx › §4.2.27`, `§4.2.28` | |
-| 4.3.21a | Close a project (§2.7) from the panel | As §4.2.38 (closing withdraws an open "Anything else?") | ✓ | ✓ | `spec-4-2.test.tsx › §4.2.38 close a project now` | Withdrawal: `closure.test.ts › … the user closes from the panel`. |
-| 4.3.21b | … by answering the Harmonizer's "Anything else?" | The question's card in the Harmonizer's thread (or inbox) → "Close <project>" | ✓ | ✓ | `spec-4-3.test.tsx › §4.3.21 close a project by answering the Harmonizer’s “Anything else?”` | Carried out: `closure.test.ts › … or by answering the question …`. |
+| 4.3.21a | Close a project (§2.7) from the panel | As §4.2.38 (closing withdraws an open "Anything else?") | ✓ | ✓ | `spec-4-2.test.tsx › §4.2.38 close a project now (and §4.3.21a: from the panel)` | Withdrawal: `closure.test.ts › … the user closes from the panel`. |
+| 4.3.21b | … by answering the Harmonizer's "Anything else?" | The question's card in the Harmonizer's thread (or inbox) → "Close <project>" | ✓ | ✓ | `spec-4-3.test.tsx › §4.3.21b close a project by answering the Harmonizer’s “Anything else?”` | Carried out: `closure.test.ts › … or by answering the question …`. |
 | 4.3.22 | Archive early | As §4.2.30 / §4.2.39; history row "Archive now" | ✓ | ✓ | `spec-4-2.test.tsx › §4.2.30`, `§4.2.39` | |
 | 4.3.23 | Pin (and unpin) | As §4.2.31 / §4.2.40; history row Pin / Unpin | ✓ | ✓ | `spec-4-2.test.tsx › §4.2.31`, `§4.2.40`; `history.test.tsx › pages back through the work, and unpins finished work` | |
 | 4.3.24 | Reopen finished work (also archived) | §4.2.32 / §4.2.41; History → row → Reopen | ✓ | ✓ | `spec-4-3.test.tsx › §4.3.24 reopen finished work from the history view` | Archived project: `history.test.tsx › finds an archived project, inspects it and reopens it`. |
