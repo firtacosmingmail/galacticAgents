@@ -198,6 +198,18 @@ describe('CapsEnforcer — spawn caps (P2-17)', () => {
     expect(caps.canSpawn(under('w-1'))).toEqual({ ok: true });
   });
 
+  it('does not count a Harmonizer in the per-hour window (decision 43; P5-06 restarts)', () => {
+    const { caps } = spawnCaps({ maxSpawnsPerHour: 2 });
+    for (let i = 0; i < 5; i++) caps.noteSpawn(undefined, undefined, 'harmonizer');
+    caps.noteSpawn(undefined, T0 - 10 * 60_000, 'harmonizer');
+    expect(caps.spawnsInLastHour()).toBe(0);
+    expect(caps.canSpawn({ role: 'steward' })).toEqual({ ok: true });
+    caps.noteSpawn('w-1', undefined, 'steward');
+    caps.noteSpawn('h-1', undefined, 'waykeeper');
+    expect(caps.spawnsInLastHour()).toBe(2);
+    expect(caps.canSpawn({ role: 'steward' }).ok).toBe(false);
+  });
+
   it('counts spawns noted with a past time (a restart) only inside the window', () => {
     const { caps } = spawnCaps({ maxSpawnsPerHour: 2 });
     caps.noteSpawn('w-1', T0 - 2 * HOUR);
