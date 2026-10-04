@@ -302,6 +302,37 @@ describe('focus kept when an item goes away, and the waiting count announced', (
     expect(focused().matches('article.card')).toBe(true);
   });
 
+  it('a question answered in the main area: the focus goes to the next one, else the title', async () => {
+    seq = 10;
+    await openApp('/steward/a-steward-1');
+    const view = () => within(main()).getByRole('region', { name: /^view of / });
+    await vi.waitFor(() => expect(view()).toBeTruthy());
+    const box = () => within(view()).getByRole('form', { name: 'answer the clarification' });
+    const answered = (questionId: string, version: number) =>
+      stream({
+        type: 'question.answered',
+        questionId,
+        answer: 'yes',
+        answeredBy: { type: 'user' },
+        version,
+      });
+    // Three open questions: the permission's card, then two clarifications (q-3 first, oldest).
+    const first = box().querySelector('textarea')!;
+    first.focus();
+    await answered('q-3', 1);
+    // The box went with q-3: the next clarification's box, in its place, has the focus.
+    expect(first.isConnected).toBe(false);
+    expect(focused()).toBe(box().querySelector('textarea'));
+    expect(focused()).not.toBe(first);
+    await answered('q-1', 4);
+    // No clarification left: the permission's card.
+    expect(focused()).toBe(within(view()).getByRole('article', { name: /^permission question/ }));
+    within(focused()).getByRole('button', { name: 'Allow' }).focus();
+    await answered('q-2', 1);
+    // Nothing left to answer: the main area's title.
+    expect(focused()).toBe(within(main()).getByRole('heading', { level: 1 }));
+  });
+
   it('announces a change of the "waiting for you" count, politely and not on load', async () => {
     seq = 10;
     await openApp('/');

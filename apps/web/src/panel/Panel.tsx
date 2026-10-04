@@ -214,9 +214,16 @@ function MainArea({
   useCanonicalSelection(agent, selection);
   const open = !collapsible || dock.open;
   const view = useDockView((s) => s.view);
-  // An answered clarification, a closed confirmation: the focus stays in the main area (P5-04).
+  // An answered question, a closed confirmation: the focus stays in the main area (P5-04) — on
+  // the next open question's card (the thread's inline cards, the Steward view's question cards
+  // and its clarification box) when one is left, else on the main area's title.
   const mainRef = useRef<HTMLElement>(null);
-  useFocusRescue(mainRef, { fallback: (main) => main.querySelector<HTMLElement>('h1') });
+  useFocusRescue(mainRef, {
+    items: MAIN_QUESTION,
+    target: (item) =>
+      item.matches('form') ? (item.querySelector<HTMLElement>('textarea') ?? item) : item,
+    fallback: (main) => main.querySelector<HTMLElement>('h1'),
+  });
 
   let content;
   if (!agent) {
@@ -479,6 +486,8 @@ const SideColumn = memo(function SideColumn({
 /** The items the arrow keys move between (P5-04): the managed agents' cards, the inbox's cards. */
 const AGENT_CARD = 'article.agc, .pnl-agents > li > a';
 const INBOX_CARD = 'article.card';
+/** The main area's open questions: their cards and the Steward view's clarification box. */
+const MAIN_QUESTION = 'article.card.question:not(.answered), form.stw-composer';
 
 function AgentLinks({ ids }: { ids: Id[] }) {
   const world = useAppStore((s) => s.world);
