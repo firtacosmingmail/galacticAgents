@@ -59,6 +59,12 @@ interface Entry {
   toolCalls: number;
   /** What the agent was doing when it was paused; restored on resume. */
   beforePause: AgentState | undefined;
+  /**
+   * Every question the agent asked that is still open, oldest first (P4-11): two permission
+   * questions can be open at once. `record.pendingQuestionId` is the newest; the agent stays
+   * `waiting_for_input` while any is open.
+   */
+  pending: Id[];
 }
 
 const LIVE: ReadonlySet<AgentState> = new Set([
@@ -131,20 +137,30 @@ export class StatusStore {
     if (event.type === 'question.cancelled') {
       // The question is gone (P1-34); a waiting agent was interrupted out of it and goes idle.
       for (const e of this.entries.values()) {
-        if (e.record.pendingQuestionId !== event.questionId) continue;
-        this.update(e, at, { pendingQuestionId: undefined });
-        if (e.beforePause === 'waiting_for_input') e.beforePause = 'idle';
+        if (!this.settle(e, event.questionId)) continue;
+        const next = e.pending.at(-1);
+        this.update(e, at, { pendingQuestionId: next });
+        if (next === undefined && e.beforePause === 'waiting_for_input') e.beforePause = 'idle';
         if (broadcast) this.mark(e.record.agentId);
       }
       return;
     }
     if (event.type === 'question.answered') {
       for (const e of this.entries.values()) {
-        if (e.record.pendingQuestionId !== event.questionId) continue;
-        const state = e.record.state;
-        const keep = state === 'paused' || ENDED_STATES.has(state);
-        this.update(e, at, { ...(keep ? {} : { state: 'working' }), pendingQuestionId: undefined });
-        if (e.beforePause === 'waiting_for_input') e.beforePause = 'working';
+        if (!this.settle(e, event.questionId)) continue;
+        const next = e.pending.at(-1);
+        if (next !== undefined) {
+          // Another question of the agent is still open: it keeps waiting for that one.
+          this.update(e, at, { pendingQuestionId: next });
+        } else {
+          const state = e.record.state;
+          const keep = state === 'paused' || ENDED_STATES.has(state);
+          this.update(e, at, {
+            ...(keep ? {} : { state: 'working' }),
+            pendingQuestionId: undefined,
+          });
+          if (e.beforePause === 'waiting_for_input') e.beforePause = 'working';
+        }
         if (broadcast) this.mark(e.record.agentId);
       }
       return;
@@ -258,6 +274,7 @@ export class StatusStore {
         lastEventAt: at,
         toolCalls: 0,
         beforePause: undefined,
+        pending: [],
       };
       entry.record.caps = this.caps(entry, at);
       this.entries.set(agentId, entry);
@@ -276,6 +293,7 @@ export class StatusStore {
         entry.spawnedAt = at;
         entry.toolCalls = 0;
         entry.beforePause = undefined;
+        entry.pending = [];
         this.update(entry, at, {
           state: 'starting',
           startedAt: new Date(at).toISOString(),
@@ -303,6 +321,7 @@ export class StatusStore {
         });
         return;
       case 'agent.needs_input':
+        entry.pending = [...entry.pending.filter((q) => q !== event.questionId), event.questionId];
         this.update(entry, at, {
           ...(paused ? {} : { state: 'waiting_for_input' }),
           pendingQuestionId: event.questionId,
@@ -311,6 +330,7 @@ export class StatusStore {
         return;
       case 'agent.idle':
         // An idle agent is not waiting for anything: a question still pending was withdrawn.
+        entry.pending = [];
         this.update(entry, at, {
           ...(paused ? {} : { state: 'idle' }),
           ...(event.cost ? { costSoFar: event.cost } : {}),
@@ -326,14 +346,14 @@ export class StatusStore {
         this.update(entry, at, { state: 'paused' });
         return;
       case 'agent.resumed': {
-        const restored = entry.record.pendingQuestionId
-          ? 'waiting_for_input'
-          : (entry.beforePause ?? 'working');
+        const restored =
+          entry.pending.length > 0 ? 'waiting_for_input' : (entry.beforePause ?? 'working');
         entry.beforePause = undefined;
         this.update(entry, at, { state: restored === 'stalled' ? 'working' : restored });
         return;
       }
       case 'agent.finished':
+        entry.pending = [];
         this.update(entry, at, {
           state: 'finished',
           currentActivity: event.result ?? 'Finished',
@@ -342,6 +362,7 @@ export class StatusStore {
         });
         return;
       case 'agent.failed':
+        entry.pending = [];
         this.update(entry, at, {
           state: 'failed',
           currentActivity: event.error,
@@ -350,10 +371,12 @@ export class StatusStore {
         });
         return;
       case 'agent.stopped':
+        entry.pending = [];
         this.update(entry, at, { state: 'stopped', pendingQuestionId: undefined });
         return;
       case 'agent.interrupted':
         // Its open question is cancelled with it (P1-34): a resumed session re-asks.
+        entry.pending = [];
         this.update(entry, at, {
           state: 'interrupted',
           currentActivity: event.reason,
@@ -361,6 +384,13 @@ export class StatusStore {
         });
         return;
     }
+  }
+
+  /** Removes an answered or cancelled question from the agent's open ones; whether it was one. */
+  private settle(entry: Entry, questionId: Id): boolean {
+    if (!entry.pending.includes(questionId)) return false;
+    entry.pending = entry.pending.filter((q) => q !== questionId);
+    return true;
   }
 
   /** Applies changes, refreshes timestamps and caps. `undefined` in `changes` clears a field. */
