@@ -14,8 +14,13 @@ import type { CloudLook, DetailLook } from './looks.js';
  * Memory: a detail texture's CPU copy is freed once it is on the GPU (`detail-textures.ts`), so a
  * level costs its GPU size, mipmaps included (× 4/3): high Earth 4096 × 2048 × (4 colour + 4 normal
  * + 2 roughness) bytes ≈ 112 MB; balanced 2048 Earth ≈ 28 MB; mobile 1024 colour only ≈ 2.8 MB.
- * Idle levels (the view left) stay cached within `budgetMB` (high fits one rocky planet, so
- * flying back is instant) and all go when the tier changes or the canvas goes.
+ * Idle levels (the view left) stay cached within `budgetMB` (high fits Earth's level and clouds,
+ * ≈ 118 MB, so flying back is instant) and all go when the tier changes or the canvas goes (the
+ * budget hook lives in `DetailLayer`, mounted for the canvas's lifetime). The budget caps the
+ * cache's ready bytes, live and idle together: idle levels are evicted (least recently left first)
+ * as soon as a new level arrives over it, before that level is uploaded. So the detail cache holds
+ * at most max(`budgetMB`, the live view's bytes) — high ≤ 128 MB — next to the near cache's 96 MB:
+ * ≈ 224 MB of textures at worst on high, 32 + 32 MB on balanced (`quality.ts` `textureBudgetMB`).
  */
 export interface DetailTier {
   /** Colour (and normal) map width of a planet shown in detail (height = width / 2). */

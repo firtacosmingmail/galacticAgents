@@ -11,8 +11,8 @@
  * giants read as giants without swallowing their moons; `radiusKm` and `distanceKm` are the real
  * values, used by true scale.
  */
-import type { SurfaceFeatures } from '../detail/visuals/features.js';
-import { SATURN_RING_BANDS, URANUS_RING_BANDS, type RingBand } from '../detail/visuals/rings.js';
+import type { SurfaceFeatures } from './features.js';
+import { SATURN_RING_BANDS, URANUS_RING_BANDS, type RingBand } from './rings.js';
 
 export type SurfaceStyle = 'rocky' | 'gas' | 'ice' | 'earth' | 'cloudy';
 
@@ -26,7 +26,7 @@ export interface RingLook {
   opacity: number;
   /** Seed for the band pattern. */
   seed: number;
-  /** The measured band profile (P6-02, `detail/visuals/rings.ts`); without it, noise bands. */
+  /** The measured band profile (P6-02, `rings.ts`); without it, noise bands. */
   bands?: readonly RingBand[];
 }
 
@@ -45,7 +45,7 @@ export interface BodyLook {
   /** Real coastlines from a land/sea mask instead of noise continents (Earth, P3-09). */
   landMask?: 'earth';
   rings?: RingLook;
-  /** What makes it recognisable (P6-02, `detail/visuals/features.ts`): bands, storms, maria, craters… */
+  /** What makes it recognisable (P6-02, `features.ts`): bands, storms, maria, craters… */
   features?: SurfaceFeatures;
   /** Moons: real mean distance from the planet, km (true scale). */
   distanceKm?: number;

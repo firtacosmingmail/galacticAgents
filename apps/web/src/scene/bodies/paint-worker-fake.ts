@@ -1,5 +1,5 @@
 import type { PaintJob, PaintReply } from './painter.js';
-import { runPaintJob } from '../detail/visuals/paint-jobs.js';
+import { runPaintJob } from './paint-jobs.js';
 
 /**
  * Tests only: a stand-in for the paint worker (jsdom has no `Worker`). `paint` answers each job

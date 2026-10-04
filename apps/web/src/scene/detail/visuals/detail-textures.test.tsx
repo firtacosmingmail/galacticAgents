@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DataTexture } from 'three';
 import { MOON_LOOKS } from '../../bodies/appearance.js';
@@ -110,6 +110,39 @@ describe('useCachedPaint (cache keys and disposal)', () => {
     rerender({ tier: 'mobile' });
     await flush();
     expect(thing.disposed).toBe(true);
+    expect(detailTextures.stats().entries).toBe(0);
+  });
+
+  it('keeps the idle level when the view is left and re-entered (the budget outlives the view)', async () => {
+    // As mounted: the budget in the layer (canvas lifetime), the view keyed by the body inside it.
+    const loads: Thing[] = [];
+    const load = () => {
+      const thing = new Thing('earth');
+      loads.push(thing);
+      return Promise.resolve(thing);
+    };
+    function View() {
+      useCachedPaint(detailTextures, 'test-earth', 1024, load);
+      return null;
+    }
+    function Layer({ shown }: { shown: string | null }) {
+      useDetailTextureBudget('high');
+      return shown ? <View key={shown} /> : null;
+    }
+    const { rerender, unmount } = render(<Layer shown="earth" />);
+    await flush();
+    expect(loads).toHaveLength(1);
+    rerender(<Layer shown={null} />); // the view left: the level goes idle…
+    await flush();
+    expect(detailTextures.stats().idle).toBe(1);
+    expect(loads[0]!.disposed).toBe(false);
+    rerender(<Layer shown="earth" />); // …and is shown again without a repaint
+    await flush();
+    expect(loads).toHaveLength(1);
+    expect(detailTextures.stats().idle).toBe(0);
+    unmount(); // the canvas goes: every idle level with it
+    await flush();
+    expect(loads[0]!.disposed).toBe(true);
     expect(detailTextures.stats().entries).toBe(0);
   });
 });

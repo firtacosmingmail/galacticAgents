@@ -1,4 +1,5 @@
 import { MOON_LOOKS, PLANET_LOOKS } from '../../bodies/appearance.js';
+import type { CloudLook } from '../../bodies/paint-jobs.js';
 
 /**
  * How each catalogue body looks **in its detail view** (P6-02), on top of its surface look
@@ -18,18 +19,8 @@ export interface AtmosphereLook {
   power: number;
 }
 
-export interface CloudLook {
-  /** Seed of the cloud pattern. */
-  seed: number;
-  /** Fraction of the sky covered, 0..1. */
-  coverage: number;
-  /** Opacity of a fully cloudy texel. */
-  opacity: number;
-  /** Extra turns of the clouds per turn of the surface (they drift slowly eastward). */
-  drift: number;
-  /** Height of the cloud shell above the surface, body radii. */
-  altitude: number;
-}
+/** Earth's clouds: declared next to their painter (`bodies/paint-jobs.ts`), re-exported here. */
+export type { CloudLook };
 
 export interface DetailLook {
   atmosphere?: AtmosphereLook;
@@ -154,9 +145,30 @@ export function cloudTurn(
   return (seconds / spinPeriod) * Math.PI * 2 * (1 + clouds.drift);
 }
 
+/** How long the clouds take to fade in once their texture arrives, seconds. */
+export const CLOUD_FADE_SECONDS = 1.2;
+
 /**
- * Planetshine (P6-02, the moons' lighting in a detail view): a moon's night side faintly lit by
- * its planet's day side. The planet's colour is its palette's mean (sRGB hex); the strength
+ * The clouds' own fade-in (0 … 1) `seconds` after their texture arrived (`arrivedAt`, `undefined`:
+ * not yet): their map may land well after the cross-fade ended, so they fade in from then instead of
+ * popping in. Smoothstep-eased; reduced motion (`motion` false) shows them at once. Multiplied by
+ * the cross-fade's mix.
+ */
+export function cloudFadeIn(
+  arrivedAt: number | undefined,
+  seconds: number,
+  motion: boolean,
+): number {
+  if (arrivedAt === undefined) return 0;
+  if (!motion) return 1;
+  const t = Math.min(1, Math.max(0, (seconds - arrivedAt) / CLOUD_FADE_SECONDS));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Planetshine (P6-02, the moons' lighting in a detail view): a moon faintly lit by its planet's
+ * day side — a faint uniform glow over the whole moon (an emissive has no direction: it shows on the
+ * night side, while the Sun's light swamps it on the day side). The planet's colour is its palette's mean (sRGB hex); the strength
  * follows how much of the planet's lit hemisphere faces the moon — `(1 + cos θ) / 2`, θ the angle
  * at the planet between the Sun (at the world origin) and the moon — and the planet's apparent size
  * from the moon, `(R / d)²`, capped at `PLANETSHINE_MAX`. Applied as the moon material's emissive,

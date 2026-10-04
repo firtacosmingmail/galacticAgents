@@ -1,12 +1,7 @@
 import type { BodyLook, RingLook } from './appearance.js';
 import { maskLevelFor, sampleLand } from './earth-mask.js';
-import {
-  applyFeatures,
-  bandLatitude,
-  bandsOf,
-  type FeatureTexel,
-} from '../detail/visuals/features.js';
-import { paintRingProfile } from '../detail/visuals/rings.js';
+import { applyFeatures, bandLatitude, bandsOf, type FeatureTexel } from './features.js';
+import { paintRingProfile } from './rings.js';
 
 /**
  * Procedural surfaces (P3-02): equirectangular RGBA pixels painted from a body's look, as plain
@@ -302,7 +297,7 @@ export function paintSurface(look: BodyLook, width: number, height: number): Uin
  * Paints the colour map and, with `withDetail` (and a surface with relief, `hasRelief`), the
  * detail map from the same noise in the same pass (P3-06): the bumps sit exactly under the colours.
  * Pure data, so it runs in a worker (`paint-worker.ts`) and in jsdom alike. P6-02: the body's
- * `features` are painted on top of its style (`detail/visuals/features.ts`), and `heights`, when
+ * `features` are painted on top of its style (`features.ts`), and `heights`, when
  * given (`width` × `height` floats), receives the unquantised relief the detail level derives its
  * normal map from.
  */

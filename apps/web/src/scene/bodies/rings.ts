@@ -1,5 +1,5 @@
-import type { RingLook } from '../../bodies/appearance.js';
-import { fbm, hexToRgb } from '../../bodies/surface.js';
+import type { RingLook } from './appearance.js';
+import { fbm, hexToRgb } from './surface.js';
 
 /**
  * Ring systems from a measured profile (P6-02): the bands a ring system is made of, in planet

@@ -44,7 +44,6 @@ import { detailMix, useDetailStore } from './mode.js';
 import { partsFor } from './parts.js';
 import { registerStandIn } from './stand-ins.js';
 import { detailTier } from './visuals/budget.js';
-import { useDetailTextureBudget } from './visuals/detail-textures.js';
 import {
   Atmosphere,
   Clouds,
@@ -124,7 +123,6 @@ function DetailFrame({
     frame.matrixWorldNeedsUpdate = true;
   }, PLACE_DETAIL);
   const parts = partsFor(body);
-  useDetailTextureBudget(quality.tier);
   return (
     <>
       <Backdrop
@@ -307,7 +305,7 @@ function PlanetSystemDetail({ planet, quality, sunRadius, children }: PlanetDeta
 
 /**
  * A moon on its orbit in its planet's view, at its nearest LOD level (the detail level is only for
- * the shown body), lit by planetshine on its night side and wearing its atmosphere if it has one
+ * the shown body), lit by planetshine (a faint uniform glow, `usePlanetshine`) and wearing its atmosphere if it has one
  * (Titan).
  */
 function OrbitingMoon({

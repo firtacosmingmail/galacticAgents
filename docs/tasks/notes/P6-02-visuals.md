@@ -4,7 +4,7 @@ Branch `p6-02-visuals` (from `p6-wave2-visuals-cutaway-hq`, with P6-03 and P6-05
 
 ## What was built
 
-- **Each body looks like itself, in every view.** The surface looks (`bodies/appearance.ts`) now carry `features` (`visuals/features.ts`), painted by the one procedural painter on top of the body's style at every texture size. The system view gets them too, and the detail map only adds resolution and relief, so nothing pops in when it arrives.
+- **Each body looks like itself, in every view.** The surface looks (`bodies/appearance.ts`) now carry `features` (`bodies/features.ts`; moved from `visuals/` in the review fixes so the system layer does not import the detail layer, like `rings.ts` and `paint-jobs.ts`), painted by the one procedural painter on top of the body's style at every texture size. The system view gets them too, and the detail map only adds resolution and relief, so nothing pops in when it arrives.
   - Jupiter: bolder bands, the Great Red Spot at 22° S with the bands swirled round it, and a small white oval.
   - Saturn: pale, broad, low-contrast bands.
   - Uranus: cyan, barely banded. Neptune: blue with stronger bands and the Great Dark Spot.
@@ -12,7 +12,7 @@ Branch `p6-02-visuals` (from `p6-wave2-visuals-cutaway-hq`, with P6-03 and P6-05
   - Venus: the thick cloud deck with chevron (V-shaped) streaks.
   - Mercury and the Moon: cratered grey (the Moon also has its maria).
   - Moons: craters for most; maria for Ganymede, Iapetus (its dark hemisphere), Io (volcanic patches) and Triton; lineae (cracks) for Europa, Enceladus, Miranda and Triton.
-- **Rings from a measured profile** (`visuals/rings.ts`, `RingLook.bands`). Saturn has its faint C ring, bright B ring, the nearly empty Cassini division, the A ring and the Encke gap. Uranus has its nine narrow dark ringlets out to the bright ε ring. The same profile paints the system's 256-texel strip and the detail view's 2048 / 1024 / 512 one (`Rings` got a `textureWidth` prop), with more segments in the detail view.
+- **Rings from a measured profile** (`bodies/rings.ts`, `RingLook.bands`). Saturn has its faint C ring, bright B ring, the nearly empty Cassini division, the A ring and the Encke gap. Uranus has its nine narrow dark ringlets out to the bright ε ring. The same profile paints the system's 256-texel strip and the detail view's 2048 / 1024 / 512 one (`Rings` got a `textureWidth` prop), with more segments in the detail view.
 - **Detail level for the shown body** (`visuals/budget.ts`, `visuals/detail-textures.ts`):
   - A colour map beyond the LOD table: 4096 for a planet and 2048 for a moon on high, 2048 / 1024 on balanced, 1024 / 512 on mobile.
   - A tangent-space **normal map** derived in the worker from the same unquantised relief (`paintSurfaceLayers(…, heights)`), on high and balanced. Earth's relief is flat at sea, so its normals tilt on land only; it is box-blurred first, because the land mask's coastline steps were embossed otherwise.
@@ -20,15 +20,15 @@ Branch `p6-02-visuals` (from `p6-wave2-visuals-cutaway-hq`, with P6-03 and P6-05
   - Giants and Venus get no normal map (no relief).
   - The moons orbiting a planet keep their nearest LOD level. Saturn's six moons at 2048 with normals would be about 250 MB.
 - **Atmosphere** (`visuals/atmosphere-shader.ts` and `Atmosphere`). The detail view's only hand-written shader, one program for every body. It is an additive shell just above the surface. The glow is the view ray's path through the shell outside the body, normalised and raised to a power: a soft ring at the limb with no hard outer edge, a faint veil over the disc, and only on the day side. Colours: Earth blue, Venus yellowish, Mars thin pink, the giants faint, Titan orange (also in Saturn's view). Drawn on every tier (one draw call, no texture). It fades in with the cross-fade.
-- **Clouds for Earth** (`Clouds`). A standard-material shell at 1.01 R with a procedural alpha map: domain-warped noise, with the latitude climate making the equatorial zone and the storm tracks cloudy and the subtropics clear. It turns with the surface plus a 4 % drift, and holds still under reduced motion. It is shaded by the Sun and eclipsed with the planet (the Moon's shadow darkens the clouds too), casts nothing, and fades in with the cross-fade. The texture is 2048 / 1024 / 512 wide by tier.
-- **Moons' lighting.** In a planet's view (and a moon's own view), a moon's night side gets **planetshine**: the material's emissive is set every frame to the planet's mean colour, scaled by how much of the planet's lit side faces the moon and by the planet's apparent size, capped at 0.12. It drops to zero in the planet's shadow. No light was added, since a new light would recompile every material in the scene.
+- **Clouds for Earth** (`Clouds`). A standard-material shell at 1.01 R with a procedural alpha map: domain-warped noise, with the latitude climate making the equatorial zone and the storm tracks cloudy and the subtropics clear. It turns with the surface plus a 4 % drift, and holds still under reduced motion. It is shaded by the Sun and eclipsed with the planet (the Moon's shadow darkens the clouds too), casts nothing, and fades in with the cross-fade and, because its map can arrive after the fade, also over 1.2 s from the map's arrival (`cloudFadeIn`; at once under reduced motion). The texture is 2048 / 1024 / 512 wide by tier.
+- **Moons' lighting.** In a planet's view (and a moon's own view), a moon gets **planetshine**: the material's emissive is set every frame to the planet's mean colour, scaled by how much of the planet's lit side faces the moon and by the planet's apparent size, capped at 0.12. It is a faint uniform glow over the whole moon, not a light on its night side only (emissive has no direction; on the day side the Sun's light swamps it), so it shows where the moon is otherwise dark. It drops to zero in the planet's shadow. No light was added, since a new light would recompile every material in the scene.
 - **Quality tiers.** Each tier has its sizes (`DETAIL_TIERS`). Mobile drops the normal maps and lowers the colour, cloud and ring sizes; the atmosphere stays. Switching tiers inside a detail view works: the old level shows until the new one is painted, and idle levels are dropped on the switch.
 - **Eclipse shading kept** on the body, its clouds and its rings (the planet's shadow on the rings). Every detail material keeps P3-10's patch and shared program cache key. The atmosphere skips it.
 - **Cutaway (P6-03) integration.** The detail material accepts the cutaway's clipping planes. The atmosphere shader has `clipping: true` and three's clipping chunks, and the cloud sphere is cut with the surface. Checked in the browser: Earth's wedge removes surface, clouds and glow together, with no veil over the layer faces.
 
 ## Memory
 
-A detail texture frees its CPU copy once uploaded (`freeAfterUpload`, three's `onUpdate`), so a level costs its GPU size. The cache drops every idle entry when the canvas goes, so a texture is never uploaded twice. Estimates include mipmaps (× 4/3), in MiB (the harness's cache numbers):
+A detail texture frees its CPU copy once uploaded (`freeAfterUpload`, three's `onUpdate`), so a level costs its GPU size. The cache drops every idle entry when the canvas goes, so a texture is never uploaded twice. Idle levels are kept across exits and body switches within the tier's budget: the budget hook lives in `DetailLayer` (canvas lifetime), not in the view (review fix: it first lived in `DetailFrame`, which unmounts on every exit, so leaving Earth dropped its level and re-entering repainted it for ~8 s). The budget caps live and idle ready bytes together, so the detail cache holds at most max(budget, the live view): ≤ 128 MiB on high, about 224 MiB of textures with the near cache's 96 MiB. Measured after the fix: re-entering Earth starts no paint job and shows the 4096 level at once. Estimates include mipmaps (× 4/3), in MiB (the harness's cache numbers):
 
 | Tier | Earth view (surface + clouds) | Rocky planet (Mars, Mercury) | Giant | Moon on its own | Idle budget |
 |---|---|---|---|---|---|
@@ -36,7 +36,7 @@ A detail texture frees its CPU copy once uploaded (`freeAfterUpload`, three's `o
 | balanced | 26.7 + 1.3 | 21.3 | 10.7 | 5.3 | 32 |
 | mobile | 2.7 + 0.3 | 2.7 | 2.7 | 0.7 | 8 |
 
-Worker paint times (dev build, M3 Pro, high): Earth 8.0 s, Mars 8.5 s, Mercury 5.2 s, Venus, Jupiter and Saturn about 4 s, Uranus and Neptune about 2.8 s, a moon at 2048 about 1.8 s. Balanced Earth (2048) takes 2.0 s, mobile Earth (1024) 0.5 s. The nearest LOD level shows until the level arrives.
+The painter runs small jobs first (`paintPriority`: near levels and clouds before detail levels, first come first served within a priority, a running job never preempted), so the clouds and an orbiting moon's near maps do not wait behind a 4096 level. Worker paint times (dev build, M3 Pro, high): Earth 8.0 s, Mars 8.5 s, Mercury 5.2 s, Venus, Jupiter and Saturn about 4 s, Uranus and Neptune about 2.8 s, a moon at 2048 about 1.8 s. Balanced Earth (2048) takes 2.0 s, mobile Earth (1024) 0.5 s. The nearest LOD level shows until the level arrives.
 
 ## Performance
 
@@ -59,7 +59,7 @@ Worker paint times (dev build, M3 Pro, high): Earth 8.0 s, Mars 8.5 s, Mercury 5
 | Europa | 60.0 / 17 | 60.0 / 16.8 | 23 | 120 MB | 60.0 / 17 | 60.0 | 11 | 9 MB |
 
 - **High "GPU textures (all)"** is everything uploaded in the context at that moment: the system's far maps, the near cache (up to 96 MB idle, P3-06), the idle detail levels within 128 MB, and the view's own level. Earth's own view is 112 MiB of it.
-- **Earth tier switch inside the view** (high → mobile → high): 60 fps throughout. Mobile holds 7.6 MB of textures with 12 draw calls; back on high, the 4096 level is repainted and shown again.
+- **Earth tier switch inside the view** (high → mobile → high): 60 fps throughout. Mobile holds 7.6 MB of textures with 12 draw calls; back on high, the 4096 level is repainted and shown again (a tier change drops idle levels on purpose).
 - **Cutaway on Earth:** one 250 ms frame when the wedge opens (every cut material recompiles with clipping planes; P6-03's, unchanged by this task), then 60 fps.
 - **The enter hitch** (33–67 ms, one frame) is the new programs compiling: the normal-mapped material, the atmosphere, the clouds. It was 33–100 ms in P6-01 for the backdrop.
 
@@ -103,18 +103,20 @@ Worker paint times (dev build, M3 Pro, high): Earth 8.0 s, Mars 8.5 s, Mercury 5
 - Atmosphere: per-planet colours (Earth blue, Venus yellowish, Mars pinkish), the giants fainter than Earth, Earth's clouds inside its glow, and the glow profile (bright just past the limb, faint over the disc, nothing at the shell's edge).
 - Reduced motion: the clouds hold still; otherwise they drift slightly faster than the surface.
 - Planetshine: strongest between the planet and the Sun, zero in its shadow, capped.
+- (Review fixes) The clouds' fade-in from their map's arrival, eased, instant under reduced motion.
 
 `visuals/detail-textures.test.tsx` (7 tests, jsdom):
 - `freeAfterUpload` drops the pixels.
 - `DetailMaps` disposes all its maps.
 - `useCachedPaint` shows the old entry until the new one is ready, releases on change and unmount, and disposes over budget.
-- `useDetailTextureBudget` drops idle levels on a tier change.
+- `useDetailTextureBudget` drops idle levels on a tier change; (review fix) leaving and re-entering a view keeps the idle level (no repaint), and unmounting the layer drops it.
 - `useDetailMaps` paints a moon at the mobile size in the (fake) worker, then caches and disposes it; without a worker it asks for nothing.
 - `useCloudMaps` paints at the mobile size.
 
 Existing suites adjusted:
 - `bodies/earth-mask.test.ts`: the P3-09 golden hashes now check each body's **style** painted without its features. Unchanged: features are painted on top.
 - `bodies/near-maps.test.tsx`: `PaintJob` is a union now.
+- (Review fix) `bodies/lod.test.tsx`: near and cloud jobs run before queued detail levels, the running one is not preempted.
 
 Gates: `pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test`, all green. Web: 108 files, 1427 tests; server 976 (+1 skipped); protocol 70. three.js is still absent from the panel's first chunk (`index-*.js`: no `WebGLRenderer`, `Matrix4`).
 
@@ -124,9 +126,11 @@ Gates: `pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm t
 - `bodies/surface.ts`: features hook, `heights` output, `hash3` exported, ring profile delegation.
 - `bodies/textures.ts`: features in `surfaceKey`, `useRingTexture(rings, width)`.
 - `bodies/Bodies.tsx`: `Rings` `textureWidth`, `BUMP_SCALE` exported.
-- `bodies/painter.ts`, `paint-worker.ts`, `paint-worker-fake.ts`: jobs go through `runPaintJob`.
-- `detail/DetailScene.tsx`: the per-kind components, and `useDetailTextureBudget` in `DetailFrame`.
-- `parts.ts`, `DetailLayer.tsx` and `SPEC.md` are untouched.
+- `bodies/painter.ts`, `paint-worker.ts`, `paint-worker-fake.ts`: jobs go through `runPaintJob`; (review fix) `paintPriority` orders the pending jobs.
+- (Review fix) `bodies/features.ts`, `bodies/rings.ts`, `bodies/paint-jobs.ts` (moved from `visuals/`; `CloudLook` now declared in `paint-jobs.ts` and re-exported by `looks.ts`).
+- `detail/DetailScene.tsx`: the per-kind components.
+- `detail/DetailLayer.tsx`: `useDetailTextureBudget` (review fix; first in `DetailFrame`).
+- `parts.ts` and `SPEC.md` are untouched.
 
 ## Deferred
 

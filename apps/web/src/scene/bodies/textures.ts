@@ -22,7 +22,7 @@ import {
 } from './surface.js';
 import { TextureCache } from './texture-cache.js';
 import { EARTH_MASK_VERSION } from './earth-mask.js';
-import { featuresKey } from '../detail/visuals/features.js';
+import { featuresKey } from './features.js';
 
 /**
  * Wraps the procedural pixels of `surface.ts` in three.js textures (P3-02, P3-06).

@@ -142,6 +142,29 @@ describe('clicking the HQ station opens the Harmonizer’s chat', () => {
     expect(readDockPrefs()).toEqual({ open: true, size: 40 });
     expect(useDockView.getState().view).toBe('chat');
     expect(within(main()).getByRole('region', { name: 'chat with Harmonizer' })).toBeTruthy();
+    // Chat for this reveal only: the stored device-wide choice is untouched…
+    expect(localStorage.getItem(DOCK_VIEW_KEY)).toBe('status');
+    expect(useDockView.getState().stored).toBe('status');
+
+    // …and shows again once the selection changes (here: a Waykeeper).
+    act(() => void activateSatellite('a-waykeeper-1'));
+    expect(selectionKey(useAppStore.getState().selection)).toBe('waykeeper:a-waykeeper-1');
+    expect(useDockView.getState().view).toBe('status');
+    expect(localStorage.getItem(DOCK_VIEW_KEY)).toBe('status');
+  });
+
+  it("the user's own pick during the reveal is stored and ends the override", async () => {
+    localStorage.setItem(SCENE_VISIBLE_KEY, '1');
+    localStorage.setItem(DOCK_VIEW_KEY, 'status');
+    useDockView.getState().reload();
+    await open('/');
+    act(() => void activateSatellite('a-harmonizer'));
+    expect(useDockView.getState().view).toBe('chat');
+    act(() => useDockView.getState().setView('chat'));
+    expect(localStorage.getItem(DOCK_VIEW_KEY)).toBe('chat');
+    expect(useDockView.getState().transient).toBeUndefined();
+    act(() => void activateSatellite('a-waykeeper-1'));
+    expect(useDockView.getState().view).toBe('chat');
   });
 
   it('another satellite selects its agent and leaves the dock and its view alone', async () => {

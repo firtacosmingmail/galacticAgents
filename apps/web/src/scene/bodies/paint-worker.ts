@@ -1,4 +1,4 @@
-import { runPaintJob, transferablesOf } from '../detail/visuals/paint-jobs.js';
+import { runPaintJob, transferablesOf } from './paint-jobs.js';
 import type { PaintJob, PaintReply } from './painter.js';
 
 /**

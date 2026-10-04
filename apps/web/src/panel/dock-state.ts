@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useAppStore } from '../state/store.js';
+import { selectionKey } from '../state/selection.js';
 import { useDockView } from './status/dock-view.js';
 
 /**
@@ -71,14 +73,30 @@ export function requestDockOpen(): void {
   if (!prefs.open) writeDockPrefs({ ...prefs, open: true });
 }
 
+/** Stops the watcher of the current `revealChat` override (`undefined`: none). */
+let stopRevealWatch: (() => void) | undefined;
+
 /**
- * Shows the conversation of the selected brain: the dock restored if minimised (decision 71) and
- * its "Chat | Status" switch on Chat (decision 80). Used with the Harmonizer selected by the HQ
- * station's click (P6-05).
+ * Shows the conversation of the selected brain: the dock restored if minimised (decision 71,
+ * remembered like the dock's own button) and its "Chat | Status" switch on Chat for this reveal
+ * only (decision 80's stored choice is left alone: a transient override, `useDockView`), until the
+ * selection changes or the user picks a view. Used with the Harmonizer selected by the HQ station's
+ * click (P6-05).
  */
 export function revealChat(): void {
   requestDockOpen();
-  if (useDockView.getState().view !== 'chat') useDockView.getState().setView('chat');
+  const dock = useDockView.getState();
+  if (dock.view === 'chat') return;
+  dock.showTransient('chat');
+  stopRevealWatch?.();
+  const shown = selectionKey(useAppStore.getState().selection);
+  const stop = useAppStore.subscribe((s) => {
+    if (selectionKey(s.selection) === shown) return;
+    useDockView.getState().endTransient();
+    stop();
+    if (stopRevealWatch === stop) stopRevealWatch = undefined;
+  });
+  stopRevealWatch = stop;
 }
 
 export function useDockPrefs(): DockControl {

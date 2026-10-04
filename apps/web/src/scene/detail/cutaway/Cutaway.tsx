@@ -8,7 +8,6 @@ import {
   Plane,
   Vector3,
   type Group,
-  type Material,
   type Mesh,
   type Object3D,
 } from 'three';
@@ -16,7 +15,8 @@ import { READ_BODIES } from '../../frame-order.js';
 import { useReducedMotion } from '../../motion.js';
 import type { DetailPartProps } from '../parts.js';
 import { displayRadii, type Layer } from './layers.js';
-import { cutawayTarget, isCutMesh } from './target.js';
+import { clipBody, parkPlanes, unclip, type ClippedMaterials } from './clipping.js';
+import { cutawayTarget } from './target.js';
 import { cutawayLabel, hideCutawayLabels, placeCutawayLabel } from './label-registry.js';
 import { useCutawayStore } from './store.js';
 import {
@@ -45,9 +45,11 @@ import {
  * material, maps and eclipse shading. A mesh is cut when its geometry is a `SphereGeometry`, or
  * when it says `userData.cutaway = true`; `userData.cutaway = false` keeps it whole (rings and
  * other geometry are never cut). The faces are two half discs of vertex-coloured triangles (one
- * draw call each, unlit), turned to the planes' azimuths. Materials are re-scanned every frame the
- * cut is open (a body's material may be swapped when its near maps arrive) and given back their
- * planes when it closes or the view is left.
+ * draw call each, unlit), turned to the planes' azimuths. Materials are re-scanned every frame (a
+ * body's material may be swapped when its maps arrive; a swapped-out one is given its planes back).
+ * The planes stay on the materials while the part is mounted — a closed cut parks them where they
+ * remove nothing (`clipping.ts`) — so opening, closing and the fade never recompile a program; they
+ * are taken back when the view is left.
  *
  * **Motion.** The wedge opens and closes over `OPEN_S` (instant with reduced motion), and only once
  * the cross-fade has brought the detail view in (`mixGate`); it follows the camera round the axis.
@@ -76,6 +78,8 @@ const LABEL_OFFSET_PX = 6;
 /** What the part writes to each frame, allocated once. */
 interface Scratch {
   open: number;
+  /** Frame counter, the stamp of each material scan. */
+  frame: number;
   last: number | undefined;
   planes: [Plane, Plane];
   v: Vector3;
@@ -87,6 +91,7 @@ interface Scratch {
 
 const newScratch = (): Scratch => ({
   open: 0,
+  frame: 0,
   last: undefined,
   planes: [new Plane(), new Plane()],
   v: new Vector3(),
@@ -121,7 +126,7 @@ function CutawayOf({
   const faceB = useRef<Mesh>(null);
   const radii = useMemo(() => displayRadii(layers), [layers]);
   const scratch = useRef<Scratch | undefined>(undefined);
-  const [clipped] = useState(() => new Set<Material>());
+  const [clipped] = useState<ClippedMaterials>(() => new Map());
 
   const geometry = useMemo(() => {
     const colors = layers.map((l) => {
@@ -170,11 +175,14 @@ function CutawayOf({
     s.open = stepOpen(s.open, target, dt, reduced);
     if (s.open !== target) invalidate();
     const shown = easeOpen(s.open) * mixGate(mix());
+    const bodyGroup = root.current?.parent ? findBodyGroup(root.current.parent, bodyId) : undefined;
 
     if (shown <= 0.001) {
       a.visible = false;
       b.visible = false;
-      unclip(clipped);
+      // Closed: the planes stay on the materials, parked (no recompile when it opens again).
+      parkPlanes(s.planes);
+      if (bodyGroup) clipBody(bodyGroup, bodyId, s.planes, clipped, ++s.frame);
       hideCutawayLabels();
       return;
     }
@@ -194,8 +202,7 @@ function CutawayOf({
       plane.constant = 0;
       plane.applyMatrix4(g.matrixWorld);
     }
-    const bodyGroup = root.current?.parent ? findBodyGroup(root.current.parent, bodyId) : undefined;
-    if (bodyGroup) clipBody(bodyGroup, bodyId, s.planes, clipped);
+    if (bodyGroup) clipBody(bodyGroup, bodyId, s.planes, clipped, ++s.frame);
 
     // Labels on the cut face drawn further right on screen, so they read away from the body.
     const project = (azimuth: number, outer: number, inner: number) => {
@@ -245,30 +252,4 @@ function findBodyGroup(frame: Object3D, bodyId: string): Object3D | undefined {
     if (!found && o.userData.bodyId === bodyId) found = o;
   });
   return found;
-}
-
-/** Gives the body's sphere materials the wedge's planes; another body's subtree (a moon) is skipped. */
-function clipBody(group: Object3D, bodyId: string, planes: Plane[], clipped: Set<Material>): void {
-  const visit = (o: Object3D) => {
-    if (o !== group && typeof o.userData.bodyId === 'string' && o.userData.bodyId !== bodyId)
-      return;
-    if (isCutMesh(o)) {
-      const list = Array.isArray(o.material) ? o.material : [o.material];
-      for (const m of list) {
-        if (m.clippingPlanes !== planes) m.clippingPlanes = planes;
-        m.clipIntersection = true;
-        clipped.add(m);
-      }
-    }
-    for (const child of o.children) visit(child);
-  };
-  visit(group);
-}
-
-function unclip(clipped: Set<Material>): void {
-  for (const m of clipped) {
-    m.clippingPlanes = null;
-    m.clipIntersection = false;
-  }
-  clipped.clear();
 }
