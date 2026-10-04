@@ -3,6 +3,7 @@ import type { Body } from '@galactic/protocol';
 import { sceneWorld, useAppStore } from '../../state/store.js';
 import { getAnchor } from '../anchors.js';
 import { setFocusFraming, useCameraStore } from '../camera/store.js';
+import { distance as distanceBetween, framedRadius, type Vec3 } from '../camera/flight.js';
 import { prefersReducedMotion } from '../motion.js';
 import { planetLook } from '../bodies/appearance.js';
 
@@ -17,11 +18,15 @@ import { planetLook } from '../bodies/appearance.js';
  *   the sub-scene's at the same place and size, and a backdrop fades in over the rest of the system.
  * - `shown`: the body the sub-scene draws — the detail body, and while leaving it the body being
  *   left, until the fade out ends (then the sub-scene unmounts and frees what it holds).
- * - `covered`: the fade in has ended: the backdrop hides the rest of the system, which is then not
- *   drawn at all (`DetailLayer`'s parts and the system components read it).
+ * - `covered`: the view has settled — the fade in has ended **and** the camera is in place (not
+ *   flying, within `EXIT_RADII`: `settleDue`) — so the opaque backdrop hides the rest of the
+ *   system, whose parts wholly outside it are then not drawn (`DetailLayer`'s parts and the
+ *   system components read it). Under reduced motion the mix jumps to 1 at once (no fade), and
+ *   `covered` still waits for the camera.
  *
- * The zoom thresholds (`zoomStep`) are in body radii (the anchor's visual radius, rings included,
- * like the camera's framing): the camera enters when it is focused on a body, not flying, and
+ * The zoom thresholds (`zoomStep`) are in framed radii (`framedRadius`: the anchor's visual
+ * radius, rings included, never below the camera's `MIN_FRAMED_RADIUS` — the unit the camera's
+ * flights land by, so true scale's tiny moons stay in once the flight lands): the camera enters when it is focused on a body, not flying, and
  * closer than `ENTER_RADII`; it leaves past `EXIT_RADII` (hysteresis). The camera's system framing
  * is ≈ 8.5 radii (`framingDistance`), so the system view of a focused body never enters by itself;
  * an explicit enter flies to `DETAIL_FRAME_RADII`.
@@ -72,7 +77,10 @@ export interface DetailState {
    * zoom out). False when already in the system view.
    */
   exit: (opts?: TransitionOpts) => boolean;
-  /** From the canvas: the running fade reached its end. */
+  /**
+   * From the canvas, when `settleDue`: a fade out reached its end (the sub-scene goes), or the
+   * detail view is in place (`covered`).
+   */
   settle: () => void;
   /** Zooming may enter again (the camera has been past `EXIT_RADII`). */
   arm: () => void;
@@ -110,7 +118,8 @@ export const useDetailStore = create<DetailState>((set, get) => ({
       mode: { kind: 'detail', bodyId },
       shown: bodyId,
       fade: reduced ? undefined : fadeTo(from, 1, now, ENTER_FADE_S),
-      covered: reduced,
+      // Settles once the camera is in place too (`settleDue`), even under reduced motion.
+      covered: false,
       zoomArmed: true,
     });
     if (opts.fly !== false) useCameraStore.getState().flyTo(bodyId);
@@ -136,10 +145,10 @@ export const useDetailStore = create<DetailState>((set, get) => ({
     return true;
   },
   settle: () => {
-    const { fade } = get();
-    if (!fade) return;
-    if (fade.to <= 0) set({ fade: undefined, shown: undefined, covered: false });
-    else set({ fade: undefined, covered: true });
+    const s = get();
+    if (s.fade && s.fade.to <= 0) set({ fade: undefined, shown: undefined, covered: false });
+    else if (s.mode.kind === 'detail' && (s.fade || !s.covered))
+      set({ fade: undefined, covered: true });
   },
   arm: () => {
     if (!get().zoomArmed) set({ zoomArmed: true });
@@ -171,6 +180,32 @@ export function detailMix(s: Pick<DetailState, 'mode' | 'fade'>, now: number): n
 export function fadeDone(s: Pick<DetailState, 'fade'>, now: number): boolean {
   const f = s.fade;
   return !f || now - f.startedAt >= f.duration;
+}
+
+/**
+ * Whether the canvas should `settle` now: a fade out has reached its end; or the detail view's
+ * fade in has (or there is none: reduced motion) while the camera is in place — not flying and
+ * within `EXIT_RADII` (`distance`, framed radii), hence well inside the backdrop. An explicit
+ * enter flies in for 0.8–1.5 s, longer than the fade: covering the system before the camera
+ * arrives would leave it outside an opaque backdrop (P6-01 review, S1).
+ */
+export function settleDue(
+  s: Pick<DetailState, 'mode' | 'fade' | 'covered'>,
+  now: number,
+  camera: { flying: boolean; distance: number | undefined },
+): boolean {
+  if (!fadeDone(s, now)) return false;
+  if (s.fade && s.fade.to <= 0) return true;
+  if (s.mode.kind !== 'detail' || (s.covered && !s.fade)) return false;
+  return !camera.flying && camera.distance !== undefined && camera.distance <= EXIT_RADII;
+}
+
+/**
+ * The camera's distance from a body's centre in framed radii (`framedRadius`), the unit of the
+ * zoom thresholds and of the camera's detail framing (`DETAIL_FRAME_RADII`).
+ */
+export function radiiFrom(camera: Vec3, centre: Vec3, radius: number): number {
+  return distanceBetween(camera, centre) / framedRadius(radius);
 }
 
 /** The detail body, while the detail view is on (not while it fades out). */
@@ -251,7 +286,7 @@ export interface ZoomView {
   focusedId: string | undefined;
   flying: boolean;
   /**
-   * The camera's distance in body radii from the detail body (detail view) or the focused body
+   * The camera's distance in framed radii (`radiiFrom`) from the detail body (detail view) or the focused body
    * (system view); `undefined` when that body is not drawn.
    */
   distance: number | undefined;

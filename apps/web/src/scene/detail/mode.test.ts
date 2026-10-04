@@ -20,6 +20,8 @@ import {
   EXIT_RADII,
   fadeDone,
   inDetailScope,
+  radiiFrom,
+  settleDue,
   useDetailStore,
   zoomStep,
   type SceneMode,
@@ -180,10 +182,16 @@ describe('the mode store', () => {
     expect(useDetailStore.getState().fade!.from).toBeCloseTo(0.5);
   });
 
-  it('switches at once under reduced motion', () => {
+  it('switches at once under reduced motion (covered once the camera is in place)', () => {
     useDetailStore.getState().enter('b-jupiter', { now: 0, reducedMotion: true });
-    expect(useDetailStore.getState()).toMatchObject({ fade: undefined, covered: true });
+    expect(useDetailStore.getState()).toMatchObject({ fade: undefined, covered: false });
     expect(detailMix(useDetailStore.getState(), 0)).toBe(1);
+    // The camera's (instant) flight has not run yet: not settled.
+    expect(settleDue(useDetailStore.getState(), 0, { flying: true, distance: 8.5 })).toBe(false);
+    expect(settleDue(useDetailStore.getState(), 0, { flying: false, distance: 2.4 })).toBe(true);
+    useDetailStore.getState().settle();
+    expect(useDetailStore.getState()).toMatchObject({ fade: undefined, covered: true });
+    expect(settleDue(useDetailStore.getState(), 0, { flying: false, distance: 2.4 })).toBe(false);
     useDetailStore.getState().exit({ now: 0, reducedMotion: true });
     expect(useDetailStore.getState()).toMatchObject({
       mode: SYSTEM,
@@ -280,6 +288,44 @@ describe('detail kinds and scope', () => {
     expect(inDetailScope('b-io')).toBe(true);
     useAppStore.setState({ replayWorld: undefined });
     expect(inDetailScope('b-io')).toBe(false);
+  });
+});
+
+describe('settling (P6-01 review, S1)', () => {
+  const inPlace = { flying: false, distance: DETAIL_FRAME_RADII };
+
+  it('an explicit enter mid-flight covers only once the camera has arrived', () => {
+    // "Detail view" on a body the camera is still flying to: the flight (0.8–1.5 s) outlasts the
+    // fade (0.9 s).
+    useDetailStore.getState().enter('b-jupiter', { now: 0, reducedMotion: false });
+    const s = useDetailStore.getState();
+    expect(settleDue(s, ENTER_FADE_S / 2, inPlace)).toBe(false); // still fading
+    expect(settleDue(s, ENTER_FADE_S, { flying: true, distance: 30 })).toBe(false);
+    expect(settleDue(s, 1.2, { flying: true, distance: 3 })).toBe(false);
+    // Landed but still outside the view (the watcher exits then anyway): not covered either.
+    expect(settleDue(s, 1.5, { flying: false, distance: EXIT_RADII + 0.1 })).toBe(false);
+    expect(settleDue(s, 1.5, { flying: false, distance: undefined })).toBe(false);
+    expect(settleDue(s, 1.5, inPlace)).toBe(true);
+    s.settle();
+    expect(useDetailStore.getState()).toMatchObject({ fade: undefined, covered: true });
+  });
+
+  it('a fade out ends whatever the camera does', () => {
+    useDetailStore.getState().enter('b-jupiter', { now: 0, reducedMotion: false });
+    useDetailStore.getState().exit({ now: 0.5, reducedMotion: false });
+    const s = useDetailStore.getState();
+    expect(settleDue(s, 0.5, { flying: true, distance: 30 })).toBe(false);
+    expect(settleDue(s, 0.5 + EXIT_FADE_S, { flying: true, distance: 30 })).toBe(true);
+    s.settle();
+    expect(useDetailStore.getState()).toMatchObject({ shown: undefined, fade: undefined });
+    // Nothing to settle in the system view.
+    expect(settleDue(useDetailStore.getState(), 10, inPlace)).toBe(false);
+  });
+
+  it('measures the camera in framed radii (the unit the flights land by)', () => {
+    expect(radiiFrom([0, 0, 12], [0, 0, 0], 5)).toBeCloseTo(2.4);
+    // True scale's moons are smaller than MIN_FRAMED_RADIUS: the camera's unit, not the raw radius.
+    expect(radiiFrom([0, 0, 0.12], [0, 0, 0], 0.02)).toBeCloseTo(2.4);
   });
 });
 

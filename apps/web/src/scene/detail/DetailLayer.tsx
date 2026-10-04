@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { Vector3 } from 'three';
 import { getAnchor } from '../anchors.js';
 import { anchorPosition, useCameraStore } from '../camera/store.js';
 import { READ_BODIES } from '../frame-order.js';
@@ -9,7 +8,8 @@ import { DetailScene } from './DetailScene.js';
 import {
   applyZoomStep,
   bindCameraToDetail,
-  fadeDone,
+  radiiFrom,
+  settleDue,
   useDetailStore,
   zoomStep,
   type DetailState,
@@ -19,8 +19,9 @@ import {
  * The detail view inside the canvas (P6-01; the rules in `mode.ts`): mounts the sub-scene of the
  * body being shown (`DetailScene`, keyed by the body, so a new body gets fresh GPU objects and
  * leaving disposes them), watches the camera's distance for the zoom thresholds, ends the
- * cross-fade, and keeps the frame loop going while a fade runs (the `demand` loop of reduced
- * motion has no fade: the switch is instant).
+ * cross-fade once the camera is in place (`settleDue`), and keeps the frame loop going until then
+ * (the `demand` loop of reduced motion has no fade: the mix switches at once, `covered` follows
+ * when the camera has arrived).
  *
  * The watcher runs at `READ_BODIES`, after the camera rig (`PLACE_CAMERA`): a flight the rig
  * started this frame already counts as flying, so a flight in or out never trips a threshold.
@@ -33,7 +34,7 @@ export function DetailLayer({ quality, sunRadius }: { quality: SceneQuality; sun
   const invalidate = useThree((s) => s.invalidate);
   const [scratch] = useState(() => ({
     at: [0, 0, 0] as [number, number, number],
-    v: new Vector3(),
+    eye: [0, 0, 0] as [number, number, number],
   }));
 
   useEffect(() => bindCameraToDetail(), []);
@@ -53,8 +54,8 @@ export function DetailLayer({ quality, sunRadius }: { quality: SceneQuality; sun
     const anchor = id ? getAnchor(id) : undefined;
     let distance: number | undefined;
     if (anchor) {
-      scratch.v.fromArray(anchorPosition(anchor, scratch.at));
-      distance = scratch.v.distanceTo(camera.position) / Math.max(anchor.radius, 1e-6);
+      camera.position.toArray(scratch.eye);
+      distance = radiiFrom(scratch.eye, anchorPosition(anchor, scratch.at), anchor.radius);
     }
     const step = zoomStep({
       mode: s.mode,
@@ -68,8 +69,11 @@ export function DetailLayer({ quality, sunRadius }: { quality: SceneQuality; sun
 
     const now = performance.now() / 1000;
     const after = useDetailStore.getState();
-    if (after.fade) {
-      if (fadeDone(after, now)) after.settle();
+    const pending = after.fade !== undefined || (after.mode.kind === 'detail' && !after.covered);
+    if (pending) {
+      // The camera's state after this frame's step: a flight it started is already `flying`.
+      if (settleDue(after, now, { flying: useCameraStore.getState().flying, distance }))
+        after.settle();
       invalidate();
     }
   }, READ_BODIES);

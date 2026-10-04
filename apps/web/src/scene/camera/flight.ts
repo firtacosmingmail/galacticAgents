@@ -67,11 +67,21 @@ export const FOCUS_FILL = 0.3;
 export const MIN_FRAMED_RADIUS = 0.05;
 
 /**
+ * The radius the camera frames a body by: its visual radius, never below `MIN_FRAMED_RADIUS`. The
+ * one unit of every camera distance measured in body radii (the framing, a detail flight's
+ * `radii`, P6-01's zoom thresholds and backdrop), so a flight that lands at N radii is N radii
+ * away for every reader, however tiny the body (true scale's moons).
+ */
+export function framedRadius(radius: number): number {
+  return Math.max(radius, MIN_FRAMED_RADIUS);
+}
+
+/**
  * The distance from a body's centre at which a sphere of `radius` fills `fill` of the narrower half
  * field of view: `sin(angular radius) = radius / distance`. Never closer than 1.5 radii.
  */
 export function framingDistance(radius: number, view: View, fill = FOCUS_FILL): number {
-  const r = Math.max(radius, MIN_FRAMED_RADIUS);
+  const r = framedRadius(radius);
   return Math.max(r / Math.sin(halfFov(view) * fill), r * 1.5);
 }
 
@@ -129,11 +139,12 @@ export function focusPose(body: Vec3, radius: number, dir: Vec3, view: View, rad
   return { target: body, position: add(body, scale(dir, focusDistance(radius, view, radii))) };
 }
 
-/** How far from a body's centre a focus flight ends: `radii` body radii, else the framing distance. */
+/**
+ * How far from a body's centre a focus flight ends: `radii` framed radii (`framedRadius`), else
+ * the framing distance.
+ */
 export function focusDistance(radius: number, view: View, radii?: number): number {
-  return radii === undefined
-    ? framingDistance(radius, view)
-    : Math.max(radius, MIN_FRAMED_RADIUS) * radii;
+  return radii === undefined ? framingDistance(radius, view) : framedRadius(radius) * radii;
 }
 
 /** The overview looks down at the orbital plane at this slope (the initial camera's, 40 over 140). */
@@ -189,5 +200,5 @@ export function flightPose(start: Pose, goal: Pose, t: number, clearance: number
  * than its radius and a half.
  */
 export function leaveDistance(radius: number): number {
-  return Math.max(radius, MIN_FRAMED_RADIUS) * 1.5;
+  return framedRadius(radius) * 1.5;
 }

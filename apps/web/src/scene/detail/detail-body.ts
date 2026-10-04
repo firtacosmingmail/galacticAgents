@@ -2,6 +2,7 @@ import type { Body } from '@galactic/protocol';
 import { buildRenderList, type MoonItem, type PlanetItem } from '../bodies/layout.js';
 import { TASK_ASTEROID_RADIUS, taskAsteroids, type TaskAsteroid } from '../belt/belt-model.js';
 import type { ScaleMode } from '../scale.js';
+import { framedRadius } from '../camera/flight.js';
 import { detailKind, EXIT_RADII } from './mode.js';
 
 /**
@@ -50,7 +51,7 @@ export function resolveDetailBody(
   return planet ? { kind, bodyId, name: body.name, radius: planet.outerRadius, planet } : undefined;
 }
 
-/** The backdrop is at least this many body radii away from the body's centre. */
+/** The backdrop is at least this many framed radii (`framedRadius`) away from the body's centre. */
 export const BACKDROP_MIN_RADII = 40;
 /**
  * …and this much beyond the farthest body that belongs to the view (a planet's moons) as seen from
@@ -68,7 +69,8 @@ export function planetReach(planet: PlanetItem): number {
 /**
  * The backdrop's radius about the body: far enough that the camera (within `EXIT_RADII` while the
  * view is on) and every body of the view's scope (`detailScope`: a planet's moons; a moon's planet
- * and siblings) are inside it, while the rest of the system is outside.
+ * and siblings) are inside it, while the rest of the system is outside. Camera distances are in
+ * framed radii, the camera's own unit (true scale's moons are smaller than `MIN_FRAMED_RADIUS`).
  */
 export function backdropRadius(body: DetailBody): number {
   const reach =
@@ -77,6 +79,7 @@ export function backdropRadius(body: DetailBody): number {
       : body.kind === 'moon'
         ? body.moon.distance + planetReach(body.parent)
         : planetReach(body.planet);
-  const camera = EXIT_RADII * body.radius;
-  return Math.max(body.radius * BACKDROP_MIN_RADII, (reach + camera) * BACKDROP_MARGIN);
+  const r = framedRadius(body.radius);
+  const camera = EXIT_RADII * r;
+  return Math.max(r * BACKDROP_MIN_RADII, (reach + camera) * BACKDROP_MARGIN);
 }
