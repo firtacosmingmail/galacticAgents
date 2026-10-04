@@ -1,6 +1,6 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** P4-04 (wave 3, after wave 2 is merged into `phase-4`) · **Task status:** todo
+**Current task:** P4-04 (wave 3, branch `p4-wave3-transitions`) · **Task status:** in progress
 **Phase status:** in progress (11/14 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -54,7 +54,7 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Acceptance:** switching activity in the harness changes the archetype within a second.
 
 ### P4-04 — Body transitions: fly, land, colonise, moved marker
-- **Status:** todo · **Depends on:** P4-01, P2-12, P2-13 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P4-01, P2-12, P2-13 · **Parallel with:** —
 - On `body.moved` the satellite **flies** from the old body to the new one (task joins a project, promotion); on completion the satellite **lands** and the body is marked colonised; "moved to …" marker on the old body during retention; archival clears markers.
 - **Acceptance:** moving a task to a project in the panel flies its satellite there; completing a task lands it.
 
