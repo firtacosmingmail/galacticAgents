@@ -7,6 +7,7 @@ import {
   isLive,
   isSuperseded,
   isWorkOver,
+  LANDED_PER_BODY,
   SCENE_SATELLITES,
   sameSatellites,
   satelliteList,
@@ -290,6 +291,67 @@ describe('keepLanded in the scene (P4-04)', () => {
     w.agents[retry.id] = retry;
     w.statuses[retry.id] = status(retry.id, 'finished');
     expect(landedOf(w)).toEqual([['a-steward-9', 'b-luna', 'finished']]);
+  });
+
+  it('a newer Steward that never ran does not hide the older landed one', () => {
+    const w = closed(world({ 'a-steward-1': 'finished' }));
+    const { sessionRef: _s, ...unstarted } = steward;
+    w.agents['a-steward-9'] = {
+      ...(unstarted as Agent),
+      id: 'a-steward-9',
+      createdAt: '2026-10-03T12:00:00Z',
+    };
+    expect(isSuperseded(w, 'a-steward-1')).toBe(false);
+    expect(landedOf(w)).toEqual([['a-steward-1', 'b-luna', 'finished']]);
+    // Once it runs (a record), it is the newest: it lands instead (it is not live).
+    w.statuses['a-steward-9'] = status('a-steward-9', 'stopped');
+    expect(landedOf(w)).toEqual([['a-steward-9', 'b-luna', 'finished']]);
+  });
+
+  it(`300 landed agents: built in linear time, ${LANDED_PER_BODY} per body drawn, the newest`, () => {
+    const w = world({});
+    w.agents = {};
+    // 300 completed tasks on the project's planet, each with one finished Steward.
+    for (let i = 0; i < 300; i++) {
+      const n = String(i).padStart(3, '0');
+      const taskId = `t-${n}`;
+      w.tasks[taskId] = { ...fx.task, id: taskId, state: 'completed' };
+      w.agents[`a-st-${n}`] = {
+        ...steward,
+        id: `a-st-${n}`,
+        taskId,
+        createdAt: `2026-10-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`,
+      };
+      w.statuses[`a-st-${n}`] = status(`a-st-${n}`, 'finished');
+    }
+    // Count every read of an agent row: an O(agents) scan per agent would be ~90 000.
+    let reads = 0;
+    const agents = w.agents;
+    w.agents = new Proxy(agents, {
+      get(target, key, receiver) {
+        reads++;
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    const list = satelliteList(w, SCENE_SATELLITES);
+    expect(reads).toBeLessThan(300 * 10);
+    expect(list.filter((s) => s.landed)).toHaveLength(LANDED_PER_BODY);
+    expect(list.map((s) => s.agentId)).toEqual([
+      'a-st-294',
+      'a-st-295',
+      'a-st-296',
+      'a-st-297',
+      'a-st-298',
+      'a-st-299',
+    ]);
+    // Per body: a Steward landed on the asteroid is drawn besides them.
+    w.agents = agents;
+    w.agents[asteroidSteward.id] = asteroidSteward;
+    w.tasks[fx.asteroidTask.id] = { ...fx.asteroidTask, state: 'completed' };
+    w.statuses[asteroidSteward.id] = status(asteroidSteward.id, 'finished');
+    const byBody = satelliteList(w, SCENE_SATELLITES).map((s) => s.bodyId);
+    expect(byBody.filter((b) => b === 'b-luna')).toHaveLength(LANDED_PER_BODY);
+    expect(byBody.filter((b) => b === 'b-ast-1')).toHaveLength(1);
   });
 
   it('outlives the ended record (the server drops it after a day) if the agent ran', () => {
