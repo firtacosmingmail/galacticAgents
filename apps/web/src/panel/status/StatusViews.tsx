@@ -269,6 +269,9 @@ export function SystemStatusView() {
   const caps = useCaps();
   const now = useSlowNow();
   const s = useMemo(() => systemStatus(world, { now, caps }), [world, now, caps]);
+  // The Harmonizer's own cost (SPEC §4.2 "each agent's … cost so far", P5-05): the other agents
+  // show theirs on their cards, in the Steward view and in their project's status.
+  const harmonizer = currentHarmonizer(world);
   return (
     <section className="sts" aria-label="system status">
       {s.waiting > 0 && (
@@ -307,6 +310,9 @@ export function SystemStatusView() {
             <Fact label="agents active today (lifetime cost)">{formatCostTotal(s.cost.today)}</Fact>
             <Fact label="Harmonizer and Waykeepers">{formatCostTotal(s.cost.brains)}</Fact>
             <Fact label="Stewards">{formatCostTotal(s.cost.stewards)}</Fact>
+            {harmonizer && (
+              <Fact label="the Harmonizer itself">{formatCost(world.statuses[harmonizer.id])}</Fact>
+            )}
           </dl>
           <p className="muted sts-note">
             Over the {s.cost.total.agents} agents the server still reports: live, or ended in the
