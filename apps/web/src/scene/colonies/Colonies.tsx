@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { BufferAttribute, BufferGeometry, DynamicDrawUsage, Matrix4, PointsMaterial } from 'three';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { getAnchor, onAnchorsChanged, SUN_ANCHOR_ID } from '../anchors.js';
 import { ASTEROID_ROCK_NAME } from '../belt/belt-model.js';
 import { READ_BODIES } from '../frame-order.js';
@@ -27,9 +27,9 @@ import {
  * needs a frame when the list or the anchors change.
  */
 export function Colonies() {
-  const bodies = useAppStore((s) => s.world.bodies);
-  const projects = useAppStore((s) => s.world.projects);
-  const tasks = useAppStore((s) => s.world.tasks);
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
+  const projects = useAppStore((s) => sceneWorld(s).projects);
+  const tasks = useAppStore((s) => sceneWorld(s).tasks);
   const next = useMemo(() => colonyList({ bodies, projects, tasks }), [bodies, projects, tasks]);
   // The previous list while it draws the same (state from the previous render, React's pattern).
   const [kept, setKept] = useState<ColonySpec[]>(next);

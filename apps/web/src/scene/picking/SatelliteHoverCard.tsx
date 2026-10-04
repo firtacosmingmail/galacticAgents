@@ -1,5 +1,5 @@
 import { memo, useLayoutEffect, useMemo, useRef } from 'react';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { StatePill } from '../../console/hierarchy/shared.js';
 import type { SatelliteMode } from '../satellites/machine.js';
 import { satelliteCard } from './satellite-card.js';
@@ -29,7 +29,7 @@ export const SatelliteHoverCard = memo(function SatelliteHoverCard({
   others: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const world = useAppStore((s) => s.world);
+  const world = useAppStore((s) => sceneWorld(s));
   const { name, state, activity, where } = useMemo(
     () => satelliteCard(world, agentId, bodyId ? { bodyId, mode } : undefined),
     [world, agentId, bodyId, mode],

@@ -12,7 +12,7 @@ import {
   type InstancedMesh,
 } from 'three';
 import type { Id } from '@galactic/protocol';
-import { useAppStore } from '../../../state/store.js';
+import { sceneWorld, useAppStore } from '../../../state/store.js';
 import { DECOR_LAYER } from '../../layers.js';
 import { motionSeconds, useReducedMotion } from '../../motion.js';
 import type { SceneQuality } from '../../quality.js';
@@ -38,8 +38,8 @@ import {
  * them whenever the satellites change (`Satellites.tsx` invalidates).
  */
 export function Activities({ quality }: { quality: SceneQuality }) {
-  const bodies = useAppStore((s) => s.world.bodies);
-  const agents = useAppStore((s) => s.world.agents);
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
+  const agents = useAppStore((s) => sceneWorld(s).agents);
   const reducedMotion = useReducedMotion();
   const maxAnimated = quality.satellites.maxAnimated;
 
