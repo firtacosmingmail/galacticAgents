@@ -1,7 +1,7 @@
 # Phase 5 — Side panel polish and scene integration
 
-**Current task:** P5-05 (wave 3, branch `p5-wave3-conformance`) · **Task status:** in progress
-**Phase status:** in progress (4/5 done) — on branch `phase-5`
+**Current task:** P5-05 (closes when P5-06 and P5-07 land), P5-06, P5-07 (wave 3, branch `p5-wave3-conformance`) · **Task status:** in progress
+**Phase status:** in progress (4/7 done) — on branch `phase-5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -59,6 +59,16 @@ The Phase 2.5 panel becomes the spec's panel, wired to the scene: selection flow
 - **Status:** in progress · **Depends on:** P5-04 · **Parallel with:** —
 - Walk every line of `SPEC.md` §4.2 and §4.3 with and without the scene; record gaps in `docs/tasks/notes/P5-05-checklist.md` and fix them or file follow-ups.
 - **Acceptance:** checklist fully ticked and committed.
+
+### P5-06 — Controls for the Harmonizer (added 2026-10-04)
+- **Status:** in progress · **Depends on:** P5-05 · **Parallel with:** P5-07
+- From P5-05's checklist (row §4.2.42h) and Cosmin's choice (decision 82): the Harmonizer's dock offers Pause, Resume and a confirmed "Restart Harmonizer" (stop + a fresh one on the same runtime, seeded from the database), never a plain Stop; "Resume session" only for an interrupted Harmonizer.
+- **Acceptance:** each control works from the dock with and without the scene; a restart leaves exactly one live Harmonizer and the user informed; tests; the conformance row §4.2.42h ticked.
+
+### P5-07 — Work controls in conversation (added 2026-10-04)
+- **Status:** in progress · **Depends on:** P5-05 · **Parallel with:** P5-06
+- From P5-05's follow-up F1 and Cosmin's choice (decision 83): a Harmonizer `control_work` tool — pause, resume and edit at once; stop and cancel only after a confirmed `ask_confirmation`; trust level excluded.
+- **Acceptance:** brain-harness tests for each action and the confirmation gate (refused without it); the conformance row §4.3.25 ticked.
 
 ## Exit criteria (from the plan)
 
