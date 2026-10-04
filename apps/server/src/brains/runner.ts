@@ -9,6 +9,7 @@ import type {
   ToolDefinition,
 } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
+import { originOfMessages } from '../domain/permissions.js';
 import type { ReopenOptions, ReopenResult, SpawnResult } from '../runtime/agent-runtime.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import type { Workspaces } from '../workspace/workspaces.js';
@@ -690,11 +691,17 @@ export class BrainRunner {
   private toolContext(): BrainToolContext {
     const brainId = this.agentId;
     const actor: Actor = { type: 'agent', id: brainId };
+    const origin = originOfMessages(
+      (this.current?.items ?? []).flatMap((item) =>
+        item.event?.type === 'message.sent' ? [item.event] : [],
+      ),
+    );
     return {
       brainId,
       role: this.definition.role,
       ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
       actor,
+      ...(origin ? { origin } : {}),
       commands: this.ownCommands(),
       queries: this.opts.queries,
       // A line to another agent never wakes the brain: `message.sent` wakes only its addressee.

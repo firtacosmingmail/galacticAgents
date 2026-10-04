@@ -4,6 +4,7 @@ import { STEWARD_TOOLS } from '../steward-tools.js';
 import type { BrainPlacement, BrainRunner, BrainRunnerOptions } from '../runner.js';
 import { SUPERVISOR_TOOLS } from './agent-tools.js';
 import { CLOSURE_TOOLS, harmonizerStartNotes } from './closure-tools.js';
+import { CONTROL_TOOLS } from './control-tools.js';
 import { HARMONIZER_SYSTEM_PROMPT } from './prompt.js';
 import { harmonizerTools, type HarmonizerDeps } from './tools.js';
 
@@ -30,14 +31,24 @@ export {
   harmonizerStartNotes,
   strandedQuestionNotes,
 } from './closure-tools.js';
+export { CONTROL_TOOLS, controlWorkTool, CONTROL_WORK_ACTIONS } from './control-tools.js';
 export { findRelated, words, type RelatedMatch } from './related.js';
 
-/** The Harmonizer's definition: its prompt, its own tools, the closure tools (P2-13), then the supervisor tools. */
+/**
+ * The Harmonizer's definition: its prompt, its own tools, the closure tools (P2-13), the work
+ * controls (P5-07), then the supervisor tools.
+ */
 export function harmonizerBrain(deps: HarmonizerDeps): BrainDefinition {
   return {
     role: 'harmonizer',
     systemPrompt: HARMONIZER_SYSTEM_PROMPT,
-    tools: [...harmonizerTools(deps), ...CLOSURE_TOOLS, ...SUPERVISOR_TOOLS, ...STEWARD_TOOLS],
+    tools: [
+      ...harmonizerTools(deps),
+      ...CLOSURE_TOOLS,
+      ...CONTROL_TOOLS,
+      ...SUPERVISOR_TOOLS,
+      ...STEWARD_TOOLS,
+    ],
     // Closure requests recorded while no Harmonizer could relay them (P2-16).
     startNotes: harmonizerStartNotes,
   };
