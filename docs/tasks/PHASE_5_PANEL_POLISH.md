@@ -1,6 +1,6 @@
 # Phase 5 — Side panel polish and scene integration
 
-**Current task:** P5-04 (wave 2, after wave 1 is merged into `phase-5`) · **Task status:** todo
+**Current task:** P5-04 (wave 2, branch `p5-wave2-a11y`) · **Task status:** in progress
 **Phase status:** in progress (3/5 done) — on branch `phase-5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -51,7 +51,7 @@ The Phase 2.5 panel becomes the spec's panel, wired to the scene: selection flow
 - **Acceptance:** an archived project can be found, inspected and reopened.
 
 ### P5-04 — Keyboard, accessibility and list mode
-- **Status:** todo · **Depends on:** P5-01, P5-02, P5-03 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P5-01, P5-02, P5-03 · **Parallel with:** —
 - Keyboard navigation of lists and cards, focus management, ARIA on cards and inbox, reduced-motion preference respected; scene hide/show toggle keeps the panel fully functional (list mode).
 - **Acceptance:** panel usable with keyboard only and with the scene hidden.
 
