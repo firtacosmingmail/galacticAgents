@@ -29,6 +29,12 @@ export const MAX_TRANSCRIPT = 2_000;
 /** Chat messages kept per agent (oldest dropped). */
 export const MAX_MESSAGES = 500;
 
+/** The offset to the server's clock a `serverTime` gives, as a state patch (none without one). */
+function serverOffset(serverTime: string | undefined): { serverOffsetMs?: number } {
+  const at = serverTime ? Date.parse(serverTime) : NaN;
+  return Number.isFinite(at) ? { serverOffsetMs: at - Date.now() } : {};
+}
+
 /**
  * Merges chat messages into an agent's list: one entry per `messageId`, in `seq` order (P2-18).
  * Live `message.sent` events and the REST history (`GET /api/agents/:id/messages`) both land
@@ -49,6 +55,11 @@ export interface AppState extends TranscriptViewSlice {
    * `world` meanwhile. Not derived from the stream: the replay store (`replay/store.ts`) sets it.
    */
   replayWorld?: WorldState | undefined;
+  /**
+   * The server's clock minus this page's (ms), from the last snapshot's or catch-up's
+   * `serverTime`: "now" on the server is `Date.now() + serverOffsetMs` (event toasts' freshness).
+   */
+  serverOffsetMs?: number | undefined;
   /** The most recent events, newest first, for the event page. */
   log: EventEnvelope[];
   /** Per-agent transcript chunks in `seq` order, for the agents this page subscribed to. */
@@ -142,6 +153,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             log: [],
             logId: message.logId,
             snapshots: s.snapshots + 1,
+            ...serverOffset(message.serverTime),
             ...(s.logId !== undefined && s.logId !== message.logId
               ? { transcripts: {}, messages: {}, transcriptViews: {}, replayWorld: undefined }
               : {}),
@@ -173,7 +185,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           };
         }
         case 'caught_up':
-          return { world: { ...s.world, seq: Math.max(s.world.seq, message.seq) } };
+          return {
+            world: { ...s.world, seq: Math.max(s.world.seq, message.seq) },
+            ...serverOffset(message.serverTime),
+          };
         case 'error':
           return { lastError: `${message.code}: ${message.message}` };
         case 'pong':
@@ -215,6 +230,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       world: emptyWorld(),
       replayWorld: undefined,
+      serverOffsetMs: undefined,
       log: [],
       transcripts: {},
       messages: {},

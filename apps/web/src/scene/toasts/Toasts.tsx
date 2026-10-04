@@ -66,7 +66,8 @@ export function Toasts() {
       lastSeq = fresh.at(-1)!.seq;
       if (now.replayWorld) return;
       const world = sceneWorld(now);
-      const wallNow = Date.now();
+      // The server's "now" (its clock, from the snapshot / catch-up), not a skewed client's.
+      const wallNow = Date.now() + (now.serverOffsetMs ?? 0);
       const incoming = fresh
         .filter((e) => isFresh(e, wallNow))
         .map((e) => toastOf(e, world))

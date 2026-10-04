@@ -118,6 +118,41 @@ describe('Toasts (P4-06)', () => {
     expect(r3f.invalidations).toBeGreaterThan(before);
   });
 
+  it('judges freshness by the server’s clock, not a skewed page’s', () => {
+    // The page's clock runs an hour behind the server's (the snapshot says what the server's is).
+    const server = Date.now() + 3_600_000;
+    act(() =>
+      useAppStore.getState().apply({
+        type: 'snapshot',
+        seq,
+        logId: 'log-1',
+        bodies: [],
+        projects: [fx.project],
+        tasks: [fx.task],
+        agents: [],
+        questions: [],
+        proposals: [],
+        statuses: [],
+        serverTime: new Date(server).toISOString(),
+      } as never),
+    );
+    expect(useAppStore.getState().serverOffsetMs).toBeGreaterThan(3_599_000);
+    render(<Toasts />);
+    const before = r3f.invalidations;
+    // Ten minutes old on the server's clock, though "in the future" on the page's: history.
+    apply(
+      { type: 'task.state_changed', taskId: 't-1', from: 'in_progress', to: 'completed' },
+      new Date(server - 600_000).toISOString(),
+    );
+    expect(r3f.invalidations).toBe(before);
+    // Just now on the server's clock (an hour ahead of the page's): news.
+    apply(
+      { type: 'project.state_changed', projectId: 'p-1', from: 'in_progress', to: 'completed' },
+      new Date(server).toISOString(),
+    );
+    expect(r3f.invalidations).toBeGreaterThan(before);
+  });
+
   it('a snapshot is history: nothing toasts for it', () => {
     render(<Toasts />);
     const before = r3f.invalidations;
