@@ -48,6 +48,8 @@ import {
   type Point,
 } from './store.js';
 import { noteUserCameraInput } from './sync.js';
+import { beaconsDrawn, beaconUnder } from '../beacons/registry.js';
+import { activateBeacon } from '../beacons/activate.js';
 
 /**
  * Picking, hover and the selection highlight inside the canvas (P3-05).
@@ -84,6 +86,12 @@ import { noteUserCameraInput } from './sync.js';
  * hover names the planet, "+n". The hovered satellite gets the faint ring too; a click selects
  * its agent (`activateSatellite`) and flies to its body — the satellite hovered at the press, if it
  * can still be seen, without re-picking (it may have orbited out from under the pointer).
+ *
+ * Question beacons (P4-05, `beacons/`) are tested first: a beacon's glyph under the pointer wins
+ * over everything (satellites, bodies, labels, a satellite kept by the hover grace) — it is drawn
+ * over everything too. There is one per question (P4-13), each hit on its own. Hovering one shows
+ * its question's card; a click selects the asking agent, flies to its body and opens that question
+ * in the inbox (`activateBeacon`).
  *
  * Per-frame cost: the pick spheres, the ray and the anchors' positions are scratch buffers reused
  * from pick to pick; the canvas's page position is cached (dropped on resize, scroll, re-entry);
@@ -154,7 +162,8 @@ export function Picking({ outline }: PickingProps) {
       const { camera, size } = get();
       return pixelScale(size.height, (camera as PerspectiveCamera).fov ?? 45);
     };
-    const pick = (at: Point): ScenePick => {
+    /** The pointer's ray, written into `tools.ray`. */
+    const aim = (at: Point) => {
       const { camera, size } = get();
       const cam = camera as PerspectiveCamera;
       tools.ndc.set((at.x / size.width) * 2 - 1, -(at.y / size.height) * 2 + 1);
@@ -167,6 +176,12 @@ export function Picking({ outline }: PickingProps) {
       ray.direction[0] = direction.x;
       ray.direction[1] = direction.y;
       ray.direction[2] = direction.z;
+      return ray;
+    };
+    /** The question beacon under the pointer (P4-05), if any. */
+    const beaconAt = (at: Point) => beaconUnder(aim(at));
+    const pick = (at: Point): ScenePick => {
+      const ray = aim(at);
       return pickScene(
         ray,
         bodySpheres(tools.bodies),
@@ -220,6 +235,16 @@ export function Picking({ outline }: PickingProps) {
       const at = pointAt(e);
       const picking = usePickingStore.getState();
       const was = picking.hover;
+      // A question beacon wins over everything under it (P4-05).
+      const beacon = beaconAt(at);
+      if (beacon) {
+        grace = undefined;
+        moveHover(at.x, at.y);
+        picking.setHover({ kind: 'beacon', bodyId: beacon.bodyId, questionId: beacon.questionId });
+        canvas.style.cursor = 'pointer';
+        if (usePickingStore.getState().hover !== was) invalidate();
+        return;
+      }
       // A satellite kept by the grace stays hovered, whatever is under the pointer now.
       if (
         grace &&
@@ -301,10 +326,16 @@ export function Picking({ outline }: PickingProps) {
       // The camera is about to move: the label comes back once it does (`repick`).
       picking.setHover(undefined);
       grace = undefined;
+      const at = pointAt(e);
+      // A question beacon goes to its asker and opens its question in the inbox (P4-05, P4-13).
+      const beacon = beaconAt(at);
+      if (beacon) {
+        activateBeacon(beacon.questionId);
+        return;
+      }
       // The satellite hovered at the press (picked, or kept by the grace) may have orbited out
       // from under the pointer since: the click is still meant for it, while it can be seen.
       if (kept && seen(kept) && activateSatellite(kept)) return;
-      const at = pointAt(e);
       const result = pick(at);
       const label = labelUnder(result, at);
       const choice = result.choice;
@@ -380,7 +411,8 @@ export function Picking({ outline }: PickingProps) {
     // Satellites move on their own: the one under a still pointer changes, the card follows (and
     // a hovered satellite that was just hidden lets go).
     const hoveringSatellite = usePickingStore.getState().hover?.kind === 'satellite';
-    if (moved || hoveringSatellite || satellitesDrawn()) repick.current?.();
+    // Beacons ride their bodies: the one under a still pointer changes too (P4-05).
+    if (moved || hoveringSatellite || satellitesDrawn() || beaconsDrawn()) repick.current?.();
   });
 
   const hovered = usePickingStore((s) => hoveredBody(s.hover));

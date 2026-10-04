@@ -13,6 +13,8 @@ import { HARMONIZER, selectionKey } from '../../state/selection.js';
 import { publishSatellites } from '../satellites/registry.js';
 import type { SatelliteFrame } from '../satellites/director.js';
 import { pickingWorld, satelliteFrame } from './fixtures.js';
+import { publishBeacons } from '../beacons/registry.js';
+import { question } from '../beacons/fixtures.js';
 import { hoverAt, usePickingStore } from './store.js';
 
 /**
@@ -633,5 +635,87 @@ describe('OutlineSync', () => {
     depthPass.render();
     expect(seen).toEqual([false]);
     expect(camera.layers.isEnabled(DECOR_LAYER)).toBe(true);
+  });
+});
+
+describe('question beacons as pick targets (P4-05, P4-13)', () => {
+  // Jupiter at the centre; two beacons in a row 72 px above it (y ≈ 228 px), over Jupiter's moon
+  // Io: the permission 20 px left of the centre line, the clarification 20 px right of it.
+  const perPx = 10 / (300 / Math.tan((22.5 * Math.PI) / 180));
+  const dx = 20 * perPx;
+  beforeEach(() => {
+    anchorAt('b-jupiter', 0);
+    anchorAtPoint('b-io', [0, 1, 0], 0.3);
+    anchorAtPoint('b-earth', [-3, -2, 0], 0.3);
+    const world = pickingWorld();
+    world.questions = {
+      'q-p': question('q-p', 'a-st-in', { kind: 'permission', text: 'Run the migration?' }),
+      'q-w': question('q-w', 'a-wk-new', { text: 'Which branch?' }),
+      'q-h': question('q-h', 'a-h', { text: 'Which repo?' }),
+    };
+    useAppStore.setState({ world });
+    publishBeacons([
+      { questionId: 'q-p', bodyId: 'b-jupiter', visible: true, center: [-dx, 1, 0], perPx },
+      { questionId: 'q-w', bodyId: 'b-jupiter', visible: true, center: [dx, 1, 0], perPx },
+      // The Harmonizer's beacon on Earth, 72 px above it (Earth at x 184, y 444 px).
+      { questionId: 'q-h', bodyId: 'b-earth', visible: true, center: [-3, -1, 0], perPx },
+    ]);
+    const inbox = document.createElement('section');
+    inbox.id = 'pnl-inbox';
+    for (const id of ['q-p', 'q-w', 'q-h']) {
+      const card = document.createElement('article');
+      card.dataset['questionId'] = id;
+      inbox.append(card);
+    }
+    document.body.append(inbox);
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  afterEach(() => {
+    publishBeacons([]);
+    document.getElementById('pnl-inbox')?.remove();
+  });
+
+  it('each beacon of a row is its own target and wins over the body under it', () => {
+    render(<Picking />);
+    frame();
+    pointer('pointerMove', 380, 228);
+    flushRaf();
+    expect(usePickingStore.getState().hover).toEqual({
+      kind: 'beacon',
+      questionId: 'q-p',
+      bodyId: 'b-jupiter',
+    });
+    pointer('pointerMove', 420, 228);
+    flushRaf();
+    expect(usePickingStore.getState().hover).toMatchObject({ kind: 'beacon', questionId: 'q-w' });
+    // Off the glyphs: the moon under the pointer again.
+    pointer('pointerMove', 400, 200);
+    flushRaf();
+    expect(usePickingStore.getState().hover?.kind).not.toBe('beacon');
+  });
+
+  it('a click selects the asker, flies to its body and opens that question', () => {
+    render(<Picking />);
+    frame();
+    click(421, 229);
+    expect(document.activeElement).toBe(document.querySelector('[data-question-id="q-w"]'));
+    expect(selected()).toBe('waykeeper:a-wk-new');
+    expect(useCameraStore.getState().request).toMatchObject({ kind: 'focus', bodyId: 'b-jupiter' });
+    expect(usePickingStore.getState().popover).toBeUndefined();
+    click(379, 229);
+    expect(document.activeElement).toBe(document.querySelector('[data-question-id="q-p"]'));
+    expect(selected()).toBe('steward:a-st-in');
+  });
+
+  it("the Harmonizer's own question: back to the Harmonizer, the camera to Earth", () => {
+    useAppStore.setState({ selection: { kind: 'steward', id: 'a-st' } });
+    render(<Picking />);
+    frame();
+    camera.updateMatrixWorld();
+    const earth = new Vector3(-3, -1, 0).project(camera);
+    click(((earth.x + 1) / 2) * 800, ((1 - earth.y) / 2) * 600);
+    expect(selected()).toBe('harmonizer');
+    expect(useCameraStore.getState().request).toMatchObject({ kind: 'focus', bodyId: 'b-earth' });
+    expect(document.activeElement).toBe(document.querySelector('[data-question-id="q-h"]'));
   });
 });

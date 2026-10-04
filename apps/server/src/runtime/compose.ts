@@ -22,6 +22,7 @@ import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { Archival, type Timers } from './archival.js';
 import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
 import { StatusStore } from './status-store.js';
+import { StewardProcesses, type StewardProcessesOptions } from './steward-processes.js';
 import { stewardReports, type StewardReports } from './steward-reports.js';
 import { TranscriptPipeline } from './transcripts.js';
 import { WorkStateDeriver } from './work-state-deriver.js';
@@ -73,6 +74,12 @@ export interface ComposeOptions {
    * and call `archival.sweep()` under an injected clock).
    */
   archival?: { retentionMs?: number; intervalMs?: number; timers?: Timers };
+  /**
+   * Steward process cleanup (P4-14): `index.ts` passes the supervisor as `groups`. With it, brains
+   * get the process tools' service and a Steward's leftovers are swept when it ends or its task
+   * closes; without it there are no sweeps and the tools refuse.
+   */
+  processes?: Omit<StewardProcessesOptions, 'log' | 'statuses' | 'onError'>;
 }
 
 export interface ComposedRuntime {
@@ -92,6 +99,8 @@ export interface ComposedRuntime {
   workspaces?: Workspaces;
   /** The retention / archival job (P2-13); its timer runs when composed with an interval. */
   archival: Archival;
+  /** A Steward's processes: list, stop, sweep (P4-14), when composed with `processes`. */
+  processes?: StewardProcesses;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
   startBrain(
     definition: BrainDefinition,
@@ -273,6 +282,15 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'archival') } : {}),
   });
   if (opts.archival?.intervalMs) archival.start(opts.archival.intervalMs);
+  const processes: StewardProcesses | undefined = opts.processes
+    ? new StewardProcesses({
+        ...opts.processes,
+        log,
+        statuses,
+        ...(opts.onError ? { onError: opts.onError } : {}),
+      })
+    : undefined;
+  processes?.watch();
 
   // The brains this composition drives (P2-16): started here or resumed by recovery.
   const runners = new Map<Id, BrainRunner>();
@@ -282,6 +300,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     commands,
     queries,
     ...(workspaces ? { workspaces } : {}),
+    ...(processes ? { processes } : {}),
     ...extra,
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
@@ -325,6 +344,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     queries,
     ...(workspaces ? { workspaces } : {}),
     archival,
+    ...(processes ? { processes } : {}),
     startBrain: async (definition, placement, brainOpts = {}) =>
       adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),
     defineBrains(defs, brainOpts = {}) {
@@ -409,6 +429,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     },
     recover: () => runtime.recover(),
     async shutdown() {
+      // A graceful shutdown interrupts agents (they come back): nothing of theirs is swept.
+      processes?.dispose();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
       reports.dispose();
@@ -418,6 +440,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       transcripts.dispose();
     },
     async dispose() {
+      processes?.dispose();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
       reports.dispose();

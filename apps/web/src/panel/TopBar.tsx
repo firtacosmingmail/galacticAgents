@@ -11,19 +11,24 @@ import { summaryOf } from '../state/reduce.js';
 import { HARMONIZER } from '../state/selection.js';
 import type { SceneControl } from '../scene/visibility.js';
 import type { ManagedAgentsControl } from './managed-agents-visibility.js';
+import type { InboxControl } from './inbox-visibility.js';
 import { waitingForUserCount } from './inbox-model.js';
 import { Beacon, NavLink } from './Navigation.js';
 import { NotificationsControl, NotificationsDisclosure } from './notifications/index.js';
 import { COMPACT_TOP_BAR_QUERY, useMediaQuery } from './use-media-query.js';
 
+import { revealInbox } from './inbox-reveal.js';
+
 /** The inbox section's id, for the compact bar's "waiting for you" button (P3-12). */
-export const INBOX_ID = 'pnl-inbox';
+export { INBOX_ID } from './inbox-reveal.js';
 const MENU_ID = 'pnl-top-menu';
 
 interface TopBarProps {
   scene: SceneControl;
   /** The managed-agents section's visibility (P4-09); absent, no toggle shows. */
   agents?: ManagedAgentsControl;
+  /** The inbox's visibility (P4-12); absent, no toggle shows. */
+  inbox?: InboxControl;
   onForget?: () => void;
 }
 
@@ -38,13 +43,28 @@ export function TopBar(props: TopBarProps) {
   return compact ? <CompactTopBar {...props} /> : <WideTopBar {...props} />;
 }
 
-function WideTopBar({ scene, agents, onForget }: TopBarProps) {
+/**
+ * The "N waiting for you" button's action: back to the panel if another page shows, then the
+ * inbox — shown again if it was hidden (P4-12) — scrolled into view and focused.
+ */
+function useOpenInbox(): () => void {
+  const route = useAppStore((s) => s.route);
+  const selection = useAppStore((s) => s.selection);
+  const navigate = useAppStore((s) => s.navigate);
+  return () => {
+    if (route !== 'panel') navigate({ route: 'panel', selection });
+    revealInbox();
+  };
+}
+
+function WideTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
   const status = useAppStore((s) => s.status);
   const route = useAppStore((s) => s.route);
   const selection = useAppStore((s) => s.selection);
   const world = useAppStore((s) => s.world);
   const summary = summaryOf(world);
   const waiting = waitingForUserCount(world);
+  const openInbox = useOpenInbox();
   return (
     <header className="pnl-top">
       <NavLink to={{ route: 'panel', selection: HARMONIZER }} className="pnl-brand">
@@ -54,7 +74,16 @@ function WideTopBar({ scene, agents, onForget }: TopBarProps) {
         {status.replace(/_/g, ' ')}
       </span>
       <span className="pnl-top-counts" aria-label="summary">
-        {waiting > 0 && <Beacon>{waiting} waiting for you</Beacon>}
+        {waiting > 0 && (
+          <button
+            type="button"
+            className="pnl-top-waiting pnl-top-waiting-wide"
+            title="Open the inbox"
+            onClick={openInbox}
+          >
+            <Beacon>{waiting} waiting for you</Beacon>
+          </button>
+        )}
         <span>{summary.openQuestions} open questions</span>
         <span>{summary.blockedItems} blocked</span>
       </span>
@@ -62,6 +91,7 @@ function WideTopBar({ scene, agents, onForget }: TopBarProps) {
       <SceneToggle scene={scene} />
       {/* Hiding is the column header's button; the bar brings the section back (P4-09). */}
       {agents && !agents.visible && <ManagedAgentsToggle agents={agents} />}
+      {inbox && !inbox.visible && <InboxToggle inbox={inbox} />}
       <NotificationsControl />
       <NavLink
         to={{ route: 'history', selection }}
@@ -89,30 +119,14 @@ function WideTopBar({ scene, agents, onForget }: TopBarProps) {
   );
 }
 
-/**
- * Scrolls the inbox into view and focuses it, once it is mounted: from the settings or history
- * page the panel first navigates back to the main view, whose columns may wait for the settings
- * read (P25-08's gate), so this looks for the inbox over a few frames. While the first-run wizard
- * shows, the inbox never mounts: it gives up after about a second, having still navigated home.
- */
-function revealInbox(triesLeft = 60) {
-  const inbox = document.getElementById(INBOX_ID);
-  if (inbox) {
-    inbox.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
-    inbox.focus({ preventScroll: true });
-    return;
-  }
-  if (triesLeft > 0) requestAnimationFrame(() => revealInbox(triesLeft - 1));
-}
-
-function CompactTopBar({ scene, agents, onForget }: TopBarProps) {
+function CompactTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
   const status = useAppStore((s) => s.status);
   const route = useAppStore((s) => s.route);
   const selection = useAppStore((s) => s.selection);
-  const navigate = useAppStore((s) => s.navigate);
   const world = useAppStore((s) => s.world);
   const summary = summaryOf(world);
   const waiting = waitingForUserCount(world);
+  const reveal = useOpenInbox();
   const statusText = status.replace(/_/g, ' ');
 
   const [open, setOpen] = useState(false);
@@ -174,14 +188,14 @@ function CompactTopBar({ scene, agents, onForget }: TopBarProps) {
   const onMenuClick = (e: ReactMouseEvent<HTMLDivElement>) => {
     const item = (e.target as HTMLElement).closest('a, button');
     if (!item || item.closest('.ntf-disclosure')) return;
-    // Links, and the buttons marked `data-closes-menu` (the scene and managed-agents toggles).
+    // Links, and the buttons marked `data-closes-menu` (the scene, managed-agents and inbox
+    // toggles).
     if (item.hasAttribute('data-closes-menu') || item.tagName === 'A') close(true);
   };
 
   const openInbox = () => {
     setOpen(false);
-    if (route !== 'panel') navigate({ route: 'panel', selection });
-    revealInbox();
+    reveal();
   };
 
   return (
@@ -241,6 +255,7 @@ function CompactTopBar({ scene, agents, onForget }: TopBarProps) {
             </p>
             <SceneToggle scene={scene} />
             {agents && <ManagedAgentsToggle agents={agents} />}
+            {inbox && <InboxToggle inbox={inbox} />}
             <NotificationsDisclosure />
             <NavLink
               to={{ route: 'history', selection }}
@@ -321,6 +336,23 @@ function ManagedAgentsToggle({ agents }: { agents: ManagedAgentsControl }) {
       onClick={() => agents.setVisible(!agents.visible)}
     >
       {agents.visible ? 'Hide managed agents' : 'Show managed agents'}
+    </button>
+  );
+}
+
+/**
+ * Shows or hides the side column's inbox (P4-12), like the managed agents: the wide bar offers it
+ * only while the inbox is hidden (its header hides it); the phone menu always does.
+ */
+function InboxToggle({ inbox }: { inbox: InboxControl }) {
+  return (
+    <button
+      type="button"
+      className="pnl-scene-toggle pnl-inbox-toggle"
+      data-closes-menu=""
+      onClick={() => inbox.setVisible(!inbox.visible)}
+    >
+      {inbox.visible ? 'Hide inbox' : 'Show inbox'}
     </button>
   );
 }

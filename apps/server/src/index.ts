@@ -59,6 +59,8 @@ const composed = composeRuntime(db, {
   caps: config.caps,
   // Finished work past decision 4's retention period is archived hourly (P2-13).
   archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
+  // Stewards' leftover processes (P4-14): attributed from the supervisor's process groups.
+  processes: { groups: supervisor },
 });
 const { log, statuses, transcripts } = composed;
 // The settings page (P25-01): caps and retention apply live through the runtime and the job.
@@ -151,6 +153,7 @@ const app = buildApp({
   transcripts,
   runtime: composed.runtime,
   commands: composed.commands,
+  ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
   scenarios: () => fake.scenarioNames(),
   logger: process.env['GALACTIC_LOG'] !== 'silent',

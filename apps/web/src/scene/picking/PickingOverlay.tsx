@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useCameraStore } from '../camera/store.js';
 import { SatelliteHoverCard } from './SatelliteHoverCard.js';
+import { BeaconHoverCard } from '../beacons/BeaconHoverCard.js';
 import {
   activateBody,
   activateSatellite,
@@ -22,7 +23,8 @@ import './picking.css';
  *
  * Over a satellite (P4-08) the hover label is its agent's card instead (`SatelliteHoverCard`), and
  * the "what's here" list names the satellites under the pointer (by their agent) before the
- * bodies; choosing one selects that agent.
+ * bodies; choosing one selects that agent. Over a question beacon (P4-05) it is the beacon's
+ * question card (`BeaconHoverCard`).
  *
  * A body's info card opens at the click and, once the camera lands on that body, moves to the
  * scene's centre where the body now is (the same place `Enter` opens it).
@@ -43,7 +45,8 @@ export function PickingOverlay() {
           others={hover.others}
         />
       )}
-      {hover && hover.kind !== 'satellite' && !popover && (
+      {hover?.kind === 'beacon' && !popover && <BeaconHoverCard questionId={hover.questionId} />}
+      {hover && hover.kind !== 'satellite' && hover.kind !== 'beacon' && !popover && (
         <BodyHoverLabel name={hover.name} others={hover.others} />
       )}
       {popover && <PickPopover popover={popover} />}

@@ -16,6 +16,7 @@ import type { Id } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { getAnchor, onAnchorsChanged } from '../anchors.js';
 import { useCameraStore } from '../camera/store.js';
+import { PLACE_SATELLITES } from '../frame-order.js';
 import { DECOR_LAYER } from '../layers.js';
 import { motionSeconds, useReducedMotion } from '../motion.js';
 import type { Vec3Tuple } from '../orbit.js';
@@ -36,8 +37,16 @@ import {
   bodyMatrix,
   satelliteGeometry,
 } from './satellite-mesh.js';
-import { sameSatellites, satelliteList, type SatelliteSpec } from './satellite-model.js';
-import { onSatellitesChanged, satelliteIds } from './registry.js';
+import {
+  sameSatellites,
+  SCENE_SATELLITES,
+  satelliteList,
+  type SatelliteSpec,
+} from './satellite-model.js';
+import { getSatellite, onSatellitesChanged, satelliteIds } from './registry.js';
+import { HqStation, HqTargets, writeHq } from './hq/HqStation.js';
+import { ordinarySatellites } from './hq/hq-model.js';
+import { useHeldArchetypes } from './activity/use-held-archetypes.js';
 
 /**
  * The satellites (P4-01; SPEC §4.1, TECHNOLOGY §2.1): one per live Waykeeper and Steward, orbiting
@@ -49,8 +58,14 @@ import { onSatellitesChanged, satelliteIds } from './registry.js';
  *
  * Two render paths (corner case 21): up to the tier's `instanceAbove` satellites, a mesh pair each
  * (the satellite and its beam, the beam hidden between scans); above it, one instanced mesh for
- * all satellites and one for all beams — two draw calls whatever the count. Everything is on the
+ * all satellites and one for the beams being drawn — at most two draw calls whatever the count (the
+beam mesh holds only the scanning satellites' beams and is hidden when none scans). Everything is on the
  * decorations' layer (`DECOR_LAYER`), so the selection outline's depth pass skips it (P3-08).
+ *
+ * P4-02: the list keeps failed agents and adds the Harmonizer's HQ station (`SCENE_SATELLITES`);
+ * every frame carries its state's tint and pulse (`look.ts`), copied here into the material or
+ * instance colour (no extra draw call). The HQ is the Harmonizer's frame drawn with its own model
+ * (`hq/HqStation.tsx`, outside the instancing), written in this same frame loop.
  *
  * Under `prefers-reduced-motion` the satellites stand still on their orbits and never scan; the
  * frame loop is then on demand, so a change of satellites, of anchors or of the scale asks for one
@@ -63,9 +78,10 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
   const tasks = useAppStore((s) => s.world.tasks);
   const projects = useAppStore((s) => s.world.projects);
   const list = useMemo(
-    () => satelliteList({ agents, statuses, tasks, projects }),
+    () => satelliteList({ agents, statuses, tasks, projects }, SCENE_SATELLITES),
     [agents, statuses, tasks, projects],
   );
+  const held = useHeldArchetypes(list); // P4-03: Steward archetypes, held against flicker
   const reducedMotion = useReducedMotion();
   const invalidate = useThree((s) => s.invalidate);
 
@@ -81,11 +97,11 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
   // The director keeps its actors across list changes; only a real change reaches it.
   const applied = useRef<SatelliteSpec[]>([]);
   useLayoutEffect(() => {
-    if (sameSatellites(applied.current, list)) return;
-    applied.current = list;
-    director.setSpecs(list, motionSeconds());
+    if (sameSatellites(applied.current, held)) return;
+    applied.current = held;
+    director.setSpecs(held, motionSeconds());
     invalidate();
-  }, [director, list, invalidate]);
+  }, [director, held, invalidate]);
   // Unmount forgets everything, and so does StrictMode's rehearsed unmount — which re-runs the
   // layout effect above next, so `applied` must forget too or the satellites never come back.
   useEffect(
@@ -99,7 +115,11 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
 
   // What is drawn is what the director publishes: the live satellites and those shrinking out.
   const agentIds = useSyncExternalStore(onSatellitesChanged, satelliteIds);
-  const instanced = instancedPath(agentIds.length, quality.satellites);
+  const { hq: hqId, others } = useMemo(
+    () => ordinarySatellites(agentIds, (id) => getSatellite(id)?.role),
+    [agentIds],
+  );
+  const instanced = instancedPath(others.length, quality.satellites);
   const bloom = quality.bloom !== null;
 
   const shapes = useMemo(() => ({ body: satelliteGeometry(), beam: beamGeometry() }), []);
@@ -107,6 +127,8 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
 
   const [targets] = useState(() => new RenderTargets());
   const [pixels] = useState(() => new PixelSizer());
+  const [hq] = useState(() => new HqTargets());
+  const hqState = list.find((s) => s.role === 'harmonizer')?.state;
 
   useFrame((state) => {
     pixels.follow(state.camera as PerspectiveCamera, state.size.height);
@@ -118,22 +140,32 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
     );
     if (instanced) writeInstanced(frames, targets, bloom);
     else writeMeshes(frames, targets, bloom);
-  });
+    writeHq(frames, hq, { bloom, now: motionSeconds(), reducedMotion, state: hqState });
+  }, PLACE_SATELLITES);
 
   if (agentIds.length === 0) return null;
-  return instanced ? (
-    <InstancedSatellites
-      key={instanceCapacity(agentIds.length)}
-      capacity={instanceCapacity(agentIds.length)}
-      shapes={shapes}
-      targets={targets}
-    />
-  ) : (
-    <group name="satellites">
-      {agentIds.map((id) => (
-        <SatelliteMeshes key={id} agentId={id} shapes={shapes} targets={targets} />
-      ))}
-    </group>
+  const station = hqId ? (
+    <HqStation key={hqId} agentId={hqId} beamShape={shapes.beam} targets={hq} />
+  ) : null;
+  if (others.length === 0) return station;
+  return (
+    <>
+      {station}
+      {instanced ? (
+        <InstancedSatellites
+          key={instanceCapacity(others.length)}
+          capacity={instanceCapacity(others.length)}
+          shapes={shapes}
+          targets={targets}
+        />
+      ) : (
+        <group name="satellites">
+          {others.map((id) => (
+            <SatelliteMeshes key={id} agentId={id} shapes={shapes} targets={targets} />
+          ))}
+        </group>
+      )}
+    </>
   );
 }
 
@@ -143,7 +175,7 @@ interface MeshPair {
 }
 
 /** Where the frame loop writes: the per-satellite meshes, or the two instanced meshes. */
-class RenderTargets {
+export class RenderTargets {
   readonly meshes = new Map<Id, MeshPair>();
   bodies: InstancedMesh | null = null;
   beams: InstancedMesh | null = null;
@@ -228,24 +260,35 @@ function writeMeshes(
   }
 }
 
-function writeInstanced(
+/**
+ * The instanced path: every ordinary satellite is a body instance (`n`); only the beams being
+ * drawn — visible and scanning — are beam instances (`m`), so between scans the beam mesh draws
+ * nothing and is skipped (`visible = false`: no draw call, no zero-scaled cones).
+ */
+export function writeInstanced(
   frames: readonly SatelliteFrame[],
-  targets: RenderTargets,
+  targets: Pick<RenderTargets, 'bodies' | 'beams'>,
   bloom: boolean,
 ): void {
   const { bodies, beams } = targets;
   if (!bodies || !beams) return;
-  const n = Math.min(frames.length, bodies.instanceMatrix.count);
-  for (let i = 0; i < n; i++) {
-    const f = frames[i];
-    if (!f) continue;
-    bodies.setMatrixAt(i, bodyMatrix(f, matrix));
-    bodies.setColorAt(i, bodyColor(f, color));
-    beams.setMatrixAt(i, beamMatrix(f, matrix));
-    beams.setColorAt(i, beamColor(f, bloom, color));
+  const capacity = bodies.instanceMatrix.count;
+  let n = 0;
+  let m = 0;
+  for (const f of frames) {
+    if (n >= capacity) break;
+    if (f.role === 'harmonizer') continue; // the HQ station has its own meshes
+    bodies.setMatrixAt(n, bodyMatrix(f, matrix));
+    bodies.setColorAt(n, bodyColor(f, color));
+    n++;
+    if (!f.visible || f.beam <= 0) continue;
+    beams.setMatrixAt(m, beamMatrix(f, matrix));
+    beams.setColorAt(m, beamColor(f, bloom, color));
+    m++;
   }
   bodies.count = n;
-  beams.count = n;
+  beams.count = m;
+  beams.visible = m > 0;
   bodies.instanceMatrix.needsUpdate = true;
   beams.instanceMatrix.needsUpdate = true;
   if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true;

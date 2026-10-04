@@ -288,6 +288,7 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'agent.stopped':
     case 'agent.interrupted':
     case 'recovery.needs_attention': // a notification (P25-07), not world state
+    case 'agent.processes_stopped': // OS processes are not world state (P4-14)
       return next;
     case 'agent.output':
       return next; // transcript traffic never reaches this stream
