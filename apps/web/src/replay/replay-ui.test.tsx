@@ -172,6 +172,27 @@ describe('timeline scrubber UI (P4-07)', () => {
     expect(bar()).toBeNull();
   });
 
+  it('Replay from history, then Escape: the focus lands on the main heading (P5-04 review)', async () => {
+    await open('/history');
+    const replay = await screen.findByRole('button', { name: 'Replay' });
+    replay.focus();
+    await act(async () => {
+      fireEvent.click(replay);
+    });
+    await vi.waitFor(() => expect(bar()).toBeTruthy());
+    // The history page unmounted with its button, so the bar found no opener (the body). The user
+    // tabs into the bar and presses Escape there: the focus must not be dropped on the body.
+    const play = within(bar()!).getByRole('button', { name: 'Play' });
+    play.focus();
+    act(() => {
+      fireEvent.keyDown(play, { key: 'Escape' });
+    });
+    expect(bar()).toBeNull();
+    const heading = document.querySelector<HTMLElement>('.pnl-body main h1');
+    expect(heading).toBeTruthy();
+    expect(document.activeElement).toBe(heading);
+  });
+
   it('Escape exits from anywhere on the page, after fields, dialogs and menus (review S4)', async () => {
     await open('/history');
     const replay = await screen.findByRole('button', { name: 'Replay' });
