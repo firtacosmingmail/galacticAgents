@@ -41,6 +41,7 @@ function classify(
     case 'agent.failed':
     case 'agent.stopped':
     case 'agent.interrupted':
+    case 'agent.processes_stopped':
       return 'agent';
     case 'message.sent':
     case 'message.delivered':
@@ -103,7 +104,8 @@ describe('event schemas', () => {
   });
 
   it('agent.* events about a running agent are AgentEvents; the row events and the rest are not', () => {
-    const rowEvents = new Set(['agent.created', 'agent.updated']);
+    // The server's own agent.* events (rows, process cleanup, P4-14) never come from an adapter.
+    const rowEvents = new Set(['agent.created', 'agent.updated', 'agent.processes_stopped']);
     for (const type of EVENT_TYPES) {
       const ok = AgentEvent.safeParse(events[type]).success;
       expect(ok, type).toBe(type.startsWith('agent.') && !rowEvents.has(type));

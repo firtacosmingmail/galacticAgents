@@ -11,6 +11,7 @@ import {
   TrustLevel,
 } from './domain.js';
 import { ControlTarget } from './events.js';
+import { Timestamp } from './primitives.js';
 
 // ---------------------------------------------------------------------------
 // The small REST control surface (TECHNOLOGY §2.2; the ops console of P1-11). Results arrive on
@@ -176,3 +177,55 @@ export type ControlResponse = z.infer<typeof ControlResponse>;
 // is a `ProposalDecision` once its `undefined` edit fields are dropped (the route does).
 const _controlAction: (b: ControlBody['action']) => ControlActionType = (b) => b;
 void _controlAction;
+
+// ---------------------------------------------------------------------------
+// A Steward's processes (P4-14; SPEC decision 53, TECHNOLOGY §2.2 "Process cleanup")
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a process counts as the Steward's: a member of its CLI's process group (`group`), a
+ * descendant of one (`descendant`: escaped with `setsid`, still a child), or an orphan started
+ * during the Steward's session whose working directory is inside the task's worktree (`worktree`).
+ */
+export const ProcessAttribution = z.enum(['group', 'descendant', 'worktree']);
+export type ProcessAttribution = z.infer<typeof ProcessAttribution>;
+
+/** One process attributed to a Steward. `command` is clipped and redacted. */
+export const StewardProcess = z.object({
+  pid: z.number().int().positive(),
+  ppid: z.number().int().nonnegative(),
+  command: z.string(),
+  /** The working directory, when the platform could tell. */
+  cwd: z.string().optional(),
+  /** TCP ports it listens on. */
+  ports: z.array(z.number().int().positive()),
+  startedAt: Timestamp,
+  why: ProcessAttribution,
+});
+export type StewardProcess = z.infer<typeof StewardProcess>;
+
+/**
+ * `GET /api/agents/:id/processes`: the Steward's processes still running (its own CLI excluded
+ * while it runs). `supported: false` on a platform the server cannot inspect (no `ps`).
+ */
+export const StewardProcessesResponse = z.object({
+  agentId: z.string().min(1),
+  supported: z.boolean(),
+  processes: z.array(StewardProcess),
+});
+export type StewardProcessesResponse = z.infer<typeof StewardProcessesResponse>;
+
+/** `POST /api/agents/:id/processes/stop`: these pids (all attributable), or all of them. */
+export const StopProcessesBody = z.object({
+  pids: z.array(z.number().int().positive()).min(1).optional(),
+});
+export type StopProcessesBody = z.infer<typeof StopProcessesBody>;
+
+/** What a stop did: `stopped` ended (SIGTERM or SIGKILL), `forced` needed SIGKILL, `alive` survived. */
+export const StopProcessesResponse = z.object({
+  agentId: z.string().min(1),
+  stopped: z.array(z.number().int().positive()),
+  forced: z.array(z.number().int().positive()),
+  alive: z.array(z.number().int().positive()),
+});
+export type StopProcessesResponse = z.infer<typeof StopProcessesResponse>;

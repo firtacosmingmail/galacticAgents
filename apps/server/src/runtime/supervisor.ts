@@ -2,6 +2,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { uptime } from 'node:os';
 import { basename } from 'node:path';
 import type { Actor, Id } from '@galactic/protocol';
+import type { AgentGroup } from './process-attribution.js';
 import { MemoryProcessStore, type ProcessRecord, type ProcessStore } from './process-store.js';
 
 /**
@@ -764,6 +765,41 @@ export class ProcessSupervisor {
   /** The persisted row for an agent (running, exited or interrupted). */
   processRecord(agentId: Id): ProcessRecord | undefined {
     return this.store.get(agentId);
+  }
+
+  /**
+   * The process groups agents got in this boot (P4-14): the anchors of process attribution. One
+   * per agent — its latest spawn (the PID table is keyed by agent) — with the leader's lifetime,
+   * so a member that started after the group ended (a recycled pgid) is not taken for one of its
+   * own. Rows from another boot are left out: their pids mean nothing now.
+   */
+  agentGroups(): AgentGroup[] {
+    const groups: AgentGroup[] = [];
+    for (const row of this.store.all()) {
+      if (row.pid === undefined || row.pid <= 1) continue;
+      if (typeof row.meta?.['bootAt'] !== 'string' || this.fromOtherBoot(row)) continue;
+      const startedAt = Date.parse(row.startedAt);
+      if (Number.isNaN(startedAt)) continue;
+      const live = this.procs.get(row.agentId);
+      const running = live !== undefined && live.state !== 'exited';
+      const endedAt = !running && row.endedAt ? Date.parse(row.endedAt) : NaN;
+      groups.push({
+        agentId: row.agentId,
+        pgid: row.pid,
+        startedAt,
+        ...(Number.isNaN(endedAt) ? {} : { endedAt }),
+      });
+    }
+    return groups;
+  }
+
+  /**
+   * Resolves once the agent's process is gone and its group reaped (P4-14: the safety-net sweep
+   * waits for the supervisor's own clean-up first); `undefined` when nothing of it runs here.
+   */
+  whenExited(agentId: Id): Promise<unknown> | undefined {
+    const managed = this.procs.get(agentId);
+    return managed && managed.state !== 'exited' ? managed.exited : undefined;
   }
 
   /** Stops every live process (graceful). */

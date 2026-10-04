@@ -11,6 +11,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
+import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import type { Workspaces } from '../workspace/workspaces.js';
 import type { WakeRules } from './wake.js';
 
@@ -74,6 +75,11 @@ export interface BrainToolContext {
    * refuse, and Stewards run in the project's workspace.
    */
   workspaces?: Workspaces;
+  /**
+   * A Steward's processes (P4-14): list and stop them. Present when the server was composed with
+   * the supervisor (`index.ts`; tests inject one). Absent: the process tools refuse.
+   */
+  processes?: StewardProcessControl;
 }
 
 export interface BrainTool {
