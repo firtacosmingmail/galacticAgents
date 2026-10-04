@@ -225,6 +225,6 @@ describe('parts (extension slots for P6-02…P6-05)', () => {
     ];
     expect(partsFor(earth, parts).map((p) => p.id)).toEqual(['overlay', 'hq']);
     expect(partsFor(jupiter, parts).map((p) => p.id)).toEqual(['overlay', 'cutaway']);
-    expect(partsFor(earth)).toEqual([]);
+    expect(partsFor(earth, [])).toEqual([]);
   });
 });

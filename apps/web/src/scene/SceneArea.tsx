@@ -23,6 +23,7 @@ import { activateBody, deselectFromScene, usePickingStore } from './picking/stor
 import { useSelectionSync } from './picking/sync.js';
 import { bodyAction } from './picking/body-action.js';
 import { useDetailStore } from './detail/mode.js';
+import { CutawayLabels } from './detail/cutaway/CutawayToggle.js';
 import { sceneWorld, useAppStore } from '../state/store.js';
 import { selectionKey } from '../state/selection.js';
 import './scene.css';
@@ -57,7 +58,8 @@ export function useQualityTier(): QualityTier | undefined {
  *
  * Labels (P3-07): the domain labels' layer (`LabelLayer`) sits over the canvas, under the scene
  * chrome (fps meter, breadcrumb, scale toggle) and picking's hover label and popover — the
- * stacking order is in `scene.css`; the projector inside the canvas positions it.
+ * stacking order is in `scene.css`; the projector inside the canvas positions it. The cutaway's
+ * layer labels (P6-03, `CutawayLabels`) share that slot.
  *
  * Legend (P4-02): what the satellites' colours and pulses mean, top-right, collapsible.
  */
@@ -86,6 +88,7 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
         </Suspense>
       </SceneErrorBoundary>
       <LabelLayer />
+      <CutawayLabels />
       <PickingOverlay />
       <CameraBreadcrumb />
       {showFps && <FpsMeter sample={sample} tier={quality.tier} />}

@@ -1,0 +1,42 @@
+/*
+ * The cutaway's layer labels (P6-03): a colour swatch and the layer's name on the same dark pill
+ * as the domain labels, in their stacking slot (over the canvas, under the scene chrome — see
+ * scene.css). Positions, visibility and opacity are written by the cutaway part, never here.
+ */
+.scene-cutaway-labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: var(--scene-z-labels);
+}
+.scene-cutaway-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px 2px 4px;
+  border: 1px solid rgba(120, 140, 190, 0.35);
+  border-radius: 5px;
+  background: rgba(6, 9, 20, 0.78);
+  color: #eef2fb;
+  font:
+    11px/1.3 system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  will-change: transform;
+}
+.scene-cutaway-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  flex: none;
+}
