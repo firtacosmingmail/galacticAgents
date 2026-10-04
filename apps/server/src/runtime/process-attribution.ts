@@ -2,7 +2,7 @@ import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { Id, ProcessAttribution } from '@galactic/protocol';
 
 /**
- * Which OS processes belong to a Steward (P4-14; SPEC decision 53; TECHNOLOGY §2.2 "Process
+ * Which OS processes belong to a Steward (P4-14; SPEC decision pending; TECHNOLOGY §2.2 "Process
  * cleanup"). Pure: it works on a snapshot of the process table (`ProcEntry[]`, from `ps`) and the
  * process groups the supervisor started (`AgentGroup[]`, from its PID table), and asks for working
  * directories only of the few processes the worktree rule needs. The OS layer is
@@ -147,7 +147,10 @@ export async function attribute(input: AttributionInput): Promise<AttributedProc
   const server = serverTree(procs, self.pid);
   const inWindow = (p: ProcEntry) =>
     p.startedAt >= window.start - START_SLACK_MS && p.startedAt <= window.end + START_SLACK_MS;
+  // A server that is itself pid 1 (a container) reaps orphans: its children are its own, never
+  // orphans of the Steward's — rule 5 is then off, which is the safe side.
   const parentIsReaper = (p: ProcEntry) => {
+    if (server.has(p.ppid)) return false;
     const parent = byPid.get(p.ppid);
     return p.ppid <= 1 || (parent !== undefined && isReaper(parent));
   };

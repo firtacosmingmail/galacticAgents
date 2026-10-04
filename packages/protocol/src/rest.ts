@@ -179,7 +179,7 @@ const _controlAction: (b: ControlBody['action']) => ControlActionType = (b) => b
 void _controlAction;
 
 // ---------------------------------------------------------------------------
-// A Steward's processes (P4-14; SPEC decision 53, TECHNOLOGY §2.2 "Process cleanup")
+// A Steward's processes (P4-14; SPEC decision pending, TECHNOLOGY §2.2 "Process cleanup")
 // ---------------------------------------------------------------------------
 
 /**

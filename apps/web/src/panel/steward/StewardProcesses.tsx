@@ -6,7 +6,7 @@ import { ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js'
 export const PROCESSES_REFRESH_MS = 15_000;
 
 /**
- * A Steward's leftover processes in its view (P4-14; SPEC decision 53): "N processes still
+ * A Steward's leftover processes in its view (P4-14; SPEC decision pending): "N processes still
  * running", the list on demand, and a Stop (with a confirmation) that stops them all through
  * `POST /api/agents/:id/processes/stop`. Read from `GET /api/agents/:id/processes` when the view
  * opens, when the Steward's state changes, and every `PROCESSES_REFRESH_MS`. Shows nothing while

@@ -264,7 +264,7 @@ export function registerAgentRoutes(
     });
 
     /**
-     * A Steward's processes (P4-14; SPEC decision 53): what attribution gives it now (its own CLI
+     * A Steward's processes (P4-14; SPEC decision pending): what attribution gives it now (its own CLI
      * left out while it runs), and the user's stop — of the given pids, every one of which must
      * be attributable (400 otherwise, nothing signalled), or of all of them. 404 for an unknown
      * agent, 400 for an agent that is not a Steward.

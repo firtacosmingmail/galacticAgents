@@ -205,6 +205,20 @@ describe('process attribution (P4-14)', () => {
     expect(await pids(input(procs, { exclude: new Set([200]) }))).toEqual([]);
   });
 
+  it('a server that is pid 1 (a container init) never has its children taken for orphans', async () => {
+    const procs = [
+      p(1, 0, { command: 'node server', at: T0 - 60 * S }),
+      p(200, 1, { pgid: 200, at: T0 + S, command: 'claude' }),
+      p(400, 1, { pgid: 400, command: 'git merge' }), // the server's own git, in the worktree
+    ];
+    const i = input(procs, {
+      self: { pid: 1, uid: UID },
+      cwdOf: () => new Map([[400, WT]]),
+      exclude: new Set([200]),
+    });
+    expect(await pids(i)).toEqual([]);
+  });
+
   it('a pgid two agents could claim is nobody’s', async () => {
     const procs = world(p(201, 1, { pgid: 200 }));
     const groups: AgentGroup[] = [...GROUPS, { agentId: 'a-x', pgid: 200, startedAt: T0 }];

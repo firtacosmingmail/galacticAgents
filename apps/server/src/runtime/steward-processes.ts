@@ -25,7 +25,7 @@ import { redactSecrets } from './redact.js';
 import type { StatusStore } from './status-store.js';
 
 /**
- * A Steward's processes (P4-14; SPEC decision 53; TECHNOLOGY §2.2 "Process cleanup"): what the
+ * A Steward's processes (P4-14; SPEC decision pending; TECHNOLOGY §2.2 "Process cleanup"): what the
  * Waykeeper's (and the Harmonizer's) `list_steward_processes` / `stop_steward_processes` tools and
  * the panel's Steward view read and stop, and the server's safety-net sweep.
  *

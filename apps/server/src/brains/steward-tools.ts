@@ -81,7 +81,7 @@ export const tellStewardTool: BrainTool = {
 };
 
 /**
- * A Steward's processes (P4-14; SPEC decision 53): the dev servers, watchers and headless browsers
+ * A Steward's processes (P4-14; SPEC decision pending): the dev servers, watchers and headless browsers
  * it started and left running. Its supervisor lists them and stops the leftovers before it merges
  * or closes the task, and when the Steward stopped or failed; the server sweeps what is left when
  * the Steward ends or its task closes, as a safety net. Reach: the caller's own Stewards (direct
