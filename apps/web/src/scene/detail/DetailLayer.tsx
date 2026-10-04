@@ -14,6 +14,7 @@ import {
   zoomStep,
   type DetailState,
 } from './mode.js';
+import { useDetailTextureBudget } from './visuals/detail-textures.js';
 
 /**
  * The detail view inside the canvas (P6-01; the rules in `mode.ts`): mounts the sub-scene of the
@@ -28,10 +29,16 @@ import {
  *
  * Unmounting the canvas (the scene hidden, a tier switch that recreates the context, a lost
  * context) puts the mode back to the system view at once, like the camera rig releasing its focus.
+ *
+ * The detail texture budget (P6-02, `useDetailTextureBudget`) lives here, not in `DetailScene`:
+ * this layer lives as long as the canvas, so a level left idle (the view exited, another body
+ * shown) stays cached within the tier's budget and re-entering does not repaint it; idle levels
+ * all go on a tier change and when the canvas (its GL context) goes.
  */
 export function DetailLayer({ quality, sunRadius }: { quality: SceneQuality; sunRadius: number }) {
   const shown = useDetailStore((s) => s.shown);
   const invalidate = useThree((s) => s.invalidate);
+  useDetailTextureBudget(quality.tier);
   const [scratch] = useState(() => ({
     at: [0, 0, 0] as [number, number, number],
     eye: [0, 0, 0] as [number, number, number],

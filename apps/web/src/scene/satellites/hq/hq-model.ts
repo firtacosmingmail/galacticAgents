@@ -63,3 +63,26 @@ export function ordinarySatellites(
   }
   return { hq, others };
 }
+
+/**
+ * P6-05: a more detailed station may take over drawing the HQ (Earth's detail view,
+ * `detail/earth-hq/`). While claimed, `writeHq` hides the system station's core and ring (never
+ * both stations at once), but the Harmonizer's frame stays published, so picking, the hover card
+ * and the beam (still drawn by `writeHq`) are unchanged. `claimHqStation()` returns the release;
+ * claims count (a StrictMode remount claims twice and releases once before claiming again).
+ */
+let claims = 0;
+export function claimHqStation(): () => void {
+  claims++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    claims--;
+  };
+}
+
+/** Whether a detail station draws the HQ now (`claimHqStation`). */
+export function hqClaimed(): boolean {
+  return claims > 0;
+}

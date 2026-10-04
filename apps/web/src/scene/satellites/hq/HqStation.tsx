@@ -11,7 +11,7 @@ import { DECOR_LAYER } from '../../layers.js';
 import type { SatelliteFrame } from '../director.js';
 import { beamColor, beamMatrix, bodyColor, bodyMatrix } from '../satellite-mesh.js';
 import { hqCoreGeometry, hqRingGeometry, hqRingMatrix } from './hq-mesh.js';
-import { hqFrame, hqRingSpeed, RingSpin } from './hq-model.js';
+import { hqClaimed, hqFrame, hqRingSpeed, RingSpin } from './hq-model.js';
 
 /**
  * The Harmonizer's HQ station (P4-02): its core, its turning ring and its beam (shown while it
@@ -19,6 +19,8 @@ import { hqFrame, hqRingSpeed, RingSpin } from './hq-model.js';
  * satellites' frame loop (`writeHq`, called from `Satellites.tsx` right after the director's
  * update), so the station is never a frame behind its own published frame (picking, hover card).
  * Three draw calls at most (two between scans). On `DECOR_LAYER` like the satellites.
+ * In Earth's detail view the core and ring give way to the detailed station (P6-05,
+ * `detail/earth-hq/`, `claimHqStation`); only the beam is still drawn here then.
  */
 export class HqTargets {
   core: Mesh | null = null;
@@ -48,8 +50,11 @@ export function writeHq(
   const { core, ring, beam } = targets;
   const f = hqFrame(frames);
   if (!f || !core || !ring) return;
-  core.visible = f.visible;
-  ring.visible = f.visible;
+  // P6-05: Earth's detail station draws the HQ while it is shown (`claimHqStation`); the beam
+  // stays drawn here.
+  const drawn = f.visible && !hqClaimed();
+  core.visible = drawn;
+  ring.visible = drawn;
   if (beam) beam.visible = f.visible && f.beam > 0;
   if (!f.visible) return;
   bodyMatrix(f, core.matrix);

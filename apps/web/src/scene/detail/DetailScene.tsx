@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from 'react';
 import { useFrame } from '@react-three/fiber';
 import {
@@ -42,6 +43,14 @@ import { backdropRadius, resolveDetailBody, type DetailBody } from './detail-bod
 import { detailMix, useDetailStore } from './mode.js';
 import { partsFor } from './parts.js';
 import { registerStandIn } from './stand-ins.js';
+import { detailTier } from './visuals/budget.js';
+import {
+  Atmosphere,
+  Clouds,
+  DetailSurfaceMaterial,
+  usePlanetshine,
+} from './visuals/DetailVisuals.js';
+import { detailLook } from './visuals/looks.js';
 
 /**
  * The detail view's sub-scene (P6-01): a separate tree of meshes, mounted while a body is shown in
@@ -55,12 +64,19 @@ import { registerStandIn } from './stand-ins.js';
  * (`Bodies.tsx`, `Belt.tsx`: `shown`), and these register as the body's stand-ins for the selection
  * outline (`stand-ins.ts`).
  *
- * **Kinds.** One component per kind, a minimal first version each (P6-02 makes them rich):
- * `RockyPlanetDetail` and `GiantPlanetDetail` (the planet at its nearest LOD level's sphere and
- * maps — painted off the main thread, the far map until then —, its rings, its moons on their
- * orbits with their orbit lines, eclipse shading among them as in the system view),
- * `MoonDetail` (the moon at its nearest level, shaded by its planet and the large siblings) and
- * `AsteroidDetail` (the task asteroid's rock; its halo fades out with the cross-fade). Later parts plug in through `parts.ts`.
+ * **Kinds.** One component per kind: `RockyPlanetDetail` and `GiantPlanetDetail` (the planet, its
+ * rings, its moons on their orbits with their orbit lines, eclipse shading among them as in the
+ * system view), `MoonDetail` (the moon, shaded by its planet and the large siblings) and
+ * `AsteroidDetail` (the task asteroid's rock; its halo fades out with the cross-fade). Later parts
+ * plug in through `parts.ts`.
+ *
+ * **Visuals** (P6-02, `visuals/`): the shown planet or moon wears its **detail level** — a colour
+ * map beyond the LOD table (high 4096 for a planet, 2048 for a moon), a normal map derived from
+ * the same relief (Earth: on land only) and Earth's roughness map, painted in the worker and cached
+ * (`visuals/detail-textures.ts`); the nearest LOD level shows until it is ready. Its atmosphere
+ * glows at the limb (`Atmosphere`, one shared shader), Earth has clouds (`Clouds`), the rings are
+ * painted from their measured profile at the tier's ring width. The moons orbiting a planet keep
+ * their nearest level, lit by planetshine. Atmosphere and clouds fade in with the cross-fade.
  *
  * **Backdrop** (`backdrop.ts`): a dark sphere about the body, beyond its scope's bodies, fading in
  * over the system (transparent, blended over whatever is behind it); once the view has settled
@@ -152,16 +168,22 @@ interface PlanetDetailProps {
   planet: PlanetItem;
   quality: SceneQuality;
   sunRadius: number;
-  /** Drawn in the planet's tilted frame (P6-02: clouds, atmosphere). */
+  /** Drawn in the planet's tilted frame. */
   children?: ReactNode;
 }
 
-/** A rocky, Earth-like or cloudy planet (Mercury, Venus, Earth, Mars): P6-02 adds atmosphere, clouds. */
+/**
+ * A rocky, Earth-like or cloudy planet (Mercury, Venus, Earth, Mars): relief in the detail level's
+ * normal map, Earth's clouds and glossy oceans, Venus's thick glowing deck, Mars's thin pink haze.
+ */
 export function RockyPlanetDetail(props: PlanetDetailProps) {
   return <PlanetSystemDetail {...props} />;
 }
 
-/** A gas or ice giant (Jupiter, Saturn, Uranus, Neptune): P6-02 adds bands, ring detail. */
+/**
+ * A gas or ice giant (Jupiter, Saturn, Uranus, Neptune): bands and storms in the detail level's
+ * colour map (no relief), a faint glow, rings from their measured profile at detail resolution.
+ */
 export function GiantPlanetDetail(props: PlanetDetailProps) {
   return <PlanetSystemDetail {...props} />;
 }
@@ -193,6 +215,8 @@ const DEG = Math.PI / 180;
  */
 function PlanetSystemDetail({ planet, quality, sunRadius, children }: PlanetDetailProps) {
   const motion = motionEnabled(useReducedMotion());
+  const look = detailLook(planet.name);
+  const tier = detailTier(quality.tier);
   const standIn = useRef<Group>(null);
   const spin = useRef<Mesh>(null);
   const spheres = useNearSpheres(quality.lod);
@@ -220,23 +244,43 @@ function PlanetSystemDetail({ planet, quality, sunRadius, children }: PlanetDeta
           scale={planet.radius}
           onBeforeRender={eclipse.onBeforeRender}
         >
-          <SurfaceMaterial
+          <DetailSurfaceMaterial
             look={planet.look}
             kind="planet"
             quality={quality}
-            level={0}
+            detail={look}
             eclipse={eclipse}
           />
         </mesh>
+        {look.clouds && (
+          <Clouds
+            clouds={look.clouds}
+            radius={planet.radius}
+            sphere={spheres.planet}
+            quality={quality}
+            motion={motion}
+            eclipse={eclipse}
+            mix={currentMix}
+          />
+        )}
+        {look.atmosphere && (
+          <Atmosphere
+            atmosphere={look.atmosphere}
+            radius={planet.radius}
+            sphere={spheres.planet}
+            mix={currentMix}
+          />
+        )}
         {planet.look.rings && (
           <Rings
             rings={planet.look.rings}
             radius={planet.radius}
-            segments={quality.ringSegments}
+            segments={Math.max(quality.ringSegments, tier.ringSegments)}
             system={system}
             receiver={receivers.get(ringsId(planet.bodyId))}
             shadows={quality.shadows}
             sunRadius={sunRadius}
+            textureWidth={tier.ringTexture}
           />
         )}
         {planet.moons.map((moon) => (
@@ -249,6 +293,8 @@ function PlanetSystemDetail({ planet, quality, sunRadius, children }: PlanetDeta
             sunRadius={sunRadius}
             system={system}
             receiver={receivers.get(moon.bodyId)}
+            planet={planet}
+            planetMesh={spin}
           />
         ))}
         {children}
@@ -257,6 +303,11 @@ function PlanetSystemDetail({ planet, quality, sunRadius, children }: PlanetDeta
   );
 }
 
+/**
+ * A moon on its orbit in its planet's view, at its nearest LOD level (the detail level is only for
+ * the shown body), lit by planetshine (a faint uniform glow, `usePlanetshine`) and wearing its atmosphere if it has one
+ * (Titan).
+ */
 function OrbitingMoon({
   moon,
   motion,
@@ -265,6 +316,8 @@ function OrbitingMoon({
   sunRadius,
   system,
   receiver,
+  planet,
+  planetMesh,
 }: {
   moon: MoonItem;
   motion: boolean;
@@ -273,10 +326,14 @@ function OrbitingMoon({
   sunRadius: number;
   system: EclipseSystem;
   receiver: EclipseReceiver | undefined;
+  planet: PlanetItem;
+  planetMesh: RefObject<Mesh | null>;
 }) {
   const anchor = useRef<Group>(null);
   const mesh = useRef<Mesh>(null);
   const eclipse = useEclipse(system, receiver, quality.shadows, sunRadius);
+  const look = detailLook(moon.name);
+  usePlanetshine(mesh, () => planetMesh.current, planet.radius, planet.look.palette);
   useLayoutEffect(() => system.register(moon.bodyId, mesh.current), [system, moon.bodyId]);
   useEffect(() => registerStandIn(moon.bodyId, anchor.current), [moon.bodyId]);
   useOrbit(anchor, moon.distance, moon.phase, moon.period, motion);
@@ -298,15 +355,24 @@ function OrbitingMoon({
             eclipse={eclipse}
           />
         </mesh>
+        {look.atmosphere && (
+          <Atmosphere
+            atmosphere={look.atmosphere}
+            radius={moon.radius}
+            sphere={sphere}
+            mix={currentMix}
+          />
+        )}
       </group>
     </>
   );
 }
 
 /**
- * A moon on its own (P6-02 adds detail): the frame is the moon's anchor's, so the moon sits at the
- * origin. Its planet and siblings are the system's own meshes, inside the backdrop; their anchors
- * are the eclipse casters (only a caster's position is read).
+ * A moon on its own: the frame is the moon's anchor's, so the moon sits at the origin. Its planet
+ * and siblings are the system's own meshes, inside the backdrop; their anchors are the eclipse
+ * casters (only a caster's position is read) and the planet's anchor the source of planetshine.
+ * The moon wears its detail level (craters, maria, lineae in relief) and its atmosphere (Titan).
  */
 export function MoonDetail({
   moon,
@@ -322,7 +388,10 @@ export function MoonDetail({
   children?: ReactNode;
 }) {
   const standIn = useRef<Group>(null);
+  const mesh = useRef<Mesh>(null);
   const spheres = useNearSpheres(quality.lod);
+  const look = detailLook(moon.name);
+  usePlanetshine(mesh, () => getAnchor(parent.bodyId)?.object, parent.radius, parent.look.palette);
   const receiver = useMemo(
     () => eclipseReceivers(parent).find((r) => r.id === moon.bodyId),
     [parent, moon.bodyId],
@@ -338,15 +407,28 @@ export function MoonDetail({
   useEffect(() => registerStandIn(moon.bodyId, standIn.current), [moon.bodyId]);
   return (
     <group ref={standIn} name={`detail-moon:${moon.name}`} userData={{ bodyId: moon.bodyId }}>
-      <mesh geometry={spheres.moon} scale={moon.radius} onBeforeRender={eclipse.onBeforeRender}>
-        <SurfaceMaterial
+      <mesh
+        ref={mesh}
+        geometry={spheres.moon}
+        scale={moon.radius}
+        onBeforeRender={eclipse.onBeforeRender}
+      >
+        <DetailSurfaceMaterial
           look={moon.look}
           kind="moon"
           quality={quality}
-          level={0}
+          detail={look}
           eclipse={eclipse}
         />
       </mesh>
+      {look.atmosphere && (
+        <Atmosphere
+          atmosphere={look.atmosphere}
+          radius={moon.radius}
+          sphere={spheres.moon}
+          mix={currentMix}
+        />
+      )}
       {children}
     </group>
   );

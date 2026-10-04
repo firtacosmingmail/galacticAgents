@@ -277,6 +277,55 @@ describe('asynchronous painting', () => {
     await expect(second).rejects.toMatchObject({ name: 'AbortError' });
     await expect(first).resolves.toBeDefined();
   });
+
+  it('runs small jobs (near levels, clouds) before queued detail levels, never preempting the running one', async () => {
+    setPaintWorkerFactoryForTest(FakePaintWorker.factory('hold'));
+    try {
+      const look = MOON_LOOKS['Io']!;
+      const detail = (width: number) =>
+        ({
+          kind: 'detail',
+          look,
+          width,
+          height: width / 2,
+          normal: false,
+          roughness: false,
+          normalStrength: 0,
+        }) as const;
+      const order: string[] = [];
+      const track = (name: string, p: Promise<unknown>) => p.then(() => order.push(name));
+      const done = [
+        track('detail-a', paintAsync(detail(16))), // starts at once (the worker was idle)
+        track('detail-b', paintAsync(detail(16))),
+        track('near', paintAsync({ look, width: 8, height: 4, detail: false })),
+        track(
+          'clouds',
+          paintAsync({
+            kind: 'clouds',
+            clouds: { seed: 1, coverage: 0.5, opacity: 1, drift: 0, altitude: 0.01 },
+            width: 8,
+            height: 4,
+          }),
+        ),
+      ];
+      const worker = FakePaintWorker.made[0]!;
+      for (let i = 0; i < 4; i++) {
+        worker.reply();
+        await Promise.resolve();
+      }
+      await Promise.all(done);
+      expect(worker.jobs.map((j) => j.kind ?? 'surface')).toEqual([
+        'detail',
+        'surface',
+        'clouds',
+        'detail',
+      ]);
+      expect(order).toEqual(['detail-a', 'near', 'clouds', 'detail-b']);
+    } finally {
+      setPaintWorkerFactoryForTest(undefined);
+      FakePaintWorker.made = [];
+    }
+  });
 });
 
 class Fake implements Disposable {

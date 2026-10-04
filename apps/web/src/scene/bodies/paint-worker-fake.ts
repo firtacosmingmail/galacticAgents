@@ -1,5 +1,5 @@
 import type { PaintJob, PaintReply } from './painter.js';
-import { paintSurfaceLayers } from './surface.js';
+import { runPaintJob } from './paint-jobs.js';
 
 /**
  * Tests only: a stand-in for the paint worker (jsdom has no `Worker`). `paint` answers each job
@@ -26,7 +26,7 @@ export class FakePaintWorker {
   /** Answers `job` (default: the last one) unless terminated. */
   reply(job: PaintJob | undefined = this.jobs.at(-1)): void {
     if (this.terminated || !job) return;
-    const layers = paintSurfaceLayers(job.look, job.width, job.height, job.detail);
+    const layers = runPaintJob(job);
     this.onmessage?.({ data: { id: job.id, ...layers } } as MessageEvent<PaintReply>);
   }
 
