@@ -45,19 +45,26 @@ export function backdropStars(
  * Where the Sun goes on the backdrop for a body at `body` (the Sun is at the origin): its
  * direction from the body, `BACKDROP_SUN_AT` of the backdrop's radius out, and a scale that keeps
  * the size it has on screen in the system view (`sunRadius` seen from the body's distance).
- * `undefined` for a body at the Sun's centre.
+ * `undefined` for a body at the Sun's centre. Written into `out` (no allocation per frame).
  */
 export function backdropSun(
   body: readonly [number, number, number],
   backdrop: number,
   sunRadius: number,
-): { position: [number, number, number]; radius: number } | undefined {
+  out: BackdropSun = { position: [0, 0, 0], radius: 0 },
+): BackdropSun | undefined {
   const d = Math.hypot(body[0], body[1], body[2]);
   if (d < 1e-9) return undefined;
   const at = backdrop * BACKDROP_SUN_AT;
-  const k = at / d;
-  return {
-    position: [(-body[0] / d) * at, (-body[1] / d) * at, (-body[2] / d) * at],
-    radius: sunRadius * k,
-  };
+  out.position[0] = (-body[0] / d) * at;
+  out.position[1] = (-body[1] / d) * at;
+  out.position[2] = (-body[2] / d) * at;
+  out.radius = sunRadius * (at / d);
+  return out;
+}
+
+/** The backdrop Sun's place (`backdropSun`; per-frame callers pass a scratch `out`). */
+export interface BackdropSun {
+  position: [number, number, number];
+  radius: number;
 }

@@ -15,19 +15,23 @@ import {
   asteroidSquash,
   BACKGROUND_BELT_SEED,
   TASK_ROCK_SEED,
+  beltBounds,
   beltSpin,
   generateBelt,
   orbitPosition,
   ASTEROID_ROCK_NAME,
   pickData,
   PICK_TARGET_NAME,
+  ROCK_SIZE,
   TASK_ASTEROID_RADIUS,
   taskAsteroids,
   type TaskAsteroid,
 } from './belt-model.js';
 import { rockGeometry, writeBeltInstances } from './belt-mesh.js';
 import { useBodyAnchor } from '../anchor-binding.js';
-import { inDetailScope, useDetailStore } from '../detail/mode.js';
+import { useDetailStore } from '../detail/mode.js';
+import { shellOutsideDome, sphereOutsideDome } from '../detail/dome.js';
+import { useBackdropCulling } from '../detail/dome-binding.js';
 import { useReducedMotion } from '../motion.js';
 import { PLACE_BODIES } from '../frame-order.js';
 
@@ -85,8 +89,12 @@ function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
   useEffect(() => () => geometry.dispose(), [geometry]);
   const mesh = useRef<InstancedMesh>(null);
   const invalidate = useThree((s) => s.invalidate);
-  // P6-01: behind a settled detail view's backdrop the belt is not drawn.
-  const covered = useDetailStore((s) => s.covered);
+  // P6-01: a settled detail view's backdrop hides the belt only when it is wholly outside the
+  // dome (an asteroid's detail view sits in the belt: the rocks inside its dome stay drawn).
+  const bounds = useMemo(() => beltBounds(mode), [mode]);
+  useBackdropCulling(mesh, (dome) =>
+    shellOutsideDome(bounds.inner - ROCK_MARGIN, bounds.outer + ROCK_MARGIN, dome),
+  );
 
   // Before the first frame: matrices, colours and the bounding sphere of the whole ring.
   useLayoutEffect(() => {
@@ -104,12 +112,16 @@ function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
       // Stays on layer 0: the rocks really hide task asteroids, so the outline's depth pass needs
       // them (one instanced draw) to draw a covered outline as hidden (P3-08 review).
       args={[geometry, undefined, Math.max(1, count)]}
-      visible={!covered}
     >
       <meshStandardMaterial flatShading roughness={1} metalness={0} />
     </instancedMesh>
   );
 }
+
+/** The largest rock's reach beyond its orbit: its size by its largest squash (`generateBelt`). */
+const ROCK_MARGIN = ROCK_SIZE.max * 1.2;
+/** A task asteroid's farthest part, in its radii: the pick target (the halo is 1.5). */
+const TASK_ASTEROID_REACH = 1.8;
 
 function TaskAsteroidMesh({
   asteroid,
@@ -140,18 +152,15 @@ function TaskAsteroidMesh({
   const data = useMemo(() => pickData(asteroid), [asteroid]);
   const invalidate = useThree((s) => s.invalidate);
   useEffect(() => invalidate(), [position, invalidate]);
-  // P6-01: its detail view draws the rock itself; another detail view's backdrop hides it.
+  // P6-01: its detail view draws the rock itself; a settled detail view's backdrop hides it when
+  // it is wholly outside the dome (inside, e.g. near another asteroid's view, it stays drawn).
   const detailHere = useDetailStore((s) => s.shown === asteroid.bodyId);
-  const far = useDetailStore((s) => s.covered && !inDetailScope(asteroid.bodyId));
+  useBackdropCulling(anchor, (dome, at) =>
+    sphereOutsideDome(at, TASK_ASTEROID_RADIUS * TASK_ASTEROID_REACH, dome),
+  );
 
   return (
-    <group
-      ref={anchor}
-      name={`asteroid:${asteroid.bodyId}`}
-      position={position}
-      userData={data}
-      visible={!far}
-    >
+    <group ref={anchor} name={`asteroid:${asteroid.bodyId}`} position={position} userData={data}>
       <mesh
         name={ASTEROID_ROCK_NAME}
         visible={!detailHere}
@@ -189,7 +198,7 @@ function TaskAsteroidMesh({
       <mesh
         name={PICK_TARGET_NAME}
         geometry={shapes.pick}
-        scale={TASK_ASTEROID_RADIUS * 1.8}
+        scale={TASK_ASTEROID_RADIUS * TASK_ASTEROID_REACH}
         userData={data}
       >
         <meshBasicMaterial visible={false} />

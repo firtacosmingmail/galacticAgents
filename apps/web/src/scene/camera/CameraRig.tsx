@@ -109,7 +109,8 @@ export function CameraRig() {
       director.overview(pose, view, world, now, true);
     }
 
-    const result = director.step(pose, view, world, now);
+    const hold = detailBodyId();
+    const result = director.step(pose, view, world, now, hold);
     if (!same(result.pose.position, pose.position) || !same(result.pose.target, pose.target)) {
       camera.position.set(...result.pose.position);
       c.target.set(...result.pose.target);
@@ -119,7 +120,7 @@ export function CameraRig() {
     else if (result.event === 'overview') store.atOverview();
     else if (result.event === 'left' || result.event === 'lost') store.released();
 
-    const limits = director.limits(result.pose, view, world, detailBodyId());
+    const limits = director.limits(result.pose, view, world, hold);
     c.minDistance = limits.minDistance;
     c.maxDistance = limits.maxDistance;
     // A flight owns the camera: no leftover inertia fights it. Reduced motion: no glide at all.

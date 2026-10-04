@@ -11,10 +11,8 @@ import { useFrame } from '@react-three/fiber';
 import {
   AdditiveBlending,
   BackSide,
-  CanvasTexture,
   Color,
   SphereGeometry,
-  SRGBColorSpace,
   type Camera,
   type Group,
   type Material,
@@ -37,7 +35,9 @@ import { motionEnabled, motionSeconds, useReducedMotion } from '../motion.js';
 import { SUN_EMISSIVE, type LodConfig, type SceneQuality } from '../quality.js';
 import { useSceneScale } from '../scale.js';
 import { centreOnCamera, STAR_POINT_PX } from '../starfield.js';
-import { backdropStars, backdropSun } from './backdrop.js';
+import { sunGlowTexture } from '../sun-glow.js';
+import { backdropStars, backdropSun, type BackdropSun } from './backdrop.js';
+import { clearDome, publishDome } from './dome.js';
 import { backdropRadius, resolveDetailBody, type DetailBody } from './detail-body.js';
 import { detailMix, useDetailStore } from './mode.js';
 import { partsFor } from './parts.js';
@@ -63,8 +63,9 @@ import { registerStandIn } from './stand-ins.js';
  * `AsteroidDetail` (the task asteroid's rock; its halo fades out with the cross-fade). Later parts plug in through `parts.ts`.
  *
  * **Backdrop** (`backdrop.ts`): a dark sphere about the body, beyond its scope's bodies, fading in
- * over the system (transparent, blended over whatever is behind it); once the fade has ended an
- * opaque copy drawn first takes over and the rest of the system is not drawn (`covered`). The
+ * over the system (transparent, blended over whatever is behind it); once the view has settled
+ * (`covered`) an opaque copy drawn first takes over, its depth hiding what lies beyond, and the
+ * system skips what is wholly outside it (the dome is published for that: `dome.ts`). The
  * sky's own stars on its inside, unchanged across the fade, and the Sun in its real direction.
  * About 4 draw calls; every geometry, material and texture here is disposed on unmount.
  */
@@ -468,7 +469,11 @@ function Backdrop({
   const sky = useRef<Points>(null);
   const sun = useRef<Group>(null);
   const glow = useRef<Sprite>(null);
-  const [scratch] = useState(() => [0, 0, 0] as [number, number, number]);
+  const [scratch] = useState(() => ({
+    at: [0, 0, 0] as [number, number, number],
+    sun: { position: [0, 0, 0], radius: 0 } as BackdropSun,
+  }));
+  useEffect(() => () => clearDome(scratch), [scratch]);
   const sphere = useMemo(() => new SphereGeometry(1, 48, 24), []);
   useEffect(() => () => sphere.dispose(), [sphere]);
   const starField = useMemo(() => backdropStars(stars), [stars]);
@@ -486,8 +491,9 @@ function Backdrop({
     const anchor = getAnchor(bodyId);
     const g = group.current;
     if (!anchor || !g) return;
-    const at = anchorPosition(anchor, scratch);
+    const at = anchorPosition(anchor, scratch.at);
     g.position.set(at[0], at[1], at[2]);
+    publishDome(scratch, scratch.at, radius);
     const s = useDetailStore.getState();
     const mix = detailMix(s, performance.now() / 1000);
     const settled = s.covered;
@@ -502,11 +508,11 @@ function Backdrop({
       sky.current.renderOrder = skyOrder;
     }
     if (sun.current) for (const child of sun.current.children) child.renderOrder = skyOrder;
-    const place = backdropSun(at, radius, sunRadius);
+    const place = backdropSun(at, radius, sunRadius, scratch.sun);
     if (sun.current) {
       sun.current.visible = place !== undefined && mix > 0;
       if (place) {
-        sun.current.position.set(...place.position);
+        sun.current.position.set(place.position[0], place.position[1], place.position[2]);
         sun.current.scale.setScalar(place.radius);
         for (const child of sun.current.children)
           setOpacity((child as Mesh | Sprite).material, child === glow.current ? mix * 0.6 : mix);
@@ -593,24 +599,4 @@ function Backdrop({
 function setOpacity(material: Material | Material[], opacity: number): void {
   const list = Array.isArray(material) ? material : [material];
   for (const m of list) m.opacity = opacity;
-}
-
-/** The Sun's soft glow on the backdrop: a radial gradient drawn at runtime (no image asset). */
-function sunGlowTexture(): CanvasTexture {
-  const size = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    g.addColorStop(0, 'rgba(255, 200, 120, 1)');
-    g.addColorStop(0.25, 'rgba(255, 150, 50, 0.55)');
-    g.addColorStop(0.6, 'rgba(255, 110, 20, 0.12)');
-    g.addColorStop(1, 'rgba(255, 90, 0, 0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, size, size);
-  }
-  const t = new CanvasTexture(canvas);
-  t.colorSpace = SRGBColorSpace;
-  return t;
 }

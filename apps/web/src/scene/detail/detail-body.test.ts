@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Body } from '@galactic/protocol';
 import { buildRenderList, planetAnchor, moonAnchor } from '../bodies/layout.js';
@@ -11,7 +13,8 @@ import {
   planetReach,
   resolveDetailBody,
 } from './detail-body.js';
-import { EXIT_RADII } from './mode.js';
+import { focusDistance, framedRadius, MIN_FRAMED_RADIUS, type View } from '../camera/flight.js';
+import { DETAIL_FRAME_RADII, EXIT_RADII, radiiFrom, settleDue, zoomStep } from './mode.js';
 import { partsFor, type DetailPart } from './parts.js';
 
 const body = (b: Body): [string, Body] => [b.id, b];
@@ -83,20 +86,90 @@ describe('backdropRadius', () => {
       ]) {
         const b = resolveDetailBody(bodies, id, mode)!;
         const r = backdropRadius(b);
-        expect(r).toBeGreaterThanOrEqual(b.radius * BACKDROP_MIN_RADII);
+        const fr = framedRadius(b.radius);
+        expect(r).toBeGreaterThanOrEqual(fr * BACKDROP_MIN_RADII);
         const reach =
           b.kind === 'moon'
             ? b.moon.distance + planetReach(b.parent)
             : b.kind === 'asteroid'
               ? b.radius
               : planetReach(b.planet);
-        expect(r).toBeGreaterThanOrEqual((reach + EXIT_RADII * b.radius) * BACKDROP_MARGIN);
+        expect(r).toBeGreaterThanOrEqual((reach + EXIT_RADII * fr) * BACKDROP_MARGIN);
         // The view's bodies (seen from a camera at most EXIT_RADII off the centre) come before the
         // backdrop's Sun and stars.
-        const camera = EXIT_RADII * b.radius;
+        const camera = EXIT_RADII * fr;
         expect(reach + camera).toBeLessThan(r * BACKDROP_SUN_AT);
         expect(reach + camera).toBeLessThan(r * (BACKDROP_STAR_SHELL.inner - camera / r));
         expect(r * BACKDROP_STAR_SHELL.outer + camera).toBeLessThan(r);
+      }
+    }
+  });
+});
+
+/** The seeded catalogue, read from the migration itself (as `bodies/bodies-model.test.ts`). */
+function seededCatalogue(): Record<string, Body> {
+  const sql = readFileSync(
+    resolve(import.meta.dirname, '../../../../server/src/db/migrations/0005_body_catalogue.sql'),
+    'utf8',
+  );
+  const row =
+    /\('(b-[a-z]+)', '(star|planet|moon)', (NULL|'b-[a-z]+'), '([A-Za-z]+)', '(\{[^']*\})'\)/g;
+  const out: Record<string, Body> = {};
+  for (const m of sql.matchAll(row)) {
+    const [, id, kind, parent, name, meta] = m;
+    out[id!] = {
+      id: id!,
+      kind: kind as Body['kind'],
+      ...(parent !== 'NULL' ? { parentId: parent!.slice(1, -1) } : {}),
+      name: name!,
+      meta: JSON.parse(meta!) as Record<string, unknown>,
+    };
+  }
+  return out;
+}
+
+describe('an explicit enter stays in once the flight lands (P6-01 review, B1)', () => {
+  const catalogue = {
+    ...seededCatalogue(),
+    'b-ast-7': bodies['b-ast-7']!,
+  };
+  const moons = Object.values(catalogue).filter((b) => b.kind === 'moon');
+  const views: View[] = [
+    { fovDeg: 45, aspect: 16 / 9 },
+    { fovDeg: 45, aspect: 0.5 },
+  ];
+
+  it('reads the whole catalogue (22 moons), many under MIN_FRAMED_RADIUS in true scale', () => {
+    expect(moons).toHaveLength(22);
+    const tiny = moons.filter(
+      (m) => resolveDetailBody(catalogue, m.id, 'true')!.radius < MIN_FRAMED_RADIUS,
+    );
+    expect(tiny.length).toBeGreaterThan(0);
+  });
+
+  it('every moon, planet and a task asteroid, in both scales: lands inside, settles, stays', () => {
+    const ids = Object.values(catalogue)
+      .filter((b) => b.kind !== 'star')
+      .map((b) => b.id);
+    for (const mode of ['true', 'fake'] as const) {
+      for (const id of ids) {
+        const b = resolveDetailBody(catalogue, id, mode);
+        expect(b, `${id} ${mode}`).toBeDefined();
+        const centre: [number, number, number] = [123, 4, -56];
+        for (const view of views) {
+          // The camera's detail flight (`focusDistance` with `radii`) lands here…
+          const d = focusDistance(b!.radius, view, DETAIL_FRAME_RADII);
+          const eye: [number, number, number] = [centre[0], centre[1], centre[2] + d];
+          // …which the watcher (`radiiFrom`, DetailLayer) measures as DETAIL_FRAME_RADII.
+          const distance = radiiFrom(eye, centre, b!.radius);
+          expect(distance, `${id} ${mode}`).toBeCloseTo(DETAIL_FRAME_RADII);
+          const mode_ = { kind: 'detail', bodyId: id } as const;
+          const at = { mode: mode_, zoomArmed: true, focusedId: id, flying: false, distance };
+          expect(zoomStep({ ...at, detailable: true }), `${id} ${mode}`).toBeUndefined();
+          expect(settleDue({ mode: mode_, fade: undefined, covered: false }, 0, at)).toBe(true);
+          // …and the camera, anywhere up to EXIT_RADII off, is well inside the backdrop.
+          expect(EXIT_RADII * framedRadius(b!.radius)).toBeLessThan(backdropRadius(b!) / 2);
+        }
       }
     }
   });
@@ -132,6 +205,11 @@ describe('backdrop stars and Sun', () => {
     // Angular radius from the body: 6 / 100 in the system, the same on the backdrop.
     expect(sun.radius / 140).toBeCloseTo(6 / 100);
     expect(backdropSun([0, 0, 0], 200, 6)).toBeUndefined();
+    // Per frame into a scratch object: no allocation.
+    const out = { position: [0, 0, 0] as [number, number, number], radius: 0 };
+    expect(backdropSun([0, 0, 50], 100, 6, out)).toBe(out);
+    expect(out.position[2]).toBeCloseTo(-70);
+    expect(out.radius).toBeCloseTo(6 * (70 / 50));
   });
 });
 

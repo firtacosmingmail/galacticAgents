@@ -10,9 +10,11 @@ import {
   framingDistance,
   leaveDistance,
   length,
+  normalize,
   overviewPose,
   pushOutside,
   rotateY,
+  scale,
   sub,
   type Pose,
   type Vec3,
@@ -55,6 +57,12 @@ type Mode =
 export const SUN_KEEP_OUT = 1.3;
 /** A flight path keeps this many Sun radii from the Sun's centre (it goes around, not through). */
 export const SUN_FLIGHT_CLEARANCE = 2;
+/**
+ * The camera never comes closer than this many body radii to the centre of the body it follows or
+ * holds (P6-01: the detail body after a pan — OrbitControls' `minDistance` only bounds the
+ * distance to the target, which a pan moves off the body).
+ */
+export const BODY_KEEP_OUT = 1.3;
 
 /**
  * The camera's behaviour, without three.js (P3-04): free (OrbitControls alone), flying to a body
@@ -139,8 +147,21 @@ export class CameraDirector {
     this.mode = { kind: 'free' };
   }
 
-  /** One frame: the pose to apply (the user's pose, adjusted) and what happened. */
-  step(pose: Pose, view: View, world: DirectorWorld, now: number): StepResult {
+  /**
+   * One frame: the pose to apply (the user's pose, adjusted) and what happened. `holdId`: a body
+   * the camera stays out of even with no focus (P6-01: the detail view's body, `limits`).
+   */
+  step(pose: Pose, view: View, world: DirectorWorld, now: number, holdId?: string): StepResult {
+    const result = this.move(pose, view, world, now);
+    if (this.mode.kind === 'flying') return result;
+    const id = this.bodyId ?? holdId;
+    const body = id ? world.body(id) : undefined;
+    if (!body) return result;
+    const kept = keepOutOfBody(result.pose, body.position, body.radius * BODY_KEEP_OUT);
+    return kept === result.pose ? result : { ...result, pose: kept };
+  }
+
+  private move(pose: Pose, view: View, world: DirectorWorld, now: number): StepResult {
     const keepOut = world.sunRadius * SUN_KEEP_OUT;
     const mode = this.mode;
     if (mode.kind === 'flying') {
@@ -224,6 +245,17 @@ export function follow(pose: Pose, from: Vec3, to: Vec3, sunRadius: number): Pos
   const orbiting = length(from) > sunRadius && length(to) > sunRadius;
   const turned = orbiting ? rotateY(offset, azimuth(to) - azimuth(from)) : offset;
   return { target, position: add(target, turned) };
+}
+
+/**
+ * `pose` with the camera moved straight out from `centre` to `minDistance` when it is closer (the
+ * target stays: the view keeps its aim). Unchanged when it is far enough.
+ */
+export function keepOutOfBody(pose: Pose, centre: Vec3, minDistance: number): Pose {
+  const offset = sub(pose.position, centre);
+  if (length(offset) >= minDistance) return pose;
+  const away = normalize(offset, normalize(sub(pose.position, pose.target)));
+  return { ...pose, position: add(centre, scale(away, minDistance)) };
 }
 
 function keepOutOfSun(pose: Pose, keepOut: number): Pose {
