@@ -2,6 +2,8 @@ import type { ComponentType } from 'react';
 import type { SceneQuality } from '../quality.js';
 import type { DetailBody } from './detail-body.js';
 import type { DetailKind } from './mode.js';
+import { EarthHq } from './earth-hq/EarthHq.js';
+import { EARTH_HQ_PART, isHeadquarters } from './earth-hq/earth-hq-model.js';
 
 /**
  * The detail view's extension slots (P6-01), for the tasks that build on it:
@@ -33,8 +35,11 @@ export interface DetailPart {
   Component: ComponentType<DetailPartProps>;
 }
 
-/** The parts, drawn in this order after the body. Empty in P6-01. */
-export const DETAIL_PARTS: readonly DetailPart[] = [];
+/** The parts, drawn in this order after the body. */
+export const DETAIL_PARTS: readonly DetailPart[] = [
+  // P6-05: Earth's HQ station, the Harmonizer's home (`earth-hq/`).
+  { id: EARTH_HQ_PART, kinds: ['rocky'], accepts: isHeadquarters, Component: EarthHq },
+];
 
 /** The parts a body's detail view mounts. */
 export function partsFor(body: DetailBody, parts: readonly DetailPart[] = DETAIL_PARTS) {

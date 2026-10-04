@@ -7,6 +7,7 @@ import {
   type SelectionKey,
 } from '../../state/selection.js';
 import { agentLabel } from '../../console/hierarchy/shared.js';
+import { revealChat } from '../../panel/dock-state.js';
 import { useCameraStore } from '../camera/store.js';
 import { getSatellite } from '../satellites/registry.js';
 import type { SatelliteMode } from '../satellites/machine.js';
@@ -232,6 +233,7 @@ export function activateBody(bodyId: string, at: Point, opts: { fly?: boolean } 
 /**
  * Activates a satellite (a click on it, a choice in the "what's here" list): selects its agent
  * (decision 53: `waykeeper:<id>` / `steward:<id>`) and flies the camera to the body it orbits.
+ * The HQ station (the Harmonizer's) also opens the Harmonizer's chat (P6-05, `revealChat`).
  * `false` when the agent is unknown (nothing happens).
  */
 export function activateSatellite(agentId: string): boolean {
@@ -242,5 +244,8 @@ export function activateSatellite(agentId: string): boolean {
   if (bodyId) useCameraStore.getState().flyTo(bodyId);
   usePickingStore.getState().closePopover();
   selectFromScene(selection);
+  // P6-05: the HQ station is the Harmonizer's home — clicking it opens the Harmonizer's chat: the
+  // dock restored if minimised (decision 71), its "Chat | Status" switch on Chat (decision 80).
+  if (selection.kind === 'harmonizer') revealChat();
   return true;
 }
