@@ -178,6 +178,68 @@
 .his-more {
   align-self: flex-start;
 }
+/* P5-03: the inspector, in-page links, moves and holder chains. */
+.his-inspector {
+  border-color: var(--pnl-here);
+}
+.his-inspector .his-title:focus-visible,
+.his-link:focus-visible {
+  outline: 2px solid var(--pnl-here);
+  outline-offset: 2px;
+}
+.his-link {
+  font: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--pnl-here);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.his-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.his-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--pnl-muted);
+  font-weight: 600;
+}
+.his-moves,
+.his-steps,
+.his-links {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.his-moves-term,
+.his-muted-inline {
+  color: var(--pnl-muted);
+}
+.his-chain {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.his-chain li + li::before {
+  content: '→ ';
+  color: var(--pnl-muted);
+}
+.his-chain-why {
+  color: var(--pnl-muted);
+}
 @media (max-width: 600px) {
   .his-page {
     padding: 12px;

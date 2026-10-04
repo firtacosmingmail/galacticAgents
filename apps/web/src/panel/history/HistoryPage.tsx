@@ -1,7 +1,14 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import type {
-  Agent,
-  ControlBody,
   HistoryQuestion,
   HistoryQuestionStatus,
   HistoryWorkItem,
@@ -10,20 +17,24 @@ import type {
   QuestionKind,
 } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
-import { startReplay } from '../../replay/store.js';
-import type { WorldState } from '../../state/reduce.js';
-import {
-  actorLabel,
-  agentsFor,
-  ErrorLine,
-  StatePill,
-  useAction,
-  useApi,
-} from '../../console/hierarchy/shared.js';
-import { workActions, type CardAction, type CardWork } from '../agent-cards-model.js';
-import { AgentRef, selectionFor } from '../cards/links.js';
+import { agentsFor, ErrorLine, StatePill, useApi } from '../../console/hierarchy/shared.js';
 import { NavLink } from '../Navigation.js';
 import { usePaged, type Paged } from './usePaged.js';
+import {
+  AgentLink,
+  Fact,
+  InspectContext,
+  liveWork,
+  Moves,
+  QuestionRow,
+  TrailFacts,
+  When,
+  WorkControls,
+  WorkLink,
+  workName,
+  type WorkTarget,
+} from './parts.js';
+import { WorkInspector } from './WorkInspector.js';
 import './history.css';
 
 /**
@@ -36,6 +47,11 @@ import './history.css';
  * copy of its item when the page has one, so a reopen or a pin shows at once. When the stream
  * sees work finish or a question resolve, the list offers a refresh ("New items") instead of
  * splicing the row in; a refresh keeps the rows on screen until the new first page arrives.
+ *
+ * P5-03: each work row also shows when it was closed and archived, where it moved and its
+ * promotion link, and "Inspect" opens it in the inspector above the lists (`WorkInspector`); a
+ * project, task or moved-to link there opens that item in its place, with "Back" to the one
+ * before. Each past question shows its holder chain.
  */
 export function HistoryPage() {
   const selection = useAppStore((s) => s.selection);
@@ -51,27 +67,58 @@ export function HistoryPage() {
     setSearch(text.trim());
   };
 
+  // The inspector (P5-03): the item shown and the ones opened before it, for "Back".
+  const [trail, setTrail] = useState<{ target: WorkTarget; name: string }[]>([]);
+  const world = useAppStore((s) => s.world);
+  const nameOf = useCallback(
+    (t: WorkTarget) =>
+      (t.kind === 'task' ? world.tasks[t.id]?.description : world.projects[t.id]?.name) ?? t.id,
+    [world],
+  );
+  const inspect = useCallback(
+    (target: WorkTarget) =>
+      setTrail((now) => {
+        const top = now.at(-1);
+        if (top && top.target.kind === target.kind && top.target.id === target.id) return now;
+        return [...now, { target, name: nameOf(target) }];
+      }),
+    [nameOf],
+  );
+  const shown = trail.at(-1);
+  const before = trail.at(-2);
+
   return (
-    <main className="his-page" aria-label="history">
-      <div className="his-head">
-        <h1 className="pnl-title">History</h1>
-        <NavLink to={{ route: 'panel', selection }} className="pnl-back">
-          ← Back to the panel
-        </NavLink>
-      </div>
-      <form className="his-search" role="search" onSubmit={submit}>
-        <input
-          type="search"
-          aria-label="Search the history"
-          placeholder="Search names, task descriptions, questions and answers"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <button type="submit">Search</button>
-      </form>
-      <WorkHistory search={search} />
-      <QuestionHistory search={search} />
-    </main>
+    <InspectContext.Provider value={inspect}>
+      <main className="his-page" aria-label="history">
+        <div className="his-head">
+          <h1 className="pnl-title">History</h1>
+          <NavLink to={{ route: 'panel', selection }} className="pnl-back">
+            ← Back to the panel
+          </NavLink>
+        </div>
+        <form className="his-search" role="search" onSubmit={submit}>
+          <input
+            type="search"
+            aria-label="Search the history"
+            placeholder="Search names, task descriptions, questions and answers"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <button type="submit">Search</button>
+        </form>
+        {shown && (
+          <WorkInspector
+            key={`${shown.target.kind}:${shown.target.id}`}
+            target={shown.target}
+            back={before?.name}
+            onBack={() => setTrail((now) => now.slice(0, -1))}
+            onClose={() => setTrail([])}
+          />
+        )}
+        <WorkHistory search={search} />
+        <QuestionHistory search={search} />
+      </main>
+    </InspectContext.Provider>
   );
 }
 
@@ -83,9 +130,6 @@ const WORK_STATES: { value: '' | HistoryWorkState; label: string }[] = [
   { value: 'failed', label: 'failed or cancelled' },
   { value: 'archived', label: 'archived' },
 ];
-
-/** The controls a history row offers: reopen, pin / unpin and archive now, as the state allows. */
-const HISTORY_ACTIONS: ReadonlySet<CardAction['action']> = new Set(['reopen', 'pin', 'archive']);
 
 const WORK_HISTORY_STATES: ReadonlySet<string> = new Set(['completed', 'failed', 'archived']);
 const QUESTION_HISTORY_STATUSES: ReadonlySet<string> = new Set(['answered', 'cancelled']);
@@ -171,23 +215,14 @@ function WorkHistory({ search }: { search: string }) {
   );
 }
 
-/** The live copy of a history row's item, when the stream has it. */
-function liveWork(world: WorldState, entry: HistoryWorkItem): CardWork {
-  if (entry.kind === 'task')
-    return { kind: 'task', item: world.tasks[entry.item.id] ?? entry.item };
-  return { kind: 'project', item: world.projects[entry.item.id] ?? entry.item };
-}
-
 function WorkRow({ entry }: { entry: HistoryWorkItem }) {
-  const api = useApi();
   const world = useAppStore((s) => s.world);
+  const inspect = useContext(InspectContext);
   const nameId = useId();
-  const { run, error, busy } = useAction();
-  const [confirming, setConfirming] = useState<CardAction | undefined>();
   const work = liveWork(world, entry);
   const { item } = work;
-  const name = work.kind === 'task' ? work.item.description : work.item.name;
-  const body = world.bodies[item.bodyId];
+  const name = workName(work);
+  const bodyName = world.bodies[item.bodyId]?.name ?? entry.bodyName;
   const project =
     work.kind === 'task'
       ? work.item.projectId
@@ -200,16 +235,6 @@ function WorkRow({ entry }: { entry: HistoryWorkItem }) {
     world,
     work.kind === 'task' ? { taskId: item.id } : { projectId: item.id },
   ).reverse();
-  const actions = workActions(work).filter((a) => HISTORY_ACTIONS.has(a.action));
-
-  const perform = (a: CardAction) => {
-    setConfirming(undefined);
-    const action: ControlBody['action'] =
-      a.action === 'pin'
-        ? { action: 'pin', pinned: !item.pinned }
-        : ({ action: a.action } as ControlBody['action']);
-    void run(() => api.control({ target: { kind: work.kind, id: item.id }, action }));
-  };
 
   return (
     <li className="his-row" aria-labelledby={nameId}>
@@ -220,17 +245,32 @@ function WorkRow({ entry }: { entry: HistoryWorkItem }) {
         <span className="his-name" id={nameId}>
           {name}
         </span>
+        <span className="pnl-spacer" />
+        <button
+          type="button"
+          className="secondary his-inspect"
+          aria-label={`Inspect ${name}`}
+          onClick={() => inspect({ kind: work.kind, id: item.id })}
+        >
+          Inspect
+        </button>
       </div>
       <dl className="his-facts">
-        {project && <Fact term={work.kind === 'task' ? 'project' : 'part of'}>{project.name}</Fact>}
-        {body && <Fact term="body">{body.name}</Fact>}
+        {project && (
+          <Fact term={work.kind === 'task' ? 'project' : 'part of'}>
+            <WorkLink target={{ kind: 'project', id: project.id }} name={project.name} />
+          </Fact>
+        )}
+        {bodyName && <Fact term="body">{bodyName}</Fact>}
         <Fact term="created">
           <When at={item.createdAt} />
         </Fact>
+        <TrailFacts trail={entry.trail} />
         <Fact term="last change">
           <When at={item.updatedAt} />
         </Fact>
       </dl>
+      <Moves moves={entry.trail?.moves} name={name} />
       {agents.length > 0 && (
         <p className="his-agents" aria-label={`agents of ${name}`}>
           {agents.map((a, i) => (
@@ -238,68 +278,10 @@ function WorkRow({ entry }: { entry: HistoryWorkItem }) {
           ))}
         </p>
       )}
-      {(actions.length > 0 || work.kind === 'project') && (
-        <div className="his-actions" role="group" aria-label={`${work.kind} controls of ${name}`}>
-          {work.kind === 'project' && (
-            // The timeline scrubber (P4-07): back to the scene, replaying this project.
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => startReplay(api, item.id, name)}
-            >
-              Replay
-            </button>
-          )}
-          {actions.map((a) => (
-            <button
-              key={a.action}
-              type="button"
-              disabled={busy}
-              className={a.confirm ? 'agc-destructive' : 'secondary'}
-              onClick={() => (a.confirm ? setConfirming(a) : perform(a))}
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
-      )}
-      {confirming && (
-        <div className="agc-confirm" role="group" aria-label="confirm">
-          <span>{confirming.confirm}</span>
-          <button
-            type="button"
-            className="danger"
-            disabled={busy}
-            onClick={() => perform(confirming)}
-          >
-            Yes, {confirming.label.toLowerCase()}
-          </button>
-          <button type="button" className="secondary" onClick={() => setConfirming(undefined)}>
-            Keep
-          </button>
-        </div>
-      )}
-      <ErrorLine error={error} />
+      <WorkControls work={work} />
     </li>
   );
 }
-
-/** A link to an agent's view: a Steward's read-only view or a Waykeeper's chat (decision 53). */
-function AgentLink({ agent, earlier }: { agent: Agent; earlier: boolean }) {
-  const label =
-    agent.role === 'steward'
-      ? 'Steward view'
-      : agent.role === 'waykeeper'
-        ? 'Waykeeper chat'
-        : 'Harmonizer';
-  return (
-    <NavLink to={{ route: 'panel', selection: selectionFor(agent) }} className="his-agent-link">
-      {earlier ? `earlier ${label.toLowerCase()} (${shortDate(agent.createdAt)})` : label}
-    </NavLink>
-  );
-}
-
-// --- questions --------------------------------------------------------------------------------
 
 function QuestionHistory({ search }: { search: string }) {
   const api = useApi();
@@ -347,54 +329,6 @@ function QuestionHistory({ search }: { search: string }) {
     </section>
   );
 }
-
-function QuestionRow({ entry }: { entry: HistoryQuestion }) {
-  const world = useAppStore((s) => s.world);
-  const q = world.questions[entry.question.id] ?? entry.question;
-  const nameId = useId();
-  const answered = q.status === 'answered';
-  const tool = q.context.toolCall?.toolName;
-  return (
-    <li className="his-row" aria-labelledby={nameId}>
-      <div className="his-row-head">
-        <span className={`his-kind his-kind-${q.kind}`}>{q.kind}</span>
-        <span className="his-tag">{answered ? 'answered' : 'withdrawn or ended'}</span>
-        <span className="his-name" id={nameId}>
-          {q.context.text}
-        </span>
-      </div>
-      <dl className="his-facts">
-        <Fact term="asked by">
-          <AgentRef agentId={q.originAgentId} />
-        </Fact>
-        {tool && <Fact term="tool">{tool}</Fact>}
-        <Fact term="asked">
-          <When at={q.createdAt} />
-        </Fact>
-        {answered ? (
-          <>
-            <Fact term="answered by">{actorLabel(q.answeredBy, world)}</Fact>
-            <Fact term="answered">
-              <When at={q.updatedAt} />
-            </Fact>
-          </>
-        ) : (
-          <Fact term="withdrawn or ended">
-            <When at={q.updatedAt} />
-          </Fact>
-        )}
-      </dl>
-      {answered && q.answer !== undefined && (
-        <blockquote className="his-answer" aria-label="answer">
-          {q.answer}
-        </blockquote>
-      )}
-      {!answered && entry.reason && <p className="his-reason">Why: {entry.reason}</p>}
-    </li>
-  );
-}
-
-// --- shared bits ------------------------------------------------------------------------------
 
 function ListBody<T extends { cursor: string }>({
   list,
@@ -470,28 +404,5 @@ function Select<V extends string>({
     >
       {children}
     </select>
-  );
-}
-
-function Fact({ term, children }: { term: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt>{term}</dt>
-      <dd>{children}</dd>
-    </div>
-  );
-}
-
-const shortDate = (at: string) =>
-  new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-
-function When({ at }: { at: string }) {
-  const d = new Date(at);
-  return (
-    <time dateTime={at} title={at}>
-      {Number.isNaN(d.getTime())
-        ? at
-        : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
-    </time>
   );
 }
