@@ -299,6 +299,8 @@ describe('the Harmonizer’s controls in its dock bar (P5-06, decision 82)', () 
     expect(document.activeElement).toBe(confirm.getByRole('button', { name: 'Keep' }));
     fireEvent.keyDown(confirm.getByRole('button', { name: 'Keep' }), { key: 'Escape' });
     expect(main().queryByRole('group', { name: 'confirm' })).toBeNull();
+    // Escape keeps, and focus goes back to the button that opened the question.
+    expect(document.activeElement).toBe(button);
 
     fireEvent.click(button);
     fireEvent.click(main().getByRole('button', { name: 'Keep' }));
@@ -309,6 +311,62 @@ describe('the Harmonizer’s controls in its dock bar (P5-06, decision 82)', () 
     fireEvent.click(main().getByRole('button', { name: 'Yes, restart' }));
     await vi.waitFor(() => expect(posted('/api/harmonizer/restart')).toHaveLength(1));
     expect(controls).toEqual([]);
+  });
+
+  it('keeps focus across a restart: the dock bar’s heading, then the new one’s Restart', async () => {
+    await open('/');
+    fireEvent.click(strip(HQ).getByRole('button', { name: 'Restart Harmonizer' }));
+    fireEvent.click(main().getByRole('button', { name: 'Yes, restart' }));
+    // While it runs the Restart button is disabled: focus waits on the heading, never on <body>.
+    expect(document.activeElement).toBe(main().getByRole('heading', { level: 1 }));
+    await vi.waitFor(() => expect(posted('/api/harmonizer/restart')).toHaveLength(1));
+
+    // The stream brings the new Harmonizer: its controls mount and take focus on Restart.
+    const before = snapshot() as Extract<ServerMessage, { type: 'snapshot' }>;
+    const old = before.agents.find((a) => a.id === 'a-harmonizer')!;
+    const fresh = { ...old, id: 'a-harmonizer-2', createdAt: '2999-01-01T00:00:00.000Z' };
+    const socket = FakeWebSocket.instances.at(-1)!;
+    await act(async () =>
+      socket.serverSends({
+        ...before,
+        seq: 20,
+        agents: [...before.agents, fresh],
+        statuses: [
+          ...before.statuses.map((r) =>
+            r.agentId === 'a-harmonizer' ? { ...r, state: 'stopped' as const } : r,
+          ),
+          status(fresh.id),
+        ],
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(
+        strip(HQ).getByRole('button', { name: 'Restart Harmonizer' }),
+      ),
+    );
+    expect(strip(HQ).getByRole('button', { name: 'Pause the Harmonizer' })).toBeTruthy();
+  });
+
+  it('a restart that fails gives focus back to Restart, with the reason', async () => {
+    const fetchMock = vi.mocked(fetch);
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url, init) =>
+      String(url).endsWith('/api/harmonizer/restart')
+        ? new Response(JSON.stringify({ error: 'refused', message: 'try again in 4 min' }), {
+            status: 429,
+          })
+        : base(url, init),
+    );
+    await open('/');
+    const button = strip(HQ).getByRole('button', { name: 'Restart Harmonizer' });
+    fireEvent.click(button);
+    fireEvent.click(main().getByRole('button', { name: 'Yes, restart' }));
+    await vi.waitFor(() => expect(document.activeElement).toBe(button));
+    expect(
+      main()
+        .getAllByRole('alert')
+        .some((a) => /try again in 4 min/.test(a.textContent ?? '')),
+    ).toBe(true);
   });
 });
 

@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { isHarnessMeta, TaskPriority } from '@galactic/protocol';
-import type { ControlAction, ControlTarget, Id, Meta } from '@galactic/protocol';
+import type { ControlAction, ControlTarget } from '@galactic/protocol';
 import { DomainError, must } from '../../domain/errors.js';
+import { usedFor } from '../../domain/questions.js';
 import type { BrainTool, BrainToolContext } from '../definition.js';
 import { checkUserAgreed, CONFIRMED_CONTROLS, labelOf } from './closure-tools.js';
 import { S } from './input.js';
@@ -14,8 +15,9 @@ import { S } from './input.js';
  *   - pause, resume and edit (a task's description or priority, a project's name) run at once;
  *   - stop and cancel run only on an `ask_confirmation` question this Harmonizer asked for exactly
  *     that action and target, answered by the user with its first choice (decision 42's check,
- *     `checkUserAgreed`), and each such answer unlocks one call: it is consumed — recorded on the
- *     target's `meta.usedConfirmations` — once the control went through;
+ *     `checkUserAgreed`), and each such answer unlocks one call: it is used up in the control's own
+ *     transaction (`control(..., {confirmation})` → the question row's `meta.usedFor`), so two
+ *     calls with one answer never both pass and a refused control leaves the answer unused;
  *   - the trust level and permission table stay the user's (decision 49): an edit naming them is
  *     refused, and so is any other field the panel could not edit;
  *   - scene-harness rows (decision 79) are refused: the harness drives its own stand-ins.
@@ -50,14 +52,6 @@ const TaskEdit = z
   .object({ description: z.string().trim().min(1).optional(), priority: TaskPriority.optional() })
   .strict();
 const ProjectEdit = z.object({ name: z.string().trim().min(1).optional() }).strict();
-
-/** The `meta` key holding the confirmations a stop or cancel already used. */
-export const USED_CONFIRMATIONS = 'usedConfirmations';
-
-function usedConfirmations(meta: Meta | undefined): Id[] {
-  const used = meta?.[USED_CONFIRMATIONS];
-  return Array.isArray(used) ? used.filter((x): x is Id => typeof x === 'string') : [];
-}
 
 function issues(error: z.ZodError): string {
   return error.issues
@@ -147,12 +141,13 @@ export const controlWorkTool: BrainTool = {
     if (changes !== undefined && action !== 'edit') {
       throw new DomainError('invalid', `changes go with "edit" only, not with "${action}"`);
     }
-    const row = workOf(ctx, target);
+    workOf(ctx, target);
 
     const confirmed = (CONFIRMED_CONTROLS as readonly string[]).includes(action);
     if (confirmed) {
       const confirm = action as (typeof CONFIRMED_CONTROLS)[number];
-      if (questionId && usedConfirmations(row.meta).includes(questionId)) {
+      // Checked again, atomically, by the control's transaction (`consumeConfirmation`).
+      if (questionId && usedFor(ctx.queries.question(questionId)) !== undefined) {
         throw new DomainError(
           'invalid',
           `the user's answer to ${questionId} was already used for a ${confirm}: ` +
@@ -164,19 +159,10 @@ export const controlWorkTool: BrainTool = {
 
     const control: ControlAction =
       action === 'edit' ? { action, changes: editChanges(target.kind, changes) } : { action };
-    await ctx.commands.control(target, control, ctx.actor, { origin: ctx.origin });
-
-    if (confirmed && questionId) {
-      // Consumed once the control went through: the same answer never unlocks a second one.
-      const fresh =
-        target.kind === 'project' ? ctx.queries.project(target.id) : ctx.queries.task(target.id);
-      const meta = {
-        ...fresh?.meta,
-        [USED_CONFIRMATIONS]: [...usedConfirmations(fresh?.meta), questionId],
-      };
-      if (target.kind === 'project') await ctx.commands.updateProject(target.id, { meta });
-      else await ctx.commands.updateTask(target.id, { meta });
-    }
+    await ctx.commands.control(target, control, ctx.actor, {
+      origin: ctx.origin,
+      ...(confirmed && questionId ? { confirmation: questionId } : {}),
+    });
     const after =
       target.kind === 'project' ? ctx.queries.project(target.id) : ctx.queries.task(target.id);
     return {

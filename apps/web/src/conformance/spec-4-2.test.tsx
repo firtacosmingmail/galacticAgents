@@ -165,7 +165,7 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
       expect(within(open).getByText(fx.question.context.text)).toBeTruthy();
     });
 
-    it('§4.2.11 a message box appears only while the Steward has an open clarification', async () => {
+    it('§4.2.11a a message box appears only while the Steward has an open clarification', async () => {
       await openPanel(mode);
       const view = await selectSteward();
       const box = view.getByRole('form', { name: 'answer the clarification' });
@@ -194,7 +194,7 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
       expect(view.getByText(/Read-only: Stewards take no messages/)).toBeTruthy();
     });
 
-    it('§4.2.11 … and none for a Steward with only a permission request (allow / refuse only)', async () => {
+    it('§4.2.11b … and none for a Steward with only a permission request (allow / refuse only)', async () => {
       await openPanel(mode, '/steward/a-steward-2');
       const view = within(screen.getByRole('region', { name: `view of ${ASTEROID_STEWARD}` }));
       expect(view.queryByRole('form', { name: 'answer the clarification' })).toBeNull();
@@ -428,13 +428,13 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
         sent: { target: T1, action: { action: 'archive' } },
       },
       {
-        req: '§4.2.31 pin a task (keep it visible)',
+        req: '§4.2.31-1 pin a task (keep it visible)',
         at: onTask({ state: 'completed' }),
         more: { group: 'task', button: 'Pin' },
         sent: { target: T1, action: { action: 'pin', pinned: true } },
       },
       {
-        req: '§4.2.31 unpin a task',
+        req: '§4.2.31-2 unpin a task',
         at: onTask({ state: 'completed', pinned: true }),
         more: { group: 'task', button: 'Unpin' },
         sent: { target: T1, action: { action: 'pin', pinned: false } },
@@ -473,7 +473,7 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
         sent: { target: P1, action: { action: 'cancel' } },
       },
       {
-        req: '§4.2.38 close a project now',
+        req: '§4.2.38 close a project now (and §4.3.21a: from the panel)',
         at: onProject({ state: 'awaiting_closure' }),
         more: { group: 'project', button: 'Close' },
         confirm: 'Yes, close',
@@ -551,7 +551,7 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
       };
     };
 
-    it('§4.2.42h pause and resume the Harmonizer itself', async () => {
+    it('§4.2.42h-1 pause and resume the Harmonizer itself', async () => {
       await openPanel(mode);
       expect(strip(HARMONIZER).queryByRole('button', { name: /stop/i })).toBeNull();
       await click(strip(HARMONIZER).getByRole('button', { name: 'Pause the Harmonizer' }));
@@ -568,13 +568,13 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
       expect(strip(HARMONIZER).queryByRole('button', { name: 'Resume session' })).toBeNull();
     });
 
-    it('§4.2.42h resume the session of an interrupted Harmonizer', async () => {
+    it('§4.2.42h-2 resume the session of an interrupted Harmonizer', async () => {
       await openPanel(mode, '/', withHq('interrupted'));
       await click(strip(HARMONIZER).getByRole('button', { name: 'Resume session' }));
       expect(postedPaths(fetchMock)).toEqual(['/api/agents/a-harmonizer/recover']);
     });
 
-    it('§4.2.42h restart the Harmonizer (confirmed); the dock follows the new one', async () => {
+    it('§4.2.42h-3 restart the Harmonizer (confirmed); the dock follows the new one', async () => {
       await openPanel(mode);
       await click(strip(HARMONIZER).getByRole('button', { name: 'Restart Harmonizer' }));
       // Destructive: nothing goes out before the confirmation, which starts on "Keep".
@@ -671,16 +671,22 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
   });
 
   describe('§4.2 history view and list mode', () => {
-    it('§4.2.46 a history view of archived work and past questions (/history)', async () => {
+    it('§4.2.46a a history view of archived work (/history)', async () => {
       await openPanel(mode);
       await click(screen.getByRole('link', { name: 'History' }));
       expect(window.location.pathname).toBe('/history');
       expect(
         await screen.findByRole('button', { name: 'Inspect Fix the flaky date test' }),
       ).toBeTruthy();
-      expect(await screen.findByText('Tabs or spaces?')).toBeTruthy();
       // The history page replaces the scene (decision 62).
       expect(screen.queryByTestId('solar-scene')).toBeNull();
+    });
+
+    it('§4.2.46b … and of past questions (/history)', async () => {
+      await openPanel(mode);
+      await click(screen.getByRole('link', { name: 'History' }));
+      expect(window.location.pathname).toBe('/history');
+      expect(await screen.findByText('Tabs or spaces?')).toBeTruthy();
     });
 
     it('§4.2.47 the panel works with the 3D scene hidden (list mode)', async () => {

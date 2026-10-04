@@ -359,7 +359,7 @@ describe.each(MODES)('SPEC §4.3 requests the user must be able to make — $nam
   });
 
   describe('§4.3 close a project; archive early, pin or reopen finished work', () => {
-    it('§4.3.21 close a project by answering the Harmonizer’s “Anything else?”', async () => {
+    it('§4.3.21b close a project by answering the Harmonizer’s “Anything else?”', async () => {
       await openPanel(mode, '/', snapshot({ questions: [anythingElse], proposals: [] }));
       const thread = within(within(main()).getByRole('log'));
       const card = await thread.findByRole('article', {

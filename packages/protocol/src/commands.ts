@@ -199,6 +199,16 @@ export interface WriteOptions {
   origin?: RequestOrigin | undefined;
 }
 
+/** `control`'s options: the write's origin, and a confirmation it uses up (P5-07). */
+export interface ControlOptions extends WriteOptions {
+  /**
+   * The `ask_confirmation` question whose answer allows this stop or cancel (decision 83): marked
+   * used on the question row (`meta.usedFor`) in the control's own transaction, so one answer
+   * allows one control — a second use is refused, and a refused control leaves it unused.
+   */
+  confirmation?: Id | undefined;
+}
+
 /** What every command returns: the affected aggregate plus the events it appended. */
 export interface CommandResult<T> {
   value: T;
@@ -291,11 +301,14 @@ export interface DomainCommands {
   withdrawQuestion(questionId: Id, reason: string, by: Actor): Promise<CommandResult<Question>>;
 
   // panel actions (SPEC decision 11b)
-  /** A project edit's `permissionPolicy` is floored unless `write.origin` is `local` (P2-21). */
+  /**
+   * A project edit's `permissionPolicy` is floored unless `write.origin` is `local` (P2-21);
+   * `write.confirmation` is used up in the same transaction (P5-07).
+   */
   control(
     target: ControlTarget,
     action: ControlAction,
     by: Actor,
-    write?: WriteOptions,
+    write?: ControlOptions,
   ): Promise<CommandResult<void>>;
 }

@@ -8,7 +8,7 @@ From P5-05's follow-up F1 and Cosmin's choice (SPEC decision 83). The Harmonizer
   - Input: `{target: {kind: 'task' | 'project', id}, action: 'pause' | 'resume' | 'stop' | 'cancel' | 'edit', changes?, questionId?}`, parsed with zod (strict: an unknown key, an agent target or another action such as `close` is refused as `invalid`).
   - **Pause, resume, edit** run at once.
   - **Stop, cancel** run only with the `questionId` of an `ask_confirmation` question that this Harmonizer asked for exactly that action and target, answered by the user with its first choice (or yes). This is decision 42's check, `checkUserAgreed` in `closure-tools.ts`, now exported. Without such an answer the tool error says to ask first.
-  - **One answer, one call.** Once the control went through, the question id is appended to the target's `meta.usedConfirmations`; the same answer is refused on a second call ("already used; ask_confirmation again"). A control the domain refuses does not use the answer up.
+  - **One answer, one call.** The answer is used up in the control's own transaction: `control(..., {confirmation: questionId})` marks the question row's `meta.usedFor` ("stop task t-1") and records the control in one `runCommand` (`consumeConfirmation`, `domain/questions.ts`). The same answer is refused on a second call ("already used … ask_confirmation again"), also when two calls race; a control the domain refuses rolls the mark back, so the answer stays valid. (Wave-3 review: the first version wrote `meta.usedConfirmations` on the target in a second transaction after the control — two parallel calls both passed, and a crash between them left the answer reusable.)
   - **Edit** takes a task's `description` and/or `priority` (`TaskPriority`) or a project's `name`. These are the panel's edit fields minus the trust level. `permissionPolicy`, `trustLevel`, `policy`, `trust`, `preset` and `autoApproveRemote` are refused with a decision-49 message ("tell the user to change it on the project's edit form"). Any other field is refused too, as are empty changes and `changes` given with another action. The domain's `taskEdit` / `projectEdit` check the edit again.
   - **Scene-harness rows** (`meta.harness`, decision 79) are refused.
   - The control is recorded with the Harmonizer as `by`. Its write options carry the turn's origin, and supervisors are woken by `concernedSupervisors`, exactly as for a panel action.
@@ -18,10 +18,11 @@ From P5-05's follow-up F1 and Cosmin's choice (SPEC decision 83). The Harmonizer
 
 ## Tests
 
-`apps/server/src/brains/harmonizer/control-work.test.ts` uses the brain harness with the real Harmonizer definition and a scripted model. It has 7 tests:
+`apps/server/src/brains/harmonizer/control-work.test.ts` uses the brain harness with the real Harmonizer definition and a scripted model. It has 8 tests:
 
 - **Pause, resume and edit at once.** Pause, resume and a task edit (description and priority) run on a project task, plus a project rename. The Steward is paused and resumed, and the rows are updated. The Waykeeper brain's prompts carry "paused task …", "resumed task …" and "edited project …" (supervisors woken as for a panel action). The work-level `control.*` events show the Harmonizer as `by`. No question is asked.
-- **Stop and cancel.** Both are refused without a confirmation. A stop is accepted after a confirmed `ask_confirmation`: the task is `paused`, its Steward `stopped`, and the answer is recorded as used. A second stop with the same answer is refused. A cancel after its own confirmation is accepted and the task is `failed`.
+- **Stop and cancel.** Both are refused without a confirmation. A stop is accepted after a confirmed `ask_confirmation`: the task is `paused`, its Steward `stopped`, and the answer is recorded as used on the question (no `task.updated`). A second stop with the same answer is refused. A cancel after its own confirmation is accepted and the task is `failed`. A stop of the failed task, confirmed, is refused by the domain and leaves its answer unused.
+- **Two calls at once** with one answer (the handler called twice in parallel): exactly one goes through, the other is refused "already used".
 - **Nothing else unlocks a stop.** These do not: a confirmation for another action (cancel, pin), for another task, an answer "No", or a question another agent asked that the user answered "yes".
 - **Refused edits.** The trust level (`permissionPolicy`, `trustLevel`), a task `name`, an invalid priority, a project `description`, a blank name, an edit without changes, changes with pause, the `close` action, an agent target and an unknown id are all refused. Nothing changed and no control was logged.
 - **Harness rows** (task and project) are refused.
@@ -30,7 +31,7 @@ From P5-05's follow-up F1 and Cosmin's choice (SPEC decision 83). The Harmonizer
 
 ## Decisions
 
-- **Consumption lives on the target's `meta`** (`usedConfirmations`), not on the question. No command updates a question's meta, and the target's meta is where speculative fields go (CLAUDE.md). The `task.updated` / `project.updated` it emits wakes no brain. Close and `finished_work` keep their earlier rule (not consumed): they are not repeatable in a harmful way, because their state transitions refuse a second run.
+- **Consumption lives on the question's row** (`meta.usedFor`), written in the control's transaction (`ControlOptions.confirmation` in `packages/protocol`); the control event is the event of that command, so the work's history gets no extra `task.updated` / `project.updated`. Close and `finished_work` keep their earlier rule (not consumed): they are not repeatable in a harmful way, because their state transitions refuse a second run.
 - **The answer is used up after the control, not before.** A control the domain refuses (for example a cancel while a sub-project is active) leaves the user's answer valid for a retry.
 - **The trust-level list is broader than `permissionPolicy`.** Names a model might invent (`trustLevel`, `policy`, …) get the decision-49 message instead of a generic "unknown field".
 - **Closing a project task** stays the Waykeeper's (decision 11). Decision 83 does not add it; the control map lists it as "by design".

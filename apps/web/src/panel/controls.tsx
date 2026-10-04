@@ -402,20 +402,52 @@ export const RESTART_HARMONIZER_CONFIRM =
  * Stop: the user is never left without a Harmonizer (decision 44 does not replace one the user
  * stopped). The selection stays on the Harmonizer, which is the newest one (`currentHarmonizer`).
  */
+/**
+ * Focus across a restart (wave-3 review): "Yes, restart" moves focus to the dock bar's heading
+ * while the restart runs (the Restart button is disabled meanwhile), and the controls of the new
+ * Harmonizer — a remount, keyed by its id — take it back on their Restart button. The dock bar
+ * keeps this between the two mounts; a mount long after the restart leaves focus alone.
+ */
+export interface RestartFocus {
+  /** The Harmonizer that was restarted. */
+  from: Id;
+  since: number;
+}
+const RESTART_FOCUS_MS = 30_000;
+
 export function HarmonizerControls({
   agentId,
   status,
   name,
+  restartFocusRef,
 }: {
   agentId: Id;
   status: StatusRecord | undefined;
   name: string;
+  restartFocusRef?: RefObject<RestartFocus | undefined>;
 }) {
   const c = useControls(agentId, undefined);
   const api = useApi();
   const restart = useAction();
   const [confirming, setConfirming] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
+  const restartButton = useRef<HTMLButtonElement>(null);
+  /** Set by "Yes, restart": a restart that fails gives focus back to the Restart button. */
+  const refocusRef = useRef(false);
+  useEffect(() => {
+    // Mounted for the new Harmonizer after "Yes, restart": focus comes back to Restart.
+    const pending = restartFocusRef?.current;
+    if (!restartFocusRef || !pending || pending.from === agentId) return;
+    restartFocusRef.current = undefined;
+    if (Date.now() - pending.since < RESTART_FOCUS_MS) restartButton.current?.focus();
+  }, [agentId, restartFocusRef]);
+  useEffect(() => {
+    // The restart failed: the same controls, the Restart button enabled again.
+    if (restart.busy || restart.error === undefined || !refocusRef.current) return;
+    refocusRef.current = false;
+    if (restartFocusRef) restartFocusRef.current = undefined;
+    restartButton.current?.focus();
+  }, [restart.busy, restart.error, restartFocusRef]);
   const actions = agentActions(status).filter((a) => INLINE.has(a.action));
   const recoverable = status?.state === 'interrupted';
   const busy = c.busy || restart.busy;
@@ -449,6 +481,7 @@ export function HarmonizerControls({
         <button
           type="button"
           className="agc-destructive"
+          ref={restartButton}
           disabled={busy}
           onClick={(e) => {
             opener.current = e.currentTarget;
@@ -466,6 +499,12 @@ export function HarmonizerControls({
           opener={opener}
           onConfirm={() => {
             setConfirming(false);
+            if (restartFocusRef) restartFocusRef.current = { from: agentId, since: Date.now() };
+            refocusRef.current = true;
+            opener.current
+              ?.closest('.pnl-dock-bar')
+              ?.querySelector<HTMLElement>('.pnl-title')
+              ?.focus();
             void restart.run(() => api.restartHarmonizer());
           }}
           onKeep={() => setConfirming(false)}

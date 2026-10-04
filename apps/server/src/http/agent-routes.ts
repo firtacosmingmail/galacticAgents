@@ -159,8 +159,9 @@ export function registerAgentRoutes(
      * The panel's "Restart Harmonizer" (P5-06; SPEC decision 82): stops the running Harmonizer as
      * the user's stop and starts a fresh one on the same runtime; the reply names the new one.
      * Any authenticated client may ask, like stopping any agent (`/api/agents/:id/stop`, the
-     * panel's controls): it is a control action, not a settings write. 409 when it cannot (a
-     * restart under way, no runtime configured, the start refused).
+     * panel's controls): it is a control action, not a settings write. 409 when it refuses (a
+     * restart or a resume of the Harmonizer under way, no runtime configured, the start refused),
+     * 429 with `Retry-After` past the restart window (3 in 10 min), 500 for anything unexpected.
      */
     const { restartHarmonizer } = opts;
     if (restartHarmonizer) {
@@ -168,8 +169,20 @@ export function registerAgentRoutes(
         try {
           return (await restartHarmonizer()) satisfies RestartHarmonizerResponse;
         } catch (error) {
+          if (!(error instanceof DomainError)) {
+            req.log.error(error);
+            return reply.code(500).send({
+              error: 'internal',
+              message: redactSecrets(String((error as Error).message ?? error)),
+            });
+          }
           req.log.warn(error);
-          return reply.code(409).send(refusal('refused', (error as Error).message));
+          const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;
+          if (typeof retryAfterMs === 'number') {
+            void reply.header('retry-after', String(Math.max(Math.ceil(retryAfterMs / 1000), 1)));
+            return reply.code(429).send(refusal('refused', error.message));
+          }
+          return reply.code(409).send(refusal('refused', error.message));
         }
       });
     }

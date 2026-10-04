@@ -299,7 +299,7 @@ export class AgentRuntime {
     // Spawns per hour survive a restart (P2-17): every agent row created in the last hour counts.
     for (const agent of opts.log.tables.agents.all()) {
       const at = Date.parse(agent.createdAt);
-      if (Number.isFinite(at)) this.caps.noteSpawn(agent.supervisorId, at);
+      if (Number.isFinite(at)) this.caps.noteSpawn(agent.supervisorId, at, agent.role);
     }
     for (const adapter of opts.adapters) {
       this.adapters.set(adapter.runtime, adapter);
@@ -351,7 +351,7 @@ export class AgentRuntime {
         },
       }),
     ).value;
-    this.caps.noteSpawn(agent.supervisorId);
+    this.caps.noteSpawn(agent.supervisorId, undefined, agent.role);
     return this.start(agent, req, adapter, (opts) => adapter.spawn(opts), false);
   }
 
@@ -1518,6 +1518,29 @@ export class AgentRuntime {
     const [spawned] = log.latestOf('agent.spawned', agentId, 1);
     if (flagged && (!spawned || flagged.seq > spawned.seq)) return;
     this.command(({ emit }) => emit({ type: 'recovery.needs_attention', agentId, reason }));
+  }
+
+  /**
+   * A fresh Harmonizer replaced the interrupted ones (P5-06 review: a restart, `keepHarmonizer`):
+   * none of them comes back while it runs (`refuseReopen`, decision 32), so the questions they
+   * still hold — a Waykeeper's, escalated — move on to the next living holder, i.e. the user
+   * (P2-03, decision 45), instead of waiting on a holder that is gone. One on its way back
+   * (`isReserved`) keeps them; the rows stay `interrupted` (an ended status is a sink), like the
+   * Harmonizers startup recovery passes over. Returns the agents whose questions moved.
+   */
+  releaseInterruptedHarmonizers(why: string): Id[] {
+    const { tables } = this.opts.log;
+    const holders = new Set<Id>();
+    for (const q of tables.questions.all()) {
+      if (q.status !== 'open' || q.holder.type !== 'agent' || !q.holder.id) continue;
+      const id = q.holder.id;
+      if (this.live.has(id) || this.isReserved(id)) continue;
+      const agent = tables.agents.get(id);
+      if (agent?.role !== 'harmonizer' || isHarnessMeta(agent.meta)) continue;
+      holders.add(id);
+    }
+    for (const id of holders) this.releaseHeld(id, why);
+    return [...holders];
   }
 
   /**

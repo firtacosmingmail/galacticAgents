@@ -3,7 +3,7 @@ import { RestartHarmonizerResponse } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { startHarmonizer } from '../brains/harmonizer/index.js';
-import { harmonizerRestarter } from '../brains/harmonizer/restart.js';
+import { harmonizerRestarter, RestartLimitError } from '../brains/harmonizer/restart.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { startTestApp, TEST_TOKEN } from '../test/harness.js';
 
@@ -82,5 +82,39 @@ describe('POST /api/harmonizer/restart (P5-06)', () => {
     } finally {
       await other.stop();
     }
+  });
+
+  it('answers 429 with Retry-After past the restart window, 500 for an unexpected failure', async () => {
+    const failing = async (error: Error) => {
+      const other = await startTestApp({
+        log: composed.log,
+        runtime: composed.runtime,
+        commands: composed.commands,
+        restartHarmonizer: () => Promise.reject(error),
+      });
+      try {
+        const res = await fetch(`${other.baseUrl}/api/harmonizer/restart`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${TEST_TOKEN}` },
+        });
+        return {
+          status: res.status,
+          retryAfter: res.headers.get('retry-after'),
+          body: await res.json(),
+        };
+      } finally {
+        await other.stop();
+      }
+    };
+    const limited = await failing(
+      new RestartLimitError('restarted 3 times in the last 10 min; try again in 4 min', 210_000),
+    );
+    expect(limited).toMatchObject({
+      status: 429,
+      retryAfter: '210',
+      body: { error: 'refused', message: expect.stringMatching(/try again in 4 min/) },
+    });
+    const broken = await failing(new Error('database is locked'));
+    expect(broken).toMatchObject({ status: 500, body: { error: 'internal' } });
   });
 });

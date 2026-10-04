@@ -1,4 +1,10 @@
-import type { Actor, Agent, AgentRuntime, Id } from '@galactic/protocol';
+import {
+  isHarnessMeta,
+  type Actor,
+  type Agent,
+  type AgentRuntime,
+  type Id,
+} from '@galactic/protocol';
 import type { BrainDefinition } from '../definition.js';
 import { STEWARD_TOOLS } from '../steward-tools.js';
 import type { BrainPlacement, BrainRunner, BrainRunnerOptions } from '../runner.js';
@@ -56,7 +62,14 @@ export function harmonizerBrain(deps: HarmonizerDeps): BrainDefinition {
 
 /** What the boot-time start needs from the composed runtime. */
 export interface HarmonizerHost {
-  runtime: { liveAgents(): Agent[]; stop(agentId: Id, by: Actor): Promise<void> };
+  runtime: {
+    liveAgents(): Agent[];
+    stop(agentId: Id, by: Actor): Promise<void>;
+    /** An interrupted agent on its way back (P2-16): a restart waits for it (P5-06). */
+    isReserved?(agentId: Id): boolean;
+    /** Moves on what interrupted Harmonizers still hold, once a fresh one runs (P5-06 review). */
+    releaseInterruptedHarmonizers?(why: string): Id[];
+  };
   /** The runner of a running brain (P2-16). */
   runnerOf?(agentId: Id): BrainRunner | undefined;
   startBrain(
@@ -89,15 +102,51 @@ export type StartHarmonizerResult =
   | { status: 'running'; agentId: Id; runner?: BrainRunner };
 
 /**
+ * One start of the Harmonizer at a time per runtime (P5-06 review): boot, `keepHarmonizer` and the
+ * panel's restart all go through it, so two of them can never both find none running and start
+ * one each — "one Harmonizer" (decision 32) is structural, not a matter of timing. A caller that
+ * finds a start under way waits for it and then looks again.
+ */
+const locks = new WeakMap<object, Promise<unknown>>();
+
+export function withHarmonizerLock<T>(host: HarmonizerHost, fn: () => Promise<T>): Promise<T> {
+  const key = host.runtime;
+  const before = locks.get(key) ?? Promise.resolve();
+  const run = before.then(fn, fn);
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  locks.set(key, settled);
+  void settled.then(() => {
+    if (locks.get(key) === settled) locks.delete(key);
+  });
+  return run;
+}
+
+/** The scene harness's dormant stand-in (decision 79) is never the Harmonizer. */
+export const isRealHarmonizer = (a: Agent): boolean =>
+  a.role === 'harmonizer' && !isHarnessMeta(a.meta);
+
+/**
  * Starts the Harmonizer unless one already runs. Called once at boot, after `recover()`: an
  * interrupted Harmonizer that recovery resumed (through its runner, P2-16) is left running; one
- * that could not be resumed stays interrupted, and a fresh one replaces it.
+ * that could not be resumed stays interrupted, and a fresh one replaces it. Single-flight with
+ * every other start (`withHarmonizerLock`).
  */
-export async function startHarmonizer(
+export function startHarmonizer(
   host: HarmonizerHost,
   opts: StartHarmonizerOptions,
 ): Promise<StartHarmonizerResult> {
-  const live = host.runtime.liveAgents().find((a) => a.role === 'harmonizer');
+  return withHarmonizerLock(host, () => startHarmonizerLocked(host, opts));
+}
+
+/** `startHarmonizer` for a caller that already holds the lock (the restart, P5-06). */
+export async function startHarmonizerLocked(
+  host: HarmonizerHost,
+  opts: StartHarmonizerOptions,
+): Promise<StartHarmonizerResult> {
+  const live = host.runtime.liveAgents().find(isRealHarmonizer);
   if (live && live.runtime === opts.runtime) {
     const runner = host.runnerOf?.(live.id);
     return { status: 'running', agentId: live.id, ...(runner ? { runner } : {}) };
@@ -122,6 +171,8 @@ export async function startHarmonizer(
     { runtime: opts.runtime, cwd: opts.cwd },
     opts.runner ?? {},
   );
+  // An interrupted Harmonizer is not coming back beside this one: what it held moves on (P5-06).
+  host.runtime.releaseInterruptedHarmonizers?.(`replaced by Harmonizer ${runner.agentId}`);
   return {
     status: 'started',
     agentId: runner.agentId,

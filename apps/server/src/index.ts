@@ -151,6 +151,7 @@ const restartHarmonizer = harmonizerRestarter(composed, {
   ...(hqRuntime ? { defaultRuntime: hqRuntime } : {}),
   cwd: workspaces.projectsRoot,
   deps: harmonizerDeps,
+  onError,
 });
 const webDir = process.env['GALACTIC_WEB_DIR'];
 const app = buildApp({
