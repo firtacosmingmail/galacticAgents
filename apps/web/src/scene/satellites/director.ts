@@ -117,6 +117,12 @@ export const SURFACE = 1.03;
 export const PRESENCE = 0.4;
 /** Seconds a beam cut short takes to fade out (a scan's own end fade is slower, so never cut). */
 export const BEAM_FADE_OUT = 0.3;
+/**
+ * A last drawn position older than this (seconds) is stale as a flight's origin — after a long
+ * gap without frames (a hidden tab) the old body has moved on along its own orbit — so the flight
+ * starts from the satellite's orbit around the old body's live anchor instead.
+ */
+export const STALE_ORIGIN = 2;
 
 /** Whether `count` satellites take the instanced path. */
 export function instancedPath(count: number, quality: SatelliteQuality): boolean {
@@ -205,6 +211,15 @@ interface Entry {
   /** Where the current flight started (captured on its first frame), by flight start time. */
   flightFrom?: { start: number; point: Vec3Tuple } | undefined;
   /**
+   * P4-04: where it was last drawn, on which body and when (`at`, motion clock). A flight starts
+   * from this point when it is fresh (`STALE_ORIGIN`) — which covers the usual move, including an
+   * old body that stops being drawn in the same render that starts the flight (an asteroid
+   * folding into the belt as its task joins a project, decision 63): the satellite was drawn on
+   * the last frame. It is the "ghost" origin only after a frame where the satellite itself was
+   * hidden (its old body had no anchor then) and the old body is not drawn either.
+   */
+  lastDrawn?: { bodyId: Id; point: Vec3Tuple; at: number } | undefined;
+  /**
    * Its own orbit clock (P4-02): seconds of orbit travelled, at its state's `orbitRate` (a paused
    * satellite holds still, a failed one drifts; landing holds the angle it came down at), last
    * advanced at `clockAt`. At rate 1 it equals the motion clock.
@@ -240,13 +255,20 @@ export class SatelliteDirector {
    * from anywhere) and grow in; ended ones shrink out and are then dropped; the others keep their
    * actor, slot and orbit and get the new input — a new body makes the next `update` start a
    * flight (to the lowest free slot there).
+   *
+   * P4-04: landed satellites (completed work) hold no orbit slot — they sit on the surface, and a
+   * project body collecting its finished Stewards must not push its live satellites outwards. One
+   * that lands keeps the orbit it came down from; one that appears already landed (a reload) gets
+   * a slot among its body's landed satellites, which only spreads them over the surface.
    */
   setSpecs(specs: readonly SatelliteSpec[], now: number): void {
     const reduced = this.options.reducedMotion;
-    const slots = orbitSlots(specs, this.slotHolders);
+    const flying = specs.filter((s) => !s.landed);
+    const slots = orbitSlots(flying, this.slotHolders);
     this.slotHolders = new Map(
-      specs.map((s) => [s.agentId, { bodyId: s.bodyId, slot: slots.get(s.agentId) ?? 0 }]),
+      flying.map((s) => [s.agentId, { bodyId: s.bodyId, slot: slots.get(s.agentId) ?? 0 }]),
     );
+    const parked = orbitSlots(specs.filter((s) => s.landed));
     const next = new Map<Id, Entry>();
     for (const spec of specs) {
       const input: SatelliteInput = {
@@ -255,9 +277,14 @@ export class SatelliteDirector {
         archetype: spec.archetype,
         landed: spec.landed,
       };
-      const slot = slots.get(spec.agentId) ?? 0;
-      const key = orbitKeyOf(spec.role, slot);
       const known = this.entries.get(spec.agentId);
+      // P4-04: a landed satellite whose body moved (a promotion) is re-created landed there.
+      const relanded =
+        spec.landed && known?.actor.mode === 'landed' && known.actor.bodyId !== spec.bodyId;
+      const slot = slots.get(spec.agentId) ?? parked.get(spec.agentId) ?? 0;
+      // A satellite landing where it orbits keeps its orbit (it comes down from it).
+      const keep = spec.landed && known !== undefined && known.actor.bodyId === spec.bodyId;
+      const key = keep ? known.orbitKey : orbitKeyOf(spec.role, slot);
       if (known) {
         this.advanceClock(known, now); // up to now at the old state's orbit rate
         known.spec = spec;
@@ -265,7 +292,14 @@ export class SatelliteDirector {
         // Taken now, not at the next drawn frame: a flight or landing starts when the world
         // changed, so it ends on time even if no frame is drawn meanwhile.
         known.actor = advance(known.actor, input, now, { reducedMotion: reduced });
-        if (known.orbitKey !== key) this.changeOrbit(known, spec, slot, key, now);
+        if (relanded && known.actor.mode === 'landed') {
+          // No orbit blend across the surface and a fresh grow-in on the new body.
+          known.orbit = satelliteOrbit(spec.agentId, spec.role, slot);
+          known.orbitKey = key;
+          known.orbitFrom = undefined;
+          known.presence = { from: reduced ? 1 : 0, to: 1, start: now };
+          known.lastDrawn = undefined;
+        } else if (known.orbitKey !== key) this.changeOrbit(known, spec, slot, key, now);
         if (known.leaving) {
           known.leaving = false;
           known.presence = { from: this.presenceAt(known, now), to: 1, start: now };
@@ -420,9 +454,9 @@ export class SatelliteDirector {
       f.presence = this.presenceAt(e, now);
       const radius = anchors(e.actor.bodyId, scratchCentre);
       if (radius === undefined) {
+        // Hidden until its body is drawn; a flight keeps its origin (it is keyed by its start).
         f.visible = false;
         f.beam = 0;
-        e.flightFrom = undefined;
         continue;
       }
       f.bodyRadius = radius;
@@ -432,7 +466,7 @@ export class SatelliteDirector {
       const orbit = this.orbitAt(e, now);
 
       if (e.actor.mode === 'flying' && e.actor.flight && view.flight !== undefined) {
-        this.placeFlight(e, f, t, view.flight, anchors);
+        this.placeFlight(e, f, t, view.flight, anchors, now);
       } else if (e.actor.mode === 'landing' || e.actor.mode === 'landed') {
         e.flightFrom = undefined;
         const angle = orbitAngle(orbit, t); // the clock holds while landing
@@ -445,6 +479,16 @@ export class SatelliteDirector {
         this.place(f, scratch);
       }
       f.visible = true;
+      if (e.lastDrawn) {
+        e.lastDrawn.bodyId = e.actor.mode === 'flying' ? '' : e.actor.bodyId;
+        e.lastDrawn.point[0] = f.position[0];
+        e.lastDrawn.point[1] = f.position[1];
+        e.lastDrawn.point[2] = f.position[2];
+        e.lastDrawn.at = now;
+      } else {
+        const bodyId = e.actor.mode === 'flying' ? '' : e.actor.bodyId;
+        e.lastDrawn = { bodyId, point: [f.position[0], f.position[1], f.position[2]], at: now };
+      }
 
       const look = SATELLITE_LOOK[e.spec.role];
       let size = look.size * radius;
@@ -478,8 +522,17 @@ export class SatelliteDirector {
 
   /**
    * A flight: from where the satellite was when it took off (captured on the flight's first
-   * frame: its last drawn position, else its old orbit, else the destination) to its place on the
-   * destination's orbit, which moves with the body, along an arc lifted toward +y.
+   * frame) to its place on the destination's orbit, which moves with the body, along an arc lifted
+   * toward +y. The origin, in order:
+   * 1. where it was drawn on the last frame, if that was within `STALE_ORIGIN` — the usual case,
+   *    also when the old body stops being drawn in the same render that starts the flight (an
+   *    asteroid whose task joined a project folds into the belt): the satellite was drawn on the
+   *    frame before;
+   * 2. its old orbit around the old body's live anchor (the satellite was hidden on the last
+   *    frame, or its last drawn position is stale after a long gap without frames);
+   * 3. P4-04's ghost — where it was last drawn on the old body — only after a frame where the
+   *    satellite itself was hidden and when the old body is not drawn now either;
+   * 4. only then the destination (nothing to fly from).
    */
   private placeFlight(
     e: Entry,
@@ -487,6 +540,7 @@ export class SatelliteDirector {
     t: number,
     p: number,
     anchors: AnchorLookup,
+    now: number,
   ): void {
     const flight = e.actor.flight;
     if (!flight) return;
@@ -497,15 +551,17 @@ export class SatelliteDirector {
     const dz = f.target[2] + scratch[2];
     if (!e.flightFrom || e.flightFrom.start !== flight.start) {
       let point: Vec3Tuple;
-      if (f.visible) point = [f.position[0], f.position[1], f.position[2]];
+      const fresh = e.lastDrawn !== undefined && now - e.lastDrawn.at <= STALE_ORIGIN;
+      if (f.visible && fresh) point = [f.position[0], f.position[1], f.position[2]];
       else {
         const centre: Vec3Tuple = [0, 0, 0];
         const r = anchors(flight.fromBodyId, centre);
-        if (r === undefined) point = [dx, dy, dz];
-        else {
+        const ghost = e.lastDrawn?.bodyId === flight.fromBodyId ? e.lastDrawn.point : undefined;
+        if (r !== undefined) {
           orbitOffset(orbit, orbitAngle(orbit, t), orbit.radius * r, scratch);
           point = [centre[0] + scratch[0], centre[1] + scratch[1], centre[2] + scratch[2]];
-        }
+        } else if (ghost) point = [ghost[0], ghost[1], ghost[2]];
+        else point = [dx, dy, dz];
       }
       e.flightFrom = { start: flight.start, point };
     }

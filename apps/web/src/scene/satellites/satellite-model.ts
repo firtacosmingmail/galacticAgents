@@ -1,5 +1,6 @@
 import {
   ENDED_STATES,
+  type Agent,
   type AgentRole,
   type AgentState,
   type Id,
@@ -23,9 +24,14 @@ import { deriveArchetype } from './archetype.js';
  *   respawned Steward on the task, a new Waykeeper on the project — live or not, so the old
  *   failure never comes back when the replacement ends: `isSuperseded`) or its work is over (task
  *   completed, archived or moved; project closed, archived, moved or cancelled: `isWorkOver`);
- * - `keepLanded` (P4-04): a `finished` Steward whose task is `completed` keeps its satellite,
- *   `landed: true`, while the server retains its record (the satellite lands and the body is
- *   colonised).
+ * - `keepLanded` (P4-04, on in the scene): completed work keeps its satellite, `landed: true` —
+ *   the newest Steward of a `completed` task, the newest Waykeeper of a `completed` project, once
+ *   the agent is no longer live (it finished, or the close stopped it; `hasLanded`). It lands on
+ *   the work's body, is drawn with the `finished` look whatever its record says (or without a
+ *   record: the server drops ended records after a day, retention lasts longer, decision 4), and
+ *   stays until the work is archived or reopened. The body itself is marked colonised by
+ *   `colonies/` when its host is completed. At most `LANDED_PER_BODY` (the newest agents') are
+ *   drawn per body.
  *
  * Its body is the body of its work — a Waykeeper's project's body, a Steward's task's body (a
  * project task lives on the project's body, decision 9) — falling back to the agent's own `bodyId`
@@ -66,9 +72,10 @@ export interface SatelliteListOptions extends SatelliteRuleOptions {
   harmonizer?: boolean;
 }
 
-/** What the scene draws (P4-02: failed agents and the HQ station; P4-04 adds `keepLanded`). */
+/** What the scene draws (P4-02: failed agents and the HQ station; P4-04: landed satellites). */
 export const SCENE_SATELLITES: Readonly<SatelliteListOptions> = {
   keepFailed: true,
+  keepLanded: true,
   harmonizer: true,
 };
 
@@ -92,12 +99,61 @@ export function isLive(world: SatelliteWorld, agentId: Id): boolean {
   return status !== undefined && !ENDED_STATES.has(status.state);
 }
 
-/** Whether an agent's work completed and its satellite lands: a finished Steward, task completed. */
-export function hasLanded(world: SatelliteWorld, agentId: Id): boolean {
+/**
+ * The newest agent that ran, per role and work (`steward:<taskId>`, `waykeeper:<projectId>`):
+ * built once per list (`satelliteList`), so the "is it superseded?" question is a lookup, not a
+ * scan of every agent per agent (O(agents) per list instead of O(agents²): a project with
+ * hundreds of finished Stewards over its retention). "Ran": it has a status record or a session
+ * (`ran`) — a Steward created and not started yet supersedes nothing, so it does not hide the
+ * older landed (or failed) satellite before it has done anything.
+ */
+export type NewestAgents = ReadonlyMap<string, Agent>;
+
+const workKey = (agent: Agent): string | undefined => {
+  if (agent.role === 'steward') return agent.taskId && `steward:${agent.taskId}`;
+  if (agent.role === 'waykeeper') return agent.projectId && `waykeeper:${agent.projectId}`;
+  return undefined;
+};
+
+/** Whether an agent ran: a status record, or a session the adapter reported. */
+const ran = (world: SatelliteWorld, agent: Agent): boolean =>
+  world.statuses[agent.id] !== undefined || agent.sessionRef !== undefined;
+
+export function newestAgents(world: SatelliteWorld): NewestAgents {
+  const newest = new Map<string, Agent>();
+  for (const agent of Object.values(world.agents)) {
+    if (!agent || !ran(world, agent)) continue;
+    const key = workKey(agent);
+    if (!key) continue;
+    const known = newest.get(key);
+    if (!known || isNewer(agent, known)) newest.set(key, agent);
+  }
+  return newest;
+}
+
+/**
+ * Whether an agent's work completed and its satellite lands (P4-04, decisions 4, 11): a Steward
+ * whose task is `completed`, or a Waykeeper whose project is `completed`, that is no longer live
+ * (finished, or stopped by the close — `control.close` stops the work's live agents) and is the
+ * newest agent of its role on that work (`isSuperseded`: one landed satellite per task or
+ * project, not one per attempt). The agent must have run (a status record or a session): a
+ * Steward created and never started leaves nothing to land. An archived or reopened task, or
+ * project, is not `completed`, so the satellite takes off or goes. `newest`: the list's index
+ * (`newestAgents`), built here when not given.
+ */
+export function hasLanded(
+  world: SatelliteWorld,
+  agentId: Id,
+  newest: NewestAgents = newestAgents(world),
+): boolean {
   const agent = world.agents[agentId];
-  const status = world.statuses[agentId];
-  if (agent?.role !== 'steward' || status?.state !== 'finished' || !agent.taskId) return false;
-  return world.tasks[agent.taskId]?.state === 'completed';
+  if (!agent || agent.role === 'harmonizer' || isLive(world, agentId)) return false;
+  if (!ran(world, agent)) return false;
+  const completed =
+    agent.role === 'steward'
+      ? agent.taskId !== undefined && world.tasks[agent.taskId]?.state === 'completed'
+      : agent.projectId !== undefined && world.projects[agent.projectId]?.state === 'completed';
+  return completed && !isSuperseded(world, agentId, newest);
 }
 
 /** Newer: by `createdAt` (ISO timestamps compare as strings), then by id. */
@@ -106,25 +162,23 @@ function isNewer(a: { createdAt: string; id: Id }, b: { createdAt: string; id: I
 }
 
 /**
- * Whether a newer agent of the same role has the failed agent's task (Steward) or project
- * (Waykeeper), live or not: a respawned Steward supersedes the failed one for good — when the
+ * Whether a newer agent of the same role that ran has the agent's task (Steward) or project
+ * (Waykeeper), live or ended: a respawned Steward supersedes the failed one for good — when the
  * replacement finishes or fails in turn, the old failure does not come back (the newest failure
- * is the one to show).
+ * is the one to show). A newer agent that has not run yet (no record, no session) does not
+ * supersede it yet. `newest`: the list's index (`newestAgents`), built here when not given.
  */
-export function isSuperseded(world: SatelliteWorld, agentId: Id): boolean {
+export function isSuperseded(
+  world: SatelliteWorld,
+  agentId: Id,
+  newest: NewestAgents = newestAgents(world),
+): boolean {
   const agent = world.agents[agentId];
-  if (!agent || agent.role === 'harmonizer') return false;
-  const key = agent.role === 'steward' ? 'taskId' : 'projectId';
-  const work = agent[key];
-  if (!work) return false;
-  return Object.values(world.agents).some(
-    (other) =>
-      other !== undefined &&
-      other.id !== agentId &&
-      other.role === agent.role &&
-      other[key] === work &&
-      isNewer(other, agent),
-  );
+  if (!agent) return false;
+  const key = workKey(agent);
+  if (!key) return false;
+  const top = newest.get(key);
+  return top !== undefined && top.id !== agentId && isNewer(top, agent);
 }
 
 /**
@@ -170,40 +224,77 @@ export function showsSatellite(
   world: SatelliteWorld,
   agentId: Id,
   options: SatelliteRuleOptions = {},
+  newest?: NewestAgents,
 ): boolean {
   if (isLive(world, agentId)) return true;
+  if (!options.keepLanded && !options.keepFailed) return false;
+  const index = newest ?? newestAgents(world);
+  // Landed first: a failed Steward of a task closed anyway lands with its completed work.
+  if (options.keepLanded && hasLanded(world, agentId, index)) return true;
   const state = world.statuses[agentId]?.state;
   if (options.keepFailed && state === 'failed') {
-    return !isSuperseded(world, agentId) && !isWorkOver(world, agentId);
+    return !isSuperseded(world, agentId, index) && !isWorkOver(world, agentId);
   }
-  return options.keepLanded === true && hasLanded(world, agentId);
+  return false;
 }
 
-/** The satellites of a world, by agent id (a stable order). */
+/**
+ * At most this many landed satellites per body (the newest agents'): a big project's planet
+ * collects one landed Steward per completed task over its retention, and a surface covered in
+ * dim satellites says nothing more than six do — the colonised lights and the labels still tell
+ * the story. The rest are simply not drawn (same spirit as the beacons' cap).
+ */
+export const LANDED_PER_BODY = 6;
+
+/**
+ * The satellites of a world, by agent id (a stable order). One pass over the agents, plus the
+ * `newestAgents` index built once; landed satellites beyond `LANDED_PER_BODY` on a body (the
+ * oldest agents') are dropped.
+ */
 export function satelliteList(
   world: SatelliteWorld,
   options: SatelliteListOptions = {},
 ): SatelliteSpec[] {
+  const newest = newestAgents(world);
   const specs: SatelliteSpec[] = [];
+  const landedOn = new Map<Id, Agent[]>();
   for (const agentId of Object.keys(world.agents).sort()) {
     const agent = world.agents[agentId];
     const status = world.statuses[agentId];
-    if (!agent || !status || !showsSatellite(world, agentId, options)) continue;
+    if (!agent || !showsSatellite(world, agentId, options, newest)) continue;
     if (agent.role === 'harmonizer' && !options.harmonizer) continue;
+    // A live or failed agent has a record; a landed one may have outlived it (`hasLanded`).
+    const landed = options.keepLanded === true && hasLanded(world, agentId, newest);
+    if (!status && !landed) continue;
     const bodyId = workBody(world, agentId);
     if (!bodyId) continue;
+    if (landed) {
+      const on = landedOn.get(bodyId);
+      if (on) on.push(agent);
+      else landedOn.set(bodyId, [agent]);
+    }
     specs.push({
       agentId,
       role: agent.role,
       bodyId,
-      state: status.state,
-      activity: status.currentActivity,
-      archetype: deriveArchetype(agent.role, status), // P4-03 (`archetype.ts`)
-      landed: options.keepLanded === true && hasLanded(world, agentId),
+      // Landed work takes the `finished` look (`STATE_LOOK`), whether the agent finished or the
+      // close stopped it, and its activity is over.
+      state: landed ? 'finished' : (status?.state ?? 'finished'),
+      activity: landed ? undefined : status?.currentActivity,
+      archetype: landed || !status ? undefined : deriveArchetype(agent.role, status), // P4-03
+      landed,
       supervisorId: agent.supervisorId,
     });
   }
-  return specs;
+  let dropped: Set<Id> | undefined;
+  for (const agents of landedOn.values()) {
+    if (agents.length <= LANDED_PER_BODY) continue;
+    agents.sort((a, b) => (isNewer(a, b) ? -1 : isNewer(b, a) ? 1 : 0));
+    dropped ??= new Set();
+    for (const a of agents.slice(LANDED_PER_BODY)) dropped.add(a.id);
+  }
+  const drop = dropped;
+  return drop ? specs.filter((s) => !drop.has(s.agentId)) : specs;
 }
 
 /** Two lists draw the same thing (keeps the scene from re-rendering on unrelated world changes). */

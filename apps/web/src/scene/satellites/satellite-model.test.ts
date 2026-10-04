@@ -7,6 +7,7 @@ import {
   isLive,
   isSuperseded,
   isWorkOver,
+  LANDED_PER_BODY,
   SCENE_SATELLITES,
   sameSatellites,
   satelliteList,
@@ -251,6 +252,132 @@ describe('the list rule (showsSatellite)', () => {
     expect(hasLanded(completed(world({ 'a-steward-1': 'working' })), 'a-steward-1')).toBe(false);
     expect(hasLanded(world({ 'a-steward-1': 'finished' }), 'a-steward-1')).toBe(false);
     expect(hasLanded(w, 'a-waykeeper-1')).toBe(false);
+  });
+});
+
+describe('keepLanded in the scene (P4-04)', () => {
+  const closed = (w: WorldState, state: 'completed' | 'archived' | 'approved' = 'completed') => {
+    w.tasks = { ...w.tasks, [fx.task.id]: { ...fx.task, state } };
+    return w;
+  };
+  const landedOf = (w: WorldState) =>
+    satelliteList(w, SCENE_SATELLITES)
+      .filter((s) => s.landed)
+      .map((s) => [s.agentId, s.bodyId, s.state]);
+
+  it('is on in the scene', () => {
+    expect(SCENE_SATELLITES.keepLanded).toBe(true);
+  });
+
+  it('the Steward of a completed task lands, finished or stopped by the close, with the finished look', () => {
+    for (const ended of ['finished', 'stopped', 'interrupted', 'failed'] as const) {
+      const w = closed(world({ 'a-steward-1': ended }));
+      expect(landedOf(w)).toEqual([['a-steward-1', 'b-luna', 'finished']]);
+      const spec = satelliteList(w, SCENE_SATELLITES).find((s) => s.agentId === 'a-steward-1');
+      expect(spec).toMatchObject({ activity: undefined, archetype: undefined });
+    }
+    // Still live (the close has not stopped it yet): it orbits, not landed.
+    expect(landedOf(closed(world({ 'a-steward-1': 'idle' })))).toEqual([]);
+  });
+
+  it('archived or reopened work takes the landed satellite away', () => {
+    expect(landedOf(closed(world({ 'a-steward-1': 'finished' }), 'archived'))).toEqual([]);
+    expect(landedOf(closed(world({ 'a-steward-1': 'finished' }), 'approved'))).toEqual([]);
+  });
+
+  it('one landed satellite per task: the newest Steward', () => {
+    const w = closed(world({ 'a-steward-1': 'failed' }));
+    const retry: Agent = { ...steward, id: 'a-steward-9', createdAt: '2026-10-03T12:00:00Z' };
+    w.agents[retry.id] = retry;
+    w.statuses[retry.id] = status(retry.id, 'finished');
+    expect(landedOf(w)).toEqual([['a-steward-9', 'b-luna', 'finished']]);
+  });
+
+  it('a newer Steward that never ran does not hide the older landed one', () => {
+    const w = closed(world({ 'a-steward-1': 'finished' }));
+    const { sessionRef: _s, ...unstarted } = steward;
+    w.agents['a-steward-9'] = {
+      ...(unstarted as Agent),
+      id: 'a-steward-9',
+      createdAt: '2026-10-03T12:00:00Z',
+    };
+    expect(isSuperseded(w, 'a-steward-1')).toBe(false);
+    expect(landedOf(w)).toEqual([['a-steward-1', 'b-luna', 'finished']]);
+    // Once it runs (a record), it is the newest: it lands instead (it is not live).
+    w.statuses['a-steward-9'] = status('a-steward-9', 'stopped');
+    expect(landedOf(w)).toEqual([['a-steward-9', 'b-luna', 'finished']]);
+  });
+
+  it(`300 landed agents: built in linear time, ${LANDED_PER_BODY} per body drawn, the newest`, () => {
+    const w = world({});
+    w.agents = {};
+    // 300 completed tasks on the project's planet, each with one finished Steward.
+    for (let i = 0; i < 300; i++) {
+      const n = String(i).padStart(3, '0');
+      const taskId = `t-${n}`;
+      w.tasks[taskId] = { ...fx.task, id: taskId, state: 'completed' };
+      w.agents[`a-st-${n}`] = {
+        ...steward,
+        id: `a-st-${n}`,
+        taskId,
+        createdAt: `2026-10-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`,
+      };
+      w.statuses[`a-st-${n}`] = status(`a-st-${n}`, 'finished');
+    }
+    // Count every read of an agent row: an O(agents) scan per agent would be ~90 000.
+    let reads = 0;
+    const agents = w.agents;
+    w.agents = new Proxy(agents, {
+      get(target, key, receiver) {
+        reads++;
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    const list = satelliteList(w, SCENE_SATELLITES);
+    expect(reads).toBeLessThan(300 * 10);
+    expect(list.filter((s) => s.landed)).toHaveLength(LANDED_PER_BODY);
+    expect(list.map((s) => s.agentId)).toEqual([
+      'a-st-294',
+      'a-st-295',
+      'a-st-296',
+      'a-st-297',
+      'a-st-298',
+      'a-st-299',
+    ]);
+    // Per body: a Steward landed on the asteroid is drawn besides them.
+    w.agents = agents;
+    w.agents[asteroidSteward.id] = asteroidSteward;
+    w.tasks[fx.asteroidTask.id] = { ...fx.asteroidTask, state: 'completed' };
+    w.statuses[asteroidSteward.id] = status(asteroidSteward.id, 'finished');
+    const byBody = satelliteList(w, SCENE_SATELLITES).map((s) => s.bodyId);
+    expect(byBody.filter((b) => b === 'b-luna')).toHaveLength(LANDED_PER_BODY);
+    expect(byBody.filter((b) => b === 'b-ast-1')).toHaveLength(1);
+  });
+
+  it('outlives the ended record (the server drops it after a day) if the agent ran', () => {
+    const w = closed(world({}));
+    expect(hasLanded(w, 'a-steward-1')).toBe(true); // `fx.agent` has a session
+    expect(landedOf(w)).toEqual([['a-steward-1', 'b-luna', 'finished']]);
+    // Created but never started: nothing to land.
+    const { sessionRef: _s, ...neverRan } = steward;
+    w.agents['a-steward-1'] = neverRan as Agent;
+    expect(landedOf(w)).toEqual([]);
+  });
+
+  it('the Waykeeper of a completed project lands; a failed one of an open project keeps failing', () => {
+    const w = world({ 'a-waykeeper-1': 'stopped' });
+    expect(landedOf(w)).toEqual([]);
+    w.projects[fx.project.id] = { ...fx.project, state: 'completed' };
+    expect(landedOf(w)).toEqual([['a-waykeeper-1', 'b-luna', 'finished']]);
+    w.projects[fx.project.id] = { ...fx.project, state: 'archived' };
+    expect(landedOf(w)).toEqual([]);
+    // The failed rules are unchanged (P4-02).
+    const f = world({ 'a-waykeeper-1': 'failed', 'a-steward-1': 'failed' });
+    const failed = satelliteList(f, SCENE_SATELLITES).filter((s) => s.state === 'failed');
+    expect(failed.map((s) => [s.agentId, s.landed])).toEqual([
+      ['a-steward-1', false],
+      ['a-waykeeper-1', false],
+    ]);
   });
 });
 

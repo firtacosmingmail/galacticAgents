@@ -74,6 +74,11 @@ describe('satelliteCard (what hovering a satellite says, P4-08)', () => {
     expect(satelliteCard(world, 'a-st', { bodyId: 'b-mars', mode: 'flying' }).where).toBe(
       'flying to Mars',
     );
+    // P4-04: a landed satellite is completed work.
+    expect(satelliteCard(world, 'a-st', { bodyId: 'b-mars', mode: 'landed' })).toMatchObject({
+      activity: 'work completed',
+      where: 'landed · Mars',
+    });
   });
 
   it("a click selects the satellite's agent (decision 53)", () => {
