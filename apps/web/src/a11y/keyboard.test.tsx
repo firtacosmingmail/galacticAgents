@@ -260,6 +260,16 @@ describe('focus into and back from what opens', () => {
     );
   });
 
+  it('the first-run wizard: Next puts the focus on the next step’s title', async () => {
+    vi.stubGlobal('fetch', quietFetch(undefined, { setupDone: false }));
+    await openApp('/');
+    const next = await screen.findByRole('button', { name: /^(Next|Continue anyway)$/ });
+    next.focus();
+    await click(next);
+    expect(focused().matches('.set-section h2, .set-section h3')).toBe(true);
+    expect(focused().textContent).not.toBe('');
+  });
+
   it('the legend’s toggle keeps the focus as it opens and closes', async () => {
     render(<SatelliteLegend />);
     const toggle = () => document.querySelector<HTMLButtonElement>('.scene-legend-toggle')!;
