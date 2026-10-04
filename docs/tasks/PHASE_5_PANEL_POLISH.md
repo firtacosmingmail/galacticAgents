@@ -1,6 +1,6 @@
 # Phase 5 — Side panel polish and scene integration
 
-**Current task:** P5-05 (wave 3, after wave 2 is merged into `phase-5`) · **Task status:** todo
+**Current task:** P5-05 (wave 3, branch `p5-wave3-conformance`) · **Task status:** in progress
 **Phase status:** in progress (4/5 done) — on branch `phase-5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -56,7 +56,7 @@ The Phase 2.5 panel becomes the spec's panel, wired to the scene: selection flow
 - **Acceptance:** panel usable with keyboard only and with the scene hidden.
 
 ### P5-05 — Spec §4.2/§4.3 conformance checklist
-- **Status:** todo · **Depends on:** P5-04 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P5-04 · **Parallel with:** —
 - Walk every line of `SPEC.md` §4.2 and §4.3 with and without the scene; record gaps in `docs/tasks/notes/P5-05-checklist.md` and fix them or file follow-ups.
 - **Acceptance:** checklist fully ticked and committed.
 
