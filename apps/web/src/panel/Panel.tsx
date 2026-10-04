@@ -20,7 +20,7 @@ import { Inbox } from './Inbox.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
 import { openQuestionsOf, StewardPanelView } from './steward/StewardPanelView.js';
 import { ManagedAgentCards } from './AgentCards.js';
-import { ControlsStrip, HarmonizerControls } from './controls.js';
+import { ControlsStrip, HarmonizerControls, type RestartFocus } from './controls.js';
 import { FirstRunGate } from './settings/FirstRunGate.js';
 import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
@@ -334,11 +334,16 @@ function MainHeader({
         ? 'Talking to the project’s Waykeeper'
         : 'Watching (read-only)';
   const activity = status?.currentActivity;
+  // Survives the remount of the Harmonizer's controls (keyed by its id) across a restart.
+  const restartFocus = useRef<RestartFocus | undefined>(undefined);
   return (
     <div className="pnl-main-head pnl-dock-bar">
       <div className="pnl-dock-titles">
         <p className="pnl-eyebrow">{eyebrow}</p>
-        <h1 className="pnl-title">{agent ? agentLabel(agent, world) : role}</h1>
+        {/* Focusable for the Harmonizer's restart (P5-06): focus waits here meanwhile. */}
+        <h1 className="pnl-title" tabIndex={-1}>
+          {agent ? agentLabel(agent, world) : role}
+        </h1>
       </div>
       {agent && (
         <span className="pnl-dock-state">
@@ -369,6 +374,7 @@ function MainHeader({
           agentId={agent.id}
           status={status}
           name={agentLabel(agent, world)}
+          restartFocus={restartFocus}
         />
       )}
       {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && <DockViewToggle />}
