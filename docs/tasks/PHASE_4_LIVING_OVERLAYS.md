@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** P4-12, P4-14 (added to wave 2, branch `p4-wave2-state-activity-beacons`) · **Task status:** in progress
-**Phase status:** in progress (9/14 done) — on branch `phase-4`
+**Current task:** P4-14 (added to wave 2, branch `p4-wave2-state-activity-beacons`) · **Task status:** in progress
+**Phase status:** in progress (10/14 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -94,7 +94,7 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Acceptance:** met — the regression test fails before the fix and passes after; adapter suite green.
 
 ### P4-12 — Hidable inbox; closed projects out of the navigation (added 2026-10-04)
-- **Status:** in progress · **Depends on:** P4-09, P4-10 · **Parallel with:** P4-13
+- **Status:** done (2026-10-04) · **Depends on:** P4-09, P4-10 · **Parallel with:** P4-13
 - Cosmin: "I want to be able to hide the inbox as well" and "I want to be able to remove closed projects from the projects bar. There are a few demo projects that seem to be working on invented planets." The inbox gets a hide/show toggle like the managed agents (decision 69), with "N waiting" still visible and a way back; when the inbox and the managed agents are both hidden the side column goes and the centre takes the space. The navigation hides closed work (completed and archived projects and tasks) behind a "Show closed" toggle; a project can be closed and archived from the navigation (the controls strip's actions), so leftover demo projects can be cleared.
 - **Acceptance:** the inbox hides and comes back, remembered per browser, with no overlap at any width; completed or archived projects are not listed unless "Show closed" is on; tests.
 
