@@ -17,7 +17,7 @@ import {
   ringTextureWidth,
   viewBytes,
 } from './budget.js';
-import { applyFeatures, bandLatitude, craterScales, type SurfaceFeatures } from './features.js';
+import { applyFeatures, bandLatitude, craterScales, type SurfaceFeatures } from '../../bodies/features.js';
 import {
   atmosphereScale,
   catalogueLookNames,
@@ -36,8 +36,8 @@ import {
   normalMapFromHeights,
   paintClouds,
   runPaintJob,
-} from './paint-jobs.js';
-import { ringBandOpacity, SATURN_RING_BANDS, URANUS_RING_BANDS } from './rings.js';
+} from '../../bodies/paint-jobs.js';
+import { ringBandOpacity, SATURN_RING_BANDS, URANUS_RING_BANDS } from '../../bodies/rings.js';
 
 /** The catalogue's body names, from the migration that seeds it (as `bodies-model.test.ts`). */
 function catalogueNames(): { planets: string[]; moons: string[] } {

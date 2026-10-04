@@ -1,4 +1,5 @@
 import { MOON_LOOKS, PLANET_LOOKS } from '../../bodies/appearance.js';
+import type { CloudLook } from '../../bodies/paint-jobs.js';
 
 /**
  * How each catalogue body looks **in its detail view** (P6-02), on top of its surface look
@@ -18,18 +19,8 @@ export interface AtmosphereLook {
   power: number;
 }
 
-export interface CloudLook {
-  /** Seed of the cloud pattern. */
-  seed: number;
-  /** Fraction of the sky covered, 0..1. */
-  coverage: number;
-  /** Opacity of a fully cloudy texel. */
-  opacity: number;
-  /** Extra turns of the clouds per turn of the surface (they drift slowly eastward). */
-  drift: number;
-  /** Height of the cloud shell above the surface, body radii. */
-  altitude: number;
-}
+/** Earth's clouds: declared next to their painter (`bodies/paint-jobs.ts`), re-exported here. */
+export type { CloudLook };
 
 export interface DetailLook {
   atmosphere?: AtmosphereLook;

@@ -25,7 +25,7 @@ import {
   type DetailMapsSpec,
 } from './budget.js';
 import type { CloudLook, DetailLook } from './looks.js';
-import type { PaintLayers } from './paint-jobs.js';
+import type { PaintLayers } from '../../bodies/paint-jobs.js';
 
 /**
  * The detail level's textures (P6-02): painted in the paint worker, cached by content and size in

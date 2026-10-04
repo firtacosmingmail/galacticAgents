@@ -1,6 +1,5 @@
-import type { BodyLook } from '../../bodies/appearance.js';
-import { extraOctaves, fbm, paintSurfaceLayers, type SurfaceLayers } from '../../bodies/surface.js';
-import type { CloudLook } from './looks.js';
+import type { BodyLook } from './appearance.js';
+import { extraOctaves, fbm, paintSurfaceLayers, type SurfaceLayers } from './surface.js';
 
 /**
  * The paint jobs the worker runs (P3-06's surface maps, P6-02's detail level and clouds), as pure
@@ -26,6 +25,20 @@ export interface DetailPaintRequest {
   normalStrength: number;
   /** Box blur radius of the relief before the normals, texels. */
   reliefBlur?: number;
+}
+
+/** Earth's cloud look (P6-02; part of its detail look, `detail/visuals/looks.ts`). */
+export interface CloudLook {
+  /** Seed of the cloud pattern. */
+  seed: number;
+  /** Fraction of the sky covered, 0..1. */
+  coverage: number;
+  /** Opacity of a fully cloudy texel. */
+  opacity: number;
+  /** Extra turns of the clouds per turn of the surface (they drift slowly eastward). */
+  drift: number;
+  /** Height of the cloud shell above the surface, body radii. */
+  altitude: number;
 }
 
 /** P6-02: Earth's clouds. */

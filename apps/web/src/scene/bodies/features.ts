@@ -1,4 +1,4 @@
-import { fbm, hash3, hexToRgb } from '../../bodies/surface.js';
+import { fbm, hash3, hexToRgb } from './surface.js';
 
 /**
  * Per-body surface features (P6-02): what makes each planet and moon recognisably itself, painted

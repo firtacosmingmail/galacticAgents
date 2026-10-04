@@ -1,4 +1,4 @@
-import { runPaintJob, type PaintLayers, type PaintRequest } from '../detail/visuals/paint-jobs.js';
+import { runPaintJob, type PaintLayers, type PaintRequest } from './paint-jobs.js';
 
 /**
  * Asynchronous surface painting (P3-06). Near-level textures are painted in a worker
@@ -12,7 +12,7 @@ import { runPaintJob, type PaintLayers, type PaintRequest } from '../detail/visu
  */
 export type { PaintLayers, PaintRequest };
 
-/** What the worker receives (P6-02: also detail levels and clouds, `detail/visuals/paint-jobs.ts`)… */
+/** What the worker receives (P6-02: also detail levels and clouds, `paint-jobs.ts`)… */
 export type PaintJob = PaintRequest & { id: number };
 
 /** …and sends back. */
