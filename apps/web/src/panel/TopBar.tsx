@@ -18,6 +18,7 @@ import { NotificationsControl, NotificationsDisclosure } from './notifications/i
 import { COMPACT_TOP_BAR_QUERY, useMediaQuery } from './use-media-query.js';
 
 import { revealInbox } from './inbox-reveal.js';
+import { SkipLink } from './a11y.js';
 
 /** The inbox section's id, for the compact bar's "waiting for you" button (P3-12). */
 export { INBOX_ID } from './inbox-reveal.js';
@@ -67,13 +68,20 @@ function WideTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
   const openInbox = useOpenInbox();
   return (
     <header className="pnl-top">
+      <SkipLink />
       <NavLink to={{ route: 'panel', selection: HARMONIZER }} className="pnl-brand">
         GalacticAgents
       </NavLink>
-      <span className={`pnl-conn pnl-conn-${status}`} aria-label="connection">
+      {/* Not a live region: "connecting / catching up / live" would be announced on load and on
+          every reconnect retry. Named like the compact bar's dot. */}
+      <span
+        className={`pnl-conn pnl-conn-${status}`}
+        role="img"
+        aria-label={`connection: ${status.replace(/_/g, ' ')}`}
+      >
         {status.replace(/_/g, ' ')}
       </span>
-      <span className="pnl-top-counts" aria-label="summary">
+      <span className="pnl-top-counts" role="group" aria-label="summary">
         {waiting > 0 && (
           <button
             type="button"
@@ -200,6 +208,7 @@ function CompactTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
 
   return (
     <header className="pnl-top pnl-top-compact">
+      <SkipLink />
       <NavLink to={{ route: 'panel', selection: HARMONIZER }} className="pnl-brand">
         GalacticAgents
       </NavLink>
@@ -250,7 +259,7 @@ function CompactTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
       >
         {open && (
           <>
-            <p className="pnl-menu-summary" aria-label="summary">
+            <p className="pnl-menu-summary" role="group" aria-label="summary">
               <span className={`pnl-conn pnl-conn-${status}`}>{statusText}</span>
               <span>{summary.openQuestions} open questions</span>
               <span>{summary.blockedItems} blocked</span>

@@ -443,7 +443,7 @@ describe('managed-agents cards: what they show (P25-04)', () => {
     expect(c.getByLabelText('cost so far').textContent).toBe('$0.4200');
     expect(c.getByLabelText('tool calls').textContent).toMatch(/^17 \/ 500/);
     expect(c.getByLabelText('wall clock').textContent).toBe('5 min / 1 h');
-    expect(c.getByLabelText('open questions').textContent).toBe('1 open question');
+    expect(card(STEWARD).querySelector('.agc-qbadge')?.textContent).toBe('1 open question');
     // Held by a supervisor: not blocked on the user.
     expect(c.queryByText('blocked on you')).toBeNull();
   });

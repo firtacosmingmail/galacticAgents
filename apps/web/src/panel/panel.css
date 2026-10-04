@@ -50,7 +50,8 @@
     --pnl-here: #2f62d0;
     --pnl-here-soft: rgba(47, 98, 208, 0.1);
     --pnl-beacon: #d9820f;
-    --pnl-beacon-ink: #ffffff;
+    /* dark ink on the amber (6.2:1); white was 2.9:1, under WCAG AA for the beacon's 11 px (P5-04) */
+    --pnl-beacon-ink: #1d1300;
     --pnl-failed: #b23b3b;
     --pnl-interrupted: #7445ad;
     --pnl-stalled: #9a5a1c;
@@ -76,6 +77,42 @@
 .pnl :focus-visible {
   outline: 2px solid var(--pnl-here);
   outline-offset: 2px;
+}
+
+/* P5-04: the skip link, first on the page and shown only while focused */
+.pnl-skip {
+  position: absolute;
+  top: max(6px, env(safe-area-inset-top));
+  left: 8px;
+  z-index: 100;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--pnl-here);
+  /* the page's background on the blue: 5.7:1 dark, 4.9:1 light */
+  color: var(--pnl-bg);
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.pnl .pnl-skip:focus {
+  transform: none;
+  outline: 2px solid var(--pnl-ink);
+  outline-offset: 2px;
+}
+
+/* P5-04: reduced motion everywhere in the panel — no pulse, no blink, no transition, no smooth
+   scrolling; what changes still changes, at once. The scene's own motion follows the same
+   preference in `scene/motion.ts`. */
+@media (prefers-reduced-motion: reduce) {
+  .pnl *,
+  .pnl *::before,
+  .pnl *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* top bar */

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PreflightResponse } from '@galactic/protocol';
 import { PreflightCheck } from './PreflightCheck.js';
 import { useSettingsData } from './SettingsData.js';
@@ -32,6 +32,21 @@ export function FirstRunWizard({ onDone }: { onDone: () => void }) {
   const back = index > 0 ? () => setIndex(index - 1) : undefined;
   const next = () => setIndex(Math.min(index + 1, STEPS.length - 1));
 
+  // P5-04: Next and Back put the focus on the new step's title (the button pressed is gone), so
+  // the keyboard and a screen reader start the step from its top. Not on the first render.
+  const page = useRef<HTMLElement>(null);
+  const shownIndex = useRef(index);
+  useEffect(() => {
+    if (shownIndex.current === index) return;
+    shownIndex.current = index;
+    const title =
+      page.current?.querySelector<HTMLElement>('.set-section h2, .set-section h3') ??
+      page.current?.querySelector<HTMLElement>('.set-section');
+    if (!title) return;
+    if (!title.hasAttribute('tabindex')) title.tabIndex = -1;
+    title.focus();
+  }, [index]);
+
   const finish = async () => {
     setFinishing(true);
     try {
@@ -45,7 +60,7 @@ export function FirstRunWizard({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <main className="set-page set-wizard" aria-label="first-run setup">
+    <main className="set-page set-wizard" aria-label="first-run setup" ref={page}>
       <div className="set-page-head">
         <div>
           <p className="pnl-eyebrow">

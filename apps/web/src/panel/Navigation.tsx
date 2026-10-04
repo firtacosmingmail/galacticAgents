@@ -1,4 +1,13 @@
-import { useCallback, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
 import type { Id } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { summaryOf } from '../state/reduce.js';
@@ -18,6 +27,7 @@ import {
   type StewardCount,
 } from './nav-model.js';
 import { NavRowActions } from './nav-row-actions.js';
+import { focusElement, listItems, useFocusRescue, usesOwnArrows } from './a11y.js';
 
 /** Per browser (P4-12): whether the navigation lists closed work. Off by default. */
 export const SHOW_CLOSED_KEY = 'galactic.panel.nav.showClosed';
@@ -61,9 +71,19 @@ export function Navigation() {
   );
   const harmonizer = currentHarmonizer(world);
   const waiting = summaryOf(world).userQuestions;
+  // P5-04: a row archived from its "⋯" leaves the list; the focus goes to the row now in its place.
+  const ref = useRef<HTMLElement>(null);
+  useFocusRescue(ref, {
+    items: '.pnl-nav-hq, li.pnl-row',
+    target: (item) =>
+      rowTarget(
+        item.matches('li') ? item.querySelector<HTMLElement>(':scope > .pnl-row-line')! : item,
+      ),
+    fallback: (n) => n.querySelector<HTMLElement>('.pnl-nav-hq'),
+  });
 
   return (
-    <nav className="pnl-nav" aria-label="navigation">
+    <nav className="pnl-nav" aria-label="navigation" ref={ref} onKeyDown={navKeys}>
       <NavLink
         to={{ route: 'panel', selection: HARMONIZER }}
         current={selection.kind === 'harmonizer'}
@@ -123,6 +143,69 @@ export function Navigation() {
   );
 }
 
+/** The navigation's rows, in order: the Harmonizer, then every listed project and task row. */
+const NAV_ROW = '.pnl-nav-hq, .pnl-row-line';
+
+/**
+ * The navigation's keys (P5-04), a light version of the ARIA tree pattern that keeps the rows as
+ * links (with `aria-current`) and Tab as it is — every link and button stays a Tab stop:
+ * - Down / Up: the next or previous row's link (from anywhere in a row: its link, "+", "⋯");
+ * - Home / End: the first row (the Harmonizer) and the last;
+ * - Right: opens a closed row's nested work, or goes to its first nested row once open;
+ * - Left: closes an open row, or goes to the row it is nested in.
+ * A row with no agent yet has no link: its disclosure or "⋯" button takes the focus instead.
+ */
+export function navKeys(e: KeyboardEvent<HTMLElement>) {
+  if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End', 'ArrowRight', 'ArrowLeft'];
+  if (!keys.includes(e.key)) return;
+  const target = e.target as HTMLElement;
+  if (usesOwnArrows(target) || target.closest('.pnl-row-actions')) return;
+  const rows = listItems(e.currentTarget, NAV_ROW);
+  const current = rows.findIndex((r) => r === target || r.contains(target));
+  if (current < 0) return;
+  const row = rows[current]!;
+  const li = row.closest('li');
+  const disclose = row.querySelector<HTMLButtonElement>(':scope > .pnl-disclose');
+  let to: HTMLElement | undefined;
+  if (e.key === 'ArrowDown') to = rows[current + 1];
+  else if (e.key === 'ArrowUp') to = rows[current - 1];
+  else if (e.key === 'Home') to = rows[0];
+  else if (e.key === 'End') to = rows[rows.length - 1];
+  else if (e.key === 'ArrowRight') {
+    if (!disclose) return;
+    if (disclose.getAttribute('aria-expanded') !== 'true') {
+      e.preventDefault();
+      disclose.click();
+      return;
+    }
+    to = li?.querySelector<HTMLElement>(':scope > ul > li > .pnl-row-line') ?? undefined;
+  } else {
+    if (disclose?.getAttribute('aria-expanded') === 'true') {
+      e.preventDefault();
+      disclose.click();
+      // The focus stays on the row (its link, or the "+" that was pressed).
+      if (!row.contains(document.activeElement)) focusElement(rowTarget(row));
+      return;
+    }
+    to =
+      li?.parentElement?.closest('li')?.querySelector<HTMLElement>(':scope > .pnl-row-line') ??
+      undefined;
+  }
+  e.preventDefault();
+  if (to) focusElement(rowTarget(to));
+}
+
+/** What takes the focus in a row: its link, else (no agent yet) its first button. */
+function rowTarget(row: HTMLElement): HTMLElement {
+  if (row.matches('a')) return row;
+  return (
+    row.querySelector<HTMLElement>(':scope > a.pnl-link') ??
+    row.querySelector<HTMLElement>('button') ??
+    row
+  );
+}
+
 function NavRow({
   item,
   selection,
@@ -139,6 +222,7 @@ function NavRow({
   const [toggled, setToggled] = useState<boolean | undefined>();
   const open = toggled ?? auto;
   const [acting, setActing] = useState(false);
+  const actionsId = useId();
   const current = item.selection !== undefined && sameSelection(item.selection, selection);
   const label = (
     <>
@@ -180,6 +264,7 @@ function NavRow({
           type="button"
           className={`pnl-row-more${acting ? ' is-open' : ''}`}
           aria-expanded={acting}
+          aria-controls={acting ? actionsId : undefined}
           aria-label={`Actions for ${item.label}`}
           title={`Close, cancel, archive… this ${item.kind}`}
           onClick={() => setActing((a) => !a)}
@@ -189,6 +274,7 @@ function NavRow({
       </div>
       {acting && (
         <NavRowActions
+          groupId={actionsId}
           kind={item.kind}
           id={item.id}
           label={item.label}
