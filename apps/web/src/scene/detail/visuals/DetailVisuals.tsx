@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import {
   AdditiveBlending,
   Color,
@@ -25,6 +25,7 @@ import {
 import { useCloudMaps, useDetailMaps } from './detail-textures.js';
 import {
   atmosphereScale,
+  cloudFadeIn,
   cloudScale,
   cloudTurn,
   planetshineColor,
@@ -219,8 +220,9 @@ const CLOUD_ORDER = 1;
 /**
  * Earth's clouds: a shell `altitude` above the surface with the procedural cloud texture as its
  * alpha map (white, lit by the Sun like the surface, eclipse-shaded with it), turning with the
- * surface plus a slow drift; still under reduced motion. Fades in with the cross-fade. The texture
- * is painted in the worker at the tier's size (mobile: 512 × 256); nothing is drawn until then.
+ * surface plus a slow drift; still under reduced motion. Fades in with the cross-fade and, as the
+ * texture may arrive after it, from when the texture arrives too (`cloudFadeIn`). The texture is
+ * painted in the worker at the tier's size (mobile: 512 × 256); nothing is drawn until then.
  * A sphere under the body's group, so P6-03's cutaway cuts it with the surface (a cloud deck
  * floating over the open wedge would hide the layers).
  */
@@ -242,12 +244,22 @@ export function Clouds({
   mix: () => number;
 }) {
   const mesh = useRef<Mesh>(null);
+  /** When the texture arrived (the mesh's first frame), `performance.now()` seconds. */
+  const arrivedAt = useRef<number | undefined>(undefined);
+  const invalidate = useThree((s) => s.invalidate);
   const maps = useCloudMaps(clouds, quality);
   useFrame(() => {
     const m = mesh.current;
-    if (!m) return;
+    if (!m) {
+      arrivedAt.current = undefined;
+      return;
+    }
+    const now = performance.now() / 1000;
+    arrivedAt.current ??= now;
+    const fade = cloudFadeIn(arrivedAt.current, now, motion);
     m.rotation.y = cloudTurn(clouds, motionSeconds(), SPIN_PERIOD, motion);
-    (m.material as MeshStandardMaterial).opacity = mix();
+    (m.material as MeshStandardMaterial).opacity = mix() * fade;
+    if (fade < 1) invalidate(); // the demand frame loop: keep frames coming through the fade
   });
   if (!maps) return null;
   return (

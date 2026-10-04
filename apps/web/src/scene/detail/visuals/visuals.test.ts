@@ -21,6 +21,8 @@ import { applyFeatures, bandLatitude, craterScales, type SurfaceFeatures } from 
 import {
   atmosphereScale,
   catalogueLookNames,
+  CLOUD_FADE_SECONDS,
+  cloudFadeIn,
   cloudScale,
   cloudTurn,
   DEFAULT_DETAIL_LOOK,
@@ -413,6 +415,17 @@ describe('atmosphere and clouds parameters', () => {
     const turn = cloudTurn(clouds, 100, 60, true);
     expect(turn).toBeGreaterThan(surface);
     expect(turn).toBeLessThan(surface * 1.1);
+  });
+
+  it('fades the clouds in from when their texture arrives, not with the cross-fade alone', () => {
+    expect(cloudFadeIn(undefined, 10, true)).toBe(0); // not painted yet
+    expect(cloudFadeIn(10, 10, true)).toBe(0); // just arrived (the cross-fade may be long over)
+    const half = cloudFadeIn(10, 10 + CLOUD_FADE_SECONDS / 2, true);
+    expect(half).toBeCloseTo(0.5, 5);
+    expect(cloudFadeIn(10, 10 + CLOUD_FADE_SECONDS / 4, true)).toBeLessThan(half);
+    expect(cloudFadeIn(10, 10 + CLOUD_FADE_SECONDS, true)).toBe(1);
+    expect(cloudFadeIn(10, 99, true)).toBe(1);
+    expect(cloudFadeIn(10, 10, false)).toBe(1); // reduced motion: at once
   });
 });
 

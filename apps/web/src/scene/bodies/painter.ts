@@ -9,6 +9,11 @@ import { runPaintJob, type PaintLayers, type PaintRequest } from './paint-jobs.j
  * the main thread after a macrotask, so callers see the same asynchronous contract everywhere —
  * but such painting blocks the UI, so `paintsOffMainThread()` tells the bodies to ask for lighter
  * maps then (`textures.ts`).
+ *
+ * The pending jobs are ordered by `paintPriority` (P6-02 review): small jobs — near levels, Earth's
+ * clouds — before the detail levels (a 4096 level takes seconds), first come first served within a
+ * priority. A running job is never preempted: a small job queued while a big one paints waits for
+ * it, but no longer for every big job queued before it.
  */
 export type { PaintLayers, PaintRequest };
 
@@ -20,8 +25,17 @@ export interface PaintReply extends PaintLayers {
   id: number;
 }
 
+/**
+ * When a job runs, lower first: 0 for the near levels and the clouds (small, wanted at once:
+ * the clouds pop in otherwise, an orbiting moon would wait on blurry maps), 1 for the detail levels.
+ */
+export function paintPriority(request: PaintRequest): number {
+  return request.kind === 'detail' ? 1 : 0;
+}
+
 interface Queued {
   job: PaintJob;
+  priority: number;
   signal: AbortSignal | undefined;
   resolve: (layers: PaintLayers) => void;
   reject: (reason: unknown) => void;
@@ -125,8 +139,12 @@ function pump(): void {
 export function paintAsync(request: PaintRequest, signal?: AbortSignal): Promise<PaintLayers> {
   if (signal?.aborted) return Promise.reject(abortError());
   return new Promise((resolve, reject) => {
-    const entry: Queued = { job: { ...request, id: nextId++ }, signal, resolve, reject };
-    queue.push(entry);
+    const priority = paintPriority(request);
+    const entry: Queued = { job: { ...request, id: nextId++ }, priority, signal, resolve, reject };
+    // After every job of the same or a higher priority (lower number), before the lower ones.
+    const at = queue.findIndex((q) => q.priority > priority);
+    if (at < 0) queue.push(entry);
+    else queue.splice(at, 0, entry);
     signal?.addEventListener(
       'abort',
       () => {

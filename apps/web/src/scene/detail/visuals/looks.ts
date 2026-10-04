@@ -145,6 +145,22 @@ export function cloudTurn(
   return (seconds / spinPeriod) * Math.PI * 2 * (1 + clouds.drift);
 }
 
+/** How long the clouds take to fade in once their texture arrives, seconds. */
+export const CLOUD_FADE_SECONDS = 1.2;
+
+/**
+ * The clouds' own fade-in (0 … 1) `seconds` after their texture arrived (`arrivedAt`, `undefined`:
+ * not yet): their map may land well after the cross-fade ended, so they fade in from then instead of
+ * popping in. Smoothstep-eased; reduced motion (`motion` false) shows them at once. Multiplied by
+ * the cross-fade's mix.
+ */
+export function cloudFadeIn(arrivedAt: number | undefined, seconds: number, motion: boolean): number {
+  if (arrivedAt === undefined) return 0;
+  if (!motion) return 1;
+  const t = Math.min(1, Math.max(0, (seconds - arrivedAt) / CLOUD_FADE_SECONDS));
+  return t * t * (3 - 2 * t);
+}
+
 /**
  * Planetshine (P6-02, the moons' lighting in a detail view): a moon's night side faintly lit by
  * its planet's day side. The planet's colour is its palette's mean (sRGB hex); the strength
