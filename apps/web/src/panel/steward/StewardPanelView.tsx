@@ -24,6 +24,7 @@ import { useNow } from '../AgentCards.js';
 import { formatCost, formatDuration, wallClockUsed } from '../agent-cards-model.js';
 import { ControlsStrip } from '../controls.js';
 import { ClarificationComposer } from './ClarificationComposer.js';
+import { StewardProcesses } from './StewardProcesses.js';
 import { TranscriptLog } from './TranscriptLog.js';
 import { useStewardTranscript } from './useStewardTranscript.js';
 import './steward.css';
@@ -67,6 +68,7 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
           />
         )}
       </div>
+      <StewardProcesses agentId={agentId} state={status?.state} />
       {open.length > 0 && (
         <section className="stw-open" aria-label="open question">
           <h2 className="pnl-eyebrow">
