@@ -9,6 +9,7 @@ import {
   startHarmonizer,
   type HarmonizerDeps,
 } from './brains/harmonizer/index.js';
+import { harmonizerRestarter } from './brains/harmonizer/restart.js';
 import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
@@ -145,6 +146,13 @@ if (recovery.resumed.length + recovery.needAttention.length > 0) {
     `Recovered: ${recovery.resumed.length} agents resumed, ${recovery.needAttention.length} need attention`,
   );
 }
+// The panel's "Restart Harmonizer" (P5-06): on the last Harmonizer's runtime, else the boot one.
+const restartHarmonizer = harmonizerRestarter(composed, {
+  ...(hqRuntime ? { defaultRuntime: hqRuntime } : {}),
+  cwd: workspaces.projectsRoot,
+  deps: harmonizerDeps,
+  onError,
+});
 const webDir = process.env['GALACTIC_WEB_DIR'];
 const app = buildApp({
   config,
@@ -155,6 +163,14 @@ const app = buildApp({
   commands: composed.commands,
   ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
+  restartHarmonizer: async () => {
+    const hq = await restartHarmonizer();
+    console.log(
+      `Harmonizer restarted by the user (${hq.agentId})` +
+        (hq.replaced ? `, replacing ${hq.replaced}` : ''),
+    );
+    return hq;
+  },
   scenarios: () => fake.scenarioNames(),
   logger: process.env['GALACTIC_LOG'] !== 'silent',
   ...(webDir ? { webDir } : {}),

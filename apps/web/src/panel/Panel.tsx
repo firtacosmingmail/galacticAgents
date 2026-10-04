@@ -20,7 +20,7 @@ import { Inbox } from './Inbox.js';
 import { Beacon, Navigation, NavLink } from './Navigation.js';
 import { openQuestionsOf, StewardPanelView } from './steward/StewardPanelView.js';
 import { ManagedAgentCards } from './AgentCards.js';
-import { ControlsStrip } from './controls.js';
+import { ControlsStrip, HarmonizerControls, type RestartFocus } from './controls.js';
 import { FirstRunGate } from './settings/FirstRunGate.js';
 import { SettingsProvider } from './settings/SettingsData.js';
 import { SettingsPage } from './settings/SettingsPage.js';
@@ -307,7 +307,8 @@ function MainArea({
 /**
  * The dock's bar (P4-10): who is selected, its state ("blocked on you" first for a Steward), the
  * "N new" replies that came while minimised, its activity, the way back to the Harmonizer, the
- * Waykeeper's controls (P4-09), and the minimise / restore button where the dock can minimise.
+ * Waykeeper's controls (P4-09) or the Harmonizer's (P5-06), and the minimise / restore button
+ * where the dock can minimise.
  */
 function MainHeader({
   agent,
@@ -333,11 +334,16 @@ function MainHeader({
         ? 'Talking to the project’s Waykeeper'
         : 'Watching (read-only)';
   const activity = status?.currentActivity;
+  // Survives the remount of the Harmonizer's controls (keyed by its id) across a restart.
+  const restartFocusRef = useRef<RestartFocus | undefined>(undefined);
   return (
     <div className="pnl-main-head pnl-dock-bar">
       <div className="pnl-dock-titles">
         <p className="pnl-eyebrow">{eyebrow}</p>
-        <h1 className="pnl-title">{agent ? agentLabel(agent, world) : role}</h1>
+        {/* Focusable for the Harmonizer's restart (P5-06): focus waits here meanwhile. */}
+        <h1 className="pnl-title" tabIndex={-1}>
+          {agent ? agentLabel(agent, world) : role}
+        </h1>
       </div>
       {agent && (
         <span className="pnl-dock-state">
@@ -361,6 +367,16 @@ function MainHeader({
         </NavLink>
       )}
       {agent?.role === 'waykeeper' && <WaykeeperControls agent={agent} />}
+      {agent?.role === 'harmonizer' && (
+        // P5-06 (decision 82): pause / resume, "Resume session" when interrupted, and restart.
+        <HarmonizerControls
+          key={agent.id}
+          agentId={agent.id}
+          status={status}
+          name={agentLabel(agent, world)}
+          restartFocusRef={restartFocusRef}
+        />
+      )}
       {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && <DockViewToggle />}
       {toggle && (
         <button

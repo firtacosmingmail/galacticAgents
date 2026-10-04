@@ -8,6 +8,7 @@ import type {
   Project,
   Proposal,
   Question,
+  RequestOrigin,
   StatusRecord,
   Task,
 } from '@galactic/protocol';
@@ -57,6 +58,12 @@ export interface BrainToolContext {
   projectId?: Id;
   /** The brain as an actor, for `by` arguments. */
   actor: Actor;
+  /**
+   * Where the turn's messages came from (P2-21, `originOfMessages`): `local` only when every
+   * `message.sent` folded into the turn is a local user's; absent (unknown, floored as remote)
+   * otherwise. A tool passes it to the policy-writing commands it calls (`control`, P5-07).
+   */
+  origin?: RequestOrigin;
   /**
    * The command surface. Every event a call appends is the brain's own side effect: it never
    * wakes the brain, neither mid-turn nor afterwards.

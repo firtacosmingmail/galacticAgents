@@ -110,6 +110,7 @@ export {
   type HarmonizerDeps,
   type HarmonizerRequest,
 } from './brains/harmonizer/index.js';
+export { harmonizerRestarter, type RestartHarmonizerResult } from './brains/harmonizer/restart.js';
 export { waykeeperDefinition } from './brains/waykeeper/index.js';
 // The scripted fake-LLM harness (P2-07), for the web console's end-to-end test (P2-18).
 export {

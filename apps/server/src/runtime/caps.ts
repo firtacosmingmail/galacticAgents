@@ -192,9 +192,12 @@ export class CapsEnforcer {
   /**
    * Counts a new spawn for the per-hour caps, by the brain that spawned it (`supervisorId`).
    * The runtime calls it when an agent row is created, and on startup for every row created in
-   * the last hour, so the window survives a restart.
+   * the last hour, so the window survives a restart. A Harmonizer is not counted (SPEC decision
+   * 43: brains are bounded by the hierarchy, and there is one at a time — its restarts have their
+   * own window, P5-06): restarting it must never use up the window Stewards and Waykeepers need.
    */
-  noteSpawn(by: Id | undefined, at?: number): void {
+  noteSpawn(by: Id | undefined, at?: number, role?: AgentRole): void {
+    if (role === 'harmonizer') return;
     const now = this.now();
     const when = Math.min(at ?? now, now);
     if (when <= now - HOUR_MS) return;
