@@ -493,6 +493,71 @@ describe('ProcessSupervisor — anchors of process attribution (P4-14)', () => {
   });
 });
 
+describe('ProcessSupervisor — group lifetimes and earlier sessions (P4-14 second review)', () => {
+  it("ends a group's lifetime at its leader's exit, not after the drain and reap (N2)", async () => {
+    const { s } = makeSupervisor({ defaults: { graceMs: 300, termMs: 400 } });
+    let out = '';
+    // The leader leaves an in-group child that ignores SIGTERM: the reap takes termMs + SIGKILL.
+    const p = await s.spawn(
+      node(
+        `const c = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(
+          LOITER(['SIGTERM']),
+        )}], { stdio: ['ignore', 'pipe', 'ignore'] });
+         c.stdout.on('data', (d) => { if (String(d).includes('ready')) { console.log('child ' + c.pid); process.exit(0); } });`,
+        { agentId: 'a-n2', onStdout: (chunk) => (out += chunk) },
+      ),
+    );
+    let child = 0;
+    try {
+      await p.exited;
+      const settledAt = Date.now();
+      child = Number(/child (\d+)/.exec(out)?.[1] ?? 0);
+      const [group] = s.agentGroups().filter((g) => g.agentId === 'a-n2');
+      expect(group!.endedAt).toBeDefined();
+      // The reap (SIGTERM ignored, SIGKILL after 400 ms) happened after the recorded end.
+      expect(settledAt - group!.endedAt!).toBeGreaterThanOrEqual(350);
+      expect(child).toBeGreaterThan(0);
+      expect(isRunning(child)).toBe(false);
+    } finally {
+      if (child > 0 && isAlive(child)) process.kill(child, 'SIGKILL');
+    }
+  });
+
+  it("keeps an earlier run's session after this run resumes the agent (N3)", async () => {
+    const store = new MemoryProcessStore();
+    const start = Date.now() - 120_000;
+    const end = start + 30_000;
+    store.upsert({
+      agentId: 'a-back',
+      pid: 424_243,
+      startedAt: new Date(start).toISOString(),
+      endedAt: new Date(end).toISOString(),
+      status: 'interrupted',
+      meta: { command: 'claude', bootAt: bootTime() },
+    });
+    const { s } = makeSupervisor({ store });
+    expect(s.agentSessions('a-back')).toEqual([{ start, end }]);
+    // The resume overwrites the PID-table row; the earlier window stays.
+    const p = await s.spawn(node(LOITER([]), { agentId: 'a-back' }));
+    expect(store.get('a-back')).toMatchObject({ status: 'running', pid: p.pid });
+    const sessions = s.agentSessions('a-back');
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0]).toEqual({ start, end });
+    expect(sessions[1]!.start).toBeGreaterThan(end);
+    await s.stop('a-back');
+    // A row from another boot is never a session.
+    store.upsert({
+      agentId: 'a-old-boot',
+      pid: 1234,
+      startedAt: new Date(start).toISOString(),
+      endedAt: new Date(end).toISOString(),
+      status: 'interrupted',
+      meta: { command: 'claude', bootAt: new Date(0).toISOString() },
+    });
+    expect(s.agentSessions('a-old-boot')).toEqual([]);
+  });
+});
+
 describe('ProcessSupervisor — restart policy', () => {
   it('is off by default', async () => {
     const { s, events } = makeSupervisor();
