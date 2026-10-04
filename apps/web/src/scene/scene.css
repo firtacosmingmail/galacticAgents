@@ -94,3 +94,13 @@
   padding: 2px 4px;
   color: #d8dcea;
 }
+/* P6-01: "Detail view" follows the trail as an action, not a crumb (no "›"). */
+.pnl-scene-crumbs li.pnl-scene-crumbs-action::before {
+  content: '';
+  margin: 0 2px;
+}
+.pnl-scene-crumbs-action button {
+  margin-left: 4px;
+  border: 1px solid rgba(157, 184, 255, 0.45);
+  border-radius: 3px;
+}

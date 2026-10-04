@@ -11,6 +11,8 @@ import {
 } from 'three';
 import type { OutlineEffect } from 'postprocessing';
 import { anchorList, getAnchor } from '../anchors.js';
+import { currentDetailScope, inDetailScope } from '../detail/mode.js';
+import { standInFor } from '../detail/stand-ins.js';
 import { labelAt } from '../labels/registry.js';
 import { anchorPosition } from '../camera/store.js';
 import { sceneWorld, useAppStore } from '../../state/store.js';
@@ -457,14 +459,18 @@ type ScratchSatelliteSphere = { -readonly [K in keyof SatelliteSphere]: Satellit
  */
 export function bodySpheres(out: ScratchBodySphere[] = []): readonly PickSphere[] {
   const anchors = anchorList();
+  // P6-01: in a detail view only its own bodies are there to pick (the rest is behind its backdrop).
+  const scope = currentDetailScope();
+  let n = 0;
   for (let i = 0; i < anchors.length; i++) {
     const a = anchors[i]!;
-    const s = (out[i] ??= { bodyId: '', center: [0, 0, 0], radius: 0 });
+    if (scope && !scope.has(a.bodyId)) continue;
+    const s = (out[n++] ??= { bodyId: '', center: [0, 0, 0], radius: 0 });
     s.bodyId = a.bodyId;
     s.radius = a.radius;
     anchorPosition(a, s.center);
   }
-  out.length = anchors.length;
+  out.length = n;
   return out;
 }
 
@@ -474,10 +480,12 @@ export function bodySpheres(out: ScratchBodySphere[] = []): readonly PickSphere[
  */
 export function satelliteSpheres(out: ScratchSatelliteSphere[] = []): readonly SatelliteSphere[] {
   const frames = satelliteFrames();
+  const scope = currentDetailScope();
   let n = 0;
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i]!;
     if (!f.visible || f.presence <= 0 || f.size <= 0) continue;
+    if (scope && !scope.has(f.bodyId)) continue;
     const s = (out[n++] ??= { agentId: '', center: f.position, radius: 0 });
     // P4-04: landed satellites are picked only by a direct hit up close (`pickScene`).
     s.agentId = f.agentId;
@@ -577,11 +585,12 @@ function ringTarget(
 ): { center: Vec3; radius: number } | undefined {
   if (agentId) {
     const f = getSatellite(agentId);
-    return f && f.visible && f.presence > 0
+    return f && f.visible && f.presence > 0 && inDetailScope(f.bodyId)
       ? { center: f.position, radius: f.size / 2 }
       : undefined;
   }
-  const anchor = bodyId ? getAnchor(bodyId) : undefined;
+  // P6-01: a ring is drawn over everything: none for a body behind a detail view's backdrop.
+  const anchor = bodyId && inDetailScope(bodyId) ? getAnchor(bodyId) : undefined;
   return anchor ? { center: anchorPosition(anchor), radius: anchor.radius } : undefined;
 }
 
@@ -611,11 +620,13 @@ export function OutlineSync({
     const outline = effect.current;
     if (!outline) return;
     depthPassWithoutDecor(outline as unknown as Partial<OutlineDepthPassOwner>);
-    const anchor = bodyId ? getAnchor(bodyId) : undefined;
+    // P6-01: behind a detail view's backdrop there is nothing to outline (the outline's x-ray
+    // would draw through it); a body its sub-scene draws is outlined on the sub-scene's meshes.
+    const anchor = bodyId && inDetailScope(bodyId) ? getAnchor(bodyId) : undefined;
     // Off screen, nothing to outline: an empty selection skips the effect's passes (P3-08).
     const meshes =
       anchor && bodyInView(state.camera, anchor.object, anchor.radius, scratch)
-        ? outlineMeshes(anchor.object, anchor.bodyId)
+        ? outlineMeshes(standInFor(anchor.bodyId) ?? anchor.object, anchor.bodyId)
         : [];
     const was = current.current;
     if (was.effect === outline && sameMeshes(meshes, was.meshes)) return;

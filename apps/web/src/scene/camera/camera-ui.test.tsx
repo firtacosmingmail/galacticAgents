@@ -106,12 +106,13 @@ describe('breadcrumb', () => {
     render(<CameraBreadcrumb />);
     act(() => void useCameraStore.getState().flyTo('b-europa'));
     const nav = screen.getByRole('navigation', { name: 'scene location' });
-    expect(nav.textContent).toBe('Solar systemJupiterEuropa');
+    // P6-01: the "Detail view" action follows the trail of a planet, moon or asteroid.
+    expect(nav.textContent).toBe('Solar systemJupiterEuropaDetail view');
     expect(screen.getByText('Europa').getAttribute('aria-current')).toBe('location');
 
     fireEvent.click(screen.getByRole('button', { name: 'Jupiter' }));
     expect(useCameraStore.getState().focusedId).toBe('b-jupiter');
-    expect(nav.textContent).toBe('Solar systemJupiter');
+    expect(nav.textContent).toBe('Solar systemJupiterDetail view');
 
     fireEvent.click(screen.getByRole('button', { name: 'Solar system' }));
     expect(useCameraStore.getState().focusedId).toBeUndefined();

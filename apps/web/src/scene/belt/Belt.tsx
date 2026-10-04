@@ -14,6 +14,7 @@ import { sceneWorld, useAppStore } from '../../state/store.js';
 import {
   asteroidSquash,
   BACKGROUND_BELT_SEED,
+  TASK_ROCK_SEED,
   beltSpin,
   generateBelt,
   orbitPosition,
@@ -26,6 +27,7 @@ import {
 } from './belt-model.js';
 import { rockGeometry, writeBeltInstances } from './belt-mesh.js';
 import { useBodyAnchor } from '../anchor-binding.js';
+import { inDetailScope, useDetailStore } from '../detail/mode.js';
 import { useReducedMotion } from '../motion.js';
 import { PLACE_BODIES } from '../frame-order.js';
 
@@ -59,7 +61,7 @@ export function Belt({ rocks }: { rocks: number }) {
   // Shared by every task asteroid: one rock shape (detail 1), one halo sphere, one pick sphere.
   const shapes = useMemo(
     () => ({
-      rock: rockGeometry(BACKGROUND_BELT_SEED ^ 0x7a5c, 1),
+      rock: rockGeometry(TASK_ROCK_SEED, 1),
       halo: new SphereGeometry(1, 24, 16),
       pick: new SphereGeometry(1, 12, 8),
     }),
@@ -83,6 +85,8 @@ function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
   useEffect(() => () => geometry.dispose(), [geometry]);
   const mesh = useRef<InstancedMesh>(null);
   const invalidate = useThree((s) => s.invalidate);
+  // P6-01: behind a settled detail view's backdrop the belt is not drawn.
+  const covered = useDetailStore((s) => s.covered);
 
   // Before the first frame: matrices, colours and the bounding sphere of the whole ring.
   useLayoutEffect(() => {
@@ -100,6 +104,7 @@ function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
       // Stays on layer 0: the rocks really hide task asteroids, so the outline's depth pass needs
       // them (one instanced draw) to draw a covered outline as hidden (P3-08 review).
       args={[geometry, undefined, Math.max(1, count)]}
+      visible={!covered}
     >
       <meshStandardMaterial flatShading roughness={1} metalness={0} />
     </instancedMesh>
@@ -135,11 +140,21 @@ function TaskAsteroidMesh({
   const data = useMemo(() => pickData(asteroid), [asteroid]);
   const invalidate = useThree((s) => s.invalidate);
   useEffect(() => invalidate(), [position, invalidate]);
+  // P6-01: its detail view draws the rock itself; another detail view's backdrop hides it.
+  const detailHere = useDetailStore((s) => s.shown === asteroid.bodyId);
+  const far = useDetailStore((s) => s.covered && !inDetailScope(asteroid.bodyId));
 
   return (
-    <group ref={anchor} name={`asteroid:${asteroid.bodyId}`} position={position} userData={data}>
+    <group
+      ref={anchor}
+      name={`asteroid:${asteroid.bodyId}`}
+      position={position}
+      userData={data}
+      visible={!far}
+    >
       <mesh
         name={ASTEROID_ROCK_NAME}
+        visible={!detailHere}
         geometry={shapes.rock}
         scale={scale}
         rotation={[asteroid.orbit.phase, asteroid.seed % 7, 0]}
@@ -154,7 +169,12 @@ function TaskAsteroidMesh({
         />
       </mesh>
       {/* A soft halo: the back faces of a larger sphere, added on top (below the bloom threshold). */}
-      <mesh geometry={shapes.halo} scale={TASK_ASTEROID_RADIUS * 1.5} layers={DECOR_LAYER}>
+      <mesh
+        geometry={shapes.halo}
+        scale={TASK_ASTEROID_RADIUS * 1.5}
+        layers={DECOR_LAYER}
+        visible={!detailHere}
+      >
         <meshBasicMaterial
           color="#5fd4ff"
           transparent

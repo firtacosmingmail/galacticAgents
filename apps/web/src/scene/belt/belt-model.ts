@@ -33,6 +33,8 @@ export const BACKGROUND_BELT_SEED = (BELT_SEED ^ 0xb0c4_5eed) >>> 0;
 
 /** Background rock size range (scene units, before the per-axis squash). */
 export const ROCK_SIZE = { min: 0.1, max: 0.55 } as const;
+/** The seed of the one rock shape every task asteroid wears (`Belt.tsx`, the detail view's too). */
+export const TASK_ROCK_SEED = BACKGROUND_BELT_SEED ^ 0x7a5c;
 /** A task asteroid's visual radius in scene units: several times the largest background rock. */
 export const TASK_ASTEROID_RADIUS = 1.1;
 /** The belt's decorative spin, radians per second (a full turn in about 26 minutes). */

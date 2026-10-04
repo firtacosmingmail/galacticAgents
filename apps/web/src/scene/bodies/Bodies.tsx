@@ -23,6 +23,7 @@ import { eclipseReceivers, ringsId, type EclipseReceiver } from './eclipse.js';
 import { EclipseSystem, useEclipse, type EclipseBinding } from './eclipse-binding.js';
 import { DECOR_LAYER } from '../layers.js';
 import { useLodLevel } from './lod.js';
+import { inDetailScope, useDetailStore } from '../detail/mode.js';
 import {
   sphereFor,
   useBodyMaps,
@@ -117,11 +118,21 @@ function Planet({
   useLayoutEffect(() => {
     if (!motion && spin.current) spin.current.rotation.y = 0;
   }, [motion]);
+  // P6-01: the detail view draws this planet (and its moons) itself, or hides it behind its
+  // backdrop. The anchor group stays (its world position is read either way).
+  const detailHere = useDetailStore((s) => s.shown === item.bodyId);
+  const covered = useDetailStore((s) => s.covered);
+  const far = useDetailStore((s) => s.covered && !inDetailScope(item.bodyId));
   return (
     <>
-      <OrbitLine radius={item.distance} segments={quality.orbitSegments.planet} opacity={0.22} />
-      <group ref={anchor} name={item.name} userData={{ bodyId: item.bodyId }}>
-        <group rotation={[0, 0, item.look.tiltDeg * DEG]}>
+      <OrbitLine
+        radius={item.distance}
+        segments={quality.orbitSegments.planet}
+        opacity={0.22}
+        visible={!detailHere && !covered}
+      />
+      <group ref={anchor} name={item.name} userData={{ bodyId: item.bodyId }} visible={!far}>
+        <group rotation={[0, 0, item.look.tiltDeg * DEG]} visible={!detailHere}>
           <mesh
             ref={spin}
             geometry={sphereFor(spheres, 'planet', level)}
@@ -186,12 +197,20 @@ function Moon({
   useOrbit(anchor, item.distance, item.phase, item.period, motion);
   useBodyAnchor(anchor, moonAnchor(item));
   const level = useLodLevel(anchor, item.radius, quality.lod);
+  // P6-01: in its own detail view the sub-scene draws this moon (its orbit line ran through it).
+  const detailHere = useDetailStore((s) => s.shown === item.bodyId);
   return (
     <>
-      <OrbitLine radius={item.distance} segments={quality.orbitSegments.moon} opacity={0.12} />
+      <OrbitLine
+        radius={item.distance}
+        segments={quality.orbitSegments.moon}
+        opacity={0.12}
+        visible={!detailHere}
+      />
       <group ref={anchor} name={item.name} userData={{ bodyId: item.bodyId }}>
         <mesh
           ref={sphere}
+          visible={!detailHere}
           geometry={sphereFor(spheres, 'moon', level)}
           scale={item.radius}
           onBeforeRender={eclipse.onBeforeRender}
@@ -209,7 +228,10 @@ function Moon({
   );
 }
 
-/** How strongly the detail map's relief shades the surface (three's `bumpScale`). */
+/**
+ * How strongly the detail map's relief shades the surface (three's `bumpScale`).
+ * `SurfaceMaterial`, `Rings` and `OrbitLine` are shared with the detail view (`detail/`, P6-01).
+ */
 const BUMP_SCALE = 1.5;
 
 /**
@@ -218,7 +240,7 @@ const BUMP_SCALE = 1.5;
  * whether the detail map is there, so adding or removing it builds a new material (three compiles
  * a different shader) instead of mutating the old one.
  */
-function SurfaceMaterial({
+export function SurfaceMaterial({
   look,
   kind,
   quality,
@@ -262,7 +284,7 @@ function SurfaceMaterial({
  * the inner edge, 1 at the outer). Receives the planet's shadow (and its moons', `eclipse.ts`); a
  * faint emissive term keeps the rings readable when the Sun grazes them edge-on.
  */
-function Rings({
+export function Rings({
   rings,
   radius,
   segments,
@@ -317,18 +339,20 @@ function Rings({
   );
 }
 
-function OrbitLine({
+export function OrbitLine({
   radius,
   segments,
   opacity,
+  visible = true,
 }: {
   radius: number;
   segments: number;
   opacity: number;
+  visible?: boolean;
 }) {
   const positions = useMemo(() => circlePoints(radius, segments), [radius, segments]);
   return (
-    <lineLoop layers={DECOR_LAYER}>
+    <lineLoop layers={DECOR_LAYER} visible={visible}>
       <bufferGeometry key={positions.length + ':' + radius}>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>

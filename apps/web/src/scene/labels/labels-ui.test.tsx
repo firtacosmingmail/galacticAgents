@@ -10,6 +10,7 @@ import { pickingWorld } from '../picking/fixtures.js';
 import { usePickingStore } from '../picking/store.js';
 import { LabelLayer } from './LabelLayer.js';
 import { labelEntries, labelStats, resetLabelStats, updateLabel } from './registry.js';
+import { useDetailStore } from '../detail/mode.js';
 
 /**
  * The label layer (DOM) and the projector without WebGL: R3F's hooks are replaced by a fake
@@ -237,6 +238,28 @@ describe('LabelProjector (one pass for every label)', () => {
     )!;
     expect(Number(x)).toBeGreaterThan(400);
     expect(Number(y)).toBeLessThan(300);
+  });
+
+  it("in a detail view only its bodies' labels show (P6-01); all again once it is left", () => {
+    render(
+      <>
+        <LabelLayer />
+        <LabelProjector hz={30} />
+      </>,
+    );
+    frame();
+    expect(shown('b-ast-9')).toBe(true);
+    act(
+      () => void useDetailStore.getState().enter('b-jupiter', { fly: false, reducedMotion: true }),
+    );
+    frame(); // the mode change forces the next pass
+    expect(shown('b-jupiter')).toBe(true);
+    expect(shown('b-io')).toBe(true);
+    expect(shown('b-ast-9')).toBe(false);
+    expect(shown('b-venus')).toBe(false);
+    act(() => void useDetailStore.getState().exit({ fly: false, reducedMotion: true }));
+    frame();
+    expect(shown('b-ast-9')).toBe(true);
   });
 
   it('writes only what changed: nothing for a still camera, transforms after it moves', () => {

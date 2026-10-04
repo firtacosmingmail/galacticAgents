@@ -12,7 +12,7 @@ import { DEFAULT_SUN_RADIUS, length, type Vec3 } from './flight.js';
  * or the whole system.
  */
 export type CameraRequest =
-  | { seq: number; kind: 'focus'; bodyId: string }
+  | { seq: number; kind: 'focus'; bodyId: string; radii?: number }
   | { seq: number; kind: 'overview'; instant?: boolean };
 
 export interface CameraState {
@@ -33,7 +33,11 @@ export interface CameraState {
    * or from the mobile tier) never replays an old flight.
    */
   request: CameraRequest | undefined;
-  /** Flies to a body's anchor and follows it; false (nothing changes) when it is not in the scene. */
+  /**
+   * Flies to a body's anchor and follows it; false (nothing changes) when it is not in the scene.
+   * The flight ends at the body's framing distance, or at `focusFraming(bodyId)` radii when the
+   * scene says so (P6-01: the body shown in the detail view keeps the detail view's framing).
+   */
   flyTo: (bodyId: string) => boolean;
   /** Back to the whole system, from any camera state. */
   back: () => void;
@@ -57,6 +61,21 @@ export interface CameraState {
 
 let seq = 0;
 
+/**
+ * The framing a focus flight to `bodyId` ends at, in body radii, when it is not the usual one
+ * (P6-01: the detail view's body is framed closer). One provider, set by the scene mode
+ * (`detail/mode.ts`) when it loads; `undefined` → the framing distance.
+ */
+let framingProvider: (bodyId: string) => number | undefined = () => undefined;
+
+export function setFocusFraming(provider: (bodyId: string) => number | undefined): void {
+  framingProvider = provider;
+}
+
+function focusFraming(bodyId: string): number | undefined {
+  return framingProvider(bodyId);
+}
+
 export const useCameraStore = create<CameraState>((set, get) => ({
   focusedId: undefined,
   flying: false,
@@ -64,7 +83,15 @@ export const useCameraStore = create<CameraState>((set, get) => ({
   request: undefined,
   flyTo: (bodyId) => {
     if (!getAnchor(bodyId)) return false;
-    set({ focusedId: bodyId, atSystem: false, request: { seq: ++seq, kind: 'focus', bodyId } });
+    const radii = focusFraming(bodyId);
+    set({
+      focusedId: bodyId,
+      atSystem: false,
+      request:
+        radii === undefined
+          ? { seq: ++seq, kind: 'focus', bodyId }
+          : { seq: ++seq, kind: 'focus', bodyId, radii },
+    });
     return true;
   },
   back: () =>
