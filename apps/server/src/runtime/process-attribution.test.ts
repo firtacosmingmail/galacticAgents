@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   attribute,
+  heldBy,
   isInside,
   serverTree,
   withDescendants,
@@ -9,7 +10,14 @@ import {
   type AttributionInput,
   type ProcEntry,
 } from './process-attribution.js';
-import { parseLsofNames, parseProcNetTcp, parsePs, portOf } from './process-table.js';
+import {
+  parseEnvFromPs,
+  parseEnviron,
+  parseLsofNames,
+  parseProcNetTcp,
+  parsePs,
+  portOf,
+} from './process-table.js';
 
 /**
  * Process attribution (P4-14), the pure rules over synthetic process tables. The OS layer and real
@@ -65,9 +73,11 @@ function input(procs: ProcEntry[], over: Partial<AttributionInput> = {}): Attrib
     procs,
     groups: GROUPS,
     self: { pid: 100, uid: UID },
-    window: { start: T0, end: T0 + 3600 * S },
+    sessions: [{ start: T0, end: T0 + 3600 * S }],
     worktree: WT,
     cwdOf: () => new Map(),
+    // By default every process asked about carries the Steward's marker; tests below say otherwise.
+    markerOf: (ps) => new Map(ps.map((pid) => [pid, 'a-st'])),
     ...over,
   };
 }
@@ -178,7 +188,7 @@ describe('process attribution (P4-14)', () => {
       await pids(
         input(world(later), {
           cwdOf: () => new Map([[403, WT]]),
-          window: { start: T0, end: T0 + 3600 * S },
+          sessions: [{ start: T0, end: T0 + 3600 * S }],
           exclude: new Set([200]),
         }),
       ),
@@ -225,6 +235,123 @@ describe('process attribution (P4-14)', () => {
     expect(await pids(input(procs, { groups, exclude: new Set([200]) }))).toEqual([]);
   });
 
+  describe('orphans need the Steward’s marker (B1)', () => {
+    // The user's daemonising programs started in the worktree during the session: a tmux server,
+    // `code .` (Electron), `nohup … &` then the terminal closed — and the children they take along.
+    const daemons = () =>
+      world(
+        p(700, 1, { pgid: 700, command: 'tmux new -s work' }),
+        p(701, 700, { pgid: 701, command: '-zsh' }),
+        p(702, 701, { pgid: 702, command: 'npm run dev' }),
+        p(710, 1, {
+          pgid: 710,
+          command: '/Applications/Visual Studio Code.app/Contents/MacOS/Electron',
+        }),
+        p(711, 710, { pgid: 710, command: 'Code Helper' }),
+      );
+    const inWorktree = (ps: number[]) => new Map(ps.map((pid) => [pid, WT]));
+
+    it('never takes an orphan in the worktree without a marker, nor anything below it', async () => {
+      const i = input(daemons(), {
+        cwdOf: inWorktree,
+        markerOf: () => new Map(),
+        exclude: new Set([200]),
+      });
+      expect(await pids(i)).toEqual([]);
+    });
+
+    it("never takes one that carries another agent's marker", async () => {
+      const i = input(daemons(), {
+        cwdOf: inWorktree,
+        markerOf: (ps) => new Map(ps.map((pid) => [pid, 'a-other'])),
+        exclude: new Set([200]),
+      });
+      expect(await pids(i)).toEqual([]);
+    });
+
+    it("takes one with this Steward's marker; below it, only what is marked too", async () => {
+      const procs = world(
+        p(400, 1, { pgid: 400, command: 'node server.js' }),
+        p(401, 400, { pgid: 400, command: 'esbuild --service' }),
+        p(402, 400, { pgid: 400, command: 'env -i sh' }), // cleared its environment
+        p(403, 402, { pgid: 400, command: 'sleep 1000' }), // marked again, but below an unmarked one
+      );
+      const asked: number[][] = [];
+      const i = input(procs, {
+        cwdOf: inWorktree,
+        markerOf: (ps) => {
+          asked.push([...ps].sort());
+          return new Map([
+            [400, 'a-st'],
+            [401, 'a-st'],
+            [403, 'a-st'],
+          ]);
+        },
+        exclude: new Set([200]),
+      });
+      expect(await pids(i)).toEqual([
+        [400, 'worktree'],
+        [401, 'descendant'],
+      ]);
+      // Markers are read for the orphan and what is below it, nothing else.
+      expect(asked).toEqual([[400, 401, 402, 403]]);
+    });
+
+    it('an environment that cannot be read is no marker (fail closed)', async () => {
+      const procs = world(p(400, 1, { pgid: 400 }));
+      // The OS layer answers nothing for the pid (gone, hidden, not ours).
+      const i = input(procs, {
+        cwdOf: inWorktree,
+        markerOf: () => new Map(),
+        exclude: new Set([200]),
+      });
+      expect(await pids(i)).toEqual([]);
+    });
+
+    it('a process started in a gap between two sessions is not taken, even marked', async () => {
+      const sessions = [
+        { start: T0, end: T0 + 60 * S },
+        { start: T0 + 600 * S, end: T0 + 700 * S },
+      ];
+      const procs = world(
+        p(400, 1, { at: T0 + 30 * S }), // first session
+        p(401, 1, { at: T0 + 300 * S }), // the gap
+        p(402, 1, { at: T0 + 650 * S }), // second session
+      );
+      const i = input(procs, { sessions, cwdOf: inWorktree, exclude: new Set([200]) });
+      expect(await pids(i)).toEqual([
+        [400, 'worktree'],
+        [402, 'worktree'],
+      ]);
+      // No recorded session at all (no supervisor, or nothing of it in this boot): rule 5 is off.
+      expect(await pids({ ...i, sessions: [] })).toEqual([]);
+    });
+  });
+
+  it('a group from an earlier server run is no anchor: a reused pgid is not taken (B2)', async () => {
+    // The Steward's group 200 belonged to the previous run; during the downtime the user's own
+    // shell got pgid 200 and runs a job outside the worktree. Only this run's groups are given.
+    const procs = world(p(220, 60, { pgid: 200, command: 'vim notes' })).filter(
+      (x) => x.pid !== 200,
+    );
+    const thisRun: AgentGroup[] = [{ agentId: 'a-other', pgid: 300, startedAt: T0 + S }];
+    expect(await pids(input(procs, { groups: thisRun }))).toEqual([]);
+  });
+
+  it("marks what a live Steward's CLI uses: its direct children and their descendants", async () => {
+    const procs = world(
+      p(201, 200, { pgid: 200, command: 'npx @playwright/mcp' }), // an MCP server
+      p(202, 201, { pgid: 200, command: 'chrome --headless' }),
+      p(203, 200, { pgid: 200, command: 'bash -c npm test' }), // the running tool command
+      p(210, 1, { pgid: 210, command: 'node dev-server' }), // escaped, orphaned, marked
+    );
+    const found = await attribute(
+      input(procs, { exclude: new Set([200]), cwdOf: (ps) => new Map(ps.map((x) => [x, WT])) }),
+    );
+    expect(found.map((x) => x.pid)).toEqual([201, 202, 203, 210]);
+    expect([...heldBy(found, 200)].sort()).toEqual([201, 202, 203]);
+  });
+
   it('expands chosen pids to their attributed descendants', async () => {
     const procs = world(
       p(201, 200, { pgid: 200 }),
@@ -251,6 +378,28 @@ describe('process table parsing (P4-14)', () => {
       [777, 776, 776, 501, '(node)', true],
     ]);
     expect(rows[1]!.startedAt).toBe(Date.parse('Sun Oct 4 09:19:56 2026'));
+  });
+
+  it('reads the agent marker from /proc environ and from macOS ps -E', () => {
+    expect(parseEnviron('PATH=/bin\0GALACTIC_AGENT_ID=a-1\0HOME=/h\0', 'GALACTIC_AGENT_ID')).toBe(
+      'a-1',
+    );
+    expect(parseEnviron('PATH=/bin\0', 'GALACTIC_AGENT_ID')).toBeUndefined();
+    expect(
+      parseEnviron('GALACTIC_AGENT_ID=a-1\0GALACTIC_AGENT_ID=a-2\0', 'GALACTIC_AGENT_ID'),
+    ).toBeUndefined();
+    const command = 'node server.js --port 3000';
+    const line = ` 4242 ${command} PATH=/bin HOME=/h GALACTIC_AGENT_ID=a-1 TERM=xterm`;
+    expect(parseEnvFromPs(line, command, 'GALACTIC_AGENT_ID')).toBe('a-1');
+    // ps hid the environment (a platform binary): no marker.
+    expect(parseEnvFromPs(` 4242 ${command}`, command, 'GALACTIC_AGENT_ID')).toBeUndefined();
+    // An argument that looks like the variable is not the environment.
+    const tricky = 'sh -c echo GALACTIC_AGENT_ID=a-1';
+    expect(parseEnvFromPs(` 77 ${tricky} PATH=/bin`, tricky, 'GALACTIC_AGENT_ID')).toBeUndefined();
+    // The command line changed between the two reads: no marker.
+    expect(
+      parseEnvFromPs(' 77 other GALACTIC_AGENT_ID=a-1', command, 'GALACTIC_AGENT_ID'),
+    ).toBeUndefined();
   });
 
   it('parses lsof -F output and listening addresses', () => {

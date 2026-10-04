@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db/database.js';
+import { attribute } from './process-attribution.js';
 import { MemoryProcessStore, SqliteProcessStore } from './process-store.js';
 import {
   INHERITED_ENV,
@@ -402,6 +403,93 @@ describe('ProcessSupervisor — the group dies with its leader (corner case 4)',
     expect(result.orphans).toEqual(['left']);
     expect(result.dead).toEqual(['old']);
     await eventually(() => !isRunning(grandchild));
+  });
+});
+
+describe('ProcessSupervisor — anchors of process attribution (P4-14)', () => {
+  it("marks every child's environment with its agent id, which no spec can override", async () => {
+    const { s } = makeSupervisor();
+    expect(s.childEnv(node('', { env: { GALACTIC_AGENT_ID: 'a-forged' } }))).toMatchObject({
+      GALACTIC_AGENT_ID: 'a-1',
+    });
+    let out = '';
+    const p = await s.spawn(
+      node(
+        `require('child_process').spawn(process.execPath, ['-e', 'console.log(process.env.GALACTIC_AGENT_ID)'], { stdio: 'inherit' })`,
+        { agentId: 'a-env', onStdout: (c) => (out += c) },
+      ),
+    );
+    await p.exited;
+    await eventually(() => out.includes('a-env'));
+    // Inherited by the grandchild.
+    expect(out.trim()).toBe('a-env');
+  });
+
+  it('gives only the groups and sessions of this run, never an earlier run’s row (B2)', async () => {
+    const store = new MemoryProcessStore();
+    const before = Date.now() - 60_000;
+    // The previous run's Steward: its row says pid 424242 — a pgid the user's shell may own now.
+    store.upsert({
+      agentId: 'a-prev',
+      pid: 424_242,
+      startedAt: new Date(before).toISOString(),
+      status: 'running',
+      meta: { command: 'claude', bootAt: bootTime() },
+    });
+    const { s } = makeSupervisor({
+      store,
+      probe: { alive: () => false, groupAlive: () => false },
+    });
+    s.reconcile(); // interrupted, endedAt = now
+    expect(store.get('a-prev')).toMatchObject({ status: 'interrupted' });
+    expect(s.agentGroups()).toEqual([]);
+    // Its session still bounds the orphan rule (which also needs the marker).
+    const [prev] = s.agentSessions('a-prev');
+    expect(prev!.start).toBe(before);
+    expect(prev!.end).toBeGreaterThanOrEqual(before);
+
+    // A reused pgid: the user's shell (60) runs a job in group 424242. With this run's groups
+    // only, nothing claims it.
+    const T = Date.now();
+    const procs = [
+      { pid: 1, ppid: 0, pgid: 1, uid: 501, startedAt: T - 3_600_000, command: '/sbin/launchd' },
+      { pid: 60, ppid: 1, pgid: 60, uid: 501, startedAt: T - 600_000, command: '-zsh' },
+      { pid: 424_250, ppid: 60, pgid: 424_242, uid: 501, startedAt: T - 30_000, command: 'vim' },
+    ];
+    const found = await attribute({
+      agentId: 'a-prev',
+      procs,
+      groups: s.agentGroups(),
+      self: { pid: 99, uid: 501 },
+      sessions: s.agentSessions('a-prev'),
+      cwdOf: () => new Map(),
+      markerOf: () => new Map(),
+    });
+    expect(found).toEqual([]);
+    // The old reading of the PID table would have anchored it (rule 3).
+    const stale = await attribute({
+      agentId: 'a-prev',
+      procs,
+      groups: [{ agentId: 'a-prev', pgid: 424_242, startedAt: before, endedAt: Date.now() }],
+      self: { pid: 99, uid: 501 },
+      sessions: [],
+      cwdOf: () => new Map(),
+      markerOf: () => new Map(),
+    });
+    expect(stale.map((p) => p.pid)).toEqual([424_250]);
+
+    // Spawns of this run are anchors, one per spawn (a resume adds one), with the end it saw.
+    const first = await s.spawn(node('', { agentId: 'a-now' }));
+    await first.exited;
+    const second = await s.spawn(node(LOITER([]), { agentId: 'a-now' }));
+    const groups = s.agentGroups().filter((g) => g.agentId === 'a-now');
+    expect(groups.map((g) => g.pgid)).toEqual([first.pid, second.pid]);
+    expect(groups[0]!.endedAt).toBeGreaterThanOrEqual(groups[0]!.startedAt);
+    expect(groups[1]!.endedAt).toBeUndefined();
+    expect(s.agentSessions('a-now')).toHaveLength(2);
+    expect(s.livePid('a-now')).toBe(second.pid);
+    await s.stop('a-now');
+    expect(s.livePid('a-now')).toBeUndefined();
   });
 });
 

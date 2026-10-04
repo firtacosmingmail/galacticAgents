@@ -164,6 +164,11 @@
 .stw-procs-list code {
   font: 12px var(--pnl-mono);
 }
+.stw-procs-confirm {
+  margin: 0 0 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .stw-procs-cmd {
   overflow-wrap: anywhere;
 }

@@ -165,7 +165,7 @@ export const RecoveryNeedsAttention = z.object({
 });
 
 /**
- * The server stopped processes attributed to a Steward (P4-14; SPEC decision pending): leftovers its
+ * The server stopped processes attributed to a Steward (P4-14; SPEC decision 76): leftovers its
  * supervisor (a Waykeeper, or the Harmonizer for an asteroid task) or the user stopped, or the
  * server's safety-net sweep when the Steward ended (`sweep: 'agent_ended'`) or its task closed
  * (`sweep: 'task_closed'`). `commands` are the processes' command lines, clipped and redacted, in

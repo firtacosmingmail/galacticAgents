@@ -2,7 +2,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { uptime } from 'node:os';
 import { basename } from 'node:path';
 import type { Actor, Id } from '@galactic/protocol';
-import type { AgentGroup } from './process-attribution.js';
+import { AGENT_ID_ENV, type AgentGroup, type Session } from './process-attribution.js';
 import { MemoryProcessStore, type ProcessRecord, type ProcessStore } from './process-store.js';
 
 /**
@@ -406,6 +406,15 @@ export class ProcessSupervisor {
   private readonly inherited: readonly string[];
   private readonly probe: ProcessProbe;
   private readonly bootAt = bootTime();
+  /**
+   * Every process group this supervisor started in this server run, per agent, in order (P4-14):
+   * one per spawn, restart or resume, with the real clock's start and the end this run observed.
+   * Never rows of an earlier run: a pgid from before this server started may name anything now.
+   */
+  private readonly runGroups = new Map<
+    Id,
+    { pgid: number; startedAt: number; endedAt?: number }[]
+  >();
   private disposed = false;
 
   constructor(opts: SupervisorOptions = {}) {
@@ -430,6 +439,9 @@ export class ProcessSupervisor {
       if (value === undefined) delete env[name];
       else env[name] = value;
     }
+    // The agent marker (P4-14): every process the agent starts inherits it, so an orphan in a
+    // Steward's worktree can be told from the user's own daemon there. Never overridable.
+    env[AGENT_ID_ENV] = spec.agentId;
     return env;
   }
 
@@ -520,10 +532,15 @@ export class ProcessSupervisor {
     child.stderr?.on('data', (chunk: string) => this.safely(spec, () => spec.onStderr?.(chunk)));
     child.stdin?.on('error', () => {}); // EPIPE after the child died is not an error for us
     let started = false;
+    // `spawn()` forks synchronously: the child started no later than now.
+    const launchedAt = Date.now();
     child.once('spawn', () => {
       started = true;
       if (child.pid !== undefined) {
         managed.pid = child.pid;
+        const groups = this.runGroups.get(spec.agentId) ?? [];
+        groups.push({ pgid: child.pid, startedAt: launchedAt });
+        this.runGroups.set(spec.agentId, groups);
         this.record(managed, 'running');
       }
     });
@@ -545,6 +562,7 @@ export class ProcessSupervisor {
       void withTimeout(closed, DRAIN_MS)
         .then(() => this.reapGroup(pgid, managed.reapMs ?? this.termMs))
         .catch((error: unknown) => this.onError(error, spec.agentId))
+        .then(() => this.endRunGroup(spec.agentId, pgid))
         .then(() => this.onExit(managed, child, { code, signal, at }));
     });
   }
@@ -767,30 +785,65 @@ export class ProcessSupervisor {
     return this.store.get(agentId);
   }
 
+  /** The leader's exit was seen and its group reaped: the group's lifetime ends now. */
+  private endRunGroup(agentId: Id, pgid: number): void {
+    const group = this.runGroups
+      .get(agentId)
+      ?.find((g) => g.pgid === pgid && g.endedAt === undefined);
+    if (group) group.endedAt = Date.now();
+  }
+
   /**
-   * The process groups agents got in this boot (P4-14): the anchors of process attribution. One
-   * per agent — its latest spawn (the PID table is keyed by agent) — with the leader's lifetime,
-   * so a member that started after the group ended (a recycled pgid) is not taken for one of its
-   * own. Rows from another boot are left out: their pids mean nothing now.
+   * The process groups agents got in THIS server run (P4-14): the anchors of process attribution
+   * (rule 3). Every spawn, restart and resume, with the leader's lifetime as this run saw it, so a
+   * member that started after the group ended (a recycled pgid) is not taken for one of its own.
+   * Rows of the PID table from an earlier run are never used: the server was not watching during
+   * the downtime, so their pgids may since name the user's processes (and their end is only the
+   * time of `reconcile()`).
    */
   agentGroups(): AgentGroup[] {
     const groups: AgentGroup[] = [];
-    for (const row of this.store.all()) {
-      if (row.pid === undefined || row.pid <= 1) continue;
-      if (typeof row.meta?.['bootAt'] !== 'string' || this.fromOtherBoot(row)) continue;
-      const startedAt = Date.parse(row.startedAt);
-      if (Number.isNaN(startedAt)) continue;
-      const live = this.procs.get(row.agentId);
-      const running = live !== undefined && live.state !== 'exited';
-      const endedAt = !running && row.endedAt ? Date.parse(row.endedAt) : NaN;
-      groups.push({
-        agentId: row.agentId,
-        pgid: row.pid,
-        startedAt,
-        ...(Number.isNaN(endedAt) ? {} : { endedAt }),
-      });
+    for (const [agentId, list] of this.runGroups) {
+      for (const g of list) {
+        groups.push({
+          agentId,
+          pgid: g.pgid,
+          startedAt: g.startedAt,
+          ...(g.endedAt !== undefined ? { endedAt: g.endedAt } : {}),
+        });
+      }
     }
     return groups;
+  }
+
+  /**
+   * An agent's sessions (P4-14: the time windows of attribution rule 5): every spawn, restart and
+   * resume of this run to its end (now while it runs), and — when this run has not spawned the
+   * agent yet — the PID table's latest row from an earlier run of this boot, from its start to the
+   * end recorded for it (its exit, or `reconcile()`'s time for an interrupted one, an upper bound).
+   * Rule 5 also requires the agent's environment marker, so the wider earlier window cannot take
+   * the user's processes; it lets a closed task's sweep still find the escaped processes of a
+   * Steward from before a restart.
+   */
+  agentSessions(agentId: Id): Session[] {
+    const now = Date.now();
+    const run = this.runGroups.get(agentId);
+    if (run && run.length > 0) {
+      return run.map((g) => ({ start: g.startedAt, end: g.endedAt ?? now }));
+    }
+    const row = this.store.get(agentId);
+    if (!row || row.status === 'running') return [];
+    if (typeof row.meta?.['bootAt'] !== 'string' || this.fromOtherBoot(row)) return [];
+    const start = Date.parse(row.startedAt);
+    const end = row.endedAt ? Date.parse(row.endedAt) : NaN;
+    if (Number.isNaN(start) || Number.isNaN(end) || end < start) return [];
+    return [{ start, end }];
+  }
+
+  /** The pid of the agent's CLI while it runs in this server run (P4-14: its helpers are held). */
+  livePid(agentId: Id): number | undefined {
+    const managed = this.procs.get(agentId);
+    return managed && managed.state !== 'exited' && managed.pid > 1 ? managed.pid : undefined;
   }
 
   /**

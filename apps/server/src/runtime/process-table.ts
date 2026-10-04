@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
-import type { ProcEntry } from './process-attribution.js';
+import { AGENT_ID_ENV, type ProcEntry } from './process-attribution.js';
 
 /**
  * The OS side of process attribution (P4-14): reading the process table, working directories and
@@ -9,6 +9,8 @@ import type { ProcEntry } from './process-attribution.js';
  *
  *   - table:  `ps -A -ww -o pid=,ppid=,pgid=,uid=,stat=,lstart=,command=` (both platforms, C locale)
  *   - cwd:    `/proc/<pid>/cwd` on Linux, `lsof -a -d cwd -Fn -p …` elsewhere
+ *   - marker: `AGENT_ID_ENV` from `/proc/<pid>/environ` on Linux, `ps -E -ww -o pid=,command= -p …`
+ *             elsewhere (macOS hides the environment of platform binaries: no marker)
  *   - ports:  `lsof -nP -a -iTCP -sTCP:LISTEN -Fn -p …`; on Linux without lsof, `/proc/net/tcp{,6}`
  *             listening sockets matched to `/proc/<pid>/fd` inodes
  *
@@ -18,6 +20,12 @@ export interface ProcessTable {
   /** The whole table, or `undefined` when this platform cannot be read (no `ps`). */
   list(): Promise<ProcEntry[] | undefined>;
   cwds(pids: readonly number[]): Promise<Map<number, string>>;
+  /**
+   * The value of `AGENT_ID_ENV` in each process's environment. A process whose environment cannot
+   * be read (another user's, a macOS platform binary, gone) or that has none is missing — callers
+   * treat that as "not an agent's" (fail closed). Optional: a table without it marks nothing.
+   */
+  markers?(procs: readonly Pick<ProcEntry, 'pid' | 'command'>[]): Promise<Map<number, string>>;
   ports(pids: readonly number[]): Promise<Map<number, number[]>>;
   /** Sends `sig` to one process (never a group); `false` when it is gone or not ours. */
   kill(pid: number, sig: NodeJS.Signals): boolean;
@@ -62,6 +70,37 @@ export function parsePs(out: string): ProcEntry[] {
     });
   }
   return entries;
+}
+
+/**
+ * The value of `name` in an environment block: `/proc/<pid>/environ` (NUL-separated). Two
+ * different values (a tampered block) are no value.
+ */
+export function parseEnviron(block: string, name: string): string | undefined {
+  const values = new Set(
+    block
+      .split('\0')
+      .filter((kv) => kv.startsWith(`${name}=`))
+      .map((kv) => kv.slice(name.length + 1)),
+  );
+  return values.size === 1 ? [...values][0] : undefined;
+}
+
+/**
+ * The value of `name` from macOS `ps -E -ww -o pid=,command=` output for one process: the command
+ * line followed by the environment, space-separated. Only what follows the known command line
+ * (from the plain table) is the environment, so an argument that looks like the variable never
+ * counts; a line that does not start with that command line (it changed meanwhile, or `ps` hid
+ * the environment) has no value, and neither has a block with two different values.
+ */
+export function parseEnvFromPs(line: string, command: string, name: string): string | undefined {
+  const text = line.replace(/^\s*\d+\s+/, '');
+  if (!text.startsWith(command)) return undefined;
+  const env = ` ${text.slice(command.length)}`;
+  const values = new Set<string>();
+  const re = new RegExp(` ${name}=(\\S*)`, 'g');
+  for (let m = re.exec(env); m; m = re.exec(env)) values.add(m[1]!);
+  return values.size === 1 ? [...values][0] : undefined;
 }
 
 /** `lsof -F…n` output → the `n` field per `p` record (the last one wins). */
@@ -135,6 +174,42 @@ export function osProcessTable(): ProcessTable {
       const text = await lsof(['-a', '-d', 'cwd', '-Fn', '-p', pids.join(',')]);
       for (const [pid, names] of parseLsofNames(text ?? '')) {
         if (names[0] !== undefined) out.set(pid, names[0]);
+      }
+      return out;
+    },
+    async markers(procs) {
+      const out = new Map<number, string>();
+      if (procs.length === 0 || process.platform === 'win32') return out;
+      if (HAS_PROC) {
+        for (const { pid } of procs) {
+          try {
+            const value = parseEnviron(
+              readFileSync(`/proc/${pid}/environ`, 'latin1'),
+              AGENT_ID_ENV,
+            );
+            if (value !== undefined) out.set(pid, value);
+          } catch {
+            // gone, or not ours: no marker
+          }
+        }
+        return out;
+      }
+      // macOS (and other BSDs): `ps -E` appends the environment to the command line.
+      const text = await run('ps', [
+        '-E',
+        '-ww',
+        '-o',
+        'pid=,command=',
+        '-p',
+        procs.map((p) => p.pid).join(','),
+      ]);
+      const commandOf = new Map(procs.map((p) => [p.pid, p.command]));
+      for (const line of (text ?? '').split('\n')) {
+        const pid = Number(/^\s*(\d+)\s/.exec(line)?.[1]);
+        const command = commandOf.get(pid);
+        if (command === undefined) continue;
+        const value = parseEnvFromPs(line, command, AGENT_ID_ENV);
+        if (value !== undefined) out.set(pid, value);
       }
       return out;
     },

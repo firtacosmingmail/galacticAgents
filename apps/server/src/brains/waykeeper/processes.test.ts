@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Event, Id, Project, Task } from '@galactic/protocol';
 import { SCENARIOS, type FakeScenario } from '../../adapters/fake/scenario.js';
+import { AGENT_ID_ENV } from '../../runtime/process-attribution.js';
 import { gitRunner } from '../../workspace/git.js';
 import { brainHarness, type BrainHarness } from '../testing/index.js';
 import { waykeeperDefinition } from './index.js';
@@ -49,14 +50,18 @@ function alive(pid: number): boolean {
   }
 }
 
-/** `nohup node server &` from a shell that exits: an orphan in `cwd`, as a Steward would leave. */
-function startOrphanServer(cwd: string): Promise<number> {
+/**
+ * `nohup node server &` from a shell that exits: an orphan in `cwd`, as a Steward would leave —
+ * carrying its agent marker, as everything the supervisor starts for an agent does.
+ */
+function startOrphanServer(cwd: string, agentId: Id): Promise<number> {
   const script = `require('http').createServer(() => {}).listen(0, '127.0.0.1'); setInterval(() => {}, 1e6)`;
   const sh = spawn(
     '/bin/sh',
     ['-c', `"${NODE}" -e "${script}" ${MARK}-dev >/dev/null 2>&1 & echo $!`],
     {
       cwd,
+      env: { ...process.env, [AGENT_ID_ENV]: agentId },
       detached: true,
       stdio: ['ignore', 'pipe', 'ignore'],
     },
@@ -73,7 +78,14 @@ function startOrphanServer(cwd: string): Promise<number> {
   );
 }
 
+let sessionStart = 0;
+
+/** The Steward of `taskId` (the fake runtime's "CLI"). */
+const stewardOf = (taskId: Id): Id =>
+  h.log.tables.agents.all().find((a) => a.role === 'steward' && a.taskId === taskId)!.id;
+
 beforeEach(() => {
+  sessionStart = Date.now() - 1_000;
   tmp = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-wk-procs-')));
   for (const d of ['home', 'data', 'projects']) mkdirSync(join(tmp, d));
   scenarios = { ...SCENARIOS };
@@ -86,7 +98,15 @@ beforeEach(() => {
         home: join(tmp, 'home'),
         git: gitRunner({ env: GIT_ENV }),
       },
-      processes: { termMs: 1_000, settleMs: 1_000 },
+      // The fake runtime runs no CLI: the sessions a supervisor would record are this test's.
+      processes: {
+        termMs: 1_000,
+        settleMs: 1_000,
+        groups: {
+          agentGroups: () => [],
+          agentSessions: () => [{ start: sessionStart, end: Date.now() }],
+        },
+      },
     },
   });
 });
@@ -156,7 +176,7 @@ describe.skipIf(!POSIX)('Waykeepers clean up their Stewards’ processes (P4-14)
             writeFileSync(join(task.worktreePath!, 'index.html'), '<h1>site</h1>\n');
             git(task.worktreePath!, 'add', 'index.html');
             git(task.worktreePath!, 'commit', '-q', '-m', 'page');
-            server = await startOrphanServer(task.worktreePath!);
+            server = await startOrphanServer(task.worktreePath!, stewardOf(taskId));
           },
         },
         { kind: 'output', text: 'Done: the page is there; I left the dev server running.' },
@@ -241,7 +261,10 @@ describe.skipIf(!POSIX)('Waykeepers clean up their Stewards’ processes (P4-14)
         {
           kind: 'script',
           run: async () => {
-            server = await startOrphanServer(h.log.tables.tasks.get(taskId)!.worktreePath!);
+            server = await startOrphanServer(
+              h.log.tables.tasks.get(taskId)!.worktreePath!,
+              stewardOf(taskId),
+            );
           },
         },
         { kind: 'finish', result: 'Done.' },

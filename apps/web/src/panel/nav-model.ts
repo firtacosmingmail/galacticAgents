@@ -39,7 +39,10 @@ export interface StewardCount {
 export interface NavModel {
   projects: NavItem[];
   asteroids: NavItem[];
-  /** How many closed items "Show closed" would bring back (each counted with its nested work). */
+  /**
+   * How many closed items are hidden: the pruned top-level items, one per pruned subtree (the
+   * outermost closed item; the work nested inside it is not counted again).
+   */
   hiddenClosed: number;
 }
 
