@@ -102,6 +102,22 @@ describe('Toasts (P4-06)', () => {
     }
   });
 
+  it('does not flare live events over a timeline replay (P4-07)', () => {
+    render(<Toasts />);
+    const before = r3f.invalidations;
+    act(() => useAppStore.setState({ replayWorld: emptyWorld() }));
+    apply({
+      type: 'project.state_changed',
+      projectId: 'p-1',
+      from: 'in_progress',
+      to: 'completed',
+    });
+    expect(r3f.invalidations).toBe(before);
+    act(() => useAppStore.setState({ replayWorld: undefined }));
+    apply({ type: 'task.state_changed', taskId: 't-1', from: 'in_progress', to: 'completed' });
+    expect(r3f.invalidations).toBeGreaterThan(before);
+  });
+
   it('a snapshot is history: nothing toasts for it', () => {
     render(<Toasts />);
     const before = r3f.invalidations;

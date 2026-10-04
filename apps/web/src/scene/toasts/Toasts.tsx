@@ -10,7 +10,7 @@ import {
   type Mesh,
   type PerspectiveCamera,
 } from 'three';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { getAnchor } from '../anchors.js';
 import { anchorPosition } from '../camera/store.js';
 import { READ_BODIES } from '../frame-order.js';
@@ -46,25 +46,30 @@ export function Toasts() {
   useEffect(() => setReduced(pool, reducedMotion), [pool, reducedMotion]);
   useEffect(() => () => disposePool(pool), [pool]);
 
-  // The feed: new events since the last one seen; a snapshot resets the mark (history never toasts).
+  // The feed: new events since the last one seen (the store's log is newest first and starts
+  // empty after a snapshot, so a snapshot is history and never toasts). While a timeline replay
+  // is open (P4-07) the scene shows the past: live events advance the mark but do not flare —
+  // a ring over a body the replayed scene may not even draw would mislead.
   useEffect(() => {
-    let lastSeq = useAppStore.getState().world.seq;
+    let lastSeq = useAppStore.getState().log[0]?.seq ?? 0;
     let snapshots = useAppStore.getState().snapshots;
     let endTimer: ReturnType<typeof setTimeout> | undefined;
-    const unsubscribe = useAppStore.subscribe((state, prev) => {
-      if (state.snapshots !== snapshots) {
-        snapshots = state.snapshots;
-        lastSeq = state.world.seq;
+    const unsubscribe = useAppStore.subscribe((now, prev) => {
+      if (now.snapshots !== snapshots) {
+        snapshots = now.snapshots;
+        lastSeq = now.log[0]?.seq ?? 0;
         return;
       }
-      if (state.log === prev.log) return;
-      const fresh = newEnvelopes(state.log, lastSeq);
+      if (now.log === prev.log) return;
+      const fresh = newEnvelopes(now.log, lastSeq);
       if (fresh.length === 0) return;
       lastSeq = fresh.at(-1)!.seq;
+      if (now.replayWorld) return;
+      const world = sceneWorld(now);
       const wallNow = Date.now();
       const incoming = fresh
         .filter((e) => isFresh(e, wallNow))
-        .map((e) => toastOf(e, state.world))
+        .map((e) => toastOf(e, world))
         .filter((t) => t !== undefined);
       if (incoming.length === 0) return;
       const life = startToasts(pool, incoming, performance.now());
