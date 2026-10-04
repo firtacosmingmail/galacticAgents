@@ -9,6 +9,7 @@ import { formatCost, formatDuration } from '../agent-cards-model.js';
 import { useSettingsData } from '../settings/SettingsData.js';
 import { useDockView, type DockView } from './dock-view.js';
 import {
+  COST_CAVEAT,
   formatCostTotal,
   narrativeRequest,
   projectStatus,
@@ -19,6 +20,8 @@ import {
   type CapUse,
   type QuestionCounts,
   type StateCount,
+  SPAWNS_CAVEAT,
+  WAYKEEPER_CAP_CAVEAT,
 } from './status-model.js';
 import './status.css';
 
@@ -191,12 +194,16 @@ function capText(cap: CapUse): string {
   return cap.limit !== undefined ? `${cap.used} / ${cap.limit}` : String(cap.used);
 }
 
-function Meter({ label, cap }: { label: string; cap: CapUse }) {
+/** A cap's use; `hint` (a tooltip) says how this count may differ from the server's. */
+function Meter({ label, cap, hint }: { label: string; cap: CapUse; hint?: string }) {
   const full = cap.limit !== undefined && cap.used >= cap.limit;
   return (
     <div className={`sts-meter${full ? ' is-full' : ''}`}>
-      <dt>{label}</dt>
-      <dd>
+      <dt title={hint}>
+        {label}
+        {hint && <span aria-hidden="true"> ⓘ</span>}
+      </dt>
+      <dd title={hint}>
         {capText(cap)}
         {full && <span className="sts-full"> at the cap</span>}
         {cap.limit !== undefined && (
@@ -297,19 +304,25 @@ export function SystemStatusView() {
         <Section title="Cost">
           <dl className="sts-facts">
             <Fact label="total">{formatCostTotal(s.cost.total)}</Fact>
-            <Fact label="active today">{formatCostTotal(s.cost.today)}</Fact>
+            <Fact label="agents active today (lifetime cost)">
+              {formatCostTotal(s.cost.today)}
+            </Fact>
             <Fact label="Harmonizer and Waykeepers">{formatCostTotal(s.cost.brains)}</Fact>
             <Fact label="Stewards">{formatCostTotal(s.cost.stewards)}</Fact>
           </dl>
           <p className="muted sts-note">
-            Over the {s.cost.total.agents} agents the server still reports (live, or ended within
-            its retention).
+            Over the {s.cost.total.agents} agents the server still reports: live, or ended in the
+            last 24 h.
           </p>
         </Section>
         <Section title="Caps">
           <dl className="sts-facts">
             <Meter label="live Stewards" cap={s.caps.liveStewards} />
-            <Meter label="spawns in the last hour" cap={s.caps.spawnsLastHour} />
+            <Meter
+              label="spawns in the last hour"
+              cap={s.caps.spawnsLastHour}
+              hint={SPAWNS_CAVEAT}
+            />
           </dl>
         </Section>
       </div>
@@ -386,7 +399,11 @@ export function ProjectStatusView({ projectId }: { projectId: Id }) {
             <Fact label="tasks with a Steward">
               {p.stewards.active} active, {p.stewards.total} in total
             </Fact>
-            <Meter label="live Stewards (Waykeeper cap)" cap={p.stewardCap} />
+            <Meter
+              label="live Stewards (Waykeeper cap)"
+              cap={p.stewardCap}
+              hint={WAYKEEPER_CAP_CAVEAT}
+            />
           </dl>
         </Section>
         <Section title="Open questions">
@@ -399,6 +416,7 @@ export function ProjectStatusView({ projectId }: { projectId: Id }) {
               <Fact label="Waykeeper">{formatCost(world.statuses[p.waykeeper.id])}</Fact>
             )}
           </dl>
+          <p className="muted sts-note">{COST_CAVEAT}</p>
         </Section>
       </div>
       {p.subProjects.length > 0 && (
@@ -443,14 +461,12 @@ export function ProjectStatusView({ projectId }: { projectId: Id }) {
 export function TaskStatusFacts({ agentId }: { agentId: Id }) {
   const world = useAppStore((s) => s.world);
   const taskId = world.agents[agentId]?.taskId;
-  const live = world.statuses[agentId];
+  // A page clock, not the agent's: "last changed … ago" keeps ticking for an ended Steward too.
   const [now, setNow] = useState(() => Date.now());
-  const ticking = live !== undefined && !ENDED_STATES.has(live.state);
   useEffect(() => {
-    if (!ticking) return;
     const timer = setInterval(() => setNow(Date.now()), 5_000);
     return () => clearInterval(timer);
-  }, [ticking]);
+  }, []);
   const t = taskId ? taskStatus(world, taskId, { now, agentId }) : undefined;
   if (!t) return null;
   const since = Date.parse(t.since);
@@ -465,7 +481,12 @@ export function TaskStatusFacts({ agentId }: { agentId: Id }) {
         {t.stewards}
         {t.stewards > 1 && <span className="muted"> (respawned)</span>}
       </Fact>
-      <Fact label="cost of the task">{formatCostTotal(t.cost)}</Fact>
+      <Fact label="cost of the task">
+        {formatCostTotal(t.cost)}
+        <span className="muted" title={COST_CAVEAT}>
+          (runs live or ended in the last 24 h)
+        </span>
+      </Fact>
       <Fact label="open questions">
         {t.questions.open === 0
           ? 'none'

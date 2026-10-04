@@ -1,5 +1,6 @@
 import {
   ENDED_STATES,
+  isHarnessMeta,
   type Agent,
   type AgentState,
   type Id,
@@ -14,6 +15,7 @@ import {
 import type { WorldState } from '../../state/reduce.js';
 import { HARMONIZER, type Selection } from '../../state/selection.js';
 import { agentLabel, agentsFor } from '../../console/hierarchy/shared.js';
+import { currentHarmonizer } from '../../console/hierarchy/HierarchyConsole.js';
 import { waitingForUserCount } from '../inbox-model.js';
 import { primaryAgent, stewardCount, type StewardCount } from '../nav-model.js';
 
@@ -282,8 +284,50 @@ export interface SystemStatus {
   waiting: number;
   /** Cards waiting for the user's decision (pending or edited). */
   cards: number;
-  cost: { total: CostTotal; today: CostTotal; brains: CostTotal; stewards: CostTotal };
-  caps: { liveStewards: CapUse; spawnsLastHour: CapUse };
+  /** Over the status records the server still holds (`COST_CAVEAT`). */
+  cost: {
+    total: CostTotal;
+    /**
+     * The agents active today (a last event after local midnight), each with its whole lifetime
+     * cost — not what was spent today: a status record has no per-day split.
+     */
+    today: CostTotal;
+    brains: CostTotal;
+    stewards: CostTotal;
+  };
+  caps: {
+    liveStewards: CapUse;
+    /**
+     * Non-Harmonizer agents created in the last hour, from the rows' `createdAt`. The server's cap
+     * counts the spawns it made in its own in-memory window (reset by a restart), so the two can
+     * differ: an estimate, not the enforcer's number (`SPAWNS_CAVEAT`).
+     */
+    spawnsLastHour: CapUse;
+  };
+}
+
+/** What every cost figure leaves out: ended agents' records go after 24 h (TECHNOLOGY §4). */
+export const COST_CAVEAT =
+  'Only the agents the server still reports: live, or ended in the last 24 h (older status records are dropped).';
+
+/** The spawns meter's tooltip (see `SystemStatus.caps.spawnsLastHour`). */
+export const SPAWNS_CAVEAT =
+  'Counted from the agents created in the last hour. The server enforces the cap with its own in-memory window (reset by a restart), so its count can differ.';
+
+/** The per-Waykeeper cap meter's tooltip (see `ProjectStatus.stewardCap`). */
+export const WAYKEEPER_CAP_CAVEAT =
+  'Counted by project here: the live Stewards of its tasks. The server counts each Waykeeper’s own Stewards (by supervisor), so the two can differ after a Waykeeper was respawned or a task moved in.';
+
+/** The world without some agents and their status records. */
+function withoutAgents(world: WorldState, ids: ReadonlySet<Id>): WorldState {
+  if (ids.size === 0) return world;
+  const agents = { ...world.agents };
+  const statuses = { ...world.statuses };
+  for (const id of ids) {
+    delete agents[id];
+    delete statuses[id];
+  }
+  return { ...world, agents, statuses };
 }
 
 const startOfLocalDay = (now: number) => {
@@ -300,12 +344,23 @@ export function systemStatus(
   opts: { now: number; caps?: SettingsCaps | undefined },
 ): SystemStatus {
   const { now } = opts;
+  // The scene harness's fake agents (P4-06) are development scaffolding: no attention entry, no
+  // cost, no cap use, never "the Harmonizer". Filtered once here; below, `world` is without them.
+  const all = world;
+  const harness = new Set(
+    Object.values(all.agents)
+      .filter((a) => isHarnessMeta(a.meta))
+      .map((a) => a.id),
+  );
+  world = withoutAgents(all, harness);
   const agents = Object.values(world.agents);
   const projects = Object.values(world.projects);
   const tasks = Object.values(world.tasks);
 
   const attention: AttentionItem[] = [];
   const covered = new Set<Id>(); // agents whose user-held questions an item already counts
+  /** Blocked projects' entries: a blocked task of one folds into it (one question, one entry). */
+  const blockedProjects = new Map<Id, { item: AttentionItem; tasks: number }>();
   for (const project of projects) {
     if (!current(project.state)) continue;
     const own = agentsFor(world, { projectId: project.id });
@@ -316,7 +371,10 @@ export function systemStatus(
     const item = workAttention(world, 'project', project, project.name, own, ids);
     if (item) {
       attention.push(item);
-      if (item.tone === 'blocked') for (const id of ids) covered.add(id);
+      if (item.tone === 'blocked') {
+        for (const id of ids) covered.add(id);
+        blockedProjects.set(project.id, { item, tasks: 0 });
+      }
     }
   }
   for (const task of tasks) {
@@ -324,17 +382,27 @@ export function systemStatus(
     const own = agentsFor(world, { taskId: task.id });
     const ids = new Set(own.map((a) => a.id));
     const item = workAttention(world, 'task', task, task.description, own, ids);
-    if (item) {
-      attention.push(item);
-      if (item.tone === 'blocked') for (const id of ids) covered.add(id);
+    if (!item) continue;
+    const folded =
+      item.tone === 'blocked' && task.projectId ? blockedProjects.get(task.projectId) : undefined;
+    if (folded) {
+      // Its project (blocked because of it, §4.4) already counts the question: one entry,
+      // "Project · N blocked tasks"; the project's own view lists the tasks (wave-1 review).
+      folded.tasks += 1;
+      continue;
     }
+    attention.push(item);
+    if (item.tone === 'blocked') for (const id of ids) covered.add(id);
   }
+  for (const { item, tasks: n } of blockedProjects.values())
+    if (n > 0) item.detail = `${item.detail} · ${plural(n, 'blocked task')}`;
   // A user-held question whose work is not marked blocked (the Harmonizer's own ask_user, a
   // Waykeeper's merge conflict before the projection catches up): its agent is listed instead.
-  const open = Object.values(world.questions).filter((q) => q.status === 'open');
+  // The counts take every open question, the harness's too: the inbox and the top bar do.
+  const open = Object.values(all.questions).filter((q) => q.status === 'open');
   const orphanAsks = new Map<Id, number>();
   for (const q of open)
-    if (q.holder.type === 'user' && !covered.has(q.originAgentId))
+    if (q.holder.type === 'user' && !covered.has(q.originAgentId) && !harness.has(q.originAgentId))
       orphanAsks.set(q.originAgentId, (orphanAsks.get(q.originAgentId) ?? 0) + 1);
   for (const [agentId, n] of orphanAsks) {
     const agent = world.agents[agentId];
@@ -357,13 +425,8 @@ export function systemStatus(
   const withStatus = agents.filter((a) => world.statuses[a.id]);
   const liveOf = (role: Agent['role']) =>
     withStatus.filter((a) => a.role === role && isLive(world.statuses[a.id]));
-  const harmonizers = liveOf('harmonizer');
-  const harmonizer =
-    harmonizers.at(-1) ??
-    withStatus
-      .filter((a) => a.role === 'harmonizer')
-      .sort(byAge)
-      .at(-1);
+  // The Harmonizer the panel talks to: the newest live one, else the newest (the dock's own rule).
+  const harmonizer = currentHarmonizer(world);
 
   const midnight = startOfLocalDay(now);
   let total = NO_COST;
@@ -403,7 +466,7 @@ export function systemStatus(
     },
     attention: sortAttention(attention),
     questions: questionCounts(open),
-    waiting: waitingForUserCount(world),
+    waiting: waitingForUserCount(all),
     cards: Object.values(world.proposals).filter(
       (p) => p.state === 'pending' || p.state === 'edited',
     ).length,
@@ -411,6 +474,7 @@ export function systemStatus(
     caps: {
       // Decision 43: the concurrency cap counts Stewards only.
       liveStewards: { used: liveOf('steward').length, limit: opts.caps?.maxConcurrentAgents },
+      // An estimate (SPAWNS_CAVEAT): the rows' `createdAt`, not the enforcer's window.
       spawnsLastHour: { used: spawnsLastHour, limit: opts.caps?.maxSpawnsPerHour },
     },
   };
@@ -429,7 +493,10 @@ export interface TaskRow {
   /** How many Stewards the task has had (a respawn counts again). */
   stewards: number;
   questions: QuestionCounts;
-  /** Every Steward of the task, respawns included. */
+  /**
+   * Every Steward of the task, respawns included — of those the server still reports (live, or
+   * ended within its 24 h status retention, `COST_CAVEAT`): an older run's cost is missing.
+   */
   cost: CostTotal;
 }
 
@@ -472,11 +539,17 @@ export interface ProjectStatus {
   rows: TaskRow[];
   archivedTasks: number;
   stewards: StewardCount;
-  /** Its live Stewards against the per-Waykeeper cap (decision 18). */
+  /**
+   * Its live Stewards against the per-Waykeeper cap (decision 18), counted by project (its tasks'
+   * Stewards); the server's enforcer counts by `supervisorId` (`WAYKEEPER_CAP_CAVEAT`).
+   */
   stewardCap: CapUse;
   attention: AttentionItem[];
   questions: QuestionCounts;
-  /** Its Waykeepers and its tasks' Stewards (sub-projects count on their own). */
+  /**
+   * Its Waykeepers and its tasks' Stewards (sub-projects count on their own), over the status
+   * records the server still holds (`COST_CAVEAT`).
+   */
   cost: CostTotal;
   subProjects: SubProjectRow[];
 }

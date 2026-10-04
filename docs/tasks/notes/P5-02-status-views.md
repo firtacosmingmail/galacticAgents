@@ -129,3 +129,31 @@ Choices worth knowing:
   Chat; the task facts; in the full app, the switch shows the system status and back while the
   chat stays mounted (`inert`, `aria-hidden`, composer present), the choice is remembered per
   browser and a Waykeeper shows its project; a Steward has no switch and shows the task facts.
+
+## 5. Wave-1 review fixes (2026-10-04)
+
+- **No Harmonizer row** (decision 44, and where every deselect lands): the dock bar still offers
+  the Chat | Status switch, and Status renders the system view (it needs no agent); only "Ask the
+  Harmonizer" is disabled. Chat keeps the "No Harmonizer is running" line.
+- **"Today" no longer overclaims:** the fact reads "agents active today (lifetime cost)" — a
+  status record has no per-day split, so it is the whole cost of the agents with an event since
+  local midnight. SPEC decision 80's "active today" should read the same (left to the SPEC owner).
+  The project and task cost facts carry the 24 h status-retention caveat (`COST_CAVEAT`), and so
+  does `TaskRow.cost`.
+- **The current Harmonizer** is `currentHarmonizer` (newest live, else newest, harness excluded),
+  as in the dock. **The scene harness's agents** (`meta.harness`) are filtered once at the top of
+  `systemStatus`: no attention entry, cost, agent count or cap use. Open-question counts and the
+  waiting number still include a harness question, as the inbox and the top bar do.
+- **One entry per question:** a blocked task whose project is blocked (derived from it, §4.4)
+  folds into the project's entry — "N questions for you · M blocked tasks"; the project's view
+  lists the tasks. A blocked task of a project that is not blocked keeps its own entry.
+- **Caveats** (code comments and tooltips): the per-Waykeeper cap meter counts by project, the
+  server by `supervisorId` (`WAYKEEPER_CAP_CAVEAT`); spawns in the last hour come from the rows'
+  `createdAt`, the server's from its in-memory window (`SPAWNS_CAVEAT`).
+- `TaskStatusFacts` ticks on a page clock, so "task last changed … ago" keeps moving for an ended
+  Steward.
+- The attention tones use panel tokens (`--pnl-failed`, `--pnl-interrupted`, `--pnl-stalled`, new
+  in `panel.css` with light-scheme values; there were no state tokens before), not fixed colours.
+- Tests: `status-model.test.ts` (+3: today's meaning, the fold, harness and two Harmonizers),
+  `status-views.test.tsx` (+3: the wording, caveats and tooltips; the ticking clock of an ended
+  Steward; the switch and system status without a Harmonizer row).

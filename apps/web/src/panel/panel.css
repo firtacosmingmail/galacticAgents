@@ -14,6 +14,10 @@
   --pnl-here-soft: rgba(91, 141, 239, 0.16);
   --pnl-beacon: #ffb547;
   --pnl-beacon-ink: #1d1300;
+  /* problem states (P5-02 status views), the hues of the state pills: never the beacon's amber */
+  --pnl-failed: #d26a6a;
+  --pnl-interrupted: #a67fd6;
+  --pnl-stalled: #c98a4b;
   --pnl-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   color-scheme: dark;
   /* exactly the viewport (P4-10): the page never scrolls */
@@ -47,6 +51,9 @@
     --pnl-here-soft: rgba(47, 98, 208, 0.1);
     --pnl-beacon: #d9820f;
     --pnl-beacon-ink: #ffffff;
+    --pnl-failed: #b23b3b;
+    --pnl-interrupted: #7445ad;
+    --pnl-stalled: #9a5a1c;
     color-scheme: light;
   }
   .pnl .muted {
