@@ -116,6 +116,12 @@ The server must never stop a process that is not the Steward's. Each rule is saf
 - **The model never decides.** The brain tools only pass pids; the server refuses any pid outside
   the attribution, and the tools' reach is the caller's own Stewards (`supervisorId` = the caller).
 
+While a Steward runs, its CLI's own helpers (MCP servers from the user's settings, e.g. a
+Playwright server and its browser) are members of its group and are listed too. That is deliberate
+— they are exactly the "stray headless browsers" — but stopping them under a live Steward would
+break its tools; the prompts therefore ask for the check before merge/close and after the Steward
+stopped or failed, not while it works.
+
 Known limits (documented, conservative): a process another agent started in this Steward's
 worktree during its session and then fully detached (new session, parent gone, so no group and no
 ancestry) is indistinguishable from the Steward's own orphan and would be attributed to it; the
