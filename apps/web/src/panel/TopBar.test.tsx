@@ -151,6 +151,7 @@ describe('the compact top bar (P3-12)', () => {
     expect(within(m).getByRole('note').textContent).toBe('3D scene unavailable — list mode');
     expect(items).toEqual([
       'Hide managed agents', // P4-09: after the scene control
+      'Hide inbox', // P4-12
       'Notifications: unavailable', // jsdom has no Notification API
       'History',
       'Settings',
