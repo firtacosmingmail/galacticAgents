@@ -2,18 +2,11 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Bloom, EffectComposer, Outline, ToneMapping } from '@react-three/postprocessing';
 import { ToneMappingMode, type OutlineEffect } from 'postprocessing';
-import {
-  AdditiveBlending,
-  CanvasTexture,
-  SRGBColorSpace,
-  WebGLRenderer,
-  type Camera,
-  type Group,
-  type Points,
-} from 'three';
+import { AdditiveBlending, WebGLRenderer, type Camera, type Group, type Points } from 'three';
 import { FpsCounter, type FpsSample } from './fps.js';
 import { BLOOM_SMOOTHING, contextAntialias, SUN_EMISSIVE, type SceneQuality } from './quality.js';
 import { centreOnCamera, generateStarField, STAR_POINT_PX } from './starfield.js';
+import { sunGlowTexture } from './sun-glow.js';
 import { Bodies } from './bodies/Bodies.js';
 import { SUN_ANCHOR_ID } from './anchors.js';
 import { attachAnchor } from './anchor-binding.js';
@@ -220,24 +213,7 @@ function Sun({ glow }: { glow: boolean }) {
 }
 
 function SunGlow() {
-  const texture = useMemo(() => {
-    const size = 128;
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-      g.addColorStop(0, 'rgba(255, 200, 120, 1)');
-      g.addColorStop(0.25, 'rgba(255, 150, 50, 0.55)');
-      g.addColorStop(0.6, 'rgba(255, 110, 20, 0.12)');
-      g.addColorStop(1, 'rgba(255, 90, 0, 0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, size, size);
-    }
-    const t = new CanvasTexture(canvas);
-    t.colorSpace = SRGBColorSpace;
-    return t;
-  }, []);
+  const texture = useMemo(() => sunGlowTexture(), []);
   useEffect(() => () => texture.dispose(), [texture]);
   return (
     <sprite scale={SUN_RADIUS * 6}>
