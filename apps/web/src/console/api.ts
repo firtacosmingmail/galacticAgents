@@ -9,9 +9,11 @@ import type {
   HistoryQuestionsResponse,
   HistoryEventsQuery,
   HistoryEventsResponse,
+  HistoryWorkDetail,
   HistoryWorkQuery,
   HistoryWorkResponse,
   HistoryWorkState,
+  HostKind,
   MessagesResponse,
   PreflightResponse,
   ProposalDecisionBody,
@@ -137,6 +139,9 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     /** The history view (P25-10): finished and archived work, newest first, paged by `before`. */
     historyWork: (query: HistoryWorkFilter = {}) =>
       call<HistoryWorkResponse>('GET', `/api/history/work${queryString(query)}`),
+    /** One project or task inspected from the history view (P5-03), in any state. */
+    historyDetail: (kind: HostKind, id: string) =>
+      call<HistoryWorkDetail>('GET', `/api/history/work/${kind}/${encodeURIComponent(id)}`),
     /** The history view (P25-10): answered and cancelled questions, newest first. */
     historyQuestions: (query: HistoryQuestionsQuery = {}) =>
       call<HistoryQuestionsResponse>('GET', `/api/history/questions${queryString(query)}`),

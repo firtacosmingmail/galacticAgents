@@ -41,6 +41,7 @@ import type { Vec3 } from '../camera/flight.js';
 import {
   activateBody,
   activateSatellite,
+  deselectFromScene,
   hoveredBody,
   hoveredSatellite,
   moveHover,
@@ -60,7 +61,8 @@ import { activateBeacon } from '../beacons/activate.js';
  * (`ClickTracker`, with a wider slop for touch). Picks are ray-vs-sphere over the anchor registry
  * (`pick.ts`). One pick → `activateBody` (fly there; select who works on it or show what it is);
  * several bodies under the pointer → the "what's here" list (corner case 24); none → closes the
- * popover.
+ * popover, or, with no popover open, deselects: back to the Harmonizer (P5-01,
+ * `deselectFromScene`; the camera stays).
  *
  * Highlights: a faint ring around the hovered body and a brighter one around the selected
  * agent's body — billboards drawn over everything, never smaller than a few pixels, so they read
@@ -348,7 +350,9 @@ export function Picking({ outline }: PickingProps) {
           result.candidates.flatMap((c) => (c.kind === 'body' ? [c.bodyId] : [])),
           result.candidates.flatMap((c) => (c.kind === 'satellite' ? [c.agentId] : [])),
         );
-      } else picking.closePopover();
+      } else if (picking.popover || result.candidates.length > 0) picking.closePopover();
+      // Empty space (P5-01): the first click closes an open card; with none open, deselects.
+      else deselectFromScene();
     };
     const onCancel = () => {
       pressed = false;

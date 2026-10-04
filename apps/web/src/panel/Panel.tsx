@@ -28,6 +28,7 @@ import { HistoryPage } from './history/HistoryPage.js';
 import { SceneArea } from '../scene/SceneArea.js';
 import { ReplayBar } from '../replay/ReplayBar.js';
 import { useScene } from '../scene/visibility.js';
+import { dropDeepLink } from '../scene/picking/sync.js';
 import { INBOX_ID, TopBar } from './TopBar.js';
 import {
   useManagedAgentsVisibility,
@@ -37,6 +38,8 @@ import { useInboxVisibility, type InboxControl } from './inbox-visibility.js';
 import { DockHandle, DOCK_BODY_ID, UnreadReplies } from './Dock.js';
 import { useDockPrefs, type DockControl } from './dock-state.js';
 import { STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
+import { BrainDock, DockViewToggle, SystemStatusView } from './status/StatusViews.js';
+import { useDockView } from './status/dock-view.js';
 import './panel.css';
 
 /*
@@ -74,6 +77,11 @@ export function Panel({
   const route = useAppStore((s) => s.route);
   const scene = useScene();
   const showScene = route === 'panel' && scene.shown;
+  // The main view in list mode: a deep link (a load, a return from another page) is spent — a
+  // scene shown later must not fly to it (P5-01).
+  useEffect(() => {
+    if (route === 'panel' && !scene.shown) dropDeepLink();
+  }, [route, scene.shown]);
   const agents = useManagedAgentsVisibility();
   const inbox = useInboxVisibility();
   // Both sections hidden (P4-12): no side column; the centre takes its width.
@@ -196,14 +204,23 @@ function MainArea({
   const agent = selectedAgent(world, selection);
   useCanonicalSelection(agent, selection);
   const open = !collapsible || dock.open;
+  const view = useDockView((s) => s.view);
 
   let content;
   if (!agent) {
     content =
       selection.kind === 'harmonizer' ? (
-        <Empty>
-          No Harmonizer is running. Start Mission Control with <code>galactic start</code>.
-        </Empty>
+        // No Harmonizer row (decision 44; where every deselect lands): the system status still
+        // shows — it needs no agent; only its "Ask the Harmonizer" button is disabled (P5-02).
+        view === 'status' ? (
+          <div className="sts-pane sts-pane-status">
+            <SystemStatusView />
+          </div>
+        ) : (
+          <Empty>
+            No Harmonizer is running. Start Mission Control with <code>galactic start</code>.
+          </Empty>
+        )
       ) : status === 'live' ? (
         <Empty>
           This {selection.kind} is not in the current log.{' '}
@@ -216,8 +233,12 @@ function MainArea({
     // Read-only except an open clarification's answer (decision 13; P25-05).
     content = <StewardPanelView key={agent.id} agentId={agent.id} />;
   } else {
-    // The Harmonizer or a Waykeeper: the conversation (P25-03).
-    content = <Conversation key={agent.id} agentId={agent.id} />;
+    // The Harmonizer or a Waykeeper: the conversation (P25-03), or its status view (P5-02).
+    content = (
+      <BrainDock agent={agent}>
+        <Conversation key={agent.id} agentId={agent.id} />
+      </BrainDock>
+    );
   }
 
   const className = [
@@ -320,6 +341,7 @@ function MainHeader({
         </NavLink>
       )}
       {agent?.role === 'waykeeper' && <WaykeeperControls agent={agent} />}
+      {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && <DockViewToggle />}
       {toggle && (
         <button
           type="button"

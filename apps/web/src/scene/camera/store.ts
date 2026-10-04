@@ -20,6 +20,13 @@ export interface CameraState {
   /** True while a flight runs. */
   flying: boolean;
   /**
+   * True while the camera rests at the whole system's framing: a fresh rig (it starts there), or
+   * an overview flight that arrived. Any flight, release or user input on the controls clears it.
+   * `Escape` uses it to know whether "back" would change anything (P5-01 review): when it would
+   * not, the key is left to the replay bar (exit the replay).
+   */
+  atSystem: boolean;
+  /**
    * The latest request; the rig handles each `seq` once. Cleared when the camera is released (the
    * rig also releases it when it unmounts), and a newly mounted rig ignores whatever request is
    * already there (`handledOnMount`), so a remounted rig (the scene hidden and shown, a switch to
@@ -42,6 +49,10 @@ export interface CameraState {
   atOverview: () => void;
   /** From the rig: user input stopped a flight, or panned away, or the body left the scene. */
   released: () => void;
+  /** From the rig: the user grabbed the controls (orbit, zoom, pan): no longer at the framing. */
+  userMoved: () => void;
+  /** From the rig: a new rig mounted; its fresh camera starts at the system's framing. */
+  rigMounted: () => void;
 }
 
 let seq = 0;
@@ -49,19 +60,23 @@ let seq = 0;
 export const useCameraStore = create<CameraState>((set, get) => ({
   focusedId: undefined,
   flying: false,
+  atSystem: true,
   request: undefined,
   flyTo: (bodyId) => {
     if (!getAnchor(bodyId)) return false;
-    set({ focusedId: bodyId, request: { seq: ++seq, kind: 'focus', bodyId } });
+    set({ focusedId: bodyId, atSystem: false, request: { seq: ++seq, kind: 'focus', bodyId } });
     return true;
   },
-  back: () => set({ focusedId: undefined, request: { seq: ++seq, kind: 'overview' } }),
+  back: () =>
+    set({ focusedId: undefined, atSystem: false, request: { seq: ++seq, kind: 'overview' } }),
   next: () => step(get, 1),
   previous: () => step(get, -1),
   flightStarted: () => set({ flying: true }),
   arrived: () => set({ flying: false }),
-  atOverview: () => set({ flying: false, focusedId: undefined }),
-  released: () => set({ flying: false, focusedId: undefined, request: undefined }),
+  atOverview: () => set({ flying: false, focusedId: undefined, atSystem: true }),
+  released: () => set({ flying: false, focusedId: undefined, atSystem: false, request: undefined }),
+  userMoved: () => set({ atSystem: false }),
+  rigMounted: () => set((s) => ({ atSystem: s.focusedId === undefined && !s.flying })),
 }));
 
 /**

@@ -19,7 +19,7 @@ import { ScaleToggle } from './bodies/ScaleToggle.js';
 import { PickingOverlay } from './picking/PickingOverlay.js';
 import { LabelLayer } from './labels/LabelLayer.js';
 import { SatelliteLegend } from './legend/Legend.js';
-import { activateBody, usePickingStore } from './picking/store.js';
+import { activateBody, deselectFromScene, usePickingStore } from './picking/store.js';
 import { useSelectionSync } from './picking/sync.js';
 import './scene.css';
 
@@ -45,7 +45,8 @@ export function useQualityTier(): QualityTier | undefined {
  * The breadcrumb over the scene shows where the camera is.
  *
  * Picking (P3-05): `Enter` on the area selects the body the camera is on (as a click would);
- * `Escape` closes the picking popover first. The hover label and the popover are drawn here, over
+ * `Escape` closes the picking popover first; with no popover and the camera on no body, it
+ * deselects (back to the Harmonizer, P5-01). The hover label and the popover are drawn here, over
  * the canvas; while the scene is shown, a selection made in the panel flies the camera to the
  * selected agent's body (`useSelectionSync`).
  *
@@ -101,8 +102,20 @@ export function onSceneKey(event: KeyboardEvent<HTMLElement>) {
     target: event.target,
   });
   if (!action) return;
-  event.preventDefault();
   const camera = useCameraStore.getState();
+  // Escape unwinds one step at a time (P5-01): the popover (above), the camera's body, then the
+  // selection — back to the Harmonizer, the camera staying — and only then the system's framing.
+  // Home always goes back to the system. An Escape that changes nothing here (the Harmonizer
+  // selected, the camera resting at the system's framing) is not taken: it reaches the replay
+  // bar's document listener, which exits a replay (`escapeExitsReplay` skips a handled key).
+  if (action === 'back' && event.key === 'Escape') {
+    if (!camera.focusedId && deselectFromScene()) {
+      event.preventDefault();
+      return;
+    }
+    if (camera.focusedId === undefined && !camera.flying && camera.atSystem) return;
+  }
+  event.preventDefault();
   if (action === 'back') camera.back();
   else if (action === 'next') camera.next();
   else camera.previous();
