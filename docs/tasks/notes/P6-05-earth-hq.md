@@ -72,11 +72,22 @@ Decision 72's "clicking it selects the Harmonizer" could become "clicking it sel
 
 ## Not done / deferred
 
-- **Browser check**: not run in this task (no harness). Worth looking at on the Mac: the station's proportions at the detail framing, the glow's strength with and without bloom, the strobe's brightness.
 - **"Headquarters" label** in the detail view: skipped. The label layer is per body; a label for a non-body would need a new label kind. The hover card already names the Harmonizer.
 - **The dark station is not clickable** (no frame to pick); a click lands on Earth or empty space, both of which select the Harmonizer, but without restoring the dock. A pick target for it could come with a `registerAnchor`-style extension of picking if wanted.
-- **Model swap at the start of the fade**: the detailed hull replaces the simple one at once (the lights and glow fade in). At that moment the station is a few pixels; not noticeable in principle, unverified in a browser.
+- **Model swap at the start of the fade**: the detailed hull replaces the simple one at once (the lights and glow fade in). Checked in the browser (below): not noticeable.
+- **The station is rarely in view in Earth's detail view** (browser check below): new task P6-06.
 - **Beams to the Waykeepers' planets**: out of scope, as briefed.
+
+## Browser check (wave 2 review, 2026-10-04)
+
+**Setup** (all from the review branch's worktree, all stopped afterwards; Cosmin's 5173/4321 untouched): the dev server (`GALACTIC_DEV=1 GALACTIC_HARMONIZER=fake`, `GALACTIC_HOME` in scratch) on 127.0.0.1:7792, Vite on 7712, headless Chrome (`--use-angle=metal`, Apple M3 Pro) on CDP 9482 with a scratch profile, driven over raw CDP; the app's own stores (`useCameraStore.flyTo`, `useDetailStore.enter/exit`) and the scene read through a `Scene.onBeforeRender` hook. Viewports 1440×900 and 2400×1000 at DPR 2. Screenshots were kept in the session scratchpad, not the repo.
+
+- **Proportions.** The detailed station is about 0.42 Earth radii across on its 1.8-radii shell, as designed: it reads as a large station beside Earth — habitation modules, docking ring, habitat ring with spokes, four solar arrays (two panels a side) on high and balanced, two arrays on mobile, a red light at one array tip and a green one at the other. Nothing is out of scale.
+- **Visibility (new task P6-06).** At the detail framing (camera 2.4 radii out) the station is on screen only near Earth's limb: on its near side it is outside the view, on its far side behind Earth. Sampled over a minute: in a square canvas (dock minimised, 860×804) it was visible in ~3 % of the samples, and seen at the limb it is washed out by the atmosphere's additive glow; in a wide canvas (≈ 2:1) about a quarter of its orbit, clearly. Not changed here: it needs a framing or placement choice (P6-06).
+- **Glow with and without bloom.** The Harmonizer (fake) was idle during the check, so the thinking glow was off; its disc was not seen. The white strobe is drawn at 1.6 (HDR, `toneMapped: false`): on high it is above the bloom threshold (1.0), so it blooms; on mobile (no composer) it is a clipped white dot. The navigation lights stay at ≤ 1 and do not bloom on either tier. The high and mobile crops looked alike apart from the model's detail (the strobe's flash did not fall in a crop, so its halo was not seen in a screenshot). Neither looks over- or under-lit.
+- **Strobe.** Sampled every 50 ms: a double flash (two ~0.15 s pulses 0.4 s apart) about every 2 s; the navigation lights blink (~0.8 s on, ~0.8 s dim at 0.18). As specified.
+- **Model swap during the fade.** 80 ms into the cross-fade the detailed station is already there, about 60 px across, with no frame showing both models or none.
+- **Fix 1 confirmed (P6-02):** first entry painted Earth's 4096 level in 10.3 s (jobs in order: clouds 2048, near maps 1024 and 512, then the 4096 detail level — small jobs first); after exit the level and clouds stay idle in the cache (117 MiB); re-entering started **no** paint job and showed the detail level at once.
 
 ## Shared files touched
 
