@@ -1,7 +1,7 @@
 # Phase 6 — Planet zoom and structure
 
-**Current task:** P6-01 (wave 1, branch `p6-wave1-detail-scene`) · **Task status:** in progress
-**Phase status:** in progress (0/5 done) — on branch `phase-6`
+**Current task:** P6-02, P6-03, P6-05 (wave 2, after wave 1 is merged into `phase-6`) · **Task status:** todo
+**Phase status:** in progress (1/5 done) — on branch `phase-6`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -36,7 +36,7 @@ Zooming into a planet shows it "as it is in our solar system" — high-detail su
 ## Tasks
 
 ### P6-01 — Planet detail sub-scene and transition
-- **Status:** in progress · **Depends on:** P3-04, P3-06 · **Parallel with:** —
+- **Status:** done (2026-10-04) · **Depends on:** P3-04, P3-06 · **Parallel with:** —
 - Sub-scene component per body kind (rocky, gas giant, moon, asteroid); zoom threshold triggers a smooth transition (fly + cross-fade) and back; breadcrumb; selection persists across the transition.
 - **Acceptance:** smooth transition from system scale to planet scale and back for every planet.
 
