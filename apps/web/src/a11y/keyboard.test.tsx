@@ -190,6 +190,34 @@ describe('arrow keys through the cards', () => {
     expect(focused()).toBe(cards()[0]);
   });
 
+  it('leaves the arrows alone in a pending confirmation and an open menu', async () => {
+    await openApp('/');
+    const section = screen.getByRole('region', { name: 'managed agents' });
+    const cards = () => Array.from(section.querySelectorAll<HTMLElement>('article.agc'));
+    const card = cards().find((c) => within(c).queryAllByRole('button', { name: 'Stop' })[0])!;
+    const stop = within(card).getAllByRole('button', { name: 'Stop' })[0]!;
+    stop.focus();
+    await click(stop);
+    const confirm = within(card).getByRole('group', { name: 'confirm' });
+    const keep = within(confirm).getByRole('button', { name: 'Keep' });
+    expect(focused()).toBe(keep);
+    await key(keep, 'ArrowDown');
+    await key(keep, 'End');
+    // Not stranded open behind the focus: still there, still holding it.
+    expect(confirm.isConnected).toBe(true);
+    expect(focused()).toBe(keep);
+    // An open menu (a `data-escape-layer`) in a card: the same.
+    await key(keep, 'Escape');
+    const menu = document.createElement('div');
+    menu.setAttribute('data-escape-layer', '');
+    const item = document.createElement('button');
+    menu.append(item);
+    card.append(menu);
+    item.focus();
+    await key(item, 'ArrowDown');
+    expect(focused()).toBe(item);
+  });
+
   it('moves between the history’s rows; Escape closes the inspector and returns the focus', async () => {
     await openApp('/history');
     const inspect = await screen.findByRole('button', { name: 'Inspect Fix the flaky date test' });
@@ -300,6 +328,37 @@ describe('focus kept when an item goes away, and the waiting count announced', (
     expect(card.isConnected).toBe(false);
     expect(inbox().contains(focused())).toBe(true);
     expect(focused().matches('article.card')).toBe(true);
+  });
+
+  it('a question answered in the main area: the focus goes to the next one, else the title', async () => {
+    seq = 10;
+    await openApp('/steward/a-steward-1');
+    const view = () => within(main()).getByRole('region', { name: /^view of / });
+    await vi.waitFor(() => expect(view()).toBeTruthy());
+    const box = () => within(view()).getByRole('form', { name: 'answer the clarification' });
+    const answered = (questionId: string, version: number) =>
+      stream({
+        type: 'question.answered',
+        questionId,
+        answer: 'yes',
+        answeredBy: { type: 'user' },
+        version,
+      });
+    // Three open questions: the permission's card, then two clarifications (q-3 first, oldest).
+    const first = box().querySelector('textarea')!;
+    first.focus();
+    await answered('q-3', 1);
+    // The box went with q-3: the next clarification's box, in its place, has the focus.
+    expect(first.isConnected).toBe(false);
+    expect(focused()).toBe(box().querySelector('textarea'));
+    expect(focused()).not.toBe(first);
+    await answered('q-1', 4);
+    // No clarification left: the permission's card.
+    expect(focused()).toBe(within(view()).getByRole('article', { name: /^permission question/ }));
+    within(focused()).getByRole('button', { name: 'Allow' }).focus();
+    await answered('q-2', 1);
+    // Nothing left to answer: the main area's title.
+    expect(focused()).toBe(within(main()).getByRole('heading', { level: 1 }));
   });
 
   it('announces a change of the "waiting for you" count, politely and not on load', async () => {

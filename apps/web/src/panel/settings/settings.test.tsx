@@ -518,7 +518,11 @@ describe('settings page (P25-08)', () => {
     const check = await screen.findByRole('region', { name: 'Runtime check' });
     await within(check).findByText(/2\.1\.0/);
     const access = section('Access');
-    const token = within(access).getByLabelText('access token');
+    // Shown after its visible "Token" label, as plain code: no ARIA role or name on a `<code>`.
+    const token = access.querySelector<HTMLElement>('code.set-token')!;
+    expect(token.previousElementSibling?.textContent).toBe('Token');
+    expect(token.getAttribute('role')).toBeNull();
+    expect(token.getAttribute('aria-label')).toBeNull();
     expect(token.textContent).not.toContain(TOKEN);
     expect(token.textContent).toMatch(/WXYZ$/);
     await click(within(access).getByRole('button', { name: 'Reveal' }));

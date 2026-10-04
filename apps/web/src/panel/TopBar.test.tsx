@@ -101,6 +101,17 @@ describe('the wide top bar (desktop layout, unchanged by P3-12)', () => {
     );
   });
 
+  it('shows the connection without a live region, so reconnect retries are not announced', async () => {
+    await open();
+    const bar = top();
+    const conn = within(bar).getByRole('img', { name: 'connection: live' });
+    expect(conn.textContent).toBe('live');
+    expect(within(bar).queryByRole('status')).toBeNull();
+    expect(within(bar).queryByRole('alert')).toBeNull();
+    expect(within(bar).queryByRole('log')).toBeNull();
+    expect(bar.querySelector('[aria-live]')).toBeNull();
+  });
+
   it('switches to the compact bar when the window narrows, and back', async () => {
     const width = stubWidth(false);
     await open();

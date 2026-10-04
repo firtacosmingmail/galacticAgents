@@ -72,7 +72,13 @@ function WideTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
       <NavLink to={{ route: 'panel', selection: HARMONIZER }} className="pnl-brand">
         GalacticAgents
       </NavLink>
-      <span className={`pnl-conn pnl-conn-${status}`} role="status" aria-label="connection">
+      {/* Not a live region: "connecting / catching up / live" would be announced on load and on
+          every reconnect retry. Named like the compact bar's dot. */}
+      <span
+        className={`pnl-conn pnl-conn-${status}`}
+        role="img"
+        aria-label={`connection: ${status.replace(/_/g, ' ')}`}
+      >
         {status.replace(/_/g, ' ')}
       </span>
       <span className="pnl-top-counts" role="group" aria-label="summary">

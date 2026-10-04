@@ -95,7 +95,10 @@ export function ReplayBar({ sceneShown }: { sceneShown: boolean }) {
   const bar = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!open) return;
-    opener.current = document.activeElement as HTMLElement | null;
+    // Captured after the route change: a replay opened from the history page finds the focus on
+    // the body (the history unmounted), which is no opener at all — exit falls back to the h1.
+    const o = document.activeElement as HTMLElement | null;
+    opener.current = o && o !== document.body ? o : null;
     const section = bar.current;
     return () => {
       const active = document.activeElement;
