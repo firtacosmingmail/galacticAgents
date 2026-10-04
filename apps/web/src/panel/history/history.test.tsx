@@ -18,6 +18,8 @@ import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../../App.js';
 import { FakeWebSocket } from '../../client/fake-socket.js';
 import { useAppStore } from '../../state/store.js';
+import { emptyWorld } from '../../state/reduce.js';
+import { openOnTrail, trailName } from './parts.js';
 
 const TOKEN = 'tok-0123456789abcdefWXYZ';
 
@@ -633,7 +635,18 @@ describe('history inspector (P5-03)', () => {
     expect(within(task).getAllByRole('button', { name: 'inspect project CSV tool' })).toHaveLength(
       2,
     );
-    await click(within(task).getByRole('button', { name: '← Back to CSV tool' }));
+    // Following it (A → B → A) goes back to the project's entry: no duplicate, no "Back".
+    await click(within(task).getAllByRole('button', { name: 'inspect project CSV tool' })[0]!);
+    const again = await vi.waitFor(() => inspector('CSV tool'));
+    expect(within(again).queryByRole('button', { name: /^← Back to/ })).toBeNull();
+    await click(
+      within(await within(again).findByRole('list', { name: 'work of CSV tool' })).getByRole(
+        'button',
+        { name: 'inspect task Fix the flaky date test' },
+      ),
+    );
+    const task2 = await vi.waitFor(() => inspector('Fix the flaky date test'));
+    await click(within(task2).getByRole('button', { name: '← Back to CSV tool' }));
     await vi.waitFor(() => inspector('CSV tool'));
     await click(within(inspector('CSV tool')).getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('region', { name: /^details of/ })).toBeNull();
@@ -680,5 +693,26 @@ describe('history inspector (P5-03)', () => {
     await click(within(row).getByRole('button', { name: 'Inspect Old site' }));
     const panel = await vi.waitFor(() => screen.getByRole('region', { name: /^details of/ }));
     expect(await within(panel).findByRole('alert')).toBeTruthy();
+  });
+});
+
+describe('the inspector trail (wave-1 review)', () => {
+  const a = { kind: 'project' as const, id: 'p-a' };
+  const b = { kind: 'task' as const, id: 't-b' };
+
+  it('names an entry by its known name, else the stream, else "…" — never the raw id', () => {
+    const world = emptyWorld();
+    expect(trailName({ target: a, name: undefined }, world)).toBe('…');
+    expect(trailName({ target: a, name: 'Alpha' }, world)).toBe('Alpha');
+    world.projects['p-a'] = { ...fx.project, id: 'p-a', name: 'From the stream' };
+    expect(trailName({ target: a, name: undefined }, world)).toBe('From the stream');
+  });
+
+  it('goes back to an entry already on the trail instead of pushing a duplicate', () => {
+    let trail = openOnTrail([], a, 'Alpha');
+    trail = openOnTrail(trail, b, 'Beta');
+    expect(trail.map((e) => e.target.id)).toEqual(['p-a', 't-b']);
+    expect(openOnTrail(trail, b)).toBe(trail);
+    expect(openOnTrail(trail, a).map((e) => e.target.id)).toEqual(['p-a']);
   });
 });

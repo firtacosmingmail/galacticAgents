@@ -268,14 +268,23 @@ export class HistoryView {
             (p) => this.tables.projects.get(p),
           )
         : [];
-    const agents: Agent[] = rowsOf(
-      idsOf(
-        work.kind === 'project'
-          ? 'SELECT id FROM agents WHERE project_id = ? ORDER BY created_at, id'
-          : 'SELECT id FROM agents WHERE task_id = ? ORDER BY created_at, id',
-        id,
-      ),
-      (a) => this.tables.agents.get(a),
+    const byTask = (taskId: Id) =>
+      idsOf('SELECT id FROM agents WHERE task_id = ? ORDER BY created_at, id', taskId);
+    // A project's agents: its own (`agents.project_id`) and every agent of its current tasks — a
+    // Steward of a standalone task that later joined the project keeps no `project_id` unless the
+    // hand-over set it (a row without a supervisor, one ended before the move). Each read is by
+    // index (`agents_project`, `agents_task`).
+    const agentIds =
+      work.kind === 'project'
+        ? [
+            ...new Set([
+              ...idsOf('SELECT id FROM agents WHERE project_id = ? ORDER BY created_at, id', id),
+              ...tasks.flatMap((t) => byTask(t.id)),
+            ]),
+          ]
+        : byTask(id);
+    const agents: Agent[] = rowsOf(agentIds, (a) => this.tables.agents.get(a)).sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
     );
     const asked =
       agents.length === 0

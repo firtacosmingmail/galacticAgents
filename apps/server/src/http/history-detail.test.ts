@@ -246,6 +246,27 @@ describe('history trails and holder chains (P5-03)', () => {
     expect(detail.trail.closedAt).toBeUndefined();
   });
 
+  it('lists a moved task’s Steward among its new project’s agents (wave-1 review)', async () => {
+    const { log, get, when, project, task, agent } = await detailApp();
+    project({ id: 'p1', name: 'Site', state: 'in_progress' });
+    agent({ id: 'h1', role: 'harmonizer', bodyId: 'b-earth' });
+    agent({ id: 'w1', role: 'waykeeper', projectId: 'p1', supervisorId: 'h1', createdAt: at(3) });
+    log.tables.bodies.upsert({
+      id: 'b-ast-7',
+      kind: 'asteroid',
+      name: 'Asteroid 7',
+      host: { kind: 'task', id: 't1' },
+    });
+    task({ id: 't1', description: 'fix the footer', bodyId: 'b-ast-7', state: 'in_progress' });
+    // A Steward row from before the hand-over rules (no supervisor): the move leaves its
+    // `project_id` empty, so only its task links it to the project.
+    agent({ id: 's-old', role: 'steward', taskId: 't1', bodyId: 'b-ast-7', createdAt: at(2) });
+    when(7, () => log.runCommand((ctx) => moveTask(ctx, 't1', 'p1', { type: 'user' })));
+    expect(log.tables.agents.get('s-old')?.projectId).toBeUndefined();
+    const d = HistoryWorkDetail.parse((await get('/api/history/work/project/p1')).body);
+    expect(d.agents.map((a) => a.id)).toEqual(['s-old', 'w1']);
+  });
+
   it('links a promoted task to the project it became', async () => {
     const { get } = await archivedProject();
     const detail = HistoryWorkDetail.parse((await get('/api/history/work/task/t-seed')).body);

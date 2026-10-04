@@ -31,7 +31,10 @@ import {
   When,
   WorkControls,
   WorkLink,
+  openOnTrail,
+  trailName,
   workName,
+  type TrailEntry,
   type WorkTarget,
 } from './parts.js';
 import { WorkInspector } from './WorkInspector.js';
@@ -67,22 +70,24 @@ export function HistoryPage() {
     setSearch(text.trim());
   };
 
-  // The inspector (P5-03): the item shown and the ones opened before it, for "Back".
-  const [trail, setTrail] = useState<{ target: WorkTarget; name: string }[]>([]);
+  // The inspector (P5-03): the item shown and the ones opened before it, for "Back". A name is
+  // the caller's, else the inspector's once it has read the item, else the stream's; "…" until
+  // one is known (never the raw id, wave-1 review).
+  const [trail, setTrail] = useState<TrailEntry[]>([]);
   const world = useAppStore((s) => s.world);
-  const nameOf = useCallback(
-    (t: WorkTarget) =>
-      (t.kind === 'task' ? world.tasks[t.id]?.description : world.projects[t.id]?.name) ?? t.id,
-    [world],
-  );
   const inspect = useCallback(
-    (target: WorkTarget) =>
+    (target: WorkTarget, name?: string) => setTrail((now) => openOnTrail(now, target, name)),
+    [],
+  );
+  const named = useCallback(
+    (target: WorkTarget, name: string) =>
       setTrail((now) => {
-        const top = now.at(-1);
-        if (top && top.target.kind === target.kind && top.target.id === target.id) return now;
-        return [...now, { target, name: nameOf(target) }];
+        const same = (e: (typeof now)[number]) =>
+          e.target.kind === target.kind && e.target.id === target.id;
+        if (!now.some((e) => same(e) && e.name !== name)) return now;
+        return now.map((e) => (same(e) ? { ...e, name } : e));
       }),
-    [nameOf],
+    [],
   );
   const shown = trail.at(-1);
   const before = trail.at(-2);
@@ -110,7 +115,8 @@ export function HistoryPage() {
           <WorkInspector
             key={`${shown.target.kind}:${shown.target.id}`}
             target={shown.target}
-            back={before?.name}
+            back={before ? trailName(before, world) : undefined}
+            onName={named}
             onBack={() => setTrail((now) => now.slice(0, -1))}
             onClose={() => setTrail([])}
           />
@@ -250,7 +256,7 @@ function WorkRow({ entry }: { entry: HistoryWorkItem }) {
           type="button"
           className="secondary his-inspect"
           aria-label={`Inspect ${name}`}
-          onClick={() => inspect({ kind: work.kind, id: item.id })}
+          onClick={() => inspect({ kind: work.kind, id: item.id }, name)}
         >
           Inspect
         </button>

@@ -89,3 +89,19 @@ Not touched: the phase file, `docs/tasks/README.md`, `SPEC.md`, `apps/web/src/st
 - **Body links.** A move names its bodies; a body is not a page of its own, so only the project a task joined is a link. When P5-01's selection covers bodies, "to Kepler" could select it in the scene.
 - **Questions beyond 50** in the inspector are reachable through the past-questions list's search, not paged in the inspector.
 - **Membership is current.** As in the replay (decision 78), the agents and questions of a project are those that belong to it now: a Steward handed to another project shows under that project.
+
+## Wave-1 review fixes (2026-10-04)
+
+- **"Back to …" never shows a raw id.** The inspector's trail keeps each entry's name as the
+  opener knew it (a row's or a link's name), else the name the inspector read (`onName`), else the
+  stream's copy; "…" until one is known (`trailName`).
+- **No duplicate trail entries:** opening an item already on the trail (A → B → A) goes back to
+  its entry (`openOnTrail`), so "Back" never loops between the two.
+- **A project's agents include its current tasks' agents** (by `agents.task_id`, besides
+  `agents.project_id`): a Steward of a standalone task that later joined the project may carry no
+  `project_id` (a row without a supervisor is not handed over). Both reads stay on their indexes.
+- `domain/bodies.ts` (`markMoved`) says why `body.moved` and the move's `task.updated` must share
+  `ctx.now`: the history's move fold matches them by that instant.
+- Tests: `history.test.tsx` (the A → B → A collapse in the moved-to walk; `trailName` and
+  `openOnTrail`), `history-detail.test.ts` (a moved task's Steward without `project_id` listed
+  under its new project).
