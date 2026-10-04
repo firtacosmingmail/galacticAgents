@@ -8,6 +8,7 @@ import {
   instancedPath,
   PRESENCE,
   SatelliteDirector,
+  STALE_ORIGIN,
   SURFACE,
   type AnchorLookup,
   type SatelliteFrame,
@@ -291,6 +292,31 @@ describe('landed satellites (P4-04)', () => {
     expect(f.mode).toBe('flying');
     // Still on the arc from the take-off point (not restarted from somewhere else).
     expect(dist(f.position, start)).toBeLessThan(dist(f.position, [0, 0, -80]));
+  });
+
+  it(`a last drawn position older than ${STALE_ORIGIN} s is stale: the flight starts on the old body's orbit`, () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars', 'idle')], 0);
+    d.update(1, world);
+    const old = [...(d.frames[0] as SatelliteFrame).position] as Vec3Tuple;
+    // A hidden tab: no frames for 20 s, while Mars moved on along its own orbit.
+    const later = anchors({
+      'b-mars': { at: [0, 0, 30], radius: 2 },
+      'b-jupiter': { at: [0, 0, -80], radius: 5 },
+    });
+    d.setSpecs([spec('a-1', 'b-jupiter', 'idle')], 21);
+    const f = d.update(21, later)[0] as SatelliteFrame;
+    expect(f.mode).toBe('flying');
+    expect(dist(f.position, [0, 0, 30])).toBeLessThan(2 * 3); // on its orbit around Mars now
+    expect(dist(f.position, old)).toBeGreaterThan(20); // not where Mars was 20 s ago
+    // A fresh one (drawn within the limit) is used as is.
+    const g = director();
+    g.setSpecs([spec('a-2', 'b-mars', 'idle')], 0);
+    g.update(1, world);
+    const at = [...(g.frames[0] as SatelliteFrame).position] as Vec3Tuple;
+    g.setSpecs([spec('a-2', 'b-jupiter', 'idle')], 1 + STALE_ORIGIN / 2);
+    const h = g.update(1 + STALE_ORIGIN / 2, later)[0] as SatelliteFrame;
+    expect(dist(h.position, at)).toBeLessThan(0.5);
   });
 });
 

@@ -117,6 +117,12 @@ export const SURFACE = 1.03;
 export const PRESENCE = 0.4;
 /** Seconds a beam cut short takes to fade out (a scan's own end fade is slower, so never cut). */
 export const BEAM_FADE_OUT = 0.3;
+/**
+ * A last drawn position older than this (seconds) is stale as a flight's origin — after a long
+ * gap without frames (a hidden tab) the old body has moved on along its own orbit — so the flight
+ * starts from the satellite's orbit around the old body's live anchor instead.
+ */
+export const STALE_ORIGIN = 2;
 
 /** Whether `count` satellites take the instanced path. */
 export function instancedPath(count: number, quality: SatelliteQuality): boolean {
@@ -205,11 +211,14 @@ interface Entry {
   /** Where the current flight started (captured on its first frame), by flight start time. */
   flightFrom?: { start: number; point: Vec3Tuple } | undefined;
   /**
-   * P4-04: where it was last drawn and on which body — the flight's "ghost" origin when it takes
-   * off from a body that is no longer drawn (a standalone task's asteroid folds into the belt as
-   * its task joins a project, decision 63) on a frame where it was not drawn itself.
+   * P4-04: where it was last drawn, on which body and when (`at`, motion clock). A flight starts
+   * from this point when it is fresh (`STALE_ORIGIN`) — which covers the usual move, including an
+   * old body that stops being drawn in the same render that starts the flight (an asteroid
+   * folding into the belt as its task joins a project, decision 63): the satellite was drawn on
+   * the last frame. It is the "ghost" origin only after a frame where the satellite itself was
+   * hidden (its old body had no anchor then) and the old body is not drawn either.
    */
-  lastDrawn?: { bodyId: Id; point: Vec3Tuple } | undefined;
+  lastDrawn?: { bodyId: Id; point: Vec3Tuple; at: number } | undefined;
   /**
    * Its own orbit clock (P4-02): seconds of orbit travelled, at its state's `orbitRate` (a paused
    * satellite holds still, a failed one drifts; landing holds the angle it came down at), last
@@ -457,7 +466,7 @@ export class SatelliteDirector {
       const orbit = this.orbitAt(e, now);
 
       if (e.actor.mode === 'flying' && e.actor.flight && view.flight !== undefined) {
-        this.placeFlight(e, f, t, view.flight, anchors);
+        this.placeFlight(e, f, t, view.flight, anchors, now);
       } else if (e.actor.mode === 'landing' || e.actor.mode === 'landed') {
         e.flightFrom = undefined;
         const angle = orbitAngle(orbit, t); // the clock holds while landing
@@ -475,9 +484,10 @@ export class SatelliteDirector {
         e.lastDrawn.point[0] = f.position[0];
         e.lastDrawn.point[1] = f.position[1];
         e.lastDrawn.point[2] = f.position[2];
+        e.lastDrawn.at = now;
       } else {
         const bodyId = e.actor.mode === 'flying' ? '' : e.actor.bodyId;
-        e.lastDrawn = { bodyId, point: [f.position[0], f.position[1], f.position[2]] };
+        e.lastDrawn = { bodyId, point: [f.position[0], f.position[1], f.position[2]], at: now };
       }
 
       const look = SATELLITE_LOOK[e.spec.role];
@@ -513,10 +523,16 @@ export class SatelliteDirector {
   /**
    * A flight: from where the satellite was when it took off (captured on the flight's first
    * frame) to its place on the destination's orbit, which moves with the body, along an arc lifted
-   * toward +y. The origin, in order: where it was drawn on the last frame; its old orbit around
-   * the old body's live anchor; P4-04's ghost — where it was last drawn on the old body, though
-   * that body is no longer drawn (an asteroid whose task joined a project folds into the belt in
-   * the same render that starts the flight); only then the destination (nothing to fly from).
+   * toward +y. The origin, in order:
+   * 1. where it was drawn on the last frame, if that was within `STALE_ORIGIN` — the usual case,
+   *    also when the old body stops being drawn in the same render that starts the flight (an
+   *    asteroid whose task joined a project folds into the belt): the satellite was drawn on the
+   *    frame before;
+   * 2. its old orbit around the old body's live anchor (the satellite was hidden on the last
+   *    frame, or its last drawn position is stale after a long gap without frames);
+   * 3. P4-04's ghost — where it was last drawn on the old body — only after a frame where the
+   *    satellite itself was hidden and when the old body is not drawn now either;
+   * 4. only then the destination (nothing to fly from).
    */
   private placeFlight(
     e: Entry,
@@ -524,6 +540,7 @@ export class SatelliteDirector {
     t: number,
     p: number,
     anchors: AnchorLookup,
+    now: number,
   ): void {
     const flight = e.actor.flight;
     if (!flight) return;
@@ -534,7 +551,8 @@ export class SatelliteDirector {
     const dz = f.target[2] + scratch[2];
     if (!e.flightFrom || e.flightFrom.start !== flight.start) {
       let point: Vec3Tuple;
-      if (f.visible) point = [f.position[0], f.position[1], f.position[2]];
+      const fresh = e.lastDrawn !== undefined && now - e.lastDrawn.at <= STALE_ORIGIN;
+      if (f.visible && fresh) point = [f.position[0], f.position[1], f.position[2]];
       else {
         const centre: Vec3Tuple = [0, 0, 0];
         const r = anchors(flight.fromBodyId, centre);
