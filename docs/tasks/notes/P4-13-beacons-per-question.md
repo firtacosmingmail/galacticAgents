@@ -44,7 +44,7 @@ The legend's beacon row now reads: "a pillar above a body: a question waits for 
 
 The render list is the only source of the planet and moon anchors (`anchorSpecs`), so a free made-up body has no anchor. That means no pick sphere, no place in the camera's next/previous order, no `flyTo`, no satellite or beacon placement. It also has no label, because labels show only on hosted or "moved to" bodies and need an anchor anyway. A hosted Demo planet is drawn as before, past Neptune with the default look. Once it is freed it disappears; if work lands on it again, it comes back. Catalogue bodies are always drawn, free or not. The server and the navigation are untouched: P4-12 covers removing closed demo projects from the navigation.
 
-## Proposed SPEC text (Cosmin to record; SPEC.md not edited here)
+## SPEC text (recorded: decision 74 rewritten, decision 63 amended)
 
 **Amend decision 74 (Question beacons)**. Replace "with a count when several wait there (one beacon per body; a permission shows over a clarification)" and the clicking sentence, so that it reads:
 

@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** P4-12, P4-13, P4-14 (added to wave 2, branch `p4-wave2-state-activity-beacons`) · **Task status:** in progress
-**Phase status:** in progress (8/14 done) — on branch `phase-4`
+**Current task:** P4-12, P4-14 (added to wave 2, branch `p4-wave2-state-activity-beacons`) · **Task status:** in progress
+**Phase status:** in progress (9/14 done) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -99,7 +99,7 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Acceptance:** the inbox hides and comes back, remembered per browser, with no overlap at any width; completed or archived projects are not listed unless "Show closed" is on; tests.
 
 ### P4-13 — A beacon per question, clicking it goes to the asker; no made-up planets (added 2026-10-04)
-- **Status:** in progress · **Depends on:** P4-05 · **Parallel with:** P4-12
+- **Status:** done (2026-10-04) · **Depends on:** P4-05 · **Parallel with:** P4-12
 - Cosmin's answers on the beacon choices: the Harmonizer's own questions put a beacon on Earth (kept); one beacon per **question**, not per body; clicking a beacon also selects the asking agent and flies the camera to it (as well as opening the question in the inbox). Also: bodies that are not in the catalogue (demo planets made by the early dev buttons) are not drawn once nothing is on them.
 - **Acceptance:** two questions on one body show two beacons; clicking one selects its asker, flies there and opens the question; a free non-catalogue body is not drawn; tests.
 
