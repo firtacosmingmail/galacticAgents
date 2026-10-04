@@ -132,7 +132,7 @@ Every row below runs one control through the strip and asserts the only POST is 
 | 4.3.22 | Archive early | As §4.2.30 / §4.2.39; history row "Archive now" | ✓ | ✓ | `spec-4-2.test.tsx › §4.2.30`, `§4.2.39` | |
 | 4.3.23 | Pin (and unpin) | As §4.2.31 / §4.2.40; history row Pin / Unpin | ✓ | ✓ | `spec-4-2.test.tsx › §4.2.31`, `§4.2.40`; `history.test.tsx › pages back through the work, and unpins finished work` | |
 | 4.3.24 | Reopen finished work (also archived) | §4.2.32 / §4.2.41; History → row → Reopen | ✓ | ✓ | `spec-4-3.test.tsx › §4.3.24 reopen finished work from the history view` | Archived project: `history.test.tsx › finds an archived project, inspects it and reopens it`. |
-| 4.3.25 | The same control actions conversationally through the Harmonizer, with the same tools | Harmonizer chat | partial | partial | See the map below | Not a panel requirement. Gap: work-level controls and edits (F1, S3). |
+| 4.3.25 | The same control actions conversationally through the Harmonizer, with the same tools | Harmonizer chat | ✓ | ✓ | See the map below; `control-work.test.ts` (P5-07) | Not a panel requirement. Work-level controls and edits added by P5-07 (decision 83, was F1/S3). |
 
 ## The Harmonizer's conversational map (§4.3, last line)
 
@@ -149,9 +149,11 @@ Every tool below calls the same command the panel's `POST /api/control` calls (`
 | Archive now | `finished_work {action: archive}` after `ask_confirmation` | `closure.test.ts › refuses close_project and finished_work without a user answer, and acts on a confirmation` |
 | Pin / unpin / reopen | `finished_work {pin / unpin / reopen}` after `ask_confirmation` | `control-mapping.test.ts › pins, unpins and reopens …` (new) |
 | Close an asteroid task | `close_task` | `harmonizer.test.ts › holds and answers … then closes the task` |
-| **Pause / resume / stop / cancel a task or project** (decision 28's work-level states) | **none** (`pause_agent` on a Waykeeper pauses the agent, not its project; nothing cancels work) | — gap: F1 |
-| **Edit a task's description or priority; a project's name or trust level** | **none** | — gap: F1 |
-| **Close a project task now** | **none** (the Waykeeper's `close_task`) | — gap: F1 |
+| Pause / resume a task or project (decision 28's work-level states) | `control_work {target, action: pause / resume}`, at once (decision 83) | `control-work.test.ts › pauses, resumes and edits at once, as the Harmonizer, and the Waykeeper is told` (P5-07) |
+| Stop / cancel a task or project | `control_work {target, action: stop / cancel, questionId}` after `ask_confirmation` for that action and target; one answer, one call (decision 83) | `control-work.test.ts › stops and cancels only after the user confirmed that action on that work, once`; `› a confirmation for another action, another work or a "No" unlocks nothing` (P5-07) |
+| Edit a task's description or priority; a project's name | `control_work {target, action: edit, changes}`, at once; the trust level and permission table are refused (decision 49) | `control-work.test.ts › pauses, resumes and edits …`; `› refuses the trust level, fields the panel cannot edit, and changes outside edit` (P5-07) |
+| Edit a project's trust level | — by design: the user's alone (decisions 49, 83) | `control-work.test.ts › refuses the trust level …` |
+| Close a project task now | — by design: the Waykeeper closes its project's tasks (decision 11); the Harmonizer closes asteroid tasks (`close_task`) | — |
 
 ## SPEC §7 decisions 53–81 read against §4.2 / §4.3
 
