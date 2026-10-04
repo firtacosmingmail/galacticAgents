@@ -60,7 +60,7 @@ import { registerStandIn } from './stand-ins.js';
  * maps — painted off the main thread, the far map until then —, its rings, its moons on their
  * orbits with their orbit lines, eclipse shading among them as in the system view),
  * `MoonDetail` (the moon at its nearest level, shaded by its planet and the large siblings) and
- * `AsteroidDetail` (the task asteroid's rock and halo). Later parts plug in through `parts.ts`.
+ * `AsteroidDetail` (the task asteroid's rock; its halo fades out with the cross-fade). Later parts plug in through `parts.ts`.
  *
  * **Backdrop** (`backdrop.ts`): a dark sphere about the body, beyond its scope's bodies, fading in
  * over the system (transparent, blended over whatever is behind it); once the fade has ended an
@@ -385,6 +385,16 @@ export function AsteroidDetail({
     [asteroid.seed],
   );
   useEffect(() => registerStandIn(body.bodyId, standIn.current), [body.bodyId]);
+  // The halo marks a task asteroid at system scale; up close (2.4 radii) it would fill the view
+  // with cyan, so it fades out with the cross-fade (and back in on the way out).
+  const halo = useRef<Mesh>(null);
+  useFrame(() => {
+    const mesh = halo.current;
+    if (!mesh) return;
+    const opacity = HALO_OPACITY * (1 - currentMix());
+    mesh.visible = opacity > 0.001;
+    setOpacity(mesh.material, opacity);
+  });
   return (
     <group ref={standIn} name={`detail-asteroid:${body.name}`} userData={{ bodyId: body.bodyId }}>
       <mesh
@@ -401,11 +411,16 @@ export function AsteroidDetail({
           metalness={0}
         />
       </mesh>
-      <mesh geometry={shapes.halo} scale={TASK_ASTEROID_RADIUS * 1.5} layers={DECOR_LAYER}>
+      <mesh
+        ref={halo}
+        geometry={shapes.halo}
+        scale={TASK_ASTEROID_RADIUS * 1.5}
+        layers={DECOR_LAYER}
+      >
         <meshBasicMaterial
           color="#5fd4ff"
           transparent
-          opacity={0.22}
+          opacity={HALO_OPACITY}
           side={BackSide}
           blending={AdditiveBlending}
           depthWrite={false}
@@ -417,12 +432,20 @@ export function AsteroidDetail({
   );
 }
 
+/** The task asteroid halo's opacity in the system view (`Belt.tsx`). */
+const HALO_OPACITY = 0.22;
+
 /** The scene's background colour (`SolarScene`): the backdrop is the same dark. */
 const BACKDROP_COLOR = '#02030a';
 /** Drawn first of all once settled, so everything inside is drawn over it and nothing outside. */
 const SOLID_ORDER = -1000;
-/** The stars and the Sun come after the fading dome (z-sorted among the transparent objects). */
+/** While fading, the stars and the Sun come after the fading dome (z-sorted at 0)… */
 const SKY_ORDER = 1;
+/**
+ * …once settled, first of the transparent objects (right after the solid dome), so rings, halos
+ * and beams are drawn over the sky, not the sky's stars over them (they write no depth).
+ */
+const SKY_SETTLED_ORDER = -999;
 
 /**
  * The backdrop about the body (see the component's header): positioned on the body (no rotation:
@@ -473,7 +496,12 @@ function Backdrop({
       setOpacity(fadeDome.current.material, mix);
     }
     if (solidDome.current) solidDome.current.visible = settled;
-    if (sky.current) setOpacity(sky.current.material, mix);
+    const skyOrder = settled ? SKY_SETTLED_ORDER : SKY_ORDER;
+    if (sky.current) {
+      setOpacity(sky.current.material, mix);
+      sky.current.renderOrder = skyOrder;
+    }
+    if (sun.current) for (const child of sun.current.children) child.renderOrder = skyOrder;
     const place = backdropSun(at, radius, sunRadius);
     if (sun.current) {
       sun.current.visible = place !== undefined && mix > 0;
