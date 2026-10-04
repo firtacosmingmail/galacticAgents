@@ -8,6 +8,8 @@ import {
 } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
+import { createWakeScope } from '../brains/seed.js';
+import { wakeLine } from '../brains/wake.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
 
@@ -298,12 +300,14 @@ describe('/dev/harness work events (P4-06)', () => {
     expect(state(steward.id)).toBe('working');
   });
 
-  it('completes a task: its Steward finishes, then the panel’s close', async () => {
+  it('completes a task: its Steward finishes, then the task is closed', async () => {
     const out = await scenario({ stewards: 1, asteroid: false });
     const n = seen.length;
     expect((await post(`/dev/harness/tasks/${out.taskIds[0]}/complete`)).status).toBe(200);
     const types = typesSince(n);
-    expect(types.indexOf('agent.finished')).toBeLessThan(types.indexOf('control.close'));
+    // Closed by the command, not the panel's `control.close`: no supervisor's brain is concerned.
+    expect(types.some((type) => type.startsWith('control.'))).toBe(false);
+    expect(types.indexOf('agent.finished')).toBeLessThan(types.lastIndexOf('task.state_changed'));
     expect(composed.log.tables.tasks.get(out.taskIds[0]!)?.state).toBe('completed');
     expect(state(out.stewardIds[0]!)).toBe('finished');
     expect((await post(`/dev/harness/tasks/${out.taskIds[0]}/complete`)).status).toBe(409);
@@ -397,5 +401,127 @@ describe('recovery and the scene harness (P4-06)', () => {
     expect(report.resumed).toEqual([]);
     expect(state(out.stewardIds[0]!)).toBe('stopped');
     expect(state(out.waykeeperId)).toBe('stopped');
+  });
+});
+
+describe('the harness touches only its own rows (P4-06 review)', () => {
+  const waitFor = async (pred: () => boolean, what: string, ms = 3_000) => {
+    const t0 = Date.now();
+    while (!pred()) {
+      if (Date.now() - t0 > ms) throw new Error(`timeout: ${what}`);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  };
+  const spawnReal = async (role: 'steward' | 'harmonizer', prompt: string) => {
+    const spawned = await composed.runtime.spawn({
+      role,
+      runtime: 'fake',
+      prompt,
+      cwd: '/tmp/real-worktree',
+    });
+    if (!spawned.ok) throw new Error(spawned.reason);
+    return spawned.agent.id;
+  };
+  const refused = (res: { status: number; body: Record<string, unknown> }, what: string) => {
+    expect(res.status, what).toBe(409);
+    expect(res.body['error'], what).toBe('not_harness');
+  };
+
+  it('refuses a real agent, the Harmonizer too, writing nothing; recovery never resumes it', async () => {
+    const steward = await spawnReal('steward', 'scenario:happy');
+    await waitFor(() => state(steward) === 'finished', 'the real Steward finishes');
+    const harmonizer = await spawnReal('harmonizer', 'scenario:happy');
+    await waitFor(() => state(harmonizer) === 'finished', 'the real Harmonizer finishes');
+    const n = seen.length;
+    for (const id of [steward, harmonizer]) {
+      refused(await post(`/dev/harness/agents/${id}/state`, { state: 'working' }), `${id} state`);
+      refused(await post(`/dev/harness/agents/${id}/state`, { state: 'idle' }), `${id} idle`);
+      refused(
+        await post(`/dev/harness/agents/${id}/activity`, { preset: 'building' }),
+        `${id} activity`,
+      );
+      refused(
+        await post(`/dev/harness/agents/${id}/question`, { kind: 'permission' }),
+        `${id} question`,
+      );
+    }
+    expect(seen.length).toBe(n);
+    expect(state(steward)).toBe('finished');
+    // The next start: nothing to resume — the real session stays ended in its real worktree.
+    const report = await composed.recover();
+    expect(report.resumed).not.toContain(steward);
+    expect(report.resumed).not.toContain(harmonizer);
+    expect(state(steward)).toBe('finished');
+  });
+
+  it('never answers a real agent’s question (a real permission above all)', async () => {
+    const steward = await spawnReal('steward', 'scenario:permission');
+    await waitFor(() => state(steward) === 'waiting_for_input', 'the real permission question');
+    const questionId = composed.statuses.get(steward)!.pendingQuestionId!;
+    expect(composed.log.tables.questions.get(questionId)?.kind).toBe('permission');
+    const n = seen.length;
+    refused(await post(`/dev/harness/questions/${questionId}/answer`, {}), 'answer');
+    expect(seen.length).toBe(n);
+    expect(composed.log.tables.questions.get(questionId)?.status).toBe('open');
+    expect(state(steward)).toBe('waiting_for_input');
+  });
+
+  it('refuses real tasks and projects: no move, complete, close or fake agent on them', async () => {
+    const out = await scenario({ stewards: 0 });
+    const { value: project } = await composed.commands.createProject({
+      name: 'Real',
+      workspace: '/tmp/real',
+    });
+    const { value: task } = await composed.commands.createTask({
+      description: 'Real task',
+      projectId: project.id,
+    });
+    const { value: solo } = await composed.commands.createTask({ description: 'Real solo' });
+    const { tables } = composed.log;
+    const before = { task: tables.tasks.get(task.id)!, project: tables.projects.get(project.id)! };
+    const n = seen.length;
+    refused(await post(`/dev/harness/tasks/${solo.id}/move`, { projectId: out.projectId }), 'mv');
+    refused(
+      await post(`/dev/harness/tasks/${out.asteroidTaskId}/move`, { projectId: project.id }),
+      'move into a real project',
+    );
+    refused(await post(`/dev/harness/tasks/${task.id}/complete`), 'complete');
+    refused(await post(`/dev/harness/tasks/${solo.id}/complete`), 'complete solo');
+    refused(await post(`/dev/harness/projects/${project.id}/close`), 'close');
+    refused(
+      await post('/dev/harness/agents', { role: 'waykeeper', projectId: project.id }),
+      'a fake Waykeeper on a real project',
+    );
+    refused(
+      await post('/dev/harness/agents', { role: 'steward', projectId: project.id }),
+      'a fake Steward on a new task of a real project',
+    );
+    refused(
+      await post('/dev/harness/agents', { role: 'steward', taskId: solo.id }),
+      'a fake Steward on a real task',
+    );
+    expect(seen.length).toBe(n);
+    expect(tables.tasks.get(task.id)).toEqual(before.task);
+    expect(tables.tasks.get(solo.id)?.projectId).toBeUndefined();
+    expect(tables.projects.get(project.id)).toEqual(before.project);
+  });
+
+  it('a harness completion and close wake no real brain (no control event, no message)', async () => {
+    const harmonizer = await spawnReal('harmonizer', 'scenario:long');
+    await waitFor(() => state(harmonizer) === 'working', 'the real Harmonizer runs');
+    const out = await scenario({ stewards: 1 });
+    const n = seen.length;
+    expect((await post(`/dev/harness/tasks/${out.taskIds[0]}/complete`)).status).toBe(200);
+    expect((await post(`/dev/harness/tasks/${out.asteroidTaskId}/complete`)).status).toBe(200);
+    expect((await post(`/dev/harness/projects/${out.projectId}/close`)).status).toBe(200);
+    const events = seen.slice(n).map((e) => e.event);
+    expect(events.some((e) => e.type.startsWith('control.'))).toBe(false);
+    expect(events.some((e) => e.type === 'message.sent')).toBe(false);
+    const scope = createWakeScope(
+      composed.log.tables,
+      { brainId: harmonizer, role: 'harmonizer' },
+      { isLive: () => true },
+    );
+    expect(events.map((e) => wakeLine(e, scope)).filter(Boolean)).toEqual([]);
   });
 });

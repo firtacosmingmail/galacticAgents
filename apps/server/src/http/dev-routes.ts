@@ -19,7 +19,7 @@ import { DomainError } from '../domain/errors.js';
 import type { ServerConfig } from '../config/config.js';
 import type { StatusStore } from '../runtime/status-store.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
-import { SceneHarness } from '../runtime/scene-harness.js';
+import { NotHarnessError, SceneHarness } from '../runtime/scene-harness.js';
 import { bearerGuard, isRemoteRequest } from './security.js';
 
 export interface DevRoutesOptions {
@@ -44,6 +44,7 @@ export interface DevRoutesOptions {
  * The scene harness (P4-06, `runtime/scene-harness.ts`) drives the scene through the same
  * commands the runtime and the panel use: fake agents without a process, their states and
  * activities as the runtime's events, moves, closes, questions and answers through `Commands`.
+ * It only ever acts on what it made: anything else is 409 `not_harness`.
  */
 export function registerDevRoutes(
   parent: FastifyInstance,
@@ -139,6 +140,10 @@ function registerHarness(app: FastifyInstance, harness: SceneHarness): void {
       if (!(error instanceof DomainError)) {
         req.log.error(error);
         return reply.code(500).send({ error: 'internal' });
+      }
+      // Something the harness did not make (a real agent, task, project or question): refused.
+      if (error instanceof NotHarnessError) {
+        return reply.code(409).send({ error: 'not_harness', message: error.message });
       }
       const status = error.code === 'not_found' ? 404 : error.code === 'invalid' ? 400 : 409;
       return reply.code(status).send({ error: error.code, message: error.message });
