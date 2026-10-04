@@ -44,7 +44,6 @@ import { detailMix, useDetailStore } from './mode.js';
 import { partsFor } from './parts.js';
 import { registerStandIn } from './stand-ins.js';
 import { detailTier } from './visuals/budget.js';
-import { useDetailTextureBudget } from './visuals/detail-textures.js';
 import {
   Atmosphere,
   Clouds,
@@ -124,7 +123,6 @@ function DetailFrame({
     frame.matrixWorldNeedsUpdate = true;
   }, PLACE_DETAIL);
   const parts = partsFor(body);
-  useDetailTextureBudget(quality.tier);
   return (
     <>
       <Backdrop

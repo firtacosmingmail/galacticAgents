@@ -103,7 +103,11 @@ export class CloudMaps implements Disposable {
 /** The detail cache, shared by every detail view; its budget follows the tier. */
 export const detailTextures = new TextureCache<Disposable>(128 * MB);
 
-/** Sets the detail cache's budget from the tier; drops every idle entry on a tier change or unmount. */
+/**
+ * Sets the detail cache's budget from the tier; drops every idle entry on a tier change or unmount.
+ * Mounted by `DetailLayer`, which lives as long as the canvas — not by the view, which unmounts on
+ * every exit and body switch and would drop the level it just left.
+ */
 export function useDetailTextureBudget(tier: QualityTier): void {
   useEffect(() => {
     detailTextures.setBudget(detailTier(tier).budgetMB * MB);
