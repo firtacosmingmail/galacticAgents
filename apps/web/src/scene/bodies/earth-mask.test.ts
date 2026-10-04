@@ -212,8 +212,9 @@ describe("Earth's painted surface (P3-09)", () => {
     expect(surfaceKey(PLANET_LOOKS['Mars']!)).not.toContain('mask');
   });
 
-  it('leaves every other body exactly as it was painted before the mask', () => {
+  it("leaves every other body's style exactly as it was painted before the mask", () => {
     // Hashes of the 64 × 32 colour (and detail) maps, recorded before P3-09 changed the painter.
+    // P6-02's per-body features are painted on top of the style: without them, nothing moved.
     const before: Record<string, string> = {
       Mercury: '81cc8a2/2e44b77a',
       Venus: '437fcb37',
@@ -254,7 +255,8 @@ describe("Earth's painted surface (P3-09)", () => {
     const now: Record<string, string> = {};
     for (const [name, look] of Object.entries(looks)) {
       if (name === 'Earth') continue;
-      const l = paintSurfaceLayers(look, 64, 32, true);
+      const { features: _features, ...style } = look;
+      const l = paintSurfaceLayers(style, 64, 32, true);
       now[name] = fnv(l.color) + (l.detail ? `/${fnv(l.detail)}` : '');
     }
     expect(now).toEqual(before);

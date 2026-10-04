@@ -22,6 +22,7 @@ import {
 } from './surface.js';
 import { TextureCache } from './texture-cache.js';
 import { EARTH_MASK_VERSION } from './earth-mask.js';
+import { featuresKey } from '../detail/visuals/features.js';
 
 /**
  * Wraps the procedural pixels of `surface.ts` in three.js textures (P3-02, P3-06).
@@ -69,7 +70,8 @@ function detailTexture(data: Uint8Array, width: number, height: number): DataTex
  * mask's version, so new mask data never reuses maps painted from the old one.
  */
 export function surfaceKey(look: BodyLook): string {
-  const base = `${look.style}|${look.seed}|${look.palette.join(',')}|${look.polarCaps ? 1 : 0}`;
+  const features = look.features ? `|${featuresKey(look.features)}` : '';
+  const base = `${look.style}|${look.seed}|${look.palette.join(',')}|${look.polarCaps ? 1 : 0}${features}`;
   return look.landMask ? `${base}|mask:${look.landMask}@${EARTH_MASK_VERSION}` : base;
 }
 
@@ -246,12 +248,12 @@ export function useBodyMaps(
   return maps ? { map: maps.map, detail: maps.detail } : { map: farMap, detail: null };
 }
 
-export function useRingTexture(rings: RingLook): DataTexture {
+export function useRingTexture(rings: RingLook, width: number = RING_TEXTURE_WIDTH): DataTexture {
   const texture = useMemo(() => {
-    const t = dataTexture(paintRings(rings, RING_TEXTURE_WIDTH), RING_TEXTURE_WIDTH, 1);
+    const t = dataTexture(paintRings(rings, width), width, 1);
     t.wrapS = ClampToEdgeWrapping;
     return t;
-  }, [rings]);
+  }, [rings, width]);
   useEffect(() => () => texture.dispose(), [texture]);
   return texture;
 }

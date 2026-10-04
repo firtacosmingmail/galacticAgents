@@ -1,5 +1,12 @@
 import type { BodyLook, RingLook } from './appearance.js';
 import { maskLevelFor, sampleLand } from './earth-mask.js';
+import {
+  applyFeatures,
+  bandLatitude,
+  bandsOf,
+  type FeatureTexel,
+} from '../detail/visuals/features.js';
+import { paintRingProfile } from '../detail/visuals/rings.js';
 
 /**
  * Procedural surfaces (P3-02): equirectangular RGBA pixels painted from a body's look, as plain
@@ -14,7 +21,7 @@ export function hexToRgb(hex: string): [number, number, number] {
 }
 
 /** A small integer hash → [0, 1). */
-function hash3(x: number, y: number, z: number, seed: number): number {
+export function hash3(x: number, y: number, z: number, seed: number): number {
   let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(z, 2147483647) ^ seed;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   h ^= h >>> 16;
@@ -294,13 +301,17 @@ export function paintSurface(look: BodyLook, width: number, height: number): Uin
 /**
  * Paints the colour map and, with `withDetail` (and a surface with relief, `hasRelief`), the
  * detail map from the same noise in the same pass (P3-06): the bumps sit exactly under the colours.
- * Pure data, so it runs in a worker (`paint-worker.ts`) and in jsdom alike.
+ * Pure data, so it runs in a worker (`paint-worker.ts`) and in jsdom alike. P6-02: the body's
+ * `features` are painted on top of its style (`detail/visuals/features.ts`), and `heights`, when
+ * given (`width` × `height` floats), receives the unquantised relief the detail level derives its
+ * normal map from.
  */
 export function paintSurfaceLayers(
   look: BodyLook,
   width: number,
   height: number,
   withDetail: boolean,
+  heights?: Float32Array,
 ): SurfaceLayers {
   const data = new Uint8Array(width * height * 4);
   const detail = withDetail && hasRelief(look) ? new Uint8Array(width * height * 2) : null;
@@ -310,6 +321,9 @@ export function paintSurfaceLayers(
   const matte = Math.round(MATTE_ROUGHNESS * 255);
   const maskLevel = look.landMask === 'earth' ? maskLevelFor(width) : 0;
   const texel: EarthTexel = { rgb: [0, 0, 0], relief: 0, rough: 0 };
+  const features = look.features;
+  const feature: FeatureTexel = { rgb: [0, 0, 0], relief: 0 };
+  const at = { lat: 0, lon: 0, sx: 0, sy: 0, sz: 0, seed, width };
   for (let j = 0; j < height; j++) {
     const lat = ((j + 0.5) / height) * Math.PI - Math.PI / 2;
     const cosLat = Math.cos(lat);
@@ -325,16 +339,21 @@ export function paintSurfaceLayers(
       switch (look.style) {
         case 'gas': {
           // Latitude bands, wobbled by noise; a few strong stripes and fine streaks.
+          // P6-02: per-planet band frequency and contrast, bands swirled round storms.
+          const bands = bandsOf(features, 18);
+          const by = features?.storms ? Math.sin(bandLatitude(features, lat, lon)) : sy;
           const turb = fbm(sx * 3, sy * 3, sz * 3, seed) - 0.5;
-          const band = Math.sin((sy + turb * 0.12) * 18) * 0.5 + 0.5;
-          const fine = fbm(sx * 1.5, sy * 24, sz * 1.5, seed + 77, 3);
-          rgb = samplePalette(palette, band * 0.75 + fine * 0.25);
+          const band = Math.sin((by + turb * 0.12) * bands.frequency) * 0.5 + 0.5;
+          const fine = fbm(sx * 1.5, by * 24, sz * 1.5, seed + 77, 3);
+          rgb = samplePalette(palette, 0.5 + (band * 0.75 + fine * 0.25 - 0.5) * bands.contrast);
           break;
         }
         case 'ice': {
+          const bands = bandsOf(features, 9);
+          const by = features?.storms ? Math.sin(bandLatitude(features, lat, lon)) : sy;
           const turb = fbm(sx * 2, sy * 2, sz * 2, seed) - 0.5;
-          const band = Math.sin((sy + turb * 0.08) * 9) * 0.5 + 0.5;
-          rgb = samplePalette(palette, 0.35 + band * 0.4 + turb * 0.3);
+          const band = Math.sin((by + turb * 0.08) * bands.frequency) * 0.5 + 0.5;
+          rgb = samplePalette(palette, 0.35 + band * 0.4 * bands.contrast + turb * 0.3);
           break;
         }
         case 'cloudy': {
@@ -377,6 +396,18 @@ export function paintSurfaceLayers(
           break;
         }
       }
+      if (features) {
+        feature.rgb = rgb;
+        feature.relief = relief;
+        at.lat = lat;
+        at.lon = lon;
+        at.sx = sx;
+        at.sy = sy;
+        at.sz = sz;
+        applyFeatures(features, at, feature);
+        rgb = feature.rgb;
+        relief = feature.relief;
+      }
       if (look.polarCaps) {
         // Caps above ≈ 75° latitude, with a ragged edge blended over a few degrees.
         const edge = 0.965 + (fbm(sx * 8, sy * 8, sz * 8, seed + 9, 3) - 0.5) * 0.04;
@@ -391,6 +422,7 @@ export function paintSurfaceLayers(
       data[k + 1] = rgb[1]!;
       data[k + 2] = rgb[2]!;
       data[k + 3] = 255;
+      if (heights) heights[j * width + i] = relief;
       if (detail) {
         const d = (j * width + i) * 2;
         detail[d] = Math.round(Math.min(1, Math.max(0, relief)) * 255);
@@ -406,6 +438,9 @@ export function paintSurfaceLayers(
  * (width - 1), with ringlets and gaps from 1D noise (Saturn gets a Cassini-like gap at ≈ 60 %).
  */
 export function paintRings(rings: RingLook, width: number): Uint8Array {
+  // P6-02: a ring system with a measured profile (Saturn's C/B/A rings and Cassini division,
+  // Uranus's narrow ringlets) is painted from it.
+  if (rings.bands) return paintRingProfile(rings, width);
   const data = new Uint8Array(width * 4);
   const palette = rings.palette.map(hexToRgb);
   const seed = rings.seed * 104729;
