@@ -1,7 +1,7 @@
 # Phase 6 — Planet zoom and structure
 
-**Current task:** P6-02, P6-03 (wave 2, branch `p6-wave2-visuals-cutaway-hq`) · **Task status:** in progress
-**Phase status:** in progress (2/5 done) — on branch `phase-6`
+**Current task:** P6-02 (wave 2, branch `p6-wave2-visuals-cutaway-hq`) · **Task status:** in progress
+**Phase status:** in progress (3/5 done) — on branch `phase-6`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -46,7 +46,7 @@ Zooming into a planet shows it "as it is in our solar system" — high-detail su
 - **Acceptance:** each planet recognisably itself at detail scale at 60 fps on the Mac.
 
 ### P6-03 — Cutaway layers
-- **Status:** in progress · **Depends on:** P6-01 · **Parallel with:** P6-02, P6-05
+- **Status:** done (2026-10-04) · **Depends on:** P6-01 · **Parallel with:** P6-02, P6-05
 - Optional cutaway showing internal layers (crust/mantle/core; gas giant envelopes) with labels; toggle in the panel.
 - **Acceptance:** cutaway works for at least one rocky planet and one gas giant.
 
