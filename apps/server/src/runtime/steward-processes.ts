@@ -48,6 +48,14 @@ import type { StatusStore } from './status-store.js';
  *                          resolution cannot tell it from a recycled pid) is re-attributed after
  *                          that second, and skipped if still that young. Each signal goes to one
  *                          pid, never to a group. Logs `agent.processes_stopped`.
+ *   remember               while a Steward's CLI runs, every process attribution takes by its
+ *                          groups (rules 3–4) is remembered by (pid, start time) for this server
+ *                          run — on every list and stop, and shortly after each `agent.tool_call`
+ *                          and `agent.idle` of the Steward — so a tool command's shell left behind
+ *                          when the CLI died (its own process group under Claude Code; an Apple
+ *                          binary whose environment `ps -E` hides on macOS, so no marker) is still
+ *                          found (rule 5, `remembered`). Forgotten as soon as a snapshot no longer
+ *                          shows it; at most `REMEMBER_CAP` per Steward.
  *   sweep                  when a Steward ends (finished, failed, stopped) — after the supervisor
  *                          reaped its group — and when its task is closed (completed, failed,
  *                          archived) for every ended Steward of the task, everything still
@@ -88,6 +96,8 @@ export interface StewardProcessesOptions {
   termMs?: number;
   /** How long a sweep waits for the supervisor's own reaping first. Default 15 s. */
   settleMs?: number;
+  /** Delay of the identity refresh after a live Steward's tool call or turn end. Default 750 ms. */
+  refreshMs?: number;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -99,6 +109,12 @@ const CLOSED_TASK = new Set(['completed', 'failed', 'archived']);
 const COMMAND_CHARS = 200;
 /** `ps lstart` resolution. */
 const SECOND = 1_000;
+/** Remembered identities per Steward (oldest forgotten first). */
+export const REMEMBER_CAP = 2_048;
+/** A live Steward's events after which its processes are looked at again (rule 5's memory). */
+const REFRESH_ON = new Set<Event['type']>(['agent.tool_call', 'agent.idle']);
+
+const identity = (p: Pick<ProcEntry, 'pid' | 'startedAt'>) => `${p.pid}@${p.startedAt}`;
 
 const clipCommand = (command: string) => {
   const text = redactSecrets(command);
@@ -135,6 +151,7 @@ export class StewardProcesses implements StewardProcessControl {
   private readonly self: { pid: number; uid: number };
   private readonly termMs: number;
   private readonly settleMs: number;
+  private readonly refreshMs: number;
   private readonly onError: (error: unknown, context: string) => void;
   /** One stop or sweep at a time per Steward. */
   private readonly busy = new Map<Id, Promise<unknown>>();
@@ -142,12 +159,20 @@ export class StewardProcesses implements StewardProcessControl {
   private readonly pending = new Set<Promise<unknown>>();
   private unsubscribe: (() => void) | undefined;
   private disposed = false;
+  /**
+   * Rule 5's memory, this server run only: per Steward, the identities (`pid@startedAt`) seen as
+   * its own by rules 3–4 while its CLI ran, in insertion order (the oldest goes past the cap).
+   */
+  private readonly remembered = new Map<Id, Set<string>>();
+  /** Identity refreshes scheduled after a tool call or turn end, per Steward. */
+  private readonly refreshes = new Map<Id, () => void>();
 
   constructor(private readonly opts: StewardProcessesOptions) {
     this.table = opts.table ?? osProcessTable();
     this.self = opts.self ?? { pid: process.pid, uid: process.getuid?.() ?? -1 };
     this.termMs = opts.termMs ?? 3_000;
     this.settleMs = opts.settleMs ?? 15_000;
+    this.refreshMs = opts.refreshMs ?? 750;
     this.onError = opts.onError ?? (() => {});
   }
 
@@ -204,6 +229,7 @@ export class StewardProcesses implements StewardProcessControl {
     const cli = live ? this.cliOf(agent, groups) : undefined;
     const worktree = this.worktreeOf(agent);
     const commandOf = new Map(snapshot.procs.map((p) => [p.pid, p.command]));
+    const memory = this.remembered.get(agent.id);
     const mine = await attribute({
       agentId: agent.id,
       procs: snapshot.procs,
@@ -216,9 +242,61 @@ export class StewardProcesses implements StewardProcessControl {
         this.table.markers?.(pids.map((pid) => ({ pid, command: commandOf.get(pid) ?? '' }))) ??
         new Map(),
       exclude: new Set(cli !== undefined ? [cli] : []),
+      ...(memory ? { remembered: (p: ProcEntry) => memory.has(identity(p)) } : {}),
     });
+    this.remember(agent.id, snapshot.procs, cli !== undefined ? mine : []);
     const held = cli !== undefined ? heldBy(mine, cli) : new Set<number>();
     return { snapshot, mine, held, live };
+  }
+
+  /**
+   * Rule 5's memory: forgets what `procs` (a whole snapshot) no longer shows — a pid that comes
+   * back later is another process — then remembers what a live CLI's Steward owns by rules 3–4
+   * (`seen`), refreshing what it already knew.
+   */
+  private remember(agentId: Id, procs: readonly ProcEntry[], seen: readonly AttributedProcess[]) {
+    const known = this.remembered.get(agentId);
+    const anchored = seen.filter((p) => p.anchored);
+    if (!known && anchored.length === 0) return;
+    const memory = known ?? new Set<string>();
+    if (known) {
+      const present = new Set(procs.filter((p) => !p.zombie).map(identity));
+      for (const id of known) if (!present.has(id)) known.delete(id);
+    }
+    for (const p of anchored) {
+      const id = identity(p);
+      memory.delete(id);
+      memory.add(id);
+    }
+    while (memory.size > REMEMBER_CAP) memory.delete(memory.values().next().value!);
+    if (memory.size > 0) this.remembered.set(agentId, memory);
+    else this.remembered.delete(agentId);
+  }
+
+  /**
+   * Looks at a live Steward's processes again shortly after it acted (a tool call starts the
+   * shell of a command a moment later; a turn end follows the last one), so rule 5 remembers them
+   * before its CLI can die. Coalesced per Steward; tracked by `idle()`.
+   */
+  private scheduleRefresh(agentId: Id): void {
+    if (this.disposed || this.refreshes.has(agentId)) return;
+    const p: Promise<unknown> = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => fire(), this.refreshMs);
+      const fire = () => {
+        clearTimeout(timer);
+        this.refreshes.delete(agentId);
+        resolve();
+      };
+      this.refreshes.set(agentId, fire);
+    })
+      .then(async () => {
+        if (this.disposed || !this.isLive(agentId)) return;
+        const agent = this.opts.log.tables.agents.get(agentId);
+        if (agent?.role === 'steward') await this.attributed(agent);
+      })
+      .catch((error: unknown) => this.onError(error, `refresh processes of ${agentId}`))
+      .finally(() => this.pending.delete(p));
+    this.pending.add(p);
   }
 
   private async describe(found: Attributed): Promise<StewardProcess[]> {
@@ -343,6 +421,10 @@ export class StewardProcesses implements StewardProcessControl {
       p.startedAt >= floorSecond(f.snapshot.takenAt);
     if (targets.some(young(found))) {
       await sleep(floorSecond(found.snapshot.takenAt) + SECOND + 50 - Date.now());
+      // The server may be shutting down meanwhile: nothing is signalled during shutdown.
+      if (this.disposed) {
+        return { ...empty, skipped: targets.map((p) => p.pid).sort((a, b) => a - b) };
+      }
       const again = await this.attributed(agent);
       if (!again) return empty;
       found = again;
@@ -362,6 +444,8 @@ export class StewardProcesses implements StewardProcessControl {
       if (!same) skipped.add(p.pid);
       return same;
     });
+    // Shutting down (the read above took time): signal nothing.
+    if (this.disposed) for (const p of targets.splice(0)) skipped.add(p.pid);
     const skippedList = [...skipped].sort((a, b) => a - b);
     if (targets.length === 0) {
       return { ...empty, ...(skippedList.length > 0 ? { skipped: skippedList } : {}) };
@@ -373,7 +457,7 @@ export class StewardProcesses implements StewardProcessControl {
     }
     let alive = await this.waitGone(targets, this.termMs);
     const forced: number[] = [];
-    if (alive.length > 0) {
+    if (alive.length > 0 && !this.disposed) {
       for (const p of alive) if (this.table.kill(p.pid, 'SIGKILL')) forced.push(p.pid);
       alive = await this.waitGone(alive, 2_000);
     }
@@ -468,6 +552,12 @@ export class StewardProcesses implements StewardProcessControl {
     this.unsubscribe?.();
     const unsubscribe = log.subscribe(({ event }) => {
       if (this.disposed) return;
+      if (REFRESH_ON.has(event.type) && 'agentId' in event) {
+        if (log.tables.agents.get(event.agentId)?.role === 'steward') {
+          this.scheduleRefresh(event.agentId);
+        }
+        return;
+      }
       if (TERMINAL.has(event.type) && 'agentId' in event) {
         if (log.tables.agents.get(event.agentId)?.role === 'steward') {
           this.schedule(event.agentId, 'agent_ended');
@@ -490,5 +580,8 @@ export class StewardProcesses implements StewardProcessControl {
     this.disposed = true;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    // A pending refresh settles now and does nothing (disposed).
+    for (const fire of [...this.refreshes.values()]) fire();
+    this.remembered.clear();
   }
 }
