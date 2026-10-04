@@ -15,9 +15,9 @@ How a move reaches the scene (unchanged, checked end to end in `transitions.test
 In each case the satellite's work body (`workBody`: the task's or project's `bodyId`) changes, and the director starts the 3 s flight in `setSpecs`, when the world changes, not at the next drawn frame. That covers every satellite of the work: a task's Stewards; a project's Waykeeper and the Stewards of its tasks.
 
 What changed is **where a flight starts** (`director.ts`, `placeFlight`). The origin is captured on the flight's first frame, trying these in order:
-1. where the satellite was drawn on the last frame (the usual case);
-2. its orbit around the old body's live anchor;
-3. **the ghost** (new): `Entry.lastDrawn`, the position where the satellite was last drawn on the old body. This covers an old body that is no longer drawn: the asteroid folds into the belt in the same render that starts the flight;
+1. where the satellite was drawn on the last frame, if that is at most `STALE_ORIGIN` (2 s) old (the usual case). This already covers an old body that stops being drawn in the same render that starts the flight (the asteroid folds into the belt): the satellite was drawn on the frame before;
+2. its orbit around the old body's live anchor (the satellite was hidden on the last frame, or its last drawn position is stale after a long gap without frames, such as a hidden tab: the old body has moved on since);
+3. **the ghost** (new): `Entry.lastDrawn`, the position where the satellite was last drawn on the old body. It only runs after a frame where the satellite itself was hidden, when the old body is not drawn now either;
 4. only then the destination.
 
 A second fix: a frame where the destination has no anchor no longer throws the captured origin away. The flight stays keyed by its start time, so it carries on from the same take-off point once the destination is drawn. Before this fix, a flight whose destination was missing for a frame lost its take-off point: it re-took it from the old body's orbit, or, if the old body was gone too, from the destination, which meant no visible flight at all.
@@ -47,7 +47,7 @@ Not built: the optional faint trail from the old body to the new one (see Deferr
 - **Rule:** a body is colonised while its **host** is `completed`: a completed project's planet or moon, or a completed standalone task's asteroid.
   - **Project body with many tasks:** the mark is about the body's own work. A project task that completes lands its Steward on the project's body but does not colonise it. The planet is colonised only when the user closes the project (decision 11), and then its Waykeeper lands too. A planet with ten finished tasks and one running is still a project in progress, and its label says so.
   - The mark goes when the host is gone or no longer completed: archival or the retention sweep (`body.freed` clears the host), a reopen, or a move (which leaves only a marker).
-- **Visual:** settlement lights. There are 5 clusters × 4 small warm-white lights (`#ffe6b8`, deliberately not the waiting amber `#ffb547`), seeded by the body id, within ±0.9 rad latitude. Each colonised body gets one `THREE.Points`: 2.5 px, not attenuated (it reads at the system view and up close), depth-tested so lights on the far side hide behind the body, on `DECOR_LAYER` (the outline pass skips it). It sits at 1.012 R, or 1.18 R on a lumpy asteroid. It is placed on the anchor every frame at `READ_BODIES`. Nothing animates, so reduced motion changes nothing. The on-demand loop is asked for a frame when the list or the anchors change.
+- **Visual:** settlement lights. There are 5 clusters × 4 small warm-white lights (`#ffe6b8`, deliberately not the waiting amber `#ffb547`), seeded by the body id, within ±0.9 rad latitude. All colonies share **one** `THREE.Points` (review fix): 2.5 px, not attenuated (it reads at the system view and up close), depth-tested so lights on the far side hide behind the body, on `DECOR_LAYER` (the outline pass skips it). Its world positions are rewritten every frame at `READ_BODIES` from each anchor (`writeColony`): 1.012 R on a planet or moon; on an asteroid, through the rock mesh's own matrix (its squash and rotation) at 1.1 of its local radius. Each light's opacity follows the Sun's angle: full on the night side, 0.35 on the lit side (dimmed, not hidden, so the mark still reads at the system view). Nothing animates, so reduced motion changes nothing. The on-demand loop is asked for a frame when the list or the anchors change.
 - Labels keep their completed state ("✓ completed", dimmed): unchanged.
 
 ### "Moved to …" markers
@@ -109,15 +109,15 @@ Gates (repo root):
 
 ## Performance
 
-- **Colonised bodies:** +1 draw call each (a 20-vertex `Points`, no texture, three's built-in points shader). There is no per-frame allocation: the frame loop copies the anchor's position and sets a scale.
-- **Landed satellites:** they use the existing paths (mesh pair or instanced). They take no animation budget and no beam, and their orbit clock is held.
+- **Colonised bodies:** +1 draw call for all of them together (20 vertices per colony, no texture, three's built-in points shader with vertex colours). Per drawn frame the positions and colours are rewritten (20 × 7 floats per colony) and re-uploaded; there is no per-frame allocation.
+- **Landed satellites:** they use the existing paths (mesh pair or instanced). They take no animation budget and no beam, and their orbit clock is held. At most 6 per body are drawn (`LANDED_PER_BODY`), and the list is linear in the agents (`newestAgents`).
 - **Ghost origin:** one 3-tuple per satellite, updated in place each drawn frame.
 - **Not measured in a browser** for this task: no headless run was done. The costs are bounded as above. The first frame-rate check is in "What Cosmin should try".
 
 ## Deferred
 
 - **The optional trail** (a faint arc from the old body to the new one for a few seconds after a move). It was left out because the flight itself is the trail (3 s on an arc); a trail would be a line per recent move on `DECOR_LAYER`. It would be a small follow-up if the flight alone reads too briefly from far away.
-- **Colony lights do not turn with the planet's spin** (they are placed on the anchor, not parented to the spinning mesh). This is invisible at today's spin rates. Parenting them to the body group would fix it if it shows.
+- **Colony lights do not turn with the planet's spin** (an asteroid's do: they follow its rock's matrix) (they are placed on the anchor, not parented to the spinning mesh). This is invisible at today's spin rates. Parenting them to the body group would fix it if it shows.
 - **Gas giants get the same surface lights** (P4-03's "orbital platforms" idea could replace them there).
 
 ## Shared files touched
@@ -139,4 +139,31 @@ Gates (repo root):
 6. **Reduced motion** (System Settings → Accessibility → Display → Reduce motion): moves and landings should be instant, and the lights still.
 7. **Decide on decision 77** above. Open questions in it:
    - whether a failed Steward of a task closed anyway should land (chosen: yes);
-   - whether many landed Stewards on a big project's planet are too busy (they sit on the surface, dim; an alternative is to land only the latest few per body).
+   - whether many landed Stewards on a big project's planet are too busy (they sit on the surface, dim; since the review only the newest 6 per body are drawn).
+
+## Review fixes (2026-10-04, branch `p4-04-fixes`)
+
+1. **Landed satellites no longer flood picking** (`picking/scene-pick.ts`, `Picking.tsx`). A frame in `landed` mode is not a pick candidate and does not count in "+n" / "what's here", except for a direct hit at its drawn size (no `MIN_TARGET_PX` floor) while its body is at least `CLEAR_TARGET_PX` on screen. Clicking a completed project's planet therefore does what clicking the body does: it selects the Waykeeper (decision 65). Tests (`scene-pick.test.ts`, +3), each on a completed planet with 30 landed satellites:
+   - a system-view click gives the body, with no list and `others: 0`;
+   - a close-up click on the surface between them gives the body, even 2 px from a landed satellite;
+   - a direct close-up hit gives that agent;
+   - the same hit on a speck of a body is not a candidate.
+2. **Bound and cost** (`satellite-model.ts`):
+   - `newestAgents(world)` maps (role, work) to the newest agent that **ran** (it has a status record or a `sessionRef`). It is built once per `satelliteList` and passed to `showsSatellite`, `hasLanded` and `isSuperseded`, so there is no longer an O(agents) scan per agent. Called alone, those three still build the index themselves.
+   - A newer agent that never ran supersedes nothing. This also applies to `keepFailed`: a respawned Steward hides the failed one once it has a status record (`starting`), not as soon as its row exists.
+   - `LANDED_PER_BODY = 6`: only the newest six landed satellites per body are drawn.
+   - Tests (+2):
+     - 300 landed agents: the agent rows are read fewer than 3 000 times (a per-agent scan would read about 90 000), and the six newest are drawn; another body keeps its own;
+     - a newer Steward that never ran does not hide the older landed one.
+3. **Promotion with landed satellites** (`machine.ts`, `director.ts`). When the body moves, a landed satellite is re-created **landed** on the new body: no flight and no second landing. It grows in there over `PRESENCE` (0.4 s), with no orbit blend sliding it across the surface. This is the quieter option: a fade-out on the old body would show a moon still dotted with work that has left it. The machine gains the `landed → landed` edge. A move that also reopens the work still flies, as before. Tests:
+   - `machine.test.ts`: the old "a move after landing flies" test now expects `landed` on the new body;
+   - `transitions.test.ts` (+1): a moon project with two landed Stewards is promoted to Jupiter. Over the Waykeeper's whole flight the Stewards are `landed` on Jupiter at 1.03 R, never `flying` or `landing`, and never animated.
+
+Nits:
+- **Ghost-origin wording** corrected in `director.ts` and in TECHNOLOGY §2.1. The ghost path runs only after a frame where the satellite itself was hidden. A fold in the same render already uses the last drawn position.
+- **Stale origin:** a last drawn position older than `STALE_ORIGIN` (2 s) is not used. The flight starts from the satellite's orbit around the old body's live anchor (`director.test.ts` +1, which also checks that a fresh position is still used).
+- **One draw call for all colonies:** done (above). `Colonies.test.tsx` checks that there is one `colonies` Points for two colonised bodies; `colony-model.test.ts` (+3) covers `writeColony` (offsets, positions, the night/day opacity and the asteroid lift).
+- **Sun-angle fade:** done, because it was trivial once positions are written on the CPU: per-vertex RGBA, using the Sun's anchor (or the origin).
+- **`asteroidLift`:** the numbers showed that lights floated visibly. The rock is jittered ±14 % per corner and squashed 0.75–1.15 per axis, so a 1.18 R sphere floated up to about half a radius over the squashed sides (≈ 0.5 units on a 1.1-unit asteroid, visible up close). The lights now follow the rock's own matrix (named mesh `asteroid-rock`), at 1.1. What is left is the corner jitter: a light over a dip floats by at most about 0.25 of the local radius, and one inside a bulge hides behind it.
+
+Gates after the fixes (repo root): `pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test` all green; 67 protocol, 910 server (+1 skipped), 999 web tests; three.js still out of the panel's first chunk (`index-*.js`: no `WebGLRenderer`, no `PointsMaterial`).
