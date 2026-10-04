@@ -1,7 +1,7 @@
 # Phase 5 — Side panel polish and scene integration
 
-**Current task:** — (phase not started; first task will be P5-01) · **Task status:** —
-**Phase status:** not started (0/5 done)
+**Current task:** P5-01, P5-02, P5-03 (wave 1, branch `p5-wave1-selection-status-history`) · **Task status:** in progress
+**Phase status:** in progress (0/5 done) — on branch `phase-5`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -36,17 +36,17 @@ The Phase 2.5 panel becomes the spec's panel, wired to the scene: selection flow
 ## Tasks
 
 ### P5-01 — Bidirectional selection and Earth = Harmonizer
-- **Status:** todo · **Depends on:** P3-05, P25-02 · **Parallel with:** P5-02, P5-03
+- **Status:** in progress · **Depends on:** P3-05, P25-02 · **Parallel with:** P5-02, P5-03
 - Scene pick ↔ panel selection in both directions with camera fly-to on panel selection; clicking Earth or deselecting returns to the Harmonizer chat; selecting a satellite selects that agent.
 - **Acceptance:** every selection path in `SPEC.md` §4.1–4.2 works in both directions.
 
 ### P5-02 — Status views
-- **Status:** todo · **Depends on:** P2-15, P25-02 · **Parallel with:** P5-01, P5-03
+- **Status:** in progress · **Depends on:** P2-15, P25-02 · **Parallel with:** P5-01, P5-03
 - System / project / task / agent summary views from the derived states (counts, blocked items first, cost totals, open questions); "blocked on user" is the loudest everywhere; optional "ask the Harmonizer for a narrative status" button.
 - **Acceptance:** "ask for the status of anything" (SPEC §4.3) is answerable without an LLM call.
 
 ### P5-03 — History view
-- **Status:** todo · **Depends on:** P2-13, P25-01 · **Parallel with:** P5-01, P5-02
+- **Status:** in progress · **Depends on:** P2-13, P25-01 · **Parallel with:** P5-01, P5-02
 - Archived projects/tasks with their bodies, moved-to links, closure dates; past questions with kind, holder chain and who answered; search/filter; reopen from history.
 - **Acceptance:** an archived project can be found, inspected and reopened.
 
