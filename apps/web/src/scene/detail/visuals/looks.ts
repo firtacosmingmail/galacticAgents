@@ -154,7 +154,11 @@ export const CLOUD_FADE_SECONDS = 1.2;
  * popping in. Smoothstep-eased; reduced motion (`motion` false) shows them at once. Multiplied by
  * the cross-fade's mix.
  */
-export function cloudFadeIn(arrivedAt: number | undefined, seconds: number, motion: boolean): number {
+export function cloudFadeIn(
+  arrivedAt: number | undefined,
+  seconds: number,
+  motion: boolean,
+): number {
   if (arrivedAt === undefined) return 0;
   if (!motion) return 1;
   const t = Math.min(1, Math.max(0, (seconds - arrivedAt) / CLOUD_FADE_SECONDS));

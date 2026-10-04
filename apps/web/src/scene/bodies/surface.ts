@@ -1,11 +1,6 @@
 import type { BodyLook, RingLook } from './appearance.js';
 import { maskLevelFor, sampleLand } from './earth-mask.js';
-import {
-  applyFeatures,
-  bandLatitude,
-  bandsOf,
-  type FeatureTexel,
-} from './features.js';
+import { applyFeatures, bandLatitude, bandsOf, type FeatureTexel } from './features.js';
 import { paintRingProfile } from './rings.js';
 
 /**

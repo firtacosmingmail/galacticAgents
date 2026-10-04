@@ -17,7 +17,12 @@ import {
   ringTextureWidth,
   viewBytes,
 } from './budget.js';
-import { applyFeatures, bandLatitude, craterScales, type SurfaceFeatures } from '../../bodies/features.js';
+import {
+  applyFeatures,
+  bandLatitude,
+  craterScales,
+  type SurfaceFeatures,
+} from '../../bodies/features.js';
 import {
   atmosphereScale,
   catalogueLookNames,
