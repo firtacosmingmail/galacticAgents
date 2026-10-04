@@ -7,6 +7,8 @@ import type {
   DecideResponse,
   HistoryQuestionsQuery,
   HistoryQuestionsResponse,
+  HistoryEventsQuery,
+  HistoryEventsResponse,
   HistoryWorkQuery,
   HistoryWorkResponse,
   HistoryWorkState,
@@ -138,6 +140,9 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     /** The history view (P25-10): answered and cancelled questions, newest first. */
     historyQuestions: (query: HistoryQuestionsQuery = {}) =>
       call<HistoryQuestionsResponse>('GET', `/api/history/questions${queryString(query)}`),
+    /** The timeline scrubber (P4-07): one project's events, oldest first, paged by `after`. */
+    historyEvents: (query: HistoryEventsQuery) =>
+      call<HistoryEventsResponse>('GET', `/api/history/events${queryString(query)}`),
   };
 }
 

@@ -4,6 +4,8 @@ import { useAppStore } from '../state/store.js';
 import type { WorldState } from '../state/reduce.js';
 import { workActions, type CardWork } from './agent-cards-model.js';
 import { ActionRow, ControlFeedback, useControls } from './controls.js';
+import { useApi } from '../console/hierarchy/shared.js';
+import { startReplay } from '../replay/store.js';
 
 /**
  * A navigation row's work actions (P4-12): what the controls strip offers for the task or project
@@ -28,6 +30,7 @@ export function NavRowActions({
   const item = kind === 'project' ? world.projects[id] : world.tasks[id];
   const work = item ? ({ kind, item } as CardWork) : undefined;
   const c = useControls(undefined, work);
+  const api = useApi();
   if (!work) return null;
   const actions = workActions(work).filter((a) => a.action !== 'edit');
   const note = work.kind === 'project' ? openTasksNote(world, work.item) : undefined;
@@ -57,6 +60,18 @@ export function NavRowActions({
       />
       {note && <p className="pnl-row-note">{note}</p>}
       <ControlFeedback controls={c} work={work} />
+      {work.kind === 'project' && (
+        // The timeline scrubber (P4-07): the project's history replayed in the scene.
+        <p className="pnl-row-replay">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => startReplay(api, work.item.id, work.item.name)}
+          >
+            Replay history
+          </button>
+        </p>
+      )}
     </div>
   );
 }

@@ -762,6 +762,9 @@ a.pnl-link:hover {
 .pnl-row-note {
   color: var(--pnl-muted);
 }
+.pnl-row-replay {
+  margin: 6px 0 0;
+}
 .pnl-row-actions .agc-confirm {
   display: flex;
   flex-wrap: wrap;
