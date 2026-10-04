@@ -7,7 +7,8 @@ import { brainDefinition, harmonizerDefinition, tool } from '../testing/canned.j
 import { brainHarness, type BrainHarness } from '../testing/index.js';
 import type { ToolOutcome } from '../testing/transcript.js';
 import type { BrainToolContext } from '../definition.js';
-import { controlWorkTool, USED_CONFIRMATIONS } from './control-tools.js';
+import { USED_FOR } from '../../domain/questions.js';
+import { controlWorkTool } from './control-tools.js';
 import { harmonizerBrain } from './index.js';
 
 /**
@@ -220,7 +221,10 @@ describe('control_work: the panel’s work controls in conversation (P5-07, deci
     expect(stopped.ok, stopped.message).toBe(true);
     await h.until(() => h.statuses.get(steward.id)?.state === 'stopped', { what: 'stopped' });
     expect(h.log.tables.tasks.get(task.id)?.state).toBe('paused');
-    expect(h.log.tables.tasks.get(task.id)?.meta?.[USED_CONFIRMATIONS]).toEqual([stopQ]);
+    // Used up on the question's row, in the control's own transaction; the task's history shows
+    // no extra edit for it.
+    expect(h.log.tables.questions.get(stopQ)?.meta?.[USED_FOR]).toBe(`stop task ${task.id}`);
+    expect(h.log.tables.tasks.get(task.id)?.meta?.['usedConfirmations']).toBeUndefined();
 
     // The same answer does not unlock a second stop.
     const again = await call(
@@ -238,6 +242,50 @@ describe('control_work: the panel’s work controls in conversation (P5-07, deci
     expect(cancelled.ok, cancelled.message).toBe(true);
     expect(h.log.tables.tasks.get(task.id)?.state).toBe('failed');
     expect(controlsBy()).toEqual(['control.stop', 'control.cancel']);
+    expect(
+      h.log
+        .eventsSince(0, Number.MAX_SAFE_INTEGER)
+        .some(
+          (e) =>
+            e.event.type === 'task.updated' &&
+            e.event.taskId === task.id &&
+            e.event.changes.meta !== undefined,
+        ),
+    ).toBe(false);
+
+    // A control the domain refuses (a failed task cannot be stopped) leaves the answer unused.
+    const lateQ = await confirm('task', task.id, 'stop');
+    const late = await call(
+      'control_work',
+      control('task', task.id, 'stop', { questionId: lateQ }),
+    );
+    expect(late.ok).toBe(false);
+    expect(late.message).toMatch(/is failed/);
+    expect(h.log.tables.questions.get(lateQ)?.meta?.[USED_FOR]).toBeUndefined();
+    expect(controlsBy()).toEqual(['control.stop', 'control.cancel']);
+  });
+
+  it('two calls with one answer at the same time: exactly one goes through', async () => {
+    const { h, hq, confirm, controlsBy, asteroidTask } = await setup();
+    const { task } = await asteroidTask('Fix the date test');
+    const stopQ = await confirm('task', task.id, 'stop');
+    const ctx = {
+      brainId: hq.agentId,
+      role: 'harmonizer',
+      actor: { type: 'agent', id: hq.agentId },
+      commands: h.commands,
+      queries: h.composed.queries,
+      send: () => ({ messageId: 'm' }),
+    } as unknown as BrainToolContext;
+    const input = control('task', task.id, 'stop', { questionId: stopQ });
+    const results = await Promise.allSettled([
+      controlWorkTool.handler(input, ctx),
+      controlWorkTool.handler(input, ctx),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const refused = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect((refused.reason as Error).message).toMatch(/already used/);
+    expect(controlsBy()).toEqual(['control.stop']);
   });
 
   it('a confirmation for another action, another work or a "No" unlocks nothing', async () => {
