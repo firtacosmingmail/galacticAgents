@@ -10,7 +10,7 @@ import {
 } from 'three';
 import { useSceneScale, type ScaleMode } from '../scale.js';
 import { DECOR_LAYER } from '../layers.js';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import {
   asteroidSquash,
   BACKGROUND_BELT_SEED,
@@ -46,7 +46,7 @@ import { PLACE_BODIES } from '../frame-order.js';
 export function Belt({ rocks }: { rocks: number }) {
   const mode = useSceneScale((s) => s.mode);
   const reducedMotion = useReducedMotion();
-  const bodies = useAppStore((s) => s.world.bodies);
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
   const asteroids = useMemo(() => taskAsteroids(bodies), [bodies]);
   const spin = useRef<Group>(null);
 

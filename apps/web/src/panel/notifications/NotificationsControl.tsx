@@ -53,7 +53,12 @@ export function NotificationsControl() {
         Notifications: {state}
       </button>
       {open && (
-        <div className="ntf-popover" role="dialog" aria-label="notification settings">
+        <div
+          className="ntf-popover"
+          role="dialog"
+          aria-label="notification settings"
+          data-escape-layer=""
+        >
           <NotificationSettings />
         </div>
       )}

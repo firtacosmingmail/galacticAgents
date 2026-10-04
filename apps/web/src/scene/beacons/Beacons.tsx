@@ -12,7 +12,7 @@ import {
   type MeshBasicMaterial,
   type PerspectiveCamera,
 } from 'three';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { getAnchor, onAnchorsChanged } from '../anchors.js';
 import { anchorPosition } from '../camera/store.js';
 import { DECOR_LAYER } from '../layers.js';
@@ -116,12 +116,12 @@ export function Beacons() {
  * status flush (several a second) neither recomputes nor re-renders the beacons.
  */
 export function useBeaconList(): BeaconSpec[] {
-  const questions = useAppStore((s) => s.world.questions);
-  const agents = useAppStore((s) => s.world.agents);
-  const tasks = useAppStore((s) => s.world.tasks);
-  const projects = useAppStore((s) => s.world.projects);
-  const bodies = useAppStore((s) => s.world.bodies);
-  const hqBodyId = useAppStore((s) => beaconHq(s.world));
+  const questions = useAppStore((s) => sceneWorld(s).questions);
+  const agents = useAppStore((s) => sceneWorld(s).agents);
+  const tasks = useAppStore((s) => sceneWorld(s).tasks);
+  const projects = useAppStore((s) => sceneWorld(s).projects);
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
+  const hqBodyId = useAppStore((s) => beaconHq(sceneWorld(s)));
   const next = useMemo(
     () => beaconList({ questions, agents, tasks, projects, bodies, hqBodyId }),
     [questions, agents, tasks, projects, bodies, hqBodyId],

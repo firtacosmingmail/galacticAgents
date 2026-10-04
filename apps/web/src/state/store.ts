@@ -29,6 +29,12 @@ export const MAX_TRANSCRIPT = 2_000;
 /** Chat messages kept per agent (oldest dropped). */
 export const MAX_MESSAGES = 500;
 
+/** The offset to the server's clock a `serverTime` gives, as a state patch (none without one). */
+function serverOffset(serverTime: string | undefined): { serverOffsetMs?: number } {
+  const at = serverTime ? Date.parse(serverTime) : NaN;
+  return Number.isFinite(at) ? { serverOffsetMs: at - Date.now() } : {};
+}
+
 /**
  * Merges chat messages into an agent's list: one entry per `messageId`, in `seq` order (P2-18).
  * Live `message.sent` events and the REST history (`GET /api/agents/:id/messages`) both land
@@ -43,6 +49,17 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): 
 
 export interface AppState extends TranscriptViewSlice {
   world: WorldState;
+  /**
+   * The timeline scrubber's world (P4-07), set while a replay is open: the scene draws it instead
+   * of `world` (`sceneWorld`), the panel keeps the live `world`, and live events keep folding into
+   * `world` meanwhile. Not derived from the stream: the replay store (`replay/store.ts`) sets it.
+   */
+  replayWorld?: WorldState | undefined;
+  /**
+   * The server's clock minus this page's (ms), from the last snapshot's or catch-up's
+   * `serverTime`: "now" on the server is `Date.now() + serverOffsetMs` (event toasts' freshness).
+   */
+  serverOffsetMs?: number | undefined;
   /** The most recent events, newest first, for the event page. */
   log: EventEnvelope[];
   /** Per-agent transcript chunks in `seq` order, for the agents this page subscribed to. */
@@ -130,14 +147,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       switch (message.type) {
         case 'snapshot':
           // A snapshot from another log (a new database) invalidates the transcript seqs too:
-          // keep them only when the log is the same (P1-38).
+          // keep them only when the log is the same (P1-38). A replay of the old log ends.
           return {
             world: applySnapshot(message),
             log: [],
             logId: message.logId,
             snapshots: s.snapshots + 1,
+            ...serverOffset(message.serverTime),
             ...(s.logId !== undefined && s.logId !== message.logId
-              ? { transcripts: {}, messages: {}, transcriptViews: {} }
+              ? { transcripts: {}, messages: {}, transcriptViews: {}, replayWorld: undefined }
               : {}),
           };
         case 'event': {
@@ -167,7 +185,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           };
         }
         case 'caught_up':
-          return { world: { ...s.world, seq: Math.max(s.world.seq, message.seq) } };
+          return {
+            world: { ...s.world, seq: Math.max(s.world.seq, message.seq) },
+            ...serverOffset(message.serverTime),
+          };
         case 'error':
           return { lastError: `${message.code}: ${message.message}` };
         case 'pong':
@@ -208,6 +229,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   reset: () =>
     set({
       world: emptyWorld(),
+      replayWorld: undefined,
+      serverOffsetMs: undefined,
       log: [],
       transcripts: {},
       messages: {},
@@ -219,3 +242,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       lastError: undefined,
     }),
 }));
+
+/**
+ * The world the solar-system scene draws (P4-07): the replay's while the timeline scrubber is
+ * open, the live one otherwise. Every scene component reads its rows through this one switch; the
+ * panel reads `world`.
+ */
+export const sceneWorld = (s: Pick<AppState, 'world' | 'replayWorld'>): WorldState =>
+  s.replayWorld ?? s.world;

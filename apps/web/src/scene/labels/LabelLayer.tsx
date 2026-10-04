@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef } from 'react';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { selectionBody } from '../picking/body-action.js';
 import { usePickingStore } from '../picking/store.js';
 import { bodyLabels, type BodyLabel } from './label-model.js';
@@ -24,10 +24,10 @@ import './labels.css';
  * No three.js: this module is in the panel's chunk.
  */
 export function LabelLayer() {
-  const bodies = useAppStore((s) => s.world.bodies);
-  const projects = useAppStore((s) => s.world.projects);
-  const tasks = useAppStore((s) => s.world.tasks);
-  const selected = useAppStore((s) => selectionBody(s.world, s.selection));
+  const bodies = useAppStore((s) => sceneWorld(s).bodies);
+  const projects = useAppStore((s) => sceneWorld(s).projects);
+  const tasks = useAppStore((s) => sceneWorld(s).tasks);
+  const selected = useAppStore((s) => selectionBody(sceneWorld(s), s.selection));
   const hovered = usePickingStore((s) => s.hover?.bodyId);
   const labels = useMemo(
     () => bodyLabels({ bodies, projects, tasks }, selected),

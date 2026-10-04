@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  isHarnessMeta,
   type Actor,
   type Agent,
   type AgentAdapter,
@@ -824,7 +825,11 @@ export class AgentRuntime {
     );
     for (const record of deepestFirst) {
       if (!LIVE_STATES.has(record.state) || this.live.has(record.agentId)) continue;
-      const stoppedBy = histories.get(record.agentId)?.stopRequested;
+      // A scene-harness fake agent (P4-06) never had a process: it ends stopped, never reopened.
+      const fake = isHarnessMeta(this.opts.log.tables.agents.get(record.agentId)?.meta);
+      const stoppedBy: Actor | undefined = fake
+        ? { type: 'system' }
+        : histories.get(record.agentId)?.stopRequested;
       this.command((ctx) => {
         ctx.emit(
           stoppedBy

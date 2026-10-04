@@ -13,7 +13,7 @@ import {
   type PerspectiveCamera,
 } from 'three';
 import type { Id } from '@galactic/protocol';
-import { useAppStore } from '../../state/store.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
 import { getAnchor, onAnchorsChanged } from '../anchors.js';
 import { useCameraStore } from '../camera/store.js';
 import { PLACE_SATELLITES } from '../frame-order.js';
@@ -73,10 +73,12 @@ beam mesh holds only the scanning satellites' beams and is hidden when none scan
  * clock, not by frames.
  */
 export function Satellites({ quality }: { quality: SceneQuality }) {
-  const agents = useAppStore((s) => s.world.agents);
-  const statuses = useAppStore((s) => s.world.statuses);
-  const tasks = useAppStore((s) => s.world.tasks);
-  const projects = useAppStore((s) => s.world.projects);
+  const agents = useAppStore((s) => sceneWorld(s).agents);
+  const statuses = useAppStore((s) => sceneWorld(s).statuses);
+  const tasks = useAppStore((s) => sceneWorld(s).tasks);
+  const projects = useAppStore((s) => sceneWorld(s).projects);
+  // P4-07: a replay opening or exiting swaps the whole world — satellites snap, never fly.
+  const replaying = useAppStore((s) => s.replayWorld !== undefined);
   const list = useMemo(
     () => satelliteList({ agents, statuses, tasks, projects }, SCENE_SATELLITES),
     [agents, statuses, tasks, projects],
@@ -96,12 +98,15 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
 
   // The director keeps its actors across list changes; only a real change reaches it.
   const applied = useRef<SatelliteSpec[]>([]);
+  const appliedReplaying = useRef(replaying);
   useLayoutEffect(() => {
+    const snap = appliedReplaying.current !== replaying;
+    appliedReplaying.current = replaying;
     if (sameSatellites(applied.current, held)) return;
     applied.current = held;
-    director.setSpecs(held, motionSeconds());
+    director.setSpecs(held, motionSeconds(), { snap });
     invalidate();
-  }, [director, held, invalidate]);
+  }, [director, held, replaying, invalidate]);
   // Unmount forgets everything, and so does StrictMode's rehearsed unmount — which re-runs the
   // layout effect above next, so `applied` must forget too or the satellites never come back.
   useEffect(

@@ -1,4 +1,5 @@
 import {
+  describeTool,
   ENDED_STATES,
   type AgentCaps,
   type AgentRuntime,
@@ -30,8 +31,11 @@ export interface StatusStoreOptions {
   /** Caps of an agent (from its row); absent → the defaults. */
   capsOf: (agentId: Id) => AgentCaps | undefined;
   defaultCaps: AgentCaps;
-  /** Silence after which a working agent is `stalled`, per runtime. */
-  stallThresholdMs: (runtime: AgentRuntime | undefined) => number;
+  /**
+   * Silence after which a working agent is `stalled`, per runtime (and agent: the scene harness's
+   * fake agents never stall on their own, P4-06).
+   */
+  stallThresholdMs: (runtime: AgentRuntime | undefined, agentId: Id) => number;
   /** Batch interval for diffs. */
   flushMs?: number;
   /** How often the wall clock of live agents is refreshed and stalls are checked. */
@@ -196,7 +200,7 @@ export class StatusStore {
     for (const entry of this.entries.values()) {
       const { record } = entry;
       if (record.state !== 'working' && record.state !== 'starting') continue;
-      const threshold = this.opts.stallThresholdMs(entry.runtime);
+      const threshold = this.opts.stallThresholdMs(entry.runtime, record.agentId);
       if (now - entry.lastEventAt < threshold) continue;
       entry.record = { ...record, state: 'stalled', caps: this.caps(entry, now) };
       this.mark(record.agentId);
@@ -434,14 +438,4 @@ export class StatusStore {
       this.flush();
     }, this.flushMs);
   }
-}
-
-function describeTool(toolName: string, input: unknown): string {
-  if (input && typeof input === 'object') {
-    const i = input as Record<string, unknown>;
-    const detail = i['command'] ?? i['file_path'] ?? i['pattern'] ?? i['path'] ?? i['url'];
-    // Events reach the store redacted (AgentRuntime); a rebuild reads the same redacted log.
-    if (typeof detail === 'string') return `${toolName}: ${detail.slice(0, 120)}`;
-  }
-  return toolName;
 }

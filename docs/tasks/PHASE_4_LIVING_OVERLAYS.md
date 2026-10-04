@@ -1,7 +1,7 @@
 # Phase 4 — Living overlays: satellites, scans and workers
 
-**Current task:** P4-06, P4-07 (wave 4, after wave 3 is merged into `phase-4`) · **Task status:** todo
-**Phase status:** in progress (12/14 done) — on branch `phase-4`
+**Current task:** — (all tasks done; exit check with the scene harness, after wave 4 is merged into `phase-4`) · **Task status:** —
+**Phase status:** in progress (14/14 done) — exit check pending (Cosmin's harness run) — on branch `phase-4`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -64,12 +64,12 @@ The map shows *what agents are doing*, continuously, from the status store: a sa
 - **Acceptance:** beacon appears/disappears with the question lifecycle.
 
 ### P4-06 — Test harness and event toasts
-- **Status:** todo · **Depends on:** P4-02, P4-03, P4-04, P4-05 · **Parallel with:** P4-07
+- **Status:** done (2026-10-04) · **Depends on:** P4-02, P4-03, P4-04, P4-05 · **Parallel with:** P4-07
 - Dev-only harness (`/debug`) to set an agent's state/activity and fire move/complete/question events; optional subtle 3D toasts (flare on task finish).
 - **Acceptance:** exit criterion "switching an agent's state changes its satellite within a second" verifiable from the harness.
 
 ### P4-07 — Timeline scrubber (nice-to-have)
-- **Status:** todo · **Depends on:** P4-04 · **Parallel with:** P4-06
+- **Status:** done (2026-10-04) · **Depends on:** P4-04 · **Parallel with:** P4-06
 - Replay the `events` stream for a project over a time range to see how it unfolded; read-only; can be deferred to Phase 8.
 - **Acceptance:** scrubbing replays body assignments, moves and completions.
 

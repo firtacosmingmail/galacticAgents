@@ -10,6 +10,7 @@ import {
 } from './client/session.js';
 import { AgentsConsole } from './console/AgentsConsole.js';
 import { HierarchyConsole } from './console/hierarchy/HierarchyConsole.js';
+import { SceneHarness } from './console/SceneHarness.js';
 import { Panel } from './panel/Panel.js';
 import { NavLink } from './panel/Navigation.js';
 import { HARMONIZER } from './state/selection.js';
@@ -108,15 +109,17 @@ function useLocationSync() {
   }, []);
 }
 
-type Tab = 'hierarchy' | 'agents';
+type Tab = 'hierarchy' | 'agents' | 'harness';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'hierarchy', label: 'Hierarchy' },
   { id: 'agents', label: 'Agents (dev)' },
+  { id: 'harness', label: 'Scene harness (dev)' },
 ];
 
 /**
  * The console's pages (P2-18): the hierarchy console drives the Phase 2 loop; the Phase 1 agents
- * console (free-form spawns, a development tool — decision 24) stays one click away; the raw
+ * console (free-form spawns, a development tool — decision 24) stays one click away, as does the
+ * scene harness (P4-06: drives the scene through the dev routes); the raw
  * snapshot counts and the event log stay below both.
  */
 function Consoles({ token }: { token: string }) {
@@ -138,6 +141,7 @@ function Consoles({ token }: { token: string }) {
       </nav>
       {tab === 'hierarchy' && <HierarchyConsole token={token} />}
       {tab === 'agents' && <AgentsConsole token={token} />}
+      {tab === 'harness' && <SceneHarness token={token} />}
       <World />
       <EventLog />
     </>

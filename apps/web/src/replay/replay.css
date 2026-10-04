@@ -1,0 +1,109 @@
+/* The timeline scrubber's bar (P4-07): docked between the scene and the conversation. */
+.rpl {
+  flex: none;
+  box-sizing: border-box;
+  padding: 6px 12px 8px;
+  border-top: 2px solid var(--pnl-here);
+  border-bottom: 1px solid var(--pnl-line);
+  background: var(--pnl-surface);
+  color: var(--pnl-ink);
+  font-size: 13px;
+}
+.rpl-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.rpl-title {
+  color: var(--pnl-here);
+}
+.rpl-note {
+  color: var(--pnl-muted);
+  flex: 1 1 auto;
+}
+.rpl-exit,
+.rpl-button,
+.rpl-speed {
+  font: inherit;
+  color: var(--pnl-ink);
+  background: var(--pnl-raised);
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  min-height: 28px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.rpl-button {
+  min-width: 32px;
+  padding: 2px 6px;
+}
+.rpl-exit:focus-visible,
+.rpl-button:focus-visible,
+.rpl-speed:focus-visible,
+.rpl-slider:focus-visible {
+  outline: 2px solid var(--pnl-here);
+  outline-offset: 1px;
+}
+.rpl-status {
+  margin: 6px 0 0;
+  color: var(--pnl-muted);
+}
+.rpl-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 6px;
+}
+.rpl-track {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 140px;
+  height: 28px;
+}
+.rpl-slider {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  margin: 0;
+  background: transparent;
+  accent-color: var(--pnl-here);
+}
+.rpl-ticks {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 2px;
+  height: 8px;
+  pointer-events: none;
+}
+.rpl-tick {
+  position: absolute;
+  width: 2px;
+  height: 8px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--pnl-muted);
+}
+.rpl-tick-move {
+  background: var(--pnl-here);
+}
+.rpl-tick-completion {
+  background: #4cc38a;
+  height: 10px;
+}
+/* amber is the beacon's colour (SPEC §4.4): a question tick is a beacon in the past */
+.rpl-tick-question {
+  background: var(--pnl-beacon);
+}
+.rpl-time {
+  font-family: var(--pnl-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.rpl-count {
+  color: var(--pnl-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}

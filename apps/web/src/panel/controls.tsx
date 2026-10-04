@@ -287,7 +287,13 @@ export function ControlsStrip({
           </button>
         )}
         {open && (
-          <div className="ctl-menu" role="group" aria-label="more controls" ref={menuRef}>
+          <div
+            className="ctl-menu"
+            role="group"
+            aria-label="more controls"
+            ref={menuRef}
+            data-escape-layer=""
+          >
             {overflow.map((g) => (
               <ActionRow
                 key={g.scope}

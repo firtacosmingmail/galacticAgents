@@ -1,4 +1,13 @@
-import type { Actor, Agent, ControlTarget, Event, Id, Task, WorkState } from '@galactic/protocol';
+import {
+  isHarnessMeta,
+  type Actor,
+  type Agent,
+  type ControlTarget,
+  type Event,
+  type Id,
+  type Task,
+  type WorkState,
+} from '@galactic/protocol';
 import type { Tables } from '../db/tables.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
@@ -222,6 +231,8 @@ export interface ConcernedOptions {
  *     a standalone task, the Harmonizer;
  *   - **project** target: its Waykeeper(s), their supervisors, and the Harmonizer (who relays
  *     project-level actions to the user, decision 11b); a sub-project's parent Waykeeper too.
+ *
+ * None for a scene-harness target (`meta.harness`, P4-06): harness rows never wake a brain.
  */
 export function concernedSupervisors(
   tables: Tables,
@@ -230,6 +241,15 @@ export function concernedSupervisors(
 ): Id[] {
   if (!event.type.startsWith('control.')) return [];
   const { target, by } = event as { target: ControlTarget; by: Actor };
+  // The scene harness's rows (P4-06) concern no brain: a fake agent's or harness work's control
+  // never wakes a real supervisor (defence in depth: the harness itself logs no `control.*`).
+  const row =
+    target.kind === 'agent'
+      ? tables.agents.get(target.id)
+      : target.kind === 'task'
+        ? tables.tasks.get(target.id)
+        : tables.projects.get(target.id);
+  if (isHarnessMeta(row?.meta)) return [];
   const out = new Set<Id>();
   const agents = tables.agents.all();
   const waykeepersOf = (projectId: Id) =>

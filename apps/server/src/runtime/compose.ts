@@ -1,5 +1,6 @@
 import {
   ENDED_STATES,
+  isHarnessMeta,
   type Agent,
   type AgentAdapter,
   type AgentRuntime as RuntimeName,
@@ -180,11 +181,17 @@ export function recoveryNote(report: RecoveryReport, describe: (agentId: Id) => 
 export function composeRuntime(db: Database, opts: ComposeOptions = {}): ComposedRuntime {
   const log = new EventLog(db, opts.log ?? {});
   const defaultCaps = opts.caps?.defaults ?? DEFAULT_CAPS;
+  const stallThreshold =
+    opts.stallThresholdMs ?? ((runtime) => (runtime ? STALL_THRESHOLDS_MS[runtime] : 60_000));
   const statuses = new StatusStore({
     capsOf: (id) => log.tables.agents.get(id)?.caps,
     defaultCaps,
-    stallThresholdMs:
-      opts.stallThresholdMs ?? ((runtime) => (runtime ? STALL_THRESHOLDS_MS[runtime] : 60_000)),
+    // The scene harness's fake agents (P4-06) have no process to fall silent: they stall only
+    // when the harness says so.
+    stallThresholdMs: (runtime, agentId) =>
+      isHarnessMeta(log.tables.agents.get(agentId)?.meta)
+        ? Number.POSITIVE_INFINITY
+        : stallThreshold(runtime),
     ...(opts.flushMs !== undefined ? { flushMs: opts.flushMs } : {}),
     ...(opts.tickMs !== undefined ? { tickMs: opts.tickMs } : {}),
     ...(opts.retainEndedMs !== undefined ? { retainEndedMs: opts.retainEndedMs } : {}),

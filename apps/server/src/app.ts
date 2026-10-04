@@ -98,7 +98,14 @@ export function buildApp(opts: AppOptions): App {
     info: (m: string) => fastify.log.info(m),
     warn: (m: string) => fastify.log.warn(m),
   };
-  if (opts.log && config.dev) registerDevRoutes(fastify, config, opts.log);
+  if (opts.log && config.dev) {
+    registerDevRoutes(fastify, config, {
+      log: opts.log,
+      ...(opts.commands ? { commands: opts.commands } : {}),
+      ...(opts.statuses ? { statuses: opts.statuses } : {}),
+      ...(opts.runtime ? { runtime: opts.runtime } : {}),
+    });
+  }
   if (opts.log && opts.runtime) {
     registerAgentRoutes(fastify, config, {
       runtime: opts.runtime,
