@@ -5,14 +5,18 @@ import { beaconCard, beaconHq } from './beacon-model.js';
 import './beacons.css';
 
 /**
- * The hover card of a question beacon (P4-05): "Permission: <text…>" or "Question: <text…>", the
- * agent asking, and "+n more on <body>" when several wait there; the click opens that question in
- * the inbox. One element over the canvas in the hover label's place (`pointer-events: none`),
- * positioned by the hover's position channel (`onHoverMove`, no React render per move), flipped
+ * The hover card of one question's beacon (P4-05, P4-13): "Permission: <text…>" or
+ * "Question: <text…>", the agent asking, and "+n more on <body>" on a full row's last beacon; the
+ * click goes to the asker and opens the question in the inbox. One element over the canvas in the
+ * hover label's place (`pointer-events: none`), positioned by the hover's position channel (`onHoverMove`, no React render per move), flipped
  * near the scene area's edges like the satellite card. Its content follows the store: a question
  * answered elsewhere changes the card (or removes it, with the beacon) at once.
  */
-export const BeaconHoverCard = memo(function BeaconHoverCard({ bodyId }: { bodyId: string }) {
+export const BeaconHoverCard = memo(function BeaconHoverCard({
+  questionId,
+}: {
+  questionId: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   // What the card reads, not the whole world: a status flush does not re-render it.
   const questions = useAppStore((s) => s.world.questions);
@@ -22,8 +26,8 @@ export const BeaconHoverCard = memo(function BeaconHoverCard({ bodyId }: { bodyI
   const bodies = useAppStore((s) => s.world.bodies);
   const hqBodyId = useAppStore((s) => beaconHq(s.world));
   const card = useMemo(
-    () => beaconCard({ questions, agents, tasks, projects, bodies, hqBodyId }, bodyId),
-    [questions, agents, tasks, projects, bodies, hqBodyId, bodyId],
+    () => beaconCard({ questions, agents, tasks, projects, bodies, hqBodyId }, questionId),
+    [questions, agents, tasks, projects, bodies, hqBodyId, questionId],
   );
 
   useLayoutEffect(() => {
@@ -50,14 +54,16 @@ export const BeaconHoverCard = memo(function BeaconHoverCard({ bodyId }: { bodyI
       ref={ref}
       className={`pick-hover beacon-card beacon-card-${card.kind}`}
       role="tooltip"
-      data-body={bodyId}
+      data-body={card.bodyId}
+      data-question={card.questionId}
     >
       <span className="beacon-card-head">
         <strong className="beacon-card-kind">{card.heading}:</strong> {card.text}
       </span>
       <span className="beacon-card-asker">{card.asker}</span>
       <span className="beacon-card-hint">
-        {card.more > 0 ? `+${card.more} more on ${card.where} · ` : ''}click to open in the inbox
+        {card.more > 0 ? `+${card.more} more on ${card.where} · ` : ''}click to go there and open it
+        in the inbox
       </span>
     </div>
   );

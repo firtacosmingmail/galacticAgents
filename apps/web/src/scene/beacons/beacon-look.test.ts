@@ -7,6 +7,7 @@ import {
   glyphKey,
   glyphSpec,
   HALO_MAX_PX,
+  rowOffsetPx,
   STEADY_PULSE,
 } from './beacon-look.js';
 import { drawGlyph, drawPillar } from './glyph-draw.js';
@@ -65,17 +66,50 @@ describe('beaconPulse', () => {
 });
 
 describe('glyphSpec', () => {
-  it('a padlock diamond for a permission, a "?" disc for a clarification, a badge for several', () => {
-    expect(glyphSpec('permission', 1)).toEqual({
+  it('a padlock diamond for a permission, a "?" disc for a clarification, "+n" past a full row', () => {
+    expect(glyphSpec('permission')).toEqual({
       kind: 'permission',
       shape: 'diamond',
       symbol: 'lock',
       badge: undefined,
     });
-    expect(glyphSpec('clarification', 2)).toMatchObject({ shape: 'disc', symbol: '?', badge: '2' });
-    expect(glyphSpec('clarification', 12).badge).toBe('9+');
-    expect(glyphKey(glyphSpec('permission', 3))).toBe('permission:3');
-    expect(glyphKey(glyphSpec('permission', 1))).not.toBe(glyphKey(glyphSpec('clarification', 1)));
+    expect(glyphSpec('clarification', 0).badge).toBeUndefined();
+    expect(glyphSpec('clarification', 2)).toMatchObject({
+      shape: 'disc',
+      symbol: '?',
+      badge: '+2',
+    });
+    expect(glyphSpec('clarification', 140).badge).toBe('+99');
+    expect(glyphKey(glyphSpec('permission', 3))).toBe('permission:+3');
+    expect(glyphKey(glyphSpec('permission'))).not.toBe(glyphKey(glyphSpec('clarification')));
+  });
+});
+
+describe('a row of beacons on one body (P4-13)', () => {
+  it('one beacon stands straight above its body', () => {
+    expect(rowOffsetPx(0, 1)).toBe(0);
+    expect(beaconLayout(3, 300).glyphX).toBe(0);
+  });
+
+  it('several stand side by side, centred, spacingPx apart: their targets never overlap', () => {
+    const xs = [0, 1, 2].map((slot) => beaconLayout(3, 300, undefined, slot, 3).glyphX);
+    expect(xs).toEqual([-BEACON.spacingPx, 0, BEACON.spacingPx]);
+    expect(BEACON.spacingPx).toBeGreaterThan(BEACON.targetPx * 2);
+    expect(BEACON.spacingPx).toBeGreaterThan(BEACON.glyphPx);
+    expect([0, 1].map((slot) => rowOffsetPx(slot, 2))).toEqual([
+      -BEACON.spacingPx / 2,
+      BEACON.spacingPx / 2,
+    ]);
+    // The same height for every beacon of the row.
+    expect(beaconLayout(3, 300, undefined, 0, 3).glyphY).toBe(beaconLayout(3, 300).glyphY);
+  });
+
+  it('a row beacon whose own glyph is off screen is not drawn, its neighbour may be', () => {
+    const [w, h] = [800, 600];
+    // The body at the right edge: the slot to its right is past it, the one to its left is in.
+    const ndcX = 1 + ((HALO_MAX_PX - 1) / w) * 2;
+    expect(glyphInView(ndcX, 0, 80, w, h, BEACON.spacingPx)).toBe(false);
+    expect(glyphInView(ndcX, 0, 80, w, h, -BEACON.spacingPx)).toBe(true);
   });
 });
 
@@ -110,17 +144,17 @@ function recorder() {
 describe('glyph sprites (drawn at runtime)', () => {
   it('a permission draws a diamond and a padlock, no "?"', () => {
     const { ctx, calls } = recorder();
-    drawGlyph(ctx, glyphSpec('permission', 1));
+    drawGlyph(ctx, glyphSpec('permission'));
     expect(calls.filter((c) => c === 'lineTo')).toHaveLength(3);
     expect(calls).toContain('fillRect'); // the padlock's body
     expect(calls.some((c) => c.startsWith('text:'))).toBe(false);
   });
 
-  it('a clarification draws "?" on a disc, and the count badge when several', () => {
+  it('a clarification draws "?" on a disc, and the "+n" badge past a full row', () => {
     const { ctx, calls } = recorder();
     drawGlyph(ctx, glyphSpec('clarification', 3));
     expect(calls).toContain('text:?');
-    expect(calls).toContain('text:3');
+    expect(calls).toContain('text:+3');
     expect(calls).not.toContain('lineTo');
   });
 
@@ -140,8 +174,9 @@ describe('beaconUnder (picking a beacon)', () => {
       direction: [x / len, y / len, -10 / len] as [number, number, number],
     };
   };
-  const frame = (bodyId: string, x: number, y: number, visible = true): BeaconFrame => ({
-    bodyId,
+  const frame = (questionId: string, x: number, y: number, visible = true): BeaconFrame => ({
+    questionId,
+    bodyId: 'b-jupiter',
     visible,
     center: [x, y, 0],
     perPx: 1 / 72,
@@ -149,16 +184,31 @@ describe('beaconUnder (picking a beacon)', () => {
 
   it('hits within the target radius, nearest the pointer first', () => {
     const frames = [frame('b-a', 0, 0), frame('b-b', 0.2, 0)];
-    expect(beaconUnder(ray(0, 0), frames)).toBe('b-a');
-    expect(beaconUnder(ray(0.18, 0), frames)).toBe('b-b');
+    expect(beaconUnder(ray(0, 0), frames)?.questionId).toBe('b-a');
+    expect(beaconUnder(ray(0.18, 0), frames)?.questionId).toBe('b-b');
     // 18 px = 0.25 units: inside; 0.4 units = 29 px: outside.
-    expect(beaconUnder(ray(0, 0.24), [frame('b-a', 0, 0)])).toBe('b-a');
+    expect(beaconUnder(ray(0, 0.24), [frame('b-a', 0, 0)])?.questionId).toBe('b-a');
     expect(beaconUnder(ray(0, 0.4), [frame('b-a', 0, 0)])).toBeUndefined();
+  });
+
+  it('hits each beacon of a row on its own, the gap between them hits neither', () => {
+    const step = BEACON.spacingPx / 72; // world units at depth 10
+    const row = [frame('q-1', -step / 2, 0), frame('q-2', step / 2, 0)];
+    expect(beaconUnder(ray(-step / 2, 0), row)?.questionId).toBe('q-1');
+    expect(beaconUnder(ray(step / 2, 0), row)?.questionId).toBe('q-2');
+    expect(beaconUnder(ray(-step / 2 + 0.2, 0), row)?.questionId).toBe('q-1');
+    expect(beaconUnder(ray(0, 0.2), row)).toBeUndefined();
   });
 
   it('skips hidden beacons and those behind the camera', () => {
     expect(beaconUnder(ray(0, 0), [frame('b-a', 0, 0, false)])).toBeUndefined();
-    const behind: BeaconFrame = { bodyId: 'b-z', visible: true, center: [0, 0, 20], perPx: 1 };
+    const behind: BeaconFrame = {
+      questionId: 'q-z',
+      bodyId: 'b-z',
+      visible: true,
+      center: [0, 0, 20],
+      perPx: 1,
+    };
     expect(beaconUnder(ray(0, 0), [behind])).toBeUndefined();
   });
 });
@@ -187,7 +237,7 @@ describe('glyphInView (off-screen beacons are not drawn)', () => {
 
 describe('no allocation per frame', () => {
   it('beaconLayout and beaconPulse write into the scratch object they are given', () => {
-    const layout = { glyphY: 0, pillarFrom: 0, pillarTo: 0 };
+    const layout = { glyphX: 0, glyphY: 0, pillarFrom: 0, pillarTo: 0 };
     expect(beaconLayout(3, 300, layout)).toBe(layout);
     expect(layout.glyphY).toBe(3 + BEACON.liftPx);
     const pulse = { haloScale: 0, haloOpacity: 0, pillarOpacity: 0 };

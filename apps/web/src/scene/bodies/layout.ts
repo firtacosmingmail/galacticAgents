@@ -169,16 +169,42 @@ export function moonDistance(
 }
 
 /**
+ * Whether a planet or moon is the catalogue's (migration 0005: every one has a `meta.orbit`), as
+ * opposed to one made outside it (the early dev buttons' "Demo planet n", P0-16).
+ */
+export function inCatalogue(body: Body): boolean {
+  return orbitOf(body) !== undefined;
+}
+
+/** Whether something is on a body: hosted work, or the "moved to …" marker of work that left. */
+export function occupied(body: Body): boolean {
+  return body.host !== undefined || body.movedTo !== undefined;
+}
+
+/**
+ * Whether the scene draws a planet or moon (P4-13): every catalogue body; a body made outside the
+ * catalogue only while something is on it (`occupied`) — a free made-up planet is not drawn, so
+ * it has no anchor, no label, no pick target and no place in the camera's order. `moons`: a
+ * made-up planet stays while one of its moons is drawn (there would be nowhere to put it).
+ */
+export function drawn(body: Body, moons: readonly Body[] = []): boolean {
+  if (inCatalogue(body) || occupied(body)) return true;
+  return body.kind === 'planet' && moons.some((m) => drawn(m));
+}
+
+/**
  * The planets (with their moons) to draw, in orbit order. Planets without a usable `meta.orbit`
  * (or with one already taken) get the next orbits past the last; moons whose parent is not a
- * drawn planet are left out (there is nowhere to put them).
+ * drawn planet are left out (there is nowhere to put them). Bodies made outside the catalogue are
+ * drawn only while something is on them (`drawn`, P4-13).
  */
 export function buildRenderList(
   bodies: Readonly<Record<string, Body>> | readonly Body[],
   mode: ScaleMode,
 ): PlanetItem[] {
-  const all = Array.isArray(bodies) ? bodies : Object.values(bodies);
-  const planets = all.filter((b) => b.kind === 'planet').sort(byOrbitThenId);
+  const all = (Array.isArray(bodies) ? bodies : Object.values(bodies)).filter(
+    (b) => b.kind !== 'moon' || drawn(b),
+  );
   const moonsByParent = new Map<string, Body[]>();
   for (const b of all) {
     if (b.kind !== 'moon' || !b.parentId) continue;
@@ -186,6 +212,9 @@ export function buildRenderList(
     list.push(b);
     moonsByParent.set(b.parentId, list);
   }
+  const planets = all
+    .filter((b) => b.kind === 'planet' && drawn(b, moonsByParent.get(b.id)))
+    .sort(byOrbitThenId);
 
   const used = new Set<number>();
   let next = Math.max(0, ...planets.map((p) => orbitOf(p) ?? 0)) + 1;

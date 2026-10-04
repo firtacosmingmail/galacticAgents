@@ -52,11 +52,13 @@ export interface SatelliteHover {
 }
 
 /**
- * The pointer over a question beacon (P4-05): its first question's card, at the pointer
- * (`beacons/BeaconHoverCard.tsx`). `bodyId` is the beacon's body (it gets the faint hover ring).
+ * The pointer over a question beacon (P4-05; one per question, P4-13): that question's card, at
+ * the pointer (`beacons/BeaconHoverCard.tsx`). `bodyId` is the beacon's body (it gets the faint
+ * hover ring).
  */
 export interface BeaconHover {
   kind: 'beacon';
+  questionId: string;
   bodyId: string;
 }
 
@@ -116,7 +118,12 @@ export const usePickingStore = create<PickingState>((set, get) => ({
 
 function sameHover(a: Hover, b: Hover): boolean {
   if (a.kind === 'beacon' || b.kind === 'beacon') {
-    return a.kind === 'beacon' && b.kind === 'beacon' && a.bodyId === b.bodyId;
+    return (
+      a.kind === 'beacon' &&
+      b.kind === 'beacon' &&
+      a.questionId === b.questionId &&
+      a.bodyId === b.bodyId
+    );
   }
   if (a.others !== b.others) return false;
   if (a.kind === 'satellite' || b.kind === 'satellite') {

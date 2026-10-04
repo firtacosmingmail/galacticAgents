@@ -4,10 +4,13 @@ import { BEACON } from './beacon-look.js';
 
 /**
  * The drawn beacons as picking sees them (P4-05), like `satellites/registry.ts`: one live frame
- * per beacon, whose glyph centre and target radius the renderer (`Beacons.tsx`) rewrites in place
- * every frame. No three.js.
+ * per beacon — one per question (P4-13) — whose glyph centre and target radius the renderer
+ * (`Beacons.tsx`) rewrites in place every frame. No three.js.
  */
 export interface BeaconFrame {
+  /** The question the beacon stands for. */
+  questionId: Id;
+  /** The body it stands on. */
   bodyId: Id;
   /** Drawn this frame (its body's anchor exists and is in front of the camera). */
   visible: boolean;
@@ -33,9 +36,9 @@ export function beaconFrames(): readonly BeaconFrame[] {
  * Writes one beacon's frame (the renderer, once per frame): its glyph's centre and the world units
  * per pixel there, or `undefined` when it is not drawn this frame.
  */
-export function placeBeacon(bodyId: Id, center: Vec3 | undefined, perPx = 0): void {
+export function placeBeacon(questionId: Id, center: Vec3 | undefined, perPx = 0): void {
   for (const f of frames) {
-    if (f.bodyId !== bodyId) continue;
+    if (f.questionId !== questionId) continue;
     f.visible = center !== undefined;
     if (center) {
       f.center[0] = center[0];
@@ -55,16 +58,18 @@ export function beaconsDrawn(): boolean {
 
 /**
  * The beacon under the pointer's ray (`origin`, unit `direction`): the one whose glyph centre is
- * within `BEACON.targetPx` of the pointer on screen, nearest the pointer first. A beacon is drawn
- * over everything (no depth test), so nothing hides it from a click either. `undefined`: none.
+ * within `BEACON.targetPx` of the pointer on screen, nearest the pointer first (beacons side by
+ * side on one body are `BEACON.spacingPx` apart, more than a target: each is hit on its own). A
+ * beacon is drawn over everything (no depth test), so nothing hides it from a click either.
+ * `undefined`: none.
  */
 export function beaconUnder(
   ray: { origin: Vec3; direction: Vec3 },
   list: readonly BeaconFrame[] = frames,
-): Id | undefined {
+): BeaconFrame | undefined {
   const [ox, oy, oz] = ray.origin;
   const [dx, dy, dz] = ray.direction;
-  let best: Id | undefined;
+  let best: BeaconFrame | undefined;
   let bestPx = Infinity;
   for (const f of list) {
     if (!f.visible || f.perPx <= 0) continue;
@@ -77,7 +82,7 @@ export function beaconUnder(
     // `perPx` was measured at the body's distance; the glyph is about as far.
     const px = off / f.perPx;
     if (px <= BEACON.targetPx && px < bestPx) {
-      best = f.bodyId;
+      best = f;
       bestPx = px;
     }
   }

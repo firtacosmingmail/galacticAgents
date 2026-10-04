@@ -254,6 +254,69 @@ describe('world → render list', () => {
     expect(list.flatMap((p) => p.moons).some((m) => m.bodyId === 'b-orphan')).toBe(false);
   });
 
+  describe('bodies made outside the catalogue (P4-13: no made-up planets)', () => {
+    const demo = (n: number, extra: Partial<Body> = {}): Body => ({
+      id: `b-demo-${n}`,
+      kind: 'planet',
+      name: `Demo planet ${n}`,
+      ...extra,
+    });
+    const at = '2026-10-04T10:00:00.000Z';
+    const bodies: Body[] = [
+      ...CATALOGUE,
+      demo(1, { host: { kind: 'project', id: 'p-demo-1' } }),
+      demo(2),
+      demo(3, {
+        movedTo: { bodyId: 'b-jupiter', host: { kind: 'project', id: 'p-demo-3' }, at },
+      }),
+      demo(4),
+      // A made-up moon hosting work keeps its made-up planet; a free one on Mars is not drawn.
+      {
+        id: 'b-demo-moon',
+        kind: 'moon',
+        parentId: 'b-demo-4',
+        name: 'Demo moon',
+        host: { kind: 'project', id: 'p-m' },
+      },
+      { id: 'b-free-moon', kind: 'moon', parentId: 'b-mars', name: 'Free moon' },
+    ];
+
+    it('a free one is not drawn; one hosting work or a "moved to" marker is', () => {
+      const list = buildRenderList(bodies, 'fake');
+      const ids = list.map((p) => p.bodyId);
+      expect(ids.slice(0, 8)).toEqual(
+        CATALOGUE.filter((b) => b.kind === 'planet').map((b) => b.id),
+      );
+      expect(ids.slice(8)).toEqual(['b-demo-1', 'b-demo-3', 'b-demo-4']);
+      expect(ids).not.toContain('b-demo-2');
+      expect(list.find((p) => p.bodyId === 'b-demo-4')!.moons.map((m) => m.bodyId)).toEqual([
+        'b-demo-moon',
+      ]);
+      expect(list.flatMap((p) => p.moons).some((m) => m.bodyId === 'b-free-moon')).toBe(false);
+    });
+
+    it('so a free one has no anchor (no label, no pick target, no place in the camera order)', () => {
+      const anchored = anchorSpecs(buildRenderList(bodies, 'fake')).map((a) => a.bodyId);
+      expect(anchored).toContain('b-demo-1');
+      expect(anchored).toContain('b-demo-moon');
+      expect(anchored).not.toContain('b-demo-2');
+      expect(anchored).not.toContain('b-free-moon');
+      // Every catalogue planet and moon is drawn, free or not.
+      expect(anchored.filter((id) => !id.includes('demo'))).toHaveLength(
+        CATALOGUE.filter((b) => b.kind === 'planet' || b.kind === 'moon').length,
+      );
+    });
+
+    it('goes when its work leaves for good, comes back when work lands on it', () => {
+      const freed = bodies.map((b) => (b.id === 'b-demo-1' ? demo(1) : b));
+      expect(buildRenderList(freed, 'fake').map((p) => p.bodyId)).not.toContain('b-demo-1');
+      const hosted = bodies.map((b) =>
+        b.id === 'b-demo-2' ? demo(2, { host: { kind: 'task', id: 't-1' } }) : b,
+      );
+      expect(buildRenderList(hosted, 'fake').map((p) => p.bodyId)).toContain('b-demo-2');
+    });
+  });
+
   it('two planets claiming the same orbit do not overlap', () => {
     const bodies: Body[] = [
       { id: 'b-a', kind: 'planet', name: 'Mars', meta: { orbit: 4 } },

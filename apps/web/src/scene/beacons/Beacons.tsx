@@ -35,10 +35,11 @@ import { drawGlyph, drawPillar, GLYPH_TEXTURE_PX, PILLAR_TEXTURE } from './glyph
 import { placeBeacon, publishBeacons, type BeaconFrame } from './registry.js';
 
 /**
- * The question beacons (P4-05; SPEC §4.1): a beacon above every body with an open question the
- * user holds — an amber light pillar rising from the body and a glyph on top (a padlock diamond
- * for a permission, a "?" disc for a clarification, a count badge when several wait), with a halo
- * that pulses outwards. The world → beacons list is `beacon-model.ts`, the look and the layout
+ * The question beacons (P4-05, P4-13; SPEC §4.1): a beacon for every open question the user holds,
+ * above its body — an amber light pillar rising from the body and a glyph on top (a padlock diamond
+ * for a permission, a "?" disc for a clarification), with a halo that pulses outwards. Several
+ * questions on one body stand side by side in a row, their pillars fanning out from the body; past
+ * `MAX_BEACONS_PER_BODY` the last carries a "+n" badge. The world → beacons list is `beacon-model.ts`, the look and the layout
  * `beacon-look.ts`, the sprites `glyph-draw.ts` (all three-free and tested); this component only
  * places the billboards once per frame.
  *
@@ -48,15 +49,15 @@ import { placeBeacon, publishBeacons, type BeaconFrame } from './registry.js';
  * depth test, after the highlight rings), on the decorations' layer (`DECOR_LAYER`: the selection
  * outline's depth pass skips it). Three draw calls per beacon on screen (pillar, halo, glyph): a
  * beacon whose glyph is outside the viewport is hidden (`glyphInView`), and every beacon shares one
- * plane and one ring geometry (`BeaconShapes`); one glyph texture per kind and count, drawn at
+ * plane and one ring geometry (`BeaconShapes`); one glyph texture per kind and badge, drawn at
  * runtime. Instancing them (three draw calls in all, a glyph atlas with a UV offset per instance)
- * was weighed and left out: there is one beacon per body with a question waiting for the user —
- * a handful at most — so it would buy a few draw calls for a custom shader and the loss of the
- * per-beacon render order (TECHNOLOGY §2.1).
+ * was weighed and left out: there is one beacon per question waiting for the user — a handful at
+ * most — so it would buy a few draw calls for a custom shader and the loss of the per-beacon
+ * render order (TECHNOLOGY §2.1).
  *
- * Lifecycle: the list follows the store — a question opened for the user or escalated to the user
- * lights its body's beacon, an answer, a cancellation or a reassignment away from the user puts it
- * out, at the next render (well within a second). A change asks the on-demand loop for a frame.
+ * Lifecycle, per question (keyed by its id): a question opened for the user or escalated to the
+ * user lights its beacon, an answer, a cancellation or a reassignment away from the user puts that
+ * one out (the others on the body close up the row), at the next render (well within a second). A change asks the on-demand loop for a frame.
  * Only a change of what is drawn does (`useBeaconList`): status flushes leave the beacons alone.
  *
  * Under `prefers-reduced-motion` the halo and the pillar are steady (`STEADY_PULSE`); otherwise
@@ -97,9 +98,9 @@ export function Beacons() {
     <>
       {list.map((b) => (
         <Beacon
-          key={b.bodyId}
+          key={b.questionId}
           spec={b}
-          glyph={textures.glyph(glyphSpec(b.kind, b.count))}
+          glyph={textures.glyph(glyphSpec(b.kind, b.more))}
           pillar={textures.pillar()}
           shapes={shapes}
           reducedMotion={reducedMotion}
@@ -134,15 +135,19 @@ export function useBeaconList(): BeaconSpec[] {
   return kept;
 }
 
-/** The frames of a new beacon list: a beacon still there keeps its last placement. */
+/**
+ * The frames of a new beacon list: a beacon still there (the same question) keeps its last
+ * placement until the next frame places it again (its row may have changed).
+ */
 export function carryFrames(
   previous: readonly BeaconFrame[],
   list: readonly BeaconSpec[],
 ): BeaconFrame[] {
-  const before = new Map(previous.map((f) => [f.bodyId, f]));
+  const before = new Map(previous.map((f) => [f.questionId, f]));
   return list.map<BeaconFrame>((b) => {
-    const was = before.get(b.bodyId);
+    const was = before.get(b.questionId);
     return {
+      questionId: b.questionId,
       bodyId: b.bodyId,
       visible: was?.visible ?? false,
       center: was ? [was.center[0], was.center[1], was.center[2]] : [0, 0, 0],
@@ -173,8 +178,9 @@ const beaconShapes = () => new BeaconShapes();
 const position = new Vector3();
 const inCamera = new Vector3();
 const up = new Vector3();
+const right = new Vector3();
 const glyphCentre: [number, number, number] = [0, 0, 0];
-const layout: BeaconLayout = { glyphY: 0, pillarFrom: 0, pillarTo: 0 };
+const layout: BeaconLayout = { glyphX: 0, glyphY: 0, pillarFrom: 0, pillarTo: 0 };
 const pulseScratch: BeaconPulse = { haloScale: 0, haloOpacity: 0, pillarOpacity: 0 };
 
 function Beacon({
@@ -208,7 +214,7 @@ function Beacon({
     }
     // No anchor yet (the body not drawn), or behind the camera: nothing to draw or to click.
     if (!anchor || inCamera.z >= 0) {
-      hide(g, spec.bodyId);
+      hide(g, spec.questionId);
       return;
     }
     const { width, height } = state.size;
@@ -216,10 +222,10 @@ function Beacon({
       Math.max(1e-6, camera.position.distanceTo(position)) / pixelScale(height, camera.fov ?? 45);
     const projected = inCamera.copy(position).project(camera);
     const bodyY = ((1 - projected.y) / 2) * height;
-    beaconLayout(anchor.radius / perPx, bodyY, layout);
+    beaconLayout(anchor.radius / perPx, bodyY, layout, spec.slot, spec.slots);
     // Off screen (its glyph and halo outside the viewport): not drawn, not clickable.
-    if (!glyphInView(projected.x, projected.y, layout.glyphY, width, height)) {
-      hide(g, spec.bodyId);
+    if (!glyphInView(projected.x, projected.y, layout.glyphY, width, height, layout.glyphX)) {
+      hide(g, spec.questionId);
       return;
     }
     const pulse = beaconPulse(motionSeconds(), reducedMotion, pulseScratch);
@@ -230,34 +236,40 @@ function Beacon({
     g.scale.setScalar(perPx);
     const glyphMeshNow = glyphMesh.current;
     if (glyphMeshNow) {
-      glyphMeshNow.position.set(0, layout.glyphY, 0);
+      glyphMeshNow.position.set(layout.glyphX, layout.glyphY, 0);
       glyphMeshNow.scale.setScalar(BEACON.glyphPx);
     }
     const haloNow = halo.current;
     if (haloNow) {
-      haloNow.position.set(0, layout.glyphY, 0);
+      haloNow.position.set(layout.glyphX, layout.glyphY, 0);
       haloNow.scale.setScalar((BEACON.glyphPx / 2) * pulse.haloScale);
       (haloNow.material as MeshBasicMaterial).opacity = pulse.haloOpacity;
     }
     const pillarNow = pillarMesh.current;
     if (pillarNow) {
-      const length = layout.pillarTo - layout.pillarFrom;
-      pillarNow.visible = length > 1;
-      pillarNow.position.set(0, (layout.pillarFrom + layout.pillarTo) / 2, 0);
+      // From the body's top (on its vertical) to under the glyph: straight up for a lone beacon,
+      // slanted towards its place in a row (the pillars of one body fan out).
+      const rise = layout.pillarTo - layout.pillarFrom;
+      const length = Math.hypot(layout.glyphX, rise);
+      pillarNow.visible = rise > 1;
+      pillarNow.position.set(layout.glyphX / 2, (layout.pillarFrom + layout.pillarTo) / 2, 0);
+      pillarNow.rotation.set(0, 0, -Math.atan2(layout.glyphX, Math.max(rise, 1e-3)));
       pillarNow.scale.set(BEACON.pillarPx, Math.max(length, 1e-3), 1);
       (pillarNow.material as MeshBasicMaterial).opacity = pulse.pillarOpacity;
     }
 
-    // The glyph's centre in the world, for picking: screen up from the body by `glyphY` pixels.
+    // The glyph's centre in the world, for picking: screen up from the body by `glyphY` pixels,
+    // screen right by `glyphX`.
     up.set(0, 1, 0).applyQuaternion(camera.quaternion);
-    glyphCentre[0] = position.x + up.x * layout.glyphY * perPx;
-    glyphCentre[1] = position.y + up.y * layout.glyphY * perPx;
-    glyphCentre[2] = position.z + up.z * layout.glyphY * perPx;
-    placeBeacon(spec.bodyId, glyphCentre, perPx);
+    right.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    glyphCentre[0] = position.x + (up.x * layout.glyphY + right.x * layout.glyphX) * perPx;
+    glyphCentre[1] = position.y + (up.y * layout.glyphY + right.y * layout.glyphX) * perPx;
+    glyphCentre[2] = position.z + (up.z * layout.glyphY + right.z * layout.glyphX) * perPx;
+    placeBeacon(spec.questionId, glyphCentre, perPx);
   });
 
   return (
-    <group ref={group} visible={false} name={`beacon:${spec.bodyId}`}>
+    <group ref={group} visible={false} name={`beacon:${spec.questionId}`}>
       <mesh
         ref={pillarMesh}
         geometry={shapes.plane}
@@ -312,9 +324,9 @@ function Beacon({
   );
 }
 
-function hide(group: Group, bodyId: string): void {
+function hide(group: Group, questionId: string): void {
   group.visible = false;
-  placeBeacon(bodyId, undefined);
+  placeBeacon(questionId, undefined);
 }
 
 /** The beacons' textures, drawn once each: one per glyph (kind and badge), one pillar. */

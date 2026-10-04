@@ -5,8 +5,8 @@ import { bodyName, headquartersBody } from '../picking/body-action.js';
 import { oneLine } from '../picking/satellite-card.js';
 
 /**
- * The question beacons as data (P4-05; SPEC §4.1 "a body with an open question for the user
- * carries a visible beacon", §2.6, decisions 55, 58). No three.js, no React: the renderer
+ * The question beacons as data (P4-05, P4-13; SPEC §4.1 "a body with an open question for the user
+ * carries a visible beacon", §2.6, decisions 55, 58, 74). No three.js, no React: the renderer
  * (`Beacons.tsx`), picking and the hover card read what this returns.
  *
  * - **Which questions:** open (`status === 'open'`) and held by the user (`holder.type === 'user'`)
@@ -17,23 +17,27 @@ import { oneLine } from '../picking/satellite-card.js';
  *   (a project task lives on its project's planet, decision 9), a Waykeeper's project's body, the
  *   Harmonizer's headquarters (Earth). Falls back to the agent's own `bodyId`, then to the
  *   question's recorded origin (task, project, body) when the agent is not loaded.
- * - **One beacon per body**, whatever the number of questions: its kind is the most urgent one
- *   there (permission before clarification: a permission stops a Steward on a tool call, the
- *   inbox's own order) and it carries the count. Its questions are in the inbox's order
- *   (permissions first, then clarifications, oldest first), so a click opens the one the inbox
- *   lists first.
+ * - **One beacon per question** (P4-13, Cosmin's answer to P4-05's "one per body"): each has its
+ *   own glyph and its own lifecycle, keyed by the question's id. Several on one body stand side by
+ *   side in a row above it (`slot` of `slots`, laid out by `beacon-look.ts`), in the inbox's order:
+ *   permissions first, then clarifications, each oldest first. At most `MAX_BEACONS_PER_BODY` per
+ *   body: past that, the last one carries a "+n" badge for the questions without a beacon of their
+ *   own (`more`), which the inbox lists after it.
  */
 export interface BeaconSpec {
+  questionId: Id;
   bodyId: Id;
-  /** The kind the beacon shows: `permission` when any of its questions is one. */
   kind: QuestionKind;
-  /** Open user-held questions on this body. */
-  count: number;
-  permissions: number;
-  clarifications: number;
-  /** In the inbox's order: permissions first, then clarifications; oldest first. */
-  questionIds: Id[];
+  /** Its place in its body's row, from 0 (the inbox's order). */
+  slot: number;
+  /** How many beacons stand on its body. */
+  slots: number;
+  /** Questions on its body without a beacon of their own (only on the last beacon of a full row). */
+  more: number;
 }
+
+/** The most beacons one body carries side by side; further questions show as "+n" on the last. */
+export const MAX_BEACONS_PER_BODY = 6;
 
 /**
  * What the beacons read. Not the status records: they change many times a second (every status
@@ -91,7 +95,10 @@ function inboxOrder(a: Question, b: Question): number {
   return rank(a) - rank(b) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 }
 
-/** Every beacon of the world, in body-id order (a stable order for the renderer). */
+/**
+ * Every beacon of the world: bodies in id order, each body's beacons in the inbox's order (a stable
+ * order for the renderer: the same questions always get the same slots).
+ */
 export function beaconList(world: BeaconWorld): BeaconSpec[] {
   const byBody = new Map<Id, Question[]>();
   for (const q of Object.values(world.questions)) {
@@ -102,42 +109,43 @@ export function beaconList(world: BeaconWorld): BeaconSpec[] {
     if (list) list.push(q);
     else byBody.set(bodyId, [q]);
   }
-  return [...byBody.keys()].sort().map((bodyId) => {
+  return [...byBody.keys()].sort().flatMap((bodyId) => {
     const questions = byBody.get(bodyId)!.sort(inboxOrder);
-    const permissions = questions.filter((q) => q.kind === 'permission').length;
-    return {
+    const shown = questions.slice(0, MAX_BEACONS_PER_BODY);
+    const more = questions.length - shown.length;
+    return shown.map<BeaconSpec>((q, slot) => ({
+      questionId: q.id,
       bodyId,
-      kind: permissions > 0 ? 'permission' : 'clarification',
-      count: questions.length,
-      permissions,
-      clarifications: questions.length - permissions,
-      questionIds: questions.map((q) => q.id),
-    };
+      kind: q.kind,
+      slot,
+      slots: shown.length,
+      more: slot === shown.length - 1 ? more : 0,
+    }));
   });
 }
 
-/** The beacon on one body, if it has one. */
-export function beaconFor(world: BeaconWorld, bodyId: Id): BeaconSpec | undefined {
-  return beaconList(world).find((b) => b.bodyId === bodyId);
+/** The beacon of one question, if it has one. */
+export function beaconFor(world: BeaconWorld, questionId: Id): BeaconSpec | undefined {
+  return beaconList(world).find((b) => b.questionId === questionId);
 }
 
-/** Whether two beacon lists draw the same (same bodies, kinds, counts and questions). */
+/** Whether two beacon lists draw the same (same questions, bodies, kinds and places). */
 export function sameBeacons(a: readonly BeaconSpec[], b: readonly BeaconSpec[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((x, i) => {
     const y = b[i]!;
     return (
+      x.questionId === y.questionId &&
       x.bodyId === y.bodyId &&
       x.kind === y.kind &&
-      x.count === y.count &&
-      x.permissions === y.permissions &&
-      x.questionIds.length === y.questionIds.length &&
-      x.questionIds.every((id, j) => id === y.questionIds[j])
+      x.slot === y.slot &&
+      x.slots === y.slots &&
+      x.more === y.more
     );
   });
 }
 
-/** What hovering a beacon says: its first question (the one a click opens), and how many more. */
+/** What hovering a beacon says: its question, who asks, and the "+n" of a full row's last one. */
 export interface BeaconCard {
   bodyId: Id;
   /** The body's name ("Jupiter"). */
@@ -149,7 +157,7 @@ export interface BeaconCard {
   text: string;
   /** Who asks, as the panel names it ("Steward · Fix the date test"). */
   asker: string;
-  /** How many other questions wait on this body. */
+  /** Questions on this body without a beacon of their own (the "+n" badge). */
   more: number;
   questionId: Id;
 }
@@ -157,19 +165,19 @@ export interface BeaconCard {
 /** The question text's length on the hover card before it is cut. */
 export const CARD_TEXT_CHARS = 80;
 
-export function beaconCard(world: BeaconWorld, bodyId: Id): BeaconCard | undefined {
-  const beacon = beaconFor(world, bodyId);
-  const questionId = beacon?.questionIds[0];
-  const q = questionId ? world.questions[questionId] : undefined;
+/** The hover card of one question's beacon; `undefined` when it has none (any more). */
+export function beaconCard(world: BeaconWorld, questionId: Id): BeaconCard | undefined {
+  const beacon = beaconFor(world, questionId);
+  const q = world.questions[questionId];
   if (!beacon || !q) return undefined;
   return {
-    bodyId,
-    where: bodyName(world, bodyId),
+    bodyId: beacon.bodyId,
+    where: bodyName(world, beacon.bodyId),
     heading: q.kind === 'permission' ? 'Permission' : 'Question',
     kind: q.kind,
     text: oneLine(q.context.text, CARD_TEXT_CHARS),
     asker: agentLabel(world.agents[q.originAgentId], world),
-    more: beacon.count - 1,
+    more: beacon.more,
     questionId: q.id,
   };
 }

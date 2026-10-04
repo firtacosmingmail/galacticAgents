@@ -5,8 +5,9 @@ import { BEACON_COLOR, BEACON_INK, type GlyphSpec } from './beacon-look.js';
  * renderer wraps the canvases in textures.
  *
  * - The glyph (`drawGlyph`, square): an amber diamond with a dark padlock (permission) or an amber
- *   disc with a dark "?" (clarification), a dark rim so it reads over a bright planet, and a count
- *   badge in the top-right corner (dark disc, amber rim and figure) when several questions wait.
+ *   disc with a dark "?" (clarification), a dark rim so it reads over a bright planet, and a "+n"
+ *   badge in the top-right corner (dark disc, amber rim and figure) on the last beacon of a full
+ *   row, for the questions on that body past it (P4-13).
  * - The pillar (`drawPillar`, tall and thin): amber light, soft at the sides, brightest at the top
  *   (under the glyph) and fading towards the body.
  */
@@ -93,7 +94,7 @@ export function drawGlyph(ctx: Ctx, spec: GlyphSpec, size = GLYPH_TEXTURE_PX): v
     ctx.stroke();
     ctx.fillStyle = BEACON_COLOR;
     const chars = spec.badge.length;
-    ctx.font = `bold ${Math.round(size * (chars > 1 ? 0.2 : 0.27))}px system-ui, -apple-system, 'Segoe UI', sans-serif`;
+    ctx.font = `bold ${Math.round(size * (chars > 2 ? 0.15 : chars > 1 ? 0.2 : 0.27))}px system-ui, -apple-system, 'Segoe UI', sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(spec.badge, bx, by + size * 0.01);
