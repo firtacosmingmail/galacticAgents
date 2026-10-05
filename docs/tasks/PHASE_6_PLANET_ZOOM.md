@@ -1,7 +1,7 @@
 # Phase 6 — Planet zoom and structure
 
-**Current task:** P6-04 (wave 3, after wave 2 is merged into `phase-6`) · **Task status:** todo
-**Phase status:** in progress (4/7 done) — on branch `phase-6`
+**Current task:** — (phase complete) · **Task status:** —
+**Phase status:** done (2026-10-05) — 7/7, on branch `phase-6` (merge into `main` pending Cosmin)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -51,7 +51,7 @@ Zooming into a planet shows it "as it is in our solar system" — high-detail su
 - **Acceptance:** cutaway works for at least one rocky planet and one gas giant.
 
 ### P6-04 — Project overlay: tasks, Stewards, sub-project moons
-- **Status:** todo · **Depends on:** P6-01, P4-03, P2-02 · **Parallel with:** —
+- **Status:** done (2026-10-05) · **Depends on:** P6-01, P4-03, P2-02 · **Parallel with:** —
 - Project tasks placed on the surface or in orbit (deterministic slots), clickable; Stewards as surface robots (rocky bodies) or orbital drones (gas giants) using the Phase 4 archetypes; sub-project moons rendered as part of the project with their own Waykeeper satellite; independent-project moons distinguished.
 - **Acceptance:** project tasks are placed and clickable in the detail view; selecting one selects the task in the panel.
 
@@ -61,15 +61,22 @@ Zooming into a planet shows it "as it is in our solar system" — high-detail su
 - **Acceptance:** Earth detail view shows the station and links to the Harmonizer.
 
 ### P6-06 — Keep the HQ station in view in Earth's detail view (added 2026-10-04)
-- **Status:** todo · **Depends on:** P6-05 · **Parallel with:** P6-04
+- **Status:** done (2026-10-05) · **Depends on:** P6-05 · **Parallel with:** P6-04
 - Found by the wave 2 review's browser check (`notes/P6-05-earth-hq.md`, "Browser check"): at the detail framing (camera 2.4 Earth radii out) the HQ, on its 1.8-radii shell, is on screen only as it passes near Earth's limb — on its near side it is outside the view, on its far side behind Earth. In a square canvas (dock minimised) that is ~3 % of its orbit, in a wide one (~2:1) about a quarter. Options: frame Earth's detail view wider, give the station a lower or camera-facing slot in the detail view only (the picking frame must follow), or turn the camera toward the station on an HQ click. Product choice first (SPEC §8 if needed).
 - **Acceptance:** in Earth's detail view the HQ station is visible most of the time in the default layout, at any canvas aspect from 1:1 to 2.2:1, and a click on it still selects the Harmonizer.
 
 ### P6-07 — Fix stray objects and the shadow in Earth's detail view (added 2026-10-04)
-- **Status:** todo · **Depends on:** P6-02 · **Parallel with:** P6-04, P6-06
+- **Status:** done (2026-10-05) · **Depends on:** P6-02 · **Parallel with:** P6-04, P6-06
 - Seen in the wave 2 browser check screenshots (`notes/P6-wave2-review.md`): in Earth's detail view, (a) asteroid-belt rocks are drawn around Earth; (b) a thick light-blue band circles the planet outside the atmosphere (a system-view mesh — orbit line, outline or the system atmosphere shell — that should be hidden or faded in the detail view); (c) the Moon's shadow on the surface and clouds is a large, hard-to-read dark disc covering a third of the disc, because the readable layout puts the Moon close; (d) the default framing lets Earth overfill a square canvas.
 - **Acceptance:** in Earth's detail view, no belt rocks or system-view rings show; the Moon's eclipse shadow is either scaled to true proportions or turned off in the detail view (pick the smaller change and record it in SPEC 87); the whole disc fits in the default framing at any aspect from 1:1 to 2.2:1. Screenshot check in headless Chrome.
 
 ## Exit criteria (from the plan)
 
 Smooth transition from system scale to planet scale and back; project tasks are placed and clickable in the detail view.
+
+## Exit check (2026-10-05)
+
+- "Smooth transition from system scale to planet scale and back": **met**. P6-01 flies and cross-fades into a body's detail sub-scene below 3 R and back above 4.5 R, selection kept, breadcrumb shown (browser check in `notes/P6-01-detail-scene.md`); the true-scale moon blocker was fixed in wave 1, and P6-07's wider framing (2.85 R) stays inside the enter threshold. Detail visuals, cutaway and the HQ station fade with the same mix; re-entering a body is instant (idle levels kept, wave 2 review).
+- "Project tasks are placed and clickable in the detail view": **met**. P6-04 places every shown task at a deterministic slot (pins on surfaces, buoys round giants); hovering names it, clicking selects its Steward as the panel row does, and the panel's selection rings the marker (browser check on Mars, Jupiter and Europa in `notes/P6-04-overlay.md`; registry kept across a body swap after the wave 3 review).
+- Gates on the wave-3 branch: protocol 70, server 976 (+1 skipped), web 1494. Review: `notes/P6-wave3-review.md`.
+- Known gaps carried forward: a Steward jumps from its robot spot to its orbit when its task completes and it lands; portrait canvases overfill sideways; no keyboard path through markers in the scene (the panel's task list is the route, decision 81).

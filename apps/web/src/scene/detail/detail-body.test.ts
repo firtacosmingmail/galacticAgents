@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Body } from '@galactic/protocol';
 import { buildRenderList, planetAnchor, moonAnchor } from '../bodies/layout.js';
+import { eclipseReceivers, ringsId } from '../bodies/eclipse.js';
 import { TASK_ASTEROID_RADIUS } from '../belt/belt-model.js';
 import { generateStarField } from '../starfield.js';
 import { BACKDROP_STAR_SHELL, BACKDROP_SUN_AT, backdropStars, backdropSun } from './backdrop.js';
@@ -10,6 +11,7 @@ import {
   BACKDROP_MARGIN,
   BACKDROP_MIN_RADII,
   backdropRadius,
+  detailEclipseReceivers,
   planetReach,
   resolveDetailBody,
 } from './detail-body.js';
@@ -231,5 +233,38 @@ describe('parts (extension slots for P6-02…P6-05)', () => {
     // P6-03's cutaway too, for a body with layer data (cutaway.test.ts covers it).
     expect(partsFor(earth).map((p) => p.id)).toContain('cutaway');
     expect(partsFor(earth, [])).toEqual([]);
+  });
+});
+
+describe("a planet's detail view: its moons cast no shadow on it (P6-07, SPEC 87)", () => {
+  const catalogue = seededCatalogue();
+  it('drops the moons as casters on the planet only; the planet still shades its moons and rings', () => {
+    for (const planet of buildRenderList(catalogue, 'fake')) {
+      const system = eclipseReceivers(planet);
+      const detail = detailEclipseReceivers(planet);
+      expect(detail.map((r) => r.id)).toEqual(system.map((r) => r.id));
+      expect(detail.find((r) => r.id === planet.bodyId)!.casters).toEqual([]);
+      for (const r of detail.filter((r) => r.id !== planet.bodyId))
+        expect(r).toEqual(system.find((s) => s.id === r.id));
+    }
+    const earth = buildRenderList(catalogue, 'fake').find((p) => p.bodyId === 'b-earth')!;
+    // The system view keeps the Moon's shadow on Earth…
+    expect(
+      eclipseReceivers(earth)
+        .find((r) => r.id === 'b-earth')!
+        .casters.map((c) => c.bodyId),
+    ).toEqual(['b-moon']);
+    // …and Earth's on the Moon stays in the detail view.
+    expect(
+      detailEclipseReceivers(earth)
+        .find((r) => r.id === 'b-moon')!
+        .casters.map((c) => c.bodyId),
+    ).toContain('b-earth');
+    const saturn = buildRenderList(catalogue, 'fake').find((p) => p.bodyId === 'b-saturn')!;
+    expect(
+      detailEclipseReceivers(saturn)
+        .find((r) => r.id === ringsId('b-saturn'))!
+        .casters.map((c) => c.bodyId),
+    ).toContain('b-saturn');
   });
 });

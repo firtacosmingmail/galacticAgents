@@ -3,8 +3,9 @@ import { useFrame } from '@react-three/fiber';
 import type { Object3D } from 'three';
 import type { Vec3 } from '../camera/flight.js';
 import { READ_BODIES } from '../frame-order.js';
-import { drawnBehindBackdrop, type Dome } from './dome.js';
-import { useDetailStore } from './mode.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
+import { beltFactor, drawnBehindBackdrop, type Dome } from './dome.js';
+import { detailKind, detailMix, useDetailStore } from './mode.js';
 
 /**
  * Hides `ref`'s object while a settled detail view's dome hides it entirely (`dome.ts`'s rule):
@@ -30,6 +31,38 @@ export function useBackdropCulling(
     if (object.visible !== drawn) object.visible = drawn;
   }, READ_BODIES);
 }
+
+/**
+ * Calls `apply` every frame (at `READ_BODIES`) with the belt's factor now (`beltFactor`: 1 as in
+ * the system view, falling to 0 while a planet's or moon's detail view fades in, 0 once it is in,
+ * 1 in an asteroid's view). The belt's components dim their rocks with it (P6-07).
+ */
+export function useBeltFade(apply: (factor: number) => void): void {
+  useFrame(() => apply(beltFactorNow(performance.now() / 1000)), READ_BODIES);
+}
+
+/**
+ * The belt's factor at `now` (seconds). The background belt and every task asteroid call it each
+ * frame, so the shown body's kind (a world lookup and `planetLook`) is cached: worked out again
+ * only when the shown body or the world's bodies change.
+ */
+export function beltFactorNow(now: number): number {
+  const s = useDetailStore.getState();
+  const bodies = s.shown === undefined ? undefined : sceneWorld(useAppStore.getState()).bodies;
+  const c = shownKind;
+  if (c.shown !== s.shown || c.bodies !== bodies) {
+    c.shown = s.shown;
+    c.bodies = bodies;
+    c.view = s.shown === undefined ? undefined : detailKind(bodies?.[s.shown]);
+  }
+  return beltFactor(c.view, c.view === undefined ? 0 : detailMix(s, now));
+}
+
+const shownKind: {
+  shown: string | undefined;
+  bodies: object | undefined;
+  view: ReturnType<typeof detailKind>;
+} = { shown: undefined, bodies: undefined, view: undefined };
 
 /** `object`'s world position this frame, written into `out`. */
 function worldPosition(object: Object3D, out: [number, number, number]): Vec3 {

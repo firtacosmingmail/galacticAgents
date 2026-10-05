@@ -6,6 +6,8 @@ import { EarthHq } from './earth-hq/EarthHq.js';
 import { EARTH_HQ_PART, isHeadquarters } from './earth-hq/earth-hq-model.js';
 import { Cutaway } from './cutaway/Cutaway.js';
 import { acceptsCutaway } from './cutaway/target.js';
+import { ProjectOverlay } from './overlay/ProjectOverlay.js';
+import { OVERLAY_KINDS, OVERLAY_PART } from './overlay/overlay-model.js';
 
 /**
  * The detail view's extension slots (P6-01), for the tasks that build on it:
@@ -43,6 +45,8 @@ export const DETAIL_PARTS: readonly DetailPart[] = [
   { id: EARTH_HQ_PART, kinds: ['rocky'], accepts: isHeadquarters, Component: EarthHq },
   // P6-03: the layers of the bodies with a known interior (`cutaway/layers.ts`).
   { id: 'cutaway', kinds: ['rocky', 'giant', 'moon'], accepts: acceptsCutaway, Component: Cutaway },
+  // P6-04: the project's tasks, Stewards and sub-project moons (`overlay/`).
+  { id: OVERLAY_PART, kinds: OVERLAY_KINDS, Component: ProjectOverlay },
 ];
 
 /** The parts a body's detail view mounts. */

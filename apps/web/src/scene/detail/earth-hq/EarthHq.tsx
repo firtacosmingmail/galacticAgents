@@ -9,6 +9,7 @@ import {
   type Group,
   type Mesh,
   type MeshBasicMaterial,
+  type PerspectiveCamera,
 } from 'three';
 import type { AgentState } from '@galactic/protocol';
 import { sceneWorld, useAppStore } from '../../../state/store.js';
@@ -17,7 +18,7 @@ import { READ_BODIES } from '../../frame-order.js';
 import { DECOR_LAYER } from '../../layers.js';
 import { motionSeconds, useReducedMotion } from '../../motion.js';
 import type { SatelliteFrame } from '../../satellites/director.js';
-import { claimHqStation, hqFrame, RingSpin } from '../../satellites/hq/hq-model.js';
+import { claimHqStation, hqFrame, overrideHqPose, RingSpin } from '../../satellites/hq/hq-model.js';
 import { BEAM } from '../../satellites/look.js';
 import { satelliteFrames } from '../../satellites/registry.js';
 import { bodyColor, bodyMatrix } from '../../satellites/satellite-mesh.js';
@@ -41,6 +42,7 @@ import {
   strobeLevel,
   type StationLook,
 } from './earth-hq-model.js';
+import { HqSlotter, type SlotCamera } from './hq-slot.js';
 
 /**
  * Earth's HQ station in the detail view (P6-05; SPEC decisions 72, 82, 84): the `'earth-hq'` part
@@ -60,6 +62,12 @@ import {
  * Under reduced motion nothing turns, blinks or breathes (the lights and the glow are steady:
  * thinking still reads by the glow and the brightness). The glow and lights fade in with the
  * cross-fade.
+ *
+ * **Viewing slot** (P6-06, SPEC decision 89, `hq-slot.ts`): while mounted the station leaves its orbit for a place
+ * fixed in the view, right of and above Earth's centre, so it stays in sight at the detail
+ * framing whatever the canvas's shape. The Harmonizer's frame itself is moved
+ * (`overrideHqPose`, right after the director), so the pick target, hover ring, click and beam
+ * follow; the dark resting station (no Harmonizer) takes the same slot.
  *
  * Draw calls: core, ring, navigation lights, strobe (4), plus the glow while thinking (5). The
  * mobile tier draws a simpler model (`simple`) and no glow. Everything is disposed on unmount.
@@ -83,6 +91,23 @@ export function EarthHq({ body, quality, mix }: DetailPartProps) {
   const bloom = quality.bloom !== null;
 
   const [targets] = useState(() => new EarthHqTargets());
+  const [slotter] = useState(() => new HqSlotter());
+  useLayoutEffect(
+    () =>
+      overrideHqPose((frame, camera) => {
+        frame.size *= slotter.place(
+          frame.position,
+          frame.target,
+          frame.bodyRadius,
+          slotCamera(camera, slotScratch),
+          mix(),
+          performance.now() / 1000,
+          reducedMotion,
+          frame.position,
+        );
+      }),
+    [slotter, mix, reducedMotion],
+  );
   const station = useRef<Group>(null);
   const ring = useRef<Mesh>(null);
   const core = useRef<Mesh>(null);
@@ -107,7 +132,19 @@ export function EarthHq({ body, quality, mix }: DetailPartProps) {
     if (!anchor) return;
     const frame = hqFrame(satelliteFrames());
     const statuses = sceneWorld(useAppStore.getState()).statuses;
+    // No Harmonizer: the dark station rests in the same viewing slot (in Earth's frame).
+    const rest = frame
+      ? undefined
+      : restInSlot(
+          slotter,
+          anchor.object.matrixWorld,
+          body.radius,
+          state.camera as PerspectiveCamera,
+          mix(),
+          reducedMotion,
+        );
     writeEarthHq(targets, {
+      rest,
       frame,
       state: frame ? statuses[frame.agentId]?.state : undefined,
       anchor: anchor.object.matrixWorld,
@@ -241,6 +278,11 @@ export interface EarthHqInput {
   anchor: Matrix4;
   /** Earth's visual radius (the resting pose). */
   radius: number;
+  /**
+   * P6-06: where the dark station rests instead of `restingPose`, in Earth's frame (its viewing
+   * slot, `restInSlot`) and its size factor; `undefined`: the resting pose.
+   */
+  rest?: { position: readonly [number, number, number]; scale: number } | undefined;
   cameraQuaternion: Quaternion;
   /** Motion seconds. */
   now: number;
@@ -280,10 +322,10 @@ export function writeEarthHq(targets: EarthHqTargets, input: EarthHqInput): void
     station.matrix.multiplyMatrices(inverse, bodyMatrix(input.frame, world));
   } else {
     const rest = restingPose(input.radius);
-    pos.set(...rest.position);
+    pos.set(...(input.rest?.position ?? rest.position));
     toCentre.copy(pos).negate().normalize();
     quat.setFromUnitVectors(DOWN, toCentre);
-    station.matrix.compose(pos, quat, scale.setScalar(rest.size));
+    station.matrix.compose(pos, quat, scale.setScalar(rest.size * (input.rest?.scale ?? 1)));
   }
   station.visible = true;
   station.matrixWorldNeedsUpdate = true;
@@ -327,4 +369,82 @@ export function writeEarthHq(targets: EarthHqTargets, input: EarthHqInput): void
       );
     }
   }
+}
+
+const slotScratch: SlotCamera = {
+  position: [0, 0, 0],
+  right: [0, 0, 0],
+  up: [0, 0, 0],
+  forward: [0, 0, 0],
+  tanHalfFov: 1,
+  aspect: 1,
+};
+
+/** The camera's pose and field as the viewing slot reads them (`hq-slot.ts`), written into `out`. */
+export function slotCamera(camera: PerspectiveCamera, out: SlotCamera): SlotCamera {
+  const e = camera.matrixWorld.elements;
+  matrixAxis(e, 0, 1, out.right);
+  matrixAxis(e, 4, 1, out.up);
+  matrixAxis(e, 8, -1, out.forward);
+  out.position[0] = e[12]!;
+  out.position[1] = e[13]!;
+  out.position[2] = e[14]!;
+  out.tanHalfFov = Math.tan(((camera.fov ?? 45) * Math.PI) / 360);
+  out.aspect = camera.aspect || 1;
+  return out;
+}
+
+/** A matrix's unit column `i` (0, 4, 8) times `sign`, into `v` (a module function: no closure). */
+function matrixAxis(
+  e: ArrayLike<number>,
+  i: number,
+  sign: number,
+  v: [number, number, number],
+): void {
+  const len = Math.hypot(e[i]!, e[i + 1]!, e[i + 2]!) || 1;
+  v[0] = (sign * e[i]!) / len;
+  v[1] = (sign * e[i + 1]!) / len;
+  v[2] = (sign * e[i + 2]!) / len;
+}
+
+const restWorld = new Vector3();
+const restCentre = new Vector3();
+const restOrbit: [number, number, number] = [0, 0, 0];
+const restEarth: [number, number, number] = [0, 0, 0];
+const restOut: [number, number, number] = [0, 0, 0];
+const restPlace = { position: restOut, scale: 1 };
+const restInverse = new Matrix4();
+
+/**
+ * The dark station's place (no Harmonizer) in Earth's frame: its resting pose moved into the
+ * viewing slot like the Harmonizer's frame (`HqSlotter`), with its size factor. Returns a shared
+ * object.
+ */
+export function restInSlot(
+  slotter: HqSlotter,
+  anchor: Matrix4,
+  radius: number,
+  camera: PerspectiveCamera,
+  mix: number,
+  reducedMotion: boolean,
+): { position: readonly [number, number, number]; scale: number } {
+  restWorld.set(...restingPose(radius).position).applyMatrix4(anchor);
+  restCentre.setFromMatrixPosition(anchor);
+  restWorld.toArray(restOrbit);
+  restCentre.toArray(restEarth);
+  restPlace.scale = slotter.place(
+    restOrbit,
+    restEarth,
+    radius,
+    slotCamera(camera, slotScratch),
+    mix,
+    performance.now() / 1000,
+    reducedMotion,
+    restOut,
+  );
+  restWorld.set(...restOut).applyMatrix4(restInverse.copy(anchor).invert());
+  restOut[0] = restWorld.x;
+  restOut[1] = restWorld.y;
+  restOut[2] = restWorld.z;
+  return restPlace;
 }

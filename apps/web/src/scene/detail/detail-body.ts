@@ -1,5 +1,6 @@
 import type { Body } from '@galactic/protocol';
 import { buildRenderList, type MoonItem, type PlanetItem } from '../bodies/layout.js';
+import { eclipseReceivers, type EclipseReceiver } from '../bodies/eclipse.js';
 import { TASK_ASTEROID_RADIUS, taskAsteroids, type TaskAsteroid } from '../belt/belt-model.js';
 import type { ScaleMode } from '../scale.js';
 import { framedRadius } from '../camera/flight.js';
@@ -82,4 +83,15 @@ export function backdropRadius(body: DetailBody): number {
   const r = framedRadius(body.radius);
   const camera = EXIT_RADII * r;
   return Math.max(r * BACKDROP_MIN_RADII, (reach + camera) * BACKDROP_MARGIN);
+}
+
+/**
+ * The eclipse receivers of a planet's detail view (P6-07; SPEC decision 87): the system's
+ * (`eclipseReceivers`), except that **its moons cast no shadow on the planet** (its surface and
+ * clouds). The readable layout puts a large moon a couple of radii out — the Moon 2.2 Earth radii
+ * instead of 60 — so its shadow up close was a hard dark disc over a third of the disc. The planet
+ * still shades its moons and its rings, and the moons each other; the system view is unchanged.
+ */
+export function detailEclipseReceivers(planet: PlanetItem): EclipseReceiver[] {
+  return eclipseReceivers(planet).map((r) => (r.id === planet.bodyId ? { ...r, casters: [] } : r));
 }

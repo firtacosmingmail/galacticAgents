@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { StrictMode } from 'react';
-import { BufferGeometry } from 'three';
+import { BufferGeometry, PerspectiveCamera } from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent, ServerMessage } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
@@ -14,7 +14,9 @@ import { DOCK_KEY, readDockPrefs } from '../../../panel/dock-state.js';
 import { DOCK_VIEW_KEY, useDockView } from '../../../panel/status/dock-view.js';
 import { SCENE_VISIBLE_KEY } from '../../visibility.js';
 import { QUALITY_TIERS } from '../../quality.js';
-import { hqClaimed } from '../../satellites/hq/hq-model.js';
+import { applyHqPose, hqClaimed } from '../../satellites/hq/hq-model.js';
+import { satelliteFrame } from '../../picking/fixtures.js';
+import { hqSlot } from './hq-slot.js';
 import { activateSatellite } from '../../picking/store.js';
 import type { DetailBody } from '../detail-body.js';
 
@@ -36,7 +38,7 @@ vi.mock('../../SolarScene.js', () => ({
 }));
 vi.mock('../../webgl.js', () => ({ webglAvailable: () => true }));
 
-const { EarthHq } = await import('./EarthHq.js');
+const { EarthHq, slotCamera } = await import('./EarthHq.js');
 
 const earth = { kind: 'rocky', bodyId: 'b-earth', name: 'Earth', radius: 1 } as DetailBody;
 
@@ -62,6 +64,51 @@ describe('the EarthHq part (mount, claim, disposal)', () => {
     view.unmount();
     expect(hqClaimed()).toBe(false);
     expect(dispose.mock.calls.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("moves the Harmonizer's frame into its viewing slot while mounted, not after (P6-06)", () => {
+    // Reduced motion: the slot is taken at once (no follow lag), for a one-frame check.
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('reduce'),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    const camera = new PerspectiveCamera(45, 1, 0.1, 1000);
+    camera.position.set(33, 0, 2.85 * 1.7);
+    camera.lookAt(33, 0, 0);
+    camera.updateMatrixWorld();
+    const orbit = () => {
+      const f = satelliteFrame('a-harmonizer', 'b-earth', [33 + 3, 0.5, -1], {
+        role: 'harmonizer',
+        size: 0.714,
+      });
+      f.target = [33, 0, 0];
+      f.bodyRadius = 1.7;
+      return f;
+    };
+    const expected: [number, number, number] = [0, 0, 0];
+    const scale = hqSlot(
+      slotCamera(camera, {
+        position: [0, 0, 0],
+        right: [0, 0, 0],
+        up: [0, 0, 0],
+        forward: [0, 0, 0],
+        tanHalfFov: 1,
+        aspect: 1,
+      }),
+      [33, 0, 0],
+      1.7,
+      expected,
+    )!;
+    const view = render(<EarthHq body={earth} quality={QUALITY_TIERS.high} mix={() => 1} />);
+    const frame = orbit();
+    applyHqPose([frame], camera);
+    frame.position.forEach((v, i) => expect(v).toBeCloseTo(expected[i]!));
+    expect(frame.size).toBeCloseTo(0.714 * scale);
+    view.unmount();
+    const after = orbit();
+    applyHqPose([after], camera);
+    expect(after.position).toEqual([36, 0.5, -1]);
   });
 
   it('the mobile tier mounts the simpler station, without the glow', () => {

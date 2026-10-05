@@ -33,6 +33,7 @@ import {
 } from './look.js';
 import type { SatelliteSpec } from './satellite-model.js';
 import { publishSatellites } from './registry.js';
+import { CLAIM_AT, placementFor } from './placement.js';
 
 /**
  * The satellites' frame logic (P4-01), without three.js so it is tested without WebGL: it owns one
@@ -96,6 +97,11 @@ export interface SatelliteFrame {
   brightness: number;
   /** The beam's colour, linear RGB before its gain (`beamTint`). */
   beamTint: readonly [number, number, number];
+  /**
+   * P6-04: a view draws its own model at this frame (`placement.ts`: the detail view's Steward
+   * robots and drones); the renderer draws neither the satellite nor its beam.
+   */
+  claimed?: boolean;
 }
 
 /** A body's live centre (written into `out`) and visual radius; `undefined` = not drawn. */
@@ -473,6 +479,7 @@ export class SatelliteDirector {
         // Hidden until its body is drawn; a flight keeps its origin (it is keyed by its start).
         f.visible = false;
         f.beam = 0;
+        f.claimed = false;
         continue;
       }
       f.bodyRadius = radius;
@@ -494,7 +501,12 @@ export class SatelliteDirector {
         orbitOffset(orbit, orbitAngle(orbit, t), orbit.radius * radius, scratch);
         this.place(f, scratch);
       }
-      f.visible = true;
+      // P6-04: a view shows it elsewhere (a Steward by its task in the detail view), only while it
+      // orbits — a flight, a landing and a landed satellite stay the director's.
+      f.claimed = this.override(e, f);
+      // A claimed frame the view says is out of sight (a robot on the cutaway's removed wedge) is
+      // not drawn, picked, ringed or given activities: every reader skips an invisible frame.
+      f.visible = !(f.claimed && placementFor(e.spec.agentId)?.hidden === true);
       if (e.lastDrawn) {
         e.lastDrawn.bodyId = e.actor.mode === 'flying' ? '' : e.actor.bodyId;
         e.lastDrawn.point[0] = f.position[0];
@@ -510,6 +522,7 @@ export class SatelliteDirector {
       let size = look.size * radius;
       if (pixelSize) size = Math.max(size, look.minPx * pixelSize(f.position));
       f.size = Math.min(size, look.maxSize * radius) * f.presence * satelliteScale(e.spec);
+      if (f.claimed) f.size *= placementFor(e.spec.agentId)?.scale ?? 1; // P6-04
       f.beam = view.beam;
       const scan = e.actor.scan;
       if (scan && !reduced)
@@ -528,6 +541,19 @@ export class SatelliteDirector {
       e.beamAt = now;
     }
     return this.frames;
+  }
+
+  /** Moves an orbiting satellite toward its placement override (`placement.ts`); claimed? */
+  private override(e: Entry, f: SatelliteFrame): boolean {
+    const mode = e.actor.mode;
+    if (mode === 'flying' || mode === 'landing' || mode === 'landed') return false;
+    const o = placementFor(e.spec.agentId);
+    if (!o || !(o.k > 0)) return false;
+    const k = Math.min(1, o.k);
+    f.position[0] += (o.position[0] - f.position[0]) * k;
+    f.position[1] += (o.position[1] - f.position[1]) * k;
+    f.position[2] += (o.position[2] - f.position[2]) * k;
+    return k >= CLAIM_AT;
   }
 
   private place(f: SatelliteFrame, offset: Vec3Tuple): void {

@@ -45,7 +45,7 @@ import {
 } from './satellite-model.js';
 import { getSatellite, onSatellitesChanged, satelliteIds } from './registry.js';
 import { HqStation, HqTargets, writeHq } from './hq/HqStation.js';
-import { ordinarySatellites } from './hq/hq-model.js';
+import { applyHqPose, ordinarySatellites } from './hq/hq-model.js';
 import { useHeldArchetypes } from './activity/use-held-archetypes.js';
 
 /**
@@ -143,6 +143,8 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
       pixels.size,
       useCameraStore.getState().focusedId,
     );
+    // P6-06: Earth's detail view may move the HQ into its viewing slot (before any reader).
+    applyHqPose(frames, state.camera as PerspectiveCamera);
     if (instanced) writeInstanced(frames, targets, bloom);
     else writeMeshes(frames, targets, bloom);
     writeHq(frames, hq, { bloom, now: motionSeconds(), reducedMotion, state: hqState });
@@ -246,16 +248,18 @@ function writeMeshes(
     const pair = targets.meshes.get(f.agentId);
     if (!pair) continue;
     const { body, beam } = pair;
+    // P6-04: a claimed frame is drawn by a view's own model (a Steward robot or drone).
+    const shown = f.visible && !f.claimed;
     if (body) {
-      body.visible = f.visible;
-      if (f.visible) {
+      body.visible = shown;
+      if (shown) {
         bodyMatrix(f, body.matrix);
         body.matrixWorldNeedsUpdate = true; // `matrixAutoUpdate` is off: say the matrix moved
         (body.material as MeshBasicMaterial).color.copy(bodyColor(f, color));
       }
     }
     if (beam) {
-      beam.visible = f.visible && f.beam > 0;
+      beam.visible = shown && f.beam > 0;
       if (beam.visible) {
         beamMatrix(f, beam.matrix);
         beam.matrixWorldNeedsUpdate = true;
@@ -283,6 +287,7 @@ export function writeInstanced(
   for (const f of frames) {
     if (n >= capacity) break;
     if (f.role === 'harmonizer') continue; // the HQ station has its own meshes
+    if (f.claimed) continue; // P6-04: drawn by a view's own model (a Steward robot or drone)
     bodies.setMatrixAt(n, bodyMatrix(f, matrix));
     bodies.setColorAt(n, bodyColor(f, color));
     n++;

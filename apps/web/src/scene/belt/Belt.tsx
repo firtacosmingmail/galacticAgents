@@ -3,10 +3,13 @@ import { useFrame, useThree } from '@react-three/fiber';
 import {
   AdditiveBlending,
   BackSide,
+  Color,
   SphereGeometry,
   type BufferGeometry,
   type Group,
   type InstancedMesh,
+  type MeshBasicMaterial,
+  type MeshStandardMaterial,
 } from 'three';
 import { useSceneScale, type ScaleMode } from '../scale.js';
 import { DECOR_LAYER } from '../layers.js';
@@ -31,7 +34,7 @@ import { rockGeometry, writeBeltInstances } from './belt-mesh.js';
 import { useBodyAnchor } from '../anchor-binding.js';
 import { useDetailStore } from '../detail/mode.js';
 import { shellOutsideDome, sphereOutsideDome } from '../detail/dome.js';
-import { useBackdropCulling } from '../detail/dome-binding.js';
+import { useBackdropCulling, useBeltFade } from '../detail/dome-binding.js';
 import { useReducedMotion } from '../motion.js';
 import { PLACE_BODIES } from '../frame-order.js';
 
@@ -95,6 +98,15 @@ function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
   useBackdropCulling(mesh, (dome) =>
     shellOutsideDome(bounds.inner - ROCK_MARGIN, bounds.outer + ROCK_MARGIN, dome),
   );
+  // P6-07: in a planet's or moon's detail view the rocks inside its dome do not belong to the
+  // view: they fade to the backdrop's black with the cross-fade, then are not drawn (`beltFactor`).
+  const material = useRef<MeshStandardMaterial>(null);
+  useBeltFade((factor) => {
+    const m = material.current;
+    if (!m) return;
+    m.color.setScalar(factor);
+    m.visible = factor > FADED;
+  });
 
   // Before the first frame: matrices, colours and the bounding sphere of the whole ring.
   useLayoutEffect(() => {
@@ -113,10 +125,17 @@ function BackgroundRocks({ count, mode }: { count: number; mode: ScaleMode }) {
       // them (one instanced draw) to draw a covered outline as hidden (P3-08 review).
       args={[geometry, undefined, Math.max(1, count)]}
     >
-      <meshStandardMaterial flatShading roughness={1} metalness={0} />
+      <meshStandardMaterial ref={material} flatShading roughness={1} metalness={0} />
     </instancedMesh>
   );
 }
+
+/** A task asteroid's rock colour, emissive intensity and halo opacity in the system view. */
+const TASK_ROCK_COLOR = new Color('#d8b48a');
+const TASK_ROCK_EMISSIVE = 0.3;
+const TASK_HALO_OPACITY = 0.22;
+/** Below this belt factor (`beltFactor`) the rocks are not drawn at all. */
+const FADED = 0.001;
 
 /** The largest rock's reach beyond its orbit: its size by its largest squash (`generateBelt`). */
 const ROCK_MARGIN = ROCK_SIZE.max * 1.2;
@@ -158,6 +177,20 @@ function TaskAsteroidMesh({
   useBackdropCulling(anchor, (dome, at) =>
     sphereOutsideDome(at, TASK_ASTEROID_RADIUS * TASK_ASTEROID_REACH, dome),
   );
+  // P6-07: like the background rocks, it fades out of a planet's or moon's detail view.
+  const rock = useRef<MeshStandardMaterial>(null);
+  const halo = useRef<MeshBasicMaterial>(null);
+  useBeltFade((factor) => {
+    if (rock.current) {
+      rock.current.color.copy(TASK_ROCK_COLOR).multiplyScalar(factor);
+      rock.current.emissiveIntensity = TASK_ROCK_EMISSIVE * factor;
+      rock.current.visible = factor > FADED;
+    }
+    if (halo.current) {
+      halo.current.opacity = TASK_HALO_OPACITY * factor;
+      halo.current.visible = factor > FADED;
+    }
+  });
 
   return (
     <group ref={anchor} name={`asteroid:${asteroid.bodyId}`} position={position} userData={data}>
@@ -169,9 +202,10 @@ function TaskAsteroidMesh({
         rotation={[asteroid.orbit.phase, asteroid.seed % 7, 0]}
       >
         <meshStandardMaterial
-          color="#d8b48a"
+          ref={rock}
+          color={TASK_ROCK_COLOR}
           emissive="#ff9a3c"
-          emissiveIntensity={0.3}
+          emissiveIntensity={TASK_ROCK_EMISSIVE}
           flatShading
           roughness={0.85}
           metalness={0}
@@ -185,9 +219,10 @@ function TaskAsteroidMesh({
         visible={!detailHere}
       >
         <meshBasicMaterial
+          ref={halo}
           color="#5fd4ff"
           transparent
-          opacity={0.22}
+          opacity={TASK_HALO_OPACITY}
           side={BackSide}
           blending={AdditiveBlending}
           depthWrite={false}
