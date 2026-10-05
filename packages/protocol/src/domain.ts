@@ -99,6 +99,17 @@ export const PermissionPolicy = z.object({
 });
 export type PermissionPolicy = z.infer<typeof PermissionPolicy>;
 
+/**
+ * A dollar budget (P8-01; SPEC decision 18): a positive amount of US dollars, compared with the
+ * cost the runtimes report (an estimate; notional under a subscription login, P1-08).
+ */
+export const BudgetUsd = z.number().positive().finite().max(1_000_000);
+export type BudgetUsd = z.infer<typeof BudgetUsd>;
+
+/** What a budget belongs to (P8-01): a project or a task. */
+export const BudgetTarget = z.object({ kind: z.enum(['project', 'task']), id: Id });
+export type BudgetTarget = z.infer<typeof BudgetTarget>;
+
 export const Project = z.object({
   id: Id,
   name: z.string().min(1),
@@ -113,6 +124,11 @@ export const Project = z.object({
   permissionPolicy: PermissionPolicy.optional(),
   /** Pinned work is never archived by the retention timer (decision 4, 11b). */
   pinned: z.boolean().optional(),
+  /**
+   * The project's dollar budget (P8-01): its agents', its tasks' and its sub-projects' reported
+   * cost together. Absent: no budget. Set through `setBudget` (logged as `budget.set`).
+   */
+  budgetUsd: BudgetUsd.optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -131,6 +147,8 @@ export const Task = z.object({
   blockedBy: z.array(Id),
   state: WorkState,
   pinned: z.boolean().optional(),
+  /** The task's dollar budget (P8-01): its Stewards' reported cost together. Absent: none. */
+  budgetUsd: BudgetUsd.optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -259,6 +277,8 @@ export function foldProposalMeta(
   else if (changes.initGit === false) delete next['initGit'];
   if (changes.trust === 'default') delete next['trust'];
   else if (changes.trust !== undefined) next['trust'] = changes.trust;
+  if (changes.budgetUsd === null) delete next['budgetUsd'];
+  else if (changes.budgetUsd !== undefined) next['budgetUsd'] = changes.budgetUsd;
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
@@ -268,6 +288,17 @@ export interface ProposalMetaChanges {
   initGit?: boolean;
   /** The trust level the user chose on the card (decision 49): `default` drops `meta.trust`. */
   trust?: TrustLevel;
+  /**
+   * The budget the user gave the work on the card (P8-01): `meta.budgetUsd`, applied to the
+   * project or task the approval creates (a plan card: to its project). `null` drops it.
+   */
+  budgetUsd?: number | null;
+}
+
+/** The budget the user gave a card (P8-01): `meta.budgetUsd`, when it is a valid amount. */
+export function proposalBudget(proposal: Pick<Proposal, 'meta'> | undefined): number | undefined {
+  const parsed = BudgetUsd.safeParse(proposal?.meta?.['budgetUsd']);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**

@@ -7,6 +7,7 @@ import {
   type AgentPlacement,
   type AnswerQuestionInput,
   type BodyRequest,
+  type BudgetTarget,
   type CommandResult,
   type ControlAction,
   type ControlTarget,
@@ -35,6 +36,7 @@ import { assignBody, freeBody, moveHost, sweepMarkers } from './bodies.js';
 import { agentEffect, agentsOf } from './cascade.js';
 import { EARTH_ID, chooseBody, freeMoons, freePlanets, type ChooseOptions } from './catalogue.js';
 import { recordControl } from './control.js';
+import { checkSpawnBudget, setBudget } from './budgets.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext, EventLog } from './event-log.js';
 import {
@@ -114,6 +116,13 @@ export interface CommandsOptions {
    * user's edit and the approval are refused for a workspace decision 27 forbids.
    */
   checkWorkspace?: (path: string) => string;
+}
+
+/** A row's budget changes through `setBudget` only (P8-01): its own event and remote rule. */
+function noBudget(changes: { budgetUsd?: unknown }): void {
+  if (changes.budgetUsd !== undefined) {
+    throw new DomainError('invalid', 'a budget is set with setBudget, not by an update');
+  }
 }
 
 const ENDINGS = new Set(['agent.finished', 'agent.failed', 'agent.stopped', 'agent.interrupted']);
@@ -245,9 +254,10 @@ export class Commands implements DomainCommands {
   }
   /** A new `permissionPolicy` is floored at the global default unless `write.origin` is local. */
   updateProject(projectId: Id, changes: ProjectChanges, write?: WriteOptions) {
-    return this.run((ctx) =>
-      updateProject(ctx, projectId, changes, this.policyWrite(write), this.handOver()),
-    );
+    return this.run((ctx) => {
+      noBudget(changes);
+      return updateProject(ctx, projectId, changes, this.policyWrite(write), this.handOver());
+    });
   }
   setProjectState(projectId: Id, state: WorkState) {
     return this.run((ctx) => setProjectState(ctx, projectId, state));
@@ -268,7 +278,17 @@ export class Commands implements DomainCommands {
     return this.run((ctx) => createTask(ctx, input));
   }
   updateTask(taskId: Id, changes: TaskChanges) {
-    return this.run((ctx) => updateTask(ctx, taskId, changes));
+    return this.run((ctx) => {
+      noBudget(changes);
+      return updateTask(ctx, taskId, changes);
+    });
+  }
+
+  // -- budgets (P8-01) -------------------------------------------------------------------------
+
+  /** Raising or removing a budget is refused for a remote or unknown origin (see `setBudget`). */
+  setBudget(target: BudgetTarget, usd: number | null, by: Actor, write?: WriteOptions) {
+    return this.run((ctx) => setBudget(ctx, target, usd, by, this.policyWrite(write)));
   }
   setTaskState(taskId: Id, state: WorkState) {
     return this.run((ctx) => setTaskState(ctx, taskId, state));
@@ -389,6 +409,29 @@ export class Commands implements DomainCommands {
           `${slot.what}${running ? ` (${running.id})` : ' (a spawn is under way)'}`,
         );
       }
+    }
+    // Dollar budgets (P8-01): no new Waykeeper or Steward for work that has spent its budget.
+    // The refusal is logged (the Harmonizer's chat shows it) and the caller gets the reason.
+    const overBudget = checkSpawnBudget(tables, {
+      role: input.role,
+      taskId: task?.id,
+      projectId,
+    });
+    if (overBudget) {
+      this.log.runCommand((ctx) =>
+        ctx.emit({
+          type: 'budget.spawn_refused',
+          target: overBudget.target,
+          role: input.role,
+          ...(task ? { taskId: task.id } : {}),
+          ...(projectId ? { projectId } : {}),
+          ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
+          spentUsd: overBudget.usage.spentUsd,
+          budgetUsd: overBudget.usage.budgetUsd!,
+          reason: overBudget.reason,
+        }),
+      );
+      throw new DomainError('conflict', overBudget.reason);
     }
     if (input.role === 'harmonizer') must(tables.bodies.get(EARTH_ID), 'body', EARTH_ID);
     // Earth is the headquarters (SPEC §3.1): the Harmonizer orbits it without it hosting work, so

@@ -84,6 +84,8 @@ const composed = composeRuntime(db, {
   },
   // Stewards' leftover processes (P4-14): attributed from the supervisor's process groups.
   processes: { groups: supervisor },
+  // Dollar budgets (P8-01): the warning threshold.
+  ...(config.budgets ? { budgets: config.budgets } : {}),
 });
 const { log, statuses, transcripts } = composed;
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
@@ -97,6 +99,7 @@ const settings = new SettingsService({
   caps: composed.runtime.caps,
   archival: composed.archival,
   transcriptRetention: composed.transcriptRetention,
+  budgets: composed.budgets,
 });
 
 // Shutdown is wired before anything is resumed or listening (P1-32): a signal during recovery

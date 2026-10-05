@@ -4,10 +4,12 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  DEFAULT_BUDGET_WARN_PERCENT,
   DEFAULT_TRANSCRIPT_RETENTION,
   IDENTITY_TOKEN,
   PermissionPolicy,
   QualityTier,
+  SettingsBudgets,
   SettingsCaps,
   TranscriptRetention,
   type AgentCaps,
@@ -98,6 +100,8 @@ export const ConfigFile = z.object({
    * repository's (SPEC §8 open question). Default `true` (keep loading them).
    */
   stewardsLoadUserSettings: z.boolean().optional(),
+  /** Dollar budgets (P8-01): the warning threshold in percent of a budget (default 80). */
+  budgets: SettingsBudgets.partial().optional(),
   /**
    * When the panel's first-run setup was finished or skipped (P25-08); absent = not yet. Written
    * as an ISO timestamp, but read leniently: a hand-edited value must not stop the server.
@@ -164,6 +168,11 @@ export interface ServerConfig {
   envOverrides?: SettingName[];
   /** When the panel's first-run setup was done (P25-08); absent = the wizard shows. */
   setupCompletedAt?: string;
+  /**
+   * Dollar budgets (P8-01): `budgets.warnAtPercent` in the file or `GALACTIC_BUDGET_WARN_PERCENT`;
+   * absent = 80.
+   */
+  budgets?: { warnAtPercent: number };
 }
 
 export interface LoadedConfig {
@@ -308,7 +317,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     maxWallClockMs: file.caps?.maxWallClockMs ?? DEFAULT_CAPS.maxWallClockMs,
     maxToolCalls: file.caps?.maxToolCalls ?? DEFAULT_CAPS.maxToolCalls,
   };
+  const warnEnv = env['GALACTIC_BUDGET_WARN_PERCENT'];
+  const warnAtPercent =
+    warnEnv !== undefined
+      ? Number(warnEnv)
+      : (file.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT);
+  if (!SettingsBudgets.shape.warnAtPercent.safeParse(warnAtPercent).success) {
+    throw new Error(
+      `Invalid budget warning threshold (1–100 %): ${warnEnv ?? file.budgets?.warnAtPercent}`,
+    );
+  }
   const envOverrides: SettingName[] = [];
+  if (warnEnv !== undefined) envOverrides.push('budgets');
   if (env['GALACTIC_PROJECTS_ROOT'] !== undefined) envOverrides.push('projectsRoot');
   if (retentionEnv !== undefined) envOverrides.push('retentionDays');
   if (CAP_ENV.some(([, name]) => env[name] !== undefined)) envOverrides.push('caps');
@@ -351,6 +371,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
         ? { stewardsLoadUserSettings: file.stewardsLoadUserSettings }
         : {}),
       envOverrides,
+      budgets: { warnAtPercent },
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
     },
     tokenGenerated,

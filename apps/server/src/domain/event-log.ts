@@ -10,6 +10,7 @@ import {
 } from '@galactic/protocol';
 import { tables, type Tables } from '../db/tables.js';
 import type { ChooseOptions } from './catalogue.js';
+import { projectBudgetEvent } from './budgets.js';
 
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
 export interface CommandContext {
@@ -113,6 +114,25 @@ export class EventLog {
     this.selectMax = db.prepare('SELECT COALESCE(MAX(id), 0) AS seq FROM events');
     this.selectMin = db.prepare('SELECT COALESCE(MIN(id), 0) AS seq FROM events');
     this.logId = this.loadLogId();
+    this.backfillProjections();
+  }
+
+  /**
+   * Folds a log written before the budget projections existed (migration 0011, P8-01) into
+   * `agent_spend` and `budget_notices`, once (settings key `budget_projection`).
+   */
+  private backfillProjections(): void {
+    if (this.tables.settings.get('budget_projection') !== undefined) return;
+    this.db.transaction(() => {
+      let after = 0;
+      for (;;) {
+        const page = this.eventsSince(after, 5_000);
+        if (page.length === 0) break;
+        for (const envelope of page) projectBudgetEvent(this.tables, envelope);
+        after = page.at(-1)!.seq;
+      }
+      this.tables.settings.set('budget_projection', 1);
+    })();
   }
 
   private loadLogId(): string {
@@ -149,7 +169,10 @@ export class EventLog {
         const result = fn(ctx);
         for (const event of queued) {
           const info = this.insertEvent.run(at, event.type, JSON.stringify(event));
-          mine.push({ seq: Number(info.lastInsertRowid), at, event });
+          const envelope = { seq: Number(info.lastInsertRowid), at, event };
+          // The log's own projections (P8-01: spend and budget notices), in the same transaction.
+          projectBudgetEvent(this.tables, envelope);
+          mine.push(envelope);
         }
         return result;
       })();
@@ -269,6 +292,7 @@ export class EventLog {
       tasks: this.tables.tasks.all(),
       questions: this.tables.questions.all(),
       proposals: this.tables.proposals.all(),
+      spend: this.tables.spend.all(),
     }))();
   }
 }

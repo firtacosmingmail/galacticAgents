@@ -7,6 +7,7 @@ import { DeviceQuality } from './DeviceQuality.js';
 import { PreflightCheck } from './PreflightCheck.js';
 import { useSettingsData } from './SettingsData.js';
 import {
+  LATER_SECTIONS,
   SaveButton,
   SECTIONS,
   SectionFrame,
@@ -55,6 +56,8 @@ export function SettingsPage({ token }: { token: string }) {
       {data.status === 'ready' && data.response?.settings.transcriptRetention && (
         <PageSection spec={TRANSCRIPT_RETENTION} />
       )}
+      {data.status === 'ready' &&
+        LATER_SECTIONS.map((spec) => <PageSection key={spec.field} spec={spec} />)}
 
       {/* P7-03: this browser's own tier, local — shown even without a settings endpoint. */}
       <DeviceQuality />

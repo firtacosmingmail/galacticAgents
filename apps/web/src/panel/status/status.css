@@ -210,3 +210,12 @@
   padding-top: 4px;
   border-top: 1px solid var(--pnl-line);
 }
+/* P8-01: a budget line. Not amber (decision 80: only "blocked on you" is); exceeded is bold. */
+.sts-budget meter {
+  width: 6em;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.sts-budget.is-exceeded dd {
+  font-weight: 700;
+}

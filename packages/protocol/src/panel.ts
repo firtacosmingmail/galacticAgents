@@ -187,6 +187,12 @@ export const SettingsCaps = z.object({
 });
 export type SettingsCaps = z.infer<typeof SettingsCaps>;
 
+/** Dollar budgets (P8-01): when a budgeted project or task warns, as a percentage of its budget. */
+export const SettingsBudgets = z.object({
+  warnAtPercent: z.number().int().min(1).max(100),
+});
+export type SettingsBudgets = z.infer<typeof SettingsBudgets>;
+
 /** The settings the panel shows and edits (SPEC §4.6), persisted in `config.json`. */
 export const Settings = z.object({
   /** Where new project folders go (SPEC §3.5): an absolute path or `~/…`. */
@@ -207,6 +213,8 @@ export const Settings = z.object({
    * settings page then leaves the section out); this server always sends it.
    */
   transcriptRetention: TranscriptRetention.optional(),
+  /** Budget warnings (P8-01); the server always reports it, older servers leave it out. */
+  budgets: SettingsBudgets.optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -219,6 +227,7 @@ export const SettingName = z.enum([
   'qualityTier',
   'stewardsLoadUserSettings',
   'transcriptRetention',
+  'budgets',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
 
@@ -237,6 +246,7 @@ export const SettingsPatch = z
     stewardsLoadUserSettings: z.boolean().optional(),
     /** Transcript retention (P8-02), merged key by key; local requests only (decision 51, 90). */
     transcriptRetention: TranscriptRetention.partial().strict().optional(),
+    budgets: SettingsBudgets.partial().strict().optional(),
     /**
      * Marks the first-run setup as done (P25-08): the server stamps `setupCompletedAt` in
      * `config.json` (kept if already set). Local requests only, like every setting but the tier

@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ENDED_STATES, type Agent, type Id, type SettingsCaps } from '@galactic/protocol';
+import {
+  ENDED_STATES,
+  type Agent,
+  type BudgetUsage,
+  type Id,
+  type SettingsCaps,
+} from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { HARMONIZER } from '../../state/selection.js';
 import { currentHarmonizer } from '../../console/hierarchy/HierarchyConsole.js';
@@ -9,6 +15,7 @@ import { formatCost, formatDuration } from '../agent-cards-model.js';
 import { useSettingsData } from '../settings/SettingsData.js';
 import { useDockView, type DockView } from './dock-view.js';
 import {
+  budgetText,
   COST_CAVEAT,
   formatCostTotal,
   narrativeRequest,
@@ -46,6 +53,32 @@ function useSlowNow(): number {
 function useCaps(): SettingsCaps | undefined {
   const data = useSettingsData();
   return data.status === 'ready' ? data.response?.settings.caps : undefined;
+}
+
+/** The budget warning threshold (P8-01), when the settings are readable. */
+function useWarnAt(): number | undefined {
+  const data = useSettingsData();
+  return data.status === 'ready' ? data.response?.settings.budgets?.warnAtPercent : undefined;
+}
+
+/** A project's or task's budget line (P8-01): spent against the budget, loud once exceeded. */
+export function BudgetFact({ label, budget }: { label: string; budget: BudgetUsage }) {
+  return (
+    <div className={`sts-fact sts-budget is-${budget.level}`}>
+      <dt>{label}</dt>
+      <dd>
+        {budgetText(budget)}
+        {budget.budgetUsd !== undefined && budget.reported && (
+          <meter
+            min={0}
+            max={budget.budgetUsd}
+            value={Math.min(budget.spentUsd, budget.budgetUsd)}
+            aria-hidden="true"
+          />
+        )}
+      </dd>
+    </div>
+  );
 }
 
 // --- the dock's switch ----------------------------------------------------------------------------
@@ -341,10 +374,11 @@ export function SystemStatusView() {
 export function ProjectStatusView({ projectId }: { projectId: Id }) {
   const world = useAppStore((s) => s.world);
   const caps = useCaps();
+  const warnAtPercent = useWarnAt();
   const now = useSlowNow();
   const p = useMemo(
-    () => projectStatus(world, projectId, { now, caps }),
-    [world, projectId, now, caps],
+    () => projectStatus(world, projectId, { now, caps, warnAtPercent }),
+    [world, projectId, now, caps, warnAtPercent],
   );
   if (!p) return <p className="pnl-empty">This project is not in the current log.</p>;
   const { project } = p;
@@ -387,6 +421,7 @@ export function ProjectStatusView({ projectId }: { projectId: Id }) {
                   )}
                   {' · '}
                   {formatCostTotal(row.cost)}
+                  {row.budget.budgetUsd !== undefined && ` · budget ${budgetText(row.budget)}`}
                   {row.questions.open > 0 && ` · ${row.questions.open} open questions`}
                 </span>
               </li>
@@ -415,6 +450,7 @@ export function ProjectStatusView({ projectId }: { projectId: Id }) {
         </Section>
         <Section title="Cost">
           <dl className="sts-facts">
+            <BudgetFact label="budget" budget={p.budget} />
             <Fact label="Waykeeper and Stewards">{formatCostTotal(p.cost)}</Fact>
             {p.waykeeper && (
               <Fact label="Waykeeper">{formatCost(world.statuses[p.waykeeper.id])}</Fact>
@@ -471,7 +507,8 @@ export function TaskStatusFacts({ agentId }: { agentId: Id }) {
     const timer = setInterval(() => setNow(Date.now()), 5_000);
     return () => clearInterval(timer);
   }, []);
-  const t = taskId ? taskStatus(world, taskId, { now, agentId }) : undefined;
+  const warnAtPercent = useWarnAt();
+  const t = taskId ? taskStatus(world, taskId, { now, agentId, warnAtPercent }) : undefined;
   if (!t) return null;
   const since = Date.parse(t.since);
   return (
@@ -485,6 +522,7 @@ export function TaskStatusFacts({ agentId }: { agentId: Id }) {
         {t.stewards}
         {t.stewards > 1 && <span className="muted"> (respawned)</span>}
       </Fact>
+      <BudgetFact label="task budget" budget={t.budget} />
       <Fact label="cost of the task">
         {formatCostTotal(t.cost)}
         <span className="muted" title={COST_CAVEAT}>

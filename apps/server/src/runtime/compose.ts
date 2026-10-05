@@ -21,6 +21,7 @@ import {
 } from '../brains/index.js';
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { Archival, type Timers } from './archival.js';
+import { BudgetWatcher } from './budgets.js';
 import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
 import { StatusStore } from './status-store.js';
 import { StewardProcesses, type StewardProcessesOptions } from './steward-processes.js';
@@ -93,6 +94,8 @@ export interface ComposeOptions {
    * closes; without it there are no sweeps and the tools refuse.
    */
   processes?: Omit<StewardProcessesOptions, 'log' | 'statuses' | 'onError'>;
+  /** Dollar budgets (P8-01): the warning threshold (`config.budgets`, default 80 %). */
+  budgets?: { warnAtPercent?: number };
 }
 
 export interface ComposedRuntime {
@@ -116,6 +119,8 @@ export interface ComposedRuntime {
   transcriptRetention: TranscriptRetention;
   /** A Steward's processes: list, stop, sweep (P4-14), when composed with `processes`. */
   processes?: StewardProcesses;
+  /** Budget notices and the Harmonizer's chat lines about them (P8-01). */
+  budgets: BudgetWatcher;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
   startBrain(
     definition: BrainDefinition,
@@ -324,6 +329,17 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     : undefined;
   processes?.watch();
 
+  const budgets = new BudgetWatcher({
+    log,
+    harmonizer: () => runtime.liveAgents().find((a) => a.role === 'harmonizer')?.id,
+    post: (agentId, text) => void runtime.send(agentId, text, { sender: { type: 'system' } }),
+    ...(opts.budgets?.warnAtPercent !== undefined
+      ? { warnAtPercent: opts.budgets.warnAtPercent }
+      : {}),
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
+  budgets.start();
+
   // The brains this composition drives (P2-16): started here or resumed by recovery.
   const runners = new Map<Id, BrainRunner>();
   const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
@@ -378,6 +394,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     archival,
     transcriptRetention,
     ...(processes ? { processes } : {}),
+    budgets,
     startBrain: async (definition, placement, brainOpts = {}) =>
       adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),
     defineBrains(defs, brainOpts = {}) {
@@ -464,6 +481,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     async shutdown() {
       // A graceful shutdown interrupts agents (they come back): nothing of theirs is swept.
       processes?.dispose();
+      budgets.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
       transcriptRetention.stop();
@@ -475,6 +493,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     },
     async dispose() {
       processes?.dispose();
+      budgets.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
       transcriptRetention.stop();

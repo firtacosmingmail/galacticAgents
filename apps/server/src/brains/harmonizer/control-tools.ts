@@ -48,10 +48,18 @@ const ControlWorkInput = z
   .strict();
 
 /** What an edit may change, per kind: the panel's edit form minus the trust level. */
+/** A budget in dollars, or `null` to remove it (P8-01; raising or removing it needs a local user). */
+const BudgetEdit = z.number().positive().finite().nullable().optional();
 const TaskEdit = z
-  .object({ description: z.string().trim().min(1).optional(), priority: TaskPriority.optional() })
+  .object({
+    description: z.string().trim().min(1).optional(),
+    priority: TaskPriority.optional(),
+    budgetUsd: BudgetEdit,
+  })
   .strict();
-const ProjectEdit = z.object({ name: z.string().trim().min(1).optional() }).strict();
+const ProjectEdit = z
+  .object({ name: z.string().trim().min(1).optional(), budgetUsd: BudgetEdit })
+  .strict();
 
 function issues(error: z.ZodError): string {
   return error.issues
@@ -65,8 +73,8 @@ function editChanges(kind: 'task' | 'project', raw: Record<string, unknown> | un
     throw new DomainError(
       'invalid',
       kind === 'task'
-        ? 'an edit needs changes: a task’s description and/or priority'
-        : 'an edit needs changes: a project’s name',
+        ? 'an edit needs changes: a task’s description, priority and/or budgetUsd'
+        : 'an edit needs changes: a project’s name and/or budgetUsd',
     );
   }
   const trust = Object.keys(raw).filter((k) => TRUST_FIELDS.has(k));
@@ -81,7 +89,7 @@ function editChanges(kind: 'task' | 'project', raw: Record<string, unknown> | un
   if (!parsed.success) {
     throw new DomainError(
       'invalid',
-      `a ${kind}'s edit takes ${kind === 'task' ? 'description, priority' : 'name'} only: ` +
+      `a ${kind}'s edit takes ${kind === 'task' ? 'description, priority, budgetUsd' : 'name, budgetUsd'} only: ` +
         issues(parsed.error),
     );
   }
@@ -109,7 +117,8 @@ export const controlWorkTool: BrainTool = {
   description:
     "The panel's work controls on a task or project the user names in conversation (decision " +
     '83): "pause" (its agents pause), "resume", "edit" (changes: a task\'s description and/or ' +
-    'priority; a project\'s name) run at once. "stop" (its agents stop, the work is paused) and ' +
+    "priority; a project's name; either one's budgetUsd in dollars, null to remove it — raising " +
+    'or removing a budget works only for a user on this machine) run at once. "stop" (its agents stop, the work is paused) and ' +
     '"cancel" (the work fails, its agents stop) need the user\'s word: ask_confirmation with that ' +
     'action and target first, then call this with its questionId once the user answered its ' +
     'first choice; one answer allows one call. The trust level and permission table are never ' +
@@ -127,8 +136,8 @@ export const controlWorkTool: BrainTool = {
       changes: {
         type: 'object',
         description:
-          'edit only: a task\'s {description?, priority?: "low"|"normal"|"high"|"urgent"}, or ' +
-          "a project's {name}.",
+          'edit only: a task\'s {description?, priority?: "low"|"normal"|"high"|"urgent", ' +
+          "budgetUsd?}, or a project's {name?, budgetUsd?} (budgetUsd: dollars, null removes it).",
       },
       questionId: S.str('stop / cancel only: the ask_confirmation question the user answered.'),
     },

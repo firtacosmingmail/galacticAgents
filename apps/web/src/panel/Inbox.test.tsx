@@ -385,6 +385,38 @@ describe('proposal and plan cards (P25-06)', () => {
     ]);
   });
 
+  it('gives a card a budget, changes and removes it (P8-01)', async () => {
+    await open([], [card, planCard]);
+    const el = within(waiting()).getByLabelText('proposal Add dark mode to the settings page');
+    expect(within(el).getByLabelText('budget').textContent).toBe('none');
+    await click(within(el).getByRole('button', { name: 'Edit' }));
+    const form = within(el).getByLabelText('edit card');
+    fireEvent.change(within(form).getByLabelText('budget ($)'), { target: { value: '2.5' } });
+    await click(within(form).getByRole('button', { name: 'Save' }));
+    await flush();
+    await stream({ type: 'proposal.edited', proposalId: 'pr-1', changes: { budgetUsd: 2.5 } });
+    expect(within(el).getByLabelText('budget').textContent).toBe('$2.50');
+    await click(within(el).getByRole('button', { name: 'Edit' }));
+    const again = within(el).getByLabelText('edit card');
+    fireEvent.change(within(again).getByLabelText('budget ($)'), { target: { value: '' } });
+    await click(within(again).getByRole('button', { name: 'Save' }));
+    // The plan card's budget is its project's, set on approval.
+    const plan = within(waiting()).getByLabelText('plan Two steps');
+    const budget = within(plan).getByLabelText('plan budget');
+    fireEvent.change(within(budget).getByLabelText('project budget ($)'), {
+      target: { value: '10' },
+    });
+    await click(within(budget).getByRole('button', { name: 'Set budget' }));
+    await flush();
+    expect(posts('/api/proposals/pr-1/decide').map((c) => c.body)).toEqual([
+      { decision: 'edit', changes: { budgetUsd: 2.5 } },
+      { decision: 'edit', changes: { budgetUsd: null } },
+    ]);
+    expect(posts('/api/proposals/pr-plan/decide').map((c) => c.body)).toEqual([
+      { decision: 'edit', changes: { budgetUsd: 10 } },
+    ]);
+  });
+
   it('shows a parked card with the occupied planets and the downsize / close-early offers', async () => {
     await open([], [parkedCard]);
     const el = within(inbox()).getByLabelText('proposal Build a billing service');
