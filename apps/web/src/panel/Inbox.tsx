@@ -4,6 +4,7 @@ import { useAppStore } from '../state/store.js';
 import { AnsweredQuestionCard, ProposalCard, QuestionCard, StaleBanner } from './cards/index.js';
 import { inboxModel, waitingForUserCount, type InboxItem } from './inbox-model.js';
 import { Beacon } from './Navigation.js';
+import { OfflineAnswers } from './cards/QueuedAnswer.js';
 import './inbox.css';
 
 /**
@@ -47,6 +48,8 @@ export function Inbox({ onHide }: { onHide?: () => void } = {}) {
           </button>
         )}
       </div>
+      {/* Answers given offline whose card is gone or not loaded yet (P7-05). */}
+      <OfflineAnswers />
       {refusals.map((r) => (
         <StaleBanner
           key={r.questionId}

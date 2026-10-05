@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
+  isCatalogued,
   proposalParking,
   proposalPlan,
   proposalPromotion,
@@ -17,6 +18,7 @@ import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
 import { Controls } from '../../console/hierarchy/WorkTree.js';
 import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy/shared.js';
+import { OfflineDecisionNote, useStreamDown } from './QueuedAnswer.js';
 import { AgentRef } from './links.js';
 
 /**
@@ -138,7 +140,10 @@ function requestType(p: Proposal): string | undefined {
 export function WorkCard({ proposal: p }: { proposal: Proposal }) {
   const api = useApi();
   const world = useAppStore((s) => s.world);
-  const { run, error, busy } = useAction();
+  const { run, error, busy: running } = useAction();
+  // Card decisions are not queued offline (P7-05): they wait for the connection.
+  const offline = useStreamDown();
+  const busy = running || offline;
   const [editing, setEditing] = useState(false);
   const decide = (d: ProposalDecisionBody) => run(() => api.decide(p.id, d));
   const parking = proposalParking(p);
@@ -202,6 +207,7 @@ export function WorkCard({ proposal: p }: { proposal: Proposal }) {
         )}
       </dl>
       {parking && <Parked parking={parking} proposal={p} decide={decide} busy={busy} />}
+      {offline && <OfflineDecisionNote />}
       <div className="controls">
         {p.state !== 'rejected' && (
           <button disabled={busy} onClick={() => decide({ decision: 'approve' })}>
@@ -302,11 +308,22 @@ function Parked({
   );
 }
 
-/** The free bodies of a kind the card may name (not reserved, not hosting, no "moved" marker). */
-function freeBodies(world: Pick<WorldState, 'bodies'>, kind: Proposal['kind']): Body[] {
+/**
+ * The free bodies of a kind the card may name: not reserved, not hosting, no "moved" marker, and
+ * catalogued — the server's own rule (`isCatalogued`): never a demo, retired or orbit-less planet,
+ * which the server would not use.
+ */
+export function freeBodies(world: Pick<WorldState, 'bodies'>, kind: Proposal['kind']): Body[] {
   if (kind === 'asteroid') return [];
   return Object.values(world.bodies)
-    .filter((b) => b.kind === kind && !b.host && !b.movedTo && b.meta?.['reserved'] !== true)
+    .filter(
+      (b) =>
+        b.kind === kind &&
+        !b.host &&
+        !b.movedTo &&
+        b.meta?.['reserved'] !== true &&
+        isCatalogued(b),
+    )
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -421,7 +438,9 @@ function EditCard({
 export function PlanCard({ proposal: p }: { proposal: Proposal }) {
   const api = useApi();
   const world = useAppStore((s) => s.world);
-  const { run, error, busy } = useAction();
+  const { run, error, busy: running } = useAction();
+  const offline = useStreamDown();
+  const busy = running || offline;
   const plan = proposalPlan(p)!;
   const project = world.projects[plan.projectId];
   const decide = (d: ProposalDecisionBody) => run(() => api.decide(p.id, d));
@@ -451,6 +470,7 @@ export function PlanCard({ proposal: p }: { proposal: Proposal }) {
           );
         })}
       </ol>
+      {offline && <OfflineDecisionNote />}
       <div className="controls">
         {p.state !== 'rejected' && (
           <button disabled={busy} onClick={() => decide({ decision: 'approve' })}>

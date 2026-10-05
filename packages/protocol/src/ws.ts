@@ -10,7 +10,7 @@ import {
   Task,
   TranscriptChunk,
 } from './domain.js';
-import { EventEnvelope } from './events.js';
+import { EVENT_TYPES, EventEnvelope } from './events.js';
 import { RequestOrigin } from './enums.js';
 
 // ---------------------------------------------------------------------------
@@ -94,6 +94,30 @@ export type Snapshot = Omit<SnapshotMessage, 'type'>;
 /** One event of the ordered stream (also used for the catch-up after `hello{lastEventId}`). */
 export const EventMessage = EventEnvelope.extend({ type: z.literal('event') });
 export type EventMessage = z.infer<typeof EventMessage>;
+
+/** An `event` frame read for its envelope only: any event `type`, the rest left unchecked. */
+const EventFrameEnvelope = z.object({
+  type: z.literal('event'),
+  seq: z.number().int().positive(),
+  at: Timestamp,
+  event: z.object({ type: z.string().min(1) }),
+});
+
+/**
+ * Protocol evolution (TECHNOLOGY §6.3): an `event` frame whose envelope is valid but whose event
+ * `type` this build does not know — a newer server added it (e.g. `body.retired`, P7-07). The
+ * client skips such an event and advances its `seq` past it, instead of treating the frame as
+ * unreadable (which would resume from the same `seq` and receive it again, forever). Undefined for
+ * anything else, including a malformed event of a *known* type: that is a server bug, and still
+ * an unreadable message.
+ */
+export function unknownEventFrame(data: unknown): { seq: number; eventType: string } | undefined {
+  const frame = EventFrameEnvelope.safeParse(data);
+  if (!frame.success) return undefined;
+  const eventType = frame.data.event.type;
+  if ((EVENT_TYPES as readonly string[]).includes(eventType)) return undefined;
+  return { seq: frame.data.seq, eventType };
+}
 
 /** Marks the end of the catch-up replay; the client is now live. */
 export const CaughtUpMessage = z.object({

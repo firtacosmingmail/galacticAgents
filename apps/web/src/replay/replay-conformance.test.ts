@@ -13,6 +13,7 @@ import {
   HistoryEvents,
   composeRuntime,
   openDatabase,
+  seedDemoProject,
   type ComposedRuntime,
 } from '@galactic/server';
 import { applySnapshot, type WorldState } from '../state/reduce.js';
@@ -293,5 +294,40 @@ describe('timeline replay vs the server', () => {
     const empty = timeline.worldAt(0);
     expect(Object.keys(empty.projects)).toHaveLength(0);
     expect(satelliteList(empty, SCENE_SATELLITES)).toHaveLength(0);
+  });
+});
+
+describe('timeline replay of a demo project (P7-07)', () => {
+  it('shows the demo planet while the project lived, and not after it retired', async () => {
+    const composed = composeRuntime(openDatabase(':memory:'), {
+      adapters: [new FakeAdapter({ speed: 1 })],
+      log: { now: tickingClock() },
+      flushMs: 10,
+    });
+    lives.push(composed);
+    const { log, commands } = composed;
+    const demo = log.runCommand((ctx) => seedDemoProject(ctx)).value;
+    await commands.closeProject(demo.id, USER);
+    await commands.archiveProject(demo.id, USER);
+
+    // The live world no longer has the planet; the replay starts from it, as the page does.
+    const live = applySnapshot({ ...log.snapshot(), statuses: [] });
+    expect(live.bodies[demo.bodyId]).toBeUndefined();
+    const page = new HistoryEvents(log.db).read({ projectId: demo.id, after: 0, limit: 100 });
+    expect(page.events.map((e) => e.event.type)).toEqual([
+      'body.created',
+      'project.created',
+      'body.assigned',
+      'project.state_changed',
+      'project.state_changed',
+      'body.freed',
+      'body.retired',
+    ]);
+    const timeline = createReplayTimeline(replayBase(live.bodies), page.events);
+    const during = timeline.worldAt(3);
+    expect(during.bodies[demo.bodyId]?.host).toEqual({ kind: 'project', id: demo.id });
+    const end = timeline.worldAt(page.events.length);
+    expect(end.bodies[demo.bodyId]).toBeUndefined();
+    expect(end.projects[demo.id]?.state).toBe('archived');
   });
 });

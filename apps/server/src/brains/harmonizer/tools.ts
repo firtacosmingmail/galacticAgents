@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import { proposalParking } from '@galactic/protocol';
+import { isDemoBody, isRetiredBody, proposalParking } from '@galactic/protocol';
 import type {
   AgentRuntime,
   Body,
@@ -98,8 +98,12 @@ function defaultCheckPath(projectsRoot: string) {
   };
 }
 
-/** Free means: no host and no "moved to …" marker (decision 25). */
-const isFree = (b: Body | undefined) => b !== undefined && !b.host && !b.movedTo;
+/**
+ * Free means: no host and no "moved to …" marker (decision 25) — and never a demo or retired body
+ * (P7-07: a `/dev/seed` planet is not for real work).
+ */
+const isFree = (b: Body | undefined) =>
+  b !== undefined && !b.host && !b.movedTo && !isDemoBody(b) && !isRetiredBody(b);
 
 const requestOf = (p: Proposal): HarmonizerRequest | undefined =>
   p.meta?.['request'] as HarmonizerRequest | undefined;

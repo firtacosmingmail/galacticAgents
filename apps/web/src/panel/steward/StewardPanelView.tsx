@@ -24,6 +24,7 @@ import { useNow } from '../AgentCards.js';
 import { formatCost, formatDuration, wallClockUsed } from '../agent-cards-model.js';
 import { ControlsStrip } from '../controls.js';
 import { ClarificationComposer } from './ClarificationComposer.js';
+import { OfflineAnswers } from '../cards/QueuedAnswer.js';
 import { StewardProcesses } from './StewardProcesses.js';
 import { TranscriptLog } from './TranscriptLog.js';
 import { TaskStatusFacts } from '../status/StatusViews.js';
@@ -86,6 +87,8 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
             ))}
         </section>
       )}
+      {/* Answers to its questions given offline, once the question is no longer open (P7-05). */}
+      <OfflineAnswers filter={(e) => world.questions[e.questionId]?.originAgentId === agentId} />
       {refusal && (
         <StaleBanner
           questionId={refusal.questionId}

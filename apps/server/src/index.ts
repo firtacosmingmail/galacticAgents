@@ -15,6 +15,7 @@ import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { openDatabase } from './db/database.js';
+import { createPush } from './push/index.js';
 import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { composeRuntime } from './runtime/compose.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
@@ -66,6 +67,11 @@ const composed = composeRuntime(db, {
   processes: { groups: supervisor },
 });
 const { log, statuses, transcripts } = composed;
+// Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
+const push = createPush(db, config, {
+  log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
+});
+push.service.start(log);
 // The settings page (P25-01): caps and retention apply live through the runtime and the job.
 const settings = new SettingsService({
   config,
@@ -91,6 +97,7 @@ function shutdown(code: number): void {
   deadline.unref();
   // The promotion flow stops with the runtime: no card is carried out while agents are stopping.
   promotions?.stop();
+  push.service.stop();
   void composed
     .shutdown()
     .catch((error) => console.error('[runtime] shutdown:', error))
@@ -165,6 +172,7 @@ const app = buildApp({
   commands: composed.commands,
   ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
+  push,
   restartHarmonizer: async () => {
     const hq = await restartHarmonizer();
     console.log(

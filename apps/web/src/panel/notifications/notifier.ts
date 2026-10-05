@@ -71,16 +71,63 @@ const liveNotifications = new Set<Notification>();
 /** How many shown notifications are still held (tests). */
 export const liveNotificationCount = () => liveNotifications.size;
 
-/** Shows one desktop notification; its click focuses the window and selects the item. */
-export function showNotification(n: {
+type Shown = {
   id: string;
   title: string;
   body?: string | undefined;
   /** Without one, the click opens the Harmonizer with the inbox in view. */
   target?: NotificationTarget | undefined;
-}) {
+};
+
+/**
+ * Shows it through the service worker (P7-04) when one is registered: then it shares its tag
+ * space with Web Push, so the page and a push about the same thing make one notification, not
+ * two; and mobile browsers, which refuse `new Notification`, show it too. A tap goes through the
+ * worker's `notificationclick` (`pwa/notification-clicks.ts`). False when there is no worker.
+ *
+ * Always shown, never skipped when the tag is already on screen: the same tag replaces it in
+ * place (`renotify: false`, no second alert), so an updated notification — a backfill summary
+ * whose count grew — is not lost behind an older copy.
+ *
+ * While a new worker is installing or waiting, the active one may be an older build without the
+ * `notificationclick` handler, and a tap on what it shows would do nothing: the page's own
+ * `Notification` (whose `onclick` the page handles) is preferred then, and the worker used only
+ * when the page cannot show one (mobile).
+ */
+async function showThroughWorker(Api: typeof Notification, n: Shown): Promise<boolean> {
+  const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+  if (!sw) return false;
+  const reg = await sw.getRegistration().catch(() => undefined);
+  if (!reg || typeof reg.showNotification !== 'function') return false;
+  if ((reg.installing || reg.waiting) && showFromPage(Api, n)) return true;
+  const options: NotificationOptions & { renotify?: boolean } = {
+    tag: n.id,
+    icon: '/icons/icon-192.png',
+    renotify: false,
+    ...(n.body ? { body: n.body } : {}),
+    data: { id: n.id, ...(n.target ? { target: n.target } : {}) },
+  };
+  await reg.showNotification(n.title, options);
+  return true;
+}
+
+/** Shows one desktop notification; its click focuses the window and selects the item. */
+export function showNotification(n: Shown) {
   const Api = notificationApi();
   if (!Api) return;
+  if (typeof navigator !== 'undefined' && navigator.serviceWorker) {
+    void showThroughWorker(Api, n)
+      .catch(() => false)
+      .then((done) => {
+        if (!done) showFromPage(Api, n);
+      });
+    return;
+  }
+  showFromPage(Api, n);
+}
+
+/** The page's own Notification; false when the browser refuses one outside a worker. */
+function showFromPage(Api: typeof Notification, n: Shown): boolean {
   try {
     // The tag makes the OS replace rather than stack a second copy (another tab, a race).
     const shown = new Api(n.title, { tag: n.id, ...(n.body ? { body: n.body } : {}) });
@@ -93,8 +140,10 @@ export function showNotification(n: {
       shown.close();
       liveNotifications.delete(shown);
     };
+    return true;
   } catch {
     // Some browsers allow notifications only from a service worker; nothing to show then.
+    return false;
   }
 }
 

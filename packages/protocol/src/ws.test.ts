@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ClientMessage, HealthResponse, ServerMessage } from './ws.js';
+import { ClientMessage, HealthResponse, ServerMessage, unknownEventFrame } from './ws.js';
 import * as d from './fixtures/domain.js';
 import { events } from './fixtures/events.js';
 
@@ -69,5 +69,26 @@ describe('websocket message schemas', () => {
         seq: 0,
       }).ok,
     ).toBe(true);
+  });
+});
+
+describe('unknownEventFrame (protocol evolution)', () => {
+  const at = '2026-10-05T10:00:00.000Z';
+  it('names an event frame whose envelope is valid but whose type this build does not know', () => {
+    expect(
+      unknownEventFrame({ type: 'event', seq: 7, at, event: { type: 'body.someday', x: 1 } }),
+    ).toEqual({ seq: 7, eventType: 'body.someday' });
+  });
+  it('is undefined for a known type (even malformed), a broken envelope or another message', () => {
+    expect(unknownEventFrame({ type: 'event', seq: 7, at, event: { type: 'agent.idle' } })).toBe(
+      undefined,
+    );
+    expect(unknownEventFrame({ type: 'event', seq: 0, at, event: { type: 'x.y' } })).toBe(
+      undefined,
+    );
+    expect(unknownEventFrame({ type: 'event', seq: 7, event: { type: 'x.y' } })).toBe(undefined);
+    expect(unknownEventFrame({ type: 'event', seq: 7, at, event: {} })).toBe(undefined);
+    expect(unknownEventFrame({ type: 'caught_up', seq: 7 })).toBe(undefined);
+    expect(unknownEventFrame('nope')).toBe(undefined);
   });
 });
