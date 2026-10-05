@@ -538,8 +538,8 @@ function placeMarkers(ctx: OverlayCtx, state: RootState): void {
         f.visible = false;
         continue;
       }
-      anchorPosition(anchor, s.world);
-      s.v.set(s.world[0], s.world[1], s.world[2]).applyMatrix4(s.toLocal);
+      anchorPosition(anchor, s.worldAt);
+      s.v.set(s.worldAt[0], s.worldAt[1], s.worldAt[2]).applyMatrix4(s.toLocal);
       s.centre[0] = s.v.x;
       s.centre[1] = s.v.y;
       s.centre[2] = s.v.z;
@@ -562,10 +562,10 @@ function placeMarkers(ctx: OverlayCtx, state: RootState): void {
     const look = markerLook(m.state);
     const unit = orbit ? MARKER_SIZE.buoy * body.radius * 2 : MARKER_SIZE.mast * r;
     const size = clampPx(unit, perPx) * look.scale * grow;
-    s.world[0] = s.v.x;
-    s.world[1] = s.v.y;
-    s.world[2] = s.v.z;
-    const cut = own && !orbit && cutAway(planes, s.world);
+    s.worldAt[0] = s.v.x;
+    s.worldAt[1] = s.v.y;
+    s.worldAt[2] = s.v.z;
+    const cut = own && !orbit && cutAway(planes, s.worldAt);
     const shown = size > 1e-6 && !cut;
     // The picking frame: a little above the pin's foot (never inside its body), or the buoy.
     f.visible = shown;
@@ -770,7 +770,7 @@ function newScratch() {
     v: new Vector3(),
     w: new Vector3(),
     q: new Quaternion(),
-    world: [0, 0, 0] as [number, number, number],
+    worldAt: [0, 0, 0] as [number, number, number],
     centre: [0, 0, 0] as Vec3,
     local: [0, 0, 0] as Vec3,
     axis: [0, 1, 0] as Vec3,
@@ -904,15 +904,15 @@ function writeTethers(
         const anchor = getAnchor(moonId);
         const moon = body.planet.moons.find((m) => m.bodyId === moonId);
         if (!anchor || !moon) continue;
-        anchorPosition(anchor, s.world);
-        s.w.set(s.world[0], s.world[1], s.world[2]).applyMatrix4(s.toLocal);
+        anchorPosition(anchor, s.worldAt);
+        s.w.set(s.worldAt[0], s.worldAt[1], s.worldAt[2]).applyMatrix4(s.toLocal);
         segment(surfaceRadius, s.w, moon.radius);
       }
     } else if (parentPlanet) {
       const anchor = getAnchor(parentPlanet);
       if (anchor) {
-        anchorPosition(anchor, s.world);
-        s.w.set(s.world[0], s.world[1], s.world[2]).applyMatrix4(s.toLocal);
+        anchorPosition(anchor, s.worldAt);
+        s.w.set(s.worldAt[0], s.worldAt[1], s.worldAt[2]).applyMatrix4(s.toLocal);
         segment(surfaceRadius, s.w, body.parent.radius);
       }
     }
