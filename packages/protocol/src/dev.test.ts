@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isDemoBody, isDemoProject } from './dev.js';
+import { isCatalogued, isDemoBody, isDemoProject } from './dev.js';
 import { isRetiredBody, type Body, type Project } from './domain.js';
 
 /** P7-07 — which rows are seeded demo work, flagged or (made before the flag) by `/dev/seed`'s names. */
@@ -19,6 +19,19 @@ const project = (over: Partial<Project> = {}): Project => ({
   createdAt: '2026-10-05T00:00:00.000Z',
   updatedAt: '2026-10-05T00:00:00.000Z',
   ...over,
+});
+
+describe('isCatalogued', () => {
+  it('is a seeded planet or moon (meta.orbit), never a demo, retired or orbit-less body', () => {
+    expect(isCatalogued(planet({ name: 'Mars', meta: { orbit: 4 } }))).toBe(true);
+    expect(
+      isCatalogued(planet({ kind: 'moon', name: 'Phobos', parentId: 'b-mars', meta: { orbit: 1 } })),
+    ).toBe(true);
+    expect(isCatalogued(planet({ name: 'Mars' }))).toBe(false); // no orbit: made outside
+    expect(isCatalogued(planet())).toBe(false); // a legacy demo planet
+    expect(isCatalogued(planet({ name: 'X', meta: { orbit: 9, demo: true } }))).toBe(false);
+    expect(isCatalogued(planet({ name: 'Mars', meta: { orbit: 4, retired: true } }))).toBe(false);
+  });
 });
 
 describe('isDemoBody', () => {

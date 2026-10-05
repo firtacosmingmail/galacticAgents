@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Id } from './primitives.js';
 import { QuestionKind } from './enums.js';
-import type { Body, Project } from './domain.js';
+import { isRetiredBody, type Body, type Project } from './domain.js';
 
 /**
  * The scene harness (P4-06): development-only routes under `/dev/harness/*` (registered only with
@@ -177,6 +177,17 @@ export function isDemoBody(body: Body): boolean {
     DEMO_PLANET_NAME.test(body.name)
   );
 }
+
+/**
+ * A body the catalogue may hand out (P7-07): a seeded planet or moon (it has a `meta.orbit`,
+ * migration 0005), never a demo body (`/dev/seed`, `isDemoBody`) or a retired one. A planet or
+ * moon made outside the catalogue is never chosen for real work: it would silently raise decision
+ * 1's planet cap and bring a made-up planet back into the scene. One rule for both sides: the
+ * server's body choice (`domain/catalogue.ts`, `domain/parking.ts`) and the proposal card's list
+ * of free bodies, so the card never offers a body the server would refuse.
+ */
+export const isCatalogued = (body: Body): boolean =>
+  typeof body.meta?.['orbit'] === 'number' && !isDemoBody(body) && !isRetiredBody(body);
 
 /**
  * Whether a project is seeded demo work: flagged `meta.demo`, or — made before the flag — named
