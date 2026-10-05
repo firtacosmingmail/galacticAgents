@@ -172,7 +172,7 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
       await type(within(box).getByRole('textbox'), 'Keep it');
       await click(within(box).getByRole('button', { name: 'Send answer' }));
       expect(posts(fetchMock, '/api/questions/q-1/answer')).toEqual([
-        { answer: 'Keep it', version: 3 },
+        { answer: 'Keep it', version: 3, answerId: expect.any(String) },
       ]);
       // Both of its clarifications answered: the box goes, the view says it is read-only.
       await serverEvent({
@@ -283,13 +283,13 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
       await type(within(held).getByRole('textbox', { name: 'answer' }), 'ISO 8601');
       await click(within(held).getByRole('button', { name: 'Answer' }));
       expect(posts(fetchMock, '/api/questions/q-1/answer')).toEqual([
-        { answer: 'yes', version: 3 },
+        { answer: 'yes', version: 3, answerId: expect.any(String) },
       ]);
       expect(posts(fetchMock, '/api/questions/q-2/answer')).toEqual([
-        { answer: 'allow', version: 0 },
+        { answer: 'allow', version: 0, answerId: expect.any(String) },
       ]);
       expect(posts(fetchMock, '/api/questions/q-3/answer')).toEqual([
-        { answer: 'ISO 8601', version: 0 },
+        { answer: 'ISO 8601', version: 0, answerId: expect.any(String) },
       ]);
     });
   });
@@ -345,8 +345,12 @@ describe.each(MODES)('SPEC §4.2 side panel — $name', (mode: Mode) => {
           { name: 'Refuse' },
         ),
       );
-      expect(posts(fetchMock, '/api/questions/q-1/answer')).toEqual([{ answer: 'no', version: 3 }]);
-      expect(posts(fetchMock, '/api/questions/q-2/answer')).toEqual([{ answer: 'no', version: 0 }]);
+      expect(posts(fetchMock, '/api/questions/q-1/answer')).toEqual([
+        { answer: 'no', version: 3, answerId: expect.any(String) },
+      ]);
+      expect(posts(fetchMock, '/api/questions/q-2/answer')).toEqual([
+        { answer: 'no', version: 0, answerId: expect.any(String) },
+      ]);
     });
   });
 

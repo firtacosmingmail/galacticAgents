@@ -232,7 +232,9 @@ describe.each(MODES)('SPEC §4.3 requests the user must be able to make — $nam
         name: `clarification question ${clarification.context.text}`,
       });
       await click(within(card).getByRole('button', { name: 'no' }));
-      expect(posts(fetchMock, '/api/questions/q-1/answer')).toEqual([{ answer: 'no', version: 3 }]);
+      expect(posts(fetchMock, '/api/questions/q-1/answer')).toEqual([
+        { answer: 'no', version: 3, answerId: expect.any(String) },
+      ]);
     });
 
     it('§4.3.9 from the inbox (a clarification, a permission)', async () => {
@@ -243,9 +245,11 @@ describe.each(MODES)('SPEC §4.3 requests the user must be able to make — $nam
       );
       await click(within(card(/^permission question/)).getByRole('button', { name: 'Refuse' }));
       expect(posts(fetchMock, '/api/questions/q-1/answer')).toEqual([
-        { answer: 'yes', version: 3 },
+        { answer: 'yes', version: 3, answerId: expect.any(String) },
       ]);
-      expect(posts(fetchMock, '/api/questions/q-2/answer')).toEqual([{ answer: 'no', version: 0 }]);
+      expect(posts(fetchMock, '/api/questions/q-2/answer')).toEqual([
+        { answer: 'no', version: 0, answerId: expect.any(String) },
+      ]);
     });
 
     it('§4.3.10 directly to the Steward — a clarification only', async () => {
@@ -254,7 +258,7 @@ describe.each(MODES)('SPEC §4.3 requests the user must be able to make — $nam
       await type(within(box).getByRole('textbox'), 'Rename it to session_id');
       await click(within(box).getByRole('button', { name: 'Send answer' }));
       expect(posts(fetchMock, '/api/questions/q-1/answer')).toEqual([
-        { answer: 'Rename it to session_id', version: 3 },
+        { answer: 'Rename it to session_id', version: 3, answerId: expect.any(String) },
       ]);
       // A permission is never answered by message: the asteroid Steward's has allow / refuse only.
       cleanup();
@@ -367,7 +371,7 @@ describe.each(MODES)('SPEC §4.3 requests the user must be able to make — $nam
       });
       await click(within(card).getByRole('button', { name: 'Close Auth refactor' }));
       expect(posts(fetchMock, '/api/questions/q-close/answer')).toEqual([
-        { answer: 'Close Auth refactor', version: 0 },
+        { answer: 'Close Auth refactor', version: 0, answerId: expect.any(String) },
       ]);
     });
 

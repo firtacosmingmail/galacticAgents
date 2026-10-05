@@ -136,6 +136,27 @@ export interface AnswerInput {
    * long as the question is open, even if its holder moved meanwhile — the agent has seen it.
    */
   delivered?: boolean;
+  /** The answerer's idempotency key (P7-05), kept on the row as `meta.answerId`. */
+  answerId?: string;
+}
+
+/** `meta.answerId`: the idempotency key of the answer that closed the question (P7-05). */
+export const ANSWER_ID = 'answerId';
+
+/** The idempotency key the question was answered under, if any. */
+export function answerIdOf(question: Pick<Question, 'meta'> | undefined): string | undefined {
+  const id = question?.meta?.[ANSWER_ID];
+  return typeof id === 'string' ? id : undefined;
+}
+
+/**
+ * Whether `answerId` already answered `question` (P7-05): a retry of an answer that was recorded
+ * while its acknowledgement was lost. The caller reports success and changes nothing.
+ */
+export function isRecordedAnswer(question: Question, answerId: string | undefined): boolean {
+  return (
+    answerId !== undefined && question.status === 'answered' && answerIdOf(question) === answerId
+  );
 }
 
 /**
@@ -145,6 +166,8 @@ export interface AnswerInput {
  */
 export function answerQuestion(ctx: CommandContext, input: AnswerInput): Question {
   const current = must(ctx.tables.questions.get(input.questionId), 'question', input.questionId);
+  // A retry of an answer already recorded under its key: nothing to do (P7-05).
+  if (isRecordedAnswer(current, input.answerId)) return current;
   checkAnswer(current, input);
   const question: Question = {
     ...current,
@@ -153,6 +176,7 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
     answeredBy: input.answeredBy,
     version: current.version + 1,
     updatedAt: ctx.now,
+    ...(input.answerId ? { meta: { ...current.meta, [ANSWER_ID]: input.answerId } } : {}),
   };
   ctx.tables.questions.upsert(question);
   ctx.emit({
@@ -162,6 +186,7 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
     answeredBy: input.answeredBy,
     version: question.version,
     ...(input.holders?.length ? { holders: input.holders } : {}),
+    ...(input.answerId ? { answerId: input.answerId } : {}),
   });
   return question;
 }

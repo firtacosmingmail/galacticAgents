@@ -48,6 +48,7 @@ import {
   useRouteFocus,
   WaitingAnnouncer,
 } from './a11y.js';
+import { AnswerQueueAnnouncer } from './cards/QueuedAnswer.js';
 import './panel.css';
 
 /*
@@ -122,6 +123,7 @@ export function Panel({
         <CardLinksContext.Provider value={true}>
           <div className={showScene ? 'pnl pnl-with-scene' : 'pnl'}>
             <WaitingAnnouncer />
+            <AnswerQueueAnnouncer />
             <TopBar
               scene={scene}
               agents={agents}

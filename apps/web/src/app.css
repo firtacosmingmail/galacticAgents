@@ -400,3 +400,30 @@ button.danger {
   color: #b8c0d6;
   font-size: 0.9rem;
 }
+
+/* Answers given offline (P7-05): static, nothing moves. */
+.queued-answer,
+.answer-notice {
+  border: 1px dashed #4a5578;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 6px 0;
+}
+.queued-answer p,
+.answer-notice p {
+  margin: 0 0 4px;
+}
+.queued-pill {
+  background: #6b5d1f;
+}
+.answer-notice.is-sent {
+  border-style: solid;
+  border-color: #1f6f4a;
+}
+.answer-notice.is-not-sent {
+  border-style: solid;
+  border-color: #7a2a2a;
+}
+.offline-answers {
+  margin: 4px 0;
+}

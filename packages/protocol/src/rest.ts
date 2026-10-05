@@ -65,8 +65,18 @@ export type SendResponse = z.infer<typeof SendResponse>;
 export const AnswerBody = z.object({
   answer: z.string().min(1),
   version: z.number().int().nonnegative().optional(),
+  /**
+   * The client's idempotency key for this answer (P7-05): the same key on a retry (an answer
+   * queued offline, an acknowledgement lost on a dropped connection) is answered `ok` with
+   * `duplicate: true` once the first copy was recorded, instead of 409 `stale`.
+   */
+  answerId: z.string().min(1).max(100).optional(),
 });
 export type AnswerBody = z.infer<typeof AnswerBody>;
+
+/** `POST /api/questions/:id/answer`'s reply; `duplicate` when `answerId` was already recorded. */
+export const AnswerResponse = z.object({ ok: z.literal(true), duplicate: z.boolean().optional() });
+export type AnswerResponse = z.infer<typeof AnswerResponse>;
 
 /** A refused answer: `stale` when the question was answered or moved since `version`. */
 export const AnswerRefusal = z.object({

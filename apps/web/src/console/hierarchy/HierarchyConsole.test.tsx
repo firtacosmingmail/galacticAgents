@@ -461,7 +461,11 @@ describe('question inbox (P2-18)', () => {
     expect(within(card).getByText(/project Auth refactor/)).toBeTruthy();
     await click(within(card).getByText('yes'));
     await flush();
-    expect(posts('/api/questions/q-1/answer')[0]?.body).toEqual({ answer: 'yes', version: 3 });
+    expect(posts('/api/questions/q-1/answer')[0]?.body).toEqual({
+      answer: 'yes',
+      version: 3,
+      answerId: expect.any(String),
+    });
   });
 
   it('says who answered first when an answer is stale', async () => {
@@ -510,8 +514,8 @@ describe('question inbox (P2-18)', () => {
     await click(within(card).getByText('Refuse'));
     await flush();
     expect(posts('/api/questions/q-2/answer').map((c) => c.body)).toEqual([
-      { answer: 'allow', version: 0 },
-      { answer: 'no', version: 0 },
+      { answer: 'allow', version: 0, answerId: expect.any(String) },
+      { answer: 'no', version: 0, answerId: expect.any(String) },
     ]);
   });
 
@@ -705,6 +709,10 @@ describe('Steward view (P2-18, decision 13)', () => {
     fireEvent.change(within(view).getByLabelText('answer'), { target: { value: 'keep it' } });
     await click(within(view).getByText('Answer'));
     await flush();
-    expect(posts('/api/questions/q-1/answer')[0]?.body).toEqual({ answer: 'keep it', version: 2 });
+    expect(posts('/api/questions/q-1/answer')[0]?.body).toEqual({
+      answer: 'keep it',
+      version: 2,
+      answerId: expect.any(String),
+    });
   });
 });
