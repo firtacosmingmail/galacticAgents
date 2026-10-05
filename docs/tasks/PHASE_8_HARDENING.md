@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-04, P8-02, P8-01 (wave 1, branch `p8-wave1-drills-retention-budgets`) · **Task status:** in progress
-**Phase status:** in progress (0/11 done) — on branch `phase-8`, cut from `phase-7` (Phase 7 waits for the P7-06 device run before it merges into `main`)
+**Current task:** next wave proposed: P8-05, P8-03, P8-09 (after wave 1 is merged into `phase-8`; P8-10 needs Cosmin's decision) · **Task status:** todo
+**Phase status:** in progress (3/11 done) — on branch `phase-8`, cut from `phase-7` (Phase 7 waits for the P7-06 device run before it merges into `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -33,12 +33,12 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 ## Tasks
 
 ### P8-01 — Dollar budgets per project/task
-- **Status:** in progress · **Depends on:** P2-17, P1-08 · **Parallel with:** all
+- **Status:** done (2026-10-05) · **Depends on:** P2-17, P1-08 · **Parallel with:** all
 - Budget fields on projects/tasks; cost aggregation from `agent.finished(cost)`; Harmonizer warns at a threshold and refuses spawns beyond the budget (tool error + user message); budget editing in settings/cards.
 - **Acceptance:** tests with fake costs; the refusal is visible in the Harmonizer chat.
 
 ### P8-02 — Transcript retention and compaction
-- **Status:** in progress · **Depends on:** P1-06, P2-13 · **Parallel with:** all
+- **Status:** done (2026-10-05) · **Depends on:** P1-06, P2-13 · **Parallel with:** all
 - Retention policy for `transcript_chunks` (by age and by archived project); scheduled compaction; `events` untouched; VACUUM strategy.
 - **Acceptance:** compaction runs on a fixture DB; resume from `lastEventId` and the scrubber still work afterwards.
 
@@ -48,7 +48,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** export → wipe → import reproduces the map and history.
 
 ### P8-04 — Crash recovery drills
-- **Status:** in progress · **Depends on:** P2-16 · **Parallel with:** all
+- **Status:** done (2026-10-05) · **Depends on:** P2-16 · **Parallel with:** all
 - Scripted drills: `kill -9` mid-project, reboot the machine, unplug the network during a Steward run, disk full on write; record outcomes and fix findings; add the reproducible ones to CI.
 - **Acceptance:** drill log in `docs/tasks/notes/P8-04-drills.md`; no data loss or duplicate spawns in any drill.
 
