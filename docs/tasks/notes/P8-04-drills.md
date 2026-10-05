@@ -247,14 +247,14 @@ database does not); events are not.
   whole, never half); recovery resumes from there. A process kill loses nothing.
 
 **Open question (§8, recorded 2026-10-05):** should the event log trade write latency for power-loss
-durability (`synchronous=FULL`), or is decision 100's "may miss the last moments" acceptable for
+durability (`synchronous=FULL`), or is decision 102's "may miss the last moments" acceptable for
 a local app? Conservative meanwhile: keep `NORMAL`.
 
 ## New tasks (appended to `PHASE_8_HARDENING.md`, added 2026-10-05)
 
 - **P8-09 — Storage health in the panel**: a storage state in the status stream, a "disk full —
   N agent events waiting" banner, `507 storage_full` for refused REST/WS actions, a push
-  notification; decision 97.
+  notification; decision 99.
 - **P8-10 — Brains and the wall-clock cap**: F5; decide (proposed: brains are not stopped by the
   per-agent wall-clock cap — they are bounded by the hierarchy — or only their turn time counts)
   and fix in `CapsEnforcer`.

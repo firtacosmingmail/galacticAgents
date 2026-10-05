@@ -108,7 +108,11 @@ export const AgentProgress = z.object({
   progress: Progress.optional(),
 });
 
-/** A turn ended and the agent waits for its next message. Runtimes that meter per turn report the running cost here. */
+/**
+ * A turn ended and the agent waits for its next message. `cost` is the session's running total
+ * (cumulative per session, the `AgentAdapter` contract): a runtime that meters per turn sums its
+ * turns in the adapter.
+ */
 export const AgentIdle = z.object({
   type: z.literal('agent.idle'),
   ...agentBase,
@@ -562,8 +566,8 @@ export const BudgetWarning = z.object({
 });
 
 /**
- * The reported cost reached the budget (P8-01). Running agents are not stopped (proposed
- * decision 97); new spawns for the work are refused until the budget is raised or removed.
+ * The reported cost reached the budget (P8-01). Running agents are not stopped (SPEC
+ * decision 98); new spawns for the work are refused until the budget is raised or removed.
  * Logged once per budget value.
  */
 export const BudgetExceeded = z.object({

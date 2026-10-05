@@ -15,6 +15,8 @@ import {
   type CreateProposalInput,
   type CreateTaskInput,
   type DomainCommands,
+  type ProjectEdit,
+  type TaskEdit,
   type Event,
   type Host,
   type Id,
@@ -46,7 +48,6 @@ import {
   pinProject,
   reopenProject,
   updateProject,
-  type ProjectChanges,
 } from './projects.js';
 import { noLooserThan, resolvePolicy, type PolicyWrite } from './permissions.js';
 import type { ProposalOptions } from './approval.js';
@@ -78,7 +79,6 @@ import {
   pinTask,
   reopenTask,
   updateTask,
-  type TaskChanges,
 } from './tasks.js';
 
 /**
@@ -118,9 +118,12 @@ export interface CommandsOptions {
   checkWorkspace?: (path: string) => string;
 }
 
-/** A row's budget changes through `setBudget` only (P8-01): its own event and remote rule. */
-function noBudget(changes: { budgetUsd?: unknown }): void {
-  if (changes.budgetUsd !== undefined) {
+/**
+ * A row's budget changes through `setBudget` only (P8-01): its own event and remote rule. The types
+ * leave `budgetUsd` out of the update commands; this refuses an untyped caller's.
+ */
+function noBudget(changes: object): void {
+  if ((changes as { budgetUsd?: unknown }).budgetUsd !== undefined) {
     throw new DomainError('invalid', 'a budget is set with setBudget, not by an update');
   }
 }
@@ -253,7 +256,7 @@ export class Commands implements DomainCommands {
     return this.run((ctx) => createProject(ctx, input, this.choose, this.policyWrite(write)));
   }
   /** A new `permissionPolicy` is floored at the global default unless `write.origin` is local. */
-  updateProject(projectId: Id, changes: ProjectChanges, write?: WriteOptions) {
+  updateProject(projectId: Id, changes: ProjectEdit, write?: WriteOptions) {
     return this.run((ctx) => {
       noBudget(changes);
       return updateProject(ctx, projectId, changes, this.policyWrite(write), this.handOver());
@@ -277,7 +280,7 @@ export class Commands implements DomainCommands {
   createTask(input: CreateTaskInput) {
     return this.run((ctx) => createTask(ctx, input));
   }
-  updateTask(taskId: Id, changes: TaskChanges) {
+  updateTask(taskId: Id, changes: TaskEdit) {
     return this.run((ctx) => {
       noBudget(changes);
       return updateTask(ctx, taskId, changes);

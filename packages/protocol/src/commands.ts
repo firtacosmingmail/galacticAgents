@@ -231,6 +231,14 @@ export interface CommandResult<T> {
  * is refused (unknown id, invalid transition, stale answer, …) rejects with a `DomainError`
  * and writes nothing.
  */
+/**
+ * What `updateProject` / `updateTask` take: the row changes without the budget, which only
+ * `setBudget` changes (its own `budget.set` event and loosening rule, P8-01). The events'
+ * `ProjectChanges` / `TaskChanges` still carry `budgetUsd`: `setBudget` writes it that way.
+ */
+export type ProjectEdit = Omit<ProjectChanges, 'budgetUsd'>;
+export type TaskEdit = Omit<TaskChanges, 'budgetUsd'>;
+
 export interface DomainCommands {
   // projects and tasks
   /** A `permissionPolicy` is floored unless `write.origin` is `local` (P2-21). */
@@ -241,7 +249,7 @@ export interface DomainCommands {
    */
   updateProject(
     projectId: Id,
-    changes: ProjectChanges,
+    changes: ProjectEdit,
     write?: WriteOptions,
   ): Promise<CommandResult<Project>>;
   setProjectState(projectId: Id, state: WorkState): Promise<CommandResult<Project>>;
@@ -251,7 +259,7 @@ export interface DomainCommands {
   reopenProject(projectId: Id, by: Actor, input?: ReopenInput): Promise<CommandResult<Project>>;
   createTask(input: CreateTaskInput): Promise<CommandResult<Task>>;
   /** `null` clears a clearable field (`TaskChanges`, P2-20). */
-  updateTask(taskId: Id, changes: TaskChanges): Promise<CommandResult<Task>>;
+  updateTask(taskId: Id, changes: TaskEdit): Promise<CommandResult<Task>>;
   setTaskState(taskId: Id, state: WorkState): Promise<CommandResult<Task>>;
   closeTask(taskId: Id, by: Actor): Promise<CommandResult<Task>>;
   archiveTask(taskId: Id, by: Actor): Promise<CommandResult<Task>>;
@@ -314,7 +322,7 @@ export interface DomainCommands {
    * Sets (`usd`), changes or removes (`null`) the dollar budget of a project or task: the row's
    * `budgetUsd` plus a `budget.set` event, in one transaction. Loosening it (raising or removing)
    * is refused for a remote or unknown `write.origin` unless the server sets `autoApproveRemote`
-   * (proposed decision 97, like decision 37's floor); setting or lowering is allowed from anywhere.
+   * (SPEC decision 98, like decision 37's floor); setting or lowering is allowed from anywhere.
    */
   setBudget(
     target: BudgetTarget,

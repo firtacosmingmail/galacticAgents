@@ -58,7 +58,7 @@ Setting a budget or lowering it is a tightening: allowed from anywhere, the phon
 
 > | 98 | Dollar budgets | **Warn, refuse new agents, never stop running ones** (2026-10-05, P8-01; refines 18, §2.8): a project or task may have a dollar budget, given on its work card or plan card, its edit form, or by asking the Harmonizer. It is measured against the cost the runtimes report — an estimate, notional under a subscription login — summed over every agent that worked on it (a project: its Waykeepers, its tasks' Stewards and its sub-projects); a runtime that reports no cost counts as nothing and the panel says "cost not reported". At a share of the budget set in the settings (default 80 %) the user is warned in the Harmonizer's chat and the Waykeeper that runs the work is told; at the budget, no new Waykeeper or Steward is started for the work — the spawn is refused with the reason, which the Harmonizer's chat shows — but running agents go on and are not paused, and resuming an interrupted one is not a new spawn. Raising or removing the budget lets the work start agents again. Setting or lowering a budget works from anywhere; raising or removing one only on the Mac (or with `autoApproveRemote`), as decision 37 holds permission tables. Pausing work at its budget is a possible later option, not the default. |
 
-SPEC §2.8 ("Cost safety") could end: "…dollar budgets per project and task warn at a threshold and refuse new agents beyond the budget (decision 97)". §4.6 (settings) could list "the budget warning threshold".
+SPEC §2.8 ("Cost safety") could end: "…dollar budgets per project and task warn at a threshold and refuse new agents beyond the budget (decision 98)". §4.6 (settings) could list "the budget warning threshold".
 
 ## Proposed TECHNOLOGY text
 

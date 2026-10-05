@@ -74,7 +74,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 
 ### P8-09 — Storage health in the panel (added 2026-10-05)
 - **Status:** todo · **Depends on:** P8-04 · **Parallel with:** all
-- From the P8-04 disk-full drill (`notes/P8-04-drills.md`, finding F2): the server now holds the agent events it cannot write and writes them when space returns, but the user only sees refused actions as generic 500 errors. Add a storage state to the status stream (writes failing since, agent events waiting), a "disk full — N agent events waiting" banner in the panel and a push notification, and `507 storage_full` ("the disk is full") for REST and WebSocket actions the storage refuses. Proposed decision 97 in the notes.
+- From the P8-04 disk-full drill (`notes/P8-04-drills.md`, finding F2): the server now holds the agent events it cannot write and writes them when space returns, but the user only sees refused actions as generic 500 errors. Add a storage state to the status stream (writes failing since, agent events waiting), a "disk full — N agent events waiting" banner in the panel and a push notification, and `507 storage_full` ("the disk is full") for REST and WebSocket actions the storage refuses. SPEC decision 99.
 - **Acceptance:** with the drill's full disk, the panel shows the banner within a second, a refused action says the disk is full, and the banner clears when the held events are written.
 
 ### P8-10 — Brains and the wall-clock cap (added 2026-10-05)

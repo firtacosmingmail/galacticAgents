@@ -141,9 +141,11 @@ describe('setBudget (P8-01)', () => {
       by: USER,
     });
 
-    // Not through an update, and only a positive amount.
-    await refusal(c.commands.updateProject(project.id, { budgetUsd: 4 }));
-    await refusal(c.commands.updateTask(tasks[0]!, { budgetUsd: 4 }));
+    // Not through an update (the types leave it out; an untyped caller is refused), and only a
+    // positive amount.
+    const untyped = { budgetUsd: 4 } as object;
+    await refusal(c.commands.updateProject(project.id, untyped));
+    await refusal(c.commands.updateTask(tasks[0]!, untyped));
     await refusal(c.commands.setBudget(target, -1, USER, LOCAL));
 
     // The panel's edit carries it: control.edit plus budget.set, in one transaction.
