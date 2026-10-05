@@ -110,6 +110,54 @@ export interface AgentRuntimeOptions {
    * 1 s.
    */
   storageRetryMs?: number;
+  /**
+   * How much the held queue may grow while the storage refuses writes (P8-04 review): past it the
+   * oldest agent output (tool calls, progress) is dropped, never a state transition first.
+   * Default 10 000 events / 64 MiB (approximate: the events' JSON size).
+   */
+  heldLimits?: { events?: number; bytes?: number };
+}
+
+/** The agent events held for the storage, as P8-09's banner will show them. */
+export interface StorageState {
+  /** Agent events waiting to be written. */
+  held: number;
+  /** Their approximate size (JSON bytes). */
+  bytes: number;
+  /** Agent output dropped since the storage started refusing, to stay within the limits. */
+  dropped: number;
+  /** When the storage started refusing writes (the first held event's time). */
+  since?: string;
+  /** The storage's last refusal. */
+  error?: string;
+  /** The refusal will not go away by itself (a read-only or missing database file). */
+  permanent: boolean;
+}
+
+/** An agent event (or a runtime command) the storage refused, waiting to be written in order. */
+interface HeldWrite {
+  fn: (ctx: CommandContext) => unknown;
+  /** When it happened: written with this `at`. */
+  at: string;
+  bytes: number;
+  /** Agent output (a tool call, progress): what is dropped first when the queue is full. */
+  droppable: boolean;
+}
+
+export const DEFAULT_HELD_LIMITS = { events: 10_000, bytes: 64 * 2 ** 20 };
+/** What a held command without a single event is counted as. */
+const HELD_COMMAND_BYTES = 512;
+/** Agent output: dropped first when the held queue is over its limits (P8-04 review). */
+const DROPPABLE = new Set<Event['type']>(['agent.tool_call', 'agent.progress', 'agent.stalled']);
+/** Refusals that will not go away by themselves: the database is read-only or missing. */
+const PERMANENT_STORAGE = ['SQLITE_READONLY', 'SQLITE_CANTOPEN'];
+
+function isPermanentStorageFailure(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return (
+    typeof code === 'string' &&
+    PERMANENT_STORAGE.some((c) => code === c || code.startsWith(`${c}_`))
+  );
 }
 
 const TERMINAL = new Set<AgentEvent['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
@@ -262,6 +310,8 @@ class AgentHistory {
   readonly delivered = new Set<Id>();
   /** The log has its `agent.created`, its `agent.spawned`, its end (P8-04). */
   created = false;
+  /** The `seq` of its `agent.created`: a stop of its task or project after it counts (P8-04). */
+  createdSeq = 0;
   spawned = false;
   ended = false;
   /**
@@ -306,13 +356,24 @@ export class AgentRuntime {
    * once writes work again, and every later one waits behind them, so the log never skips an
    * event the runtime already acted on (an agent it forgot as ended, a question it delivered).
    */
-  private held: ((ctx: CommandContext) => unknown)[] = [];
+  private held: HeldWrite[] = [];
+  private heldBytes = 0;
   private heldTimer: NodeJS.Timeout | undefined;
+  /** The current refusal episode (P8-04 review): since when, the last error, what was dropped. */
+  private storage: { since?: string; error?: unknown; dropped: number; warnedFull: boolean } = {
+    dropped: 0,
+    warnedFull: false,
+  };
+  /** True while `writeHeld` runs: the log's before-command hook must not drain again. */
+  private draining = false;
+  private readonly unhook: () => void;
 
   constructor(private readonly opts: AgentRuntimeOptions) {
     this.now = opts.now ?? (() => new Date().toISOString());
     this.onError = opts.onError ?? (() => {});
     this.questions = opts.questions ?? logRouting(opts.log, livingFromStatuses(opts.statuses));
+    // Nothing commits ahead of the agent events held for a full disk (P8-04 review).
+    this.unhook = opts.log.addBeforeCommand(() => this.beforeCommand());
     const { maxConcurrentAgents, defaults, ...spawn } = opts.caps ?? {};
     this.caps = new CapsEnforcer({
       maxConcurrentAgents: maxConcurrentAgents ?? DEFAULT_MAX_CONCURRENT_AGENTS,
@@ -538,19 +599,20 @@ export class AgentRuntime {
       return { ok: false, reason: message };
     }
     live.handle = handle;
-    // The row's session ref and `agent.spawned` in one transaction (one write rule).
-    try {
-      live.agent = this.opts.log.runCommand((ctx) =>
-        recordSpawned(
-          ctx,
-          live.agent,
-          handle.sessionRef,
-          how.foldedUpTo !== undefined ? { foldedUpTo: how.foldedUpTo } : {},
-        ),
-      ).value;
-    } catch (error) {
-      this.onError(error, `record agent.spawned ${agent.id}`);
-    }
+    // The row's session ref and `agent.spawned` in one transaction (one write rule). A full disk
+    // holds it like any agent event (P8-04 review): lost, the next start would take the agent for
+    // one that never started and begin afresh instead of resuming its session.
+    this.command((ctx) => {
+      const row = ctx.tables.agents.get(live.agent.id) ?? live.agent;
+      const spawned = recordSpawned(
+        ctx,
+        row,
+        handle.sessionRef,
+        how.foldedUpTo !== undefined ? { foldedUpTo: how.foldedUpTo } : {},
+      );
+      if (this.live.get(spawned.id) === live) live.agent = spawned;
+      return spawned;
+    }, `record agent.spawned ${agent.id}`);
     for (const event of live.decisions.splice(0)) this.record(event);
     for (const event of live.early.splice(0)) this.route(event);
     if (live.pendingCap && !live.terminal) void this.onCapHit(agent.id, live.pendingCap);
@@ -576,7 +638,8 @@ export class AgentRuntime {
       throw new Error(`agent ${agentId} is stopping`);
     }
     const messageId = `m-${randomUUID()}`;
-    this.record({
+    // The user's line is refused whole on a full disk (SPEC decision 99); an agent's is held.
+    this.recordAs(opts.sender, {
       type: 'message.sent',
       messageId,
       agentId,
@@ -689,6 +752,9 @@ export class AgentRuntime {
     const current = this.opts.log.tables.questions.get(questionId);
     if (!current) throw new Error(`no open question ${questionId}`);
     checkAnswer(current, { questionId, answer, answeredBy: by });
+    // The user's answer is refused whole while the disk is full (SPEC decision 99): checked
+    // before the agent has it, since afterwards the record can only be held.
+    this.ensureWritable(by);
     // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
     // an answer in the log that the agent never saw.
     live.answering.add(questionId);
@@ -717,7 +783,7 @@ export class AgentRuntime {
     const live = this.must(agentId);
     if (live.paused) return;
     const session = this.session(live); // no session yet: refused before anything is logged
-    this.record({ type: 'control.pause', target: { kind: 'agent', id: agentId }, by });
+    this.recordAs(by, { type: 'control.pause', target: { kind: 'agent', id: agentId }, by });
     live.paused = true;
     live.inbox.paused();
     // A paused agent's wall clock stops (its cap counts working time only).
@@ -737,7 +803,7 @@ export class AgentRuntime {
     const live = this.must(agentId);
     if (!live.paused) return;
     const session = this.session(live);
-    this.record({ type: 'control.resume', target: { kind: 'agent', id: agentId }, by });
+    this.recordAs(by, { type: 'control.resume', target: { kind: 'agent', id: agentId }, by });
     await live.adapter.resume(session); // a failure leaves the agent paused, as the adapter is
     this.unpaused(live);
   }
@@ -768,8 +834,8 @@ export class AgentRuntime {
     if (!live || !live.handle || live.terminal) return;
     const sessionId = live.handle.sessionId;
     if (!live.stopRequested && !live.capStop) {
+      this.recordAs(by, { type: 'control.stop', target: { kind: 'agent', id: agentId }, by });
       live.stopRequested = by;
-      this.record({ type: 'control.stop', target: { kind: 'agent', id: agentId }, by });
     }
     try {
       await live.adapter.stop(sessionId);
@@ -868,15 +934,23 @@ export class AgentRuntime {
     // Agents the previous server created but never started (P8-04): no status record, so the
     // pass below would not see them. Interrupted like the others; they come back fresh (no
     // session to resume) — a brain re-seeded from the database, a Steward from its first prompt.
+    // One whose stop was logged meanwhile (its own, or its task's or project's) ends stopped, as
+    // a live one with a stop under way does below: it is not started again.
     for (const agent of this.opts.log.tables.agents.all()) {
       if (this.live.has(agent.id) || isHarnessMeta(agent.meta)) continue;
-      if (!histories.get(agent.id)?.neverStarted()) continue;
+      const history = histories.get(agent.id);
+      if (!history?.neverStarted()) continue;
+      const stoppedBy = history.stopRequested;
       this.command(({ emit }) =>
-        emit({
-          type: 'agent.interrupted',
-          agentId: agent.id,
-          reason: 'server restarted before the agent started',
-        }),
+        emit(
+          stoppedBy
+            ? { type: 'agent.stopped', agentId: agent.id, by: stoppedBy }
+            : {
+                type: 'agent.interrupted',
+                agentId: agent.id,
+                reason: 'server restarted before the agent started',
+              },
+        ),
       );
     }
     // Stewards first, supervisors last (P2-16): an agent's own questions are cancelled before the
@@ -1168,6 +1242,8 @@ export class AgentRuntime {
       if (!h) out.set(id, (h = new AgentHistory()));
       return h;
     };
+    /** Stops and cancels of tasks and projects, for the agents that never started (P8-04). */
+    const workStops: { kind: 'task' | 'project'; id: Id; seq: number; by: Actor }[] = [];
     const PAGE = 5_000;
     let since = 0;
     for (;;) {
@@ -1176,7 +1252,15 @@ export class AgentRuntime {
         since = seq;
         switch (ev.type) {
           case 'agent.created':
-            if (!only || only.has(ev.agent.id)) of(ev.agent.id).created = true;
+            if (!only || only.has(ev.agent.id)) {
+              of(ev.agent.id).created = true;
+              of(ev.agent.id).createdSeq = seq;
+            }
+            break;
+          case 'control.cancel':
+            if (ev.target.kind !== 'agent') {
+              workStops.push({ kind: ev.target.kind, id: ev.target.id, seq, by: ev.by });
+            }
             break;
           case 'agent.spawned':
             if (!only || only.has(ev.agentId)) {
@@ -1185,9 +1269,9 @@ export class AgentRuntime {
             }
             break;
           case 'control.stop':
-            if (ev.target.kind === 'agent' && (!only || only.has(ev.target.id))) {
-              of(ev.target.id).stopRequested = ev.by;
-            }
+            if (ev.target.kind === 'agent') {
+              if (!only || only.has(ev.target.id)) of(ev.target.id).stopRequested = ev.by;
+            } else workStops.push({ kind: ev.target.kind, id: ev.target.id, seq, by: ev.by });
             break;
           case 'agent.stopped':
           case 'agent.finished':
@@ -1210,6 +1294,19 @@ export class AgentRuntime {
       }
       if (page.length < PAGE) break;
     }
+    // An agent caught before it started whose task or project was stopped or cancelled after its
+    // row was made: the stop concerned it too (its session would have been stopped).
+    for (const [id, history] of out) {
+      if (!history.neverStarted() || history.stopRequested) continue;
+      const agent = this.opts.log.tables.agents.get(id);
+      const stop = workStops.find(
+        (s) =>
+          s.seq > history.createdSeq &&
+          ((s.kind === 'task' && s.id === agent?.taskId) ||
+            (s.kind === 'project' && s.id === agent?.projectId)),
+      );
+      if (stop) history.stopRequested = stop.by;
+    }
     return out;
   }
 
@@ -1218,6 +1315,7 @@ export class AgentRuntime {
     this.disposed = true;
     clearTimeout(this.heldTimer);
     this.heldTimer = undefined;
+    this.unhook();
     const stops = await Promise.allSettled(this.liveAgents().map((a) => this.stop(a.id, SYSTEM)));
     for (const s of stops) if (s.status === 'rejected') this.onError(s.reason, 'dispose stop');
     const disposals = await Promise.allSettled([...this.adapters.values()].map((a) => a.dispose()));
@@ -1369,43 +1467,142 @@ export class AgentRuntime {
 
   /** Appends an event under the one write rule; the status store sees it as a log subscriber. */
   private record(event: Event): void {
-    this.command(({ emit }) => emit(event));
+    this.command(({ emit }) => emit(event), 'command', event);
+  }
+
+  /**
+   * Records an action taken by `by` (P8-04 review; SPEC decision 99): the user's is refused whole
+   * with the storage error while the disk is full — it runs only once every held agent event is
+   * written, and a refused write is thrown, never held; anyone else's is held like an agent event.
+   */
+  private recordAs(by: Actor, event: Event): void {
+    if (by.type !== 'user') {
+      this.record(event);
+      return;
+    }
+    this.ensureWritable(by);
+    this.opts.log.runCommand(({ emit }) => emit(event));
+  }
+
+  /**
+   * Refuses the user's action with the storage error while agent events are still held (P8-04
+   * review): they are written first, and if the storage still refuses them the action is not
+   * taken at all. A no-op for anyone but the user and when nothing is held.
+   */
+  private ensureWritable(by: Actor): void {
+    if (by.type !== 'user' || this.held.length === 0) return;
+    this.writeHeld();
+    if (this.held.length > 0) throw this.storageRefusal();
+  }
+
+  /** The log's before-command hook: drains what is held, or refuses the command whole. */
+  private beforeCommand(): void {
+    if (this.draining || this.held.length === 0) return;
+    this.writeHeld();
+    if (this.held.length > 0) throw this.storageRefusal();
+  }
+
+  /** The storage error a refused action gets (`isStorageFailure` holds for it). */
+  private storageRefusal(): Error {
+    const cause = this.storage.error;
+    const code = (cause as { code?: unknown } | undefined)?.code;
+    const error = new Error(
+      `${cause instanceof Error ? cause.message : 'database or disk is full'} ` +
+        `(${this.held.length} agent events wait to be written)`,
+    ) as Error & { code?: string };
+    error.code = typeof code === 'string' ? code : 'SQLITE_FULL';
+    return error;
   }
 
   /**
    * Runs a domain command; a failure is reported, never thrown into the adapter's stream. A write
-   * the storage refuses (a full disk) is held and retried in order (P8-04), never dropped.
+   * the storage refuses (a full disk) is held and retried in order (P8-04), never dropped — unless
+   * the held queue outgrows its limits, when the oldest agent output goes first.
    */
-  private command(fn: (ctx: CommandContext) => unknown): void {
+  private command(fn: (ctx: CommandContext) => unknown, context = 'command', event?: Event): void {
     try {
-      this.recordOrHold(fn);
+      this.recordOrHold(fn, event);
     } catch (error) {
-      this.onError(error, 'command');
+      this.onError(error, context);
     }
   }
 
   /**
    * Runs `fn` under the one write rule, or holds it when the storage refuses it (or earlier
-   * writes are still held: the order is kept). Any other failure is thrown.
+   * writes are still held: the order is kept). It keeps the time it happened (`at`). Any other
+   * failure is thrown.
    */
-  private recordOrHold(fn: (ctx: CommandContext) => unknown): void {
+  private recordOrHold(fn: (ctx: CommandContext) => unknown, event?: Event): void {
+    const at = this.opts.log.clock();
     if (this.held.length > 0) {
-      this.held.push(fn);
+      this.hold({ fn, at, ...this.sizeOf(event) });
       return;
     }
     try {
-      this.opts.log.runCommand(fn);
+      this.opts.log.runCommand(fn, { at });
     } catch (error) {
       if (!isStorageFailure(error)) throw error;
-      this.held.push(fn);
-      this.onError(
-        new Error(
-          `${(error as Error).message}: agent events are held and written as soon as the ` +
-            'database accepts writes again',
-        ),
-        'storage',
-      );
+      this.storage = { since: at, error, dropped: 0, warnedFull: false };
+      this.hold({ fn, at, ...this.sizeOf(event) });
+      if (isPermanentStorageFailure(error)) {
+        this.onError(
+          new Error(
+            `${(error as Error).message}: the database cannot be written at all (read-only or ` +
+              'missing file). Agent events are held, within limits, until it can — fix the ' +
+              "file's permissions or restore it; the user's actions are refused meanwhile",
+          ),
+          'storage (permanent)',
+        );
+      } else {
+        this.onError(
+          new Error(
+            `${(error as Error).message}: agent events are held and written as soon as the ` +
+              'database accepts writes again',
+          ),
+          'storage',
+        );
+      }
       this.retryHeld();
+    }
+  }
+
+  private sizeOf(event: Event | undefined): { bytes: number; droppable: boolean } {
+    if (!event) return { bytes: HELD_COMMAND_BYTES, droppable: false };
+    return { bytes: JSON.stringify(event).length, droppable: DROPPABLE.has(event.type) };
+  }
+
+  /**
+   * Queues a refused write; past the limits the oldest agent output is dropped (logged once per
+   * episode), and only when there is none left the oldest write of any kind — the queue stays
+   * bounded even when the storage never comes back.
+   */
+  private hold(write: HeldWrite): void {
+    this.held.push(write);
+    this.heldBytes += write.bytes;
+    const limits = { ...DEFAULT_HELD_LIMITS, ...this.opts.heldLimits };
+    while (this.held.length > limits.events || this.heldBytes > limits.bytes) {
+      let i = this.held.findIndex((w) => w.droppable);
+      if (i < 0) {
+        i = 0;
+        this.onError(
+          new Error('the held queue holds only state changes: the oldest one is lost'),
+          'storage',
+        );
+      }
+      const [dropped] = this.held.splice(i, 1);
+      this.heldBytes -= dropped!.bytes;
+      this.storage.dropped += 1;
+      if (!this.storage.warnedFull) {
+        this.storage.warnedFull = true;
+        this.onError(
+          new Error(
+            `${this.held.length} agent events are held (${Math.round(this.heldBytes / 2 ** 20)} ` +
+              'MiB): the oldest agent output (tool calls, progress) is dropped from now on to ' +
+              'stay within the limits',
+          ),
+          'storage',
+        );
+      }
     }
   }
 
@@ -1419,27 +1616,46 @@ export class AgentRuntime {
   }
 
   /**
-   * Writes the held events in order; stops at the first one the storage still refuses and tries
-   * again later. One the log now refuses (a question answered meanwhile) is reported and dropped,
-   * as it would have been at the time. Returns how many are still held.
+   * Writes the held events in order, each with the time it happened; stops at the first one the
+   * storage still refuses and tries again later. One the log now refuses (a question answered
+   * meanwhile) is reported and dropped, as it would have been at the time. Returns how many are
+   * still held.
    */
   writeHeld(): number {
+    if (this.draining) return this.held.length;
     const before = this.held.length;
-    // Subscribers of a written event may log more: they queue behind the ones being written.
-    while (this.held.length > 0) {
-      try {
-        this.opts.log.runCommand(this.held[0]!);
-      } catch (error) {
-        if (isStorageFailure(error)) {
-          this.retryHeld();
-          return this.held.length;
+    this.draining = true;
+    try {
+      // Subscribers of a written event may log more: they queue behind the ones being written.
+      while (this.held.length > 0) {
+        const write = this.held[0]!;
+        try {
+          this.opts.log.runCommand(write.fn, { at: write.at });
+        } catch (error) {
+          if (isStorageFailure(error)) {
+            this.storage.error = error;
+            this.retryHeld();
+            return this.held.length;
+          }
+          this.onError(error, 'held command');
         }
-        this.onError(error, 'held command');
+        this.held.shift();
+        this.heldBytes -= write.bytes;
       }
-      this.held.shift();
+    } finally {
+      this.draining = false;
     }
+    this.heldBytes = 0;
     if (before > 0) {
-      this.onError(new Error(`writes work again: ${before} held agent events written`), 'storage');
+      const dropped = this.storage.dropped;
+      this.onError(
+        new Error(
+          `writes work again: ${before} held agent events written` +
+            (dropped > 0 ? ` (${dropped} older agent output events were dropped)` : ''),
+        ),
+        'storage',
+      );
+      this.storage = { dropped: 0, warnedFull: false };
     }
     return 0;
   }
@@ -1447,6 +1663,20 @@ export class AgentRuntime {
   /** Agent events waiting for the storage (P8-04). */
   get heldWrites(): number {
     return this.held.length;
+  }
+
+  /** The storage state for the panel (P8-09): what is held, since when, and why. */
+  storageState(): StorageState {
+    const error = this.storage.error;
+    const held = this.held.length > 0;
+    return {
+      held: this.held.length,
+      bytes: this.heldBytes,
+      dropped: this.storage.dropped,
+      ...(held && this.storage.since ? { since: this.storage.since } : {}),
+      ...(held && error ? { error: error instanceof Error ? error.message : String(error) } : {}),
+      permanent: held && isPermanentStorageFailure(error),
+    };
   }
 
   private async pump(adapter: AgentAdapter): Promise<void> {
