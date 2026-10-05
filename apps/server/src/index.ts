@@ -21,7 +21,9 @@ import { SqliteProcessStore } from './runtime/process-store.js';
 import { ProcessSupervisor } from './runtime/supervisor.js';
 import { Workspaces } from './workspace/workspaces.js';
 
-const { config, tokenGenerated } = loadConfig();
+const { config, tokenGenerated, warnings } = loadConfig();
+// Remote-access settings that work but deserve a word (P7-02): wildcards, identity headers.
+for (const warning of warnings) console.warn(`[config] ${warning}`);
 // The global default permission table from the settings (P25-01), before any agent runs.
 setGlobalDefaultPolicy(config.defaultPermissionPolicy);
 const onError = (error: unknown, context: string) =>

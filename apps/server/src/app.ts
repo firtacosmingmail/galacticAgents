@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { PROTOCOL_VERSION, type HealthResponse } from '@galactic/protocol';
 import type { ServerConfig } from './config/config.js';
-import { isAllowedHost, isRemoteRequest } from './http/security.js';
+import { isAllowedHost, isRemoteRequest, tailscaleIdentityOf } from './http/security.js';
 import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
@@ -38,7 +38,8 @@ export interface AppOptions {
   restartHarmonizer?: AgentRoutesOptions['restartHarmonizer'];
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
-  logger?: boolean;
+  /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
+  logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
 
 export interface App {
@@ -74,9 +75,15 @@ export function buildApp(opts: AppOptions): App {
     // Serve, `vite preview --host`) also arrives from loopback, maybe with no Origin at all (a
     // plain GET, curl): its Host or forwarding headers give it away (`isRemoteRequest`), and it
     // pastes the token (P3-08 review: the Origin check alone handed it to any LAN client).
-    if (!isRemoteRequest(req)) {
+    // Never to a remote client, not even one Tailscale identity authenticated (P7-02): the
+    // identity is its credential, the long-lived token stays on this machine.
+    const remote = isRemoteRequest(req);
+    body.origin = remote ? 'remote' : 'local';
+    if (!remote) {
       body.token = config.token;
     }
+    const identity = tailscaleIdentityOf(req, config);
+    if (identity) body.identity = identity;
     return body;
   });
 

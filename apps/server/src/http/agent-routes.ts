@@ -83,6 +83,20 @@ export function registerAgentRoutes(
       return undefined;
     };
     const agentId = (req: FastifyRequest) => (req.params as { id: string }).id;
+    /**
+     * Controls a remote client may not use unless the server trusts remote clients
+     * (`autoApproveRemote`): stopping a Steward's leftover processes and restarting the Harmonizer
+     * (P7-02; SPEC §8, the conservative answer until it is decided). 403 `remote_control`, with
+     * nothing done; stopping or pausing an agent and the work controls stay open to the phone.
+     */
+    const refuseRemoteControl = (req: FastifyRequest, reply: FastifyReply, what: string) => {
+      if (config.autoApproveRemote || originOf(req) === 'local') return false;
+      void reply.code(403).send({
+        error: 'remote_control',
+        message: `${what} only from this machine's own browser (not from a remote client).`,
+      });
+      return true;
+    };
     const attempt = async (reply: FastifyReply, fn: () => Promise<unknown>) => {
       try {
         return (await fn()) ?? { ok: true };
@@ -158,14 +172,15 @@ export function registerAgentRoutes(
     /**
      * The panel's "Restart Harmonizer" (P5-06; SPEC decision 82): stops the running Harmonizer as
      * the user's stop and starts a fresh one on the same runtime; the reply names the new one.
-     * Any authenticated client may ask, like stopping any agent (`/api/agents/:id/stop`, the
-     * panel's controls): it is a control action, not a settings write. 409 when it refuses (a
+     * A local client may ask; a remote one only when the server trusts remote clients
+     * (`autoApproveRemote`; 403 `remote_control` otherwise, P7-02). 409 when it refuses (a
      * restart or a resume of the Harmonizer under way, no runtime configured, the start refused),
      * 429 with `Retry-After` past the restart window (3 in 10 min), 500 for anything unexpected.
      */
     const { restartHarmonizer } = opts;
     if (restartHarmonizer) {
       app.post('/api/harmonizer/restart', async (req, reply) => {
+        if (refuseRemoteControl(req, reply, 'The Harmonizer can be restarted')) return reply;
         try {
           return (await restartHarmonizer()) satisfies RestartHarmonizerResponse;
         } catch (error) {
@@ -303,7 +318,8 @@ export function registerAgentRoutes(
      * left out while it runs, what that CLI uses marked `held`), and the user's stop — of the
      * given pids, every one of which must be attributable (400 otherwise, nothing signalled), or
      * of all of them for a Steward that ended (400 while it runs: the panel sends the pids it
-     * showed). 404 for an unknown agent, 400 for an agent that is not a Steward.
+     * showed). 404 for an unknown agent, 400 for an agent that is not a Steward. The stop is local
+     * only unless `autoApproveRemote` (403 `remote_control`, P7-02); the list is open to all.
      */
     const { processes } = opts;
     if (processes) {
@@ -315,6 +331,7 @@ export function registerAgentRoutes(
         }
       });
       app.post('/api/agents/:id/processes/stop', async (req, reply) => {
+        if (refuseRemoteControl(req, reply, "A Steward's processes can be stopped")) return reply;
         const body = parse(StopProcessesBody, req.body, reply);
         if (!body) return;
         try {

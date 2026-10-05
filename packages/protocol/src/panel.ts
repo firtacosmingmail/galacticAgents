@@ -218,6 +218,18 @@ export const SettingsResponse = z.object({
    * tighter default policy only — not the first-run marker). Absent (an older server): `all`.
    */
   writable: z.enum(['all', 'limited']).optional(),
+  /**
+   * Remote access as configured (P7-02; `docs/REMOTE_ACCESS.md`): `host` is the Tailscale Serve
+   * name (`remoteHost`), from which the settings page builds the phone's address and QR code;
+   * `tailscaleIdentity` says whether identity headers are accepted as a credential. Read-only:
+   * set in `config.json` / the environment. Absent (an older server): no remote access set up.
+   */
+  remote: z
+    .object({
+      host: z.string().min(1).optional(),
+      tailscaleIdentity: z.boolean(),
+    })
+    .optional(),
 });
 export type SettingsResponse = z.infer<typeof SettingsResponse>;
 
