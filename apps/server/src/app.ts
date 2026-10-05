@@ -100,7 +100,11 @@ export function buildApp(opts: AppOptions): App {
     const webDir = opts.webDir;
     void fastify.register(fastifyStatic, {
       root: webDir,
-      wildcard: false,
+      // One wildcard route that looks a file up per request (P7-01 review): `wildcard: false`
+      // lists the files at startup, so a rebuild without a restart 404'd its new assets — a blank
+      // page and a service worker that failed to install. Dotfiles stay unserved.
+      wildcard: true,
+      dotfiles: 'ignore',
       setHeaders: (reply, path) =>
         void reply.header('cache-control', webCacheControl(webDir, path)),
     });

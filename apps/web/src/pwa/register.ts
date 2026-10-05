@@ -125,17 +125,19 @@ export function registerPwa(
   // Reload only for an update the user asked for: the first install's `clients.claim()` and a
   // silent takeover change the controller too.
   let applying = false;
-  const onControllerChange = () => {
+  const reloadOnce = () => {
     if (!applying) return;
     applying = false;
     win.location.reload();
   };
-  sw.addEventListener('controllerchange', onControllerChange);
-  cleanups.push(() => sw.removeEventListener('controllerchange', onControllerChange));
+  sw.addEventListener('controllerchange', reloadOnce);
+  cleanups.push(() => sw.removeEventListener('controllerchange', reloadOnce));
 
-  const offer = async (worker: ServiceWorker) => {
-    // No controller yet: the first install, nothing to update.
-    if (!sw.controller) return;
+  const offer = async (worker: ServiceWorker, reg: ServiceWorkerRegistration) => {
+    // No active worker: the first install, nothing to update. A page without a controller but
+    // with an active worker (a hard reload, or before `clients.claim()` lands) still gets the
+    // offer (P7-01 review).
+    if (!reg.active) return;
     const entry = currentEntry(win.document);
     const build = await askBuild(worker);
     if (entry && build?.precache.includes(entry)) {
@@ -145,23 +147,35 @@ export function registerPwa(
     usePwa.setState({
       update: () => {
         usePwa.setState({ update: undefined });
-        if (worker.state === 'redundant') {
+        // No longer waiting: another tab applied it (it is active) or it was replaced. A plain
+        // reload loads whatever now serves the page (P7-01 review: two tabs).
+        if (worker.state !== 'installed') {
           win.location.reload();
           return;
         }
         applying = true;
+        // `controllerchange` reloads; a page no worker controls gets none, so the new worker
+        // reaching `activated` does too — whichever comes first.
+        const onActivated = () => {
+          if (worker.state === 'activated' || worker.state === 'redundant') {
+            worker.removeEventListener('statechange', onActivated);
+          }
+          if (worker.state === 'activated') reloadOnce();
+        };
+        worker.addEventListener('statechange', onActivated);
         worker.postMessage({ type: 'SKIP_WAITING' });
       },
     });
   };
-  const track = (worker: ServiceWorker | null) => {
+  const track = (worker: ServiceWorker | null, reg: ServiceWorkerRegistration) => {
     if (!worker) return;
+    warnIfDiscarded(worker);
     if (worker.state === 'installed') {
-      void offer(worker);
+      void offer(worker, reg);
       return;
     }
     const onState = () => {
-      if (worker.state === 'installed') void offer(worker);
+      if (worker.state === 'installed') void offer(worker, reg);
       if (worker.state === 'installed' || worker.state === 'redundant') {
         worker.removeEventListener('statechange', onState);
       }
@@ -176,9 +190,9 @@ export function registerPwa(
       .register('/sw.js', { scope: '/', updateViaCache: 'none' })
       .then((reg) => {
         if (cancelled) return;
-        track(reg.waiting);
-        track(reg.installing);
-        const onFound = () => track(reg.installing);
+        track(reg.waiting, reg);
+        track(reg.installing, reg);
+        const onFound = () => track(reg.installing, reg);
         reg.addEventListener('updatefound', onFound);
         const check = () => void reg.update().catch(() => undefined);
         const onVisible = () => {
@@ -203,6 +217,28 @@ export function registerPwa(
     cancelled = true;
     cleanups.forEach((c) => c());
   };
+}
+
+/**
+ * Logs a new worker that goes redundant without ever activating (P7-01 review): its install failed
+ * — most often a precache file the server does not have, such as a build made while the server
+ * kept serving the old one — or a newer worker replaced it. Either way the page keeps the old
+ * build without a word, so the console says so.
+ */
+function warnIfDiscarded(worker: ServiceWorker) {
+  let activated = false;
+  const onState = () => {
+    if (worker.state === 'activating' || worker.state === 'activated') activated = true;
+    if (worker.state !== 'redundant' && !activated) return;
+    worker.removeEventListener('statechange', onState);
+    if (worker.state === 'redundant' && !activated) {
+      console.warn(
+        '[pwa] A new service worker was discarded before it activated (its install failed, or a ' +
+          'newer one replaced it). The page keeps its current version.',
+      );
+    }
+  };
+  worker.addEventListener('statechange', onState);
 }
 
 /** Running as the installed app (Home Screen, standalone window). */

@@ -39,6 +39,7 @@ class FakeWorker extends EventTarget {
 }
 
 class FakeRegistration extends EventTarget {
+  active: FakeWorker | null = null;
   installing: FakeWorker | null = null;
   waiting: FakeWorker | null = null;
   update = vi.fn(async () => undefined);
@@ -134,6 +135,7 @@ describe('service worker registration (P7-01)', () => {
 
   it('takes a new build the page already runs silently', async () => {
     container.controller = {};
+    container.registration.active = new FakeWorker('activated', ['/', ENTRY]);
     const waiting = new FakeWorker('installed', ['/', ENTRY]);
     container.registration.waiting = waiting;
     start();
@@ -146,6 +148,7 @@ describe('service worker registration (P7-01)', () => {
 
   it('offers a reload for a deploy found while the page runs, and reloads once in control', async () => {
     container.controller = {};
+    container.registration.active = new FakeWorker('activated', ['/', ENTRY]);
     start();
     await settle();
     const next = new FakeWorker('installing', ['/', '/assets/index-next.js']);
@@ -168,6 +171,7 @@ describe('service worker registration (P7-01)', () => {
 
   it('offers the reload when the new worker does not say what it serves', async () => {
     container.controller = {};
+    container.registration.active = new FakeWorker('activated', ['/', ENTRY]);
     container.registration.waiting = new FakeWorker('installed', undefined);
     start();
     await new Promise((r) => setTimeout(r, 1700));
@@ -176,6 +180,7 @@ describe('service worker registration (P7-01)', () => {
 
   it('reloads straight away when the offered worker is gone', async () => {
     container.controller = {};
+    container.registration.active = new FakeWorker('activated', ['/', ENTRY]);
     const waiting = new FakeWorker('installed', ['/other']);
     container.registration.waiting = waiting;
     start();
@@ -183,6 +188,81 @@ describe('service worker registration (P7-01)', () => {
     waiting.state = 'redundant';
     usePwa.getState().update!();
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a waiting worker to a page no worker controls, after a hard reload (P7-01 review)', async () => {
+    container.registration.active = new FakeWorker('activated', ['/', ENTRY]);
+    const waiting = new FakeWorker('installed', ['/', '/assets/index-next.js']);
+    container.registration.waiting = waiting;
+    start();
+    await settle();
+    const update = usePwa.getState().update;
+    expect(update).toBeTypeOf('function');
+    update!();
+    expect(waiting.messages).toContainEqual({ type: 'SKIP_WAITING' });
+    // No controller, so maybe no controllerchange: the new worker activating reloads, once.
+    waiting.setState('activating');
+    waiting.setState('activated');
+    container.dispatchEvent(new Event('controllerchange'));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a waiting worker silently on an uncontrolled page that already runs its build', async () => {
+    container.registration.active = new FakeWorker('activated', ['/old']);
+    const waiting = new FakeWorker('installed', ['/', ENTRY]);
+    container.registration.waiting = waiting;
+    start();
+    await settle();
+    expect(waiting.messages).toContainEqual({ type: 'SKIP_WAITING' });
+    expect(usePwa.getState().update).toBeUndefined();
+  });
+
+  it('reloads plainly when another tab applied the update first (P7-01 review)', async () => {
+    container.controller = {};
+    container.registration.active = new FakeWorker('activated', ['/', ENTRY]);
+    const waiting = new FakeWorker('installed', ['/', '/assets/index-next.js']);
+    container.registration.waiting = waiting;
+    start();
+    await settle();
+    expect(usePwa.getState().update).toBeTypeOf('function');
+    // Tab B skips waiting: the worker activates and takes this page over, unasked.
+    waiting.setState('activating');
+    waiting.setState('activated');
+    container.dispatchEvent(new Event('controllerchange'));
+    expect(reload).not.toHaveBeenCalled();
+    waiting.messages.length = 0;
+    usePwa.getState().update!();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(waiting.messages).not.toContainEqual({ type: 'SKIP_WAITING' });
+  });
+
+  it('warns when a new worker is discarded before it activates (P7-01 review)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      container.controller = {};
+      container.registration.active = new FakeWorker('activated', ['/', ENTRY]);
+      start();
+      await settle();
+      // An install that fails (a precache file the server does not have).
+      const failed = new FakeWorker('installing', ['/', '/assets/index-next.js']);
+      container.registration.installing = failed;
+      container.registration.dispatchEvent(new Event('updatefound'));
+      failed.setState('redundant');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/discarded before it activated/);
+      // A worker that activated and later goes redundant (a newer deploy) is not news.
+      const fine = new FakeWorker('installing', ['/', ENTRY]);
+      container.registration.installing = fine;
+      container.registration.dispatchEvent(new Event('updatefound'));
+      fine.setState('installed');
+      await settle();
+      fine.setState('activating');
+      fine.setState('activated');
+      fine.setState('redundant');
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('checks for a new deploy on returning to the app and every 30 minutes', async () => {

@@ -51,6 +51,10 @@
   flex: 1 1 14rem;
   margin: 0;
 }
+/* No notice: the (empty) live region stays in the page, taking no room. */
+.pwa-notice-empty p {
+  margin: 0;
+}
 .pwa-actions {
   display: flex;
   gap: 8px;

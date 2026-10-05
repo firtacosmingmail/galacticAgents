@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { usePwa } from './register.js';
 import './pwa.css';
 
@@ -12,48 +13,52 @@ export function PwaNotices() {
   const install = usePwa((s) => s.install);
   const iosHint = usePwa((s) => s.iosHint);
   const { dismissUpdate, dismissInstall, runInstall } = usePwa.getState();
+  // One notice at a time, the update first. Only the message is the live region (P7-01 review):
+  // it stays in the page, empty, so a screen reader announces the text once, without the buttons.
+  let message: ReactNode = null;
+  let actions: ReactNode = null;
+  if (update) {
+    message = 'A new version of GalacticAgents is available.';
+    actions = (
+      <>
+        <button type="button" onClick={update}>
+          Reload
+        </button>
+        <button type="button" className="pwa-secondary" onClick={dismissUpdate}>
+          Later
+        </button>
+      </>
+    );
+  } else if (install) {
+    message = 'Install GalacticAgents on this device to open it from the Home Screen.';
+    actions = (
+      <>
+        <button type="button" onClick={() => void runInstall()}>
+          Install
+        </button>
+        <button type="button" className="pwa-secondary" onClick={dismissInstall}>
+          Not now
+        </button>
+      </>
+    );
+  } else if (iosHint) {
+    message = (
+      <>
+        To install GalacticAgents, tap <strong>Share</strong>, then{' '}
+        <strong>Add to Home Screen</strong>.
+      </>
+    );
+    actions = (
+      <button type="button" className="pwa-secondary" onClick={dismissInstall}>
+        Got it
+      </button>
+    );
+  }
   return (
     <aside className="pwa-notices" aria-label="App notices">
-      <div role="status">
-        {update && (
-          <div className="pwa-notice">
-            <p>A new version of GalacticAgents is available.</p>
-            <div className="pwa-actions">
-              <button type="button" onClick={update}>
-                Reload
-              </button>
-              <button type="button" className="pwa-secondary" onClick={dismissUpdate}>
-                Later
-              </button>
-            </div>
-          </div>
-        )}
-        {!update && install && (
-          <div className="pwa-notice">
-            <p>Install GalacticAgents on this device to open it from the Home Screen.</p>
-            <div className="pwa-actions">
-              <button type="button" onClick={() => void runInstall()}>
-                Install
-              </button>
-              <button type="button" className="pwa-secondary" onClick={dismissInstall}>
-                Not now
-              </button>
-            </div>
-          </div>
-        )}
-        {!update && !install && iosHint && (
-          <div className="pwa-notice">
-            <p>
-              To install GalacticAgents, tap <strong>Share</strong>, then{' '}
-              <strong>Add to Home Screen</strong>.
-            </p>
-            <div className="pwa-actions">
-              <button type="button" className="pwa-secondary" onClick={dismissInstall}>
-                Got it
-              </button>
-            </div>
-          </div>
-        )}
+      <div className={message ? 'pwa-notice' : 'pwa-notice-empty'}>
+        <p role="status">{message}</p>
+        {actions && <div className="pwa-actions">{actions}</div>}
       </div>
     </aside>
   );

@@ -68,6 +68,22 @@ describe('PWA files', () => {
     expect(icon.headers.get('cache-control')).toBe('public, max-age=3600');
   });
 
+  it('serves a build made after the server started, without a restart (P7-01 review)', async () => {
+    writeFileSync(join(webDir, 'index.html'), '<!doctype html><title>rebuilt</title>');
+    writeFileSync(join(webDir, 'assets', 'index-new456.js'), 'console.log(2);');
+    const asset = await fetch(`${t.baseUrl}/assets/index-new456.js`);
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(await asset.text()).toBe('console.log(2);');
+    expect(await (await fetch(`${t.baseUrl}/steward/a-2`)).text()).toContain('rebuilt');
+  });
+
+  it('never serves a dotfile', async () => {
+    writeFileSync(join(webDir, '.env'), 'SECRET=1');
+    const res = await fetch(`${t.baseUrl}/.env`);
+    expect(await res.text()).not.toContain('SECRET');
+  });
+
   it('answers a missing build file with a 404, not the page', async () => {
     for (const path of ['/assets/index-old.js', '/icons/nope.png']) {
       const res = await fetch(`${t.baseUrl}${path}`);
