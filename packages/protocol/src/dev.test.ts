@@ -25,7 +25,9 @@ describe('isCatalogued', () => {
   it('is a seeded planet or moon (meta.orbit), never a demo, retired or orbit-less body', () => {
     expect(isCatalogued(planet({ name: 'Mars', meta: { orbit: 4 } }))).toBe(true);
     expect(
-      isCatalogued(planet({ kind: 'moon', name: 'Phobos', parentId: 'b-mars', meta: { orbit: 1 } })),
+      isCatalogued(
+        planet({ kind: 'moon', name: 'Phobos', parentId: 'b-mars', meta: { orbit: 1 } }),
+      ),
     ).toBe(true);
     expect(isCatalogued(planet({ name: 'Mars' }))).toBe(false); // no orbit: made outside
     expect(isCatalogued(planet())).toBe(false); // a legacy demo planet
