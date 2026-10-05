@@ -419,7 +419,7 @@ describe('budgets against reported cost (P8-01)', () => {
     await c2.dispose();
     lives.splice(lives.indexOf(c2), 1);
 
-    // A log written before the projection (migration 0011) is folded once at the next start.
+    // A log written before the projection (migration 0012) is folded once at the next start.
     const db = openDatabase(path);
     db.prepare('DELETE FROM agent_spend').run();
     db.prepare('DELETE FROM budget_notices').run();

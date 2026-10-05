@@ -348,7 +348,7 @@ export function tables(db: Database): Tables {
   const setSetting = db.prepare(
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
   );
-  // Prepared on first use, like `Table`'s (migration 0011 adds these tables).
+  // Prepared on first use, like `Table`'s (migration 0012 adds these tables).
   const lazy = (sql: string) => {
     let s: Statement | undefined;
     return () => (s ??= db.prepare(sql));

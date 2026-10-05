@@ -118,7 +118,7 @@ export class EventLog {
   }
 
   /**
-   * Folds a log written before the budget projections existed (migration 0011, P8-01) into
+   * Folds a log written before the budget projections existed (migration 0012, P8-01) into
    * `agent_spend` and `budget_notices`, once (settings key `budget_projection`).
    */
   private backfillProjections(): void {
