@@ -453,7 +453,7 @@ export const QUALITY_TIER: SectionSpec<QualityTier> = {
   field: 'qualityTier',
   title: 'Rendering quality',
   intro:
-    "How detailed the solar-system scene is drawn; a change applies at once in this browser (another device's change after a reload).",
+    'How detailed the solar-system scene is drawn on every device without a choice of its own (phones start at Mobile; see “Rendering quality on this device” below). A change applies at once in this browser, on other devices after a reload.',
   fromSettings: (s) => s.qualityTier,
   validate: () => undefined,
   toPatch: (d) => ({ qualityTier: d }),

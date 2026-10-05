@@ -18,7 +18,9 @@ const DAMPING = 0.08;
 
 /**
  * Camera controls and fly-to (P3-04). OrbitControls drag to orbit, right-drag / two fingers to
- * pan and scroll / pinch to zoom, with damping. Flights come from `useCameraStore` (the panel,
+ * pan and scroll / pinch to zoom, with damping. On touch (P7-03): one finger orbits, two fingers
+ * pinch to zoom and pan together (`TOUCH.DOLLY_PAN`, OrbitControls' default), and neither the page
+ * nor the browser's own zoom takes the gesture (`blockPageGestures`, scene.css). Flights come from `useCameraStore` (the panel,
  * the breadcrumb, the keyboard, picking later); the `CameraDirector` runs them every frame against
  * the live anchors and this component writes its pose to the camera and the controls' target.
  *
@@ -76,6 +78,10 @@ export function CameraRig() {
     useCameraStore.getState().rigMounted();
     return () => useCameraStore.getState().released();
   }, []);
+  const gestureTarget = useThree(
+    (s) => (s.events?.connected as EventTarget | undefined) ?? s.gl?.domElement,
+  );
+  useEffect(() => (gestureTarget ? blockPageGestures(gestureTarget) : undefined), [gestureTarget]);
 
   useFrame((state) => {
     const c = controls.current;
@@ -148,6 +154,21 @@ export function CameraRig() {
       }}
     />
   );
+}
+
+/**
+ * P7-03: a pinch on the scene zooms the camera, never the page. `touch-action: none` (scene.css,
+ * OrbitControls) covers every browser that honours it; iOS Safari also sends its own `gesture*`
+ * events, whose default (a page zoom) is cancelled here, on the controls' element only. Not passive:
+ * a passive listener cannot cancel. Returns the cleanup.
+ */
+export function blockPageGestures(target: EventTarget): () => void {
+  const cancel = (e: Event) => e.preventDefault();
+  const types = ['gesturestart', 'gesturechange', 'gestureend'];
+  for (const type of types) target.addEventListener(type, cancel, { passive: false });
+  return () => {
+    for (const type of types) target.removeEventListener(type, cancel);
+  };
 }
 
 function vec(v: Vector3): Vec3 {

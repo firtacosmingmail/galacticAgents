@@ -21,6 +21,24 @@
   min-height: 0;
   background: #02030a;
   overflow: hidden;
+  /* P7-03: a pinch that starts on the scene's chrome (the breadcrumb, the legend, a card) never
+     zooms the page either; scrolling a card still works. */
+  touch-action: pan-x pan-y;
+}
+/*
+ * Touch (P7-03): the canvas owns every gesture that starts on it — one finger orbits, two pinch and
+ * pan — so the page neither scrolls nor zooms under it, and no double-tap zoom delays a tap.
+ * OrbitControls sets `none` on the element it listens on (R3F's wrapper) but leaves an inline
+ * `auto` on the canvas when it moves there from the canvas; `!important` keeps the canvas's own
+ * value right whichever element the controls end up on. A long press shows no callout or text
+ * selection. Outside the canvas the page scrolls and zooms as usual.
+ */
+.pnl-scene canvas {
+  touch-action: none !important;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .pnl-scene-loading {
   position: absolute;

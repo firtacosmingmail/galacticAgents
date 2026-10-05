@@ -57,6 +57,45 @@ export const CLEAR_TARGET_PX = 12;
 /** The "what's here" list never grows past this. */
 export const MAX_CANDIDATES = 8;
 
+/**
+ * How generous a pick is, in CSS pixels (P7-03): a mouse points to the pixel, a fingertip covers
+ * about 40 px and lands a few pixels off, so a tap gets larger minimum targets (a 32 px disc for a
+ * body or a satellite, 48 px for a question beacon, 32 px for a task marker) and a wider cluster.
+ * Larger targets mean more taps near several specks find more than one: those open the "what's
+ * here" list (corner case 24), never a guess.
+ */
+export interface PickSlop {
+  /** `MIN_TARGET_PX` for bodies and satellites. */
+  minTargetPx: number;
+  /** `CLUSTER_PX` for bodies. */
+  clusterPx: number;
+  /** A floor on a question beacon's target radius (its own is `BEACON.targetPx`); 0: none. */
+  beaconPx: number;
+  /** A floor on a task marker's target radius (its own is `MARKER_SIZE.targetPx`); 0: none. */
+  markerPx: number;
+}
+
+/** A mouse or a pen (and the hover, which a finger never has): the targets as they always were. */
+export const POINTER_SLOP: PickSlop = {
+  minTargetPx: MIN_TARGET_PX,
+  clusterPx: CLUSTER_PX,
+  beaconPx: 0,
+  markerPx: 0,
+};
+
+/** A finger. */
+export const TOUCH_SLOP: PickSlop = {
+  minTargetPx: 16,
+  clusterPx: 8,
+  beaconPx: 24,
+  markerPx: 16,
+};
+
+/** The slop for a `PointerEvent.pointerType`: a finger gets `TOUCH_SLOP`, anything else the pointer's. */
+export function pickSlop(pointerType: string | undefined): PickSlop {
+  return pointerType === 'touch' ? TOUCH_SLOP : POINTER_SLOP;
+}
+
 /** Pixels per world unit at distance 1, for a vertical field of view in degrees. */
 export function pixelScale(viewportHeightPx: number, fovDeg: number): number {
   return viewportHeightPx / (2 * Math.tan((fovDeg * Math.PI) / 180 / 2));
@@ -75,7 +114,9 @@ export function pickBodies(
   ray: PickRay,
   spheres: readonly PickSphere[],
   pxScale: number,
+  slop: PickSlop = POINTER_SLOP,
 ): PickResult {
+  const { minTargetPx, clusterPx } = slop;
   const candidates: PickCandidate[] = [];
   const [ox, oy, oz] = ray.origin;
   const [dx, dy, dz] = ray.direction;
@@ -91,8 +132,8 @@ export function pickBodies(
     const perPx = depth / pxScale; // world units per pixel at this depth
     const screenRadius = s.radius / perPx;
     const screenDistance = perpendicular / perPx;
-    const target = Math.max(s.radius, MIN_TARGET_PX * perPx);
-    if (screenDistance > Math.max(screenRadius, MIN_TARGET_PX) + CLUSTER_PX) continue;
+    const target = Math.max(s.radius, minTargetPx * perPx);
+    if (screenDistance > Math.max(screenRadius, minTargetPx) + clusterPx) continue;
     const hit = perpendicular <= target;
     const entry = hit
       ? depth - Math.sqrt(Math.max(0, target * target - perpendicular * perpendicular))
