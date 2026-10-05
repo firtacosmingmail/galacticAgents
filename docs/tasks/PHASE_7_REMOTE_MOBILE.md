@@ -1,7 +1,7 @@
 # Phase 7 — Remote and mobile access
 
-**Current task:** P7-04, P7-05, P7-07 (wave 2, branch `p7-wave2-push-offline-demo`) · **Task status:** in progress
-**Phase status:** in progress (3/7 done) — on branch `phase-7`
+**Current task:** P7-06 (wave 3, needs Cosmin with Tailscale on the Mac and the phone, after wave 2 is merged into `phase-7`) · **Task status:** todo
+**Phase status:** in progress (6/7 done) — on branch `phase-7`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -54,12 +54,12 @@ Check on the system from the phone while the Mac runs the agents: installable PW
 - **Acceptance:** scene usable on the phone at ≥30 fps at the mobile tier; list mode complete without 3D.
 
 ### P7-04 — Web Push notifications
-- **Status:** in progress · **Depends on:** P7-01, P25-07 · **Parallel with:** P7-05
+- **Status:** done (2026-10-05; device checks in P7-06) · **Depends on:** P7-01, P25-07 · **Parallel with:** P7-05
 - VAPID key generation and storage, push-subscription endpoints, server-side sending (`web-push`) for question/permission opened and project finished/failed; iOS caveats documented (Home-Screen install, user gesture); per-type toggles.
 - **Acceptance:** a question opened while the phone is locked produces a push on iOS (installed PWA) and Android.
 
 ### P7-05 — Offline answer reconciliation
-- **Status:** in progress · **Depends on:** P0-08, P2-03 · **Parallel with:** P7-04
+- **Status:** done (2026-10-05; device checks in P7-06) · **Depends on:** P0-08, P2-03 · **Parallel with:** P7-04
 - Answers composed while disconnected are queued with the question's version and sent on reconnect; stale answers get "already answered by …"; UI shows queued state.
 - **Acceptance:** airplane-mode test: answer queued, reconnect, resolved or rejected correctly.
 
@@ -70,7 +70,7 @@ Check on the system from the phone while the Mac runs the agents: installable PW
 - **Acceptance:** exit criteria met; notes committed.
 
 ### P7-07 — Demo planets go away for good (added 2026-10-05)
-- **Status:** in progress · **Depends on:** P4-06, P4-12 · **Parallel with:** P7-04, P7-05
+- **Status:** done (2026-10-05) · **Depends on:** P4-06, P4-12 · **Parallel with:** P7-04, P7-05
 - Found when Cosmin asked how to remove the planets of closed demo projects. `/dev/seed` creates orbit-less "Demo planet n" bodies; archiving their project only frees them, and `chooseBody` (`catalogue.ts`) reuses a free demo planet for a real project once the catalogue planets are taken, so it reappears and silently raises decision 1's planet cap. No bulk clear exists for seeded demo work (the harness "Clear" only takes harness items).
 - Demo bodies are never chosen for real work; a demo body is retired (event, projection, migration if needed) when its project is archived; the ops console gets a dev-only "Clear demo projects" that closes/cancels and archives every seeded demo project (never real work).
 - **Acceptance:** after "Clear demo projects" no demo planet is drawn and none comes back when a new project needs a planet; real projects and harness items are untouched.
