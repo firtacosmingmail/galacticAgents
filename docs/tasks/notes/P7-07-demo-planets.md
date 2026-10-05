@@ -40,7 +40,7 @@ Cosmin asked how to remove the planets of closed demo projects. The ops console'
 - Best effort. A refused step (for example, a demo project with a running agent) and a demo planet still hosting real work are listed in `skipped` with the reason. The rest goes on.
 - It returns `{seq, projects, tasks, retired, skipped}`. The console prints one line, e.g. "Cleared 4 demo projects and 0 tasks; retired 4 demo planets."
 
-## Proposed SPEC text
+## SPEC text (recorded in SPEC decision 79, 2026-10-05)
 
 Added to decision 79 rather than as a new number:
 

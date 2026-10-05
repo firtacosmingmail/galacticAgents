@@ -12,6 +12,7 @@ import {
   flushAnswerQueue,
   notSentLine,
   QUEUE_KEY,
+  RETRY_MS,
   startAnswerQueue,
   submitAnswer,
   tokenScope,
@@ -255,6 +256,45 @@ describe('answering offline (P7-05)', () => {
     expect(entries()['q-1']?.state).toBe('sent');
   });
 
+  it.each([500, 502, 503, 408, 429])(
+    'a passing %i while flushing keeps the answer queued and retries it with the same answerId',
+    async (code) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        stop = startAnswerQueue(TOKEN, api);
+        snapshot([userHeld]);
+        status('live');
+        await answerOffline();
+        const { answerId } = entries()['q-1']!;
+        answer.mockRejectedValueOnce(new ApiError(code, 'try later'));
+        status('live');
+        await flushAnswerQueue();
+        expect(entries()['q-1']).toMatchObject({ state: 'queued', answerId });
+        expect(answer).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(RETRY_MS);
+        await flushAnswerQueue();
+        expect(answer).toHaveBeenCalledTimes(2);
+        expect(answer.mock.calls[1]![3]).toBe(answerId);
+        expect(entries()['q-1']?.state).toBe('sent');
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('a passing 503 on a direct send queues the answer instead of failing the card', async () => {
+    stop = startAnswerQueue(TOKEN, api);
+    snapshot([userHeld]);
+    status('live');
+    answer.mockRejectedValueOnce(new ApiError(503, 'unavailable'));
+    expect(await submitAnswer(api, userHeld, 'yes')).toBe('queued');
+    expect(entries()['q-1']).toMatchObject({ state: 'queued', wasQueued: true });
+    // A real refusal still throws to the card.
+    answer.mockRejectedValueOnce(new ApiError(400, 'bad answer', 'invalid'));
+    await expect(submitAnswer(api, second, 'x')).rejects.toBeInstanceOf(ApiError);
+    expect(entries()['q-2']).toBeUndefined();
+  });
+
   it('a network failure while flushing keeps the answer queued for the next try', async () => {
     stop = startAnswerQueue(TOKEN, api);
     snapshot([userHeld]);
@@ -303,6 +343,39 @@ describe('the browser and other tabs (P7-05)', () => {
       JSON.stringify({ v: 1, scope: tokenScope(TOKEN), entries: [entry] }),
     );
     window.dispatchEvent(new StorageEvent('storage', { key: QUEUE_KEY }));
+    await flushAnswerQueue();
+    expect(answer).toHaveBeenCalledWith('q-1', 'yes', 3, 'other-tab');
+  });
+
+  it("another live tab's in-flight send is left to it, not sent again here", async () => {
+    stop = startAnswerQueue(TOKEN, api);
+    snapshot([userHeld]);
+    status('live');
+    const entry: QueuedAnswer = {
+      answerId: 'other-tab',
+      questionId: 'q-1',
+      answer: 'yes',
+      version: 3,
+      text: 'Keep the legacy cookie name?',
+      queuedAt: fx.NOW,
+      state: 'sending',
+      wasQueued: true,
+    };
+    localStorage.setItem(
+      QUEUE_KEY,
+      JSON.stringify({ v: 1, scope: tokenScope(TOKEN), entries: [entry] }),
+    );
+    window.dispatchEvent(new StorageEvent('storage', { key: QUEUE_KEY }));
+    await flushAnswerQueue();
+    expect(answer).not.toHaveBeenCalled();
+    expect(entries()['q-1']?.state).toBe('sending');
+    // That tab closed mid-send: the next page load recovers it (same answerId).
+    stop();
+    useAnswerQueue.setState({ scope: undefined, entries: {} });
+    status('connecting');
+    stop = startAnswerQueue(TOKEN, api);
+    expect(entries()['q-1']?.state).toBe('queued');
+    status('live');
     await flushAnswerQueue();
     expect(answer).toHaveBeenCalledWith('q-1', 'yes', 3, 'other-tab');
   });
