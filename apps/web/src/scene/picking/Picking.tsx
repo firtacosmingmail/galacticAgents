@@ -22,7 +22,7 @@ import { getSatellite, satelliteFrames } from '../satellites/registry.js';
 import { prefersReducedMotion } from '../motion.js';
 import { bodyName, outlineBody, selectionBody } from './body-action.js';
 import { ClickTracker } from './click.js';
-import { pixelScale, type PickSphere } from './pick.js';
+import { pickSlop, pixelScale, POINTER_SLOP, type PickSlop, type PickSphere } from './pick.js';
 import {
   hoverTarget,
   occluded,
@@ -196,21 +196,24 @@ export function Picking({ outline }: PickingProps) {
      * in `tools`): when no satellite is under it, or the marker is nearer the pointer on screen
      * than every satellite (a Steward's robot stands beside its task's pin).
      */
-    const markerAt = (result: ScenePick): string | undefined => {
-      const hit = taskMarkerHit(tools.ray, pxScale(), tools.bodies);
+    const markerAt = (result: ScenePick, slop: PickSlop = POINTER_SLOP): string | undefined => {
+      const hit = taskMarkerHit(tools.ray, pxScale(), tools.bodies, undefined, slop.markerPx);
       if (!hit) return undefined;
       const satellite = result.satellites[0];
       return !satellite || hit.px < satellite.screenDistance ? hit.frame.taskId : undefined;
     };
     /** The question beacon under the pointer (P4-05), if any. */
-    const beaconAt = (at: Point) => beaconUnder(aim(at));
-    const pick = (at: Point): ScenePick => {
+    const beaconAt = (at: Point, slop: PickSlop = POINTER_SLOP) =>
+      beaconUnder(aim(at), undefined, slop.beaconPx);
+    /** `slop`: a tap's targets are larger than a mouse's (P7-03); the hover is never a finger's. */
+    const pick = (at: Point, slop: PickSlop = POINTER_SLOP): ScenePick => {
       const ray = aim(at);
       return pickScene(
         ray,
         bodySpheres(tools.bodies),
         satelliteSpheres(tools.satellites),
         pxScale(),
+        slop,
       );
     };
     /**
@@ -366,8 +369,9 @@ export function Picking({ outline }: PickingProps) {
       picking.setHover(undefined);
       grace = undefined;
       const at = pointAt(e);
+      const slop = pickSlop(e.pointerType);
       // A question beacon goes to its asker and opens its question in the inbox (P4-05, P4-13).
-      const beacon = beaconAt(at);
+      const beacon = beaconAt(at, slop);
       if (beacon) {
         activateBeacon(beacon.questionId);
         return;
@@ -375,8 +379,8 @@ export function Picking({ outline }: PickingProps) {
       // The satellite hovered at the press (picked, or kept by the grace) may have orbited out
       // from under the pointer since: the click is still meant for it, while it can be seen.
       if (kept && seen(kept) && activateSatellite(kept)) return;
-      const result = pick(at);
-      const marker = markerAt(result);
+      const result = pick(at, slop);
+      const marker = markerAt(result, slop);
       if (marker) {
         activateTask(marker, at);
         return;

@@ -22,6 +22,19 @@
   background: #02030a;
   overflow: hidden;
 }
+/*
+ * Touch (P7-03): the canvas owns every gesture that starts on it — one finger orbits, two pinch and
+ * pan (OrbitControls also sets this on connect; here it holds from the first paint) — so the page
+ * neither scrolls nor zooms under it, and no double-tap zoom delays a tap. A long press shows no
+ * callout or text selection. Outside the canvas the page scrolls and zooms as usual.
+ */
+.pnl-scene canvas {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
 .pnl-scene-loading {
   position: absolute;
   inset: 0;

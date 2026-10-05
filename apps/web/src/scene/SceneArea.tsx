@@ -15,6 +15,7 @@ import { sceneKeyAction, SCENE_SHORTCUTS } from './camera/keys.js';
 import { useCameraStore } from './camera/store.js';
 import { fpsMeterEnabled, type FpsSample } from './fps.js';
 import { sceneQuality } from './quality.js';
+import { effectiveTier, useDeviceTier } from './device-tier.js';
 import { ScaleToggle } from './bodies/ScaleToggle.js';
 import { PickingOverlay } from './picking/PickingOverlay.js';
 import { LabelLayer } from './labels/LabelLayer.js';
@@ -34,9 +35,14 @@ export const CONTEXT_LOST = 'the GPU context was lost';
 /** The three.js part, fetched on first show: its own chunk, never in jsdom unless mocked. */
 const SolarScene = lazy(() => import('./SolarScene.js'));
 
-/** The quality tier the settings hold (decision 51); the default until they are read. */
+/**
+ * The quality tier the scene draws at (P7-03): this browser's own choice (`device-tier.ts`), else
+ * `mobile` on a phone, else the settings' (decision 51); the renderer's default until they are read.
+ */
 export function useQualityTier(): QualityTier | undefined {
-  return useSettingsData().response?.settings.qualityTier;
+  const server = useSettingsData().response?.settings.qualityTier;
+  const device = useDeviceTier();
+  return effectiveTier(server, device);
 }
 
 /**
