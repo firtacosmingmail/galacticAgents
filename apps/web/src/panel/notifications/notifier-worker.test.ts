@@ -27,6 +27,7 @@ beforeEach(() => {
       shown.filter((s) => s.options.tag === filter?.tag),
     ) as unknown as ServiceWorkerRegistration['getNotifications'],
     showNotification: vi.fn(async (title: string, options?: NotificationOptions) => {
+      shown = shown.filter((s) => s.options.tag !== options?.tag);
       shown.push({ title, options: options as Shown['options'] });
     }),
   };
@@ -62,12 +63,50 @@ describe('desktop notifications through the service worker (P7-04)', () => {
     expect(FakeNotification.instances).toHaveLength(0);
   });
 
-  it('are not shown again when a push already put the same id on screen', async () => {
+  it('replace in place (same tag, no second alert) what a push already put on screen', async () => {
     shown.push({ title: 'push', options: { tag: 'question:q1' } });
     showNotification({ id: 'question:q1', title: 'A question for you' });
     await flush();
     expect(shown).toHaveLength(1);
+    expect(shown[0]!.title).toBe('A question for you');
+    expect(shown[0]!.options).toMatchObject({ tag: 'question:q1', renotify: false });
     expect(FakeNotification.instances).toHaveLength(0);
+  });
+
+  it('an updated backfill summary replaces the older one still on screen', async () => {
+    showNotification({ id: 'galactic:backfill-summary', title: '2 more updates' });
+    await flush();
+    showNotification({ id: 'galactic:backfill-summary', title: '7 more updates' });
+    await flush();
+    expect(shown.map((s) => s.title)).toEqual(['7 more updates']);
+  });
+
+  it('use the page’s Notification while a new worker is installing or waiting', async () => {
+    // The active worker may predate the notificationclick handler: a tap would do nothing.
+    registration = { ...registration, waiting: {} as ServiceWorker };
+    showNotification({ id: 'a', title: 'one', target: { kind: 'question', id: 'q1' } });
+    await flush();
+    registration = { ...registration, waiting: null, installing: {} as ServiceWorker };
+    showNotification({ id: 'b', title: 'two' });
+    await flush();
+    expect(FakeNotification.instances.map((n) => n.title)).toEqual(['one', 'two']);
+    expect(shown).toEqual([]);
+  });
+
+  it('still use the worker during an update when the page cannot show one (mobile)', async () => {
+    vi.stubGlobal(
+      'Notification',
+      Object.assign(
+        function Refuse() {
+          throw new TypeError('Illegal constructor');
+        },
+        { permission: 'granted', requestPermission: async () => 'granted' },
+      ),
+    );
+    registration = { ...registration, waiting: {} as ServiceWorker };
+    showNotification({ id: 'a', title: 'one' });
+    await flush();
+    expect(shown.map((s) => s.title)).toEqual(['one']);
   });
 
   it('fall back to the page’s Notification without a registration, or when the worker fails', async () => {

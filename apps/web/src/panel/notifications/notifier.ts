@@ -84,21 +84,30 @@ type Shown = {
  * space with Web Push, so the page and a push about the same thing make one notification, not
  * two; and mobile browsers, which refuse `new Notification`, show it too. A tap goes through the
  * worker's `notificationclick` (`pwa/notification-clicks.ts`). False when there is no worker.
+ *
+ * Always shown, never skipped when the tag is already on screen: the same tag replaces it in
+ * place (`renotify: false`, no second alert), so an updated notification — a backfill summary
+ * whose count grew — is not lost behind an older copy.
+ *
+ * While a new worker is installing or waiting, the active one may be an older build without the
+ * `notificationclick` handler, and a tap on what it shows would do nothing: the page's own
+ * `Notification` (whose `onclick` the page handles) is preferred then, and the worker used only
+ * when the page cannot show one (mobile).
  */
-async function showThroughWorker(n: Shown): Promise<boolean> {
+async function showThroughWorker(Api: typeof Notification, n: Shown): Promise<boolean> {
   const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
   if (!sw) return false;
   const reg = await sw.getRegistration().catch(() => undefined);
   if (!reg || typeof reg.showNotification !== 'function') return false;
-  // A push already put this one on screen: leave it.
-  const existing = await reg.getNotifications({ tag: n.id }).catch(() => []);
-  if (existing.length > 0) return true;
-  await reg.showNotification(n.title, {
+  if ((reg.installing || reg.waiting) && showFromPage(Api, n)) return true;
+  const options: NotificationOptions & { renotify?: boolean } = {
     tag: n.id,
     icon: '/icons/icon-192.png',
+    renotify: false,
     ...(n.body ? { body: n.body } : {}),
     data: { id: n.id, ...(n.target ? { target: n.target } : {}) },
-  });
+  };
+  await reg.showNotification(n.title, options);
   return true;
 }
 
@@ -107,7 +116,7 @@ export function showNotification(n: Shown) {
   const Api = notificationApi();
   if (!Api) return;
   if (typeof navigator !== 'undefined' && navigator.serviceWorker) {
-    void showThroughWorker(n)
+    void showThroughWorker(Api, n)
       .catch(() => false)
       .then((done) => {
         if (!done) showFromPage(Api, n);
@@ -117,7 +126,8 @@ export function showNotification(n: Shown) {
   showFromPage(Api, n);
 }
 
-function showFromPage(Api: typeof Notification, n: Shown) {
+/** The page's own Notification; false when the browser refuses one outside a worker. */
+function showFromPage(Api: typeof Notification, n: Shown): boolean {
   try {
     // The tag makes the OS replace rather than stack a second copy (another tab, a race).
     const shown = new Api(n.title, { tag: n.id, ...(n.body ? { body: n.body } : {}) });
@@ -130,8 +140,10 @@ function showFromPage(Api: typeof Notification, n: Shown) {
       shown.close();
       liveNotifications.delete(shown);
     };
+    return true;
   } catch {
     // Some browsers allow notifications only from a service worker; nothing to show then.
+    return false;
   }
 }
 

@@ -116,10 +116,12 @@ self.addEventListener('fetch', (event) => {
  * user and for a project that finished or failed. The payload is minimal (title, an optional body
  * the device chose to receive, the notification id and what a tap opens) and never carries a
  * credential. One notification per device: the page's own desktop notifications use the same id
- * as their tag, so a push for something the page already showed is not shown again, and the page
- * does not show what a push already put on screen. A push is always shown — browsers penalise a
- * push that shows nothing, and the conservative answer to the SPEC §8 question (2026-10-03) is
- * that notifications show even while the app is in front.
+ * as their tag, so a push for something the page already showed replaces it in place (same tag,
+ * `renotify: false`: no second alert) rather than stacking a copy. A push always calls
+ * `showNotification` — even when that tag is already on screen: Safari on iOS counts a push that
+ * does not call it as a silent push and revokes the subscription after a few, and browsers
+ * penalise a push that shows nothing. The conservative answer to the SPEC §8 question
+ * (2026-10-03) is that notifications show even while the app is in front.
  */
 
 const PUSH_ICON = '/icons/icon-192.png';
@@ -153,15 +155,23 @@ function pushNotification(event) {
 
 async function showPush(n) {
   const shown = n || { id: 'galactic:push', title: 'GalacticAgents', target: undefined };
-  // Already on screen (the open page showed it, or an earlier copy of this push): leave it.
-  const existing = await self.registration.getNotifications({ tag: shown.id });
-  if (existing.length > 0) return;
-  await self.registration.showNotification(shown.title, {
-    body: shown.body || PUSH_DEFAULT_BODY,
+  // Always shown, never skipped (iOS revokes a subscription whose pushes show nothing): when the
+  // page or an earlier copy of this push already showed it, the same tag replaces it in place
+  // without alerting again, keeping its text (the page's carries details a push may leave out).
+  let existing = [];
+  try {
+    existing = await self.registration.getNotifications({ tag: shown.id });
+  } catch {
+    existing = [];
+  }
+  const prior = existing[0];
+  await self.registration.showNotification(prior ? prior.title : shown.title, {
+    body: prior && prior.body ? prior.body : shown.body || PUSH_DEFAULT_BODY,
     tag: shown.id,
+    renotify: false,
     icon: PUSH_ICON,
     badge: PUSH_ICON,
-    data: { id: shown.id, target: shown.target },
+    data: prior && prior.data ? prior.data : { id: shown.id, target: shown.target },
   });
 }
 

@@ -15,7 +15,12 @@ const TEMPLATE = readFileSync(new URL('./sw.js', import.meta.url), 'utf8');
 type Listener = (event: unknown) => void;
 interface Shown {
   title: string;
-  options: { body?: string; tag: string; data: { id: string; target?: unknown } };
+  options: {
+    body?: string;
+    tag: string;
+    renotify?: boolean;
+    data: { id: string; target?: unknown };
+  };
 }
 interface FakeClient {
   url: string;
@@ -29,10 +34,12 @@ let listeners: Record<string, Listener>;
 let shown: Shown[];
 let windows: FakeClient[];
 let opened: string[];
+let showCalls: number;
 
 function load() {
   listeners = {};
   shown = [];
+  showCalls = 0;
   opened = [];
   windows = [];
   const self = {
@@ -41,8 +48,11 @@ function load() {
     skipWaiting: vi.fn(),
     registration: {
       getNotifications: async ({ tag }: { tag: string }) =>
-        shown.filter((n) => n.options.tag === tag),
+        shown
+          .filter((n) => n.options.tag === tag)
+          .map((n) => ({ title: n.title, body: n.options.body, data: n.options.data })),
       showNotification: async (title: string, options: Shown['options']) => {
+        showCalls++;
         shown = shown.filter((n) => n.options.tag !== options.tag);
         shown.push({ title, options });
       },
@@ -118,11 +128,32 @@ describe('the service worker’s push handlers (P7-04)', () => {
     expect(shown[0]!.options.body).toBe('Which format?');
   });
 
-  it('one notification per id: the page or an earlier push already showed it', async () => {
-    shown.push({ title: 'from the page', options: { tag: 'question:q1', data: { id: 'x' } } });
+  it('one notification per id: a push for a tag already on screen replaces it in place', async () => {
+    // Never skipped: Safari on iOS revokes a subscription whose pushes do not call showNotification.
+    shown.push({
+      title: 'from the page',
+      options: { tag: 'question:q1', body: 'Which format?', data: { id: 'x' } },
+    });
     await push(question);
+    expect(showCalls).toBe(1);
     expect(shown).toHaveLength(1);
+    // The page's text (it may carry details the push leaves out) is kept.
     expect(shown[0]!.title).toBe('from the page');
+    expect(shown[0]!.options).toMatchObject({
+      tag: 'question:q1',
+      body: 'Which format?',
+      renotify: false,
+      data: { id: 'x' },
+    });
+  });
+
+  it('every push calls showNotification, even a repeat of what is on screen', async () => {
+    await push(question);
+    await push(question);
+    await push(undefined);
+    await push(undefined);
+    expect(showCalls).toBe(4);
+    expect(shown.map((n) => n.options.tag)).toEqual(['question:q1', 'galactic:push']);
   });
 
   it('a missing or foreign payload still shows a generic notification (never a silent push)', async () => {

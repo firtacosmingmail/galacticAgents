@@ -46,7 +46,7 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
 **Web** (`apps/web/src/pwa/`)
 
 - `sw.js`, an additive block after the fetch handler:
-  - `push`: it parses and validates the payload (id, title, a known target kind, clipped lengths). If a notification with the same tag is already on screen, it does nothing. Otherwise it shows `title`, then `body` or "Open GalacticAgents to see it.", with `tag = id`, `data = {id, target}` and the 192 px icon.
+  - `push`: it parses and validates the payload (id, title, a known target kind, clipped lengths). It always calls `showNotification` (review fix: Safari on iOS counts a push that does not as a silent push and revokes the subscription). If a notification with the same tag is already on screen, it is replaced in place with `renotify: false` and keeps its text (the page's may carry details the push leaves out). Otherwise it shows `title`, then `body` or "Open GalacticAgents to see it.", with `tag = id`, `data = {id, target}` and the 192 px icon.
   - A missing or foreign payload still shows a generic "GalacticAgents" notification, never a silent push.
   - `notificationclick`: it closes the notification. If one of our windows is open (focused first, then visible, then any), it focuses it and posts `{type: 'NOTIFICATION_CLICK', target}`. Otherwise it calls `clients.openWindow('/#focus=<kind>:<id>')`, or `#focus=inbox` when there is no target.
 - `notification-clicks.ts` (wired in `main.tsx`):
@@ -73,7 +73,8 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
 The conservative answer to the SPEC §8 question of 2026-10-03 is that notifications show even while the panel is in front. Push follows it: a push is always shown, and the device never shows the same notification twice.
 
 - The page's notifications and pushes share one tag space: the `notificationOf` id, shown through the same service worker registration. Chrome keeps a page's `new Notification` and a worker's notifications in separate tag spaces, which is why the page now shows through the worker.
-- Whichever arrives second sees the tag already on screen and does nothing.
+- Whichever arrives second replaces the first in place: same tag, `renotify: false`, no second alert. (Review fix, 2026-10-05: it used to do nothing, which Safari counts as a silent push. A repeat push keeps the text already on screen; the page always shows its own, so an updated backfill summary — "N more updates" — replaces the older count.)
+- While a new worker is installing or waiting, the active one may predate the `notificationclick` handler, so the page shows its own `new Notification` (whose `onclick` it handles) and uses the worker only when the browser refuses that (mobile).
 - Pushes are never silent: Chrome replaces a silent push with its own "site updated in the background" notice, and Safari revokes the subscription after a few.
 - Side effect: Android Chrome, which refuses `new Notification`, now shows the page's desktop notifications too. This was the item P25-07 deferred.
 - Remaining gap: if the user dismisses the page's notification in the second or so before the push about the same thing arrives, the push shows it again.
@@ -163,11 +164,11 @@ The conservative answer to the SPEC §8 question of 2026-10-03 is that notificat
   - deleting another device is 403 from the phone and allowed from the Mac, and with `autoApproveRemote`;
   - the 20-device cap still lets an existing device update.
 - Web:
-  - `pwa/sw-push.test.ts` (8): shows with the tag; the detailed body; no duplicate when the tag is on screen; a generic notification for a missing, foreign or invalid payload; an unknown target is dropped and fields are clipped; a tap focuses the focused window and posts to it; with no window it opens `/#focus=` (no token); a window that refuses focus still gets the message.
+  - `pwa/sw-push.test.ts` (9): shows with the tag; the detailed body; a tag already on screen is replaced in place (one notification, the earlier text kept, `renotify: false`); every push calls `showNotification`; a generic notification for a missing, foreign or invalid payload; an unknown target is dropped and fields are clipped; a tap focuses the focused window and posts to it; with no window it opens `/#focus=` (no token); a window that refuses focus still gets the message.
   - `pwa/push.test.ts` (7): support, including the iOS install caveat; the device id equals the server's SHA-256; the label; key decoding and comparison; the remembered switches; the rotated-subscription re-sync, which never subscribes anew; a stale key is not re-sent.
   - `pwa/PushSettings.test.tsx` (7): the iOS explanation; the development (no worker) explanation; the prompt only on the click, with the server key and `userVisibleOnly`; the switches, details, test and turn off; other devices removable only when `canRemoveOthers`; the blocked permission and a failed call (alert); retry after a read failure. Axe shows no serious or critical findings in the off, on, other-devices and iOS states.
   - `pwa/notification-clicks.test.ts` (3): `#focus=` parsing and stripping (other keys and `#token=` kept); waiting for the first snapshot; worker messages, with junk going to the inbox.
-  - `panel/notifications/notifier-worker.test.ts` (3): through the worker with tag and data; not shown again when a push already showed it; falls back to `new Notification` without a registration or when the worker fails.
+  - `panel/notifications/notifier-worker.test.ts` (6): through the worker with tag and data; replaces in place what a push already showed; an updated backfill summary replaces the older one; the page's `Notification` while a worker is installing or waiting, the worker when the page cannot; falls back to `new Notification` without a registration or when the worker fails.
 - Full gates on `p7-04-push`: build, typecheck, lint and format:check are clean. Tests: protocol 74, server 1029 (+1 skipped), web 1598, all passing.
 
 ## Verified in headless Chrome (CDP), production build
@@ -178,7 +179,7 @@ The real server ran on `127.0.0.1:47815` with `GALACTIC_DEV=1` and `GALACTIC_HAR
 - `GET /api/push` returns the public key, and `vapid.json` is created with mode **0600**. The route answers 401 without the token.
 - **A real subscription works in headless Chrome**, on `fcm.googleapis.com`. The settings' "Turn on push notifications", clicked with a real mouse event, subscribed and saved the device "Mac · Chrome". "Turn off" removed it.
 - **End to end through Google's push service.**
-  - With the panel open and its desktop notifications on, a permission question opened through `/dev/harness` produced exactly **one** notification. It carried the page's text, the push's `lastSentAt` was set, and the push saw the tag and added nothing.
+  - With the panel open and its desktop notifications on, a permission question opened through `/dev/harness` produced exactly **one** notification. It carried the page's text, the push's `lastSentAt` was set, and the push saw the tag and added nothing. (Before the review fix; the push now replaces it in place with the same text and no second alert.)
   - With no app page open (only `/icons/icon.svg` on the origin), another permission question arrived **by push alone**: "Permission needed", "Open GalacticAgents to see it.", no question text (details off).
 - A fake FCM endpoint got **410 from Google** and the server removed the device.
 - The server log contains no endpoint, no private key and no token. The push lines read `push: device <id> is no longer subscribed (410); removed`.
