@@ -262,7 +262,7 @@ describe('budgets against reported cost (P8-01)', () => {
     await report(c, s1.id, 1.5);
     expect(rec.of('budget.warning')).toHaveLength(1);
     expect(rec.of('budget.exceeded')).toHaveLength(1);
-    // The running Steward is not stopped for money (proposed decision 97).
+    // The running Steward is not stopped for money (SPEC decision 98).
     expect(c.statuses.get(s1.id)?.state).toBe('idle');
 
     // A new Steward for the project is refused; nothing but the refusal is written.

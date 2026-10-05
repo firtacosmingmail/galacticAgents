@@ -133,7 +133,7 @@ pass. `processes.list(S1)` does not take the look-alike.
 `synchronous=NORMAL`: a process kill loses nothing committed (drills 1, 1b), but a power loss or
 OS crash may roll back the **last transactions** before it — never half of one (each command is
 one transaction). Recovery then works from the earlier, consistent state (the drills show any
-consistent prefix recovers). See proposed decision 100 and the open question below.
+consistent prefix recovers). See decision 102 and the open question below.
 
 **Finding F4 — a worktree cut short by the reboot.** A `kill -9` of the server alone cannot cut a
 `git worktree add` short (git is its own process and finishes), but a reboot can: git leaves the
@@ -226,27 +226,27 @@ database does not); events are not.
   finished). Recovery is a sequence of the same commands, each idempotent from the log; 1b shows
   any consistent prefix recovers, but no run aimed at it.
 
-## Proposed SPEC §7 decisions (not edited into §7; numbers to be assigned at merge)
+## SPEC §7 decisions (recorded as 99–102)
 
-- **Proposed decision 97 — A full disk loses nothing done** (P8-04; §5, decision 8): when the
+- **Decision 99 — A full disk loses nothing done** (P8-04; §5, decision 8): when the
   disk is full, agents keep working and what they do is written, in order, as soon as there is
   room again; an action the user takes meanwhile is refused as a whole with "the disk is full",
   never half-done; the panel says the disk is full and how many agent events are waiting (P8-09).
   Agent output that could not be saved meanwhile is not kept.
-- **Proposed decision 98 — A silent agent's supervisor is told** (P8-04; corner case 2,
+- **Decision 100 — A silent agent's supervisor is told** (P8-04; corner case 2,
   decision 18): an agent that falls silent past its runtime's threshold is shown `stalled` and its
   supervisor is told once per silence ("has been silent for N s"); nothing is stopped for it —
   only its caps stop it — and it is `working` again as soon as it speaks.
-- **Proposed decision 99 — Recovery includes agents that had not started** (P8-04; decisions 8,
+- **Decision 101 — Recovery includes agents that had not started** (P8-04; decisions 8,
   44, 46): an agent the restart caught before its session started is started again — a Steward
   from its own instructions, the Harmonizer or a Waykeeper with a fresh session seeded from the
   database — and counts as resumed in the recovery report; a task worktree the machine went down
   in the middle of creating is made again.
-- **Proposed decision 100 — Power loss** (P8-04; §5): after a power cut or an OS crash the map is
+- **Decision 102 — Power loss** (P8-04; §5): after a power cut or an OS crash the map is
   whole and consistent but may miss the last moments before it (the last commands are rolled back
   whole, never half); recovery resumes from there. A process kill loses nothing.
 
-**Proposed open question (§8):** should the event log trade write latency for power-loss
+**Open question (§8, recorded 2026-10-05):** should the event log trade write latency for power-loss
 durability (`synchronous=FULL`), or is decision 100's "may miss the last moments" acceptable for
 a local app? Conservative meanwhile: keep `NORMAL`.
 

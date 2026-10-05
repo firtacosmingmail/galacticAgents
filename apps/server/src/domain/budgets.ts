@@ -26,7 +26,7 @@ import { updateTask } from './tasks.js';
  * `budgetUsd`; the reported cost of the agents that worked on it (`agent_spend`, folded from the
  * `agent.*` cost reports) is measured against it. At the settings' threshold the work warns
  * (`budget.warning`), at the budget it is exceeded (`budget.exceeded`): running agents go on —
- * nothing is stopped for money (proposed decision 97) — but a new spawn for the work is refused
+ * nothing is stopped for money (SPEC decision 98) — but a new spawn for the work is refused
  * (`budget.spawn_refused` plus a `conflict` error to the caller). The Harmonizer is never refused.
  *
  * A cost a runtime does not report counts as nothing: a budget only binds what is metered, and
