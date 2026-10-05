@@ -1,6 +1,8 @@
 import { PerspectiveCamera } from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Vec3Tuple } from '../../orbit.js';
+import { moonLook, planetLook } from '../../bodies/appearance.js';
+import { moonDistance } from '../../bodies/layout.js';
 import { DETAIL_FRAME_RADII } from '../mode.js';
 import { satelliteFrame } from '../../picking/fixtures.js';
 import { applyHqPose, overrideHqPose } from '../../satellites/hq/hq-model.js';
@@ -72,7 +74,10 @@ describe('the HQ viewing slot in Earth’s detail view (P6-06)', () => {
         .clone()
         .set(...at)
         .project(camera);
-      expect(ndc.x).toBeCloseTo(HQ_SLOT.ndc[0]);
+      // (x pulled in where the slot would be beyond `maxReach`: 2:1 and wider)
+      if (dist(at, EARTH) < HQ_SLOT.maxReach * R - 1e-6) expect(ndc.x).toBeCloseTo(HQ_SLOT.ndc[0]);
+      else expect(ndc.x).toBeLessThan(HQ_SLOT.ndc[0]);
+      expect(ndc.x).toBeGreaterThan(0.4);
       expect(ndc.y).toBeCloseTo(HQ_SLOT.ndc[1]);
       // …and the whole station (its span at its size factor) inside the canvas.
       const half = (SATELLITE_LOOK.harmonizer.size * R * scale!) / 2;
@@ -104,6 +109,34 @@ describe('the HQ viewing slot in Earth’s detail view (P6-06)', () => {
     expect(s).toBeLessThan(0.7);
     expect(s).toBeGreaterThan(0.4);
     expect(dist(square, EARTH)).toBeCloseTo(HQ_SLOT.clearance * R);
+  });
+
+  it('never meets the Moon’s orbit, however wide the canvas (x pulled in, height kept)', () => {
+    // The readable layout: the Moon's orbit and radius in Earth radii.
+    const earth = planetLook('Earth');
+    const moon = moonLook('Moon');
+    const moonOrbit = moonDistance(moon, moon.radius, 1, earth.radius, 'fake') / earth.radius;
+    const moonR = moon.radius / earth.radius;
+    const halfStation = SATELLITE_LOOK.harmonizer.size / 2;
+    // The reach keeps the whole station inside the Moon's orbit, with a gap.
+    expect(HQ_SLOT.maxReach + halfStation).toBeLessThan(moonOrbit - moonR);
+    for (const aspect of [1, 1.5, 1.84, 2, 2.2, 2.6, 3.2]) {
+      const { camera, slot } = cameraAt(aspect);
+      const at: Vec3Tuple = [0, 0, 0];
+      const scale = hqSlot(slot, EARTH, R, at);
+      expect(scale, `aspect ${aspect}`).toBeDefined();
+      expect(dist(at, EARTH), `aspect ${aspect}`).toBeLessThanOrEqual(HQ_SLOT.maxReach * R + 1e-6);
+      expect(dist(at, EARTH)).toBeGreaterThanOrEqual(HQ_SLOT.clearance * R - 1e-9);
+      // Wherever the Moon is on its orbit, the station's span and the Moon's never overlap.
+      expect(dist(at, EARTH) + halfStation * R * scale!).toBeLessThan((moonOrbit - moonR) * R);
+      const ndc = camera.position
+        .clone()
+        .set(...at)
+        .project(camera);
+      expect(ndc.y).toBeCloseTo(HQ_SLOT.ndc[1]);
+      expect(ndc.x).toBeGreaterThan(0.3);
+      expect(ndc.x).toBeLessThanOrEqual(HQ_SLOT.ndc[0] + 1e-9);
+    }
   });
 
   it('none when the camera is too close to Earth: the station keeps its orbit', () => {

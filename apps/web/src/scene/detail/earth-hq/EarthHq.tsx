@@ -63,7 +63,7 @@ import { HqSlotter, type SlotCamera } from './hq-slot.js';
  * thinking still reads by the glow and the brightness). The glow and lights fade in with the
  * cross-fade.
  *
- * **Viewing slot** (P6-06, `hq-slot.ts`): while mounted the station leaves its orbit for a place
+ * **Viewing slot** (P6-06, SPEC decision 89, `hq-slot.ts`): while mounted the station leaves its orbit for a place
  * fixed in the view, right of and above Earth's centre, so it stays in sight at the detail
  * framing whatever the canvas's shape. The Harmonizer's frame itself is moved
  * (`overrideHqPose`, right after the director), so the pick target, hover ring, click and beam
@@ -383,15 +383,9 @@ const slotScratch: SlotCamera = {
 /** The camera's pose and field as the viewing slot reads them (`hq-slot.ts`), written into `out`. */
 export function slotCamera(camera: PerspectiveCamera, out: SlotCamera): SlotCamera {
   const e = camera.matrixWorld.elements;
-  const axis = (i: number, sign: number, v: [number, number, number]) => {
-    const len = Math.hypot(e[i]!, e[i + 1]!, e[i + 2]!) || 1;
-    v[0] = (sign * e[i]!) / len;
-    v[1] = (sign * e[i + 1]!) / len;
-    v[2] = (sign * e[i + 2]!) / len;
-  };
-  axis(0, 1, out.right);
-  axis(4, 1, out.up);
-  axis(8, -1, out.forward);
+  matrixAxis(e, 0, 1, out.right);
+  matrixAxis(e, 4, 1, out.up);
+  matrixAxis(e, 8, -1, out.forward);
   out.position[0] = e[12]!;
   out.position[1] = e[13]!;
   out.position[2] = e[14]!;
@@ -400,8 +394,23 @@ export function slotCamera(camera: PerspectiveCamera, out: SlotCamera): SlotCame
   return out;
 }
 
+/** A matrix's unit column `i` (0, 4, 8) times `sign`, into `v` (a module function: no closure). */
+function matrixAxis(
+  e: ArrayLike<number>,
+  i: number,
+  sign: number,
+  v: [number, number, number],
+): void {
+  const len = Math.hypot(e[i]!, e[i + 1]!, e[i + 2]!) || 1;
+  v[0] = (sign * e[i]!) / len;
+  v[1] = (sign * e[i + 1]!) / len;
+  v[2] = (sign * e[i + 2]!) / len;
+}
+
 const restWorld = new Vector3();
 const restCentre = new Vector3();
+const restOrbit: [number, number, number] = [0, 0, 0];
+const restEarth: [number, number, number] = [0, 0, 0];
 const restOut: [number, number, number] = [0, 0, 0];
 const restPlace = { position: restOut, scale: 1 };
 const restInverse = new Matrix4();
@@ -421,9 +430,11 @@ export function restInSlot(
 ): { position: readonly [number, number, number]; scale: number } {
   restWorld.set(...restingPose(radius).position).applyMatrix4(anchor);
   restCentre.setFromMatrixPosition(anchor);
+  restWorld.toArray(restOrbit);
+  restCentre.toArray(restEarth);
   restPlace.scale = slotter.place(
-    [restWorld.x, restWorld.y, restWorld.z],
-    [restCentre.x, restCentre.y, restCentre.z],
+    restOrbit,
+    restEarth,
     radius,
     slotCamera(camera, slotScratch),
     mix,

@@ -12,9 +12,9 @@ import type { DetailBody } from '../detail-body.js';
 import type { DetailKind } from '../mode.js';
 
 /**
- * The project overlay of the detail view (P6-04; SPEC §3.2, §4.1, decisions 9, 66, 68, 73, 77,
- * 84), as plain data — no three.js, no React — so placement, looks and selection are tested
- * without WebGL. `ProjectOverlay.tsx` draws it.
+ * The project overlay of the detail view (P6-04; SPEC decision 88, and §3.2, §4.1, decisions 9,
+ * 66, 68, 73, 77, 84), as plain data — no three.js, no React — so placement, looks and selection
+ * are tested without WebGL. `ProjectOverlay.tsx` draws it.
  *
  * - **Which tasks.** A body's project tasks (decision 9: a project task lives on its project's
  *   body, `task.bodyId`): every task with a `projectId` on the shown body, except archived and
