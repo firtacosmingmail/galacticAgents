@@ -24,11 +24,15 @@ const LONG = { timeoutMs: 10_000 };
 const roots: string[] = [];
 const dbs: Database[] = [];
 const lives: BrainHarness[] = [];
+/** Ends the spawns a first life left hanging, so its runtime can be disposed. */
+const releases: (() => void)[] = [];
 afterEach(async () => {
-  // Newest first; a first life holds a spawn that never returns, so its dispose is not awaited
-  // for long.
-  for (const h of lives.splice(0).reverse()) {
-    await Promise.race([h.dispose().catch(() => {}), new Promise((r) => setTimeout(r, 1_000))]);
+  // The newest life first: an older one's dispose must not write into a live one's database.
+  // The first life's hanging spawn ends before its own dispose.
+  const all = lives.splice(0).reverse();
+  for (const h of all) {
+    if (h === all.at(-1)) for (const release of releases.splice(0)) release();
+    await h.dispose().catch(() => {});
   }
   for (const db of dbs.splice(0)) db.close();
   for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
@@ -51,7 +55,10 @@ function boot(w: { d: DrillDirs; db: Database }): BrainHarness {
 /** The adapter never gets the session of `role` started: the kill comes first. */
 function hangSpawns(h: BrainHarness, role: SpawnOptions['role']): void {
   const spawn = h.adapter.spawn.bind(h.adapter);
-  h.adapter.spawn = (opts) => (opts.role === role ? new Promise(() => {}) : spawn(opts));
+  h.adapter.spawn = (opts) =>
+    opts.role === role
+      ? new Promise((_, reject) => releases.push(() => reject(new Error('the drill ended'))))
+      : spawn(opts);
 }
 
 const eventsOf = (h: BrainHarness, agentId: Id): Event[] =>
@@ -123,11 +130,14 @@ describe('an agent created but never started before the kill (P8-04)', () => {
     ).value;
     await h1.composed.workspaces!.prepareProject(project.id);
     hangSpawns(h1, 'waykeeper');
-    void h1.composed.startBrain(waykeeperDefinition(), {
-      runtime: 'fake',
-      projectId: project.id,
-      supervisorId: hq.agentId,
-    });
+    // Never settles in this life; refused when the drill ends the hanging spawn.
+    h1.composed
+      .startBrain(waykeeperDefinition(), {
+        runtime: 'fake',
+        projectId: project.id,
+        supervisorId: hq.agentId,
+      })
+      .catch(() => {});
     let wk: Id | undefined;
     await h1.until(
       () => (wk = h1.log.tables.agents.all().find((a) => a.role === 'waykeeper')?.id) !== undefined,
