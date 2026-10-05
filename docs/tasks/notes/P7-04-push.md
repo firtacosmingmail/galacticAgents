@@ -15,7 +15,7 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
 - `vapid.ts`: the VAPID key pair.
   - It is made on first need: the first `GET /api/push`, or the first send to a device. While nobody subscribes, no key exists.
   - It is stored in `<dataDir>/vapid.json` (`~/.galactic`) with mode 0600, and the data directory gets 0700 if it is new.
-  - A copy that others can read is set back to 0600 with a warning. A damaged file is replaced, and every device must then turn push on again.
+  - A copy that others can read is set back to 0600 with a warning. A damaged (or lost) file is replaced, and every device must then turn push on again: the stored subscriptions are bound to the old public key, so they are cleared at once with a warning that names only how many (review fix, 2026-10-05). Pruning on a 401/403 from the push service was considered and not chosen: a 403 can also mean a passing VAPID problem, and the regeneration is the one case known to break every subscription.
   - The keys are never logged.
   - `vapidSubject`: the `sub` claim is `https://<remoteHost>` when remote access is set up, else `mailto:mission-control@galactic-agents.invalid`. `GALACTIC_PUSH_SUBJECT` overrides it. Apple refuses a localhost subject.
 - `endpoint.ts`: the endpoint allow-list and device ids.
@@ -33,7 +33,8 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
   - 404 and 410 remove the device.
   - 429, 5xx and network errors are retried: at most 3 attempts in all, backing off 1 s then 4 s, with `Retry-After` honoured up to 30 s.
   - Any other answer (400, 403, 413) is recorded as `lastError` and not retried.
-  - At most 32 deliveries are in flight; beyond that a push is dropped with a warning.
+  - At most 32 deliveries are in flight; beyond that a push is dropped with a warning. A delivery keeps its slot through its retries and back-offs, so during a push service outage the slots can fill up and pushes are dropped (best effort, by design).
+  - Test push times (the per-device rate limit) are forgotten after a minute or when the device is removed.
   - Logs name a device by its id and give the status, never the endpoint (a capability URL), its keys or the payload.
 - `routes.ts`, all bearer-guarded in their own scope:
   - `GET /api/push`: the public key, the devices and `canRemoveOthers`.
@@ -46,7 +47,7 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
 **Web** (`apps/web/src/pwa/`)
 
 - `sw.js`, an additive block after the fetch handler:
-  - `push`: it parses and validates the payload (id, title, a known target kind, clipped lengths). If a notification with the same tag is already on screen, it does nothing. Otherwise it shows `title`, then `body` or "Open GalacticAgents to see it.", with `tag = id`, `data = {id, target}` and the 192 px icon.
+  - `push`: it parses and validates the payload (id, title, a known target kind, clipped lengths). It always calls `showNotification` (review fix: Safari on iOS counts a push that does not as a silent push and revokes the subscription). If a notification with the same tag is already on screen, it is replaced in place with `renotify: false` and keeps its text (the page's may carry details the push leaves out). Otherwise it shows `title`, then `body` or "Open GalacticAgents to see it.", with `tag = id`, `data = {id, target}` and the 192 px icon.
   - A missing or foreign payload still shows a generic "GalacticAgents" notification, never a silent push.
   - `notificationclick`: it closes the notification. If one of our windows is open (focused first, then visible, then any), it focuses it and posts `{type: 'NOTIFICATION_CLICK', target}`. Otherwise it calls `clients.openWindow('/#focus=<kind>:<id>')`, or `#focus=inbox` when there is no target.
 - `notification-clicks.ts` (wired in `main.tsx`):
@@ -56,7 +57,8 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
 - `push.ts`:
   - Support detection: `supported`, `ios-install` (iPhone or iPad in Safari, not installed), `insecure`, `unsupported`.
   - The device id, the device label (for example "iPhone · Safari (Home Screen)"), key decoding and the `/api/push*` client.
-  - `syncPush`: on each session start, if push was turned on in this browser and the browser holds a subscription the server does not know (rotated by the push service, or pruned), it is handed over again with the switches this browser remembers. It never prompts and never subscribes anew.
+  - `syncPush`: on each session start, if push was turned on in this browser and the browser holds a subscription the server does not know, it looks at the device id it remembers (`galactic.push.device` keeps the id — the endpoint's SHA-256 prefix, never the endpoint — with the switches). A different id means the push service rotated the subscription: it is handed over again with the remembered switches. The same id (or none, from a build before the review fix) means the server forgot this very subscription — the Mac's "Remove device", or a prune after the push service said it was gone: the browser forgets its choice and drops the local subscription, and the settings show push off. (Review fix, 2026-10-05: before, the phone's next app open re-subscribed and undid the removal.) It never prompts and never subscribes anew.
+  - Removing a device is not a revocation: a lost phone that still holds a valid token can turn push on again from its settings. Cutting it off needs a token reset (decision 90).
 - `PushSettings.tsx`: settings → "Push notifications" (its own section under the desktop notifications).
   - Each unavailable state gets its explanation; the iOS one says "tap Share, then Add to Home Screen…".
   - "Turn on push notifications" calls `pushManager.subscribe` as the first await of the click. The browser's prompt opens there and nowhere else.
@@ -73,7 +75,8 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
 The conservative answer to the SPEC §8 question of 2026-10-03 is that notifications show even while the panel is in front. Push follows it: a push is always shown, and the device never shows the same notification twice.
 
 - The page's notifications and pushes share one tag space: the `notificationOf` id, shown through the same service worker registration. Chrome keeps a page's `new Notification` and a worker's notifications in separate tag spaces, which is why the page now shows through the worker.
-- Whichever arrives second sees the tag already on screen and does nothing.
+- Whichever arrives second replaces the first in place: same tag, `renotify: false`, no second alert. (Review fix, 2026-10-05: it used to do nothing, which Safari counts as a silent push. A repeat push keeps the text already on screen; the page always shows its own, so an updated backfill summary — "N more updates" — replaces the older count.)
+- While a new worker is installing or waiting, the active one may predate the `notificationclick` handler, so the page shows its own `new Notification` (whose `onclick` it handles) and uses the worker only when the browser refuses that (mobile).
 - Pushes are never silent: Chrome replaces a silent push with its own "site updated in the background" notice, and Safari revokes the subscription after a few.
 - Side effect: Android Chrome, which refuses `new Notification`, now shows the page's desktop notifications too. This was the item P25-07 deferred.
 - Remaining gap: if the user dismisses the page's notification in the second or so before the push about the same thing arrives, the push shows it again.
@@ -89,7 +92,7 @@ The conservative answer to the SPEC §8 question of 2026-10-03 is that notificat
 
 - Desktop notification switches stay in the browser (decision 59).
 - Push switches must live on the server, because the server decides what to send while the page is closed. They are stored with the subscription, and only the browser holding that subscription can change them, since every change names the endpoint.
-- The browser keeps a copy only to hand a rotated subscription over again.
+- The browser keeps a copy (with the device id, not the endpoint) only to hand a rotated subscription over again, and to tell a rotation from a removal.
 
 ### Remote clients (decision 90)
 
@@ -107,11 +110,11 @@ The conservative answer to the SPEC §8 question of 2026-10-03 is that notificat
 - The server POSTs to whatever endpoint a client registers, so only the known push services are accepted. They are listed in `endpoint.ts`.
 - A new browser's push service would need a code change. That is deliberate.
 
-## Proposed SPEC text
+## SPEC text (recorded as SPEC decision 95 and the §8 row, 2026-10-05)
 
 **Decision 95 — Push notifications on the phone** (§4.5; refines decision 59; decisions 90, 91):
 
-> A device can receive push notifications while GalacticAgents is closed: a question or a permission request waiting for the user, a project that finished or failed — the other notifications stay on the open page. Each device turns push on for itself in the settings ("Turn on push notifications"); only that click asks the browser's permission, and on iPhone and iPad only the app added to the Home Screen can (the settings say so). Each device keeps its own switches, one per kind, and chooses whether its notifications show project names and question text; by default they do not, and the lock screen says only what happened ("A question for you", "Project finished"). The phone manages its own device like the Mac does; removing another device's push works only from the Mac (decision 90). A device shows one notification per event — a push and the open page's own notification for the same question are one notification — and a push is shown even while the app is in front (as desktop notifications are, §8 2026-10-03). Tapping one opens GalacticAgents at the item, as a desktop notification's click does (decision 59). Push is best effort: a question not delivered within six hours, or a project's end within a day, is not delivered later; a device that no longer exists is forgotten.
+> A device can receive push notifications while GalacticAgents is closed: a question or a permission request waiting for the user, a project that finished or failed — the other notifications stay on the open page. Each device turns push on for itself in the settings ("Turn on push notifications"); only that click asks the browser's permission, and on iPhone and iPad only the app added to the Home Screen can (the settings say so). Each device keeps its own switches, one per kind, and chooses whether its notifications show project names and question text; by default they do not, and the lock screen says only what happened ("A question for you", "Project finished"). The phone manages its own device like the Mac does; removing another device's push works only from the Mac (decision 90). A device shows one notification per event — a push and the open page's own notification for the same question are one notification, the later one replacing the earlier in place without alerting again — and a push is shown even while the app is in front (as desktop notifications are, §8 2026-10-03). Tapping one opens GalacticAgents at the item, as a desktop notification's click does (decision 59). Push is best effort: a question not delivered within six hours, or a project's end within a day, is not delivered later; a device that no longer exists is forgotten.
 
 **SPEC §8, update the 2026-10-03 row** ("suppress while focused"): add "Push follows the same answer (Decision 95): a push is always shown, one notification per device by id; suppressing in front would need the page to tell the worker, and Safari revokes subscriptions that receive silent pushes."
 
@@ -150,7 +153,8 @@ The conservative answer to the SPEC §8 question of 2026-10-03 is that notificat
     - logs carry ids, never endpoints;
     - an unsubscribe during a retry stops it;
     - the in-flight cap;
-    - the test push and its rate limit;
+    - the test push and its rate limit; its times are pruned after a minute or with the device;
+    - new keys (a lost or damaged `vapid.json`) clear the stored subscriptions with a warning that carries no secret; `onCreate` fires on a new pair only;
     - no key is made without subscribers;
     - stop.
   - The real `web-push` request is decrypted with the device's private key and auth secret (`http_ece`): aes128gcm, VAPID `k=` is our key, and the payload is not in clear.
@@ -163,11 +167,11 @@ The conservative answer to the SPEC §8 question of 2026-10-03 is that notificat
   - deleting another device is 403 from the phone and allowed from the Mac, and with `autoApproveRemote`;
   - the 20-device cap still lets an existing device update.
 - Web:
-  - `pwa/sw-push.test.ts` (8): shows with the tag; the detailed body; no duplicate when the tag is on screen; a generic notification for a missing, foreign or invalid payload; an unknown target is dropped and fields are clipped; a tap focuses the focused window and posts to it; with no window it opens `/#focus=` (no token); a window that refuses focus still gets the message.
-  - `pwa/push.test.ts` (7): support, including the iOS install caveat; the device id equals the server's SHA-256; the label; key decoding and comparison; the remembered switches; the rotated-subscription re-sync, which never subscribes anew; a stale key is not re-sent.
+  - `pwa/sw-push.test.ts` (9): shows with the tag; the detailed body; a tag already on screen is replaced in place (one notification, the earlier text kept, `renotify: false`); every push calls `showNotification`; a generic notification for a missing, foreign or invalid payload; an unknown target is dropped and fields are clipped; a tap focuses the focused window and posts to it; with no window it opens `/#focus=` (no token); a window that refuses focus still gets the message.
+  - `pwa/push.test.ts` (10): support, including the iOS install caveat; the device id equals the server's SHA-256; the label; key decoding and comparison; the remembered switches; the rotated-subscription re-sync, which never subscribes anew; a removed device (same id) is not re-sent and push stays off, also for a remembered choice without an id; a known subscription's id is learnt; a stale key is not re-sent.
   - `pwa/PushSettings.test.tsx` (7): the iOS explanation; the development (no worker) explanation; the prompt only on the click, with the server key and `userVisibleOnly`; the switches, details, test and turn off; other devices removable only when `canRemoveOthers`; the blocked permission and a failed call (alert); retry after a read failure. Axe shows no serious or critical findings in the off, on, other-devices and iOS states.
   - `pwa/notification-clicks.test.ts` (3): `#focus=` parsing and stripping (other keys and `#token=` kept); waiting for the first snapshot; worker messages, with junk going to the inbox.
-  - `panel/notifications/notifier-worker.test.ts` (3): through the worker with tag and data; not shown again when a push already showed it; falls back to `new Notification` without a registration or when the worker fails.
+  - `panel/notifications/notifier-worker.test.ts` (6): through the worker with tag and data; replaces in place what a push already showed; an updated backfill summary replaces the older one; the page's `Notification` while a worker is installing or waiting, the worker when the page cannot; falls back to `new Notification` without a registration or when the worker fails.
 - Full gates on `p7-04-push`: build, typecheck, lint and format:check are clean. Tests: protocol 74, server 1029 (+1 skipped), web 1598, all passing.
 
 ## Verified in headless Chrome (CDP), production build
@@ -178,7 +182,7 @@ The real server ran on `127.0.0.1:47815` with `GALACTIC_DEV=1` and `GALACTIC_HAR
 - `GET /api/push` returns the public key, and `vapid.json` is created with mode **0600**. The route answers 401 without the token.
 - **A real subscription works in headless Chrome**, on `fcm.googleapis.com`. The settings' "Turn on push notifications", clicked with a real mouse event, subscribed and saved the device "Mac · Chrome". "Turn off" removed it.
 - **End to end through Google's push service.**
-  - With the panel open and its desktop notifications on, a permission question opened through `/dev/harness` produced exactly **one** notification. It carried the page's text, the push's `lastSentAt` was set, and the push saw the tag and added nothing.
+  - With the panel open and its desktop notifications on, a permission question opened through `/dev/harness` produced exactly **one** notification. It carried the page's text, the push's `lastSentAt` was set, and the push saw the tag and added nothing. (Before the review fix; the push now replaces it in place with the same text and no second alert.)
   - With no app page open (only `/icons/icon.svg` on the origin), another permission question arrived **by push alone**: "Permission needed", "Open GalacticAgents to see it.", no question text (details off).
 - A fake FCM endpoint got **410 from Google** and the server removed the device.
 - The server log contains no endpoint, no private key and no token. The push lines read `push: device <id> is no longer subscribed (410); removed`.

@@ -192,6 +192,8 @@ describe('push routes (P7-04)', () => {
 
   it('removing another device is the Mac’s (decision 90), unless autoApproveRemote', async () => {
     const { push } = await start();
+    // The keys exist before any device subscribes (new keys clear the stored subscriptions).
+    push.service.publicKey();
     const mac = push.store.upsert({ subscription: subscription(1), origin: 'local' });
     const phoneList = PushStatusResponse.parse((await inject('GET', '/api/push', PHONE)).json());
     expect(phoneList.canRemoveOthers).toBe(false);

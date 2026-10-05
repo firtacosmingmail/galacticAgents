@@ -12,12 +12,13 @@ Cosmin asked how to remove the planets of closed demo projects. The ops console'
 
 - `/dev/seed` now flags both rows with `meta.demo: true` (`domain/demo.ts` `seedDemoProject`, stamped with the command clock).
 - `isDemoBody(body)` matches `meta.demo`. For rows made before the flag it also matches **the legacy rule**: a `planet` with no `parentId`, no numeric `meta.orbit`, not `meta.reserved`, named exactly `Demo planet <digits>`. Catalogue bodies always have `meta.orbit` (migration 0005) and asteroids are not planets, so neither can ever match. `/dev/seed` has made exactly this shape since P0-16 (checked in the git history; nothing else in the code makes an orbit-less planet).
-- `isDemoProject(project)` matches `meta.demo`. For older rows it matches name `Demo project <digits>` **and** workspace `/tmp/galactic-demo-<digits>`. A `meta.harness` project is never demo work. The workspace condition is there so a real project that ended up on a demo planet is never taken for demo work.
+- `isDemoProject(project)` matches `meta.demo`. For older rows it matches name `Demo project <digits>` **and** workspace `/tmp/galactic-demo-<digits>`. A `meta.harness` project is never demo work. The workspace condition is there so a real project that ended up on a demo planet is never taken for demo work. Caveat: a real project that happens to be named exactly "Demo project N" **and** to have the workspace `/tmp/galactic-demo-N` is indistinguishable from a legacy seeded one, and "Clear demo projects" would close and archive it. Accepted: only `/dev/seed` ever made that pair, and Clear is a development-only button.
 
 **Never chosen, never assigned** (`catalogue.ts`, `bodies.ts`, `parking.ts`, Harmonizer tools):
 
-- `isCatalogued(body)` means a numeric `meta.orbit`, not demo, not retired. `freePlanets` and `freeMoons` (so `chooseBody`, `createProject`, un-parking and the promotion flow) return catalogued bodies only. Any orbit-less planet is skipped too, whatever its name.
+- `isCatalogued(body)` (in `@galactic/protocol`'s `dev.ts` since the review, shared by the server and the panel) means a numeric `meta.orbit`, not demo, not retired. `freePlanets` and `freeMoons` (so `chooseBody`, `createProject`, un-parking and the promotion flow) return catalogued bodies only. Any orbit-less planet is skipped too, whatever its name.
 - `roomFor` keeps a card's named body only while it is catalogued. The Harmonizer's `isFree` refuses demo and retired bodies.
+- The proposal card's edit form (`ProposalCard.tsx` `freeBodies`) lists only catalogued free bodies too (review fix 2026-10-05: it offered demo and orbit-less planets the server would then not use).
 - `checkAssignable` refuses a retired body, and a demo body for anything except the demo project it already hosts.
 - `occupiedPlanets` (the "no free planet" refusal) still lists a demo planet that hosts work, because it is occupied. It never lists a retired one.
 
@@ -40,7 +41,11 @@ Cosmin asked how to remove the planets of closed demo projects. The ops console'
 - Best effort. A refused step (for example, a demo project with a running agent) and a demo planet still hosting real work are listed in `skipped` with the reason. The rest goes on.
 - It returns `{seq, projects, tasks, retired, skipped}`. The console prints one line, e.g. "Cleared 4 demo projects and 0 tasks; retired 4 demo planets."
 
-## Proposed SPEC text
+## Older pages and `body.retired` (review fix, 2026-10-05)
+
+`body.retired` is a new event type. A page loaded from a build before it failed `ServerMessage` on that event, closed with 4002, resumed from the same `seq` and received the same event again, forever. The client now skips an event of an unknown type with a valid envelope, advancing `seq` past it (TECHNOLOGY §6.3 item 5, `unknownEventFrame`). That protects later builds; a tab still running a bundle from before the fix keeps looping until it is reloaded (the P7-01 update banner prompts the reload).
+
+## SPEC text (recorded in SPEC decision 79, 2026-10-05)
 
 Added to decision 79 rather than as a new number:
 
@@ -61,7 +66,8 @@ According to the P4-12 notes, his database holds four "Demo project 1–4", `in_
 
 ## Tests
 
-- Protocol `dev.test.ts` (+5): `isDemoBody` (flagged, legacy, never catalogue/moon/reserved/other names), `isRetiredBody`, `isDemoProject` (flagged, legacy, never real or harness work).
+- Web `panel/cards/free-bodies.test.ts` (1): the edit form's body list skips reserved, hosting, demo (flagged and legacy), retired and orbit-less bodies.
+- Protocol `dev.test.ts` (+6): `isCatalogued`; `isDemoBody` (flagged, legacy, never catalogue/moon/reserved/other names), `isRetiredBody`, `isDemoProject` (flagged, legacy, never real or harness work).
 - Server `domain/demo.test.ts` (+9):
   - seed flags;
   - `freePlanets` / `chooseBody` skip free demo planets (flagged and legacy) and any orbit-less planet, so with the catalogue full a new project is refused rather than given a demo planet;

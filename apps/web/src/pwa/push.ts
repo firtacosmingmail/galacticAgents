@@ -167,6 +167,12 @@ export function subscriptionJson(sub: PushSubscription): PushSubscribeRequest['s
 export const PUSH_DEVICE_KEY = 'galactic.push.device';
 
 interface RememberedDevice {
+  /**
+   * The device id (the endpoint's SHA-256 prefix, not the endpoint) of the subscription this
+   * browser handed over last: how `syncPush` tells a rotated subscription (a new id) from one the
+   * server forgot on purpose (the same id: the device was removed).
+   */
+  id?: string | undefined;
   kinds: PushKinds;
   details: boolean;
 }
@@ -176,7 +182,11 @@ export function rememberDevice(device: RememberedDevice | undefined): void {
     if (device) {
       localStorage.setItem(
         PUSH_DEVICE_KEY,
-        JSON.stringify({ kinds: device.kinds, details: device.details }),
+        JSON.stringify({
+          ...(device.id ? { id: device.id } : {}),
+          kinds: device.kinds,
+          details: device.details,
+        }),
       );
     } else localStorage.removeItem(PUSH_DEVICE_KEY);
   } catch {
@@ -188,9 +198,10 @@ export function rememberedDevice(): RememberedDevice | undefined {
   try {
     const raw = localStorage.getItem(PUSH_DEVICE_KEY);
     if (!raw) return undefined;
-    const parsed = JSON.parse(raw) as { kinds?: unknown; details?: unknown };
+    const parsed = JSON.parse(raw) as { id?: unknown; kinds?: unknown; details?: unknown };
     const kinds = PushKinds.safeParse(parsed.kinds);
     return {
+      ...(typeof parsed.id === 'string' && parsed.id ? { id: parsed.id } : {}),
       kinds: kinds.success ? kinds.data : allPushKindsOn(),
       details: parsed.details === true,
     };
@@ -201,15 +212,24 @@ export function rememberedDevice(): RememberedDevice | undefined {
 
 /**
  * On a session start: when push was turned on in this browser and the browser now holds a
- * subscription the server does not know (the push service rotated it, or the server pruned it),
- * hand it over again with the toggles this browser remembers. Best effort and silent: it never
- * asks for a permission and never subscribes anew.
+ * subscription the server does not know, decide why from the device id this browser remembers:
+ *
+ * - **Another id** (the push service rotated the subscription): hand the new one over with the
+ *   toggles this browser remembers (`synced`).
+ * - **The same id** (or none remembered): the server forgot this very subscription — the device
+ *   was removed (from the Mac's "Remove device", or after the push service said it was gone). The
+ *   removal is respected: this browser forgets its choice, drops the local subscription, and push
+ *   stays off until the user turns it on again in the settings (`removed`).
+ *
+ * Best effort and silent: it never asks for a permission and never subscribes anew. Removing a
+ * device is not a revocation: a lost phone that still holds a valid token can turn push on again
+ * itself; cutting it off needs a token reset (SPEC decision 90).
  */
 export async function syncPush(
   token: string,
   env: PushEnv = defaultEnv(),
   api: PushApi = createPushApi(token),
-): Promise<'synced' | 'unchanged' | 'off'> {
+): Promise<'synced' | 'unchanged' | 'removed' | 'off'> {
   const remembered = rememberedDevice();
   if (!remembered || pushSupport(env) !== 'supported') return 'off';
   try {
@@ -219,13 +239,22 @@ export async function syncPush(
     const status = await api.status();
     if (!sameServerKey(sub, status.publicKey)) return 'off';
     const id = await pushDeviceId(sub.endpoint);
-    if (status.devices.some((d) => d.id === id)) return 'unchanged';
-    await api.subscribe({
+    if (status.devices.some((d) => d.id === id)) {
+      if (remembered.id !== id) rememberDevice({ ...remembered, id });
+      return 'unchanged';
+    }
+    if (!remembered.id || remembered.id === id) {
+      rememberDevice(undefined);
+      await sub.unsubscribe().catch(() => false);
+      return 'removed';
+    }
+    const saved = await api.subscribe({
       subscription: subscriptionJson(sub),
       kinds: remembered.kinds,
       details: remembered.details,
       label: deviceLabel(env),
     });
+    rememberDevice(saved);
     return 'synced';
   } catch {
     return 'off';

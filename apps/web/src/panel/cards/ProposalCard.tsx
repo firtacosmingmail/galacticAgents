@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
+  isCatalogued,
   proposalParking,
   proposalPlan,
   proposalPromotion,
@@ -307,11 +308,22 @@ function Parked({
   );
 }
 
-/** The free bodies of a kind the card may name (not reserved, not hosting, no "moved" marker). */
-function freeBodies(world: Pick<WorldState, 'bodies'>, kind: Proposal['kind']): Body[] {
+/**
+ * The free bodies of a kind the card may name: not reserved, not hosting, no "moved" marker, and
+ * catalogued — the server's own rule (`isCatalogued`): never a demo, retired or orbit-less planet,
+ * which the server would not use.
+ */
+export function freeBodies(world: Pick<WorldState, 'bodies'>, kind: Proposal['kind']): Body[] {
   if (kind === 'asteroid') return [];
   return Object.values(world.bodies)
-    .filter((b) => b.kind === kind && !b.host && !b.movedTo && b.meta?.['reserved'] !== true)
+    .filter(
+      (b) =>
+        b.kind === kind &&
+        !b.host &&
+        !b.movedTo &&
+        b.meta?.['reserved'] !== true &&
+        isCatalogued(b),
+    )
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

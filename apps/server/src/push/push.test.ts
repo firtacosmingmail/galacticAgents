@@ -90,6 +90,19 @@ describe('VAPID keys', () => {
     }
   });
 
+  it('tells the caller when a new pair was made (none yet, or a damaged file), not on reuse', () => {
+    const dataDir = tempDir();
+    let created = 0;
+    const onCreate = () => void created++;
+    loadOrCreateVapidKeys({ dataDir, onCreate });
+    expect(created).toBe(1);
+    loadOrCreateVapidKeys({ dataDir, onCreate });
+    expect(created).toBe(1);
+    writeFileSync(join(dataDir, VAPID_FILE), '{broken');
+    loadOrCreateVapidKeys({ dataDir, onCreate });
+    expect(created).toBe(2);
+  });
+
   it('the subject is the Serve name, else a placeholder; the environment may override it', () => {
     expect(vapidSubject({}, 'mac.tail1.ts.net')).toBe('https://mac.tail1.ts.net');
     expect(vapidSubject({}, undefined)).toMatch(/^mailto:/);
@@ -152,6 +165,10 @@ describe('PushStore', () => {
     expect(store.forKind('project_completed')).toHaveLength(0);
     expect(store.forKind('question')).toHaveLength(1);
     expect(store.remove(a.device.id)).toBe(true);
+    expect(store.list()).toHaveLength(0);
+    store.upsert({ subscription, origin: 'remote' });
+    store.upsert({ subscription: fakeSubscription(2).subscription, origin: 'local' });
+    expect(store.clear()).toBe(2);
     expect(store.list()).toHaveLength(0);
   });
 });
@@ -376,6 +393,51 @@ describe('PushService', () => {
     expect(await service.test(s.subscription.endpoint)).toBe('too_soon');
     now += 5_000;
     expect(await service.test(s.subscription.endpoint)).toBe('sent');
+  });
+
+  it('new keys clear every stored subscription (bound to the old key), warning without secrets', () => {
+    const dataDir = tempDir();
+    const first = make({ dataDir });
+    const keys = first.vapidKeys();
+    const a = fakeSubscription(1);
+    const b = fakeSubscription(2);
+    store.upsert({ subscription: a.subscription, origin: 'remote' });
+    store.upsert({ subscription: b.subscription, origin: 'local' });
+    first.stop();
+    // A restart that reads the same file keeps them.
+    const again = make({ dataDir });
+    expect(again.vapidKeys()).toEqual(keys);
+    expect(store.list()).toHaveLength(2);
+    again.stop();
+    // The file is lost or damaged: new keys, and the old subscriptions can never work again.
+    writeFileSync(join(dataDir, VAPID_FILE), '{broken');
+    const fresh = make({ dataDir }).vapidKeys();
+    expect(fresh.publicKey).not.toBe(keys.publicKey);
+    expect(store.list()).toHaveLength(0);
+    const warning = logs.find((l) => /2 device subscriptions .*removed/.test(l));
+    expect(warning).toBeDefined();
+    const all = logs.join('\n');
+    for (const secret of [keys.privateKey, fresh.privateKey, a.subscription.endpoint]) {
+      expect(all).not.toContain(secret);
+    }
+  });
+
+  it('test push times are forgotten after a minute or when the device is removed', async () => {
+    const a = fakeSubscription(1);
+    const b = fakeSubscription(2);
+    const stored = store.upsert({ subscription: a.subscription, origin: 'remote' });
+    store.upsert({ subscription: b.subscription, origin: 'remote' });
+    let now = 1_000_000;
+    make({ now: () => now });
+    await service.test(a.subscription.endpoint);
+    expect(service.rememberedTests).toBe(1);
+    store.remove(stored.device.id);
+    await service.test(b.subscription.endpoint);
+    expect(service.rememberedTests).toBe(1); // a's entry went with its device
+    now += 61_000;
+    store.upsert({ subscription: a.subscription, origin: 'remote' });
+    await service.test(a.subscription.endpoint);
+    expect(service.rememberedTests).toBe(1); // b's is older than a minute
   });
 
   it('makes no keys while nobody is subscribed, and stops following the log on stop', async () => {

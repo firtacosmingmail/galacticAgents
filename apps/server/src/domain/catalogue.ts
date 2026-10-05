@@ -1,6 +1,6 @@
 import {
   asteroidSpec,
-  isDemoBody,
+  isCatalogued,
   isRetiredBody,
   type Body,
   type BodyChoice,
@@ -35,14 +35,8 @@ export const isReserved = (body: Body): boolean => body.meta?.['reserved'] === t
 /** Free: unreserved, hosting nothing and not showing a "moved to …" marker. */
 export const isFree = (body: Body): boolean => !body.host && !body.movedTo && !isReserved(body);
 
-/**
- * A body the catalogue may hand out (P7-07): a seeded planet or moon (it has a `meta.orbit`,
- * migration 0005), never a demo body (`/dev/seed`, `isDemoBody`) or a retired one. A planet or
- * moon made outside the catalogue is never chosen for real work: it would silently raise decision
- * 1's planet cap and bring a made-up planet back into the scene.
- */
-export const isCatalogued = (body: Body): boolean =>
-  typeof body.meta?.['orbit'] === 'number' && !isDemoBody(body) && !isRetiredBody(body);
+/** A body the catalogue may hand out: `isCatalogued` (`@galactic/protocol`, shared with the panel). */
+export { isCatalogued };
 
 const num = (v: unknown, fallback: number): number => (typeof v === 'number' ? v : fallback);
 

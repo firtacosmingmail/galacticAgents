@@ -131,6 +131,11 @@ export class PushStore {
     return this.get(id)!;
   }
 
+  /** Removes every subscription (the VAPID keys were replaced); how many there were. */
+  clear(): number {
+    return this.db.prepare('DELETE FROM push_subscriptions').run().changes;
+  }
+
   remove(id: string): boolean {
     return this.db.prepare('DELETE FROM push_subscriptions WHERE id = ?').run(id).changes > 0;
   }

@@ -46,9 +46,16 @@ const status = (agentId: string, state: StatusRecord['state'] = 'working'): Stat
   agentId,
   state,
 });
-const kepler: Body = { ...fx.body };
-const mars: Body = { id: 'b-mars', kind: 'planet', name: 'Mars' };
-const titan: Body = { id: 'b-titan', kind: 'moon', parentId: 'b-saturn', name: 'Titan' };
+// Catalogue bodies carry an orbit (migration 0005); the card offers only those (isCatalogued).
+const kepler: Body = { ...fx.body, meta: { orbit: 5 } };
+const mars: Body = { id: 'b-mars', kind: 'planet', name: 'Mars', meta: { orbit: 4 } };
+const titan: Body = {
+  id: 'b-titan',
+  kind: 'moon',
+  parentId: 'b-saturn',
+  name: 'Titan',
+  meta: { orbit: 1 },
+};
 
 function seed(
   extra: {

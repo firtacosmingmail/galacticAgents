@@ -195,4 +195,57 @@ describe('GalacticClient', () => {
     expect(t.socket().closeCalls).toEqual([]);
     warn.mockRestore();
   });
+
+  it('skips an event type a newer server added, advancing seq instead of looping (protocol evolution)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = setup();
+    t.client.connect();
+    t.socket().serverOpens();
+    t.socket().serverSends(snapshot(3));
+    const future = {
+      type: 'event',
+      seq: 4,
+      at: '2026-09-30T10:00:00.000Z',
+      event: { type: 'body.someday', bodyId: 'b-1', anything: [1, 2] },
+    };
+    t.socket().serverSends(future);
+    expect(t.client.status).toBe('live');
+    expect(t.socket().closeCalls).toEqual([]);
+    expect(t.client.lastEventId).toBe(4);
+    expect(t.persisted).toEqual([3, 4]); // a reload resumes past it
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/body\.someday.*reload/));
+    // Not handed to the store; the next event applies in order.
+    t.socket().serverSends(idle(5));
+    expect(t.received.map((m) => m.type)).toEqual(['snapshot', 'event']);
+    expect(t.client.lastEventId).toBe(5);
+    // A replayed copy is a duplicate; an unknown event after a gap still resumes.
+    t.socket().serverSends(future);
+    expect(t.socket().closeCalls).toEqual([]);
+    t.socket().serverSends({ ...future, seq: 9 });
+    expect(t.socket().closeCalls[0]?.reason).toBe('gap in event stream');
+    warn.mockRestore();
+  });
+
+  it('still treats a malformed event of a known type, or a broken envelope, as unreadable', () => {
+    const t = setup();
+    t.client.connect();
+    t.socket().serverOpens();
+    t.socket().serverSends(snapshot(3));
+    // `agent.idle` is known: a missing agentId is a server bug, not a newer protocol.
+    t.socket().serverSends({
+      type: 'event',
+      seq: 4,
+      at: '2026-09-30T10:00:00.000Z',
+      event: { type: 'agent.idle' },
+    });
+    expect(t.socket().closeCalls[0]).toEqual({ code: 4002, reason: 'unreadable message' });
+    expect(t.client.lastEventId).toBe(3);
+
+    const u = setup();
+    u.client.connect();
+    u.socket().serverOpens();
+    u.socket().serverSends(snapshot(3));
+    u.socket().serverSends({ type: 'event', seq: 'four', event: { type: 'body.someday' } });
+    expect(u.socket().closeCalls[0]?.reason).toBe('unreadable message');
+  });
 });

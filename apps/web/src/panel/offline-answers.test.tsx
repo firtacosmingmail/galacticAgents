@@ -94,16 +94,21 @@ async function open(questions: Question[], path = '/') {
   });
 }
 
+/** How many sockets existed when the connection dropped: the reconnect is the next one. */
+let socketsAtDrop = 0;
+
 /** The connection drops (a phone in a tunnel). */
 async function drop() {
   await act(async () => socket().serverCloses(1006));
+  // Counted here, not in reconnect(): under load the client's reconnect timer can fire while the
+  // test is still clicking, and a count taken later would wait for a socket that already exists.
+  socketsAtDrop = FakeWebSocket.instances.length;
   expect(useAppStore.getState().status).toBe('disconnected');
 }
 
 /** The client reconnects; the server replays `events` and says `caught_up`. */
 async function reconnect(events: Event[] = []) {
-  const before = FakeWebSocket.instances.length;
-  await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(before + 1), {
+  await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(socketsAtDrop + 1), {
     timeout: 3000,
   });
   await act(async () => {

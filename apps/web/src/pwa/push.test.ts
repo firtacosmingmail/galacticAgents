@@ -81,6 +81,7 @@ describe('push on the page (P7-04)', () => {
     expect(await syncPush('t', browser.env, api)).toBe('off');
     expect(api.status).not.toHaveBeenCalled();
 
+    // Turned on with the subscription before the rotation (another id).
     rememberDevice(device('old', { details: true }));
     expect(await syncPush('t', browser.env, api)).toBe('synced');
     expect(api.subscribe).toHaveBeenCalledWith(
@@ -91,10 +92,44 @@ describe('push on the page (P7-04)', () => {
       }),
     );
     expect(browser.subscribe).not.toHaveBeenCalled(); // never subscribes anew
+    expect(rememberedDevice()?.id).toBe(await pushDeviceId(held.endpoint));
+    expect(localStorage.getItem(PUSH_DEVICE_KEY)).not.toMatch(/fcm|endpoint|token/);
 
     const known = fakeApi({ devices: [device(await pushDeviceId(held.endpoint))] });
     expect(await syncPush('t', browser.env, known.api)).toBe('unchanged');
     expect(known.api.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('respects a removal: the same subscription the server forgot is not handed over again', async () => {
+    const held = new FakeSubscription('https://fcm.googleapis.com/fcm/send/phone');
+    const browser = fakeBrowser({ held, permission: 'granted' });
+    rememberDevice(device(await pushDeviceId(held.endpoint)));
+    // The Mac removed this device: the server no longer lists it.
+    const { api } = fakeApi();
+    expect(await syncPush('t', browser.env, api)).toBe('removed');
+    expect(api.subscribe).not.toHaveBeenCalled();
+    expect(held.unsubscribed).toBe(true);
+    expect(rememberedDevice()).toBeUndefined(); // the settings show push off
+    // The next session start does nothing more.
+    expect(await syncPush('t', browser.env, api)).toBe('off');
+    expect(api.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('a remembered choice without a device id (older build) is treated as removed', async () => {
+    const held = new FakeSubscription('https://fcm.googleapis.com/fcm/send/phone');
+    localStorage.setItem(PUSH_DEVICE_KEY, JSON.stringify({ kinds: {}, details: false }));
+    const { api } = fakeApi();
+    expect(await syncPush('t', fakeBrowser({ held }).env, api)).toBe('removed');
+    expect(api.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('learns the device id of a known subscription remembered without one', async () => {
+    const held = new FakeSubscription('https://fcm.googleapis.com/fcm/send/phone');
+    const id = await pushDeviceId(held.endpoint);
+    localStorage.setItem(PUSH_DEVICE_KEY, JSON.stringify({ kinds: {}, details: true }));
+    const { api } = fakeApi({ devices: [device(id)] });
+    expect(await syncPush('t', fakeBrowser({ held }).env, api)).toBe('unchanged');
+    expect(rememberedDevice()).toMatchObject({ id, details: true });
   });
 
   it('a subscription bound to another server key is not re-sent', async () => {

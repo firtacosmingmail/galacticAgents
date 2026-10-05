@@ -17,7 +17,7 @@ import { actorLabel, agentLabel } from '../console/hierarchy/shared.js';
  * withdrawn question leaves it "not sent" with who answered, worded from the folded world.
  *
  * Only answers are queued. Card decisions (approve / edit / reject / park) have no version to
- * check a stale view against and start work, so they need a live connection (decision proposed in
+ * check a stale view against and start work, so they need a live connection (SPEC decision 96;
  * `docs/tasks/notes/P7-05-offline.md`).
  *
  * What is stored: the answer text, the question's id, version and text, and a fingerprint of the
@@ -131,12 +131,18 @@ function persist(): void {
   }
 }
 
-/** Reads the stored queue; an entry caught mid-send (the page closed) is queued again. */
-function hydrate(): void {
+/**
+ * Reads the stored queue. On page load (`recover`), an entry caught mid-send — the page that was
+ * sending it closed — is queued again (same answerId, so a send that did land is recognised as a
+ * duplicate). When another live tab's change is read in, its `sending` entries are left as they
+ * are: that tab is sending them, and queuing them here would send them twice at once.
+ */
+function hydrate(recover: boolean): void {
   const stored = readStored();
   const entries: Record<Id, QueuedAnswer> = {};
   for (const e of stored?.entries ?? []) {
-    entries[e.questionId] = e.state === 'sending' ? { ...e, state: 'queued', wasQueued: true } : e;
+    entries[e.questionId] =
+      recover && e.state === 'sending' ? { ...e, state: 'queued', wasQueued: true } : e;
   }
   useAnswerQueue.setState({ scope: stored?.scope, entries });
 }
@@ -209,8 +215,16 @@ export function isOffline(status: ConnectionStatus = useAppStore.getState().stat
   }
 }
 
-/** A refusal from the server, as opposed to a request that never got an answer. */
-const isRefusal = (e: unknown): e is ApiError => e instanceof ApiError;
+/**
+ * A passing failure: the server (or a proxy before it) is restarting, overloaded or timed out —
+ * 5xx, 408, 429. Like a request that never got an answer, the answer stays queued and is retried
+ * with the same answerId; it is not a decision about the answer.
+ */
+const isTransient = (e: ApiError): boolean =>
+  e.status >= 500 || e.status === 408 || e.status === 429;
+
+/** A refusal from the server, as opposed to a request that never got an answer or a passing failure. */
+const isRefusal = (e: unknown): e is ApiError => e instanceof ApiError && !isTransient(e);
 
 // -- the card's send ---------------------------------------------------------------------------
 
@@ -248,7 +262,11 @@ export async function submitAnswer(
       throw e;
     }
     update(question.id, entry.answerId, { state: 'queued', wasQueued: true });
-    announce(`No connection: the answer is queued and will be sent when the connection is back.`);
+    announce(
+      e instanceof ApiError
+        ? `The server could not take the answer just now: it is queued and will be sent again shortly.`
+        : `No connection: the answer is queued and will be sent when the connection is back.`,
+    );
     scheduleRetry();
     return 'queued';
   }
@@ -305,7 +323,7 @@ function scheduleRetry(): void {
  * comes back online; another tab's change to it is read in. Returns the stop function.
  */
 export function startAnswerQueue(token: string, api: Api): () => void {
-  hydrate();
+  hydrate(true);
   const sentTimers = new Set<ReturnType<typeof setTimeout>>();
   session = { api, scope: tokenScope(token), retry: undefined, sentTimers };
   let previous = useAppStore.getState().status;
@@ -319,7 +337,7 @@ export function startAnswerQueue(token: string, api: Api): () => void {
     if (e.key !== QUEUE_KEY) return;
     // Another tab queued, cancelled or sent something; what this tab is sending stays as it is.
     const local = useAnswerQueue.getState().entries;
-    hydrate();
+    hydrate(false);
     const merged = { ...useAnswerQueue.getState().entries };
     for (const e of Object.values(local)) {
       if (e.state !== 'sending' && e.state !== 'sent') continue;
@@ -405,7 +423,8 @@ async function flushOnce(): Promise<void> {
       await session.api.answer(entry.questionId, entry.answer, entry.version, entry.answerId);
     } catch (e) {
       if (!isRefusal(e)) {
-        // No reply: try again later (the same answerId), not in a tight loop.
+        // No reply, or a passing 5xx/408/429: try again later (the same answerId), not in a
+        // tight loop.
         update(entry.questionId, entry.answerId, { state: 'queued' });
         flushAgain = false;
         scheduleRetry();
