@@ -56,7 +56,8 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
 - `push.ts`:
   - Support detection: `supported`, `ios-install` (iPhone or iPad in Safari, not installed), `insecure`, `unsupported`.
   - The device id, the device label (for example "iPhone · Safari (Home Screen)"), key decoding and the `/api/push*` client.
-  - `syncPush`: on each session start, if push was turned on in this browser and the browser holds a subscription the server does not know (rotated by the push service, or pruned), it is handed over again with the switches this browser remembers. It never prompts and never subscribes anew.
+  - `syncPush`: on each session start, if push was turned on in this browser and the browser holds a subscription the server does not know, it looks at the device id it remembers (`galactic.push.device` keeps the id — the endpoint's SHA-256 prefix, never the endpoint — with the switches). A different id means the push service rotated the subscription: it is handed over again with the remembered switches. The same id (or none, from a build before the review fix) means the server forgot this very subscription — the Mac's "Remove device", or a prune after the push service said it was gone: the browser forgets its choice and drops the local subscription, and the settings show push off. (Review fix, 2026-10-05: before, the phone's next app open re-subscribed and undid the removal.) It never prompts and never subscribes anew.
+  - Removing a device is not a revocation: a lost phone that still holds a valid token can turn push on again from its settings. Cutting it off needs a token reset (decision 90).
 - `PushSettings.tsx`: settings → "Push notifications" (its own section under the desktop notifications).
   - Each unavailable state gets its explanation; the iOS one says "tap Share, then Add to Home Screen…".
   - "Turn on push notifications" calls `pushManager.subscribe` as the first await of the click. The browser's prompt opens there and nowhere else.
@@ -90,7 +91,7 @@ The conservative answer to the SPEC §8 question of 2026-10-03 is that notificat
 
 - Desktop notification switches stay in the browser (decision 59).
 - Push switches must live on the server, because the server decides what to send while the page is closed. They are stored with the subscription, and only the browser holding that subscription can change them, since every change names the endpoint.
-- The browser keeps a copy only to hand a rotated subscription over again.
+- The browser keeps a copy (with the device id, not the endpoint) only to hand a rotated subscription over again, and to tell a rotation from a removal.
 
 ### Remote clients (decision 90)
 
@@ -165,7 +166,7 @@ The conservative answer to the SPEC §8 question of 2026-10-03 is that notificat
   - the 20-device cap still lets an existing device update.
 - Web:
   - `pwa/sw-push.test.ts` (9): shows with the tag; the detailed body; a tag already on screen is replaced in place (one notification, the earlier text kept, `renotify: false`); every push calls `showNotification`; a generic notification for a missing, foreign or invalid payload; an unknown target is dropped and fields are clipped; a tap focuses the focused window and posts to it; with no window it opens `/#focus=` (no token); a window that refuses focus still gets the message.
-  - `pwa/push.test.ts` (7): support, including the iOS install caveat; the device id equals the server's SHA-256; the label; key decoding and comparison; the remembered switches; the rotated-subscription re-sync, which never subscribes anew; a stale key is not re-sent.
+  - `pwa/push.test.ts` (10): support, including the iOS install caveat; the device id equals the server's SHA-256; the label; key decoding and comparison; the remembered switches; the rotated-subscription re-sync, which never subscribes anew; a removed device (same id) is not re-sent and push stays off, also for a remembered choice without an id; a known subscription's id is learnt; a stale key is not re-sent.
   - `pwa/PushSettings.test.tsx` (7): the iOS explanation; the development (no worker) explanation; the prompt only on the click, with the server key and `userVisibleOnly`; the switches, details, test and turn off; other devices removable only when `canRemoveOthers`; the blocked permission and a failed call (alert); retry after a read failure. Axe shows no serious or critical findings in the off, on, other-devices and iOS states.
   - `pwa/notification-clicks.test.ts` (3): `#focus=` parsing and stripping (other keys and `#token=` kept); waiting for the first snapshot; worker messages, with junk going to the inbox.
   - `panel/notifications/notifier-worker.test.ts` (6): through the worker with tag and data; replaces in place what a push already showed; an updated backfill summary replaces the older one; the page's `Notification` while a worker is installing or waiting, the worker when the page cannot; falls back to `new Notification` without a registration or when the worker fails.
