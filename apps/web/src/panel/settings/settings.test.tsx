@@ -491,6 +491,31 @@ describe('settings page (P25-08)', () => {
     expect(within(caps).getByRole('status').textContent).toBe('Saved.');
   });
 
+  it('leaves transcript retention out for a server without it (P8-02)', async () => {
+    await open('/settings', done());
+    await screen.findByRole('region', { name: 'Caps' });
+    expect(screen.queryByRole('region', { name: 'Transcript retention' })).toBeNull();
+  });
+
+  it('edits transcript retention: days, or empty to keep forever (P8-02)', async () => {
+    const withRetention = done();
+    withRetention.settings.transcriptRetention = { maxAgeDays: 90, archivedDays: 30 };
+    await open('/settings', withRetention);
+    const tr = await screen.findByRole('region', { name: 'Transcript retention' });
+    const age = within(tr).getByLabelText('Remove agent output older than') as HTMLInputElement;
+    const archived = within(tr).getByLabelText('Remove archived work’s output') as HTMLInputElement;
+    expect([age.value, archived.value]).toEqual(['90', '30']);
+    type(age, '0');
+    expect(within(tr).getByRole('alert').textContent).toMatch(/more than 0/);
+    type(age, ''); // keep forever
+    type(archived, '7');
+    await click(within(tr).getByRole('button', { name: 'Save transcript retention' }));
+    expect(server.patches).toEqual([
+      { transcriptRetention: { maxAgeDays: null, archivedDays: 7 } },
+    ]);
+    expect(within(tr).getByRole('status').textContent).toBe('Saved.');
+  });
+
   it('resets the default table to the §3.6 table', async () => {
     const custom = done();
     custom.settings.defaultPermissionPolicy.rules.network = 'allow';

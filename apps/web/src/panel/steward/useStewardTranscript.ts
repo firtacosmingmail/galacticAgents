@@ -40,7 +40,11 @@ export function useStewardTranscript(agentId: Id) {
         if (cancelled) return;
         if (!Array.isArray(page.chunks)) throw new Error('unreadable transcript page');
         addTranscriptPage(agentId, page.chunks, 'newest');
-        setTranscriptView(agentId, { status: 'ready', hasMore: page.hasMore });
+        setTranscriptView(agentId, {
+          status: 'ready',
+          hasMore: page.hasMore,
+          compacted: page.compacted,
+        });
       } catch (e) {
         if (cancelled) return;
         setTranscriptView(agentId, { status: 'error', error: (e as Error).message });
@@ -66,7 +70,11 @@ export function useStewardTranscript(agentId: Id) {
       const page = await api.transcript(agentId, { before: oldest, limit: TRANSCRIPT_PAGE });
       if (!Array.isArray(page.chunks)) throw new Error('unreadable transcript page');
       addTranscriptPage(agentId, page.chunks, 'older');
-      setTranscriptView(agentId, { loadingOlder: false, hasMore: page.hasMore });
+      setTranscriptView(agentId, {
+        loadingOlder: false,
+        hasMore: page.hasMore,
+        ...(page.compacted ? { compacted: page.compacted } : {}),
+      });
     } catch (e) {
       setTranscriptView(agentId, { loadingOlder: false, error: (e as Error).message });
     }

@@ -6,7 +6,14 @@ import { AccessToken } from './AccessToken.js';
 import { DeviceQuality } from './DeviceQuality.js';
 import { PreflightCheck } from './PreflightCheck.js';
 import { useSettingsData } from './SettingsData.js';
-import { SaveButton, SECTIONS, SectionFrame, useSection, type AnySectionSpec } from './sections.js';
+import {
+  SaveButton,
+  SECTIONS,
+  SectionFrame,
+  TRANSCRIPT_RETENTION,
+  useSection,
+  type AnySectionSpec,
+} from './sections.js';
 import './settings.css';
 
 /**
@@ -44,6 +51,10 @@ export function SettingsPage({ token }: { token: string }) {
       )}
       {data.status === 'ready' &&
         SECTIONS.map((spec) => <PageSection key={spec.field} spec={spec} />)}
+      {/* P8-02: only a server that has the setting sends it. */}
+      {data.status === 'ready' && data.response?.settings.transcriptRetention && (
+        <PageSection spec={TRANSCRIPT_RETENTION} />
+      )}
 
       {/* P7-03: this browser's own tier, local — shown even without a settings endpoint. */}
       <DeviceQuality />

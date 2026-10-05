@@ -1,7 +1,9 @@
 import {
   DEFAULT_PERMISSION_POLICY,
+  DEFAULT_TRANSCRIPT_RETENTION,
   Settings,
   SettingsCaps,
+  TranscriptRetention,
   type PermissionAction,
   type PermissionDecision,
   type PermissionPolicy,
@@ -97,6 +99,33 @@ export function validateRetention(value: string): string | undefined {
   if (!Settings.shape.retentionDays.safeParse(n).success)
     return 'Enter more than 0 and at most 3650 days.';
   return undefined;
+}
+
+/** Transcript retention as typed (P8-02): days, or empty for "keep forever". */
+export interface TranscriptRetentionDraft {
+  maxAgeDays: string;
+  archivedDays: string;
+}
+
+export function transcriptRetentionDraft(settings: Settings): TranscriptRetentionDraft {
+  const r = settings.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION;
+  return {
+    maxAgeDays: r.maxAgeDays === null ? '' : String(r.maxAgeDays),
+    archivedDays: r.archivedDays === null ? '' : String(r.archivedDays),
+  };
+}
+
+/** The policy a draft stands for, or what is wrong with it. */
+export function parseTranscriptRetention(
+  draft: TranscriptRetentionDraft,
+): { value: TranscriptRetention; error?: undefined } | { value?: undefined; error: string } {
+  const days = (raw: string) => (raw.trim() === '' ? null : Number(raw));
+  const value = { maxAgeDays: days(draft.maxAgeDays), archivedDays: days(draft.archivedDays) };
+  if (!TranscriptRetention.shape.maxAgeDays.safeParse(value.maxAgeDays).success)
+    return { error: 'Keep output for more than 0 and at most 3650 days, or leave it empty.' };
+  if (!TranscriptRetention.shape.archivedDays.safeParse(value.archivedDays).success)
+    return { error: 'Keep archived work’s output for 0 to 3650 days, or leave it empty.' };
+  return { value };
 }
 
 /** One cap field: the form shows `ms` caps in minutes. */

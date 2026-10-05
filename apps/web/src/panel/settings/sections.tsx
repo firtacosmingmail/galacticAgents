@@ -16,15 +16,18 @@ import {
   ENV_VARIABLES,
   isSpecTable,
   parseCaps,
+  parseTranscriptRetention,
   POLICY_ROWS,
   policyValue,
   refusalMessage,
   RESTART_FIELDS,
   specDefault,
+  transcriptRetentionDraft,
   validateProjectsRoot,
   validateRetention,
   withPolicyValue,
   type CapsDraft,
+  type TranscriptRetentionDraft,
 } from './settings-model.js';
 
 /**
@@ -324,6 +327,50 @@ function RetentionEditor({ id, draft, setDraft, disabled }: EditorProps<string>)
   );
 }
 
+function TranscriptRetentionEditor({
+  id,
+  draft,
+  setDraft,
+  disabled,
+}: EditorProps<TranscriptRetentionDraft>) {
+  return (
+    <div className="set-field">
+      <div className="set-inline">
+        <label htmlFor={`${id}-age`}>Remove agent output older than</label>
+        <input
+          id={`${id}-age`}
+          className="set-input set-input-num"
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step="any"
+          placeholder="keep"
+          value={draft.maxAgeDays}
+          disabled={disabled}
+          onChange={(e) => setDraft({ ...draft, maxAgeDays: e.target.value })}
+        />
+        <span className="set-muted">days</span>
+      </div>
+      <div className="set-inline">
+        <label htmlFor={`${id}-archived`}>Remove archived work’s output</label>
+        <input
+          id={`${id}-archived`}
+          className="set-input set-input-num"
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step="any"
+          placeholder="keep"
+          value={draft.archivedDays}
+          disabled={disabled}
+          onChange={(e) => setDraft({ ...draft, archivedDays: e.target.value })}
+        />
+        <span className="set-muted">days after it was archived</span>
+      </div>
+    </div>
+  );
+}
+
 function CapsEditor({ id, draft, setDraft, disabled }: EditorProps<CapsDraft>) {
   const parsed = parseCaps(draft);
   return (
@@ -469,6 +516,21 @@ export const STEWARD_SOURCES: SectionSpec<boolean> = {
   validate: () => undefined,
   toPatch: (d) => ({ stewardsLoadUserSettings: d }),
   Editor: StewardSourcesEditor,
+};
+
+/**
+ * Transcript retention (P8-02). On the settings page only, not in the first-run wizard: the
+ * defaults suit a first run, and an older server without the setting leaves it out.
+ */
+export const TRANSCRIPT_RETENTION: SectionSpec<TranscriptRetentionDraft> = {
+  field: 'transcriptRetention',
+  title: 'Transcript retention',
+  intro:
+    'How long agents’ output (their replies, tool calls and thinking) is kept. Removed output is gone for good; the transcript and chat say where it was removed. Messages, questions, states and the replay history are always kept, and pinned work is never touched. Leave a field empty to keep that output forever. Changed only on this Mac.',
+  fromSettings: transcriptRetentionDraft,
+  validate: (d) => parseTranscriptRetention(d).error,
+  toPatch: (d) => ({ transcriptRetention: parseTranscriptRetention(d).value! }),
+  Editor: TranscriptRetentionEditor,
 };
 
 /** A section of any draft type (the list below mixes them; each is used with its own). */
