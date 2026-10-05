@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import BetterSqlite3 from 'better-sqlite3';
 import type { Id } from '@galactic/protocol';
@@ -7,7 +10,14 @@ import { archiveProject, closeProject, createProject } from '../domain/projects.
 import { SYSTEM } from '../domain/retention.js';
 import { archiveTask, closeTask, createTask } from '../domain/tasks.js';
 import { migrate } from '../db/migrate.js';
-import { autoVacuumMode, convertToIncrementalVacuum, vacuumIncrementally } from '../db/vacuum.js';
+import { JOURNAL_SIZE_LIMIT, openDatabase } from '../db/database.js';
+import {
+  autoVacuumMode,
+  CONVERSION_FAILURES_KEY,
+  convertToIncrementalVacuum,
+  startupConversion,
+  vacuumIncrementally,
+} from '../db/vacuum.js';
 import { world } from '../test/world.js';
 import { History } from './history.js';
 import { TranscriptPipeline } from './transcripts.js';
@@ -281,5 +291,88 @@ describe('incremental vacuum (P8-02)', () => {
     expect(report.pagesFreed).toBe(free);
     expect(report.steps).toBe(Math.ceil(free / 4));
     expect(db.pragma('freelist_count', { simple: true })).toBe(0);
+  });
+});
+
+describe('the startup conversion (P8-02 review)', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** A pre-P8-02 database file (auto_vacuum NONE, WAL) holding a few MB of transcript chunks. */
+  function legacyFile(): { path: string; db: BetterSqlite3.Database } {
+    const dir = mkdtempSync(join(tmpdir(), 'galactic-vacuum-'));
+    dirs.push(dir);
+    const path = join(dir, 'galactic.db');
+    const db = new BetterSqlite3(path);
+    db.pragma('journal_mode = WAL');
+    migrate(db);
+    chunks(db, 'a', T0, 3000);
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    expect(autoVacuumMode(db)).toBe('none');
+    return { path, db };
+  }
+  const walSize = (path: string) => (existsSync(`${path}-wal`) ? statSync(`${path}-wal`).size : 0);
+  const quiet = { info: () => {}, warn: () => {} };
+
+  it('openDatabase caps the WAL with journal_size_limit', () => {
+    const db = openDatabase(':memory:');
+    expect(db.pragma('journal_size_limit', { simple: true })).toBe(JOURNAL_SIZE_LIMIT);
+  });
+
+  it('is skipped, with the reason, when the disk lacks ~2.2x the database', () => {
+    const { path, db } = legacyFile();
+    const size = statSync(path).size;
+    const warnings: string[] = [];
+    const result = startupConversion(db, {
+      dbPath: path,
+      freeBytes: () => size * 2,
+      log: { info: () => {}, warn: (m) => warnings.push(m) },
+    });
+    expect(result).toMatchObject({ outcome: 'skipped', reason: 'disk-space' });
+    expect(warnings[0]).toMatch(/needs about \d+ MiB free/);
+    expect(autoVacuumMode(db)).toBe('none');
+  });
+
+  it('converts when there is room, and leaves no WAL behind', () => {
+    const { path, db } = legacyFile();
+    const result = startupConversion(db, { dbPath: path, freeBytes: () => 1e12, log: quiet });
+    expect(result.outcome).toBe('converted');
+    expect(autoVacuumMode(db)).toBe('incremental');
+    expect(walSize(path)).toBe(0);
+    expect(startupConversion(db, { dbPath: path, log: quiet })).toEqual({ outcome: 'already' });
+  });
+
+  it('truncates the WAL after a failure, and gives up after three, until asked to retry', () => {
+    const { path, db } = legacyFile();
+    const failing = (d: BetterSqlite3.Database) => {
+      // A VACUUM that got far: the WAL holds a copy of the data, then the disk is full.
+      d.prepare('UPDATE transcript_chunks SET chunk = chunk || ?').run('x'.repeat(200));
+      return { converted: false, ms: 1, error: new Error('database or disk is full') };
+    };
+    const opts = { dbPath: path, freeBytes: () => 1e12, convert: failing, log: quiet };
+    for (const n of [1, 2, 3]) {
+      expect(startupConversion(db, opts)).toMatchObject({ outcome: 'failed', failures: n });
+      expect(walSize(path)).toBe(0);
+    }
+    const warnings: string[] = [];
+    const gaveUp = startupConversion(db, {
+      ...opts,
+      log: { info: () => {}, warn: (m) => warnings.push(m) },
+    });
+    expect(gaveUp).toMatchObject({ outcome: 'skipped', reason: 'gave-up' });
+    expect(warnings[0]).toMatch(/GALACTIC_VACUUM_RETRY=1/);
+    // The retry switch forgets the failures; a success clears the count.
+    const retried = startupConversion(db, {
+      dbPath: path,
+      freeBytes: () => 1e12,
+      retry: true,
+      log: quiet,
+    });
+    expect(retried.outcome).toBe('converted');
+    expect(
+      db.prepare('SELECT value FROM settings WHERE key = ?').get(CONVERSION_FAILURES_KEY),
+    ).toBeUndefined();
   });
 });
