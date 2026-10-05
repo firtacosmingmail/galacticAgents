@@ -24,3 +24,26 @@ export function openDatabase(path: string, opts: OpenOptions = {}): Database {
   if (opts.migrate !== false) migrate(db);
   return db;
 }
+
+/**
+ * SQLite result codes that say the storage refused the write (P8-04: disk full, an I/O error, a
+ * lock held too long, a read-only file) rather than the statement being wrong: the same write can
+ * succeed later, once the disk has room or the lock is gone. Extended codes count by prefix.
+ */
+const STORAGE_CODES = [
+  'SQLITE_FULL',
+  'SQLITE_IOERR',
+  'SQLITE_BUSY',
+  'SQLITE_LOCKED',
+  'SQLITE_READONLY',
+  'SQLITE_CANTOPEN',
+  'SQLITE_PROTOCOL',
+];
+
+/** Whether `error` is a storage failure (see `STORAGE_CODES`): worth retrying, not a refusal. */
+export function isStorageFailure(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return (
+    typeof code === 'string' && STORAGE_CODES.some((c) => code === c || code.startsWith(`${c}_`))
+  );
+}

@@ -192,6 +192,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       isHarnessMeta(log.tables.agents.get(agentId)?.meta)
         ? Number.POSITIVE_INFINITY
         : stallThreshold(runtime),
+    // A stall the ticker saw is logged (P8-04): the supervisor is woken, the history shows it.
+    onStalled: (agentId, silentForMs) => runtime.noteStalled(agentId, silentForMs),
     ...(opts.flushMs !== undefined ? { flushMs: opts.flushMs } : {}),
     ...(opts.tickMs !== undefined ? { tickMs: opts.tickMs } : {}),
     ...(opts.retainEndedMs !== undefined ? { retainEndedMs: opts.retainEndedMs } : {}),
