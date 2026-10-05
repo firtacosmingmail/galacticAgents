@@ -8,7 +8,8 @@ import { z } from 'zod';
  * subscription to its public key. Generated on first need — the first `GET /api/push` or send —
  * and kept in `<dataDir>/vapid.json` with file mode 0600, next to `config.json`: outside the
  * repository, never in a log, never sent anywhere but its public half. Losing the file means
- * every device subscribes again (their subscriptions are bound to the old key).
+ * every device subscribes again (their subscriptions are bound to the old key): the caller is told
+ * through `onCreate` and clears the stored subscriptions, which can never work again.
  */
 
 export const VAPID_FILE = 'vapid.json';
@@ -28,6 +29,11 @@ export interface VapidOptions {
   dataDir: string;
   /** Called when the file had to be repaired or replaced; never given the keys. */
   warn?: (message: string) => void;
+  /**
+   * Called after a new key pair was made — no file yet, or one that could not be read. Every
+   * subscription made before is bound to the old public key and can never be delivered again.
+   */
+  onCreate?: () => void;
 }
 
 /** Reads the key pair, creating it (mode 0600) when there is none or the file is unreadable. */
@@ -57,6 +63,7 @@ export function loadOrCreateVapidKeys(opts: VapidOptions): VapidKeys {
   );
   // `mode` applies only when the file is created: an existing (unreadable) one is tightened too.
   chmodSync(path, 0o600);
+  opts.onCreate?.();
   return keys;
 }
 

@@ -15,7 +15,7 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
 - `vapid.ts`: the VAPID key pair.
   - It is made on first need: the first `GET /api/push`, or the first send to a device. While nobody subscribes, no key exists.
   - It is stored in `<dataDir>/vapid.json` (`~/.galactic`) with mode 0600, and the data directory gets 0700 if it is new.
-  - A copy that others can read is set back to 0600 with a warning. A damaged file is replaced, and every device must then turn push on again.
+  - A copy that others can read is set back to 0600 with a warning. A damaged (or lost) file is replaced, and every device must then turn push on again: the stored subscriptions are bound to the old public key, so they are cleared at once with a warning that names only how many (review fix, 2026-10-05). Pruning on a 401/403 from the push service was considered and not chosen: a 403 can also mean a passing VAPID problem, and the regeneration is the one case known to break every subscription.
   - The keys are never logged.
   - `vapidSubject`: the `sub` claim is `https://<remoteHost>` when remote access is set up, else `mailto:mission-control@galactic-agents.invalid`. `GALACTIC_PUSH_SUBJECT` overrides it. Apple refuses a localhost subject.
 - `endpoint.ts`: the endpoint allow-list and device ids.
@@ -33,7 +33,8 @@ Design: SPEC §4.5 and decision 59 (the notification triggers), decision 90 (rem
   - 404 and 410 remove the device.
   - 429, 5xx and network errors are retried: at most 3 attempts in all, backing off 1 s then 4 s, with `Retry-After` honoured up to 30 s.
   - Any other answer (400, 403, 413) is recorded as `lastError` and not retried.
-  - At most 32 deliveries are in flight; beyond that a push is dropped with a warning.
+  - At most 32 deliveries are in flight; beyond that a push is dropped with a warning. A delivery keeps its slot through its retries and back-offs, so during a push service outage the slots can fill up and pushes are dropped (best effort, by design).
+  - Test push times (the per-device rate limit) are forgotten after a minute or when the device is removed.
   - Logs name a device by its id and give the status, never the endpoint (a capability URL), its keys or the payload.
 - `routes.ts`, all bearer-guarded in their own scope:
   - `GET /api/push`: the public key, the devices and `canRemoveOthers`.
@@ -152,7 +153,8 @@ The conservative answer to the SPEC §8 question of 2026-10-03 is that notificat
     - logs carry ids, never endpoints;
     - an unsubscribe during a retry stops it;
     - the in-flight cap;
-    - the test push and its rate limit;
+    - the test push and its rate limit; its times are pruned after a minute or with the device;
+    - new keys (a lost or damaged `vapid.json`) clear the stored subscriptions with a warning that carries no secret; `onCreate` fires on a new pair only;
     - no key is made without subscribers;
     - stop.
   - The real `web-push` request is decrypted with the device's private key and auth secret (`http_ece`): aes128gcm, VAPID `k=` is our key, and the payload is not in clear.

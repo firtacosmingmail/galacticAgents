@@ -121,6 +121,8 @@ export const PUSH_DELIVERY: Record<PushKind | 'test', PushSendOptions> = {
 const BODY_MAX = 120;
 const clip = (text: string) => (text.length > BODY_MAX ? `${text.slice(0, BODY_MAX - 1)}…` : text);
 const PUSHED_MEMORY = 2000;
+/** A device's last test push is remembered this long (the rate limit needs only `testIntervalMs`). */
+const TEST_MEMORY_MS = 60_000;
 
 /**
  * What one device is sent for a notification: the kind's own title ("A question for you",
@@ -168,11 +170,23 @@ export class PushService {
       opts.transport ?? webPushTransport(() => ({ ...this.vapidKeys(), subject: opts.subject }));
   }
 
-  /** The key pair, made on first need. */
+  /**
+   * The key pair, made on first need. When it had to be made anew (no `vapid.json`, or one that
+   * could not be read), every stored subscription is bound to the old public key and can never be
+   * delivered again: they are cleared, with a warning that names only how many.
+   */
   vapidKeys(): VapidKeys {
     this.keys ??= loadOrCreateVapidKeys({
       dataDir: this.opts.dataDir,
       ...(this.log ? { warn: (m: string) => this.log!.warn(`push: ${m}`) } : {}),
+      onCreate: () => {
+        const removed = this.store.clear();
+        if (removed > 0) {
+          this.log?.warn(
+            `push: new push keys were made; ${removed} device subscription${removed === 1 ? '' : 's'} bound to the old keys removed (each device turns push on again)`,
+          );
+        }
+      },
     });
     return this.keys;
   }
@@ -221,6 +235,7 @@ export class PushService {
   async test(endpoint: string): Promise<DeliveryResult | 'too_soon' | undefined> {
     const sub = this.store.byEndpoint(endpoint);
     if (!sub) return undefined;
+    this.pruneTests();
     const last = this.lastTest.get(sub.device.id);
     if (last !== undefined && this.now() - last < this.testIntervalMs) return 'too_soon';
     this.lastTest.set(sub.device.id, this.now());
@@ -233,6 +248,19 @@ export class PushService {
       at: new Date(this.now()).toISOString(),
     };
     return this.track(this.deliver(sub, payload, PUSH_DELIVERY.test, 1));
+  }
+
+  /** Forgets test times that can no longer limit anything: older than a minute, or a removed device. */
+  private pruneTests() {
+    const cutoff = this.now() - Math.max(this.testIntervalMs, TEST_MEMORY_MS);
+    for (const [id, at] of this.lastTest) {
+      if (at < cutoff || !this.store.get(id)) this.lastTest.delete(id);
+    }
+  }
+
+  /** How many test times are remembered (tests). */
+  get rememberedTests(): number {
+    return this.lastTest.size;
   }
 
   private remember(id: string) {
@@ -256,6 +284,9 @@ export class PushService {
     attempts = this.maxAttempts,
   ): Promise<DeliveryResult> {
     const id = sub.device.id;
+    // A delivery holds its slot through its retries and back-offs (up to ~30 s each): during a
+    // push service outage the slots can fill up and further pushes are dropped. Best effort by
+    // design (SPEC decision 95) — bounded memory and connections beat a queue that grows.
     if (this.inFlight >= this.maxInFlight) {
       this.log?.warn(`push: too many pushes in flight; one for device ${id} was dropped`);
       return 'dropped';
