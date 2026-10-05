@@ -287,7 +287,10 @@ export function decideProposal(
           throw new DomainError('invalid', "only the user sets a card's budget");
         }
         if (budgetUsd !== null && !BudgetUsd.safeParse(budgetUsd).success) {
-          throw new DomainError('invalid', `a budget is a positive amount of dollars, not ${budgetUsd}`);
+          throw new DomainError(
+            'invalid',
+            `a budget is a positive amount of dollars, not ${budgetUsd}`,
+          );
         }
       }
       if (initGit !== undefined && by?.type !== 'user') {

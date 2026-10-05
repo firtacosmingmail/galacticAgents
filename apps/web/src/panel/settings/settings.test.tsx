@@ -491,6 +491,18 @@ describe('settings page (P25-08)', () => {
     expect(within(caps).getByRole('status').textContent).toBe('Saved.');
   });
 
+  it('saves the budget warning threshold on the settings page, not in the wizard (P8-01)', async () => {
+    await open('/settings', done());
+    const budgets = await screen.findByRole('region', { name: 'Budgets' });
+    const input = within(budgets).getByLabelText('Warn when a budget is') as HTMLInputElement;
+    expect(input.value).toBe('80');
+    type(input, '101');
+    expect(within(budgets).getByRole('alert').textContent).toMatch(/from 1 to 100/);
+    type(input, '65');
+    await click(within(budgets).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ budgets: { warnAtPercent: 65 } });
+  });
+
   it('resets the default table to the §3.6 table', async () => {
     const custom = done();
     custom.settings.defaultPermissionPolicy.rules.network = 'allow';

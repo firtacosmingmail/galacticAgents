@@ -123,6 +123,29 @@ describe('SettingsService (P25-01)', () => {
     expect(trusted.settings.caps.maxConcurrentAgents).toBe(8);
   });
 
+  it('saves and applies the budget warning threshold, locally only (P8-01)', () => {
+    const home = temp('galactic-home-');
+    const env = { GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv;
+    const { config } = loadConfig(env);
+    const watcher = { warnAtPercent: 80 };
+    const settings = new SettingsService({ config, home, budgets: watcher });
+    expect(settings.current().budgets).toEqual({ warnAtPercent: 80 });
+    expect(refusal(() => settings.update({ budgets: { warnAtPercent: 50 } }, {}))?.code).toBe(
+      'remote_settings',
+    );
+    const res = settings.update({ budgets: { warnAtPercent: 65 } }, local);
+    expect(res.settings.budgets).toEqual({ warnAtPercent: 65 });
+    expect(watcher.warnAtPercent).toBe(65);
+    expect(loadConfig(env).config.budgets).toEqual({ warnAtPercent: 65 }); // the restart keeps it
+    // The environment decides it: read-only in the panel.
+    const locked = loadConfig({ ...env, GALACTIC_BUDGET_WARN_PERCENT: '90' }).config;
+    expect(locked.budgets).toEqual({ warnAtPercent: 90 });
+    expect(locked.envOverrides).toContain('budgets');
+    expect(() => loadConfig({ ...env, GALACTIC_BUDGET_WARN_PERCENT: '0' })).toThrow(
+      /budget warning threshold/,
+    );
+  });
+
   it('reports a hand-edited first-run marker as a timestamp, still done (P25-08)', () => {
     const { config, settings } = setup();
     config.setupCompletedAt = '2026-10-01';

@@ -95,7 +95,13 @@ export function recordControl(
       if (projectChanges) updateProject(ctx, target.id, projectChanges, opts.write);
       else updateTask(ctx, target.id, taskChanges!);
       if (budget !== undefined) {
-        setBudget(ctx, { kind: isProject ? 'project' : 'task', id: target.id }, budget, by, opts.write);
+        setBudget(
+          ctx,
+          { kind: isProject ? 'project' : 'task', id: target.id },
+          budget,
+          by,
+          opts.write,
+        );
       }
       return;
     case 'close':
@@ -127,7 +133,10 @@ export function recordControl(
 function budgetEdit(value: unknown): number | null {
   if (value === null) return null;
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
-  throw new DomainError('invalid', `a budget is a positive amount of dollars, not ${String(value)}`);
+  throw new DomainError(
+    'invalid',
+    `a budget is a positive amount of dollars, not ${String(value)}`,
+  );
 }
 
 function withoutBudget(changes: Record<string, unknown>): Record<string, unknown> {

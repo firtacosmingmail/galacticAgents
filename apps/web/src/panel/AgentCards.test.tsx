@@ -378,6 +378,22 @@ describe('managed-agents cards: every control action of SPEC §4.3 (P25-04)', ()
     );
   });
 
+  it('gives a project a dollar budget from its edit form (P8-01)', async () => {
+    load();
+    show();
+    fireEvent.click(within(group(WAYKEEPER, 'project')).getByRole('button', { name: 'Edit' }));
+    const c = card(WAYKEEPER);
+    expect((within(c).getByLabelText('budget ($)') as HTMLInputElement).value).toBe('');
+    fireEvent.change(within(c).getByLabelText('budget ($)'), { target: { value: '12.5' } });
+    fireEvent.click(within(c).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(control).toHaveBeenCalledWith({
+        target: projectT,
+        action: { action: 'edit', changes: { budgetUsd: 12.5 } },
+      }),
+    );
+  });
+
   it('opens (selects) the agent from its card', () => {
     load();
     show();

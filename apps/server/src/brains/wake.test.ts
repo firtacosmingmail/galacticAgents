@@ -145,6 +145,29 @@ describe('WAKE_RULES', () => {
     ).toBeUndefined();
   });
 
+  it('wakes the brain that runs budgeted work on its budget notices (P8-01)', () => {
+    const exceeded: Event = {
+      type: 'budget.exceeded',
+      target: { kind: 'project', id: 'p-1' },
+      spentUsd: 5.5,
+      budgetUsd: 5,
+    };
+    const line = wakeLine(exceeded, scope());
+    expect(line).toMatch(/^budget exceeded: project p-1 has spent \$5\.50 of its \$5\.00 budget/);
+    expect(wakeLine(exceeded, scope({ runsProject: () => false }))).toBeUndefined();
+    // The Harmonizer is not woken for its Waykeepers' projects: its chat shows the notice already.
+    expect(wakeLine(exceeded, scope({ role: 'harmonizer' }))).toBeUndefined();
+    // A task's notice wakes whoever runs the task: the Harmonizer for an asteroid task.
+    const warning: Event = { ...fixtures['budget.warning'], target: { kind: 'task', id: 't-9' } };
+    expect(wakeLine(warning, scope({ role: 'harmonizer' }))).toMatch(/^budget warning: task t-9/);
+    expect(wakeLine(warning, scope({ runsTask: () => false }))).toBeUndefined();
+    expect(wakeLine(fixtures['budget.set'], scope())).toBe(
+      'the budget of project p-1 is now $5.00 (was $2.00) — spawns refused for the budget may be tried again',
+    );
+    // A refused spawn is the asker's tool error, not a mailbox line.
+    expect(wakeLine(fixtures['budget.spawn_refused'], scope())).toBeUndefined();
+  });
+
   it('wakes on finished, failed and stalled only for supervised agents', () => {
     const s = scope({ supervises: (id) => id === 'a-steward-1' });
     expect(wakeLine(fixtures['agent.finished'], s)).toMatch(/^agent a-steward-1 finished/);

@@ -145,7 +145,11 @@ export class BudgetWatcher {
         this.posted.add(key);
         text =
           `Spawn refused: a new ${event.role}` +
-          (event.taskId ? ` for task ${event.taskId}` : event.projectId ? ` for project ${event.projectId}` : '') +
+          (event.taskId
+            ? ` for task ${event.taskId}`
+            : event.projectId
+              ? ` for project ${event.projectId}`
+              : '') +
           ` — ${name} has spent ${spent}. Raise or remove the budget to let it start.`;
         break;
       }

@@ -117,7 +117,7 @@ export const controlWorkTool: BrainTool = {
   description:
     "The panel's work controls on a task or project the user names in conversation (decision " +
     '83): "pause" (its agents pause), "resume", "edit" (changes: a task\'s description and/or ' +
-    'priority; a project\'s name; either one\'s budgetUsd in dollars, null to remove it — raising ' +
+    "priority; a project's name; either one's budgetUsd in dollars, null to remove it — raising " +
     'or removing a budget works only for a user on this machine) run at once. "stop" (its agents stop, the work is paused) and ' +
     '"cancel" (the work fails, its agents stop) need the user\'s word: ask_confirmation with that ' +
     'action and target first, then call this with its questionId once the user answered its ' +

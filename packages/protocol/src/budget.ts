@@ -177,7 +177,8 @@ export function budgetUsage(
   };
 }
 
-/** Dollars as the panel and the notices show them: four decimals under a dollar, else two. */
+/** Dollars as the panel and the notices show them: cents, or four decimals for a smaller amount. */
 export function formatUsd(usd: number): string {
-  return `$${usd.toFixed(usd > 0 && usd < 1 ? 4 : 2)}`;
+  const cents = usd.toFixed(2);
+  return `$${usd > 0 && usd < 1 && Math.abs(Number(cents) - usd) > 1e-9 ? usd.toFixed(4) : cents}`;
 }

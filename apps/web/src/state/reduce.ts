@@ -217,7 +217,7 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
         ),
       };
     case 'proposal.edited': {
-      const { initGit, trust, ...changes } = event.changes;
+      const { initGit, trust, budgetUsd, ...changes } = event.changes;
       return {
         ...next,
         proposals: decide(
@@ -228,6 +228,7 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
             parked: null,
             ...(initGit !== undefined ? { initGit } : {}),
             ...(trust !== undefined ? { trust } : {}),
+            ...(budgetUsd !== undefined ? { budgetUsd } : {}),
           },
         ),
       };

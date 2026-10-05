@@ -10,7 +10,10 @@ import {
   LATER_SECTIONS,
   SaveButton,
   SECTIONS,
-  SectionFrame, useSection, type AnySectionSpec } from './sections.js';
+  SectionFrame,
+  useSection,
+  type AnySectionSpec,
+} from './sections.js';
 import './settings.css';
 
 /**

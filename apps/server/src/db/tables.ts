@@ -327,7 +327,13 @@ export interface Tables {
   };
 }
 
-type SpendRow = { agent_id: string; usd: number; reported: number; session: string; sessions: string };
+type SpendRow = {
+  agent_id: string;
+  usd: number;
+  reported: number;
+  session: string;
+  sessions: string;
+};
 const fromSpendRow = (r: SpendRow): AgentSpend =>
   AgentSpend.parse({
     agentId: r.agent_id,
