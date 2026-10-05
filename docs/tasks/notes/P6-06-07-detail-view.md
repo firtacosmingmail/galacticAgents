@@ -50,11 +50,11 @@ Options considered, from the task:
 
 **After** (20 s samples): visible **100 %** of samples at 1.07:1, 1.7:1 and 2.1:1. The span-to-distance ratio is 0.138 at 1.07:1, 0.131 at 1.7:1 and 0.124 at 2.1:1, about the same everywhere. Through the full enter and exit the distance from Earth's centre stayed ≥ 1.40 R. **The click works**: hovering the station showed the "Harmonizer · idle" card and the ring; clicking selected the Harmonizer, restored the minimised dock on Chat, and stayed in the detail view.
 
-### Proposed SPEC text (proposed decision 8x: not added to §7, another agent may be adding one)
+### Proposed SPEC text (proposed decision 89: not added to §7, another agent may be adding one)
 
-> **Proposed decision 8x — The HQ in Earth's detail view** (2026-10-05, P6-06; decisions 84, 85): in Earth's detail view the HQ station leaves its orbit and holds a place in view, up and to the right of Earth: beside the globe in a wide view, in front of its limb in a narrow one, at the size it would have beside Earth. It flies there as the view opens and back to its orbit as it closes, and when the user turns the view it drifts back to its place after a moment (at once with reduced motion). Hovering and clicking it work as everywhere: a click selects the Harmonizer and opens its chat. With no Harmonizer running, the dark station rests in the same place. Zoomed in very close to Earth, the station keeps its orbit.
+> **Proposed decision 89 — The HQ in Earth's detail view** (2026-10-05, P6-06; decisions 84, 85): in Earth's detail view the HQ station leaves its orbit and holds a place in view, up and to the right of Earth: beside the globe in a wide view, in front of its limb in a narrow one, at the size it would have beside Earth. It flies there as the view opens and back to its orbit as it closes, and when the user turns the view it drifts back to its place after a moment (at once with reduced motion). Hovering and clicking it work as everywhere: a click selects the Harmonizer and opens its chat. With no Harmonizer running, the dark station rests in the same place. Zoomed in very close to Earth, the station keeps its orbit.
 
-Decision 85 could gain a pointer: "(where it stays in view: decision 8x)".
+Decision 85 could gain a pointer: "(where it stays in view: decision 89)".
 
 ## Tests (Vitest)
 
