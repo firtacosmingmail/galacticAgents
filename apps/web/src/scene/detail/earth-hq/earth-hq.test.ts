@@ -260,6 +260,15 @@ describe('writeEarthHq (per frame)', () => {
     expect(targets.spin.angle).toBe(0);
   });
 
+  it('no Harmonizer, in its viewing slot (P6-06): rests there at its size factor', () => {
+    const { targets, objects } = station();
+    writeEarthHq(targets, input({ radius: 2, rest: { position: [1.5, 2, -1], scale: 0.5 } }));
+    expect(position(objects.station.matrix).toArray()).toEqual([1.5, 2, -1]);
+    expect(new Vector3().setFromMatrixScale(objects.station.matrix).x).toBeCloseTo(
+      restingPose(2).size * 0.5,
+    );
+  });
+
   it('a hidden frame (shrinking out, behind the scenes) hides the station', () => {
     const { targets, objects } = station();
     const frame = satelliteFrame('a-h', 'b-earth', [12, 0, 0], { role: 'harmonizer' });

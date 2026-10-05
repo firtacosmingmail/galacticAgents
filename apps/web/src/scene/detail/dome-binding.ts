@@ -3,8 +3,9 @@ import { useFrame } from '@react-three/fiber';
 import type { Object3D } from 'three';
 import type { Vec3 } from '../camera/flight.js';
 import { READ_BODIES } from '../frame-order.js';
-import { drawnBehindBackdrop, type Dome } from './dome.js';
-import { useDetailStore } from './mode.js';
+import { sceneWorld, useAppStore } from '../../state/store.js';
+import { beltFactor, drawnBehindBackdrop, type Dome } from './dome.js';
+import { detailKind, detailMix, useDetailStore } from './mode.js';
 
 /**
  * Hides `ref`'s object while a settled detail view's dome hides it entirely (`dome.ts`'s rule):
@@ -28,6 +29,22 @@ export function useBackdropCulling(
       drawn = drawnBehindBackdrop(true, (dome) => outside(dome, where));
     }
     if (object.visible !== drawn) object.visible = drawn;
+  }, READ_BODIES);
+}
+
+/**
+ * Calls `apply` every frame (at `READ_BODIES`) with the belt's factor now (`beltFactor`: 1 as in
+ * the system view, falling to 0 while a planet's or moon's detail view fades in, 0 once it is in,
+ * 1 in an asteroid's view). The belt's components dim their rocks with it (P6-07).
+ */
+export function useBeltFade(apply: (factor: number) => void): void {
+  useFrame(() => {
+    const s = useDetailStore.getState();
+    const view =
+      s.shown === undefined
+        ? undefined
+        : detailKind(sceneWorld(useAppStore.getState()).bodies[s.shown]);
+    apply(beltFactor(view, view === undefined ? 0 : detailMix(s, performance.now() / 1000)));
   }, READ_BODIES);
 }
 

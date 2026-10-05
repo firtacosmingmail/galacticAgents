@@ -4,10 +4,12 @@ import { beltBounds, orbitPosition, taskAsteroids } from '../belt/belt-model.js'
 import { buildRenderList } from '../bodies/layout.js';
 import { backdropRadius, planetReach, resolveDetailBody } from './detail-body.js';
 import {
+  beltFactor,
   clearDome,
   currentDome,
   drawnBehindBackdrop,
   orbitLineFactor,
+  ownRingFactor,
   orbitOutsideDome,
   publishDome,
   shellOutsideDome,
@@ -128,5 +130,50 @@ describe("the detail body's own orbit line", () => {
     expect(orbitLineFactor(true, 0.25)).toBeCloseTo(0.75);
     expect(orbitLineFactor(true, 1)).toBe(0);
     expect(orbitLineFactor(false, 1)).toBe(1);
+  });
+});
+
+describe('system decorations that do not belong in a detail view fade with it (P6-07)', () => {
+  it('every Sun-centred orbit line fades out with any detail view; a moon line keeps its opacity', () => {
+    expect(orbitLineFactor(false, 0, true)).toBe(1);
+    expect(orbitLineFactor(false, 0.4, true)).toBeCloseTo(0.6);
+    expect(orbitLineFactor(false, 1, true)).toBe(0);
+    expect(orbitLineFactor(false, 1, false)).toBe(1);
+  });
+
+  it("the ring around the shown body fades out; other bodies' rings stay", () => {
+    expect(ownRingFactor(true, 0)).toBe(1);
+    expect(ownRingFactor(true, 0.5)).toBeCloseTo(0.5);
+    expect(ownRingFactor(true, 1)).toBe(0);
+    expect(ownRingFactor(false, 1)).toBe(1);
+  });
+
+  it("the belt fades out of a planet's or moon's view, stays in an asteroid's and the system's", () => {
+    for (const view of ['rocky', 'giant', 'moon']) {
+      expect(beltFactor(view, 0)).toBe(1);
+      expect(beltFactor(view, 0.3)).toBeCloseTo(0.7);
+      expect(beltFactor(view, 1)).toBe(0);
+    }
+    expect(beltFactor('asteroid', 1)).toBe(1);
+    expect(beltFactor(undefined, 1)).toBe(1);
+  });
+
+  it("why culling alone left them: in the readable layout Earth's dome reaches the belt and its neighbours' orbits", () => {
+    const bodies: Record<string, Body> = {
+      'b-earth': { id: 'b-earth', kind: 'planet', name: 'Earth', meta: { orbit: 3 } },
+      'b-moon': {
+        id: 'b-moon',
+        kind: 'moon',
+        name: 'Moon',
+        parentId: 'b-earth',
+        meta: { orbit: 1 },
+      },
+    };
+    const earth = resolveDetailBody(bodies, 'b-earth', 'fake')!;
+    if (earth.kind !== 'rocky') throw new Error('rocky');
+    const dome: Dome = { centre: [earth.planet.distance, 0, 0], radius: backdropRadius(earth) };
+    const belt = beltBounds('fake');
+    expect(shellOutsideDome(belt.inner, belt.outer, dome)).toBe(false); // the rocks are inside
+    expect(orbitOutsideDome(43, dome)).toBe(false); // Mars's orbit line too
   });
 });

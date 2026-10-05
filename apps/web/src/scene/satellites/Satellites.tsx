@@ -45,7 +45,7 @@ import {
 } from './satellite-model.js';
 import { getSatellite, onSatellitesChanged, satelliteIds } from './registry.js';
 import { HqStation, HqTargets, writeHq } from './hq/HqStation.js';
-import { ordinarySatellites } from './hq/hq-model.js';
+import { applyHqPose, ordinarySatellites } from './hq/hq-model.js';
 import { useHeldArchetypes } from './activity/use-held-archetypes.js';
 
 /**
@@ -143,6 +143,8 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
       pixels.size,
       useCameraStore.getState().focusedId,
     );
+    // P6-06: Earth's detail view may move the HQ into its viewing slot (before any reader).
+    applyHqPose(frames, state.camera as PerspectiveCamera);
     if (instanced) writeInstanced(frames, targets, bloom);
     else writeMeshes(frames, targets, bloom);
     writeHq(frames, hq, { bloom, now: motionSeconds(), reducedMotion, state: hqState });

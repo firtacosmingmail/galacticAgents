@@ -680,6 +680,48 @@ describe('in a detail view (P6-01)', () => {
     expect(selected()).toBe('waykeeper:a-wk-old');
   });
 
+  it('fades out the ring around the body shown in detail with the cross-fade; its moons keep theirs (P6-07)', () => {
+    anchorAt('b-jupiter', 0);
+    anchorAtPoint('b-io', [0, 1.5, 0], 0.3);
+    act(() => useAppStore.getState().select({ kind: 'waykeeper', id: 'a-wk-old' }));
+    render(<Picking />);
+    // The three rings (hovered body, hovered satellite, selected body) with a material to fade.
+    const rings = [
+      ...document.querySelectorAll<HTMLElement & { visible: boolean; material: MeshBasicMaterial }>(
+        'mesh',
+      ),
+    ];
+    for (const ring of rings) ring.material = new MeshBasicMaterial();
+    const selectedRing = rings[2]!;
+    frame();
+    expect(selectedRing.visible).toBe(true);
+    expect(selectedRing.material.opacity).toBeCloseTo(0.9);
+
+    let now = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    useDetailStore.getState().enter('b-jupiter', { fly: false, now: 1, reducedMotion: false });
+    now = 1000 + 450; // half-way through the 0.9 s fade (eased: 0.5)
+    frame();
+    expect(selectedRing.visible).toBe(true);
+    expect(selectedRing.material.opacity).toBeCloseTo(0.45);
+    now = 1000 + 1000; // the fade is over
+    frame();
+    expect(selectedRing.visible).toBe(false);
+    // A moon of the view hovered: its ring is drawn as usual.
+    act(() =>
+      usePickingStore.getState().setHover({ bodyId: 'b-io', name: 'Io', others: 0, x: 0, y: 0 }),
+    );
+    frame();
+    expect(rings[0]!.visible).toBe(true);
+    expect(rings[0]!.material.opacity).toBeCloseTo(0.35);
+    // Leaving: the selected body's ring comes back with the fade out.
+    useDetailStore.getState().exit({ fly: false, now: 2, reducedMotion: false });
+    now = 2000 + 800;
+    frame();
+    expect(selectedRing.visible).toBe(true);
+    expect(selectedRing.material.opacity).toBeCloseTo(0.9);
+  });
+
   it("outlines the sub-scene's stand-in, and nothing behind the backdrop", () => {
     const jupiter = anchorAt('b-jupiter', 0, true);
     anchorAt('b-mars', 1, true);
