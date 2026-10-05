@@ -1,4 +1,5 @@
 import type { AgentState, Id } from '@galactic/protocol';
+import type { PerspectiveCamera } from 'three';
 import type { SatelliteFrame } from '../director.js';
 
 /**
@@ -85,4 +86,27 @@ export function claimHqStation(): () => void {
 /** Whether a detail station draws the HQ now (`claimHqStation`). */
 export function hqClaimed(): boolean {
   return claims > 0;
+}
+
+/**
+ * P6-06: while Earth is shown in detail its station takes a viewing slot instead of its orbit
+ * (`detail/earth-hq/hq-slot.ts`). The slot is written into the Harmonizer's frame itself, right
+ * after the director (`Satellites.tsx`, before `writeHq` and every reader), so picking, the hover
+ * card and ring, the click and the beam follow it. `overrideHqPose(fn)` installs the writer (the
+ * newest wins) and returns its removal; `applyHqPose` runs it on the HQ's frame, if drawn.
+ */
+export type HqPoseOverride = (frame: SatelliteFrame, camera: PerspectiveCamera) => void;
+let poseOverride: HqPoseOverride | undefined;
+export function overrideHqPose(fn: HqPoseOverride): () => void {
+  poseOverride = fn;
+  return () => {
+    if (poseOverride === fn) poseOverride = undefined;
+  };
+}
+
+/** Moves the HQ's frame into its override's place (`overrideHqPose`), if any and if drawn. */
+export function applyHqPose(frames: readonly SatelliteFrame[], camera: PerspectiveCamera): void {
+  if (!poseOverride) return;
+  const frame = hqFrame(frames);
+  if (frame && frame.visible) poseOverride(frame, camera);
 }
