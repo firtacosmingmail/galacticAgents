@@ -14,8 +14,8 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 4 — Living overlays | `PHASE_4_LIVING_OVERLAYS.md` | done (2026-10-04) | 14/14 | — |
 | 5 — Panel polish and scene integration | `PHASE_5_PANEL_POLISH.md` | done (2026-10-04) | 7/7 | — |
 | 6 — Planet zoom and structure | `PHASE_6_PLANET_ZOOM.md` | done (2026-10-05) | 7/7 | — |
-| 7 — Remote and mobile access | `PHASE_7_REMOTE_MOBILE.md` | in progress (branch `phase-7`) | 6/7 | P7-06 (wave 3, device run with Cosmin) |
-| 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | not started | 0/8 | — |
+| 7 — Remote and mobile access | `PHASE_7_REMOTE_MOBILE.md` | in progress (branch `phase-7`) | 6/7 | P7-06 (device run with Cosmin; needs Tailscale) |
+| 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | in progress (branch `phase-8`, from `phase-7`) | 0/8 | P8-04, P8-02, P8-01 (wave 1, in progress) |
 
 Phases run in order 0 → 1 → 2 → 2.5 → 3 → 4 → 5 → 6 → 7; Phase 8 tasks are picked whenever their dependencies are met. Phase 7 depends on Phase 5, not on Phase 6.
 
