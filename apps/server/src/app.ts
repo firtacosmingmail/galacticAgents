@@ -2,7 +2,12 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { PROTOCOL_VERSION, type HealthResponse } from '@galactic/protocol';
 import type { ServerConfig } from './config/config.js';
-import { isAllowedHost, isRemoteRequest, tailscaleIdentityOf } from './http/security.js';
+import {
+  isAllowedHost,
+  isRemoteRequest,
+  isSameOriginFetch,
+  tailscaleIdentityOf,
+} from './http/security.js';
 import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
@@ -78,9 +83,12 @@ export function buildApp(opts: AppOptions): App {
     // pastes the token (P3-08 review: the Origin check alone handed it to any LAN client).
     // Never to a remote client, not even one Tailscale identity authenticated (P7-02): the
     // identity is its credential, the long-lived token stays on this machine.
+    // And only to a browser's own page (`Sec-Fetch-Site: same-origin`, or `none` for a typed
+    // navigation): a speed bump for scripts and agents on this machine, not a boundary — any
+    // local process can send that header too (docs/REMOTE_ACCESS.md §4).
     const remote = isRemoteRequest(req);
     body.origin = remote ? 'remote' : 'local';
-    if (!remote) {
+    if (!remote && isSameOriginFetch(req)) {
       body.token = config.token;
     }
     const identity = tailscaleIdentityOf(req, config);

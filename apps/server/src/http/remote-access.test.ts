@@ -27,6 +27,8 @@ const SERVE = {
 };
 const IDENTITY = { ...SERVE, 'tailscale-user-login': LOGIN, 'tailscale-user-name': 'Cosmin' };
 const BEARER = { authorization: `Bearer ${TEST_TOKEN}` };
+/** What a browser sends when the page itself fetches `/health`. */
+const PAGE = { 'sec-fetch-site': 'same-origin' };
 
 let composed: ComposedRuntime | undefined;
 let t: Awaited<ReturnType<typeof startTestApp>> | undefined;
@@ -140,11 +142,11 @@ describe('the Host allow-list (P7-02)', () => {
 describe('/health through Serve', () => {
   it('flags the request remote and never hands out the token', async () => {
     await start();
-    const local = (await inject('GET', '/health', {})).json() as HealthResponse;
+    const local = (await inject('GET', '/health', PAGE)).json() as HealthResponse;
     expect(local.origin).toBe('local');
     expect(local.token).toBe(TEST_TOKEN);
 
-    const remote = (await inject('GET', '/health', SERVE)).json() as HealthResponse;
+    const remote = (await inject('GET', '/health', { ...SERVE, ...PAGE })).json() as HealthResponse;
     expect(remote.origin).toBe('remote');
     expect(remote.token).toBeUndefined();
     expect(remote.identity).toBeUndefined();
@@ -155,7 +157,9 @@ describe('/health through Serve', () => {
       { via: '1.1 proxy' },
       { host: TS_HOST },
     ]) {
-      const body = (await inject('GET', '/health', headers)).json() as HealthResponse;
+      const body = (
+        await inject('GET', '/health', { ...PAGE, ...headers })
+      ).json() as HealthResponse;
       expect(body.origin, JSON.stringify(headers)).toBe('remote');
       expect(body.token, JSON.stringify(headers)).toBeUndefined();
     }
@@ -163,7 +167,9 @@ describe('/health through Serve', () => {
 
   it('names the accepted identity, still without the token', async () => {
     await start(WITH_IDENTITY);
-    const body = (await inject('GET', '/health', IDENTITY)).json() as HealthResponse;
+    const body = (
+      await inject('GET', '/health', { ...IDENTITY, ...PAGE })
+    ).json() as HealthResponse;
     expect(body).toMatchObject({ origin: 'remote', identity: LOGIN });
     expect(body.token).toBeUndefined();
   });
@@ -247,10 +253,19 @@ describe('Tailscale identity headers as the credential (P7-02)', () => {
   });
 });
 
-describe('what a remote client may do (P7-02; SPEC §8, conservative meanwhile)', () => {
-  it("refuses a remote stop of a Steward's processes and a Harmonizer restart", async () => {
+const SPAWN = { runtime: 'fake', prompt: 'scenario:echo', cwd: '/tmp', policy: 'trusted' };
+
+describe('what a remote client may do (P7-02; SPEC decision 90)', () => {
+  it("refuses a remote free-form spawn, a stop of a Steward's processes and a Harmonizer restart", async () => {
     await start(WITH_IDENTITY);
     for (const headers of [{ ...SERVE, ...BEARER }, IDENTITY]) {
+      const spawn = await inject('POST', '/api/agents', headers, SPAWN);
+      expect(spawn.statusCode).toBe(403);
+      expect(spawn.json()).toMatchObject({ error: 'remote_control' });
+      expect(composed!.runtime.liveAgents()).toHaveLength(0);
+      // Recover is like resume: open to the phone (404 here: no such agent, not a refusal).
+      const recover = await inject('POST', '/api/agents/a-none/recover', headers);
+      expect(recover.statusCode).toBe(404);
       const stop = await inject('POST', '/api/agents/a-st/processes/stop', headers, {});
       expect(stop.statusCode).toBe(403);
       expect(stop.json()).toMatchObject({ error: 'remote_control' });
@@ -278,6 +293,13 @@ describe('what a remote client may do (P7-02; SPEC §8, conservative meanwhile)'
       200,
     );
     expect((await inject('POST', '/api/harmonizer/restart', headers)).statusCode).toBe(200);
+    const spawn = await inject('POST', '/api/agents', headers, SPAWN);
+    expect(spawn.statusCode).toBe(201);
+    await inject(
+      'POST',
+      `/api/agents/${(spawn.json() as { agentId: string }).agentId}/stop`,
+      BEARER,
+    );
   });
 });
 
@@ -294,40 +316,41 @@ describe("a remote client's permission requests are never auto-approved (P7-02 a
       tick();
     });
   /** Spawns the fake `permission` scenario (an `rm -rf`) under the `trusted` preset. */
-  const spawnTrusted = async (headers: Record<string, string>) => {
-    const res = await inject('POST', '/api/agents', headers, {
+  const spawnTrusted = (headers: Record<string, string>) =>
+    inject('POST', '/api/agents', headers, {
       runtime: 'fake',
       prompt: 'scenario:permission',
       cwd: '/tmp',
       policy: 'trusted',
     });
-    expect(res.statusCode).toBe(201);
-    return (res.json() as { agentId: string }).agentId;
-  };
 
-  it('a destructive call asks when the phone started the agent, also under the trusted preset', async () => {
+  it('the phone can neither start a free-form agent nor loosen a project policy', async () => {
     await start(WITH_IDENTITY);
+    const project = (await composed!.commands.createProject({ name: 'CSV', workspace: '/tmp' }))
+      .value;
     for (const headers of [IDENTITY, { ...SERVE, ...BEARER }]) {
-      const id = await spawnTrusted(headers);
-      await waitFor(
-        () => composed!.statuses.get(id)?.pendingQuestionId !== undefined,
-        'a permission question',
-      );
-      const q = composed!.log.tables.questions.get(composed!.statuses.get(id)!.pendingQuestionId!);
-      expect(q?.kind).toBe('permission');
-      const policy = composed!.log.tables.agents.get(id)?.meta?.['permissionPolicy'] as {
-        rules: Record<string, string>;
-        unclassified?: string;
-      };
-      expect(policy.rules['destructive']).toBe('ask');
-      expect(policy.unclassified ?? 'ask').toBe('ask');
-      await inject('POST', `/api/agents/${id}/stop`, BEARER);
+      expect((await spawnTrusted(headers)).statusCode).toBe(403);
+      // The work it can start (a project, through a card or an edit) is floored at the default.
+      const edit = await inject('POST', '/api/control', headers, {
+        target: { kind: 'project', id: project.id },
+        action: {
+          action: 'edit',
+          changes: { permissionPolicy: { rules: { destructive: 'allow' }, unclassified: 'allow' } },
+        },
+      });
+      expect(edit.statusCode).toBe(200);
+      const policy = composed!.log.tables.projects.get(project.id)?.permissionPolicy;
+      expect(policy?.rules['destructive']).toBe('ask');
+      expect(policy?.unclassified ?? 'ask').toBe('ask');
     }
+    expect(composed!.runtime.liveAgents()).toHaveLength(0);
   });
 
   it('while the same spawn from the local page runs the call on its own', async () => {
     await start();
-    const id = await spawnTrusted(BEARER);
+    const res = await spawnTrusted(BEARER);
+    expect(res.statusCode).toBe(201);
+    const id = (res.json() as { agentId: string }).agentId;
     await waitFor(
       () =>
         composed!.log
@@ -347,8 +370,8 @@ describe("a remote client's permission requests are never auto-approved (P7-02 a
 describe('the token never reaches a log line (P7-02)', () => {
   it('through requests, refusals and sessions, local and remote', async () => {
     await start(WITH_IDENTITY);
-    await inject('GET', '/health', {});
-    await inject('GET', '/health', SERVE);
+    await inject('GET', '/health', PAGE);
+    await inject('GET', '/health', { ...SERVE, ...PAGE });
     await inject('GET', '/api/runtimes', BEARER);
     await inject('GET', '/api/runtimes', { authorization: `Bearer ${TEST_TOKEN}x` });
     await inject('GET', '/api/settings', { ...SERVE, ...BEARER });

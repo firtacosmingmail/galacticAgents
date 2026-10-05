@@ -85,9 +85,11 @@ export function registerAgentRoutes(
     const agentId = (req: FastifyRequest) => (req.params as { id: string }).id;
     /**
      * Controls a remote client may not use unless the server trusts remote clients
-     * (`autoApproveRemote`): stopping a Steward's leftover processes and restarting the Harmonizer
-     * (P7-02; SPEC §8, the conservative answer until it is decided). 403 `remote_control`, with
-     * nothing done; stopping or pausing an agent and the work controls stay open to the phone.
+     * (`autoApproveRemote`; SPEC decision 90): a free-form spawn (the ops console's development
+     * tool, decision 24), stopping a Steward's leftover processes and restarting the Harmonizer.
+     * 403 `remote_control`, with nothing done; stopping, pausing, resuming or recovering an agent,
+     * answers and the work controls stay open to the phone. Work-driven spawns (a Waykeeper's
+     * Stewards, the Harmonizer's) never come through here.
      */
     const refuseRemoteControl = (req: FastifyRequest, reply: FastifyReply, what: string) => {
       if (config.autoApproveRemote || originOf(req) === 'local') return false;
@@ -120,6 +122,7 @@ export function registerAgentRoutes(
     }));
 
     app.post('/api/agents', async (req, reply) => {
+      if (refuseRemoteControl(req, reply, 'Free-form agents can be spawned')) return reply;
       const body = parse(SpawnBody, req.body, reply);
       if (!body) return;
       const result = await runtime.spawn({
@@ -129,7 +132,8 @@ export function registerAgentRoutes(
         cwd: body.cwd,
         ...(body.workspace ? { workspace: body.workspace } : {}),
         // A remote client never sets up auto-approvals unless the server allows it (P2-04).
-        // A remote client's preset is floored at the global default (P2-04, P2-21).
+        // A remote client's preset is floored at the global default (P2-04, P2-21) — kept as a
+        // second line behind the refusal above, which only `autoApproveRemote` lifts.
         permissionPolicy: policyForWrite(PERMISSION_POLICY_PRESETS[body.policy], {
           origin: originOf(req),
           autoApproveRemote: config.autoApproveRemote,
@@ -205,6 +209,7 @@ export function registerAgentRoutes(
     /**
      * Reopens an interrupted agent from its session ref (the manual half of P1-14): the same
      * path as startup recovery (P1-29) — 409 unless the agent is interrupted and not running.
+     * Open to remote clients like resume (decision 90): it continues work already started.
      */
     app.post('/api/agents/:id/recover', async (req, reply) => {
       const id = agentId(req);
