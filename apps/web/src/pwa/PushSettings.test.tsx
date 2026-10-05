@@ -29,6 +29,9 @@ async function noBlockingFindings(name: string) {
   expect(blocking(await axeFindings()), name).toEqual<AxeFinding[]>([]);
 }
 
+/** Waits until a control is enabled again (the previous action settled). */
+const enabled = (el: HTMLElement) => waitFor(() => expect(el.matches(':disabled')).toBe(false));
+
 describe('PushSettings (P7-04)', () => {
   it('on an iPhone in Safari, explains the Home Screen install', async () => {
     const { api } = fakeApi();
@@ -102,6 +105,7 @@ describe('PushSettings (P7-04)', () => {
       ).toBe(false),
     );
 
+    await enabled(screen.getByRole('checkbox', { name: /lock screen/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /lock screen/ }));
     await waitFor(() => expect(api.subscribe).toHaveBeenCalledTimes(2));
     expect(api.subscribe.mock.calls[1]![0]).toMatchObject({
@@ -109,10 +113,13 @@ describe('PushSettings (P7-04)', () => {
       kinds: { project_completed: false },
     });
 
+    // Each save leaves the controls disabled until it settles: a click before that is lost.
+    await enabled(screen.getByRole('button', { name: 'Send a test push' }));
     fireEvent.click(screen.getByRole('button', { name: 'Send a test push' }));
     await screen.findByText(/Test push sent/);
     expect(api.test).toHaveBeenCalledWith(held.endpoint);
 
+    await enabled(screen.getByRole('button', { name: 'Turn off' }));
     fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
     await screen.findByRole('button', { name: 'Turn on push notifications' });
     expect(api.unsubscribe).toHaveBeenCalledWith(held.endpoint);

@@ -158,13 +158,12 @@ async function showPush(n) {
   // Always shown, never skipped (iOS revokes a subscription whose pushes show nothing): when the
   // page or an earlier copy of this push already showed it, the same tag replaces it in place
   // without alerting again, keeping its text (the page's carries details a push may leave out).
-  let existing = [];
+  let prior;
   try {
-    existing = await self.registration.getNotifications({ tag: shown.id });
+    [prior] = await self.registration.getNotifications({ tag: shown.id });
   } catch {
-    existing = [];
+    prior = undefined;
   }
-  const prior = existing[0];
   await self.registration.showNotification(prior ? prior.title : shown.title, {
     body: prior && prior.body ? prior.body : shown.body || PUSH_DEFAULT_BODY,
     tag: shown.id,
