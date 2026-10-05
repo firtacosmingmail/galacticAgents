@@ -109,15 +109,6 @@ describe('TranscriptPipeline', () => {
     expect(errors).toHaveLength(1);
   });
 
-  it('prune drops chunks up to a seq (retention hook, unused in v1)', () => {
-    const { p } = make();
-    for (let i = 0; i < 4; i++) p.append('a-1', 'text', `l${i}`);
-    p.flush();
-    expect(p.prune('a-1', 2)).toBe(2);
-    expect(p.read('a-1').map((c) => c.seq)).toEqual([3, 4]);
-    expect(p.append('a-1', 'text', 'next').seq).toBe(5);
-  });
-
   it('dispose flushes; later appends are dropped, not thrown', () => {
     const { db, p } = make();
     p.append('a-1', 'text', 'last words');
@@ -412,18 +403,23 @@ describe('TranscriptPipeline', () => {
       expect(received).toEqual([2]);
     });
 
-    it('prune keeps the newest chunk so seq stays monotonic after a restart', () => {
+    it('numbers after the high-water mark when retention removed every chunk (P8-02)', () => {
       const db = openDatabase(':memory:');
       dbs.push(db);
       const first = new TranscriptPipeline(db, { flushMs: 5, holdMs: 0 });
       for (const t of ['a', 'b', 'c']) first.append('a-1', 'text', t);
       first.flush();
-      expect(first.prune('a-1', 3)).toBe(2);
-      expect(first.read('a-1').map((c) => c.seq)).toEqual([3]);
-      expect(first.prune('a-1', 99)).toBe(0);
       first.dispose();
+      // What the retention job does: remove the chunks, record the agent's newest seq.
+      db.prepare('DELETE FROM transcript_chunks WHERE agent_id = ?').run('a-1');
+      db.prepare(
+        `INSERT INTO transcript_compactions
+           (agent_id, through_seq, through_at, last_seq, removed_at, reason)
+         VALUES ('a-1', 3, 'x', 3, 'y', 'age')`,
+      ).run();
       const second = new TranscriptPipeline(db, { flushMs: 5, holdMs: 0 });
       pipes.push(second);
+      expect(second.lastSeq('a-1')).toBe(3);
       expect(second.append('a-1', 'text', 'd').seq).toBe(4);
     });
   });

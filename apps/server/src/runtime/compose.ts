@@ -26,6 +26,7 @@ import { StatusStore } from './status-store.js';
 import { StewardProcesses, type StewardProcessesOptions } from './steward-processes.js';
 import { stewardReports, type StewardReports } from './steward-reports.js';
 import { TranscriptPipeline } from './transcripts.js';
+import { TranscriptRetention, type RetentionPolicy } from './transcript-retention.js';
 import { WorkStateDeriver } from './work-state-deriver.js';
 import { Workspaces, type WorkspacesOptions } from '../workspace/workspaces.js';
 
@@ -76,6 +77,17 @@ export interface ComposeOptions {
    */
   archival?: { retentionMs?: number; intervalMs?: number; timers?: Timers };
   /**
+   * Transcript retention (P8-02): `policy` from the settings (default
+   * `DEFAULT_TRANSCRIPT_RETENTION`); the timer runs only with an `intervalMs`, like archival
+   * (tests call `transcriptRetention.run()`).
+   */
+  transcriptRetention?: {
+    policy?: RetentionPolicy;
+    intervalMs?: number;
+    timers?: Timers;
+    pause?: () => Promise<void>;
+  };
+  /**
    * Steward process cleanup (P4-14): `index.ts` passes the supervisor as `groups`. With it, brains
    * get the process tools' service and a Steward's leftovers are swept when it ends or its task
    * closes; without it there are no sweeps and the tools refuse.
@@ -100,6 +112,8 @@ export interface ComposedRuntime {
   workspaces?: Workspaces;
   /** The retention / archival job (P2-13); its timer runs when composed with an interval. */
   archival: Archival;
+  /** Transcript retention and compaction (P8-02); its timer runs when composed with an interval. */
+  transcriptRetention: TranscriptRetention;
   /** A Steward's processes: list, stop, sweep (P4-14), when composed with `processes`. */
   processes?: StewardProcesses;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
@@ -289,6 +303,17 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'archival') } : {}),
   });
   if (opts.archival?.intervalMs) archival.start(opts.archival.intervalMs);
+  const tr = opts.transcriptRetention;
+  const transcriptRetention = new TranscriptRetention({
+    db,
+    tables: log.tables,
+    ...(tr?.policy ? { policy: tr.policy } : {}),
+    ...(tr?.timers ? { timers: tr.timers } : {}),
+    ...(tr?.pause ? { pause: tr.pause } : {}),
+    ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'transcript retention') } : {}),
+  });
+  if (tr?.intervalMs) transcriptRetention.start(tr.intervalMs);
   const processes: StewardProcesses | undefined = opts.processes
     ? new StewardProcesses({
         ...opts.processes,
@@ -351,6 +376,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     queries,
     ...(workspaces ? { workspaces } : {}),
     archival,
+    transcriptRetention,
     ...(processes ? { processes } : {}),
     startBrain: async (definition, placement, brainOpts = {}) =>
       adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),
@@ -440,6 +466,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       processes?.dispose();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
+      transcriptRetention.stop();
       reports.dispose();
       await runtime.shutdown();
       await runtime.dispose();
@@ -450,6 +477,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       processes?.dispose();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
+      transcriptRetention.stop();
       reports.dispose();
       await runtime.dispose();
       statuses.dispose();

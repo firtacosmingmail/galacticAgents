@@ -4,10 +4,12 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  DEFAULT_TRANSCRIPT_RETENTION,
   IDENTITY_TOKEN,
   PermissionPolicy,
   QualityTier,
   SettingsCaps,
+  TranscriptRetention,
   type AgentCaps,
   type SettingName,
 } from '@galactic/protocol';
@@ -66,6 +68,12 @@ export const ConfigFile = z.object({
    * archival job archives it, in days (fractions allowed). Default 7 (P2-13).
    */
   retentionDays: z.number().positive().optional(),
+  /**
+   * Transcript retention (P8-02), in days, `null` = keep forever: chunks older than `maxAgeDays`
+   * are removed, and the whole transcript of an agent whose work was archived `archivedDays` ago.
+   * Defaults 90 and 30 (`DEFAULT_TRANSCRIPT_RETENTION`).
+   */
+  transcriptRetention: TranscriptRetention.partial().optional(),
   /**
    * Hard caps on spawning (decision 18; P2-17): live Stewards (brains not counted), live
    * Stewards per Waykeeper, spawns per sliding hour in all and per spawning brain.
@@ -144,6 +152,8 @@ export interface ServerConfig {
    * `GALACTIC_MAX_SPAWNS_PER_HOUR_PER_BRAIN`; defaults 4, 3, 30 and 20.
    */
   caps: SpawnCaps & { maxConcurrentAgents: number; defaults?: AgentCaps };
+  /** Transcript retention (P8-02); absent = `DEFAULT_TRANSCRIPT_RETENTION`. */
+  transcriptRetention?: TranscriptRetention;
   /** The global default permission table from the file (P25-01); absent = the SPEC's table. */
   defaultPermissionPolicy?: PermissionPolicy;
   /** The renderer's quality tier (P25-01); absent = `high`. */
@@ -322,6 +332,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
             env['GALACTIC_AUTO_APPROVE_REMOTE'] === 'true'
           : (file.autoApproveRemote ?? false),
       retentionMs: Math.round(retentionDays * DAY_MS),
+      ...(file.transcriptRetention
+        ? {
+            transcriptRetention: {
+              ...DEFAULT_TRANSCRIPT_RETENTION,
+              ...Object.fromEntries(
+                Object.entries(file.transcriptRetention).filter(([, v]) => v !== undefined),
+              ),
+            },
+          }
+        : {}),
       caps: { ...caps, defaults },
       ...(file.defaultPermissionPolicy
         ? { defaultPermissionPolicy: file.defaultPermissionPolicy }

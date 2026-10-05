@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import {
   DEFAULT_PERMISSION_POLICY,
+  DEFAULT_TRANSCRIPT_RETENTION,
   Timestamp,
   type PermissionPolicy,
   type Settings,
@@ -18,6 +19,7 @@ import {
 } from '../domain/permissions.js';
 import type { Archival } from '../runtime/archival.js';
 import type { CapsEnforcer } from '../runtime/caps.js';
+import type { TranscriptRetention } from '../runtime/transcript-retention.js';
 import { canonical, unsafeFolder } from '../workspace/workspaces.js';
 import { ConfigFile, expandHome, type ServerConfig } from './config.js';
 
@@ -30,6 +32,7 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * |---|---|
  * | `defaultPermissionPolicy` | live: the next tool call of every agent on the default (decision 31) |
  * | `retentionDays` | live: the next archival sweep (hourly) |
+ * | `transcriptRetention` | live: the next transcript compaction (hourly; P8-02) |
  * | `caps` | live: the next spawn and the next agent's caps; running agents keep theirs |
  * | `qualityTier` | live (stored for the renderer, Phase 3) |
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
@@ -69,6 +72,8 @@ export interface SettingsServiceOptions {
   caps?: CapsEnforcer;
   /** The archival job: the retention period applies live through it. */
   archival?: Archival;
+  /** The transcript retention job (P8-02): its policy applies live through it. */
+  transcriptRetention?: TranscriptRetention;
   /** The home directory the projects root may not be (default `os.homedir()`; tests). */
   home?: string;
 }
@@ -186,6 +191,14 @@ export class SettingsService {
         ...Object.fromEntries(Object.entries(patch.caps).filter(([, v]) => v !== undefined)),
       };
     }
+    if (patch.transcriptRetention) {
+      next.transcriptRetention = {
+        ...(next.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION),
+        ...Object.fromEntries(
+          Object.entries(patch.transcriptRetention).filter(([, v]) => v !== undefined),
+        ),
+      };
+    }
     if (patch.qualityTier !== undefined) next.qualityTier = patch.qualityTier;
     if (patch.stewardsLoadUserSettings !== undefined)
       next.stewardsLoadUserSettings = patch.stewardsLoadUserSettings;
@@ -221,6 +234,7 @@ export class SettingsService {
       },
       qualityTier: c.qualityTier ?? DEFAULT_QUALITY_TIER,
       stewardsLoadUserSettings: c.stewardsLoadUserSettings ?? true,
+      transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
     };
   }
 
@@ -240,6 +254,7 @@ export class SettingsService {
     else if (policy !== undefined) raw['defaultPermissionPolicy'] = policy;
     if (patch.retentionDays !== undefined) raw['retentionDays'] = next.retentionDays;
     if (patch.caps) raw['caps'] = { ...((raw['caps'] as object | undefined) ?? {}), ...next.caps };
+    if (patch.transcriptRetention) raw['transcriptRetention'] = next.transcriptRetention;
     if (patch.qualityTier !== undefined) raw['qualityTier'] = next.qualityTier;
     if (patch.stewardsLoadUserSettings !== undefined)
       raw['stewardsLoadUserSettings'] = next.stewardsLoadUserSettings;
@@ -271,6 +286,11 @@ export class SettingsService {
       const defaults = { maxWallClockMs, maxToolCalls };
       this.config.caps = { ...spawn, defaults };
       this.opts.caps?.update({ ...spawn, defaults });
+    }
+    if (patch.transcriptRetention && next.transcriptRetention) {
+      this.config.transcriptRetention = { ...next.transcriptRetention };
+      if (this.opts.transcriptRetention)
+        this.opts.transcriptRetention.policy = { ...next.transcriptRetention };
     }
     if (patch.qualityTier !== undefined) this.config.qualityTier = next.qualityTier;
   }

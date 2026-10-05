@@ -72,6 +72,16 @@ interface KeyState {
   carry: string;
 }
 
+/**
+ * An agent's newest `seq`: its newest chunk, or — when transcript retention removed that one too
+ * — the high-water mark it recorded (P8-02, `transcript_compactions.last_seq`), so `seq` keeps
+ * increasing across restarts whatever was removed. Bind the agent id twice.
+ */
+export const HIGH_WATER_SQL = `SELECT MAX(
+    COALESCE((SELECT MAX(seq) FROM transcript_chunks WHERE agent_id = ?), 0),
+    COALESCE((SELECT last_seq FROM transcript_compactions WHERE agent_id = ?), 0)
+  ) AS seq`;
+
 /** How much of the previous chunk's tail is matched together with the new text. */
 const TAIL = 512;
 /** How much raw text is kept to find a key header split over two chunks (> any header line). */
@@ -90,7 +100,6 @@ export class TranscriptPipeline {
   private readonly insert: Statement;
   private readonly selectSince: Statement;
   private readonly selectMax: Statement;
-  private readonly deleteBefore: Statement;
   private readonly nextSeq = new Map<Id, number>();
   private readonly buffer = new Map<Id, Pending[]>();
   /** The raw tail of each agent's output so far, for a boundary with an already flushed chunk. */
@@ -117,10 +126,7 @@ export class TranscriptPipeline {
     this.selectSince = db.prepare(
       'SELECT agent_id, seq, at, chunk FROM transcript_chunks WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?',
     );
-    this.selectMax = db.prepare(
-      'SELECT COALESCE(MAX(seq), 0) AS seq FROM transcript_chunks WHERE agent_id = ?',
-    );
-    this.deleteBefore = db.prepare('DELETE FROM transcript_chunks WHERE agent_id = ? AND seq <= ?');
+    this.selectMax = db.prepare(HIGH_WATER_SQL);
   }
 
   /**
@@ -263,18 +269,6 @@ export class TranscriptPipeline {
     }
   }
 
-  /**
-   * Retention hook (Phase 8): drops an agent's chunks up to `throughSeq`. A no-op unless called;
-   * v1 keeps everything. The newest persisted chunk is always kept: its `seq` is where the
-   * agent's numbering resumes after a restart, so dropping it would hand out a `seq` again.
-   */
-  prune(agentId: Id, throughSeq: number): number {
-    const max = (this.selectMax.get(agentId) as { seq: number }).seq;
-    const through = Math.min(throughSeq, max - 1);
-    if (through <= 0) return 0;
-    return this.deleteBefore.run(agentId, through).changes;
-  }
-
   /** Flushes everything and stops the timer. */
   dispose(): void {
     this.flush();
@@ -357,7 +351,7 @@ export class TranscriptPipeline {
   private allocateSeq(agentId: Id, advance = true): number {
     let next = this.nextSeq.get(agentId);
     if (next === undefined) {
-      next = (this.selectMax.get(agentId) as { seq: number }).seq;
+      next = (this.selectMax.get(agentId, agentId) as { seq: number }).seq;
       this.nextSeq.set(agentId, next);
     }
     if (!advance) return next;
