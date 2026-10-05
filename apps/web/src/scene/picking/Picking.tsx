@@ -53,6 +53,9 @@ import {
 import { noteUserCameraInput } from './sync.js';
 import { beaconsDrawn, beaconUnder } from '../beacons/registry.js';
 import { activateBeacon } from '../beacons/activate.js';
+import { taskMarkerHit, taskMarkersDrawn } from '../detail/overlay/task-registry.js';
+import { activateTask } from '../detail/overlay/activate.js';
+import { taskHoverText } from '../detail/overlay/overlay-model.js';
 
 /**
  * Picking, hover and the selection highlight inside the canvas (P3-05).
@@ -96,6 +99,10 @@ import { activateBeacon } from '../beacons/activate.js';
  * over everything too. There is one per question (P4-13), each hit on its own. Hovering one shows
  * its question's card; a click selects the asking agent, flies to its body and opens that question
  * in the inbox (`activateBeacon`).
+ *
+ * Task markers (P6-04, `detail/overlay/`): in a detail view, a task's pin or buoy under the
+ * pointer — no satellite there, or the marker nearer the pointer than any — names the task and a click selects it (`activateTask`: its
+ * Steward, as its row in the panel does); markers win over labels and the body behind them.
  *
  * Per-frame cost: the pick spheres, the ray and the anchors' positions are scratch buffers reused
  * from pick to pick; the canvas's page position is cached (dropped on resize, scroll, re-entry);
@@ -182,6 +189,17 @@ export function Picking({ outline }: PickingProps) {
       ray.direction[2] = direction.z;
       return ray;
     };
+    /**
+     * The task marker under the pointer (P6-04) after a `pick` (its ray and body spheres are still
+     * in `tools`): when no satellite is under it, or the marker is nearer the pointer on screen
+     * than every satellite (a Steward's robot stands beside its task's pin).
+     */
+    const markerAt = (result: ScenePick): string | undefined => {
+      const hit = taskMarkerHit(tools.ray, pxScale(), tools.bodies);
+      if (!hit) return undefined;
+      const satellite = result.satellites[0];
+      return !satellite || hit.px < satellite.screenDistance ? hit.frame.taskId : undefined;
+    };
     /** The question beacon under the pointer (P4-05), if any. */
     const beaconAt = (at: Point) => beaconUnder(aim(at));
     const pick = (at: Point): ScenePick => {
@@ -263,6 +281,21 @@ export function Picking({ outline }: PickingProps) {
       }
       grace = undefined;
       const result = pick(at);
+      // A task's marker in a detail view (P6-04), when no satellite is under the pointer.
+      const marker = markerAt(result);
+      if (marker) {
+        const task = sceneWorld(useAppStore.getState()).tasks[marker];
+        moveHover(at.x, at.y);
+        picking.setHover({
+          kind: 'task',
+          taskId: marker,
+          name: task ? taskHoverText(task) : marker,
+          others: 0,
+        });
+        canvas.style.cursor = 'pointer';
+        if (usePickingStore.getState().hover !== was) invalidate();
+        return;
+      }
       const label = labelUnder(result, at);
       const hit = label
         ? { target: { kind: 'body', bodyId: label } as PickTarget, others: 0 }
@@ -341,6 +374,11 @@ export function Picking({ outline }: PickingProps) {
       // from under the pointer since: the click is still meant for it, while it can be seen.
       if (kept && seen(kept) && activateSatellite(kept)) return;
       const result = pick(at);
+      const marker = markerAt(result);
+      if (marker) {
+        activateTask(marker, at);
+        return;
+      }
       const label = labelUnder(result, at);
       const choice = result.choice;
       if (label) activateBody(label, at);
@@ -418,7 +456,9 @@ export function Picking({ outline }: PickingProps) {
     // a hovered satellite that was just hidden lets go).
     const hoveringSatellite = usePickingStore.getState().hover?.kind === 'satellite';
     // Beacons ride their bodies: the one under a still pointer changes too (P4-05).
-    if (moved || hoveringSatellite || satellitesDrawn() || beaconsDrawn()) repick.current?.();
+    // Task markers ride their body's spin or orbit (P6-04).
+    if (moved || hoveringSatellite || satellitesDrawn() || beaconsDrawn() || taskMarkersDrawn())
+      repick.current?.();
   });
 
   const hovered = usePickingStore((s) => hoveredBody(s.hover));

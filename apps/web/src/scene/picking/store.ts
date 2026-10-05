@@ -68,7 +68,21 @@ export interface BeaconHover {
   bodyId: string;
 }
 
-export type Hover = BodyHover | SatelliteHover | BeaconHover;
+/**
+ * The pointer over a task's marker in a detail view (P6-04): the task's name and state, at the
+ * pointer (shown like a body's name). No body is hovered (no hover ring on the planet, its label
+ * not lit): the overlay rings the marker itself.
+ */
+export interface TaskHover {
+  kind: 'task';
+  taskId: string;
+  bodyId?: undefined;
+  /** "Add pagination · in progress". */
+  name: string;
+  others: 0;
+}
+
+export type Hover = BodyHover | SatelliteHover | BeaconHover | TaskHover;
 
 export type Popover =
   | (Point & { kind: 'info'; action: Extract<BodyAction, { kind: 'info' }> })
@@ -131,6 +145,9 @@ function sameHover(a: Hover, b: Hover): boolean {
       a.bodyId === b.bodyId
     );
   }
+  if (a.kind === 'task' || b.kind === 'task') {
+    return a.kind === 'task' && b.kind === 'task' && a.taskId === b.taskId && a.name === b.name;
+  }
   if (a.others !== b.others) return false;
   if (a.kind === 'satellite' || b.kind === 'satellite') {
     return (
@@ -167,11 +184,16 @@ export function onHoverMove(listener: (at: Readonly<Point>) => void): () => void
 }
 
 /**
- * The body a hover is about (`undefined` over a satellite: its body is not what is hovered; a
- * beacon's body, P4-05).
+ * The body a hover is about (`undefined` over a satellite or a task marker — P6-04: its body is
+ * not what is hovered; a beacon's body, P4-05).
  */
 export function hoveredBody(hover: Hover | undefined): string | undefined {
   return hover?.kind === 'satellite' ? undefined : hover?.bodyId;
+}
+
+/** The task whose marker is hovered (P6-04). */
+export function hoveredTask(hover: Hover | undefined): string | undefined {
+  return hover?.kind === 'task' ? hover.taskId : undefined;
 }
 
 /** The agent whose satellite is hovered. */

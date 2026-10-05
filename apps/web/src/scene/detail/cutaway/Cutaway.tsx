@@ -19,6 +19,7 @@ import { clipBody, parkPlanes, unclip, type ClippedMaterials } from './clipping.
 import { cutawayTarget } from './target.js';
 import { cutawayLabel, hideCutawayLabels, placeCutawayLabel } from './label-registry.js';
 import { useCutawayStore } from './store.js';
+import { publishCutPlanes } from './cut-planes.js';
 import {
   azimuthOf,
   easeOpen,
@@ -158,6 +159,7 @@ function CutawayOf({
     () => () => {
       unclip(clipped);
       hideCutawayLabels();
+      publishCutPlanes(undefined);
     },
     [clipped],
   );
@@ -168,6 +170,7 @@ function CutawayOf({
     const b = faceB.current;
     if (!g || !a || !b) return;
     const s = (scratch.current ??= newScratch());
+    publishCutPlanes(s.planes); // P6-04: the overlay's surface markers are cut with the body
     const now = performance.now() / 1000;
     const dt = s.last === undefined ? 0 : Math.min(0.1, now - s.last);
     s.last = now;
