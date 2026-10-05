@@ -115,8 +115,13 @@ describe('applyEvent', () => {
 
   it('drops a retired demo body from the world (P7-07)', () => {
     let w = emptyWorld();
-    const demo = { id: 'b-demo-1', kind: 'planet', name: 'Demo planet 1', meta: { demo: true } };
-    w = applyEvent(w, env(1, { type: 'body.created', body: demo } as const));
+    const demo = {
+      id: 'b-demo-1',
+      kind: 'planet',
+      name: 'Demo planet 1',
+      meta: { demo: true },
+    } as const;
+    w = applyEvent(w, env(1, { type: 'body.created', body: demo }));
     w = applyEvent(w, env(2, ev['body.retired']));
     expect(w.bodies['b-demo-1']).toBeUndefined();
     expect(w.seq).toBe(2);
