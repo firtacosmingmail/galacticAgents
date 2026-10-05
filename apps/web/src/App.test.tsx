@@ -71,6 +71,48 @@ describe('event page', () => {
     expect(localStorage.getItem('galactic.lastEventId')).toBeNull(); // P0-12: never persisted
   });
 
+  it('"Clear demo projects" posts to /dev/demo/clear and says what it did (P7-07)', async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url === '/health')
+        return new Response(JSON.stringify({ ok: true, token: 'tok-from-health' }));
+      if (url === '/dev/demo/clear')
+        return new Response(
+          JSON.stringify({ seq: 9, projects: ['p-1'], tasks: [], retired: ['b-1'], skipped: [] }),
+        );
+      return new Response('{}');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    await screen.findByText('connecting');
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      socket.serverOpens();
+      socket.serverSends({
+        type: 'snapshot',
+        logId: 'log-a',
+        seq: 1,
+        agents: [],
+        bodies: [],
+        projects: [],
+        tasks: [],
+        questions: [],
+        proposals: [],
+        statuses: [],
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear demo projects' }));
+    });
+    expect(
+      await screen.findByText('Cleared 1 demo project and 0 tasks; retired 1 demo planet.'),
+    ).toBeTruthy();
+    const call = fetchMock.mock.calls.find(([url]) => url === '/dev/demo/clear')!;
+    expect(call[1]).toMatchObject({
+      method: 'POST',
+      headers: { authorization: 'Bearer tok-from-health' },
+    });
+  });
+
   it('asks for the token when none can be discovered, and always starts with a snapshot', async () => {
     vi.stubGlobal(
       'fetch',

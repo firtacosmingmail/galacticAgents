@@ -17,6 +17,7 @@ import type { Tables } from '../db/tables.js';
 import {
   chooseBody,
   describeRefusal,
+  isCatalogued,
   isFree,
   type ChooseOptions,
   type Reader,
@@ -134,7 +135,7 @@ export function roomFor(
   if (!request) return undefined;
   const reader = claimedReader(ctx, claimed);
   const named = p.proposedBody.bodyId ? reader.tables.bodies.get(p.proposedBody.bodyId) : undefined;
-  if (named && named.kind === request.kind && isFree(named)) {
+  if (named && named.kind === request.kind && isFree(named) && isCatalogued(named)) {
     const parentPlanet =
       request.kind === 'moon' && request.parentProjectId
         ? ctx.tables.projects.get(request.parentProjectId)?.bodyId

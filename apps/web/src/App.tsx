@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
-import { PROTOCOL_VERSION } from '@galactic/protocol';
+import { PROTOCOL_VERSION, type DemoClearResponse } from '@galactic/protocol';
+import { describeDemoClear } from './console/demo-clear.js';
 import { useAppStore } from './state/store.js';
 import {
   confirmToken,
@@ -192,10 +193,12 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
   const seq = useAppStore((s) => s.world.seq);
   const lastError = useAppStore((s) => s.lastError);
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | undefined>();
 
   const setLastError = (e: string | undefined) => useAppStore.setState({ lastError: e });
-  const devPost = async (path: string, body?: unknown) => {
+  const devPost = async (path: string, body?: unknown): Promise<unknown> => {
     setBusy(true);
+    setNotice(undefined);
     try {
       const res = await fetch(path, {
         method: 'POST',
@@ -213,6 +216,7 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
         setLastError(`${path} failed: ${res.status}${hint}`);
       } else {
         setLastError(undefined);
+        return await res.json().catch(() => undefined);
       }
     } catch (e) {
       setLastError(`${path} failed: ${(e as Error).message}`);
@@ -227,6 +231,10 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
       summary: `Fake progress from the browser at ${new Date().toLocaleTimeString()}`,
     });
   const seed = () => devPost('/dev/seed');
+  const clearDemo = async () => {
+    const out = (await devPost('/dev/demo/clear')) as DemoClearResponse | undefined;
+    if (out) setNotice(describeDemoClear(out));
+  };
 
   return (
     <section className="status">
@@ -234,6 +242,11 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
       <span>seq {seq}</span>
       {detail && <span className="muted">{detail}</span>}
       {lastError && <span className="error">{lastError}</span>}
+      {notice && (
+        <span className="muted" role="status">
+          {notice}
+        </span>
+      )}
       <span className="spacer" />
       <button onClick={emitFake} disabled={busy || status !== 'live'}>
         Emit fake event
@@ -244,6 +257,14 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
         title="Creates a demo planet + project"
       >
         Seed demo project
+      </button>
+      <button
+        onClick={() => void clearDemo()}
+        disabled={busy || status !== 'live'}
+        className="secondary"
+        title="Archives every seeded demo project and retires its planet (never real work or harness items)"
+      >
+        Clear demo projects
       </button>
       <button onClick={onForget} className="secondary">
         Forget token

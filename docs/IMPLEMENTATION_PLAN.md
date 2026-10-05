@@ -146,6 +146,7 @@ Each phase ends with something you can run. Estimates assume one developer worki
 - Touch controls and mobile quality tier; list mode for slow connections.
 - **Web Push:** VAPID key generation, push-subscription storage, server-side `web-push` sending for question/permission opened and project finished; iOS requires Home-Screen install and a user gesture to request permission — best-effort.
 - Reconnect: the Phase 0 `lastEventId` resume already covers a phone that slept; answers given offline carry the question's version so a stale answer gets "already answered by …".
+- Housekeeping (P7-07): the ops console's demo planets are never reused for real work and retire (`body.retired`) when their project is archived; a dev-only "Clear demo projects" archives the seeded demo work.
 
 **Exit criteria:** from mobile data, you can open the app, see the map or the list, read every status, and answer a Steward's question or permission request.
 

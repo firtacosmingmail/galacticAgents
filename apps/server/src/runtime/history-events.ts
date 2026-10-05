@@ -233,6 +233,7 @@ export function touches(event: Event, m: Members): boolean {
     case 'body.moved':
       return hosts(event.host.id) || (!!event.intoProjectId && m.projects.has(event.intoProjectId));
     case 'body.freed':
+    case 'body.retired':
       return m.bodies.has(event.bodyId);
     case 'agent.created':
       return m.agents.has(event.agent.id);

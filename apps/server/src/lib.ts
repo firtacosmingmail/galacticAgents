@@ -61,6 +61,8 @@ export {
   retentionDue,
 } from './domain/cascade.js';
 export { DomainError } from './domain/errors.js';
+export { seedDemoProject, retireFreeDemoBodies } from './domain/demo.js';
+export { clearDemoProjects } from './runtime/demo-clear.js';
 export { TRANSITIONS, canTransition } from './domain/states.js';
 export { buildSnapshot } from './ws/snapshot.js';
 export { CapsEnforcer, DEFAULT_CAPS, type CapUsage } from './runtime/caps.js';

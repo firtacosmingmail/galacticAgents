@@ -1,5 +1,7 @@
 import {
   asteroidSpec,
+  isDemoBody,
+  isRetiredBody,
   type Body,
   type BodyChoice,
   type BodyOccupancy,
@@ -33,12 +35,22 @@ export const isReserved = (body: Body): boolean => body.meta?.['reserved'] === t
 /** Free: unreserved, hosting nothing and not showing a "moved to …" marker. */
 export const isFree = (body: Body): boolean => !body.host && !body.movedTo && !isReserved(body);
 
+/**
+ * A body the catalogue may hand out (P7-07): a seeded planet or moon (it has a `meta.orbit`,
+ * migration 0005), never a demo body (`/dev/seed`, `isDemoBody`) or a retired one. A planet or
+ * moon made outside the catalogue is never chosen for real work: it would silently raise decision
+ * 1's planet cap and bring a made-up planet back into the scene.
+ */
+export const isCatalogued = (body: Body): boolean =>
+  typeof body.meta?.['orbit'] === 'number' && !isDemoBody(body) && !isRetiredBody(body);
+
 const num = (v: unknown, fallback: number): number => (typeof v === 'number' ? v : fallback);
 
 /**
  * The catalogue order: the Sun, planets from the Sun outwards, then moons by their planet's
  * orbit and their own, then asteroids by number. Bodies without an orbit (a hand-made demo
  * planet) come after the seeded ones of their kind, by name, then id — always the same order.
+ * (Ordering only: `freePlanets` / `freeMoons` never hand such a body out, P7-07.)
  */
 export function catalogueOrder(bodies: readonly Body[], all: readonly Body[] = bodies): Body[] {
   const byId = new Map(all.map((b) => [b.id, b]));
@@ -63,16 +75,17 @@ export function bodiesWhere(ctx: Reader, pred: (b: Body) => boolean): Body[] {
   return catalogueOrder(all.filter(pred), all);
 }
 
-/** The free planets in catalogue order (Earth never among them). */
+/** The free planets of the catalogue, in its order (Earth and demo planets never among them). */
 export function freePlanets(ctx: Reader): Body[] {
-  return bodiesWhere(ctx, (b) => b.kind === 'planet' && isFree(b));
+  return bodiesWhere(ctx, (b) => b.kind === 'planet' && isFree(b) && isCatalogued(b));
 }
 
 /** The free moons, of `planetId` or of every planet, in catalogue order (Earth's Moon never). */
 export function freeMoons(ctx: Reader, planetId?: Id): Body[] {
   return bodiesWhere(
     ctx,
-    (b) => b.kind === 'moon' && isFree(b) && (!planetId || b.parentId === planetId),
+    (b) =>
+      b.kind === 'moon' && isFree(b) && isCatalogued(b) && (!planetId || b.parentId === planetId),
   );
 }
 
@@ -93,11 +106,15 @@ export function occupancyOf(ctx: Reader, body: Body): BodyOccupancy {
   return out;
 }
 
-/** Every unreserved planet that is not free, with its occupant (decision 16's refusal). */
+/**
+ * Every unreserved planet that is not free, with its occupant (decision 16's refusal). A demo
+ * planet still hosting work is listed (it is occupied); a retired one never is.
+ */
 export function occupiedPlanets(ctx: Reader): BodyOccupancy[] {
-  return bodiesWhere(ctx, (b) => b.kind === 'planet' && !isReserved(b) && !isFree(b)).map((b) =>
-    occupancyOf(ctx, b),
-  );
+  return bodiesWhere(
+    ctx,
+    (b) => b.kind === 'planet' && !isReserved(b) && !isFree(b) && !isRetiredBody(b),
+  ).map((b) => occupancyOf(ctx, b));
 }
 
 export interface ChooseOptions {
