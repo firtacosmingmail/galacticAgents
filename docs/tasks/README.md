@@ -14,7 +14,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 4 — Living overlays | `PHASE_4_LIVING_OVERLAYS.md` | done (2026-10-04) | 14/14 | — |
 | 5 — Panel polish and scene integration | `PHASE_5_PANEL_POLISH.md` | done (2026-10-04) | 7/7 | — |
 | 6 — Planet zoom and structure | `PHASE_6_PLANET_ZOOM.md` | done (2026-10-05) | 7/7 | — |
-| 7 — Remote and mobile access | `PHASE_7_REMOTE_MOBILE.md` | in progress (branch `phase-7`) | 3/6 | P7-04, P7-05 (wave 2, next) |
+| 7 — Remote and mobile access | `PHASE_7_REMOTE_MOBILE.md` | in progress (branch `phase-7`) | 3/7 | P7-04, P7-05, P7-07 (wave 2, in progress) |
 | 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | not started | 0/8 | — |
 
 Phases run in order 0 → 1 → 2 → 2.5 → 3 → 4 → 5 → 6 → 7; Phase 8 tasks are picked whenever their dependencies are met. Phase 7 depends on Phase 5, not on Phase 6.
