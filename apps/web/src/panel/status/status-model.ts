@@ -500,7 +500,7 @@ export function budgetOf(
       projects: Object.values(world.projects),
       tasks: Object.values(world.tasks),
       agents: Object.values(world.agents),
-      spend: (id) => world.spend[id],
+      spend: (id) => world.spend?.[id],
     },
     target,
     warnAtPercent,

@@ -65,8 +65,10 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
 
 /** The agent's spend after `envelope` (P8-01), the same fold as the server's `agent_spend`. */
 function spendAfter(state: WorldState, envelope: EventEnvelope, agentId: Id): WorldState {
-  const next = foldSpend(state.spend[agentId], envelope);
-  return next ? { ...state, spend: { ...state.spend, [agentId]: next } } : state;
+  // A world built before P8-01 (a test fixture, a replay base) may have no spend yet.
+  const spend = state.spend ?? {};
+  const next = foldSpend(spend[agentId], envelope);
+  return next ? { ...state, spend: { ...spend, [agentId]: next } } : state;
 }
 
 /**
