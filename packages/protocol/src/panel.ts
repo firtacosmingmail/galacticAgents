@@ -142,6 +142,12 @@ export const SettingsCaps = z.object({
 });
 export type SettingsCaps = z.infer<typeof SettingsCaps>;
 
+/** Dollar budgets (P8-01): when a budgeted project or task warns, as a percentage of its budget. */
+export const SettingsBudgets = z.object({
+  warnAtPercent: z.number().int().min(1).max(100),
+});
+export type SettingsBudgets = z.infer<typeof SettingsBudgets>;
+
 /** The settings the panel shows and edits (SPEC §4.6), persisted in `config.json`. */
 export const Settings = z.object({
   /** Where new project folders go (SPEC §3.5): an absolute path or `~/…`. */
@@ -157,6 +163,8 @@ export const Settings = z.object({
    * repository's (SPEC §8 open question; default keep). Brains never do.
    */
   stewardsLoadUserSettings: z.boolean(),
+  /** Budget warnings (P8-01); the server always reports it, older servers leave it out. */
+  budgets: SettingsBudgets.optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -168,6 +176,7 @@ export const SettingName = z.enum([
   'caps',
   'qualityTier',
   'stewardsLoadUserSettings',
+  'budgets',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
 
@@ -184,6 +193,7 @@ export const SettingsPatch = z
     caps: SettingsCaps.partial().strict().optional(),
     qualityTier: QualityTier.optional(),
     stewardsLoadUserSettings: z.boolean().optional(),
+    budgets: SettingsBudgets.partial().strict().optional(),
     /**
      * Marks the first-run setup as done (P25-08): the server stamps `setupCompletedAt` in
      * `config.json` (kept if already set). Local requests only, like every setting but the tier

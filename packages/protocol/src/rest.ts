@@ -4,6 +4,7 @@ import type { ControlAction as ControlActionType } from './commands.js';
 import {
   Actor,
   AgentCaps,
+  BudgetUsd,
   ProposedBody,
   PERMISSION_POLICY_PRESETS,
   PermissionPolicy,
@@ -102,6 +103,8 @@ export const ProposalDecisionBody = z.discriminatedUnion('decision', [
         workspace: z.string().min(1).optional(),
         initGit: z.boolean().optional(),
         trust: TrustLevel.optional(),
+        /** The work's dollar budget (P8-01); `null` drops it from the card. */
+        budgetUsd: BudgetUsd.nullable().optional(),
       })
       .strict(),
   }),
@@ -173,6 +176,8 @@ export const ControlActionBody = z.discriminatedUnion('action', [
         priority: TaskPriority.optional(),
         name: z.string().min(1).optional(),
         permissionPolicy: PermissionPolicy.nullable().optional(),
+        /** The project's or task's dollar budget (P8-01); `null` removes it. */
+        budgetUsd: BudgetUsd.nullable().optional(),
       })
       .strict(),
   }),

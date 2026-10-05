@@ -4,6 +4,7 @@ import type {
   AgentCaps,
   Body,
   BodyOccupancy,
+  BudgetTarget,
   Host,
   PermissionPolicy,
   Project,
@@ -151,6 +152,8 @@ export type ProposalDecision =
         Pick<Proposal, 'kind' | 'proposedBody' | 'workspace'> & {
           initGit: boolean;
           trust: TrustLevel;
+          /** The work's dollar budget (P8-01): `meta.budgetUsd`, applied on approval; `null` drops it. */
+          budgetUsd: number | null;
         }
       >;
     }
@@ -305,6 +308,20 @@ export interface DomainCommands {
    * with its agent). A question that is not open is returned unchanged.
    */
   withdrawQuestion(questionId: Id, reason: string, by: Actor): Promise<CommandResult<Question>>;
+
+  // budgets (P8-01; SPEC decision 18)
+  /**
+   * Sets (`usd`), changes or removes (`null`) the dollar budget of a project or task: the row's
+   * `budgetUsd` plus a `budget.set` event, in one transaction. Loosening it (raising or removing)
+   * is refused for a remote or unknown `write.origin` unless the server sets `autoApproveRemote`
+   * (proposed decision 97, like decision 37's floor); setting or lowering is allowed from anywhere.
+   */
+  setBudget(
+    target: BudgetTarget,
+    usd: number | null,
+    by: Actor,
+    write?: WriteOptions,
+  ): Promise<CommandResult<Project | Task>>;
 
   // panel actions (SPEC decision 11b)
   /**

@@ -12,6 +12,7 @@ import {
 } from './domain.js';
 import { EVENT_TYPES, EventEnvelope } from './events.js';
 import { RequestOrigin } from './enums.js';
+import { AgentSpend } from './budget.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
@@ -82,6 +83,11 @@ export const SnapshotMessage = z.object({
   questions: z.array(Question),
   proposals: z.array(Proposal),
   statuses: z.array(StatusRecord),
+  /**
+   * Every agent's reported cost at `seq` (P8-01): the `agent_spend` projection, which the client
+   * keeps folding from the stream with `foldSpend`. Absent from older servers: no spend known.
+   */
+  spend: z.array(AgentSpend).optional(),
   /**
    * The server's clock when it sent this (P4-06 review): the client's offset to it, so "is this
    * event news?" compares event times with the server's clock, not a skewed client's.

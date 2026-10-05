@@ -341,7 +341,7 @@ describe('control_work: the panel’s work controls in conversation (P5-07, deci
       ],
       [control('task', task.id, 'edit', { changes: { name: 'x' } }), /description, priority/],
       [control('task', task.id, 'edit', { changes: { priority: 'asap' } }), /priority/],
-      [control('project', project.id, 'edit', { changes: { description: 'x' } }), /name only/],
+      [control('project', project.id, 'edit', { changes: { description: 'x' } }), /name, budgetUsd only/],
       [control('project', project.id, 'edit', { changes: { name: '  ' } }), /name/],
       [control('project', project.id, 'edit'), /an edit needs changes/],
       [control('task', task.id, 'pause', { changes: { priority: 'low' } }), /go with "edit" only/],

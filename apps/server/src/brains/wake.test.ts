@@ -61,6 +61,9 @@ describe('WAKE_RULES', () => {
         'control.archive',
         'control.pin',
         'control.reopen',
+        'budget.set',
+        'budget.warning',
+        'budget.exceeded',
       ].sort(),
     );
   });
