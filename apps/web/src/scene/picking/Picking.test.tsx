@@ -615,6 +615,35 @@ describe('per-frame cost (review item 4)', () => {
     // The compatibility mouse events and click after the touch are cancelled.
     expect(fireEvent.touchEnd(canvas)).toBe(false);
   });
+
+  it('a tap on the scene blurs a text field being typed in, not a button (P7-03 review)', () => {
+    render(<Picking />);
+    frame();
+    for (const make of [
+      () => document.createElement('input'),
+      () => document.createElement('textarea'),
+      () => {
+        const div = document.createElement('div');
+        div.setAttribute('contenteditable', 'true');
+        div.tabIndex = 0;
+        return div;
+      },
+    ]) {
+      const field = make();
+      document.body.appendChild(field);
+      field.focus();
+      expect(document.activeElement).toBe(field);
+      expect(fireEvent.touchEnd(canvas)).toBe(false);
+      expect(document.activeElement, field.tagName).not.toBe(field);
+      field.remove();
+    }
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    button.focus();
+    fireEvent.touchEnd(canvas);
+    expect(document.activeElement).toBe(button);
+    button.remove();
+  });
 });
 
 describe('OutlineSync', () => {

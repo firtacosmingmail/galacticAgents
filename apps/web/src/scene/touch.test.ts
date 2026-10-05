@@ -73,6 +73,18 @@ describe('device detection (P7-03)', () => {
     expect(isSlowConnection(MAC)).toBe(false); // Safari: no `navigator.connection`
   });
 
+  it('never calls a page served from this machine slow (P7-03 review)', () => {
+    const slow = { effectiveType: '2g', saveData: true };
+    for (const hostname of ['localhost', '127.0.0.1', '127.1.2.3', '[::1]', '::1']) {
+      const local = { ...probe([], 1440, 900, slow), hostname };
+      expect(isSlowConnection(local), hostname).toBe(false);
+      expect(listModeReason(local), hostname).toBeUndefined();
+    }
+    for (const hostname of ['mymac.tail1234.ts.net', '192.168.1.10', '127.example.com']) {
+      expect(isSlowConnection({ ...probe([], 1440, 900, slow), hostname }), hostname).toBe(true);
+    }
+  });
+
   it('starts in list mode on a small screen or a slow connection, the connection named first', () => {
     expect(listModeReason(MAC)).toBeUndefined();
     expect(listModeReason(IPAD)).toBeUndefined();
@@ -94,8 +106,12 @@ describe('device detection (P7-03)', () => {
     const live = liveProbe();
     expect(live.matches(COARSE_POINTER_QUERY)).toBe(true);
     expect(live.viewport).toEqual({ width: 390, height: 844 });
+    expect(live.connection).toEqual({ effectiveType: '3g' });
+    expect(live.hostname).toBe(window.location.hostname);
     expect(isPhone()).toBe(true);
-    expect(isSlowConnection()).toBe(true);
+    // jsdom's page is on localhost: never slow (a remote page with this connection is).
+    expect(isSlowConnection()).toBe(window.location.hostname !== 'localhost');
+    expect(isSlowConnection({ ...live, hostname: 'mymac.tail1234.ts.net' })).toBe(true);
   });
 });
 

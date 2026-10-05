@@ -418,8 +418,13 @@ export function Picking({ outline }: PickingProps) {
     // may have scrolled the inbox into view (a beacon) or opened a card, so the "ghost" click
     // lands on whatever is there now (a navigation row, selecting something else). Cancelling
     // `touchend` drops those compatibility events; nothing on the canvas listens for them.
+    // It also keeps the focus where it was, so a text field being typed in would keep the phone's
+    // keyboard up over the scene: a tap on the scene blurs it, as a tap anywhere else would.
     const onTouchEnd = (e: TouchEvent) => {
-      if (e.cancelable) e.preventDefault();
+      if (!e.cancelable) return;
+      e.preventDefault();
+      const active = canvas.ownerDocument.activeElement;
+      if (active instanceof HTMLElement && isTextField(active)) active.blur();
     };
     const resizes =
       typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(forgetRect);
@@ -705,3 +710,24 @@ export function OutlineSync({
   );
   return null;
 }
+
+/** A field the keyboard types into: a text-like `<input>`, a `<textarea>`, an editable element. */
+export function isTextField(el: HTMLElement): boolean {
+  if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') return true;
+  if (el instanceof HTMLTextAreaElement) return true;
+  if (!(el instanceof HTMLInputElement)) return false;
+  return !NON_TEXT_INPUTS.has(el.type);
+}
+
+const NON_TEXT_INPUTS = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'hidden',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+]);

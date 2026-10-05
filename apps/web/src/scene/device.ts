@@ -15,6 +15,8 @@ export interface DeviceProbe {
   viewport: { width: number; height: number };
   /** `navigator.connection`, when the browser has it. */
   connection?: { saveData?: boolean; effectiveType?: string } | undefined;
+  /** `location.hostname`: the page served from this machine is never on a slow link. */
+  hostname?: string | undefined;
 }
 
 /** The primary pointer is a finger (phones, tablets); a mouse or a trackpad is `fine`. */
@@ -50,7 +52,15 @@ export function liveProbe(): DeviceProbe {
     },
     viewport: { width: w?.innerWidth ?? 1024, height: w?.innerHeight ?? 768 },
     connection: (nav as { connection?: DeviceProbe['connection'] } | undefined)?.connection,
+    hostname: w?.location?.hostname,
   };
+}
+
+/** `localhost`, `127.x.x.x` and `::1` (bracketed, as `location.hostname` gives it, or not). */
+export function isLoopbackHostname(hostname: string | undefined): boolean {
+  if (!hostname) return false;
+  const h = hostname.toLowerCase();
+  return h === 'localhost' || h === '[::1]' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
 }
 
 /** A phone: a finger for a pointer and a phone-sized viewport (either orientation). */
@@ -64,10 +74,14 @@ export function isSmallScreen(probe: DeviceProbe = liveProbe()): boolean {
   return probe.matches(SMALL_SCREEN_QUERY);
 }
 
-/** Data saver on, or a connection the browser rates 3G or slower. Unknown → not slow. */
+/**
+ * Data saver on, or a connection the browser rates 3G or slower. Unknown → not slow. A page loaded
+ * from this machine (loopback) is never slow, whatever the browser thinks of the network: the
+ * scene's files come over loopback (P7-03 review).
+ */
 export function isSlowConnection(probe: DeviceProbe = liveProbe()): boolean {
   const c = probe.connection;
-  if (!c) return false;
+  if (!c || isLoopbackHostname(probe.hostname)) return false;
   if (c.saveData === true) return true;
   return c.effectiveType !== undefined && SLOW_EFFECTIVE_TYPES.includes(c.effectiveType);
 }

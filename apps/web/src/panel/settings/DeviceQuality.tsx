@@ -13,7 +13,7 @@ const TIER_NAMES: Record<QualityTier, string> = {
 const AUTOMATIC = 'auto';
 
 /**
- * The rendering quality of this browser alone (P7-03; proposed decision, notes P7-03): "Automatic"
+ * The rendering quality of this browser alone (P7-03; SPEC decision 93): "Automatic"
  * follows the settings' tier above — `Mobile` on a phone — and any other choice wins over it on
  * this device only. Applied at once and remembered in this browser (`device-tier.ts`), never sent
  * to the server: the phone choosing `Mobile` leaves the Mac at `High`.
