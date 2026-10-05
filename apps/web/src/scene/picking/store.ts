@@ -7,6 +7,7 @@ import {
   type SelectionKey,
 } from '../../state/selection.js';
 import { agentLabel } from '../../console/hierarchy/shared.js';
+import { revealChat } from '../../panel/dock-state.js';
 import { useCameraStore } from '../camera/store.js';
 import { getSatellite } from '../satellites/registry.js';
 import type { SatelliteMode } from '../satellites/machine.js';
@@ -67,7 +68,21 @@ export interface BeaconHover {
   bodyId: string;
 }
 
-export type Hover = BodyHover | SatelliteHover | BeaconHover;
+/**
+ * The pointer over a task's marker in a detail view (P6-04): the task's name and state, at the
+ * pointer (shown like a body's name). No body is hovered (no hover ring on the planet, its label
+ * not lit): the overlay rings the marker itself.
+ */
+export interface TaskHover {
+  kind: 'task';
+  taskId: string;
+  bodyId?: undefined;
+  /** "Add pagination · in progress". */
+  name: string;
+  others: 0;
+}
+
+export type Hover = BodyHover | SatelliteHover | BeaconHover | TaskHover;
 
 export type Popover =
   | (Point & { kind: 'info'; action: Extract<BodyAction, { kind: 'info' }> })
@@ -130,6 +145,9 @@ function sameHover(a: Hover, b: Hover): boolean {
       a.bodyId === b.bodyId
     );
   }
+  if (a.kind === 'task' || b.kind === 'task') {
+    return a.kind === 'task' && b.kind === 'task' && a.taskId === b.taskId && a.name === b.name;
+  }
   if (a.others !== b.others) return false;
   if (a.kind === 'satellite' || b.kind === 'satellite') {
     return (
@@ -166,11 +184,16 @@ export function onHoverMove(listener: (at: Readonly<Point>) => void): () => void
 }
 
 /**
- * The body a hover is about (`undefined` over a satellite: its body is not what is hovered; a
- * beacon's body, P4-05).
+ * The body a hover is about (`undefined` over a satellite or a task marker — P6-04: its body is
+ * not what is hovered; a beacon's body, P4-05).
  */
 export function hoveredBody(hover: Hover | undefined): string | undefined {
   return hover?.kind === 'satellite' ? undefined : hover?.bodyId;
+}
+
+/** The task whose marker is hovered (P6-04). */
+export function hoveredTask(hover: Hover | undefined): string | undefined {
+  return hover?.kind === 'task' ? hover.taskId : undefined;
 }
 
 /** The agent whose satellite is hovered. */
@@ -232,6 +255,7 @@ export function activateBody(bodyId: string, at: Point, opts: { fly?: boolean } 
 /**
  * Activates a satellite (a click on it, a choice in the "what's here" list): selects its agent
  * (decision 53: `waykeeper:<id>` / `steward:<id>`) and flies the camera to the body it orbits.
+ * The HQ station (the Harmonizer's) also opens the Harmonizer's chat (P6-05, `revealChat`).
  * `false` when the agent is unknown (nothing happens).
  */
 export function activateSatellite(agentId: string): boolean {
@@ -242,5 +266,8 @@ export function activateSatellite(agentId: string): boolean {
   if (bodyId) useCameraStore.getState().flyTo(bodyId);
   usePickingStore.getState().closePopover();
   selectFromScene(selection);
+  // P6-05: the HQ station is the Harmonizer's home — clicking it opens the Harmonizer's chat: the
+  // dock restored if minimised (decision 71), its "Chat | Status" switch on Chat (decision 80).
+  if (selection.kind === 'harmonizer') revealChat();
   return true;
 }

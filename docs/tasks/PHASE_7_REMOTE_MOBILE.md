@@ -1,6 +1,6 @@
 # Phase 7 — Remote and mobile access
 
-**Current task:** — (phase not started; first tasks will be P7-01 / P7-02 in parallel) · **Task status:** —
+**Current task:** P7-01 / P7-02 (wave 1, after Phase 6 is merged into `main`) · **Task status:** todo
 **Phase status:** not started (0/6 done)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.

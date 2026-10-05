@@ -13,6 +13,8 @@ export interface StarField {
 }
 
 export const STAR_SHELL = { inner: 1200, outer: 2400 } as const;
+/** The stars' size on screen, in pixels (not attenuated with distance). */
+export const STAR_POINT_PX = 1.6;
 
 /**
  * The brightest a star channel gets (linear). Kept below the bloom threshold (1.0, `quality.ts`)

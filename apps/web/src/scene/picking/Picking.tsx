@@ -6,11 +6,15 @@ import {
   Vector2,
   Vector3,
   type Mesh,
+  type MeshBasicMaterial,
   type Object3D,
   type PerspectiveCamera,
 } from 'three';
 import type { OutlineEffect } from 'postprocessing';
 import { anchorList, getAnchor } from '../anchors.js';
+import { currentDetailScope, detailMix, inDetailScope, useDetailStore } from '../detail/mode.js';
+import { ownRingFactor } from '../detail/dome.js';
+import { standInFor } from '../detail/stand-ins.js';
 import { labelAt } from '../labels/registry.js';
 import { anchorPosition } from '../camera/store.js';
 import { sceneWorld, useAppStore } from '../../state/store.js';
@@ -51,6 +55,9 @@ import {
 import { noteUserCameraInput } from './sync.js';
 import { beaconsDrawn, beaconUnder } from '../beacons/registry.js';
 import { activateBeacon } from '../beacons/activate.js';
+import { taskMarkerHit, taskMarkersDrawn } from '../detail/overlay/task-registry.js';
+import { activateTask } from '../detail/overlay/activate.js';
+import { taskHoverText } from '../detail/overlay/overlay-model.js';
 
 /**
  * Picking, hover and the selection highlight inside the canvas (P3-05).
@@ -94,6 +101,10 @@ import { activateBeacon } from '../beacons/activate.js';
  * over everything too. There is one per question (P4-13), each hit on its own. Hovering one shows
  * its question's card; a click selects the asking agent, flies to its body and opens that question
  * in the inbox (`activateBeacon`).
+ *
+ * Task markers (P6-04, `detail/overlay/`): in a detail view, a task's pin or buoy under the
+ * pointer — no satellite there, or the marker nearer the pointer than any — names the task and a click selects it (`activateTask`: its
+ * Steward, as its row in the panel does); markers win over labels and the body behind them.
  *
  * Per-frame cost: the pick spheres, the ray and the anchors' positions are scratch buffers reused
  * from pick to pick; the canvas's page position is cached (dropped on resize, scroll, re-entry);
@@ -180,6 +191,17 @@ export function Picking({ outline }: PickingProps) {
       ray.direction[2] = direction.z;
       return ray;
     };
+    /**
+     * The task marker under the pointer (P6-04) after a `pick` (its ray and body spheres are still
+     * in `tools`): when no satellite is under it, or the marker is nearer the pointer on screen
+     * than every satellite (a Steward's robot stands beside its task's pin).
+     */
+    const markerAt = (result: ScenePick): string | undefined => {
+      const hit = taskMarkerHit(tools.ray, pxScale(), tools.bodies);
+      if (!hit) return undefined;
+      const satellite = result.satellites[0];
+      return !satellite || hit.px < satellite.screenDistance ? hit.frame.taskId : undefined;
+    };
     /** The question beacon under the pointer (P4-05), if any. */
     const beaconAt = (at: Point) => beaconUnder(aim(at));
     const pick = (at: Point): ScenePick => {
@@ -261,6 +283,21 @@ export function Picking({ outline }: PickingProps) {
       }
       grace = undefined;
       const result = pick(at);
+      // A task's marker in a detail view (P6-04), when no satellite is under the pointer.
+      const marker = markerAt(result);
+      if (marker) {
+        const task = sceneWorld(useAppStore.getState()).tasks[marker];
+        moveHover(at.x, at.y);
+        picking.setHover({
+          kind: 'task',
+          taskId: marker,
+          name: task ? taskHoverText(task) : marker,
+          others: 0,
+        });
+        canvas.style.cursor = 'pointer';
+        if (usePickingStore.getState().hover !== was) invalidate();
+        return;
+      }
       const label = labelUnder(result, at);
       const hit = label
         ? { target: { kind: 'body', bodyId: label } as PickTarget, others: 0 }
@@ -339,6 +376,11 @@ export function Picking({ outline }: PickingProps) {
       // from under the pointer since: the click is still meant for it, while it can be seen.
       if (kept && seen(kept) && activateSatellite(kept)) return;
       const result = pick(at);
+      const marker = markerAt(result);
+      if (marker) {
+        activateTask(marker, at);
+        return;
+      }
       const label = labelUnder(result, at);
       const choice = result.choice;
       if (label) activateBody(label, at);
@@ -416,7 +458,9 @@ export function Picking({ outline }: PickingProps) {
     // a hovered satellite that was just hidden lets go).
     const hoveringSatellite = usePickingStore.getState().hover?.kind === 'satellite';
     // Beacons ride their bodies: the one under a still pointer changes too (P4-05).
-    if (moved || hoveringSatellite || satellitesDrawn() || beaconsDrawn()) repick.current?.();
+    // Task markers ride their body's spin or orbit (P6-04).
+    if (moved || hoveringSatellite || satellitesDrawn() || beaconsDrawn() || taskMarkersDrawn())
+      repick.current?.();
   });
 
   const hovered = usePickingStore((s) => hoveredBody(s.hover));
@@ -457,14 +501,18 @@ type ScratchSatelliteSphere = { -readonly [K in keyof SatelliteSphere]: Satellit
  */
 export function bodySpheres(out: ScratchBodySphere[] = []): readonly PickSphere[] {
   const anchors = anchorList();
+  // P6-01: in a detail view only its own bodies are there to pick (the rest is behind its backdrop).
+  const scope = currentDetailScope();
+  let n = 0;
   for (let i = 0; i < anchors.length; i++) {
     const a = anchors[i]!;
-    const s = (out[i] ??= { bodyId: '', center: [0, 0, 0], radius: 0 });
+    if (scope && !scope.has(a.bodyId)) continue;
+    const s = (out[n++] ??= { bodyId: '', center: [0, 0, 0], radius: 0 });
     s.bodyId = a.bodyId;
     s.radius = a.radius;
     anchorPosition(a, s.center);
   }
-  out.length = anchors.length;
+  out.length = n;
   return out;
 }
 
@@ -474,10 +522,12 @@ export function bodySpheres(out: ScratchBodySphere[] = []): readonly PickSphere[
  */
 export function satelliteSpheres(out: ScratchSatelliteSphere[] = []): readonly SatelliteSphere[] {
   const frames = satelliteFrames();
+  const scope = currentDetailScope();
   let n = 0;
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i]!;
     if (!f.visible || f.presence <= 0 || f.size <= 0) continue;
+    if (scope && !scope.has(f.bodyId)) continue;
     const s = (out[n++] ??= { agentId: '', center: f.position, radius: 0 });
     // P4-04: landed satellites are picked only by a direct hit up close (`pickScene`).
     s.agentId = f.agentId;
@@ -544,7 +594,13 @@ function HighlightRing({
     const depth = Math.max(1e-6, camera.position.distanceTo(ring.position.set(x, y, z)));
     const perPx = depth / pixelScale(state.size.height, camera.fov ?? 45);
     const screenRadius = target.radius / perPx;
-    ring.visible = hideAbovePx === undefined || screenRadius < hideAbovePx;
+    // P6-07: the ring around the body shown in detail fades out with the cross-fade.
+    const detail = useDetailStore.getState();
+    const own = bodyId !== undefined && detail.shown === bodyId;
+    const factor = ownRingFactor(own, own ? detailMix(detail, performance.now() / 1000) : 0);
+    const material = ring.material as MeshBasicMaterial | undefined;
+    if (material) material.opacity = opacity * factor;
+    ring.visible = factor > 0.001 && (hideAbovePx === undefined || screenRadius < hideAbovePx);
     ring.quaternion.copy(camera.quaternion);
     ring.scale.setScalar(Math.max(target.radius * RING_SCALE, RING_MIN_PX * perPx));
   });
@@ -577,11 +633,12 @@ function ringTarget(
 ): { center: Vec3; radius: number } | undefined {
   if (agentId) {
     const f = getSatellite(agentId);
-    return f && f.visible && f.presence > 0
+    return f && f.visible && f.presence > 0 && inDetailScope(f.bodyId)
       ? { center: f.position, radius: f.size / 2 }
       : undefined;
   }
-  const anchor = bodyId ? getAnchor(bodyId) : undefined;
+  // P6-01: a ring is drawn over everything: none for a body behind a detail view's backdrop.
+  const anchor = bodyId && inDetailScope(bodyId) ? getAnchor(bodyId) : undefined;
   return anchor ? { center: anchorPosition(anchor), radius: anchor.radius } : undefined;
 }
 
@@ -611,11 +668,13 @@ export function OutlineSync({
     const outline = effect.current;
     if (!outline) return;
     depthPassWithoutDecor(outline as unknown as Partial<OutlineDepthPassOwner>);
-    const anchor = bodyId ? getAnchor(bodyId) : undefined;
+    // P6-01: behind a detail view's backdrop there is nothing to outline (the outline's x-ray
+    // would draw through it); a body its sub-scene draws is outlined on the sub-scene's meshes.
+    const anchor = bodyId && inDetailScope(bodyId) ? getAnchor(bodyId) : undefined;
     // Off screen, nothing to outline: an empty selection skips the effect's passes (P3-08).
     const meshes =
       anchor && bodyInView(state.camera, anchor.object, anchor.radius, scratch)
-        ? outlineMeshes(anchor.object, anchor.bodyId)
+        ? outlineMeshes(standInFor(anchor.bodyId) ?? anchor.object, anchor.bodyId)
         : [];
     const was = current.current;
     if (was.effect === outline && sameMeshes(meshes, was.meshes)) return;

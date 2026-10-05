@@ -146,7 +146,9 @@ describe('painting without a worker', () => {
     });
     await settle();
     // The 128 + detail job was sent to the worker and failed; the body asked again, lighter.
-    expect(FakePaintWorker.made[0]!.jobs.map((j) => [j.width, j.detail])).toEqual([[128, true]]);
+    expect(FakePaintWorker.made[0]!.jobs.map((j) => [j.width, 'detail' in j && j.detail])).toEqual([
+      [128, true],
+    ]);
     expect(result.current.map.image.width).toBe(64);
     expect(result.current.detail).toBeNull();
   }, 20_000);
