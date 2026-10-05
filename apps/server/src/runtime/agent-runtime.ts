@@ -641,7 +641,7 @@ export class AgentRuntime {
     return this.byQuestion.has(questionId);
   }
 
-  async answer(questionId: Id, answer: string, by: Actor): Promise<void> {
+  async answer(questionId: Id, answer: string, by: Actor, answerId?: string): Promise<void> {
     const agentId = this.byQuestion.get(questionId);
     if (!agentId) throw new Error(`no open question ${questionId}`);
     const live = this.must(agentId);
@@ -670,6 +670,7 @@ export class AgentRuntime {
         answeredBy: by,
         holders: holdersNow(ctx, questionId, this.questions),
         delivered: true,
+        ...(answerId !== undefined ? { answerId } : {}),
       }),
     );
   }

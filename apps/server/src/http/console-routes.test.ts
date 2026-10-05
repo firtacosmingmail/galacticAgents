@@ -287,6 +287,120 @@ describe('POST /api/questions/:id/answer with a version (P2-18)', () => {
   });
 });
 
+describe('POST /api/questions/:id/answer with an answerId (P7-05)', () => {
+  const askUser = async () => {
+    const hq = await spawnHarmonizer(composed.commands);
+    return (
+      await composed.commands.openQuestion({
+        kind: 'clarification',
+        originAgentId: hq.id,
+        context: { text: 'Which format?' },
+        toUser: true,
+      })
+    ).value;
+  };
+
+  it('a retry with the same answerId after a lost acknowledgement is ok and logs nothing more', async () => {
+    const q = await askUser();
+    const body = { answer: 'ISO 8601', version: q.version, answerId: 'ans-1' };
+    const first = await post(`/api/questions/${q.id}/answer`, body);
+    expect(first).toEqual({ status: 200, body: { ok: true } });
+    const seq = composed.log.currentSeq();
+    const retry = await post(`/api/questions/${q.id}/answer`, body);
+    expect(retry).toEqual({ status: 200, body: { ok: true, duplicate: true } });
+    expect(composed.log.currentSeq()).toBe(seq);
+    const row = composed.log.tables.questions.get(q.id)!;
+    expect(row).toMatchObject({
+      status: 'answered',
+      answer: 'ISO 8601',
+      meta: { answerId: 'ans-1' },
+    });
+    const answered = composed.log
+      .eventsSince(0, Number.MAX_SAFE_INTEGER)
+      .filter((e) => e.event.type === 'question.answered');
+    expect(answered).toHaveLength(1);
+    expect(answered[0]!.event).toMatchObject({ answerId: 'ans-1' });
+  });
+
+  it('another answerId (another device) is refused as stale, saying who answered', async () => {
+    const q = await askUser();
+    await post(`/api/questions/${q.id}/answer`, {
+      answer: 'ISO 8601',
+      version: q.version,
+      answerId: 'phone',
+    });
+    const other = await post(`/api/questions/${q.id}/answer`, {
+      answer: 'RFC 2822',
+      version: q.version,
+      answerId: 'laptop',
+    });
+    expect(other.status).toBe(409);
+    expect(other.body).toMatchObject({ error: 'stale' });
+    expect(other.body['message']).toMatch(/already answered by the user/);
+    expect(composed.log.tables.questions.get(q.id)?.answer).toBe('ISO 8601');
+  });
+
+  it('a stale version is refused even with a fresh answerId, and a withdrawn question is rejected', async () => {
+    const q = await askUser();
+    const moved = await post(`/api/questions/${q.id}/answer`, {
+      answer: 'x',
+      version: q.version + 1,
+      answerId: 'ans-x',
+    });
+    expect(moved).toMatchObject({ status: 409, body: { error: 'stale' } });
+    await composed.commands.withdrawQuestion(q.id, 'no longer needed', { type: 'system' });
+    const withdrawn = await post(`/api/questions/${q.id}/answer`, {
+      answer: 'x',
+      version: q.version,
+      answerId: 'ans-y',
+    });
+    expect(withdrawn.status).toBe(409);
+    expect(withdrawn.body['message']).toMatch(/cancelled/);
+    expect(withdrawn.body['error']).not.toBe('stale');
+  });
+
+  it('a retry while the answer is still being handed to the adapter waits for it (live session)', async () => {
+    const spawned = await composed.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:asks',
+      cwd: '/w/s',
+    });
+    const agentId = spawned.ok ? spawned.agent.id : '';
+    let questionId: string | undefined;
+    for (let i = 0; i < 200 && !questionId; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      questionId = composed.statuses.get(agentId)?.pendingQuestionId;
+    }
+    const q = composed.log.tables.questions.get(questionId!)!;
+    const adapter = composed.runtime.adapter('fake')!;
+    const original = adapter.answer.bind(adapter);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    adapter.answer = async (...args: Parameters<typeof original>) => {
+      await gate;
+      return original(...args);
+    };
+    const body = { answer: 'ISO 8601', version: q.version, answerId: 'ans-live' };
+    const first = post(`/api/questions/${q.id}/answer`, body);
+    await new Promise((r) => setTimeout(r, 30));
+    const retry = post(`/api/questions/${q.id}/answer`, body);
+    await new Promise((r) => setTimeout(r, 30));
+    release();
+    expect((await first).status).toBe(200);
+    expect((await retry).status).toBe(200);
+    expect(composed.log.tables.questions.get(q.id)).toMatchObject({
+      status: 'answered',
+      meta: { answerId: 'ans-live' },
+    });
+    // After it is recorded, one more retry is a duplicate.
+    expect(await post(`/api/questions/${q.id}/answer`, body)).toEqual({
+      status: 200,
+      body: { ok: true, duplicate: true },
+    });
+  });
+});
+
 describe('GET /api/agents/:id/messages (P2-18)', () => {
   it("returns the agent's messages oldest first, with who sent them", async () => {
     const hq = await spawnHarmonizer(composed.commands);

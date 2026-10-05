@@ -176,6 +176,12 @@ export interface AnswerQuestionInput {
   by: Actor;
   /** The version the answerer saw; a stale answer is refused with "already answered by …". */
   version?: number;
+  /**
+   * Idempotency key (P7-05): an answer already recorded under this key is a success that changes
+   * nothing (`events: []`), whatever `version` says; a retry while the first copy is still being
+   * handed to the agent waits for it.
+   */
+  answerId?: string;
 }
 
 export type ControlAction =

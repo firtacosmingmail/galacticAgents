@@ -266,6 +266,12 @@ export const QuestionAnswered = z.object({
    * learn it was answered and stop waiting. Absent when no agent ever held it.
    */
   holders: z.array(Id).optional(),
+  /**
+   * The answerer's idempotency key (P7-05): a client generates one per answer it composes and
+   * resends it on a retry, so an answer whose acknowledgement was lost is not refused as stale.
+   * Folded into the row as `meta.answerId`. Absent for answers without one.
+   */
+  answerId: z.string().min(1).max(100).optional(),
 });
 /**
  * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an

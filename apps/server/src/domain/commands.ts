@@ -21,6 +21,7 @@ import {
   type PermissionPolicy,
   type ProposalDecision,
   type ProposePlanInput,
+  type Question,
   type ReopenInput,
   type SpawnAgentInput,
   type Task,
@@ -61,6 +62,7 @@ import {
   cancelQuestion,
   checkAnswer,
   consumeConfirmation,
+  isRecordedAnswer,
   escalateQuestion,
   reassignQuestion,
   COMMAND_SOURCE,
@@ -87,7 +89,8 @@ export interface AgentControl {
   stop(agentId: Id, by: Actor): Promise<void>;
   pause(agentId: Id, by: Actor): Promise<void>;
   resumeAgent(agentId: Id, by: Actor): Promise<void>;
-  answer(questionId: Id, answer: string, by: Actor): Promise<void>;
+  /** `answerId`: the answerer's idempotency key (P7-05), recorded with the answer. */
+  answer(questionId: Id, answer: string, by: Actor, answerId?: string): Promise<void>;
   /** Whether a live session asked the question and takes its answer through the adapter. */
   hasQuestion(questionId: Id): boolean;
   /** Agents with a live adapter session: whom a task or project control reaches (P2-14). */
@@ -135,6 +138,12 @@ export class Commands implements DomainCommands {
    * both pass the "one live agent" check (wave-4 review).
    */
   private readonly spawning = new Set<string>();
+  /**
+   * Answers being handed to an agent's adapter, by `<questionId> <answerId>` (P7-05): a retry of
+   * the same answer (its acknowledgement was lost) waits for the first copy instead of being
+   * refused as "already being answered".
+   */
+  private readonly answering = new Map<string, Promise<CommandResult<Question>>>();
 
   constructor(opts: CommandsOptions) {
     this.log = opts.log;
@@ -528,23 +537,42 @@ export class Commands implements DomainCommands {
    * its adapter before the log records it, so the log never holds an answer the agent did not
    * receive; any other open question is answered in the log alone.
    */
-  async answerQuestion(input: AnswerQuestionInput) {
-    const { questionId } = input;
+  async answerQuestion(input: AnswerQuestionInput): Promise<CommandResult<Question>> {
+    const { questionId, answerId } = input;
+    const key = answerId !== undefined ? `${questionId} ${answerId}` : undefined;
+    const pending = key !== undefined ? this.answering.get(key) : undefined;
+    if (pending) return pending;
     const answer = {
       questionId,
       answer: input.answer,
       answeredBy: input.by,
       ...(input.version !== undefined ? { version: input.version } : {}),
+      ...(answerId !== undefined ? { answerId } : {}),
     };
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    // Recorded already under this key: the retry of an answer whose acknowledgement was lost.
+    if (isRecordedAnswer(question, answerId)) return { value: question, events: [] };
     checkAnswer(question, answer);
     if (!this.agents?.hasQuestion(questionId)) {
       return this.run((ctx) =>
         answerQuestion(ctx, { ...answer, holders: holdersNow(ctx, questionId, this.questions) }),
       );
     }
+    if (key === undefined) return this.answerThroughAdapter(input);
+    const result = this.answerThroughAdapter(input);
+    this.answering.set(key, result);
+    try {
+      return await result;
+    } finally {
+      this.answering.delete(key);
+    }
+  }
+
+  /** The answer to a question a live session waits on: the adapter first, then the log. */
+  private async answerThroughAdapter(input: AnswerQuestionInput): Promise<CommandResult<Question>> {
+    const { questionId } = input;
     const since = this.log.currentSeq();
-    await this.agents!.answer(questionId, input.answer, input.by);
+    await this.agents!.answer(questionId, input.answer, input.by, input.answerId);
     const after = must(this.log.tables.questions.get(questionId), 'question', questionId);
     const events = this.log
       .eventsSince(since, Number.MAX_SAFE_INTEGER)

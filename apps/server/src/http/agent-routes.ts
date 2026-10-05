@@ -9,6 +9,7 @@ import {
   SpawnBody,
   StopProcessesBody,
   type Actor,
+  type AnswerResponse,
   type ChatMessage,
   type ControlAction,
   type ControlResponse,
@@ -355,6 +356,8 @@ export function registerAgentRoutes(
      * `DomainCommands.answerQuestion`: first answer wins, `version` refuses a stale answer with
      * 409 `stale` ("already answered by …"), and a question no live session waits on (a brain's
      * `ask_user`, a closure question) is answered too (P2-18). Without it, the Phase 1 path.
+     * `answerId` (P7-05) makes a retry idempotent: once recorded under it, the same answer is `ok`
+     * with `duplicate: true` (an answer queued offline whose acknowledgement was lost).
      */
     app.post('/api/questions/:id/answer', async (req, reply) => {
       const body = parse(AnswerBody, req.body, reply);
@@ -364,13 +367,16 @@ export function registerAgentRoutes(
         return attempt(reply, () => runtime.answer(questionId, body.answer, USER));
       }
       try {
-        await commands.answerQuestion({
+        const { events } = await commands.answerQuestion({
           questionId,
           answer: body.answer,
           by: USER,
           ...(body.version !== undefined ? { version: body.version } : {}),
+          ...(body.answerId !== undefined ? { answerId: body.answerId } : {}),
         });
-        return { ok: true };
+        // A retry of an answer already recorded under its `answerId` changes nothing (P7-05).
+        const duplicate = body.answerId !== undefined && events.length === 0;
+        return { ok: true, ...(duplicate ? { duplicate } : {}) } satisfies AnswerResponse;
       } catch (error) {
         // Anything that is not a domain refusal (an adapter that failed to take the answer) is a
         // 500, logged here and never echoed to the client.
