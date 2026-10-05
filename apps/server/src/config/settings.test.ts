@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { setGlobalDefaultPolicy } from '../domain/permissions.js';
 import { loadConfig } from './config.js';
+import type { TranscriptRetention as TranscriptRetentionPolicy } from '@galactic/protocol';
+import type { TranscriptRetention } from '../runtime/transcript-retention.js';
 import { SettingsError, SettingsService, writableFor } from './settings.js';
 
 const dirs: string[] = [];
@@ -138,5 +140,42 @@ describe('SettingsService (P25-01)', () => {
     expect(writableFor({ origin: 'remote' })).toBe('limited');
     expect(writableFor({})).toBe('limited'); // unknown origin fails closed
     expect(writableFor({ origin: 'remote', autoApproveRemote: true })).toBe('all');
+  });
+});
+
+describe('transcript retention settings (P8-02)', () => {
+  it('defaults, saves key by key, applies live and survives a restart', () => {
+    const { env, config, home, file } = setup();
+    const job = { policy: { maxAgeDays: 90, archivedDays: 30 } as TranscriptRetentionPolicy };
+    const settings = new SettingsService({
+      config,
+      home,
+      transcriptRetention: job as unknown as TranscriptRetention,
+    });
+    expect(settings.current().transcriptRetention).toEqual({ maxAgeDays: 90, archivedDays: 30 });
+    const res = settings.update({ transcriptRetention: { maxAgeDays: null } }, local);
+    expect(res.settings.transcriptRetention).toEqual({ maxAgeDays: null, archivedDays: 30 });
+    expect(job.policy).toEqual({ maxAgeDays: null, archivedDays: 30 });
+    expect(file()['transcriptRetention']).toEqual({ maxAgeDays: null, archivedDays: 30 });
+    expect(loadConfig(env).config.transcriptRetention).toEqual({
+      maxAgeDays: null,
+      archivedDays: 30,
+    });
+  });
+
+  it('is changed only from this machine (decisions 51, 90)', () => {
+    const { settings, file } = setup();
+    const before = file();
+    const r = refusal(() =>
+      settings.update({ transcriptRetention: { archivedDays: 0 } }, { origin: 'remote' }),
+    );
+    expect(r?.code).toBe('remote_settings');
+    expect(file()).toEqual(before);
+    expect(
+      settings.update(
+        { transcriptRetention: { archivedDays: 0 } },
+        { origin: 'remote', autoApproveRemote: true },
+      ).settings.transcriptRetention,
+    ).toEqual({ maxAgeDays: 90, archivedDays: 0 });
   });
 });

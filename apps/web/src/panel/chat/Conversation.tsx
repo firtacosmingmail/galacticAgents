@@ -31,6 +31,7 @@ import {
   useApi,
 } from '../../console/hierarchy/shared.js';
 import { NavLink } from '../Navigation.js';
+import { compactionNote } from '../compaction.js';
 import { ThreadCard } from './InlineCards.js';
 import './chat.css';
 
@@ -214,6 +215,12 @@ export function Conversation({ agentId }: { agentId: Id }) {
           >
             {thread.loadingOlder ? 'Loading…' : 'Load earlier messages'}
           </button>
+        )}
+        {/* P8-02: retention removed older replies (messages stay); said, not silently missing. */}
+        {thread.compacted && (
+          <p className="muted pnl-compacted" role="note">
+            {compactionNote(thread.compacted, 'replies')}
+          </p>
         )}
         {!thread.loaded && entries.length === 0 && (
           <p className="muted">Loading the conversation…</p>

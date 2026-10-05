@@ -162,7 +162,8 @@ describe('GET /api/agents/:id/conversation (P25-01)', () => {
       )
         .map((p) => p.detail)
         .join(' | ');
-      expect(plan, sql).not.toMatch(/TEMP B-TREE|SCAN/);
+      // `SCAN CONSTANT ROW`: the high-water read's outer SELECT of two subqueries (P8-02).
+      expect(plan, sql).not.toMatch(/TEMP B-TREE|SCAN (?!CONSTANT ROW)/);
       expect(plan, sql).toMatch(
         /USING INDEX (events_message_agent_at|transcript_text_at)|USING COVERING INDEX sqlite_autoindex_transcript_chunks/,
       );

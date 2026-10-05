@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import type { TranscriptChunk } from '@galactic/protocol';
 import type { TranscriptView } from '../../state/transcript-view.js';
+import { compactionNote } from '../compaction.js';
 
 /** Within this many pixels of an edge counts as "at" it. */
 const EDGE_PX = 48;
@@ -67,8 +68,16 @@ export function TranscriptLog({
             {view.loadingOlder ? 'Loading earlier…' : 'Load earlier'}
           </button>
         )}
+        {/* P8-02: retention removed the start; said where the transcript now begins. */}
+        {view.status === 'ready' && !view.hasMore && view.compacted && (
+          <p className="muted stw-compacted" role="note">
+            {compactionNote(view.compacted, 'transcript')}
+          </p>
+        )}
         {view.status === 'loading' && chunks.length === 0 && <p className="muted">Loading…</p>}
-        {view.status !== 'loading' && chunks.length === 0 && <p className="muted">Nothing yet.</p>}
+        {view.status !== 'loading' && chunks.length === 0 && !view.compacted && (
+          <p className="muted">Nothing yet.</p>
+        )}
         {chunks.map((c) => (
           <Chunk key={c.seq} chunk={c} />
         ))}
