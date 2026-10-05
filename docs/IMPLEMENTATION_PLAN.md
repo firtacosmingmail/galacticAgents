@@ -154,7 +154,7 @@ Each phase ends with something you can run. Estimates assume one developer worki
 
 ## Phase 8 — Hardening, cost and polish (ongoing)
 
-- Dollar budgets per project/task, with the Harmonizer warning or refusing before exceeding them (hard caps already exist since Phase 1).
+- Dollar budgets per project/task, measured against the cost the runtimes report: a warning in the Harmonizer's chat at a threshold, new Waykeepers and Stewards refused at the budget, running agents never stopped (P8-01; hard caps already exist since Phase 1).
 - Log retention and `transcript_chunks` compaction (the `events` stream is kept long for resume and replay).
 - Backups of the SQLite file; export/import of the map.
 - Crash recovery drills: kill -9 the server mid-project, reboot the machine, unplug the network.
