@@ -58,10 +58,16 @@ async function setup() {
         ),
   });
   await h.settle();
-  const call = async (name: string, input: unknown): Promise<ToolOutcome> => {
+  /** `origin`: the turn comes from the user's message from there (P2-21), else from a system line. */
+  const call = async (
+    name: string,
+    input: unknown,
+    origin?: 'local' | 'remote',
+  ): Promise<ToolOutcome> => {
     next = { tool: name, input };
     outcome = undefined;
-    hq.tell(TOKEN);
+    if (origin) h.runtime.send(hq.agentId, TOKEN, { sender: USER, origin });
+    else hq.tell(TOKEN);
     await h.settle();
     expect(outcome, `the model called ${name}`).toBeDefined();
     return outcome!;
@@ -360,6 +366,91 @@ describe('control_work: the panel’s work controls in conversation (P5-07, deci
     expect(h.log.tables.projects.get(project.id)).toMatchObject({ name: 'Tool' });
     expect(h.log.tables.projects.get(project.id)?.permissionPolicy).toBeUndefined();
     expect(controlsBy()).toEqual([]);
+  });
+
+  it('raises or removes a budget only on the user’s confirmation of that amount (decision 98)', async () => {
+    const { h, call, asteroidTask } = await setup();
+    const { task } = await asteroidTask('Fix the date test');
+    const local = 'local' as const;
+    const budget = () => h.log.tables.tasks.get(task.id)?.budgetUsd;
+    const edit = (budgetUsd: number | null, questionId?: Id) =>
+      call(
+        'control_work',
+        control('task', task.id, 'edit', {
+          changes: { budgetUsd },
+          ...(questionId ? { questionId } : {}),
+        }),
+        local,
+      );
+    /** Asks to confirm a budget change and answers it (its first choice by default). */
+    const confirmBudget = async (budgetUsd: number | null, answer?: string): Promise<Id> => {
+      const asked = await call(
+        'ask_confirmation',
+        { kind: 'task', id: task.id, action: 'budget', budgetUsd },
+        local,
+      );
+      expect(asked.ok, asked.message).toBe(true);
+      const questionId = (asked.value as { questionId: Id }).questionId;
+      const q = h.log.tables.questions.get(questionId)!;
+      await h.commands.answerQuestion({
+        questionId,
+        answer: answer ?? q.context.options![0]!,
+        by: USER,
+      });
+      await h.settle();
+      return questionId;
+    };
+
+    // Setting a first budget and lowering one: at once, no question.
+    expect((await edit(2)).ok).toBe(true);
+    expect((await edit(1)).ok).toBe(true);
+    expect(budget()).toBe(1);
+    expect(h.log.tables.questions.all()).toEqual([]);
+
+    // Raising or removing: refused without the user's word, even from this machine.
+    for (const usd of [5, null]) {
+      const refused = await edit(usd);
+      expect(refused.ok).toBe(false);
+      expect(refused.message).toMatch(/only the user decides to (raise|remove) the budget/);
+      expect(refused.message).toMatch(/ask_confirmation first \(action "budget"/);
+    }
+    expect(budget()).toBe(1);
+
+    // A confirmation for that amount allows exactly that raise, once.
+    const raiseQ = await confirmBudget(5);
+    expect(h.log.tables.questions.get(raiseQ)?.context.options?.[0]).toMatch(
+      /^Raise the budget of task "Fix the date test" .* to \$5\.00$/,
+    );
+    const other = await edit(6, raiseQ);
+    expect(other.ok).toBe(false);
+    expect(other.message).toMatch(/is not such an answer/);
+    const raised = await edit(5, raiseQ);
+    expect(raised.ok, raised.message).toBe(true);
+    expect(budget()).toBe(5);
+    expect(h.log.tables.questions.get(raiseQ)?.meta?.[USED_FOR]).toBe(`edit task ${task.id}`);
+    const twice = await edit(8, raiseQ);
+    expect(twice.ok).toBe(false);
+    expect(twice.message).toMatch(/already used/);
+
+    // "No" unlocks nothing; removing needs its own confirmation.
+    const declined = await confirmBudget(null, 'No');
+    expect((await edit(null, declined)).ok).toBe(false);
+    const removeQ = await confirmBudget(null);
+    const removed = await edit(null, removeQ);
+    expect(removed.ok, removed.message).toBe(true);
+    expect(budget()).toBeUndefined();
+
+    // A remote turn may still not loosen one, confirmed or not (the origin rule stands).
+    expect((await edit(3)).ok).toBe(true);
+    const remoteQ = await confirmBudget(9);
+    const remote = await call(
+      'control_work',
+      control('task', task.id, 'edit', { changes: { budgetUsd: 9 }, questionId: remoteQ }),
+      'remote',
+    );
+    expect(remote.ok).toBe(false);
+    expect(remote.message).toMatch(/works only from this machine/);
+    expect(budget()).toBe(3);
   });
 
   it('refuses the scene harness’s rows (decision 79)', async () => {
