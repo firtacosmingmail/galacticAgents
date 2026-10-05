@@ -27,7 +27,7 @@ A request is local only when it comes over a loopback connection with a loopback
 
 Serve guarantees the header is genuine for traffic that went through Serve. Nothing guarantees that traffic came through Serve: any local process can reach `127.0.0.1` and send the same headers. So identity is off by default, needs an explicit list of logins, is read only under the exact Serve name, and is documented as "every local process counts as these users". The concrete risk: a Steward with network permission could `curl` the API and answer its own permission question. This is now an open question in SPEC §8 (2026-10-05). A Unix-socket Serve target with file permissions would close it; Serve's proxy code appears to handle Unix-socket backends, but the documented CLI targets are TCP only, so that is left for later.
 
-### Proposed decision 90
+### proposed decision (now in SPEC §7)
 
 Proposed text for SPEC §7.2 (not added to SPEC §7 here):
 
