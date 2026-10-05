@@ -2,12 +2,13 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 're
 import { PROTOCOL_VERSION } from '@galactic/protocol';
 import { useAppStore } from './state/store.js';
 import {
+  confirmToken,
   discoverToken,
   forgetToken,
+  initialToken,
+  refuseToken,
   saveToken,
   startSession,
-  takeTokenFromFragment,
-  TOKEN_KEY,
 } from './client/session.js';
 import { AgentsConsole } from './console/AgentsConsole.js';
 import { HierarchyConsole } from './console/hierarchy/HierarchyConsole.js';
@@ -19,17 +20,9 @@ import { captureFpsFlag } from './scene/fps.js';
 import './app.css';
 
 export function App() {
-  const [token, setToken] = useState<string | undefined>(() => {
-    // A token handed over by the settings page's QR code wins over a saved one, and leaves the
-    // address bar before anything else reads the URL (P7-02).
-    const handed = takeTokenFromFragment();
-    if (handed) return handed;
-    try {
-      return localStorage.getItem(TOKEN_KEY) ?? undefined;
-    } catch {
-      return undefined;
-    }
-  });
+  // A token handed over by the settings page's QR code wins over a saved one, and leaves the
+  // address bar before anything else reads the URL (P7-02). It is saved only once it connects.
+  const [token, setToken] = useState<string | undefined>(initialToken);
   const [discovering, setDiscovering] = useState(token === undefined);
   const route = useAppStore((s) => s.route);
   useLocationSync();
@@ -57,13 +50,15 @@ export function App() {
   // A token the server refuses (config reset, another machine's token) is forgotten so the page
   // does not sit on "unauthorized": once per page life it re-discovers the current token from
   // `/health`; a second refusal falls through to the paste form.
+  // A refused QR-code token was never saved: the saved token it would have replaced is tried again.
   const status = useAppStore((s) => s.status);
   useEffect(() => {
+    if (status === 'live' && token) confirmToken(token);
     if (status !== 'unauthorized' || !token) return;
-    forgetToken();
+    const fallback = refuseToken(token);
     useAppStore.getState().reset();
-    setDiscovering(rediscoveries.current-- > 0);
-    setToken(undefined);
+    if (!fallback) setDiscovering(rediscoveries.current-- > 0);
+    setToken(fallback);
   }, [status, token]);
 
   if (!token) {

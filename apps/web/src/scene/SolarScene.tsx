@@ -71,6 +71,8 @@ export default function SolarScene({ quality, onFps, onContextLost }: SolarScene
   const outline = useRef<OutlineEffect>(null);
   return (
     <Canvas
+      // The canvas's wrapper owns its touch gestures (P7-03, scene.css).
+      className="pnl-scene-canvas"
       // `antialias` is a context parameter: a tier that changes it gets a new context. With a
       // composer the composer multisamples and the context does not (`contextAntialias`, P3-08).
       key={contextAntialias(quality) ? 'aa' : 'no-aa'}

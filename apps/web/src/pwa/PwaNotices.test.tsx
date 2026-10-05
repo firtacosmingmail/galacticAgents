@@ -36,6 +36,9 @@ describe('PWA notices (P7-01)', () => {
     expect(screen.getByRole('status').textContent).toContain(
       'A new version of GalacticAgents is available.',
     );
+    // Only the message is announced, not the buttons (P7-01 review).
+    expect(screen.getByRole('status').querySelectorAll('button')).toHaveLength(0);
+    expect(screen.getByRole('status').tagName).toBe('P');
     await noBlockingFindings('update');
     fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
     expect(update).toHaveBeenCalledTimes(1);

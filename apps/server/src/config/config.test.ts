@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { IDENTITY_TOKEN } from '@galactic/protocol';
 import { DEFAULT_PORT, DEFAULT_PROJECTS_DIR, loadConfig } from './config.js';
 
 let home: string;
@@ -207,6 +208,7 @@ describe('loadConfig', () => {
     expect(config.allowedHosts).not.toContain('*.ts.net');
     expect(config.tailscaleIdentityLogins).toEqual(['me@example.com']);
     expect(warnings.join('\n')).toMatch(/any process on this machine/);
+    expect(warnings.join('\n')).toMatch(/only HTTP-mode Tailscale Serve.*X-Forwarded-For/);
     expect(warnings.join('\n')).not.toContain('file-token-0123456789abcdef');
 
     // The environment names the host too.
@@ -260,5 +262,25 @@ describe('loadConfig', () => {
     const { config, warnings } = loadConfig({ GALACTIC_HOME: home });
     expect(config.allowedHosts).toContain('*.ts.net');
     expect(warnings.join('\n')).toMatch(/wildcard \*\.ts\.net.*Funnel/);
+  });
+
+  it('refuses the identity stand-in as a token, in the file and the environment', () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ token: IDENTITY_TOKEN }));
+    expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow(/reserved/);
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef' }),
+    );
+    expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_TOKEN: IDENTITY_TOKEN })).toThrow(
+      /reserved/,
+    );
+  });
+
+  it('warns about other tunnels only when remote access is set up', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef' }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).warnings.join('\n')).not.toMatch(/HTTP-mode/);
   });
 });

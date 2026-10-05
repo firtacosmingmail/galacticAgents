@@ -112,6 +112,18 @@ export function isRemoteRequest(req: RequestLike): boolean {
   return !(isLoopback(req.socket.remoteAddress) && isLoopbackOrigin(origin));
 }
 
+/**
+ * Whether a request is a browser fetching from its own page (`Sec-Fetch-Site: same-origin`) or a
+ * user's own navigation (`none`): what `/health` requires before handing out the token (P7-02
+ * review). Browsers set this header and no page script can change it, so a cross-site page never
+ * passes; a plain `curl` or an agent's script does not send it by default. Any local process can
+ * still send it on purpose: a speed bump, not a boundary (docs/REMOTE_ACCESS.md §4).
+ */
+export function isSameOriginFetch(req: RequestLike): boolean {
+  const site = req.headers['sec-fetch-site'];
+  return site === 'same-origin' || site === 'none';
+}
+
 /** What `tailscaleIdentityOf` and the guards need of the server config (P7-02). */
 export interface RemoteAuthConfig {
   token: string;
@@ -134,9 +146,10 @@ export interface RemoteAuthConfig {
  *
  * Serve deletes any `Tailscale-User-*` header the client sent before setting its own, and sets
  * none for a tagged node or a Funnel request (`ipn/ipnlocal/serve.go`,
- * `addTailscaleIdentityHeaders`), so a tailnet device cannot forge it through Serve. A process on this machine can still connect to loopback
- * and send all of the above: that is the trust model `docs/REMOTE_ACCESS.md` spells out — with the
- * opt-in on, every local process is trusted as much as the listed users.
+ * `addTailscaleIdentityHeaders`), so a tailnet device cannot forge it through Serve. A process on
+ * this machine can still connect to loopback and send all of the above — but it can already ask
+ * `/health` for the token, so the opt-in adds no new local exposure: every local process is
+ * trusted either way (the trust model in `docs/REMOTE_ACCESS.md` §4).
  */
 export function tailscaleIdentityOf(
   req: RequestLike,

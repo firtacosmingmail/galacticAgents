@@ -3,11 +3,11 @@ import { QualityTier } from '@galactic/protocol';
 import { isPhone, liveProbe, type DeviceProbe } from './device.js';
 
 /**
- * The quality tier per device (P7-03, resolving SPEC §8's 2026-10-03 question; proposed decision
- * in `docs/tasks/notes/P7-03-touch.md`): the server's `qualityTier` (decision 51) is the default
- * for every device; a phone starts at `mobile` instead; and the user may pick a tier for this
- * browser alone in the settings page, which wins over both and is remembered here, in
- * `localStorage` — like the scene's visibility (decision 62), a device preference.
+ * The quality tier per device (P7-03; SPEC decision 93, answering §8's 2026-10-03 question): the
+ * server's `qualityTier` (decision 51) is the default for every device; a phone starts at
+ * `mobile` instead; and the user may pick a tier for this browser alone in the settings page,
+ * which wins over both and is remembered here, in `localStorage` — like the scene's visibility
+ * (decision 62), a device preference.
  */
 export const DEVICE_TIER_KEY = 'galactic.scene.tier';
 

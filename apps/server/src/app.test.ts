@@ -18,18 +18,40 @@ beforeEach(async () => {
 });
 afterEach(() => t.stop());
 
+/** What a browser sends when the page itself fetches `/health`. */
+const PAGE = { 'sec-fetch-site': 'same-origin' };
+
 describe('health endpoint', () => {
-  it('answers with the token for loopback callers', async () => {
-    const res = await fetch(`${t.baseUrl}/health`);
+  it('answers with the token for the local page', async () => {
+    const res = await fetch(`${t.baseUrl}/health`, { headers: PAGE });
     expect(res.status).toBe(200);
     const body = HealthResponse.parse(await res.json());
     expect(body.token).toBe(TEST_TOKEN);
     expect(body.protocolVersion).toBe(1);
   });
 
+  it('hands the token to a typed navigation (Sec-Fetch-Site: none)', async () => {
+    const res = await fetch(`${t.baseUrl}/health`, { headers: { 'sec-fetch-site': 'none' } });
+    expect(HealthResponse.parse(await res.json()).token).toBe(TEST_TOKEN);
+  });
+
+  it('withholds the token from a local script without Sec-Fetch-Site (P7-02 review)', async () => {
+    // A speed bump, not a boundary: curl or an agent's script does not send the header by
+    // default, but any local process could (docs/REMOTE_ACCESS.md §4).
+    const plain = await fetch(`${t.baseUrl}/health`);
+    expect(plain.status).toBe(200);
+    const body = HealthResponse.parse(await plain.json());
+    expect(body.token).toBeUndefined();
+    expect(body.origin).toBe('local');
+    for (const site of ['cross-site', 'same-site', 'bogus']) {
+      const res = await fetch(`${t.baseUrl}/health`, { headers: { 'sec-fetch-site': site } });
+      expect(HealthResponse.parse(await res.json()).token, site).toBeUndefined();
+    }
+  });
+
   it('withholds the token from a foreign Origin', async () => {
     const res = await fetch(`${t.baseUrl}/health`, {
-      headers: { origin: 'http://evil.example.com' },
+      headers: { ...PAGE, origin: 'http://evil.example.com' },
     });
     expect(res.status).toBe(200);
     const body = HealthResponse.parse(await res.json());
@@ -38,20 +60,26 @@ describe('health endpoint', () => {
 
   it('hands the token to the local page, not to an allowed remote Origin (P0-16)', async () => {
     const local = await fetch(`${t.baseUrl}/health`, {
-      headers: { origin: 'http://localhost:5173' },
+      headers: { ...PAGE, origin: 'http://localhost:5173' },
     });
     expect(HealthResponse.parse(await local.json()).token).toBe(TEST_TOKEN);
     // *.ts.net is in the allow-list (a Tailscale Serve proxy also connects from loopback).
     const remote = await fetch(`${t.baseUrl}/health`, {
-      headers: { origin: 'https://mymac.tail1234.ts.net' },
+      headers: { ...PAGE, origin: 'https://mymac.tail1234.ts.net' },
     });
     expect(HealthResponse.parse(await remote.json()).token).toBeUndefined();
   });
 
   it('still hands the token to the Vite dev proxy (Host localhost:5173, no Origin)', async () => {
+    // The proxy passes the page's Sec-Fetch-Site through.
     const body = await new Promise<string>((resolve, reject) => {
       request(
-        { host: '127.0.0.1', port: t.port, path: '/health', headers: { host: 'localhost:5173' } },
+        {
+          host: '127.0.0.1',
+          port: t.port,
+          path: '/health',
+          headers: { ...PAGE, host: 'localhost:5173' },
+        },
         (res) => {
           let data = '';
           res.on('data', (chunk) => (data += chunk));
@@ -74,7 +102,7 @@ describe('health endpoint', () => {
           host: '127.0.0.1',
           port: t.port,
           path: '/health',
-          headers: { host: 'mymac.tail1234.ts.net' },
+          headers: { ...PAGE, host: 'mymac.tail1234.ts.net' },
         },
         (res) => {
           let data = '';

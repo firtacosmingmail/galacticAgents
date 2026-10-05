@@ -17,6 +17,13 @@ import { RequestOrigin } from './enums.js';
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
 // ---------------------------------------------------------------------------
 
+/**
+ * Stands in for the token on a device the server authenticates by its Tailscale identity (P7-02):
+ * sent where the token would go, ignored by the server, never stored. It can never be the real
+ * token: the server refuses it in `config.json` and `GALACTIC_TOKEN`, the client in a QR fragment.
+ */
+export const IDENTITY_TOKEN = 'tailscale-identity';
+
 /** WebSocket close code for a bad or missing token (private 4xxx range). */
 export const CLOSE_UNAUTHORIZED = 4401;
 

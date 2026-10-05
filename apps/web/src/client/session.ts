@@ -1,3 +1,4 @@
+import { IDENTITY_TOKEN } from '@galactic/protocol';
 import { GalacticClient } from './client.js';
 import { conversationSince } from '../state/conversation.js';
 import { useAppStore } from '../state/store.js';
@@ -38,19 +39,27 @@ export function wsUrl(): string {
 
 /**
  * Stands in for the token on a device the server authenticates by its Tailscale identity (P7-02):
- * sent where the token would go, ignored by the server, never stored. A server that stops
- * accepting the identity refuses it like any wrong token, and the page asks for the real one.
+ * sent where the token would go, ignored by the server, never stored (`@galactic/protocol`).
  */
-export const IDENTITY_TOKEN = 'tailscale-identity';
+export { IDENTITY_TOKEN };
 
 /** The fragment key the settings page's QR code carries the token under (P7-02). */
 const FRAGMENT_KEY = 'token';
 
 /**
+ * The token the fragment handed over in this page life, until a session with it goes live, and
+ * the saved token it would replace (P7-02 review): a stale or mistyped QR code must not overwrite
+ * a saved token that works.
+ */
+let unverified: { token: string; previous: string | undefined } | undefined;
+
+/**
  * Takes a token handed over in the URL fragment (`https://<mac>.ts.net/#token=…`, the settings
- * page's QR code; P7-02), saves it and removes it from the address bar and the history entry, so
- * it is neither bookmarked nor shared with the URL. A fragment never reaches a server or its logs,
- * which is why the QR code uses it rather than a query string. Returns the token, if there was one.
+ * page's QR code; P7-02) and removes it from the address bar and the history entry, so it is
+ * neither bookmarked nor shared with the URL. A fragment never reaches a server or its logs, which
+ * is why the QR code uses it rather than a query string. The token is not saved yet: `confirmToken`
+ * saves it once a session with it goes live, `refuseToken` falls back to the saved one. The
+ * identity stand-in is never taken. Returns the token, if there was one.
  */
 export function takeTokenFromFragment(): string | undefined {
   let hash: string;
@@ -74,14 +83,45 @@ export function takeTokenFromFragment(): string | undefined {
   } catch {
     /* a sandboxed frame: the fragment stays, the token is still not sent anywhere */
   }
-  if (!token) return undefined;
-  storage.set(TOKEN_KEY, token);
+  if (!token || token === IDENTITY_TOKEN) return undefined;
+  const previous = storage.get(TOKEN_KEY) ?? undefined;
+  unverified = previous === token ? undefined : { token, previous };
   return token;
 }
 
 /**
- * The saved token, or the one `/health` hands to same-machine callers, or — on a device the server
- * accepts by its Tailscale identity (P7-02) — `IDENTITY_TOKEN`, or nothing.
+ * The token a page load starts with: one handed over in the fragment (not yet saved), else the
+ * saved one. Safe to call twice (React's strict mode): the second call finds the fragment gone and
+ * returns the same unverified token.
+ */
+export function initialToken(): string | undefined {
+  return takeTokenFromFragment() ?? unverified?.token ?? storage.get(TOKEN_KEY) ?? undefined;
+}
+
+/** A session with `token` went live: a token from the fragment is saved now. */
+export function confirmToken(token: string): void {
+  if (unverified?.token !== token) return;
+  unverified = undefined;
+  saveToken(token);
+}
+
+/**
+ * The server refused `token`. A fragment token was never saved: the saved token it would have
+ * replaced, if any, is returned to fall back to. Any other token is forgotten.
+ */
+export function refuseToken(token: string): string | undefined {
+  if (unverified?.token === token) {
+    const { previous } = unverified;
+    unverified = undefined;
+    return previous;
+  }
+  forgetToken();
+  return undefined;
+}
+
+/**
+ * The saved token, or the one `/health` hands to the same machine's browser page, or — on a
+ * device the server accepts by its Tailscale identity (P7-02) — `IDENTITY_TOKEN`, or nothing.
  */
 export async function discoverToken(): Promise<string | undefined> {
   const handed = takeTokenFromFragment();
@@ -92,7 +132,7 @@ export async function discoverToken(): Promise<string | undefined> {
     const res = await fetch('/health');
     if (!res.ok) return undefined;
     const body = (await res.json()) as { token?: string; identity?: string };
-    if (body.token) {
+    if (body.token && body.token !== IDENTITY_TOKEN) {
       storage.set(TOKEN_KEY, body.token);
       return body.token;
     }
@@ -109,6 +149,7 @@ export function saveToken(token: string): void {
 }
 
 export function forgetToken(): void {
+  unverified = undefined;
   storage.remove(TOKEN_KEY);
 }
 
