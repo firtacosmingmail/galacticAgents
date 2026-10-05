@@ -1,6 +1,7 @@
 import { useAppStore } from '../../state/store.js';
 import { NavLink } from '../Navigation.js';
 import { NotificationSettings } from '../notifications/NotificationSettings.js';
+import { PushSettings } from '../../pwa/PushSettings.js';
 import { AccessToken } from './AccessToken.js';
 import { DeviceQuality } from './DeviceQuality.js';
 import { PreflightCheck } from './PreflightCheck.js';
@@ -54,6 +55,14 @@ export function SettingsPage({ token }: { token: string }) {
         {/* P25-07's per-browser toggles. Not in the first-run wizard: the browser's permission
             prompt needs a click, and the toggles are this browser's, not the server's. */}
         <NotificationSettings heading={false} />
+      </section>
+
+      {/* P7-04: this device's push subscription and its switches (stored with it, server side). */}
+      <section className="set-section" aria-label="Push notifications">
+        <div className="set-head">
+          <h2 className="set-title">Push notifications</h2>
+        </div>
+        <PushSettings token={token} />
       </section>
 
       <AccessToken

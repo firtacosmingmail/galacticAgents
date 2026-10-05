@@ -14,6 +14,7 @@ import { registerDevRoutes } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
 import { isWebFile, webCacheControl } from './http/web-cache.js';
+import { registerPushRoutes, type Push } from './push/index.js';
 import type { SettingsService } from './config/settings.js';
 import type { EventLog } from './domain/event-log.js';
 import type { StatusStore } from './runtime/status-store.js';
@@ -44,6 +45,8 @@ export interface AppOptions {
   restartHarmonizer?: AgentRoutesOptions['restartHarmonizer'];
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
+  /** Web Push (P7-04): enables `/api/push*`. */
+  push?: Push;
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -154,6 +157,10 @@ export function buildApp(opts: AppOptions): App {
       ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
       ...(opts.settings ? { settings: opts.settings } : {}),
     });
+  }
+
+  if (opts.push) {
+    registerPushRoutes(fastify, config, { push: opts.push.service, store: opts.push.store });
   }
 
   const onSession =

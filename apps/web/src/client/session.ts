@@ -5,6 +5,7 @@ import { useAppStore } from '../state/store.js';
 import { createNotifier } from '../panel/notifications/notifier.js';
 import { createApi } from '../console/api.js';
 import { clearAnswerQueue, startAnswerQueue } from './answer-queue.js';
+import { syncPush } from '../pwa/push.js';
 
 export const TOKEN_KEY = 'galactic.token';
 /** Written by earlier builds; removed on start so a stale value can never be sent (P0-12). */
@@ -193,6 +194,8 @@ export function startSession(token: string): () => void {
   // Answers given offline are sent once the stream is live again, after the catch-up (P7-05).
   const stopAnswers = startAnswerQueue(token, createApi(token));
   client.connect();
+  // A push subscription the browser rotated is handed to the server again (P7-04; best effort).
+  void syncPush(token);
   return () => {
     useAppStore.setState({ subscribeTranscript: undefined, unsubscribeTranscript: undefined });
     stopAnswers();

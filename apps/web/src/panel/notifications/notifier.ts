@@ -71,16 +71,53 @@ const liveNotifications = new Set<Notification>();
 /** How many shown notifications are still held (tests). */
 export const liveNotificationCount = () => liveNotifications.size;
 
-/** Shows one desktop notification; its click focuses the window and selects the item. */
-export function showNotification(n: {
+type Shown = {
   id: string;
   title: string;
   body?: string | undefined;
   /** Without one, the click opens the Harmonizer with the inbox in view. */
   target?: NotificationTarget | undefined;
-}) {
+};
+
+/**
+ * Shows it through the service worker (P7-04) when one is registered: then it shares its tag
+ * space with Web Push, so the page and a push about the same thing make one notification, not
+ * two; and mobile browsers, which refuse `new Notification`, show it too. A tap goes through the
+ * worker's `notificationclick` (`pwa/notification-clicks.ts`). False when there is no worker.
+ */
+async function showThroughWorker(n: Shown): Promise<boolean> {
+  const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+  if (!sw) return false;
+  const reg = await sw.getRegistration().catch(() => undefined);
+  if (!reg || typeof reg.showNotification !== 'function') return false;
+  // A push already put this one on screen: leave it.
+  const existing = await reg.getNotifications({ tag: n.id }).catch(() => []);
+  if (existing.length > 0) return true;
+  await reg.showNotification(n.title, {
+    tag: n.id,
+    icon: '/icons/icon-192.png',
+    ...(n.body ? { body: n.body } : {}),
+    data: { id: n.id, ...(n.target ? { target: n.target } : {}) },
+  });
+  return true;
+}
+
+/** Shows one desktop notification; its click focuses the window and selects the item. */
+export function showNotification(n: Shown) {
   const Api = notificationApi();
   if (!Api) return;
+  if (typeof navigator !== 'undefined' && navigator.serviceWorker) {
+    void showThroughWorker(n)
+      .catch(() => false)
+      .then((done) => {
+        if (!done) showFromPage(Api, n);
+      });
+    return;
+  }
+  showFromPage(Api, n);
+}
+
+function showFromPage(Api: typeof Notification, n: Shown) {
   try {
     // The tag makes the OS replace rather than stack a second copy (another tab, a race).
     const shown = new Api(n.title, { tag: n.id, ...(n.body ? { body: n.body } : {}) });
