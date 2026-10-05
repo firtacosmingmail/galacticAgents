@@ -190,15 +190,24 @@ describe('transcript retention settings (P8-02)', () => {
     const { settings, file } = setup();
     const before = file();
     const r = refusal(() =>
-      settings.update({ transcriptRetention: { archivedDays: 0 } }, { origin: 'remote' }),
+      settings.update({ transcriptRetention: { archivedDays: 1 } }, { origin: 'remote' }),
     );
     expect(r?.code).toBe('remote_settings');
     expect(file()).toEqual(before);
     expect(
       settings.update(
-        { transcriptRetention: { archivedDays: 0 } },
+        { transcriptRetention: { archivedDays: 1 } },
         { origin: 'remote', autoApproveRemote: true },
       ).settings.transcriptRetention,
-    ).toEqual({ maxAgeDays: 90, archivedDays: 0 });
+    ).toEqual({ maxAgeDays: 90, archivedDays: 1 });
+  });
+
+  it('takes whole days from 1, or null (P8-02 review)', () => {
+    const { settings, file } = setup();
+    const before = file();
+    for (const bad of [{ archivedDays: 0 }, { maxAgeDays: 0.5 }, { maxAgeDays: -1 }]) {
+      expect(refusal(() => settings.update({ transcriptRetention: bad }, local))).toBeDefined();
+    }
+    expect(file()).toEqual(before);
   });
 });

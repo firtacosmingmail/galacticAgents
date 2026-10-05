@@ -84,14 +84,14 @@ export const TranscriptCompaction = z.object({
 export type TranscriptCompaction = z.infer<typeof TranscriptCompaction>;
 
 /**
- * The transcript retention policy (P8-02; settings, decision 51), in days (fractions allowed),
+ * The transcript retention policy (P8-02; settings, decision 51), in whole days, at least one,
  * `null` = keep forever. `maxAgeDays`: any agent's chunks older than this are removed (a running
  * Harmonizer's too). `archivedDays`: an agent's whole transcript is removed this long after its
  * work (task or project) was archived. Pinned work is never compacted.
  */
 export const TranscriptRetention = z.object({
-  maxAgeDays: z.number().positive().max(3650).nullable(),
-  archivedDays: z.number().nonnegative().max(3650).nullable(),
+  maxAgeDays: z.number().int().min(1).max(3650).nullable(),
+  archivedDays: z.number().int().min(1).max(3650).nullable(),
 });
 export type TranscriptRetention = z.infer<typeof TranscriptRetention>;
 

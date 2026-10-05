@@ -506,7 +506,12 @@ describe('settings page (P25-08)', () => {
     const archived = within(tr).getByLabelText('Remove archived work’s output') as HTMLInputElement;
     expect([age.value, archived.value]).toEqual(['90', '30']);
     type(age, '0');
-    expect(within(tr).getByRole('alert').textContent).toMatch(/more than 0/);
+    expect(within(tr).getByRole('alert').textContent).toMatch(/whole number of days from 1/);
+    type(age, '1.5');
+    expect(within(tr).getByRole('alert').textContent).toMatch(/whole number of days from 1/);
+    type(age, '30');
+    type(archived, '0');
+    expect(within(tr).getByRole('alert').textContent).toMatch(/whole number of days from 1/);
     type(age, ''); // keep forever
     type(archived, '7');
     await click(within(tr).getByRole('button', { name: 'Save transcript retention' }));
