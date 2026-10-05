@@ -58,7 +58,7 @@ Setting a budget or lowering it is a tightening: allowed from anywhere, the phon
 
 > | 98 | Dollar budgets | **Warn, refuse new agents, never stop running ones** (2026-10-05, P8-01; refines 18, §2.8): a project or task may have a dollar budget, given on its work card or plan card, its edit form, or by asking the Harmonizer. It is measured against the cost the runtimes report — an estimate, notional under a subscription login — summed over every agent that worked on it (a project: its Waykeepers, its tasks' Stewards and its sub-projects); a runtime that reports no cost counts as nothing and the panel says "cost not reported". At a share of the budget set in the settings (default 80 %) the user is warned in the Harmonizer's chat and the Waykeeper that runs the work is told; at the budget, no new Waykeeper or Steward is started for the work — the spawn is refused with the reason, which the Harmonizer's chat shows — but running agents go on and are not paused, and resuming an interrupted one is not a new spawn. Raising or removing the budget lets the work start agents again. Setting or lowering a budget works from anywhere; raising or removing one only on the Mac (or with `autoApproveRemote`), as decision 37 holds permission tables. Pausing work at its budget is a possible later option, not the default. |
 
-SPEC §2.8 ("Cost safety") could end: "…dollar budgets per project and task warn at a threshold and refuse new agents beyond the budget (decision 97)". §4.6 (settings) could list "the budget warning threshold".
+SPEC §2.8 ("Cost safety") could end: "…dollar budgets per project and task warn at a threshold and refuse new agents beyond the budget (decision 98)". §4.6 (settings) could list "the budget warning threshold".
 
 ## Proposed TECHNOLOGY text
 
@@ -88,3 +88,27 @@ SPEC §2.8 ("Cost safety") could end: "…dollar budgets per project and task wa
 - **Agent cards** still show the agent's `costSoFar` (the status record), not its lifetime spend from `world.spend`; switching would make an ended agent's cost survive the 24 h status retention.
 - **Per-agent budgets** and a **global daily budget** are not built.
 - The budget is checked at spawn time; two spawns racing at the threshold may both start (each is under the budget when checked), which is acceptable for an estimate-based limit.
+
+## Review fixes (2026-10-05, branch `p8-wave1-review-fixes`)
+
+- **A raised budget restarts refused work.** `budget.set` woke only the brain that runs the work,
+  so a Waykeeper whose spawn was refused never came back. The wake rule now also wakes the
+  Harmonizer when a budget is raised or removed for an active project without a running Waykeeper
+  (or an active asteroid task without a running Steward; `WakeScope.unattended`, from the status
+  store), and its line says to `spawn_waykeeper` / `spawn_steward` if the budget now allows it;
+  the prompt says the same. Test: `brains/harmonizer/budget.test.ts` (scripted fake LLM: refused,
+  budget raised, the Harmonizer starts the Waykeeper) and `wake.test.ts`.
+- **The Harmonizer cannot loosen a budget on its own.** `control_work` passed the turn's origin,
+  so a local user turn let the model raise or remove a budget unasked. Raising or removing now
+  needs an `ask_confirmation` question (action `budget`, with the new `budgetUsd`: the first choice
+  names the amount) answered by the user, used up in the control's transaction; setting a first
+  budget or lowering one stays free. SPEC 98 says so. Test: `control-work.test.ts`.
+- **`budget.spawn_refused` is logged once an hour** per work, role and budget value
+  (`SPAWN_REFUSED_EVERY_MS`); the caller is refused every time.
+- `ProjectEdit` / `TaskEdit` (the update commands' types) leave `budgetUsd` out; `setBudget` is the
+  only way to change it (an untyped caller is still refused).
+- The migration runner refuses a database whose applied migration names differ from the files
+  (another branch's `0011`); `copy-migrations.mjs` copies first and removes stale files after.
+- The `AgentAdapter` contract (protocol and TECHNOLOGY §3.4) says cost reports are cumulative per
+  session; a per-turn reporter accumulates in its adapter.
+

@@ -4,7 +4,12 @@ import type { ControlAction, ControlTarget } from '@galactic/protocol';
 import { DomainError, must } from '../../domain/errors.js';
 import { usedFor } from '../../domain/questions.js';
 import type { BrainTool, BrainToolContext } from '../definition.js';
-import { checkUserAgreed, CONFIRMED_CONTROLS, labelOf } from './closure-tools.js';
+import {
+  BUDGET_CONFIRMATION,
+  checkUserAgreed,
+  CONFIRMED_CONTROLS,
+  labelOf,
+} from './closure-tools.js';
 import { S } from './input.js';
 
 /**
@@ -18,6 +23,9 @@ import { S } from './input.js';
  *     `checkUserAgreed`), and each such answer unlocks one call: it is used up in the control's own
  *     transaction (`control(..., {confirmation})` → the question row's `meta.usedFor`), so two
  *     calls with one answer never both pass and a refused control leaves the answer unused;
+ *   - an edit that raises or removes a budget (P8-01 review, decision 98) runs only on an
+ *     `ask_confirmation` question for that budget change ("budget" with the new `budgetUsd`),
+ *     used up the same way; setting a first budget or lowering one runs at once;
  *   - the trust level and permission table stay the user's (decision 49): an edit naming them is
  *     refused, and so is any other field the panel could not edit;
  *   - scene-harness rows (decision 79) are refused: the harness drives its own stand-ins.
@@ -48,7 +56,10 @@ const ControlWorkInput = z
   .strict();
 
 /** What an edit may change, per kind: the panel's edit form minus the trust level. */
-/** A budget in dollars, or `null` to remove it (P8-01; raising or removing it needs a local user). */
+/**
+ * A budget in dollars, or `null` to remove it (P8-01). Raising or removing it needs the user's
+ * confirmation (decision 98) and a turn from this machine (or `autoApproveRemote`).
+ */
 const BudgetEdit = z.number().positive().finite().nullable().optional();
 const TaskEdit = z
   .object({
@@ -117,12 +128,13 @@ export const controlWorkTool: BrainTool = {
   description:
     "The panel's work controls on a task or project the user names in conversation (decision " +
     '83): "pause" (its agents pause), "resume", "edit" (changes: a task\'s description and/or ' +
-    "priority; a project's name; either one's budgetUsd in dollars, null to remove it — raising " +
-    'or removing a budget works only for a user on this machine) run at once. "stop" (its agents stop, the work is paused) and ' +
-    '"cancel" (the work fails, its agents stop) need the user\'s word: ask_confirmation with that ' +
-    'action and target first, then call this with its questionId once the user answered its ' +
-    'first choice; one answer allows one call. The trust level and permission table are never ' +
-    'yours to change.',
+    "priority; a project's name; either one's budgetUsd in dollars, null to remove it) run at " +
+    'once — except raising or removing a budget, which needs the user\'s word like "stop" (its ' +
+    'agents stop, the work is paused) and "cancel" (the work fails, its agents stop): ' +
+    'ask_confirmation first (for a budget: action "budget" with the new budgetUsd), then call ' +
+    'this with its questionId once the user answered its first choice; one answer allows one ' +
+    'call. Raising or removing a budget also works only for a user on this machine. The trust ' +
+    'level and permission table are never yours to change.',
   inputSchema: S.obj(
     {
       target: S.obj(
@@ -139,7 +151,10 @@ export const controlWorkTool: BrainTool = {
           'edit only: a task\'s {description?, priority?: "low"|"normal"|"high"|"urgent", ' +
           "budgetUsd?}, or a project's {name?, budgetUsd?} (budgetUsd: dollars, null removes it).",
       },
-      questionId: S.str('stop / cancel only: the ask_confirmation question the user answered.'),
+      questionId: S.str(
+        'stop / cancel, or an edit raising or removing a budget: the ask_confirmation question ' +
+          'the user answered.',
+      ),
     },
     ['target', 'action'],
   ),
@@ -150,24 +165,36 @@ export const controlWorkTool: BrainTool = {
     if (changes !== undefined && action !== 'edit') {
       throw new DomainError('invalid', `changes go with "edit" only, not with "${action}"`);
     }
-    workOf(ctx, target);
+    const row = workOf(ctx, target);
 
-    const confirmed = (CONFIRMED_CONTROLS as readonly string[]).includes(action);
+    const control: ControlAction =
+      action === 'edit' ? { action, changes: editChanges(target.kind, changes) } : { action };
+    // Raising or removing a budget loosens a safety limit: the user's word first (decision 98).
+    const budget =
+      control.action === 'edit' && 'budgetUsd' in control.changes
+        ? (control.changes['budgetUsd'] as number | null)
+        : undefined;
+    const loosens =
+      budget !== undefined &&
+      row.budgetUsd !== undefined &&
+      (budget === null || budget > row.budgetUsd);
+    const confirmed = (CONFIRMED_CONTROLS as readonly string[]).includes(action) || loosens;
     if (confirmed) {
-      const confirm = action as (typeof CONFIRMED_CONTROLS)[number];
+      const confirm = loosens
+        ? BUDGET_CONFIRMATION
+        : (action as (typeof CONFIRMED_CONTROLS)[number]);
+      const what = loosens ? 'budget change' : confirm;
       // Checked again, atomically, by the control's transaction (`consumeConfirmation`).
       if (questionId && usedFor(ctx.queries.question(questionId)) !== undefined) {
         throw new DomainError(
           'invalid',
-          `the user's answer to ${questionId} was already used for a ${confirm}: ` +
-            `ask_confirmation again to ${confirm} ${labelOf(ctx, target.kind, target.id)}`,
+          `the user's answer to ${questionId} was already used for a ${what}: ` +
+            `ask_confirmation again for ${labelOf(ctx, target.kind, target.id)}`,
         );
       }
-      checkUserAgreed(ctx, confirm, target.kind, target.id, questionId);
+      checkUserAgreed(ctx, confirm, target.kind, target.id, questionId, budget);
     }
 
-    const control: ControlAction =
-      action === 'edit' ? { action, changes: editChanges(target.kind, changes) } : { action };
     await ctx.commands.control(target, control, ctx.actor, {
       origin: ctx.origin,
       ...(confirmed && questionId ? { confirmation: questionId } : {}),

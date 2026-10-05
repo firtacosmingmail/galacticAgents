@@ -1,4 +1,6 @@
 import type { Database } from 'better-sqlite3';
+import { statfsSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 /**
  * Giving disk space back after transcript retention (P8-02; TECHNOLOGY §6.2). SQLite never
@@ -9,9 +11,15 @@ import type { Database } from 'better-sqlite3';
  * (`PRAGMA incremental_vacuum(n)`), yielding to the event loop between steps.
  *
  * A database created before P8-02 has `auto_vacuum = NONE`, and switching costs one full VACUUM;
- * `convertToIncrementalVacuum` runs it once at startup, before the server listens. If it fails (a
- * full disk: VACUUM needs room for a copy) the database keeps working as before; freed pages are
- * still reused, the file just does not shrink, and the conversion is tried again at the next start.
+ * `startupConversion` runs it once at startup, before the server listens. In WAL mode a VACUUM
+ * writes the whole database through the WAL, so it needs about twice the database's size free
+ * (a copy in the WAL, then the checkpoint back): it is skipped, with the reason logged, unless the
+ * disk has `CONVERSION_SPACE_FACTOR` × the database free. Whatever its outcome the WAL is then
+ * truncated (`wal_checkpoint(TRUNCATE)`), so a failed or finished conversion never leaves a WAL
+ * as big as the database behind; `journal_size_limit` (`openDatabase`) caps it after any later
+ * big write. A failed conversion leaves the database working as before (freed pages are still
+ * reused, the file just does not shrink); after `MAX_CONVERSION_ATTEMPTS` failures it is no longer
+ * tried at every start — the log says how to try again (`GALACTIC_VACUUM_RETRY=1`).
  */
 
 /** `PRAGMA auto_vacuum`: 0 none, 1 full, 2 incremental. */
@@ -37,6 +45,141 @@ export function convertToIncrementalVacuum(db: Database): ConversionResult {
   } catch (error) {
     return { converted: false, ms: performance.now() - started, error };
   }
+}
+
+/** Free disk space needed for the conversion, as a multiple of the database's size. */
+export const CONVERSION_SPACE_FACTOR = 2.2;
+/** Failed conversions after which startup stops trying (settings key `CONVERSION_FAILURES_KEY`). */
+export const MAX_CONVERSION_ATTEMPTS = 3;
+export const CONVERSION_FAILURES_KEY = 'vacuum_conversion_failures';
+/** The environment variable that clears the failure count, so the next start tries again. */
+export const CONVERSION_RETRY_ENV = 'GALACTIC_VACUUM_RETRY';
+
+export interface StartupConversionOptions {
+  /** The database file (`':memory:'` skips the space check). */
+  dbPath: string;
+  /** Free bytes on the file system holding `dir`; default `fs.statfsSync`. */
+  freeBytes?: (dir: string) => number;
+  /** Forget earlier failures and try again (`GALACTIC_VACUUM_RETRY=1`). */
+  retry?: boolean;
+  maxAttempts?: number;
+  /** The conversion itself (tests make it fail). */
+  convert?: (db: Database) => ConversionResult;
+  log?: { info(message: string): void; warn(message: string): void };
+}
+
+export type StartupConversion =
+  | { outcome: 'already' }
+  | { outcome: 'converted'; ms: number }
+  | { outcome: 'skipped'; reason: 'disk-space' | 'gave-up'; detail: string }
+  | { outcome: 'failed'; error: unknown; failures: number };
+
+const diskFree = (dir: string): number => {
+  const s = statfsSync(dir);
+  return Number(s.bavail) * Number(s.bsize);
+};
+
+const mib = (bytes: number) => `${Math.round(bytes / 2 ** 20)} MiB`;
+
+/** Failed conversions so far (a missing or unreadable count is 0). */
+function failuresOf(db: Database): number {
+  try {
+    const row = db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get(CONVERSION_FAILURES_KEY) as { value: string } | undefined;
+    const n = row ? Number(JSON.parse(row.value)) : 0;
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function setFailures(db: Database, n: number): void {
+  try {
+    if (n === 0) db.prepare('DELETE FROM settings WHERE key = ?').run(CONVERSION_FAILURES_KEY);
+    else {
+      db.prepare(
+        'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      ).run(CONVERSION_FAILURES_KEY, JSON.stringify(n));
+    }
+  } catch {
+    // A full disk may refuse this too: the next start simply tries again.
+  }
+}
+
+/** Truncates the WAL (it holds a copy of the database after a VACUUM, finished or not). */
+export function truncateWal(db: Database): void {
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+  } catch {
+    // Nothing to give back (not WAL, or a reader holds it): the size limit trims it later.
+  }
+}
+
+/**
+ * The startup conversion to incremental auto-vacuum (P8-02, review fix): skipped when the disk
+ * lacks room for it or after `maxAttempts` failures, the WAL truncated after any attempt.
+ */
+export function startupConversion(db: Database, opts: StartupConversionOptions): StartupConversion {
+  if (autoVacuumMode(db) === 'incremental') {
+    if (failuresOf(db) > 0) setFailures(db, 0);
+    return { outcome: 'already' };
+  }
+  const log = opts.log ?? { info: () => {}, warn: () => {} };
+  const max = opts.maxAttempts ?? MAX_CONVERSION_ATTEMPTS;
+  if (opts.retry) setFailures(db, 0);
+  const failures = failuresOf(db);
+  if (failures >= max) {
+    const detail =
+      `the conversion to incremental auto-vacuum failed ${failures} times and is no longer tried ` +
+      `at startup; start once with ${CONVERSION_RETRY_ENV}=1 to try again (the database works ` +
+      'without it: freed space is reused, the file just does not shrink)';
+    log.warn(`[db] ${detail}`);
+    return { outcome: 'skipped', reason: 'gave-up', detail };
+  }
+  if (opts.dbPath !== ':memory:') {
+    const { pages, pageSize } = pageStats(db);
+    const size = pages * pageSize;
+    const needed = Math.ceil(size * CONVERSION_SPACE_FACTOR);
+    let free: number | undefined;
+    try {
+      free = (opts.freeBytes ?? diskFree)(dirname(opts.dbPath));
+    } catch {
+      free = undefined; // unknown: try anyway, a failure is counted and the WAL truncated
+    }
+    if (free !== undefined && free < needed) {
+      const detail =
+        `not converting the database to incremental auto-vacuum: it needs about ${mib(needed)} ` +
+        `free (${CONVERSION_SPACE_FACTOR}× the ${mib(size)} database) and the disk has ` +
+        `${mib(free)}; tried again at the next start`;
+      log.warn(`[db] ${detail}`);
+      return { outcome: 'skipped', reason: 'disk-space', detail };
+    }
+  }
+  log.info('Converting the database to incremental auto-vacuum (once)…');
+  let result: ConversionResult;
+  try {
+    result = (opts.convert ?? convertToIncrementalVacuum)(db);
+  } catch (error) {
+    result = { converted: false, ms: 0, error };
+  }
+  const count = result.converted ? 0 : failures + 1;
+  setFailures(db, count);
+  // Last: the VACUUM (and the count) went through the WAL, which now holds a copy of the database.
+  truncateWal(db);
+  if (result.converted) {
+    log.info(`Converted in ${Math.round(result.ms)} ms`);
+    return { outcome: 'converted', ms: result.ms };
+  }
+  const error = result.error ?? new Error('auto_vacuum is still not incremental');
+  log.warn(
+    `[db] could not convert to incremental auto-vacuum (attempt ${count} of ${max}): ` +
+      `${error instanceof Error ? error.message : String(error)}` +
+      (count >= max
+        ? `; no longer tried at startup — start once with ${CONVERSION_RETRY_ENV}=1 to try again`
+        : '; tried again at the next start'),
+  );
+  return { outcome: 'failed', error, failures: count };
 }
 
 /** Pages in the database file and on its free list, and the page size. */

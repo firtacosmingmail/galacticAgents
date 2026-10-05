@@ -15,7 +15,7 @@ import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { openDatabase } from './db/database.js';
-import { autoVacuumMode, convertToIncrementalVacuum } from './db/vacuum.js';
+import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
 import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { composeRuntime } from './runtime/compose.js';
@@ -34,17 +34,13 @@ const onError = (error: unknown, context: string) =>
 
 const db = openDatabase(config.dbPath);
 // Transcript retention gives space back in small steps (P8-02), which needs incremental
-// auto-vacuum; a database made before it is converted once, here, before the server listens.
-if (autoVacuumMode(db) !== 'incremental') {
-  console.log('Converting the database to incremental auto-vacuum (once)…');
-  const conversion = convertToIncrementalVacuum(db);
-  if (conversion.converted) console.log(`Converted in ${Math.round(conversion.ms)} ms`);
-  else
-    console.warn(
-      '[db] could not convert to incremental auto-vacuum (retried at the next start):',
-      conversion.error instanceof Error ? conversion.error.message : conversion.error,
-    );
-}
+// auto-vacuum; a database made before it is converted once, here, before the server listens —
+// unless the disk lacks room for it, or it already failed too often (`db/vacuum.ts`).
+startupConversion(db, {
+  dbPath: config.dbPath,
+  retry: process.env[CONVERSION_RETRY_ENV] === '1',
+  log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
+});
 // The supervisor owns every agent child process; its PID table lives in the same database.
 const supervisor = new ProcessSupervisor({ store: new SqliteProcessStore(db) });
 const reconciled = supervisor.reconcile();

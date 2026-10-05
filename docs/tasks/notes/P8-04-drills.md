@@ -191,8 +191,9 @@ runtime acted on it: in the first run 21 "command: database or disk is full" err
 finished and the runtime forgot its session, but its status stayed **`starting` forever** (even
 after space returned), its `agent.finished` never reached the log, so the Waykeeper was never
 told and the task never moved; a restart would have "resumed" a finished session. From the code,
-the same path also lost a chat line to a brain (accepted, HTTP 200, never logged — the drill now
-checks it is held and delivered) and failed the request of an answer the agent had already
+the same path also lost a chat line to a brain (accepted, HTTP 200, never logged — since the
+review fixes the drill checks the user's line is refused with the storage error, and goes through
+once space is back) and failed the request of an answer the agent had already
 received, leaving the question `open`.
 **Fix:** `AgentRuntime` holds what the storage refuses (`isStorageFailure`: SQLITE_FULL,
 SQLITE_IOERR*, BUSY, LOCKED, READONLY, CANTOPEN, PROTOCOL) in a queue and every later runtime
@@ -207,7 +208,7 @@ answer the agent already has is held too instead of failing the request.
 **Observed after the fix:** the Steward makes its 80 tool calls and finishes while nothing can be
 written (the log's end does not move); one storage line; space back → the held events land in
 order (80 `agent.tool_call`, then `agent.finished`), the status is `finished`, the Waykeeper is
-told it finished, no drift. The held chat line is delivered to the Harmonizer.
+told it finished, no drift. The chat line sent again after space returns reaches the Harmonizer.
 
 **Still open (P8-09):** the panel does not show that the disk is full — the user sees refused
 actions as generic 500 errors and the console line is the only signal. Transcript chunks whose
@@ -247,14 +248,14 @@ database does not); events are not.
   whole, never half); recovery resumes from there. A process kill loses nothing.
 
 **Open question (§8, recorded 2026-10-05):** should the event log trade write latency for power-loss
-durability (`synchronous=FULL`), or is decision 100's "may miss the last moments" acceptable for
+durability (`synchronous=FULL`), or is decision 102's "may miss the last moments" acceptable for
 a local app? Conservative meanwhile: keep `NORMAL`.
 
 ## New tasks (appended to `PHASE_8_HARDENING.md`, added 2026-10-05)
 
 - **P8-09 — Storage health in the panel**: a storage state in the status stream, a "disk full —
   N agent events waiting" banner, `507 storage_full` for refused REST/WS actions, a push
-  notification; decision 97.
+  notification; decision 99.
 - **P8-10 — Brains and the wall-clock cap**: F5; decide (proposed: brains are not stopped by the
   per-agent wall-clock cap — they are bounded by the hierarchy — or only their turn time counts)
   and fix in `CapsEnforcer`.
@@ -272,3 +273,34 @@ a local app? Conservative meanwhile: keep `NORMAL`.
   (`noteStalled`, held writes, never-started agents), `db/database.ts` (`isStorageFailure`),
   `workspace/workspaces.ts` (unfinished worktrees).
 - `package.json`: `pnpm drills`.
+
+## Review fixes (2026-10-05, branch `p8-wave1-review-fixes`)
+
+- **Ordering of held writes.** Before, only the runtime's own later writes waited behind the held
+  queue: `Commands`, the budget watcher's notices and the spawn's `createAgent` went straight to
+  the log and could commit ahead of older held events. `EventLog.addBeforeCommand` now runs a hook
+  before every outermost command; the runtime's hook writes the held queue first and, if the
+  storage still refuses it, throws the storage error so the command is refused whole. Held events
+  keep the time they happened (`runCommand(fn, {at})`).
+- **`agent.spawned` is held like the rest.** It went straight to the log; a storage error dropped
+  it, so after a restart the agent was taken for one that never started and restarted fresh
+  instead of resumed (and the spend fold lost its session key). It now goes through the held path
+  (the live agent row is updated when it is written). Test: `held-writes.test.ts` — held, written
+  when space returns, and a restart calls `resumeSession` with its ref.
+- **The user's runtime actions are refused, not held** (SPEC decision 99 "refused as a whole"):
+  pause, resume, stop, an answer and a chat line with a `user` actor fail with the storage error
+  while anything is held (after one attempt to write the queue) or when their own write fails;
+  agent-side events keep being queued. Drill 4 now expects the chat line refused.
+- **A bounded queue.** 10 000 events / 64 MiB of event JSON (`heldLimits`); past it the oldest
+  agent output (`agent.tool_call`, `agent.progress`, `agent.stalled`) goes first, one warning per
+  episode, the count in "writes work again". SQLITE_READONLY / SQLITE_CANTOPEN are logged as
+  permanent. `AgentRuntime.storageState()` gives P8-09 `{held, bytes, dropped, since, error,
+  permanent}`.
+- **Never-started agents with a logged stop.** Recovery restarted them; now an agent caught
+  before it started whose own `control.stop`, or a `control.stop` / `control.cancel` of its task
+  or project after its `agent.created`, is in the log ends `agent.stopped{by}`
+  (`recovery.test.ts`).
+- SPEC 99 and 102 reworded (the user repeats a refused action; a long full disk keeps only so much
+  agent output; a process kill loses the events held for a full disk); TECHNOLOGY §6.1/§6.2
+  updated.
+

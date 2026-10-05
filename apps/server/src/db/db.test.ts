@@ -88,6 +88,19 @@ describe('migrations', () => {
     writeFileSync(join(dir, '0002_b.sql'), 'CREATE TABLE b (x);');
     expect(loadMigrations(dir).map((m) => m.name)).toEqual(['a', 'b', 'c']);
   });
+
+  it('refuses a database whose applied migrations have other names (another branch)', () => {
+    const db = openDatabase(':memory:', { migrate: false });
+    const all = loadMigrations();
+    migrate(db, all.slice(0, 10));
+    // A branch where 0011 was the budgets migration ran here.
+    db.prepare(
+      "INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, 'budgets', 'x')",
+    ).run();
+    expect(() => migrate(db, all)).toThrow(
+      /migration 0011 is "budgets" in the database but "transcript_compactions" here/,
+    );
+  });
 });
 
 describe('domain tables', () => {

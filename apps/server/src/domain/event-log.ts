@@ -40,6 +40,21 @@ export interface CommandOutcome<T> {
 
 export type Subscriber = (envelope: EventEnvelope) => void;
 
+/**
+ * Runs before every outermost command (P8-04 review): the agent runtime registers one that writes
+ * the agent events it holds for a full disk first, so no command commits ahead of them — and
+ * throws the storage error when they still cannot be written, which refuses the command whole.
+ */
+export type BeforeCommand = () => void;
+
+export interface RunOptions {
+  /**
+   * The command's clock reading, when it is not now: an agent event held while the disk was full
+   * keeps the time it happened (P8-04 review). Default: the log's clock.
+   */
+  at?: string;
+}
+
 function db_get(db: Database, key: string): string | undefined {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
     { value: string } | undefined;
@@ -98,6 +113,9 @@ export class EventLog {
   private selectLatestOf: Statement | undefined;
   /** True while subscribers are being notified; commands run by a subscriber queue behind the batch. */
   private publishing = false;
+  private readonly beforeCommand = new Set<BeforeCommand>();
+  /** True while the `beforeCommand` hooks run: the commands they run do not call them again. */
+  private inHook = false;
 
   constructor(
     readonly db: Database,
@@ -143,11 +161,32 @@ export class EventLog {
     return id;
   }
 
+  /** The log's clock: what a command run now would carry as `at`. */
+  clock(): string {
+    return this.now();
+  }
+
+  /** Registers a hook run before every outermost command (see `BeforeCommand`). */
+  addBeforeCommand(hook: BeforeCommand): () => void {
+    this.beforeCommand.add(hook);
+    return () => {
+      this.beforeCommand.delete(hook);
+    };
+  }
+
   /** Runs `fn` under the one write rule. Nested calls join the outer transaction. */
-  runCommand<T>(fn: (ctx: CommandContext) => T): CommandOutcome<T> {
+  runCommand<T>(fn: (ctx: CommandContext) => T, opts: RunOptions = {}): CommandOutcome<T> {
+    if (this.depth === 0 && !this.inHook && this.beforeCommand.size > 0) {
+      this.inHook = true;
+      try {
+        for (const hook of [...this.beforeCommand]) hook();
+      } finally {
+        this.inHook = false;
+      }
+    }
     const mine: EventEnvelope[] = [];
     const queued: Event[] = [];
-    const at = this.now();
+    const at = opts.at ?? this.now();
     const ctx: CommandContext = {
       tables: this.tables,
       now: at,

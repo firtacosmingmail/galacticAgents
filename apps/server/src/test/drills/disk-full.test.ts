@@ -171,12 +171,20 @@ describe('disk full (P8-04 drill 4)', () => {
       expect(state(h), what).toBe(before);
     }
     expect(logDrift(h.log)).toEqual([]);
-    // A chat line is the runtime's to write: accepted, held, not lost (nor half-written).
-    const chat = h.tell(hq.agentId, 'how is it going?');
+    // The user's chat line is an action too (SPEC decision 99): refused whole, never held.
+    let refused: unknown;
+    try {
+      h.tell(hq.agentId, 'how is it going?');
+    } catch (error) {
+      refused = error;
+    }
+    expect(isStorageFailure(refused), String(refused)).toBe(true);
     expect(state(h)).toBe(before);
+    expect(h.runtime.heldWrites).toBe(0);
 
-    // Space returns: the held line lands and reaches the Harmonizer; the same commands go through.
+    // Space returns: the line sent again reaches the Harmonizer; the same commands go through.
     restore();
+    const chat = h.tell(hq.agentId, 'how is it going?');
     await h.until(
       () =>
         h.log
@@ -214,6 +222,17 @@ describe('disk full (P8-04 drill 4)', () => {
     });
     expect(h.log.currentSeq()).toBe(seq);
     expect(h.runtime.heldWrites).toBeGreaterThan(0);
+    expect(h.runtime.storageState()).toMatchObject({
+      held: h.runtime.heldWrites,
+      dropped: 0,
+      permanent: false,
+      error: expect.stringMatching(/disk is full/),
+    });
+    // Meanwhile the user's actions are refused whole: a pause, a project edit.
+    await expect(
+      h.commands.control({ kind: 'project', id: projectId }, { action: 'pause' }, USER),
+    ).rejects.toSatisfy(isStorageFailure);
+    expect(h.log.currentSeq()).toBe(seq);
     // The server says so, once — not once per event.
     const full = h.errors.filter((e) => e.startsWith('storage: database or disk is full'));
     expect(full).toHaveLength(1);

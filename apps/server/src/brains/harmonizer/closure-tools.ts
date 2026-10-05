@@ -1,3 +1,4 @@
+import { formatUsd } from '@galactic/protocol';
 import type { ControlAction, ControlTarget, Id, Project, Question } from '@galactic/protocol';
 import { closureRequestOf } from '../../domain/closure.js';
 import { DomainError, must } from '../../domain/errors.js';
@@ -15,8 +16,9 @@ import { asInput, oneOf, S, str } from './input.js';
  *     and Stewards are stopped, `completed`, the retention clock starts);
  *   - `finished_work`: archive now, pin, unpin or reopen a project or task (the panel's actions,
  *     conversationally);
- *   - `ask_confirmation`: asks the user to confirm one of those actions, or a stop or cancel of
- *     work for `control_work` (P5-07, decision 83; `control-tools.ts`).
+ *   - `ask_confirmation`: asks the user to confirm one of those actions, a stop or cancel of
+ *     work for `control_work` (P5-07, decision 83; `control-tools.ts`), or raising or removing a
+ *     budget through `control_work` (P8-01 review, decision 98).
  *
  * The user's word is checked in code, never left to the prompt (decision 11): `close_project`
  * and `finished_work` act only on a question the user answered with that choice — the project's
@@ -80,7 +82,17 @@ export const askClosureTool: BrainTool = {
 /** The work controls that need the user's confirmation in conversation (decision 83). */
 export const CONFIRMED_CONTROLS = ['stop', 'cancel'] as const;
 
-export type Confirmable = 'close' | (typeof ACTIONS)[number] | (typeof CONFIRMED_CONTROLS)[number];
+/**
+ * Raising or removing a budget through `control_work` (P8-01 review, decision 98): the Harmonizer
+ * may set or lower one on its own, never loosen one without the user's word.
+ */
+export const BUDGET_CONFIRMATION = 'budget' as const;
+
+export type Confirmable =
+  | 'close'
+  | (typeof ACTIONS)[number]
+  | (typeof CONFIRMED_CONTROLS)[number]
+  | typeof BUDGET_CONFIRMATION;
 
 /** What the target is called on a confirmation question. */
 export function labelOf(ctx: BrainToolContext, kind: 'project' | 'task', id: Id): string {
@@ -90,9 +102,16 @@ export function labelOf(ctx: BrainToolContext, kind: 'project' | 'task', id: Id)
   return `task "${line.length > 50 ? `${line.slice(0, 49)}…` : line}" (${id})`;
 }
 
-/** The choice a confirmation question offers first: what the user agrees to. */
-function choiceOf(action: Confirmable, label: string): string {
+/**
+ * The choice a confirmation question offers first: what the user agrees to. A budget's names the
+ * amount (`null`: removing it), so the answer allows exactly that change.
+ */
+function choiceOf(action: Confirmable, label: string, budgetUsd?: number | null): string {
   switch (action) {
+    case 'budget':
+      return budgetUsd === null || budgetUsd === undefined
+        ? `Remove the budget of ${label}`
+        : `Raise the budget of ${label} to ${formatUsd(budgetUsd)}`;
     case 'close':
       return `Close ${label}`;
     case 'archive':
@@ -131,9 +150,10 @@ export function checkUserAgreed(
   kind: 'project' | 'task',
   id: Id,
   questionId: Id | undefined,
+  budgetUsd?: number | null,
 ): void {
   const label = labelOf(ctx, kind, id);
-  const choice = choiceOf(action, label);
+  const choice = choiceOf(action, label, budgetUsd);
   if (action === 'close' && kind === 'project') {
     const closure = closureRequestOf(ctx.queries.project(id)!)?.questionId;
     const q = closure ? ctx.queries.question(closure) : undefined;
@@ -149,10 +169,15 @@ export function checkUserAgreed(
   ) {
     return;
   }
+  const what =
+    action === 'budget'
+      ? `${budgetUsd === null || budgetUsd === undefined ? 'remove' : 'raise'} the budget of ${label} (decision 98)`
+      : `${action} ${label} (decision 11)`;
   throw new DomainError(
     'invalid',
-    `only the user decides to ${action} ${label} (decision 11): ask_confirmation first, then ` +
-      `call this again with its questionId once the user answered "${choice}"` +
+    `only the user decides to ${what}: ask_confirmation first` +
+      (action === 'budget' ? ' (action "budget" with that budgetUsd)' : '') +
+      `, then call this again with its questionId once the user answered "${choice}"` +
       (questionId ? ` (question ${questionId} is not such an answer)` : ''),
   );
 }
@@ -161,14 +186,22 @@ export const askConfirmationTool: BrainTool = {
   name: 'ask_confirmation',
   description:
     'Asks the user to confirm closing a project, a finished-work action (archive, pin, unpin, ' +
-    'reopen) or stopping or cancelling work (stop, cancel) they asked for in conversation. Ends ' +
-    'your turn; once the user answers with the first choice, call close_project / finished_work ' +
-    '/ control_work with this questionId.',
+    'reopen), stopping or cancelling work (stop, cancel), or raising or removing a budget ' +
+    '("budget" with budgetUsd: the new amount, null to remove it) they asked for in ' +
+    'conversation. Ends your turn; once the user answers with the first choice, call ' +
+    'close_project / finished_work / control_work with this questionId.',
   inputSchema: S.obj(
     {
       kind: { type: 'string', enum: ['project', 'task'] },
       id: S.str('The project or task.'),
-      action: { type: 'string', enum: ['close', ...ACTIONS, ...CONFIRMED_CONTROLS] },
+      action: {
+        type: 'string',
+        enum: ['close', ...ACTIONS, ...CONFIRMED_CONTROLS, BUDGET_CONFIRMATION],
+      },
+      budgetUsd: {
+        type: ['number', 'null'],
+        description: 'budget only: the new budget in dollars, or null to remove it.',
+      },
     },
     ['kind', 'id', 'action'],
   ),
@@ -177,11 +210,27 @@ export const askConfirmationTool: BrainTool = {
     const input = asInput(raw);
     const kind = oneOf(input, 'kind', ['project', 'task'] as const);
     const id = str(input, 'id');
-    const action = oneOf(input, 'action', ['close', ...ACTIONS, ...CONFIRMED_CONTROLS] as const);
+    const action = oneOf(input, 'action', [
+      'close',
+      ...ACTIONS,
+      ...CONFIRMED_CONTROLS,
+      BUDGET_CONFIRMATION,
+    ] as const);
     if (action === 'close' && kind !== 'project') {
       throw new DomainError('invalid', 'only a project is closed; a task is closed by close_task');
     }
-    const choice = choiceOf(action, labelOf(ctx, kind, id));
+    let budgetUsd: number | null | undefined;
+    if (action === BUDGET_CONFIRMATION) {
+      const raw = input['budgetUsd'];
+      if (raw !== null && (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0)) {
+        throw new DomainError(
+          'invalid',
+          'a budget confirmation needs budgetUsd: the new amount in dollars, or null to remove it',
+        );
+      }
+      budgetUsd = raw;
+    }
+    const choice = choiceOf(action, labelOf(ctx, kind, id), budgetUsd);
     const { value } = await ctx.commands.openQuestion({
       kind: 'clarification',
       originAgentId: ctx.brainId,

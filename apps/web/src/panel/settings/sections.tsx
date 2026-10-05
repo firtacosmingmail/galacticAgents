@@ -341,9 +341,10 @@ function TranscriptRetentionEditor({
           id={`${id}-age`}
           className="set-input set-input-num"
           type="number"
-          inputMode="decimal"
-          min={0}
-          step="any"
+          inputMode="numeric"
+          min={1}
+          max={3650}
+          step={1}
           placeholder="keep"
           value={draft.maxAgeDays}
           disabled={disabled}
@@ -357,9 +358,10 @@ function TranscriptRetentionEditor({
           id={`${id}-archived`}
           className="set-input set-input-num"
           type="number"
-          inputMode="decimal"
-          min={0}
-          step="any"
+          inputMode="numeric"
+          min={1}
+          max={3650}
+          step={1}
           placeholder="keep"
           value={draft.archivedDays}
           disabled={disabled}

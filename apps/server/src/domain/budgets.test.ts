@@ -141,9 +141,11 @@ describe('setBudget (P8-01)', () => {
       by: USER,
     });
 
-    // Not through an update, and only a positive amount.
-    await refusal(c.commands.updateProject(project.id, { budgetUsd: 4 }));
-    await refusal(c.commands.updateTask(tasks[0]!, { budgetUsd: 4 }));
+    // Not through an update (the types leave it out; an untyped caller is refused), and only a
+    // positive amount.
+    const untyped = { budgetUsd: 4 } as object;
+    await refusal(c.commands.updateProject(project.id, untyped));
+    await refusal(c.commands.updateTask(tasks[0]!, untyped));
     await refusal(c.commands.setBudget(target, -1, USER, LOCAL));
 
     // The panel's edit carries it: control.edit plus budget.set, in one transaction.
@@ -291,16 +293,21 @@ describe('budgets against reported cost (P8-01)', () => {
         budgetUsd: 1,
       },
     ]);
-    // A second refusal: logged again, but one chat line until the budget changes.
-    await refusal(
+    // The same spawn retried: refused again, but not logged again (once an hour per work).
+    const stewardFor = (taskId: string) =>
       c.commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
-        taskId: tasks[2]!,
+        taskId,
         supervisorId: waykeeper.id,
         prompt: 'scenario:echo',
-      }),
-    );
+      });
+    for (let i = 0; i < 3; i++) {
+      expect((await refusal(stewardFor(tasks[1]!))).code).toBe('conflict');
+    }
+    expect(rec.of('budget.spawn_refused')).toHaveLength(1);
+    // Another task's spawn is logged: other work. Still one chat line until the budget changes.
+    await refusal(stewardFor(tasks[2]!));
     expect(rec.of('budget.spawn_refused')).toHaveLength(2);
 
     // The Harmonizer's chat shows the warning, the exceeded budget and the refusal.

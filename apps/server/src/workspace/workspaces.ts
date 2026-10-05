@@ -9,13 +9,11 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { CommandResult, Id, Project, Task } from '@galactic/protocol';
+import type { CommandResult, Id, Project, ProjectEdit, Task, TaskEdit } from '@galactic/protocol';
 import { z } from 'zod';
 import { expandHome } from '../config/config.js';
 import type { Tables } from '../db/tables.js';
 import { DomainError, must } from '../domain/errors.js';
-import type { ProjectChanges } from '../domain/projects.js';
-import type { TaskChanges } from '../domain/tasks.js';
 import { gitRunner, splitZ, type Git } from './git.js';
 
 /**
@@ -161,8 +159,8 @@ export type MergeResult =
 
 /** What the service needs from the command surface: the two updates it records through. */
 export interface WorkspaceCommands {
-  updateProject(projectId: Id, changes: ProjectChanges): Promise<CommandResult<Project>>;
-  updateTask(taskId: Id, changes: TaskChanges): Promise<CommandResult<Task>>;
+  updateProject(projectId: Id, changes: ProjectEdit): Promise<CommandResult<Project>>;
+  updateTask(taskId: Id, changes: TaskEdit): Promise<CommandResult<Task>>;
 }
 
 export interface WorkspacesOptions {

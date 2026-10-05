@@ -123,9 +123,12 @@ export function parseTranscriptRetention(
   const days = (raw: string) => (raw.trim() === '' ? null : Number(raw));
   const value = { maxAgeDays: days(draft.maxAgeDays), archivedDays: days(draft.archivedDays) };
   if (!TranscriptRetention.shape.maxAgeDays.safeParse(value.maxAgeDays).success)
-    return { error: 'Keep output for more than 0 and at most 3650 days, or leave it empty.' };
+    return { error: 'Keep output for a whole number of days from 1 to 3650, or leave it empty.' };
   if (!TranscriptRetention.shape.archivedDays.safeParse(value.archivedDays).success)
-    return { error: 'Keep archived work’s output for 0 to 3650 days, or leave it empty.' };
+    return {
+      error:
+        'Keep archived work’s output for a whole number of days from 1 to 3650, or leave it empty.',
+    };
   return { value };
 }
 

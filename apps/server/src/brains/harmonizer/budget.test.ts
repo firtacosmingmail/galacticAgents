@@ -7,6 +7,7 @@ import type { FakeScenario } from '../../adapters/fake/scenario.js';
 import { History } from '../../runtime/history.js';
 import { brainHarness, type BrainHarness } from '../testing/index.js';
 import type { ToolOutcome } from '../testing/transcript.js';
+import { waykeeperDefinition } from '../waykeeper/index.js';
 import { harmonizerBrain } from './index.js';
 
 /**
@@ -133,5 +134,79 @@ describe('Harmonizer under a dollar budget (P8-01)', () => {
       expect.stringMatching(/^reply: Not started: budget exceeded: task/),
     );
     hq.assertCalls(['create_task', 'spawn_steward', 'spawn_steward']);
+  });
+
+  it('starts the refused Waykeeper again once the user raises the budget (review fix)', async () => {
+    const h = brainHarness({ adapter: { scenarios: SCENARIOS } });
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-budget-wk-')));
+    lives.push({ h, root });
+    const definition = harmonizerBrain({
+      projectsRoot: root,
+      startWaykeeper: async ({ projectId, supervisorId }) => {
+        const wk = await h.startBrain(
+          waykeeperDefinition(),
+          { runtime: 'fake', projectId, supervisorId },
+          { scriptOptions: { strict: false } },
+        );
+        return { agentId: wk.agentId };
+      },
+    });
+    const project = (
+      await h.commands.createProject({ name: 'Docs', workspace: join(root, 'docs') })
+    ).value;
+    const target = { kind: 'project' as const, id: project.id };
+    await h.commands.setBudget(target, 0.1, USER, { origin: 'local' });
+
+    let refused: ToolOutcome | undefined;
+    let restarted: ToolOutcome | undefined;
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('go', async (t) => {
+            refused = await t.try('spawn_waykeeper', { projectId: project.id });
+          })
+          // The wake line for the raised budget names the unattended project.
+          .once(
+            /has no running Waykeeper: if the budget now allows it, spawn_waykeeper/,
+            async (t) => {
+              restarted = await t.try('spawn_waykeeper', { projectId: project.id });
+              t.say('Started the Waykeeper of Docs again.');
+            },
+          )
+          .on(/reported|failed \(crash\)|budget exceeded/, () => {}),
+    });
+
+    // Its first Waykeeper spends over the budget and fails (a crash).
+    const first = (
+      await h.commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: project.id,
+        supervisorId: hq.agentId,
+        prompt: 'scenario:spend',
+      })
+    ).value;
+    await h.until(() => h.statuses.get(first.id)?.state === 'idle', { what: 'its first turn' });
+    h.runtime.send(first.id, 'fail 0.2', { sender: USER });
+    await h.until(() => h.log.eventsSince(0).some((e) => e.event.type === 'budget.exceeded'), {
+      what: 'the budget to be exceeded',
+    });
+    await h.settle();
+
+    hq.tell('go');
+    await h.until(() => refused !== undefined, { what: 'the refused spawn' });
+    expect(refused).toMatchObject({ ok: false, error: 'conflict' });
+    expect(h.log.tables.agents.all().filter((a) => a.role === 'waykeeper')).toHaveLength(1);
+
+    // The user raises the budget on the Mac: the Harmonizer is woken and starts the Waykeeper.
+    await h.commands.setBudget(target, 1, USER, { origin: 'local' });
+    await h.until(() => restarted !== undefined, { what: 'the restart' });
+    await h.done();
+    expect(restarted?.ok, restarted?.message).toBe(true);
+    const wk = h.log.tables.agents.all().filter((a) => a.role === 'waykeeper');
+    expect(wk.map((a) => a.projectId)).toEqual([project.id, project.id]);
+    expect(h.statuses.get(wk[1]!.id)?.state).not.toBe('failed');
+    hq.assertCalls(['spawn_waykeeper', 'spawn_waykeeper']);
   });
 });

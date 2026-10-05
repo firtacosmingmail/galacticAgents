@@ -32,7 +32,7 @@ Settings: `config.json` (`transcriptRetention`, partial objects merged over the 
 
 - **Current DB settings before this task:** `journal_mode = WAL`, `synchronous = NORMAL`, `auto_vacuum = NONE` (SQLite's default), 4 KiB pages. With `NONE`, deleted pages go to the free list and are reused by later inserts, but the file never shrinks.
 - **New databases** get `PRAGMA auto_vacuum = INCREMENTAL`, set in `openDatabase` before `journal_mode` (it only takes effect before the first table is created; it cannot go in a migration: migrations run inside a transaction and VACUUM cannot).
-- **Existing databases** are converted once at startup in `index.ts` (`convertToIncrementalVacuum`: the pragma, then one full `VACUUM`), before the server listens, so no client waits on it. Cost: 0.3 s at 22 MB, 3.2–3.5 s at 213 MB, 7–11 s at 531 MB (below). If it fails (VACUUM needs room for a copy: a full disk) it is logged and retried at the next start; the server works as before meanwhile.
+- **Existing databases** are converted once at startup in `index.ts` (`startupConversion` → `convertToIncrementalVacuum`: the pragma, then one full `VACUUM`), before the server listens, so no client waits on it. Cost: 0.3 s at 22 MB, 3.2–3.5 s at 213 MB, 7–11 s at 531 MB (below). Since the review fixes: skipped (reason logged) unless the disk has 2.2 × the database free; the WAL truncated after any attempt; after three failures no longer tried at startup until `GALACTIC_VACUUM_RETRY=1` (see below). The server works as before meanwhile.
 - **After a run that removed chunks**, `vacuumIncrementally` releases the free list **256 pages (1 MiB) per step** with `PRAGMA incremental_vacuum(256)`, yielding between steps. No explicit WAL checkpoint: a `wal_checkpoint(TRUNCATE)` at the end measured 0.2–0.4 s in one go on a probe, while SQLite's auto-checkpoint (every 1 000 pages) keeps the WAL at ≈ 4 MB.
 - Why not a periodic full VACUUM when idle: better-sqlite3 is synchronous, so a full VACUUM holds the event loop for seconds on a few hundred MB (see the conversion cost) — exactly what the task rules out. Step sizes tried on the 404 k-chunk fixture: 2 048 pages per step → longest step ≈ 0.2 s with a 78 ms longest delete batch at 2 000 chunks per batch; 256 / 500 keeps typical steps at 3–30 ms and batches under 40 ms for about +15 % total time.
 
@@ -68,3 +68,18 @@ The fixture (`apps/server/src/runtime/transcript-retention.fixture.test.ts`, a f
 - A reopened archived project gets no transcript back (removed is removed); the marker keeps saying so.
 - No client event announces a compaction: an open Steward view or chat learns of it on its next REST page (open, reload, catch-up). Acceptable: compaction only touches output older than the policy, which an open view rarely holds; an event would also need a fold and a conformance exemption.
 - The fixture's large runs are not in CI (only `n = 400`); rerun with `GALACTIC_P802_SCALE=10` / `25` to refresh the table.
+
+## Review fixes (2026-10-05, branch `p8-wave1-review-fixes`)
+
+- **The conversion's disk cost.** In WAL mode the startup VACUUM writes the whole database into the
+  WAL (about 2 × the database at the peak), and with no `journal_size_limit` the WAL then stayed as
+  big as the database; a failure (disk full) left that WAL behind and was retried at every start.
+  Now: skipped with the sizes logged unless `fs.statfsSync` shows 2.2 × the database free;
+  `wal_checkpoint(TRUNCATE)` after any attempt; `journal_size_limit = 64 MiB` in `openDatabase`;
+  the failures are counted in `settings` (`vacuum_conversion_failures`) and after three the log
+  says to start once with `GALACTIC_VACUUM_RETRY=1`. Tests (`transcript-retention.test.ts`): a
+  fake `statfs` below the threshold skips; a conversion leaves a zero-size WAL; three failures
+  (each leaving no WAL) then a give-up, then the retry switch converts.
+- **Whole days.** `maxAgeDays` and `archivedDays` are integers from 1 to 3650 (or `null`): the
+  protocol schema, the settings page (whole-number inputs, the message) and their tests.
+
