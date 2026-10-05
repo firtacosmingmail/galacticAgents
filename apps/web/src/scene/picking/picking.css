@@ -108,3 +108,19 @@
 .pick-list button:focus-visible {
   background: rgba(91, 140, 255, 0.18);
 }
+/* A finger needs a taller row than a mouse (P7-03): 44 px, the platforms' minimum touch target. */
+@media (pointer: coarse) {
+  .pick-list button {
+    min-height: 44px;
+    padding: 6px 8px;
+  }
+  .pick-popover {
+    padding-right: 44px;
+  }
+  .pick-close {
+    top: 0;
+    right: 0;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

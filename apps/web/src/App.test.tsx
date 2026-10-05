@@ -165,3 +165,48 @@ describe('event page', () => {
     expect(screen.getByText('seq 4')).toBeTruthy();
   });
 });
+
+describe('a token handed over by the QR code (P7-02 review)', () => {
+  it('keeps the saved token until the handed one connects, and falls back to it if refused', async () => {
+    localStorage.setItem('galactic.token', 'saved-token');
+    window.history.replaceState(null, '', '/debug#token=handed-token');
+    render(<App />);
+    await screen.findByText('connecting');
+    const s1 = FakeWebSocket.instances[0]!;
+    await act(async () => s1.serverOpens());
+    expect(s1.hello.token).toBe('handed-token');
+    expect(localStorage.getItem('galactic.token')).toBe('saved-token');
+    await act(async () => s1.serverCloses(4401, 'unauthorized'));
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const s2 = FakeWebSocket.instances[1]!;
+    await act(async () => s2.serverOpens());
+    expect(s2.hello.token).toBe('saved-token');
+    expect(localStorage.getItem('galactic.token')).toBe('saved-token');
+  });
+
+  it('saves the handed token once its session is live', async () => {
+    localStorage.setItem('galactic.token', 'saved-token');
+    window.history.replaceState(null, '', '/debug#token=handed-token');
+    render(<App />);
+    await screen.findByText('connecting');
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      socket.serverOpens();
+      socket.serverSends({
+        type: 'snapshot',
+        logId: 'log-a',
+        seq: 0,
+        agents: [],
+        bodies: [],
+        projects: [],
+        tasks: [],
+        questions: [],
+        proposals: [],
+        statuses: [],
+      });
+    });
+    expect(screen.getByText('live')).toBeTruthy();
+    expect(localStorage.getItem('galactic.token')).toBe('handed-token');
+    expect(window.location.hash).toBe('');
+  });
+});

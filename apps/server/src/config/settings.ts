@@ -123,6 +123,11 @@ export class SettingsService {
       ...(this.config.setupCompletedAt
         ? { setupCompletedAt: asTimestamp(this.config.setupCompletedAt) }
         : {}),
+      // Remote access as configured (P7-02), read-only: the page builds the phone's QR code.
+      remote: {
+        ...(this.config.remoteHost ? { host: this.config.remoteHost } : {}),
+        tailscaleIdentity: (this.config.tailscaleIdentityLogins?.length ?? 0) > 0,
+      },
       ...extra,
     };
   }

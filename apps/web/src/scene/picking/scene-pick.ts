@@ -2,9 +2,10 @@ import type { Vec3 } from '../camera/flight.js';
 import {
   CLEAR_TARGET_PX,
   MAX_CANDIDATES,
-  MIN_TARGET_PX,
   pickBodies,
+  POINTER_SLOP,
   type PickRay,
+  type PickSlop,
   type PickResult,
   type PickSphere,
 } from './pick.js';
@@ -12,7 +13,7 @@ import {
 /**
  * Picking over bodies **and satellites** (P4-08): the same ray-vs-sphere maths as `pickBodies`,
  * with each drawn satellite (`satellites/registry.ts`: its frame's live `position`, half its `size`)
- * as one more sphere, never smaller than `MIN_TARGET_PX` on screen. No three.js.
+ * as one more sphere, never smaller than `MIN_TARGET_PX` on screen (the slop's, P7-03: larger for a finger). No three.js.
  *
  * The rule, on top of the bodies' one (`pick.ts`):
  * 1. a satellite counts only when the ray passes through its target and no body's drawn surface
@@ -109,8 +110,9 @@ export function pickScene(
   bodySpheres: readonly PickSphere[],
   satelliteSpheres: readonly SatelliteSphere[],
   pxScale: number,
+  slop: PickSlop = POINTER_SLOP,
 ): ScenePick {
-  const bodies = pickBodies(ray, bodySpheres, pxScale);
+  const bodies = pickBodies(ray, bodySpheres, pxScale, slop);
   const satellites: SatelliteCandidate[] = [];
   const listed: SatelliteSphere[] = [];
   const [ox, oy, oz] = ray.origin;
@@ -128,7 +130,7 @@ export function pickScene(
     if (s.landed) {
       if (screenDistance > screenRadius) continue; // its real size: no minimum target
       if (!clearTarget(ray.origin, s.bodyId, bodySpheres, pxScale)) continue;
-    } else if (screenDistance > Math.max(screenRadius, MIN_TARGET_PX)) continue;
+    } else if (screenDistance > Math.max(screenRadius, slop.minTargetPx)) continue;
     if (occluded(ray.origin, s.center, bodySpheres)) continue; // behind a body
     satellites.push({ agentId: s.agentId, depth, screenDistance, screenRadius });
     listed.push(s);

@@ -2,7 +2,7 @@
 
 Mission Control for the AI coding agents running on your computer, through a solar-system interface: Earth is the headquarters, planets, moons and asteroids host projects and tasks by size, and agents are satellites doing visible work.
 
-Read `docs/SPEC.md` (what), `docs/TECHNOLOGY.md` (with what) and `docs/IMPLEMENTATION_PLAN.md` (in which order). Work is tracked in `docs/tasks/`; the ticket flow is in `CLAUDE.md`.
+Read `docs/SPEC.md` (what), `docs/TECHNOLOGY.md` (with what) and `docs/IMPLEMENTATION_PLAN.md` (in which order). Work is tracked in `docs/tasks/`; the ticket flow is in `CLAUDE.md`. Phone access over Tailscale Serve: `docs/REMOTE_ACCESS.md`.
 
 ## Quickstart
 

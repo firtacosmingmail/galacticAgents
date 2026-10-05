@@ -93,9 +93,9 @@ describe('/api agent routes (P1-11)', () => {
     });
   });
 
-  it("floors a remote client's policy at the global default unless configured (P2-04)", async () => {
-    const spawn = async (headers: Record<string, string>) => {
-      const res = await fetch(`${t.baseUrl}/api/agents`, {
+  it('refuses a free-form spawn from a remote client (SPEC decision 90)', async () => {
+    const spawn = (headers: Record<string, string>) =>
+      fetch(`${t.baseUrl}/api/agents`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${TEST_TOKEN}`,
@@ -109,15 +109,16 @@ describe('/api agent routes (P1-11)', () => {
           policy: 'trusting',
         }),
       });
-      const id = ((await res.json()) as { agentId: string }).agentId;
-      return composed.log.tables.agents.get(id)?.meta?.['permissionPolicy'] as
-        { rules: Record<string, string> } | undefined;
-    };
-    const local = await spawn({});
-    expect(local?.rules['network']).toBe('allow');
     const remote = await spawn({ origin: 'https://mymac.tail1234.ts.net' });
-    expect(remote?.rules['network']).toBe('ask');
-    expect(remote?.rules['edit_workspace']).toBe('allow');
+    expect(remote.status).toBe(403);
+    expect(await remote.json()).toMatchObject({ error: 'remote_control' });
+    expect(composed.runtime.liveAgents()).toHaveLength(0);
+    const local = await spawn({});
+    expect(local.status).toBe(201);
+    const id = ((await local.json()) as { agentId: string }).agentId;
+    const policy = composed.log.tables.agents.get(id)?.meta?.['permissionPolicy'] as
+      { rules: Record<string, string> } | undefined;
+    expect(policy?.rules['network']).toBe('allow');
   });
 
   it('spawns, messages, pauses, resumes and stops an agent', async () => {

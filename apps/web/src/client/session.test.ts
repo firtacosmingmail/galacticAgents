@@ -1,0 +1,115 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  confirmToken,
+  discoverToken,
+  forgetToken,
+  IDENTITY_TOKEN,
+  initialToken,
+  refuseToken,
+  saveToken,
+  takeTokenFromFragment,
+  TOKEN_KEY,
+} from './session.js';
+import { phoneUrl } from '../panel/settings/AccessToken.js';
+import { qrModules } from '../panel/settings/QrCode.js';
+
+/** The token hand-over of P7-02: QR fragment, Tailscale identity, never a query string. */
+afterEach(() => {
+  forgetToken();
+  localStorage.clear();
+  vi.unstubAllGlobals();
+  window.history.replaceState(null, '', '/');
+});
+
+describe('takeTokenFromFragment', () => {
+  it('takes the token and removes it from the address, keeping the rest of the URL', () => {
+    window.history.replaceState(null, '', '/settings?tab=a#token=abc%2B123&other=1');
+    expect(takeTokenFromFragment()).toBe('abc+123');
+    // Saved only once a session with it goes live.
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+    confirmToken('abc+123');
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('abc+123');
+    expect(window.location.pathname).toBe('/settings');
+    expect(window.location.search).toBe('?tab=a');
+    expect(window.location.hash).toBe('#other=1');
+    expect(window.location.href).not.toContain('abc');
+  });
+
+  it('does nothing without the key, and strips an empty one', () => {
+    window.history.replaceState(null, '', '/#other=1');
+    expect(takeTokenFromFragment()).toBeUndefined();
+    expect(window.location.hash).toBe('#other=1');
+    window.history.replaceState(null, '', '/#token=');
+    expect(takeTokenFromFragment()).toBeUndefined();
+    expect(window.location.hash).toBe('');
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+
+  it('keeps a saved token until the handed one connects, and falls back to it if refused', () => {
+    localStorage.setItem(TOKEN_KEY, 'saved-good');
+    window.history.replaceState(null, '', '/#token=new-bad');
+    expect(initialToken()).toBe('new-bad');
+    // A second call (React's strict mode) finds the fragment gone and returns the same token.
+    expect(initialToken()).toBe('new-bad');
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('saved-good');
+    expect(refuseToken('new-bad')).toBe('saved-good');
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('saved-good');
+    // The saved token refused in turn is forgotten, with nothing to fall back to.
+    expect(refuseToken('saved-good')).toBeUndefined();
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+
+  it('replaces the saved token once the handed one connects', () => {
+    localStorage.setItem(TOKEN_KEY, 'saved-old');
+    window.history.replaceState(null, '', '/#token=new-good');
+    expect(initialToken()).toBe('new-good');
+    confirmToken('saved-old'); // not the handed token: nothing changes
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('saved-old');
+    confirmToken('new-good');
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('new-good');
+    expect(refuseToken('new-good')).toBeUndefined();
+  });
+
+  it('never takes the identity stand-in from a fragment', () => {
+    window.history.replaceState(null, '', `/#token=${IDENTITY_TOKEN}`);
+    expect(takeTokenFromFragment()).toBeUndefined();
+    expect(window.location.hash).toBe('');
+    expect(initialToken()).toBeUndefined();
+    confirmToken(IDENTITY_TOKEN);
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+
+  it('pairs with the QR code: the phone address carries the token in the fragment only', () => {
+    const url = new URL(phoneUrl('mymac.tail1234.ts.net', 'a/b+c=d'));
+    expect(url.protocol).toBe('https:');
+    expect(url.host).toBe('mymac.tail1234.ts.net');
+    expect(url.search).toBe('');
+    expect(url.pathname).toBe('/');
+    window.history.replaceState(null, '', `/${url.hash}`);
+    expect(takeTokenFromFragment()).toBe('a/b+c=d');
+    const { size, path } = qrModules(url.href);
+    expect(size).toBeGreaterThanOrEqual(21);
+    expect(path.length).toBeGreaterThan(0);
+  });
+});
+
+describe('discoverToken with a Tailscale identity', () => {
+  const health = (body: object) =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })),
+    );
+
+  it('stands in for the token when the server accepts the identity, and never stores it', async () => {
+    health({ ok: true, origin: 'remote', identity: 'me@example.com' });
+    expect(await discoverToken()).toBe(IDENTITY_TOKEN);
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+    saveToken(IDENTITY_TOKEN);
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+
+  it('finds nothing on a remote device without a token or an identity', async () => {
+    health({ ok: true, origin: 'remote' });
+    expect(await discoverToken()).toBeUndefined();
+  });
+});

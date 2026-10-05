@@ -22,6 +22,28 @@
   background: #02030a;
   overflow: hidden;
 }
+/*
+ * Touch (P7-03): the canvas owns every gesture that starts on it — one finger orbits, two pinch and
+ * pan — so the page neither scrolls nor zooms under it, and no double-tap zoom delays a tap.
+ * OrbitControls sets `none` on the element it listens on (R3F's wrapper) but leaves an inline
+ * `auto` on the canvas when it moves there from the canvas; `!important` keeps the canvas's own
+ * value right whichever element the controls end up on. A long press shows no callout or text
+ * selection. Only the canvas and its wrappers: a pinch that starts on a card, the breadcrumb or
+ * the legend over the scene zooms the page as anywhere else, so their text can be enlarged
+ * (WCAG 1.4.4; P7-03 review). The paint-only labels take no pointer events, so a touch on one
+ * reaches the canvas.
+ */
+.pnl-scene-canvas,
+.pnl-scene-canvas > div {
+  touch-action: none;
+}
+.pnl-scene canvas {
+  touch-action: none !important;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
 .pnl-scene-loading {
   position: absolute;
   inset: 0;

@@ -2,6 +2,7 @@ import { useAppStore } from '../../state/store.js';
 import { NavLink } from '../Navigation.js';
 import { NotificationSettings } from '../notifications/NotificationSettings.js';
 import { AccessToken } from './AccessToken.js';
+import { DeviceQuality } from './DeviceQuality.js';
 import { PreflightCheck } from './PreflightCheck.js';
 import { useSettingsData } from './SettingsData.js';
 import { SaveButton, SECTIONS, SectionFrame, useSection, type AnySectionSpec } from './sections.js';
@@ -43,6 +44,9 @@ export function SettingsPage({ token }: { token: string }) {
       {data.status === 'ready' &&
         SECTIONS.map((spec) => <PageSection key={spec.field} spec={spec} />)}
 
+      {/* P7-03: this browser's own tier, local — shown even without a settings endpoint. */}
+      <DeviceQuality />
+
       <section className="set-section" aria-label="Notifications">
         <div className="set-head">
           <h2 className="set-title">Notifications</h2>
@@ -52,7 +56,10 @@ export function SettingsPage({ token }: { token: string }) {
         <NotificationSettings heading={false} />
       </section>
 
-      <AccessToken token={token} />
+      <AccessToken
+        token={token}
+        {...(data.response?.remote ? { remote: data.response.remote } : {})}
+      />
     </main>
   );
 }

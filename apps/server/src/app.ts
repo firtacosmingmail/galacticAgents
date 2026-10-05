@@ -2,12 +2,18 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { PROTOCOL_VERSION, type HealthResponse } from '@galactic/protocol';
 import type { ServerConfig } from './config/config.js';
-import { isAllowedHost, isRemoteRequest } from './http/security.js';
+import {
+  isAllowedHost,
+  isRemoteRequest,
+  isSameOriginFetch,
+  tailscaleIdentityOf,
+} from './http/security.js';
 import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
+import { isWebFile, webCacheControl } from './http/web-cache.js';
 import type { SettingsService } from './config/settings.js';
 import type { EventLog } from './domain/event-log.js';
 import type { StatusStore } from './runtime/status-store.js';
@@ -38,7 +44,8 @@ export interface AppOptions {
   restartHarmonizer?: AgentRoutesOptions['restartHarmonizer'];
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
-  logger?: boolean;
+  /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
+  logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
 
 export interface App {
@@ -74,21 +81,42 @@ export function buildApp(opts: AppOptions): App {
     // Serve, `vite preview --host`) also arrives from loopback, maybe with no Origin at all (a
     // plain GET, curl): its Host or forwarding headers give it away (`isRemoteRequest`), and it
     // pastes the token (P3-08 review: the Origin check alone handed it to any LAN client).
-    if (!isRemoteRequest(req)) {
+    // Never to a remote client, not even one Tailscale identity authenticated (P7-02): the
+    // identity is its credential, the long-lived token stays on this machine.
+    // And only to a browser's own page (`Sec-Fetch-Site: same-origin`, or `none` for a typed
+    // navigation): a speed bump for scripts and agents on this machine, not a boundary — any
+    // local process can send that header too (docs/REMOTE_ACCESS.md §4).
+    const remote = isRemoteRequest(req);
+    body.origin = remote ? 'remote' : 'local';
+    if (!remote && isSameOriginFetch(req)) {
       body.token = config.token;
     }
+    const identity = tailscaleIdentityOf(req, config);
+    if (identity) body.identity = identity;
     return body;
   });
 
   if (opts.webDir) {
-    void fastify.register(fastifyStatic, { root: opts.webDir, wildcard: false });
+    const webDir = opts.webDir;
+    void fastify.register(fastifyStatic, {
+      root: webDir,
+      // One wildcard route that looks a file up per request (P7-01 review): `wildcard: false`
+      // lists the files at startup, so a rebuild without a restart 404'd its new assets — a blank
+      // page and a service worker that failed to install. Dotfiles stay unserved.
+      wildcard: true,
+      dotfiles: 'ignore',
+      setHeaders: (reply, path) =>
+        void reply.header('cache-control', webCacheControl(webDir, path)),
+    });
     fastify.setNotFoundHandler((req, reply) => {
-      // Single-page app: unknown GET paths load the page; API-shaped paths stay 404.
+      // Single-page app: unknown GET paths load the page; API-shaped paths stay 404, and so do
+      // missing build files (P7-01: the service worker must never keep the page as a script).
       if (
         req.method === 'GET' &&
         !req.url.startsWith('/dev/') &&
         !req.url.startsWith('/api/') &&
-        !req.url.startsWith('/health')
+        !req.url.startsWith('/health') &&
+        !isWebFile(req.url)
       ) {
         return reply.sendFile('index.html');
       }

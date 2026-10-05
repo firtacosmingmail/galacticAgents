@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  IDENTITY_TOKEN,
   PermissionPolicy,
   QualityTier,
   SettingsCaps,
@@ -17,12 +18,42 @@ import {
   type SpawnCaps,
 } from '../runtime/caps.js';
 
+/** A DNS name with at least one dot: no scheme, port, path or wildcard (stored lower-case). */
+const REMOTE_HOST =
+  /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
+
 /** Persisted in `~/.galactic/config.json`. Every field is optional on disk; defaults fill the rest. */
 export const ConfigFile = z.object({
   port: z.number().int().min(1).max(65535).optional(),
-  token: z.string().min(16).optional(),
-  /** Extra allowed `Host`/`Origin` host names, e.g. "mymac.tailnet-name.ts.net" or "*.ts.net". */
+  /** Never the identity stand-in (`IDENTITY_TOKEN`), which clients send in place of a token. */
+  token: z
+    .string()
+    .min(16)
+    .refine((t) => t !== IDENTITY_TOKEN, `"${IDENTITY_TOKEN}" is reserved; pick another token`)
+    .optional(),
+  /**
+   * Extra allowed `Host`/`Origin` host names. Prefer `remoteHost` for the Tailscale name; a
+   * `*.ts.net` wildcard is accepted but warned about (it also admits every Funnel page's Origin).
+   */
   allowedHosts: z.array(z.string().min(1)).optional(),
+  /**
+   * The Tailscale Serve name this machine is reached at from the phone (P7-02;
+   * `docs/REMOTE_ACCESS.md`), e.g. "mymac.tail1234.ts.net": an exact host name, never a wildcard.
+   * Added to the allow-list, used for the phone's address in the settings QR code, and the only
+   * `Host` under which Tailscale identity headers are read.
+   */
+  remoteHost: z
+    .string()
+    .regex(REMOTE_HOST, 'an exact host name such as mymac.tail1234.ts.net (no scheme, port or *)')
+    .optional(),
+  /**
+   * Opt-in (P7-02): accept Tailscale Serve's `Tailscale-User-Login` header as a remote client's
+   * credential, instead of the token, for exactly these logins. Read only over a loopback
+   * connection whose `Host` is `remoteHost`. Any process on this Mac can send that header — as it
+   * can already obtain the token from `/health`, so this adds no new local exposure
+   * (`docs/REMOTE_ACCESS.md` §4).
+   */
+  tailscaleIdentityLogins: z.array(z.string().min(3)).min(1).optional(),
   /** Where new project folders are created (SPEC §3.5); absolute or `~/…`. */
   projectsRoot: z.string().min(1).optional(),
   /**
@@ -74,6 +105,16 @@ export interface ServerConfig {
   token: string;
   /** Host names accepted in `Host` and `Origin` headers; `*.ts.net` style wildcards allowed. */
   allowedHosts: string[];
+  /**
+   * The Tailscale Serve name (P7-02): `remoteHost` in the file or `GALACTIC_REMOTE_HOST`. In
+   * `allowedHosts` too; absent = remote access not set up (the settings page shows no QR code).
+   */
+  remoteHost?: string;
+  /**
+   * Tailscale logins (lower-case) accepted as a credential through Serve's identity headers
+   * (P7-02); absent = off, the default. Only with `remoteHost` (ignored, with a warning, without).
+   */
+  tailscaleIdentityLogins?: string[];
   /** `GALACTIC_DEV=1`: enables the `/dev/*` routes (`pnpm dev` sets it; `galactic start --dev` opts in). */
   dev: boolean;
   /** `~/.galactic` (or `$GALACTIC_HOME`): config, database, logs. */
@@ -119,6 +160,8 @@ export interface LoadedConfig {
   config: ServerConfig;
   /** True when this call generated the token; `galactic start` prints it once in that case. */
   tokenGenerated: boolean;
+  /** Configuration that works but deserves a word at startup (P7-02); never carries the token. */
+  warnings: string[];
 }
 
 export const DEFAULT_PORT = 4321;
@@ -153,6 +196,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
 
   let tokenGenerated = false;
   let token = env['GALACTIC_TOKEN'] ?? file.token;
+  if (token === IDENTITY_TOKEN) {
+    throw new Error(`GALACTIC_TOKEN "${IDENTITY_TOKEN}" is reserved; pick another token`);
+  }
   if (!token) {
     token = generateToken();
     tokenGenerated = true;
@@ -174,7 +220,49 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       .map((h) => h.trim())
       .filter(Boolean) ?? []),
   ];
-  const allowedHosts = [...new Set([...DEFAULT_ALLOWED_HOSTS, ...extraHosts])];
+  const warnings: string[] = [];
+  const remoteSetting = env['GALACTIC_REMOTE_HOST'] ?? file.remoteHost;
+  const remoteHost = remoteSetting?.trim().toLowerCase() || undefined;
+  if (remoteHost !== undefined && !REMOTE_HOST.test(remoteHost)) {
+    throw new Error(
+      `Invalid remote host (an exact name such as mymac.tail1234.ts.net): ${remoteSetting}`,
+    );
+  }
+  if (remoteHost) {
+    // REMOTE_ACCESS §1/§3: a request is remote by its proxy headers; a tunnel that adds none
+    // makes every one of its users local.
+    warnings.push(
+      `Remote access via ${remoteHost}: point only HTTP-mode Tailscale Serve at this port ` +
+        `(tailscale serve --https=443 http://127.0.0.1:${port}). A TCP Serve, ssh -L/-R, VS Code ` +
+        `port forwarding or any tunnel that adds no X-Forwarded-For makes its users local.`,
+    );
+  }
+  const allowedHosts = [
+    ...new Set([...DEFAULT_ALLOWED_HOSTS, ...extraHosts, ...(remoteHost ? [remoteHost] : [])]),
+  ];
+  for (const h of extraHosts) {
+    if (h.startsWith('*.')) {
+      warnings.push(
+        `allowedHosts has the wildcard ${h}: every name under it passes the Host and Origin checks ` +
+          `(for *.ts.net, any Tailscale Funnel page too). Prefer remoteHost with your machine's exact name.`,
+      );
+    }
+  }
+  let tailscaleIdentityLogins: string[] | undefined;
+  if (file.tailscaleIdentityLogins) {
+    if (remoteHost) {
+      tailscaleIdentityLogins = [
+        ...new Set(file.tailscaleIdentityLogins.map((l) => l.trim().toLowerCase())),
+      ];
+      warnings.push(
+        `Tailscale identity headers are accepted for ${tailscaleIdentityLogins.join(', ')}: any ` +
+          `process on this machine can send them, as it can already ask /health for the token ` +
+          `(docs/REMOTE_ACCESS.md §4).`,
+      );
+    } else {
+      warnings.push('tailscaleIdentityLogins is ignored: it needs remoteHost.');
+    }
+  }
 
   const rootSetting = env['GALACTIC_PROJECTS_ROOT'] ?? file.projectsRoot;
   const projectsRoot = rootSetting
@@ -221,6 +309,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       port,
       token,
       allowedHosts,
+      ...(remoteHost ? { remoteHost } : {}),
+      ...(tailscaleIdentityLogins ? { tailscaleIdentityLogins } : {}),
       dev: env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true',
       dataDir,
       configPath,
@@ -244,6 +334,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
     },
     tokenGenerated,
+    warnings,
   };
 }
 

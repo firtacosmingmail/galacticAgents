@@ -123,3 +123,12 @@ describe('finished labels: dimmer, still readable (WCAG AA, 4.5:1)', () => {
     expect(luminance(done)).toBeLessThan(luminance(open));
   });
 });
+
+describe('touch gestures (P7-03, decision 92)', () => {
+  it('the canvas and its wrappers own every gesture; the scene area does not block pinch-zoom', () => {
+    expect(rule('.pnl-scene canvas')['touch-action']).toBe('none !important');
+    expect(rule('.pnl-scene-canvas,\n.pnl-scene-canvas > div')['touch-action']).toBe('none');
+    // Cards, the breadcrumb and the legend over the scene can be pinch-zoomed (WCAG 1.4.4).
+    expect(rule('.pnl-scene')['touch-action']).toBeUndefined();
+  });
+});

@@ -584,6 +584,66 @@ describe('per-frame cost (review item 4)', () => {
     flushRaf();
     expect(rect).toHaveBeenCalledTimes(3);
   });
+
+  it('a finger gets a larger target than a mouse, and its ghost click is dropped (P7-03)', () => {
+    // A speck: 0.01 units at z 0, ≈ 1 px; the canvas centre is (400, 300).
+    anchorAtPoint('b-speck', [0, 0, 0], 0.01);
+    render(<Picking />);
+    frame();
+    const tap = (x: number, pointerType: string) => {
+      fireEvent.pointerDown(canvas, {
+        clientX: x,
+        clientY: 300,
+        buttons: 1,
+        pointerId: 1,
+        button: 0,
+        pointerType,
+      });
+      fireEvent.pointerUp(canvas, {
+        clientX: x,
+        clientY: 300,
+        pointerId: 1,
+        button: 0,
+        pointerType,
+      });
+    };
+    // 15 px off: past a mouse's target and cluster (6 + 6), inside a finger's (16 + 8).
+    tap(415, 'mouse');
+    expect(usePickingStore.getState().popover).toBeUndefined();
+    tap(415, 'touch');
+    expect(usePickingStore.getState().popover).toMatchObject({ kind: 'info' });
+    // The compatibility mouse events and click after the touch are cancelled.
+    expect(fireEvent.touchEnd(canvas)).toBe(false);
+  });
+
+  it('a tap on the scene blurs a text field being typed in, not a button (P7-03 review)', () => {
+    render(<Picking />);
+    frame();
+    for (const make of [
+      () => document.createElement('input'),
+      () => document.createElement('textarea'),
+      () => {
+        const div = document.createElement('div');
+        div.setAttribute('contenteditable', 'true');
+        div.tabIndex = 0;
+        return div;
+      },
+    ]) {
+      const field = make();
+      document.body.appendChild(field);
+      field.focus();
+      expect(document.activeElement).toBe(field);
+      expect(fireEvent.touchEnd(canvas)).toBe(false);
+      expect(document.activeElement, field.tagName).not.toBe(field);
+      field.remove();
+    }
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    button.focus();
+    fireEvent.touchEnd(canvas);
+    expect(document.activeElement).toBe(button);
+    button.remove();
+  });
 });
 
 describe('OutlineSync', () => {

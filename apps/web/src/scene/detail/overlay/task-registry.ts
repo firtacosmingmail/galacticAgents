@@ -65,7 +65,10 @@ export function taskMarkerHit(
   pxScale: number,
   bodies: readonly PickSphere[],
   list: readonly TaskMarkerFrame[] = frames,
+  minTargetPx = 0,
 ): { frame: TaskMarkerFrame; px: number } | undefined {
+  // P7-03: a finger's tap gets a larger target (`PickSlop.markerPx`).
+  const targetPx = Math.max(MARKER_SIZE.targetPx, minTargetPx);
   const [ox, oy, oz] = ray.origin;
   const [dx, dy, dz] = ray.direction;
   let best: TaskMarkerFrame | undefined;
@@ -80,7 +83,7 @@ export function taskMarkerHit(
     if (depth <= 0) continue;
     const perPx = depth / pxScale;
     const px = Math.sqrt(Math.max(0, vx * vx + vy * vy + vz * vz - depth * depth)) / perPx;
-    if (px > Math.max(f.radius / perPx, MARKER_SIZE.targetPx)) continue;
+    if (px > Math.max(f.radius / perPx, targetPx)) continue;
     if (px > bestPx || (px === bestPx && depth >= bestDepth)) continue;
     if (hidden(ray.origin, f, bodies)) continue;
     best = f;

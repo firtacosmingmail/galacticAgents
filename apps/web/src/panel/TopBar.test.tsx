@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+// The page as a remote device loads it: a loopback page is never on a slow connection (P7-03).
+// @vitest-environment-options {"url": "https://mymac.tail1234.ts.net/"}
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerMessage } from '@galactic/protocol';
@@ -6,7 +8,7 @@ import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
 import { useAppStore } from '../state/store.js';
-import { COMPACT_TOP_BAR_QUERY } from './use-media-query.js';
+import { COMPACT_TOP_BAR_QUERY, STACKED_LAYOUT_QUERY } from './use-media-query.js';
 
 const snapshot: ServerMessage = {
   type: 'snapshot',
@@ -27,7 +29,8 @@ function stubWidth(initiallyNarrow: boolean) {
   const listeners = new Set<() => void>();
   vi.stubGlobal('matchMedia', (query: string) => ({
     get matches() {
-      return query === COMPACT_TOP_BAR_QUERY && narrow;
+      // A phone's width is compact and stacked (760 px < 1100 px).
+      return (query === COMPACT_TOP_BAR_QUERY || query === STACKED_LAYOUT_QUERY) && narrow;
     },
     media: query,
     addEventListener: (_: string, fn: () => void) => listeners.add(fn),
@@ -124,6 +127,20 @@ describe('the wide top bar (desktop layout, unchanged by P3-12)', () => {
   });
 });
 
+describe('list mode on a slow connection (P7-03)', () => {
+  it('starts in list mode on a wide screen too, the bar offering the scene', async () => {
+    vi.stubGlobal(
+      'navigator',
+      Object.assign(Object.create(navigator), { connection: { saveData: true } }),
+    );
+    await open();
+    expect(document.querySelector('.pnl-scene')).toBeNull();
+    expect(within(top()).getByRole('button', { name: 'Show scene' })).toBeTruthy();
+    // The one-tap row is the phone's: the wide bar already has the toggle.
+    expect(screen.queryByRole('group', { name: 'solar system' })).toBeNull();
+  });
+});
+
 describe('the compact top bar (P3-12)', () => {
   beforeEach(() => {
     stubWidth(true);
@@ -152,6 +169,8 @@ describe('the compact top bar (P3-12)', () => {
   });
 
   it('opens a menu with every other action, moving focus into it', async () => {
+    // Shown by choice: a phone with no choice starts in list mode (P7-03, below).
+    localStorage.setItem('galactic.scene.visible', '1');
     await open();
     openMenu();
     expect(menuButton().getAttribute('aria-expanded')).toBe('true');
@@ -190,6 +209,34 @@ describe('the compact top bar (P3-12)', () => {
     } finally {
       HTMLCanvasElement.prototype.getContext = canvas;
     }
+  });
+
+  it('starts in list mode with no choice made and offers the scene with one tap (P7-03)', async () => {
+    await open();
+    expect(document.querySelector('.pnl-scene')).toBeNull();
+    const offer = screen.getByRole('group', { name: 'solar system' });
+    expect(offer.textContent).toContain('List mode, for a small screen.');
+    // Nothing remembered until the user chooses.
+    expect(localStorage.getItem('galactic.scene.visible')).toBeNull();
+    fireEvent.click(within(offer).getByRole('button', { name: 'Show scene' }));
+    expect(localStorage.getItem('galactic.scene.visible')).toBe('1');
+    // Shown (jsdom has no WebGL, so the menu says the scene is unavailable instead of a canvas).
+    expect(screen.queryByRole('group', { name: 'solar system' })).toBeNull();
+    openMenu();
+    expect(within(menu()).getByRole('note').textContent).toBe('3D scene unavailable — list mode');
+  });
+
+  it('keeps the one-tap offer in list mode chosen from the menu, without a reason', async () => {
+    localStorage.setItem('galactic.scene.visible', '0');
+    await open();
+    const offer = screen.getByRole('group', { name: 'solar system' });
+    expect(offer.textContent).toBe('List mode.Show scene');
+  });
+
+  it('shows the scene on a phone that chose it, with no offer', async () => {
+    localStorage.setItem('galactic.scene.visible', '1');
+    await open();
+    expect(screen.queryByRole('group', { name: 'solar system' })).toBeNull();
   });
 
   it('closes on the button, on Escape and on an outside tap, returning focus as it should', async () => {

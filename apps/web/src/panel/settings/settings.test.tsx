@@ -528,6 +528,40 @@ describe('settings page (P25-08)', () => {
     await click(within(access).getByRole('button', { name: 'Reveal' }));
     expect(token.textContent).toBe(TOKEN);
     expect(window.location.href).not.toContain(TOKEN);
-    expect(within(access).getByRole('img', { name: 'QR code placeholder' })).toBeTruthy();
+    // No remote host configured: no QR code, a pointer to the setup instead.
+    expect(within(access).queryByRole('img')).toBeNull();
+    expect(within(access).getByText(/Phone access is not set up/)).toBeTruthy();
+  });
+
+  it('draws the phone QR code only after its own reveal, in the browser (P7-02)', async () => {
+    const host = 'mymac.tail1234.ts.net';
+    await open('/settings', { ...done(), remote: { host, tailscaleIdentity: false } });
+    const access = section('Access');
+    expect(within(access).queryByRole('img')).toBeNull();
+    const fetchesBefore = server.fetchImpl.mock.calls.length;
+    await click(within(access).getByRole('button', { name: 'Show the phone QR code' }));
+    const qr = within(access).getByRole('img', {
+      name: `QR code: the address https://${host} with the token`,
+    });
+    expect(qr.tagName.toLowerCase()).toBe('svg');
+    expect(qr.querySelector('path')?.getAttribute('d')).toMatch(/^M\d+ \d+h1v1h-1z/);
+    // Drawn here: nothing was fetched for it, and the token went into no URL or text node.
+    expect(server.fetchImpl.mock.calls.length).toBe(fetchesBefore);
+    expect(server.fetchImpl.mock.calls.map(([url]) => url).join(' ')).not.toContain(TOKEN);
+    expect(access.textContent).not.toContain(TOKEN);
+    expect(window.location.href).not.toContain(TOKEN);
+    await click(within(access).getByRole('button', { name: 'Hide the phone QR code' }));
+    expect(within(access).queryByRole('img')).toBeNull();
+  });
+});
+
+describe('token hand-over from the QR code (P7-02)', () => {
+  it('takes the token from the fragment, connects with it and strips it from the URL', async () => {
+    localStorage.setItem('galactic.token', 'an-old-token-0123456789');
+    await open('/#token=from-the-qr-0123456789', freshSettings());
+    expect(FakeWebSocket.instances[0]!.hello.token).toBe('from-the-qr-0123456789');
+    expect(window.location.href).not.toContain('from-the-qr');
+    expect(window.location.hash).toBe('');
+    expect(localStorage.getItem('galactic.token')).toBe('from-the-qr-0123456789');
   });
 });

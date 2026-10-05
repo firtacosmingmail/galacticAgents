@@ -66,7 +66,10 @@ export function beaconsDrawn(): boolean {
 export function beaconUnder(
   ray: { origin: Vec3; direction: Vec3 },
   list: readonly BeaconFrame[] = frames,
+  minTargetPx = 0,
 ): BeaconFrame | undefined {
+  // P7-03: a finger's tap gets a larger target (`PickSlop.beaconPx`).
+  const targetPx = Math.max(BEACON.targetPx, minTargetPx);
   const [ox, oy, oz] = ray.origin;
   const [dx, dy, dz] = ray.direction;
   let best: BeaconFrame | undefined;
@@ -81,7 +84,7 @@ export function beaconUnder(
     const off = Math.sqrt(Math.max(0, vx * vx + vy * vy + vz * vz - depth * depth));
     // `perPx` was measured at the body's distance; the glyph is about as far.
     const px = off / f.perPx;
-    if (px <= BEACON.targetPx && px < bestPx) {
+    if (px <= targetPx && px < bestPx) {
       best = f;
       bestPx = px;
     }
