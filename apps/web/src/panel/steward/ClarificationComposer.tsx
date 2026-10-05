@@ -1,8 +1,15 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import type { Question } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { ApiError } from '../../console/api.js';
 import { actorLabel, ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js';
+import { submitAnswer } from '../../client/answer-queue.js';
+import {
+  AnswerNoticeFor,
+  isPending,
+  QueuedAnswerBox,
+  useQueuedAnswer,
+} from '../cards/QueuedAnswer.js';
 
 /**
  * The Steward view's only message box (decision 13): the answer to its open clarification
@@ -24,12 +31,15 @@ export function ClarificationComposer({
   const world = useAppStore((s) => s.world);
   const { run, error, busy } = useAction();
   const [value, setValue] = useState('');
+  const queued = useQueuedAnswer(q.id);
+  const field = useRef<HTMLTextAreaElement>(null);
 
   const answer = async (text: string) => {
     let stale: string | undefined;
     const ok = await run(async () => {
       try {
-        await api.answer(q.id, text, q.version);
+        // Sent now, or queued while offline and sent on reconnect (P7-05).
+        await submitAnswer(api, q, text);
       } catch (e) {
         if (e instanceof ApiError && e.code === 'stale') stale = e.message;
         throw e;
@@ -45,6 +55,21 @@ export function ClarificationComposer({
     const text = value.trim();
     if (text) void answer(text);
   };
+
+  if (queued && isPending(queued)) {
+    return (
+      <div className="stw-composer" role="group" aria-label="answer the clarification">
+        <p className="stw-composer-label">
+          Answer {actorLabel({ type: 'agent', id: q.originAgentId }, world)}: “{q.context.text}”
+        </p>
+        <QueuedAnswerBox
+          entry={queued}
+          // The box comes back: the focus goes to it, not to the page.
+          onCancelled={() => requestAnimationFrame(() => field.current?.focus())}
+        />
+      </div>
+    );
+  }
 
   return (
     <form className="stw-composer" aria-label="answer the clarification" onSubmit={submit}>
@@ -68,6 +93,7 @@ export function ClarificationComposer({
       )}
       <div className="stw-composer-row">
         <textarea
+          ref={field}
           id={`stw-answer-${q.id}`}
           value={value}
           rows={2}
@@ -81,6 +107,7 @@ export function ClarificationComposer({
           Send answer
         </button>
       </div>
+      <AnswerNoticeFor questionId={q.id} />
       <ErrorLine error={error} />
     </form>
   );

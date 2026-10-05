@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Id, Question } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
 import { ApiError } from '../../console/api.js';
 import { actorLabel, ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js';
 import { AgentRef } from './links.js';
+import { submitAnswer } from '../../client/answer-queue.js';
+import { AnswerNoticeFor, isPending, QueuedAnswerBox, useQueuedAnswer } from './QueuedAnswer.js';
 
 /**
  * Question cards (P2-18, extracted for the panel in P25-06; SPEC §2.6): one open question with its
@@ -105,6 +107,8 @@ export function QuestionCard({
   const { run, error, busy } = useAction();
   const [value, setValue] = useState('');
   const [ownStale, setOwnStale] = useState<string | undefined>();
+  const queued = useQueuedAnswer(q.id);
+  const article = useRef<HTMLElement>(null);
   const permission = q.kind === 'permission';
   const call = q.context.toolCall;
   const userHeld = q.holder.type === 'user';
@@ -112,7 +116,8 @@ export function QuestionCard({
     let stale: string | undefined;
     const ok = await run(async () => {
       try {
-        await api.answer(q.id, text, q.version);
+        // Sent now, or queued while offline and sent on reconnect (P7-05).
+        await submitAnswer(api, q, text);
       } catch (e) {
         if (e instanceof ApiError && e.code === 'stale') stale = e.message;
         throw e;
@@ -126,6 +131,7 @@ export function QuestionCard({
   };
   return (
     <article
+      ref={article}
       className={`card question question-${q.kind}`}
       aria-label={`${q.kind} question ${q.context.text}`}
       data-question-id={q.id}
@@ -151,7 +157,17 @@ export function QuestionCard({
           Its supervisor may answer it from context; you can answer it yourself instead.
         </p>
       )}
-      {permission ? (
+      {queued && isPending(queued) ? (
+        <QueuedAnswerBox
+          entry={queued}
+          // The controls come back: the focus goes to the first of them, not to the page.
+          onCancelled={() =>
+            requestAnimationFrame(() =>
+              article.current?.querySelector<HTMLElement>('.controls button, form input')?.focus(),
+            )
+          }
+        />
+      ) : permission ? (
         <div className="controls">
           <button disabled={busy} onClick={() => void answer('allow')}>
             Allow
@@ -184,6 +200,7 @@ export function QuestionCard({
           </button>
         </form>
       )}
+      <AnswerNoticeFor questionId={q.id} />
       {ownStale !== undefined ? (
         <StaleBanner
           questionId={q.id}
@@ -267,6 +284,7 @@ export function QuestionView({ questionId }: { questionId: Id }) {
       {stale !== undefined && (
         <StaleBanner questionId={q.id} message={stale} onDismiss={() => setStale(undefined)} />
       )}
+      {q.status !== 'open' && <AnswerNoticeFor questionId={q.id} />}
       {q.status === 'open' ? (
         <QuestionCard question={q} onStale={(_id, message) => setStale(message)} />
       ) : q.status === 'answered' ? (

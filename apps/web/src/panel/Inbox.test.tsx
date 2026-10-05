@@ -248,7 +248,7 @@ describe('panel inbox (P25-06)', () => {
     await click(within(el).getByRole('button', { name: 'yes' }));
     await flush();
     expect(posts('/api/questions/q-1/answer').map((c) => c.body)).toEqual([
-      { answer: 'yes', version: 3 },
+      { answer: 'yes', version: 3, answerId: expect.any(String) },
     ]);
 
     // The server commits the answer; the stream carries it to the store, and from there everywhere.
@@ -282,6 +282,7 @@ describe('panel inbox (P25-06)', () => {
     expect(posts('/api/questions/q-1/answer')[0]?.body).toEqual({
       answer: 'rename it',
       version: 3,
+      answerId: expect.any(String),
     });
     await stream({
       type: 'question.answered',
@@ -306,8 +307,8 @@ describe('panel inbox (P25-06)', () => {
     await click(within(thread()).getByRole('button', { name: 'no' }));
     await flush();
     expect(posts('/api/questions/q-1/answer').map((c) => c.body)).toEqual([
-      { answer: 'no', version: 3 },
-      { answer: 'no', version: 3 },
+      { answer: 'no', version: 3, answerId: expect.any(String) },
+      { answer: 'no', version: 3, answerId: expect.any(String) },
     ]);
     // Meanwhile the Waykeeper answered it from context.
     await stream({
@@ -340,8 +341,8 @@ describe('panel inbox (P25-06)', () => {
     await click(within(el).getByRole('button', { name: 'Refuse' }));
     await flush();
     expect(posts('/api/questions/q-2/answer').map((c) => c.body)).toEqual([
-      { answer: 'allow', version: 0 },
-      { answer: 'no', version: 0 },
+      { answer: 'allow', version: 0, answerId: expect.any(String) },
+      { answer: 'no', version: 0, answerId: expect.any(String) },
     ]);
   });
 

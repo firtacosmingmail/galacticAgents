@@ -1,5 +1,6 @@
 import type {
   AnswerBody,
+  AnswerResponse,
   ControlBody,
   ControlResponse,
   ConversationQuery,
@@ -102,11 +103,15 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     recover: (agentId: string) => call('POST', `/api/agents/${agentId}/recover`),
     /** Stops the Harmonizer and starts a fresh one on the same runtime (P5-06, decision 82). */
     restartHarmonizer: () => call<RestartHarmonizerResponse>('POST', '/api/harmonizer/restart'),
-    /** `version`: the question's version as the page saw it (a stale answer is refused). */
-    answer: (questionId: string, answer: string, version?: number) =>
-      call('POST', `/api/questions/${questionId}/answer`, {
+    /**
+     * `version`: the question's version as the page saw it (a stale answer is refused);
+     * `answerId`: the idempotency key of this answer, the same on every retry (P7-05).
+     */
+    answer: (questionId: string, answer: string, version?: number, answerId?: string) =>
+      call<AnswerResponse>('POST', `/api/questions/${questionId}/answer`, {
         answer,
         ...(version !== undefined ? { version } : {}),
+        ...(answerId !== undefined ? { answerId } : {}),
       } satisfies AnswerBody),
     decide: (proposalId: string, decision: ProposalDecisionBody) =>
       call<DecideResponse>('POST', `/api/proposals/${proposalId}/decide`, decision),
