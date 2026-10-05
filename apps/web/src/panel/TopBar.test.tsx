@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+// The page as a remote device loads it: a loopback page is never on a slow connection (P7-03).
+// @vitest-environment-options {"url": "https://mymac.tail1234.ts.net/"}
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerMessage } from '@galactic/protocol';
