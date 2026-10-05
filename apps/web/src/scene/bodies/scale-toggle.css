@@ -38,3 +38,19 @@
   background: #24345e;
   color: #ffffff;
 }
+/*
+ * A phone-width scene (P7-03): the breadcrumb ("Solar system › Mars › Detail · Cutaway") takes the
+ * whole bottom row, so the toggle sits on the row above it instead of over it; and a finger gets a
+ * taller button.
+ */
+@media (max-width: 760px) {
+  .pnl-scene-scale {
+    bottom: 52px;
+    max-width: calc(100% - 16px);
+  }
+}
+@media (pointer: coarse) {
+  .pnl-scene-scale button {
+    min-height: 36px;
+  }
+}

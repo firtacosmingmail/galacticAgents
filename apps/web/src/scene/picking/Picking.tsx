@@ -413,6 +413,14 @@ export function Picking({ outline }: PickingProps) {
       invalidate();
     };
     const onWheel = () => noteUserCameraInput();
+    // P7-03: a tap is handled on `pointerup` above. The browser then synthesises mouse events and
+    // a `click` from the touch, a moment later, at the same point of the page — by when the tap
+    // may have scrolled the inbox into view (a beacon) or opened a card, so the "ghost" click
+    // lands on whatever is there now (a navigation row, selecting something else). Cancelling
+    // `touchend` drops those compatibility events; nothing on the canvas listens for them.
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.cancelable) e.preventDefault();
+    };
     const resizes =
       typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(forgetRect);
     resizes?.observe(canvas);
@@ -424,6 +432,7 @@ export function Picking({ outline }: PickingProps) {
     canvas.addEventListener('pointerenter', forgetRect);
     canvas.addEventListener('pointerleave', onLeave);
     canvas.addEventListener('wheel', onWheel, { passive: true });
+    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     window.addEventListener('resize', forgetRect);
     window.addEventListener('scroll', forgetRect, { capture: true, passive: true });
     return () => {
@@ -436,6 +445,7 @@ export function Picking({ outline }: PickingProps) {
       canvas.removeEventListener('pointerenter', forgetRect);
       canvas.removeEventListener('pointerleave', onLeave);
       canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('touchend', onTouchEnd);
       window.removeEventListener('resize', forgetRect);
       window.removeEventListener('scroll', forgetRect, { capture: true });
       canvas.style.cursor = '';
