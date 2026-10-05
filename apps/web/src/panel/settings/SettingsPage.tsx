@@ -6,7 +6,11 @@ import { AccessToken } from './AccessToken.js';
 import { DeviceQuality } from './DeviceQuality.js';
 import { PreflightCheck } from './PreflightCheck.js';
 import { useSettingsData } from './SettingsData.js';
-import { SaveButton, SECTIONS, SectionFrame, useSection, type AnySectionSpec } from './sections.js';
+import {
+  LATER_SECTIONS,
+  SaveButton,
+  SECTIONS,
+  SectionFrame, useSection, type AnySectionSpec } from './sections.js';
 import './settings.css';
 
 /**
@@ -43,7 +47,9 @@ export function SettingsPage({ token }: { token: string }) {
         </p>
       )}
       {data.status === 'ready' &&
-        SECTIONS.map((spec) => <PageSection key={spec.field} spec={spec} />)}
+        [...SECTIONS, ...LATER_SECTIONS].map((spec) => (
+          <PageSection key={spec.field} spec={spec} />
+        ))}
 
       {/* P7-03: this browser's own tier, local — shown even without a settings endpoint. */}
       <DeviceQuality />

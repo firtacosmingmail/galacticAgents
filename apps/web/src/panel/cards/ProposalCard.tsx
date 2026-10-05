@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
+  formatUsd,
   isCatalogued,
+  proposalBudget,
   proposalParking,
   proposalPlan,
   proposalPromotion,
@@ -16,7 +18,7 @@ import {
 } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
-import { Controls } from '../../console/hierarchy/WorkTree.js';
+import { budgetInput, Controls } from '../../console/hierarchy/WorkTree.js';
 import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy/shared.js';
 import { OfflineDecisionNote, useStreamDown } from './QueuedAnswer.js';
 import { AgentRef } from './links.js';
@@ -151,6 +153,7 @@ export function WorkCard({ proposal: p }: { proposal: Proposal }) {
   const body = p.proposedBody.bodyId ? world.bodies[p.proposedBody.bodyId] : undefined;
   const initGit = p.meta?.['initGit'] === true;
   const trust = proposalTrust(p);
+  const budget = proposalBudget(p);
   return (
     <article
       className={`card proposal proposal-${p.state}`}
@@ -188,6 +191,12 @@ export function WorkCard({ proposal: p }: { proposal: Proposal }) {
             </dd>
           </div>
         )}
+        <div>
+          <dt>budget</dt>
+          <dd role="definition" aria-label="budget">
+            {budget !== undefined ? formatUsd(budget) : 'none'}
+          </dd>
+        </div>
         {promotion && (
           <div className="wide">
             <dt>moves</dt>
@@ -344,6 +353,10 @@ function EditCard({
   const [workspace, setWorkspace] = useState(p.workspace);
   const [initGit, setInitGit] = useState(p.meta?.['initGit'] === true);
   const [trust, setTrust] = useState<TrustLevel>(proposalTrust(p));
+  const [budget, setBudget] = useState(() => {
+    const b = proposalBudget(p);
+    return b !== undefined ? String(b) : '';
+  });
   const choices = freeBodies(world, kind);
   // P5-04: opening the form puts the keyboard on its first field.
   const form = useRef<HTMLFormElement>(null);
@@ -369,6 +382,7 @@ function EditCard({
         : {}),
       ...(initGit !== (p.meta?.['initGit'] === true) ? { initGit } : {}),
       ...(trust !== proposalTrust(p) ? { trust } : {}),
+      ...budgetChange(budget, proposalBudget(p)),
     });
   };
   return (
@@ -428,8 +442,82 @@ function EditCard({
           </select>
         </label>
       )}
+      <BudgetField value={budget} onChange={setBudget} />
       <button type="submit" disabled={busy}>
         Save
+      </button>
+    </form>
+  );
+}
+
+/** A card's budget change (P8-01): `{budgetUsd}` when the field says something new, else nothing. */
+function budgetChange(text: string, current: number | undefined): { budgetUsd?: number | null } {
+  const usd = budgetInput(text);
+  if (usd === undefined) return {};
+  if (usd === null) return current !== undefined ? { budgetUsd: null } : {};
+  return usd !== current ? { budgetUsd: usd } : {};
+}
+
+function BudgetField({
+  value,
+  onChange,
+  label = 'budget ($)',
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  label?: string;
+}) {
+  return (
+    <label>
+      {label}
+      <input
+        type="number"
+        inputMode="decimal"
+        min="0.01"
+        step="0.01"
+        placeholder="none"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
+/**
+ * A plan card's budget (P8-01): the project's budget, given with the plan and set on approval.
+ * The project's budget now is shown beside it.
+ */
+function PlanBudget({
+  proposal: p,
+  current,
+  busy,
+  decide,
+}: {
+  proposal: Proposal;
+  current: number | undefined;
+  busy: boolean;
+  decide: (d: ProposalDecisionBody) => Promise<boolean>;
+}) {
+  const onCard = proposalBudget(p);
+  const [value, setValue] = useState(onCard !== undefined ? String(onCard) : '');
+  const change = budgetChange(value, onCard);
+  return (
+    <form
+      className="edit"
+      aria-label="plan budget"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if ('budgetUsd' in change) void decide({ decision: 'edit', changes: change });
+      }}
+    >
+      <BudgetField value={value} onChange={setValue} label="project budget ($)" />
+      <span className="muted">
+        {onCard !== undefined ? `set on approval: ${formatUsd(onCard)}` : 'none on the card'}
+        {' · now '}
+        {current !== undefined ? formatUsd(current) : 'none'}
+      </span>
+      <button type="submit" className="secondary" disabled={busy || !('budgetUsd' in change)}>
+        Set budget
       </button>
     </form>
   );
@@ -470,6 +558,9 @@ export function PlanCard({ proposal: p }: { proposal: Proposal }) {
           );
         })}
       </ol>
+      {(p.state === 'pending' || p.state === 'edited') && (
+        <PlanBudget proposal={p} current={project?.budgetUsd} busy={busy} decide={decide} />
+      )}
       {offline && <OfflineDecisionNote />}
       <div className="controls">
         {p.state !== 'rejected' && (

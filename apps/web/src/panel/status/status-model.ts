@@ -1,7 +1,11 @@
 import {
+  budgetUsage,
   ENDED_STATES,
+  formatUsd,
   isHarnessMeta,
   type Agent,
+  type BudgetTarget,
+  type BudgetUsage,
   type AgentState,
   type Id,
   type Project,
@@ -480,6 +484,57 @@ export function systemStatus(
   };
 }
 
+// --- budgets (P8-01) ------------------------------------------------------------------------------
+
+/**
+ * How a project or task stands against its dollar budget, from the folded spend (`world.spend`,
+ * never dropped like the status records): the protocol's `budgetUsage`, the server's own rule.
+ */
+export function budgetOf(
+  world: Pick<WorldState, 'projects' | 'tasks' | 'agents' | 'spend'>,
+  target: BudgetTarget,
+  warnAtPercent?: number,
+): BudgetUsage {
+  return budgetUsage(
+    {
+      projects: Object.values(world.projects),
+      tasks: Object.values(world.tasks),
+      agents: Object.values(world.agents),
+      spend: (id) => world.spend[id],
+    },
+    target,
+    warnAtPercent,
+  );
+}
+
+/** "$1.20 of $5.00 (24%)", "no budget · $0.4200 spent", "cost not reported", … */
+export function budgetText(b: BudgetUsage): string {
+  const unreported =
+    b.agents > 0 && !b.reported
+      ? 'cost not reported'
+      : b.unreported > 0
+        ? `${b.unreported} of ${b.agents} agents did not report a cost`
+        : undefined;
+  if (b.budgetUsd === undefined) {
+    if (b.agents > 0 && !b.reported) return 'no budget · cost not reported';
+    return `no budget · ${formatUsd(b.spentUsd)} spent${unreported ? ` (${unreported})` : ''}`;
+  }
+  if (b.agents > 0 && !b.reported) {
+    return `${formatUsd(b.budgetUsd)} budget · cost not reported, so not enforced`;
+  }
+  const pct = Math.round((b.fraction ?? 0) * 100);
+  const level =
+    b.level === 'exceeded'
+      ? ' — exceeded: new agents are refused'
+      : b.level === 'warning'
+        ? ' — near the budget'
+        : '';
+  return (
+    `${formatUsd(b.spentUsd)} of ${formatUsd(b.budgetUsd)} (${pct}%)${level}` +
+    (unreported ? ` · ${unreported}` : '')
+  );
+}
+
 // --- project ------------------------------------------------------------------------------------
 
 /** One task as the project and task views show it. */
@@ -498,6 +553,8 @@ export interface TaskRow {
    * ended within its 24 h status retention, `COST_CAVEAT`): an older run's cost is missing.
    */
   cost: CostTotal;
+  /** Its budget and its whole reported spend (P8-01): every run, from the folded log. */
+  budget: BudgetUsage;
 }
 
 const TASK_RANK = (state: WorkState) => {
@@ -505,7 +562,7 @@ const TASK_RANK = (state: WorkState) => {
   return i < 0 ? WORK_STATE_ORDER.length : i;
 };
 
-export function taskRow(world: WorldState, task: Task): TaskRow {
+export function taskRow(world: WorldState, task: Task, warnAtPercent?: number): TaskRow {
   const stewards = agentsFor(world, { taskId: task.id });
   const steward = primaryAgent(world, stewards);
   const ids = new Set(stewards.map((a) => a.id));
@@ -519,6 +576,7 @@ export function taskRow(world: WorldState, task: Task): TaskRow {
     stewards: stewards.length,
     questions,
     cost: costOf(world, stewards),
+    budget: budgetOf(world, { kind: 'task', id: task.id }, warnAtPercent),
   };
 }
 
@@ -551,13 +609,15 @@ export interface ProjectStatus {
    * records the server still holds (`COST_CAVEAT`).
    */
   cost: CostTotal;
+  /** Its budget and its reported spend, sub-projects included (P8-01). */
+  budget: BudgetUsage;
   subProjects: SubProjectRow[];
 }
 
 export function projectStatus(
   world: WorldState,
   projectId: Id,
-  opts: { now: number; caps?: SettingsCaps | undefined },
+  opts: { now: number; caps?: SettingsCaps | undefined; warnAtPercent?: number | undefined },
 ): ProjectStatus | undefined {
   const project = world.projects[projectId];
   if (!project) return undefined;
@@ -566,7 +626,7 @@ export function projectStatus(
   const tasks = Object.values(world.tasks).filter((t) => t.projectId === projectId);
   const rows = tasks
     .filter((t) => t.state !== 'archived')
-    .map((t) => taskRow(world, t))
+    .map((t) => taskRow(world, t, opts.warnAtPercent))
     .sort(
       (a, b) =>
         Number(b.blocked) - Number(a.blocked) ||
@@ -649,6 +709,7 @@ export function projectStatus(
     attention: sortAttention(attention),
     questions: questionCounts(questionsOfAgents(world, ids)),
     cost: costOf(world, [...waykeepers, ...stewardAgents]),
+    budget: budgetOf(world, { kind: 'project', id: projectId }, opts.warnAtPercent),
     subProjects,
   };
 }
@@ -666,11 +727,11 @@ export interface TaskStatus extends TaskRow {
 export function taskStatus(
   world: WorldState,
   taskId: Id,
-  opts: { now: number; agentId?: Id | undefined },
+  opts: { now: number; agentId?: Id | undefined; warnAtPercent?: number | undefined },
 ): TaskStatus | undefined {
   const task = world.tasks[taskId];
   if (!task) return undefined;
-  const row = taskRow(world, task);
+  const row = taskRow(world, task, opts.warnAtPercent);
   const status = opts.agentId ? world.statuses[opts.agentId] : row.status;
   const last = status ? Date.parse(status.lastEventAt) : NaN;
   return {

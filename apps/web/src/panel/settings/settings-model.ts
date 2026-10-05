@@ -23,6 +23,7 @@ export const ENV_VARIABLES: Partial<Record<SettingName, string>> = {
   projectsRoot: 'GALACTIC_PROJECTS_ROOT',
   retentionDays: 'GALACTIC_RETENTION_DAYS',
   caps: 'GALACTIC_MAX_* (any of the cap variables)',
+  budgets: 'GALACTIC_BUDGET_WARN_PERCENT',
 };
 
 /** One editable row of the default permission table (SPEC §3.6, decision 49's `unclassified`). */

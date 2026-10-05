@@ -403,6 +403,35 @@ function StewardSourcesEditor({ id, draft, setDraft, disabled }: EditorProps<boo
   );
 }
 
+function BudgetWarnEditor({ id, draft, setDraft, disabled }: EditorProps<string>) {
+  return (
+    <div className="set-field set-inline">
+      <label htmlFor={id}>Warn when a budget is</label>
+      <input
+        id={id}
+        className="set-input set-input-num"
+        type="number"
+        inputMode="numeric"
+        min={1}
+        max={100}
+        step={1}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+      />
+      <span className="set-muted">% spent</span>
+    </div>
+  );
+}
+
+/** The budget warning threshold's draft (P8-01): a whole percentage from 1 to 100. */
+export function validateBudgetWarn(draft: string): string | undefined {
+  const n = Number(draft.trim());
+  return draft.trim() !== '' && Number.isInteger(n) && n >= 1 && n <= 100
+    ? undefined
+    : 'A whole percentage from 1 to 100.';
+}
+
 // --- the specs --------------------------------------------------------------------------------
 
 export const PROJECTS_ROOT: SectionSpec<string> = {
@@ -471,9 +500,26 @@ export const STEWARD_SOURCES: SectionSpec<boolean> = {
   Editor: StewardSourcesEditor,
 };
 
+export const BUDGETS: SectionSpec<string> = {
+  field: 'budgets',
+  title: 'Budgets',
+  intro:
+    'A project or task may get a dollar budget on its card or its edit form. Spending is the cost the runtimes report (an estimate; notional under a subscription login); work whose cost is not reported is not held to its budget. At this share of a budget you are warned in the Harmonizer’s chat; at the budget, new agents for the work are refused and running ones go on.',
+  fromSettings: (s) => String(s.budgets?.warnAtPercent ?? 80),
+  validate: validateBudgetWarn,
+  toPatch: (d) => ({ budgets: { warnAtPercent: Number(d.trim()) } }),
+  Editor: BudgetWarnEditor,
+};
+
 /** A section of any draft type (the list below mixes them; each is used with its own). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnySectionSpec = SectionSpec<any>;
+
+/**
+ * The settings page's sections after the wizard's (P8-01): set later, when a budget is in use,
+ * so they are not first-run steps.
+ */
+export const LATER_SECTIONS: readonly AnySectionSpec[] = [BUDGETS];
 
 /** Every section, in the order the page and the wizard show them. */
 export const SECTIONS: readonly AnySectionSpec[] = [

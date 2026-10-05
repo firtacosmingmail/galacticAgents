@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AgentSpend,
   Body,
   EventEnvelope,
   Id,
@@ -13,6 +14,7 @@ import type {
 import {
   applyChanges,
   foldProposalMeta,
+  foldSpend,
   summarize,
   type ProposalMetaChanges,
   type SystemSummary,
@@ -28,6 +30,8 @@ export interface WorldState {
   questions: Record<Id, Question>;
   proposals: Record<Id, Proposal>;
   statuses: Record<Id, StatusRecord>;
+  /** Every agent's reported cost (P8-01): the snapshot's, folded on with `foldSpend`. */
+  spend: Record<Id, AgentSpend>;
 }
 
 export const emptyWorld = (): WorldState => ({
@@ -39,6 +43,7 @@ export const emptyWorld = (): WorldState => ({
   questions: {},
   proposals: {},
   statuses: {},
+  spend: {},
 });
 
 const byId = <T extends { id: Id }>(items: T[]): Record<Id, T> =>
@@ -54,7 +59,14 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
     questions: byId(snapshot.questions),
     proposals: byId(snapshot.proposals),
     statuses: Object.fromEntries(snapshot.statuses.map((s) => [s.agentId, s])),
+    spend: Object.fromEntries((snapshot.spend ?? []).map((s) => [s.agentId, s])),
   };
+}
+
+/** The agent's spend after `envelope` (P8-01), the same fold as the server's `agent_spend`. */
+function spendAfter(state: WorldState, envelope: EventEnvelope, agentId: Id): WorldState {
+  const next = foldSpend(state.spend[agentId], envelope);
+  return next ? { ...state, spend: { ...state.spend, [agentId]: next } } : state;
 }
 
 /**
@@ -94,7 +106,8 @@ function patch<T extends object>(
  * (P2-01), so folding them here builds exactly the server's tables — `conformance.test.ts`
  * replays a recorded log and checks it against the server's snapshot at every commit.
  */
-export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope): WorldState {
+export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldState {
+  const { seq, at, event } = envelope;
   const next = { ...state, seq };
   switch (event.type) {
     case 'project.created':
@@ -276,26 +289,30 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
         ...next,
         agents: patch(next.agents, event.agentId, { ...event.changes, updatedAt: at }),
       };
-    case 'agent.spawned':
+    case 'agent.spawned': {
+      // The spend's session meter (P8-01) follows the session, as on the server.
+      const spent = spendAfter(next, envelope, event.agentId);
       // The server stores a new session ref only (a resume under the same ref changes nothing).
-      return event.sessionRef && next.agents[event.agentId]?.sessionRef !== event.sessionRef
+      return event.sessionRef && spent.agents[event.agentId]?.sessionRef !== event.sessionRef
         ? {
-            ...next,
-            agents: patch(next.agents, event.agentId, {
+            ...spent,
+            agents: patch(spent.agents, event.agentId, {
               sessionRef: event.sessionRef,
               updatedAt: at,
             }),
           }
-        : next;
+        : spent;
+    }
+    case 'agent.idle':
+    case 'agent.finished':
+    case 'agent.failed':
+      return spendAfter(next, envelope, event.agentId); // a cost report (P8-01)
     case 'agent.progress':
     case 'agent.tool_call':
     case 'agent.needs_input':
-    case 'agent.idle':
     case 'agent.stalled':
     case 'agent.paused':
     case 'agent.resumed':
-    case 'agent.finished':
-    case 'agent.failed':
     case 'agent.stopped':
     case 'agent.interrupted':
     case 'recovery.needs_attention': // a notification (P25-07), not world state
@@ -319,6 +336,11 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
     case 'control.pin':
     case 'control.reopen':
       return next; // panel actions are recorded for supervisors; their effects arrive as domain events
+    case 'budget.set': // the row's `budgetUsd` arrives as project.updated / task.updated
+    case 'budget.warning': // notices (P8-01): the spend and the budget are already folded
+    case 'budget.exceeded':
+    case 'budget.spawn_refused':
+      return next;
   }
 }
 

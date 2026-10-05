@@ -294,6 +294,8 @@ export function EditForm({
   const [text, setText] = useState(isTask ? task.description : project.name);
   const [priority, setPriority] = useState(isTask ? task.priority : 'normal');
   const [policy, setPolicy] = useState<'' | 'clear' | PermissionPolicyPreset>('');
+  // P8-01: the dollar budget; emptied, it is removed.
+  const [budget, setBudget] = useState(item.budgetUsd !== undefined ? String(item.budgetUsd) : '');
   // P5-04: opening the form puts the keyboard on its first field.
   const form = useRef<HTMLFormElement>(null);
   useEffect(() => form.current?.querySelector<HTMLElement>('input')?.focus(), []);
@@ -308,6 +310,9 @@ export function EditForm({
       if (policy === 'clear') changes.permissionPolicy = null;
       else if (policy) changes.permissionPolicy = PERMISSION_POLICY_PRESETS[policy];
     }
+    const usd = budgetInput(budget);
+    if (usd === null && item.budgetUsd !== undefined) changes.budgetUsd = null;
+    else if (usd !== null && usd !== undefined && usd !== item.budgetUsd) changes.budgetUsd = usd;
     onSave(changes);
   };
   return (
@@ -344,9 +349,32 @@ export function EditForm({
           </select>
         </label>
       )}
+      <label>
+        budget ($)
+        <input
+          type="number"
+          inputMode="decimal"
+          min="0.01"
+          step="0.01"
+          placeholder="none"
+          value={budget}
+          onChange={(e) => setBudget(e.target.value)}
+        />
+      </label>
       <button type="submit" disabled={busy}>
         Save
       </button>
     </form>
   );
+}
+
+/**
+ * A budget field's value (P8-01): `null` for an empty field (no budget), a positive number of
+ * dollars, or `undefined` for anything else (left unchanged).
+ */
+export function budgetInput(text: string): number | null | undefined {
+  const t = text.trim();
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
