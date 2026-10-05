@@ -275,11 +275,15 @@ export class BrainRunner {
       throw error;
     }
     this.id = agentId;
-    this.scope = createWakeScope(this.opts.log.tables, {
-      brainId: agentId,
-      role: this.definition.role,
-      ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
-    });
+    this.scope = createWakeScope(
+      this.opts.log.tables,
+      {
+        brainId: agentId,
+        role: this.definition.role,
+        ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
+      },
+      { status: (id) => this.opts.queries.status(id) },
+    );
     this.opts.runtime.attachMailbox(agentId);
     const early = this.early ?? [];
     this.early = undefined;
@@ -298,11 +302,15 @@ export class BrainRunner {
     this.early = undefined;
     this.markReady();
     this.stateValue = 'renewing'; // a failed resume's `agent.interrupted` must not end the runner
-    this.scope = createWakeScope(log.tables, {
-      brainId: agentId,
-      role: this.definition.role,
-      ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
-    });
+    this.scope = createWakeScope(
+      log.tables,
+      {
+        brainId: agentId,
+        role: this.definition.role,
+        ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
+      },
+      { status: (id) => this.opts.queries.status(id) },
+    );
     const notes = [...(await this.startNotes(agentId, true)), ...extra].map((line) =>
       this.noteItem(line),
     );

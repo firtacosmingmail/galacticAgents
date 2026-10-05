@@ -45,6 +45,12 @@ export interface WakeScope {
    * task's Waykeeper, an asteroid task's Harmonizer, a sub-project's parent Waykeeper.
    */
   concerned?(event: Event): boolean;
+  /**
+   * The work is active but nobody runs it (P8-01 review): a project in progress without a running
+   * Waykeeper, a standalone task without a running Steward — as after a spawn refused for its
+   * budget.
+   */
+  unattended?(target: BudgetTarget): boolean;
 }
 
 export interface WakeRule<T extends EventType> {
@@ -130,6 +136,15 @@ const runsBudget = (target: BudgetTarget, s: WakeScope): boolean =>
   target.kind === 'task'
     ? s.runsTask(target.id)
     : s.role === 'waykeeper' && s.runsProject(target.id);
+
+/**
+ * A budget raised or removed for work nobody runs (P8-01 review): the Harmonizer is woken so it
+ * can start its Waykeeper (or an asteroid's Steward) again — a spawn the old budget refused.
+ */
+const loosened = (e: EventOfType<'budget.set'>): boolean =>
+  e.previousUsd !== undefined && (e.usd === undefined || e.usd > e.previousUsd);
+const restartable = (e: EventOfType<'budget.set'>, s: WakeScope): boolean =>
+  s.role === 'harmonizer' && loosened(e) && (s.unattended?.(e.target) ?? false);
 
 export const WAKE_RULES: WakeRules = {
   'message.sent': {
@@ -225,13 +240,20 @@ export const WAKE_RULES: WakeRules = {
   'agent.failed': ended((e) => `failed (${e.reason}): ${quote(e.error)}`),
   'agent.stalled': ended((e) => `has been silent for ${Math.round(e.silentForMs / 1000)} s`),
   'budget.set': {
-    wakes: (e, s) => runsBudget(e.target, s),
-    describe: (e) =>
+    wakes: (e, s) => runsBudget(e.target, s) || restartable(e, s),
+    describe: (e, s) =>
       `the budget of ${e.target.kind} ${e.target.id} ` +
       (e.usd !== undefined
         ? `is now ${formatUsd(e.usd)}${e.previousUsd !== undefined ? ` (was ${formatUsd(e.previousUsd)})` : ''}` +
           ' — spawns refused for the budget may be tried again'
-        : 'was removed — spawns refused for the budget may be tried again'),
+        : 'was removed — spawns refused for the budget may be tried again') +
+      (restartable(e, s)
+        ? e.target.kind === 'project'
+          ? `; project ${e.target.id} has no running Waykeeper: if the budget now allows it, ` +
+            'spawn_waykeeper for it'
+          : `; task ${e.target.id} has no running Steward: if the budget now allows it, ` +
+            'spawn_steward for it'
+        : ''),
   },
   'budget.warning': {
     wakes: (e, s) => runsBudget(e.target, s),

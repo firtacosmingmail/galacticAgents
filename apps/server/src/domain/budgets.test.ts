@@ -293,16 +293,21 @@ describe('budgets against reported cost (P8-01)', () => {
         budgetUsd: 1,
       },
     ]);
-    // A second refusal: logged again, but one chat line until the budget changes.
-    await refusal(
+    // The same spawn retried: refused again, but not logged again (once an hour per work).
+    const stewardFor = (taskId: string) =>
       c.commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
-        taskId: tasks[2]!,
+        taskId,
         supervisorId: waykeeper.id,
         prompt: 'scenario:echo',
-      }),
-    );
+      });
+    for (let i = 0; i < 3; i++) {
+      expect((await refusal(stewardFor(tasks[1]!))).code).toBe('conflict');
+    }
+    expect(rec.of('budget.spawn_refused')).toHaveLength(1);
+    // Another task's spawn is logged: other work. Still one chat line until the budget changes.
+    await refusal(stewardFor(tasks[2]!));
     expect(rec.of('budget.spawn_refused')).toHaveLength(2);
 
     // The Harmonizer's chat shows the warning, the exceeded budget and the refusal.
