@@ -397,7 +397,8 @@ describe('the real web-push transport', () => {
     const keys = loadOrCreateVapidKeys({ dataDir });
     const { subscription, ecdh, auth } = fakeSubscription();
     const payload = JSON.stringify({ v: 1, id: 'question:q1', kind: 'question', title: 'Hi' });
-    const details = webpush.generateRequestDetails(subscription, payload, {
+    const target = { endpoint: subscription.endpoint, keys: subscription.keys };
+    const details = webpush.generateRequestDetails(target, payload, {
       vapidDetails: { subject: 'mailto:test@example.com', ...keys },
       TTL: 60,
       urgency: 'high',

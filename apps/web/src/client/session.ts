@@ -3,6 +3,7 @@ import { GalacticClient } from './client.js';
 import { conversationSince } from '../state/conversation.js';
 import { useAppStore } from '../state/store.js';
 import { createNotifier } from '../panel/notifications/notifier.js';
+import { syncPush } from '../pwa/push.js';
 
 export const TOKEN_KEY = 'galactic.token';
 /** Written by earlier builds; removed on start so a stale value can never be sent (P0-12). */
@@ -187,6 +188,8 @@ export function startSession(token: string): () => void {
     unsubscribeTranscript: (agentId) => client.unsubscribeTranscript(agentId),
   });
   client.connect();
+  // A push subscription the browser rotated is handed to the server again (P7-04; best effort).
+  void syncPush(token);
   return () => {
     useAppStore.setState({ subscribeTranscript: undefined, unsubscribeTranscript: undefined });
     notifier.stop();

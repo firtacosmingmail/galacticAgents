@@ -110,3 +110,96 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(networkFirst(request, url.pathname));
   }
 });
+
+/*
+ * Web Push (P7-04, SPEC §4.5): the server sends a push for a question or permission held by the
+ * user and for a project that finished or failed. The payload is minimal (title, an optional body
+ * the device chose to receive, the notification id and what a tap opens) and never carries a
+ * credential. One notification per device: the page's own desktop notifications use the same id
+ * as their tag, so a push for something the page already showed is not shown again, and the page
+ * does not show what a push already put on screen. A push is always shown — browsers penalise a
+ * push that shows nothing, and the conservative answer to the SPEC §8 question (2026-10-03) is
+ * that notifications show even while the app is in front.
+ */
+
+const PUSH_ICON = '/icons/icon-192.png';
+const PUSH_DEFAULT_BODY = 'Open GalacticAgents to see it.';
+const PUSH_TARGET_KINDS = ['question', 'task', 'project', 'agent', 'proposal'];
+
+/** The push's notification, or undefined when the payload is missing or not ours. */
+function pushNotification(event) {
+  let data;
+  try {
+    data = event.data ? event.data.json() : undefined;
+  } catch {
+    data = undefined;
+  }
+  if (!data || typeof data !== 'object' || data.v !== 1) return undefined;
+  if (typeof data.id !== 'string' || !data.id || typeof data.title !== 'string' || !data.title) {
+    return undefined;
+  }
+  const t = data.target;
+  const target =
+    t && PUSH_TARGET_KINDS.includes(t.kind) && typeof t.id === 'string' && t.id
+      ? { kind: t.kind, id: t.id }
+      : undefined;
+  return {
+    id: data.id.slice(0, 200),
+    title: data.title.slice(0, 120),
+    body: typeof data.body === 'string' && data.body ? data.body.slice(0, 200) : undefined,
+    target,
+  };
+}
+
+async function showPush(n) {
+  const shown = n || { id: 'galactic:push', title: 'GalacticAgents', target: undefined };
+  // Already on screen (the open page showed it, or an earlier copy of this push): leave it.
+  const existing = await self.registration.getNotifications({ tag: shown.id });
+  if (existing.length > 0) return;
+  await self.registration.showNotification(shown.title, {
+    body: shown.body || PUSH_DEFAULT_BODY,
+    tag: shown.id,
+    icon: PUSH_ICON,
+    badge: PUSH_ICON,
+    data: { id: shown.id, target: shown.target },
+  });
+}
+
+self.addEventListener('push', (event) => {
+  event.waitUntil(showPush(pushNotification(event)));
+});
+
+/** Where a tap opens the app when no window is open: the page reads `#focus=` (no credential). */
+function focusUrl(target) {
+  return '/#focus=' + (target ? encodeURIComponent(target.kind + ':' + target.id) : 'inbox');
+}
+
+/** A tap focuses an open window and tells it what to select, else opens one at the target. */
+async function openNotification(data) {
+  const target = data && data.target ? data.target : undefined;
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const ours = windows.filter((c) => {
+    try {
+      return new URL(c.url).origin === self.location.origin;
+    } catch {
+      return false;
+    }
+  });
+  const client =
+    ours.find((c) => c.focused) || ours.find((c) => c.visibilityState === 'visible') || ours[0];
+  if (client) {
+    try {
+      await client.focus();
+    } catch {
+      // Not allowed (no user activation passed on): the message still selects the item.
+    }
+    client.postMessage({ type: 'NOTIFICATION_CLICK', target: target || null });
+    return;
+  }
+  await self.clients.openWindow(focusUrl(target));
+}
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(openNotification(event.notification.data));
+});
