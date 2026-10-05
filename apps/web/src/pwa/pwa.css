@@ -1,0 +1,76 @@
+/*
+ * The installable app's notices (P7-01): a small card at the bottom of the screen, above the page,
+ * clear of the phone's home bar. The panel's palette (panel.css); no motion.
+ */
+.pwa-notices {
+  --pwa-surface: #1d2232;
+  --pwa-line: #262c40;
+  --pwa-ink: #dfe3ee;
+  --pwa-here: #5b8def;
+  --pwa-button: #3a64d8; /* white text at 5:1 */
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  padding: 0 max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  pointer-events: none;
+  font:
+    14px/1.45 system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  .pwa-notices {
+    --pwa-surface: #ffffff;
+    --pwa-line: #d9dee8;
+    --pwa-ink: #1a1f2b;
+    --pwa-here: #2f62d0;
+    --pwa-button: #2f62d0;
+  }
+}
+.pwa-notice {
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  max-width: 32rem;
+  padding: 10px 12px;
+  border: 1px solid var(--pwa-line);
+  border-radius: 10px;
+  background: var(--pwa-surface);
+  color: var(--pwa-ink);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+.pwa-notice p {
+  flex: 1 1 14rem;
+  margin: 0;
+}
+.pwa-actions {
+  display: flex;
+  gap: 8px;
+}
+.pwa-notice button {
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--pwa-button);
+  border-radius: 6px;
+  background: var(--pwa-button);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.pwa-notice button.pwa-secondary {
+  background: transparent;
+  color: var(--pwa-ink);
+  border-color: var(--pwa-line);
+}
+.pwa-notice button:focus-visible {
+  outline: 2px solid var(--pwa-here);
+  outline-offset: 2px;
+}

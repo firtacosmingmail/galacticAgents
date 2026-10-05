@@ -8,6 +8,7 @@ import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
+import { isWebFile, webCacheControl } from './http/web-cache.js';
 import type { SettingsService } from './config/settings.js';
 import type { EventLog } from './domain/event-log.js';
 import type { StatusStore } from './runtime/status-store.js';
@@ -88,14 +89,22 @@ export function buildApp(opts: AppOptions): App {
   });
 
   if (opts.webDir) {
-    void fastify.register(fastifyStatic, { root: opts.webDir, wildcard: false });
+    const webDir = opts.webDir;
+    void fastify.register(fastifyStatic, {
+      root: webDir,
+      wildcard: false,
+      setHeaders: (reply, path) =>
+        void reply.header('cache-control', webCacheControl(webDir, path)),
+    });
     fastify.setNotFoundHandler((req, reply) => {
-      // Single-page app: unknown GET paths load the page; API-shaped paths stay 404.
+      // Single-page app: unknown GET paths load the page; API-shaped paths stay 404, and so do
+      // missing build files (P7-01: the service worker must never keep the page as a script).
       if (
         req.method === 'GET' &&
         !req.url.startsWith('/dev/') &&
         !req.url.startsWith('/api/') &&
-        !req.url.startsWith('/health')
+        !req.url.startsWith('/health') &&
+        !isWebFile(req.url)
       ) {
         return reply.sendFile('index.html');
       }
