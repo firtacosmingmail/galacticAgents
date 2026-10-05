@@ -301,8 +301,8 @@ function scheduleRetry(): void {
 
 /**
  * Starts the queue for a session with `token` (from `startSession`): reads the stored queue and
- * sends it every time the stream goes live — after the snapshot or the catch-up — and on another
- * tab's change to it. Returns the stop function.
+ * sends it every time the stream goes live — after the snapshot or the catch-up — or the browser
+ * comes back online; another tab's change to it is read in. Returns the stop function.
  */
 export function startAnswerQueue(token: string, api: Api): () => void {
   hydrate();
@@ -317,10 +317,27 @@ export function startAnswerQueue(token: string, api: Api): () => void {
   });
   const onStorage = (e: StorageEvent) => {
     if (e.key !== QUEUE_KEY) return;
+    // Another tab queued, cancelled or sent something; what this tab is sending stays as it is.
+    const local = useAnswerQueue.getState().entries;
     hydrate();
+    const merged = { ...useAnswerQueue.getState().entries };
+    for (const e of Object.values(local)) {
+      if (e.state !== 'sending' && e.state !== 'sent') continue;
+      const other = merged[e.questionId];
+      if (!other || other.answerId === e.answerId) merged[e.questionId] = e;
+    }
+    useAnswerQueue.setState({ entries: merged });
+    // One queue per browser: a tab that is live sends what an offline tab queued (same answerId).
+    if (useAppStore.getState().status === 'live') void flushAnswerQueue();
+  };
+  // The browser is back online while the stream never noticed it was gone (a short drop, or an
+  // emulated one): send what was queued meanwhile.
+  const onOnline = () => {
+    if (useAppStore.getState().status === 'live') void flushAnswerQueue();
   };
   try {
     window.addEventListener('storage', onStorage);
+    window.addEventListener('online', onOnline);
   } catch {
     /* no window */
   }
@@ -329,6 +346,7 @@ export function startAnswerQueue(token: string, api: Api): () => void {
     unsubscribe();
     try {
       window.removeEventListener('storage', onStorage);
+      window.removeEventListener('online', onOnline);
     } catch {
       /* no window */
     }
@@ -459,6 +477,15 @@ export function notSentLine(world: WorldView, entry: QueuedAnswer): string {
   }
   if (q && entry.reason === 'stale') {
     return `the question changed while you were offline (it is now held by ${actorLabel(q.holder, world)}); answer it again if it still applies`;
+  }
+  if (entry.reason === 'stale') {
+    // The page does not hold the question (yet: a reload before the snapshot): the refusal says.
+    const m = entry.message ?? '';
+    if (/already answered by the user/.test(m))
+      return 'already answered by you on another device or tab';
+    if (/already answered by agent/.test(m)) return 'already answered by a supervisor';
+    if (/already answered by the system/.test(m)) return 'already answered by the system';
+    return 'the question changed while you were offline';
   }
   return entry.message ?? 'the server refused it';
 }

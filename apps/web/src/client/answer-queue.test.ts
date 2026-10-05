@@ -270,6 +270,44 @@ describe('answering offline (P7-05)', () => {
   });
 });
 
+describe('the browser and other tabs (P7-05)', () => {
+  it('navigator.onLine false queues even while the stream still looks live; "online" sends it', async () => {
+    stop = startAnswerQueue(TOKEN, api);
+    snapshot([userHeld]);
+    status('live');
+    vi.stubGlobal('navigator', { ...navigator, onLine: false });
+    expect(await submitAnswer(api, userHeld, 'yes')).toBe('queued');
+    expect(answer).not.toHaveBeenCalled();
+    vi.stubGlobal('navigator', { ...navigator, onLine: true });
+    window.dispatchEvent(new Event('online'));
+    await flushAnswerQueue();
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(entries()['q-1']?.state).toBe('sent');
+  });
+
+  it("another tab's change is read in, and a live tab sends what it queued", async () => {
+    stop = startAnswerQueue(TOKEN, api);
+    snapshot([userHeld]);
+    status('live');
+    const entry: QueuedAnswer = {
+      answerId: 'other-tab',
+      questionId: 'q-1',
+      answer: 'yes',
+      version: 3,
+      text: 'Keep the legacy cookie name?',
+      queuedAt: fx.NOW,
+      state: 'queued',
+    };
+    localStorage.setItem(
+      QUEUE_KEY,
+      JSON.stringify({ v: 1, scope: tokenScope(TOKEN), entries: [entry] }),
+    );
+    window.dispatchEvent(new StorageEvent('storage', { key: QUEUE_KEY }));
+    await flushAnswerQueue();
+    expect(answer).toHaveBeenCalledWith('q-1', 'yes', 3, 'other-tab');
+  });
+});
+
 describe('reconciling on reconnect (P7-05)', () => {
   async function conflict(by: Question['answeredBy'], serverMessage: string, answerId?: string) {
     stop = startAnswerQueue(TOKEN, api);
@@ -372,6 +410,28 @@ describe('reconciling on reconnect (P7-05)', () => {
     const world = useAppStore.getState().world;
     expect(notSentLine(world, entries()['q-1']!)).toBe('the question was withdrawn');
     expect(notSentLine(world, entries()['q-2']!)).toBe('the question no longer exists');
+  });
+
+  it('before the world arrives (a reload), the refusal is worded from the server message', () => {
+    const entry: QueuedAnswer = {
+      answerId: 'x',
+      questionId: 'q-unknown',
+      answer: 'yes',
+      version: 0,
+      text: 'Q?',
+      queuedAt: fx.NOW,
+      state: 'not_sent',
+      reason: 'stale',
+      message: 'question q-unknown was already answered by the user',
+    };
+    const world = useAppStore.getState().world;
+    expect(notSentLine(world, entry)).toBe('already answered by you on another device or tab');
+    expect(
+      notSentLine(world, { ...entry, message: 'question q was already answered by agent a-1' }),
+    ).toBe('already answered by a supervisor');
+    expect(notSentLine(world, { ...entry, message: 'question q changed since version 0' })).toBe(
+      'the question changed while you were offline',
+    );
   });
 
   it('a refused token keeps the answer queued for the next session', async () => {
