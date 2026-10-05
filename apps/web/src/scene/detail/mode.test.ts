@@ -5,11 +5,13 @@ import { useAppStore } from '../../state/store.js';
 import { allAnchors, getAnchor, registerAnchor, type BodyAnchor } from '../anchors.js';
 import { useCameraStore } from '../camera/store.js';
 import { pickingWorld } from '../picking/fixtures.js';
+import { halfFov } from '../camera/flight.js';
 import {
   bindCameraToDetail,
   breadcrumbText,
   breadcrumbTrail,
   currentDetailScope,
+  DETAIL_DISC_REACH,
   DETAIL_FRAME_RADII,
   detailKind,
   detailMix,
@@ -86,6 +88,21 @@ describe('zoom thresholds (zoomStep)', () => {
     expect(zoomStep({ ...inside, distance: EXIT_RADII + 0.01 })).toBe('exit');
     // A flight in (explicit enter) or out never trips the threshold.
     expect(zoomStep({ ...inside, distance: 8, flying: true })).toBeUndefined();
+  });
+
+  it('frames the whole disc and its glow at any aspect from 1:1 to 2.2:1, inside ENTER_RADII (P6-07)', () => {
+    // The camera at DETAIL_FRAME_RADII from the centre sees a sphere of `reach` radii under
+    // asin(reach / distance); it fits when that is within the narrower half field of view.
+    const fits = (distance: number, aspect: number) =>
+      Math.asin(DETAIL_DISC_REACH / distance) < halfFov({ fovDeg: 45, aspect });
+    for (const aspect of [1, 1.07, 4 / 3, 16 / 9, 2, 2.2]) {
+      expect(fits(DETAIL_FRAME_RADII, aspect), `aspect ${aspect}`).toBe(true);
+      expect(fits(2.4, aspect), `the old framing at ${aspect}`).toBe(false);
+    }
+    expect(DETAIL_DISC_REACH).toBeGreaterThanOrEqual(1.06); // Venus's glow; Earth's is 1.035
+    // A landed flight is inside the enter threshold, and well inside the exit one.
+    expect(DETAIL_FRAME_RADII).toBeLessThan(ENTER_RADII);
+    expect(EXIT_RADII - DETAIL_FRAME_RADII).toBeGreaterThan(1.5);
   });
 
   it('leaves the detail view when its body is gone or the focus moved to another body', () => {

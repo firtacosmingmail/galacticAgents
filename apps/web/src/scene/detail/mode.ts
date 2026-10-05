@@ -36,8 +36,16 @@ import { planetLook } from '../bodies/appearance.js';
  */
 export const ENTER_RADII = 3;
 export const EXIT_RADII = 4.5;
-/** Where an explicit enter (and any flight to the detail body while in the detail view) ends. */
-export const DETAIL_FRAME_RADII = 2.4;
+/**
+ * Where an explicit enter (and any flight to the detail body while in the detail view) ends, in
+ * framed radii. P6-07: far enough that the whole disc with its atmosphere glow
+ * (`DETAIL_DISC_REACH`) fits the camera's 45° vertical field — the narrower one at any aspect from
+ * 1:1 up — with a little room (2.4 overfilled a square canvas), and still inside `ENTER_RADII`, so
+ * a landed flight is well within the view's thresholds (`EXIT_RADII` is where it leaves).
+ */
+export const DETAIL_FRAME_RADII = 2.85;
+/** How far the detail framing must fit, in body radii: the disc and its atmosphere's glow (≤ 1.06; Titan's haze 1.08). */
+export const DETAIL_DISC_REACH = 1.08;
 /** Cross-fade lengths, seconds; 0 under reduced motion (an instant switch). */
 export const ENTER_FADE_S = 0.9;
 export const EXIT_FADE_S = 0.7;

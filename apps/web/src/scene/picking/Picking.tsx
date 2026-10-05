@@ -6,12 +6,14 @@ import {
   Vector2,
   Vector3,
   type Mesh,
+  type MeshBasicMaterial,
   type Object3D,
   type PerspectiveCamera,
 } from 'three';
 import type { OutlineEffect } from 'postprocessing';
 import { anchorList, getAnchor } from '../anchors.js';
-import { currentDetailScope, inDetailScope } from '../detail/mode.js';
+import { currentDetailScope, detailMix, inDetailScope, useDetailStore } from '../detail/mode.js';
+import { ownRingFactor } from '../detail/dome.js';
 import { standInFor } from '../detail/stand-ins.js';
 import { labelAt } from '../labels/registry.js';
 import { anchorPosition } from '../camera/store.js';
@@ -552,7 +554,13 @@ function HighlightRing({
     const depth = Math.max(1e-6, camera.position.distanceTo(ring.position.set(x, y, z)));
     const perPx = depth / pixelScale(state.size.height, camera.fov ?? 45);
     const screenRadius = target.radius / perPx;
-    ring.visible = hideAbovePx === undefined || screenRadius < hideAbovePx;
+    // P6-07: the ring around the body shown in detail fades out with the cross-fade.
+    const detail = useDetailStore.getState();
+    const own = bodyId !== undefined && detail.shown === bodyId;
+    const factor = ownRingFactor(own, own ? detailMix(detail, performance.now() / 1000) : 0);
+    const material = ring.material as MeshBasicMaterial | undefined;
+    if (material) material.opacity = opacity * factor;
+    ring.visible = factor > 0.001 && (hideAbovePx === undefined || screenRadius < hideAbovePx);
     ring.quaternion.copy(camera.quaternion);
     ring.scale.setScalar(Math.max(target.radius * RING_SCALE, RING_MIN_PX * perPx));
   });

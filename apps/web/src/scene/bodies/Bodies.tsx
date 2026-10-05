@@ -363,9 +363,10 @@ export function Rings({
 
 /**
  * An orbit line. P6-01: `bodyId`, the body on this orbit — its line fades out while that body is
- * shown in detail (`orbitLineFactor`); `aboutSun`, the line is centred on the Sun — a settled
- * detail view's backdrop hides it when it is wholly outside (`orbitOutsideDome`; a moon's line
- * goes with its planet's group). Without either (the sub-scene's own lines) it is always drawn.
+ * shown in detail (`orbitLineFactor`); `aboutSun`, the line is centred on the Sun — it fades out
+ * with any detail view's cross-fade (P6-07: a neighbour's line may run inside the dome), and a
+ * settled detail view's backdrop hides it when it is wholly outside (`orbitOutsideDome`; a moon's
+ * line goes with its planet's group). Without either (the sub-scene's own lines) it is always drawn.
  */
 export function OrbitLine({
   radius,
@@ -387,7 +388,12 @@ export function OrbitLine({
     if (!l || (bodyId === undefined && !aboutSun)) return;
     const s = useDetailStore.getState();
     const own = bodyId !== undefined && s.shown === bodyId;
-    const factor = orbitLineFactor(own, own ? detailMix(s, performance.now() / 1000) : 0);
+    const fades = own || (aboutSun && s.shown !== undefined);
+    const factor = orbitLineFactor(
+      own,
+      fades ? detailMix(s, performance.now() / 1000) : 0,
+      aboutSun,
+    );
     const drawn =
       factor > 0.001 &&
       (!aboutSun || drawnBehindBackdrop(s.covered, (dome) => orbitOutsideDome(radius, dome)));

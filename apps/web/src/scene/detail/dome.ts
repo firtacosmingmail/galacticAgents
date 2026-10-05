@@ -10,7 +10,10 @@ import type { Vec3 } from '../camera/flight.js';
  * changes) but must keep drawing whatever may be inside it — belt rocks and other task asteroids
  * near an asteroid's detail view, the planet of a moon's detail view, an orbit line through the
  * dome — or it would pop out the moment the fade ends (P6-01 review, S2). Lines that would run
- * through the detail body itself (its own orbit line) fade out with the cross-fade instead.
+ * through the detail body itself (its own orbit line) fade out with the cross-fade instead, and
+ * so do the system's decorations that may be inside the dome but do not belong to the view
+ * (P6-07: every Sun-centred orbit line, the highlight ring around the shown body, the belt's rocks
+ * in a planet's or moon's view — `orbitLineFactor`, `ownRingFactor`, `beltFactor`).
  *
  * The dome is published by the sub-scene's `Backdrop` every frame (`PLACE_DETAIL`), read by the
  * system's components at `READ_BODIES` (after it, before the render).
@@ -78,8 +81,34 @@ export function drawnBehindBackdrop(
 /**
  * The opacity factor of a system orbit line: its own body's line (`own`: that body is shown in
  * detail) fades out with the cross-fade's `mix` (it would cut through the close-up) and back in
- * on the way out; any other line keeps full opacity while drawn.
+ * on the way out; so does every line about the Sun (`aboutSun`, P6-07: in a readable layout the
+ * neighbours' lines run through the dome, inside it, and showed as stray arcs in the close-up — no
+ * Sun-centred line belongs to a detail view). A moon's line keeps full opacity while drawn (it is
+ * part of its planet's system, inside a moon's or planet's view).
  */
-export function orbitLineFactor(own: boolean, mix: number): number {
+export function orbitLineFactor(own: boolean, mix: number, aboutSun = false): number {
+  return own || aboutSun ? Math.max(0, 1 - mix) : 1;
+}
+
+/**
+ * The factor (1 drawn as in the system view … 0 gone) of a highlight ring around a body (P6-07):
+ * the ring around the body shown in detail (`own`) fades out with the cross-fade — the body fills
+ * the view, and the selection ring drawn over everything at ≈ 1.15 of its radius read as a thick
+ * light-blue band outside its atmosphere. Rings around its moons (and satellites) stay.
+ */
+export function ownRingFactor(own: boolean, mix: number): number {
   return own ? Math.max(0, 1 - mix) : 1;
+}
+
+/**
+ * The factor (1 lit as in the system view … 0 not drawn) of the belt's rocks — the background
+ * rocks and the task asteroids other than the shown one — in a detail view of kind `view`
+ * (`undefined`: none) at the cross-fade's `mix` (P6-07). A planet's or moon's backdrop is at least
+ * `BACKDROP_MIN_RADII` of its radii, which in the readable layout reaches the belt (Earth's: 68
+ * units about a planet 19 units from the belt's inner edge), so its rocks were inside the dome,
+ * drawn over it in the close-up. They fade to the backdrop's black with the cross-fade instead and
+ * are not drawn once it is complete. An asteroid's view lives in the belt: its rocks stay.
+ */
+export function beltFactor(view: string | undefined, mix: number): number {
+  return view === undefined || view === 'asteroid' ? 1 : Math.max(0, 1 - mix);
 }

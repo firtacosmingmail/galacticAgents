@@ -39,7 +39,12 @@ import { centreOnCamera, STAR_POINT_PX } from '../starfield.js';
 import { sunGlowTexture } from '../sun-glow.js';
 import { backdropStars, backdropSun, type BackdropSun } from './backdrop.js';
 import { clearDome, publishDome } from './dome.js';
-import { backdropRadius, resolveDetailBody, type DetailBody } from './detail-body.js';
+import {
+  backdropRadius,
+  detailEclipseReceivers,
+  resolveDetailBody,
+  type DetailBody,
+} from './detail-body.js';
 import { detailMix, useDetailStore } from './mode.js';
 import { partsFor } from './parts.js';
 import { registerStandIn } from './stand-ins.js';
@@ -222,7 +227,7 @@ function PlanetSystemDetail({ planet, quality, sunRadius, children }: PlanetDeta
   const spheres = useNearSpheres(quality.lod);
   const system = useMemo(() => new EclipseSystem(), []);
   const receivers = useMemo(
-    () => new Map(eclipseReceivers(planet).map((r) => [r.id, r] as const)),
+    () => new Map(detailEclipseReceivers(planet).map((r) => [r.id, r] as const)),
     [planet],
   );
   const eclipse = useEclipse(system, receivers.get(planet.bodyId), quality.shadows, sunRadius);
