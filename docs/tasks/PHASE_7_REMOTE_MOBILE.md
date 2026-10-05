@@ -1,7 +1,7 @@
 # Phase 7 — Remote and mobile access
 
-**Current task:** P7-01 / P7-02 (wave 1, after Phase 6 is merged into `main`) · **Task status:** todo
-**Phase status:** not started (0/6 done)
+**Current task:** P7-01, P7-02, P7-03 (wave 1, branch `p7-wave1-pwa-remote-touch`) · **Task status:** in progress
+**Phase status:** in progress (0/6 done) — on branch `phase-7`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -39,17 +39,17 @@ Check on the system from the phone while the Mac runs the agents: installable PW
 ## Tasks
 
 ### P7-01 — PWA manifest and service worker
-- **Status:** todo · **Depends on:** P5-04 · **Parallel with:** P7-02, P7-03
+- **Status:** in progress · **Depends on:** P5-04 · **Parallel with:** P7-02, P7-03
 - Manifest (icons, name, display), versioned network-first service worker for the app shell only, install prompt handling, update flow (new version banner).
 - **Acceptance:** installable on iOS and Android; a new deploy is picked up without stale shells.
 
 ### P7-02 — Tailscale Serve, token provisioning, remote flag
-- **Status:** todo · **Depends on:** P0-05, P25-08 · **Parallel with:** P7-01, P7-03
+- **Status:** in progress · **Depends on:** P0-05, P25-08 · **Parallel with:** P7-01, P7-03
 - Setup doc for Tailscale Serve; `Host` allow-list includes the `*.ts.net` name; token display + QR in settings; optional acceptance of Tailscale identity headers; connections flagged `remote` so permission auto-approval rules apply (never auto-approve for remote unless configured).
 - **Acceptance:** phone on the tailnet opens the app over HTTPS and authenticates; a remote client's permission request is never auto-approved.
 
 ### P7-03 — Touch controls and mobile tier
-- **Status:** todo · **Depends on:** P3-06, P5-04 · **Parallel with:** P7-01, P7-02
+- **Status:** in progress · **Depends on:** P3-06, P5-04 · **Parallel with:** P7-01, P7-02
 - One-finger orbit, pinch zoom, tap select; mobile quality tier default on phones; list mode as default on small screens or slow connections with a one-tap switch to the scene.
 - **Acceptance:** scene usable on the phone at ≥30 fps at the mobile tier; list mode complete without 3D.
 
