@@ -12,6 +12,7 @@ import {
   carriedOut,
   composeRuntime,
   openDatabase,
+  seedDemoProject,
   type ComposedRuntime,
 } from '@galactic/server';
 import { applyEvent, applySnapshot, summaryOf, type WorldState } from './reduce.js';
@@ -305,6 +306,14 @@ describe('replay vs snapshot conformance', () => {
     await commands.closeTask(chore.id, USER);
     await commands.control({ kind: 'task', id: chore.id }, { action: 'archive' }, USER);
 
+    // --- a demo planet (P7-07): seeded, closed and archived — it retires and leaves the world;
+    // reopening its project takes a catalogue planet
+    const demo = log.runCommand((ctx) => seedDemoProject(ctx)).value;
+    await commands.closeProject(demo.id, USER);
+    await commands.archiveProject(demo.id, USER);
+    await commands.reopenProject(demo.id, USER);
+    expect(log.tables.projects.get(demo.id)?.bodyId).not.toBe(demo.bodyId);
+
     // --- a question whose holder stops moves to the next living supervisor, the Harmonizer
     // (P2-03); left open when its own agent stops, it is cancelled with the stop
     const orphan = (
@@ -341,6 +350,7 @@ describe('replay vs snapshot conformance', () => {
       'body.assigned',
       'body.moved',
       'body.freed',
+      'body.retired',
       'agent.created',
       'agent.spawned',
       'agent.updated',

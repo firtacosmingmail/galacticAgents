@@ -113,6 +113,19 @@ describe('applyEvent', () => {
     expect(w.bodies['b-new']?.host).toEqual({ kind: 'task', id: 't-7' });
   });
 
+  it('drops a retired demo body from the world (P7-07)', () => {
+    let w = emptyWorld();
+    const demo = { id: 'b-demo-1', kind: 'planet', name: 'Demo planet 1', meta: { demo: true } };
+    w = applyEvent(w, env(1, { type: 'body.created', body: demo } as const));
+    w = applyEvent(w, env(2, ev['body.retired']));
+    expect(w.bodies['b-demo-1']).toBeUndefined();
+    expect(w.seq).toBe(2);
+    // An unknown body: nothing to drop, the seq still moves on.
+    const again = applyEvent(w, env(3, ev['body.retired']));
+    expect(again.bodies).toBe(w.bodies);
+    expect(again.seq).toBe(3);
+  });
+
   it('tracks questions and proposals', () => {
     let w = emptyWorld();
     w = applyEvent(w, env(1, ev['question.opened']));

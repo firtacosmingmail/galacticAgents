@@ -3,6 +3,8 @@ import {
   CLEARABLE_PROJECT_FIELDS,
   PermissionPolicy,
   applyChanges,
+  isDemoBody,
+  isRetiredBody,
   type Actor,
   type Body,
   type CreateProjectInput,
@@ -12,7 +14,15 @@ import {
   type ProjectChanges,
   type ReopenInput,
 } from '@galactic/protocol';
-import { bodyOf, checkAssignable, checkSubProjectBody, occupy, place, release } from './bodies.js';
+import {
+  bodyOf,
+  checkAssignable,
+  checkSubProjectBody,
+  occupy,
+  place,
+  release,
+  retireBody,
+} from './bodies.js';
 import { unparkWaiting } from './parking.js';
 import { chooseBody, describeRefusal, type ChooseOptions } from './catalogue.js';
 import { withdrawClosureQuestion } from './closure.js';
@@ -210,7 +220,11 @@ export function archiveProject(ctx: CommandContext, projectId: Id, by: Actor): P
   checkNothingActive(ctx, projectId, true);
   const project = setProjectState(ctx, projectId, 'archived', by);
   const body = bodyOf(ctx, hostOf(projectId));
-  if (body) release(ctx, body);
+  if (body) {
+    const freed = release(ctx, body);
+    // A demo planet goes away with its project (P7-07): retired, never reused.
+    if (isDemoBody(freed)) retireBody(ctx, freed);
+  }
   return project;
 }
 
@@ -254,8 +268,10 @@ export function reopenProject(
   }
   const host = hostOf(projectId);
   const old = must(ctx.tables.bodies.get(current.bodyId), 'body', current.bodyId);
+  // A retired demo planet is gone (P7-07): the reopened project takes a catalogue body.
   const oldIsFree =
-    (!old.host && !old.movedTo) || (old.host?.kind === 'project' && old.host.id === projectId);
+    !isRetiredBody(old) &&
+    ((!old.host && !old.movedTo) || (old.host?.kind === 'project' && old.host.id === projectId));
   if (oldIsFree && (!input.bodyId || input.bodyId === old.id)) {
     occupy(ctx, old, host);
   } else {

@@ -196,6 +196,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     intoProjectId: 'p-1',
   },
   'body.freed': { type: 'body.freed', bodyId: 'b-ast-1' },
+  'body.retired': { type: 'body.retired', bodyId: 'b-demo-1' },
 
   'project.created': { type: 'project.created', project: d.project },
   'project.updated': { type: 'project.updated', projectId: 'p-1', changes: { name: 'Auth v2' } },

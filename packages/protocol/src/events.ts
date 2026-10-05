@@ -398,6 +398,13 @@ export const BodyMoved = z.object({
 });
 /** The body is free again: no host, no "moved to …" marker. */
 export const BodyFreed = z.object({ type: z.literal('body.freed'), bodyId: Id });
+/**
+ * The body is gone from the world for good (P7-07): a demo body made outside the catalogue
+ * (`/dev/seed`, `meta.demo`) whose project was archived. Never a catalogue body or an asteroid.
+ * The server keeps the row as a tombstone (`meta.retired`, left out of snapshots) so archived work
+ * still names it; the client deletes it.
+ */
+export const BodyRetired = z.object({ type: z.literal('body.retired'), bodyId: Id });
 
 // ---------------------------------------------------------------------------
 // project.* and task.*
@@ -550,6 +557,7 @@ export const Event = z.discriminatedUnion('type', [
   BodyAssigned,
   BodyMoved,
   BodyFreed,
+  BodyRetired,
   ProjectCreated,
   ProjectUpdated,
   ProjectStateChanged,

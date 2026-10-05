@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Database, Statement } from 'better-sqlite3';
 import {
   Event,
+  isRetiredBody,
   isTranscriptEvent,
   type EventEnvelope,
   type Id,
@@ -262,7 +263,8 @@ export class EventLog {
       logId: this.logId,
       seq: this.currentSeq(),
       agents: this.tables.agents.all(),
-      bodies: this.tables.bodies.all(),
+      // A retired demo body (P7-07) is gone from the world: its row only names archived work.
+      bodies: this.tables.bodies.all().filter((b) => !isRetiredBody(b)),
       projects: this.tables.projects.all(),
       tasks: this.tables.tasks.all(),
       questions: this.tables.questions.all(),

@@ -1,4 +1,12 @@
-import type { Agent, Body, BodyKind, Host, Id } from '@galactic/protocol';
+import {
+  isDemoBody,
+  isRetiredBody,
+  type Agent,
+  type Body,
+  type BodyKind,
+  type Host,
+  type Id,
+} from '@galactic/protocol';
 import { isReserved } from './catalogue.js';
 import { DomainError, must, notFound } from './errors.js';
 import type { CommandContext } from './event-log.js';
@@ -63,6 +71,11 @@ export function parentBodyOf(ctx: CommandContext, host: Host): Id | undefined {
 /** Refuses a body that cannot take `host`: reserved, the wrong kind, or taken by someone else. */
 export function checkAssignable(body: Body, host: Host): void {
   if (isReserved(body)) throw new DomainError('conflict', `${body.name} is reserved`);
+  if (isRetiredBody(body)) throw new DomainError('conflict', `${body.name} is retired`);
+  if (isDemoBody(body) && !sameHost(body.host, host)) {
+    // P7-07: a `/dev/seed` demo planet only ever hosts the demo project it was made with.
+    throw new DomainError('conflict', `${body.name} is a demo planet, never used for real work`);
+  }
   if (body.movedTo && !body.host) {
     throw new DomainError(
       'conflict',
@@ -262,6 +275,27 @@ export function release(ctx: CommandContext, body: Body, unpark = true): Body {
   const next = ctx.tables.bodies.upsert(freed);
   ctx.emit({ type: 'body.freed', bodyId: body.id });
   if (unpark) unparkWaiting(ctx, ctx.choose ?? {});
+  return next;
+}
+
+/**
+ * Retires a demo body for good (P7-07): `meta.retired` and `body.retired`. The row stays as a
+ * tombstone (archived work still points at it and the history names it) but it is out of every
+ * snapshot, never chosen and never assigned again; the client deletes it. Only a free demo body
+ * (`isDemoBody`) is retired — never a catalogue body, an asteroid, or a body still hosting work or
+ * showing a "moved to …" marker (those are refused: the caller frees it first). Retiring a retired
+ * body is a no-op.
+ */
+export function retireBody(ctx: CommandContext, body: Body): Body {
+  if (isRetiredBody(body)) return body;
+  if (!isDemoBody(body)) {
+    throw new DomainError('invalid', `${body.name} is not a demo body; only demo bodies retire`);
+  }
+  if (body.host || body.movedTo) {
+    throw new DomainError('conflict', `${body.name} still hosts work; it retires once freed`);
+  }
+  const next = ctx.tables.bodies.upsert({ ...body, meta: { ...body.meta, retired: true } });
+  ctx.emit({ type: 'body.retired', bodyId: body.id });
   return next;
 }
 

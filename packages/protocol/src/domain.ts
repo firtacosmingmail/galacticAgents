@@ -65,6 +65,14 @@ export const Body = z.object({
 export type Body = z.infer<typeof Body>;
 
 /**
+ * A retired body (P7-07): a body made outside the catalogue (a `/dev/seed` demo planet) whose
+ * work was archived. It never hosts anything again: the server keeps its row with
+ * `meta.retired: true` only so archived work still names it (`projects.body_id`, the history),
+ * leaves it out of every snapshot, and the client drops it on `body.retired`.
+ */
+export const isRetiredBody = (body: Body): boolean => body.meta?.['retired'] === true;
+
+/**
  * Who holds a body that is not free (P2-02): the planets listed by the "no free planet" refusal
  * (decision 16), which offers downsizing or closing a completed project early. `host` is absent
  * for a body that only shows a "moved to …" marker.
