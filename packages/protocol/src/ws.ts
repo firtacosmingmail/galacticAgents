@@ -11,6 +11,7 @@ import {
   TranscriptChunk,
 } from './domain.js';
 import { EventEnvelope } from './events.js';
+import { RequestOrigin } from './enums.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
@@ -156,7 +157,10 @@ export const ServerMessage = z.discriminatedUnion('type', [
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 
-/** Response of `GET /health`. The token is only returned to loopback callers. */
+/**
+ * Response of `GET /health`. The token is only returned to a local caller (`origin: 'local'`);
+ * never to a remote one, whatever credential it holds (P7-02).
+ */
 export const HealthResponse = z.object({
   ok: z.literal(true),
   name: z.literal('galactic-agents'),
@@ -165,5 +169,13 @@ export const HealthResponse = z.object({
   logId: z.string().optional(),
   seq: z.number().int().nonnegative(),
   token: z.string().optional(),
+  /** How the server classified this request (P7-02; TECHNOLOGY §8 "Remote clients"). */
+  origin: RequestOrigin.optional(),
+  /**
+   * The Tailscale login the server accepted as this request's credential (P7-02): present only
+   * when identity headers are enabled and this request passed every check. A client holding no
+   * token may then connect without one; the server ignores the token it sends.
+   */
+  identity: z.string().optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponse>;

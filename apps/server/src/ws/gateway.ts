@@ -8,7 +8,13 @@ import {
   type HelloMessage,
   type ServerMessage,
 } from '@galactic/protocol';
-import { isAllowedHost, isAllowedOrigin, tokenMatches } from '../http/security.js';
+import {
+  isAllowedHost,
+  isAllowedOrigin,
+  isRemoteRequest,
+  tailscaleIdentityOf,
+  tokenMatches,
+} from '../http/security.js';
 import type { ServerConfig } from '../config/config.js';
 
 /** WebSocket close codes in the private 4xxx range (`CLOSE_UNAUTHORIZED` is the protocol's). */
@@ -23,7 +29,7 @@ export const HELLO_TIMEOUT_MS = 5_000;
 export type SessionHandler = (socket: WebSocket, hello: HelloMessage, req: IncomingMessage) => void;
 
 export interface GatewayOptions {
-  config: Pick<ServerConfig, 'token' | 'allowedHosts'>;
+  config: Pick<ServerConfig, 'token' | 'allowedHosts' | 'remoteHost' | 'tailscaleIdentityLogins'>;
   path?: string;
   onSession: SessionHandler;
   log?: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -105,10 +111,18 @@ export class WsGateway {
         });
         return;
       }
-      if (!tokenMatches(parsed.data.token, this.opts.config.token)) {
+      // The upgrade request's Tailscale identity, when the opt-in accepts it, stands in for the
+      // token (P7-02); the hello's token is then not checked. Neither is ever logged.
+      const identity = tailscaleIdentityOf(req, this.opts.config);
+      if (identity === undefined && !tokenMatches(parsed.data.token, this.opts.config.token)) {
         this.opts.log?.warn('ws hello refused: bad token');
         refuse(socket, CLOSE_UNAUTHORIZED, { code: 'unauthorized', message: 'bad token' });
         return;
+      }
+      if (isRemoteRequest(req)) {
+        this.opts.log?.info(
+          `ws remote session (${identity !== undefined ? 'tailscale identity' : 'token'})`,
+        );
       }
       this.opts.onSession(socket, parsed.data, req);
     });

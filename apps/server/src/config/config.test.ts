@@ -191,4 +191,74 @@ describe('loadConfig', () => {
       /absolute/,
     );
   });
+
+  it('adds remoteHost to the allow-list and accepts identity logins only with it (P7-02)', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        remoteHost: 'mymac.tail1234.ts.net',
+        tailscaleIdentityLogins: ['Me@Example.com'],
+      }),
+    );
+    const { config, warnings } = loadConfig({ GALACTIC_HOME: home });
+    expect(config.remoteHost).toBe('mymac.tail1234.ts.net');
+    expect(config.allowedHosts).toContain('mymac.tail1234.ts.net');
+    expect(config.allowedHosts).not.toContain('*.ts.net');
+    expect(config.tailscaleIdentityLogins).toEqual(['me@example.com']);
+    expect(warnings.join('\n')).toMatch(/any process on this machine/);
+    expect(warnings.join('\n')).not.toContain('file-token-0123456789abcdef');
+
+    // The environment names the host too.
+    expect(
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_REMOTE_HOST: 'Other.tail1234.ts.net' }).config
+        .remoteHost,
+    ).toBe('other.tail1234.ts.net');
+
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        tailscaleIdentityLogins: ['me@example.com'],
+      }),
+    );
+    const without = loadConfig({ GALACTIC_HOME: home });
+    expect(without.config.tailscaleIdentityLogins).toBeUndefined();
+    expect(without.warnings.join('\n')).toMatch(/ignored: it needs remoteHost/);
+  });
+
+  it('refuses a remoteHost that is not an exact name, and warns about a ts.net wildcard', () => {
+    for (const bad of [
+      '*.ts.net',
+      'https://mymac.ts.net',
+      'mymac.ts.net:443',
+      'mymac',
+      'my mac.ts.net',
+    ]) {
+      writeFileSync(
+        join(home, 'config.json'),
+        JSON.stringify({ token: 'file-token-0123456789abcdef', remoteHost: bad }),
+      );
+      expect(() => loadConfig({ GALACTIC_HOME: home }), bad).toThrow();
+    }
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef' }),
+    );
+    expect(() =>
+      loadConfig({
+        GALACTIC_HOME: home,
+        GALACTIC_TOKEN: 'env-token-0123456789abcdef',
+        GALACTIC_REMOTE_HOST: '*.ts.net',
+      }),
+    ).toThrow(/Invalid remote host/);
+
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef', allowedHosts: ['*.ts.net'] }),
+    );
+    const { config, warnings } = loadConfig({ GALACTIC_HOME: home });
+    expect(config.allowedHosts).toContain('*.ts.net');
+    expect(warnings.join('\n')).toMatch(/wildcard \*\.ts\.net.*Funnel/);
+  });
 });

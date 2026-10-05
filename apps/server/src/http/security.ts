@@ -80,25 +80,103 @@ export function isLoopback(remoteAddress: string | undefined): boolean {
   return a === '::1';
 }
 
-/**
- * Whether a request comes from a remote client (P2-04; TECHNOLOGY §8): anything but a loopback
- * connection whose `Origin`, if any, is this machine and that carries no Tailscale identity. A
- * reverse proxy (Tailscale Serve, Phase 7) connects from loopback, so its `Origin` or identity
- * headers are what give it away. Fails towards "remote": the stricter rules then apply.
- */
-export function isRemoteRequest(req: {
+/** What the security helpers read of a request: Fastify's and Node's `IncomingMessage` both fit. */
+export interface RequestLike {
   socket: { remoteAddress?: string | undefined };
   headers: Record<string, string | string[] | undefined>;
-}): boolean {
+}
+
+/**
+ * Whether a request comes from a remote client (P2-04, P7-02; TECHNOLOGY §8 "Remote clients"). It
+ * is local only when all of these hold: the connection is from loopback, `Host` is a loopback
+ * name (or absent), `Origin` is absent or a loopback origin, and no proxy header is present — no
+ * `Forwarded`, `X-Real-IP`, `Via`, no `X-Forwarded-*` and no `Tailscale-*` header of any name.
+ * Tailscale Serve connects from loopback, but it keeps the phone's `Host` (the `*.ts.net` name)
+ * and adds `X-Forwarded-For` / `-Host` / `-Proto`, plus the identity headers for a tailnet user,
+ * so any one of them gives it away. Headers can only make a request look more remote, so a
+ * forged header never gains anything; fails towards "remote", where the stricter rules apply.
+ */
+export function isRemoteRequest(req: RequestLike): boolean {
   const origin = req.headers['origin'];
   if (Array.isArray(origin)) return true;
-  if (req.headers['tailscale-user-login'] !== undefined) return true;
   // A proxy on this machine (Tailscale Serve, Funnel, a dev proxy) connects from loopback but
-  // says where the request came from; headers can only make a request look more remote.
-  for (const h of FORWARDING_HEADERS) if (req.headers[h] !== undefined) return true;
+  // says where the request came from.
+  for (const name of Object.keys(req.headers)) {
+    const h = name.toLowerCase();
+    if (FORWARDING_HEADERS.has(h) || h.startsWith('x-forwarded-') || h.startsWith('tailscale-')) {
+      return true;
+    }
+  }
   const host = req.headers['host'];
   if (Array.isArray(host) || (host !== undefined && !isLoopbackHost(host))) return true;
   return !(isLoopback(req.socket.remoteAddress) && isLoopbackOrigin(origin));
+}
+
+/** What `tailscaleIdentityOf` and the guards need of the server config (P7-02). */
+export interface RemoteAuthConfig {
+  token: string;
+  remoteHost?: string | undefined;
+  tailscaleIdentityLogins?: readonly string[] | undefined;
+}
+
+/**
+ * The Tailscale login a request carries as its credential (P7-02), or `undefined`. Only when the
+ * opt-in is configured (`tailscaleIdentityLogins` with a `remoteHost`) and the request looks
+ * exactly like Tailscale Serve forwarding a tailnet user's request:
+ *
+ * - the TCP connection is from loopback (Serve runs on this machine; a tailnet peer reaching the
+ *   port directly cannot, since the server binds 127.0.0.1 only);
+ * - `Host` names `remoteHost` exactly (any port) — Serve keeps the phone's `Host`, while a page in
+ *   a local browser can never forge `Host`, so no website can use this path;
+ * - `Origin`, if present, is `https://<remoteHost>`;
+ * - no `Tailscale-Funnel-Request` (Funnel traffic is the public internet);
+ * - exactly one `Tailscale-User-Login`, equal (case-insensitively) to a configured login.
+ *
+ * Serve deletes any `Tailscale-User-*` header the client sent before setting its own, and sets
+ * none for a tagged node or a Funnel request (`ipn/ipnlocal/serve.go`,
+ * `addTailscaleIdentityHeaders`), so a tailnet device cannot forge it through Serve. A process on this machine can still connect to loopback
+ * and send all of the above: that is the trust model `docs/REMOTE_ACCESS.md` spells out — with the
+ * opt-in on, every local process is trusted as much as the listed users.
+ */
+export function tailscaleIdentityOf(
+  req: RequestLike,
+  config: RemoteAuthConfig,
+): string | undefined {
+  const logins = config.tailscaleIdentityLogins;
+  const remoteHost = config.remoteHost;
+  if (!logins || logins.length === 0 || !remoteHost) return undefined;
+  if (!isLoopback(req.socket.remoteAddress)) return undefined;
+  const host = req.headers['host'];
+  if (typeof host !== 'string' || hostnameOf(host) !== remoteHost) return undefined;
+  const origin = req.headers['origin'];
+  if (origin !== undefined) {
+    if (typeof origin !== 'string') return undefined;
+    let url: URL;
+    try {
+      url = new URL(origin);
+    } catch {
+      return undefined;
+    }
+    if (url.protocol !== 'https:' || url.hostname !== remoteHost) return undefined;
+  }
+  // A Funnel request comes from the public internet: Serve sets no identity for it, ever.
+  if (req.headers['tailscale-funnel-request'] !== undefined) return undefined;
+  const login = req.headers['tailscale-user-login'];
+  // Node joins a repeated header into one comma-separated string, which matches no login.
+  if (typeof login !== 'string') return undefined;
+  const normalized = login.trim().toLowerCase();
+  return logins.includes(normalized) ? normalized : undefined;
+}
+
+/** A request's credential: the bearer token, or an accepted Tailscale identity (P7-02). */
+export function isAuthorized(
+  req: RequestLike & { headers: { authorization?: string | string[] | undefined } },
+  config: RemoteAuthConfig,
+): boolean {
+  const header = req.headers.authorization;
+  const presented =
+    typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7) : undefined;
+  return tokenMatches(presented, config.token) || tailscaleIdentityOf(req, config) !== undefined;
 }
 
 /**
@@ -106,19 +184,12 @@ export function isRemoteRequest(req: {
  * policy-writing command and record on a user's `message.sent`, so a brain acting on that message
  * writes with the same origin.
  */
-export function originOf(req: Parameters<typeof isRemoteRequest>[0]): RequestOrigin {
+export function originOf(req: RequestLike): RequestOrigin {
   return isRemoteRequest(req) ? 'remote' : 'local';
 }
 
-const FORWARDING_HEADERS = [
-  'forwarded',
-  'x-forwarded-for',
-  'x-forwarded-host',
-  'x-forwarded-proto',
-  'x-real-ip',
-  'tailscale-user-name',
-  'tailscale-user-profile-pic',
-];
+/** Proxy headers besides the `X-Forwarded-*` and `Tailscale-*` families. */
+const FORWARDING_HEADERS = new Set(['forwarded', 'x-real-ip', 'via']);
 
 /** A `Host` header naming this machine: localhost, 127.x or [::1], with or without a port. */
 function isLoopbackHost(host: string): boolean {
@@ -131,26 +202,24 @@ function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(name) || (isIP(name) === 4 && name.startsWith('127.'));
 }
 
-/** Constant-time token comparison. */
 /**
- * An `onRequest` hook that refuses a request without `Authorization: Bearer <token>` (P1-28).
- * Added inside an encapsulated plugin, so it runs for exactly the routes registered there —
- * matched on the decoded route, never on the raw URL (`/%61pi/…` once skipped a URL-prefix
- * check).
+ * An `onRequest` hook that refuses a request without `Authorization: Bearer <token>` (P1-28) or an
+ * accepted Tailscale identity (P7-02, `tailscaleIdentityOf`). Added inside an encapsulated plugin,
+ * so it runs for exactly the routes registered there — matched on the decoded route, never on the
+ * raw URL (`/%61pi/…` once skipped a URL-prefix check).
  */
-export function bearerGuard(config: { token: string }) {
+export function bearerGuard(config: RemoteAuthConfig) {
   return async (
-    req: { headers: { authorization?: string | undefined } },
+    req: RequestLike & { headers: { authorization?: string | string[] | undefined } },
     reply: { code(n: number): { send(body: unknown): unknown } },
   ) => {
-    const header = req.headers.authorization ?? '';
-    const presented = header.startsWith('Bearer ') ? header.slice(7) : undefined;
-    if (!tokenMatches(presented, config.token)) {
+    if (!isAuthorized(req, config)) {
       return reply.code(401).send({ error: 'unauthorized' });
     }
   };
 }
 
+/** Constant-time token comparison. */
 export function tokenMatches(presented: string | undefined, expected: string): boolean {
   if (!presented || presented.length !== expected.length) return false;
   let diff = 0;
