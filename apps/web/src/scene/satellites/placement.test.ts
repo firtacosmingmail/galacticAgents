@@ -13,6 +13,7 @@ import {
 } from './placement.js';
 import type { SatelliteSpec } from './satellite-model.js';
 import { publishSatellites } from './registry.js';
+import { satelliteSpheres } from '../picking/Picking.js';
 import { writeInstanced } from './Satellites.js';
 
 /*
@@ -102,6 +103,34 @@ describe('placement overrides in the director', () => {
     d.update(1, anchors);
     expect(f.claimed).toBe(false);
     expect(dist(f.position, orbit)).toBeLessThan(1e-9);
+  });
+
+  it('a hidden override (a robot on the cut-away wedge) makes the claimed frame invisible', () => {
+    const d = director();
+    d.setSpecs([spec('a-1', 'b-mars'), spec('a-2', 'b-mars')], 0);
+    const frames = d.update(1, anchors);
+    const f = frames.find((x) => x.agentId === 'a-1')!;
+    publishSatellites(new Map(frames.map((x) => [x.agentId, x])));
+    const o: PlacementOverride = { position: [32, 0, 0], k: 0.25, hidden: true };
+    setPlacement('a-1', o);
+    // Not claimed yet: the satellite is still the director's, and drawn.
+    d.update(1, anchors);
+    expect(f.visible).toBe(true);
+    // Claimed and hidden: no pick target (and no rings or activities: they skip invisible frames).
+    o.k = 1;
+    d.update(1, anchors);
+    expect(f.claimed).toBe(true);
+    expect(f.visible).toBe(false);
+    expect(satelliteSpheres().map((x) => x.agentId)).toEqual(['a-2']);
+    // Back in sight.
+    o.hidden = false;
+    d.update(1, anchors);
+    expect(f.visible).toBe(true);
+    expect(
+      satelliteSpheres()
+        .map((x) => x.agentId)
+        .sort(),
+    ).toEqual(['a-1', 'a-2']);
   });
 
   it('never takes over a flight or a landed satellite', () => {

@@ -93,4 +93,27 @@ describe("the belt's rocks in a detail view (P6-07)", () => {
     frame();
     expect(last()).toBe(0);
   });
+
+  it('every caller of a frame gets the same factor; a change of the bodies is seen', () => {
+    render(
+      <>
+        <Probe />
+        <Probe />
+        <Probe />
+      </>,
+    );
+    useDetailStore.getState().enter('b-io', { fly: false, reducedMotion: true });
+    seen = [];
+    frame();
+    expect(seen).toEqual([0, 0, 0]);
+    // The shown body's kind is cached, but recomputed when the world's bodies change.
+    const world = useAppStore.getState().world;
+    const io = world.bodies['b-io']!;
+    useAppStore.setState({
+      world: { ...world, bodies: { ...world.bodies, 'b-io': { ...io, kind: 'asteroid' } } },
+    });
+    seen = [];
+    frame();
+    expect(seen).toEqual([1, 1, 1]);
+  });
 });

@@ -12,9 +12,9 @@ import type { DetailBody } from '../detail-body.js';
 import type { DetailKind } from '../mode.js';
 
 /**
- * The project overlay of the detail view (P6-04; SPEC §3.2, §4.1, decisions 9, 66, 68, 73, 77,
- * 84), as plain data — no three.js, no React — so placement, looks and selection are tested
- * without WebGL. `ProjectOverlay.tsx` draws it.
+ * The project overlay of the detail view (P6-04; SPEC decision 88, and §3.2, §4.1, decisions 9,
+ * 66, 68, 73, 77, 84), as plain data — no three.js, no React — so placement, looks and selection
+ * are tested without WebGL. `ProjectOverlay.tsx` draws it.
  *
  * - **Which tasks.** A body's project tasks (decision 9: a project task lives on its project's
  *   body, `task.bodyId`): every task with a `projectId` on the shown body, except archived and
@@ -60,10 +60,8 @@ const GONE: ReadonlySet<WorkState> = new Set<WorkState>(['archived', 'moved']);
 /** Closed work: shown, dim, and the first to be left out when slots run out. */
 const CLOSED: ReadonlySet<WorkState> = new Set<WorkState>(['completed']);
 
-export type OverlayWorld = Pick<
-  WorldState,
-  'bodies' | 'projects' | 'tasks' | 'agents' | 'statuses'
->;
+/** What the markers are made from: only the tasks (a Steward's state never changes a marker). */
+export type OverlayWorld = Pick<WorldState, 'tasks'>;
 
 const byAge = (a: Task, b: Task) =>
   a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -233,9 +231,17 @@ const LOOKS: Readonly<Record<WorkState, Omit<MarkerLook, 'color'> & { hex: strin
   moved: { hex: '#6f7891', level: 0.4, still: 0.4, pulse: 'steady', scale: 0.7 },
 };
 
+/** One look per state, built once (read for every marker every frame: no allocation). */
+const BUILT = new Map<WorkState, MarkerLook>();
+
 export function markerLook(state: WorkState): MarkerLook {
-  const { hex, ...look } = LOOKS[state];
-  return { ...look, color: linearRgb(hex) };
+  let look = BUILT.get(state);
+  if (!look) {
+    const { hex, ...rest } = LOOKS[state];
+    look = Object.freeze({ ...rest, color: linearRgb(hex) });
+    BUILT.set(state, look);
+  }
+  return look;
 }
 
 /** The head's brightness now: the state's level and pulse; the still level under reduced motion. */
@@ -355,6 +361,63 @@ export function overlayMarkers(
   add(body.bodyId, overlayFooting(body));
   for (const moonId of subMoons) add(moonId, 'surface');
   return out;
+}
+
+/** How many instances each of the overlay's instanced meshes holds. */
+export interface OverlayCapacity {
+  /** Pins on the shown body (cut by the cutaway). */
+  pins: number;
+  /** Pins on sub-project moons (never cut). */
+  moonPins: number;
+  buoys: number;
+  /** Uncut glows: buoy and moon-pin heads, drone lights. */
+  glow: number;
+  /** Cut glows: the shown body's pin heads, robot lights. */
+  cutGlow: number;
+}
+
+/** Capacities are rounded up to this step: a task more or fewer rarely rebuilds the meshes. */
+export const CAPACITY_STEP = 8;
+
+/**
+ * The capacities a marker list needs (`bodyId`: the shown body), with `standIns` robots or drones:
+ * every marker fits, whatever its sub-project moons hold (each moon has up to `MAX_MARKERS` of its
+ * own), so no drawn marker is ever dropped by a full list.
+ */
+export function overlayCapacity(
+  markers: readonly Pick<MarkerSpec, 'bodyId' | 'footing'>[],
+  bodyId: Id,
+  standIns: number,
+): OverlayCapacity {
+  let pins = 0;
+  let moonPins = 0;
+  let buoys = 0;
+  for (const m of markers) {
+    if (m.footing === 'orbit') buoys++;
+    else if (m.bodyId === bodyId) pins++;
+    else moonPins++;
+  }
+  const up = (n: number) => Math.max(CAPACITY_STEP, Math.ceil(n / CAPACITY_STEP) * CAPACITY_STEP);
+  return {
+    pins: up(pins),
+    moonPins: up(moonPins),
+    buoys: up(buoys),
+    glow: up(buoys + moonPins + standIns),
+    cutGlow: up(pins + standIns),
+  };
+}
+
+/**
+ * Whether a Steward's robot is out of sight (P6-04): a robot (surface footing) whose place on the
+ * shown body is removed by the cutaway. Its frame is then hidden from every reader (`hidden` on its
+ * placement override). Drones in orbit are never cut.
+ */
+export function standInCut(
+  footing: TaskFooting,
+  planes: Parameters<typeof cutAway>[0],
+  position: readonly number[],
+): boolean {
+  return footing === 'surface' && cutAway(planes, position);
 }
 
 /** Two marker lists draw the same thing (keeps React from re-rendering on unrelated changes). */

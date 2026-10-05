@@ -52,12 +52,14 @@ import {
   moonLinks,
   orbitPoint,
   overlayFooting,
+  overlayCapacity,
   overlayMarkers,
   parentPlanetOf,
   sameMarkers,
   selectedTaskOf,
   spinAngle,
   STAND_IN,
+  standInCut,
   surfacePoint,
   surfaceSlot,
   type MarkerSpec,
@@ -72,7 +74,7 @@ import {
   robotGeometry,
   ROBOT_LIGHT_Y,
 } from './overlay-mesh.js';
-import { publishTaskMarkers, type TaskMarkerFrame } from './task-registry.js';
+import { publishTaskMarkers, taskMarkerFrames, type TaskMarkerFrame } from './task-registry.js';
 
 /**
  * The project overlay (P6-04; registered as `'project-overlay'` in `parts.ts`): in a planet's or
@@ -128,7 +130,6 @@ function ProjectOverlayOf({
   const bodies = useAppStore((s) => sceneWorld(s).bodies);
   const projects = useAppStore((s) => sceneWorld(s).projects);
   const agents = useAppStore((s) => sceneWorld(s).agents);
-  const statuses = useAppStore((s) => sceneWorld(s).statuses);
   const selection = useAppStore((s) => s.selection);
   const hovered = usePickingStore((s) => hoveredTask(s.hover));
   const reduced = useReducedMotion();
@@ -151,9 +152,10 @@ function ProjectOverlayOf({
     body.kind === 'moon' ? parentPlanetOf({ bodies, projects }, body.bodyId) : undefined;
 
   const max = MAX_MARKERS[quality.tier];
+  // Only the tasks make markers (agents and statuses change on every turn: not deps).
   const latest = useMemo(
-    () => overlayMarkers({ tasks, bodies, projects, agents, statuses }, body, max, subMoons),
-    [tasks, bodies, projects, agents, statuses, body, max, subMoons],
+    () => overlayMarkers({ tasks }, body, max, subMoons),
+    [tasks, body, max, subMoons],
   );
   // A new list only when what is drawn changes (unrelated world changes keep the old one).
   const [markers, setMarkers] = useState(latest);
@@ -201,18 +203,22 @@ function ProjectOverlayOf({
   );
 
   const standIns = MAX_STAND_INS[quality.tier];
+  // Sized from the markers (every sub-project moon has up to `max` of its own), in steps.
+  const capacity = overlayCapacity(markers, body.bodyId, standIns);
+  const { pins: nPins, moonPins: nMoonPins, buoys: nBuoys, glow: nGlow, cutGlow: nCut } = capacity;
   const lists = useMemo(
     () => ({
-      pins: new InstanceList(max),
-      moonPins: new InstanceList(max * 2),
-      buoys: new InstanceList(max),
+      pins: new InstanceList(nPins),
+      moonPins: new InstanceList(nMoonPins),
+      buoys: new InstanceList(nBuoys),
       robots: new InstanceList(standIns),
       drones: new InstanceList(standIns),
-      glow: new InstanceList(max * 2 + standIns),
-      cutGlow: new InstanceList(max * 2 + standIns),
+      glow: new InstanceList(nGlow),
+      cutGlow: new InstanceList(nCut),
     }),
-    [max, standIns],
+    [nPins, nMoonPins, nBuoys, nGlow, nCut, standIns],
   );
+  const listsKey = `${nPins}:${nMoonPins}:${nBuoys}:${nGlow}:${nCut}:${standIns}:${simple}`;
 
   // The markers as picking sees them: one live frame each, published while mounted.
   const frames = useMemo<TaskMarkerFrame[]>(
@@ -227,11 +233,16 @@ function ProjectOverlayOf({
       })),
     [markers],
   );
+  // Published and withdrawn in one layout effect, the withdrawal only of this set: when the detail
+  // scene swaps bodies in one commit (`DetailScene` is keyed by the body), the old overlay's
+  // cleanup runs before the new one publishes, and never empties the new set afterwards.
   useLayoutEffect(() => {
     publishTaskMarkers(frames);
     invalidate();
+    return () => {
+      if (taskMarkerFrames() === frames) publishTaskMarkers([]);
+    };
   }, [frames, invalidate]);
-  useEffect(() => () => publishTaskMarkers([]), []);
   useEffect(() => invalidate(), [selectedTask, hovered, invalidate]);
 
   // Steward stand-ins: one placement override per agent put down (kept across frames).
@@ -306,7 +317,7 @@ function ProjectOverlayOf({
 
   return (
     <group ref={root} name="detail-project-overlay">
-      <group key={`${lists.pins.capacity}:${standIns}:${simple}`}>
+      <group key={listsKey}>
         <instancedMesh
           ref={pins}
           name="overlay-pins"
@@ -566,7 +577,11 @@ function placeMarkers(ctx: OverlayCtx, state: RootState): void {
     s.worldAt[1] = s.v.y;
     s.worldAt[2] = s.v.z;
     const cut = own && !orbit && cutAway(planes, s.worldAt);
-    const shown = size > 1e-6 && !cut;
+    // Its instances fit (they always should: `overlayCapacity`); a marker not drawn is not picked.
+    const solids = orbit ? lists.buoys : own ? lists.pins : lists.moonPins;
+    const heads = own && !orbit ? lists.cutGlow : lists.glow;
+    const room = solids.count < solids.capacity && heads.count < heads.capacity;
+    const shown = size > 1e-6 && !cut && room;
     // The picking frame: a little above the pin's foot (never inside its body), or the buoy.
     f.visible = shown;
     if (shown) {
@@ -605,13 +620,12 @@ function placeMarkers(ctx: OverlayCtx, state: RootState): void {
     p.shown = shown;
     if (!shown) continue;
     // Instances: the pin or buoy, and its glowing head.
-    const glow = own && !orbit ? lists.cutGlow : lists.glow;
+    const glow = heads;
     const level = markerBrightness(look, now, reduced, m.taskId);
+    solids.push(s.local, s.axis, size, size, size, SOLID_TINT, 1);
     if (orbit) {
-      lists.buoys.push(s.local, s.axis, size, size, size, SOLID_TINT, 1);
       glow.push(s.local, s.axis, size * 0.7, size * 0.7, size * 0.7, look.color, level * GLOW_GAIN);
     } else {
-      (own ? lists.pins : lists.moonPins).push(s.local, s.axis, size, size, size, SOLID_TINT, 1);
       s.head[0] = s.local[0] + s.axis[0] * size * PIN_HEAD_Y;
       s.head[1] = s.local[1] + s.axis[1] * size * PIN_HEAD_Y;
       s.head[2] = s.local[2] + s.axis[2] * size * PIN_HEAD_Y;
@@ -649,6 +663,8 @@ function placeMarkers(ctx: OverlayCtx, state: RootState): void {
     o.position[1] = s.v.y;
     o.position[2] = s.v.z;
     o.k = k;
+    // A robot on the cutaway's removed wedge: its frame is hidden from picking, rings, activities.
+    o.hidden = standInCut(footing, planes, o.position);
   }
   for (const [agentId, o] of placed) {
     if (s.seen.has(agentId)) continue;
@@ -686,7 +702,8 @@ function drawStandIns(ctx: OverlayCtx, state: RootState): void {
     s.v.set(f.position[0], f.position[1], f.position[2]);
     const perPx = Math.max(1e-6, camera.position.distanceTo(s.v)) / pxScale;
     const base = robot ? STAND_IN.robot * surfaceRadius : STAND_IN.drone * body.radius;
-    const unit = clampPx(base, perPx) * grow;
+    // Scaled by the frame's presence: an ended Steward's robot shrinks away with its satellite.
+    const unit = clampPx(base, perPx) * grow * f.presence;
     const busy =
       !reduced && (f.mode === 'gathering' || f.mode === 'building' || f.mode === 'transporting');
     const bob = busy

@@ -38,15 +38,31 @@ export function useBackdropCulling(
  * 1 in an asteroid's view). The belt's components dim their rocks with it (P6-07).
  */
 export function useBeltFade(apply: (factor: number) => void): void {
-  useFrame(() => {
-    const s = useDetailStore.getState();
-    const view =
-      s.shown === undefined
-        ? undefined
-        : detailKind(sceneWorld(useAppStore.getState()).bodies[s.shown]);
-    apply(beltFactor(view, view === undefined ? 0 : detailMix(s, performance.now() / 1000)));
-  }, READ_BODIES);
+  useFrame(() => apply(beltFactorNow(performance.now() / 1000)), READ_BODIES);
 }
+
+/**
+ * The belt's factor at `now` (seconds). The background belt and every task asteroid call it each
+ * frame, so the shown body's kind (a world lookup and `planetLook`) is cached: worked out again
+ * only when the shown body or the world's bodies change.
+ */
+export function beltFactorNow(now: number): number {
+  const s = useDetailStore.getState();
+  const bodies = s.shown === undefined ? undefined : sceneWorld(useAppStore.getState()).bodies;
+  const c = shownKind;
+  if (c.shown !== s.shown || c.bodies !== bodies) {
+    c.shown = s.shown;
+    c.bodies = bodies;
+    c.view = s.shown === undefined ? undefined : detailKind(bodies?.[s.shown]);
+  }
+  return beltFactor(c.view, c.view === undefined ? 0 : detailMix(s, now));
+}
+
+const shownKind: {
+  shown: string | undefined;
+  bodies: object | undefined;
+  view: ReturnType<typeof detailKind>;
+} = { shown: undefined, bodies: undefined, view: undefined };
 
 /** `object`'s world position this frame, written into `out`. */
 function worldPosition(object: Object3D, out: [number, number, number]): Vec3 {

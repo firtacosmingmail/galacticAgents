@@ -50,9 +50,9 @@ Options considered, from the task:
 
 **After** (20 s samples): visible **100 %** of samples at 1.07:1, 1.7:1 and 2.1:1. The span-to-distance ratio is 0.138 at 1.07:1, 0.131 at 1.7:1 and 0.124 at 2.1:1, about the same everywhere. Through the full enter and exit the distance from Earth's centre stayed ≥ 1.40 R. **The click works**: hovering the station showed the "Harmonizer · idle" card and the ring; clicking selected the Harmonizer, restored the minimised dock on Chat, and stayed in the detail view.
 
-### Proposed SPEC text (proposed decision 89: not added to §7, another agent may be adding one)
+### SPEC decision 89 (added to §7 at the wave's merge; the original proposal below)
 
-> **Proposed decision 89 — The HQ in Earth's detail view** (2026-10-05, P6-06; decisions 84, 85): in Earth's detail view the HQ station leaves its orbit and holds a place in view, up and to the right of Earth: beside the globe in a wide view, in front of its limb in a narrow one, at the size it would have beside Earth. It flies there as the view opens and back to its orbit as it closes, and when the user turns the view it drifts back to its place after a moment (at once with reduced motion). Hovering and clicking it work as everywhere: a click selects the Harmonizer and opens its chat. With no Harmonizer running, the dark station rests in the same place. Zoomed in very close to Earth, the station keeps its orbit.
+> **Decision 89 — The HQ in Earth's detail view** (2026-10-05, P6-06; decisions 84, 85): in Earth's detail view the HQ station leaves its orbit and holds a place in view, up and to the right of Earth: beside the globe in a wide view, in front of its limb in a narrow one, at the size it would have beside Earth. It flies there as the view opens and back to its orbit as it closes, and when the user turns the view it drifts back to its place after a moment (at once with reduced motion). Hovering and clicking it work as everywhere: a click selects the Harmonizer and opens its chat. With no Harmonizer running, the dark station rests in the same place. Zoomed in very close to Earth, the station keeps its orbit.
 
 Decision 85 could gain a pointer: "(where it stays in view: decision 89)".
 
@@ -108,3 +108,10 @@ The Moon's shadow could not be caught on camera, because the Moon was not betwee
 - **Jupiter's moon spots** are gone in Jupiter's detail view (see the moon shadow fix). If wanted back, a "true geometry" shadow (umbra = r − d·α☉ with the true distance) could replace the off switch.
 - With **reduced motion** the slot snaps each frame from the previous frame's camera, so it is one frame late during a drag. Not visible at 60 fps.
 - The slot's NDC (0.7, 0.55) is a constant. If P6-04's overlay places markers there, the two may overlap. Worth a look when merging.
+
+## Review fixes (2026-10-05, branch `p6-wave3-review-fixes`)
+
+- **P6-06 — the Moon could overlap the station at wide aspects.** In the readable layout the Moon orbits at 2.21 R with radius 0.26 R, so it comes no nearer Earth's centre than 1.94 R; the slot at Earth's depth was ≈ 1.78 R from it at 2:1 and ≈ 1.93 R at 2.2:1, and the station's half-span is 0.21 R. `HQ_SLOT.maxReach` = 1.7 R: when the slot at Earth's depth would be farther, `hqSlot` pulls its x in (its height kept; exact in one step for the detail camera, which looks at Earth's centre, iterated up to four times otherwise). From about 2:1 up the station sits a little nearer the globe than NDC 0.7. Test: aspects 1:1 to 3.2:1, the slot within the reach and the station's span inside the Moon's inner edge, computed from the layout (`moonDistance`, `moonLook`, `planetLook`), so a layout change that breaks the clearance fails the test.
+- **P6-06 — per-frame allocations.** `hqSlot` writes its line of sight into a module scratch tuple, `swing` works in scalars, `HqSlotter` keeps scratch tuples for the orbit and goal offsets, `slotCamera` uses a module function instead of a closure, and `restInSlot` passes scratch tuples.
+- **P6-07 — `useBeltFade`** worked out the shown body's kind (a world lookup and `planetLook`) in every caller, i.e. once per task asteroid per frame. `beltFactorNow` caches it until the shown body or the world's bodies change. Test: three callers get the same factor; a change of the bodies is seen.
+- **Docs:** `hq-slot.ts`, `EarthHq.tsx` and TECHNOLOGY's viewing-slot text cite SPEC decision 89 instead of the proposed text; TECHNOLOGY describes `maxReach`.
