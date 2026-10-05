@@ -6,6 +6,7 @@ import {
   forgetToken,
   saveToken,
   startSession,
+  takeTokenFromFragment,
   TOKEN_KEY,
 } from './client/session.js';
 import { AgentsConsole } from './console/AgentsConsole.js';
@@ -19,6 +20,10 @@ import './app.css';
 
 export function App() {
   const [token, setToken] = useState<string | undefined>(() => {
+    // A token handed over by the settings page's QR code wins over a saved one, and leaves the
+    // address bar before anything else reads the URL (P7-02).
+    const handed = takeTokenFromFragment();
+    if (handed) return handed;
     try {
       return localStorage.getItem(TOKEN_KEY) ?? undefined;
     } catch {

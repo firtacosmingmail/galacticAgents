@@ -1,4 +1,9 @@
 import { useState } from 'react';
+import type { SettingsResponse } from '@galactic/protocol';
+import { IDENTITY_TOKEN } from '../../client/session.js';
+import { QrCode } from './QrCode.js';
+
+type SettingsRemote = NonNullable<SettingsResponse['remote']>;
 
 /**
  * The token as shown by default: its last four characters only — or nothing of it when it is
@@ -9,12 +14,23 @@ export function maskToken(token: string): string {
 }
 
 /**
- * The access token (P25-08) and the place where Phase 7 puts the phone's QR code. The token is
- * shown masked unless revealed, copied only on a click, and never put in a URL or a log; the QR
- * code is a placeholder until remote access exists (TECHNOLOGY §8).
+ * The address a phone opens to connect (P7-02): the Tailscale Serve name over HTTPS, with the
+ * token in the fragment — which the browser never sends to a server, so it reaches no log — for
+ * the page to take and strip from the address bar (`takeTokenFromFragment`).
  */
-export function AccessToken({ token }: { token: string }) {
+export function phoneUrl(host: string, token: string): string {
+  return `https://${host}/#token=${encodeURIComponent(token)}`;
+}
+
+/**
+ * The access token (P25-08) and the phone's QR code (P7-02). The token is shown masked unless
+ * revealed, copied only on a click, and never put in a log; the QR code, which carries it in the
+ * phone address's fragment, is drawn only after its own reveal and only in this browser
+ * (TECHNOLOGY §8, `docs/REMOTE_ACCESS.md`).
+ */
+export function AccessToken({ token, remote }: { token: string; remote?: SettingsRemote }) {
   const [revealed, setRevealed] = useState(false);
+  const [qrShown, setQrShown] = useState(false);
   const [copied, setCopied] = useState<'yes' | 'no'>();
   const copy = async () => {
     try {
@@ -24,6 +40,21 @@ export function AccessToken({ token }: { token: string }) {
       setCopied('no');
     }
   };
+  if (token === IDENTITY_TOKEN) {
+    return (
+      <section className="set-section" aria-label="Access">
+        <div className="set-head">
+          <h2 className="set-title">Access</h2>
+        </div>
+        <p className="set-intro">
+          This device is signed in by its Tailscale identity: Mission Control accepts it through
+          Tailscale Serve, and no token is stored here. The token and the phone QR code are shown on
+          the Mac itself.
+        </p>
+      </section>
+    );
+  }
+  const host = remote?.host;
   return (
     <section className="set-section" aria-label="Access">
       <div className="set-head">
@@ -54,13 +85,36 @@ export function AccessToken({ token }: { token: string }) {
           </span>
         )}
       </div>
-      <div className="set-qr" role="img" aria-label="QR code placeholder">
-        <span>QR</span>
-        <p className="set-muted">
-          Connect your phone (coming with remote access): a QR code here will carry this address and
-          the token, so you will not have to type them.
+      {host ? (
+        <div className="set-qr">
+          <p className="set-muted">
+            Connect your phone: with Tailscale on, scan this code to open{' '}
+            <code>https://{host}</code> already signed in. The code carries the token — show it only
+            where no one else can see or photograph it.
+          </p>
+          <button type="button" className="set-secondary" onClick={() => setQrShown(!qrShown)}>
+            {qrShown ? 'Hide the phone QR code' : 'Show the phone QR code'}
+          </button>
+          {qrShown && (
+            <QrCode
+              text={phoneUrl(host, token)}
+              label={`QR code: the address https://${host} with the token`}
+            />
+          )}
+        </div>
+      ) : (
+        <p className="set-muted set-qr-note">
+          Phone access is not set up: put this Mac&apos;s Tailscale name in <code>remoteHost</code>{' '}
+          (<code>~/.galactic/config.json</code>) and restart — see{' '}
+          <code>docs/REMOTE_ACCESS.md</code>. The phone QR code appears here then.
         </p>
-      </div>
+      )}
+      {remote?.tailscaleIdentity && (
+        <p className="set-muted">
+          Tailscale identity headers are accepted too: the listed Tailscale users connect through
+          Tailscale Serve without the token.
+        </p>
+      )}
     </section>
   );
 }

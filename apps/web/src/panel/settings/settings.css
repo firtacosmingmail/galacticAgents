@@ -265,22 +265,21 @@
 }
 .set-qr {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
 }
-.set-qr > span {
-  flex: none;
-  width: 72px;
-  height: 72px;
-  display: grid;
-  place-items: center;
-  border: 2px dashed var(--pnl-line);
-  border-radius: 8px;
-  color: var(--pnl-muted);
-  font-family: var(--pnl-mono);
-}
-.set-qr p {
+.set-qr p,
+.set-qr-note {
   margin: 0;
+}
+/* Dark on white in every theme, with room around it: scanners need the contrast and quiet zone. */
+.set-qr-code {
+  max-width: 100%;
+  height: auto;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px;
 }
 
 /* wizard */

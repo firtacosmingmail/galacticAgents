@@ -52,7 +52,10 @@ export function SettingsPage({ token }: { token: string }) {
         <NotificationSettings heading={false} />
       </section>
 
-      <AccessToken token={token} />
+      <AccessToken
+        token={token}
+        {...(data.response?.remote ? { remote: data.response.remote } : {})}
+      />
     </main>
   );
 }
