@@ -15,6 +15,7 @@ import { PLANET_LOOKS, MOON_LOOKS } from '../../bodies/appearance.js';
 import { resolveDetailBody } from '../detail-body.js';
 import { DETAIL_PARTS, partsFor } from '../parts.js';
 import { acceptsCutaway, cutawayTarget, isCutMesh } from './target.js';
+import { cutPlanes, publishCutPlanes, withdrawCutPlanes } from './cut-planes.js';
 import { clipBody, parkPlanes, unclip, type ClippedMaterials } from './clipping.js';
 import {
   CUTAWAY_BODIES,
@@ -371,5 +372,22 @@ describe('clipping the body (no recompile on open, close or fade)', () => {
     expect(before.clipIntersection).toBe(false);
     expect(after.clippingPlanes).toBe(planes);
     expect([...clipped.keys()]).toEqual([after]);
+  });
+});
+
+describe('the shared cut planes (P6-04)', () => {
+  it('an unmounting cutaway withdraws only its own planes (a body swap in one commit)', () => {
+    const a = [new Plane(), new Plane()];
+    const b = [new Plane(), new Plane()];
+    publishCutPlanes(a);
+    // The new body’s cutaway publishes before the old one’s cleanup runs…
+    publishCutPlanes(b);
+    withdrawCutPlanes(a);
+    expect(cutPlanes()).toBe(b);
+    // …and withdraws its own when it goes.
+    withdrawCutPlanes(b);
+    expect(cutPlanes()).toBeUndefined();
+    withdrawCutPlanes(undefined);
+    expect(cutPlanes()).toBeUndefined();
   });
 });

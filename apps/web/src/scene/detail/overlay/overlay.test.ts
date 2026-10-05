@@ -13,7 +13,10 @@ import {
   markerBrightness,
   markerLook,
   MAX_MARKERS,
+  MAX_STAND_INS,
   moonLinks,
+  overlayCapacity,
+  standInCut,
   orbitPoint,
   ORBIT_RINGS,
   ORBIT_SLOTS,
@@ -258,6 +261,8 @@ describe('looks', () => {
     expect(blocked.color[0]).toBeGreaterThan(blocked.color[2]); // amber
     expect(done.scale).toBeLessThan(working.scale);
     expect(done.level).toBeLessThan(working.level);
+    // Built once per state: read for every marker every frame without allocating.
+    expect(markerLook('in_progress')).toBe(working);
   });
 
   it('under reduced motion nothing pulses: the still level at any time', () => {
@@ -336,7 +341,55 @@ describe('moons', () => {
   });
 });
 
+describe('instance capacity', () => {
+  it('fits every marker: mobile tier, three sub-project moons with 17 tasks each', () => {
+    const tasks: Record<string, Task> = {};
+    let n = 0;
+    for (let i = 0; i < 30; i++) tasks[`m${i}`] = task(`m${i}`, 'b-mars', n++);
+    for (const moon of ['b-m1', 'b-m2', 'b-m3'])
+      for (let i = 0; i < 17; i++) tasks[`${moon}-${i}`] = task(`${moon}-${i}`, moon, n++);
+    const max = MAX_MARKERS.mobile;
+    const markers = overlayMarkers(world({ tasks }), detail('b-mars'), max, [
+      'b-m1',
+      'b-m2',
+      'b-m3',
+    ]);
+    const onMars = markers.filter((m) => m.bodyId === 'b-mars').length;
+    const onMoons = markers.length - onMars;
+    expect(onMars).toBe(max);
+    expect(onMoons).toBe(51); // more than the old fixed `max × 2` (48)
+    const standIns = MAX_STAND_INS.mobile;
+    const c = overlayCapacity(markers, 'b-mars', standIns);
+    expect(c.pins).toBeGreaterThanOrEqual(onMars);
+    expect(c.moonPins).toBeGreaterThanOrEqual(onMoons);
+    expect(c.glow).toBeGreaterThanOrEqual(onMoons + standIns);
+    expect(c.cutGlow).toBeGreaterThanOrEqual(onMars + standIns);
+    // Rounded up in steps: one task more or less keeps the same meshes.
+    expect(overlayCapacity(markers.slice(1), 'b-mars', standIns)).toEqual(c);
+  });
+
+  it('a giant’s buoys and its moons’ pins have their own lists', () => {
+    const c = overlayCapacity(
+      [
+        { bodyId: 'b-jupiter', footing: 'orbit' },
+        { bodyId: 'b-europa', footing: 'surface' },
+      ],
+      'b-jupiter',
+      4,
+    );
+    expect(c).toEqual({ pins: 8, moonPins: 8, buoys: 8, glow: 8, cutGlow: 8 });
+  });
+});
+
 describe('the cutaway rule', () => {
+  it('a robot on the removed wedge is out of sight; a drone in orbit never', () => {
+    const planes = [new Plane(new Vector3(1, 0, 0), 0), new Plane(new Vector3(0, 0, 1), 0)];
+    expect(standInCut('surface', planes, [-1, 0, -1])).toBe(true);
+    expect(standInCut('surface', planes, [1, 0, -1])).toBe(false);
+    expect(standInCut('orbit', planes, [-1, 0, -1])).toBe(false);
+    expect(standInCut('surface', undefined, [-1, 0, -1])).toBe(false);
+  });
+
   it('a point is cut only on the negative side of both planes; parked planes cut nothing', () => {
     const planes = [new Plane(new Vector3(1, 0, 0), 0), new Plane(new Vector3(0, 0, 1), 0)];
     expect(cutAway(planes, [-1, 0, -1])).toBe(true);

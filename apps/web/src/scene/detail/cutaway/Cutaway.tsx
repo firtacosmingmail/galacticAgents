@@ -19,7 +19,7 @@ import { clipBody, parkPlanes, unclip, type ClippedMaterials } from './clipping.
 import { cutawayTarget } from './target.js';
 import { cutawayLabel, hideCutawayLabels, placeCutawayLabel } from './label-registry.js';
 import { useCutawayStore } from './store.js';
-import { publishCutPlanes } from './cut-planes.js';
+import { publishCutPlanes, withdrawCutPlanes } from './cut-planes.js';
 import {
   azimuthOf,
   easeOpen,
@@ -159,7 +159,9 @@ function CutawayOf({
     () => () => {
       unclip(clipped);
       hideCutawayLabels();
-      publishCutPlanes(undefined);
+      // Only this cutaway's planes: a cutaway mounted in the same commit (the detail scene swapped
+      // bodies) may have published its own already.
+      withdrawCutPlanes(scratch.current?.planes);
     },
     [clipped],
   );

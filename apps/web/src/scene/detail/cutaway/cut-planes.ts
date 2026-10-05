@@ -13,6 +13,15 @@ export function publishCutPlanes(next: readonly Plane[] | undefined): void {
   planes = next;
 }
 
+/**
+ * Withdraws `own` if it is still the published set (a cutaway unmounting). When the detail scene
+ * swaps bodies in one commit, the new cutaway may publish before the old one's cleanup runs: the
+ * old one never withdraws the new one's planes.
+ */
+export function withdrawCutPlanes(own: readonly Plane[] | undefined): void {
+  if (own !== undefined && planes === own) planes = undefined;
+}
+
 export function cutPlanes(): readonly Plane[] | undefined {
   return planes;
 }

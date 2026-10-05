@@ -36,6 +36,13 @@ const bodies: Record<string, Body> = {
     meta: { orbit: 4 },
     host: { kind: 'project', id: 'p-mars' },
   },
+  'b-venus': {
+    id: 'b-venus',
+    kind: 'planet',
+    name: 'Venus',
+    meta: { orbit: 2 },
+    host: { kind: 'project', id: 'p-venus' },
+  },
   'b-ast-7': {
     id: 'b-ast-7',
     kind: 'asteroid',
@@ -45,6 +52,7 @@ const bodies: Record<string, Body> = {
   },
 };
 const project: Project = { ...fx.project, id: 'p-mars', name: 'CSV tool', bodyId: 'b-mars' };
+const venusProject: Project = { ...fx.project, id: 'p-venus', name: 'Docs', bodyId: 'b-venus' };
 const task = (id: string, n: number): Task => ({
   ...fx.task,
   id,
@@ -60,8 +68,12 @@ function seed() {
     world: {
       ...emptyWorld(),
       bodies,
-      projects: { 'p-mars': project },
-      tasks: { 't-1': task('t-1', 1), 't-2': task('t-2', 2) },
+      projects: { 'p-mars': project, 'p-venus': venusProject },
+      tasks: {
+        't-1': task('t-1', 1),
+        't-2': task('t-2', 2),
+        't-v': { ...task('t-v', 3), projectId: 'p-venus', bodyId: 'b-venus' },
+      },
       agents: { 'a-s1': steward },
       statuses: { 'a-s1': { ...fx.status, agentId: 'a-s1' } },
     },
@@ -70,6 +82,7 @@ function seed() {
 }
 
 const mars = () => resolveDetailBody(bodies, 'b-mars', 'fake')!;
+const venus = () => resolveDetailBody(bodies, 'b-venus', 'fake')!;
 
 afterEach(() => {
   cleanup();
@@ -94,6 +107,21 @@ describe('the ProjectOverlay part', () => {
     view.unmount();
     expect(taskMarkerFrames()).toEqual([]);
     expect(dispose.mock.calls.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('a body swap in one commit keeps the new body’s frames (the old cleanup runs first)', () => {
+    seed();
+    // `DetailScene` is keyed by the body: one commit unmounts Mars's overlay and mounts Venus's.
+    const view = render(
+      <ProjectOverlay key="b-mars" body={mars()} quality={QUALITY_TIERS.high} mix={() => 1} />,
+    );
+    expect(taskMarkerFrames().map((f) => f.taskId)).toEqual(['t-1', 't-2']);
+    view.rerender(
+      <ProjectOverlay key="b-venus" body={venus()} quality={QUALITY_TIERS.high} mix={() => 1} />,
+    );
+    expect(taskMarkerFrames().map((f) => f.taskId)).toEqual(['t-v']);
+    view.unmount();
+    expect(taskMarkerFrames()).toEqual([]);
   });
 
   it('a new task adds a frame; the mobile tier mounts too; an asteroid draws nothing', () => {

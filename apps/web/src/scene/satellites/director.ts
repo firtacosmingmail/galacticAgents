@@ -504,7 +504,9 @@ export class SatelliteDirector {
       // P6-04: a view shows it elsewhere (a Steward by its task in the detail view), only while it
       // orbits — a flight, a landing and a landed satellite stay the director's.
       f.claimed = this.override(e, f);
-      f.visible = true;
+      // A claimed frame the view says is out of sight (a robot on the cutaway's removed wedge) is
+      // not drawn, picked, ringed or given activities: every reader skips an invisible frame.
+      f.visible = !(f.claimed && placementFor(e.spec.agentId)?.hidden === true);
       if (e.lastDrawn) {
         e.lastDrawn.bodyId = e.actor.mode === 'flying' ? '' : e.actor.bodyId;
         e.lastDrawn.point[0] = f.position[0];

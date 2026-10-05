@@ -13,7 +13,8 @@ import type { Vec3Tuple } from '../orbit.js';
  * renderer then draws nothing for it (neither the satellite nor its beam) and the view draws its
  * own model at the frame's position. Everything that reads the frame — picking, the hover card and
  * ring, the activities (P4-03: gathering drones, transport shuttles, building robots around it) —
- * follows it there. Positions are in world units, written before `PLACE_SATELLITES` each frame.
+ * follows it there; a claimed frame whose override is `hidden` is invisible to all of them.
+ * Positions are in world units, written before `PLACE_SATELLITES` each frame.
  */
 export interface PlacementOverride {
   /** Where the agent is shown (world units); rewritten in place by its owner. */
@@ -25,6 +26,12 @@ export interface PlacementOverride {
    * close: the activities and the pick target scale with the span). Default 1.
    */
   scale?: number;
+  /**
+   * The view's model is out of sight (a robot standing on the cutaway's removed wedge): once
+   * claimed, the director marks the frame invisible, so picking, the hover and selection rings and
+   * the activities skip it too. Default false.
+   */
+  hidden?: boolean;
 }
 
 /** From this `k` on, the frame is the view's own model's (the satellite is not drawn). */
