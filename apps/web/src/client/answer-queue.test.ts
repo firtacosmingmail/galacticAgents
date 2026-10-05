@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Agent, Event, Question } from '@galactic/protocol';
+import type { Agent, Event as DomainEvent, Question } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { ApiError, type Api } from '../console/api.js';
 import { useAppStore } from '../state/store.js';
@@ -76,7 +76,7 @@ function snapshot(questions: Question[]) {
     statuses: [],
   });
 }
-function event(e: Event) {
+function event(e: DomainEvent) {
   seq += 1;
   useAppStore.getState().apply({ type: 'event', seq, at: fx.NOW, event: e });
 }
