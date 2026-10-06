@@ -10,7 +10,7 @@ import {
 } from '@galactic/protocol';
 import { buildApp, type App } from '../app.js';
 import type { ServerConfig } from '../config/config.js';
-import { openDatabase } from '../db/database.js';
+import { isStorageFailure, openDatabase, type Database } from '../db/database.js';
 import { testConfig, TEST_TOKEN } from '../test/harness.js';
 import { createPush, type Push } from './index.js';
 import { MAX_PUSH_DEVICES } from './routes.js';
@@ -52,14 +52,15 @@ async function start(over: Partial<ServerConfig> = {}) {
     ...over,
   });
   const transport = vi.fn<PushTransport>(async () => undefined);
-  const push: Push = createPush(openDatabase(':memory:'), config, { transport, env: {} });
+  const db = openDatabase(':memory:');
+  const push: Push = createPush(db, config, { transport, env: {} });
   app = buildApp({
     config,
     push,
     logger: { level: 'trace', stream: { write: (line: string) => void (logged += line) } },
   });
   await app.fastify.ready();
-  return { push, transport, config };
+  return { push, transport, config, db };
 }
 
 afterEach(async () => {
@@ -230,5 +231,51 @@ describe('push routes (P7-04)', () => {
       details: true,
     });
     expect(update.statusCode).toBe(200);
+  });
+
+  it('on a full disk: subscribing is refused with 507, a test push is still sent once (P8-12)', async () => {
+    const { push, transport, db } = await start();
+    push.service.publicKey();
+    const mine = subscription(1);
+    const stored = push.store.upsert({ subscription: mine, origin: 'local' });
+    const fill = (write: (n: number, filler: string) => void) => {
+      let n = 0;
+      for (const size of [4_000, 400, 40, 1]) {
+        for (;;) {
+          try {
+            write(n++, 'x'.repeat(size));
+          } catch (error) {
+            if (!isStorageFailure(error)) throw error;
+            break;
+          }
+        }
+      }
+    };
+    const fillDisk = (d: Database) => {
+      d.pragma(`max_page_count = ${d.pragma('page_count', { simple: true }) as number}`);
+      const insert = d.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+      fill((n, filler) => insert.run(`push-filler-${n}`, filler));
+      const grow = d.prepare('UPDATE push_subscriptions SET label = label || ? WHERE id = ?');
+      fill((_n, filler) => grow.run(filler, stored.device.id));
+    };
+    fillDisk(db);
+
+    const refused = await inject('PUT', '/api/push/subscription', BEARER, {
+      subscription: subscription(2),
+    });
+    expect(refused.statusCode).toBe(507);
+    expect(refused.json()).toMatchObject({ error: 'storage_full' });
+    expect(push.store.list()).toHaveLength(1);
+
+    const test = await inject('POST', '/api/push/test', BEARER, { endpoint: mine.endpoint });
+    expect(test.json()).toEqual({ ok: true, result: 'sent' });
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(push.store.list()[0]!.device.lastSentAt).toBeUndefined();
+
+    db.pragma('max_page_count = 1073741823');
+    const ok = await inject('PUT', '/api/push/subscription', BEARER, {
+      subscription: subscription(3),
+    });
+    expect(ok.statusCode).toBe(200);
   });
 });
