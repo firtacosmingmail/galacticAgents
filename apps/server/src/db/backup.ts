@@ -107,11 +107,11 @@ export function listBackups(dir: string): BackupInfo[] {
   for (const name of names) {
     const m = NAME.exec(name);
     if (!m) continue;
-    let bytes = 0;
+    let bytes: number;
     try {
       bytes = statSync(join(dir, name)).size;
     } catch {
-      continue;
+      continue; // removed meanwhile
     }
     out.push({ name, kind: m[2] as BackupKind, createdAt: isoOfStamp(m[1]!), bytes });
   }
