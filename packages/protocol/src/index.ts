@@ -22,3 +22,4 @@ export * from './dev.js';
 export * from './replay.js';
 export * from './push.js';
 export * from './budget.js';
+export * from './storage.js';

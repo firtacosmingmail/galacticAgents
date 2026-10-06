@@ -32,6 +32,7 @@ import { redactSecrets } from '../runtime/redact.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { policyForWrite } from '../domain/permissions.js';
 import { bearerGuard, originOf } from './security.js';
+import { sendStorageRefusal } from './storage-refusal.js';
 
 /**
  * The agent control surface the ops console uses (P1-11; TECHNOLOGY §2.2 "a small REST
@@ -104,6 +105,8 @@ export function registerAgentRoutes(
       try {
         return (await fn()) ?? { ok: true };
       } catch (error) {
+        // A full disk is not a conflict: 507 `storage_full` (P8-09), nothing done.
+        if (sendStorageRefusal(reply, error)) return reply;
         return reply.code(409).send(refusal('rejected', (error as Error).message));
       }
     };
@@ -189,6 +192,7 @@ export function registerAgentRoutes(
         try {
           return (await restartHarmonizer()) satisfies RestartHarmonizerResponse;
         } catch (error) {
+          if (sendStorageRefusal(reply, error)) return reply;
           if (!(error instanceof DomainError)) {
             req.log.error(error);
             return reply.code(500).send({
@@ -229,10 +233,13 @@ export function registerAgentRoutes(
     const { commands } = opts;
     /**
      * A refused domain command as the console reads it (P2-14, P2-18): 404 unknown, 400 invalid,
-     * 409 for a state that refuses it (`stale` keeps its code: "already answered by …"), 500 for
-     * anything that is not a refusal (a bug or a runtime failure, never reported as a conflict).
+     * 409 for a state that refuses it (`stale` keeps its code: "already answered by …"), 507 / 503
+     * when the storage refused it (P8-09), 500 for anything that is not a refusal (a bug or a
+     * runtime failure, never reported as a conflict).
      */
     const refuse = (req: FastifyRequest, reply: FastifyReply, error: unknown) => {
+      // The storage refused it (P8-09): 507 `storage_full` / 503, nothing done.
+      if (sendStorageRefusal(reply, error)) return reply;
       if (!(error instanceof DomainError)) {
         req.log.error(error);
         return reply.code(500).send({ error: 'internal' });

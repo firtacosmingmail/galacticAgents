@@ -192,6 +192,7 @@ const app = buildApp({
   ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
   push,
+  storage: composed.storage,
   restartHarmonizer: async () => {
     const hq = await restartHarmonizer();
     console.log(

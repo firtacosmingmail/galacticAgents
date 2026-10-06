@@ -118,7 +118,7 @@ export interface AgentRuntimeOptions {
   heldLimits?: { events?: number; bytes?: number };
 }
 
-/** The agent events held for the storage, as P8-09's banner will show them. */
+/** The agent events held for the storage, as the panel's storage banner shows them (P8-09). */
 export interface StorageState {
   /** Agent events waiting to be written. */
   held: number;
@@ -130,6 +130,8 @@ export interface StorageState {
   since?: string;
   /** The storage's last refusal. */
   error?: string;
+  /** Its SQLite code (`SQLITE_FULL`, …): what the panel calls it (`storageConditionOf`). */
+  code?: string;
   /** The refusal will not go away by itself (a read-only or missing database file). */
   permanent: boolean;
 }
@@ -1668,6 +1670,7 @@ export class AgentRuntime {
   /** The storage state for the panel (P8-09): what is held, since when, and why. */
   storageState(): StorageState {
     const error = this.storage.error;
+    const code = (error as { code?: unknown } | undefined)?.code;
     const held = this.held.length > 0;
     return {
       held: this.held.length,
@@ -1675,6 +1678,7 @@ export class AgentRuntime {
       dropped: this.storage.dropped,
       ...(held && this.storage.since ? { since: this.storage.since } : {}),
       ...(held && error ? { error: error instanceof Error ? error.message : String(error) } : {}),
+      ...(held && typeof code === 'string' ? { code } : {}),
       permanent: held && isPermanentStorageFailure(error),
     };
   }

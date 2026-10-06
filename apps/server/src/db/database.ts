@@ -53,6 +53,23 @@ const STORAGE_CODES = [
   'SQLITE_PROTOCOL',
 ];
 
+/**
+ * What a storage failure means for the user (P8-09): `full` (SQLITE_FULL: the disk is full),
+ * `unwritable` (SQLITE_READONLY, SQLITE_CANTOPEN: the file must be fixed, it does not pass by
+ * itself), `unavailable` (any other storage failure: an I/O error, a lock held too long). Undefined
+ * for an error that is not a storage failure.
+ */
+export function storageConditionOf(
+  error: unknown,
+): 'full' | 'unavailable' | 'unwritable' | undefined {
+  if (!isStorageFailure(error)) return undefined;
+  const code = (error as { code: string }).code;
+  const is = (c: string) => code === c || code.startsWith(`${c}_`);
+  if (is('SQLITE_FULL')) return 'full';
+  if (is('SQLITE_READONLY') || is('SQLITE_CANTOPEN')) return 'unwritable';
+  return 'unavailable';
+}
+
 /** Whether `error` is a storage failure (see `STORAGE_CODES`): worth retrying, not a refusal. */
 export function isStorageFailure(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;

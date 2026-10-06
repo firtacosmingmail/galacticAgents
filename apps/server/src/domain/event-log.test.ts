@@ -302,3 +302,40 @@ describe('EventLog readers', () => {
     expect(snap.questions[0]?.id).toBe('q-1');
   });
 });
+
+describe('EventLog storage observers (P8-09)', () => {
+  const full = () => Object.assign(new Error('database or disk is full'), { code: 'SQLITE_FULL' });
+
+  it('reports an outermost command the storage refused, and one that committed events', () => {
+    const log = fresh();
+    const told: unknown[] = [];
+    const off = log.addStorageObserver((error) => told.push(error));
+    const emitBody = () =>
+      log.runCommand(({ emit }) =>
+        emit({ type: 'body.assigned', bodyId: 'b-1', host: { kind: 'project', id: 'p-1' } }),
+      );
+
+    // A nested command reports through its outer one only.
+    log.runCommand(() => emitBody());
+    expect(told).toEqual([undefined]);
+    // A command that writes no event says nothing about the storage, nor does another failure.
+    log.runCommand(() => 1);
+    expect(() =>
+      log.runCommand(() => {
+        throw new Error('refused');
+      }),
+    ).toThrow('refused');
+    expect(told).toEqual([undefined]);
+    // A storage refusal, even one a before-command hook throws.
+    const error = full();
+    const offHook = log.addBeforeCommand(() => {
+      throw error;
+    });
+    expect(() => emitBody()).toThrow('disk is full');
+    expect(told).toEqual([undefined, error]);
+    offHook();
+    off();
+    emitBody();
+    expect(told).toHaveLength(2);
+  });
+});
