@@ -46,6 +46,46 @@ describe('loadConfig', () => {
     );
   });
 
+  it('reads acp.mode and allowPermissiveMode; refuses GALACTIC_* in passEnv; a JSON command', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        acp: { command: 'codex-acp', mode: 'read-only', allowPermissiveMode: false },
+      }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.acp).toEqual({
+      command: 'codex-acp',
+      mode: 'read-only',
+      allowPermissiveMode: false,
+    });
+    expect(
+      loadConfig({
+        GALACTIC_HOME: home,
+        GALACTIC_ACP_COMMAND: '["/opt/my agent/bin/acp", "--flag", "a b"]',
+      }).config.acp,
+    ).toEqual({
+      command: '/opt/my agent/bin/acp',
+      args: ['--flag', 'a b'],
+      mode: 'read-only',
+      allowPermissiveMode: false,
+    });
+    expect(() =>
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_ACP_COMMAND: '["unterminated' }),
+    ).toThrow(/not a JSON array/);
+    expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_ACP_COMMAND: '[]' })).toThrow(
+      /non-empty JSON array/,
+    );
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        acp: { command: 'x', passEnv: ['GEMINI_API_KEY', 'GALACTIC_TOKEN'] },
+      }),
+    );
+    expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow(/GALACTIC_\*/);
+  });
+
   it('drops a fake Steward runtime outside dev mode, with a warning (P8 wave 3 review)', () => {
     writeFileSync(
       join(home, 'config.json'),

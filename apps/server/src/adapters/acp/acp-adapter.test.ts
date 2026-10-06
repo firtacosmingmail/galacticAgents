@@ -5,9 +5,9 @@ import { Readable, Writable } from 'node:stream';
 import { spawn } from 'node:child_process';
 import * as acp from '@agentclientprotocol/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentEvent, GateVerdict, ToolCall } from '@galactic/protocol';
+import type { AgentEvent, GateCheckOptions, GateVerdict, ToolCall } from '@galactic/protocol';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
-import { AcpAdapter, CLIENT_CAPABILITIES } from './acp-adapter.js';
+import { ACP_PASS_ENV, AcpAdapter, CLIENT_CAPABILITIES } from './acp-adapter.js';
 import { FAKE_ACP_AGENT } from './fake-agent.js';
 
 /**
@@ -29,6 +29,8 @@ interface Rig {
   supervisor: ProcessSupervisor;
   events: AgentEvent[];
   checks: ToolCall[];
+  /** Whether each check reserved the call against the cap. */
+  reserves: boolean[];
 }
 
 const rigs: Rig[] = [];
@@ -39,11 +41,18 @@ afterEach(async () => {
   }
 });
 
-function rig(extraArgs: string[] = []): Rig {
+function rig(
+  extraArgs: string[] = [],
+  agent: Partial<ConstructorParameters<typeof AcpAdapter>[0]['agent']> = {},
+): Rig {
   const supervisor = new ProcessSupervisor({ defaults: { graceMs: 2_000, termMs: 1_000 } });
   const adapter = new AcpAdapter({
     supervisor,
-    agent: { command: process.execPath, args: [FAKE_ACP_AGENT, '--state', state, ...extraArgs] },
+    agent: {
+      command: process.execPath,
+      args: [FAKE_ACP_AGENT, '--state', state, ...extraArgs],
+      ...agent,
+    },
     graceMs: 2_000,
     startTimeoutMs: 10_000,
   });
@@ -51,7 +60,7 @@ function rig(extraArgs: string[] = []): Rig {
   void (async () => {
     for await (const e of adapter.events) events.push(e);
   })();
-  const r = { adapter, supervisor, events, checks: [] };
+  const r = { adapter, supervisor, events, checks: [], reserves: [] };
   rigs.push(r);
   return r;
 }
@@ -71,8 +80,9 @@ function spawnOpts(
     prompt,
     caps: CAPS,
     gate: {
-      check: (call: ToolCall) => {
+      check: (call: ToolCall, opts?: GateCheckOptions) => {
         r.checks.push(call);
+        r.reserves.push(opts?.reserve ?? true);
         return verdict(call);
       },
     },
@@ -169,16 +179,15 @@ describe('AcpAdapter', () => {
     expect(of(r, 'agent.idle')[0]?.cost).toBeUndefined();
   });
 
-  it('a call the agent ran without asking: allowed is reported, `ask` adds a warning', async () => {
+  const askPush: Verdict = (call) =>
+    /push/.test(JSON.stringify(call.input))
+      ? { decision: 'ask', action: 'push', reasons: ['git push'] }
+      : { decision: 'allow' };
+
+  it('a call the agent ran without asking that the table would ask about holds: turn cancelled, a permission card, carry on when allowed', async () => {
     const r = rig();
-    await r.adapter.spawn(
-      spawnOpts(r, 'scenario:unasked', () => ({
-        decision: 'ask',
-        action: 'push',
-        reasons: ['git push'],
-      })),
-    );
-    await waitFor(() => idles(r) === 1, 'idle');
+    await r.adapter.spawn(spawnOpts(r, 'scenario:unasked', askPush));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'hold');
     expect(r.checks[0]).toEqual({
       toolName: 'Bash',
       input: {
@@ -186,15 +195,57 @@ describe('AcpAdapter', () => {
         acp: { kind: 'execute', title: 'git push origin main' },
       },
     });
-    expect(of(r, 'agent.tool_call')).toHaveLength(1);
-    expect(texts(r).some((t) => /without asking.*would have asked \(git push\)/.test(t))).toBe(
-      true,
-    );
-    expect(texts(r)).toContain('after the command');
-    expect(of(r, 'agent.needs_input')).toEqual([]);
+    const q = of(r, 'agent.needs_input')[0]!;
+    expect(q).toMatchObject({
+      kind: 'permission',
+      question: {
+        text: expect.stringMatching(
+          /ran git push origin main without asking.*would have asked \(git push\)/,
+        ),
+        toolCall: { toolName: 'Bash', input: { command: 'git push origin main' } },
+        permissionAction: 'push',
+      },
+    });
+    expect(of(r, 'agent.tool_call')).toHaveLength(1); // it ran: reported
+    // The turn is cancelled and does not end in idle: the agent waits on the answer.
+    await new Promise((res) => setTimeout(res, 500));
+    expect(texts(r)).not.toContain('after the command');
+    expect(idles(r)).toBe(0);
+    await r.adapter.answer(q.questionId, 'allow');
+    await waitFor(() => idles(r) === 1, 'idle after the new turn');
+    expect(texts(r).some((t) => /^echo: GalacticAgents stopped your last turn/.test(t))).toBe(true);
+    expect(of(r, 'agent.failed')).toEqual([]);
   });
 
-  it('a call the agent ran without asking that the table denies cancels the turn', async () => {
+  it('a hold the user refuses stops the agent: failed (runtime) with the reason', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:unasked', askPush));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'hold');
+    await r.adapter.answer(of(r, 'agent.needs_input')[0]!.questionId, 'deny: not now');
+    await waitFor(() => of(r, 'agent.failed').length === 1, 'failed');
+    expect(of(r, 'agent.failed')[0]).toMatchObject({
+      reason: 'runtime',
+      error: expect.stringMatching(
+        /ran git push origin main without asking and was not allowed.*not now/,
+      ),
+    });
+    expect(idles(r)).toBe(0);
+    await waitFor(() => r.supervisor.runningCount === 0, 'no process');
+  });
+
+  it('an interrupt withdraws a hold: the agent goes idle', async () => {
+    const r = rig();
+    const h = await r.adapter.spawn(spawnOpts(r, 'scenario:unasked', askPush));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'hold');
+    await r.adapter.interrupt(h.sessionId);
+    await waitFor(() => idles(r) === 1, 'idle');
+    await expect(
+      r.adapter.answer(of(r, 'agent.needs_input')[0]!.questionId, 'allow'),
+    ).rejects.toThrow(/no pending question/);
+    expect(of(r, 'agent.failed')).toEqual([]);
+  });
+
+  it('a call the agent ran without asking that the table denies stops the agent for the user', async () => {
     const r = rig();
     await r.adapter.spawn(
       spawnOpts(r, 'scenario:unasked\ncommand: rm -rf dist', () => ({
@@ -202,12 +253,145 @@ describe('AcpAdapter', () => {
         reason: 'destructive: denied by the table',
       })),
     );
-    await waitFor(() => idles(r) === 1, 'idle');
+    await waitFor(() => of(r, 'agent.failed').length === 1, 'failed');
     expect(of(r, 'agent.tool_call')).toEqual([]);
-    expect(
-      texts(r).some((t) => /permission denied for rm -rf dist.*turn is cancelled/.test(t)),
-    ).toBe(true);
+    expect(of(r, 'agent.failed')[0]).toMatchObject({
+      reason: 'runtime',
+      error: expect.stringMatching(
+        /ran rm -rf dist without asking, and the permission table denies it \(destructive/,
+      ),
+    });
     expect(texts(r)).not.toContain('after the command');
+    expect(r.events.filter((e) => /finished|failed|stopped/.test(e.type))).toHaveLength(1);
+    await waitFor(() => r.supervisor.runningCount === 0, 'no process');
+  });
+
+  it('a call reported as failed at once is still judged', async () => {
+    const r = rig();
+    await r.adapter.spawn(
+      spawnOpts(r, 'scenario:failsUnasked', () => ({ decision: 'deny', reason: 'denied' })),
+    );
+    await waitFor(() => of(r, 'agent.failed').length === 1, 'failed');
+    expect(r.checks).toHaveLength(1);
+    expect(r.checks[0]).toMatchObject({ toolName: 'Bash', input: { command: 'rm -rf /tmp/x' } });
+  });
+
+  it('a call whose input changes after it was judged is judged once more, not reserved again', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:rewrites', askPush));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'hold');
+    expect(r.checks.map((c) => (c.input as { command: string }).command)).toEqual([
+      'ls',
+      'git push origin main',
+    ]);
+    expect(r.reserves).toEqual([true, false]);
+  });
+
+  it('a call judged when it started and then asked about is reserved against the cap once', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:startsThenAsks'));
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(texts(r)).toContain('tested');
+    expect(r.checks).toHaveLength(2);
+    expect(r.reserves).toEqual([true, false]);
+    expect(of(r, 'agent.tool_call')).toHaveLength(1);
+  });
+
+  describe('session modes (decision 108)', () => {
+    it('refuses an agent whose mode runs tool calls without asking', async () => {
+      const r = rig(['--mode', 'bypassPermissions']);
+      await expect(r.adapter.spawn(spawnOpts(r, 'scenario:echo'))).rejects.toThrow(
+        /mode "Bypass Permissions", which runs tool calls without asking.*acp\.mode.*allowPermissiveMode/,
+      );
+      await waitFor(() => r.supervisor.runningCount === 0, 'no process');
+      expect(r.events).toEqual([]);
+    });
+
+    it('accepts it when the config opts in', async () => {
+      const r = rig(['--mode', 'bypassPermissions'], { allowPermissiveMode: true });
+      await r.adapter.spawn(spawnOpts(r, 'scenario:echo'));
+      await waitFor(() => idles(r) === 1, 'idle');
+    });
+
+    it('sets the configured mode (set_mode, or the mode config option) before the first prompt', async () => {
+      for (const extra of [[], ['--config-modes']]) {
+        const r = rig(['--mode', 'bypassPermissions', ...extra], { mode: 'default' });
+        await r.adapter.spawn(spawnOpts(r, 'scenario:echo'));
+        await waitFor(() => idles(r) === 1, 'idle');
+      }
+      const named = rig(['--mode', 'default'], { mode: 'plan mode' }); // by name, any case
+      await named.adapter.spawn(spawnOpts(named, 'scenario:echo'));
+      await waitFor(() => idles(named) === 1, 'idle');
+    });
+
+    it('refuses a configured mode the agent does not have, or a permissive one', async () => {
+      const r = rig(['--mode', 'default'], { mode: 'careful' });
+      await expect(r.adapter.spawn(spawnOpts(r, 'scenario:echo'))).rejects.toThrow(
+        /no mode "careful" \(acp\.mode; its modes: default, plan, acceptEdits, bypassPermissions\)/,
+      );
+      const p = rig(['--mode', 'default'], { mode: 'acceptEdits' });
+      await expect(p.adapter.spawn(spawnOpts(p, 'scenario:echo'))).rejects.toThrow(
+        /without asking/,
+      );
+    });
+
+    it('an agent without modes is allowed', async () => {
+      const r = rig([], { mode: 'default' });
+      await r.adapter.spawn(spawnOpts(r, 'scenario:echo'));
+      await waitFor(() => idles(r) === 1, 'idle');
+    });
+
+    it('a switch away from the expected mode holds; refused, the agent is stopped', async () => {
+      const r = rig(['--mode', 'default']);
+      await r.adapter.spawn(spawnOpts(r, 'scenario:switches'));
+      await waitFor(() => of(r, 'agent.needs_input').length === 1, 'hold');
+      const q = of(r, 'agent.needs_input')[0]!;
+      expect(q.kind).toBe('permission');
+      expect(q.question.toolCall).toBeUndefined(); // never decided by the table: the user's
+      expect(q.question.text).toMatch(
+        /switched itself to mode "Bypass Permissions", which runs tool calls without asking/,
+      );
+      expect(texts(r)).not.toContain('after the switch');
+      await r.adapter.answer(q.questionId, 'no');
+      await waitFor(() => of(r, 'agent.failed').length === 1, 'failed');
+      expect(of(r, 'agent.failed')[0]?.error).toMatch(/switched itself to mode/);
+    });
+
+    it('a switch the user allows becomes the expected mode', async () => {
+      const r = rig(['--mode', 'default']);
+      const h = await r.adapter.spawn(spawnOpts(r, 'scenario:switches\nmode:plan'));
+      await waitFor(() => of(r, 'agent.needs_input').length === 1, 'hold');
+      expect(of(r, 'agent.needs_input')[0]!.question.text).toMatch(/mode "Plan Mode"\. Let it/);
+      await r.adapter.answer(of(r, 'agent.needs_input')[0]!.questionId, 'yes');
+      await waitFor(() => idles(r) === 1, 'idle');
+      await r.adapter.send(h.sessionId, 'again');
+      await waitFor(() => texts(r).includes('echo: again'), 'echo');
+      expect(of(r, 'agent.needs_input')).toHaveLength(1);
+    });
+  });
+
+  it('passes routing variables by default, never a credential; refuses GALACTIC_* in passEnv', () => {
+    for (const secret of [
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_API_KEY',
+      'GEMINI_API_KEY',
+      'GOOGLE_API_KEY',
+      'GOOGLE_APPLICATION_CREDENTIALS',
+      'OPENAI_API_KEY',
+    ]) {
+      expect(ACP_PASS_ENV).not.toContain(secret);
+    }
+    expect(ACP_PASS_ENV.every((k) => !/TOKEN|KEY|SECRET|CREDENTIAL|PASSWORD/i.test(k))).toBe(true);
+    const supervisor = new ProcessSupervisor();
+    expect(
+      () =>
+        new AcpAdapter({
+          supervisor,
+          agent: { command: 'x', passEnv: ['GEMINI_API_KEY', 'GALACTIC_TOKEN'] },
+        }),
+    ).toThrow(/GALACTIC_TOKEN/);
+    void supervisor.dispose();
   });
 
   it('asks one clarification per form field, re-asks an unreadable answer, sends typed values', async () => {
@@ -349,7 +533,7 @@ describe('AcpAdapter', () => {
       agent: { command: join(cwd, 'no-such-agent') },
       startTimeoutMs: 5_000,
     });
-    rigs.push({ adapter, supervisor, events: [], checks: [] });
+    rigs.push({ adapter, supervisor, events: [], checks: [], reserves: [] });
     await expect(adapter.spawn(spawnOpts(rigs.at(-1)!, 'x'))).rejects.toThrow(
       /exited during initialize/,
     );

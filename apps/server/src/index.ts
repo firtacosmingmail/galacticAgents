@@ -104,6 +104,8 @@ const adapters: AgentAdapter[] = [
             command: config.acp.command,
             ...(config.acp.args ? { args: config.acp.args } : {}),
             ...(config.acp.passEnv ? { passEnv: config.acp.passEnv } : {}),
+            ...(config.acp.mode ? { mode: config.acp.mode } : {}),
+            ...(config.acp.allowPermissiveMode ? { allowPermissiveMode: true } : {}),
           },
           onError,
         }),
