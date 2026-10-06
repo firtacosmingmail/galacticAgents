@@ -1,6 +1,6 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** next wave proposed: P8-05, P8-03, P8-09 (after wave 1 is merged into `phase-8`; P8-10 needs Cosmin's decision) · **Task status:** todo
+**Current task:** P8-05, P8-03, P8-09, P8-10 (wave 2, branch `p8-wave2-smoke-backup-storage-caps`) · **Task status:** in progress
 **Phase status:** in progress (3/11 done) — on branch `phase-8`, cut from `phase-7` (Phase 7 waits for the P7-06 device run before it merges into `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -43,7 +43,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** compaction runs on a fixture DB; resume from `lastEventId` and the scrubber still work afterwards.
 
 ### P8-03 — Backups, export and import of the map
-- **Status:** todo · **Depends on:** P2-13 · **Parallel with:** all
+- **Status:** in progress · **Depends on:** P2-13 · **Parallel with:** all
 - Scheduled SQLite backups (online backup API); export/import of projects, tasks, bodies and history as JSON; restore procedure documented.
 - **Acceptance:** export → wipe → import reproduces the map and history.
 
@@ -53,7 +53,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** drill log in `docs/tasks/notes/P8-04-drills.md`; no data loss or duplicate spawns in any drill.
 
 ### P8-05 — Playwright scene and panel smoke tests
-- **Status:** todo · **Depends on:** P5-05 · **Parallel with:** all
+- **Status:** in progress · **Depends on:** P5-05 · **Parallel with:** all
 - Headless Chromium smoke tests: app loads, snapshot renders, a fake-adapter project shows bodies and satellites, inbox answer flow works; screenshot diffs for the scene at a fixed seed.
 - **Acceptance:** suite in CI using the fake adapter.
 
@@ -73,13 +73,13 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** conformance suite green for the subset the interface marks optional; a shell-script "agent" runs end to end.
 
 ### P8-09 — Storage health in the panel (added 2026-10-05)
-- **Status:** todo · **Depends on:** P8-04 · **Parallel with:** all
+- **Status:** in progress · **Depends on:** P8-04 · **Parallel with:** all
 - From the P8-04 disk-full drill (`notes/P8-04-drills.md`, finding F2): the server now holds the agent events it cannot write and writes them when space returns, but the user only sees refused actions as generic 500 errors. Add a storage state to the status stream (writes failing since, agent events waiting), a "disk full — N agent events waiting" banner in the panel and a push notification, and `507 storage_full` ("the disk is full") for REST and WebSocket actions the storage refuses. SPEC decision 99.
 - **Acceptance:** with the drill's full disk, the panel shows the banner within a second, a refused action says the disk is full, and the banner clears when the held events are written.
 
 ### P8-10 — Brains and the wall-clock cap (added 2026-10-05)
-- **Status:** todo · **Depends on:** P2-17 · **Parallel with:** all
-- From the P8-04 network drill (finding F5): the per-agent wall-clock cap (default 2 h) also stops the Harmonizer and Waykeepers, idle time included — an idle Harmonizer fails with `failed(reason: cap)` once the cap has passed since its spawn and is replaced with a fresh session; a Waykeeper fails every two hours. Decide (proposed: brains are bounded by the hierarchy and their tool-call cap, not by the wall clock; or only their turn time counts) and fix in `CapsEnforcer` with a test.
+- **Status:** in progress · **Depends on:** P2-17 · **Parallel with:** all
+- From the P8-04 network drill (finding F5): the per-agent wall-clock cap (default 2 h) also stops the Harmonizer and Waykeepers, idle time included — an idle Harmonizer fails with `failed(reason: cap)` once the cap has passed since its spawn and is replaced with a fresh session; a Waykeeper fails every two hours. Decided by Cosmin (2026-10-06): the wall-clock cap applies to Stewards only; brains are bounded by the hierarchy and their tool-call cap and fix in `CapsEnforcer` with a test.
 - **Acceptance:** a brain idle past the wall-clock cap keeps running; Stewards are still stopped by it.
 
 ### P8-11 — A CLI forked just before a kill (added 2026-10-05)
