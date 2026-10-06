@@ -210,4 +210,51 @@ describe('transcript retention settings (P8-02)', () => {
     }
     expect(file()).toEqual(before);
   });
+
+  it('sets the runtime of new Stewards live, to a registered runtime only (P8-07)', () => {
+    const home = temp('galactic-home-');
+    const { config } = loadConfig({ GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv);
+    const settings = new SettingsService({
+      config,
+      home,
+      runtimes: () => ['fake', 'claude-sdk', 'acp'],
+    });
+    const file = () =>
+      JSON.parse(readFileSync(config.configPath, 'utf8')) as Record<string, unknown>;
+    expect(settings.current().stewardRuntime).toBeUndefined();
+    expect(settings.update({ stewardRuntime: 'acp' }, local).settings.stewardRuntime).toBe('acp');
+    expect(config.stewardRuntime).toBe('acp'); // live: the brains read the config at each spawn
+    expect(file()['stewardRuntime']).toBe('acp');
+    expect(settings.response().restartRequired).toEqual([]);
+    expect(refusal(() => settings.update({ stewardRuntime: 'pty' }, local))).toMatchObject({
+      code: 'invalid',
+      message: expect.stringMatching(/no pty runtime is set up/),
+    });
+    expect(
+      refusal(() => settings.update({ stewardRuntime: 'fake' }, { origin: 'remote' })),
+    ).toMatchObject({ code: 'remote_settings' });
+    expect(
+      settings.update({ stewardRuntime: null }, local).settings.stewardRuntime,
+    ).toBeUndefined();
+    expect(config.stewardRuntime).toBeUndefined();
+    expect(file()).not.toHaveProperty('stewardRuntime');
+  });
+
+  it('refuses the fake runtime outside dev mode, even though it is registered (P8 wave 3 review)', () => {
+    const home = temp('galactic-home-');
+    const { config } = loadConfig({ GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv);
+    expect(config.dev).toBe(false);
+    const runtimes = () => ['fake', 'claude-sdk', 'acp'] as const;
+    const prod = new SettingsService({ config, home, runtimes });
+    expect(refusal(() => prod.update({ stewardRuntime: 'fake' }, local))).toMatchObject({
+      code: 'invalid',
+      message: expect.stringMatching(/fake runtime is for development only/),
+    });
+    expect(config.stewardRuntime).toBeUndefined();
+    // Dev mode (or a test that says so) may run new Stewards on the fake adapter.
+    const dev = new SettingsService({ config: { ...config, dev: true }, home, runtimes });
+    expect(dev.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
+    const allowed = new SettingsService({ config, home, runtimes, allowFakeRuntime: true });
+    expect(allowed.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
+  });
 });

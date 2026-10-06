@@ -215,6 +215,12 @@ export const Settings = z.object({
   transcriptRetention: TranscriptRetention.optional(),
   /** Budget warnings (P8-01); the server always reports it, older servers leave it out. */
   budgets: SettingsBudgets.optional(),
+  /**
+   * The runtime new Stewards run on (P8-07), whichever brain spawns them; absent = the spawning
+   * brain's own runtime (the behaviour before P8-07). Only a runtime the server has an adapter
+   * for can be chosen. The Harmonizer and Waykeepers stay on their own runtime.
+   */
+  stewardRuntime: AgentRuntime.optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -228,6 +234,7 @@ export const SettingName = z.enum([
   'stewardsLoadUserSettings',
   'transcriptRetention',
   'budgets',
+  'stewardRuntime',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
 
@@ -247,6 +254,8 @@ export const SettingsPatch = z
     /** Transcript retention (P8-02), merged key by key; local requests only (decision 51, 90). */
     transcriptRetention: TranscriptRetention.partial().strict().optional(),
     budgets: SettingsBudgets.partial().strict().optional(),
+    /** The runtime of new Stewards (P8-07); `null` = the spawning brain's own again. */
+    stewardRuntime: AgentRuntime.nullable().optional(),
     /**
      * Marks the first-run setup as done (P25-08): the server stamps `setupCompletedAt` in
      * `config.json` (kept if already set). Local requests only, like every setting but the tier

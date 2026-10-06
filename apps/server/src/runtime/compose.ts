@@ -98,6 +98,12 @@ export interface ComposeOptions {
   processes?: Omit<StewardProcessesOptions, 'log' | 'statuses' | 'onError'>;
   /** Dollar budgets (P8-01): the warning threshold (`config.budgets`, default 80 %). */
   budgets?: { warnAtPercent?: number };
+  /**
+   * The runtime new Stewards run on (P8-07; the `stewardRuntime` setting, read at every spawn):
+   * handed to every brain's tools. Absent or `undefined`: a brain spawns Stewards on its own
+   * runtime.
+   */
+  stewardRuntime?: () => RuntimeName | undefined;
 }
 
 export interface ComposedRuntime {
@@ -366,6 +372,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     queries,
     ...(workspaces ? { workspaces } : {}),
     ...(processes ? { processes } : {}),
+    ...(opts.stewardRuntime ? { stewardRuntime: opts.stewardRuntime } : {}),
     ...extra,
     ...(opts.onError ? { onError: opts.onError } : {}),
   });

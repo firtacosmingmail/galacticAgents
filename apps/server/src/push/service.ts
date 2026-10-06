@@ -7,11 +7,17 @@ import {
   type PushKind,
   type PushPayload,
 } from '@galactic/protocol';
+import { isStorageFailure } from '../db/database.js';
 import type { EventLog } from '../domain/event-log.js';
 import { notificationLookup } from '../runtime/notifications.js';
 import { redactSecrets } from '../runtime/redact.js';
-import { loadOrCreateVapidKeys, type VapidKeys } from './vapid.js';
-import type { PushStore, StoredSubscription } from './store.js';
+import {
+  loadOrCreateVapidKeys,
+  vapidKeyId,
+  type StoredVapidKeys,
+  type VapidKeys,
+} from './vapid.js';
+import type { PushStore, StoredSubscription, UpsertInput } from './store.js';
 
 /**
  * Web Push sending (P7-04; SPEC §4.5, decision 59). Every committed event is folded through the
@@ -25,6 +31,14 @@ import type { PushStore, StoredSubscription } from './store.js';
  * most `maxInFlight` deliveries run at once; beyond that a push is dropped with a warning rather
  * than queued without bound. A question reaches a device once per server life however often it is
  * escalated or reassigned to the user (its id is the same, like the page's ledger).
+ *
+ * Delivery and bookkeeping are separate (P8-12): once the push service accepted a push, a failure
+ * to record it (`last_sent_at`, `last_error`, removing a device the push service says is gone —
+ * any database write) never sends it again. A storage refusal (`isStorageFailure`: a full disk) is
+ * logged once per episode, until a bookkeeping write works again; the in-memory "already pushed"
+ * ledger keeps the same notification from being pushed twice in this server life either way. A
+ * device whose removal (404/410) could not be written is skipped from then on and its removal
+ * retried on the next push.
  *
  * Logs name a device by its id and the HTTP status only: never the endpoint (a capability URL),
  * its keys, the payload, or the VAPID private key.
@@ -151,11 +165,25 @@ export class PushService {
   private readonly maxInFlight: number;
   private readonly testIntervalMs: number;
   private readonly transport: PushTransport;
-  private keys: VapidKeys | undefined;
+  private keys: StoredVapidKeys | undefined;
   private inFlight = 0;
   private readonly pushed = new Set<string>();
   private readonly lastTest = new Map<string, number>();
   private readonly running = new Set<Promise<unknown>>();
+  /**
+   * Devices the push service called gone whose removal the database refused (P8-12), each with
+   * the `updated_at` of the row that was gone: a device subscribed again since (a newer row) is
+   * neither skipped nor removed.
+   */
+  private readonly goneIds = new Map<string, string>();
+  /**
+   * While set, the subscriptions bound to replaced keys are not cleared yet: rows last written at
+   * or before this time (the current key's creation) are skipped until the clearing works. It is
+   * worked out from `settings` on loading the keys, so a restart still clears them (P8-12, S5).
+   */
+  private clearCutoff: string | undefined;
+  /** A bookkeeping write was refused by the storage and none has worked since (P8-12). */
+  private storageEpisode = false;
   private unsubscribe: (() => void) | undefined;
 
   constructor(private readonly opts: PushServiceOptions) {
@@ -172,27 +200,124 @@ export class PushService {
 
   /**
    * The key pair, made on first need. When it had to be made anew (no `vapid.json`, or one that
-   * could not be read), every stored subscription is bound to the old public key and can never be
-   * delivered again: they are cleared, with a warning that names only how many.
+   * could not be read), every subscription stored before is bound to the old public key and can
+   * never be delivered again: they are cleared, with a warning that names only how many. Which key
+   * they were last cleared for is kept in `settings`, so a clearing the database refused is still
+   * done after a restart; only rows written at or before the key was made are cleared, so a device
+   * that subscribed with the new key meanwhile is kept.
    */
   vapidKeys(): VapidKeys {
-    this.keys ??= loadOrCreateVapidKeys({
-      dataDir: this.opts.dataDir,
-      ...(this.log ? { warn: (m: string) => this.log!.warn(`push: ${m}`) } : {}),
-      onCreate: () => {
-        const removed = this.store.clear();
-        if (removed > 0) {
+    if (!this.keys) {
+      const keys = loadOrCreateVapidKeys({
+        dataDir: this.opts.dataDir,
+        ...(this.log ? { warn: (m: string) => this.log!.warn(`push: ${m}`) } : {}),
+      });
+      this.keys = keys;
+      let clearedFor: string | undefined;
+      try {
+        clearedFor = this.store.clearedForKey();
+      } catch {
+        clearedFor = undefined; // clearing again is harmless: it removes only older rows
+      }
+      if (clearedFor !== vapidKeyId(keys.publicKey)) this.clearCutoff = keys.createdAt;
+    }
+    this.clearOldSubscriptions();
+    return { publicKey: this.keys.publicKey, privateKey: this.keys.privateKey };
+  }
+
+  /**
+   * Clears the subscriptions bound to replaced keys. When the database refuses it (a full disk),
+   * the keys stay made — the file is written — and the clearing is retried on the next need (or
+   * after a restart), so a refused clear never leaves dead subscriptions behind for good.
+   */
+  private clearOldSubscriptions(): void {
+    const cutoff = this.clearCutoff;
+    if (cutoff === undefined || !this.keys) return;
+    const keyId = vapidKeyId(this.keys.publicKey);
+    const removed = this.bookkeep('clearing the old subscriptions', () =>
+      this.store.clearBoundToOldKeys(cutoff, keyId),
+    );
+    if (removed === undefined) return;
+    this.clearCutoff = undefined;
+    if (removed > 0) {
+      this.log?.warn(
+        `push: new push keys were made; ${removed} device subscription${removed === 1 ? '' : 's'} bound to the old keys removed (each device turns push on again)`,
+      );
+    }
+  }
+
+  /**
+   * One bookkeeping write. Its failure never reaches delivery: a storage refusal is logged once per
+   * episode (the next write that works ends it), any other failure each time by its name only.
+   * Returns the write's result, or undefined when it failed.
+   */
+  private bookkeep<T>(what: string, write: () => T): T | undefined {
+    try {
+      const result = write();
+      if (this.storageEpisode) {
+        this.storageEpisode = false;
+        this.log?.info('push: the database takes writes again; push records are kept again');
+      }
+      return result;
+    } catch (error) {
+      if (isStorageFailure(error)) {
+        if (!this.storageEpisode) {
+          this.storageEpisode = true;
+          const code = (error as { code: string }).code;
           this.log?.warn(
-            `push: new push keys were made; ${removed} device subscription${removed === 1 ? '' : 's'} bound to the old keys removed (each device turns push on again)`,
+            `push: the database refused ${what} (${code}); pushes are still sent once each, their records are not kept until it takes writes again`,
           );
         }
-      },
-    });
-    return this.keys;
+      } else {
+        this.log?.warn(`push: ${what} failed (${(error as Error).name})`);
+      }
+      return undefined;
+    }
+  }
+
+  /**
+   * A device the push service called gone: removed, or skipped until its removal can be written.
+   * Only the row that was gone (`updatedAt`) is removed: one subscribed again since is kept.
+   */
+  private prune(id: string, updatedAt: string): boolean {
+    const removal = this.bookkeep(`removing device ${id}`, () => this.store.remove(id, updatedAt));
+    if (removal === undefined) {
+      this.goneIds.set(id, updatedAt);
+      return false;
+    }
+    this.goneIds.delete(id);
+    return true;
+  }
+
+  /** Retries the removals the database refused before. */
+  private retryPrunes(): void {
+    for (const [id, updatedAt] of [...this.goneIds]) this.prune(id, updatedAt);
+  }
+
+  /** Whether a stored subscription may be sent to: not gone, and not bound to replaced keys. */
+  private deliverable(sub: StoredSubscription): boolean {
+    const goneAt = this.goneIds.get(sub.device.id);
+    if (goneAt !== undefined) {
+      if (goneAt === sub.device.updatedAt) return false;
+      this.goneIds.delete(sub.device.id); // subscribed again since it was gone
+    }
+    return this.clearCutoff === undefined || sub.device.updatedAt > this.clearCutoff;
   }
 
   publicKey(): string {
     return this.vapidKeys().publicKey;
+  }
+
+  /**
+   * Subscribes a device or updates it (`PUT /api/push/subscription`). Subscriptions bound to
+   * replaced keys are cleared first (so this write is not mistaken for one), and a device the push
+   * service called gone before is no longer skipped or removed: it subscribed again.
+   */
+  subscribe(input: UpsertInput): StoredSubscription {
+    this.vapidKeys();
+    const stored = this.store.upsert(input);
+    this.goneIds.delete(stored.device.id);
+    return stored;
   }
 
   /** Follows the log: each committed event that is worth a push is sent. Returns a stop. */
@@ -222,7 +347,14 @@ export class PushService {
     const n = notificationOf(envelope, lookup);
     if (!n || !isPushKind(n.kind)) return;
     if (this.pushed.has(n.id)) return;
-    const devices = this.store.forKind(n.kind);
+    this.retryPrunes();
+    const kind = n.kind;
+    const candidates = () => this.store.forKind(kind).filter((s) => this.deliverable(s));
+    if (candidates().length === 0) return;
+    // Loading the keys clears the subscriptions bound to replaced ones (also after a restart);
+    // those not cleared yet are skipped by `deliverable`: nothing can reach them.
+    this.vapidKeys();
+    const devices = candidates();
     if (devices.length === 0) return;
     this.remember(n.id);
     for (const sub of devices) {
@@ -233,8 +365,11 @@ export class PushService {
 
   /** "Send a test push" from a device's settings. `undefined` when the device is unknown. */
   async test(endpoint: string): Promise<DeliveryResult | 'too_soon' | undefined> {
+    this.retryPrunes();
+    if (!this.store.byEndpoint(endpoint)) return undefined;
+    this.vapidKeys();
     const sub = this.store.byEndpoint(endpoint);
-    if (!sub) return undefined;
+    if (!sub || !this.deliverable(sub)) return undefined;
     this.pruneTests();
     const last = this.lastTest.get(sub.device.id);
     if (last !== undefined && this.now() - last < this.testIntervalMs) return 'too_soon';
@@ -295,29 +430,47 @@ export class PushService {
     try {
       const body = JSON.stringify(payload);
       for (let attempt = 1; ; attempt++) {
+        // Only the send is guarded here: what follows a send is bookkeeping, and a failure to
+        // record it must never be taken for a failed send (P8-12).
+        let failure: unknown;
         try {
           await this.transport({ endpoint: sub.endpoint, keys: sub.keys }, body, opts);
-          this.store.markSent(id);
-          return 'sent';
         } catch (error) {
-          const status = error instanceof PushSendError ? error.statusCode : undefined;
-          if (status === 404 || status === 410) {
-            this.store.remove(id);
-            this.log?.info(`push: device ${id} is no longer subscribed (${status}); removed`);
-            return 'gone';
-          }
-          const retryable = status === undefined || status === 429 || status >= 500;
-          if (!retryable || attempt >= attempts) {
-            const what = status ? `HTTP ${status}` : 'network';
-            this.store.markFailed(id, what);
-            this.log?.warn(`push: device ${id} failed (${what})`);
-            return 'failed';
-          }
-          const hinted = error instanceof PushSendError ? error.retryAfterMs : undefined;
-          await this.sleep(Math.min(hinted ?? 1_000 * 4 ** (attempt - 1), 30_000));
-          // Unsubscribed meanwhile: nothing more to send.
-          if (!this.store.get(id)) return 'gone';
+          failure = error ?? new PushSendError(undefined);
         }
+        if (failure === undefined) {
+          this.bookkeep(`recording the push to device ${id}`, () => this.store.markSent(id));
+          return 'sent';
+        }
+        const status = failure instanceof PushSendError ? failure.statusCode : undefined;
+        if (status === 404 || status === 410) {
+          const removed = this.prune(id, sub.device.updatedAt);
+          this.log?.info(
+            `push: device ${id} is no longer subscribed (${status}); ${removed ? 'removed' : 'skipped until its removal can be saved'}`,
+          );
+          return 'gone';
+        }
+        const retryable = status === undefined || status === 429 || status >= 500;
+        if (!retryable || attempt >= attempts) {
+          const what = status ? `HTTP ${status}` : 'network';
+          this.bookkeep(`recording the failure of device ${id}`, () =>
+            this.store.markFailed(id, what),
+          );
+          this.log?.warn(`push: device ${id} failed (${what})`);
+          return 'failed';
+        }
+        const hinted = failure instanceof PushSendError ? failure.retryAfterMs : undefined;
+        await this.sleep(Math.min(hinted ?? 1_000 * 4 ** (attempt - 1), 30_000));
+        // Unsubscribed meanwhile: nothing more to send. A read the storage refuses keeps trying
+        // (bounded by the attempts): the device was there when the delivery started.
+        if (this.goneIds.has(id)) return 'gone';
+        let present = true;
+        try {
+          present = this.store.get(id) !== undefined;
+        } catch (error) {
+          if (!isStorageFailure(error)) throw error;
+        }
+        if (!present) return 'gone';
       }
     } finally {
       this.inFlight--;

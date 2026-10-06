@@ -132,6 +132,9 @@ async function secondLife(root: string, ready: Ready): Promise<SecondLife> {
   // The PID table first, before anything is resumed (index.ts).
   const supervisor = new ProcessSupervisor({ store: new SqliteProcessStore(db) });
   const reconciled = supervisor.reconcile();
+  // Launches the killed run never recorded (P8-11): none here, every stand-in has its row.
+  const launches = await supervisor.reconcileLaunches();
+  expect(launches.taken).toEqual([]);
   const h = bootDrill(dirs, db, { groups: supervisor });
   const life: (typeof lives)[number] = { h, supervisor };
   lives.push(life);

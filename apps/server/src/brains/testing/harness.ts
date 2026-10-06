@@ -1,4 +1,4 @@
-import type { Actor, AgentRole, Id, SpawnOptions } from '@galactic/protocol';
+import type { Actor, AgentAdapter, AgentRole, Id, SpawnOptions } from '@galactic/protocol';
 import { FakeAdapter, type FakeAdapterOptions } from '../../adapters/fake/fake-adapter.js';
 import {
   FakeTurnCancelled,
@@ -65,6 +65,8 @@ export interface HarnessOptions {
   db?: Database;
   compose?: Omit<ComposeOptions, 'adapters' | 'onError'>;
   adapter?: Omit<FakeAdapterOptions, 'scenarioFor'>;
+  /** More adapters beside the fake one (P8-07: Stewards on another runtime); the test disposes them. */
+  adapters?: AgentAdapter[];
   /** Default `coalesceMs` of `startBrain`. */
   coalesceMs?: number;
   /** Errors the runtime reports (`onError`) fail `verify()`. Default true. */
@@ -138,7 +140,7 @@ export class BrainHarness {
     this.composed = composeRuntime(opts.db ?? openDatabase(':memory:'), {
       flushMs: 10,
       ...(opts.compose ?? {}),
-      adapters: [this.adapter],
+      adapters: [this.adapter, ...(opts.adapters ?? [])],
       onError: (e, ctx) => this.errors.push(`${ctx}: ${(e as Error).message}`),
     });
   }

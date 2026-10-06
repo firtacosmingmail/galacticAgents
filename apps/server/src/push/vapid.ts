@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import webpush from 'web-push';
@@ -36,8 +37,17 @@ export interface VapidOptions {
   onCreate?: () => void;
 }
 
+/** The key pair as stored: with the time it was made (subscriptions before it are bound to an older key). */
+export interface StoredVapidKeys extends VapidKeys {
+  createdAt: string;
+}
+
+/** A short, stable name for a public key (not secret; kept in `settings` to tell keys apart). */
+export const vapidKeyId = (publicKey: string): string =>
+  createHash('sha256').update(publicKey).digest('hex').slice(0, 16);
+
 /** Reads the key pair, creating it (mode 0600) when there is none or the file is unreadable. */
-export function loadOrCreateVapidKeys(opts: VapidOptions): VapidKeys {
+export function loadOrCreateVapidKeys(opts: VapidOptions): StoredVapidKeys {
   const path = join(opts.dataDir, VAPID_FILE);
   if (existsSync(path)) {
     // A copy restored with looser permissions is tightened before it is read.
@@ -47,20 +57,21 @@ export function loadOrCreateVapidKeys(opts: VapidOptions): VapidKeys {
     }
     try {
       const parsed = VapidFile.parse(JSON.parse(readFileSync(path, 'utf8')));
-      return { publicKey: parsed.publicKey, privateKey: parsed.privateKey };
+      return {
+        publicKey: parsed.publicKey,
+        privateKey: parsed.privateKey,
+        createdAt: parsed.createdAt,
+      };
     } catch {
       opts.warn?.(
         `${VAPID_FILE} could not be read; new push keys were made (every device must turn push on again)`,
       );
     }
   }
-  const keys = webpush.generateVAPIDKeys();
+  const { publicKey, privateKey } = webpush.generateVAPIDKeys();
+  const keys: StoredVapidKeys = { publicKey, privateKey, createdAt: new Date().toISOString() };
   mkdirSync(opts.dataDir, { recursive: true, mode: 0o700 });
-  writeFileSync(
-    path,
-    JSON.stringify({ ...keys, createdAt: new Date().toISOString() }, null, 2) + '\n',
-    { mode: 0o600 },
-  );
+  writeFileSync(path, JSON.stringify(keys, null, 2) + '\n', { mode: 0o600 });
   // `mode` applies only when the file is created: an existing (unreadable) one is tightened too.
   chmodSync(path, 0o600);
   opts.onCreate?.();

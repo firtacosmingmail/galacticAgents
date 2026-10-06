@@ -13,6 +13,8 @@ import {
 import { harmonizerRestarter } from './brains/harmonizer/restart.js';
 import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
+import type { AgentAdapter } from '@galactic/protocol';
+import { AcpAdapter } from './adapters/acp/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { BACKUP_CHECK_INTERVAL_MS, BACKUP_DIR, BackupService } from './db/backup.js';
@@ -70,22 +72,65 @@ if (reconciled.dead.length + reconciled.orphans.length > 0) {
     `Reconciled the process table: ${reconciled.dead.length} dead, ${reconciled.orphans.length} orphaned (killed)`,
   );
 }
+// Launches the killed run forked but never recorded (P8-11): their processes are found by the
+// launch id in their environment and stopped, before anything of this run is spawned.
+const launches = await supervisor.reconcileLaunches();
+for (const take of launches.taken) {
+  console.log(
+    `Stopped an unrecorded launch of agent ${take.agentId} from the previous run: ` +
+      `pids ${take.pids.join(', ')}${take.forced ? ' (forced)' : ''}`,
+  );
+}
 
-// Adapters: the fake one always (dev mode without Claude), the real one for Claude Code.
+// Adapters: the fake one always (dev mode without Claude), the real one for Claude Code, and the
+// ACP one for any ACP agent when `acp.command` is configured (P8-07).
 const fake = new FakeAdapter();
+const adapters: AgentAdapter[] = [
+  fake,
+  new ClaudeSdkAdapter({
+    supervisor,
+    ...(process.env['GALACTIC_MODEL'] ? { model: process.env['GALACTIC_MODEL'] } : {}),
+    // SPEC §8 open question: Stewards load `~/.claude` unless the settings say not (P25-01).
+    ...(config.stewardsLoadUserSettings === false
+      ? { stewardSettingSources: ['project', 'local'] as ('project' | 'local')[] }
+      : {}),
+    onError,
+  }),
+  ...(config.acp
+    ? [
+        new AcpAdapter({
+          supervisor,
+          agent: {
+            command: config.acp.command,
+            ...(config.acp.args ? { args: config.acp.args } : {}),
+            ...(config.acp.passEnv ? { passEnv: config.acp.passEnv } : {}),
+            ...(config.acp.mode ? { mode: config.acp.mode } : {}),
+            ...(config.acp.allowPermissiveMode ? { allowPermissiveMode: true } : {}),
+          },
+          onError,
+        }),
+      ]
+    : []),
+];
+if (config.stewardRuntime && !adapters.some((a) => a.runtime === config.stewardRuntime)) {
+  console.warn(
+    `[config] stewardRuntime is ${config.stewardRuntime}, which is not set up here: ` +
+      `new Stewards run on their brain's runtime`,
+  );
+  delete config.stewardRuntime;
+} else if (config.stewardRuntime === 'fake' && !config.dev) {
+  // The fake adapter is always registered (the ops console's dev tools), but real work never runs
+  // on it outside dev mode (`loadConfig` already drops it; this guards a config built elsewhere).
+  console.warn(
+    `[config] stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
+      `new Stewards run on their brain's runtime`,
+  );
+  delete config.stewardRuntime;
+}
 const composed = composeRuntime(db, {
-  adapters: [
-    fake,
-    new ClaudeSdkAdapter({
-      supervisor,
-      ...(process.env['GALACTIC_MODEL'] ? { model: process.env['GALACTIC_MODEL'] } : {}),
-      // SPEC §8 open question: Stewards load `~/.claude` unless the settings say not (P25-01).
-      ...(config.stewardsLoadUserSettings === false
-        ? { stewardSettingSources: ['project', 'local'] as ('project' | 'local')[] }
-        : {}),
-      onError,
-    }),
-  ],
+  adapters,
+  // The runtime new Stewards run on (P8-07): read at every spawn, so the settings apply live.
+  stewardRuntime: () => config.stewardRuntime,
   // Brain tools create worktrees and merge through this service (P2-05, P2-10).
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
@@ -131,6 +176,7 @@ const settings = new SettingsService({
   archival: composed.archival,
   transcriptRetention: composed.transcriptRetention,
   budgets: composed.budgets,
+  runtimes: () => adapters.map((a) => a.runtime),
 });
 
 // Shutdown is wired before anything is resumed or listening (P1-32): a signal during recovery

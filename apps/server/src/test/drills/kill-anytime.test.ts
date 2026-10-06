@@ -124,6 +124,8 @@ describe(`kill -9 at any moment (P8-04 drill 1; seed ${SEED})`, () => {
       const rows = store.all();
       const supervisor = new ProcessSupervisor({ store });
       supervisor.reconcile();
+      // Launches forked right before the kill whose PID-table row never came (P8-11, R3).
+      const launches = await supervisor.reconcileLaunches();
       const h = bootDrill(dirs, db, { groups: supervisor });
       lives.push({ h, supervisor });
       expect(logDrift(h.log)).toEqual([]);
@@ -185,7 +187,8 @@ describe(`kill -9 at any moment (P8-04 drill 1; seed ${SEED})`, () => {
       for (const s of left) {
         expect(
           await eventually(() => !alive(s.child) && !alive(s.leader)),
-          `stand-in ${JSON.stringify(s)} left running; PID table at boot: ${JSON.stringify(rows)}`,
+          `stand-in ${JSON.stringify(s)} left running; PID table at boot: ${JSON.stringify(rows)}; ` +
+            `launches: ${JSON.stringify(launches)}`,
         ).toBe(true);
       }
       expect(logDrift(h.log)).toEqual([]);
@@ -197,7 +200,8 @@ describe(`kill -9 at any moment (P8-04 drill 1; seed ${SEED})`, () => {
             `(${liveAtBoot.length} live, ${neverStarted.length} never started), tasks ${t.tasks.all().length}, cards ` +
             `${t.proposals.all().length}, open questions ` +
             `${t.questions.all().filter((q) => q.status === 'open').length}, stand-ins ` +
-            `${left.length} → resumed ${report.resumed.length}, need attention ` +
+            `${left.length} (unrecorded launches taken ${launches.taken.length}) → resumed ` +
+            `${report.resumed.length}, need attention ` +
             `${report.needAttention.length}, Harmonizer ${created === 1 ? 'started' : 'resumed'}`,
         );
       }

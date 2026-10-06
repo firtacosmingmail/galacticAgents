@@ -14,6 +14,7 @@ import {
   DEFAULT_PERMISSION_POLICY,
   DEFAULT_TRANSCRIPT_RETENTION,
   Timestamp,
+  type AgentRuntime,
   type PermissionPolicy,
   type Settings,
   type SettingName,
@@ -45,6 +46,7 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `caps` | live: the next spawn and the next agent's caps; running agents keep theirs |
  * | `qualityTier` | live (stored for the renderer, Phase 3) |
  * | `budgets` | live: every budgeted project and task is judged against the new threshold (P8-01) |
+ * | `stewardRuntime` | live: the next Steward a brain spawns (P8-07); only a registered runtime |
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
  *
@@ -88,6 +90,16 @@ export interface SettingsServiceOptions {
   budgets?: { warnAtPercent: number };
   /** The home directory the projects root may not be (default `os.homedir()`; tests). */
   home?: string;
+  /**
+   * The runtimes the server has adapters for (P8-07): `stewardRuntime` may name only one of
+   * them. Absent: any runtime is accepted (tests).
+   */
+  runtimes?: () => readonly AgentRuntime[];
+  /**
+   * Whether `stewardRuntime` may be `fake` (the scripted fake adapter): only in dev mode
+   * (`GALACTIC_DEV`). Default `config.dev`; tests may pass it explicitly.
+   */
+  allowFakeRuntime?: boolean;
 }
 
 /** What a remote client may patch (decision 51): the policy only floored (decision 37). */
@@ -217,6 +229,26 @@ export class SettingsService {
     if (patch.budgets?.warnAtPercent !== undefined) {
       next.budgets = { ...next.budgets, warnAtPercent: patch.budgets.warnAtPercent };
     }
+    if (patch.stewardRuntime === null) delete next.stewardRuntime;
+    else if (patch.stewardRuntime !== undefined) {
+      if (
+        patch.stewardRuntime === 'fake' &&
+        !(this.opts.allowFakeRuntime ?? this.opts.config.dev)
+      ) {
+        throw new SettingsError(
+          'invalid',
+          'the fake runtime is for development only (GALACTIC_DEV): choose a real runtime',
+        );
+      }
+      const known = this.opts.runtimes?.();
+      if (known && !known.includes(patch.stewardRuntime)) {
+        throw new SettingsError(
+          'invalid',
+          `no ${patch.stewardRuntime} runtime is set up on this server (available: ${known.join(', ')})`,
+        );
+      }
+      next.stewardRuntime = patch.stewardRuntime;
+    }
 
     // The first-run marker (P25-08): stamped once, never moved back.
     const setupCompletedAt =
@@ -251,6 +283,7 @@ export class SettingsService {
       stewardsLoadUserSettings: c.stewardsLoadUserSettings ?? true,
       transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
       budgets: { warnAtPercent: c.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT },
+      ...(c.stewardRuntime ? { stewardRuntime: c.stewardRuntime } : {}),
     };
   }
 
@@ -277,6 +310,8 @@ export class SettingsService {
     if (patch.budgets?.warnAtPercent !== undefined) {
       raw['budgets'] = { ...((raw['budgets'] as object | undefined) ?? {}), ...next.budgets };
     }
+    if (patch.stewardRuntime === null) delete raw['stewardRuntime'];
+    else if (patch.stewardRuntime !== undefined) raw['stewardRuntime'] = next.stewardRuntime;
     if (setupCompletedAt) raw['setupCompletedAt'] = setupCompletedAt;
     const checked = ConfigFile.safeParse(raw);
     if (!checked.success) {
@@ -322,6 +357,11 @@ export class SettingsService {
     if (patch.budgets?.warnAtPercent !== undefined && next.budgets) {
       this.config.budgets = { warnAtPercent: next.budgets.warnAtPercent };
       if (this.opts.budgets) this.opts.budgets.warnAtPercent = next.budgets.warnAtPercent;
+    }
+    // Read by the brains' Steward spawns at every spawn (`index.ts` hands them this config).
+    if (patch.stewardRuntime !== undefined) {
+      if (next.stewardRuntime) this.config.stewardRuntime = next.stewardRuntime;
+      else delete this.config.stewardRuntime;
     }
   }
 }

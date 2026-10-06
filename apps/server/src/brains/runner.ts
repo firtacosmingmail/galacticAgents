@@ -93,6 +93,8 @@ export interface BrainRunnerOptions {
   workspaces?: Workspaces;
   /** Handed to the brain's tools as `ctx.processes` (P4-14). */
   processes?: StewardProcessControl;
+  /** Handed to the brain's tools as `ctx.stewardRuntime` (P8-07). */
+  stewardRuntime?: () => RuntimeName | undefined;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -718,6 +720,7 @@ export class BrainRunner {
       }),
       ...(this.opts.workspaces ? { workspaces: this.opts.workspaces } : {}),
       ...(this.opts.processes ? { processes: this.opts.processes } : {}),
+      ...(this.opts.stewardRuntime ? { stewardRuntime: this.opts.stewardRuntime } : {}),
     };
   }
 

@@ -7,9 +7,10 @@ caps, the permission policy, the event log, the status store and the transcript 
 adapter never imports from `domain/` or `runtime/` except the process supervisor and
 `lib/event-queue.ts`, and nothing outside `adapters/` imports a runtime SDK (CLAUDE.md).
 
-Two adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI target)
-and `claude-sdk/` (the real one). Read `fake/fake-adapter.ts` first: every rule below is visible
-there in forty lines per concern.
+Three adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI
+target), `claude-sdk/` (the real one for Claude Code) and `acp/` (any Agent Client Protocol agent,
+P8-07). Read `fake/fake-adapter.ts` first: every rule below is visible there in forty lines per
+concern.
 
 ## The interface
 
@@ -98,7 +99,10 @@ the `toolUseId` when the runtime has one.
 ## Processes and the supervisor
 
 If the runtime is a child process, spawn it through `ProcessSupervisor.adopt(spec)` (synchronous,
-own process group, PID table, allow-listed environment) and map its `ProcessOutcome`s:
+own process group, PID table, allow-listed environment) and map its `ProcessOutcome`s. The
+supervisor records a launch intent before the fork (P8-11), so a server killed between the fork
+and the PID-table row still finds the process at the next start; `adopt` throws (and reports
+`start_failed`) when that intent cannot be written, e.g. on a full disk.
 
 | Outcome                                            | Event                                                        |
 | -------------------------------------------------- | ------------------------------------------------------------ |
@@ -143,20 +147,76 @@ hook), the prompts that make its agent do each thing, and may `skip` the optiona
 in CI (the fake adapter with `checkCwd: true` and its `crash()` test hook);
 `claude-sdk/claude-sdk.conformance.test.ts` runs with `GALACTIC_REAL_CLAUDE=1` (crash = `SIGKILL`
 to the CLI's process group through the supervisor; `spawnFailure: 'event'`).
+`acp/acp.conformance.test.ts` runs in CI against the fake ACP agent (`acp/fake-acp-agent.mjs`, a
+real child process speaking ACP through the official SDK); `acp/acp-real.conformance.test.ts` runs
+with `GALACTIC_REAL_ACP="<agent command line>"` against a real ACP agent, local-only.
+
+## The ACP adapter (`acp/`, P8-07; TECHNOLOGY §3.2)
+
+The server is an ACP _client_ (like an editor) over stdio JSON-RPC, with the official TypeScript
+SDK `@agentclientprotocol/sdk` (Apache-2.0). One agent process per session, started through
+`ProcessSupervisor.adopt()` from the configured command (`acp.command` / `acp.args` in
+`config.json`, or `GALACTIC_ACP_COMMAND` — whitespace-split, or a JSON array of strings): own
+process group, PID table, `GALACTIC_AGENT_ID`, the graceful stop. Its environment is the
+supervisor's allow-list, the routing variables of `ACP_PASS_ENV` (base URLs, provider switches,
+region, profile — no credential) and what `acp.passEnv` names (every API key or token; never a
+`GALACTIC_*` name). The session mode is set to `acp.mode` when configured; a session in a known
+permissive mode (`PERMISSIVE_MODES`) is refused unless `acp.allowPermissiveMode` (decision 108).
+
+**The capability set it advertises in `initialize`** (`CLIENT_CAPABILITIES`), asserted by the fake
+agent:
+
+| Capability                                               | Advertised | Why                                                                                                                                                |
+| -------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `elicitation.form`                                       | **yes**    | the only way an ACP agent can ask the user a question; without it the agent's question tool is off                                                 |
+| `elicitation.url`                                        | no         | nothing here can open a URL for the user                                                                                                           |
+| `fs.readTextFile` / `fs.writeTextFile`                   | no         | the agent reads and writes with its own tools in its own cwd (the Steward's worktree); a headless server has no editor buffers to serve faithfully |
+| `terminal`                                               | no         | likewise: the agent runs commands itself; its tool calls still reach the gate                                                                      |
+| `plan`, `session.*`, `subagents`, `auth.terminal`, `nes` | no         | not needed (a plan arrives as `session/update` anyway); nothing here can run a login                                                               |
+
+An agent that calls an unadvertised method gets `method not found` from the SDK.
+
+| ACP                                                                         | Adapter                                                                                                                                                                                                                                        |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `initialize` → `session/new {cwd, mcpServers: []}` → first `session/prompt` | `spawn` (a failure before the first prompt throws; the runtime reports it)                                                                                                                                                                     |
+| `session/prompt` and its response                                           | `send` (one prompt per turn) → `agent.idle` with the running cost; a stop reason other than `end_turn`/`cancelled` is a transcript line; an error response is a transcript line + `agent.idle`                                                 |
+| `session/update` `agent_message_chunk` / `agent_thought_chunk`              | joined into one `agent.output` per block (`text` / `thinking`)                                                                                                                                                                                 |
+| `session/update` `tool_call` / `tool_call_update`                           | merged per `toolCallId`; `agent.tool_call` when it runs (after the gate); its result as `agent.output(kind: tool)`                                                                                                                             |
+| `session/update` `plan`                                                     | `agent.progress{summary, progress}`                                                                                                                                                                                                            |
+| `session/update` `usage_update.cost`                                        | the session's dollars (cumulative, USD only)                                                                                                                                                                                                   |
+| `session/update` `notice`                                                   | a transcript line; other updates (modes, commands, replay of our prompt) are ignored                                                                                                                                                           |
+| `session/cancel`                                                            | `interrupt` (pending permission/elicitation requests answered "cancelled" first)                                                                                                                                                               |
+| `session/load` (capability `loadSession`)                                   | `resumeSession("acp:<sessionId>")`; the replay during the load is not transcript; without `loadSession` the resume fails and the agent stays `interrupted`                                                                                     |
+| `session/request_permission`                                                | **permission-kind**: the call is translated (`gateCall`) and checked once — `allow` → `allow_once` + `agent.tool_call`, `deny` → `reject_once` + "permission denied" line, `ask` → `agent.needs_input(permission)`; never an `*_always` option |
+| a tool call the agent runs without asking                                   | checked when it starts (or fails), again once if its input changes: `allow` reported; `ask` reported + a **hold**; `deny` stops the Steward (`agent.failed(runtime)` with the reason; not counted)                                             |
+| `session/update` `current_mode_update` / mode `config_option_update`        | a switch away from the expected mode (`acp.mode`, else the mode at start) is a **hold**; allowed, the new mode is expected                                                                                                                     |
+| a hold                                                                      | the turn is cancelled and `agent.needs_input(permission)` asks whether the agent may go on — no `agent.idle` meanwhile; allowed → a new turn ("carry on"), refused → stopped as for `deny`, interrupt → `agent.idle`                           |
+| `elicitation/create` (form)                                                 | one `agent.needs_input(clarification)` per field; answered `accept` with typed values (re-asked up to three times when a number or yes/no does not read), `cancel` on interrupt/stop; URL mode → `decline`                                     |
+| —                                                                           | pause/resume: SIGSTOP/SIGCONT on the process group                                                                                                                                                                                             |
+
+**Translating tool calls for the gate** (`mapping.ts`, `gateCall`): the policy engine speaks
+Claude Code's tool names, so an ACP call is mapped by its `kind` and raw input: `execute` +
+command → `Bash {command}` (a `["bash","-lc",script]` argv keeps its script), `read` → `Read`,
+a `cwd`/`workdir` becomes `cd '<dir>' && …`; `read` → `Read`, `edit` → `Edit` on the path,
+`delete` → `Bash rm -r -- '<path>'` (destructive, and outside the workspace when it is), `move` →
+`Edit` with both paths, `search` → `Glob` (its pattern located) unless plainly a content search
+(`Grep`), `fetch` → `WebFetch`. Every distinct path a call names (path fields, a `paths` list,
+every location) is judged (`paths` array), the strictest winning. A call that cannot be placed
+keeps a name the engine does not know (`acp:<kind>`), so the table's `unclassified` entry decides
+it (`ask` unless trusted; a push mentioned in its input or title still asks). `think` is
+bookkeeping: no gate, no `agent.tool_call`; a `switch_mode` call run without asking is a hold
+unless it names the expected mode. A call already judged when it started is checked with
+`reserve: false` when the agent then asks about it: counted once.
+
+Brains do not run on ACP (their server tools would need an MCP bridge): a spawn with `tools` is
+refused, and `bare` too. The fake ACP agent (`node acp/fake-acp-agent.mjs [--state dir]
+[--no-load] [--no-cost] [--mode <id>] [--config-modes]`) picks a scenario from `scenario:<name>` in
+its first prompt (`happy`, `asks`, `permission`, `long`, `echo`, `stalls`, `unasked`, `switches`,
+`rewrites`, `failsUnasked`, `startsThenAsks`, `form`, `error`, `refusal`, `dies`) and echoes later
+prompts; `--mode` gives it session modes (`default`, `plan`, `acceptEdits`, `bypassPermissions`),
+`--config-modes` offers them as a `mode` config option.
 
 ## Notes for the next adapters
-
-**ACP** (`acp/`, TECHNOLOGY §3.2): the server is an ACP _client_ over stdio JSON-RPC.
-`session/new` → `spawn`, `session/prompt` → `send` (one prompt per turn; the `result` of the
-prompt is `agent.idle`), `session/update` → `agent.output` / `agent.tool_call` (emit the tool call
-when the agent reports it running, after the gate), `session/cancel` → `interrupt`,
-`session/load` (capability `loadSession`) → `resumeSession`. **`session/request_permission` is
-permission-kind** (gate → ask → `permission` question; answer with the chosen option id).
-**Clarification questions arrive only if the client advertises `clientCapabilities.elicitation.form`
-in `initialize`** — advertise it and map `elicitation/create` → `clarification` (the form's first
-field is the question, its enum the options). Do not advertise `fs/*` or `terminal/*` unless
-implemented. Pause: no ACP primitive — SIGSTOP/SIGCONT on the process group like the SDK adapter.
-Cost: whatever the agent reports in `session/update` usage, else none (`metered: false`).
 
 **PTY** (`pty/`, TECHNOLOGY §3.3): `node-pty`, stream the terminal as `agent.output(kind: text)`
 per line or per prompt-detected block, derive `agent.idle` from prompt detection and

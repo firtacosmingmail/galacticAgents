@@ -104,8 +104,12 @@ const liveStewards = (ctx: BrainToolContext, filter: (a: Agent) => boolean = () 
     .supervisedAgents(ctx.brainId)
     .filter(({ agent, status }) => agent.role === 'steward' && filter(agent) && isLive(status));
 
-const runtimeOf = (ctx: BrainToolContext) =>
-  ctx.queries.agent(ctx.brainId)?.runtime ?? 'claude-sdk';
+/**
+ * The runtime of a Steward this Waykeeper spawns: the `stewardRuntime` setting (P8-07), else the
+ * Waykeeper's own.
+ */
+const stewardRuntimeOf = (ctx: BrainToolContext) =>
+  ctx.stewardRuntime?.() ?? ctx.queries.agent(ctx.brainId)?.runtime ?? 'claude-sdk';
 
 const brief = (t: Task) => ({ taskId: t.id, description: t.description, state: t.state });
 
@@ -285,7 +289,7 @@ export const spawnStewardTool: BrainTool = {
     try {
       ({ value } = await ctx.commands.spawnAgent({
         role: 'steward',
-        runtime: runtimeOf(ctx),
+        runtime: stewardRuntimeOf(ctx),
         taskId: task.id,
         supervisorId: ctx.brainId,
         prompt: stewardPrompt(task, project, where, instructions, {
@@ -560,7 +564,7 @@ async function sendBack(
   );
   const { value } = await ctx.commands.spawnAgent({
     role: 'steward',
-    runtime: runtimeOf(ctx),
+    runtime: stewardRuntimeOf(ctx),
     taskId: task.id,
     supervisorId: ctx.brainId,
     prompt: brief,
