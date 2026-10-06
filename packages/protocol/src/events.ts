@@ -73,11 +73,15 @@ export const AgentSpawned = z.object({
   foldedUpTo: z.number().int().nonnegative().optional(),
 });
 
-/** Transcript traffic. Routed to `transcript_chunks`, never persisted in `events` (TECHNOLOGY §6.2). */
+/**
+ * Transcript traffic. Routed to `transcript_chunks`, never persisted in `events` (TECHNOLOGY §6.2).
+ * `terminal` (P8-08) is a PTY agent's raw terminal output, escape sequences included, for the
+ * terminal view; the same output also arrives as `text` with the escapes stripped.
+ */
 export const AgentOutput = z.object({
   type: z.literal('agent.output'),
   ...agentBase,
-  kind: z.enum(['text', 'tool', 'thinking']),
+  kind: z.enum(['text', 'tool', 'thinking', 'terminal']),
   text: z.string(),
 });
 

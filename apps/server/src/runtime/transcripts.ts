@@ -103,8 +103,8 @@ export class TranscriptPipeline {
   private readonly nextSeq = new Map<Id, number>();
   private readonly buffer = new Map<Id, Pending[]>();
   /** The raw tail of each agent's output so far, for a boundary with an already flushed chunk. */
-  private readonly tails = new Map<Id, { kind: TranscriptChunk['kind']; text: string }>();
-  private readonly keys = new Map<Id, KeyState>();
+  private readonly tails = new Map<string, { kind: TranscriptChunk['kind']; text: string }>();
+  private readonly keys = new Map<string, KeyState>();
   private readonly listeners = new Map<Id, Set<TranscriptListener>>();
   private timer: NodeJS.Timeout | undefined;
   private disposed = false;
@@ -140,11 +140,15 @@ export class TranscriptPipeline {
       pending = [];
       this.buffer.set(agentId, pending);
     }
-    let raw = this.maskPrivateKeys(agentId, text);
+    // A PTY agent's raw `terminal` output is a stream of its own beside its stripped `text`
+    // (P8-08): the same bytes twice, so each continues only itself — boundaries, tails and the
+    // private-key state are kept per stream.
+    const stream = streamOf(agentId, kind);
+    let raw = this.maskPrivateKeys(stream, text);
     // Only consecutive chunks of one kind continue each other: a text delta and a tool output
     // never split one secret, and joining them would take the next word for part of a key.
-    const prev = pending.at(-1);
-    const tail = this.tails.get(agentId);
+    const prev = lastOf(pending, (p) => (p.chunk.kind === 'terminal') === (kind === 'terminal'));
+    const tail = this.tails.get(stream);
     let before = tail?.kind === kind ? tail.text : '';
     if (prev?.chunk.kind === kind) {
       const hit = this.boundaryMatch(prev.raw, raw);
@@ -161,7 +165,7 @@ export class TranscriptPipeline {
       const hit = this.boundaryMatch(before, raw);
       if (hit) raw = mask(hit.rule) + raw.slice(hit.end);
     }
-    this.tails.set(agentId, { kind, text: (before + raw).slice(-TAIL) });
+    this.tails.set(stream, { kind, text: (before + raw).slice(-TAIL) });
     const chunk: TranscriptChunk = { agentId, seq, at: this.now(), kind, text: this.redact(raw) };
     if (this.disposed) return chunk; // shutting down: dropped, never an exception for the caller
     pending.push({ chunk, raw, appendedAt: Date.now() });
@@ -280,11 +284,11 @@ export class TranscriptPipeline {
    * Masks private-key blocks in the raw stream of `agentId`, whatever the chunking: from the
    * BEGIN line to the END line, or for {@link PRIVATE_KEY_CAP} characters.
    */
-  private maskPrivateKeys(agentId: Id, text: string): string {
-    let st = this.keys.get(agentId);
+  private maskPrivateKeys(stream: string, text: string): string {
+    let st = this.keys.get(stream);
     if (!st) {
       st = { inKey: false, masked: 0, carry: '' };
-      this.keys.set(agentId, st);
+      this.keys.set(stream, st);
     }
     const s = st.carry + text;
     const offset = st.carry.length;
@@ -375,6 +379,16 @@ export class TranscriptPipeline {
       this.onError(error);
     }
   }
+}
+
+function lastOf<T>(list: T[], pred: (item: T) => boolean): T | undefined {
+  for (let i = list.length - 1; i >= 0; i--) if (pred(list[i]!)) return list[i];
+  return undefined;
+}
+
+/** The redaction stream of a chunk: an agent's `terminal` output apart from the rest (P8-08). */
+function streamOf(agentId: Id, kind: TranscriptChunk['kind']): string {
+  return kind === 'terminal' ? `${agentId}\u0000terminal` : agentId;
 }
 
 /** The first match of `pattern` in `s` at or after `from` that ends after `after`. */

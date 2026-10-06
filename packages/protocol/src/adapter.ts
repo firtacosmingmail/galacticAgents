@@ -117,6 +117,11 @@ export interface AgentAdapter {
   /** Re-attaches to a saved session after a restart. Absent for runtimes that cannot (PTY). */
   resumeSession?(sessionRef: string, opts: SpawnOptions): Promise<SpawnHandle>;
   /**
+   * Types one line (the text, then Enter) into the session's terminal now, whatever the turn is
+   * doing (P8-08). Only terminal runtimes (PTY) have it; the runtime logs it as the user's message.
+   */
+  input?(sessionId: string, text: string): Promise<void>;
+  /**
    * The normalised event stream for every session of this adapter — the only source of
    * `agent.*` events for its sessions (the runtime adds `agent.spawned`).
    *

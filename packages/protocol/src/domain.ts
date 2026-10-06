@@ -514,10 +514,20 @@ export const TranscriptChunk = z.object({
   /** Per-agent, strictly increasing; the transcript stream is resumed from it. */
   seq: z.number().int().positive(),
   at: Timestamp,
-  kind: z.enum(['text', 'tool', 'thinking']),
+  /**
+   * `terminal` (P8-08): a PTY agent's raw terminal bytes (ANSI escapes kept) for the terminal
+   * view only; its `text` chunks carry the same output stripped, for the conversation and history.
+   */
+  kind: z.enum(['text', 'tool', 'thinking', 'terminal']),
   text: z.string(),
 });
 export type TranscriptChunk = z.infer<typeof TranscriptChunk>;
+
+/**
+ * The terminal size every PTY agent runs in (P8-08): the terminal view in the panel draws its
+ * `terminal` chunks at exactly this size, so cursor movement lands where the CLI meant it.
+ */
+export const PTY_TERMINAL_SIZE = { cols: 120, rows: 32 } as const;
 
 /**
  * A project's trust level (decision 49): the name of the policy preset the user chose for it on

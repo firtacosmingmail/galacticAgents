@@ -31,8 +31,17 @@ import type { SpawnRequest } from '../runtime/agent-runtime.js';
  * runs in CI; the claude-sdk target is tagged local-only (P1-12).
  */
 
-/** Cases a target may skip, each with the reason (shown in the test name). */
-export type OptionalConformanceCase = 'crash' | 'spawnFailure' | 'concurrentSessions';
+/**
+ * Cases a target may skip, each with the reason (shown in the test name). `policyDeny` and
+ * `toolCalls` (one `agent.tool_call` per tool use) need structured tool calls, which a terminal
+ * agent (PTY, P8-08) does not have.
+ */
+export type OptionalConformanceCase =
+  | 'crash'
+  | 'spawnFailure'
+  | 'concurrentSessions'
+  | 'policyDeny'
+  | 'toolCalls';
 
 export interface ConformanceInstance {
   adapter: AgentAdapter;
@@ -87,6 +96,22 @@ export interface ConformanceTarget {
   spawnFailure?: 'rejected' | 'event';
   /** A policy under which the `permission` prompt's tool call is denied without asking. */
   denyPolicy?: PermissionPolicy;
+  /**
+   * The permission policy every spawn runs under (default: the global default). A runtime that
+   * runs only under some tables (PTY: the trusted preset, proposed decision 110) names one here.
+   */
+  spawnPolicy?: PermissionPolicy;
+  /**
+   * Whether the runtime reports structured tool calls (default `true`): `agent.tool_call` events
+   * and a permission question's `toolCall`. A terminal agent (PTY) has none; its permission
+   * questions are checked by `permissionEvidence` instead.
+   */
+  toolCalls?: boolean;
+  /**
+   * Transcript text the `permission` prompt's agent writes only when the permission was allowed
+   * (checked on both answers). Required when `toolCalls` is `false`.
+   */
+  permissionEvidence?: string;
   /** Optional cases this target cannot run, with the reason. */
   skip?: Partial<Record<OptionalConformanceCase, string>>;
 }
@@ -106,6 +131,10 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
   const USER = { type: 'user' } as const;
   const jobEnd = target.jobEnd ?? 'finished';
   const JOB_END = `agent.${jobEnd}` as const;
+  const structured = target.toolCalls !== false;
+  if (!structured && !target.permissionEvidence) {
+    throw new Error(`target ${target.name} has no tool calls: it needs permissionEvidence`);
+  }
 
   // A real adapter needs minutes per case; the suite's timeout is the target's, not Vitest's.
   describe(`adapter conformance — ${target.name}`, { timeout: timeoutMs * 6 }, () => {
@@ -162,6 +191,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         runtime: target.runtime,
         prompt,
         cwd: target.cwd,
+        ...(target.spawnPolicy ? { permissionPolicy: target.spawnPolicy } : {}),
         ...extra,
       });
       if (!result.ok) throw new Error(result.reason);
@@ -242,7 +272,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       expect(typesOf(agent.id)[0]).toBe('agent.spawned');
       await waitFor(() => typesOf(agent.id).includes(JOB_END), JOB_END);
       const types = typesOf(agent.id);
-      expect(types).toContain('agent.tool_call');
+      if (structured) expect(types).toContain('agent.tool_call');
       expect(types.at(-1)).toBe(JOB_END);
       expect(types).not.toContain('agent.output'); // output never enters the log
       expect(transcript(agent.id).length).toBeGreaterThan(0);
@@ -293,14 +323,21 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         question: { toolCall?: { toolName: string }; permissionAction?: string };
       };
       expect(q.kind).toBe('permission');
-      expect(q.question.toolCall?.toolName).toBeTruthy();
-      expect(q.question.permissionAction).toBeTruthy();
+      if (structured) {
+        expect(q.question.toolCall?.toolName).toBeTruthy();
+        expect(q.question.permissionAction).toBeTruthy();
+      }
       const callsBefore = typesOf(agent.id).filter((t) => t === 'agent.tool_call').length;
       await rig.composed.runtime.answer(pendingQuestion(agent.id), 'allow', USER);
       await waitFor(() => typesOf(agent.id).includes(JOB_END), 'job end after allow');
-      expect(typesOf(agent.id).filter((t) => t === 'agent.tool_call').length).toBeGreaterThan(
-        callsBefore,
-      );
+      if (structured) {
+        expect(typesOf(agent.id).filter((t) => t === 'agent.tool_call').length).toBeGreaterThan(
+          callsBefore,
+        );
+      }
+      if (target.permissionEvidence) {
+        expect(transcriptText(agent.id)).toContain(target.permissionEvidence);
+      }
     });
 
     it('pauses without events and resumes to completion', async () => {
@@ -441,17 +478,20 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         await waitState(agent.id, 'waiting_for_input');
         const q = eventsOf(agent.id, 'agent.needs_input')[0]!;
         expect(q.kind).toBe('permission');
-        const call = q.question.toolCall!;
-        expect(call.toolName).toBeTruthy();
+        const call = q.question.toolCall;
+        if (structured) expect(call?.toolName).toBeTruthy();
         await denyUntilJobEnd(agent.id);
-        expect(ran(agent.id, call)).toBe(false);
+        if (call) expect(ran(agent.id, call)).toBe(false);
+        if (target.permissionEvidence) {
+          expect(transcriptText(agent.id)).not.toContain(target.permissionEvidence);
+        }
         expect(rig.composed.log.tables.questions.get(q.questionId)?.status).toBe('answered');
         expect(typesOf(agent.id)).not.toContain('agent.failed');
         expectOneCallPerToolUse(agent.id);
         if (jobEnd === 'finished') await expectOneTerminal(agent.id);
       });
 
-      it('a policy deny: the tool does not run, no question is asked, the reason is visible', async () => {
+      optional('policyDeny', 'a policy deny: the tool does not run, no question is asked, the reason is visible', async () => {
         const agent = await spawn(target.prompts.permission, {
           permissionPolicy: target.denyPolicy ?? DENY_DESTRUCTIVE,
         });
@@ -468,7 +508,7 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         if (jobEnd === 'finished') await expectOneTerminal(agent.id);
       });
 
-      it('one agent.tool_call per tool use', async () => {
+      optional('toolCalls', 'one agent.tool_call per tool use', async () => {
         const agent = await spawn(target.prompts.permission);
         await waitState(agent.id, 'waiting_for_input');
         const call = eventsOf(agent.id, 'agent.needs_input')[0]!.question.toolCall!;

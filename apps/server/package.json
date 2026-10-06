@@ -20,6 +20,7 @@
     "@galactic/protocol": "workspace:*",
     "better-sqlite3": "^13.0.3",
     "fastify": "^5.12.5",
+    "node-pty": "1.1.0",
     "web-push": "^3.6.7",
     "ws": "^8.22.0",
     "zod": "^4.6.5"
