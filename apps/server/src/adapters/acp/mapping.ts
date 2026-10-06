@@ -5,6 +5,8 @@ import type {
   PermissionOption,
   PermissionOptionKind,
   Plan,
+  SessionConfigOption,
+  SessionModeState,
   ToolCall as AcpToolCall,
   ToolCallContent,
   ToolCallUpdate,
@@ -71,21 +73,56 @@ function commandOf(raw: Record<string, unknown>): string | undefined {
 }
 
 const PATH_KEYS = ['file_path', 'path', 'filePath', 'absolute_path', 'notebook_path', 'file'];
+/** Raw-input fields that carry several paths. */
+const PATHS_KEYS = ['paths', 'file_paths', 'files'];
+/** Raw-input fields that carry the directory a command runs in. */
+const CWD_KEYS = ['cwd', 'workdir', 'working_directory', 'workingDirectory', 'dir'];
+/** Raw-input fields only a content search (grep) has. */
+const GREP_KEYS = ['output_mode', 'glob', '-i', '-n', '-A', '-B', '-C', 'multiline', 'type'];
+
+/** A word quoted for the shell: always in single quotes, as in `rm -r -- '<path>'`. */
+const shellQuote = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`;
+
+/** Every distinct path a call names: its path fields, a list of paths, its locations. */
+function pathsOf(raw: Record<string, unknown>, locations: string[]): string[] {
+  const out: string[] = [];
+  for (const k of PATH_KEYS) {
+    const v = str(raw[k]);
+    if (v !== undefined) out.push(v);
+  }
+  for (const k of PATHS_KEYS) {
+    const v = raw[k];
+    if (Array.isArray(v)) for (const p of v) if (str(p) !== undefined) out.push(p as string);
+  }
+  out.push(...locations);
+  return [...new Set(out)];
+}
+
+/** The engine's path fields for a call on `paths`: the first under `key`, all as `paths`. */
+function onPaths(paths: string[], key = 'file_path'): Record<string, unknown> {
+  return { [key]: paths[0], ...(paths.length > 1 ? { paths } : {}) };
+}
 
 /**
  * The gate's view of an ACP tool call. The permission engine speaks Claude Code's tool names
  * (`Read`, `Edit`, `Bash`, `WebFetch` …: `domain/permissions.ts`), so an ACP call is translated by
  * its `kind` and its raw input into the call it is equivalent to — an `execute` with a command is
- * `Bash {command}`, an `edit` on a path is `Edit {file_path}` — and anything that cannot be placed
- * keeps a name the engine does not know, so the table's `unclassified` entry decides it (`ask`
- * unless the project is trusted): a call is never made to look safer than it is. The original
- * ACP fields travel along in the input (`acp: {kind, title}`) for the permission card.
+ * `Bash {command}` (run from its `cwd` when it names one: `cd '<dir>' && …`), an `edit` on a path
+ * is `Edit {file_path}`, a `delete` is the `rm -r -- '<path>'` it amounts to (judged as the shell
+ * command is: destructive, and outside the workspace when it is), a `search` is `Glob` (a
+ * file-name pattern, whose location the engine checks) unless it is plainly a content search
+ * (`Grep`) — and anything that cannot be placed keeps a name the engine does not know, so the
+ * table's `unclassified` entry decides it (`ask` unless the project is trusted; a push mentioned
+ * anywhere in it still asks): a call is never made to look safer than it is. Every distinct path
+ * a call names (its path fields, a `paths` list, all its locations) is judged, the strictest
+ * winning. The original ACP fields travel along in the input (`acp: {kind, title}`) for the
+ * permission card.
  */
 export function gateCall(tool: ToolState): ToolCall {
   const raw = asRecord(tool.rawInput);
   const kind = tool.kind ?? 'other';
   const locations = (tool.locations ?? []).map((l) => l.path).filter((p) => p.length > 0);
-  const path = pick(raw, PATH_KEYS) ?? locations[0];
+  const paths = pathsOf(raw, locations);
   const title = tool.title ?? tool.name ?? undefined;
   const acp = { kind, ...(title ? { title } : {}) };
   const unclassified = (): ToolCall => ({
@@ -95,31 +132,67 @@ export function gateCall(tool: ToolState): ToolCall {
   switch (kind) {
     case 'execute': {
       const command = commandOf(raw);
-      return command ? { toolName: 'Bash', input: { command, acp } } : unclassified();
+      if (!command) return unclassified();
+      const dir = pick(raw, CWD_KEYS);
+      return {
+        toolName: 'Bash',
+        input: { command: dir ? `cd ${shellQuote(dir)} && ${command}` : command, acp },
+      };
     }
     case 'read':
-      return path ? { toolName: 'Read', input: { file_path: path, acp } } : unclassified();
-    case 'search':
+      return paths.length
+        ? { toolName: 'Read', input: { ...onPaths(paths), acp } }
+        : unclassified();
+    case 'search': {
+      const pattern = pick(raw, ['pattern']);
+      const query = pick(raw, ['query', 'regex']);
+      const glob = pick(raw, ['glob', 'include', 'file_pattern']);
+      const where = paths.length ? onPaths(paths, 'path') : {};
+      const grep =
+        GREP_KEYS.some((k) => k in raw) ||
+        /\b(grep|rg|ripgrep)\b/i.test(`${tool.name ?? ''} ${title ?? ''}`) ||
+        (pattern === undefined && query !== undefined);
+      if (grep) {
+        const regex = pattern ?? query;
+        return {
+          toolName: 'Grep',
+          input: {
+            ...(regex !== undefined ? { pattern: regex } : {}),
+            ...(glob !== undefined ? { glob } : {}),
+            ...where,
+            acp,
+          },
+        };
+      }
+      // A file-name search: its pattern is a location the engine checks.
       return {
-        toolName: 'Grep',
-        input: {
-          ...(pick(raw, ['pattern', 'query']) ? { pattern: pick(raw, ['pattern', 'query']) } : {}),
-          ...(path ? { path } : {}),
-          acp,
-        },
+        toolName: 'Glob',
+        input: { ...(pattern !== undefined ? { pattern } : {}), ...where, acp },
       };
+    }
     case 'edit':
+      // Inside the workspace the table's `edit_workspace`, outside it `outside_workspace`.
+      return paths.length
+        ? { toolName: 'Edit', input: { ...onPaths(paths), acp } }
+        : unclassified();
     case 'delete':
-      // A delete is an edit of the file it removes: inside the workspace it is the table's
-      // `edit_workspace`, outside it `outside_workspace` (the engine's own Edit rules).
-      return path ? { toolName: 'Edit', input: { file_path: path, acp } } : unclassified();
+      // What a delete amounts to: the shell's `rm -r` on every path it names.
+      return paths.length
+        ? {
+            toolName: 'Bash',
+            input: { command: `rm -r -- ${paths.map(shellQuote).join(' ')}`, acp },
+          }
+        : unclassified();
     case 'move': {
       const from = pick(raw, ['from', 'source', 'src', 'old_path', ...PATH_KEYS]) ?? locations[0];
       const to = pick(raw, ['to', 'destination', 'dest', 'new_path']) ?? locations[1];
-      // Both ends are checked (the engine reads every path field of an edit).
-      return from && to
-        ? { toolName: 'Edit', input: { file_path: from, path: to, acp } }
-        : unclassified();
+      if (!from || !to) return unclassified();
+      // Both ends are checked (the engine reads every path field of an edit), and any other path.
+      const all = [...new Set([from, to, ...paths])];
+      return {
+        toolName: 'Edit',
+        input: { file_path: from, path: to, ...(all.length > 2 ? { paths: all } : {}), acp },
+      };
     }
     case 'fetch': {
       const url = pick(raw, ['url', 'uri', 'query']);
@@ -354,4 +427,92 @@ function matchChoice(choices: Choice[], answer: string): string {
   return (
     choices.find((c) => c.title.toLowerCase() === a || c.value.toLowerCase() === a)?.value ?? answer
   );
+}
+
+// --- session modes ---------------------------------------------------------------
+
+/**
+ * Modes known to let an ACP agent run tool calls without asking its client (decision 108):
+ * Claude's `bypassPermissions`, `dontAsk` and `acceptEdits`, Gemini's `yolo` and `autoEdit`,
+ * Codex's `full-access` and `auto`, and the auto/accept-all variants. Matched against a mode's id
+ * and its name, case-insensitively, ignoring everything but letters and digits.
+ */
+export const PERMISSIVE_MODES: readonly string[] = [
+  'bypassPermissions',
+  'dontAsk',
+  'acceptEdits',
+  'yolo',
+  'autoEdit',
+  'full-access',
+  'auto',
+  'auto-approve',
+  'auto-accept',
+  'accept-all',
+  'allow-all',
+  'never-ask',
+];
+const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+const PERMISSIVE = new Set(PERMISSIVE_MODES.map(norm));
+
+export interface ModeOption {
+  id: string;
+  name: string;
+}
+
+/** An agent's session modes: ACP's `modes`, or a `configOptions` select of category `mode`. */
+export interface ModeState {
+  current: string;
+  available: ModeOption[];
+  /** How the mode is set: `session/set_mode`, or `session/set_config_option` on `configId`. */
+  via: { kind: 'mode' } | { kind: 'config'; configId: string };
+}
+
+/** The modes a `session/new` / `session/load` response (or a config update) carries, if any. */
+export function modeState(response: {
+  modes?: SessionModeState | null;
+  configOptions?: SessionConfigOption[] | null;
+}): ModeState | undefined {
+  const modes = response.modes;
+  if (modes && typeof modes.currentModeId === 'string') {
+    return {
+      current: modes.currentModeId,
+      available: (modes.availableModes ?? []).map((m) => ({ id: m.id, name: m.name })),
+      via: { kind: 'mode' },
+    };
+  }
+  for (const option of response.configOptions ?? []) {
+    if (option.category !== 'mode' || option.type !== 'select') continue;
+    if (typeof option.currentValue !== 'string') continue;
+    const available: ModeOption[] = [];
+    for (const entry of option.options) {
+      if ('group' in entry) {
+        for (const o of entry.options) available.push({ id: o.value, name: o.name });
+      } else available.push({ id: entry.value, name: entry.name });
+    }
+    return {
+      current: option.currentValue,
+      available,
+      via: { kind: 'config', configId: option.id },
+    };
+  }
+  return undefined;
+}
+
+/** A mode by id or name (any case), as the config names it. */
+export function findMode(state: ModeState, wanted: string): ModeOption | undefined {
+  return (
+    state.available.find((m) => m.id === wanted) ??
+    state.available.find((m) => norm(m.id) === norm(wanted) || norm(m.name) === norm(wanted))
+  );
+}
+
+/** The mode's display name (its id when the agent did not list it). */
+export function modeName(state: ModeState | undefined, id: string): string {
+  return state?.available.find((m) => m.id === id)?.name ?? id;
+}
+
+/** Whether a mode is one of the known permissive ones (by its id or its name). */
+export function isPermissiveMode(state: ModeState | undefined, id: string): boolean {
+  const name = state?.available.find((m) => m.id === id)?.name;
+  return PERMISSIVE.has(norm(id)) || (name !== undefined && PERMISSIVE.has(norm(name)));
 }

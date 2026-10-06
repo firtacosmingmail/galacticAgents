@@ -3,9 +3,12 @@ import { classifyToolCall } from '../../domain/permissions.js';
 import {
   chooseOption,
   CostMeter,
+  findMode,
   formFields,
   gateCall,
+  isPermissiveMode,
   mergeTool,
+  modeState,
   planProgress,
   toolResultText,
 } from './mapping.js';
@@ -40,7 +43,7 @@ describe('gateCall: ACP tool calls in the permission engine’s vocabulary', () 
     ).toMatchObject({ toolName: 'Edit', input: { file_path: '/etc/hosts' } });
     expect(
       gateCall({ toolCallId: '3', kind: 'delete', locations: [{ path: '/w/proj/b' }] }),
-    ).toMatchObject({ toolName: 'Edit', input: { file_path: '/w/proj/b' } });
+    ).toMatchObject({ toolName: 'Bash', input: { command: "rm -r -- '/w/proj/b'" } });
     expect(
       gateCall({ toolCallId: '4', kind: 'move', rawInput: { from: '/w/proj/a', to: '/tmp/a' } }),
     ).toMatchObject({ toolName: 'Edit', input: { file_path: '/w/proj/a', path: '/tmp/a' } });
@@ -63,6 +66,104 @@ describe('gateCall: ACP tool calls in the permission engine’s vocabulary', () 
     expect(judge({ toolCallId: '5', kind: 'fetch', rawInput: { url: 'https://x.y' } })).toEqual([
       'network',
     ]);
+  });
+
+  const judge = (t: Parameters<typeof gateCall>[0]) => classifyToolCall(gateCall(t), ctx);
+
+  it('a delete is the rm -r it amounts to: destructive, and outside the workspace when it is', () => {
+    const inside = judge({ toolCallId: '1', kind: 'delete', locations: [{ path: '/w/proj/b' }] });
+    expect(inside.actions).toEqual(['destructive']);
+    const outside = judge({ toolCallId: '2', kind: 'delete', rawInput: { path: '/etc/x' } });
+    expect(outside.actions).toEqual(expect.arrayContaining(['destructive', 'outside_workspace']));
+    // A path with a quote or spaces stays one quoted word.
+    expect(
+      gateCall({ toolCallId: '3', kind: 'delete', rawInput: { path: "/w/proj/it's here" } }).input,
+    ).toMatchObject({ command: `rm -r -- '/w/proj/it'\\''s here'` });
+    expect(
+      judge({ toolCallId: '4', kind: 'delete', rawInput: { path: "/w/proj/it's here" } }).actions,
+    ).toEqual(['destructive']);
+  });
+
+  it('every distinct path is judged: further locations and a paths list', () => {
+    expect(
+      judge({
+        toolCallId: '1',
+        kind: 'read',
+        locations: [{ path: '/w/proj/a.ts' }, { path: '/etc/passwd' }],
+      }).actions,
+    ).toEqual(['outside_workspace']);
+    expect(
+      judge({ toolCallId: '2', kind: 'edit', rawInput: { paths: ['/w/proj/a', '/tmp/b'] } })
+        .actions,
+    ).toEqual(['outside_workspace']);
+    expect(
+      judge({
+        toolCallId: '3',
+        kind: 'delete',
+        rawInput: { file_path: '/w/proj/a' },
+        locations: [{ path: '/tmp/b' }],
+      }).actions,
+    ).toEqual(expect.arrayContaining(['destructive', 'outside_workspace']));
+    expect(
+      judge({
+        toolCallId: '4',
+        kind: 'edit',
+        locations: [{ path: '/w/proj/a' }, { path: '/w/proj/b' }],
+      }).actions,
+    ).toEqual(['edit_workspace']);
+  });
+
+  it('a file-name search is a Glob whose pattern is checked; a content search is a Grep', () => {
+    expect(
+      gateCall({ toolCallId: '1', kind: 'search', rawInput: { pattern: '../../**/*.env' } }),
+    ).toMatchObject({ toolName: 'Glob', input: { pattern: '../../**/*.env' } });
+    expect(
+      judge({ toolCallId: '2', kind: 'search', rawInput: { pattern: '/etc/**/*.conf' } }).actions,
+    ).toEqual(['outside_workspace']);
+    expect(
+      judge({ toolCallId: '3', kind: 'search', rawInput: { pattern: 'src/**/*.ts' } }).actions,
+    ).toEqual(['read_workspace']);
+    expect(
+      gateCall({
+        toolCallId: '4',
+        kind: 'search',
+        title: 'grep "TODO"',
+        rawInput: { pattern: 'TODO.*', path: '/w/proj' },
+      }),
+    ).toMatchObject({ toolName: 'Grep', input: { pattern: 'TODO.*', path: '/w/proj' } });
+    expect(
+      judge({
+        toolCallId: '5',
+        kind: 'search',
+        rawInput: { pattern: 'x', glob: '../../**', output_mode: 'content' },
+      }).actions,
+    ).toEqual(['outside_workspace']);
+  });
+
+  it('an execute with a working directory runs from it', () => {
+    expect(
+      gateCall({ toolCallId: '1', kind: 'execute', rawInput: { command: 'ls', cwd: '/w/proj/a' } })
+        .input,
+    ).toMatchObject({ command: "cd '/w/proj/a' && ls" });
+    expect(
+      judge({ toolCallId: '2', kind: 'execute', rawInput: { command: 'rm x', workdir: '/etc' } })
+        .actions,
+    ).toEqual(expect.arrayContaining(['destructive', 'outside_workspace']));
+  });
+
+  it('an unreadable execute that mentions a push still asks about the push', () => {
+    const c = judge({
+      toolCallId: '1',
+      kind: 'execute',
+      title: 'Publish the branch',
+      rawInput: { script_ref: 'git push origin main' },
+    });
+    expect(c.unclassified).toBe(true);
+    expect(c.actions).toEqual(['push']);
+    expect(judge({ toolCallId: '2', kind: 'execute', title: 'git push' }).actions).toEqual([
+      'push',
+    ]);
+    expect(judge({ toolCallId: '3', kind: 'execute', title: 'run tests' }).actions).toEqual([]);
   });
 
   it('what cannot be placed stays unclassified (never made to look safer)', () => {
@@ -163,6 +264,51 @@ describe('mapping helpers', () => {
       ),
     ).toBe('hello\ndiff /a');
     expect(toolResultText({ toolCallId: 't', rawOutput: { ok: true } }, 5)).toBe('{"ok"');
+  });
+
+  it('modeState reads ACP modes or a mode config option; permissive modes by id or name', () => {
+    const a = modeState({
+      modes: {
+        currentModeId: 'default',
+        availableModes: [
+          { id: 'default', name: 'Default' },
+          { id: 'x1', name: 'YOLO' },
+        ],
+      },
+    })!;
+    expect(a).toMatchObject({ current: 'default', via: { kind: 'mode' } });
+    expect(isPermissiveMode(a, 'default')).toBe(false);
+    expect(isPermissiveMode(a, 'x1')).toBe(true); // by its name
+    expect(isPermissiveMode(undefined, 'bypassPermissions')).toBe(true);
+    expect(isPermissiveMode(undefined, 'Full Access')).toBe(true);
+    expect(isPermissiveMode(undefined, 'read-only')).toBe(false);
+    const b = modeState({
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'm',
+          options: [{ value: 'm', name: 'M' }],
+        },
+        {
+          id: 'approval',
+          name: 'Approval',
+          category: 'mode',
+          type: 'select',
+          currentValue: 'ask',
+          options: [
+            { group: 'g', name: 'G', options: [{ value: 'ask', name: 'Ask every time' }] },
+            { group: 'h', name: 'H', options: [{ value: 'auto', name: 'Auto' }] },
+          ],
+        },
+      ],
+    })!;
+    expect(b).toMatchObject({ current: 'ask', via: { kind: 'config', configId: 'approval' } });
+    expect(findMode(b, 'ASK EVERY TIME')?.id).toBe('ask');
+    expect(isPermissiveMode(b, 'auto')).toBe(true);
+    expect(modeState({})).toBeUndefined();
   });
 
   it('resolveCommand finds an executable on the PATH, or a path as given', () => {
