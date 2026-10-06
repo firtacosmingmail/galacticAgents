@@ -174,9 +174,9 @@ export function Backups({
         <h2 className="set-title">Backups</h2>
       </div>
       <p className="set-intro">
-        Mission Control copies its database once a day and keeps the recent copies. Restoring one,
-        or importing an export, is done from the command line with Mission Control stopped (see{' '}
-        <code>docs/BACKUP_RESTORE.md</code>).
+        Mission Control copies its database once a day and keeps the recent copies. To restore one,
+        stop Mission Control and run <code>galactic restore &lt;name&gt;</code>; an export goes back
+        with <code>galactic import &lt;file&gt;</code> (see <code>docs/BACKUP_RESTORE.md</code>).
       </p>
       {state.kind === 'loading' && <p className="set-muted">Loading the backups…</p>}
       {state.kind === 'remote' && (
