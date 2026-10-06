@@ -1,0 +1,24 @@
+{
+  "name": "@galactic/desktop",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The optional desktop shell (P8-06): a Tauri 2 app that runs Mission Control, shows its web UI, a menu bar status and OS notifications.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "tauri": "tauri",
+    "smoke": "node scripts/smoke.mjs",
+    "icons": "node scripts/tray-icons.mjs && tauri icon ../web/public/icons/icon-512.png -o src-tauri/icons",
+    "dev": "tsc -p tsconfig.json && tauri dev",
+    "bundle": "tsc -p tsconfig.json && tauri build --bundles app"
+  },
+  "dependencies": {
+    "@galactic/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1"
+  }
+}

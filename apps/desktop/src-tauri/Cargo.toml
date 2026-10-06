@@ -1,0 +1,29 @@
+[package]
+name = "galactic-desktop"
+version = "0.0.1"
+description = "GalacticAgents desktop shell (P8-06): Mission Control in a window, a menu bar status, OS notifications"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[[bin]]
+name = "galactic-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
+tauri-plugin-notification = "2.5.1"
+tauri-plugin-autostart = "2.7.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# A small binary: the shell is a thin window around the local server.
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
