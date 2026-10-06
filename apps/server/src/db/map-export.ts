@@ -48,9 +48,14 @@ export function appliedMigrations(db: Database): { version: number; name: string
 /**
  * Refuses a database this build cannot read as its own: one migrated by a different build (a
  * migration of the same number with another name), or one not yet migrated to this build's
- * schema (start Mission Control once to migrate it).
+ * schema (start Mission Control once to migrate it) — unless `allowOlder` (a restore: the server
+ * migrates an older database at its next start).
  */
-function checkSchema(db: Database, migrations: Migration[]): { version: number; name: string }[] {
+export function checkSchema(
+  db: Database,
+  migrations: Migration[],
+  opts: { allowOlder?: boolean } = {},
+): { version: number; name: string }[] {
   const applied = appliedMigrations(db);
   const files = new Map(migrations.map((m) => [m.version, m.name]));
   for (const m of applied) {
@@ -68,7 +73,7 @@ function checkSchema(db: Database, migrations: Migration[]): { version: number; 
       );
     }
   }
-  if (applied.length < migrations.length) {
+  if (applied.length < migrations.length && !opts.allowOlder) {
     throw new ExportError(
       `The database is at schema version ${applied.length}, this build at ${migrations.length}: ` +
         'start Mission Control once to update it, then export.',
@@ -156,4 +161,141 @@ export function exportMap(db: Database, opts: ExportOptions = {}): MapExport {
     }
     return out;
   })();
+}
+
+/** Events (and transcript chunks) read per step of `exportMapText`, between event-loop yields. */
+const EXPORT_PAGE = 2_000;
+const yieldToLoop = () => new Promise<void>((r) => setImmediate(r));
+
+/**
+ * The same export as `exportMap`, as JSON text in pieces, for `GET /api/export` (P8-03 review): the
+ * events and transcript chunks are read a page at a time and the event loop runs between pages,
+ * so a large log neither blocks the server while it is read and stringified nor sits in memory
+ * whole. `db` must be a **dedicated** connection (the route opens a read-only one on the file):
+ * the export holds one read transaction on it from the first piece to the last — the events, the
+ * rows and the transcripts are of one moment while the server keeps writing through its own
+ * connection (WAL). Each event's payload is written exactly as the log stores it. The first piece
+ * runs the schema check, so a caller can await it before answering (an `ExportError` then).
+ * Parsing the concatenation gives what `exportMap` returns (key order aside).
+ */
+export async function* exportMapText(
+  db: Database,
+  opts: ExportOptions & { pageSize?: number } = {},
+): AsyncGenerator<string, void, undefined> {
+  const migrations = opts.migrations ?? loadMigrations();
+  const now = opts.now ?? (() => new Date().toISOString());
+  const page = opts.pageSize ?? EXPORT_PAGE;
+  db.exec('BEGIN');
+  try {
+    const applied = checkSchema(db, migrations);
+    const t = tables(db);
+    const lastSeq = (
+      db.prepare('SELECT COALESCE(MAX(id), 0) AS seq FROM events').get() as { seq: number }
+    ).seq;
+    const logId =
+      (
+        db.prepare(`SELECT value FROM settings WHERE key = 'log_id'`).get() as
+          { value: string } | undefined
+      )?.value ?? '';
+    const head = {
+      format: MAP_EXPORT_FORMAT,
+      formatVersion: MAP_EXPORT_VERSION,
+      exportedAt: now(),
+      app: { name: 'galactic-agents', version: SERVER_VERSION },
+      schema: { version: applied.at(-1)?.version ?? 0, migrations: applied },
+      source: { logId, seq: lastSeq },
+      includes: { transcripts: opts.transcripts === true },
+      rows: {
+        bodies: t.bodies.all(),
+        projects: t.projects.all(),
+        tasks: t.tasks.all(),
+        agents: t.agents.all(),
+        questions: t.questions.all(),
+        proposals: t.proposals.all(),
+      },
+    };
+    yield `${JSON.stringify(head).slice(0, -1)},"events":[`;
+
+    const events = db.prepare(
+      'SELECT id, at, payload FROM events WHERE id > ? ORDER BY id LIMIT ?',
+    );
+    let after = 0;
+    let first = true;
+    for (;;) {
+      const rows = events.all(after, page) as { id: number; at: string; payload: string }[];
+      if (rows.length === 0) break;
+      const text = rows
+        .map((r) => `{"seq":${r.id},"at":${JSON.stringify(r.at)},"event":${r.payload}}`)
+        .join(',');
+      yield (first ? '' : ',') + text;
+      first = false;
+      after = rows.at(-1)!.id;
+      await yieldToLoop();
+    }
+    yield ']';
+
+    if (opts.transcripts) {
+      yield ',"transcripts":{"chunks":[';
+      const chunks = db.prepare(
+        `SELECT agent_id, seq, at, chunk FROM transcript_chunks
+          WHERE agent_id > ? OR (agent_id = ? AND seq > ?) ORDER BY agent_id, seq LIMIT ?`,
+      );
+      let lastAgent = '';
+      let lastChunk = -1;
+      first = true;
+      for (;;) {
+        const rows = chunks.all(lastAgent, lastAgent, lastChunk, page) as {
+          agent_id: string;
+          seq: number;
+          at: string;
+          chunk: string;
+        }[];
+        if (rows.length === 0) break;
+        const text = rows
+          .map((c) =>
+            JSON.stringify({
+              agentId: c.agent_id,
+              seq: c.seq,
+              at: c.at,
+              chunk: c.chunk,
+            } satisfies ExportedChunk),
+          )
+          .join(',');
+        yield (first ? '' : ',') + text;
+        first = false;
+        lastAgent = rows.at(-1)!.agent_id;
+        lastChunk = rows.at(-1)!.seq;
+        await yieldToLoop();
+      }
+      const compactions = (
+        db
+          .prepare(
+            `SELECT agent_id, through_seq, through_at, last_seq, removed_at, removed_chunks, reason
+               FROM transcript_compactions ORDER BY agent_id`,
+          )
+          .all() as {
+          agent_id: string;
+          through_seq: number;
+          through_at: string;
+          last_seq: number;
+          removed_at: string;
+          removed_chunks: number;
+          reason: 'age' | 'archived';
+        }[]
+      ).map((c): ExportedCompaction => ({
+        agentId: c.agent_id,
+        throughSeq: c.through_seq,
+        throughAt: c.through_at,
+        lastSeq: c.last_seq,
+        removedAt: c.removed_at,
+        removedChunks: c.removed_chunks,
+        reason: c.reason,
+      }));
+      yield `],"compactions":${JSON.stringify(compactions)}}`;
+    }
+    yield '}';
+  } finally {
+    // A read transaction: ending it releases the snapshot (nothing was written).
+    if (db.inTransaction) db.exec('ROLLBACK');
+  }
 }

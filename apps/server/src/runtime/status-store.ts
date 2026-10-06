@@ -33,7 +33,8 @@ export interface StatusStoreOptions {
   defaultCaps: AgentCaps;
   /**
    * Whether the wall-clock cap applies to the agent (SPEC decision 103: not to a brain); when it
-   * does not, the record's `caps.wallClockMs` carries no `limit`. Default: it applies.
+   * does not, the record's `caps.wallClockMs` says `capped: false` (its `limit` stays, for older
+   * clients). Default: it applies.
    */
   wallClockCapped?: (agentId: Id) => boolean;
   /**
@@ -444,9 +445,10 @@ export class StatusStore {
     return {
       wallClockMs: {
         used,
+        limit: caps.maxWallClockMs,
         ...((this.opts.wallClockCapped?.(entry.record.agentId) ?? true)
-          ? { limit: caps.maxWallClockMs }
-          : {}),
+          ? {}
+          : { capped: false as const }),
       },
       toolCalls: { used: entry.toolCalls, limit: caps.maxToolCalls },
     };

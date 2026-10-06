@@ -446,11 +446,25 @@ export const Progress = z.object({
 export type Progress = z.infer<typeof Progress>;
 
 const CapUsage = z.object({ used: z.number().nonnegative(), limit: z.number().positive() });
-/** The wall clock: `limit` is absent for an agent the wall-clock cap does not apply to (SPEC decision 103). */
+/**
+ * The wall clock. `limit` is always present (the agent's configured cap), so the previous build's
+ * parser still reads the record (TECHNOLOGY §6.3, protocol evolution); `capped: false` marks an
+ * agent the wall-clock cap does not apply to (a brain, SPEC decision 103) — the meter is hidden and
+ * the agent is never "near its cap". Absent means capped. Read it through `wallClockLimit()`.
+ */
 const WallClockUsage = z.object({
   used: z.number().nonnegative(),
-  limit: z.number().positive().optional(),
+  limit: z.number().positive(),
+  capped: z.boolean().optional(),
 });
+
+/** The wall-clock limit that applies to the agent, or `undefined` when it is not capped (decision 103). */
+export function wallClockLimit(usage: {
+  limit: number;
+  capped?: boolean | undefined;
+}): number | undefined {
+  return usage.capped === false ? undefined : usage.limit;
+}
 
 /**
  * Whether the per-agent wall-clock cap applies to an agent (SPEC decision 103, P8-10): it does to

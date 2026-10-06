@@ -19,6 +19,22 @@ export function storageRefusal(
   return { status, body: { error: code, message } };
 }
 
+/**
+ * A file write the disk refused (P8 wave 2 review: `config.json` from `PATCH /api/settings`), as
+ * the same REST refusal: ENOSPC / EDQUOT → 507 `storage_full`, EIO → 503 `storage_unavailable`.
+ * Undefined for any other error (a permission problem is not worded as the database's).
+ */
+export function fileWriteRefusal(
+  error: unknown,
+): { status: number; body: { error: StorageErrorCode; message: string } } | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  const condition =
+    code === 'ENOSPC' || code === 'EDQUOT' ? 'full' : code === 'EIO' ? 'unavailable' : undefined;
+  if (!condition) return undefined;
+  const { code: errorCode, status, message } = STORAGE_ERROR[condition];
+  return { status, body: { error: errorCode, message } };
+}
+
 /** Sends `storageRefusal(error)` when it applies; returns whether it did. */
 export function sendStorageRefusal(reply: FastifyReply, error: unknown): boolean {
   const refusal = storageRefusal(error);

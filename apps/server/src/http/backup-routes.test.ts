@@ -17,9 +17,9 @@ afterEach(async () => {
   for (const a of apps.splice(0)) await a.stop();
 });
 
-async function start(autoApproveRemote = false) {
+async function start(autoApproveRemote = false, onFile = false) {
   const config = testConfig({ autoApproveRemote });
-  const db = openDatabase(':memory:');
+  const db = openDatabase(onFile ? config.dbPath : ':memory:');
   const log = new EventLog(db);
   log.runCommand((ctx) => seedDemoProject(ctx));
   const backups = new BackupService({
@@ -29,7 +29,8 @@ async function start(autoApproveRemote = false) {
   });
   const t = await startTestApp({ config, log, backups });
   apps.push(t);
-  return { t, log };
+  apps.push({ stop: async () => config.cleanup() });
+  return { t, log, db };
 }
 
 const call = (
@@ -68,6 +69,28 @@ describe('backup and export routes (P8-03)', () => {
     );
     expect(withTranscripts.transcripts).toEqual({ chunks: [], compactions: [] });
     expect((await call(t.baseUrl, 'GET', '/api/export?transcripts=maybe')).status).toBe(400);
+  });
+
+  it('streams the export of a database on disk, and refuses one this build cannot export', async () => {
+    const { t, log, db } = await start(false, true);
+    for (let i = 0; i < 3; i++) log.runCommand((ctx) => seedDemoProject(ctx));
+    const res = await call(t.baseUrl, 'GET', '/api/export?transcripts=1');
+    expect(res.status).toBe(200);
+    const exported = MapExport.parse(await res.json());
+    expect(exported.events.map((e) => e.seq)).toEqual(
+      Array.from({ length: log.currentSeq() }, (_, i) => i + 1),
+    );
+    expect(exported.source.seq).toBe(log.currentSeq());
+    expect(exported.rows.projects.length).toBe(4);
+
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+      9_999,
+      'from_the_future',
+      new Date().toISOString(),
+    );
+    const refused = await call(t.baseUrl, 'GET', '/api/export');
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: 'export_refused' });
   });
 
   it('needs the token', async () => {

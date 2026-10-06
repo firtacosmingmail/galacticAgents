@@ -2,7 +2,17 @@ import BetterSqlite3 from 'better-sqlite3';
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataPaths, DEFAULT_PORT } from './config/config.js';
-import { BACKUP_DIR } from './db/backup.js';
+import { BACKUP_DIR, removePartialBackups } from './db/backup.js';
+import {
+  acquireDataLock,
+  DataLockError,
+  DEFAULT_LOCK_PROBE,
+  describeHolder,
+  liveLockHolder,
+  removeStaleTempDatabases,
+  type DataLock,
+  type LockProbe,
+} from './db/data-lock.js';
 import { exportMap, ExportError } from './db/map-export.js';
 import { importMap, ImportError } from './db/map-import.js';
 import { restoreBackup, RestoreError } from './db/restore.js';
@@ -14,9 +24,13 @@ import { restoreBackup, RestoreError } from './db/restore.js';
  *
  * The export opens the database read-only, so it works while Mission Control runs (WAL readers
  * see a consistent state) and writes the file 0600: it holds the whole history, messages included.
- * The import replaces the database, so it refuses while a Mission Control answers on the
- * configured port; into a database that holds a map only with `--replace` (which copies it into
- * `backups/` first).
+ * The import and the restore replace the database, so they refuse while a live process holds
+ * the data lock (`<db>.lock`, `db/data-lock.ts`: a Mission Control from its start to its exit,
+ * whatever port or address it listens on, or another import) and, as a second check, while a
+ * Mission Control answers `/health` on the configured port; they then hold the lock themselves,
+ * so a server cannot start under them. The import goes into a database that holds a map only with
+ * `--replace` (which copies it into `backups/` first). Both first remove what a killed import,
+ * restore or backup left (`<db>.import-<pid>` / `.restore-<pid>` of a dead pid, `*.partial`).
  */
 
 export const CLI_USAGE = [
@@ -31,6 +45,8 @@ export interface CliIo {
   err: (line: string) => void;
   /** Whether a Mission Control answers on `port` (default: `GET /health` on 127.0.0.1). */
   isServerRunning?: (port: number) => Promise<boolean>;
+  /** How the data lock's holder is checked (default: the OS). */
+  lockProbe?: LockProbe;
 }
 
 async function healthAnswers(port: number): Promise<boolean> {
@@ -68,7 +84,7 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
     import: ['--replace', '--prefer-rows'],
     restore: [],
   };
-  const allowed = command ? known[command] : undefined;
+  const allowed = command && Object.hasOwn(known, command) ? known[command] : undefined;
   if (!allowed || !file || positional.length > 1 || [...flags].some((f) => !allowed.includes(f))) {
     io.err(CLI_USAGE);
     return 2;
@@ -103,12 +119,59 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
   }
 
   // import and restore replace the database: never under a running server
+  const probe = io.lockProbe ?? DEFAULT_LOCK_PROBE;
+  const holder = liveLockHolder(paths.dbPath, probe);
+  if (holder) {
+    io.err(`${describeHolder(holder)} is using ${paths.dbPath}: stop it first, then ${command}.`);
+    return 1;
+  }
   const port = configuredPort(io.env, paths.configPath);
   if (await (io.isServerRunning ?? healthAnswers)(port)) {
     io.err(`Mission Control is running on port ${port}: stop it first, then ${command}.`);
     return 1;
   }
-  const backupDir = join(paths.dataDir, BACKUP_DIR);
+  let lock: DataLock;
+  try {
+    lock = acquireDataLock(paths.dbPath, command === 'restore' ? 'restore' : 'import', { probe });
+  } catch (error) {
+    io.err(
+      error instanceof DataLockError
+        ? `${error.message} Stop it first, then ${command}.`
+        : `Cannot take the data lock: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
+  try {
+    const backupDir = join(paths.dataDir, BACKUP_DIR);
+    for (const name of [
+      ...removeStaleTempDatabases(paths.dbPath, (pid) => probe.alive(pid)),
+      ...removePartialBackups(backupDir),
+    ]) {
+      io.out(`Removed ${name}, left by an import, restore or backup that did not finish.`);
+    }
+    return await replaceDatabase(
+      command as 'import' | 'restore',
+      file,
+      flags,
+      paths.dbPath,
+      backupDir,
+      io,
+    );
+  } finally {
+    lock.release();
+  }
+}
+
+/** The import or the restore proper, with the data lock held. */
+async function replaceDatabase(
+  command: 'import' | 'restore',
+  file: string,
+  flags: Set<string>,
+  dbPath: string,
+  backupDir: string,
+  io: CliIo,
+): Promise<number> {
+  const paths = { dbPath };
 
   if (command === 'restore') {
     // A bare name is looked up in the backups folder (as the settings page lists it).

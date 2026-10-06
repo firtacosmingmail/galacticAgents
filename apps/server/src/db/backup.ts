@@ -39,7 +39,19 @@ import { diskFree } from './vacuum.js';
  * `reserveBytes` free after the copy: a backup must never be what fills the disk under the live
  * database (P8-04, decision 99). After each backup the folder is rotated: the newest automatic
  * backup of each of the last `keepDaily` days and of each of the last `keepWeekly` ISO weeks
- * (UTC), and the newest `keepManual` manual and pre-import copies each, are kept.
+ * (UTC), and the newest `keepManual` manual and pre-import copies each, are kept — and whatever the
+ * numbers say, the newest backup of each kind is never deleted (a `keep*` of 0 would otherwise
+ * delete the copy just taken, or the only pre-import copy of a replaced database).
+ *
+ * A backup the process died in leaves `<name>.partial` (and maybe its journal): every backup
+ * first removes the `*.partial*` files in the folder — only one backup runs at a time, and the
+ * CLI's pre-import copies run with the server stopped (the data lock, `data-lock.ts`).
+ *
+ * Cost: the online copy yields between steps, but `PRAGMA quick_check` on the copy is one
+ * synchronous pass over every page (measured ≈ 50 ms for a 96 MiB database on an M-series Mac,
+ * the file in the page cache — the copy just written is), during which the event loop waits.
+ * At the sizes the retention keeps (P8-02) that is well under a second once a day; a database of
+ * several GiB would need the check moved to a worker thread.
  */
 
 export const BACKUP_DIR = 'backups';
@@ -125,7 +137,8 @@ const weekKey = (iso: string) => Math.floor((dayKey(iso) + 3) / 7);
 /**
  * The rotation: which backups to delete. Automatic ones: the newest of each of the last
  * `keepDaily` days that have one, plus the newest of each of the last `keepWeekly` weeks; manual
- * and pre-import copies: the newest `keepManual` of each kind.
+ * and pre-import copies: the newest `keepManual` of each kind. The newest backup of each kind is
+ * always kept.
  */
 export function backupsToRemove(
   backups: readonly BackupInfo[],
@@ -146,6 +159,11 @@ export function backupsToRemove(
   };
   newestPer(dayKey, schedule.keepDaily);
   newestPer(weekKey, schedule.keepWeekly);
+  // The newest of each kind always stays, whatever the numbers (a `keep*` of 0 included).
+  for (const kind of ['auto', 'manual', 'pre-import'] as const) {
+    const newest = newestFirst.find((b) => b.kind === kind);
+    if (newest) keep.add(newest.name);
+  }
   for (const kind of ['manual', 'pre-import'] as const) {
     newestFirst
       .filter((b) => b.kind === kind)
@@ -153,6 +171,22 @@ export function backupsToRemove(
       .forEach((b) => keep.add(b.name));
   }
   return newestFirst.filter((b) => !keep.has(b.name));
+}
+
+/**
+ * Removes the leftovers of backups that never finished in `dir` (`*.partial`, `*.partial-journal`,
+ * …). Call only when no backup is being written into `dir`. Returns the names removed.
+ */
+export function removePartialBackups(dir: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const removed = names.filter((n) => /\.partial(?:-journal|-wal|-shm)?$/.test(n));
+  for (const name of removed) rmSync(join(dir, name), { force: true });
+  return removed;
 }
 
 const mib = (bytes: number) => `${Math.round(bytes / 2 ** 20)} MiB`;
@@ -241,6 +275,11 @@ export class BackupService {
     return this.lastOutcome;
   }
 
+  /** Resolves once no backup is being taken (at once when none is): the shutdown waits on it. */
+  async idle(): Promise<void> {
+    await this.inFlight;
+  }
+
   get running(): boolean {
     return this.inFlight !== undefined;
   }
@@ -308,6 +347,11 @@ export class BackupService {
     };
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+      // This is the only backup being written (`backupNow` runs one at a time): what a killed one
+      // left is garbage that would otherwise stay forever.
+      for (const name of removePartialBackups(this.dir)) {
+        this.log.info(`[backup] removed ${name}, left by a backup that did not finish`);
+      }
       const size = databaseBytes(this.db);
       const free = this.freeBytes(this.dir);
       if (free < size + this.reserveBytes) {

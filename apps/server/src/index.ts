@@ -16,6 +16,7 @@ import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { BACKUP_CHECK_INTERVAL_MS, BACKUP_DIR, BackupService } from './db/backup.js';
+import { acquireDataLock, DataLockError, removeStaleTempDatabases } from './db/data-lock.js';
 import { openDatabase } from './db/database.js';
 import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
@@ -33,6 +34,24 @@ for (const warning of warnings) console.warn(`[config] ${warning}`);
 setGlobalDefaultPolicy(config.defaultPermissionPolicy);
 const onError = (error: unknown, context: string) =>
   console.error(`[runtime] ${context}:`, error instanceof Error ? error.message : error);
+
+// The data lock (P8-03 review): one server per database, and no import or restore under it.
+// Taken before the database is opened; removed on exit (a killed server leaves it stale).
+let dataLock: ReturnType<typeof acquireDataLock>;
+try {
+  dataLock = acquireDataLock(config.dbPath, 'server');
+} catch (error) {
+  console.error(
+    error instanceof DataLockError
+      ? `Cannot start: ${error.message} Stop it first.`
+      : `Cannot take the data lock: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}
+process.on('exit', () => dataLock.release());
+for (const name of removeStaleTempDatabases(config.dbPath)) {
+  console.log(`Removed ${name}, left by an import or restore that did not finish`);
+}
 
 const db = openDatabase(config.dbPath);
 // Transcript retention gives space back in small steps (P8-02), which needs incremental
@@ -134,9 +153,11 @@ function shutdown(code: number): void {
   promotions?.stop();
   push.service.stop();
   backups.stop();
-  void composed
-    .shutdown()
-    .catch((error) => console.error('[runtime] shutdown:', error))
+  // A backup being taken finishes (or fails) before the process exits, so no half copy is left.
+  void Promise.all([
+    composed.shutdown().catch((error) => console.error('[runtime] shutdown:', error)),
+    backups.idle(),
+  ])
     .then(() => supervisor.dispose())
     .catch((error) => console.error('[supervisor] dispose:', error))
     .then(() => server.app?.close())
@@ -231,6 +252,7 @@ if (tokenGenerated) {
 }
 try {
   const port = await app.listen();
+  dataLock.update({ port, host: config.host });
   // The first check waits for the server to be up; a backup already due runs once the log is quiet.
   backups.start(BACKUP_CHECK_INTERVAL_MS);
   // `galactic start` watches for this line to print its banner and open the browser.

@@ -60,10 +60,13 @@ export async function startServer(): Promise<E2eServer> {
   );
 
   // Nothing of the caller's GALACTIC_* settings leaks in (a GALACTIC_HOME would point at a real
-  // data directory, a GALACTIC_HARMONIZER at a real runtime).
+  // data directory, a GALACTIC_HARMONIZER at a real runtime), and HOME is the temp root too, so
+  // nothing the server or a child process reads from `~` (global VCS config, ~/.galactic,
+  // ~/.claude) is the user's.
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('GALACTIC_')) env[k] = v;
   Object.assign(env, {
+    HOME: root,
     GALACTIC_HOME: home,
     GALACTIC_PROJECTS_ROOT: projects,
     GALACTIC_PORT: '0',

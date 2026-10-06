@@ -248,4 +248,42 @@ describe('backups (P8-03)', () => {
     expect(list.filter((b) => b.kind === 'manual')).toHaveLength(1);
     expect(existsSync(join(t.home, 'backups', 'notes.txt'))).toBe(true);
   });
+
+  it('a keep of 0 never deletes the newest backup of a kind (the one just taken, the only pre-import)', () => {
+    const at = (h: number) =>
+      new Date(Date.parse('2026-10-01T00:00:00.000Z') + h * HOUR).toISOString();
+    const backups: BackupInfo[] = [
+      { name: backupName('auto', at(1)), kind: 'auto', createdAt: at(1), bytes: 1 },
+      { name: backupName('auto', at(30)), kind: 'auto', createdAt: at(30), bytes: 1 },
+      { name: backupName('manual', at(2)), kind: 'manual', createdAt: at(2), bytes: 1 },
+      { name: backupName('pre-import', at(3)), kind: 'pre-import', createdAt: at(3), bytes: 1 },
+    ];
+    const gone = backupsToRemove(backups, { keepDaily: 0, keepWeekly: 0, keepManual: 0 });
+    expect(gone.map((b) => b.name)).toEqual([backupName('auto', at(1))]);
+  });
+
+  it('removes what a killed backup left before taking the next one', async () => {
+    const t = setup();
+    const dir = join(t.home, 'backups');
+    mkdirSync(dir, { recursive: true });
+    const stale = backupName('auto', '2026-10-05T03:00:00.000Z');
+    writeFileSync(join(dir, `${stale}.partial`), 'half a copy');
+    writeFileSync(join(dir, `${stale}.partial-journal`), 'its journal');
+    writeFileSync(join(dir, 'notes.txt'), 'mine');
+    const outcome = await t.service.backupNow();
+    expect(outcome.outcome).toBe('ok');
+    expect(readdirSync(dir).sort()).toEqual([outcome.name, 'notes.txt'].sort());
+    expect(t.lines.some((l) => l.includes(`removed ${stale}.partial`))).toBe(true);
+  });
+
+  it('idle() waits for the backup under way (the shutdown awaits it)', async () => {
+    const t = setup({ stepPages: 1 });
+    await t.service.idle(); // nothing running: resolves at once
+    const taking = t.service.backupNow();
+    expect(t.service.running).toBe(true);
+    await t.service.idle();
+    expect(t.service.running).toBe(false);
+    expect((await taking).outcome).toBe('ok');
+    expect(readdirSync(join(t.home, 'backups')).some((n) => n.includes('.partial'))).toBe(false);
+  });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Agent } from '@galactic/protocol';
+import { wallClockLimit, type Agent } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { HARMONIZER } from '../state/selection.js';
 import { agentLabel, StatePill } from '../console/hierarchy/shared.js';
@@ -82,7 +82,7 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
       : { kind: agent.role, id: agent.id }
     : undefined;
   const wall = status ? wallClockUsed(status, now) : undefined;
-  const wallLimit = status?.caps.wallClockMs.limit;
+  const wallLimit = status ? wallClockLimit(status.caps.wallClockMs) : undefined;
   const questions = openQuestions.length;
 
   return (

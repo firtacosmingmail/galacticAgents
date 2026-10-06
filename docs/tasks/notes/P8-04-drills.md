@@ -116,6 +116,15 @@ supervisor's spawn call — the child exists, its PID-table row is not written y
 the server's pipe and exits on EOF), but its MCP servers and tool shells would live on. Recorded
 as P8-11.
 
+**Drill expectation fixed (P8 wave 2 review, 2026-10-06).** Seed 75240 over 600–760 ms failed
+2 runs of 150: the drill built "who must come back" from status records only, so an agent caught
+between `agent.created` and `agent.spawned` — which has no status record, and which the F3 fix
+correctly resumes — showed up in `report.resumed` but not in the expectation. The test was wrong,
+not recovery. The expectation is now `liveAtBoot ∪ neverStarted` (non-harness agent rows with no
+status record), minus agents that end `stopped` (a stop under way: ended, not reported). The
+drill log line prints the never-started count (`(2 live, 1 never started)`). Re-run with the same
+seed and window: 150/150 pass (twice; one run had a never-started agent, resumed).
+
 ## Drill 2 — "machine reboot"
 
 The Mac cannot be rebooted from a test. Simulated as what a reboot does to the server's world:

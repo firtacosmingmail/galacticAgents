@@ -131,3 +131,9 @@ conflict with the wave's other branches): **"Push bookkeeping on a full disk"** 
   the replacing set keeps the records; a page opened on a full disk; the unwritable words; a
   refused control shows the disk-full message under its strip; a refused answer is shown on its
   card and not queued; axe (no serious/critical findings) with the banner up.
+
+## Review fixes (P8 wave 2 review, 2026-10-06)
+
+- `PATCH /api/settings`: a full disk writing `config.json` (ENOSPC / EDQUOT) is now 507 `storage_full` (EIO: 503 `storage_unavailable`) through `fileWriteRefusal` (`http/storage-refusal.ts`), not a 500; nothing is applied (the settings service writes the file before applying) and the truncated temp file is removed. Test in `panel-routes.test.ts`.
+- The task text in `PHASE_8_HARDENING.md` now says the push notification is deferred to the §8 question (decision 104).
+

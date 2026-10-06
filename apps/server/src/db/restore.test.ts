@@ -8,6 +8,7 @@ import { seedDemoProject } from '../domain/demo.js';
 import { EventLog } from '../domain/event-log.js';
 import { BackupService, listBackups } from './backup.js';
 import { openDatabase } from './database.js';
+import { loadMigrations } from './migrate.js';
 import { restoreBackup, RestoreError } from './restore.js';
 
 /** P8-03 — restoring a backup file: checked, the replaced database kept, a new log identity. */
@@ -82,6 +83,31 @@ describe('restoring a backup (P8-03)', () => {
     const db = new BetterSqlite3(t.dbPath, { readonly: true });
     expect((db.prepare('SELECT MAX(id) AS n FROM events').get() as { n: number }).n).toBe(t.later);
     db.close();
+  });
+
+  it('refuses a backup from a newer build, accepts one from an older build', async () => {
+    const t = await withBackup();
+    const newer = new BetterSqlite3(t.file);
+    newer
+      .prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
+      .run(9_999, 'from_the_future', new Date().toISOString());
+    newer.close();
+    await expect(restoreBackup(t.dbPath, t.file)).rejects.toThrow(
+      /cannot be restored by this build: .*migration 9999 \("from_the_future"\)/,
+    );
+    // The target is untouched.
+    const db = new BetterSqlite3(t.dbPath, { readonly: true });
+    expect((db.prepare('SELECT MAX(id) AS n FROM events').get() as { n: number }).n).toBe(t.later);
+    db.close();
+
+    // An older backup (fewer migrations than this build) restores; the server migrates it.
+    const older = await withBackup();
+    const all = loadMigrations();
+    await expect(
+      restoreBackup(older.dbPath, older.file, {
+        migrations: [...all, { ...all.at(-1)!, version: all.at(-1)!.version + 1, name: 'later' }],
+      }),
+    ).resolves.toMatchObject({ seq: older.atBackup.seq });
   });
 
   it('galactic restore takes a name from the backups folder and refuses while the server runs', async () => {

@@ -1,9 +1,18 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MapExport } from '@galactic/protocol';
 import { runCli, type CliIo } from './cli.js';
+import { acquireDataLock, lockPathOf } from './db/data-lock.js';
 import { openDatabase } from './db/database.js';
 import { seedDemoProject } from './domain/demo.js';
 import { EventLog } from './domain/event-log.js';
@@ -77,6 +86,54 @@ describe('galactic export / import (P8-03)', () => {
     const running = io(b, true);
     expect(await runCli(['import', file], running)).toBe(1);
     expect(running.errors.join('\n')).toMatch(/running on port 4321/);
+  });
+
+  it('refuses while a live process holds the data lock, whatever port it listens on', async () => {
+    const a = temp();
+    seeded(a);
+    const file = join(temp(), 'map.json');
+    await runCli(['export', file], io(a));
+    const b = temp();
+    const dbPath = join(b, 'galactic.sqlite');
+    // A server of this very process (alive), started with `--port 5999`, or still starting.
+    const server = acquireDataLock(dbPath, 'server');
+    const held = io(b);
+    expect(await runCli(['import', file], held)).toBe(1);
+    expect(held.errors.join('\n')).toMatch(/Mission Control \(pid \d+, starting\) is using/);
+    server.update({ port: 5999 });
+    const restore = io(b);
+    expect(await runCli(['restore', 'x.sqlite'], restore)).toBe(1);
+    expect(restore.errors.join('\n')).toMatch(/port 5999\) is using .*stop it first, then restore/);
+    server.release();
+
+    // A lock left by a server that died is stale: the import goes ahead and releases its own.
+    writeFileSync(
+      lockPathOf(dbPath),
+      JSON.stringify({ pid: 2 ** 22 + 12_345, role: 'server', bootAt: new Date().toISOString() }),
+    );
+    const ok = io(b);
+    expect(await runCli(['import', file], ok)).toBe(0);
+    expect(existsSync(lockPathOf(dbPath))).toBe(false);
+  });
+
+  it('removes what a killed import, restore or backup left', async () => {
+    const a = temp();
+    seeded(a);
+    const file = join(temp(), 'map.json');
+    await runCli(['export', file], io(a));
+    const b = temp();
+    const dead = 2 ** 22 + 54_321; // above any pid macOS or Linux hands out by default
+    writeFileSync(join(b, `galactic.sqlite.import-${dead}`), 'half');
+    writeFileSync(join(b, `galactic.sqlite.restore-${dead}-wal`), 'half');
+    mkdirSync(join(b, 'backups'));
+    writeFileSync(join(b, 'backups', 'galactic-20261006T000000000Z-auto.sqlite.partial'), 'x');
+    const run = io(b);
+    expect(await runCli(['import', file], run)).toBe(0);
+    expect(run.lines.filter((l) => l.startsWith('Removed '))).toHaveLength(3);
+    expect(existsSync(join(b, `galactic.sqlite.import-${dead}`))).toBe(false);
+    expect(existsSync(join(b, 'backups', 'galactic-20261006T000000000Z-auto.sqlite.partial'))).toBe(
+      false,
+    );
   });
 
   it('explains what it cannot do', async () => {

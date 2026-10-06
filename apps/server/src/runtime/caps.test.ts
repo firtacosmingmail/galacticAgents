@@ -250,8 +250,8 @@ describe('CapsEnforcer — the wall-clock cap is for Stewards only (P8-10, SPEC 
     expect(hits).toEqual([['s', 'wall-clock cap: 120 min elapsed']]);
     vi.advanceTimersByTime(10 * H2);
     expect(hits).toHaveLength(1);
-    // The brains' time still counts, with no limit to show.
-    expect(caps.usage('h')?.wallClockMs).toEqual({ used: 11 * H2 + 1 });
+    // The brains' time still counts, marked uncapped (the limit stays, for older clients).
+    expect(caps.usage('h')?.wallClockMs).toEqual({ used: 11 * H2 + 1, limit: H2, capped: false });
     expect(caps.usage('s')?.wallClockMs).toEqual({ used: 11 * H2 + 1, limit: H2 });
   });
 
