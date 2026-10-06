@@ -363,7 +363,9 @@ export class AcpAdapter implements AgentAdapter {
       .onRequest(acp.methods.client.elicitation.create, (ctx) =>
         this.elicit(session, ctx.params, ctx.signal),
       )
-      .onNotification(acp.methods.client.session.update, (ctx) => this.onUpdate(session, ctx.params))
+      .onNotification(acp.methods.client.session.update, (ctx) =>
+        this.onUpdate(session, ctx.params),
+      )
       .connect(acp.ndJsonStream(writable, readable));
     session.conn = conn;
     return conn;
@@ -388,7 +390,9 @@ export class AcpAdapter implements AgentAdapter {
     try {
       return await Promise.race([request, exited, timeout]);
     } catch (error) {
-      if (error instanceof acp.RequestError) throw new Error(`${what} failed: ${error.message}`);
+      if (error instanceof acp.RequestError) {
+        throw new Error(`${what} failed: ${error.message}`, { cause: error });
+      }
       throw error;
     } finally {
       clearTimeout(timer);
@@ -545,7 +549,11 @@ export class AcpAdapter implements AgentAdapter {
     session.process?.turnEnded();
     if (!session.stopping && !session.terminal) {
       const cost = session.meter.cost;
-      this.emit(session, { type: 'agent.idle', agentId: session.agentId, ...(cost ? { cost } : {}) });
+      this.emit(session, {
+        type: 'agent.idle',
+        agentId: session.agentId,
+        ...(cost ? { cost } : {}),
+      });
     }
   }
 
@@ -621,8 +629,13 @@ export class AcpAdapter implements AgentAdapter {
   private onToolStatus(session: Session, tool: ToolState): void {
     const id = tool.toolCallId;
     const status = tool.status ?? 'pending';
-    const bookkeeping = tool.kind !== undefined && tool.kind !== null && BOOKKEEPING_KINDS.has(tool.kind);
-    if ((status === 'in_progress' || status === 'completed') && !bookkeeping && !session.decided.has(id)) {
+    const bookkeeping =
+      tool.kind !== undefined && tool.kind !== null && BOOKKEEPING_KINDS.has(tool.kind);
+    if (
+      (status === 'in_progress' || status === 'completed') &&
+      !bookkeeping &&
+      !session.decided.has(id)
+    ) {
       // The agent runs a call it did not ask about: the gate still judges it.
       session.decided.add(id);
       this.unaskedCall(session, tool);
@@ -646,7 +659,10 @@ export class AcpAdapter implements AgentAdapter {
       verdict = session.gate.check(call);
     } catch (error) {
       this.onError(error, `gate ${session.agentId}`);
-      verdict = { decision: 'deny' as const, reason: `permission check failed: ${(error as Error).message}` };
+      verdict = {
+        decision: 'deny' as const,
+        reason: `permission check failed: ${(error as Error).message}`,
+      };
     }
     if (verdict.decision === 'deny') {
       this.output(
@@ -709,7 +725,11 @@ export class AcpAdapter implements AgentAdapter {
         return answerWith(true);
       }
       if (verdict.decision === 'deny') {
-        this.output(session, 'text', `permission denied for ${describeTool(tool)}: ${verdict.reason}`);
+        this.output(
+          session,
+          'text',
+          `permission denied for ${describeTool(tool)}: ${verdict.reason}`,
+        );
         return answerWith(false);
       }
       const why = verdict.reasons.join('; ');

@@ -15,9 +15,9 @@ const ctx = { workspace: '/w/proj', cwd: '/w/proj' };
 
 describe('gateCall: ACP tool calls in the permission engine’s vocabulary', () => {
   it('an execute with a command is Bash; a shell argv wrapper keeps its script', () => {
-    expect(gateCall({ toolCallId: '1', kind: 'execute', rawInput: { command: 'pnpm test' } })).toEqual(
-      { toolName: 'Bash', input: { command: 'pnpm test', acp: { kind: 'execute' } } },
-    );
+    expect(
+      gateCall({ toolCallId: '1', kind: 'execute', rawInput: { command: 'pnpm test' } }),
+    ).toEqual({ toolName: 'Bash', input: { command: 'pnpm test', acp: { kind: 'execute' } } });
     expect(
       gateCall({
         toolCallId: '2',
@@ -48,18 +48,18 @@ describe('gateCall: ACP tool calls in the permission engine’s vocabulary', () 
 
   it('the engine judges the translated calls as it judges Claude Code’s', () => {
     const judge = (t: Parameters<typeof gateCall>[0]) => classifyToolCall(gateCall(t), ctx).actions;
-    expect(judge({ toolCallId: '1', kind: 'read', locations: [{ path: '/w/proj/a.ts' }] })).toEqual([
-      'read_workspace',
-    ]);
+    expect(judge({ toolCallId: '1', kind: 'read', locations: [{ path: '/w/proj/a.ts' }] })).toEqual(
+      ['read_workspace'],
+    );
     expect(judge({ toolCallId: '2', kind: 'edit', locations: [{ path: '/etc/hosts' }] })).toEqual([
       'outside_workspace',
     ]);
     expect(
       judge({ toolCallId: '3', kind: 'move', rawInput: { from: '/w/proj/a', to: '/tmp/a' } }),
     ).toEqual(['outside_workspace']);
-    expect(judge({ toolCallId: '4', kind: 'execute', rawInput: { command: 'rm -rf /' } })).toContain(
-      'destructive',
-    );
+    expect(
+      judge({ toolCallId: '4', kind: 'execute', rawInput: { command: 'rm -rf /' } }),
+    ).toContain('destructive');
     expect(judge({ toolCallId: '5', kind: 'fetch', rawInput: { url: 'https://x.y' } })).toEqual([
       'network',
     ]);
@@ -81,7 +81,12 @@ describe('gateCall: ACP tool calls in the permission engine’s vocabulary', () 
 
 describe('mapping helpers', () => {
   it('mergeTool keeps what an update does not carry', () => {
-    const a = mergeTool(undefined, { toolCallId: 't', title: 'Read a', kind: 'read', status: 'pending' });
+    const a = mergeTool(undefined, {
+      toolCallId: 't',
+      title: 'Read a',
+      kind: 'read',
+      status: 'pending',
+    });
     const b = mergeTool(a, { toolCallId: 't', status: 'completed', title: null });
     expect(b).toEqual({ toolCallId: 't', title: 'Read a', kind: 'read', status: 'completed' });
   });
@@ -112,7 +117,13 @@ describe('mapping helpers', () => {
 
   it('formFields: enum options map back to values, multi-select splits commas', () => {
     const [choice] = formFields('Pick', {
-      c: { type: 'string', oneOf: [{ const: 'v1', title: 'First' }, { const: 'v2', title: 'Second' }] },
+      c: {
+        type: 'string',
+        oneOf: [
+          { const: 'v1', title: 'First' },
+          { const: 'v2', title: 'Second' },
+        ],
+      },
     });
     expect(choice).toMatchObject({ text: 'Pick', options: ['First', 'Second'] });
     expect(choice!.parse('second')).toBe('v2');

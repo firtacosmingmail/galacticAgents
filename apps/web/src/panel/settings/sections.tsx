@@ -437,9 +437,17 @@ function TierEditor({ id, draft, setDraft, disabled }: EditorProps<QualityTier>)
 
 /** The Steward runtime choices (P8-07); `''` = the spawning brain's own runtime. */
 const STEWARD_RUNTIMES: { value: AgentRuntime | ''; label: string; hint: string }[] = [
-  { value: '', label: 'Same as its brain', hint: 'the runtime of the Waykeeper or Harmonizer that starts it' },
+  {
+    value: '',
+    label: 'Same as its brain',
+    hint: 'the runtime of the Waykeeper or Harmonizer that starts it',
+  },
   { value: 'claude-sdk', label: 'Claude Code', hint: 'the Claude Agent SDK' },
-  { value: 'acp', label: 'ACP agent', hint: 'the agent set as acp.command (Codex, Gemini CLI, claude-agent-acp …)' },
+  {
+    value: 'acp',
+    label: 'ACP agent',
+    hint: 'the agent set as acp.command (Codex, Gemini CLI, claude-agent-acp …)',
+  },
 ];
 
 function StewardRuntimeEditor({ id, draft, setDraft, disabled }: EditorProps<AgentRuntime | ''>) {

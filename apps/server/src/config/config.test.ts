@@ -23,7 +23,11 @@ describe('loadConfig', () => {
     );
     const fromFile = loadConfig({ GALACTIC_HOME: home }).config;
     expect(fromFile.stewardRuntime).toBe('acp');
-    expect(fromFile.acp).toEqual({ command: 'gemini', args: ['--acp'], passEnv: ['GEMINI_API_KEY'] });
+    expect(fromFile.acp).toEqual({
+      command: 'gemini',
+      args: ['--acp'],
+      passEnv: ['GEMINI_API_KEY'],
+    });
     expect(fromFile.envOverrides).not.toContain('stewardRuntime');
     const fromEnv = loadConfig({
       GALACTIC_HOME: home,

@@ -388,7 +388,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
   const acpEnv = env['GALACTIC_ACP_COMMAND']?.trim().split(/\s+/).filter(Boolean);
   const acp =
     acpEnv && acpEnv.length > 0
-      ? { command: acpEnv[0]!, args: acpEnv.slice(1), ...(file.acp?.passEnv ? { passEnv: file.acp.passEnv } : {}) }
+      ? {
+          command: acpEnv[0]!,
+          args: acpEnv.slice(1),
+          ...(file.acp?.passEnv ? { passEnv: file.acp.passEnv } : {}),
+        }
       : file.acp;
   const envOverrides: SettingName[] = [];
   if (runtimeEnv !== undefined) envOverrides.push('stewardRuntime');

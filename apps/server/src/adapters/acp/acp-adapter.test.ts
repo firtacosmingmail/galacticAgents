@@ -58,7 +58,12 @@ function rig(extraArgs: string[] = []): Rig {
 
 const allowAll: Verdict = () => ({ decision: 'allow' });
 
-function spawnOpts(r: Rig, prompt: string, verdict: Verdict = allowAll, agentId = `a-${Math.random()}`) {
+function spawnOpts(
+  r: Rig,
+  prompt: string,
+  verdict: Verdict = allowAll,
+  agentId = `a-${Math.random()}`,
+) {
   return {
     agentId,
     role: 'steward' as const,
@@ -136,7 +141,11 @@ describe('AcpAdapter', () => {
     expect(of(r, 'agent.tool_call')).toHaveLength(1);
     expect(of(r, 'agent.progress')[0]?.progress).toMatchObject({ done: 1, total: 2 });
     // Cost: the session's dollars from usage_update, tokens from the prompt response.
-    expect(of(r, 'agent.idle')[0]?.cost).toEqual({ usd: 0.0021, inputTokens: 100, outputTokens: 20 });
+    expect(of(r, 'agent.idle')[0]?.cost).toEqual({
+      usd: 0.0021,
+      inputTokens: 100,
+      outputTokens: 20,
+    });
   });
 
   it('keeps the cost cumulative across turns', async () => {
@@ -145,7 +154,11 @@ describe('AcpAdapter', () => {
     await waitFor(() => idles(r) === 1, 'first idle');
     await r.adapter.send(h.sessionId, 'again');
     await waitFor(() => idles(r) === 2, 'second idle');
-    expect(of(r, 'agent.idle')[1]?.cost).toEqual({ usd: 0.0042, inputTokens: 200, outputTokens: 40 });
+    expect(of(r, 'agent.idle')[1]?.cost).toEqual({
+      usd: 0.0042,
+      inputTokens: 200,
+      outputTokens: 40,
+    });
     expect(texts(r)).toContain('echo: again');
   });
 
@@ -168,10 +181,15 @@ describe('AcpAdapter', () => {
     await waitFor(() => idles(r) === 1, 'idle');
     expect(r.checks[0]).toEqual({
       toolName: 'Bash',
-      input: { command: 'git push origin main', acp: { kind: 'execute', title: 'git push origin main' } },
+      input: {
+        command: 'git push origin main',
+        acp: { kind: 'execute', title: 'git push origin main' },
+      },
     });
     expect(of(r, 'agent.tool_call')).toHaveLength(1);
-    expect(texts(r).some((t) => /without asking.*would have asked \(git push\)/.test(t))).toBe(true);
+    expect(texts(r).some((t) => /without asking.*would have asked \(git push\)/.test(t))).toBe(
+      true,
+    );
     expect(texts(r)).toContain('after the command');
     expect(of(r, 'agent.needs_input')).toEqual([]);
   });
@@ -186,9 +204,9 @@ describe('AcpAdapter', () => {
     );
     await waitFor(() => idles(r) === 1, 'idle');
     expect(of(r, 'agent.tool_call')).toEqual([]);
-    expect(texts(r).some((t) => /permission denied for rm -rf dist.*turn is cancelled/.test(t))).toBe(
-      true,
-    );
+    expect(
+      texts(r).some((t) => /permission denied for rm -rf dist.*turn is cancelled/.test(t)),
+    ).toBe(true);
     expect(texts(r)).not.toContain('after the command');
   });
 
@@ -332,7 +350,9 @@ describe('AcpAdapter', () => {
       startTimeoutMs: 5_000,
     });
     rigs.push({ adapter, supervisor, events: [], checks: [] });
-    await expect(adapter.spawn(spawnOpts(rigs.at(-1)!, 'x'))).rejects.toThrow(/exited during initialize/);
+    await expect(adapter.spawn(spawnOpts(rigs.at(-1)!, 'x'))).rejects.toThrow(
+      /exited during initialize/,
+    );
   });
 
   it('pause freezes the agent; interrupt while paused thaws it first', async () => {

@@ -135,7 +135,8 @@ app.onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
     const words = t.split(/(?<= )/);
     for (const w of words) await say(w);
   };
-  const update = (u) => client.notify(acp.methods.client.session.update, { sessionId: id, update: u });
+  const update = (u) =>
+    client.notify(acp.methods.client.session.update, { sessionId: id, update: u });
   const ctx = { id, state, turn, client, say, stream, update, signal: turn.signal };
 
   let scenario;

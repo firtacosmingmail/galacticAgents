@@ -214,8 +214,13 @@ describe('transcript retention settings (P8-02)', () => {
   it('sets the runtime of new Stewards live, to a registered runtime only (P8-07)', () => {
     const home = temp('galactic-home-');
     const { config } = loadConfig({ GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv);
-    const settings = new SettingsService({ config, home, runtimes: () => ['fake', 'claude-sdk', 'acp'] });
-    const file = () => JSON.parse(readFileSync(config.configPath, 'utf8')) as Record<string, unknown>;
+    const settings = new SettingsService({
+      config,
+      home,
+      runtimes: () => ['fake', 'claude-sdk', 'acp'],
+    });
+    const file = () =>
+      JSON.parse(readFileSync(config.configPath, 'utf8')) as Record<string, unknown>;
     expect(settings.current().stewardRuntime).toBeUndefined();
     expect(settings.update({ stewardRuntime: 'acp' }, local).settings.stewardRuntime).toBe('acp');
     expect(config.stewardRuntime).toBe('acp'); // live: the brains read the config at each spawn
@@ -225,10 +230,12 @@ describe('transcript retention settings (P8-02)', () => {
       code: 'invalid',
       message: expect.stringMatching(/no pty runtime is set up/),
     });
-    expect(refusal(() => settings.update({ stewardRuntime: 'fake' }, { origin: 'remote' }))).toMatchObject(
-      { code: 'remote_settings' },
-    );
-    expect(settings.update({ stewardRuntime: null }, local).settings.stewardRuntime).toBeUndefined();
+    expect(
+      refusal(() => settings.update({ stewardRuntime: 'fake' }, { origin: 'remote' })),
+    ).toMatchObject({ code: 'remote_settings' });
+    expect(
+      settings.update({ stewardRuntime: null }, local).settings.stewardRuntime,
+    ).toBeUndefined();
     expect(config.stewardRuntime).toBeUndefined();
     expect(file()).not.toHaveProperty('stewardRuntime');
   });

@@ -536,7 +536,9 @@ describe('settings page (P25-08)', () => {
   it('sets the runtime of new Stewards, and back to the brain’s own (P8-07)', async () => {
     await open('/settings', done());
     const section = await screen.findByRole('region', { name: 'Steward runtime' });
-    const same = within(section).getByRole('radio', { name: /Same as its brain/ }) as HTMLInputElement;
+    const same = within(section).getByRole('radio', {
+      name: /Same as its brain/,
+    }) as HTMLInputElement;
     expect(same.checked).toBe(true);
     await click(within(section).getByRole('radio', { name: /ACP agent/ }));
     await click(within(section).getByRole('button', { name: /^Save/ }));

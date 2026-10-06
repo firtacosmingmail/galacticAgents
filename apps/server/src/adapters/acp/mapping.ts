@@ -62,7 +62,9 @@ function commandOf(raw: Record<string, unknown>): string | undefined {
       if (argv.length >= 3 && /(^|\/)(ba|z|da)?sh$/.test(argv[0]!) && /^-\w*c$/.test(argv[1]!)) {
         return argv.slice(2).join(' ');
       }
-      return argv.map((p) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`)).join(' ');
+      return argv
+        .map((p) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`))
+        .join(' ');
     }
   }
   return undefined;
@@ -175,7 +177,9 @@ export function toolResultText(tool: ToolState, maxChars: number): string {
     else if (c.type === 'terminal') parts.push(`[terminal ${c.terminalId}]`);
   }
   if (parts.length === 0 && tool.rawOutput !== undefined) {
-    parts.push(typeof tool.rawOutput === 'string' ? tool.rawOutput : JSON.stringify(tool.rawOutput));
+    parts.push(
+      typeof tool.rawOutput === 'string' ? tool.rawOutput : JSON.stringify(tool.rawOutput),
+    );
   }
   return parts.join('\n').slice(0, maxChars);
 }
@@ -224,7 +228,9 @@ export class CostMeter {
     this.tokens = true;
     this.inputTokens += Math.max(
       0,
-      Math.round(usage.inputTokens + (usage.cachedReadTokens ?? 0) + (usage.cachedWriteTokens ?? 0)),
+      Math.round(
+        usage.inputTokens + (usage.cachedReadTokens ?? 0) + (usage.cachedWriteTokens ?? 0),
+      ),
     );
     this.outputTokens += Math.max(0, Math.round(usage.outputTokens + (usage.thoughtTokens ?? 0)));
   }
@@ -326,13 +332,18 @@ interface Choice {
 
 function enumChoices(plain: unknown, titled: unknown): Choice[] {
   if (Array.isArray(plain)) {
-    return plain.filter((v): v is string => typeof v === 'string').map((v) => ({ value: v, title: v }));
+    return plain
+      .filter((v): v is string => typeof v === 'string')
+      .map((v) => ({ value: v, title: v }));
   }
   if (Array.isArray(titled)) {
     return titled
       .map(asRecord)
       .filter((o) => typeof o['const'] === 'string')
-      .map((o) => ({ value: o['const'] as string, title: str(o['title']) ?? (o['const'] as string) }));
+      .map((o) => ({
+        value: o['const'] as string,
+        title: str(o['title']) ?? (o['const'] as string),
+      }));
   }
   return [];
 }
@@ -340,5 +351,7 @@ function enumChoices(plain: unknown, titled: unknown): Choice[] {
 /** An answer matched to a choice by title or value (any case); free text when nothing matches. */
 function matchChoice(choices: Choice[], answer: string): string {
   const a = answer.toLowerCase();
-  return choices.find((c) => c.title.toLowerCase() === a || c.value.toLowerCase() === a)?.value ?? answer;
+  return (
+    choices.find((c) => c.title.toLowerCase() === a || c.value.toLowerCase() === a)?.value ?? answer
+  );
 }
