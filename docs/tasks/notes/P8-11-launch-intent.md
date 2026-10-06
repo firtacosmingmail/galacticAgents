@@ -128,7 +128,11 @@ startup (index.ts):  reconcile()  →  reconcileLaunches()  →  compose / recov
 - Gates: `pnpm build`, `typecheck`, `lint`, `format:check`, `test` green (server 1191 passed,
   1 skipped; web 1669; protocol 98).
 - `pnpm drills`: 7 files, 38 tests green.
-- Long kill-anytime loop: see the summary below.
+- Long kill-anytime loop: `GALACTIC_DRILLS=150 GALACTIC_DRILLS_SEED=8411` over the default window
+  (0.3–2.3 s): 150/150 pass (259 s), every second life running `reconcileLaunches()`; no stand-in
+  survived. No random kill happened to land in the fork-to-row gap (microseconds wide) — that is
+  what the fault-injection drill is for.
+- `unrecorded-launch.test.ts` run 10 times in a row: 20/20 pass; no stray stand-in afterwards.
 
 ## Proposed SPEC §7 decisions (not edited into §7; renumber on collision)
 
