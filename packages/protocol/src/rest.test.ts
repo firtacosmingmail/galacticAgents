@@ -8,6 +8,7 @@ import {
   PermissionPolicyPresetName,
   ProposalDecisionBody,
   RuntimesInfo,
+  TerminalInputBody,
   SendBody,
   SpawnBody,
 } from './rest.js';
@@ -140,5 +141,14 @@ describe('ControlBody project policy edit (P2-21)', () => {
         ],
       }).success,
     ).toBe(true);
+  });
+
+  it('TerminalInputBody refuses control characters but keeps tabs and printable text', () => {
+    expect(TerminalInputBody.safeParse({ text: 'yes\tplease — ok ✓' }).success).toBe(true);
+    for (const bad of ['stop\x03', '\x15rm', '\x1b[31mred', 'a\nb', 'a\rb', 'x\x7f', 'y\x9b1m']) {
+      const r = TerminalInputBody.safeParse({ text: bad });
+      expect(r.success).toBe(false);
+      expect(r.error?.issues[0]?.message).toMatch(/control characters/);
+    }
   });
 });

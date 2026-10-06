@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GalacticAgents</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at center, #1d264a, #0b0e17);
+        color: #c9d4f2;
+        font:
+          15px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+      }
+      main {
+        text-align: center;
+        max-width: 32rem;
+        padding: 1rem;
+      }
+      h1 {
+        font-size: 1.2rem;
+        font-weight: 600;
+        margin: 0 0 0.5rem;
+      }
+      p {
+        margin: 0;
+        opacity: 0.85;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The shell's own page (P8-06), shown until Mission Control answers; the window then
+      navigates to http://127.0.0.1:<port>, the server's own origin. No script: the Rust side
+      sets the status text, and this page has no IPC access.
+    -->
+    <main>
+      <h1>GalacticAgents</h1>
+      <p id="status" role="status">Starting Mission Control…</p>
+    </main>
+  </body>
+</html>

@@ -677,6 +677,53 @@ export class AgentRuntime {
   }
 
   /**
+   * Types one line into a terminal agent's terminal now, whatever its turn is doing (P8-08): the
+   * user's own keyboard, for a prompt the adapter did not recognise. Not queued — the inbox waits
+   * for idle, a terminal waiting on an unrecognised prompt never is. Logged as the user's
+   * `message.sent` (so the conversation shows it; secrets redacted, `redactSecrets`) and
+   * `message.delivered` once typed; nothing is logged when the adapter refuses. The agent is then
+   * busy (`idle = false`, the inbox `working()`): typed while idle, the line opens a turn in the
+   * adapter, and queued messages wait for its end. Refused for a runtime without a terminal, an agent that is
+   * stopping, and on a full disk (checked first: the line must not reach the terminal unlogged).
+   */
+  async typeInto(
+    agentId: Id,
+    text: string,
+    opts: { by: Actor; origin?: RequestOrigin },
+  ): Promise<{ messageId: Id }> {
+    const live = this.must(agentId);
+    const { adapter } = live;
+    if (!adapter.input) {
+      throw new Error(`agent ${agentId} has no terminal (runtime ${live.agent.runtime})`);
+    }
+    if (live.capStop || live.stopRequested || live.terminal) {
+      throw new Error(`agent ${agentId} is stopping`);
+    }
+    this.ensureWritable(opts.by);
+    await adapter.input(this.session(live), text);
+    if (!live.terminal) {
+      // The line starts (or continues) work: the agent is busy until the adapter reports idle,
+      // so the inbox holds queued messages meanwhile (the adapter reads the screen again).
+      if (live.idle) live.turn = { text: undefined, interrupted: false };
+      live.idle = false;
+      if (!live.paused) live.inbox.working();
+    }
+    const messageId = `m-${randomUUID()}`;
+    this.recordAs(opts.by, {
+      type: 'message.sent',
+      messageId,
+      agentId,
+      sender: opts.by,
+      // Typed lines may carry a token pasted at a prompt: the log keeps the redacted form.
+      text: redactSecrets(text),
+      interrupt: false,
+      ...(opts.origin ? { origin: opts.origin } : {}),
+    });
+    if (!live.terminal) this.record({ type: 'message.delivered', messageId, agentId });
+    return { messageId };
+  }
+
+  /**
    * Hands the agent's messages to its brain mailbox (P2-06): from now on `send()` without `turn`
    * logs `message.sent` and queues nothing, and the brain runner delivers whole turns.
    */
@@ -1043,7 +1090,7 @@ export class AgentRuntime {
    * received is delivered again, with its original id, before anything new.
    */
   async recoverAgent(agentId: Id): Promise<SpawnResult> {
-    return this.recoverOne(agentId, undefined);
+    return this.recoverOne(agentId, undefined, { restart: true });
   }
 
   /**
@@ -1065,12 +1112,29 @@ export class AgentRuntime {
     return this.reopenOne(agentId, undefined, opts);
   }
 
-  private async recoverOne(agentId: Id, history: AgentHistory | undefined): Promise<SpawnResult> {
+  /**
+   * `restart` (the user's action, never startup recovery): an agent whose runtime cannot resume
+   * sessions (PTY, P8-08; TECHNOLOGY §3.3) starts again afresh from its first prompt, in the same
+   * working directory — the "restart" its interrupted state offers. Startup leaves it interrupted.
+   */
+  private async recoverOne(
+    agentId: Id,
+    history: AgentHistory | undefined,
+    how: { restart?: boolean } = {},
+  ): Promise<SpawnResult> {
     const refused = this.refuseReopen(agentId);
     if (refused) return refused;
     const agent = this.opts.log.tables.agents.get(agentId)!;
     const viaBrain = this.brainResumer?.(agent);
     if (viaBrain) return viaBrain;
+    const prompt = (agent.meta as { prompt?: unknown } | undefined)?.prompt;
+    if (
+      how.restart &&
+      this.adapters.get(agent.runtime)?.resumeSession === undefined &&
+      typeof prompt === 'string'
+    ) {
+      return this.reopenOne(agentId, history, { freshPrompt: prompt });
+    }
     return this.reopenOne(agentId, history, {});
   }
 

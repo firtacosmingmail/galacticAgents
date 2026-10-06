@@ -159,7 +159,7 @@ Each phase ends with something you can run. Estimates assume one developer worki
 - Backups of the SQLite file; export/import of the map (P8-03: daily online backups with rotation and `galactic restore`; a JSON export of the event log that `galactic import` replays into a new database — `docs/BACKUP_RESTORE.md`, TECHNOLOGY §6.4).
 - Crash recovery drills: kill -9 the server mid-project, reboot the machine, unplug the network.
 - Tests: adapter conformance, brain tool contracts (scripted LLM), WebSocket protocol, scene smoke tests via Playwright.
-- Tauri 2 desktop shell (tray icon, auto-start) if you want the "real app" feel.
+- Tauri 2 desktop shell (tray icon, auto-start) if you want the "real app" feel — P8-06, `docs/DESKTOP.md`.
 - ACP adapter for the second runtime (Codex / Gemini CLI), PTY adapter for arbitrary CLIs.
 
 ---

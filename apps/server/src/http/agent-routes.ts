@@ -9,6 +9,7 @@ import {
   SendBody,
   SpawnBody,
   StopProcessesBody,
+  TerminalInputBody,
   type Actor,
   type AnswerResponse,
   type ChatMessage,
@@ -82,7 +83,11 @@ export function registerAgentRoutes(
     const parse = <T>(schema: z.ZodType<T>, body: unknown, reply: FastifyReply): T | undefined => {
       const parsed = schema.safeParse(body ?? {});
       if (parsed.success) return parsed.data;
-      void reply.code(400).send({ error: 'invalid_body', issues: parsed.error.issues });
+      void reply.code(400).send({
+        error: 'invalid_body',
+        message: parsed.error.issues[0]?.message ?? 'invalid body',
+        issues: parsed.error.issues,
+      });
       return undefined;
     };
     const agentId = (req: FastifyRequest) => (req.params as { id: string }).id;
@@ -168,6 +173,26 @@ export function registerAgentRoutes(
       });
     });
 
+    /**
+     * Types a line into a terminal agent's terminal (P8-08; decision 113): only from
+     * this machine's own browser — never from a remote client, `autoApproveRemote` or not: a
+     * keyboard on an agent no table can judge is the Mac's alone. 409 when the agent has no
+     * terminal or is not running; logged as the user's message.
+     */
+    app.post('/api/agents/:id/terminal', async (req, reply) => {
+      if (originOf(req) !== 'local') {
+        return reply.code(403).send({
+          error: 'remote_control',
+          message: "Typing into an agent's terminal works only from this machine's own browser.",
+        });
+      }
+      const body = parse(TerminalInputBody, req.body, reply);
+      if (!body) return;
+      return attempt(reply, async () =>
+        runtime.typeInto(agentId(req), body.text, { by: USER, origin: 'local' }),
+      );
+    });
+
     app.post('/api/agents/:id/pause', (req, reply) =>
       attempt(reply, () => runtime.pause(agentId(req), USER)),
     );
@@ -218,6 +243,7 @@ export function registerAgentRoutes(
     /**
      * Reopens an interrupted agent from its session ref (the manual half of P1-14): the same
      * path as startup recovery (P1-29) — 409 unless the agent is interrupted and not running.
+     * An agent whose runtime cannot resume (PTY, P8-08) is restarted from its first prompt.
      * Open to remote clients like resume (decision 90): it continues work already started.
      */
     app.post('/api/agents/:id/recover', async (req, reply) => {

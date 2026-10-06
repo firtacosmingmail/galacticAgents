@@ -29,6 +29,7 @@ import type {
   StewardProcessesResponse,
   StopProcessesBody,
   StopProcessesResponse,
+  TerminalInputBody,
   TranscriptResponse,
 } from '@galactic/protocol';
 
@@ -101,6 +102,11 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     interrupt: (agentId: string) => call('POST', `/api/agents/${agentId}/interrupt`),
     stop: (agentId: string) => call('POST', `/api/agents/${agentId}/stop`),
     recover: (agentId: string) => call('POST', `/api/agents/${agentId}/recover`),
+    /** Types one line into a terminal agent's terminal (P8-08); the Mac's own browser only. */
+    terminal: (agentId: string, text: string) =>
+      call<{ messageId: string }>('POST', `/api/agents/${encodeURIComponent(agentId)}/terminal`, {
+        text,
+      } satisfies TerminalInputBody),
     /** Stops the Harmonizer and starts a fresh one on the same runtime (P5-06, decision 82). */
     restartHarmonizer: () => call<RestartHarmonizerResponse>('POST', '/api/harmonizer/restart'),
     /**

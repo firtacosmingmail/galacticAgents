@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { NotificationKind } from '@galactic/protocol';
+import { shellPostsNotifications } from '../../desktop-shell.js';
 
 /**
  * Desktop notification preferences (P25-07, SPEC §4.5). Notifications are per device, so these
@@ -71,8 +72,12 @@ function writePrefs(prefs: StoredPrefs): void {
   }
 }
 
-/** The browser's Notification constructor, if it has one. */
+/**
+ * The browser's Notification constructor, if it has one. None inside the desktop shell (P8-06):
+ * the shell posts the notifications itself, so the page never adds a second one.
+ */
 export function notificationApi(): typeof Notification | undefined {
+  if (shellPostsNotifications()) return undefined;
   return typeof globalThis.Notification === 'function' ? globalThis.Notification : undefined;
 }
 
