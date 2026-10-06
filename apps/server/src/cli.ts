@@ -5,9 +5,11 @@ import { dataPaths, DEFAULT_PORT } from './config/config.js';
 import { BACKUP_DIR } from './db/backup.js';
 import { exportMap, ExportError } from './db/map-export.js';
 import { importMap, ImportError } from './db/map-import.js';
+import { restoreBackup, RestoreError } from './db/restore.js';
 
 /**
- * `galactic export <file>` and `galactic import <file>` (P8-03; docs/BACKUP_RESTORE.md), run by
+ * `galactic export <file>`, `galactic import <file>` and `galactic restore <backup>` (P8-03;
+ * docs/BACKUP_RESTORE.md), run by
  * `bin/galactic.mjs` against the data folder (`~/.galactic`, `GALACTIC_HOME`, `GALACTIC_DB`).
  *
  * The export opens the database read-only, so it works while Mission Control runs (WAL readers
@@ -20,6 +22,7 @@ import { importMap, ImportError } from './db/map-import.js';
 export const CLI_USAGE = [
   'usage: galactic export <file> [--transcripts]',
   '       galactic import <file> [--replace] [--prefer-rows]',
+  '       galactic restore <backup file or name in backups/>',
 ].join('\n');
 
 export interface CliIo {
@@ -63,6 +66,7 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
   const known: Record<string, string[]> = {
     export: ['--transcripts'],
     import: ['--replace', '--prefer-rows'],
+    restore: [],
   };
   const allowed = command ? known[command] : undefined;
   if (!allowed || !file || positional.length > 1 || [...flags].some((f) => !allowed.includes(f))) {
@@ -98,12 +102,33 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
     }
   }
 
-  // import
+  // import and restore replace the database: never under a running server
   const port = configuredPort(io.env, paths.configPath);
   if (await (io.isServerRunning ?? healthAnswers)(port)) {
-    io.err(`Mission Control is running on port ${port}: stop it first, then import.`);
+    io.err(`Mission Control is running on port ${port}: stop it first, then ${command}.`);
     return 1;
   }
+  const backupDir = join(paths.dataDir, BACKUP_DIR);
+
+  if (command === 'restore') {
+    // A bare name is looked up in the backups folder (as the settings page lists it).
+    const source = existsSync(file) || file.includes('/') ? file : join(backupDir, file);
+    try {
+      const report = await restoreBackup(paths.dbPath, source, { backupDir });
+      if (report.replacedBackup) {
+        io.out(`The previous database was copied to ${report.replacedBackup}.`);
+      }
+      io.out(
+        `Restored ${source} (events up to seq ${report.seq}) into ${paths.dbPath}. Start ` +
+          'Mission Control: agents that were running when the backup was taken resume as after a restart.',
+      );
+      return 0;
+    } catch (error) {
+      io.err(error instanceof RestoreError ? error.message : `Restore failed: ${String(error)}`);
+      return 1;
+    }
+  }
+
   let input: unknown;
   try {
     input = JSON.parse(readFileSync(file, 'utf8'));
@@ -115,7 +140,7 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
     const report = await importMap(paths.dbPath, input, {
       replace: flags.has('--replace'),
       preferRows: flags.has('--prefer-rows'),
-      backupDir: join(paths.dataDir, BACKUP_DIR),
+      backupDir,
     });
     if (report.replacedBackup)
       io.out(`The previous database was copied to ${report.replacedBackup}.`);

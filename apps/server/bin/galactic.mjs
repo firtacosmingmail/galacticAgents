@@ -2,8 +2,8 @@
 // `galactic start` — starts Mission Control serving the built web app, prints the URL and the
 // token, and opens the browser. Run `pnpm build` first (or use `pnpm dev` for hot reload).
 // `--dev` enables the `/dev/*` demo routes the Phase 0 page's buttons use.
-// `galactic export <file>` / `galactic import <file>` export and import the map (P8-03,
-// docs/BACKUP_RESTORE.md).
+// `galactic export <file>` / `galactic import <file>` export and import the map, and
+// `galactic restore <backup>` puts a backup back (P8-03, docs/BACKUP_RESTORE.md).
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -15,8 +15,8 @@ const serverEntry = resolve(here, '../dist/index.js');
 const webDir = resolve(here, '../../web/dist');
 const [command = 'start', ...flags] = process.argv.slice(2);
 
-// `galactic export <file>` / `galactic import <file>` (P8-03): the map and its history as JSON.
-if (command === 'export' || command === 'import') {
+// export / import (P8-03): the map and its history as JSON; restore: a backup file put back.
+if (command === 'export' || command === 'import' || command === 'restore') {
   const cliEntry = resolve(here, '../dist/cli.js');
   if (!existsSync(cliEntry)) {
     console.error(`The server is not built (${cliEntry} missing). Run \`pnpm build\` first.`);
@@ -35,6 +35,7 @@ if (command !== 'start') {
   console.error(`usage: galactic start [--no-open] [--port <n>] [--dev]`);
   console.error(`       galactic export <file> [--transcripts]`);
   console.error(`       galactic import <file> [--replace] [--prefer-rows]`);
+  console.error(`       galactic restore <backup file>`);
   process.exit(2);
 }
 for (const [name, path] of [
