@@ -9,9 +9,10 @@ Read `docs/SPEC.md` (what), `docs/TECHNOLOGY.md` (with what) and `docs/IMPLEMENT
 Requirements: Node 22 LTS (22.12 or newer; `jsdom` prints a warning below 22.22, which is harmless) and pnpm 10 (`corepack enable` or `npm i -g pnpm`). No native toolchain is needed: `better-sqlite3` ships prebuilt binaries (its install script is intentionally not run).
 
 ```sh
-pnpm install          # workspace: packages/protocol, apps/server, apps/web (npm/yarn are refused)
+pnpm install          # workspace: packages/protocol, apps/server, apps/web, e2e (npm/yarn are refused)
 pnpm build            # protocol → server → web (also copies SQL migrations)
 pnpm test             # builds protocol + server first, then every package's Vitest suite, incl. the resume/gap test
+pnpm e2e              # builds, then the Playwright browser smoke tests (once: pnpm e2e:install); docs/tasks/notes/P8-05-smoke.md
 pnpm start            # = galactic start: serves the built web app, prints URL + token, opens the browser
 ```
 
