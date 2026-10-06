@@ -460,7 +460,10 @@ const RUNTIME_LABELS: Partial<Record<AgentRuntime, { label: string; hint: string
     label: 'ACP agent',
     hint: 'the agent set as acp.command (Codex, Gemini CLI, claude-agent-acp …)',
   },
-  pty: { label: 'Terminal agent', hint: 'a CLI agent driven through a terminal' },
+  pty: {
+    label: 'Terminal agent',
+    hint: 'the command-line agent set as pty.command, driven through a terminal; only in trusted projects',
+  },
 };
 
 const choiceOf = (runtime: AgentRuntime, hint?: string): RuntimeChoice => ({
@@ -680,7 +683,7 @@ export const STEWARD_RUNTIME: SectionSpec<AgentRuntime | ''> = {
   field: 'stewardRuntime',
   title: 'Steward runtime',
   intro:
-    'Which agent runtime new Stewards run on. The Harmonizer and Waykeepers always stay on their own runtime; running Stewards keep theirs. An ACP agent must be set up first (acp.command in config.json). An ACP agent may run a tool call before the permission table judges it: its own permission mode decides first, and GalacticAgents checks each call as it starts, stopping it or asking you when the table would not have allowed it — so set the agent’s own mode to its most careful one.',
+    'Which agent runtime new Stewards run on. The Harmonizer and Waykeepers always stay on their own runtime; running Stewards keep theirs. An ACP agent must be set up first (acp.command in config.json). An ACP agent may run a tool call before the permission table judges it: its own permission mode decides first, and GalacticAgents checks each call as it starts, stopping it or asking you when the table would not have allowed it — so set the agent’s own mode to its most careful one. A terminal agent (pty.command) runs commands GalacticAgents cannot see or judge at all: it runs only in projects whose permission table is “trusted” (elsewhere its Stewards fail to start, saying so), its yes/no prompts always come to you, it cannot resume after a restart, and it reports no cost.',
   fromSettings: (s) => s.stewardRuntime ?? '',
   validate: () => undefined,
   toPatch: (d) => ({ stewardRuntime: d === '' ? null : d }),
