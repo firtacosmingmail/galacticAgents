@@ -116,6 +116,14 @@ supervisor's spawn call — the child exists, its PID-table row is not written y
 the server's pipe and exits on EOF), but its MCP servers and tool shells would live on. Recorded
 as P8-11.
 
+**R3 resolved (P8-11, 2026-10-06; notes `P8-11-launch-intent.md`).** The supervisor now writes a
+launch intent before every fork and tags the child with `GALACTIC_LAUNCH_ID`; at startup
+`reconcileLaunches()` (after `reconcile()`) finds the processes of a launch whose PID-table row
+never came and stops their group. `unrecorded-launch.test.ts` kills the drill server exactly
+between the fork and the row (`--pause-after-fork`, the supervisor's `testHooks.afterFork`) and
+asserts no process of the killed CLI's group survives; `kill-anytime.test.ts` runs
+`reconcileLaunches()` in every second life.
+
 **Drill expectation fixed (P8 wave 2 review, 2026-10-06).** Seed 75240 over 600–760 ms failed
 2 runs of 150: the drill built "who must come back" from status records only, so an agent caught
 between `agent.created` and `agent.spawned` — which has no status record, and which the F3 fix
@@ -276,7 +284,7 @@ a local app? Conservative meanwhile: keep `NORMAL`.
   tool-call cap; Stewards and free-form agents keep it. Fixed in `CapsEnforcer`.
 - **P8-11 — A CLI forked just before a kill**: R3; record a launch intent before the spawn (or
   sweep marked orphans of agents of the killed run) so `reconcile()` can take a child whose pid
-  never reached the PID table.
+  never reached the PID table. Done on `p8-11-launch-intent` (launch intents, migration 0013).
 
 ## Files
 
