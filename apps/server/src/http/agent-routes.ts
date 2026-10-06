@@ -170,7 +170,7 @@ export function registerAgentRoutes(
     });
 
     /**
-     * Types a line into a terminal agent's terminal (P8-08; proposed decision 111): only from
+     * Types a line into a terminal agent's terminal (P8-08; decision 113): only from
      * this machine's own browser — never from a remote client, `autoApproveRemote` or not: a
      * keyboard on an agent no table can judge is the Mac's alone. 409 when the agent has no
      * terminal or is not running; logged as the user's message.

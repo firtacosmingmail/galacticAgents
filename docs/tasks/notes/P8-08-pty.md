@@ -58,7 +58,7 @@ file only), the preflight reporting a helper it cannot fix.
 
 ## Design decisions
 
-1. **Permission rule (proposed decision 110).** A terminal agent's actions are invisible: no
+1. **Permission rule (decision 112).** A terminal agent's actions are invisible: no
    structured tool call ever reaches the permission table. So the session as a whole is put to the
    gate — `{toolName: 'pty:session', input: {command, cwd}}`, a tool the policy engine does not
    know, `reserve: false` — before every spawn and every message; only `allow` runs it. That is the
@@ -90,19 +90,19 @@ file only), the preflight reporting a helper it cannot fix.
    caught in the text form but could survive in the raw form — no known CLI does that; noted.
 5. **User input.** Read-only by default. A line can be typed (`POST /api/agents/:id/terminal`)
    only from the Mac's own browser — refused for a remote client **even with
-   `autoApproveRemote`** (proposed decision 111) — and is logged as the user's message
+   `autoApproveRemote`** (decision 113) — and is logged as the user's message
    (`message.sent` with `origin: local`, then `message.delivered`). Single keystrokes are not
    offered: one event per line keeps the log readable.
 6. **No resume, restart instead.** `resumeSession` absent. Startup recovery leaves a PTY agent
    `interrupted` and flags it (`recovery.needs_attention`); the user's "Restart from its first
-   prompt" starts it afresh in the same worktree (proposed decision 112).
+   prompt" starts it afresh in the same worktree (decision 114).
 7. **Ends.** Exit 0 → `agent.finished` (last five lines as result); non-zero → `agent.failed
 (runtime, "exited with code N: <last line>")`; signal → `agent.failed(crash)`. No cost.
 8. **Brains and `bare` refused**, as for ACP.
 
 ## Proposed SPEC §7 decisions (not recorded in §7)
 
-> **proposed decision 110 — Terminal agents run only where the table trusts what it cannot see**
+> **decision 112 — Terminal agents run only where the table trusts what it cannot see**
 > (P8-08; decisions 5, 7, 49, 109): a terminal agent (a command-line tool driven through a
 > terminal, `pty.command`) does its work with no tool calls GalacticAgents can see, so its permission
 > table can judge nothing it does. It runs only in projects whose table allows what it cannot
@@ -112,13 +112,13 @@ file only), the preflight reporting a helper it cannot fix.
 > never answered by a supervisor or by the table; its other questions are clarifications its
 > supervisor may answer. The settings page says this where the Steward runtime is chosen.
 
-> **proposed decision 111 — Typing into a terminal agent is the Mac's alone** (P8-08; decision
+> **decision 113 — Typing into a terminal agent is the Mac's alone** (P8-08; decision
 > 90): the panel can type a line into a terminal agent's terminal (for a prompt the server did not
 > recognise); it is logged as the user's message. Only the Mac's own browser may do it — a remote
 > client never, even with `autoApproveRemote`: a keyboard on an agent no table can judge is a
 > shell. The terminal view itself is read-only everywhere.
 
-> **proposed decision 112 — A terminal agent interrupted by a restart starts again from its task**
+> **decision 114 — A terminal agent interrupted by a restart starts again from its task**
 > (P8-08; decisions 8, 101, 109): a terminal session cannot be re-attached, so after a restart the
 > agent stays interrupted and the user is told; its "Restart from its first prompt" action starts
 > it afresh from its original instructions in the same worktree. The server never does that on
@@ -170,4 +170,4 @@ interrupt during a `read` takes up to a second.
   line-oriented CLIs this targets.
 - `node-pty` 1.2 (stable) would drop the `spawn-helper` chmod workaround.
 - The fake PTY agent is not copied into `dist/` (like the fake ACP agent).
-- Proposed decisions 110–112 await Cosmin for SPEC §7.
+- Decisions 112–114 are recorded in SPEC §7.

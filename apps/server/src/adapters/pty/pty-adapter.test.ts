@@ -111,7 +111,7 @@ const outputs = (r: Rig, kind: 'text' | 'terminal') =>
     .join('');
 
 describe('PtyAdapter', () => {
-  it('runs only where the table allows what it cannot classify (proposed decision 110)', async () => {
+  it('runs only where the table allows what it cannot classify (decision 112)', async () => {
     const r = rig();
     const ask = (): GateVerdict => ({ decision: 'ask', reasons: ['unclassified'] });
     await expect(r.adapter.spawn(spawnOpts(r, 'scenario:happy', ask))).rejects.toThrow(

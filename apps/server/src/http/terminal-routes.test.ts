@@ -13,7 +13,7 @@ import { startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
 
 /**
  * A terminal agent through the REST surface (P8-08): the user's typing (local only, never remote
- * — proposed decision 111 — and logged as their message), and the restart of an interrupted
+ * — decision 113 — and logged as their message), and the restart of an interrupted
  * terminal agent from its first prompt (it cannot resume).
  */
 

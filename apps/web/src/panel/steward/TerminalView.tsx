@@ -93,7 +93,7 @@ export function TerminalView({ chunks }: { chunks: TranscriptChunk[] }) {
 }
 
 /**
- * The user's keyboard on a terminal agent (P8-08; proposed decision 111): one line typed into its
+ * The user's keyboard on a terminal agent (P8-08; decision 113): one line typed into its
  * terminal now (the text, then Enter) — for a prompt the server did not recognise as a question.
  * Offered on the Mac's own browser only: the server refuses a remote client whatever its
  * settings. Logged as the user's message.

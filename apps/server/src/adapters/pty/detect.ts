@@ -8,7 +8,7 @@
  * - **permission** — a yes/no confirmation (`[y/N]`, `(yes/no)`, "Continue?", "Delete …?", …):
  *   the CLI asks before doing something, and GalacticAgents cannot see what. Always a
  *   permission-kind question, so no brain ever answers it, and it carries no tool call, so the
- *   permission table cannot judge it either: the user decides (proposed decision 110). A pattern
+ *   permission table cannot judge it either: the user decides (decision 112). A pattern
  *   configured as `clarification` that matches a yes/no confirmation is still a permission.
  * - **clarification** — any other question (a line ending in `?`, or a configured pattern); the
  *   answer is typed into the terminal.

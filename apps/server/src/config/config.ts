@@ -158,7 +158,7 @@ export const ConfigFile = z.object({
    * `clarification`, `yes`/`no` what is typed); `quietMs` is the silence after which the screen
    * is read (default 750); `idleAfterMs` ends a turn after that much silence when there is no
    * prompt to recognise. A terminal agent runs only where the permission table allows what it
-   * cannot classify (the trusted preset; proposed decision 110).
+   * cannot classify (the trusted preset; decision 112).
    */
   pty: z
     .object({

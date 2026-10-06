@@ -94,7 +94,7 @@ export interface ConformanceTarget {
   denyPolicy?: PermissionPolicy;
   /**
    * The permission policy every spawn runs under (default: the global default). A runtime that
-   * runs only under some tables (PTY: the trusted preset, proposed decision 110) names one here.
+   * runs only under some tables (PTY: the trusted preset, decision 112) names one here.
    */
   spawnPolicy?: PermissionPolicy;
   /**

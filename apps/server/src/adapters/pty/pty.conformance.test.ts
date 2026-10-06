@@ -13,7 +13,7 @@ import { PtyAdapter } from './pty-adapter.js';
  * network, no model). A terminal agent has no structured tool calls (`toolCalls: false`: the
  * policy-deny and tool-call-count cases are skipped, the permission cases check what the script
  * printed), cannot resume (`resumable: false`), reports no cost (`metered: false`) and runs only
- * under a table that allows what it cannot classify (the trusted preset, proposed decision 110).
+ * under a table that allows what it cannot classify (the trusted preset, decision 112).
  * A job ends with the script's exit: `agent.finished`.
  */
 const cwd = mkdtempSync(join(tmpdir(), 'galactic-pty-conformance-'));

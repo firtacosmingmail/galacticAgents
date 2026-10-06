@@ -231,7 +231,7 @@ idlePattern?, questionPatterns?, quietMs?, idleAfterMs?}` in `config.json` (or
   so launch intent, PID row, agent marker, graceful stop and group reaping are the usual ones. A
   fixed 120×32 terminal (`PTY_TERMINAL_SIZE` in the protocol). Environment: allow-list +
   `TERM`/`COLORTERM` + `pty.passEnv` (never `GALACTIC_*`).
-- **Trust rule** (proposed decision 110): before every spawn and every message the gate is asked
+- **Trust rule** (decision 112): before every spawn and every message the gate is asked
   about `{toolName: 'pty:session', input: {command, cwd}}` with `reserve: false`; only `allow`
   (a table allowing unclassified calls: the trusted preset) runs it.
 - **Turns:** the prompt (system prompt first) and every message are typed as one line + Enter

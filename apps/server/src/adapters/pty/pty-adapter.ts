@@ -42,7 +42,7 @@ import { TerminalText } from './terminal-text.js';
  * table, launch intent (P8-11), the `GALACTIC_AGENT_ID` marker, the graceful stop and the group
  * reaping, like every agent process. The terminal is `PTY_TERMINAL_SIZE` (120×32).
  *
- * **Who may run one** (proposed decision 110). A terminal agent's tool calls are invisible: no
+ * **Who may run one** (decision 112). A terminal agent's tool calls are invisible: no
  * structured call reaches the permission table, so GalacticAgents cannot judge what it does.
  * Every spawn (and every later message) first asks the gate about the session as a whole — an
  * unclassified call `pty:session` with the command line — and runs only when the project's table
@@ -303,7 +303,7 @@ export class PtyAdapter implements AgentAdapter {
   }
 
   /**
-   * Proposed decision 110: the session as a whole asked of the gate as a call it cannot classify.
+   * decision 112: the session as a whole asked of the gate as a call it cannot classify.
    * `undefined` when allowed, else the refusal. Never reserved against the tool-call cap.
    */
   private judgeSession(gate: PermissionGate, cwd: string): string | undefined {
@@ -583,7 +583,7 @@ export class PtyAdapter implements AgentAdapter {
       await session.turnEnd();
     }
     if (session.terminal) throw new Error(`session ${sessionId} has ${session.terminal}`);
-    // The table may have changed since the spawn (proposed decision 110).
+    // The table may have changed since the spawn (decision 112).
     const refused = this.judgeSession(session.gate, session.cwd);
     if (refused) throw new Error(refused);
     this.startTurn(session, message);
