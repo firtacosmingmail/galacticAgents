@@ -189,7 +189,9 @@ function StatusHeader({
         </Fact>
         <Fact label="wall clock">
           {status
-            ? `${formatDuration(wallClockUsed(status, now))} / ${formatDuration(status.caps.wallClockMs.limit)}`
+            ? status.caps.wallClockMs.limit !== undefined
+              ? `${formatDuration(wallClockUsed(status, now))} / ${formatDuration(status.caps.wallClockMs.limit)}`
+              : formatDuration(wallClockUsed(status, now))
             : '—'}
         </Fact>
         {status?.progress && (

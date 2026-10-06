@@ -14,6 +14,7 @@ import {
   Task,
   TrustLevel,
   trustLevelOf,
+  wallClockCapApplies,
 } from './domain.js';
 import { AgentState, PermissionAction, WorkState } from './enums.js';
 import * as fx from './fixtures/domain.js';
@@ -119,5 +120,19 @@ describe('trust levels (P2-22, decision 49)', () => {
     });
     expect(proposalTrust({ meta: { trust: 'yolo' } })).toBe('default');
     expect(proposalTrust(undefined)).toBe('default');
+  });
+
+  it('the wall-clock cap applies to Stewards and free-form agents, not to brains (decision 103)', () => {
+    expect(wallClockCapApplies({ role: 'steward' })).toBe(true);
+    expect(wallClockCapApplies({})).toBe(true);
+    expect(wallClockCapApplies({ role: 'harmonizer' })).toBe(false);
+    expect(wallClockCapApplies({ role: 'waykeeper', meta: { cwd: '/w' } })).toBe(false);
+    expect(wallClockCapApplies({ role: 'waykeeper', meta: { freeForm: true } })).toBe(true);
+    expect(wallClockCapApplies({ role: 'steward', meta: { freeForm: true } })).toBe(true);
+  });
+
+  it('a status record without a wall-clock limit is valid (an uncapped brain)', () => {
+    const caps = { ...fx.status.caps, wallClockMs: { used: 5_000 } };
+    expect(StatusRecord.safeParse({ ...fx.status, caps }).success).toBe(true);
   });
 });

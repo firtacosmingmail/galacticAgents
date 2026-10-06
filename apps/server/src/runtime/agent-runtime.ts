@@ -88,6 +88,11 @@ export interface SpawnRequest {
   bare?: boolean;
   /** A fixed agent id (tests, resume); default: generated. */
   agentId?: Id;
+  /**
+   * A free-form agent (the ops console's `POST /api/agents`): recorded as `meta.freeForm`, so it
+   * keeps the wall-clock cap whatever its role, across restarts too (SPEC decision 103).
+   */
+  freeForm?: boolean;
 }
 
 export type SpawnResult = { ok: true; agent: Agent } | { ok: false; reason: string };
@@ -434,6 +439,7 @@ export class AgentRuntime {
           ...(req.workspace ? { workspace: req.workspace } : {}),
           ...(req.permissionPolicy ? { permissionPolicy: req.permissionPolicy } : {}),
           ...(req.bare ? { bare: true } : {}),
+          ...(req.freeForm ? { freeForm: true } : {}),
         },
       }),
     ).value;
@@ -565,6 +571,7 @@ export class AgentRuntime {
     this.caps.track(agent.id, caps, {
       role: agent.role,
       ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
+      ...(agent.meta?.freeForm === true ? { freeForm: true } : {}),
     });
     let handle: SpawnHandle;
     try {

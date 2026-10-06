@@ -82,6 +82,7 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
       : { kind: agent.role, id: agent.id }
     : undefined;
   const wall = status ? wallClockUsed(status, now) : undefined;
+  const wallLimit = status?.caps.wallClockMs.limit;
   const questions = openQuestions.length;
 
   return (
@@ -134,14 +135,17 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
             <div>
               <dt>wall clock</dt>
               <dd role="definition" aria-label="wall clock">
-                {status && wall !== undefined ? (
+                {wall === undefined ? (
+                  '—'
+                ) : wallLimit === undefined ? (
+                  // A Waykeeper: no wall-clock cap (SPEC decision 103), only its time.
+                  formatDuration(wall)
+                ) : (
                   <Usage
                     used={wall}
-                    limit={status.caps.wallClockMs.limit}
-                    text={`${formatDuration(wall)} / ${formatDuration(status.caps.wallClockMs.limit)}`}
+                    limit={wallLimit}
+                    text={`${formatDuration(wall)} / ${formatDuration(wallLimit)}`}
                   />
-                ) : (
-                  '—'
                 )}
               </dd>
             </div>
