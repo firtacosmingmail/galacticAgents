@@ -92,7 +92,8 @@ describe('loadConfig', () => {
       args: ['--no-auto-commits'],
       passEnv: ['OPENAI_API_KEY'],
       idlePattern: '^> $',
-      questionPatterns: [{ pattern: 'Name:\\s*$', kind: 'clarification' }],
+      questionPatterns: [{ pattern: 'Ready\\s*$', kind: 'permission', yes: 'go' }],
+      clarificationPatterns: ['Name:\\s*$'],
       quietMs: 500,
       idleAfterMs: 5_000,
     };
@@ -115,6 +116,15 @@ describe('loadConfig', () => {
       }),
     );
     expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow(/GALACTIC_\*/);
+    // Fail closed (decision 112): a free-form shape is a clarification pattern, not a question one.
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        pty: { command: 'x', questionPatterns: [{ pattern: 'Name:', kind: 'clarification' }] },
+      }),
+    );
+    expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow(/clarificationPatterns/);
   });
 
   it('drops a fake Steward runtime outside dev mode, with a warning (P8 wave 3 review)', () => {

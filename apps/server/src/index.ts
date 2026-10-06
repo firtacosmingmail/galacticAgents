@@ -126,12 +126,14 @@ const adapters: AgentAdapter[] = [
               ? {
                   questionPatterns: config.pty.questionPatterns.map((q) => ({
                     pattern: q.pattern,
-                    kind: q.kind,
                     ...(q.flags !== undefined ? { flags: q.flags } : {}),
                     ...(q.yes !== undefined ? { yes: q.yes } : {}),
                     ...(q.no !== undefined ? { no: q.no } : {}),
                   })),
                 }
+              : {}),
+            ...(config.pty.clarificationPatterns
+              ? { clarificationPatterns: config.pty.clarificationPatterns }
               : {}),
             ...(config.pty.quietMs !== undefined ? { quietMs: config.pty.quietMs } : {}),
             ...(config.pty.idleAfterMs !== undefined

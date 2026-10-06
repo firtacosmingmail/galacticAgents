@@ -83,7 +83,11 @@ export function registerAgentRoutes(
     const parse = <T>(schema: z.ZodType<T>, body: unknown, reply: FastifyReply): T | undefined => {
       const parsed = schema.safeParse(body ?? {});
       if (parsed.success) return parsed.data;
-      void reply.code(400).send({ error: 'invalid_body', issues: parsed.error.issues });
+      void reply.code(400).send({
+        error: 'invalid_body',
+        message: parsed.error.issues[0]?.message ?? 'invalid body',
+        issues: parsed.error.issues,
+      });
       return undefined;
     };
     const agentId = (req: FastifyRequest) => (req.params as { id: string }).id;

@@ -59,13 +59,31 @@ export const SendResponse = z.object({ messageId: z.string().min(1) });
 export type SendResponse = z.infer<typeof SendResponse>;
 
 /**
+ * Control characters a line typed into a terminal agent may not carry (P8-08 review): C0 except
+ * TAB (Ctrl-C, Ctrl-U, ESC, newlines…), DEL and C1 (CSI…). The adapter strips them from every
+ * line it types; the terminal route refuses them (400) so the user sees what was not typed.
+ */
+// eslint-disable-next-line no-control-regex
+export const TERMINAL_CONTROL_CHARS = /[\x00-\x08\x0A-\x1F\x7F-\x9F]/;
+
+/**
  * `POST /api/agents/:id/terminal` (P8-08): one line the user types into a terminal agent's (PTY)
  * terminal — the text then Enter, at once, whatever the agent is doing. Only from this machine's
  * own browser, never from a remote client (not even with `autoApproveRemote`); logged as the
- * user's `message.sent` (and `message.delivered` once typed). 409 for an agent that has no
+ * user's `message.sent` (and `message.delivered` once typed), secrets redacted. A line with
+ * control characters is refused (400). 409 for an agent that has no
  * terminal or is not running.
  */
-export const TerminalInputBody = z.object({ text: z.string().max(4_000) });
+export const TerminalInputBody = z.object({
+  text: z
+    .string()
+    .max(4_000)
+    .refine((t) => !TERMINAL_CONTROL_CHARS.test(t), {
+      message:
+        'The line may not contain control characters (Ctrl keys, escape sequences, newlines): ' +
+        'only printable text and tabs are typed into a terminal.',
+    }),
+});
 export type TerminalInputBody = z.infer<typeof TerminalInputBody>;
 
 /**

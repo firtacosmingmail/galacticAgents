@@ -680,8 +680,10 @@ export class AgentRuntime {
    * Types one line into a terminal agent's terminal now, whatever its turn is doing (P8-08): the
    * user's own keyboard, for a prompt the adapter did not recognise. Not queued — the inbox waits
    * for idle, a terminal waiting on an unrecognised prompt never is. Logged as the user's
-   * `message.sent` (so the conversation shows it) and `message.delivered` once typed; nothing is
-   * logged when the adapter refuses. Refused for a runtime without a terminal, an agent that is
+   * `message.sent` (so the conversation shows it; secrets redacted, `redactSecrets`) and
+   * `message.delivered` once typed; nothing is logged when the adapter refuses. The agent is then
+   * busy (`idle = false`, the inbox `working()`): typed while idle, the line opens a turn in the
+   * adapter, and queued messages wait for its end. Refused for a runtime without a terminal, an agent that is
    * stopping, and on a full disk (checked first: the line must not reach the terminal unlogged).
    */
   async typeInto(
@@ -699,13 +701,21 @@ export class AgentRuntime {
     }
     this.ensureWritable(opts.by);
     await adapter.input(this.session(live), text);
+    if (!live.terminal) {
+      // The line starts (or continues) work: the agent is busy until the adapter reports idle,
+      // so the inbox holds queued messages meanwhile (the adapter reads the screen again).
+      if (live.idle) live.turn = { text: undefined, interrupted: false };
+      live.idle = false;
+      if (!live.paused) live.inbox.working();
+    }
     const messageId = `m-${randomUUID()}`;
     this.recordAs(opts.by, {
       type: 'message.sent',
       messageId,
       agentId,
       sender: opts.by,
-      text,
+      // Typed lines may carry a token pasted at a prompt: the log keeps the redacted form.
+      text: redactSecrets(text),
       interrupt: false,
       ...(opts.origin ? { origin: opts.origin } : {}),
     });

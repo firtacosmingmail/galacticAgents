@@ -154,8 +154,11 @@ export const ConfigFile = z.object({
    * "idlePattern": "^> $"}`; also `GALACTIC_PTY_COMMAND` (like `GALACTIC_ACP_COMMAND`). Absent:
    * no `pty` runtime. `passEnv` names the server variables it needs (credentials by name; never
    * `GALACTIC_*`). `idlePattern` is its input prompt (a regular expression on the cursor's line):
-   * the turn is over; `questionPatterns` add question shapes (`kind` `permission` or
-   * `clarification`, `yes`/`no` what is typed); `quietMs` is the silence after which the screen
+   * the turn is over. Every question it asks is a permission (only the user answers it,
+   * decision 112) unless a `clarificationPatterns` regex matches its prompt line (its supervisor
+   * may answer those); `questionPatterns` add yes/no shapes (`yes`/`no`: what is typed).
+   * `args` may hold `{prompt}` (replaced by the first prompt) or `{promptFile}` (the path of a
+   * 0600 file holding it): the first prompt is then not typed. `quietMs` is the silence after which the screen
    * is read (default 750); `idleAfterMs` ends a turn after that much silence when there is no
    * prompt to recognise. A terminal agent runs only where the permission table allows what it
    * cannot classify (the trusted preset; decision 112).
@@ -178,12 +181,19 @@ export const ConfigFile = z.object({
           z.object({
             pattern: z.string().min(1),
             flags: z.string().optional(),
-            kind: z.enum(['permission', 'clarification']),
+            kind: z
+              .literal('permission', {
+                error:
+                  'pty.questionPatterns are permission shapes only; a prompt its supervisor may ' +
+                  'answer goes in pty.clarificationPatterns',
+              })
+              .optional(),
             yes: z.string().optional(),
             no: z.string().optional(),
           }),
         )
         .optional(),
+      clarificationPatterns: z.array(z.string().min(1)).optional(),
       quietMs: z.number().int().min(50).max(60_000).optional(),
       idleAfterMs: z.number().int().min(500).optional(),
     })
