@@ -20,7 +20,17 @@ How to reach Mission Control from your phone (P7-02; `TECHNOLOGY.md` §2.4, §8;
    Or set `GALACTIC_REMOTE_HOST=mymac.tail1234.ts.net` in the environment. The value must be one exact host name: no scheme, no port, no `*`. It is added to the `Host` allow-list, the settings page builds the phone's address from it, and it is the only `Host` under which Tailscale identity headers are read (§4).
 
    Do not use a `*.ts.net` wildcard in `allowedHosts`. It lets every name under `ts.net` through the `Host` and `Origin` checks, and that includes any stranger's public Funnel page. The server prints a warning at startup if it finds one.
-5. Restart Mission Control (`galactic start`), then start Serve, in the background, pointing at the server's port (4321 by default):
+5. Start Mission Control for the phone. The simplest way is one command from the repository (it does steps 4–5 for you and builds the app):
+
+   ```sh
+   pnpm remote               # options: --port <n>, --no-open, --skip-build
+   ```
+
+   It checks that Tailscale is connected and has a MagicDNS name, adds `remoteHost` to `~/.galactic/config.json` when it is missing (and stops if it names another machine), starts Serve on 443 → `http://127.0.0.1:4321` unless it already serves that (it refuses when 443 serves something else or Funnel is on), prints `tailscale serve status`, runs `pnpm build`, then runs `pnpm galactic start --dev`. Ctrl-C stops Mission Control; Serve stays on until you turn it off.
+
+   > **`pnpm dev` does not work for the phone.** In dev mode the server on port 4321 serves only the API; the page comes from Vite on port 5173, which Serve does not forward. The phone then gets `{"message":"Route GET:/ not found"…}`. Stop `pnpm dev` first: `pnpm remote` refuses to start while something listens on the port. Use `galactic start` (here `pnpm galactic start --dev`, which also keeps the ops console and the scene harness) on a fresh `pnpm build`.
+
+   To do it by hand instead: build (`pnpm build`), start Mission Control (`pnpm galactic start --dev`, or `galactic start`), then start Serve, in the background, pointing at the server's port (4321 by default):
 
    ```sh
    tailscale serve --bg --https=443 http://127.0.0.1:4321
