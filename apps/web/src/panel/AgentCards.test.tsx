@@ -69,7 +69,11 @@ function load(w: World = {}) {
     proposals: [],
     statuses: [
       status('a-harmonizer'),
-      status('a-wk', w.waykeeperState),
+      // A brain: no wall-clock limit (SPEC decision 103).
+      {
+        ...status('a-wk', w.waykeeperState),
+        caps: { ...fx.status.caps, wallClockMs: { used: 0 } },
+      },
       status('a-st', w.stewardState),
       ...(w.extraAgents ?? []).map((a) => status(a.id)),
     ],
@@ -459,6 +463,8 @@ describe('managed-agents cards: what they show (P25-04)', () => {
     expect(c.getByLabelText('cost so far').textContent).toBe('$0.4200');
     expect(c.getByLabelText('tool calls').textContent).toMatch(/^17 \/ 500/);
     expect(c.getByLabelText('wall clock').textContent).toBe('5 min / 1 h');
+    // A Waykeeper has no wall-clock cap (P8-10, decision 103): only its time.
+    expect(within(card(WAYKEEPER)).getByLabelText('wall clock').textContent).toBe('5 min');
     expect(card(STEWARD).querySelector('.agc-qbadge')?.textContent).toBe('1 open question');
     // Held by a supervisor: not blocked on the user.
     expect(c.queryByText('blocked on you')).toBeNull();

@@ -141,6 +141,8 @@ export function registerAgentRoutes(
         }),
         ...(body.caps ? { caps: compact(body.caps) } : {}),
         ...(body.bare ? { bare: true } : {}),
+        // Whatever its role, a free-form agent keeps the wall-clock cap (SPEC decision 103).
+        freeForm: true,
       });
       if (!result.ok) return reply.code(409).send(refusal('refused', result.reason));
       return reply.code(201).send({ agentId: result.agent.id } satisfies SpawnResponse);

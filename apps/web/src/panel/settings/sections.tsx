@@ -520,7 +520,7 @@ export const CAPS: SectionSpec<CapsDraft> = {
   field: 'caps',
   title: 'Caps',
   intro:
-    'Hard limits that keep agents from running away. New agents get the new per-agent caps; running agents keep theirs, and lowering a cap stops nobody.',
+    'Hard limits that keep agents from running away. New agents get the new per-agent caps; running agents keep theirs, and lowering a cap stops nobody. The wall-clock cap stops Stewards (and agents started from the ops console) only; the Harmonizer and Waykeepers are bounded by their tool calls and the hierarchy.',
   fromSettings: (s) => capsDraft(s.caps),
   validate: (d) => (parseCaps(d).errors ? 'Fix the caps marked above.' : undefined),
   toPatch: (d, saved) => ({ caps: changedCaps(parseCaps(d, saved.caps).caps!, saved.caps) }),

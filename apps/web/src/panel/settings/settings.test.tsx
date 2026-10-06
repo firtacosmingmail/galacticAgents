@@ -421,7 +421,7 @@ describe('settings page (P25-08)', () => {
       (within(caps).getByRole('button', { name: 'Save caps' }) as HTMLButtonElement).disabled,
     ).toBe(true);
     type(within(caps).getByLabelText('Stewards working at once'), '8');
-    type(within(caps).getByLabelText('Wall-clock time per agent'), '30');
+    type(within(caps).getByLabelText('Wall-clock time per Steward'), '30');
 
     server.setRefuse((p) => {
       if (p.caps)
@@ -482,7 +482,7 @@ describe('settings page (P25-08)', () => {
     await open('/settings', stored);
     const caps = await screen.findByRole('region', { name: 'Caps' });
     expect(
-      (within(caps).getByLabelText('Wall-clock time per agent') as HTMLInputElement).value,
+      (within(caps).getByLabelText('Wall-clock time per Steward') as HTMLInputElement).value,
     ).toBe('1.5');
     type(within(caps).getByLabelText('Stewards working at once'), '8');
     expect(within(caps).queryByRole('alert')).toBeNull();

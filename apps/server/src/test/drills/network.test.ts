@@ -224,7 +224,8 @@ describe('network loss during a Steward run (P8-04 drill 3)', () => {
 
   it('a stall past the wall-clock cap is stopped by the cap, and the supervisor is told why', async () => {
     const w = await world();
-    // A short wall clock for the agents started from now on: the Steward, not the brains.
+    // A short wall clock for the agents started from now on. It stops the Steward; the brains
+    // would outlive it anyway (P8-10, SPEC decision 103).
     w.h.runtime.caps.update({ defaults: { maxWallClockMs: 1_200, maxToolCalls: 100 } });
     const { stewardId } = await stewardFor(w, 'net-hang download the model');
     await w.h.until(() => w.h.statuses.get(stewardId)?.state === 'failed', {

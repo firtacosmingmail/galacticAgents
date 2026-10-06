@@ -205,6 +205,8 @@ export function nearCap(status: StatusRecord | undefined, now: number): string |
   const { toolCalls, wallClockMs } = status!.caps;
   if (toolCalls.used >= NEAR_CAP * toolCalls.limit)
     return `tool calls ${toolCalls.used} / ${toolCalls.limit}`;
+  // A brain has no wall-clock cap to be near (SPEC decision 103).
+  if (wallClockMs.limit === undefined) return undefined;
   const clock = wallClockAt(status!, now);
   if (clock >= NEAR_CAP * wallClockMs.limit)
     return `wall clock ${Math.min(100, Math.round((clock / wallClockMs.limit) * 100))}% of its cap`;

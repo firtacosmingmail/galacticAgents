@@ -261,7 +261,9 @@ function AgentPanel({
           <dt>wall clock</dt>
           <dd>
             {status
-              ? `${Math.round(status.caps.wallClockMs.used / 1000)} s / ${Math.round(status.caps.wallClockMs.limit / 60000)} min`
+              ? status.caps.wallClockMs.limit !== undefined
+                ? `${Math.round(status.caps.wallClockMs.used / 1000)} s / ${Math.round(status.caps.wallClockMs.limit / 60000)} min`
+                : `${Math.round(status.caps.wallClockMs.used / 1000)} s (no cap)`
               : '—'}
           </dd>
         </div>

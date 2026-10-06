@@ -1,6 +1,7 @@
 import {
   ENDED_STATES,
   isHarnessMeta,
+  wallClockCapApplies,
   type Agent,
   type AgentAdapter,
   type AgentRuntime as RuntimeName,
@@ -205,6 +206,11 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   const statuses = new StatusStore({
     capsOf: (id) => log.tables.agents.get(id)?.caps,
     defaultCaps,
+    // A brain shows its time without a limit (SPEC decision 103).
+    wallClockCapped: (id) => {
+      const agent = log.tables.agents.get(id);
+      return !agent || wallClockCapApplies(agent);
+    },
     // The scene harness's fake agents (P4-06) have no process to fall silent: they stall only
     // when the harness says so.
     stallThresholdMs: (runtime, agentId) =>
