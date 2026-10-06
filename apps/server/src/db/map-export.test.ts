@@ -11,6 +11,7 @@ import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { HistoryEvents } from '../runtime/history-events.js';
 import { HistoryView } from '../runtime/history-view.js';
 import { History } from '../runtime/history.js';
+import { DEFAULT_CAPS } from '../runtime/caps.js';
 import { StatusStore } from '../runtime/status-store.js';
 import { logDrift } from '../test/drills/drill-checks.js';
 import { openDatabase, type Database } from './database.js';
@@ -228,6 +229,8 @@ function observe(dbPath: string): Observed {
     const at = Date.parse('2026-10-20T00:00:00.000Z');
     const statuses = new StatusStore({
       capsOf: (id) => log.tables.agents.get(id)?.caps,
+      defaultCaps: DEFAULT_CAPS,
+      stallThresholdMs: () => 60_000,
       now: () => at,
     });
     statuses.rebuild(log.eventsSince(0, Number.MAX_SAFE_INTEGER));
@@ -305,7 +308,7 @@ describe('map export and import (P8-03)', () => {
     expect(newMap).toEqual(oldMap);
     expect(newId).not.toBe(oldId);
     expect(report.logId).toBe(newId);
-    expect(after.snapshot.spend.length).toBeGreaterThan(0); // folded from the log again
+    expect(after.snapshot.spend?.length).toBeGreaterThan(0); // folded from the log again
     expect(after.statuses).toEqual(before.statuses);
     expect(after.history).toEqual(before.history);
     // Without the transcripts, the chats keep their messages and lose the agents' replies.

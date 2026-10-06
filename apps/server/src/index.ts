@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadConfig } from './config/config.js';
 import { SettingsService } from './config/settings.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
@@ -14,6 +15,7 @@ import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
+import { BACKUP_CHECK_INTERVAL_MS, BACKUP_DIR, BackupService } from './db/backup.js';
 import { openDatabase } from './db/database.js';
 import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
@@ -89,6 +91,20 @@ const push = createPush(db, config, {
   log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
 });
 push.service.start(log);
+// Backups (P8-03): daily when the log is quiet, rotated; "Back up now" from the settings page.
+const backups = new BackupService({
+  db,
+  dir: join(config.dataDir, BACKUP_DIR),
+  ...(config.backups
+    ? {
+        schedule: (({ reserveBytes: _r, ...schedule }) => schedule)(config.backups),
+        ...(config.backups.reserveBytes !== undefined
+          ? { reserveBytes: config.backups.reserveBytes }
+          : {}),
+      }
+    : {}),
+  log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
+});
 // The settings page (P25-01): caps and retention apply live through the runtime and the job.
 const settings = new SettingsService({
   config,
@@ -117,6 +133,7 @@ function shutdown(code: number): void {
   // The promotion flow stops with the runtime: no card is carried out while agents are stopping.
   promotions?.stop();
   push.service.stop();
+  backups.stop();
   void composed
     .shutdown()
     .catch((error) => console.error('[runtime] shutdown:', error))
@@ -192,6 +209,7 @@ const app = buildApp({
   ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
   push,
+  backups,
   restartHarmonizer: async () => {
     const hq = await restartHarmonizer();
     console.log(
@@ -212,6 +230,8 @@ if (tokenGenerated) {
 }
 try {
   const port = await app.listen();
+  // The first check waits for the server to be up; a backup already due runs once the log is quiet.
+  backups.start(BACKUP_CHECK_INTERVAL_MS);
   // `galactic start` watches for this line to print its banner and open the browser.
   console.log(`GalacticAgents Mission Control listening on http://${config.host}:${port}`);
 } catch (error) {

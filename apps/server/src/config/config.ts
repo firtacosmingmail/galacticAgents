@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  BackupSchedule,
   DEFAULT_BUDGET_WARN_PERCENT,
   DEFAULT_TRANSCRIPT_RETENTION,
   IDENTITY_TOKEN,
@@ -107,6 +108,14 @@ export const ConfigFile = z.object({
    * as an ISO timestamp, but read leniently: a hand-edited value must not stop the server.
    */
   setupCompletedAt: z.string().min(1).optional(),
+  /**
+   * Backups (P8-03; docs/BACKUP_RESTORE.md): whether the daily backup runs (default true; also
+   * `GALACTIC_BACKUPS=0`), how many are kept, and how much free space a backup must leave on the
+   * disk (MiB, default 1024).
+   */
+  backups: BackupSchedule.partial()
+    .extend({ reserveMiB: z.number().int().nonnegative().optional() })
+    .optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -173,6 +182,8 @@ export interface ServerConfig {
    * absent = 80.
    */
   budgets?: { warnAtPercent: number };
+  /** Backups (P8-03): the rotation and the free space a backup leaves; absent = the defaults. */
+  backups?: Partial<BackupSchedule> & { reserveBytes?: number };
 }
 
 export interface LoadedConfig {
@@ -204,9 +215,25 @@ export function generateToken(): string {
  * Loads the config: defaults ← `~/.galactic/config.json` ← environment.
  * Generates and persists a token on first start (file mode 0600).
  */
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
+/**
+ * Where the data lives (`~/.galactic`, or `$GALACTIC_HOME`; the database `$GALACTIC_DB`), without
+ * reading or writing anything: the export and import commands (P8-03) use it.
+ */
+export function dataPaths(env: NodeJS.ProcessEnv = process.env): {
+  dataDir: string;
+  configPath: string;
+  dbPath: string;
+} {
   const dataDir = env['GALACTIC_HOME'] ?? join(homedir(), '.galactic');
-  const configPath = join(dataDir, 'config.json');
+  return {
+    dataDir,
+    configPath: join(dataDir, 'config.json'),
+    dbPath: env['GALACTIC_DB'] ?? join(dataDir, 'galactic.sqlite'),
+  };
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
+  const { dataDir, configPath, dbPath } = dataPaths(env);
 
   let file: ConfigFile = {};
   if (existsSync(configPath)) {
@@ -344,7 +371,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       dev: env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true',
       dataDir,
       configPath,
-      dbPath: env['GALACTIC_DB'] ?? join(dataDir, 'galactic.sqlite'),
+      dbPath,
       projectsRoot: resolve(projectsRoot),
       autoApproveRemote:
         env['GALACTIC_AUTO_APPROVE_REMOTE'] !== undefined
@@ -373,10 +400,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       envOverrides,
       budgets: { warnAtPercent },
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
+      ...backupsOf(file.backups, env['GALACTIC_BACKUPS']),
     },
     tokenGenerated,
     warnings,
   };
+}
+
+/** The backups setting (P8-03): the file's values, the environment's on/off over them. */
+function backupsOf(
+  file: ConfigFile['backups'],
+  envFlag: string | undefined,
+): { backups?: NonNullable<ServerConfig['backups']> } {
+  const { reserveMiB, ...schedule } = file ?? {};
+  const backups: NonNullable<ServerConfig['backups']> = {
+    // Keys present with `undefined` are dropped (an absent key means the default).
+    ...(Object.fromEntries(
+      Object.entries(schedule).filter(([, v]) => v !== undefined),
+    ) as Partial<BackupSchedule>),
+    ...(reserveMiB !== undefined ? { reserveBytes: reserveMiB * 2 ** 20 } : {}),
+    ...(envFlag !== undefined ? { enabled: envFlag === '1' || envFlag === 'true' } : {}),
+  };
+  return Object.keys(backups).length > 0 ? { backups } : {};
 }
 
 /** `~` and `~/…` name the home directory; anything else is returned as written. */
