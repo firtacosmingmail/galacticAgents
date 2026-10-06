@@ -1,0 +1,15 @@
+{
+  "name": "@galactic/e2e",
+  "version": "0.0.1",
+  "private": true,
+  "description": "GalacticAgents browser smoke tests (P8-05): Playwright against the real server from the production build, with the fake adapter.",
+  "type": "module",
+  "scripts": {
+    "e2e": "playwright test",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@galactic/protocol": "workspace:*",
+    "@playwright/test": "1.63.0"
+  }
+}

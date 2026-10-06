@@ -1,0 +1,9 @@
+/*
+ * Applied to the scene's screenshots only (P8-05): everything the scene area draws over its canvas
+ * (labels, legend, breadcrumb, scale toggle, popovers) is made transparent, so a baseline holds
+ * WebGL pixels and no fonts. Opacity, not visibility: the label projector sets each label's
+ * visibility inline. The labels are asserted through the DOM instead.
+ */
+.pnl-scene > :not(.pnl-scene-canvas) {
+  opacity: 0 !important;
+}
