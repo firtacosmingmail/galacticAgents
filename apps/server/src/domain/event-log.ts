@@ -11,6 +11,7 @@ import {
 import { tables, type Tables } from '../db/tables.js';
 import type { ChooseOptions } from './catalogue.js';
 import { projectBudgetEvent } from './budgets.js';
+import { isStorageFailure } from '../db/database.js';
 
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
 export interface CommandContext {
@@ -46,6 +47,13 @@ export type Subscriber = (envelope: EventEnvelope) => void;
  * throws the storage error when they still cannot be written, which refuses the command whole.
  */
 export type BeforeCommand = () => void;
+
+/**
+ * Told how every outermost command went with the storage (P8-09): `error` when the storage refused
+ * it (`isStorageFailure`), undefined when it committed events. A command that fails for another
+ * reason, or commits nothing, says nothing about the storage and is not reported.
+ */
+export type StorageObserver = (error: unknown) => void;
 
 export interface RunOptions {
   /**
@@ -116,6 +124,9 @@ export class EventLog {
   private readonly beforeCommand = new Set<BeforeCommand>();
   /** True while the `beforeCommand` hooks run: the commands they run do not call them again. */
   private inHook = false;
+  private readonly storageObservers = new Set<StorageObserver>();
+  /** Outermost commits that wrote at least one event (their own or a nested command's). */
+  private eventCommits = 0;
 
   constructor(
     readonly db: Database,
@@ -174,8 +185,40 @@ export class EventLog {
     };
   }
 
+  /** Registers a storage observer (see `StorageObserver`). */
+  addStorageObserver(observer: StorageObserver): () => void {
+    this.storageObservers.add(observer);
+    return () => {
+      this.storageObservers.delete(observer);
+    };
+  }
+
   /** Runs `fn` under the one write rule. Nested calls join the outer transaction. */
   runCommand<T>(fn: (ctx: CommandContext) => T, opts: RunOptions = {}): CommandOutcome<T> {
+    if (this.depth > 0 || this.storageObservers.size === 0) return this.run(fn, opts);
+    let outcome: CommandOutcome<T>;
+    const commits = this.eventCommits;
+    try {
+      outcome = this.run(fn, opts);
+    } catch (error) {
+      if (isStorageFailure(error)) this.tellStorage(error);
+      throw error;
+    }
+    if (this.eventCommits > commits) this.tellStorage(undefined);
+    return outcome;
+  }
+
+  private tellStorage(error: unknown): void {
+    for (const observer of [...this.storageObservers]) {
+      try {
+        observer(error);
+      } catch {
+        // An observer's failure must not change the command's outcome.
+      }
+    }
+  }
+
+  private run<T>(fn: (ctx: CommandContext) => T, opts: RunOptions): CommandOutcome<T> {
     if (this.depth === 0 && !this.inHook && this.beforeCommand.size > 0) {
       this.inHook = true;
       try {
@@ -218,6 +261,7 @@ export class EventLog {
       this.uncommitted.push(...mine);
       if (this.depth === 1) {
         // The outermost command committed: its events (and its nested commands') are published.
+        if (this.uncommitted.length > 0) this.eventCommits++;
         this.pending.push(...this.uncommitted);
         this.uncommitted = [];
       }

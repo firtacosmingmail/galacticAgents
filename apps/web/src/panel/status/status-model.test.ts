@@ -381,6 +381,12 @@ describe('helpers', () => {
     });
     expect(nearCap(clock, NOW)).toBe('wall clock 83% of its cap');
     expect(nearCap({ ...clock, state: 'finished' }, NOW)).toBeUndefined();
+    // A brain has no wall-clock cap to be near (P8-10, decision 103).
+    const brain = {
+      ...clock,
+      caps: { ...clock.caps, wallClockMs: { used: 0, limit: 3_600_000, capped: false } },
+    };
+    expect(nearCap(brain, NOW)).toBeUndefined();
   });
 
   it('words the narrative request', () => {

@@ -13,6 +13,8 @@ import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
+import { registerBackupRoutes } from './http/backup-routes.js';
+import type { BackupService } from './db/backup.js';
 import { isWebFile, webCacheControl } from './http/web-cache.js';
 import { registerPushRoutes, type Push } from './push/index.js';
 import type { SettingsService } from './config/settings.js';
@@ -20,6 +22,8 @@ import type { EventLog } from './domain/event-log.js';
 import type { StatusStore } from './runtime/status-store.js';
 import type { TranscriptPipeline } from './runtime/transcripts.js';
 import { SERVER_VERSION } from './version.js';
+import { sendStorageRefusal } from './http/storage-refusal.js';
+import type { StorageMonitor } from './runtime/storage-health.js';
 
 export interface AppOptions {
   config: ServerConfig;
@@ -47,6 +51,10 @@ export interface AppOptions {
   settings?: SettingsService;
   /** Web Push (P7-04): enables `/api/push*`. */
   push?: Push;
+  /** The database's write health (P8-09): sent to every socket for the panel's banner. */
+  storage?: StorageMonitor;
+  /** Backups (P8-03): enables `GET`/`POST /api/backups` (the export needs only `log`). */
+  backups?: BackupService;
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -62,6 +70,15 @@ export interface App {
 export function buildApp(opts: AppOptions): App {
   const { config } = opts;
   const fastify = Fastify({ logger: opts.logger ?? false });
+
+  // A route that lets a storage failure escape (P8-09): 507 `storage_full` / 503, never a bare 500.
+  fastify.setErrorHandler((error, req, reply) => {
+    if (sendStorageRefusal(reply, error)) {
+      req.log.warn(`refused by the storage: ${error instanceof Error ? error.message : error}`);
+      return reply;
+    }
+    return reply.send(error);
+  });
 
   // DNS-rebinding guard on every HTTP request (TECHNOLOGY §8).
   fastify.addHook('onRequest', async (req, reply) => {
@@ -159,6 +176,14 @@ export function buildApp(opts: AppOptions): App {
     });
   }
 
+  // Backups and the map export (P8-03).
+  if (opts.log) {
+    registerBackupRoutes(fastify, config, {
+      log: opts.log,
+      ...(opts.backups ? { backups: opts.backups } : {}),
+    });
+  }
+
   if (opts.push) {
     registerPushRoutes(fastify, config, { push: opts.push.service, store: opts.push.store });
   }
@@ -170,6 +195,7 @@ export function buildApp(opts: AppOptions): App {
           log: logSink,
           ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
           ...(opts.statuses ? { statuses: opts.statuses } : {}),
+          ...(opts.storage ? { storage: opts.storage } : {}),
         })
       : () => {
           throw new Error('buildApp needs either onSession or log');

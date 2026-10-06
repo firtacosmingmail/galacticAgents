@@ -88,6 +88,11 @@ export interface SpawnRequest {
   bare?: boolean;
   /** A fixed agent id (tests, resume); default: generated. */
   agentId?: Id;
+  /**
+   * A free-form agent (the ops console's `POST /api/agents`): recorded as `meta.freeForm`, so it
+   * keeps the wall-clock cap whatever its role, across restarts too (SPEC decision 103).
+   */
+  freeForm?: boolean;
 }
 
 export type SpawnResult = { ok: true; agent: Agent } | { ok: false; reason: string };
@@ -118,7 +123,7 @@ export interface AgentRuntimeOptions {
   heldLimits?: { events?: number; bytes?: number };
 }
 
-/** The agent events held for the storage, as P8-09's banner will show them. */
+/** The agent events held for the storage, as the panel's storage banner shows them (P8-09). */
 export interface StorageState {
   /** Agent events waiting to be written. */
   held: number;
@@ -130,6 +135,8 @@ export interface StorageState {
   since?: string;
   /** The storage's last refusal. */
   error?: string;
+  /** Its SQLite code (`SQLITE_FULL`, …): what the panel calls it (`storageConditionOf`). */
+  code?: string;
   /** The refusal will not go away by itself (a read-only or missing database file). */
   permanent: boolean;
 }
@@ -434,6 +441,7 @@ export class AgentRuntime {
           ...(req.workspace ? { workspace: req.workspace } : {}),
           ...(req.permissionPolicy ? { permissionPolicy: req.permissionPolicy } : {}),
           ...(req.bare ? { bare: true } : {}),
+          ...(req.freeForm ? { freeForm: true } : {}),
         },
       }),
     ).value;
@@ -565,6 +573,7 @@ export class AgentRuntime {
     this.caps.track(agent.id, caps, {
       role: agent.role,
       ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
+      ...(agent.meta?.freeForm === true ? { freeForm: true } : {}),
     });
     let handle: SpawnHandle;
     try {
@@ -1668,6 +1677,7 @@ export class AgentRuntime {
   /** The storage state for the panel (P8-09): what is held, since when, and why. */
   storageState(): StorageState {
     const error = this.storage.error;
+    const code = (error as { code?: unknown } | undefined)?.code;
     const held = this.held.length > 0;
     return {
       held: this.held.length,
@@ -1675,6 +1685,7 @@ export class AgentRuntime {
       dropped: this.storage.dropped,
       ...(held && this.storage.since ? { since: this.storage.since } : {}),
       ...(held && error ? { error: error instanceof Error ? error.message : String(error) } : {}),
+      ...(held && typeof code === 'string' ? { code } : {}),
       permanent: held && isPermanentStorageFailure(error),
     };
   }

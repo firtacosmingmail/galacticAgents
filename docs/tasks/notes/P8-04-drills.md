@@ -14,7 +14,7 @@ group and only those are killed.
 | 1  | `kill -9` mid-project | `kill-restart.test.ts` | **Pass** first time: no drift, every agent resumed once (supervisors first), questions where the rules put them, card pending, "recovered: 5 resumed, 0 need attention", the killed run's process groups killed at start, the escaped process left to its Steward and swept when it ends | — |
 | 1b | `kill -9` at any moment of the first life | `kill-anytime.test.ts` | **Finding F3**: an agent created but never started (kill between its row and its `agent.spawned`) was left with no state forever. One unexplained orphan (R3) | F3 fixed |
 | 2  | "Reboot" (server and every process group it left die at once) | `kill-restart.test.ts`, `worktree-crash.test.ts` | **Pass** for the recovery; reconcile refuses a recycled pid from the previous boot. **Finding F4**: a worktree whose `git worktree add` the power cut short is handed to the Steward half checked out | F4 fixed |
-| 3  | Network loss during a Steward run | `network.test.ts` | **Finding F1**: a silent Steward shows `stalled` but nothing is logged, so its supervisor is never told. Error turn, CLI crash and cap paths pass. **Finding F5** (side): brains are stopped by the per-agent wall-clock cap | F1 fixed; F5 → P8-10 |
+| 3  | Network loss during a Steward run | `network.test.ts` | **Finding F1**: a silent Steward shows `stalled` but nothing is logged, so its supervisor is never told. Error turn, CLI crash and cap paths pass. **Finding F5** (side): brains are stopped by the per-agent wall-clock cap | F1 fixed; F5 fixed in P8-10 (decision 103) |
 | 4  | Disk full on write | `disk-full.test.ts` | One write rule **holds** (a refused command leaves nothing). **Finding F2**: agent events the runtime cannot write are dropped while it acts on them — a Steward that finished on a full disk stays "starting" forever, its supervisor never hears; a chat line to a brain is swallowed (HTTP 200, never logged) | F2 fixed; UI surface → P8-09 |
 
 All drills run in `pnpm test` (≈ 6 s for the drill files together, the two real-process drills
@@ -116,6 +116,15 @@ supervisor's spawn call — the child exists, its PID-table row is not written y
 the server's pipe and exits on EOF), but its MCP servers and tool shells would live on. Recorded
 as P8-11.
 
+**Drill expectation fixed (P8 wave 2 review, 2026-10-06).** Seed 75240 over 600–760 ms failed
+2 runs of 150: the drill built "who must come back" from status records only, so an agent caught
+between `agent.created` and `agent.spawned` — which has no status record, and which the F3 fix
+correctly resumes — showed up in `report.resumed` but not in the expectation. The test was wrong,
+not recovery. The expectation is now `liveAtBoot ∪ neverStarted` (non-harness agent rows with no
+status record), minus agents that end `stopped` (a stop under way: ended, not reported). The
+drill log line prints the never-started count (`(2 live, 1 never started)`). Re-run with the same
+seed and window: 150/150 pass (twice; one run had a never-started agent, resumed).
+
 ## Drill 2 — "machine reboot"
 
 The Mac cannot be rebooted from a test. Simulated as what a reboot does to the server's world:
@@ -170,6 +179,12 @@ spawn — idle time counts. In production the Harmonizer would be replaced (fres
 Waykeeper would fail every two hours of running. That is a product question (decision 43 bounds
 brains by the hierarchy for spawn caps only), so it is P8-10 with a proposed decision, not fixed
 here. The drill sets the short cap after the brains started.
+
+**F5 resolved (P8-10, 2026-10-06; SPEC decision 103):** Cosmin decided the wall-clock cap applies to
+Stewards only (and to free-form agents from the ops console, whatever their role); the Harmonizer
+and Waykeepers are bounded by the hierarchy and their tool-call cap. `CapsEnforcer` arms no
+wall-clock timer for a brain; tests in `runtime/caps.test.ts` (fake timers) and
+`runtime/wall-clock-cap.test.ts` (composed runtime and the free-form route).
 
 ## Drill 4 — disk full on write
 
@@ -256,9 +271,9 @@ a local app? Conservative meanwhile: keep `NORMAL`.
 - **P8-09 — Storage health in the panel**: a storage state in the status stream, a "disk full —
   N agent events waiting" banner, `507 storage_full` for refused REST/WS actions, a push
   notification; decision 99.
-- **P8-10 — Brains and the wall-clock cap**: F5; decide (proposed: brains are not stopped by the
-  per-agent wall-clock cap — they are bounded by the hierarchy — or only their turn time counts)
-  and fix in `CapsEnforcer`.
+- **P8-10 — Brains and the wall-clock cap**: F5; decided 2026-10-06 (decision 103): brains are
+  not stopped by the per-agent wall-clock cap — they are bounded by the hierarchy and their
+  tool-call cap; Stewards and free-form agents keep it. Fixed in `CapsEnforcer`.
 - **P8-11 — A CLI forked just before a kill**: R3; record a launch intent before the spawn (or
   sweep marked orphans of agents of the killed run) so `reconcile()` can take a child whose pid
   never reached the PID table.

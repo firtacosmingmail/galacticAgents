@@ -32,6 +32,12 @@ export interface StatusStoreOptions {
   capsOf: (agentId: Id) => AgentCaps | undefined;
   defaultCaps: AgentCaps;
   /**
+   * Whether the wall-clock cap applies to the agent (SPEC decision 103: not to a brain); when it
+   * does not, the record's `caps.wallClockMs` says `capped: false` (its `limit` stays, for older
+   * clients). Default: it applies.
+   */
+  wallClockCapped?: (agentId: Id) => boolean;
+  /**
    * Silence after which a working agent is `stalled`, per runtime (and agent: the scene harness's
    * fake agents never stall on their own, P4-06).
    */
@@ -437,7 +443,13 @@ export class StatusStore {
     const ended = ENDED_STATES.has(entry.record.state);
     const used = ended ? entry.record.caps.wallClockMs.used : Math.max(0, now - entry.spawnedAt);
     return {
-      wallClockMs: { used, limit: caps.maxWallClockMs },
+      wallClockMs: {
+        used,
+        limit: caps.maxWallClockMs,
+        ...((this.opts.wallClockCapped?.(entry.record.agentId) ?? true)
+          ? {}
+          : { capped: false as const }),
+      },
       toolCalls: { used: entry.toolCalls, limit: caps.maxToolCalls },
     };
   }

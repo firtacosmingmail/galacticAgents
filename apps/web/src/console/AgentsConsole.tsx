@@ -8,6 +8,7 @@ import {
   type PermissionPolicyPreset,
   type StatusRecord,
   type TranscriptChunk,
+  wallClockLimit,
 } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { createApi, type Api } from './api.js';
@@ -261,7 +262,9 @@ function AgentPanel({
           <dt>wall clock</dt>
           <dd>
             {status
-              ? `${Math.round(status.caps.wallClockMs.used / 1000)} s / ${Math.round(status.caps.wallClockMs.limit / 60000)} min`
+              ? wallClockLimit(status.caps.wallClockMs) !== undefined
+                ? `${Math.round(status.caps.wallClockMs.used / 1000)} s / ${Math.round(status.caps.wallClockMs.limit / 60000)} min`
+                : `${Math.round(status.caps.wallClockMs.used / 1000)} s (no cap)`
               : '—'}
           </dd>
         </div>

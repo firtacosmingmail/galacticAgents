@@ -148,7 +148,7 @@ const MINUTE = 60_000;
 export const CAP_FIELDS: readonly CapField[] = [
   {
     key: 'maxWallClockMs',
-    label: 'Wall-clock time per agent',
+    label: 'Wall-clock time per Steward',
     unit: 'minutes',
     min: 1,
     max: 7 * 24 * 60,

@@ -416,8 +416,21 @@ describe('settings (P25-01; SPEC §4.6)', () => {
     );
     const file = () =>
       JSON.parse(readFileSync(config.configPath, 'utf8')) as Record<string, unknown>;
-    return { t, config, file };
+    return { t, config, file, settings };
   }
+
+  it('a full disk writing config.json is a storage refusal (507 storage_full), not a 500', async () => {
+    const { t, settings, file } = await settingsApp();
+    const before = file();
+    const spy = vi.spyOn(settings, 'update').mockImplementation(() => {
+      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    });
+    const res = await patch(t, { retentionDays: 3 });
+    expect(res).toMatchObject({ status: 507, body: { error: 'storage_full' } });
+    expect(String(res.body['message'])).toMatch(/disk is full/);
+    spy.mockRestore();
+    expect(file()).toEqual(before);
+  });
 
   it('reads the effective settings', async () => {
     const { t } = await settingsApp();

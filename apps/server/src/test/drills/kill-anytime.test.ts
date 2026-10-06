@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ENDED_STATES, type Event, type Id } from '@galactic/protocol';
+import { ENDED_STATES, isHarnessMeta, type Event, type Id } from '@galactic/protocol';
 import { startHarmonizer } from '../../brains/harmonizer/index.js';
 import type { BrainHarness } from '../../brains/testing/index.js';
 import { openDatabase, type Database } from '../../db/database.js';
@@ -132,6 +132,12 @@ describe(`kill -9 at any moment (P8-04 drill 1; seed ${SEED})`, () => {
         .all()
         .filter((r) => !ENDED_STATES.has(r.state))
         .map((r) => r.agentId);
+      // Agents caught between `agent.created` and `agent.spawned` have no status record yet; the
+      // F3 fix (decision 101) interrupts and reopens them too.
+      const neverStarted = h.log.tables.agents
+        .all()
+        .filter((a) => !isHarnessMeta(a.meta) && h.statuses.get(a.id) === undefined)
+        .map((a) => a.id);
       const agentsAtBoot = h.log.tables.agents.all().length;
       const seq = h.log.currentSeq();
       const { report } = await h.recover();
@@ -142,8 +148,12 @@ describe(`kill -9 at any moment (P8-04 drill 1; seed ${SEED})`, () => {
       });
       h.composed.announceRecovery(report);
 
-      // Each agent the kill interrupted is reopened once, or reported as needing attention.
-      expect([...report.resumed, ...report.needAttention].sort()).toEqual([...liveAtBoot].sort());
+      // Each agent the kill interrupted is reopened once, or reported as needing attention — except
+      // one whose stop was under way: it ends `stopped` and is not reported.
+      const expected = [...new Set([...liveAtBoot, ...neverStarted])].filter(
+        (id) => h.statuses.get(id)?.state !== 'stopped',
+      );
+      expect([...report.resumed, ...report.needAttention].sort()).toEqual(expected.sort());
       const spawned = h.log
         .eventsSince(seq, Number.MAX_SAFE_INTEGER)
         .filter(({ event }) => event.type === 'agent.spawned')
@@ -184,7 +194,7 @@ describe(`kill -9 at any moment (P8-04 drill 1; seed ${SEED})`, () => {
         const t = h.log.tables;
         console.info(
           `run ${_run}: killed at ${delayMs} ms — seq ${seq}, agents ${agentsAtBoot} ` +
-            `(${liveAtBoot.length} live), tasks ${t.tasks.all().length}, cards ` +
+            `(${liveAtBoot.length} live, ${neverStarted.length} never started), tasks ${t.tasks.all().length}, cards ` +
             `${t.proposals.all().length}, open questions ` +
             `${t.questions.all().filter((q) => q.status === 'open').length}, stand-ins ` +
             `${left.length} → resumed ${report.resumed.length}, need attention ` +

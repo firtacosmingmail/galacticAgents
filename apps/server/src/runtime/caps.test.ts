@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CapsEnforcer, DEFAULT_CAPS } from './caps.js';
 
 const enforcers: CapsEnforcer[] = [];
@@ -221,5 +221,62 @@ describe('CapsEnforcer — spawn caps (P2-17)', () => {
       // The oldest spawn inside the window (50 min ago) leaves it first.
       reason: expect.stringContaining('frees at 2026-10-02T10:10:00.000Z (in 10 min)'),
     });
+  });
+});
+
+describe('CapsEnforcer — the wall-clock cap is for Stewards only (P8-10, SPEC decision 103)', () => {
+  const H2 = 2 * 60 * 60 * 1000;
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  function fakeClock() {
+    vi.useFakeTimers({ now: Date.parse('2026-10-06T08:00:00.000Z') });
+    const hits: [string, string][] = [];
+    const caps = new CapsEnforcer({
+      maxConcurrentAgents: 10,
+      defaults: { maxWallClockMs: H2, maxToolCalls: 3 },
+      onCapHit: (id, reason) => hits.push([id, reason]),
+    });
+    enforcers.push(caps);
+    return { caps, hits };
+  }
+
+  it('an idle Harmonizer and Waykeeper run past the cap; a Steward is stopped by it', () => {
+    const { caps, hits } = fakeClock();
+    caps.track('h', caps.resolve(), { role: 'harmonizer' });
+    caps.track('w', caps.resolve(), { role: 'waykeeper', supervisorId: 'h' });
+    caps.track('s', caps.resolve(), { role: 'steward', supervisorId: 'w' });
+    vi.advanceTimersByTime(H2 + 1);
+    expect(hits).toEqual([['s', 'wall-clock cap: 120 min elapsed']]);
+    vi.advanceTimersByTime(10 * H2);
+    expect(hits).toHaveLength(1);
+    // The brains' time still counts, marked uncapped (the limit stays, for older clients).
+    expect(caps.usage('h')?.wallClockMs).toEqual({ used: 11 * H2 + 1, limit: H2, capped: false });
+    expect(caps.usage('s')?.wallClockMs).toEqual({ used: 11 * H2 + 1, limit: H2 });
+  });
+
+  it('a brain paused and resumed still has no wall-clock timer', () => {
+    const { caps, hits } = fakeClock();
+    caps.track('w', caps.resolve(), { role: 'waykeeper' });
+    caps.pause('w');
+    caps.resume('w');
+    vi.advanceTimersByTime(3 * H2);
+    expect(hits).toEqual([]);
+  });
+
+  it('a brain keeps its tool-call cap', () => {
+    const { caps, hits } = fakeClock();
+    caps.track('h', caps.resolve(), { role: 'harmonizer' });
+    for (let i = 0; i < 4; i++)
+      caps.onEvent({ type: 'agent.tool_call', agentId: 'h', toolName: 'report_status' });
+    expect(hits).toEqual([['h', 'tool-call cap: 4 calls, limit 3']]);
+  });
+
+  it('a free-form agent keeps the wall-clock cap, whatever its role', () => {
+    const { caps, hits } = fakeClock();
+    caps.track('f', caps.resolve(), { role: 'waykeeper', freeForm: true });
+    caps.track('g', caps.resolve(), { role: 'steward', freeForm: true });
+    vi.advanceTimersByTime(H2 + 1);
+    expect(hits.map(([id]) => id).sort()).toEqual(['f', 'g']);
   });
 });

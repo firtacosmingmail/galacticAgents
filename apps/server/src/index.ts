@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadConfig } from './config/config.js';
 import { SettingsService } from './config/settings.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
@@ -14,6 +15,8 @@ import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
+import { BACKUP_CHECK_INTERVAL_MS, BACKUP_DIR, BackupService } from './db/backup.js';
+import { acquireDataLock, DataLockError, removeStaleTempDatabases } from './db/data-lock.js';
 import { openDatabase } from './db/database.js';
 import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
@@ -31,6 +34,24 @@ for (const warning of warnings) console.warn(`[config] ${warning}`);
 setGlobalDefaultPolicy(config.defaultPermissionPolicy);
 const onError = (error: unknown, context: string) =>
   console.error(`[runtime] ${context}:`, error instanceof Error ? error.message : error);
+
+// The data lock (P8-03 review): one server per database, and no import or restore under it.
+// Taken before the database is opened; removed on exit (a killed server leaves it stale).
+let dataLock: ReturnType<typeof acquireDataLock>;
+try {
+  dataLock = acquireDataLock(config.dbPath, 'server');
+} catch (error) {
+  console.error(
+    error instanceof DataLockError
+      ? `Cannot start: ${error.message} Stop it first.`
+      : `Cannot take the data lock: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}
+process.on('exit', () => dataLock.release());
+for (const name of removeStaleTempDatabases(config.dbPath)) {
+  console.log(`Removed ${name}, left by an import or restore that did not finish`);
+}
 
 const db = openDatabase(config.dbPath);
 // Transcript retention gives space back in small steps (P8-02), which needs incremental
@@ -89,6 +110,20 @@ const push = createPush(db, config, {
   log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
 });
 push.service.start(log);
+// Backups (P8-03): daily when the log is quiet, rotated; "Back up now" from the settings page.
+const backups = new BackupService({
+  db,
+  dir: join(config.dataDir, BACKUP_DIR),
+  ...(config.backups
+    ? {
+        schedule: (({ reserveBytes: _r, ...schedule }) => schedule)(config.backups),
+        ...(config.backups.reserveBytes !== undefined
+          ? { reserveBytes: config.backups.reserveBytes }
+          : {}),
+      }
+    : {}),
+  log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
+});
 // The settings page (P25-01): caps and retention apply live through the runtime and the job.
 const settings = new SettingsService({
   config,
@@ -117,9 +152,12 @@ function shutdown(code: number): void {
   // The promotion flow stops with the runtime: no card is carried out while agents are stopping.
   promotions?.stop();
   push.service.stop();
-  void composed
-    .shutdown()
-    .catch((error) => console.error('[runtime] shutdown:', error))
+  backups.stop();
+  // A backup being taken finishes (or fails) before the process exits, so no half copy is left.
+  void Promise.all([
+    composed.shutdown().catch((error) => console.error('[runtime] shutdown:', error)),
+    backups.idle(),
+  ])
     .then(() => supervisor.dispose())
     .catch((error) => console.error('[supervisor] dispose:', error))
     .then(() => server.app?.close())
@@ -192,6 +230,8 @@ const app = buildApp({
   ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
   push,
+  storage: composed.storage,
+  backups,
   restartHarmonizer: async () => {
     const hq = await restartHarmonizer();
     console.log(
@@ -212,6 +252,9 @@ if (tokenGenerated) {
 }
 try {
   const port = await app.listen();
+  dataLock.update({ port, host: config.host });
+  // The first check waits for the server to be up; a backup already due runs once the log is quiet.
+  backups.start(BACKUP_CHECK_INTERVAL_MS);
   // `galactic start` watches for this line to print its banner and open the browser.
   console.log(`GalacticAgents Mission Control listening on http://${config.host}:${port}`);
 } catch (error) {

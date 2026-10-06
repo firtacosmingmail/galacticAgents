@@ -3,6 +3,7 @@ import { NavLink } from '../Navigation.js';
 import { NotificationSettings } from '../notifications/NotificationSettings.js';
 import { PushSettings } from '../../pwa/PushSettings.js';
 import { AccessToken } from './AccessToken.js';
+import { Backups } from './Backups.js';
 import { DeviceQuality } from './DeviceQuality.js';
 import { PreflightCheck } from './PreflightCheck.js';
 import { useSettingsData } from './SettingsData.js';
@@ -78,6 +79,9 @@ export function SettingsPage({ token }: { token: string }) {
         </div>
         <PushSettings token={token} />
       </section>
+
+      {/* P8-03: the backup files, "Back up now" and the map export (Mac only). */}
+      <Backups token={token} />
 
       <AccessToken
         token={token}

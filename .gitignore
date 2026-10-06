@@ -6,6 +6,9 @@ dist/
 build/
 .turbo/
 *.tsbuildinfo
+# Playwright smoke tests' output (P8-05); the baselines under e2e/tests/__screenshots__ are kept
+e2e/test-results/
+e2e/playwright-report/
 
 # runtime data
 *.sqlite

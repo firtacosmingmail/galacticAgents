@@ -2,12 +2,14 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Event, Id } from '@galactic/protocol';
+import WebSocket from 'ws';
+import type { Event, Id, ServerMessage, StorageHealth } from '@galactic/protocol';
 import type { FakeStep } from '../../adapters/fake/scenario.js';
 import type { BrainHarness, HarnessBrain } from '../../brains/testing/index.js';
 import { harmonizerBrain } from '../../brains/harmonizer/index.js';
 import { waykeeperDefinition } from '../../brains/waykeeper/index.js';
 import { isStorageFailure, openDatabase, type Database } from '../../db/database.js';
+import { startTestApp, TEST_TOKEN } from '../harness.js';
 import { logDrift } from './drill-checks.js';
 import { bootDrill, drillDirs, spawnStewards, USER, type DrillDirs } from './drill-world.js';
 
@@ -40,7 +42,9 @@ const BUSY: FakeStep[] = [
 const roots: string[] = [];
 const dbs: Database[] = [];
 const lives: BrainHarness[] = [];
+const servers: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  for (const stop of servers.splice(0)) await stop();
   for (const h of lives.splice(0).reverse()) await h.dispose().catch(() => {});
   for (const db of dbs.splice(0)) db.close();
   for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
@@ -108,6 +112,40 @@ async function world(d?: DrillDirs): Promise<World> {
     },
   );
   return { h, d, db, hq, wk, projectId: project.id };
+}
+
+/** The panel's side of the drill (P8-09): the server's socket and REST surface over the world. */
+async function panelOf(h: BrainHarness) {
+  const t = await startTestApp({
+    log: h.log,
+    statuses: h.statuses,
+    runtime: h.runtime,
+    commands: h.commands,
+    storage: h.composed.storage,
+  });
+  const ws = new WebSocket(t.wsUrl);
+  servers.push(async () => {
+    ws.close();
+    await t.stop();
+  });
+  const messages: ServerMessage[] = [];
+  ws.on('message', (d) => messages.push(JSON.parse(d.toString()) as ServerMessage));
+  ws.on('open', () => ws.send(JSON.stringify({ type: 'hello', token: TEST_TOKEN })));
+  await h.until(() => messages.some((m) => m.type === 'snapshot'), { what: 'the snapshot' });
+  const storage = (): StorageHealth[] =>
+    messages.flatMap((m) =>
+      (m.type === 'status' || m.type === 'snapshot') && m.storage ? [m.storage] : [],
+    );
+  expect(storage()).toEqual([{ condition: 'ok', held: 0, dropped: 0 }]);
+  const post = async (path: string, body: unknown) => {
+    const res = await fetch(`${t.baseUrl}${path}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TEST_TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  };
+  return { messages, storage, post };
 }
 
 /** What a refused write must not change: every domain table and the log's end. */
@@ -181,6 +219,8 @@ describe('disk full (P8-04 drill 4)', () => {
     expect(isStorageFailure(refused), String(refused)).toBe(true);
     expect(state(h)).toBe(before);
     expect(h.runtime.heldWrites).toBe(0);
+    // Nothing is held, but the panel still says the disk is full (P8-09): the refusals tell.
+    expect(h.composed.storage.check()).toMatchObject({ condition: 'full', held: 0 });
 
     // Space returns: the line sent again reaches the Harmonizer; the same commands go through.
     restore();
@@ -198,6 +238,7 @@ describe('disk full (P8-04 drill 4)', () => {
     await h.commands.createTask({ description: 'one more', projectId });
     expect(h.log.tables.questions.get(question.id)?.status).toBe('answered');
     expect(logDrift(h.log)).toEqual([]);
+    expect(h.composed.storage.check().condition).toBe('ok');
   });
 
   it('a Steward working through a full disk loses nothing: its events wait and land in order', async () => {
@@ -210,10 +251,30 @@ describe('disk full (P8-04 drill 4)', () => {
         eventsOf(h, steward).some((e) => e.type === 'agent.tool_call'),
       { ...LONG, what: 'the Steward at work' },
     );
+    // The panel's view (P8-09): a socket on the server, and its REST surface.
+    const panel = await panelOf(h);
+
     // The file cannot grow: the log's last pages still take a few events, then nothing more.
     const restore = fillDisk(db);
     await h.until(() => h.runtime.heldWrites > 0, { ...LONG, what: 'the first refused write' });
+    const firstHeld = Date.now();
     const seq = h.log.currentSeq();
+    // The panel hears of it within a second: a storage state in a (replacing) status message.
+    await h.until(() => panel.storage().some((s) => s.condition === 'full' && s.held > 0), {
+      timeoutMs: 1_000,
+      what: 'the storage state on the socket',
+    });
+    expect(Date.now() - firstHeld).toBeLessThan(1_000);
+    const message = panel.messages.find(
+      (m) => m.type === 'status' && m.storage?.condition === 'full',
+    ) as Extract<ServerMessage, { type: 'status' }>;
+    expect(message.replace).toBe(true);
+    expect(message.storage).toMatchObject({
+      condition: 'full',
+      dropped: 0,
+      since: expect.any(String),
+      error: expect.stringMatching(/disk is full/),
+    });
 
     // It goes on working and finishes while nothing can be written.
     await h.until(() => h.runtime.liveAgents().every((a) => a.id !== steward), {
@@ -233,6 +294,22 @@ describe('disk full (P8-04 drill 4)', () => {
       h.commands.control({ kind: 'project', id: projectId }, { action: 'pause' }, USER),
     ).rejects.toSatisfy(isStorageFailure);
     expect(h.log.currentSeq()).toBe(seq);
+    // …and through the panel the refusal says the disk is full: 507 `storage_full`.
+    const refused = await panel.post('/api/control', {
+      target: { kind: 'project', id: projectId },
+      action: { action: 'pause' },
+    });
+    expect(refused.status).toBe(507);
+    expect(refused.body).toMatchObject({
+      error: 'storage_full',
+      message: expect.stringMatching(/^The disk is full/),
+    });
+    expect(h.log.currentSeq()).toBe(seq);
+    // The count on the socket follows the queue.
+    await h.until(() => panel.storage().at(-1)?.held === h.runtime.heldWrites, {
+      timeoutMs: 2_500,
+      what: 'the held count on the socket',
+    });
     // The server says so, once — not once per event.
     const full = h.errors.filter((e) => e.startsWith('storage: database or disk is full'));
     expect(full).toHaveLength(1);
@@ -240,6 +317,12 @@ describe('disk full (P8-04 drill 4)', () => {
     // Space returns: the held events are written in order, the supervisor hears of the finish.
     restore();
     await h.until(() => h.runtime.heldWrites === 0, { ...LONG, what: 'the held events' });
+    // The banner clears once the queue is written.
+    await h.until(() => panel.storage().at(-1)?.condition === 'ok', {
+      timeoutMs: 1_000,
+      what: 'the storage state to clear on the socket',
+    });
+    expect(panel.storage().at(-1)).toEqual({ condition: 'ok', held: 0, dropped: 0 });
     await h.until(() => h.statuses.get(steward!)?.state === 'finished', LONG);
     const types = eventsOf(h, steward!).map((e) => e.type);
     expect(types.filter((t) => t === 'agent.tool_call')).toHaveLength(TOOL_CALLS);

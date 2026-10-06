@@ -446,6 +446,39 @@ export const Progress = z.object({
 export type Progress = z.infer<typeof Progress>;
 
 const CapUsage = z.object({ used: z.number().nonnegative(), limit: z.number().positive() });
+/**
+ * The wall clock. `limit` is always present (the agent's configured cap), so the previous build's
+ * parser still reads the record (TECHNOLOGY §6.3, protocol evolution); `capped: false` marks an
+ * agent the wall-clock cap does not apply to (a brain, SPEC decision 103) — the meter is hidden and
+ * the agent is never "near its cap". Absent means capped. Read it through `wallClockLimit()`.
+ */
+const WallClockUsage = z.object({
+  used: z.number().nonnegative(),
+  limit: z.number().positive(),
+  capped: z.boolean().optional(),
+});
+
+/** The wall-clock limit that applies to the agent, or `undefined` when it is not capped (decision 103). */
+export function wallClockLimit(usage: {
+  limit: number;
+  capped?: boolean | undefined;
+}): number | undefined {
+  return usage.capped === false ? undefined : usage.limit;
+}
+
+/**
+ * Whether the per-agent wall-clock cap applies to an agent (SPEC decision 103, P8-10): it does to
+ * Stewards and to free-form agents (the ops console's, `meta.freeForm`, whatever role they were
+ * given); it does not to the Harmonizer and the Waykeepers, which are idle most of their life and
+ * bounded by the hierarchy and their tool-call cap instead. An agent of unknown role is capped.
+ */
+export function wallClockCapApplies(agent: {
+  role?: AgentRole | undefined;
+  meta?: Meta | undefined;
+}): boolean {
+  if (agent.role !== 'harmonizer' && agent.role !== 'waykeeper') return true;
+  return agent.meta?.freeForm === true;
+}
 
 /** Per-agent status record: a projection of the event log, never the source of truth (TECHNOLOGY §4). */
 export const StatusRecord = z.object({
@@ -459,7 +492,7 @@ export const StatusRecord = z.object({
   progress: Progress.optional(),
   costSoFar: Cost.optional(),
   /** `wallClockMs.used` is as of `lastEventAt` for a live agent; the client extrapolates from `startedAt`. */
-  caps: z.object({ wallClockMs: CapUsage, toolCalls: CapUsage }),
+  caps: z.object({ wallClockMs: WallClockUsage, toolCalls: CapUsage }),
 });
 export type StatusRecord = z.infer<typeof StatusRecord>;
 

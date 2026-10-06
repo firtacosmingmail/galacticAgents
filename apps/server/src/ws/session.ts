@@ -2,6 +2,7 @@ import type { WebSocket } from 'ws';
 import { ClientMessage, type EventEnvelope, type HelloMessage } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 import type { StatusStore } from '../runtime/status-store.js';
+import type { StorageMonitor } from '../runtime/storage-health.js';
 import type { TranscriptPipeline } from '../runtime/transcripts.js';
 import { CLOSE_PROTOCOL_VIOLATION, send, type SessionHandler } from './gateway.js';
 import { buildSnapshot } from './snapshot.js';
@@ -14,6 +15,13 @@ export interface SessionOptions {
   transcripts?: TranscriptPipeline;
   /** The status store (P1-05): its batched diffs go out as `status` messages. */
   statuses?: StatusStore;
+  /**
+   * The database's write health (P8-09): in the snapshot and, when it changes, in a replacing
+   * `status` message (the complete record set plus `storage`, which a page built before the field
+   * reads as an ordinary replacing set — see `StatusMessage`). Never an event: a full disk could
+   * not log it.
+   */
+  storage?: StorageMonitor;
 }
 
 /**
@@ -31,6 +39,7 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
     let lastSent = 0;
     let unsubscribe: (() => void) | undefined;
     let unsubscribeStatus: (() => void) | undefined;
+    let unsubscribeStorage: (() => void) | undefined;
     /** Transcript subscriptions of this socket, one per agent. */
     const transcriptSubs = new Map<string, () => void>();
 
@@ -39,6 +48,8 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
       unsubscribe = undefined;
       unsubscribeStatus?.();
       unsubscribeStatus = undefined;
+      unsubscribeStorage?.();
+      unsubscribeStorage = undefined;
       for (const off of transcriptSubs.values()) off();
       transcriptSubs.clear();
     };
@@ -74,6 +85,15 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
       if (!ready()) return;
       send(socket, { type: 'status', statuses, ...(removed.length > 0 ? { removed } : {}) });
     });
+    unsubscribeStorage = opts.storage?.subscribe((storage) => {
+      if (!ready()) return;
+      send(socket, {
+        type: 'status',
+        statuses: opts.statuses?.all() ?? [],
+        replace: true,
+        storage,
+      });
+    });
 
     // 2. Snapshot or replay.
     const since = hello.lastEventId;
@@ -87,11 +107,16 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
       // Records are server-owned (TECHNOLOGY §4): a replaying client cannot derive them, so it
       // gets the current set right after the replay, like a snapshot would have carried it. The
       // set replaces the client's (P1-38): records retention dropped while it was away go too.
-      if (opts.statuses)
-        send(socket, { type: 'status', statuses: opts.statuses.all(), replace: true });
+      if (opts.statuses || opts.storage)
+        send(socket, {
+          type: 'status',
+          statuses: opts.statuses?.all() ?? [],
+          replace: true,
+          ...(opts.storage ? { storage: opts.storage.current() } : {}),
+        });
       opts.log?.info(`ws session resumed from ${since}, replayed up to ${lastSent}`);
     } else {
-      const snapshot = buildSnapshot(log, opts.statuses);
+      const snapshot = buildSnapshot(log, opts.statuses, opts.storage);
       lastSent = snapshot.seq;
       send(socket, { type: 'snapshot', ...snapshot, serverTime: new Date().toISOString() });
       opts.log?.info(`ws session started with snapshot at ${snapshot.seq}`);

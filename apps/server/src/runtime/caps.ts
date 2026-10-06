@@ -1,4 +1,10 @@
-import type { AgentCaps, AgentEvent, AgentRole, Id } from '@galactic/protocol';
+import {
+  wallClockCapApplies,
+  type AgentCaps,
+  type AgentEvent,
+  type AgentRole,
+  type Id,
+} from '@galactic/protocol';
 
 /**
  * Hard caps (P1-02; SPEC decision 18, TECHNOLOGY §5.4). Enforced here, never by prompts: a
@@ -8,6 +14,9 @@ import type { AgentCaps, AgentEvent, AgentRole, Id } from '@galactic/protocol';
  * hierarchy's spawn caps: live Stewards per Waykeeper and spawns per hour (global and per spawning
  * brain). Brains (the Harmonizer, Waykeepers) do not count against `maxConcurrentAgents`, and the
  * Harmonizer is never refused by a spawn cap (P2-17; `docs/tasks/notes/P2-17-caps.md`). Dollar budgets in Phase 8.
+ * The wall-clock cap applies to Stewards and free-form agents only (SPEC decision 103, P8-10):
+ * a brain is idle most of its life and is bounded by the hierarchy and its tool-call cap, so its
+ * clock is counted (for the status views) but never stops it.
  */
 
 /** The spawn caps of the hierarchy (P2-17); every field has a default. */
@@ -47,6 +56,11 @@ export interface SpawnCheck {
 export interface TrackedInfo {
   role?: AgentRole | undefined;
   supervisorId?: Id | undefined;
+  /**
+   * A free-form agent (the ops console's, `meta.freeForm`): it keeps the wall-clock cap whatever
+   * role it was given (SPEC decision 103).
+   */
+  freeForm?: boolean | undefined;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -69,7 +83,11 @@ export interface CapsOptions {
 }
 
 export interface CapUsage {
-  wallClockMs: { used: number; limit: number };
+  /**
+   * `capped: false` when the wall-clock cap does not apply to the agent (a brain, decision 103);
+   * `limit` is its configured cap either way.
+   */
+  wallClockMs: { used: number; limit: number; capped?: false };
   toolCalls: { used: number; limit: number };
 }
 
@@ -83,6 +101,8 @@ interface Tracked {
   timer: NodeJS.Timeout | undefined;
   hit: boolean;
   info: TrackedInfo;
+  /** Whether the wall-clock cap stops this agent (SPEC decision 103): not for a brain. */
+  wallClock: boolean;
 }
 
 export const DEFAULT_CAPS: AgentCaps = { maxWallClockMs: 2 * 60 * 60 * 1000, maxToolCalls: 500 };
@@ -240,13 +260,21 @@ export class CapsEnforcer {
       timer: undefined,
       hit: false,
       info,
+      wallClock: wallClockCapApplies({
+        role: info.role,
+        ...(info.freeForm ? { meta: { freeForm: true } } : {}),
+      }),
     };
     this.arm(agentId, entry);
     this.tracked.set(agentId, entry);
   }
 
-  /** Sets the wall-clock timer for what is left of the agent's cap. */
+  /**
+   * Sets the wall-clock timer for what is left of the agent's cap. A brain gets none (SPEC
+   * decision 103): its clock still counts, for `usage`, but never stops it.
+   */
   private arm(agentId: Id, entry: Tracked): void {
+    if (!entry.wallClock) return;
     const left = Math.max(entry.caps.maxWallClockMs - entry.usedMs, 0);
     entry.timer = setTimeout(() => {
       this.hit(agentId, entry, `wall-clock cap: ${formatMs(entry.caps.maxWallClockMs)} elapsed`);
@@ -322,6 +350,7 @@ export class CapsEnforcer {
         used:
           entry.usedMs + (entry.runningSince === undefined ? 0 : this.now() - entry.runningSince),
         limit: entry.caps.maxWallClockMs,
+        ...(entry.wallClock ? {} : { capped: false as const }),
       },
       toolCalls: { used: entry.toolCalls, limit: entry.caps.maxToolCalls },
     };

@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** next wave proposed: P8-05, P8-03, P8-09 (after wave 1 is merged into `phase-8`; P8-10 needs Cosmin's decision) · **Task status:** todo
-**Phase status:** in progress (3/11 done) — on branch `phase-8`, cut from `phase-7` (Phase 7 waits for the P7-06 device run before it merges into `main`)
+**Current task:** next wave proposed: P8-11, P8-12, P8-07 (after wave 2 is merged into `phase-8`) · **Task status:** todo
+**Phase status:** in progress (7/12 done) — on branch `phase-8`, cut from `phase-7` (Phase 7 waits for the P7-06 device run before it merges into `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -43,7 +43,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** compaction runs on a fixture DB; resume from `lastEventId` and the scrubber still work afterwards.
 
 ### P8-03 — Backups, export and import of the map
-- **Status:** todo · **Depends on:** P2-13 · **Parallel with:** all
+- **Status:** done (2026-10-06) · **Depends on:** P2-13 · **Parallel with:** all
 - Scheduled SQLite backups (online backup API); export/import of projects, tasks, bodies and history as JSON; restore procedure documented.
 - **Acceptance:** export → wipe → import reproduces the map and history.
 
@@ -53,7 +53,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** drill log in `docs/tasks/notes/P8-04-drills.md`; no data loss or duplicate spawns in any drill.
 
 ### P8-05 — Playwright scene and panel smoke tests
-- **Status:** todo · **Depends on:** P5-05 · **Parallel with:** all
+- **Status:** done (2026-10-06) · **Depends on:** P5-05 · **Parallel with:** all
 - Headless Chromium smoke tests: app loads, snapshot renders, a fake-adapter project shows bodies and satellites, inbox answer flow works; screenshot diffs for the scene at a fixed seed.
 - **Acceptance:** suite in CI using the fake adapter.
 
@@ -73,19 +73,24 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** conformance suite green for the subset the interface marks optional; a shell-script "agent" runs end to end.
 
 ### P8-09 — Storage health in the panel (added 2026-10-05)
-- **Status:** todo · **Depends on:** P8-04 · **Parallel with:** all
-- From the P8-04 disk-full drill (`notes/P8-04-drills.md`, finding F2): the server now holds the agent events it cannot write and writes them when space returns, but the user only sees refused actions as generic 500 errors. Add a storage state to the status stream (writes failing since, agent events waiting), a "disk full — N agent events waiting" banner in the panel and a push notification, and `507 storage_full` ("the disk is full") for REST and WebSocket actions the storage refuses. SPEC decision 99.
+- **Status:** done (2026-10-06) · **Depends on:** P8-04 · **Parallel with:** all
+- From the P8-04 disk-full drill (`notes/P8-04-drills.md`, finding F2): the server now holds the agent events it cannot write and writes them when space returns, but the user only sees refused actions as generic 500 errors. Add a storage state to the status stream (writes failing since, agent events waiting), a "disk full — N agent events waiting" banner in the panel, and `507 storage_full` ("the disk is full") for REST and WebSocket actions the storage refuses. SPEC decision 99. The push notification first planned here is deferred (SPEC decision 104): whether a full disk should also send a push / desktop notification is the 2026-10-06 open question in SPEC §8; meanwhile none.
 - **Acceptance:** with the drill's full disk, the panel shows the banner within a second, a refused action says the disk is full, and the banner clears when the held events are written.
 
 ### P8-10 — Brains and the wall-clock cap (added 2026-10-05)
-- **Status:** todo · **Depends on:** P2-17 · **Parallel with:** all
-- From the P8-04 network drill (finding F5): the per-agent wall-clock cap (default 2 h) also stops the Harmonizer and Waykeepers, idle time included — an idle Harmonizer fails with `failed(reason: cap)` once the cap has passed since its spawn and is replaced with a fresh session; a Waykeeper fails every two hours. Decide (proposed: brains are bounded by the hierarchy and their tool-call cap, not by the wall clock; or only their turn time counts) and fix in `CapsEnforcer` with a test.
+- **Status:** done (2026-10-06) · **Depends on:** P2-17 · **Parallel with:** all
+- From the P8-04 network drill (finding F5): the per-agent wall-clock cap (default 2 h) also stops the Harmonizer and Waykeepers, idle time included — an idle Harmonizer fails with `failed(reason: cap)` once the cap has passed since its spawn and is replaced with a fresh session; a Waykeeper fails every two hours. Decided by Cosmin (2026-10-06): the wall-clock cap applies to Stewards only; brains are bounded by the hierarchy and their tool-call cap and fix in `CapsEnforcer` with a test.
 - **Acceptance:** a brain idle past the wall-clock cap keeps running; Stewards are still stopped by it.
 
 ### P8-11 — A CLI forked just before a kill (added 2026-10-05)
 - **Status:** todo · **Depends on:** P8-04 · **Parallel with:** all
 - From the P8-04 kill-at-any-moment drill (residual R3, seen once): a child the supervisor forked in the instant before the server was killed can run with no PID-table row, so `reconcile()` never takes it. Record a launch intent (agent, command, time) before the spawn, and at startup take a marked (`GALACTIC_AGENT_ID`) orphan of such an intent's agent started in that window, with the same safety rules as P4-14.
 - **Acceptance:** a drill that kills the server between the fork and the row (fault injection) leaves no process of the killed run.
+
+### P8-12 — Push bookkeeping on a full disk (added 2026-10-06)
+- **Status:** todo · **Depends on:** P7-04, P8-09 · **Parallel with:** all
+- Found while building P8-09: `PushService.deliver` calls `markSent` inside the send's `try`, so on a full disk a delivered push fails `markSent`, is treated as a network error and is sent again (up to three attempts). Separate delivery from bookkeeping; a bookkeeping failure must never re-send.
+- **Acceptance:** with SQLITE_FULL on the push bookkeeping, each push is delivered once; a test proves it.
 
 ## Exit criteria
 
