@@ -333,3 +333,21 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* backups (P8-03) */
+.set-backups {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 14em;
+  overflow-y: auto;
+  font-size: 13px;
+}
+.set-backups li {
+  padding: 3px 0;
+  border-top: 1px solid var(--pnl-line);
+  overflow-wrap: anywhere;
+}
+.set-section code {
+  overflow-wrap: anywhere;
+}

@@ -23,3 +23,5 @@ export * from './replay.js';
 export * from './push.js';
 export * from './budget.js';
 export * from './storage.js';
+export * from './world.js';
+export * from './backup.js';

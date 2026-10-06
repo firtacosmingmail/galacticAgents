@@ -156,7 +156,7 @@ Each phase ends with something you can run. Estimates assume one developer worki
 
 - Dollar budgets per project/task, measured against the cost the runtimes report: a warning in the Harmonizer's chat at a threshold, new Waykeepers and Stewards refused at the budget, running agents never stopped (P8-01; hard caps already exist since Phase 1).
 - Log retention and `transcript_chunks` compaction (the `events` stream is kept long for resume and replay).
-- Backups of the SQLite file; export/import of the map.
+- Backups of the SQLite file; export/import of the map (P8-03: daily online backups with rotation and `galactic restore`; a JSON export of the event log that `galactic import` replays into a new database — `docs/BACKUP_RESTORE.md`, TECHNOLOGY §6.4).
 - Crash recovery drills: kill -9 the server mid-project, reboot the machine, unplug the network.
 - Tests: adapter conformance, brain tool contracts (scripted LLM), WebSocket protocol, scene smoke tests via Playwright.
 - Tauri 2 desktop shell (tray icon, auto-start) if you want the "real app" feel.

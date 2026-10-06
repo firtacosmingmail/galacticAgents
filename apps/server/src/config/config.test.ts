@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IDENTITY_TOKEN } from '@galactic/protocol';
-import { DEFAULT_PORT, DEFAULT_PROJECTS_DIR, loadConfig } from './config.js';
+import { DEFAULT_PORT, DEFAULT_PROJECTS_DIR, dataPaths, loadConfig } from './config.js';
 
 let home: string;
 beforeEach(() => {
@@ -282,5 +282,38 @@ describe('loadConfig', () => {
       JSON.stringify({ token: 'file-token-0123456789abcdef' }),
     );
     expect(loadConfig({ GALACTIC_HOME: home }).warnings.join('\n')).not.toMatch(/HTTP-mode/);
+  });
+
+  it('reads the backups setting (P8-03), the environment switching the schedule on or off', () => {
+    const token = 'file-token-0123456789abcdef';
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ token }));
+    expect(loadConfig({ GALACTIC_HOME: home }).config.backups).toBeUndefined();
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token, backups: { keepDaily: 3, keepWeekly: 2, reserveMiB: 10 } }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.backups).toEqual({
+      keepDaily: 3,
+      keepWeekly: 2,
+      reserveBytes: 10 * 2 ** 20,
+    });
+    expect(loadConfig({ GALACTIC_HOME: home, GALACTIC_BACKUPS: '0' }).config.backups).toMatchObject(
+      {
+        enabled: false,
+      },
+    );
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ token, backups: { keepDaily: -1 } }));
+    expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow();
+  });
+
+  it('names the data paths without touching the disk', () => {
+    expect(dataPaths({ GALACTIC_HOME: home })).toEqual({
+      dataDir: home,
+      configPath: join(home, 'config.json'),
+      dbPath: join(home, 'galactic.sqlite'),
+    });
+    expect(dataPaths({ GALACTIC_HOME: home, GALACTIC_DB: '/x/y.sqlite' }).dbPath).toBe(
+      '/x/y.sqlite',
+    );
   });
 });

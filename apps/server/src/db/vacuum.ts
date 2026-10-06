@@ -74,7 +74,8 @@ export type StartupConversion =
   | { outcome: 'skipped'; reason: 'disk-space' | 'gave-up'; detail: string }
   | { outcome: 'failed'; error: unknown; failures: number };
 
-const diskFree = (dir: string): number => {
+/** Free bytes for an unprivileged user on the file system holding `dir` (`fs.statfsSync`). */
+export const diskFree = (dir: string): number => {
   const s = statfsSync(dir);
   return Number(s.bavail) * Number(s.bsize);
 };

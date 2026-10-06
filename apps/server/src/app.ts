@@ -13,6 +13,8 @@ import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
+import { registerBackupRoutes } from './http/backup-routes.js';
+import type { BackupService } from './db/backup.js';
 import { isWebFile, webCacheControl } from './http/web-cache.js';
 import { registerPushRoutes, type Push } from './push/index.js';
 import type { SettingsService } from './config/settings.js';
@@ -51,6 +53,8 @@ export interface AppOptions {
   push?: Push;
   /** The database's write health (P8-09): sent to every socket for the panel's banner. */
   storage?: StorageMonitor;
+  /** Backups (P8-03): enables `GET`/`POST /api/backups` (the export needs only `log`). */
+  backups?: BackupService;
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -169,6 +173,14 @@ export function buildApp(opts: AppOptions): App {
       ...(opts.runtime ? { runtime: opts.runtime } : {}),
       ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
       ...(opts.settings ? { settings: opts.settings } : {}),
+    });
+  }
+
+  // Backups and the map export (P8-03).
+  if (opts.log) {
+    registerBackupRoutes(fastify, config, {
+      log: opts.log,
+      ...(opts.backups ? { backups: opts.backups } : {}),
     });
   }
 
