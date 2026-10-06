@@ -17,7 +17,7 @@ import { world } from '../test/world.js';
 import { isPushServiceEndpoint, pushDeviceId } from './endpoint.js';
 import { PushSendError, PushService, webPushTransport, type PushTransport } from './service.js';
 import { PushStore } from './store.js';
-import { loadOrCreateVapidKeys, vapidSubject, VAPID_FILE } from './vapid.js';
+import { loadOrCreateVapidKeys, vapidKeyId, vapidSubject, VAPID_FILE } from './vapid.js';
 
 /**
  * Web Push on the server (P7-04): the key pair, the device table, what is sent for which event,
@@ -35,6 +35,21 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
+
+/**
+ * A data directory whose VAPID keys were made long ago, as on a server where devices subscribe
+ * after the keys exist (subscriptions written at or before the keys' creation are bound to older
+ * keys and cleared).
+ */
+const keyedDir = (createdAt = '2000-01-01T00:00:00.000Z') => {
+  const d = tempDir();
+  writeFileSync(
+    join(d, VAPID_FILE),
+    JSON.stringify({ ...webpush.generateVAPIDKeys(), createdAt }),
+    { mode: 0o600 },
+  );
+  return d;
+};
 
 /** A browser-like subscription: a real P-256 key pair and auth secret, on an allowed service. */
 function fakeSubscription(n = 1, host = 'fcm.googleapis.com') {
@@ -172,6 +187,22 @@ describe('PushStore', () => {
     expect(store.clear()).toBe(2);
     expect(store.list()).toHaveLength(0);
   });
+
+  it('clears only rows written at or before a cutoff, records the key, and removes by version', () => {
+    const { log } = world();
+    let clock = '2026-01-01T00:00:00.000Z';
+    const store = new PushStore(log.db, () => clock);
+    const old = store.upsert({ subscription: fakeSubscription(1).subscription, origin: 'local' });
+    clock = '2026-02-01T00:00:00.000Z';
+    const fresh = store.upsert({ subscription: fakeSubscription(2).subscription, origin: 'local' });
+    expect(store.clearedForKey()).toBeUndefined();
+    expect(store.clearBoundToOldKeys('2026-01-01T00:00:00.000Z', 'key-a')).toBe(1);
+    expect(store.clearedForKey()).toBe('key-a');
+    expect(store.get(old.device.id)).toBeUndefined();
+    // A removal of an older version of the row leaves the newer one.
+    expect(store.remove(fresh.device.id, '2026-01-01T00:00:00.000Z')).toBe(false);
+    expect(store.remove(fresh.device.id, fresh.device.updatedAt)).toBe(true);
+  });
 });
 
 describe('PushService', () => {
@@ -186,7 +217,7 @@ describe('PushService', () => {
   const make = (over: Partial<ConstructorParameters<typeof PushService>[0]> = {}) => {
     service = new PushService({
       store,
-      dataDir: tempDir(),
+      dataDir: keyedDir(),
       subject: 'mailto:test@example.com',
       transport,
       log: { info: (m) => logs.push(m), warn: (m) => logs.push(m) },
@@ -502,11 +533,11 @@ class FullStore extends PushStore {
   override markFailed(id: string, error: string) {
     this.guard(() => super.markFailed(id, error));
   }
-  override remove(id: string) {
-    return this.guard(() => super.remove(id));
+  override remove(id: string, ifUpdatedAt?: string) {
+    return this.guard(() => super.remove(id, ifUpdatedAt));
   }
-  override clear() {
-    return this.guard(() => super.clear());
+  override clearBoundToOldKeys(cutoff: string, keyId: string) {
+    return this.guard(() => super.clearBoundToOldKeys(cutoff, keyId));
   }
 }
 
@@ -522,7 +553,7 @@ describe('PushService on a full disk (P8-12)', () => {
   ) => {
     const service = new PushService({
       store,
-      dataDir: tempDir(),
+      dataDir: keyedDir(),
       subject: 'mailto:test@example.com',
       transport,
       log: { info: (m) => logs.push(m), warn: (m) => logs.push(m) },
@@ -589,6 +620,8 @@ describe('PushService on a full disk (P8-12)', () => {
       calls.push(`${target.endpoint} ${idOf(payload)}`);
     });
     const service = make(store);
+    service.publicKey(); // the keys are loaded (and checked) before the disk fills
+    store.writes = 0;
     store.full = true;
     emit({ type: 'question.opened', question: question('q1') });
     emit({ type: 'question.opened', question: question('q2', { kind: 'permission' }) });
@@ -617,6 +650,7 @@ describe('PushService on a full disk (P8-12)', () => {
       if (target.endpoint === gone.subscription.endpoint) throw new PushSendError(410);
     });
     const service = make(store);
+    service.publicKey(); // the keys are loaded (and checked) before the disk fills
     store.full = true;
     emit({ type: 'question.opened', question: question('q1') });
     await service.idle();
@@ -649,6 +683,7 @@ describe('PushService on a full disk (P8-12)', () => {
       if (id === 'question:q2') throw new PushSendError(403);
     });
     const service = make(store);
+    service.publicKey(); // the keys are loaded (and checked) before the disk fills
     store.full = true;
     emit({ type: 'question.opened', question: question('q1') });
     await service.idle();
@@ -690,6 +725,127 @@ describe('PushService on a full disk (P8-12)', () => {
     expect(logs.some((l) => /1 device subscription bound to the old keys removed/.test(l))).toBe(
       true,
     );
+  });
+
+  /** A store whose clock the test sets (`updated_at` of each write). */
+  const clocked = () => {
+    const at = { now: '2026-10-06T10:00:00.000Z' };
+    return { store: new FullStore(w.log.db, () => at.now), at };
+  };
+
+  it('a device gone (410, removal refused) that writes its subscription again is kept and sent to', async () => {
+    const { store, at } = clocked();
+    const s = fakeSubscription(1);
+    const first = store.upsert({ subscription: s.subscription, origin: 'remote' });
+    let gone = true;
+    transport.mockImplementation(async (target, payload) => {
+      calls.push(`${target.endpoint} ${idOf(payload)}`);
+      if (gone) throw new PushSendError(410);
+    });
+    const service = make(store);
+    service.publicKey();
+    store.full = true;
+    emit({ type: 'question.opened', question: question('q1') });
+    await service.idle();
+    expect(store.get(first.device.id)).toBeDefined(); // removal refused: on the gone list
+    // The browser writes the same endpoint again (a later row) without going through the service.
+    gone = false;
+    at.now = '2026-10-06T10:05:00.000Z';
+    store.upsert({ subscription: s.subscription, origin: 'remote' });
+    store.full = false;
+    emit({ type: 'question.opened', question: question('q2') });
+    await service.idle();
+    // The retried removal was for the old row only: the device stays and gets the push.
+    expect(store.get(first.device.id)).toBeDefined();
+    expect(calls).toEqual([
+      `${s.subscription.endpoint} question:q1`,
+      `${s.subscription.endpoint} question:q2`,
+    ]);
+  });
+
+  it('subscribing through the service takes a gone device off the gone list at once', async () => {
+    const { store, at } = clocked();
+    const s = fakeSubscription(1);
+    store.upsert({ subscription: s.subscription, origin: 'remote' });
+    let gone = true;
+    transport.mockImplementation(async (target, payload) => {
+      calls.push(`${target.endpoint} ${idOf(payload)}`);
+      if (gone) throw new PushSendError(404);
+    });
+    const service = make(store);
+    service.publicKey();
+    store.full = true;
+    emit({ type: 'question.opened', question: question('q1') });
+    await service.idle();
+    expect(await service.test(s.subscription.endpoint)).toBeUndefined(); // skipped while gone
+    gone = false;
+    at.now = '2026-10-06T10:05:00.000Z';
+    const again = service.subscribe({ subscription: s.subscription, origin: 'remote' });
+    // Still on a full disk: the test push goes, and a later retry does not remove the device.
+    expect(await service.test(s.subscription.endpoint)).toBe('sent');
+    store.full = false;
+    emit({ type: 'question.opened', question: question('q2') });
+    await service.idle();
+    expect(store.get(again.device.id)).toBeDefined();
+    expect(calls.filter((c) => c.endsWith('question:q2'))).toHaveLength(1);
+  });
+
+  it('new keys keep a device subscribed with them while the old ones wait to be cleared', async () => {
+    const { store, at } = clocked();
+    const dataDir = tempDir();
+    const first = make(store, { dataDir });
+    first.vapidKeys();
+    at.now = '2001-01-01T00:00:00.000Z'; // before the next keys are made
+    const old = store.upsert({ subscription: fakeSubscription(1).subscription, origin: 'remote' });
+    first.stop();
+    writeFileSync(join(dataDir, VAPID_FILE), '{broken');
+    store.full = true;
+    const fresh = make(store, { dataDir });
+    fresh.publicKey(); // new keys; clearing refused
+    at.now = '2999-01-01T00:00:00.000Z'; // after the new keys: bound to them
+    const mine = fakeSubscription(2);
+    const kept = fresh.subscribe({ subscription: mine.subscription, origin: 'remote' });
+    emit({ type: 'question.opened', question: question('q1') });
+    await fresh.idle();
+    expect(calls).toEqual([`${mine.subscription.endpoint} question:q1`]);
+    store.full = false;
+    fresh.publicKey();
+    expect(store.get(old.device.id)).toBeUndefined();
+    expect(store.get(kept.device.id)).toBeDefined();
+  });
+
+  it('a clearing refused before a restart is done after it, keeping newer subscriptions', async () => {
+    const { store, at } = clocked();
+    const dataDir = tempDir();
+    const first = make(store, { dataDir });
+    first.vapidKeys();
+    at.now = '2001-01-01T00:00:00.000Z';
+    const old = store.upsert({ subscription: fakeSubscription(1).subscription, origin: 'remote' });
+    first.stop();
+    writeFileSync(join(dataDir, VAPID_FILE), '{broken');
+    store.full = true;
+    const fresh = make(store, { dataDir });
+    const keys = fresh.vapidKeys(); // new keys; clearing refused, then the server stops
+    fresh.stop();
+    at.now = '2999-01-01T00:00:00.000Z';
+    const mine = fakeSubscription(2);
+    const kept = store.upsert({ subscription: mine.subscription, origin: 'remote' });
+    store.full = false;
+    // Restart: the file is intact now (no new keys), but the old subscriptions were never cleared.
+    const restarted = make(store, { dataDir });
+    emit({ type: 'question.opened', question: question('q1') });
+    await restarted.idle();
+    expect(restarted.vapidKeys()).toEqual(keys);
+    expect(store.get(old.device.id)).toBeUndefined();
+    expect(store.get(kept.device.id)).toBeDefined();
+    expect(calls).toEqual([`${mine.subscription.endpoint} question:q1`]);
+    expect(store.clearedForKey()).toBe(vapidKeyId(keys.publicKey));
+    // A further restart does not clear again.
+    restarted.stop();
+    at.now = '2000-06-01T00:00:00.000Z';
+    store.upsert({ subscription: fakeSubscription(3).subscription, origin: 'remote' });
+    make(store, { dataDir }).vapidKeys();
+    expect(store.list()).toHaveLength(2);
   });
 });
 

@@ -77,7 +77,7 @@ export function registerPushRoutes(
           message: `At most ${MAX_PUSH_DEVICES} devices can receive push notifications; remove one first.`,
         });
       }
-      const stored = store.upsert({
+      const stored = push.subscribe({
         subscription: body.subscription,
         kinds: body.kinds,
         details: body.details,
