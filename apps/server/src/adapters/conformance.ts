@@ -37,11 +37,7 @@ import type { SpawnRequest } from '../runtime/agent-runtime.js';
  * agent (PTY, P8-08) does not have.
  */
 export type OptionalConformanceCase =
-  | 'crash'
-  | 'spawnFailure'
-  | 'concurrentSessions'
-  | 'policyDeny'
-  | 'toolCalls';
+  'crash' | 'spawnFailure' | 'concurrentSessions' | 'policyDeny' | 'toolCalls';
 
 export interface ConformanceInstance {
   adapter: AgentAdapter;
@@ -491,22 +487,26 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
         if (jobEnd === 'finished') await expectOneTerminal(agent.id);
       });
 
-      optional('policyDeny', 'a policy deny: the tool does not run, no question is asked, the reason is visible', async () => {
-        const agent = await spawn(target.prompts.permission, {
-          permissionPolicy: target.denyPolicy ?? DENY_DESTRUCTIVE,
-        });
-        // A model may retry another way that still needs asking: refuse that too.
-        await denyUntilJobEnd(agent.id);
-        const asked = eventsOf(agent.id, 'agent.needs_input').filter(
-          (e) => e.kind === 'permission',
-        );
-        expect(asked).toEqual([]);
-        expect(typesOf(agent.id)).not.toContain('agent.failed');
-        // The refusal is explained to the agent and lands in its transcript.
-        expect(transcriptText(agent.id)).toMatch(/denied/i);
-        expectOneCallPerToolUse(agent.id);
-        if (jobEnd === 'finished') await expectOneTerminal(agent.id);
-      });
+      optional(
+        'policyDeny',
+        'a policy deny: the tool does not run, no question is asked, the reason is visible',
+        async () => {
+          const agent = await spawn(target.prompts.permission, {
+            permissionPolicy: target.denyPolicy ?? DENY_DESTRUCTIVE,
+          });
+          // A model may retry another way that still needs asking: refuse that too.
+          await denyUntilJobEnd(agent.id);
+          const asked = eventsOf(agent.id, 'agent.needs_input').filter(
+            (e) => e.kind === 'permission',
+          );
+          expect(asked).toEqual([]);
+          expect(typesOf(agent.id)).not.toContain('agent.failed');
+          // The refusal is explained to the agent and lands in its transcript.
+          expect(transcriptText(agent.id)).toMatch(/denied/i);
+          expectOneCallPerToolUse(agent.id);
+          if (jobEnd === 'finished') await expectOneTerminal(agent.id);
+        },
+      );
 
       optional('toolCalls', 'one agent.tool_call per tool use', async () => {
         const agent = await spawn(target.prompts.permission);

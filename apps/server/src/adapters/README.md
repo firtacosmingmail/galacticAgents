@@ -1,15 +1,15 @@
 # Adapters — how to add a runtime
 
-An adapter turns one agent runtime (the Claude Agent SDK today; ACP and PTY later) into the
+An adapter turns one agent runtime (the Claude Agent SDK, ACP agents, terminal CLIs) into the
 server's one event vocabulary and the one control surface. It is a **translator, not a
 scheduler**: the runtime layer (`apps/server/src/runtime/`) owns the per-agent inbox, the hard
 caps, the permission policy, the event log, the status store and the transcript pipeline. An
 adapter never imports from `domain/` or `runtime/` except the process supervisor and
 `lib/event-queue.ts`, and nothing outside `adapters/` imports a runtime SDK (CLAUDE.md).
 
-Three adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI
-target), `claude-sdk/` (the real one for Claude Code) and `acp/` (any Agent Client Protocol agent,
-P8-07). Read `fake/fake-adapter.ts` first: every rule below is visible there in forty lines per
+Four adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI
+target), `claude-sdk/` (the real one for Claude Code), `acp/` (any Agent Client Protocol agent,
+P8-07) and `pty/` (any command-line agent under a pseudo-terminal, P8-08). Read `fake/fake-adapter.ts` first: every rule below is visible there in forty lines per
 concern.
 
 ## The interface
@@ -25,6 +25,7 @@ concern.
 | `pause` / `resume`                       | Hold the session and let it continue. Emit `agent.paused` / `agent.resumed` (`by: system`; the actor is in the runtime's `control.*` event). Nothing else may be emitted while paused. `pause` throws when there is nothing to freeze (no process yet, or it exited): the runtime then undoes its own pause.                                               |
 | `stop(sessionId, {graceMs?})`            | Graceful: interrupt → wait for the turn to end (at most `graceMs`) → terminate → kill. Ends with exactly one `agent.stopped`. Idempotent; a no-op after any terminal event.                                                                                                                                                                                |
 | `resumeSession?(sessionRef, opts)`       | Reopen a saved session after a restart. Absent when the runtime cannot (PTY). A reopened session re-asks any question that was pending.                                                                                                                                                                                                                    |
+| `input?(sessionId, text)`                | Terminal runtimes only (PTY): type one line now, whatever the turn does. The runtime logs it as the user's message.                                                                                                                                                                                                                                        |
 | `events`                                 | One `AsyncIterable<AgentEvent>` for every session of the adapter (`lib/event-queue.ts` is the usual implementation). The only source of `agent.*` events for its sessions.                                                                                                                                                                                 |
 | `dispose()`                              | Stop every session, close the stream.                                                                                                                                                                                                                                                                                                                      |
 
@@ -143,7 +144,9 @@ The failure paths (P1-38):
 Checked throughout: one terminal event per agent and no delivery ever refused (no message handed
 to the adapter mid-turn). A target supplies a fresh adapter per test (with an optional `crash`
 hook), the prompts that make its agent do each thing, and may `skip` the optional cases (`crash`,
-`spawnFailure`, `concurrentSessions`) with a reason. `fake/fake-adapter.conformance.test.ts` runs
+`spawnFailure`, `concurrentSessions`, `policyDeny`, `toolCalls`) with a reason. A runtime without
+structured tool calls sets `toolCalls: false` and a `permissionEvidence` text; one that runs only
+under some tables sets `spawnPolicy`. `fake/fake-adapter.conformance.test.ts` runs
 in CI (the fake adapter with `checkCwd: true` and its `crash()` test hook);
 `claude-sdk/claude-sdk.conformance.test.ts` runs with `GALACTIC_REAL_CLAUDE=1` (crash = `SIGKILL`
 to the CLI's process group through the supervisor; `spawnFailure: 'event'`).
@@ -216,12 +219,40 @@ its first prompt (`happy`, `asks`, `permission`, `long`, `echo`, `stalls`, `unas
 prompts; `--mode` gives it session modes (`default`, `plan`, `acceptEdits`, `bypassPermissions`),
 `--config-modes` offers them as a `mode` config option.
 
-## Notes for the next adapters
+## The PTY adapter (`pty/`, P8-08; TECHNOLOGY §3.3)
 
-**PTY** (`pty/`, TECHNOLOGY §3.3): `node-pty`, stream the terminal as `agent.output(kind: text)`
-per line or per prompt-detected block, derive `agent.idle` from prompt detection and
-`agent.finished` from the exit code. No structured permissions: every detected shell prompt that
-looks like a confirmation becomes a `permission` question with the best-effort command as the
-tool call; questions detected by regex are `clarification`s. **No `resumeSession`** (`resumable:
-false`): an interrupted PTY agent stays `interrupted` with a restart action. Interrupt is Ctrl-C;
-pause/resume are SIGSTOP/SIGCONT.
+Any command-line agent with no machine protocol, run under a pseudo-terminal (`node-pty` 1.1.0,
+MIT) and read like a person reads its screen. Configured as `pty: {command, args?, passEnv?,
+idlePattern?, questionPatterns?, quietMs?, idleAfterMs?}` in `config.json` (or
+`GALACTIC_PTY_COMMAND`); registered only then, and `node-pty` loads at the first spawn.
+
+- **Process:** `ProcessSupervisor.adopt()` with the spec's `fork` hook (`pty-child.ts`, the only
+  module that imports `node-pty`): the PTY behind the `ChildProcess` subset the supervisor uses,
+  so launch intent, PID row, agent marker, graceful stop and group reaping are the usual ones. A
+  fixed 120×32 terminal (`PTY_TERMINAL_SIZE` in the protocol). Environment: allow-list +
+  `TERM`/`COLORTERM` + `pty.passEnv` (never `GALACTIC_*`).
+- **Trust rule** (proposed decision 110): before every spawn and every message the gate is asked
+  about `{toolName: 'pty:session', input: {command, cwd}}` with `reserve: false`; only `allow`
+  (a table allowing unclassified calls: the trusted preset) runs it.
+- **Turns:** the prompt (system prompt first) and every message are typed as one line + Enter
+  once the CLI is ready. After `quietMs` of silence the cursor's line is read (`detect.ts`):
+  `idlePattern` → `agent.idle`; a yes/no confirmation → `agent.needs_input(permission)` **without
+  a tool call** (only the user can answer it; allow types `y`/`yes`, anything else `n`/`no`);
+  another question → `clarification`, its answer typed. `idleAfterMs` ends a turn on silence.
+  A question the CLI moved on from is answered without typing.
+- **Output:** raw bytes as `agent.output(kind: 'terminal')` (batched ≈100 ms / 8 KB) for the
+  panel's xterm.js view, and the stripped text (`terminal-text.ts`) as `text` blocks; the first
+  line of a turn and one every 30 s as `agent.progress`.
+- **Ends:** exit 0 → `agent.finished` (last lines as result); other code → `agent.failed(runtime)`;
+  signal → `agent.failed(crash)`. No cost. No `resumeSession`: the user's recover restarts it
+  from its first prompt.
+- **Controls:** interrupt = Ctrl-C (turn ends at the idle prompt, or quiet without one, ≤ 3 s);
+  pause = SIGSTOP/SIGCONT; stop hook = Ctrl-C, turn end, Ctrl-D, then SIGTERM/SIGKILL;
+  `input(sessionId, text)` types a line now (the Mac's own browser only, logged as the user's
+  message).
+
+The scripted terminal agent `pty/fake-pty-agent.sh` (bash; `fixture> ` prompt; scenarios `happy`,
+`asks`, `permission`, `long`, `echo`, `stalls`, `movesOn`, `env`, `fails` from `scenario:<name>` in
+the first line) drives `pty/pty.conformance.test.ts` in CI with `toolCalls: false`,
+`permissionEvidence: 'deleted build'`, the trusted `spawnPolicy`, and the optional `policyDeny` and
+`toolCalls` cases skipped.

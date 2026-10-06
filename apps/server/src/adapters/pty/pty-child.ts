@@ -4,6 +4,7 @@ import { accessSync, chmodSync, constants, existsSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module';
 import { constants as osConstants } from 'node:os';
 import { dirname, join } from 'node:path';
+import type * as NodePty from 'node-pty';
 import type { IPty } from 'node-pty';
 
 /**
@@ -15,7 +16,7 @@ import type { IPty } from 'node-pty';
  * process group, which is what the supervisor signals.
  */
 
-type PtyModule = typeof import('node-pty');
+type PtyModule = typeof NodePty;
 
 let loading: Promise<PtyModule> | undefined;
 

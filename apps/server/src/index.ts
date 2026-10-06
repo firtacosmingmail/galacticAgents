@@ -134,7 +134,9 @@ const adapters: AgentAdapter[] = [
                 }
               : {}),
             ...(config.pty.quietMs !== undefined ? { quietMs: config.pty.quietMs } : {}),
-            ...(config.pty.idleAfterMs !== undefined ? { idleAfterMs: config.pty.idleAfterMs } : {}),
+            ...(config.pty.idleAfterMs !== undefined
+              ? { idleAfterMs: config.pty.idleAfterMs }
+              : {}),
           },
           onError,
         }),

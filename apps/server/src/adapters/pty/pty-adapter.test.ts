@@ -2,7 +2,13 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentAdapter, AgentEvent, GateCheckOptions, GateVerdict, ToolCall } from '@galactic/protocol';
+import type {
+  AgentAdapter,
+  AgentEvent,
+  GateCheckOptions,
+  GateVerdict,
+  ToolCall,
+} from '@galactic/protocol';
 import { MemoryProcessStore } from '../../runtime/process-store.js';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
 import { FAKE_PTY_AGENT, FAKE_PTY_IDLE } from './fake-agent.js';
@@ -64,7 +70,12 @@ function rig(agent: { [K in keyof PtyAgentCommand]?: PtyAgentCommand[K] | undefi
 
 const allow = (): GateVerdict => ({ decision: 'allow' });
 
-function spawnOpts(r: Rig, prompt: string, verdict: () => GateVerdict = allow, agentId = `a-${Math.random()}`) {
+function spawnOpts(
+  r: Rig,
+  prompt: string,
+  verdict: () => GateVerdict = allow,
+  agentId = `a-${Math.random()}`,
+) {
   return {
     agentId,
     role: 'steward' as const,
@@ -114,7 +125,9 @@ describe('PtyAdapter', () => {
     ]);
     expect(r.supervisor.list()).toEqual([]); // nothing forked
     const deny = (): GateVerdict => ({ decision: 'deny', reason: 'denied by policy' });
-    await expect(r.adapter.spawn(spawnOpts(r, 'scenario:happy', deny))).rejects.toThrow(/denied by policy/);
+    await expect(r.adapter.spawn(spawnOpts(r, 'scenario:happy', deny))).rejects.toThrow(
+      /denied by policy/,
+    );
     expect(r.events).toEqual([]);
   });
 
@@ -174,7 +187,9 @@ describe('PtyAdapter', () => {
       const q = of(r, 'agent.needs_input')[0]!;
       expect(q.kind).toBe('permission');
       expect(q.question.toolCall).toBeUndefined();
-      expect(q.question.text).toMatch(/cannot see what it would do[\s\S]*about to clean up[\s\S]*> Delete the build folder\? \[y\/N\]/);
+      expect(q.question.text).toMatch(
+        /cannot see what it would do[\s\S]*about to clean up[\s\S]*> Delete the build folder\? \[y\/N\]/,
+      );
       await r.adapter.answer(q.questionId, answer);
       await waitFor(() => of(r, 'agent.finished').length === 1, 'finished');
       expect(outputs(r, 'text')).toContain(said);

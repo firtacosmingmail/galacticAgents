@@ -47,7 +47,9 @@ describe('detect', () => {
   });
 
   it('refuses patterns that do not parse', () => {
-    expect(() => compilePatterns([{ pattern: '(', kind: 'clarification' }])).toThrow(/pty.questionPatterns/);
+    expect(() => compilePatterns([{ pattern: '(', kind: 'clarification' }])).toThrow(
+      /pty.questionPatterns/,
+    );
     expect(() => compileIdle('[')).toThrow(/pty.idlePattern/);
   });
 

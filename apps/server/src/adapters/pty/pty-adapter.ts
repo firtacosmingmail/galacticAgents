@@ -298,10 +298,7 @@ export class PtyAdapter implements AgentAdapter {
     }
     // Ready: the idle prompt, or quiet (`onQuiet`); at the latest after the ready timeout.
     this.armQuiet(session);
-    session.readyTimer = setTimeout(
-      () => this.ready(session),
-      this.opts.readyTimeoutMs ?? 15_000,
-    );
+    session.readyTimer = setTimeout(() => this.ready(session), this.opts.readyTimeoutMs ?? 15_000);
     return { sessionId: session.sessionId };
   }
 
@@ -314,7 +311,10 @@ export class PtyAdapter implements AgentAdapter {
     let verdict;
     try {
       verdict = gate.check(
-        { toolName: PTY_SESSION_TOOL, input: { command: [command, ...(args ?? [])].join(' '), cwd } },
+        {
+          toolName: PTY_SESSION_TOOL,
+          input: { command: [command, ...(args ?? [])].join(' '), cwd },
+        },
         { reserve: false },
       );
     } catch (error) {

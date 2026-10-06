@@ -29,8 +29,9 @@ export async function ptyPreflight(
   let sdkVersion: string | undefined;
   try {
     if (!dir) throw new Error('node-pty is not installed');
-    sdkVersion = (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: string })
-      .version;
+    sdkVersion = (
+      JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: string }
+    ).version;
     const stuck = ensureSpawnHelper();
     if (stuck.length > 0) {
       throw new Error(`its helper is not executable: ${stuck.join(', ')}`);
