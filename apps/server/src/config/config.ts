@@ -125,15 +125,27 @@ export const ConfigFile = z.object({
   /**
    * The ACP agent the `acp` runtime starts for every session (P8-07; TECHNOLOGY §3.2), e.g.
    * `{"command": "claude-agent-acp"}`, `{"command": "gemini", "args": ["--acp"]}` or
-   * `{"command": "codex-acp"}`; also `GALACTIC_ACP_COMMAND` (a command line split on spaces).
-   * Absent: no `acp` runtime. `passEnv` names server variables the agent needs (its API key) on
-   * top of the allow-list.
+   * `{"command": "codex-acp"}`; also `GALACTIC_ACP_COMMAND` (a command line split on spaces, or
+   * a JSON array `["cmd", "an arg with spaces"]`). Absent: no `acp` runtime. `passEnv` names the
+   * server variables the agent needs — every credential (its API key or token): only routing
+   * variables pass by default — never a `GALACTIC_*` one. `mode` is the session mode every session
+   * is set to; a mode known to run tool calls without asking is refused unless
+   * `allowPermissiveMode` (decision 108).
    */
   acp: z
     .object({
       command: z.string().min(1),
       args: z.array(z.string()).optional(),
-      passEnv: z.array(z.string().min(1)).optional(),
+      passEnv: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .refine((k) => !/^GALACTIC_/i.test(k), 'acp.passEnv may not name GALACTIC_* variables'),
+        )
+        .optional(),
+      mode: z.string().min(1).optional(),
+      allowPermissiveMode: z.boolean().optional(),
     })
     .optional(),
 });
@@ -207,7 +219,13 @@ export interface ServerConfig {
   /** The runtime new Stewards run on (P8-07); absent = the spawning brain's own. */
   stewardRuntime?: AgentRuntime;
   /** The ACP agent command (P8-07); absent = no `acp` runtime registered. */
-  acp?: { command: string; args?: string[] | undefined; passEnv?: string[] | undefined };
+  acp?: {
+    command: string;
+    args?: string[] | undefined;
+    passEnv?: string[] | undefined;
+    mode?: string | undefined;
+    allowPermissiveMode?: boolean | undefined;
+  };
 }
 
 export interface LoadedConfig {
@@ -385,13 +403,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     if (!parsed.success) throw new Error(`Invalid Steward runtime: ${runtimeEnv}`);
     stewardRuntime = parsed.data;
   }
-  const acpEnv = env['GALACTIC_ACP_COMMAND']?.trim().split(/\s+/).filter(Boolean);
+  const dev = env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true';
+  if (stewardRuntime === 'fake' && !dev) {
+    // The scripted fake adapter is for development and tests only (P8 wave 3 review).
+    warnings.push(
+      `stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
+        `new Stewards run on their brain's runtime.`,
+    );
+    stewardRuntime = undefined;
+  }
+  const acpEnv = parseAcpCommand(env['GALACTIC_ACP_COMMAND']);
   const acp =
     acpEnv && acpEnv.length > 0
       ? {
+          ...file.acp,
           command: acpEnv[0]!,
           args: acpEnv.slice(1),
-          ...(file.acp?.passEnv ? { passEnv: file.acp.passEnv } : {}),
         }
       : file.acp;
   const envOverrides: SettingName[] = [];
@@ -409,7 +436,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       allowedHosts,
       ...(remoteHost ? { remoteHost } : {}),
       ...(tailscaleIdentityLogins ? { tailscaleIdentityLogins } : {}),
-      dev: env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true',
+      dev,
       dataDir,
       configPath,
       dbPath,
@@ -472,4 +499,31 @@ export function expandHome(path: string): string {
   if (path === '~') return homedir();
   if (path.startsWith('~/')) return join(homedir(), path.slice(2));
   return path;
+}
+
+/**
+ * `GALACTIC_ACP_COMMAND`: a JSON array of strings (`["cmd", "an arg with spaces"]`), or a command
+ * line split on whitespace (no quoting). `undefined` when unset or empty.
+ */
+export function parseAcpCommand(value: string | undefined): string[] | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (text.startsWith('[')) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error(`GALACTIC_ACP_COMMAND is not a JSON array: ${text}`);
+    }
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      !parsed.every((p) => typeof p === 'string') ||
+      !(parsed[0] as string).trim()
+    ) {
+      throw new Error('GALACTIC_ACP_COMMAND must be a non-empty JSON array of strings');
+    }
+    return parsed as string[];
+  }
+  return text.split(/\s+/).filter(Boolean);
 }

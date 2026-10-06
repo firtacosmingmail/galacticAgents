@@ -11,8 +11,13 @@ import { isStorageFailure } from '../db/database.js';
 import type { EventLog } from '../domain/event-log.js';
 import { notificationLookup } from '../runtime/notifications.js';
 import { redactSecrets } from '../runtime/redact.js';
-import { loadOrCreateVapidKeys, type VapidKeys } from './vapid.js';
-import type { PushStore, StoredSubscription } from './store.js';
+import {
+  loadOrCreateVapidKeys,
+  vapidKeyId,
+  type StoredVapidKeys,
+  type VapidKeys,
+} from './vapid.js';
+import type { PushStore, StoredSubscription, UpsertInput } from './store.js';
 
 /**
  * Web Push sending (P7-04; SPEC §4.5, decision 59). Every committed event is folded through the
@@ -160,15 +165,23 @@ export class PushService {
   private readonly maxInFlight: number;
   private readonly testIntervalMs: number;
   private readonly transport: PushTransport;
-  private keys: VapidKeys | undefined;
+  private keys: StoredVapidKeys | undefined;
   private inFlight = 0;
   private readonly pushed = new Set<string>();
   private readonly lastTest = new Map<string, number>();
   private readonly running = new Set<Promise<unknown>>();
-  /** Devices the push service called gone whose removal the database refused (P8-12). */
-  private readonly goneIds = new Set<string>();
-  /** New keys were made but the old subscriptions could not be cleared yet (P8-12). */
-  private clearPending = false;
+  /**
+   * Devices the push service called gone whose removal the database refused (P8-12), each with
+   * the `updated_at` of the row that was gone: a device subscribed again since (a newer row) is
+   * neither skipped nor removed.
+   */
+  private readonly goneIds = new Map<string, string>();
+  /**
+   * While set, the subscriptions bound to replaced keys are not cleared yet: rows last written at
+   * or before this time (the current key's creation) are skipped until the clearing works. It is
+   * worked out from `settings` on loading the keys, so a restart still clears them (P8-12, S5).
+   */
+  private clearCutoff: string | undefined;
   /** A bookkeeping write was refused by the storage and none has worked since (P8-12). */
   private storageEpisode = false;
   private unsubscribe: (() => void) | undefined;
@@ -187,32 +200,45 @@ export class PushService {
 
   /**
    * The key pair, made on first need. When it had to be made anew (no `vapid.json`, or one that
-   * could not be read), every stored subscription is bound to the old public key and can never be
-   * delivered again: they are cleared, with a warning that names only how many.
+   * could not be read), every subscription stored before is bound to the old public key and can
+   * never be delivered again: they are cleared, with a warning that names only how many. Which key
+   * they were last cleared for is kept in `settings`, so a clearing the database refused is still
+   * done after a restart; only rows written at or before the key was made are cleared, so a device
+   * that subscribed with the new key meanwhile is kept.
    */
   vapidKeys(): VapidKeys {
-    this.keys ??= loadOrCreateVapidKeys({
-      dataDir: this.opts.dataDir,
-      ...(this.log ? { warn: (m: string) => this.log!.warn(`push: ${m}`) } : {}),
-      onCreate: () => {
-        this.clearPending = true;
-        this.clearOldSubscriptions();
-      },
-    });
+    if (!this.keys) {
+      const keys = loadOrCreateVapidKeys({
+        dataDir: this.opts.dataDir,
+        ...(this.log ? { warn: (m: string) => this.log!.warn(`push: ${m}`) } : {}),
+      });
+      this.keys = keys;
+      let clearedFor: string | undefined;
+      try {
+        clearedFor = this.store.clearedForKey();
+      } catch {
+        clearedFor = undefined; // clearing again is harmless: it removes only older rows
+      }
+      if (clearedFor !== vapidKeyId(keys.publicKey)) this.clearCutoff = keys.createdAt;
+    }
     this.clearOldSubscriptions();
-    return this.keys;
+    return { publicKey: this.keys.publicKey, privateKey: this.keys.privateKey };
   }
 
   /**
    * Clears the subscriptions bound to replaced keys. When the database refuses it (a full disk),
-   * the keys stay made — the file is written — and the clearing is retried on the next need, so a
-   * refused clear never leaves dead subscriptions behind for good.
+   * the keys stay made — the file is written — and the clearing is retried on the next need (or
+   * after a restart), so a refused clear never leaves dead subscriptions behind for good.
    */
   private clearOldSubscriptions(): void {
-    if (!this.clearPending) return;
-    const removed = this.bookkeep('clearing the old subscriptions', () => this.store.clear());
+    const cutoff = this.clearCutoff;
+    if (cutoff === undefined || !this.keys) return;
+    const keyId = vapidKeyId(this.keys.publicKey);
+    const removed = this.bookkeep('clearing the old subscriptions', () =>
+      this.store.clearBoundToOldKeys(cutoff, keyId),
+    );
     if (removed === undefined) return;
-    this.clearPending = false;
+    this.clearCutoff = undefined;
     if (removed > 0) {
       this.log?.warn(
         `push: new push keys were made; ${removed} device subscription${removed === 1 ? '' : 's'} bound to the old keys removed (each device turns push on again)`,
@@ -249,10 +275,14 @@ export class PushService {
     }
   }
 
-  /** A device the push service called gone: removed, or skipped until its removal can be written. */
-  private prune(id: string): boolean {
-    if (this.bookkeep(`removing device ${id}`, () => this.store.remove(id)) === undefined) {
-      this.goneIds.add(id);
+  /**
+   * A device the push service called gone: removed, or skipped until its removal can be written.
+   * Only the row that was gone (`updatedAt`) is removed: one subscribed again since is kept.
+   */
+  private prune(id: string, updatedAt: string): boolean {
+    const removal = this.bookkeep(`removing device ${id}`, () => this.store.remove(id, updatedAt));
+    if (removal === undefined) {
+      this.goneIds.set(id, updatedAt);
       return false;
     }
     this.goneIds.delete(id);
@@ -261,11 +291,33 @@ export class PushService {
 
   /** Retries the removals the database refused before. */
   private retryPrunes(): void {
-    for (const id of [...this.goneIds]) this.prune(id);
+    for (const [id, updatedAt] of [...this.goneIds]) this.prune(id, updatedAt);
+  }
+
+  /** Whether a stored subscription may be sent to: not gone, and not bound to replaced keys. */
+  private deliverable(sub: StoredSubscription): boolean {
+    const goneAt = this.goneIds.get(sub.device.id);
+    if (goneAt !== undefined) {
+      if (goneAt === sub.device.updatedAt) return false;
+      this.goneIds.delete(sub.device.id); // subscribed again since it was gone
+    }
+    return this.clearCutoff === undefined || sub.device.updatedAt > this.clearCutoff;
   }
 
   publicKey(): string {
     return this.vapidKeys().publicKey;
+  }
+
+  /**
+   * Subscribes a device or updates it (`PUT /api/push/subscription`). Subscriptions bound to
+   * replaced keys are cleared first (so this write is not mistaken for one), and a device the push
+   * service called gone before is no longer skipped or removed: it subscribed again.
+   */
+  subscribe(input: UpsertInput): StoredSubscription {
+    this.vapidKeys();
+    const stored = this.store.upsert(input);
+    this.goneIds.delete(stored.device.id);
+    return stored;
   }
 
   /** Follows the log: each committed event that is worth a push is sent. Returns a stop. */
@@ -296,10 +348,13 @@ export class PushService {
     if (!n || !isPushKind(n.kind)) return;
     if (this.pushed.has(n.id)) return;
     this.retryPrunes();
-    this.clearOldSubscriptions();
-    // Old subscriptions not cleared yet are bound to the replaced keys: nothing can reach them.
-    if (this.clearPending) return;
-    const devices = this.store.forKind(n.kind).filter((s) => !this.goneIds.has(s.device.id));
+    const kind = n.kind;
+    const candidates = () => this.store.forKind(kind).filter((s) => this.deliverable(s));
+    if (candidates().length === 0) return;
+    // Loading the keys clears the subscriptions bound to replaced ones (also after a restart);
+    // those not cleared yet are skipped by `deliverable`: nothing can reach them.
+    this.vapidKeys();
+    const devices = candidates();
     if (devices.length === 0) return;
     this.remember(n.id);
     for (const sub of devices) {
@@ -311,8 +366,10 @@ export class PushService {
   /** "Send a test push" from a device's settings. `undefined` when the device is unknown. */
   async test(endpoint: string): Promise<DeliveryResult | 'too_soon' | undefined> {
     this.retryPrunes();
+    if (!this.store.byEndpoint(endpoint)) return undefined;
+    this.vapidKeys();
     const sub = this.store.byEndpoint(endpoint);
-    if (!sub || this.goneIds.has(sub.device.id)) return undefined;
+    if (!sub || !this.deliverable(sub)) return undefined;
     this.pruneTests();
     const last = this.lastTest.get(sub.device.id);
     if (last !== undefined && this.now() - last < this.testIntervalMs) return 'too_soon';
@@ -387,7 +444,7 @@ export class PushService {
         }
         const status = failure instanceof PushSendError ? failure.statusCode : undefined;
         if (status === 404 || status === 410) {
-          const removed = this.prune(id);
+          const removed = this.prune(id, sub.device.updatedAt);
           this.log?.info(
             `push: device ${id} is no longer subscribed (${status}); ${removed ? 'removed' : 'skipped until its removal can be saved'}`,
           );

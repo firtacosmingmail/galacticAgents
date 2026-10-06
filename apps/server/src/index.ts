@@ -104,6 +104,8 @@ const adapters: AgentAdapter[] = [
             command: config.acp.command,
             ...(config.acp.args ? { args: config.acp.args } : {}),
             ...(config.acp.passEnv ? { passEnv: config.acp.passEnv } : {}),
+            ...(config.acp.mode ? { mode: config.acp.mode } : {}),
+            ...(config.acp.allowPermissiveMode ? { allowPermissiveMode: true } : {}),
           },
           onError,
         }),
@@ -113,6 +115,14 @@ const adapters: AgentAdapter[] = [
 if (config.stewardRuntime && !adapters.some((a) => a.runtime === config.stewardRuntime)) {
   console.warn(
     `[config] stewardRuntime is ${config.stewardRuntime}, which is not set up here: ` +
+      `new Stewards run on their brain's runtime`,
+  );
+  delete config.stewardRuntime;
+} else if (config.stewardRuntime === 'fake' && !config.dev) {
+  // The fake adapter is always registered (the ops console's dev tools), but real work never runs
+  // on it outside dev mode (`loadConfig` already drops it; this guards a config built elsewhere).
+  console.warn(
+    `[config] stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
       `new Stewards run on their brain's runtime`,
   );
   delete config.stewardRuntime;

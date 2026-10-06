@@ -6,6 +6,11 @@
 // `fs/*` and `terminal/*` must not be.
 //
 //   node fake-acp-agent.mjs [--state <dir>] [--no-load] [--no-cost] [--speed <factor>]
+//                           [--mode <id>] [--config-modes]
+//
+// `--mode <id>` gives every session ACP session modes (`default`, `plan`, `acceptEdits`,
+// `bypassPermissions`), starting in `<id>`, settable with `session/set_mode`; `--config-modes`
+// offers the same modes as a `mode` config option instead (`session/set_config_option`).
 //
 // The first prompt of a session picks the scenario (`scenario:<name>` anywhere in it; anything
 // else runs `echo`); every later prompt is echoed ("echo: <prompt>"), except the first prompt
@@ -32,6 +37,33 @@ const stateDir = option(
 const canLoad = !flag('--no-load');
 const reportsCost = !flag('--no-cost');
 const speed = Number(option('--speed', '1'));
+const startMode = option('--mode', undefined);
+const configModes = flag('--config-modes');
+const MODES = [
+  { id: 'default', name: 'Default' },
+  { id: 'plan', name: 'Plan Mode' },
+  { id: 'acceptEdits', name: 'Accept Edits' },
+  { id: 'bypassPermissions', name: 'Bypass Permissions' },
+];
+/** The mode fields of a session/new or session/load response. */
+function modesOf(current) {
+  if (current === undefined) return {};
+  if (configModes) {
+    return {
+      configOptions: [
+        {
+          id: 'mode',
+          name: 'Mode',
+          category: 'mode',
+          type: 'select',
+          currentValue: current,
+          options: MODES.map((m) => ({ value: m.id, name: m.name })),
+        },
+      ],
+    };
+  }
+  return { modes: { currentModeId: current, availableModes: MODES } };
+}
 mkdirSync(stateDir, { recursive: true });
 
 /** @type {Map<string, {state: Record<string, unknown>, turn?: AbortController, loaded: boolean}>} */
@@ -81,11 +113,38 @@ app.onRequest(acp.methods.agent.initialize, ({ params }) => {
 app.onRequest(acp.methods.agent.session.new, ({ params }) => {
   const id = `fake-${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`;
   sessions.set(id, {
-    state: { cwd: params.cwd, turns: 0, cost: 0, scenario: undefined, pending: false },
+    state: {
+      cwd: params.cwd,
+      turns: 0,
+      cost: 0,
+      scenario: undefined,
+      pending: false,
+      mode: startMode,
+    },
     loaded: false,
   });
   save(id);
-  return { sessionId: id };
+  return { sessionId: id, ...modesOf(startMode) };
+});
+
+app.onRequest(acp.methods.agent.session.setMode, ({ params }) => {
+  const session = sessions.get(params.sessionId);
+  if (!session) throw acp.RequestError.resourceNotFound(params.sessionId);
+  if (!MODES.some((m) => m.id === params.modeId)) throw acp.RequestError.invalidParams();
+  session.state.mode = params.modeId;
+  save(params.sessionId);
+  return {};
+});
+
+app.onRequest(acp.methods.agent.session.setConfigOption, ({ params }) => {
+  const session = sessions.get(params.sessionId);
+  if (!session) throw acp.RequestError.resourceNotFound(params.sessionId);
+  if (params.configId !== 'mode' || !MODES.some((m) => m.id === params.value)) {
+    throw acp.RequestError.invalidParams();
+  }
+  session.state.mode = params.value;
+  save(params.sessionId);
+  return modesOf(params.value);
 });
 
 app.onRequest(acp.methods.agent.session.load, async ({ params, client }) => {
@@ -107,7 +166,7 @@ app.onRequest(acp.methods.agent.session.load, async ({ params, client }) => {
       update,
     });
   }
-  return {};
+  return modesOf(state.mode);
 });
 
 app.onNotification(acp.methods.agent.session.cancel, ({ params }) => {
@@ -341,6 +400,64 @@ const SCENARIOS = {
     await runTool(ctx, 'exec-1', { title: command, kind: 'execute', rawInput: { command } }, 'ok');
     await sleep(300, ctx.signal);
     await ctx.stream('after the command');
+  },
+  /** Switches itself to `bypassPermissions` mid-turn (or the mode named `mode:<id>`). */
+  switches: async (ctx, text) => {
+    const mode = /mode:(\w+)/.exec(text)?.[1] ?? 'bypassPermissions';
+    await ctx.stream('Switching modes.');
+    ctx.state.mode = mode;
+    await ctx.update({ sessionUpdate: 'current_mode_update', currentModeId: mode });
+    await sleep(300, ctx.signal);
+    await ctx.stream('after the switch');
+  },
+  /** A tool call whose input changes after it started: `ls`, then `git push origin main`. */
+  rewrites: async (ctx) => {
+    await ctx.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'exec-r',
+      title: 'Run a command',
+      kind: 'execute',
+      status: 'in_progress',
+      rawInput: { command: 'ls' },
+    });
+    await sleep(10, ctx.signal);
+    await ctx.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'exec-r',
+      rawInput: { command: 'git push origin main' },
+    });
+    await sleep(300, ctx.signal);
+    await ctx.stream('after the command');
+  },
+  /** A tool call that fails at once, without asking first (`failed` is its first status). */
+  failsUnasked: async (ctx) => {
+    await ctx.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'exec-f',
+      title: 'rm -rf /tmp/x',
+      kind: 'execute',
+      status: 'failed',
+      rawInput: { command: 'rm -rf /tmp/x' },
+    });
+    await sleep(300, ctx.signal);
+    await ctx.stream('after the command');
+  },
+  /** Asks for a call it already reported as started (the cap must count it once). */
+  startsThenAsks: async (ctx) => {
+    await ctx.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'exec-s',
+      title: 'pnpm test',
+      kind: 'execute',
+      status: 'in_progress',
+      rawInput: { command: 'pnpm test' },
+    });
+    const ran = await askToRun(ctx, 'exec-s', {
+      title: 'pnpm test',
+      kind: 'execute',
+      rawInput: { command: 'pnpm test' },
+    });
+    await ctx.stream(ran ? 'tested' : 'not tested');
   },
   /** A form with two fields of other types. */
   form: async (ctx) => {

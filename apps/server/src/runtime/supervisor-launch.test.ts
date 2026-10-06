@@ -2,7 +2,8 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openDatabase } from '../db/database.js';
+import { isStorageFailure, openDatabase } from '../db/database.js';
+import { storageRefusal } from '../http/storage-refusal.js';
 import { LAUNCH_ID_ENV } from './launch-intents.js';
 import { AGENT_ID_ENV, type ProcEntry } from './process-attribution.js';
 import {
@@ -130,9 +131,17 @@ describe('ProcessSupervisor — launch intents (P8-11)', () => {
     };
     const { s, outcomes } = make({ store });
     const spec = node(`require('fs').writeFileSync(${JSON.stringify(marker)}, 'x')`);
-    await expect(s.spawn(spec)).rejects.toThrow(
-      /launch could not be recorded \(database or disk is full\)/,
+    // The standard storage refusal (SPEC decisions 104, 107): its code kept, the user's wording.
+    const refusal = await s.spawn(spec).then(
+      () => undefined,
+      (e: unknown) => e,
     );
+    expect(refusal).toBeInstanceOf(Error);
+    expect((refusal as Error).message).toMatch(
+      /launch could not be recorded\. The disk is full: your action was not saved/,
+    );
+    expect(isStorageFailure(refusal)).toBe(true);
+    expect(storageRefusal(refusal)?.body.error).toBe('storage_full');
     expect(() => s.adopt({ ...spec, agentId: 'a-2' })).toThrow(/launch could not be recorded/);
     expect(outcomes.map((o) => [o.kind, o.agentId])).toEqual([
       ['start_failed', 'a-1'],

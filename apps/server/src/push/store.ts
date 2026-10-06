@@ -30,6 +30,9 @@ interface Row {
   last_error: string | null;
 }
 
+/** The `settings` key naming the VAPID key the old subscriptions were cleared for. */
+export const CLEARED_FOR_KEY = 'push_keys_cleared_for';
+
 const parseKinds = (raw: string): PushKinds => {
   try {
     const parsed = PushKinds.safeParse(JSON.parse(raw));
@@ -131,13 +134,51 @@ export class PushStore {
     return this.get(id)!;
   }
 
-  /** Removes every subscription (the VAPID keys were replaced); how many there were. */
+  /** Removes every subscription; how many there were. */
   clear(): number {
     return this.db.prepare('DELETE FROM push_subscriptions').run().changes;
   }
 
-  remove(id: string): boolean {
-    return this.db.prepare('DELETE FROM push_subscriptions WHERE id = ?').run(id).changes > 0;
+  /**
+   * Which VAPID key the old subscriptions were last cleared for (`settings`
+   * `push_keys_cleared_for`, a fingerprint of the public key), or undefined when never.
+   */
+  clearedForKey(): string | undefined {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(CLEARED_FOR_KEY) as
+      { value: string } | undefined;
+    return row?.value;
+  }
+
+  /**
+   * Removes the subscriptions bound to replaced VAPID keys: every row last written at or before
+   * `cutoff` (the new key's creation time), keeping those made with the new key since. Records
+   * `keyId` as cleared in the same transaction, so a restart does not clear again. Returns how
+   * many rows were removed.
+   */
+  clearBoundToOldKeys(cutoff: string, keyId: string): number {
+    return this.db.transaction(() => {
+      const removed = this.db
+        .prepare('DELETE FROM push_subscriptions WHERE updated_at <= ?')
+        .run(cutoff).changes;
+      this.db
+        .prepare(
+          'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        )
+        .run(CLEARED_FOR_KEY, keyId);
+      return removed;
+    })();
+  }
+
+  /** Removes a device; with `ifUpdatedAt`, only while its row is still that version. */
+  remove(id: string, ifUpdatedAt?: string): boolean {
+    if (ifUpdatedAt === undefined) {
+      return this.db.prepare('DELETE FROM push_subscriptions WHERE id = ?').run(id).changes > 0;
+    }
+    return (
+      this.db
+        .prepare('DELETE FROM push_subscriptions WHERE id = ? AND updated_at = ?')
+        .run(id, ifUpdatedAt).changes > 0
+    );
   }
 
   markSent(id: string): void {

@@ -239,4 +239,22 @@ describe('transcript retention settings (P8-02)', () => {
     expect(config.stewardRuntime).toBeUndefined();
     expect(file()).not.toHaveProperty('stewardRuntime');
   });
+
+  it('refuses the fake runtime outside dev mode, even though it is registered (P8 wave 3 review)', () => {
+    const home = temp('galactic-home-');
+    const { config } = loadConfig({ GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv);
+    expect(config.dev).toBe(false);
+    const runtimes = () => ['fake', 'claude-sdk', 'acp'] as const;
+    const prod = new SettingsService({ config, home, runtimes });
+    expect(refusal(() => prod.update({ stewardRuntime: 'fake' }, local))).toMatchObject({
+      code: 'invalid',
+      message: expect.stringMatching(/fake runtime is for development only/),
+    });
+    expect(config.stewardRuntime).toBeUndefined();
+    // Dev mode (or a test that says so) may run new Stewards on the fake adapter.
+    const dev = new SettingsService({ config: { ...config, dev: true }, home, runtimes });
+    expect(dev.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
+    const allowed = new SettingsService({ config, home, runtimes, allowFakeRuntime: true });
+    expect(allowed.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
+  });
 });

@@ -276,8 +276,22 @@ export function classifyToolCall(call: ToolCall, ctx: PolicyContext): Classifica
     const command = typeof input['command'] === 'string' ? input['command'] : '';
     return classifyCommand(command, ctx);
   }
-  // MCP tools of the user's own setup land here too: a `trusted` project allows them (decision 49).
-  return { actions: [], reasons: [`unknown tool ${name}`], unclassified: true };
+  // MCP tools of the user's own setup land here too: a `trusted` project allows them (decision 49)
+  // — unless their input mentions a push, which still asks (the rule for opaque commands: an ACP
+  // agent's `execute` whose command cannot be read lands here with its title and raw input).
+  const reasons = [`unknown tool ${name}`];
+  const pushes = mentionsPush(inputText(input));
+  reasons.push(...pushes);
+  return { actions: pushes.length ? ['push'] : [], reasons, unclassified: true };
+}
+
+/** An unknown tool's input as text for `mentionsPush` (never throws). */
+function inputText(input: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(input) ?? '';
+  } catch {
+    return '';
+  }
 }
 
 function classifyPaths(
@@ -286,7 +300,11 @@ function classifyPaths(
   inside: PermissionAction,
   ctx: PolicyContext,
 ): Classification {
-  const paths = PATH_FIELDS.map((f) => input[f]).filter((v): v is string => typeof v === 'string');
+  // A `paths` array (an ACP call that names several files) is judged path by path too.
+  const listed = Array.isArray(input['paths']) ? (input['paths'] as unknown[]) : [];
+  const paths = [...PATH_FIELDS.map((f) => input[f]), ...listed].filter(
+    (v): v is string => typeof v === 'string',
+  );
   const edit = inside === 'edit_workspace';
   // An edit tool that names no file cannot be placed: ask.
   if (edit && paths.length === 0) {

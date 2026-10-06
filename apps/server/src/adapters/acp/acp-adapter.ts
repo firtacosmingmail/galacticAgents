@@ -16,7 +16,9 @@ import type {
   Actor,
   AgentAdapter,
   AgentEvent,
+  GateVerdict,
   Id,
+  PermissionAction,
   PermissionGate,
   RuntimePreflight,
   SendOptions,
@@ -37,9 +39,14 @@ import {
   contentText,
   CostMeter,
   describeTool,
+  findMode,
   formFields,
   gateCall,
+  isPermissiveMode,
   mergeTool,
+  modeName,
+  modeState,
+  type ModeState,
   planProgress,
   toolResultText,
   type ToolState,
@@ -115,8 +122,22 @@ export interface AcpAgentCommand {
   args?: string[];
   /** Extra environment for the agent (credentials it needs that the allow-list does not carry). */
   env?: Record<string, string | undefined>;
-  /** Variables copied from the server's environment on top of the supervisor's allow-list. */
+  /**
+   * Variables copied from the server's environment on top of the supervisor's allow-list and the
+   * routing defaults (`ACP_PASS_ENV`): every credential the agent needs is named here. Never a
+   * `GALACTIC_*` name (the server's own secrets).
+   */
   passEnv?: string[];
+  /**
+   * The session mode every session is set to (`session/set_mode`, or the `mode` config option),
+   * by id or name; absent: the agent's own default. Decision 108.
+   */
+  mode?: string;
+  /**
+   * Lets a session run in a mode known to skip the agent's permission requests (`PERMISSIVE_MODES`).
+   * Default `false`: such a spawn is refused.
+   */
+  allowPermissiveMode?: boolean;
 }
 
 export interface AcpAdapterOptions {
@@ -133,24 +154,37 @@ export interface AcpAdapterOptions {
   preflight?: () => Promise<RuntimePreflight>;
 }
 
-/** Credentials the known ACP agents read from the environment (Claude, OpenAI/Codex, Gemini). */
+/**
+ * Routing variables the known ACP agents read (Claude, OpenAI/Codex, Gemini), passed by default:
+ * base URLs, the provider switches, region and profile (proxies are in the supervisor's
+ * allow-list). No credential: an API key or token (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
+ * `GEMINI_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `OPENAI_API_KEY` …) reaches the agent only
+ * when `acp.passEnv` names it.
+ */
 export const ACP_PASS_ENV: readonly string[] = [
   'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_AUTH_TOKEN',
-  'CLAUDE_CODE_OAUTH_TOKEN',
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_VERTEX',
+  'CLOUD_ML_REGION',
   'OPENAI_BASE_URL',
-  'CODEX_HOME',
-  'GEMINI_API_KEY',
-  'GOOGLE_API_KEY',
-  'GOOGLE_CLOUD_PROJECT',
-  'GOOGLE_CLOUD_LOCATION',
   'GOOGLE_GENAI_USE_VERTEXAI',
-  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_CLOUD_LOCATION',
   'AWS_REGION',
   'AWS_PROFILE',
 ];
+
+/** Names `acp.passEnv` may not carry: the server's own configuration and secrets. */
+export const REFUSED_PASS_ENV = /^GALACTIC_/i;
+
+/** Throws when `passEnv` names a variable the agent may never get (`GALACTIC_*`). */
+export function checkPassEnv(passEnv: readonly string[] | undefined): void {
+  const refused = (passEnv ?? []).filter((k) => REFUSED_PASS_ENV.test(k));
+  if (refused.length > 0) {
+    throw new Error(
+      `acp.passEnv may not name the server's own variables: ${refused.join(', ')} (GALACTIC_*)`,
+    );
+  }
+}
 
 const SYSTEM: Actor = { type: 'system' };
 const ENDED_MEMORY = 256;
@@ -160,9 +194,29 @@ const ALLOW = /^(allow|yes|y|ok|approve|approved)$/i;
 interface PendingQuestion {
   id: Id;
   resolve: (answer: string | undefined) => void;
+  /** A hold (decision 108): outlives the turn it cancelled; only a stop or interrupt settles it. */
+  hold?: boolean;
+}
+
+/**
+ * What a hold asks the user (decision 108): a call the agent ran without asking that the table
+ * would have asked about, or a mode the agent switched to on its own.
+ */
+interface HoldSpec {
+  text: string;
+  toolCall?: ReturnType<typeof gateCall>;
+  permissionAction?: PermissionAction;
+  /** Applied when the user allows it, before the agent carries on. */
+  onAllow?: () => void;
+  /** Why the Steward is stopped when the user refuses (followed by the answer). */
+  refused: string;
 }
 
 type QuestionBody = Extract<AgentEvent, { type: 'agent.needs_input' }>['question'];
+
+/** What a tool call was judged on: its raw input and its locations. */
+const inputKey = (tool: ToolState): string =>
+  JSON.stringify([tool.rawInput ?? null, tool.locations ?? null]);
 
 class Session {
   acpSessionId: string | undefined;
@@ -184,6 +238,16 @@ class Session {
   readonly reported = new Set<string>();
   /** Tool calls the gate already decided (through a permission request, or when they started). */
   readonly decided = new Set<string>();
+  /** The input each decided call was judged on: a changed input is judged once more. */
+  readonly judgedOn = new Map<string, string>();
+  readonly rejudged = new Set<string>();
+  /** The agent's session modes, when it has any; `expectedMode` is the one it should be in. */
+  mode: ModeState | undefined;
+  expectedMode: string | undefined;
+  /** An open hold (decision 108): the turn it cancelled does not end in `agent.idle`. */
+  hold: { cancelledTurn: boolean } | undefined;
+  /** Set when the adapter stops the agent itself: its terminal event is `agent.failed`. */
+  failure: string | undefined;
   readonly meter = new CostMeter();
   lastResult: string | undefined;
   /** The message block being streamed: chunks joined until the block ends. */
@@ -200,8 +264,9 @@ class Session {
     readonly gate: PermissionGate,
   ) {}
 
-  settlePending(): void {
-    for (const q of [...this.pending.values()]) q.resolve(undefined);
+  /** Answers every open question "no answer"; a turn's end leaves a hold open (`all: false`). */
+  settlePending(all = true): void {
+    for (const q of [...this.pending.values()]) if (all || !q.hold) q.resolve(undefined);
   }
 
   turnEnd(): Promise<void> {
@@ -214,6 +279,8 @@ class Session {
     this.tools.clear();
     this.reported.clear();
     this.decided.clear();
+    this.judgedOn.clear();
+    this.rejudged.clear();
     for (const w of this.turnWaiters.splice(0)) w();
   }
 }
@@ -230,6 +297,7 @@ export class AcpAdapter implements AgentAdapter {
   private disposed = false;
 
   constructor(private readonly opts: AcpAdapterOptions) {
+    checkPassEnv(opts.agent.passEnv);
     this.onError = opts.onError ?? (() => {});
     this.maxToolResultChars = opts.maxToolResultChars ?? 2_000;
   }
@@ -287,7 +355,7 @@ export class AcpAdapter implements AgentAdapter {
           );
         }
         session.loading = true;
-        await this.during(
+        const loaded = await this.during(
           session,
           conn.agent.request(acp.methods.agent.session.load, {
             sessionId: resume,
@@ -298,6 +366,7 @@ export class AcpAdapter implements AgentAdapter {
         );
         session.loading = false;
         session.acpSessionId = resume;
+        session.mode = modeState(loaded ?? {});
       } else {
         const created = await this.during(
           session,
@@ -305,7 +374,9 @@ export class AcpAdapter implements AgentAdapter {
           'session/new',
         );
         session.acpSessionId = created.sessionId;
+        session.mode = modeState(created);
       }
+      await this.settleMode(session);
     } catch (error) {
       await this.abandon(session);
       throw error;
@@ -399,6 +470,52 @@ export class AcpAdapter implements AgentAdapter {
     }
   }
 
+  /**
+   * The session's mode (decision 108): set to `acp.mode` when configured, and refused when the
+   * mode it ends up in is a known permissive one (`PERMISSIVE_MODES`) unless
+   * `acp.allowPermissiveMode`. An agent without modes is allowed: the gate's checks on calls it
+   * runs without asking are then all there is.
+   */
+  private async settleMode(session: Session): Promise<void> {
+    const state = session.mode;
+    const { mode: wanted, allowPermissiveMode } = this.opts.agent;
+    const list = (s: ModeState) => s.available.map((m) => m.id).join(', ') || 'none listed';
+    if (state && wanted !== undefined) {
+      const target = findMode(state, wanted);
+      if (!target) {
+        throw new Error(
+          `the ACP agent has no mode "${wanted}" (acp.mode; its modes: ${list(state)})`,
+        );
+      }
+      if (target.id !== state.current) {
+        const sessionId = session.acpSessionId!;
+        await this.during(
+          session,
+          state.via.kind === 'mode'
+            ? session.conn!.agent.request(acp.methods.agent.session.setMode, {
+                sessionId,
+                modeId: target.id,
+              })
+            : session.conn!.agent.request(acp.methods.agent.session.setConfigOption, {
+                sessionId,
+                configId: state.via.configId,
+                value: target.id,
+              }),
+          state.via.kind === 'mode' ? 'session/set_mode' : 'session/set_config_option',
+        );
+        state.current = target.id;
+      }
+    }
+    if (state && isPermissiveMode(state, state.current) && allowPermissiveMode !== true) {
+      throw new Error(
+        `the ACP agent is in mode "${modeName(state, state.current)}", which runs tool calls ` +
+          `without asking: set acp.mode to a mode that asks (its modes: ${list(state)}), ` +
+          `or set acp.allowPermissiveMode to true to accept it`,
+      );
+    }
+    session.expectedMode = state?.current;
+  }
+
   /** A start that failed: no event (the runtime reports the failed spawn), no process left. */
   private async abandon(session: Session): Promise<void> {
     session.terminal = 'failed';
@@ -470,15 +587,11 @@ export class AcpAdapter implements AgentAdapter {
         });
         return;
       case 'stopped':
-        this.terminal(session, {
-          type: 'agent.stopped',
-          agentId: session.agentId,
-          by: outcome.by ?? SYSTEM,
-        });
+        this.terminal(session, this.stoppedEvent(session, outcome.by ?? SYSTEM));
         return;
       case 'exited':
         if (session.stopping) {
-          this.terminal(session, { type: 'agent.stopped', agentId: session.agentId, by: SYSTEM });
+          this.terminal(session, this.stoppedEvent(session, SYSTEM));
         } else {
           this.terminal(session, {
             type: 'agent.finished',
@@ -544,10 +657,11 @@ export class AcpAdapter implements AgentAdapter {
 
   private endTurn(session: Session): void {
     session.interrupting = false;
-    session.settlePending();
+    session.settlePending(false);
     session.closeTurn();
     session.process?.turnEnded();
-    if (!session.stopping && !session.terminal) {
+    // A hold cancelled this turn: the agent waits on the user, not on its next message.
+    if (!session.stopping && !session.terminal && !session.hold) {
       const cost = session.meter.cost;
       this.emit(session, {
         type: 'agent.idle',
@@ -595,6 +709,14 @@ export class AcpAdapter implements AgentAdapter {
       case 'usage_update':
         session.meter.sessionCost(u.cost);
         return;
+      case 'current_mode_update':
+        this.onModeChange(session, u.currentModeId);
+        return;
+      case 'config_option_update': {
+        const state = modeState({ configOptions: u.configOptions });
+        if (state) this.onModeChange(session, state.current, state);
+        return;
+      }
       case 'notice':
         this.flush(session);
         this.output(
@@ -604,8 +726,8 @@ export class AcpAdapter implements AgentAdapter {
         );
         return;
       default:
-        // user_message_chunk (our own prompt echoed), commands, modes, config, session info,
-        // compaction, subagents, session messages: not transcript.
+        // user_message_chunk (our own prompt echoed), commands, session info, compaction,
+        // subagents, session messages: not transcript.
         return;
     }
   }
@@ -629,16 +751,25 @@ export class AcpAdapter implements AgentAdapter {
   private onToolStatus(session: Session, tool: ToolState): void {
     const id = tool.toolCallId;
     const status = tool.status ?? 'pending';
+    const started = status === 'in_progress' || status === 'completed' || status === 'failed';
     const bookkeeping =
       tool.kind !== undefined && tool.kind !== null && BOOKKEEPING_KINDS.has(tool.kind);
-    if (
-      (status === 'in_progress' || status === 'completed') &&
-      !bookkeeping &&
-      !session.decided.has(id)
-    ) {
+    if (started && !session.decided.has(id)) {
       // The agent runs a call it did not ask about: the gate still judges it.
       session.decided.add(id);
-      this.unaskedCall(session, tool);
+      session.judgedOn.set(id, inputKey(tool));
+      if (tool.kind === 'switch_mode') this.unaskedSwitch(session, tool);
+      else if (!bookkeeping) this.unaskedCall(session, tool, true);
+    } else if (
+      !bookkeeping &&
+      session.judgedOn.has(id) &&
+      !session.rejudged.has(id) &&
+      session.judgedOn.get(id) !== inputKey(tool)
+    ) {
+      // Its input changed after it was judged (an agent that streams the input in): once more,
+      // without reserving it against the cap again.
+      session.rejudged.add(id);
+      this.unaskedCall(session, tool, false);
     }
     if (status === 'completed' || status === 'failed') {
       const text = toolResultText(tool, this.maxToolResultChars);
@@ -652,42 +783,167 @@ export class AcpAdapter implements AgentAdapter {
     }
   }
 
-  private unaskedCall(session: Session, tool: ToolState): void {
-    const call = gateCall(tool);
-    let verdict;
+  /** The gate's verdict; a check that throws is a `deny` (fail closed). */
+  private check(
+    session: Session,
+    call: ReturnType<typeof gateCall>,
+    reserve: boolean,
+  ): GateVerdict {
     try {
-      verdict = session.gate.check(call);
+      return session.gate.check(call, reserve ? undefined : { reserve: false });
     } catch (error) {
       this.onError(error, `gate ${session.agentId}`);
-      verdict = {
-        decision: 'deny' as const,
-        reason: `permission check failed: ${(error as Error).message}`,
-      };
+      return { decision: 'deny', reason: `permission check failed: ${(error as Error).message}` };
     }
+  }
+
+  /**
+   * A call the agent ran without asking (its own mode let it), judged as it starts (decision
+   * 108): `allow` reports it; `ask` reports it, cancels the turn and asks the user whether the
+   * agent may go on (a hold); `deny` stops the agent with the reason, for the user to look at.
+   */
+  private unaskedCall(session: Session, tool: ToolState, reserve: boolean): void {
+    const call = gateCall(tool);
+    const verdict = this.check(session, call, reserve);
+    const what = describeTool(tool);
     if (verdict.decision === 'deny') {
-      this.output(
+      this.fail(
         session,
-        'text',
-        `permission denied for ${describeTool(tool)}: ${verdict.reason} — the agent ran it without asking, so the turn is cancelled`,
+        `stopped: the agent ran ${what} without asking, and the permission table denies it (${verdict.reason})`,
       );
-      if (session.turnOpen && !session.interrupting) {
-        session.interrupting = true;
-        session.settlePending();
-        void this.cancel(session);
-      }
       return;
     }
     this.toolCall(session, tool, call);
     if (verdict.decision === 'ask') {
-      this.output(
-        session,
-        'text',
-        `warning: the agent ran ${describeTool(tool)} without asking; the permission table would have asked` +
-          (verdict.reasons.length ? ` (${verdict.reasons.join('; ')})` : ''),
-      );
+      const why = verdict.reasons.join('; ');
+      this.hold(session, {
+        text: `The agent ran ${what} without asking; the permission table would have asked${why ? ` (${why})` : ''}. Let it continue?`,
+        toolCall: call,
+        ...(verdict.action ? { permissionAction: verdict.action } : {}),
+        refused: `stopped: the agent ran ${what} without asking and was not allowed to continue`,
+      });
     }
   }
 
+  /** A `switch_mode` call the agent ran on its own: a switch away from the expected mode holds. */
+  private unaskedSwitch(session: Session, tool: ToolState): void {
+    const raw = (tool.rawInput ?? {}) as Record<string, unknown>;
+    const target = ['modeId', 'mode', 'mode_id', 'target']
+      .map((k) => raw[k])
+      .find((v) => typeof v === 'string') as string | undefined;
+    if (target !== undefined && target === session.expectedMode) return;
+    this.holdForMode(session, target, describeTool(tool));
+  }
+
+  /**
+   * The agent's mode changed (`current_mode_update`, or the mode config option): a switch away
+   * from the expected mode holds (decision 108). An agent that announced no modes at start may
+   * move to any mode that is not a permissive one.
+   */
+  private onModeChange(session: Session, modeId: string, state?: ModeState): void {
+    if (state && session.mode?.via.kind !== 'mode') session.mode = state;
+    else if (session.mode) session.mode.current = modeId;
+    if (session.starting || modeId === session.expectedMode) return;
+    if (session.expectedMode === undefined && !isPermissiveMode(session.mode, modeId)) {
+      session.expectedMode = modeId;
+      return;
+    }
+    this.holdForMode(session, modeId);
+  }
+
+  private holdForMode(
+    session: Session,
+    modeId: string | undefined,
+    via?: string,
+    cancelledTurn?: boolean,
+  ): void {
+    const permissive = modeId !== undefined && isPermissiveMode(session.mode, modeId);
+    const name = modeId !== undefined ? `"${modeName(session.mode, modeId)}"` : 'another mode';
+    this.hold(
+      session,
+      {
+        text:
+          `The agent switched itself to mode ${name}${via ? ` (${via})` : ''}` +
+          `${permissive ? ', which runs tool calls without asking' : ''}. Let it continue in that mode?`,
+        refused: `stopped: the agent switched itself to mode ${name} and was not allowed to continue`,
+        onAllow: () => {
+          session.expectedMode = modeId ?? session.mode?.current;
+        },
+      },
+      cancelledTurn,
+    );
+  }
+
+  /**
+   * A hold (decision 108): the turn is cancelled and a permission question asks the user whether
+   * the agent may go on. The cancelled turn ends without `agent.idle` — the agent waits on the
+   * answer. Allowed: the agent carries on with a new turn (or goes idle, when no turn was
+   * running). Refused: the agent is stopped (`fail`). Withdrawn (an interrupt): the agent goes idle.
+   * One hold at a time; whatever happens meanwhile is judged again once it is answered.
+   */
+  private hold(session: Session, spec: HoldSpec, carried?: boolean): void {
+    if (session.hold || session.terminal || session.stopping || session.failure !== undefined)
+      return;
+    const cancelledTurn = carried ?? session.turnOpen;
+    session.hold = { cancelledTurn };
+    if (session.turnOpen && !session.interrupting) {
+      session.interrupting = true;
+      session.settlePending(false);
+      void this.cancel(session);
+    }
+    const signal = new AbortController().signal;
+    void this.ask(
+      session,
+      'permission',
+      {
+        text: spec.text,
+        ...(spec.toolCall ? { toolCall: spec.toolCall } : {}),
+        ...(spec.permissionAction ? { permissionAction: spec.permissionAction } : {}),
+      },
+      signal,
+      true,
+    ).then((answer) => this.afterHold(session, spec, answer));
+  }
+
+  private async afterHold(
+    session: Session,
+    spec: HoldSpec,
+    answer: string | undefined,
+  ): Promise<void> {
+    await session.turnEnd();
+    const { cancelledTurn } = session.hold ?? { cancelledTurn: false };
+    session.hold = undefined;
+    if (session.terminal || session.stopping) return;
+    if (answer !== undefined && !ALLOW.test(answer.trim())) {
+      this.fail(session, `${spec.refused}: ${answer}`);
+      return;
+    }
+    if (answer !== undefined) {
+      spec.onAllow?.();
+      // A mode change that came in while the user was deciding.
+      const current = session.mode?.current;
+      if (
+        current !== undefined &&
+        session.expectedMode !== undefined &&
+        current !== session.expectedMode
+      ) {
+        this.holdForMode(session, current, undefined, cancelledTurn);
+        if (session.hold) return;
+      }
+      if (cancelledTurn) {
+        this.startTurn(
+          session,
+          'GalacticAgents stopped your last turn to ask the user about it, and the user allowed it: carry on with your task where you left off.',
+        );
+        return;
+      }
+    }
+    this.emit(session, {
+      type: 'agent.idle',
+      agentId: session.agentId,
+      ...(session.meter.cost ? { cost: session.meter.cost } : {}),
+    });
+  }
   private toolCall(session: Session, tool: ToolState, call: ReturnType<typeof gateCall>): void {
     if (session.reported.has(tool.toolCallId)) return;
     session.reported.add(tool.toolCallId);
@@ -708,18 +964,23 @@ export class AcpAdapter implements AgentAdapter {
     signal: AbortSignal,
   ): Promise<RequestPermissionResponse> {
     const cancelled: RequestPermissionResponse = { outcome: { outcome: 'cancelled' } };
-    if (session.terminal || session.stopping || session.interrupting) return cancelled;
+    if (session.terminal || session.stopping || session.interrupting || session.hold) {
+      return cancelled;
+    }
     this.flush(session);
     const tool = mergeTool(session.tools.get(params.toolCall.toolCallId), params.toolCall);
     session.tools.set(tool.toolCallId, tool);
+    // A call already judged when it started is not reserved against the cap a second time.
+    const reserve = !session.decided.has(tool.toolCallId);
     session.decided.add(tool.toolCallId);
+    session.judgedOn.set(tool.toolCallId, inputKey(tool));
     const call = gateCall(tool);
     const answerWith = (allow: boolean): RequestPermissionResponse => {
       const option = chooseOption(params.options, allow);
       return option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : cancelled;
     };
     try {
-      const verdict = session.gate.check(call);
+      const verdict = session.gate.check(call, reserve ? undefined : { reserve: false });
       if (verdict.decision === 'allow') {
         this.toolCall(session, tool, call);
         return answerWith(true);
@@ -766,7 +1027,9 @@ export class AcpAdapter implements AgentAdapter {
     params: CreateElicitationRequest,
     signal: AbortSignal,
   ): Promise<CreateElicitationResponse> {
-    if (session.terminal || session.stopping || session.interrupting) return { action: 'cancel' };
+    if (session.terminal || session.stopping || session.interrupting || session.hold) {
+      return { action: 'cancel' };
+    }
     if (params.mode !== 'form' || !('requestedSchema' in params)) return { action: 'decline' };
     this.flush(session);
     const schema = params.requestedSchema as {
@@ -805,6 +1068,7 @@ export class AcpAdapter implements AgentAdapter {
     kind: 'clarification' | 'permission',
     question: QuestionBody,
     signal: AbortSignal,
+    hold = false,
   ): Promise<string | undefined> {
     if (signal.aborted || session.terminal || session.stopping) return Promise.resolve(undefined);
     const id = `q-${randomUUID()}`;
@@ -817,7 +1081,7 @@ export class AcpAdapter implements AgentAdapter {
       };
       const onAbort = () => done(undefined);
       signal.addEventListener('abort', onAbort, { once: true });
-      session.pending.set(id, { id, resolve: done });
+      session.pending.set(id, { id, resolve: done, ...(hold ? { hold } : {}) });
       this.byQuestion.set(id, session);
       this.emit(session, {
         type: 'agent.needs_input',
@@ -856,7 +1120,12 @@ export class AcpAdapter implements AgentAdapter {
 
   async interrupt(sessionId: string): Promise<void> {
     const session = this.live(sessionId);
-    if (!session || !session.turnOpen || session.terminal) return;
+    if (!session || session.terminal) return;
+    if (!session.turnOpen) {
+      // A hold between turns: withdrawn, the agent goes idle.
+      if (session.hold) session.settlePending();
+      return;
+    }
     if (session.paused) this.thaw(session); // a frozen agent cannot read the cancel
     session.interrupting = true;
     session.settlePending();
@@ -902,11 +1171,46 @@ export class AcpAdapter implements AgentAdapter {
           by: SYSTEM,
         });
       }
-      if (!session.terminal) {
-        this.terminal(session, { type: 'agent.stopped', agentId: session.agentId, by: SYSTEM });
-      }
+      if (!session.terminal) this.terminal(session, this.stoppedEvent(session, SYSTEM));
     })();
     return session.stopDone;
+  }
+
+  /**
+   * A stopped session's terminal event: `agent.stopped`, or `agent.failed` (reason `runtime`, the
+   * reason as its error) when the adapter stopped it itself (`fail`), so the Steward shows as
+   * needing the user's attention.
+   */
+  private stoppedEvent(
+    session: Session,
+    by: Actor,
+  ): Extract<AgentEvent, { type: 'agent.stopped' | 'agent.failed' }> {
+    if (session.failure === undefined) {
+      return { type: 'agent.stopped', agentId: session.agentId, by };
+    }
+    const cost = session.meter.cost;
+    return {
+      type: 'agent.failed',
+      agentId: session.agentId,
+      error: session.failure,
+      reason: 'runtime',
+      ...(cost ? { cost } : {}),
+    };
+  }
+
+  /**
+   * Stops the agent on the adapter's own account (decision 108: a call the table denies that it
+   * ran without asking, a hold the user refused). The reason is said in the transcript and is the
+   * error of the `agent.failed` that ends the session.
+   */
+  private fail(session: Session, reason: string): void {
+    if (session.terminal || session.failure !== undefined) return;
+    session.failure = reason;
+    this.flush(session);
+    this.output(session, 'text', reason);
+    this.stop(session.sessionId).catch((error: unknown) =>
+      this.onError(error, `stop ${session.agentId}`),
+    );
   }
 
   async dispose(): Promise<void> {

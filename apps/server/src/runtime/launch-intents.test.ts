@@ -214,6 +214,39 @@ describe('matchLaunch (P8-11)', () => {
       expect(takenGroups(input([before], { 101: ENV_LAUNCH }, { 101: WT }))).toEqual([]);
     });
 
+    it('only the CLI’s own group: a group a tool moved out to (its leader exited) is left alone', () => {
+      // The CLI is alive: a leaderless group carrying the launch is one a descendant moved out to.
+      const cliAlive = proc({ pid: 100 });
+      const nohupChild = proc({ pid: 131, ppid: 1, pgid: 130, startedAt: sec(T + 2_000) });
+      expect(
+        takenGroups(
+          input([cliAlive, nohupChild], { 100: ENV_LAUNCH, 131: ENV_LAUNCH }, { 100: WT, 131: WT }),
+        ),
+      ).toEqual([[100, 'leader']]);
+      // The CLI is gone too: two leaderless groups carry the launch and the CLI's cannot be told
+      // apart, so neither is taken (fail closed; the Steward's sweep finds them when it ends).
+      expect(
+        takenGroups(
+          input([child, nohupChild], { 101: ENV_LAUNCH, 131: ENV_LAUNCH }, { 101: WT, 131: WT }),
+        ),
+      ).toEqual([]);
+    });
+
+    it('two qualifying leaders: only the earliest-started one (the CLI) is taken', () => {
+      const cliAlive = proc({ pid: 100 });
+      // A descendant that moved out within the window and whose parent already exited.
+      const escapedLeader = proc({ pid: 140, ppid: 1, startedAt: sec(T + 2_000) });
+      expect(
+        takenGroups(
+          input(
+            [escapedLeader, cliAlive],
+            { 100: ENV_LAUNCH, 140: ENV_LAUNCH },
+            { 100: WT, 140: WT },
+          ),
+        ),
+      ).toEqual([[100, 'leader']]);
+    });
+
     it('a pid that is alive under another group is not the leader: the group is still a leftover', () => {
       const stranger = proc({ pid: 100, pgid: 300, startedAt: T + 30_000, ppid: 8000 });
       expect(
