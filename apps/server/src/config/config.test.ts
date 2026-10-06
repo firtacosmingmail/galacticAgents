@@ -46,6 +46,22 @@ describe('loadConfig', () => {
     );
   });
 
+  it('drops a fake Steward runtime outside dev mode, with a warning (P8 wave 3 review)', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef', stewardRuntime: 'fake' }),
+    );
+    const fromFile = loadConfig({ GALACTIC_HOME: home });
+    expect(fromFile.config.stewardRuntime).toBeUndefined();
+    expect(fromFile.warnings).toContainEqual(expect.stringMatching(/stewardRuntime is fake/));
+    const fromEnv = loadConfig({ GALACTIC_HOME: home, GALACTIC_STEWARD_RUNTIME: 'fake' });
+    expect(fromEnv.config.stewardRuntime).toBeUndefined();
+    expect(fromEnv.warnings).toContainEqual(expect.stringMatching(/development only/));
+    const dev = loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '1' });
+    expect(dev.config.stewardRuntime).toBe('fake');
+    expect(dev.warnings.some((w) => w.includes('stewardRuntime'))).toBe(false);
+  });
+
   it('generates a token on first start, persists it with mode 0600 and reuses it afterwards', () => {
     const first = loadConfig({ GALACTIC_HOME: home });
     expect(first.tokenGenerated).toBe(true);

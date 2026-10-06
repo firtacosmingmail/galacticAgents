@@ -95,6 +95,11 @@ export interface SettingsServiceOptions {
    * them. Absent: any runtime is accepted (tests).
    */
   runtimes?: () => readonly AgentRuntime[];
+  /**
+   * Whether `stewardRuntime` may be `fake` (the scripted fake adapter): only in dev mode
+   * (`GALACTIC_DEV`). Default `config.dev`; tests may pass it explicitly.
+   */
+  allowFakeRuntime?: boolean;
 }
 
 /** What a remote client may patch (decision 51): the policy only floored (decision 37). */
@@ -226,6 +231,15 @@ export class SettingsService {
     }
     if (patch.stewardRuntime === null) delete next.stewardRuntime;
     else if (patch.stewardRuntime !== undefined) {
+      if (
+        patch.stewardRuntime === 'fake' &&
+        !(this.opts.allowFakeRuntime ?? this.opts.config.dev)
+      ) {
+        throw new SettingsError(
+          'invalid',
+          'the fake runtime is for development only (GALACTIC_DEV): choose a real runtime',
+        );
+      }
       const known = this.opts.runtimes?.();
       if (known && !known.includes(patch.stewardRuntime)) {
         throw new SettingsError(

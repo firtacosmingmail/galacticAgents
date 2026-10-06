@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
 import {
+  AgentRuntime as AgentRuntimeName,
   AnswerBody,
   ControlBody,
   PERMISSION_POLICY_PRESETS,
@@ -113,7 +114,8 @@ export function registerAgentRoutes(
 
     /** What the spawn form can offer. */
     app.get('/api/runtimes', async (): Promise<RuntimesInfo> => ({
-      runtimes: (['fake', 'claude-sdk'] as const)
+      // Every runtime with an adapter registered here (ACP only when `acp` is configured).
+      runtimes: AgentRuntimeName.options
         .filter((name) => runtime.adapter(name) !== undefined)
         .map((name) => ({
           name,

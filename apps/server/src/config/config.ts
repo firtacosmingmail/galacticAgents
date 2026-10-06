@@ -385,6 +385,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     if (!parsed.success) throw new Error(`Invalid Steward runtime: ${runtimeEnv}`);
     stewardRuntime = parsed.data;
   }
+  const dev = env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true';
+  if (stewardRuntime === 'fake' && !dev) {
+    // The scripted fake adapter is for development and tests only (P8 wave 3 review).
+    warnings.push(
+      `stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
+        `new Stewards run on their brain's runtime.`,
+    );
+    stewardRuntime = undefined;
+  }
   const acpEnv = env['GALACTIC_ACP_COMMAND']?.trim().split(/\s+/).filter(Boolean);
   const acp =
     acpEnv && acpEnv.length > 0
@@ -409,7 +418,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       allowedHosts,
       ...(remoteHost ? { remoteHost } : {}),
       ...(tailscaleIdentityLogins ? { tailscaleIdentityLogins } : {}),
-      dev: env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true',
+      dev,
       dataDir,
       configPath,
       dbPath,

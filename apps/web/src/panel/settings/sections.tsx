@@ -1,4 +1,12 @@
-import { useId, useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import {
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from 'react';
 import type {
   AgentRuntime,
   PermissionDecision,
@@ -8,6 +16,7 @@ import type {
   Settings,
   SettingsPatch,
 } from '@galactic/protocol';
+import { ApiContext } from '../../console/hierarchy/shared.js';
 import { useSettingsData } from './SettingsData.js';
 import {
   CAP_FIELDS,
@@ -435,25 +444,72 @@ function TierEditor({ id, draft, setDraft, disabled }: EditorProps<QualityTier>)
   );
 }
 
-/** The Steward runtime choices (P8-07); `''` = the spawning brain's own runtime. */
-const STEWARD_RUNTIMES: { value: AgentRuntime | ''; label: string; hint: string }[] = [
-  {
-    value: '',
-    label: 'Same as its brain',
-    hint: 'the runtime of the Waykeeper or Harmonizer that starts it',
-  },
-  { value: 'claude-sdk', label: 'Claude Code', hint: 'the Claude Agent SDK' },
-  {
-    value: 'acp',
+type RuntimeChoice = { value: AgentRuntime | ''; label: string; hint: string };
+
+/** `''`: the spawning brain's own runtime (P8-07); always offered. */
+const SAME_AS_BRAIN: RuntimeChoice = {
+  value: '',
+  label: 'Same as its brain',
+  hint: 'the runtime of the Waykeeper or Harmonizer that starts it',
+};
+
+/** How each runtime is offered; `fake` (the dev adapter) never is. */
+const RUNTIME_LABELS: Partial<Record<AgentRuntime, { label: string; hint: string }>> = {
+  'claude-sdk': { label: 'Claude Code', hint: 'the Claude Agent SDK' },
+  acp: {
     label: 'ACP agent',
     hint: 'the agent set as acp.command (Codex, Gemini CLI, claude-agent-acp …)',
   },
-];
+  pty: { label: 'Terminal agent', hint: 'a CLI agent driven through a terminal' },
+};
 
-function StewardRuntimeEditor({ id, draft, setDraft, disabled }: EditorProps<AgentRuntime | ''>) {
-  const choices = STEWARD_RUNTIMES.some((c) => c.value === draft)
-    ? STEWARD_RUNTIMES
-    : [...STEWARD_RUNTIMES, { value: draft, label: draft, hint: 'set outside the panel' }];
+const choiceOf = (runtime: AgentRuntime, hint?: string): RuntimeChoice => ({
+  value: runtime,
+  label: RUNTIME_LABELS[runtime]?.label ?? runtime,
+  hint: hint ?? RUNTIME_LABELS[runtime]?.hint ?? runtime,
+});
+
+/**
+ * The runtimes this server has adapters for (`GET /api/runtimes`), without the dev-only `fake`;
+ * empty until it answers, or when it cannot be read.
+ */
+function useRegisteredRuntimes(): AgentRuntime[] {
+  const api = useContext(ApiContext);
+  const [runtimes, setRuntimes] = useState<AgentRuntime[]>([]);
+  useEffect(() => {
+    if (!api) return;
+    let cancelled = false;
+    api.runtimes().then(
+      (info) => {
+        if (cancelled || !Array.isArray(info?.runtimes)) return;
+        setRuntimes(info.runtimes.map((r) => r.name).filter((name) => name !== 'fake'));
+      },
+      () => {
+        // Unreadable: only the brain's own runtime (and the current value) is offered.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+  return runtimes;
+}
+
+function StewardRuntimeEditor({
+  id,
+  draft,
+  setDraft,
+  disabled,
+  settings,
+}: EditorProps<AgentRuntime | ''>) {
+  const registered = useRegisteredRuntimes();
+  const offered = [SAME_AS_BRAIN, ...registered.map((r) => choiceOf(r))];
+  // A saved value the panel does not offer (set in config.json or the environment) stays shown.
+  const saved = settings.stewardRuntime;
+  const choices =
+    saved && !offered.some((c) => c.value === saved)
+      ? [...offered, choiceOf(saved, 'set outside the panel')]
+      : offered;
   return (
     <fieldset className="set-field set-radios" disabled={disabled}>
       <legend className="set-visually-hidden">Steward runtime</legend>
@@ -624,7 +680,7 @@ export const STEWARD_RUNTIME: SectionSpec<AgentRuntime | ''> = {
   field: 'stewardRuntime',
   title: 'Steward runtime',
   intro:
-    'Which agent runtime new Stewards run on. The Harmonizer and Waykeepers always stay on their own runtime; running Stewards keep theirs. An ACP agent must be set up first (acp.command in config.json).',
+    'Which agent runtime new Stewards run on. The Harmonizer and Waykeepers always stay on their own runtime; running Stewards keep theirs. An ACP agent must be set up first (acp.command in config.json). An ACP agent may run a tool call before the permission table judges it: its own permission mode decides first, and GalacticAgents checks each call as it starts, stopping it or asking you when the table would not have allowed it — so set the agent’s own mode to its most careful one.',
   fromSettings: (s) => s.stewardRuntime ?? '',
   validate: () => undefined,
   toPatch: (d) => ({ stewardRuntime: d === '' ? null : d }),
