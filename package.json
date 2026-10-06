@@ -16,6 +16,7 @@
     "format:check": "prettier --check .",
     "start": "node apps/server/bin/galactic.mjs start",
     "galactic": "node apps/server/bin/galactic.mjs",
+    "remote": "node scripts/remote-start.mjs",
     "check:real": "pnpm build:deps && node scripts/check-real.mjs"
   },
   "engines": {
