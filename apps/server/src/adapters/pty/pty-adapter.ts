@@ -136,6 +136,8 @@ export interface PtyAdapterOptions {
   progressEveryMs?: number;
   /** Raw output batch interval (default 100 ms). */
   flushMs?: number;
+  /** How long a batch of only `\r` redraws (a spinner) is held (default 1 s). */
+  redrawFlushMs?: number;
   onError?: (error: unknown, context: string) => void;
   /** The runtime check (P25-01); default `ptyPreflight(agent)`. */
   preflight?: () => Promise<RuntimePreflight>;
@@ -186,6 +188,11 @@ interface OpenQuestion {
   movedOn: boolean;
 }
 
+/** Whether a raw batch only redraws the cursor's line: a `\r` and no newline. */
+export function isRedrawOnly(raw: string): boolean {
+  return raw.includes('\r') && !raw.includes('\n');
+}
+
 class Session {
   process: ManagedProcess | undefined;
   phase: Phase = 'starting';
@@ -210,6 +217,8 @@ class Session {
   progressAt: number | undefined;
   quietTimer: NodeJS.Timeout | undefined;
   rawTimer: NodeJS.Timeout | undefined;
+  /** When the raw batch got its first byte. */
+  rawSince = 0;
   readyTimer: NodeJS.Timeout | undefined;
   interruptTimer: NodeJS.Timeout | undefined;
   idleTimer: NodeJS.Timeout | undefined;
@@ -396,14 +405,10 @@ export class PtyAdapter implements AgentAdapter {
 
   private onData(session: Session, chunk: string): void {
     if (session.terminal) return;
+    if (!session.raw) session.rawSince = Date.now();
     session.raw += chunk;
     if (session.raw.length >= RAW_BATCH) this.flushRaw(session);
-    else if (!session.rawTimer) {
-      session.rawTimer = setTimeout(() => {
-        session.rawTimer = undefined;
-        this.flushRaw(session);
-      }, this.flushMs);
-    }
+    else if (!session.rawTimer) this.armRawFlush(session, this.flushMs);
     for (const line of session.text.feed(chunk)) this.onLine(session, line);
     session.fresh = true;
     this.armQuiet(session);
@@ -433,6 +438,25 @@ export class PtyAdapter implements AgentAdapter {
         });
       }
     }
+  }
+
+  /**
+   * Schedules the raw batch's flush. A batch that is only carriage-return redraws (a spinner, a
+   * progress bar: `\r` and no newline) is held up to `redrawFlushMs` (default 1 s) instead of
+   * `flushMs`, so a spinner costs a transcript row a second, not ten (P8-08 review); the view
+   * renders the same final frame either way.
+   */
+  private armRawFlush(session: Session, ms: number): void {
+    session.rawTimer = setTimeout(() => {
+      session.rawTimer = undefined;
+      const held = Date.now() - session.rawSince;
+      const redrawMs = this.opts.redrawFlushMs ?? 1_000;
+      if (isRedrawOnly(session.raw) && held < redrawMs) {
+        this.armRawFlush(session, redrawMs - held);
+        return;
+      }
+      this.flushRaw(session);
+    }, ms);
   }
 
   /** The raw batch as one `terminal` chunk. Held while paused (nothing is emitted then). */

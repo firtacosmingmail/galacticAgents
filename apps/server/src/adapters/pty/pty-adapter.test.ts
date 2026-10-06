@@ -136,6 +136,15 @@ describe('PtyAdapter', () => {
       /denied by policy/,
     );
     expect(r.events).toEqual([]);
+    // A push in the command line: its own reason (a push always asks, decision 49).
+    const push = (): GateVerdict => ({
+      decision: 'ask',
+      action: 'push',
+      reasons: ['the command mentions git push, which leaves the machine'],
+    });
+    await expect(r.adapter.spawn(spawnOpts(r, 'scenario:happy', push))).rejects.toThrow(
+      /mentions a push, and a push always asks the user \(decision 49\)/,
+    );
   });
 
   it('streams raw terminal chunks and their stripped text; exit 0 finishes with the last lines', async () => {
@@ -374,6 +383,18 @@ describe('PtyAdapter', () => {
     expect(outputs(r, 'text')).not.toContain('echo:');
     await r.adapter.stop(sessionId);
     expect(existsSync(join(cwd, '.galactic', 'pty'))).toBe(false);
+  });
+
+  it('carriage-return redraws (a spinner) are coalesced into about one chunk a second', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:spinner'));
+    await waitFor(() => of(r, 'agent.finished').length === 1, 'finished');
+    const chunks = of(r, 'agent.output').filter((e) => e.kind === 'terminal');
+    const frames = chunks.filter((e) => e.text.includes('working'));
+    // 20 frames over 2 s: ten-a-second batching would give about 20 rows.
+    expect(frames.length).toBeLessThanOrEqual(6);
+    expect(chunks.map((e) => e.text).join('')).toContain('working 20');
+    expect(outputs(r, 'text')).toContain('spun');
   });
 
   it('a long answer or typed line is typed as is, with a warning in the transcript', async () => {

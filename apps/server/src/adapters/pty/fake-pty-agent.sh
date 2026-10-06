@@ -15,12 +15,14 @@
 #   env         its agent marker, process group and PTY_TEST_SECRET; exit 0
 #   fails       exit 3
 #   aider       "Add notes.md to the chat? (Y)es/(N)o [Yes]: " — "answer=<line>", then the prompt
+#   spinner     20 carriage-return redraws over 2 s, then "spun"; exit 0
 #   size        "task bytes: <n> ends: <last 12 characters>", then the prompt
 #
 # A line "Read your instructions from <path>" (a long message, P8-08 review) is replaced by the
 # file's contents, first line or later; `--prompt-file <path>` gives the task from a file
 # (`{promptFile}`) instead of reading it from the terminal. At the prompt, a line from a file is
 # echoed as "file echo: <bytes> bytes, ends: <last 12 characters>".
+#
 # Run alone: bash fake-pty-agent.sh (bash: `read -t`; a trapped Ctrl-C does not end a plain read)
 
 interrupted=0
@@ -151,6 +153,16 @@ case "$task" in
       printf '\n'
     fi
     repl
+    ;;
+  *scenario:spinner*)
+    i=1
+    while [ "$i" -le 20 ]; do
+      printf '\r%s working %s' '|/-\\' "$i"
+      sleep 0.1
+      i=$((i + 1))
+    done
+    printf '\nspun\n'
+    exit 0
     ;;
   *scenario:size*)
     printf 'task bytes: %s ends: %s\n' "${#task}" "${task: -12}"
