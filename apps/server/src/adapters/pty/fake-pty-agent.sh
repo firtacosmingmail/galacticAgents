@@ -11,6 +11,8 @@
 #   long        30 steps of 0.1 s, then exit 0
 #   echo        "ready", then the prompt
 #   stalls      "working", 1 s of silence, "done", exit 0
+#   movesOn     "Which one? ", then carries on without an answer; exit 0
+#   env         its agent marker, process group and PTY_TEST_SECRET; exit 0
 #   fails       exit 3
 #
 # Run alone: bash fake-pty-agent.sh (bash: `read -t`; a trapped Ctrl-C does not end a plain read)
@@ -101,6 +103,18 @@ case "$task" in
     printf 'working\n'
     sleep 1
     printf 'done\n'
+    exit 0
+    ;;
+  *scenario:movesOn*)
+    printf 'Which one? '
+    sleep 0.6
+    printf '\nnever mind, carrying on\n'
+    sleep 0.4
+    printf 'finished on my own\n'
+    exit 0
+    ;;
+  *scenario:env*)
+    printf 'agent=%s pgid=%s secret=%s\n' "$GALACTIC_AGENT_ID" "$(ps -o pgid= -p $$ | tr -d ' ')" "${PTY_TEST_SECRET:-none}"
     exit 0
     ;;
   *scenario:fails*)

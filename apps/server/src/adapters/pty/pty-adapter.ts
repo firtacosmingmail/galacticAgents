@@ -511,7 +511,8 @@ export class PtyAdapter implements AgentAdapter {
     session: Session,
     found: Exclude<ReturnType<typeof detect>, { kind: 'idle' } | undefined>,
   ): void {
-    const context = session.recent.slice(-CONTEXT_LINES - 1, -1).filter((l) => l !== found.line);
+    // The lines before the prompt (the prompt itself is the cursor's line, not one of them).
+    const context = session.recent.slice(-CONTEXT_LINES).filter((l) => l !== found.line);
     const lead =
       found.kind === 'permission'
         ? 'The terminal agent asks for confirmation (GalacticAgents cannot see what it would do):'
