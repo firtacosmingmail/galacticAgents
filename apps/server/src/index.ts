@@ -15,6 +15,7 @@ import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import type { AgentAdapter } from '@galactic/protocol';
 import { AcpAdapter } from './adapters/acp/index.js';
+import { PtyAdapter } from './adapters/pty/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { BACKUP_CHECK_INTERVAL_MS, BACKUP_DIR, BackupService } from './db/backup.js';
@@ -83,7 +84,8 @@ for (const take of launches.taken) {
 }
 
 // Adapters: the fake one always (dev mode without Claude), the real one for Claude Code, and the
-// ACP one for any ACP agent when `acp.command` is configured (P8-07).
+// ACP one for any ACP agent when `acp.command` is configured (P8-07), the PTY one for a
+// command-line agent when `pty.command` is (P8-08; node-pty loads at its first spawn).
 const fake = new FakeAdapter();
 const adapters: AgentAdapter[] = [
   fake,
@@ -106,6 +108,33 @@ const adapters: AgentAdapter[] = [
             ...(config.acp.passEnv ? { passEnv: config.acp.passEnv } : {}),
             ...(config.acp.mode ? { mode: config.acp.mode } : {}),
             ...(config.acp.allowPermissiveMode ? { allowPermissiveMode: true } : {}),
+          },
+          onError,
+        }),
+      ]
+    : []),
+  ...(config.pty
+    ? [
+        new PtyAdapter({
+          supervisor,
+          agent: {
+            command: config.pty.command,
+            ...(config.pty.args ? { args: config.pty.args } : {}),
+            ...(config.pty.passEnv ? { passEnv: config.pty.passEnv } : {}),
+            ...(config.pty.idlePattern ? { idlePattern: config.pty.idlePattern } : {}),
+            ...(config.pty.questionPatterns
+              ? {
+                  questionPatterns: config.pty.questionPatterns.map((q) => ({
+                    pattern: q.pattern,
+                    kind: q.kind,
+                    ...(q.flags !== undefined ? { flags: q.flags } : {}),
+                    ...(q.yes !== undefined ? { yes: q.yes } : {}),
+                    ...(q.no !== undefined ? { no: q.no } : {}),
+                  })),
+                }
+              : {}),
+            ...(config.pty.quietMs !== undefined ? { quietMs: config.pty.quietMs } : {}),
+            ...(config.pty.idleAfterMs !== undefined ? { idleAfterMs: config.pty.idleAfterMs } : {}),
           },
           onError,
         }),

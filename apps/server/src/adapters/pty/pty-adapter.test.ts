@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentEvent, GateCheckOptions, GateVerdict, ToolCall } from '@galactic/protocol';
+import type { AgentAdapter, AgentEvent, GateCheckOptions, GateVerdict, ToolCall } from '@galactic/protocol';
 import { MemoryProcessStore } from '../../runtime/process-store.js';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
 import { FAKE_PTY_AGENT, FAKE_PTY_IDLE } from './fake-agent.js';
@@ -36,12 +36,20 @@ afterEach(async () => {
   }
 });
 
-function rig(agent: Partial<PtyAgentCommand> = {}): Rig {
+function rig(agent: { [K in keyof PtyAgentCommand]?: PtyAgentCommand[K] | undefined } = {}): Rig {
   const store = new MemoryProcessStore();
   const supervisor = new ProcessSupervisor({ store, defaults: { graceMs: 2_000, termMs: 1_000 } });
   const adapter = new PtyAdapter({
     supervisor,
-    agent: { command: 'bash', args: [FAKE_PTY_AGENT], idlePattern: FAKE_PTY_IDLE, quietMs: 120, ...agent },
+    agent: Object.fromEntries(
+      Object.entries({
+        command: 'bash',
+        args: [FAKE_PTY_AGENT],
+        idlePattern: FAKE_PTY_IDLE,
+        quietMs: 120,
+        ...agent,
+      }).filter(([, v]) => v !== undefined),
+    ) as unknown as PtyAgentCommand,
     graceMs: 2_000,
     interruptIdleMs: 2_000,
   });
@@ -228,7 +236,7 @@ describe('PtyAdapter', () => {
       }),
     ).rejects.toThrow(/claude-sdk/);
     await expect(r.adapter.spawn({ ...spawnOpts(r, 'x'), bare: true })).rejects.toThrow(/bare/);
-    expect(r.adapter.resumeSession).toBeUndefined();
+    expect((r.adapter as AgentAdapter).resumeSession).toBeUndefined();
   });
 
   it('helpers: signal names, the spawn helper made executable', () => {

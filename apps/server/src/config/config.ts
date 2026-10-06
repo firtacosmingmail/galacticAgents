@@ -148,6 +148,46 @@ export const ConfigFile = z.object({
       allowPermissiveMode: z.boolean().optional(),
     })
     .optional(),
+  /**
+   * The command-line agent the `pty` runtime runs under a pseudo-terminal for every session
+   * (P8-08; TECHNOLOGY §3.3), e.g. `{"command": "aider", "args": ["--no-auto-commits"],
+   * "idlePattern": "^> $"}`; also `GALACTIC_PTY_COMMAND` (like `GALACTIC_ACP_COMMAND`). Absent:
+   * no `pty` runtime. `passEnv` names the server variables it needs (credentials by name; never
+   * `GALACTIC_*`). `idlePattern` is its input prompt (a regular expression on the cursor's line):
+   * the turn is over; `questionPatterns` add question shapes (`kind` `permission` or
+   * `clarification`, `yes`/`no` what is typed); `quietMs` is the silence after which the screen
+   * is read (default 750); `idleAfterMs` ends a turn after that much silence when there is no
+   * prompt to recognise. A terminal agent runs only where the permission table allows what it
+   * cannot classify (the trusted preset; proposed decision 110).
+   */
+  pty: z
+    .object({
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+      passEnv: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .refine((k) => !/^GALACTIC_/i.test(k), 'pty.passEnv may not name GALACTIC_* variables'),
+        )
+        .optional(),
+      idlePattern: z.string().min(1).optional(),
+      questionPatterns: z
+        .array(
+          z.object({
+            pattern: z.string().min(1),
+            flags: z.string().optional(),
+            kind: z.enum(['permission', 'clarification']),
+            yes: z.string().optional(),
+            no: z.string().optional(),
+          }),
+        )
+        .optional(),
+      quietMs: z.number().int().min(50).max(60_000).optional(),
+      idleAfterMs: z.number().int().min(500).optional(),
+    })
+    .optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -226,6 +266,8 @@ export interface ServerConfig {
     mode?: string | undefined;
     allowPermissiveMode?: boolean | undefined;
   };
+  /** The terminal agent (P8-08); absent = no `pty` runtime registered. */
+  pty?: NonNullable<ConfigFile['pty']>;
 }
 
 export interface LoadedConfig {
@@ -421,6 +463,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
           args: acpEnv.slice(1),
         }
       : file.acp;
+  const ptyEnv = parseAcpCommand(env['GALACTIC_PTY_COMMAND'], 'GALACTIC_PTY_COMMAND');
+  const pty =
+    ptyEnv && ptyEnv.length > 0
+      ? { ...file.pty, command: ptyEnv[0]!, args: ptyEnv.slice(1) }
+      : file.pty;
   const envOverrides: SettingName[] = [];
   if (runtimeEnv !== undefined) envOverrides.push('stewardRuntime');
   if (warnEnv !== undefined) envOverrides.push('budgets');
@@ -471,6 +518,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       ...backupsOf(file.backups, env['GALACTIC_BACKUPS']),
       ...(stewardRuntime ? { stewardRuntime } : {}),
       ...(acp ? { acp } : {}),
+      ...(pty ? { pty } : {}),
     },
     tokenGenerated,
     warnings,
@@ -505,7 +553,10 @@ export function expandHome(path: string): string {
  * `GALACTIC_ACP_COMMAND`: a JSON array of strings (`["cmd", "an arg with spaces"]`), or a command
  * line split on whitespace (no quoting). `undefined` when unset or empty.
  */
-export function parseAcpCommand(value: string | undefined): string[] | undefined {
+export function parseAcpCommand(
+  value: string | undefined,
+  name = 'GALACTIC_ACP_COMMAND',
+): string[] | undefined {
   const text = value?.trim();
   if (!text) return undefined;
   if (text.startsWith('[')) {
@@ -513,7 +564,7 @@ export function parseAcpCommand(value: string | undefined): string[] | undefined
     try {
       parsed = JSON.parse(text);
     } catch {
-      throw new Error(`GALACTIC_ACP_COMMAND is not a JSON array: ${text}`);
+      throw new Error(`${name} is not a JSON array: ${text}`);
     }
     if (
       !Array.isArray(parsed) ||
@@ -521,7 +572,7 @@ export function parseAcpCommand(value: string | undefined): string[] | undefined
       !parsed.every((p) => typeof p === 'string') ||
       !(parsed[0] as string).trim()
     ) {
-      throw new Error('GALACTIC_ACP_COMMAND must be a non-empty JSON array of strings');
+      throw new Error(`${name} must be a non-empty JSON array of strings`);
     }
     return parsed as string[];
   }
