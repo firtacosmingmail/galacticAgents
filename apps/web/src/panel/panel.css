@@ -564,6 +564,24 @@
   height: 40dvh;
   min-height: 200px;
 }
+/* list mode on a phone (P7-03): the one-tap way back to the scene, where the scene would be */
+.pnl-stack > .pnl-scene-offer {
+  grid-area: scene;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--pnl-line);
+}
+.pnl-scene-offer-text {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--pnl-muted);
+}
+.pnl-scene-offer-button.pnl-scene-toggle {
+  min-height: 44px;
+  padding: 4px 14px;
+}
 /* in the stack they keep their content's height (the stack scrolls, not they) */
 .pnl-stack > .pnl-nav {
   grid-area: nav;

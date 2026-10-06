@@ -10,11 +10,19 @@ import {
   Task,
   TranscriptChunk,
 } from './domain.js';
-import { EventEnvelope } from './events.js';
+import { EVENT_TYPES, EventEnvelope } from './events.js';
+import { RequestOrigin } from './enums.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
 // ---------------------------------------------------------------------------
+
+/**
+ * Stands in for the token on a device the server authenticates by its Tailscale identity (P7-02):
+ * sent where the token would go, ignored by the server, never stored. It can never be the real
+ * token: the server refuses it in `config.json` and `GALACTIC_TOKEN`, the client in a QR fragment.
+ */
+export const IDENTITY_TOKEN = 'tailscale-identity';
 
 /** WebSocket close code for a bad or missing token (private 4xxx range). */
 export const CLOSE_UNAUTHORIZED = 4401;
@@ -87,6 +95,30 @@ export type Snapshot = Omit<SnapshotMessage, 'type'>;
 export const EventMessage = EventEnvelope.extend({ type: z.literal('event') });
 export type EventMessage = z.infer<typeof EventMessage>;
 
+/** An `event` frame read for its envelope only: any event `type`, the rest left unchecked. */
+const EventFrameEnvelope = z.object({
+  type: z.literal('event'),
+  seq: z.number().int().positive(),
+  at: Timestamp,
+  event: z.object({ type: z.string().min(1) }),
+});
+
+/**
+ * Protocol evolution (TECHNOLOGY §6.3): an `event` frame whose envelope is valid but whose event
+ * `type` this build does not know — a newer server added it (e.g. `body.retired`, P7-07). The
+ * client skips such an event and advances its `seq` past it, instead of treating the frame as
+ * unreadable (which would resume from the same `seq` and receive it again, forever). Undefined for
+ * anything else, including a malformed event of a *known* type: that is a server bug, and still
+ * an unreadable message.
+ */
+export function unknownEventFrame(data: unknown): { seq: number; eventType: string } | undefined {
+  const frame = EventFrameEnvelope.safeParse(data);
+  if (!frame.success) return undefined;
+  const eventType = frame.data.event.type;
+  if ((EVENT_TYPES as readonly string[]).includes(eventType)) return undefined;
+  return { seq: frame.data.seq, eventType };
+}
+
 /** Marks the end of the catch-up replay; the client is now live. */
 export const CaughtUpMessage = z.object({
   type: z.literal('caught_up'),
@@ -156,7 +188,10 @@ export const ServerMessage = z.discriminatedUnion('type', [
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 
-/** Response of `GET /health`. The token is only returned to loopback callers. */
+/**
+ * Response of `GET /health`. The token is only returned to a local caller (`origin: 'local'`);
+ * never to a remote one, whatever credential it holds (P7-02).
+ */
 export const HealthResponse = z.object({
   ok: z.literal(true),
   name: z.literal('galactic-agents'),
@@ -165,5 +200,13 @@ export const HealthResponse = z.object({
   logId: z.string().optional(),
   seq: z.number().int().nonnegative(),
   token: z.string().optional(),
+  /** How the server classified this request (P7-02; TECHNOLOGY §8 "Remote clients"). */
+  origin: RequestOrigin.optional(),
+  /**
+   * The Tailscale login the server accepted as this request's credential (P7-02): present only
+   * when identity headers are enabled and this request passed every check. A client holding no
+   * token may then connect without one; the server ignores the token it sends.
+   */
+  identity: z.string().optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponse>;

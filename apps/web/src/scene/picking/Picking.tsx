@@ -22,7 +22,7 @@ import { getSatellite, satelliteFrames } from '../satellites/registry.js';
 import { prefersReducedMotion } from '../motion.js';
 import { bodyName, outlineBody, selectionBody } from './body-action.js';
 import { ClickTracker } from './click.js';
-import { pixelScale, type PickSphere } from './pick.js';
+import { pickSlop, pixelScale, POINTER_SLOP, type PickSlop, type PickSphere } from './pick.js';
 import {
   hoverTarget,
   occluded,
@@ -196,21 +196,24 @@ export function Picking({ outline }: PickingProps) {
      * in `tools`): when no satellite is under it, or the marker is nearer the pointer on screen
      * than every satellite (a Steward's robot stands beside its task's pin).
      */
-    const markerAt = (result: ScenePick): string | undefined => {
-      const hit = taskMarkerHit(tools.ray, pxScale(), tools.bodies);
+    const markerAt = (result: ScenePick, slop: PickSlop = POINTER_SLOP): string | undefined => {
+      const hit = taskMarkerHit(tools.ray, pxScale(), tools.bodies, undefined, slop.markerPx);
       if (!hit) return undefined;
       const satellite = result.satellites[0];
       return !satellite || hit.px < satellite.screenDistance ? hit.frame.taskId : undefined;
     };
     /** The question beacon under the pointer (P4-05), if any. */
-    const beaconAt = (at: Point) => beaconUnder(aim(at));
-    const pick = (at: Point): ScenePick => {
+    const beaconAt = (at: Point, slop: PickSlop = POINTER_SLOP) =>
+      beaconUnder(aim(at), undefined, slop.beaconPx);
+    /** `slop`: a tap's targets are larger than a mouse's (P7-03); the hover is never a finger's. */
+    const pick = (at: Point, slop: PickSlop = POINTER_SLOP): ScenePick => {
       const ray = aim(at);
       return pickScene(
         ray,
         bodySpheres(tools.bodies),
         satelliteSpheres(tools.satellites),
         pxScale(),
+        slop,
       );
     };
     /**
@@ -366,8 +369,9 @@ export function Picking({ outline }: PickingProps) {
       picking.setHover(undefined);
       grace = undefined;
       const at = pointAt(e);
+      const slop = pickSlop(e.pointerType);
       // A question beacon goes to its asker and opens its question in the inbox (P4-05, P4-13).
-      const beacon = beaconAt(at);
+      const beacon = beaconAt(at, slop);
       if (beacon) {
         activateBeacon(beacon.questionId);
         return;
@@ -375,8 +379,8 @@ export function Picking({ outline }: PickingProps) {
       // The satellite hovered at the press (picked, or kept by the grace) may have orbited out
       // from under the pointer since: the click is still meant for it, while it can be seen.
       if (kept && seen(kept) && activateSatellite(kept)) return;
-      const result = pick(at);
-      const marker = markerAt(result);
+      const result = pick(at, slop);
+      const marker = markerAt(result, slop);
       if (marker) {
         activateTask(marker, at);
         return;
@@ -409,6 +413,19 @@ export function Picking({ outline }: PickingProps) {
       invalidate();
     };
     const onWheel = () => noteUserCameraInput();
+    // P7-03: a tap is handled on `pointerup` above. The browser then synthesises mouse events and
+    // a `click` from the touch, a moment later, at the same point of the page — by when the tap
+    // may have scrolled the inbox into view (a beacon) or opened a card, so the "ghost" click
+    // lands on whatever is there now (a navigation row, selecting something else). Cancelling
+    // `touchend` drops those compatibility events; nothing on the canvas listens for them.
+    // It also keeps the focus where it was, so a text field being typed in would keep the phone's
+    // keyboard up over the scene: a tap on the scene blurs it, as a tap anywhere else would.
+    const onTouchEnd = (e: TouchEvent) => {
+      if (!e.cancelable) return;
+      e.preventDefault();
+      const active = canvas.ownerDocument.activeElement;
+      if (active instanceof HTMLElement && isTextField(active)) active.blur();
+    };
     const resizes =
       typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(forgetRect);
     resizes?.observe(canvas);
@@ -420,6 +437,7 @@ export function Picking({ outline }: PickingProps) {
     canvas.addEventListener('pointerenter', forgetRect);
     canvas.addEventListener('pointerleave', onLeave);
     canvas.addEventListener('wheel', onWheel, { passive: true });
+    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     window.addEventListener('resize', forgetRect);
     window.addEventListener('scroll', forgetRect, { capture: true, passive: true });
     return () => {
@@ -432,6 +450,7 @@ export function Picking({ outline }: PickingProps) {
       canvas.removeEventListener('pointerenter', forgetRect);
       canvas.removeEventListener('pointerleave', onLeave);
       canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('touchend', onTouchEnd);
       window.removeEventListener('resize', forgetRect);
       window.removeEventListener('scroll', forgetRect, { capture: true });
       canvas.style.cursor = '';
@@ -691,3 +710,24 @@ export function OutlineSync({
   );
   return null;
 }
+
+/** A field the keyboard types into: a text-like `<input>`, a `<textarea>`, an editable element. */
+export function isTextField(el: HTMLElement): boolean {
+  if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') return true;
+  if (el instanceof HTMLTextAreaElement) return true;
+  if (!(el instanceof HTMLInputElement)) return false;
+  return !NON_TEXT_INPUTS.has(el.type);
+}
+
+const NON_TEXT_INPUTS = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'hidden',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+]);

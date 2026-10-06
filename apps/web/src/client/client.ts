@@ -1,4 +1,4 @@
-import { CLOSE_UNAUTHORIZED, ServerMessage } from '@galactic/protocol';
+import { CLOSE_UNAUTHORIZED, ServerMessage, unknownEventFrame } from '@galactic/protocol';
 
 export type ConnectionStatus =
   'idle' | 'connecting' | 'catching_up' | 'live' | 'disconnected' | 'unauthorized' | 'closed';
@@ -135,6 +135,13 @@ export class GalacticClient {
       }
       const parsed = ServerMessage.safeParse(data);
       if (!parsed.success) {
+        // An event type a newer server added: skip it and move past its seq (TECHNOLOGY §6.3,
+        // protocol evolution). Closing would resume from the same seq and loop on it.
+        const unknown = unknownEventFrame(data);
+        if (unknown) {
+          this.skipUnknownEvent(unknown.seq, unknown.eventType, socket);
+          return;
+        }
         this.setStatus('disconnected', 'unreadable server message');
         socket.close(4002, 'unreadable message');
         return;
@@ -197,6 +204,20 @@ export class GalacticClient {
         this.opts.onMessage(message);
         return;
     }
+  }
+
+  /** An event this build cannot read: ordered like any event, then skipped (not applied). */
+  private skipUnknownEvent(seq: number, eventType: string, socket: WebSocket): void {
+    const expected = (this._lastEventId ?? 0) + 1;
+    if (seq < expected) return;
+    if (seq > expected && this._lastEventId !== undefined) {
+      socket.close(4002, 'gap in event stream');
+      return;
+    }
+    console.warn(
+      `galactic: skipping event ${seq} of a type this page does not know (${eventType}); reload to get the newer build`,
+    );
+    this.advance(seq);
   }
 
   private advance(seq: number): void {

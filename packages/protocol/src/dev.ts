@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Id } from './primitives.js';
 import { QuestionKind } from './enums.js';
+import { isRetiredBody, type Body, type Project } from './domain.js';
 
 /**
  * The scene harness (P4-06): development-only routes under `/dev/harness/*` (registered only with
@@ -140,5 +141,75 @@ export interface HarnessClearResponse {
   tasks: Id[];
   projects: Id[];
   /** What could not be cleared and why (e.g. a harness project holding a real, open task). */
+  skipped: { id: Id; reason: string }[];
+}
+
+// ---------------------------------------------------------------------------
+// Demo work (P0-16 `/dev/seed`, P7-07)
+// ---------------------------------------------------------------------------
+
+/**
+ * The key of the `meta` flag on the planet and the project `/dev/seed` makes (P7-07). A demo body
+ * is never chosen or assigned for real work and is retired (`body.retired`) once its project is
+ * archived; the ops console's "Clear demo projects" (`POST /dev/demo/clear`) archives every demo
+ * project. Harness rows (`meta.harness`) are never demo rows: the harness has its own Clear.
+ */
+export const DEMO_META_KEY = 'demo';
+
+/** The names and workspace `/dev/seed` has always used (P0-16), for rows made before the flag. */
+const DEMO_PLANET_NAME = /^Demo planet \d+$/;
+const DEMO_PROJECT_NAME = /^Demo project \d+$/;
+const DEMO_WORKSPACE = /^\/tmp\/galactic-demo-\d+$/;
+
+/**
+ * Whether a body is a demo planet: flagged `meta.demo`, or — made before the flag (P7-07's
+ * legacy rule) — a planet outside the catalogue (no parent, no `meta.orbit`, not reserved) named
+ * exactly "Demo planet n". Catalogue bodies always carry `meta.orbit` (migration 0005), so none
+ * ever matches.
+ */
+export function isDemoBody(body: Body): boolean {
+  if (body.meta?.[DEMO_META_KEY] === true) return true;
+  return (
+    body.kind === 'planet' &&
+    body.parentId === undefined &&
+    typeof body.meta?.['orbit'] !== 'number' &&
+    body.meta?.['reserved'] !== true &&
+    DEMO_PLANET_NAME.test(body.name)
+  );
+}
+
+/**
+ * A body the catalogue may hand out (P7-07): a seeded planet or moon (it has a `meta.orbit`,
+ * migration 0005), never a demo body (`/dev/seed`, `isDemoBody`) or a retired one. A planet or
+ * moon made outside the catalogue is never chosen for real work: it would silently raise decision
+ * 1's planet cap and bring a made-up planet back into the scene. One rule for both sides: the
+ * server's body choice (`domain/catalogue.ts`, `domain/parking.ts`) and the proposal card's list
+ * of free bodies, so the card never offers a body the server would refuse.
+ */
+export const isCatalogued = (body: Body): boolean =>
+  typeof body.meta?.['orbit'] === 'number' && !isDemoBody(body) && !isRetiredBody(body);
+
+/**
+ * Whether a project is seeded demo work: flagged `meta.demo`, or — made before the flag — named
+ * exactly "Demo project n" with `/dev/seed`'s workspace `/tmp/galactic-demo-n`. Never a harness
+ * project.
+ */
+export function isDemoProject(project: Project): boolean {
+  if (isHarnessMeta(project.meta)) return false;
+  if (project.meta?.[DEMO_META_KEY] === true) return true;
+  return DEMO_PROJECT_NAME.test(project.name) && DEMO_WORKSPACE.test(project.workspace);
+}
+
+/** `POST /dev/demo/clear`: what "Clear demo projects" archived and retired. */
+export interface DemoClearResponse {
+  seq: number;
+  /** Tasks of demo projects closed (when open) and archived. */
+  tasks: Id[];
+  /** Demo projects closed or cancelled (when open) and archived. */
+  projects: Id[];
+  /** Demo bodies retired (`body.retired`): gone from the world, never reused. */
+  retired: Id[];
+  /** What could not be cleared and why (a demo project with a running agent, a demo body still
+   * hosting real work). */
   skipped: { id: Id; reason: string }[];
 }

@@ -1,0 +1,18 @@
+/* Push notifications on this device (P7-04): reuses the desktop notifications' ntf-* styles. */
+.push-details {
+  margin-top: 4px;
+}
+.push-devices ul {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.push-devices li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}

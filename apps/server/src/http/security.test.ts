@@ -5,7 +5,9 @@ import {
   isAllowedOrigin,
   isLoopback,
   isLoopbackOrigin,
+  isAuthorized,
   isRemoteRequest,
+  tailscaleIdentityOf,
   tokenMatches,
 } from './security.js';
 
@@ -86,5 +88,92 @@ describe('security helpers', () => {
     expect(isRemoteRequest(req('127.0.0.1', { host: '127.0.0.1:7777' }))).toBe(false);
     expect(isRemoteRequest(req('::1', { host: '[::1]:7777' }))).toBe(false);
     expect(isRemoteRequest(req('127.0.0.1', { host: 'localhost:7777' }))).toBe(false);
+  });
+
+  it('counts any proxy header family as remote (P7-02)', () => {
+    const req = (headers: Record<string, string>) => ({
+      socket: { remoteAddress: '127.0.0.1' },
+      headers,
+    });
+    for (const h of ['tailscale-app-capabilities', 'tailscale-headers-info', 'x-forwarded-port']) {
+      expect(isRemoteRequest(req({ [h]: 'x' })), h).toBe(true);
+    }
+    expect(isRemoteRequest(req({ via: '1.1 tailscale' }))).toBe(true);
+    expect(isRemoteRequest(req({ 'x-real-ip': '100.64.1.2' }))).toBe(true);
+    expect(isRemoteRequest(req({ host: 'localhost:4321', 'user-agent': 'x' }))).toBe(false);
+  });
+});
+
+describe('Tailscale identity (P7-02)', () => {
+  const HOST = 'mymac.tail1234.ts.net';
+  const config = {
+    token: 'tok-0123456789abcdef',
+    remoteHost: HOST,
+    tailscaleIdentityLogins: ['me@example.com'],
+  };
+  const req = (
+    headers: Record<string, string | string[] | undefined>,
+    remoteAddress: string | undefined = '127.0.0.1',
+  ) => ({ socket: { remoteAddress }, headers });
+  const serve = { host: HOST, 'tailscale-user-login': 'me@example.com' };
+
+  it('accepts a listed login forwarded by Serve under the Serve name', () => {
+    expect(tailscaleIdentityOf(req(serve), config)).toBe('me@example.com');
+    expect(tailscaleIdentityOf(req({ ...serve, host: `${HOST}:8443` }), config)).toBe(
+      'me@example.com',
+    );
+    expect(tailscaleIdentityOf(req({ ...serve, origin: `https://${HOST}` }), config)).toBe(
+      'me@example.com',
+    );
+    expect(tailscaleIdentityOf(req(serve, '::ffff:127.0.0.1'), config)).toBe('me@example.com');
+  });
+
+  it('is off without the opt-in or without remoteHost', () => {
+    expect(tailscaleIdentityOf(req(serve), { token: config.token })).toBeUndefined();
+    expect(
+      tailscaleIdentityOf(req(serve), { token: config.token, remoteHost: HOST }),
+    ).toBeUndefined();
+    expect(
+      tailscaleIdentityOf(req(serve), { ...config, tailscaleIdentityLogins: [] }),
+    ).toBeUndefined();
+    expect(
+      tailscaleIdentityOf(req(serve), {
+        token: config.token,
+        tailscaleIdentityLogins: ['me@example.com'],
+      }),
+    ).toBeUndefined();
+  });
+
+  it('refuses anything that does not look exactly like Serve', () => {
+    const refused: [Record<string, string | string[] | undefined>, string?][] = [
+      [{ ...serve, 'tailscale-user-login': 'other@example.com' }],
+      [{ ...serve, host: 'localhost' }],
+      [{ ...serve, host: 'other.tail1234.ts.net' }],
+      [{ ...serve, host: undefined }],
+      [{ ...serve, origin: 'https://evil.example.com' }],
+      [{ ...serve, origin: `http://${HOST}` }],
+      [{ ...serve, origin: 'null' }],
+      [{ ...serve, origin: [`https://${HOST}`, `https://${HOST}`] }],
+      [{ ...serve, 'tailscale-user-login': ['me@example.com', 'me@example.com'] }],
+      [{ ...serve, 'tailscale-user-login': 'me@example.com, other@example.com' }],
+      [{ host: HOST }],
+      [{ ...serve, 'tailscale-funnel-request': '?1' }],
+      [serve, '100.101.102.103'],
+      [serve, ''],
+    ];
+    for (const [headers, address] of refused) {
+      expect(
+        tailscaleIdentityOf(req(headers, address), config),
+        JSON.stringify([headers, address]),
+      ).toBeUndefined();
+    }
+  });
+
+  it('authorizes by token or accepted identity', () => {
+    expect(isAuthorized(req({ authorization: 'Bearer tok-0123456789abcdef' }), config)).toBe(true);
+    expect(isAuthorized(req({ authorization: 'Bearer wrong' }), config)).toBe(false);
+    expect(isAuthorized(req({ authorization: 'tok-0123456789abcdef' }), config)).toBe(false);
+    expect(isAuthorized(req(serve), config)).toBe(true);
+    expect(isAuthorized(req(serve), { token: config.token })).toBe(false);
   });
 });

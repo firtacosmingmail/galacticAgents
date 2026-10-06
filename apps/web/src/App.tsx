@@ -1,12 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
-import { PROTOCOL_VERSION } from '@galactic/protocol';
+import { PROTOCOL_VERSION, type DemoClearResponse } from '@galactic/protocol';
+import { describeDemoClear } from './console/demo-clear.js';
 import { useAppStore } from './state/store.js';
 import {
+  confirmToken,
   discoverToken,
   forgetToken,
+  initialToken,
+  refuseToken,
   saveToken,
   startSession,
-  TOKEN_KEY,
 } from './client/session.js';
 import { AgentsConsole } from './console/AgentsConsole.js';
 import { HierarchyConsole } from './console/hierarchy/HierarchyConsole.js';
@@ -18,13 +21,9 @@ import { captureFpsFlag } from './scene/fps.js';
 import './app.css';
 
 export function App() {
-  const [token, setToken] = useState<string | undefined>(() => {
-    try {
-      return localStorage.getItem(TOKEN_KEY) ?? undefined;
-    } catch {
-      return undefined;
-    }
-  });
+  // A token handed over by the settings page's QR code wins over a saved one, and leaves the
+  // address bar before anything else reads the URL (P7-02). It is saved only once it connects.
+  const [token, setToken] = useState<string | undefined>(initialToken);
   const [discovering, setDiscovering] = useState(token === undefined);
   const route = useAppStore((s) => s.route);
   useLocationSync();
@@ -52,13 +51,15 @@ export function App() {
   // A token the server refuses (config reset, another machine's token) is forgotten so the page
   // does not sit on "unauthorized": once per page life it re-discovers the current token from
   // `/health`; a second refusal falls through to the paste form.
+  // A refused QR-code token was never saved: the saved token it would have replaced is tried again.
   const status = useAppStore((s) => s.status);
   useEffect(() => {
+    if (status === 'live' && token) confirmToken(token);
     if (status !== 'unauthorized' || !token) return;
-    forgetToken();
+    const fallback = refuseToken(token);
     useAppStore.getState().reset();
-    setDiscovering(rediscoveries.current-- > 0);
-    setToken(undefined);
+    if (!fallback) setDiscovering(rediscoveries.current-- > 0);
+    setToken(fallback);
   }, [status, token]);
 
   if (!token) {
@@ -192,10 +193,12 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
   const seq = useAppStore((s) => s.world.seq);
   const lastError = useAppStore((s) => s.lastError);
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | undefined>();
 
   const setLastError = (e: string | undefined) => useAppStore.setState({ lastError: e });
-  const devPost = async (path: string, body?: unknown) => {
+  const devPost = async (path: string, body?: unknown): Promise<unknown> => {
     setBusy(true);
+    setNotice(undefined);
     try {
       const res = await fetch(path, {
         method: 'POST',
@@ -213,6 +216,7 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
         setLastError(`${path} failed: ${res.status}${hint}`);
       } else {
         setLastError(undefined);
+        return await res.json().catch(() => undefined);
       }
     } catch (e) {
       setLastError(`${path} failed: ${(e as Error).message}`);
@@ -227,6 +231,10 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
       summary: `Fake progress from the browser at ${new Date().toLocaleTimeString()}`,
     });
   const seed = () => devPost('/dev/seed');
+  const clearDemo = async () => {
+    const out = (await devPost('/dev/demo/clear')) as DemoClearResponse | undefined;
+    if (out) setNotice(describeDemoClear(out));
+  };
 
   return (
     <section className="status">
@@ -234,6 +242,11 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
       <span>seq {seq}</span>
       {detail && <span className="muted">{detail}</span>}
       {lastError && <span className="error">{lastError}</span>}
+      {notice && (
+        <span className="muted" role="status">
+          {notice}
+        </span>
+      )}
       <span className="spacer" />
       <button onClick={emitFake} disabled={busy || status !== 'live'}>
         Emit fake event
@@ -244,6 +257,14 @@ function StatusBar({ token, onForget }: { token: string; onForget: () => void })
         title="Creates a demo planet + project"
       >
         Seed demo project
+      </button>
+      <button
+        onClick={() => void clearDemo()}
+        disabled={busy || status !== 'live'}
+        className="secondary"
+        title="Archives every seeded demo project and retires its planet (never real work or harness items)"
+      >
+        Clear demo projects
       </button>
       <button onClick={onForget} className="secondary">
         Forget token

@@ -133,6 +133,13 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
       const { host: _host, movedTo: _marker, ...freed } = body;
       return { ...next, bodies: { ...next.bodies, [event.bodyId]: freed } };
     }
+    case 'body.retired': {
+      // A retired demo body (P7-07) is gone from the world for good, as from the server's
+      // snapshot (which leaves its tombstone row out).
+      if (!next.bodies[event.bodyId]) return next;
+      const { [event.bodyId]: _gone, ...bodies } = next.bodies;
+      return { ...next, bodies };
+    }
     case 'body.moved': {
       // The old body shows "moved to …" (P2-02, decision 15) until `body.freed`; a task that
       // joined a project lives on the project's body without hosting it (`intoProjectId`).
@@ -168,7 +175,9 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
           updatedAt: at,
         }),
       };
-    case 'question.answered':
+    case 'question.answered': {
+      // The answer's idempotency key goes on the row as the server keeps it (P7-05).
+      const prior = next.questions[event.questionId]?.meta;
       return {
         ...next,
         questions: patch(next.questions, event.questionId, {
@@ -177,8 +186,10 @@ export function applyEvent(state: WorldState, { seq, at, event }: EventEnvelope)
           answeredBy: event.answeredBy,
           version: event.version,
           updatedAt: at,
+          ...(event.answerId ? { meta: { ...prior, answerId: event.answerId } } : {}),
         }),
       };
+    }
 
     case 'proposal.created':
       return { ...next, proposals: { ...next.proposals, [event.proposal.id]: event.proposal } };

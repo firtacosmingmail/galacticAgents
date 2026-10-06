@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
 import {
@@ -10,15 +9,15 @@ import {
   HarnessQuestionBody,
   HarnessScenarioBody,
   HarnessStateBody,
-  type Body,
-  type Project,
 } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 import type { Commands } from '../domain/commands.js';
+import { seedDemoProject } from '../domain/demo.js';
 import { DomainError } from '../domain/errors.js';
 import type { ServerConfig } from '../config/config.js';
 import type { StatusStore } from '../runtime/status-store.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
+import { clearDemoProjects } from '../runtime/demo-clear.js';
 import { NotHarnessError, SceneHarness } from '../runtime/scene-harness.js';
 import { bearerGuard, isRemoteRequest } from './security.js';
 
@@ -39,7 +38,8 @@ export interface DevRoutesOptions {
  *
  * Only `agent.*` events may be appended directly: they touch no domain table, so a client that
  * replays them and one that takes a snapshot agree. Domain state is seeded through a proper
- * command (`/dev/seed`) that writes the rows and the events together.
+ * command (`/dev/seed`) that writes the rows and the events together; `/dev/demo/clear` (P7-07)
+ * archives every seeded demo project and retires its planet.
  *
  * The scene harness (P4-06, `runtime/scene-harness.ts`) drives the scene through the same
  * commands the runtime and the panel use: fake agents without a process, their states and
@@ -83,29 +83,12 @@ export function registerDevRoutes(
       }
     });
 
-    /** Creates a demo planet with a project on it — rows and events in one command. */
+    /**
+     * Creates a demo planet with a project on it — rows and events in one command. Both carry
+     * `meta.demo` (P7-07): the planet is never reused for real work and retires with its project.
+     */
     app.post('/dev/seed', async () => {
-      const out = log.runCommand(({ tables, emit }) => {
-        const n = tables.projects.all().length + 1;
-        const now = new Date().toISOString();
-        const body: Body = { id: `b-${randomUUID()}`, kind: 'planet', name: `Demo planet ${n}` };
-        const project: Project = {
-          id: `p-${randomUUID()}`,
-          name: `Demo project ${n}`,
-          workspace: `/tmp/galactic-demo-${n}`,
-          bodyId: body.id,
-          state: 'in_progress',
-          createdAt: now,
-          updatedAt: now,
-        };
-        const host = { kind: 'project', id: project.id } as const;
-        tables.bodies.insert({ ...body, host });
-        tables.projects.insert(project);
-        emit({ type: 'body.created', body });
-        emit({ type: 'project.created', project });
-        emit({ type: 'body.assigned', bodyId: body.id, host });
-        return project;
-      });
+      const out = log.runCommand((ctx) => seedDemoProject(ctx));
       return { seq: out.events.at(-1)!.seq, projectId: out.value.id, name: out.value.name };
     });
 
@@ -113,6 +96,19 @@ export function registerDevRoutes(
       const since = Number((req.query as { since?: string }).since ?? 0);
       return { seq: log.currentSeq(), events: log.eventsSince(Number.isFinite(since) ? since : 0) };
     });
+
+    if (opts.commands) {
+      const commands = opts.commands;
+      /** "Clear demo projects" (P7-07): archives every seeded demo project, retires its planet. */
+      app.post('/dev/demo/clear', async (req, reply) => {
+        try {
+          return await clearDemoProjects(log, commands);
+        } catch (error) {
+          req.log.error(error);
+          return reply.code(500).send({ error: 'internal' });
+        }
+      });
+    }
 
     if (opts.commands && opts.statuses) {
       registerHarness(

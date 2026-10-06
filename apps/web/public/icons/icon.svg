@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<defs>
+<radialGradient id="bg" cx="50%" cy="50%" r="75%"><stop offset="0" stop-color="#1d264a"/><stop offset="1" stop-color="#0b0e17"/></radialGradient>
+<radialGradient id="planet" cx="32%" cy="30%" r="80%"><stop offset="0" stop-color="#9cbcff"/><stop offset="1" stop-color="#1f3580"/></radialGradient>
+</defs>
+<rect width="512" height="512" fill="url(#bg)"/>
+<circle cx="102.4" cy="112.64" r="4.096" fill="#e6ecff"/><circle cx="399.36" cy="87.04" r="3.072" fill="#e6ecff"/><circle cx="440.32" cy="368.64" r="3.584" fill="#e6ecff"/><circle cx="81.92" cy="409.6" r="3.072" fill="#e6ecff"/><circle cx="337.92" cy="450.56" r="2.56" fill="#e6ecff"/>
+<path d="M 71.68 256 A 184.32 61.44 0 0 1 440.32 256" fill="none" stroke="#b4c6f0" stroke-width="10.24" transform="rotate(-20 256 256)"/>
+<circle cx="256" cy="256" r="107.52" fill="url(#planet)"/>
+<path d="M 71.68 256 A 184.32 61.44 0 0 0 440.32 256" fill="none" stroke="#b4c6f0" stroke-width="10.24" transform="rotate(-20 256 256)"/>
+<circle cx="353.4" cy="278.8" r="20.48" fill="#ffb547"/>
+</svg>

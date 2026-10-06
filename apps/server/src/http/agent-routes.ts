@@ -9,6 +9,7 @@ import {
   SpawnBody,
   StopProcessesBody,
   type Actor,
+  type AnswerResponse,
   type ChatMessage,
   type ControlAction,
   type ControlResponse,
@@ -83,6 +84,22 @@ export function registerAgentRoutes(
       return undefined;
     };
     const agentId = (req: FastifyRequest) => (req.params as { id: string }).id;
+    /**
+     * Controls a remote client may not use unless the server trusts remote clients
+     * (`autoApproveRemote`; SPEC decision 90): a free-form spawn (the ops console's development
+     * tool, decision 24), stopping a Steward's leftover processes and restarting the Harmonizer.
+     * 403 `remote_control`, with nothing done; stopping, pausing, resuming or recovering an agent,
+     * answers and the work controls stay open to the phone. Work-driven spawns (a Waykeeper's
+     * Stewards, the Harmonizer's) never come through here.
+     */
+    const refuseRemoteControl = (req: FastifyRequest, reply: FastifyReply, what: string) => {
+      if (config.autoApproveRemote || originOf(req) === 'local') return false;
+      void reply.code(403).send({
+        error: 'remote_control',
+        message: `${what} only from this machine's own browser (not from a remote client).`,
+      });
+      return true;
+    };
     const attempt = async (reply: FastifyReply, fn: () => Promise<unknown>) => {
       try {
         return (await fn()) ?? { ok: true };
@@ -106,6 +123,7 @@ export function registerAgentRoutes(
     }));
 
     app.post('/api/agents', async (req, reply) => {
+      if (refuseRemoteControl(req, reply, 'Free-form agents can be spawned')) return reply;
       const body = parse(SpawnBody, req.body, reply);
       if (!body) return;
       const result = await runtime.spawn({
@@ -115,7 +133,8 @@ export function registerAgentRoutes(
         cwd: body.cwd,
         ...(body.workspace ? { workspace: body.workspace } : {}),
         // A remote client never sets up auto-approvals unless the server allows it (P2-04).
-        // A remote client's preset is floored at the global default (P2-04, P2-21).
+        // A remote client's preset is floored at the global default (P2-04, P2-21) — kept as a
+        // second line behind the refusal above, which only `autoApproveRemote` lifts.
         permissionPolicy: policyForWrite(PERMISSION_POLICY_PRESETS[body.policy], {
           origin: originOf(req),
           autoApproveRemote: config.autoApproveRemote,
@@ -158,14 +177,15 @@ export function registerAgentRoutes(
     /**
      * The panel's "Restart Harmonizer" (P5-06; SPEC decision 82): stops the running Harmonizer as
      * the user's stop and starts a fresh one on the same runtime; the reply names the new one.
-     * Any authenticated client may ask, like stopping any agent (`/api/agents/:id/stop`, the
-     * panel's controls): it is a control action, not a settings write. 409 when it refuses (a
+     * A local client may ask; a remote one only when the server trusts remote clients
+     * (`autoApproveRemote`; 403 `remote_control` otherwise, P7-02). 409 when it refuses (a
      * restart or a resume of the Harmonizer under way, no runtime configured, the start refused),
      * 429 with `Retry-After` past the restart window (3 in 10 min), 500 for anything unexpected.
      */
     const { restartHarmonizer } = opts;
     if (restartHarmonizer) {
       app.post('/api/harmonizer/restart', async (req, reply) => {
+        if (refuseRemoteControl(req, reply, 'The Harmonizer can be restarted')) return reply;
         try {
           return (await restartHarmonizer()) satisfies RestartHarmonizerResponse;
         } catch (error) {
@@ -190,6 +210,7 @@ export function registerAgentRoutes(
     /**
      * Reopens an interrupted agent from its session ref (the manual half of P1-14): the same
      * path as startup recovery (P1-29) — 409 unless the agent is interrupted and not running.
+     * Open to remote clients like resume (decision 90): it continues work already started.
      */
     app.post('/api/agents/:id/recover', async (req, reply) => {
       const id = agentId(req);
@@ -303,7 +324,8 @@ export function registerAgentRoutes(
      * left out while it runs, what that CLI uses marked `held`), and the user's stop — of the
      * given pids, every one of which must be attributable (400 otherwise, nothing signalled), or
      * of all of them for a Steward that ended (400 while it runs: the panel sends the pids it
-     * showed). 404 for an unknown agent, 400 for an agent that is not a Steward.
+     * showed). 404 for an unknown agent, 400 for an agent that is not a Steward. The stop is local
+     * only unless `autoApproveRemote` (403 `remote_control`, P7-02); the list is open to all.
      */
     const { processes } = opts;
     if (processes) {
@@ -315,6 +337,7 @@ export function registerAgentRoutes(
         }
       });
       app.post('/api/agents/:id/processes/stop', async (req, reply) => {
+        if (refuseRemoteControl(req, reply, "A Steward's processes can be stopped")) return reply;
         const body = parse(StopProcessesBody, req.body, reply);
         if (!body) return;
         try {
@@ -333,6 +356,8 @@ export function registerAgentRoutes(
      * `DomainCommands.answerQuestion`: first answer wins, `version` refuses a stale answer with
      * 409 `stale` ("already answered by …"), and a question no live session waits on (a brain's
      * `ask_user`, a closure question) is answered too (P2-18). Without it, the Phase 1 path.
+     * `answerId` (P7-05) makes a retry idempotent: once recorded under it, the same answer is `ok`
+     * with `duplicate: true` (an answer queued offline whose acknowledgement was lost).
      */
     app.post('/api/questions/:id/answer', async (req, reply) => {
       const body = parse(AnswerBody, req.body, reply);
@@ -342,13 +367,16 @@ export function registerAgentRoutes(
         return attempt(reply, () => runtime.answer(questionId, body.answer, USER));
       }
       try {
-        await commands.answerQuestion({
+        const { events } = await commands.answerQuestion({
           questionId,
           answer: body.answer,
           by: USER,
           ...(body.version !== undefined ? { version: body.version } : {}),
+          ...(body.answerId !== undefined ? { answerId: body.answerId } : {}),
         });
-        return { ok: true };
+        // A retry of an answer already recorded under its `answerId` changes nothing (P7-05).
+        const duplicate = body.answerId !== undefined && events.length === 0;
+        return { ok: true, ...(duplicate ? { duplicate } : {}) } satisfies AnswerResponse;
       } catch (error) {
         // Anything that is not a domain refusal (an adapter that failed to take the answer) is a
         // 500, logged here and never echoed to the client.

@@ -37,7 +37,8 @@ import {
 import { useInboxVisibility, type InboxControl } from './inbox-visibility.js';
 import { DockHandle, DOCK_BODY_ID, UnreadReplies } from './Dock.js';
 import { useDockPrefs, type DockControl } from './dock-state.js';
-import { STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
+import { COMPACT_TOP_BAR_QUERY, STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
+import { SceneOffer } from './SceneOffer.js';
 import { BrainDock, DockViewToggle, SystemStatusView } from './status/StatusViews.js';
 import { useDockView } from './status/dock-view.js';
 import {
@@ -47,6 +48,7 @@ import {
   useRouteFocus,
   WaitingAnnouncer,
 } from './a11y.js';
+import { AnswerQueueAnnouncer } from './cards/QueuedAnswer.js';
 import './panel.css';
 
 /*
@@ -94,6 +96,9 @@ export function Panel({
   // Both sections hidden (P4-12): no side column; the centre takes its width.
   const side = agents.visible || inbox.visible;
   const stacked = useMediaQuery(STACKED_LAYOUT_QUERY);
+  // P7-03: list mode on a phone offers the scene with one tap (the bar's toggle is in its menu).
+  const compact = useMediaQuery(COMPACT_TOP_BAR_QUERY);
+  const offerScene = compact && route === 'panel' && !scene.visible && !scene.failure;
   const dock = useDockPrefs();
   // Minimising makes sense where something else shares the space: the scene, or the stack.
   const collapsible = stacked || showScene;
@@ -118,6 +123,7 @@ export function Panel({
         <CardLinksContext.Provider value={true}>
           <div className={showScene ? 'pnl pnl-with-scene' : 'pnl'}>
             <WaitingAnnouncer />
+            <AnswerQueueAnnouncer />
             <TopBar
               scene={scene}
               agents={agents}
@@ -139,6 +145,7 @@ export function Panel({
                     <div className={gridClass} ref={centre}>
                       <div className="pnl-stack">
                         {showScene && <SceneAreaMemo onFailure={scene.fail} />}
+                        {offerScene && <SceneOffer scene={scene} />}
                         <NavigationMemo />
                         {side && <SideColumn agents={agents} inbox={inbox} />}
                       </div>

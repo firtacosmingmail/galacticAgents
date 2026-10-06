@@ -71,6 +71,48 @@ describe('event page', () => {
     expect(localStorage.getItem('galactic.lastEventId')).toBeNull(); // P0-12: never persisted
   });
 
+  it('"Clear demo projects" posts to /dev/demo/clear and says what it did (P7-07)', async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url === '/health')
+        return new Response(JSON.stringify({ ok: true, token: 'tok-from-health' }));
+      if (url === '/dev/demo/clear')
+        return new Response(
+          JSON.stringify({ seq: 9, projects: ['p-1'], tasks: [], retired: ['b-1'], skipped: [] }),
+        );
+      return new Response('{}');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    await screen.findByText('connecting');
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      socket.serverOpens();
+      socket.serverSends({
+        type: 'snapshot',
+        logId: 'log-a',
+        seq: 1,
+        agents: [],
+        bodies: [],
+        projects: [],
+        tasks: [],
+        questions: [],
+        proposals: [],
+        statuses: [],
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Clear demo projects' }));
+    });
+    expect(
+      await screen.findByText('Cleared 1 demo project and 0 tasks; retired 1 demo planet.'),
+    ).toBeTruthy();
+    const call = fetchMock.mock.calls.find(([url]) => url === '/dev/demo/clear')!;
+    expect(call[1]).toMatchObject({
+      method: 'POST',
+      headers: { authorization: 'Bearer tok-from-health' },
+    });
+  });
+
   it('asks for the token when none can be discovered, and always starts with a snapshot', async () => {
     vi.stubGlobal(
       'fetch',
@@ -163,5 +205,50 @@ describe('event page', () => {
     expect(s3.hello).toEqual({ type: 'hello', token: 'tok-from-health' });
     expect(screen.getAllByText('Auth refactor').length).toBeGreaterThan(0);
     expect(screen.getByText('seq 4')).toBeTruthy();
+  });
+});
+
+describe('a token handed over by the QR code (P7-02 review)', () => {
+  it('keeps the saved token until the handed one connects, and falls back to it if refused', async () => {
+    localStorage.setItem('galactic.token', 'saved-token');
+    window.history.replaceState(null, '', '/debug#token=handed-token');
+    render(<App />);
+    await screen.findByText('connecting');
+    const s1 = FakeWebSocket.instances[0]!;
+    await act(async () => s1.serverOpens());
+    expect(s1.hello.token).toBe('handed-token');
+    expect(localStorage.getItem('galactic.token')).toBe('saved-token');
+    await act(async () => s1.serverCloses(4401, 'unauthorized'));
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const s2 = FakeWebSocket.instances[1]!;
+    await act(async () => s2.serverOpens());
+    expect(s2.hello.token).toBe('saved-token');
+    expect(localStorage.getItem('galactic.token')).toBe('saved-token');
+  });
+
+  it('saves the handed token once its session is live', async () => {
+    localStorage.setItem('galactic.token', 'saved-token');
+    window.history.replaceState(null, '', '/debug#token=handed-token');
+    render(<App />);
+    await screen.findByText('connecting');
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      socket.serverOpens();
+      socket.serverSends({
+        type: 'snapshot',
+        logId: 'log-a',
+        seq: 0,
+        agents: [],
+        bodies: [],
+        projects: [],
+        tasks: [],
+        questions: [],
+        proposals: [],
+        statuses: [],
+      });
+    });
+    expect(screen.getByText('live')).toBeTruthy();
+    expect(localStorage.getItem('galactic.token')).toBe('handed-token');
+    expect(window.location.hash).toBe('');
   });
 });

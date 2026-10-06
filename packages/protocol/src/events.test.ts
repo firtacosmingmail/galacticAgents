@@ -67,6 +67,7 @@ function classify(
     case 'body.assigned':
     case 'body.moved':
     case 'body.freed':
+    case 'body.retired':
       return 'body';
     case 'project.created':
     case 'project.updated':
