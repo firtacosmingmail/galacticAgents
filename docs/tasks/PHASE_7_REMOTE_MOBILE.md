@@ -1,7 +1,7 @@
 # Phase 7 — Remote and mobile access
 
-**Current task:** P7-06 (wave 3, needs Cosmin with Tailscale on the Mac and the phone, after wave 2 is merged into `phase-7`) · **Task status:** todo
-**Phase status:** in progress (6/7 done) — on branch `phase-7`
+**Current task:** P7-06 (Cosmin's device run, in parallel with Phase 8; fixes go on a batch branch from `main`) · **Task status:** todo
+**Phase status:** in progress (6/7 done) — merged into `main` on 2026-10-06 at Cosmin's request before the P7-06 device run; the phase closes when P7-06 passes — on branch `phase-7`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
