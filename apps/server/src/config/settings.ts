@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import {
@@ -279,8 +287,15 @@ export class SettingsService {
     }
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n', { mode: 0o600 });
-    renameSync(tmp, path);
+    try {
+      writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n', { mode: 0o600 });
+      renameSync(tmp, path);
+    } catch (error) {
+      // A full disk (ENOSPC) leaves a truncated temp file: config.json itself is untouched, and
+      // nothing is applied (the route answers 507 storage_full).
+      rmSync(tmp, { force: true });
+      throw error;
+    }
   }
 
   private apply(patch: SettingsPatch, next: Settings): void {

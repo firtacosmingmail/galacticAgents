@@ -33,6 +33,7 @@ import { notificationFeed } from '../runtime/notifications.js';
 import { redactSecrets } from '../runtime/redact.js';
 import type { TranscriptPipeline } from '../runtime/transcripts.js';
 import { bearerGuard, originOf } from './security.js';
+import { fileWriteRefusal, storageRefusal } from './storage-refusal.js';
 
 /**
  * The side panel's endpoints (P25-01; `docs/tasks/notes/P25-01-endpoints.md`), bearer-guarded in
@@ -191,6 +192,9 @@ export function registerPanelRoutes(
               )
               .send({ error: error.code, message: error.message });
           }
+          // The disk refused config.json (full): a storage refusal, nothing changed (P8-09).
+          const refusal = fileWriteRefusal(error) ?? storageRefusal(error);
+          if (refusal) return reply.code(refusal.status).send(refusal.body);
           req.log.error(error);
           return reply.code(500).send({ error: 'internal' });
         }
