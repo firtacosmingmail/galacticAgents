@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-11, P8-12, P8-07 (wave 3, branch `p8-wave3-pids-push-acp`) · **Task status:** in progress
-**Phase status:** in progress (7/12 done) — on branch `phase-8`, cut from `phase-7`; Phase 7 merged into `main` on 2026-10-06 and into `phase-8` after it
+**Current task:** next: P8-08, P8-06 (after wave 3 is merged into `phase-8`); P8-07 blocked on a real ACP runtime · **Task status:** todo
+**Phase status:** in progress (9/12 done) — on branch `phase-8`, cut from `phase-7`; Phase 7 merged into `main` on 2026-10-06 and into `phase-8` after it
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -63,7 +63,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** `.app` bundle runs the same UI against the local server.
 
 ### P8-07 — ACP adapter (Codex / Gemini CLI / claude-agent-acp)
-- **Status:** in progress · **Depends on:** P1-13, P1-04 · **Parallel with:** all
+- **Status:** blocked (code merged and conformance green against the fake ACP agent; the acceptance run against a real ACP runtime needs one installed locally — none was, 2026-10-06) · **Depends on:** P1-13, P1-04 · **Parallel with:** all
 - Official TypeScript ACP SDK client; `initialize` capability set documented (advertise `elicitation.form`; no `fs/*`/`terminal/*` unless implemented); `session/new|prompt|update|cancel|load`; `request_permission` → permission-kind; `elicitation/create` → clarification-kind; fake ACP agent script for the conformance suite; runtime selection in spawn options and settings.
 - **Acceptance:** conformance suite green against the fake ACP agent in CI and against one real ACP runtime locally.
 
@@ -83,12 +83,12 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** a brain idle past the wall-clock cap keeps running; Stewards are still stopped by it.
 
 ### P8-11 — A CLI forked just before a kill (added 2026-10-05)
-- **Status:** in progress · **Depends on:** P8-04 · **Parallel with:** all
+- **Status:** done (2026-10-06) · **Depends on:** P8-04 · **Parallel with:** all
 - From the P8-04 kill-at-any-moment drill (residual R3, seen once): a child the supervisor forked in the instant before the server was killed can run with no PID-table row, so `reconcile()` never takes it. Record a launch intent (agent, command, time) before the spawn, and at startup take a marked (`GALACTIC_AGENT_ID`) orphan of such an intent's agent started in that window, with the same safety rules as P4-14.
 - **Acceptance:** a drill that kills the server between the fork and the row (fault injection) leaves no process of the killed run.
 
 ### P8-12 — Push bookkeeping on a full disk (added 2026-10-06)
-- **Status:** in progress · **Depends on:** P7-04, P8-09 · **Parallel with:** all
+- **Status:** done (2026-10-06) · **Depends on:** P7-04, P8-09 · **Parallel with:** all
 - Found while building P8-09: `PushService.deliver` calls `markSent` inside the send's `try`, so on a full disk a delivered push fails `markSent`, is treated as a network error and is sent again (up to three attempts). Separate delivery from bookkeeping; a bookkeeping failure must never re-send.
 - **Acceptance:** with SQLITE_FULL on the push bookkeeping, each push is delivered once; a test proves it.
 
