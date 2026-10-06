@@ -69,10 +69,10 @@ function load(w: World = {}) {
     proposals: [],
     statuses: [
       status('a-harmonizer'),
-      // A brain: no wall-clock limit (SPEC decision 103).
+      // A brain: not wall-clock capped (SPEC decision 103); the limit stays for older clients.
       {
         ...status('a-wk', w.waykeeperState),
-        caps: { ...fx.status.caps, wallClockMs: { used: 0 } },
+        caps: { ...fx.status.caps, wallClockMs: { used: 0, limit: 3_600_000, capped: false } },
       },
       status('a-st', w.stewardState),
       ...(w.extraAgents ?? []).map((a) => status(a.id)),

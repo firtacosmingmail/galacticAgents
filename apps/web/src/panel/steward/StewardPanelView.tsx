@@ -6,6 +6,7 @@ import {
   type Id,
   type Question,
   type StatusRecord,
+  wallClockLimit,
 } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
@@ -189,7 +190,7 @@ function StatusHeader({
         </Fact>
         <Fact label="wall clock">
           {status
-            ? status.caps.wallClockMs.limit !== undefined
+            ? wallClockLimit(status.caps.wallClockMs) !== undefined
               ? `${formatDuration(wallClockUsed(status, now))} / ${formatDuration(status.caps.wallClockMs.limit)}`
               : formatDuration(wallClockUsed(status, now))
             : '—'}

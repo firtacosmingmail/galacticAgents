@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { StatusRecord, wallClockLimit } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { startTestApp, TEST_TOKEN } from '../test/harness.js';
@@ -83,12 +84,18 @@ describe('the wall-clock cap is for Stewards only (P8-10, decision 103)', () => 
     expect(state(waykeeper)).toBe('idle');
     expect(failures(harmonizer)).toEqual([]);
     expect(failures(waykeeper)).toEqual([]);
-    expect(composed.runtime.caps.usage(harmonizer)?.wallClockMs.limit).toBeUndefined();
+    expect(composed.runtime.caps.usage(harmonizer)?.wallClockMs.capped).toBe(false);
 
-    // The status views: a brain's time has no limit; a Steward's does.
+    // The status views: a brain's time is marked uncapped (its numeric limit stays, so the previous
+    // build's parser still reads the record); a Steward's is capped.
     const brainClock = composed.statuses.get(harmonizer)?.caps.wallClockMs;
-    expect(brainClock?.limit).toBeUndefined();
-    expect(composed.statuses.get(steward)?.caps.wallClockMs.limit).toBe(CAP_MS);
-    expect(composed.statuses.get(freeForm)?.caps.wallClockMs.limit).toBe(CAP_MS);
+    expect(brainClock).toMatchObject({ limit: CAP_MS, capped: false });
+    expect(wallClockLimit(brainClock!)).toBeUndefined();
+    expect(StatusRecord.safeParse(composed.statuses.get(harmonizer)).success).toBe(true);
+    for (const capped of [steward, freeForm]) {
+      const clock = composed.statuses.get(capped)?.caps.wallClockMs;
+      expect(clock?.capped).toBeUndefined();
+      expect(wallClockLimit(clock!)).toBe(CAP_MS);
+    }
   });
 });

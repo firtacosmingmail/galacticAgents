@@ -83,8 +83,11 @@ export interface CapsOptions {
 }
 
 export interface CapUsage {
-  /** `limit` is absent when the wall-clock cap does not apply to the agent (a brain, decision 103). */
-  wallClockMs: { used: number; limit?: number };
+  /**
+   * `capped: false` when the wall-clock cap does not apply to the agent (a brain, decision 103);
+   * `limit` is its configured cap either way.
+   */
+  wallClockMs: { used: number; limit: number; capped?: false };
   toolCalls: { used: number; limit: number };
 }
 
@@ -346,7 +349,8 @@ export class CapsEnforcer {
       wallClockMs: {
         used:
           entry.usedMs + (entry.runningSince === undefined ? 0 : this.now() - entry.runningSince),
-        ...(entry.wallClock ? { limit: entry.caps.maxWallClockMs } : {}),
+        limit: entry.caps.maxWallClockMs,
+        ...(entry.wallClock ? {} : { capped: false as const }),
       },
       toolCalls: { used: entry.toolCalls, limit: entry.caps.maxToolCalls },
     };
