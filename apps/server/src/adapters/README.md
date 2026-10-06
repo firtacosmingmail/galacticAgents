@@ -237,15 +237,15 @@ idlePattern?, questionPatterns?, clarificationPatterns?, quietMs?, idleAfterMs?}
   Refused later, the agent ends: `agent.failed(runtime, TABLE_NO_LONGER_ALLOWS)`.
 - **Turns:** the first prompt (for a Steward, its role instructions ahead of the task — the CLI
   reads them as ordinary input, not as a system prompt) and every message are typed as one line
-  + Enter once the CLI is ready; `oneLine()` turns newlines into spaces and drops every other
-  control character. A line over 1000 bytes goes through a 0600 file in `<cwd>/.galactic/pty/`
-  (`Read your instructions from <path>`); `{promptFile}` in `args` passes the first prompt that
-  way. After `quietMs` of silence the cursor's line is read (`detect.ts`): `idlePattern` →
-  `agent.idle`; any question → `agent.needs_input(permission)` **without a tool call** (fail
-  closed: only the user answers it; on a yes/no prompt allow types its yes token, anything else
-  its no; on a free-form one allow presses Enter, anything else interrupts), unless a
-  `clarificationPatterns` regex matched → `clarification`, its answer typed. `idleAfterMs` ends a
-  turn on silence. A question the CLI moved on from is answered without typing.
+  - Enter once the CLI is ready; `oneLine()` turns newlines into spaces and drops every other
+    control character. A line over 1000 bytes goes through a 0600 file in `<cwd>/.galactic/pty/`
+    (`Read your instructions from <path>`); `{promptFile}` in `args` passes the first prompt that
+    way. After `quietMs` of silence the cursor's line is read (`detect.ts`): `idlePattern` →
+    `agent.idle`; any question → `agent.needs_input(permission)` **without a tool call** (fail
+    closed: only the user answers it; on a yes/no prompt allow types its yes token, anything else
+    its no; on a free-form one allow presses Enter, anything else interrupts), unless a
+    `clarificationPatterns` regex matched → `clarification`, its answer typed. `idleAfterMs` ends a
+    turn on silence. A question the CLI moved on from is answered without typing.
 - **Output:** raw bytes as `agent.output(kind: 'terminal')` (batched ≈100 ms / 8 KB) for the
   panel's xterm.js view, and the stripped text (`terminal-text.ts`) as `text` blocks; the first
   line of a turn and one every 30 s as `agent.progress`.
