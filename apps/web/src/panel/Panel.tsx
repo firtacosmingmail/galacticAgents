@@ -30,6 +30,7 @@ import { ReplayBar } from '../replay/ReplayBar.js';
 import { useScene } from '../scene/visibility.js';
 import { dropDeepLink } from '../scene/picking/sync.js';
 import { INBOX_ID, TopBar } from './TopBar.js';
+import { StorageBanner } from './StorageBanner.js';
 import {
   useManagedAgentsVisibility,
   type ManagedAgentsControl,
@@ -130,6 +131,8 @@ export function Panel({
               inbox={inbox}
               {...(onForget ? { onForget } : {})}
             />
+            {/* While the database refuses writes (P8-09): the disk is full, actions refused. */}
+            <StorageBanner />
             <div className="pnl-body">
               {route === 'settings' ? (
                 // The settings page (P25-08), in the panel's frame.

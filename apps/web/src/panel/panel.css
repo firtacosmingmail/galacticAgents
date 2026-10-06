@@ -713,6 +713,24 @@ a.pnl-link:hover {
 .pnl-nav-stewards.is-busy {
   color: var(--pnl-here);
 }
+/* The storage banner (P8-09): the failed hue, never the beacon's amber (that is "blocked on you"). */
+.pnl-storage {
+  flex: none;
+  padding: 8px max(16px, env(safe-area-inset-left));
+  border-bottom: 1px solid var(--pnl-failed);
+  background: color-mix(in srgb, var(--pnl-failed) 16%, var(--pnl-surface));
+  color: var(--pnl-ink);
+}
+.pnl-storage p {
+  margin: 0;
+}
+.pnl-storage-title {
+  font-weight: 600;
+}
+.pnl-storage-detail {
+  color: var(--pnl-muted);
+  font-size: 13px;
+}
 .pnl-visually-hidden {
   position: absolute;
   width: 1px;

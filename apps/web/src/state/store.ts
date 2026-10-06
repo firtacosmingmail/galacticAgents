@@ -1,10 +1,12 @@
 import { create } from 'zustand';
-import type {
-  ChatMessage,
-  EventEnvelope,
-  Id,
-  ServerMessage,
-  TranscriptChunk,
+import {
+  STORAGE_OK,
+  type ChatMessage,
+  type EventEnvelope,
+  type Id,
+  type ServerMessage,
+  type StorageHealth,
+  type TranscriptChunk,
 } from '@galactic/protocol';
 import { applyEvent, applySnapshot, emptyWorld, type WorldState } from './reduce.js';
 import type { ConnectionStatus } from '../client/client.js';
@@ -80,6 +82,12 @@ export interface AppState extends TranscriptViewSlice {
   snapshots: number;
   status: ConnectionStatus;
   statusDetail?: string | undefined;
+  /**
+   * Whether the server's database takes writes (P8-09; decision 99): the last `storage` the
+   * snapshot or a `status` message carried — runtime state, not derived from events. `ok` until
+   * told otherwise (an older server sends none).
+   */
+  storage: StorageHealth;
   lastError?: string | undefined;
   apply: (message: ServerMessage) => void;
   setStatus: (status: ConnectionStatus, detail?: string) => void;
@@ -142,6 +150,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   messages: {},
   snapshots: 0,
   status: 'idle',
+  storage: STORAGE_OK,
   apply: (message) =>
     set((s) => {
       switch (message.type) {
@@ -153,6 +162,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             log: [],
             logId: message.logId,
             snapshots: s.snapshots + 1,
+            storage: message.storage ?? STORAGE_OK,
             ...serverOffset(message.serverTime),
             ...(s.logId !== undefined && s.logId !== message.logId
               ? { transcripts: {}, messages: {}, transcriptViews: {}, replayWorld: undefined }
@@ -199,7 +209,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           const statuses = message.replace ? {} : { ...s.world.statuses };
           for (const record of message.statuses) statuses[record.agentId] = record;
           for (const id of message.removed ?? []) delete statuses[id];
-          return { world: { ...s.world, statuses } };
+          return {
+            world: { ...s.world, statuses },
+            ...(message.storage ? { storage: message.storage } : {}),
+          };
         }
         case 'transcript': {
           const current = s.transcripts[message.agentId] ?? [];
@@ -239,6 +252,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       snapshots: 0,
       status: 'idle',
       statusDetail: undefined,
+      storage: STORAGE_OK,
       lastError: undefined,
     }),
 }));
