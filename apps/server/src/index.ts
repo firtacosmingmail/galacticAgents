@@ -70,6 +70,15 @@ if (reconciled.dead.length + reconciled.orphans.length > 0) {
     `Reconciled the process table: ${reconciled.dead.length} dead, ${reconciled.orphans.length} orphaned (killed)`,
   );
 }
+// Launches the killed run forked but never recorded (P8-11): their processes are found by the
+// launch id in their environment and stopped, before anything of this run is spawned.
+const launches = await supervisor.reconcileLaunches();
+for (const take of launches.taken) {
+  console.log(
+    `Stopped an unrecorded launch of agent ${take.agentId} from the previous run: ` +
+      `pids ${take.pids.join(', ')}${take.forced ? ' (forced)' : ''}`,
+  );
+}
 
 // Adapters: the fake one always (dev mode without Claude), the real one for Claude Code.
 const fake = new FakeAdapter();

@@ -98,7 +98,10 @@ the `toolUseId` when the runtime has one.
 ## Processes and the supervisor
 
 If the runtime is a child process, spawn it through `ProcessSupervisor.adopt(spec)` (synchronous,
-own process group, PID table, allow-listed environment) and map its `ProcessOutcome`s:
+own process group, PID table, allow-listed environment) and map its `ProcessOutcome`s. The
+supervisor records a launch intent before the fork (P8-11), so a server killed between the fork
+and the PID-table row still finds the process at the next start; `adopt` throws (and reports
+`start_failed`) when that intent cannot be written, e.g. on a full disk.
 
 | Outcome                                            | Event                                                        |
 | -------------------------------------------------- | ------------------------------------------------------------ |
