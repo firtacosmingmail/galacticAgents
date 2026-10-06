@@ -16,15 +16,18 @@ import {
   ENV_VARIABLES,
   isSpecTable,
   parseCaps,
+  parseTranscriptRetention,
   POLICY_ROWS,
   policyValue,
   refusalMessage,
   RESTART_FIELDS,
   specDefault,
+  transcriptRetentionDraft,
   validateProjectsRoot,
   validateRetention,
   withPolicyValue,
   type CapsDraft,
+  type TranscriptRetentionDraft,
 } from './settings-model.js';
 
 /**
@@ -324,6 +327,52 @@ function RetentionEditor({ id, draft, setDraft, disabled }: EditorProps<string>)
   );
 }
 
+function TranscriptRetentionEditor({
+  id,
+  draft,
+  setDraft,
+  disabled,
+}: EditorProps<TranscriptRetentionDraft>) {
+  return (
+    <div className="set-field">
+      <div className="set-inline">
+        <label htmlFor={`${id}-age`}>Remove agent output older than</label>
+        <input
+          id={`${id}-age`}
+          className="set-input set-input-num"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={3650}
+          step={1}
+          placeholder="keep"
+          value={draft.maxAgeDays}
+          disabled={disabled}
+          onChange={(e) => setDraft({ ...draft, maxAgeDays: e.target.value })}
+        />
+        <span className="set-muted">days</span>
+      </div>
+      <div className="set-inline">
+        <label htmlFor={`${id}-archived`}>Remove archived work’s output</label>
+        <input
+          id={`${id}-archived`}
+          className="set-input set-input-num"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={3650}
+          step={1}
+          placeholder="keep"
+          value={draft.archivedDays}
+          disabled={disabled}
+          onChange={(e) => setDraft({ ...draft, archivedDays: e.target.value })}
+        />
+        <span className="set-muted">days after it was archived</span>
+      </div>
+    </div>
+  );
+}
+
 function CapsEditor({ id, draft, setDraft, disabled }: EditorProps<CapsDraft>) {
   const parsed = parseCaps(draft);
   return (
@@ -403,6 +452,35 @@ function StewardSourcesEditor({ id, draft, setDraft, disabled }: EditorProps<boo
   );
 }
 
+function BudgetWarnEditor({ id, draft, setDraft, disabled }: EditorProps<string>) {
+  return (
+    <div className="set-field set-inline">
+      <label htmlFor={id}>Warn when a budget is</label>
+      <input
+        id={id}
+        className="set-input set-input-num"
+        type="number"
+        inputMode="numeric"
+        min={1}
+        max={100}
+        step={1}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+      />
+      <span className="set-muted">% spent</span>
+    </div>
+  );
+}
+
+/** The budget warning threshold's draft (P8-01): a whole percentage from 1 to 100. */
+export function validateBudgetWarn(draft: string): string | undefined {
+  const n = Number(draft.trim());
+  return draft.trim() !== '' && Number.isInteger(n) && n >= 1 && n <= 100
+    ? undefined
+    : 'A whole percentage from 1 to 100.';
+}
+
 // --- the specs --------------------------------------------------------------------------------
 
 export const PROJECTS_ROOT: SectionSpec<string> = {
@@ -471,9 +549,41 @@ export const STEWARD_SOURCES: SectionSpec<boolean> = {
   Editor: StewardSourcesEditor,
 };
 
+/**
+ * Transcript retention (P8-02). On the settings page only, not in the first-run wizard: the
+ * defaults suit a first run, and an older server without the setting leaves it out.
+ */
+export const TRANSCRIPT_RETENTION: SectionSpec<TranscriptRetentionDraft> = {
+  field: 'transcriptRetention',
+  title: 'Transcript retention',
+  intro:
+    'How long agents’ output (their replies, tool calls and thinking) is kept. Removed output is gone for good; the transcript and chat say where it was removed. Messages, questions, states and the replay history are always kept, and pinned work is never touched. Leave a field empty to keep that output forever. Changed only on this Mac.',
+  fromSettings: transcriptRetentionDraft,
+  validate: (d) => parseTranscriptRetention(d).error,
+  toPatch: (d) => ({ transcriptRetention: parseTranscriptRetention(d).value! }),
+  Editor: TranscriptRetentionEditor,
+};
+
+export const BUDGETS: SectionSpec<string> = {
+  field: 'budgets',
+  title: 'Budgets',
+  intro:
+    'A project or task may get a dollar budget on its card or its edit form. Spending is the cost the runtimes report (an estimate; notional under a subscription login); work whose cost is not reported is not held to its budget. At this share of a budget you are warned in the Harmonizer’s chat; at the budget, new agents for the work are refused and running ones go on.',
+  fromSettings: (s) => String(s.budgets?.warnAtPercent ?? 80),
+  validate: validateBudgetWarn,
+  toPatch: (d) => ({ budgets: { warnAtPercent: Number(d.trim()) } }),
+  Editor: BudgetWarnEditor,
+};
+
 /** A section of any draft type (the list below mixes them; each is used with its own). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnySectionSpec = SectionSpec<any>;
+
+/**
+ * The settings page's sections after the wizard's (P8-01): set later, when a budget is in use,
+ * so they are not first-run steps.
+ */
+export const LATER_SECTIONS: readonly AnySectionSpec[] = [BUDGETS];
 
 /** Every section, in the order the page and the wizard show them. */
 export const SECTIONS: readonly AnySectionSpec[] = [

@@ -8,6 +8,7 @@ import type {
 } from '@galactic/protocol';
 import { TaskPriority as TaskPrioritySchema } from '@galactic/protocol';
 import { applyControlState, type ControlStateOptions } from './cascade.js';
+import { setBudget } from './budgets.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import type { PolicyWrite } from './permissions.js';
@@ -52,8 +53,11 @@ export function recordControl(
   // An edit is checked (and its policy floored, P2-21) before anything is recorded, so
   // `control.edit` carries what is applied, not what was asked.
   const edit = action.action === 'edit' ? action.changes : undefined;
-  const projectChanges = edit && isProject ? projectEdit(edit, opts.write ?? {}) : undefined;
-  const taskChanges = edit && !isProject ? taskEdit(edit) : undefined;
+  // The budget (P8-01) is set by `setBudget` (its own event and remote rule), not by the row edit.
+  const budget = edit && 'budgetUsd' in edit ? budgetEdit(edit['budgetUsd']) : undefined;
+  const rest = edit && budget !== undefined ? withoutBudget(edit) : edit;
+  const projectChanges = rest && isProject ? projectEdit(rest, opts.write ?? {}) : undefined;
+  const taskChanges = rest && !isProject ? taskEdit(rest) : undefined;
 
   const event = ((): Event => {
     switch (action.action) {
@@ -66,7 +70,14 @@ export function recordControl(
       case 'resume':
         return { type: 'control.resume', ...base };
       case 'edit':
-        return { type: 'control.edit', ...base, changes: (projectChanges ?? taskChanges)! };
+        return {
+          type: 'control.edit',
+          ...base,
+          changes: {
+            ...(projectChanges ?? taskChanges)!,
+            ...(budget !== undefined ? { budgetUsd: budget } : {}),
+          },
+        };
       case 'close':
         return { type: 'control.close', ...base };
       case 'archive':
@@ -83,6 +94,15 @@ export function recordControl(
     case 'edit':
       if (projectChanges) updateProject(ctx, target.id, projectChanges, opts.write);
       else updateTask(ctx, target.id, taskChanges!);
+      if (budget !== undefined) {
+        setBudget(
+          ctx,
+          { kind: isProject ? 'project' : 'task', id: target.id },
+          budget,
+          by,
+          opts.write,
+        );
+      }
       return;
     case 'close':
       if (isProject) closeProject(ctx, target.id, by);
@@ -107,6 +127,21 @@ export function recordControl(
       applyControlState(ctx, target, action.action, by, opts);
       return;
   }
+}
+
+/** An edit's budget (P8-01): a positive number of dollars, or `null` to remove it. */
+function budgetEdit(value: unknown): number | null {
+  if (value === null) return null;
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  throw new DomainError(
+    'invalid',
+    `a budget is a positive amount of dollars, not ${String(value)}`,
+  );
+}
+
+function withoutBudget(changes: Record<string, unknown>): Record<string, unknown> {
+  const { budgetUsd: _budget, ...rest } = changes;
+  return rest;
 }
 
 /** What the panel may edit (SPEC §4.3): a task's description and priority, a project's name. */

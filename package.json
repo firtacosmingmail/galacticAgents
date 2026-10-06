@@ -16,7 +16,8 @@
     "format:check": "prettier --check .",
     "start": "node apps/server/bin/galactic.mjs start",
     "galactic": "node apps/server/bin/galactic.mjs",
-    "check:real": "pnpm build:deps && node scripts/check-real.mjs"
+    "check:real": "pnpm build:deps && node scripts/check-real.mjs",
+    "drills": "pnpm build:deps && GALACTIC_DRILLS=${GALACTIC_DRILLS:-25} pnpm --filter @galactic/server exec vitest run src/test/drills"
   },
   "engines": {
     "node": ">=22.12",

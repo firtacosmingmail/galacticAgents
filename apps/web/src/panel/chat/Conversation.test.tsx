@@ -205,6 +205,25 @@ describe('the panel chat (P25-03)', () => {
     expect(within(thread()).getAllByText(/said/)).toHaveLength(4);
   });
 
+  it('says when retention removed older replies (P8-02)', async () => {
+    const f = fakeApi(() => ({
+      entries: [entry(3, 'message'), entry(4, 'reply')],
+      hasMore: false,
+      lastSeq: 4,
+      compacted: {
+        throughSeq: 2,
+        throughAt: '2026-06-01T10:00:00.000Z',
+        removedAt: '2026-10-05T09:00:00.000Z',
+        reason: 'archived',
+      },
+    }));
+    show(H, f.api);
+    const note = await within(thread()).findByRole('note');
+    expect(note.textContent).toMatch(
+      /^Replies removed on .*2026 by retention: this work was archived\. Messages are kept\.$/,
+    );
+  });
+
   it('catches up after a snapshot and starts over for another log', async () => {
     let pages = 0;
     const f = fakeApi((q) => {

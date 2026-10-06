@@ -119,6 +119,12 @@ export interface AgentAdapter {
   /**
    * The normalised event stream for every session of this adapter — the only source of
    * `agent.*` events for its sessions (the runtime adds `agent.spawned`).
+   *
+   * Cost reports (`cost` on `agent.idle`, `agent.finished`, `agent.failed`) are **cumulative per
+   * session**: each one is the session's running total so far, never the cost of one turn. The
+   * spend fold (`foldSpend`, P8-01) keeps the highest figure per session and sums sessions, so a
+   * runtime that meters per turn must accumulate in its adapter before reporting; a resumed
+   * session continues its own total.
    */
   readonly events: AsyncIterable<AgentEvent>;
   /** Stops every session and releases resources. */

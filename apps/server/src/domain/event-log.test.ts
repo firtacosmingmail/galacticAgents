@@ -280,6 +280,7 @@ describe('EventLog readers', () => {
       tasks: [],
       questions: [],
       proposals: [],
+      spend: [],
     });
     log.runCommand(({ tables, emit }) => {
       tables.bodies.insert(fx.body);

@@ -449,4 +449,48 @@ describe('the resume message (dev-machine run, 2026-10-02)', () => {
     await second.recover();
     expect(prompts).toEqual([RESUME_PROMPT]);
   });
+
+  it('an agent caught before it started whose stop was logged ends stopped, not started again (P8-04 review)', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const hanging = new FakeAdapter({ speed: 0, sessionStore: sessions });
+    hanging.spawn = () => new Promise(() => {}); // killed before any session starts
+    const first = composeRuntime(db, { adapters: [hanging], flushMs: 10 });
+    const project = (
+      await first.commands.createProject({ name: 'Stopped', workspace: '/tmp/w/stopped' })
+    ).value;
+    const task = (await first.commands.createTask({ description: 'x', projectId: project.id }))
+      .value;
+    const spawn = (extra: { taskId?: string; projectId?: string } = {}) =>
+      void first.runtime.spawn({
+        role: 'steward',
+        runtime: 'fake',
+        prompt: 'scenario:happy',
+        cwd: '/tmp/w',
+        ...extra,
+      });
+    spawn();
+    spawn({ taskId: task.id, projectId: project.id });
+    spawn();
+    await waitFor(() => first.log.tables.agents.all().length === 3, 'the rows');
+    const [own, ofTask, plain] = first.log.tables.agents.all();
+    // Its own stop (as a task's agent effect records it), and its task's stop.
+    first.log.runCommand(({ emit }) =>
+      emit({ type: 'control.stop', target: { kind: 'agent', id: own!.id }, by: USER }),
+    );
+    first.log.runCommand(({ emit }) =>
+      emit({ type: 'control.stop', target: { kind: 'task', id: task.id }, by: USER }),
+    );
+    // The first server dies here.
+
+    const second = boot(db, sessions);
+    const report = await second.recover();
+    expect(report.resumed).toEqual([plain!.id]);
+    for (const stopped of [own!, ofTask!]) {
+      expect(agentEventsOf(second, stopped.id).at(-1)).toBe('agent.stopped');
+      expect(second.statuses.get(stopped.id)?.state).toBe('stopped');
+      expect(eventsOf(second, stopped.id).filter((t) => t === 'agent.spawned')).toHaveLength(0);
+    }
+  });
 });

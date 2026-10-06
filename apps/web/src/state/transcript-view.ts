@@ -1,4 +1,4 @@
-import type { Id, TranscriptChunk } from '@galactic/protocol';
+import type { Id, TranscriptChunk, TranscriptCompaction } from '@galactic/protocol';
 
 /**
  * The Steward view's transcript state (P25-05): how far back the REST history has been read for
@@ -20,6 +20,11 @@ export interface TranscriptView {
    * user asked for, and trimming them would undo the scroll back.
    */
   pagedBack?: boolean | undefined;
+  /**
+   * What retention removed from the start of the transcript (P8-02), from the newest REST page:
+   * the view says so above the oldest chunk once there is nothing older to read.
+   */
+  compacted?: TranscriptCompaction | undefined;
   error?: string | undefined;
 }
 

@@ -1,6 +1,8 @@
+import { formatUsd } from '@galactic/protocol';
 import type {
   Actor,
   AgentRole,
+  BudgetTarget,
   ControlTarget,
   Event,
   EventOfType,
@@ -43,6 +45,12 @@ export interface WakeScope {
    * task's Waykeeper, an asteroid task's Harmonizer, a sub-project's parent Waykeeper.
    */
   concerned?(event: Event): boolean;
+  /**
+   * The work is active but nobody runs it (P8-01 review): a project in progress without a running
+   * Waykeeper, a standalone task without a running Steward — as after a spawn refused for its
+   * budget.
+   */
+  unattended?(target: BudgetTarget): boolean;
 }
 
 export interface WakeRule<T extends EventType> {
@@ -118,6 +126,25 @@ const proposal = <T extends DecisionType>(text: (e: EventOfType<T>) => string): 
 });
 
 const quote = (text: string) => JSON.stringify(text);
+
+/**
+ * A budget notice concerns the brain that runs the work (P8-01): the Waykeeper of the project (or
+ * of the task's project), or the Harmonizer for an asteroid task it supervises. The Harmonizer is
+ * not woken for its Waykeepers' projects: the user already sees the notice in its chat.
+ */
+const runsBudget = (target: BudgetTarget, s: WakeScope): boolean =>
+  target.kind === 'task'
+    ? s.runsTask(target.id)
+    : s.role === 'waykeeper' && s.runsProject(target.id);
+
+/**
+ * A budget raised or removed for work nobody runs (P8-01 review): the Harmonizer is woken so it
+ * can start its Waykeeper (or an asteroid's Steward) again — a spawn the old budget refused.
+ */
+const loosened = (e: EventOfType<'budget.set'>): boolean =>
+  e.previousUsd !== undefined && (e.usd === undefined || e.usd > e.previousUsd);
+const restartable = (e: EventOfType<'budget.set'>, s: WakeScope): boolean =>
+  s.role === 'harmonizer' && loosened(e) && (s.unattended?.(e.target) ?? false);
 
 export const WAKE_RULES: WakeRules = {
   'message.sent': {
@@ -212,6 +239,36 @@ export const WAKE_RULES: WakeRules = {
   'agent.finished': ended((e) => `finished${e.result ? `: ${quote(e.result)}` : ''}`),
   'agent.failed': ended((e) => `failed (${e.reason}): ${quote(e.error)}`),
   'agent.stalled': ended((e) => `has been silent for ${Math.round(e.silentForMs / 1000)} s`),
+  'budget.set': {
+    wakes: (e, s) => runsBudget(e.target, s) || restartable(e, s),
+    describe: (e, s) =>
+      `the budget of ${e.target.kind} ${e.target.id} ` +
+      (e.usd !== undefined
+        ? `is now ${formatUsd(e.usd)}${e.previousUsd !== undefined ? ` (was ${formatUsd(e.previousUsd)})` : ''}` +
+          ' — spawns refused for the budget may be tried again'
+        : 'was removed — spawns refused for the budget may be tried again') +
+      (restartable(e, s)
+        ? e.target.kind === 'project'
+          ? `; project ${e.target.id} has no running Waykeeper: if the budget now allows it, ` +
+            'spawn_waykeeper for it'
+          : `; task ${e.target.id} has no running Steward: if the budget now allows it, ` +
+            'spawn_steward for it'
+        : ''),
+  },
+  'budget.warning': {
+    wakes: (e, s) => runsBudget(e.target, s),
+    describe: (e) =>
+      `budget warning: ${e.target.kind} ${e.target.id} has spent ${formatUsd(e.spentUsd)} of ` +
+      `its ${formatUsd(e.budgetUsd)} budget (warning at ${e.warnAtPercent}%); at the budget, new ` +
+      'Stewards for it are refused',
+  },
+  'budget.exceeded': {
+    wakes: (e, s) => runsBudget(e.target, s),
+    describe: (e) =>
+      `budget exceeded: ${e.target.kind} ${e.target.id} has spent ${formatUsd(e.spentUsd)} of ` +
+      `its ${formatUsd(e.budgetUsd)} budget — new Stewards for it are refused (running ones go ` +
+      'on); do not retry a refused spawn until the user raises or removes the budget',
+  },
   'control.stop': control('stopped'),
   'control.cancel': control('cancelled'),
   'control.pause': control('paused'),

@@ -283,5 +283,12 @@ export function touches(event: Event, m: Members): boolean {
     case 'control.pin':
     case 'control.reopen':
       return false; // skipped anyway: their effects arrive as domain events
+    case 'budget.set':
+    case 'budget.warning':
+    case 'budget.exceeded':
+    case 'budget.spawn_refused':
+      return event.target.kind === 'project'
+        ? m.projects.has(event.target.id)
+        : m.tasks.has(event.target.id);
   }
 }

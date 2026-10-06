@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import type {
+  Cost,
   Actor,
   AgentAdapter,
   AgentEvent,
@@ -112,6 +113,8 @@ class FakeSession {
   turnDone: Promise<void> = Promise.resolve();
   /** Set by the first `stop()`; later calls share it. */
   stopping: Promise<void> | undefined;
+  /** The session's running cost, set by `cost` steps (P8-01); every later idle reports it. */
+  cost: Cost | undefined;
 
   constructor(
     readonly agentId: Id,
@@ -393,7 +396,13 @@ export class FakeAdapter implements AgentAdapter {
       } finally {
         session.turn = undefined;
       }
-      if (!session.ended) this.emit({ type: 'agent.idle', agentId: session.agentId });
+      if (!session.ended) {
+        this.emit({
+          type: 'agent.idle',
+          agentId: session.agentId,
+          ...(session.cost ? { cost: session.cost } : {}),
+        });
+      }
     })();
     session.turnDone = done;
     return done;
@@ -463,6 +472,9 @@ export class FakeAdapter implements AgentAdapter {
         return 'next';
       case 'idle':
         return 'idle';
+      case 'cost':
+        session.cost = step.cost;
+        return 'next';
       case 'ask': {
         const answer = await this.askQuestion(session, 'clarification', {
           text: step.text,

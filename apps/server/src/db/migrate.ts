@@ -43,11 +43,30 @@ export function migrate(db: Database, migrations: Migration[] = loadMigrations()
     name       TEXT NOT NULL,
     applied_at TEXT NOT NULL
   )`);
-  const done = new Set(
-    (db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map(
-      (r) => r.version,
-    ),
+  const recorded = db.prepare('SELECT version, name FROM schema_migrations').all() as {
+    version: number;
+    name: string;
+  }[];
+  // A database that ran another branch's migrations under the same numbers (a `0011` that was
+  // budgets there) must not be taken for this schema: the names have to match the files.
+  const files = new Map(migrations.map((m) => [m.version, m.name]));
+  const mismatched = recorded.filter(
+    (r) => files.has(r.version) && files.get(r.version) !== r.name,
   );
+  if (mismatched.length > 0) {
+    throw new Error(
+      'The database was migrated by a different build: ' +
+        mismatched
+          .map(
+            (r) =>
+              `migration ${String(r.version).padStart(4, '0')} is "${r.name}" in the database ` +
+              `but "${files.get(r.version)}" here`,
+          )
+          .join('; ') +
+        '. Use the build that created it, or a fresh database.',
+    );
+  }
+  const done = new Set(recorded.map((r) => r.version));
   const applied: number[] = [];
   const insert = db.prepare(
     'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)',

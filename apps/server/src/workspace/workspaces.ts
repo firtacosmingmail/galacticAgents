@@ -9,13 +9,11 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { CommandResult, Id, Project, Task } from '@galactic/protocol';
+import type { CommandResult, Id, Project, ProjectEdit, Task, TaskEdit } from '@galactic/protocol';
 import { z } from 'zod';
 import { expandHome } from '../config/config.js';
 import type { Tables } from '../db/tables.js';
 import { DomainError, must } from '../domain/errors.js';
-import type { ProjectChanges } from '../domain/projects.js';
-import type { TaskChanges } from '../domain/tasks.js';
 import { gitRunner, splitZ, type Git } from './git.js';
 
 /**
@@ -161,8 +159,8 @@ export type MergeResult =
 
 /** What the service needs from the command surface: the two updates it records through. */
 export interface WorkspaceCommands {
-  updateProject(projectId: Id, changes: ProjectChanges): Promise<CommandResult<Project>>;
-  updateTask(taskId: Id, changes: TaskChanges): Promise<CommandResult<Task>>;
+  updateProject(projectId: Id, changes: ProjectEdit): Promise<CommandResult<Project>>;
+  updateTask(taskId: Id, changes: TaskEdit): Promise<CommandResult<Task>>;
 }
 
 export interface WorkspacesOptions {
@@ -478,7 +476,13 @@ export class Workspaces {
 
     await this.serial(repoRoot, async () => {
       await this.git(repoRoot, ['worktree', 'prune']);
-      if (await this.isWorktree(repoRoot, root)) return;
+      if (await this.isWorktree(repoRoot, root)) {
+        if (!(await this.isUnfinished(repoRoot, root))) return;
+        // A `worktree add` cut short (P8-04: the machine went down while a Steward was being
+        // spawned): git left it registered, locked "initializing", with a partial checkout. Its
+        // Steward never started, so nothing in it is anyone's work: it is made again.
+        await this.git(repoRoot, ['worktree', 'remove', '--force', '--force', root]);
+      }
       mkdirSync(dirname(root), { recursive: true });
       const exists = await this.git(
         repoRoot,
@@ -510,6 +514,19 @@ export class Workspaces {
     const w = task.meta?.['worktree'] as
       { root?: string; baseBranch?: string; removed?: boolean } | undefined;
     return w?.root === info.root && w.baseBranch === info.baseBranch && !w.removed;
+  }
+
+  /** The worktree at `root` is still locked "initializing": its `git worktree add` never ended. */
+  private async isUnfinished(repoRoot: string, root: string): Promise<boolean> {
+    const list = await this.git(repoRoot, ['worktree', 'list', '--porcelain', '-z']);
+    const real = realpathSync(root);
+    let current: string | undefined;
+    for (const field of list.stdout.split('\0')) {
+      if (field === '') current = undefined;
+      else if (field.startsWith('worktree ')) current = canonical(field.slice('worktree '.length));
+      else if (current === real && field === 'locked initializing') return true;
+    }
+    return false;
   }
 
   private async isWorktree(repoRoot: string, root: string): Promise<boolean> {

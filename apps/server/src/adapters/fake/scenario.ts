@@ -33,6 +33,11 @@ export type FakeStep =
   | { kind: 'stall'; silentForMs: number }
   /** Ends the turn early: `agent.idle`, then wait for the next message. */
   | { kind: 'idle' }
+  /**
+   * The session's running cost from now on (P8-01): cumulative, like the SDK's `total_cost_usd`;
+   * every later `agent.idle` of the session reports it. Emits nothing itself.
+   */
+  | { kind: 'cost'; cost: Cost }
   | { kind: 'finish'; result?: string; cost?: Cost; delayMs?: number }
   | { kind: 'fail'; error: string; reason: 'cap' | 'crash' | 'runtime' | 'unknown'; cost?: Cost }
   /**

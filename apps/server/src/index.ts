@@ -15,9 +15,11 @@ import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { openDatabase } from './db/database.js';
+import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
 import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { composeRuntime } from './runtime/compose.js';
+import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { ProcessSupervisor } from './runtime/supervisor.js';
 import { Workspaces } from './workspace/workspaces.js';
@@ -31,6 +33,14 @@ const onError = (error: unknown, context: string) =>
   console.error(`[runtime] ${context}:`, error instanceof Error ? error.message : error);
 
 const db = openDatabase(config.dbPath);
+// Transcript retention gives space back in small steps (P8-02), which needs incremental
+// auto-vacuum; a database made before it is converted once, here, before the server listens —
+// unless the disk lacks room for it, or it already failed too often (`db/vacuum.ts`).
+startupConversion(db, {
+  dbPath: config.dbPath,
+  retry: process.env[CONVERSION_RETRY_ENV] === '1',
+  log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
+});
 // The supervisor owns every agent child process; its PID table lives in the same database.
 const supervisor = new ProcessSupervisor({ store: new SqliteProcessStore(db) });
 const reconciled = supervisor.reconcile();
@@ -63,8 +73,15 @@ const composed = composeRuntime(db, {
   caps: config.caps,
   // Finished work past decision 4's retention period is archived hourly (P2-13).
   archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
+  // Transcript chunks past the transcript retention policy are removed hourly (P8-02).
+  transcriptRetention: {
+    ...(config.transcriptRetention ? { policy: config.transcriptRetention } : {}),
+    intervalMs: TRANSCRIPT_RETENTION_INTERVAL_MS,
+  },
   // Stewards' leftover processes (P4-14): attributed from the supervisor's process groups.
   processes: { groups: supervisor },
+  // Dollar budgets (P8-01): the warning threshold.
+  ...(config.budgets ? { budgets: config.budgets } : {}),
 });
 const { log, statuses, transcripts } = composed;
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
@@ -77,6 +94,8 @@ const settings = new SettingsService({
   config,
   caps: composed.runtime.caps,
   archival: composed.archival,
+  transcriptRetention: composed.transcriptRetention,
+  budgets: composed.budgets,
 });
 
 // Shutdown is wired before anything is resumed or listening (P1-32): a signal during recovery

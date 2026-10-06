@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (phase not started; tasks here are picked individually as needed) · **Task status:** —
-**Phase status:** not started (0/8 done)
+**Current task:** next wave proposed: P8-05, P8-03, P8-09 (after wave 1 is merged into `phase-8`; P8-10 needs Cosmin's decision) · **Task status:** todo
+**Phase status:** in progress (3/11 done) — on branch `phase-8`, cut from `phase-7` (Phase 7 waits for the P7-06 device run before it merges into `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -28,17 +28,17 @@ An ongoing backlog rather than a sequential phase: dollar budgets, retention/com
 
 ## Execution order
 
-All tasks are independent of each other; suggested priority order: P8-04 → P8-02 → P8-01 → P8-05 → P8-03 → P8-07 → P8-08 → P8-06.
+All tasks are independent of each other; suggested priority order: P8-04 → P8-02 → P8-01 → P8-05 → P8-03 → P8-07 → P8-08 → P8-06. Added from the P8-04 drills (2026-10-05): P8-10 (brains stopped by the wall-clock cap) first, then P8-09, then P8-11.
 
 ## Tasks
 
 ### P8-01 — Dollar budgets per project/task
-- **Status:** todo · **Depends on:** P2-17, P1-08 · **Parallel with:** all
+- **Status:** done (2026-10-05) · **Depends on:** P2-17, P1-08 · **Parallel with:** all
 - Budget fields on projects/tasks; cost aggregation from `agent.finished(cost)`; Harmonizer warns at a threshold and refuses spawns beyond the budget (tool error + user message); budget editing in settings/cards.
 - **Acceptance:** tests with fake costs; the refusal is visible in the Harmonizer chat.
 
 ### P8-02 — Transcript retention and compaction
-- **Status:** todo · **Depends on:** P1-06, P2-13 · **Parallel with:** all
+- **Status:** done (2026-10-05) · **Depends on:** P1-06, P2-13 · **Parallel with:** all
 - Retention policy for `transcript_chunks` (by age and by archived project); scheduled compaction; `events` untouched; VACUUM strategy.
 - **Acceptance:** compaction runs on a fixture DB; resume from `lastEventId` and the scrubber still work afterwards.
 
@@ -48,7 +48,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** export → wipe → import reproduces the map and history.
 
 ### P8-04 — Crash recovery drills
-- **Status:** todo · **Depends on:** P2-16 · **Parallel with:** all
+- **Status:** done (2026-10-05) · **Depends on:** P2-16 · **Parallel with:** all
 - Scripted drills: `kill -9` mid-project, reboot the machine, unplug the network during a Steward run, disk full on write; record outcomes and fix findings; add the reproducible ones to CI.
 - **Acceptance:** drill log in `docs/tasks/notes/P8-04-drills.md`; no data loss or duplicate spawns in any drill.
 
@@ -71,6 +71,21 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Status:** todo · **Depends on:** P1-13, P1-04 · **Parallel with:** all
 - `node-pty` spawn, xterm.js view in the Steward panel, heuristic status (activity, exit code, prompt detection), best-effort question detection, no resume (shown `interrupted` with restart).
 - **Acceptance:** conformance suite green for the subset the interface marks optional; a shell-script "agent" runs end to end.
+
+### P8-09 — Storage health in the panel (added 2026-10-05)
+- **Status:** todo · **Depends on:** P8-04 · **Parallel with:** all
+- From the P8-04 disk-full drill (`notes/P8-04-drills.md`, finding F2): the server now holds the agent events it cannot write and writes them when space returns, but the user only sees refused actions as generic 500 errors. Add a storage state to the status stream (writes failing since, agent events waiting), a "disk full — N agent events waiting" banner in the panel and a push notification, and `507 storage_full` ("the disk is full") for REST and WebSocket actions the storage refuses. SPEC decision 99.
+- **Acceptance:** with the drill's full disk, the panel shows the banner within a second, a refused action says the disk is full, and the banner clears when the held events are written.
+
+### P8-10 — Brains and the wall-clock cap (added 2026-10-05)
+- **Status:** todo · **Depends on:** P2-17 · **Parallel with:** all
+- From the P8-04 network drill (finding F5): the per-agent wall-clock cap (default 2 h) also stops the Harmonizer and Waykeepers, idle time included — an idle Harmonizer fails with `failed(reason: cap)` once the cap has passed since its spawn and is replaced with a fresh session; a Waykeeper fails every two hours. Decide (proposed: brains are bounded by the hierarchy and their tool-call cap, not by the wall clock; or only their turn time counts) and fix in `CapsEnforcer` with a test.
+- **Acceptance:** a brain idle past the wall-clock cap keeps running; Stewards are still stopped by it.
+
+### P8-11 — A CLI forked just before a kill (added 2026-10-05)
+- **Status:** todo · **Depends on:** P8-04 · **Parallel with:** all
+- From the P8-04 kill-at-any-moment drill (residual R3, seen once): a child the supervisor forked in the instant before the server was killed can run with no PID-table row, so `reconcile()` never takes it. Record a launch intent (agent, command, time) before the spawn, and at startup take a marked (`GALACTIC_AGENT_ID`) orphan of such an intent's agent started in that window, with the same safety rules as P4-14.
+- **Acceptance:** a drill that kills the server between the fork and the row (fault injection) leaves no process of the killed run.
 
 ## Exit criteria
 
