@@ -172,3 +172,31 @@
 .stw-procs-cmd {
   overflow-wrap: anywhere;
 }
+/* A terminal agent's screen (P8-08): xterm.js at the agent's fixed size, scrolled sideways on a
+   narrow panel rather than squeezed. */
+.stw-terminal .pnl-eyebrow {
+  margin-top: 0;
+}
+.stw-terminal-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: #000;
+  padding: 4px;
+}
+.stw-terminal-screen {
+  width: max-content;
+}
+.stw-terminal-row {
+  display: flex;
+  gap: 8px;
+}
+.stw-terminal-field {
+  flex: 1;
+  min-width: 0;
+  font: 13px var(--pnl-mono);
+}
+.stw-text-transcript > summary {
+  cursor: pointer;
+}

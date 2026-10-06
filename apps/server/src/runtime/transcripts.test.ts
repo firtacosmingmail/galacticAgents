@@ -335,6 +335,24 @@ describe('TranscriptPipeline', () => {
       p.flush();
       expect(w.rows()).toEqual(['token [redacted:github-token]', 'third']);
     });
+
+    it('a terminal stream and its text interleaved: each catches its own split key (P8-08)', () => {
+      const { p } = make({ holdMs: 250 });
+      const head = FAKE_KEY.slice(0, 18);
+      const tail = FAKE_KEY.slice(18);
+      // A PTY agent's raw output and its stripped text arrive interleaved, the same bytes twice.
+      const t1 = p.append('a-1', 'terminal', `\x1b[32mkey=${head}`);
+      const x1 = p.append('a-1', 'text', `key=${head}`);
+      const t2 = p.append('a-1', 'terminal', `${tail}\x1b[0m\r\n`);
+      const x2 = p.append('a-1', 'text', `${tail}`);
+      p.flush();
+      const all = [t1, x1, t2, x2].map((c) => c.text).join('|');
+      expect(all).not.toContain(head);
+      expect(all).not.toContain(tail);
+      expect(t2.text).toContain('[redacted:anthropic-key]');
+      expect(x2.text).toContain('[redacted:anthropic-key]');
+      expect(p.read('a-1').map((c) => c.kind)).toEqual(['terminal', 'text', 'terminal', 'text']);
+    });
   });
 
   describe('what a subscriber gets is what is stored (P1-31)', () => {

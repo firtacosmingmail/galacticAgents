@@ -137,6 +137,21 @@ export interface ProcessSpec {
   interrupt?: (proc: ManagedProcess) => void | Promise<void>;
   /** Anything the adapter wants persisted next to the pid. */
   meta?: Record<string, unknown>;
+  /**
+   * Forks the child instead of `child_process.spawn` (P8-08: the PTY adapter starts its CLI under
+   * a pseudo-terminal). Gets the command, its args, the cwd and the full environment the
+   * supervisor built (allow-list, agent marker, launch id), and must return at once with a
+   * `ChildProcess` stand-in: `pid` set, the child the leader of its own process group, `stdin`
+   * (`write`, `end`, `on('error')`), `stdout` (`setEncoding`, `on('data')`), `stderr` (may be
+   * `null`), and the events `spawn` (after returning), `exit(code, signal)` then `close`. A fork
+   * that cannot start throws. Everything else — launch intent, PID table, stop sequence, group
+   * reaping — is the supervisor's as for any child.
+   */
+  fork?: (
+    command: string,
+    args: string[],
+    options: { cwd: string; env: Record<string, string> },
+  ) => ChildProcess;
 }
 
 export interface ExitInfo {
@@ -653,14 +668,17 @@ export class ProcessSupervisor {
     }
     let child: ChildProcess;
     try {
-      child = spawn(spec.command, spec.args ?? [], {
-        cwd: spec.cwd,
-        env: { ...this.childEnv(spec), [LAUNCH_ID_ENV]: launchId },
-        // Own process group (setsid): the group kill takes the agent's children that stayed in it
-        // along (not a tool command's shell in a group of its own: see the class comment).
-        detached: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      const env = { ...this.childEnv(spec), [LAUNCH_ID_ENV]: launchId };
+      child = spec.fork
+        ? spec.fork(spec.command, spec.args ?? [], { cwd: spec.cwd, env })
+        : spawn(spec.command, spec.args ?? [], {
+            cwd: spec.cwd,
+            env,
+            // Own process group (setsid): the group kill takes the agent's children that stayed
+            // in it along (not a tool command's shell in a group of its own: see the class comment).
+            detached: true,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
     } catch (error) {
       this.forgetLaunch(launchId, spec.agentId);
       throw error;

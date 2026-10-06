@@ -107,11 +107,14 @@ export function StewardView({ agentId }: { agentId: Id }) {
         {chunks.length === 0 ? (
           <span className="muted">nothing yet</span>
         ) : (
-          chunks.map((c) => (
-            <div key={c.seq} className={`chunk chunk-${c.kind}`}>
-              <span className="muted">{c.kind}</span> {c.text}
-            </div>
-          ))
+          // A terminal agent's raw screen (P8-08) is the panel's terminal view; its text is here.
+          chunks
+            .flatMap((c) => (c.kind === 'terminal' ? [] : [c]))
+            .map((c) => (
+              <div key={c.seq} className={`chunk chunk-${c.kind}`}>
+                <span className="muted">{c.kind}</span> {c.text}
+              </div>
+            ))
         )}
       </pre>
     </section>

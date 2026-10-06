@@ -59,6 +59,16 @@ export const SendResponse = z.object({ messageId: z.string().min(1) });
 export type SendResponse = z.infer<typeof SendResponse>;
 
 /**
+ * `POST /api/agents/:id/terminal` (P8-08): one line the user types into a terminal agent's (PTY)
+ * terminal — the text then Enter, at once, whatever the agent is doing. Only from this machine's
+ * own browser, never from a remote client (not even with `autoApproveRemote`); logged as the
+ * user's `message.sent` (and `message.delivered` once typed). 409 for an agent that has no
+ * terminal or is not running.
+ */
+export const TerminalInputBody = z.object({ text: z.string().max(4_000) });
+export type TerminalInputBody = z.infer<typeof TerminalInputBody>;
+
+/**
  * `POST /api/questions/:id/answer`. `version` is the question's version the answerer saw (P2-18):
  * when it changed meanwhile — someone answered first, it was escalated — the answer is refused
  * with 409 `stale` and the message says who has it ("already answered by …", SPEC §2.6).

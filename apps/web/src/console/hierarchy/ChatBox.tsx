@@ -63,7 +63,7 @@ export function ChatBox({ agentId, title }: { agentId: Id; title?: string }) {
   const lines: Line[] = [
     ...messages.map((m): Line => ({ kind: 'in', at: m.at, key: `m-${m.messageId}`, message: m })),
     ...chunks
-      .filter((c) => showWork || c.kind === 'text')
+      .filter((c) => c.kind !== 'terminal' && (showWork || c.kind === 'text'))
       .map((c): Line => ({ kind: 'out', at: c.at, key: `c-${c.seq}`, chunk: c })),
   ].sort((a, b) => a.at.localeCompare(b.at));
 
