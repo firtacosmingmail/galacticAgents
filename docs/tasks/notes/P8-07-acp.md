@@ -78,7 +78,7 @@ that advertises them (tested).
    stays unclassified (`acp:<kind>`) and so asks unless trusted — never made to look safer. The
    original kind and title travel along in the input (`acp: {kind, title}`) for the card.
    `think` / `switch_mode` are bookkeeping (no gate, no `agent.tool_call`).
-6. **Calls the agent runs without asking** are judged when they start (proposed decision 106).
+6. **Calls the agent runs without asking** are judged when they start (decision 108).
 7. **Form elicitation → one clarification per field**, required fields first; enum/`oneOf` →
    options matched back to values, boolean → yes/no, numbers parsed (an unreadable answer is asked
    again, up to three times, then `decline`), multi-select comma-separated. Interrupt/stop →
@@ -94,7 +94,7 @@ that advertises them (tested).
     through an async chain, so the last `session/update`s of a turn (its `usage_update`, its last
     chunks) arrived *after* the prompt's response in the first conformance run (cost missing on the
     idle). The adapter ends a turn one macrotask (`setImmediate`) after the response.
-11. **Brains stay on the Claude SDK** (proposed decision 107): the ACP adapter refuses a spawn with
+11. **Brains stay on the Claude SDK** (decision 109): the ACP adapter refuses a spawn with
     server `tools` (they would need an MCP bridge) and `bare` (a Claude notion). A Steward's
     `systemPrompt` is put before its first prompt.
 12. **Environment:** the supervisor's allow-list plus `ACP_PASS_ENV` (the routing/login variables
@@ -103,7 +103,7 @@ that advertises them (tested).
 
 ## Proposed SPEC decisions (not entered in §7; for Cosmin)
 
-> **proposed decision 106 — Calls an ACP agent runs without asking.** An ACP agent asks permission
+> **decision 108 — Calls an ACP agent runs without asking.** An ACP agent asks permission
 > only for what its own mode deems risky. Every tool call it reports is still judged by the
 > project's permission table when it starts: an allowed one is counted as usual; one the table
 > would have asked about is counted and the transcript says "the agent ran X without asking; the
@@ -112,7 +112,7 @@ that advertises them (tested).
 > requests the agent does send are decided by the table or the user exactly like Claude Code's,
 > and are always answered "once", never "always".
 
-> **proposed decision 107 — Which runtime Stewards run on.** The settings name the runtime new
+> **decision 109 — Which runtime Stewards run on.** The settings name the runtime new
 > Stewards run on ("Steward runtime": same as their brain — the default —, Claude Code, or an ACP
 > agent such as Codex, Gemini CLI or claude-agent-acp, once one is set up in `config.json`). It
 > applies to the next Steward a Waykeeper or the Harmonizer starts; running Stewards keep theirs.
@@ -176,7 +176,7 @@ real ACP runtime locally") is therefore **open**.
 ## Left / follow-ups
 
 - The real-runtime run (above), and the facts it settles in TECHNOLOGY §3.2.
-- Proposed decisions 106 and 107 to be entered in SPEC §7 (or changed) by Cosmin.
+- Decisions 108 and 109 are recorded in SPEC §7.
 - A resumed ACP session whose agent restarts its own cost tally is under-counted until it passes
   its earlier total (the spend fold keeps the highest figure per session).
 - The fake ACP agent is not copied into `dist/` (it lives next to the sources; `fake-agent.ts`

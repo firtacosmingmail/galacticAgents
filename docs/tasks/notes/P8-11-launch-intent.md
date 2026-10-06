@@ -136,7 +136,7 @@ startup (index.ts):  reconcile()  →  reconcileLaunches()  →  compose / recov
 
 ## Proposed SPEC §7 decisions (not edited into §7; renumber on collision)
 
-- **Proposed decision 106 — An agent started just before a crash is cleaned up too** (P8-11;
+- **Decision 106 — An agent started just before a crash is cleaned up too** (P8-11;
   decisions 8, 76; corner cases 3, 4): the server notes that it is about to start an agent's
   program before it starts it; if the server is killed in that instant, the next start finds that
   program and what it started in its own group (by the agent's marker and that start's own tag in
@@ -145,7 +145,7 @@ startup (index.ts):  reconcile()  →  reconcileLaunches()  →  compose / recov
   is left to the agent, which comes back, and is cleaned up when it ends (decision 76). The rules
   of decision 76 hold: never a process whose environment cannot be read, never a user-facing app
   or anything below one, never anything the user started.
-- **Proposed decision 107 — No agent process the server cannot keep track of** (P8-11;
+- **Decision 107 — No agent process the server cannot keep track of** (P8-11;
   decisions 76, 99): when the disk is full and the server cannot note that it is starting an
   agent's program, it does not start it: that start fails with "the disk is full" and can be
   retried once there is room. Agents already running keep working (decision 99).
