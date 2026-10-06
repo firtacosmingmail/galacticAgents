@@ -12,6 +12,36 @@ beforeEach(() => {
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 describe('loadConfig', () => {
+  it('reads the Steward runtime and the ACP agent command (P8-07)', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        stewardRuntime: 'acp',
+        acp: { command: 'gemini', args: ['--acp'], passEnv: ['GEMINI_API_KEY'] },
+      }),
+    );
+    const fromFile = loadConfig({ GALACTIC_HOME: home }).config;
+    expect(fromFile.stewardRuntime).toBe('acp');
+    expect(fromFile.acp).toEqual({ command: 'gemini', args: ['--acp'], passEnv: ['GEMINI_API_KEY'] });
+    expect(fromFile.envOverrides).not.toContain('stewardRuntime');
+    const fromEnv = loadConfig({
+      GALACTIC_HOME: home,
+      GALACTIC_STEWARD_RUNTIME: 'claude-sdk',
+      GALACTIC_ACP_COMMAND: ' codex-acp  --verbose ',
+    }).config;
+    expect(fromEnv.stewardRuntime).toBe('claude-sdk');
+    expect(fromEnv.envOverrides).toContain('stewardRuntime');
+    expect(fromEnv.acp).toEqual({
+      command: 'codex-acp',
+      args: ['--verbose'],
+      passEnv: ['GEMINI_API_KEY'],
+    });
+    expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_STEWARD_RUNTIME: 'cursor' })).toThrow(
+      /Steward runtime/,
+    );
+  });
+
   it('generates a token on first start, persists it with mode 0600 and reuses it afterwards', () => {
     const first = loadConfig({ GALACTIC_HOME: home });
     expect(first.tokenGenerated).toBe(true);

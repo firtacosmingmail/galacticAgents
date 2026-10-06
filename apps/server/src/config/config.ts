@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  AgentRuntime,
   BackupSchedule,
   DEFAULT_BUDGET_WARN_PERCENT,
   DEFAULT_TRANSCRIPT_RETENTION,
@@ -116,6 +117,25 @@ export const ConfigFile = z.object({
   backups: BackupSchedule.partial()
     .extend({ reserveMiB: z.number().int().nonnegative().optional() })
     .optional(),
+  /**
+   * The runtime new Stewards run on (P8-07; also `GALACTIC_STEWARD_RUNTIME`); absent = the
+   * spawning brain's own runtime. Settable from the panel.
+   */
+  stewardRuntime: AgentRuntime.optional(),
+  /**
+   * The ACP agent the `acp` runtime starts for every session (P8-07; TECHNOLOGY §3.2), e.g.
+   * `{"command": "claude-agent-acp"}`, `{"command": "gemini", "args": ["--acp"]}` or
+   * `{"command": "codex-acp"}`; also `GALACTIC_ACP_COMMAND` (a command line split on spaces).
+   * Absent: no `acp` runtime. `passEnv` names server variables the agent needs (its API key) on
+   * top of the allow-list.
+   */
+  acp: z
+    .object({
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+      passEnv: z.array(z.string().min(1)).optional(),
+    })
+    .optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -184,6 +204,10 @@ export interface ServerConfig {
   budgets?: { warnAtPercent: number };
   /** Backups (P8-03): the rotation and the free space a backup leaves; absent = the defaults. */
   backups?: Partial<BackupSchedule> & { reserveBytes?: number };
+  /** The runtime new Stewards run on (P8-07); absent = the spawning brain's own. */
+  stewardRuntime?: AgentRuntime;
+  /** The ACP agent command (P8-07); absent = no `acp` runtime registered. */
+  acp?: { command: string; args?: string[] | undefined; passEnv?: string[] | undefined };
 }
 
 export interface LoadedConfig {
@@ -354,7 +378,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       `Invalid budget warning threshold (1–100 %): ${warnEnv ?? file.budgets?.warnAtPercent}`,
     );
   }
+  const runtimeEnv = env['GALACTIC_STEWARD_RUNTIME'];
+  let stewardRuntime = file.stewardRuntime;
+  if (runtimeEnv !== undefined) {
+    const parsed = AgentRuntime.safeParse(runtimeEnv.trim());
+    if (!parsed.success) throw new Error(`Invalid Steward runtime: ${runtimeEnv}`);
+    stewardRuntime = parsed.data;
+  }
+  const acpEnv = env['GALACTIC_ACP_COMMAND']?.trim().split(/\s+/).filter(Boolean);
+  const acp =
+    acpEnv && acpEnv.length > 0
+      ? { command: acpEnv[0]!, args: acpEnv.slice(1), ...(file.acp?.passEnv ? { passEnv: file.acp.passEnv } : {}) }
+      : file.acp;
   const envOverrides: SettingName[] = [];
+  if (runtimeEnv !== undefined) envOverrides.push('stewardRuntime');
   if (warnEnv !== undefined) envOverrides.push('budgets');
   if (env['GALACTIC_PROJECTS_ROOT'] !== undefined) envOverrides.push('projectsRoot');
   if (retentionEnv !== undefined) envOverrides.push('retentionDays');
@@ -401,6 +438,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       budgets: { warnAtPercent },
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
       ...backupsOf(file.backups, env['GALACTIC_BACKUPS']),
+      ...(stewardRuntime ? { stewardRuntime } : {}),
+      ...(acp ? { acp } : {}),
     },
     tokenGenerated,
     warnings,

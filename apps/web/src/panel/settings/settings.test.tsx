@@ -533,6 +533,19 @@ describe('settings page (P25-08)', () => {
     expect(server.patches.at(-1)).toEqual({ budgets: { warnAtPercent: 65 } });
   });
 
+  it('sets the runtime of new Stewards, and back to the brain’s own (P8-07)', async () => {
+    await open('/settings', done());
+    const section = await screen.findByRole('region', { name: 'Steward runtime' });
+    const same = within(section).getByRole('radio', { name: /Same as its brain/ }) as HTMLInputElement;
+    expect(same.checked).toBe(true);
+    await click(within(section).getByRole('radio', { name: /ACP agent/ }));
+    await click(within(section).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ stewardRuntime: 'acp' });
+    await click(within(section).getByRole('radio', { name: /Same as its brain/ }));
+    await click(within(section).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ stewardRuntime: null });
+  });
+
   it('resets the default table to the §3.6 table', async () => {
     const custom = done();
     custom.settings.defaultPermissionPolicy.rules.network = 'allow';
