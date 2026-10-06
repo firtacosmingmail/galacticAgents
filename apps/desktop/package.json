@@ -12,8 +12,8 @@
     "tauri": "tauri",
     "smoke": "node scripts/smoke.mjs",
     "icons": "node scripts/tray-icons.mjs && tauri icon ../web/public/icons/icon-512.png -o src-tauri/icons",
-    "dev": "tsc -p tsconfig.json && tauri dev",
-    "bundle": "tsc -p tsconfig.json && tauri build --bundles app"
+    "dev": "tsc -p tsconfig.json && PATH=\"$HOME/.cargo/bin:$PATH\" tauri dev",
+    "bundle": "tsc -p tsconfig.json && PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --bundles app"
   },
   "dependencies": {
     "@galactic/protocol": "workspace:*"
