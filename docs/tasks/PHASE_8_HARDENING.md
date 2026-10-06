@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-08, P8-06 (wave 4, branch `p8-wave4-pty-desktop`); P8-07 blocked on a real ACP runtime · **Task status:** in progress
-**Phase status:** in progress (9/12 done) — on branch `phase-8`, cut from `phase-7`; Phase 7 merged into `main` on 2026-10-06 and into `phase-8` after it
+**Current task:** P8-07 (blocked on a real ACP runtime installed locally); everything else done · **Task status:** blocked
+**Phase status:** in progress (11/12 done) — on branch `phase-8`, cut from `phase-7`; Phase 7 merged into `main` on 2026-10-06 and into `phase-8` after it
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -58,7 +58,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** suite in CI using the fake adapter.
 
 ### P8-06 — Tauri 2 desktop shell
-- **Status:** in progress · **Depends on:** P7-01 · **Parallel with:** all
+- **Status:** done (2026-10-06) · **Depends on:** P7-01 · **Parallel with:** all
 - Wrap the web UI in Tauri 2: tray icon with status, auto-start option, server lifecycle managed by the shell, notifications via the OS.
 - **Acceptance:** `.app` bundle runs the same UI against the local server.
 
@@ -68,7 +68,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** conformance suite green against the fake ACP agent in CI and against one real ACP runtime locally.
 
 ### P8-08 — PTY adapter for arbitrary CLIs
-- **Status:** in progress · **Depends on:** P1-13, P1-04 · **Parallel with:** all
+- **Status:** done (2026-10-06) · **Depends on:** P1-13, P1-04 · **Parallel with:** all
 - `node-pty` spawn, xterm.js view in the Steward panel, heuristic status (activity, exit code, prompt detection), best-effort question detection, no resume (shown `interrupted` with restart).
 - **Acceptance:** conformance suite green for the subset the interface marks optional; a shell-script "agent" runs end to end.
 
