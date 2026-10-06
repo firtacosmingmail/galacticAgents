@@ -13,6 +13,11 @@ import { bootDrill, drillDirs, firstLife, type FirstLife } from './drill-world.j
  * process supervisor whose PID table is in that database (as `index.ts` does), builds the first
  * life, gives the two Stewards stand-in CLIs (real process groups), writes `<root>/ready.json`,
  * prints `DRILL READY` and runs until it is killed. Nothing here ever shuts down gracefully.
+ *
+ * `--pause-after-fork s1|s2` (P8-11, fault injection): the supervisor's `afterFork` hook for that
+ * Steward's stand-in writes `<root>/forked.json` (`{agentId, pid, launchId}`) and then blocks the
+ * server for good — the stand-in is forked, its PID-table row is never written — so the drill
+ * can kill the server exactly between the fork and the row.
  */
 
 export interface StandIn {
@@ -29,14 +34,36 @@ export interface Ready extends FirstLife {
 
 const STAND_IN = join(dirname(fileURLToPath(import.meta.url)), 'stand-in-cli.mjs');
 
+/** What `--pause-after-fork` writes once the stand-in is forked. */
+export interface Forked {
+  agentId: Id;
+  pid: number;
+  launchId: string;
+}
+
 async function main(): Promise<void> {
   const root = process.argv[2];
   if (!root) throw new Error('usage: drill-server.ts <root>');
+  const flag = process.argv.indexOf('--pause-after-fork');
+  const pauseWhich = flag > 0 ? process.argv[flag + 1] : undefined;
+  let pauseAgent: Id | undefined;
   const dirs = drillDirs(root);
   const db = openDatabase(dirs.db);
-  const supervisor = new ProcessSupervisor({ store: new SqliteProcessStore(db) });
+  const supervisor = new ProcessSupervisor({
+    store: new SqliteProcessStore(db),
+    testHooks: {
+      afterFork: (info) => {
+        if (info.agentId !== pauseAgent) return;
+        writeFileSync(join(root, 'forked.json'), JSON.stringify(info satisfies Forked));
+        // Blocks the event loop for good: the row that would follow the fork is never written.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      },
+    },
+  });
   const h = bootDrill(dirs, db, { groups: supervisor });
   const one = await firstLife(h, dirs);
+  if (pauseWhich === 's1') pauseAgent = one.s1;
+  if (pauseWhich === 's2') pauseAgent = one.s2;
 
   const standIns: Record<Id, StandIn> = {};
   for (const [agentId, cwd, flag] of [

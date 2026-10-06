@@ -26,6 +26,15 @@ export interface ProcessTable {
    * treat that as "not an agent's" (fail closed). Optional: a table without it marks nothing.
    */
   markers?(procs: readonly Pick<ProcEntry, 'pid' | 'command'>[]): Promise<Map<number, string>>;
+  /**
+   * The values of the given variables in each process's environment (P8-11: the agent marker and
+   * the launch id). Same rules as `markers`: an unreadable environment gives no entry, and a
+   * variable that is missing (or appears twice with different values) is absent from the entry.
+   */
+  environment?(
+    procs: readonly Pick<ProcEntry, 'pid' | 'command'>[],
+    names: readonly string[],
+  ): Promise<Map<number, Map<string, string>>>;
   ports(pids: readonly number[]): Promise<Map<number, number[]>>;
   /** Sends `sig` to one process (never a group); `false` when it is gone or not ours. */
   kill(pid: number, sig: NodeJS.Signals): boolean;
@@ -147,6 +156,52 @@ export function osProcessTable(): ProcessTable {
     if (out === undefined) lsofMissing = true;
     return out;
   };
+  const environment: NonNullable<ProcessTable['environment']> = async (procs, names) => {
+    const out = new Map<number, Map<string, string>>();
+    if (procs.length === 0 || names.length === 0 || process.platform === 'win32') return out;
+    const pick = (read: (name: string) => string | undefined): Map<string, string> => {
+      const vars = new Map<string, string>();
+      for (const name of names) {
+        const value = read(name);
+        if (value !== undefined) vars.set(name, value);
+      }
+      return vars;
+    };
+    if (HAS_PROC) {
+      for (const { pid } of procs) {
+        try {
+          const block = readFileSync(`/proc/${pid}/environ`, 'latin1');
+          out.set(
+            pid,
+            pick((name) => parseEnviron(block, name)),
+          );
+        } catch {
+          // gone, or not ours: no environment
+        }
+      }
+      return out;
+    }
+    // macOS (and other BSDs): `ps -E` appends the environment to the command line.
+    const text = await run('ps', [
+      '-E',
+      '-ww',
+      '-o',
+      'pid=,command=',
+      '-p',
+      procs.map((p) => p.pid).join(','),
+    ]);
+    const commandOf = new Map(procs.map((p) => [p.pid, p.command]));
+    for (const line of (text ?? '').split('\n')) {
+      const pid = Number(/^\s*(\d+)\s/.exec(line)?.[1]);
+      const command = commandOf.get(pid);
+      if (command === undefined) continue;
+      const vars = pick((name) => parseEnvFromPs(line, command, name));
+      // A line whose environment `ps` hid (a platform binary) carries none of the variables.
+      if (vars.size > 0) out.set(pid, vars);
+    }
+    return out;
+  };
+
   return {
     async list() {
       if (process.platform === 'win32') return undefined;
@@ -179,40 +234,13 @@ export function osProcessTable(): ProcessTable {
     },
     async markers(procs) {
       const out = new Map<number, string>();
-      if (procs.length === 0 || process.platform === 'win32') return out;
-      if (HAS_PROC) {
-        for (const { pid } of procs) {
-          try {
-            const value = parseEnviron(
-              readFileSync(`/proc/${pid}/environ`, 'latin1'),
-              AGENT_ID_ENV,
-            );
-            if (value !== undefined) out.set(pid, value);
-          } catch {
-            // gone, or not ours: no marker
-          }
-        }
-        return out;
-      }
-      // macOS (and other BSDs): `ps -E` appends the environment to the command line.
-      const text = await run('ps', [
-        '-E',
-        '-ww',
-        '-o',
-        'pid=,command=',
-        '-p',
-        procs.map((p) => p.pid).join(','),
-      ]);
-      const commandOf = new Map(procs.map((p) => [p.pid, p.command]));
-      for (const line of (text ?? '').split('\n')) {
-        const pid = Number(/^\s*(\d+)\s/.exec(line)?.[1]);
-        const command = commandOf.get(pid);
-        if (command === undefined) continue;
-        const value = parseEnvFromPs(line, command, AGENT_ID_ENV);
+      for (const [pid, vars] of await environment(procs, [AGENT_ID_ENV])) {
+        const value = vars.get(AGENT_ID_ENV);
         if (value !== undefined) out.set(pid, value);
       }
       return out;
     },
+    environment,
     async ports(pids) {
       const out = new Map<number, number[]>();
       if (pids.length === 0) return out;

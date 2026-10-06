@@ -863,7 +863,12 @@ describe('ProcessSupervisor — persisted PID table and reconciliation', () => {
       pid: proc.pid,
       startedAt: '2026-09-30T02:00:00.000Z',
       status: 'running',
-      meta: { runtime: 'fake', command: NODE, bootAt: expect.any(String) },
+      meta: {
+        runtime: 'fake',
+        command: NODE,
+        bootAt: expect.any(String),
+        launchId: expect.any(String),
+      },
     });
     expect(store.running().map((r) => r.agentId)).toEqual(['a-1']);
     await proc.exited;

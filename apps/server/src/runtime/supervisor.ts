@@ -1,9 +1,29 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { uptime } from 'node:os';
 import { basename } from 'node:path';
 import type { Actor, Id } from '@galactic/protocol';
-import { AGENT_ID_ENV, type AgentGroup, type Session } from './process-attribution.js';
-import { MemoryProcessStore, type ProcessRecord, type ProcessStore } from './process-store.js';
+import {
+  carriesLaunch,
+  LAUNCH_ID_ENV,
+  launchCandidates,
+  matchLaunch,
+  type LaunchTake,
+} from './launch-intents.js';
+import {
+  AGENT_ID_ENV,
+  START_SLACK_MS,
+  type AgentGroup,
+  type ProcEntry,
+  type Session,
+} from './process-attribution.js';
+import {
+  MemoryProcessStore,
+  type LaunchIntent,
+  type ProcessRecord,
+  type ProcessStore,
+} from './process-store.js';
+import { osProcessTable, type ProcessTable } from './process-table.js';
 
 /**
  * The process supervisor (P1-01; TECHNOLOGY §2.2, §5.4; IMPLEMENTATION_PLAN corner cases 1, 3,
@@ -169,6 +189,18 @@ export interface ReconcileResult {
   orphans: Id[];
 }
 
+/** What `reconcileLaunches()` did with the launch intents an earlier server run left (P8-11). */
+export interface LaunchReconcileResult {
+  /** Agents whose launch reached the PID table after all (`reconcile()` handled the row). */
+  completed: Id[];
+  /** Launches whose processes were found and stopped: their groups and members. */
+  taken: { agentId: Id; launchId: string; pgids: number[]; pids: number[]; forced: boolean }[];
+  /** Launches with nothing left to stop (never forked, already gone, or another boot's). */
+  none: Id[];
+  /** Launches this platform cannot check (no process table): forgotten, nothing stopped. */
+  unchecked: Id[];
+}
+
 export interface SupervisorOptions {
   store?: ProcessStore;
   now?: () => string;
@@ -181,6 +213,15 @@ export interface SupervisorOptions {
   inheritEnv?: string[];
   /** Identity checks for `reconcile()`; defaults to `ps` and `kill(…, 0)`. Tests inject one. */
   probe?: Partial<ProcessProbe>;
+  /** The process table `reconcileLaunches()` reads (P8-11); defaults to `osProcessTable()`. */
+  table?: ProcessTable;
+  /** This server run's id on its launch intents; a random UUID by default. */
+  runId?: string;
+  /**
+   * Fault injection for the drills (P8-11): called right after the fork, before the PID table
+   * holds the child. Never set in production.
+   */
+  testHooks?: { afterFork?: (info: { agentId: Id; pid: number; launchId: string }) => void };
 }
 
 /**
@@ -196,12 +237,21 @@ export interface ProcessProbe {
   name(pid: number): string | undefined;
   /** Start time in epoch ms (`ps -o lstart=`), `undefined` when unreadable. */
   startTime(pid: number): number | undefined;
+  /** Signals the group `-pgid` only (`reconcileLaunches()`, P8-11); gone already is fine. */
+  signalGroup(pgid: number, sig: NodeJS.Signals): void;
 }
 
 /** How far a row's `startedAt` may be from the process's own start time (`lstart` has 1 s resolution). */
 export const START_TIME_TOLERANCE_MS = 5_000;
 
 const SYSTEM: Actor = { type: 'system' };
+
+/** A forked child and its launch intent (`pending`: still recorded, the PID table has no row yet). */
+interface Launched {
+  child: ChildProcess;
+  launchId: string;
+  pending: boolean;
+}
 /** How long after `exit` to wait for stdio to drain (`close`) before settling. */
 const DRAIN_MS = 250;
 
@@ -222,23 +272,31 @@ class Managed implements ManagedProcess {
   /** Bumped by `turnEnded()`; a stop compares it to the value it saw when it started. */
   private turnsEnded = 0;
   private exitExpected = false;
+  /** The current child's launch intent (P8-11), and whether it is still recorded as pending. */
+  launchId: string;
+  launchPending: boolean;
 
   constructor(
     readonly agentId: Id,
     readonly spec: ProcessSpec,
-    child: ChildProcess,
+    launched: Launched,
     startedAt: string,
   ) {
-    this.child = child;
-    this.pid = child.pid ?? -1;
+    this.child = launched.child;
+    this.pid = launched.child.pid ?? -1;
+    this.launchId = launched.launchId;
+    this.launchPending = launched.pending;
     this.startedAt = startedAt;
     this.exited = new Promise((r) => (this.resolveExit = r));
   }
 
   /** A restart replaces the child; the lifetime `exited` promise stays. */
-  replaceChild(child: ChildProcess, startedAt: string): void {
+  replaceChild(launched: Launched, startedAt: string): void {
+    const { child } = launched;
     this.child = child;
     this.pid = child.pid ?? -1;
+    this.launchId = launched.launchId;
+    this.launchPending = launched.pending;
     this.startedAt = startedAt;
     this.exit = undefined;
     this.restarts++;
@@ -389,6 +447,7 @@ export const DEFAULT_PROBE: ProcessProbe = {
   groupAlive: isGroupAlive,
   name: processName,
   startTime: processStartTime,
+  signalGroup: (pgid, sig) => killGroup(pgid, sig),
 };
 
 /** When this machine booted (ISO); pids are only comparable within one boot. */
@@ -408,6 +467,9 @@ export class ProcessSupervisor {
   private readonly onOutcome: (outcome: ProcessOutcome) => void;
   private readonly inherited: readonly string[];
   private readonly probe: ProcessProbe;
+  private readonly table: ProcessTable;
+  private readonly runId: string;
+  private readonly testHooks: SupervisorOptions['testHooks'];
   private readonly bootAt = bootTime();
   /**
    * Every process group this supervisor started in this server run, per agent, in order (P4-14):
@@ -434,6 +496,9 @@ export class ProcessSupervisor {
     this.onOutcome = opts.onOutcome ?? (() => {});
     this.inherited = [...INHERITED_ENV, ...(opts.inheritEnv ?? [])];
     this.probe = { ...DEFAULT_PROBE, ...(opts.probe ?? {}) };
+    this.table = opts.table ?? osProcessTable();
+    this.runId = opts.runId ?? randomUUID();
+    this.testHooks = opts.testHooks;
   }
 
   /** The environment a child gets: the allow-listed inheritance plus the spec's own variables. */
@@ -517,23 +582,88 @@ export class ProcessSupervisor {
     if (!this.earlierSessions.has(spec.agentId)) {
       this.earlierSessions.set(spec.agentId, this.storedSession(spec.agentId));
     }
-    const child = this.launch(spec);
-    const managed = new Managed(spec.agentId, spec, child, this.now());
+    let launched: Launched;
+    try {
+      launched = this.launch(spec);
+    } catch (error) {
+      // Nothing was forked (the intent could not be written, or `spawn` threw): a start failure.
+      const outcome: ProcessOutcome = {
+        kind: 'start_failed',
+        agentId: spec.agentId,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      this.safely(spec, () => spec.onOutcome?.(outcome));
+      this.safely(spec, () => this.onOutcome(outcome));
+      throw error;
+    }
+    const managed = new Managed(spec.agentId, spec, launched, this.now());
     this.procs.set(spec.agentId, managed);
     this.record(managed, 'running');
-    this.watch(managed, child);
+    this.watch(managed, launched.child);
     return managed;
   }
 
-  private launch(spec: ProcessSpec): ChildProcess {
-    return spawn(spec.command, spec.args ?? [], {
+  /**
+   * Forks the agent's CLI (P8-11). The launch intent is written FIRST, durably: a server killed
+   * between the fork and the PID table's row leaves the intent, and the next start finds the
+   * launch's processes by the launch id in their environment (`reconcileLaunches()`). When the
+   * intent cannot be written (a full disk), nothing is forked: a process the server cannot record
+   * could outlive it unseen. The caller writes the row, which removes the intent (`record`).
+   * This is the one place every adapter's process goes through (`spawn`, `adopt`, restarts).
+   */
+  private launch(spec: ProcessSpec): Launched {
+    const launchId = randomUUID();
+    const intent: LaunchIntent = {
+      id: launchId,
+      agentId: spec.agentId,
+      command: spec.command,
+      args: spec.args ?? [],
       cwd: spec.cwd,
-      env: this.childEnv(spec),
-      // Own process group (setsid): the group kill takes the agent's children that stayed in it
-      // along (not a tool command's shell in a group of its own: see the class comment).
-      detached: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+      runId: this.runId,
+      bootAt: this.bootAt,
+      // The real clock, like `ps lstart`: the window the fork falls in.
+      intendedAt: new Date().toISOString(),
+      ...(spec.meta ? { meta: spec.meta } : {}),
+    };
+    try {
+      this.store.addLaunch(intent);
+    } catch (error) {
+      throw new Error(
+        `could not start ${spec.command}: the launch could not be recorded (${error instanceof Error ? error.message : String(error)})`,
+        { cause: error },
+      );
+    }
+    let child: ChildProcess;
+    try {
+      child = spawn(spec.command, spec.args ?? [], {
+        cwd: spec.cwd,
+        env: { ...this.childEnv(spec), [LAUNCH_ID_ENV]: launchId },
+        // Own process group (setsid): the group kill takes the agent's children that stayed in it
+        // along (not a tool command's shell in a group of its own: see the class comment).
+        detached: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      this.forgetLaunch(launchId, spec.agentId);
+      throw error;
+    }
+    if (child.pid === undefined) {
+      // The fork failed (ENOENT, EACCES, bad cwd; `error` follows): no process to look for.
+      return { child, launchId, pending: !this.forgetLaunch(launchId, spec.agentId) };
+    }
+    this.testHooks?.afterFork?.({ agentId: spec.agentId, pid: child.pid, launchId });
+    return { child, launchId, pending: true };
+  }
+
+  /** Removes a launch intent; `false` (and an error reported) when the storage refused it. */
+  private forgetLaunch(launchId: string, agentId: Id): boolean {
+    try {
+      this.store.removeLaunch(launchId);
+      return true;
+    } catch (error) {
+      this.onError(error, agentId);
+      return false;
+    }
   }
 
   private watch(managed: Managed, child: ChildProcess): void {
@@ -642,10 +772,10 @@ export class ProcessSupervisor {
         return;
       }
       // `launch` is synchronous, so no stop can slip in between the check above and the new child.
-      const child = this.launch(managed.spec);
-      managed.replaceChild(child, this.now());
+      const launched = this.launch(managed.spec);
+      managed.replaceChild(launched, this.now());
       this.record(managed, 'running');
-      this.watch(managed, child);
+      this.watch(managed, launched.child);
     } catch (error) {
       this.onError(error, managed.agentId);
       managed.settleExit(previous);
@@ -753,12 +883,156 @@ export class ProcessSupervisor {
     return result;
   }
 
+  /**
+   * Startup, after `reconcile()` and before this run spawns anything (P8-11; SPEC decision 76):
+   * the launch intents an earlier server run left. An intent whose PID-table row exists completed
+   * (`reconcile()` took the row). Any other is a launch the killed server may have forked without
+   * recording: its processes are found by the launch id and agent marker in their environment, the
+   * launch window and the worktree (`launch-intents.ts`), and their process groups are stopped —
+   * SIGTERM (and SIGCONT), then SIGKILL after `termMs` — with the safety rules of process
+   * attribution: never a process whose environment cannot be read, never a user-facing app or
+   * anything below one, never another user's, never the server's own. Each launch is then
+   * recorded as an interrupted session of its agent (so the Steward's sweep can find what escaped
+   * its group) and the intent is forgotten. Intents of another boot are simply forgotten.
+   */
+  async reconcileLaunches(opts: { termMs?: number } = {}): Promise<LaunchReconcileResult> {
+    const result: LaunchReconcileResult = { completed: [], taken: [], none: [], unchecked: [] };
+    let intents: LaunchIntent[];
+    try {
+      intents = this.store.launches().filter((i) => i.runId !== this.runId);
+    } catch (error) {
+      this.onError(error, 'launch intents');
+      return result;
+    }
+    const open: LaunchIntent[] = [];
+    for (const intent of intents) {
+      if (this.otherBoot(intent.bootAt)) {
+        result.none.push(intent.agentId);
+        this.forgetLaunch(intent.id, intent.agentId);
+      } else if (this.store.get(intent.agentId)?.meta?.['launchId'] === intent.id) {
+        result.completed.push(intent.agentId);
+        this.forgetLaunch(intent.id, intent.agentId);
+      } else {
+        open.push(intent);
+      }
+    }
+    if (open.length === 0) return result;
+
+    const procs = await this.table.list();
+    if (procs === undefined) {
+      for (const intent of open) {
+        result.unchecked.push(intent.agentId);
+        this.closeLaunch(intent);
+      }
+      return result;
+    }
+    const self = { pid: process.pid, uid: process.getuid?.() ?? -1 };
+    const candidates = new Map<number, ProcEntry>();
+    for (const intent of open) {
+      for (const p of launchCandidates(intent, procs, self)) candidates.set(p.pid, p);
+    }
+    const envOf =
+      candidates.size > 0 && this.table.environment
+        ? await this.table.environment([...candidates.values()], [AGENT_ID_ENV, LAUNCH_ID_ENV])
+        : new Map<number, Map<string, string>>();
+    const marked = [...candidates.values()]
+      .filter((p) => open.some((intent) => carriesLaunch(p, intent, envOf)))
+      .map((p) => p.pid);
+    const cwdOf = marked.length > 0 ? await this.table.cwds(marked) : new Map<number, string>();
+    const excludeGroups = new Set(this.agentGroups().map((g) => g.pgid));
+    const takes = open.flatMap((intent) =>
+      matchLaunch({ intent, procs, self, envOf, cwdOf, excludeGroups }),
+    );
+
+    // Graceful, then forced — each group re-checked right before its first signal.
+    const signalled: LaunchTake[] = [];
+    for (const take of takes) {
+      if (this.disposed || !this.stillTheLaunch(take)) continue;
+      this.probe.signalGroup(take.pgid, 'SIGTERM');
+      this.probe.signalGroup(take.pgid, 'SIGCONT');
+      signalled.push(take);
+    }
+    const termMs = opts.termMs ?? this.termMs;
+    const gone = (t: LaunchTake) => !this.probe.groupAlive(t.pgid);
+    if (signalled.length > 0) await until(() => signalled.every(gone), termMs);
+    const forced = new Set<number>();
+    for (const take of signalled) {
+      if (gone(take) || this.disposed) continue;
+      this.probe.signalGroup(take.pgid, 'SIGKILL');
+      forced.add(take.pgid);
+    }
+    if (forced.size > 0) await until(() => signalled.every(gone), 1_000);
+
+    for (const intent of open) {
+      const mine = signalled.filter((t) => t.intentId === intent.id);
+      if (mine.length > 0) {
+        result.taken.push({
+          agentId: intent.agentId,
+          launchId: intent.id,
+          pgids: mine.map((t) => t.pgid),
+          pids: mine.flatMap((t) => t.members.map((p) => p.pid)).sort((a, b) => a - b),
+          forced: mine.some((t) => forced.has(t.pgid)),
+        });
+      } else {
+        result.none.push(intent.agentId);
+      }
+      this.closeLaunch(intent, mine.find((t) => t.leader)?.leader?.pid);
+    }
+    return result;
+  }
+
+  /** The group is still what the snapshot showed: the same leader, or still leaderless. */
+  private stillTheLaunch(take: LaunchTake): boolean {
+    if (take.leader) {
+      if (!this.probe.alive(take.leader.pid)) return false;
+      const started = this.probe.startTime(take.leader.pid);
+      // Fail closed: a start time that cannot be read again is not the same process.
+      return started !== undefined && Math.abs(started - take.leader.startedAt) <= START_SLACK_MS;
+    }
+    return !this.probe.alive(take.pgid) && this.probe.groupAlive(take.pgid);
+  }
+
+  /**
+   * Records the launch as an interrupted session of its agent — unless the PID table already
+   * holds a newer one — so process attribution's session window covers it, then forgets the
+   * intent.
+   */
+  private closeLaunch(intent: LaunchIntent, pid?: number): void {
+    try {
+      const row = this.store.get(intent.agentId);
+      const newer =
+        row !== undefined &&
+        (row.status === 'running' || Date.parse(row.startedAt) > Date.parse(intent.intendedAt));
+      if (!newer) {
+        this.store.upsert({
+          agentId: intent.agentId,
+          ...(pid !== undefined ? { pid } : {}),
+          startedAt: intent.intendedAt,
+          endedAt: new Date().toISOString(),
+          status: 'interrupted',
+          meta: {
+            ...(intent.meta ?? {}),
+            command: intent.command,
+            bootAt: intent.bootAt,
+            launchId: intent.id,
+            fromLaunchIntent: true,
+          },
+        });
+      }
+    } catch (error) {
+      this.onError(error, intent.agentId);
+    }
+    this.forgetLaunch(intent.id, intent.agentId);
+  }
+
   /** Recorded in a previous boot: the pid cannot be the same process. */
   private fromOtherBoot(row: ProcessRecord): boolean {
-    const rowBoot = row.meta?.['bootAt'];
+    return this.otherBoot(row.meta?.['bootAt']);
+  }
+
+  private otherBoot(bootAt: unknown): boolean {
     return (
-      typeof rowBoot === 'string' &&
-      Math.abs(Date.parse(rowBoot) - Date.parse(this.bootAt)) > 60_000
+      typeof bootAt === 'string' && Math.abs(Date.parse(bootAt) - Date.parse(this.bootAt)) > 60_000
     );
   }
 
@@ -892,7 +1166,13 @@ export class ProcessSupervisor {
       agentId: managed.agentId,
       startedAt: managed.startedAt,
       status,
-      meta: { ...(managed.spec.meta ?? {}), command: managed.spec.command, bootAt: this.bootAt },
+      meta: {
+        ...(managed.spec.meta ?? {}),
+        command: managed.spec.command,
+        bootAt: this.bootAt,
+        // The launch this row completes (P8-11): its intent is then no longer needed.
+        launchId: managed.launchId,
+      },
     };
     if (managed.pid > 0) rec.pid = managed.pid;
     if (exit) {
@@ -903,7 +1183,12 @@ export class ProcessSupervisor {
     try {
       this.store.upsert(rec);
     } catch (error) {
+      // The intent stays (P8-11): after a kill the next start still finds this launch.
       this.onError(error, managed.agentId);
+      return;
+    }
+    if (managed.launchPending && rec.pid !== undefined) {
+      managed.launchPending = !this.forgetLaunch(managed.launchId, managed.agentId);
     }
   }
 }
