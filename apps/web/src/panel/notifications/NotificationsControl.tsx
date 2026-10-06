@@ -1,12 +1,17 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useNotificationPrefs } from './prefs.js';
+import { shellPostsNotifications } from '../../desktop-shell.js';
 import { NotificationSettings } from './NotificationSettings.js';
 import './notifications.css';
 
-/** The one-word state the top bar shows: "on", "off", "blocked" or "unavailable". */
-export function useNotificationState(): 'on' | 'off' | 'blocked' | 'unavailable' {
+/**
+ * The state the top bar shows: "on", "off", "blocked", "unavailable", or "by the app" inside the
+ * desktop shell (P8-06), which posts them itself.
+ */
+export function useNotificationState(): 'on' | 'off' | 'blocked' | 'unavailable' | 'by the app' {
   const enabled = useNotificationPrefs((s) => s.enabled);
   const permission = useNotificationPrefs((s) => s.permission);
+  if (shellPostsNotifications()) return 'by the app';
   return permission === 'unsupported'
     ? 'unavailable'
     : permission === 'denied'

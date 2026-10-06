@@ -9,7 +9,7 @@ import { useAppStore } from '../../state/store.js';
 import { FakeNotification } from './fake-notification.js';
 import { clearLedgerMemory } from './ledger.js';
 import { NotificationSettings } from './NotificationSettings.js';
-import { PREFS_KEY, useNotificationPrefs } from './prefs.js';
+import { PREFS_KEY, shouldShow, useNotificationPrefs } from './prefs.js';
 
 /** P25-07: the settings component, the permission prompt, and the top bar's control in the panel. */
 
@@ -37,6 +37,16 @@ const click = async (el: HTMLElement) => {
 };
 
 describe('NotificationSettings', () => {
+  it('inside the desktop shell, leaves notifications to the app and never posts one (P8-06)', async () => {
+    vi.stubGlobal('__GALACTIC_DESKTOP__', { shell: 'tauri', notifications: 'shell' });
+    useNotificationPrefs.getState().reload();
+    render(<NotificationSettings />);
+    expect(screen.getByText(/The GalacticAgents app posts these notifications/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Enable desktop notifications' })).toBeNull();
+    expect(shouldShow('question')).toBe(false);
+    expect(FakeNotification.requests).toBe(0);
+  });
+
   it('asks the browser for permission only when the user clicks Enable', async () => {
     render(<NotificationSettings />);
     expect(FakeNotification.requests).toBe(0);
