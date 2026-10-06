@@ -39,6 +39,14 @@ import type { LaunchIntent } from './process-store.js';
  * by the kernel's grouping, as `reconcile()` does — a group id is not handed out again while the
  * group has members, and only the launch's processes can have joined it.
  *
+ * Only the CLI's own group is taken (decision 106): one launch has one such group. When the CLI
+ * is alive, its group is the leader's (the earliest-started leader that qualifies: the CLI is the
+ * launch's first process, so a later one is a descendant that moved out); every leaderless group
+ * carrying the launch id is then one a descendant moved out to, and is not taken. When the CLI is
+ * gone, a leaderless group is taken only if it is the one leaderless group carrying the launch:
+ * with several (a tool's `nohup`/`setsid` group whose own leader exited, next to the CLI's), the
+ * CLI's cannot be told apart, and all of them are left alone (fail closed).
+ *
  * What escaped the CLI's group (a `setsid` dev server) is not taken here, as `reconcile()` leaves
  * it (decision 76: an interrupted agent comes back); the supervisor records the launch as an
  * interrupted session of the agent instead, so the Steward's sweep finds it when it ends.
@@ -141,7 +149,8 @@ export function matchLaunch(input: LaunchMatchInput): LaunchTake[] {
     groups.set(p.pgid, list);
   }
 
-  const takes: LaunchTake[] = [];
+  const leaders: LaunchTake[] = [];
+  const leftovers: LaunchTake[] = [];
   for (const [pgid, all] of groups) {
     if (pgid === serverGroup || input.excludeGroups?.has(pgid)) continue;
     const members = all.filter((p) => !p.zombie);
@@ -161,7 +170,7 @@ export function matchLaunch(input: LaunchMatchInput): LaunchTake[] {
         parentIsReaper(leader) &&
         inCwd(leader)
       ) {
-        takes.push({
+        leaders.push({
           intentId: intent.id,
           agentId: intent.agentId,
           pgid,
@@ -174,8 +183,23 @@ export function matchLaunch(input: LaunchMatchInput): LaunchTake[] {
     }
     // The leader is gone (or a zombie): a leftover group, if a member names this launch.
     if (members.some((p) => marked(p) && p.startedAt >= at - START_SLACK_MS && inCwd(p))) {
-      takes.push({ intentId: intent.id, agentId: intent.agentId, pgid, kind: 'leftover', members });
+      leftovers.push({
+        intentId: intent.id,
+        agentId: intent.agentId,
+        pgid,
+        kind: 'leftover',
+        members,
+      });
     }
   }
-  return takes.sort((a, b) => a.pgid - b.pgid);
+  // Only the CLI's own group (see above): what moved out of it is left to the agent.
+  if (leaders.length > 0) {
+    const first = leaders.reduce((a, b) => {
+      const sa = a.leader!.startedAt;
+      const sb = b.leader!.startedAt;
+      return sb < sa || (sb === sa && b.pgid < a.pgid) ? b : a;
+    });
+    return [first];
+  }
+  return leftovers.length === 1 ? leftovers : [];
 }

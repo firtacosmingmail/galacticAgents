@@ -2,7 +2,8 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { uptime } from 'node:os';
 import { basename } from 'node:path';
-import type { Actor, Id } from '@galactic/protocol';
+import { STORAGE_ERROR, type Actor, type Id } from '@galactic/protocol';
+import { storageConditionOf } from '../db/database.js';
 import {
   carriesLaunch,
   LAUNCH_ID_ENV,
@@ -633,6 +634,18 @@ export class ProcessSupervisor {
     try {
       this.store.addLaunch(intent);
     } catch (error) {
+      const condition = storageConditionOf(error);
+      if (condition) {
+        // A storage refusal keeps its code (`isStorageFailure` holds), so a route answers it as
+        // the standard refusal (507 `storage_full`: "The disk is full…"; SPEC decisions 104, 107).
+        throw Object.assign(
+          new Error(
+            `could not start ${spec.command}: the launch could not be recorded. ${STORAGE_ERROR[condition].message}`,
+            { cause: error },
+          ),
+          { code: (error as { code: string }).code },
+        );
+      }
       throw new Error(
         `could not start ${spec.command}: the launch could not be recorded (${error instanceof Error ? error.message : String(error)})`,
         { cause: error },
