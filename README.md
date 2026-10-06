@@ -26,6 +26,7 @@ The token is generated on first start and printed by `galactic start`. The page 
 
 ```sh
 pnpm remote           # for the phone: Tailscale Serve + build + galactic start --dev (docs/REMOTE_ACCESS.md)
+pnpm desktop:build    # the optional macOS app (Tauri 2, needs Rust): Dock + menu bar + notifications (docs/DESKTOP.md)
 pnpm dev              # builds the protocol once, then protocol (tsc --watch) + server (tsx watch, GALACTIC_DEV=1) + web (vite) with hot reload
 ```
 
@@ -38,6 +39,7 @@ Other scripts: `pnpm lint`, `pnpm format`, `pnpm typecheck` (includes the tests)
 ```
 apps/server/      Fastify + ws + SQLite + agent runtime — see apps/server/README.md
 apps/web/         Vite + React 19 (+ React Three Fiber from Phase 3)
+apps/desktop/     optional Tauri 2 shell: Rust window/menu bar + a Node side for the server lifecycle (docs/DESKTOP.md)
 packages/protocol zod schemas, event model, AgentAdapter + DomainCommands interfaces (the single vocabulary)
 docs/             SPEC, TECHNOLOGY, IMPLEMENTATION_PLAN, tasks/
 ```

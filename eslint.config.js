@@ -12,6 +12,8 @@ export default tseslint.config(
       '**/dist/**',
       '**/coverage/**',
       '.claude/**',
+      'apps/desktop/src-tauri/target/**',
+      'apps/desktop/src-tauri/gen/**',
       'e2e/test-results/**',
       'e2e/playwright-report/**',
     ],
@@ -19,7 +21,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['**/*.{mjs,cjs}', 'apps/server/**/*.ts', 'packages/**/*.ts'],
+    files: ['**/*.{mjs,cjs}', 'apps/server/**/*.ts', 'apps/desktop/**/*.ts', 'packages/**/*.ts'],
     languageOptions: { globals: globals.node },
   },
   {
