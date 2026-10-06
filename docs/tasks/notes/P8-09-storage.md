@@ -98,7 +98,7 @@ conflict with the wave's other branches): **"Push bookkeeping on a full disk"** 
   saved, or that the database cannot be written at all and the file must be fixed — and a refused
   action says 'the disk is full' on the control that was refused (P8-09). The band goes once the
   waiting events are written."
-- **Proposed decision 103 — Storage health is shown, not logged** (P8-09; decision 99, §4.5):
+- **Decision 104 — Storage health is shown, not logged** (P8-09; decision 99, §4.5):
   whether the database takes writes is shown live in the panel, never kept in the history: a full
   disk cannot record that it is full. A screen reader hears when writes start failing and when
   they work again, not every change of the count. An answer refused for a full disk is not queued

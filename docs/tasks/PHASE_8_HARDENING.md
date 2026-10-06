@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
 **Current task:** P8-05, P8-03, P8-09, P8-10 (wave 2, branch `p8-wave2-smoke-backup-storage-caps`) · **Task status:** in progress
-**Phase status:** in progress (3/11 done) — on branch `phase-8`, cut from `phase-7` (Phase 7 waits for the P7-06 device run before it merges into `main`)
+**Phase status:** in progress (3/12 done) — on branch `phase-8`, cut from `phase-7` (Phase 7 waits for the P7-06 device run before it merges into `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -86,6 +86,11 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Status:** todo · **Depends on:** P8-04 · **Parallel with:** all
 - From the P8-04 kill-at-any-moment drill (residual R3, seen once): a child the supervisor forked in the instant before the server was killed can run with no PID-table row, so `reconcile()` never takes it. Record a launch intent (agent, command, time) before the spawn, and at startup take a marked (`GALACTIC_AGENT_ID`) orphan of such an intent's agent started in that window, with the same safety rules as P4-14.
 - **Acceptance:** a drill that kills the server between the fork and the row (fault injection) leaves no process of the killed run.
+
+### P8-12 — Push bookkeeping on a full disk (added 2026-10-06)
+- **Status:** todo · **Depends on:** P7-04, P8-09 · **Parallel with:** all
+- Found while building P8-09: `PushService.deliver` calls `markSent` inside the send's `try`, so on a full disk a delivered push fails `markSent`, is treated as a network error and is sent again (up to three attempts). Separate delivery from bookkeeping; a bookkeeping failure must never re-send.
+- **Acceptance:** with SQLITE_FULL on the push bookkeeping, each push is delivered once; a test proves it.
 
 ## Exit criteria
 
