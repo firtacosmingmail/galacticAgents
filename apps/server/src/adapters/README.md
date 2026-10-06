@@ -156,8 +156,12 @@ with `GALACTIC_REAL_ACP="<agent command line>"` against a real ACP agent, local-
 The server is an ACP _client_ (like an editor) over stdio JSON-RPC, with the official TypeScript
 SDK `@agentclientprotocol/sdk` (Apache-2.0). One agent process per session, started through
 `ProcessSupervisor.adopt()` from the configured command (`acp.command` / `acp.args` in
-`config.json`, or `GALACTIC_ACP_COMMAND`): own process group, PID table, `GALACTIC_AGENT_ID`, the
-graceful stop.
+`config.json`, or `GALACTIC_ACP_COMMAND` — whitespace-split, or a JSON array of strings): own
+process group, PID table, `GALACTIC_AGENT_ID`, the graceful stop. Its environment is the
+supervisor's allow-list, the routing variables of `ACP_PASS_ENV` (base URLs, provider switches,
+region, profile — no credential) and what `acp.passEnv` names (every API key or token; never a
+`GALACTIC_*` name). The session mode is set to `acp.mode` when configured; a session in a known
+permissive mode (`PERMISSIVE_MODES`) is refused unless `acp.allowPermissiveMode` (decision 108).
 
 **The capability set it advertises in `initialize`** (`CLIENT_CAPABILITIES`), asserted by the fake
 agent:
@@ -184,23 +188,33 @@ An agent that calls an unadvertised method gets `method not found` from the SDK.
 | `session/cancel`                                                            | `interrupt` (pending permission/elicitation requests answered "cancelled" first)                                                                                                                                                               |
 | `session/load` (capability `loadSession`)                                   | `resumeSession("acp:<sessionId>")`; the replay during the load is not transcript; without `loadSession` the resume fails and the agent stays `interrupted`                                                                                     |
 | `session/request_permission`                                                | **permission-kind**: the call is translated (`gateCall`) and checked once — `allow` → `allow_once` + `agent.tool_call`, `deny` → `reject_once` + "permission denied" line, `ask` → `agent.needs_input(permission)`; never an `*_always` option |
-| a tool call the agent runs without asking                                   | checked when it starts: `allow` reported, `ask` reported with a warning line, `deny` cancels the turn (not counted)                                                                                                                            |
+| a tool call the agent runs without asking                                   | checked when it starts (or fails), again once if its input changes: `allow` reported; `ask` reported + a **hold**; `deny` stops the Steward (`agent.failed(runtime)` with the reason; not counted)                                             |
+| `session/update` `current_mode_update` / mode `config_option_update`        | a switch away from the expected mode (`acp.mode`, else the mode at start) is a **hold**; allowed, the new mode is expected                                                                                                                     |
+| a hold                                                                      | the turn is cancelled and `agent.needs_input(permission)` asks whether the agent may go on — no `agent.idle` meanwhile; allowed → a new turn ("carry on"), refused → stopped as for `deny`, interrupt → `agent.idle`                           |
 | `elicitation/create` (form)                                                 | one `agent.needs_input(clarification)` per field; answered `accept` with typed values (re-asked up to three times when a number or yes/no does not read), `cancel` on interrupt/stop; URL mode → `decline`                                     |
 | —                                                                           | pause/resume: SIGSTOP/SIGCONT on the process group                                                                                                                                                                                             |
 
 **Translating tool calls for the gate** (`mapping.ts`, `gateCall`): the policy engine speaks
 Claude Code's tool names, so an ACP call is mapped by its `kind` and raw input: `execute` +
 command → `Bash {command}` (a `["bash","-lc",script]` argv keeps its script), `read` → `Read`,
-`edit`/`delete` → `Edit` on the path, `move` → `Edit` with both paths, `search` → `Grep`, `fetch`
-→ `WebFetch`. A call that cannot be placed keeps a name the engine does not know (`acp:<kind>`), so
-the table's `unclassified` entry decides it (`ask` unless trusted). `think` and `switch_mode` are
-bookkeeping: no gate, no `agent.tool_call`.
+a `cwd`/`workdir` becomes `cd '<dir>' && …`; `read` → `Read`, `edit` → `Edit` on the path,
+`delete` → `Bash rm -r -- '<path>'` (destructive, and outside the workspace when it is), `move` →
+`Edit` with both paths, `search` → `Glob` (its pattern located) unless plainly a content search
+(`Grep`), `fetch` → `WebFetch`. Every distinct path a call names (path fields, a `paths` list,
+every location) is judged (`paths` array), the strictest winning. A call that cannot be placed
+keeps a name the engine does not know (`acp:<kind>`), so the table's `unclassified` entry decides
+it (`ask` unless trusted; a push mentioned in its input or title still asks). `think` is
+bookkeeping: no gate, no `agent.tool_call`; a `switch_mode` call run without asking is a hold
+unless it names the expected mode. A call already judged when it started is checked with
+`reserve: false` when the agent then asks about it: counted once.
 
 Brains do not run on ACP (their server tools would need an MCP bridge): a spawn with `tools` is
 refused, and `bare` too. The fake ACP agent (`node acp/fake-acp-agent.mjs [--state dir]
-[--no-load] [--no-cost]`) picks a scenario from `scenario:<name>` in its first prompt (`happy`,
-`asks`, `permission`, `long`, `echo`, `stalls`, `unasked`, `form`, `error`, `refusal`, `dies`) and
-echoes later prompts.
+[--no-load] [--no-cost] [--mode <id>] [--config-modes]`) picks a scenario from `scenario:<name>` in
+its first prompt (`happy`, `asks`, `permission`, `long`, `echo`, `stalls`, `unasked`, `switches`,
+`rewrites`, `failsUnasked`, `startsThenAsks`, `form`, `error`, `refusal`, `dies`) and echoes later
+prompts; `--mode` gives it session modes (`default`, `plan`, `acceptEdits`, `bypassPermissions`),
+`--config-modes` offers them as a `mode` config option.
 
 ## Notes for the next adapters
 

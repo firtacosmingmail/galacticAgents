@@ -54,6 +54,11 @@ startup (index.ts):  reconcile()  →  reconcileLaunches()  →  compose / recov
   - **leftover**: the leader is gone and a member carries marker and launch id, started after the
     intent and runs inside the launch's cwd (a CLI that exited on EOF and left its group, as
     `reconcile()` takes a dead leader's group).
+  Only the CLI's own group is taken (decision 106; wave 3 review): with a qualifying leader alive,
+  only the earliest-started one, and no leaderless group (those are what moved out of the CLI's
+  group); with no leader, a leaderless group only when it is the one leaderless group carrying the
+  launch — with several, the CLI's cannot be told apart and none is taken (fail closed; the
+  interrupted-session record lets the Steward's sweep find them when it ends).
   An unreadable environment (a macOS platform binary, another user's) never qualifies a group;
   inside a group that qualifies, members are taken by the kernel's grouping, as `reconcile()`
   does (a group id is not reused while it has members).
@@ -155,7 +160,9 @@ startup (index.ts):  reconcile()  →  reconcileLaunches()  →  compose / recov
 - A kill during `reconcileLaunches()` itself: the intents are removed only after their groups
   were handled, so the next start does it again (idempotent), but no drill aims at it.
 - Leftover groups cannot be told apart from an escaped `setsid` group of the same launch whose own
-  leader exited (both carry the launch id and run in the worktree): such a group is taken. It is
-  the agent's own process of the killed run either way, never the user's.
+  leader exited (both carry the launch id and run in the worktree): since the wave 3 review such
+  groups are left alone whenever there is more than one (or the CLI's leader is alive), so a CLI
+  that exited next to an escaped group leaves its own leftover group running until the Steward's
+  sweep.
 - No `ps` (Windows): intents are forgotten as `unchecked` — the supervisor's process groups do
   not work there either.

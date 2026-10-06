@@ -73,12 +73,20 @@ that advertises them (tested).
    asking next time, and every call must reach the gate (the fake agent fails a turn answered
    `allow_always`).
 5. **Tool calls in the gate's vocabulary** (`gateCall`): the engine speaks Claude Code tool names,
-   so ACP kinds are mapped (`execute`+command → `Bash`, `read` → `Read`, `edit`/`delete` → `Edit`,
-   `move` → `Edit` with both paths, `search` → `Grep`, `fetch` → `WebFetch`); what cannot be placed
-   stays unclassified (`acp:<kind>`) and so asks unless trusted — never made to look safer. The
-   original kind and title travel along in the input (`acp: {kind, title}`) for the card.
-   `think` / `switch_mode` are bookkeeping (no gate, no `agent.tool_call`).
-6. **Calls the agent runs without asking** are judged when they start (decision 108).
+   so ACP kinds are mapped (`execute`+command → `Bash`, with `cd '<dir>' && ` for a `cwd`,
+   `read` → `Read`, `edit` → `Edit`, `delete` → `Bash rm -r -- '<path>'`, `move` → `Edit` with both
+   paths, `search` → `Glob` unless plainly a grep, `fetch` → `WebFetch`); every distinct path is
+   judged (the engine reads a `paths` array); what cannot be placed stays unclassified
+   (`acp:<kind>`) and so asks unless trusted — never made to look safer; the engine adds `push`
+   when an unknown tool's input or title mentions one. The original kind and title travel along
+   in the input (`acp: {kind, title}`) for the card. `think` is bookkeeping (no gate, no
+   `agent.tool_call`).
+6. **Calls the agent runs without asking** are judged when they start (decision 108, as amended
+   after the review): `ask` → a hold (turn cancelled, permission card, no idle until answered;
+   refused → stopped), `deny` → the Steward stopped as `agent.failed(runtime)` with the reason.
+   Judged on `failed` too, once more if the input changes, reserved against the cap once. Session
+   modes: `acp.mode` is set at start, a known permissive mode is refused unless
+   `acp.allowPermissiveMode`, a switch away from the expected mode is a hold.
 7. **Form elicitation → one clarification per field**, required fields first; enum/`oneOf` →
    options matched back to values, boolean → yes/no, numbers parsed (an unreadable answer is asked
    again, up to three times, then `decline`), multi-select comma-separated. Interrupt/stop →
@@ -97,20 +105,16 @@ that advertises them (tested).
 11. **Brains stay on the Claude SDK** (decision 109): the ACP adapter refuses a spawn with
     server `tools` (they would need an MCP bridge) and `bare` (a Claude notion). A Steward's
     `systemPrompt` is put before its first prompt.
-12. **Environment:** the supervisor's allow-list plus `ACP_PASS_ENV` (the routing/login variables
-    the known agents read: Anthropic, Codex, Gemini, Google, AWS) plus `acp.passEnv`. API keys
-    (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are not passed by default: name them in `passEnv`.
+12. **Environment:** the supervisor's allow-list plus `ACP_PASS_ENV` (routing only: base URLs,
+    the Bedrock/Vertex switches, region, profile) plus `acp.passEnv`. Every credential
+    (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_*` tokens and keys, `GEMINI_API_KEY`, `GOOGLE_*`
+    credentials, `OPENAI_*` keys) must be named in `passEnv`; `GALACTIC_*` names are refused.
+    `GALACTIC_ACP_COMMAND` takes a whitespace-split line or a JSON array of strings.
 
-## Proposed SPEC decisions (not entered in §7; for Cosmin)
+## SPEC decisions (recorded in §7 as 108 and 109)
 
-> **decision 108 — Calls an ACP agent runs without asking.** An ACP agent asks permission
-> only for what its own mode deems risky. Every tool call it reports is still judged by the
-> project's permission table when it starts: an allowed one is counted as usual; one the table
-> would have asked about is counted and the transcript says "the agent ran X without asking; the
-> permission table would have asked"; one the table denies cancels the agent's turn (the call
-> itself may already have run — ACP gives no way to hold it) and is not counted. Permission
-> requests the agent does send are decided by the table or the user exactly like Claude Code's,
-> and are always answered "once", never "always".
+Decision 108 was amended after the wave 3 review (conservative judging: modes, holds, stops); the
+text in SPEC §7 is the reference. 109 as recorded:
 
 > **decision 109 — Which runtime Stewards run on.** The settings name the runtime new
 > Stewards run on ("Steward runtime": same as their brain — the default —, Claude Code, or an ACP
@@ -167,6 +171,12 @@ real ACP runtime locally") is therefore **open**.
 - `acp/mapping.test.ts`: 10 — `gateCall` per kind and judged by the real engine, unclassified
   fallbacks, `mergeTool`, `chooseOption`, `CostMeter`, `formFields`, `planProgress`,
   `toolResultText`, `resolveCommand`.
+- Wave 3 review fixes: `mapping.test.ts` 16 (+ delete as `rm -r`, every path, Glob vs Grep, cwd,
+  pushes in unreadable calls, modes); `acp-adapter.test.ts` 31 (holds allowed / refused /
+  withdrawn, deny stops, `failed` judged, re-judge on changed input, cap counted once, modes:
+  permissive refused / opted in / set via `set_mode` and the config option / unknown mode / no
+  modes / a switch refused and allowed, `passEnv` defaults and `GALACTIC_*` refused);
+  `config.test.ts` +1 (`acp.mode`, JSON command, `GALACTIC_*` refused).
 - `acp/acp-real.conformance.test.ts`: skipped unless `GALACTIC_REAL_ACP`.
 - `brains/steward-runtime.test.ts`: 2 — a fake-runtime Harmonizer's asteroid Steward runs on the
   ACP runtime (a real fake-agent process) when the setting says `acp`, and on `fake` when unset.
