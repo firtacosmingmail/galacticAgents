@@ -122,7 +122,13 @@ export class Supervisor {
       }
       if (next.kind === 'wait') {
         this.waitingSince ??= this.now();
-        if (this.autoStart && this.now() - this.waitingSince > UNANSWERING_GRACE_MS) {
+        // Only a server that does not answer is raced after the grace; an import or a restore
+        // holding the data is waited out, however long it takes (P8-06 review).
+        if (
+          this.autoStart &&
+          next.holder.role === 'server' &&
+          this.now() - this.waitingSince > UNANSWERING_GRACE_MS
+        ) {
           this.waitingSince = undefined;
           await this.tryStart();
           return;

@@ -16,14 +16,15 @@
 //!   notifications are off inside the shell (`window.__GALACTIC_DESKTOP__`).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::VecDeque;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tauri::image::Image;
@@ -125,10 +126,12 @@ fn main() {
             });
 
             build_tray(&handle)?;
-            match spawn_node_side(&handle) {
-                Ok(()) => {}
-                Err(message) => show_failure(&handle, &message),
-            }
+            // Off the main thread: finding Node asks the login shell, which may take seconds.
+            thread::spawn(move || {
+                if let Err(message) = spawn_node_side(&handle) {
+                    show_failure(&handle, &message);
+                }
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -152,8 +155,27 @@ fn main() {
         });
 }
 
+/// At most one link handed to the default browser a second, and `OPEN_PER_MINUTE` a minute: a
+/// page (or an agent's output in it) cannot flood the Mac with browser tabs.
+const OPEN_PER_MINUTE: usize = 5;
+static OPENED: Mutex<VecDeque<Instant>> = Mutex::new(VecDeque::new());
+
+/// Whether another link may go to the default browser now (and records it when it may).
+fn may_open_externally(now: Instant) -> bool {
+    let mut opened = OPENED.lock().unwrap();
+    while opened.front().is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(60)) {
+        opened.pop_front();
+    }
+    let too_soon = opened.back().is_some_and(|t| now.duration_since(*t) < Duration::from_secs(1));
+    if too_soon || opened.len() >= OPEN_PER_MINUTE {
+        return false;
+    }
+    opened.push_back(now);
+    true
+}
+
 /// The window shows the shell's own pages and the Mission Control it is attached to; any other
-/// http(s) link opens in the default browser.
+/// http(s) link opens in the default browser (rate-limited: `may_open_externally`).
 fn navigation_allowed(url: &Url, port: &Arc<Mutex<Option<u16>>>) -> bool {
     match url.scheme() {
         "tauri" | "about" => true,
@@ -166,7 +188,11 @@ fn navigation_allowed(url: &Url, port: &Arc<Mutex<Option<u16>>>) -> bool {
             if url.scheme() == "http" && host == "127.0.0.1" && url.port().is_some() && url.port() == current {
                 return true;
             }
-            let _ = Command::new("/usr/bin/open").arg(url.as_str()).spawn();
+            if may_open_externally(Instant::now()) {
+                let _ = Command::new("/usr/bin/open").arg(url.as_str()).spawn();
+            } else {
+                eprintln!("[desktop] not opening {url}: too many links opened just now");
+            }
             false
         }
         _ => false,
@@ -318,24 +344,47 @@ fn find_node() -> (Option<PathBuf>, Option<String>) {
     (candidates.into_iter().find(|p| p.is_file()), probed_path)
 }
 
+/// Asks the login shell for its PATH and node, off the main thread, for at most 10 s (the shell
+/// is killed then). `-lc`, not `-ilc`: an interactive shell would source `.zshrc` and whatever it
+/// starts (prompts, plugin managers, `exec tmux`…) with no terminal to run in. The tradeoff: a
+/// PATH set only in `.zshrc` is not seen — `.zprofile` / `.zshenv` are, and the usual node
+/// install folders (Homebrew, Volta, nvm) are tried anyway; `GALACTIC_NODE` overrides it all
+/// (docs/DESKTOP.md).
 fn probe_login_shell() -> (Option<PathBuf>, Option<String>) {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let out = Command::new(shell)
-            .args([
-                "-ilc",
-                r#"printf '__GALACTIC_PATH__%s\n' "$PATH"; printf '__GALACTIC_NODE__%s\n' "$(command -v node)""#,
-            ])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
-        let _ = tx.send(out);
-    });
-    let Ok(Ok(out)) = rx.recv_timeout(Duration::from_secs(10)) else {
+    let Ok(mut child) = Command::new(shell)
+        .args([
+            "-lc",
+            r#"printf '__GALACTIC_PATH__%s\n' "$PATH"; printf '__GALACTIC_NODE__%s\n' "$(command -v node)""#,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
         return (None, None);
     };
-    let text = String::from_utf8_lossy(&out.stdout);
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return (None, None);
+    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        let _ = tx.send(text);
+    });
+    let text = match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(text) => text,
+        Err(_) => {
+            eprintln!("[desktop] the login shell did not answer in 10 s; it was stopped");
+            let _ = child.kill();
+            let _ = child.wait();
+            return (None, None);
+        }
+    };
+    let _ = child.wait();
     let mut node = None;
     let mut path = None;
     for line in text.lines() {
@@ -386,6 +435,9 @@ fn spawn_node_side(app: &AppHandle) -> Result<(), String> {
         ));
     }
     let (node, login_path) = find_node();
+    if app.state::<Shell>().quitting.load(Ordering::SeqCst) {
+        return Ok(()); // quit while the login shell was asked: start nothing
+    }
     let node = node.ok_or("Node.js was not found. Install Node 22+ or set GALACTIC_NODE.")?;
     let mut path = login_path.unwrap_or_default();
     if let Ok(current) = std::env::var("PATH") {
