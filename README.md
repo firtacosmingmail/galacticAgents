@@ -2,7 +2,7 @@
 
 Mission Control for the AI coding agents running on your computer, through a solar-system interface: Earth is the headquarters, planets, moons and asteroids host projects and tasks by size, and agents are satellites doing visible work.
 
-Read `docs/SPEC.md` (what), `docs/TECHNOLOGY.md` (with what) and `docs/IMPLEMENTATION_PLAN.md` (in which order). Work is tracked in `docs/tasks/`; the ticket flow is in `CLAUDE.md`. Phone access over Tailscale Serve: `docs/REMOTE_ACCESS.md`.
+Read `docs/SPEC.md` (what), `docs/TECHNOLOGY.md` (with what) and `docs/IMPLEMENTATION_PLAN.md` (in which order). Work is tracked in `docs/tasks/`; the ticket flow is in `CLAUDE.md`. Phone access over Tailscale Serve: `docs/REMOTE_ACCESS.md` (`pnpm remote` sets up Serve, builds and starts Mission Control for the phone; `pnpm dev` does not serve the page to the phone).
 
 ## Quickstart
 
@@ -24,6 +24,7 @@ The token is generated on first start and printed by `galactic start`. The page 
 ## Development
 
 ```sh
+pnpm remote           # for the phone: Tailscale Serve + build + galactic start --dev (docs/REMOTE_ACCESS.md)
 pnpm dev              # builds the protocol once, then protocol (tsc --watch) + server (tsx watch, GALACTIC_DEV=1) + web (vite) with hot reload
 ```
 

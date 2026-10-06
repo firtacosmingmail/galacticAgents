@@ -67,6 +67,7 @@ Check on the system from the phone while the Mac runs the agents: installable PW
 - **Status:** todo · **Depends on:** P7-01 … P7-05 · **Parallel with:** —
 - From mobile data (not Wi-Fi): open the app, see the map or the list, read every status, answer a Steward's question and a permission request; record in `docs/tasks/notes/P7-06-mobile-run.md`.
 - Includes the device checklists of P7-01 (`notes/P7-01-pwa.md`: install on iOS and Android, update flow, airplane mode), P7-02 (`notes/P7-02-remote.md`: Tailscale Serve, QR token, remote refusals) P7-03 (`notes/P7-03-touch.md`: gestures, ≥30 fps at the mobile tier, list mode) and P7-04 (`notes/P7-04-push.md`: push on a locked iPhone and Android, lock-screen details, removing a device), P7-05 (`notes/P7-05-offline.md`: airplane-mode answers, stale answer from the Mac, offline card decisions) — their acceptance on real devices is verified here. Needs Tailscale on the Mac and the phone (not installed on 2026-10-05).
+- Fixes found during the run (2026-10-06): `pnpm remote` (`scripts/remote-start.mjs`) starts Serve if needed, prints its status, builds and runs `galactic start --dev`; `docs/REMOTE_ACCESS.md` now says `pnpm dev` cannot serve the phone (the page comes from Vite, not the port Serve forwards to).
 - **Acceptance:** exit criteria met; notes committed.
 
 ### P7-07 — Demo planets go away for good (added 2026-10-05)
