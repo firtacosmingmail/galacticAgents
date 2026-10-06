@@ -69,8 +69,19 @@ Possible §8 open question: should an import onto another machine stop every age
 
 ## Left open / follow-ups
 
-- The REST export with transcripts builds the JSON synchronously: about 0.55 s on the loop for 200 MB. Streaming it (or exporting from a backup copy in a worker) would remove that. Not done: one user, an explicit click.
-- `quick_check` runs on the main thread (about 0.1 s per 200 MB). A worker thread would remove it, but would need a worker entry that also works under `tsx` in tests.
+- ~~The REST export with transcripts builds the JSON synchronously~~ — streamed since the wave 2 review (below).
+- `quick_check` runs on the main thread (≈ 50 ms for 96 MiB, cached). A worker thread would remove it, but would need a worker entry that also works under `tsx` in tests. Documented in `backup.ts` and TECHNOLOGY §6.4.
 - The rotation is not editable from the panel (`config.json` only). The settings section shows it.
 - A single JSON document is limited by V8's string size (~512 MB). That is fine for the log, but a transcript export of several hundred MB could approach it. JSON Lines would scale if it ever matters.
 - Without `--transcripts`, imported agents have no compaction marker saying their output is missing. The views are just empty. Adding a marker would need a new `reason` (a migration on `transcript_compactions`' CHECK).
+
+## Review fixes (P8 wave 2 review, 2026-10-06; branch `p8-wave2-review-fixes`)
+
+- **Import / restore under a running server.** The `/health` check missed `galactic start --port N` (the port is only in the child's environment), a server still in its startup vacuum or recovery (not listening yet) and non-loopback binds. Now a **data lock** (`db/data-lock.ts`, `<db>.lock`: pid, role, `ps lstart` process start time, boot time, port/host once listening). The server takes it before opening the database and removes it on exit; it refuses to start while a live holder has it (a second server on the same database). `galactic import` / `restore` refuse while a live holder has it, keep `/health` as a second check, and hold the lock themselves while they replace the file. Stale = dead pid, a pid now belonging to a process started at another time, another boot, or an unparsable file. Tests: `data-lock.test.ts` (5), `cli.test.ts` (+2), `index-lock.test.ts` (the real `src/index.ts` exits 1 naming the holder and never creates the database).
+- **Leftovers.** Each backup first removes `*.partial*` in `backups/` (`removePartialBackups`); the server start and the CLI remove `<db>.import-<pid>` / `.restore-<pid>` files of dead pids (`removeStaleTempDatabases`); the CLI also removes `backups/*.partial*`. Tests in `backup.test.ts`, `data-lock.test.ts`, `cli.test.ts`.
+- **Rotation.** The newest backup of each kind is always kept (a `keep*` of 0 can no longer delete the copy just taken or the only pre-import copy). The schema's `nonnegative()` stays, so existing `config.json` files still load.
+- **`GET /api/export` streams** (`exportMapText` over a dedicated read-only connection, one read transaction, 2 000 events or chunks per page, event-loop yields between pages, payloads written as stored); the schema check runs before the first byte (409 `export_refused`). Tests: the streamed document equals `exportMap`'s and ignores a write made mid-stream (`map-export.test.ts`); the route on a file database, and its refusal (`backup-routes.test.ts`).
+- **Shutdown** awaits a backup under way (`BackupService.idle()`).
+- **Restore** checks the backup's migrations (`checkSchema(…, {allowOlder: true})`): a newer build's backup is refused; an older one is accepted (migrated at the next start). Test in `restore.test.ts`.
+- SPEC §8's 2026-10-06 import question now covers a restore too (agents live in the backup resume sessions and worktrees that moved on).
+

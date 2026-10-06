@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { backupName, backupTo, BACKUP_DIR } from './backup.js';
+import { checkSchema, ExportError } from './map-export.js';
 import { isEmptyDatabase } from './map-import.js';
+import { loadMigrations, type Migration } from './migrate.js';
 
 /**
  * Restoring a backup file (P8-03; docs/BACKUP_RESTORE.md): `galactic restore <file>`, with
@@ -33,7 +35,7 @@ export interface RestoreReport {
 export async function restoreBackup(
   dbPath: string,
   file: string,
-  opts: { backupDir?: string; now?: () => string } = {},
+  opts: { backupDir?: string; now?: () => string; migrations?: Migration[] } = {},
 ): Promise<RestoreReport> {
   if (!existsSync(file)) throw new RestoreError(`No backup at ${file}.`);
   const now = opts.now ?? (() => new Date().toISOString());
@@ -53,6 +55,20 @@ export async function restoreBackup(
     }
     if (check !== 'ok') {
       throw new RestoreError(`${file} failed its integrity check: ${String(check)}`);
+    }
+    // A backup from a newer build (or another branch's migrations) cannot be run by this one; an
+    // older one is migrated by the server at its next start.
+    try {
+      checkSchema(source, opts.migrations ?? loadMigrations(), { allowOlder: true });
+    } catch (error) {
+      if (error instanceof ExportError) {
+        throw new RestoreError(
+          `${file} cannot be restored by this build: ${error.message.replace('export it', 'restore it')}`,
+        );
+      }
+      throw new RestoreError(
+        `${file} is not a Mission Control backup: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
     let replacedBackup: string | undefined;

@@ -15,7 +15,7 @@ import { DEFAULT_CAPS } from '../runtime/caps.js';
 import { StatusStore } from '../runtime/status-store.js';
 import { logDrift } from '../test/drills/drill-checks.js';
 import { openDatabase, type Database } from './database.js';
-import { exportMap } from './map-export.js';
+import { exportMap, exportMapText } from './map-export.js';
 import { foldRows, importMap, ImportError, isEmptyDatabase } from './map-import.js';
 import { listBackups } from './backup.js';
 
@@ -361,6 +361,39 @@ describe('map export and import (P8-03)', () => {
     ).toEqual(original);
     expect(imported.prepare('SELECT * FROM transcript_compactions').all()).toHaveLength(1);
     imported.close();
+  });
+
+  it('the streamed export (GET /api/export) is the same document, in pages, of one moment', async () => {
+    const home = tempDir();
+    const dbPath = join(home, 'galactic.sqlite');
+    await buildMap(dbPath);
+    const db = openDatabase(dbPath);
+    const agent = db.prepare('SELECT id FROM agents LIMIT 1').get() as { id: string };
+    for (let seq = 100; seq < 105; seq++) {
+      db.prepare(
+        'INSERT INTO transcript_chunks (agent_id, seq, at, chunk) VALUES (?, ?, ?, ?)',
+      ).run(agent.id, seq, '2026-10-01T10:00:00.000Z', `{"kind":"text","text":"line ${seq}"}`);
+    }
+    const now = () => '2026-10-06T12:00:00.000Z';
+    for (const transcripts of [false, true]) {
+      const whole = exportMap(db, { transcripts, now });
+      const reader = new BetterSqlite3(dbPath, { readonly: true });
+      const pieces: string[] = [];
+      let wroteMeanwhile = false;
+      for await (const piece of exportMapText(reader, { transcripts, now, pageSize: 3 })) {
+        pieces.push(piece);
+        if (!wroteMeanwhile && pieces.length === 3) {
+          // The server keeps writing through its own connection: the export does not see it.
+          new EventLog(db).runCommand((ctx) => seedDemoProject(ctx));
+          wroteMeanwhile = true;
+        }
+      }
+      reader.close();
+      expect(pieces.length).toBeGreaterThan(4); // really in pages
+      const streamed = MapExport.parse(JSON.parse(pieces.join('')));
+      expect(streamed).toEqual(MapExport.parse(whole));
+    }
+    db.close();
   });
 
   it('never exports secrets or device configuration', async () => {
