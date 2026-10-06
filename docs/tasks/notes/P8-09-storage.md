@@ -89,6 +89,10 @@ Push only follows committed events, so this needs the log's last pages to take a
 `push_subscriptions` update cannot — rare, but real. Proposed task (not appended, to avoid a
 conflict with the wave's other branches): **"Push bookkeeping on a full disk"** — move
 `markSent` out of the send's `try` and ignore a storage failure of the bookkeeping writes.
+**Done in P8-12** (2026-10-06): only the send is retried; every bookkeeping write (records, the
+404/410 removal, clearing old subscriptions) is guarded, logged once per storage episode, and never
+re-sends; a device whose removal was refused is skipped until the removal can be saved. Details in
+`P7-04-push.md`.
 
 ## Proposed SPEC text (not edited: §7 belongs to Cosmin)
 
