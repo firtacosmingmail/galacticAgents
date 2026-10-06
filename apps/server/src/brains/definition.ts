@@ -2,6 +2,7 @@ import type {
   Actor,
   Agent,
   AgentRole,
+  AgentRuntime,
   Body,
   DomainCommands,
   Id,
@@ -87,6 +88,11 @@ export interface BrainToolContext {
    * the supervisor (`index.ts`; tests inject one). Absent: the process tools refuse.
    */
   processes?: StewardProcessControl;
+  /**
+   * The runtime new Stewards run on, as the settings say now (P8-07: `stewardRuntime`);
+   * `undefined` (or absent) = the brain's own runtime. Read at every Steward spawn.
+   */
+  stewardRuntime?: () => AgentRuntime | undefined;
 }
 
 export interface BrainTool {

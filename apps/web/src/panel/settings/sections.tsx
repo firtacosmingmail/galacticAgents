@@ -1,5 +1,6 @@
 import { useId, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import type {
+  AgentRuntime,
   PermissionDecision,
   PermissionPolicy,
   QualityTier,
@@ -434,6 +435,46 @@ function TierEditor({ id, draft, setDraft, disabled }: EditorProps<QualityTier>)
   );
 }
 
+/** The Steward runtime choices (P8-07); `''` = the spawning brain's own runtime. */
+const STEWARD_RUNTIMES: { value: AgentRuntime | ''; label: string; hint: string }[] = [
+  {
+    value: '',
+    label: 'Same as its brain',
+    hint: 'the runtime of the Waykeeper or Harmonizer that starts it',
+  },
+  { value: 'claude-sdk', label: 'Claude Code', hint: 'the Claude Agent SDK' },
+  {
+    value: 'acp',
+    label: 'ACP agent',
+    hint: 'the agent set as acp.command (Codex, Gemini CLI, claude-agent-acp …)',
+  },
+];
+
+function StewardRuntimeEditor({ id, draft, setDraft, disabled }: EditorProps<AgentRuntime | ''>) {
+  const choices = STEWARD_RUNTIMES.some((c) => c.value === draft)
+    ? STEWARD_RUNTIMES
+    : [...STEWARD_RUNTIMES, { value: draft, label: draft, hint: 'set outside the panel' }];
+  return (
+    <fieldset className="set-field set-radios" disabled={disabled}>
+      <legend className="set-visually-hidden">Steward runtime</legend>
+      {choices.map((c) => (
+        <label key={c.value || 'brain'} className="set-radio">
+          <input
+            type="radio"
+            name={id}
+            value={c.value}
+            checked={draft === c.value}
+            onChange={() => setDraft(c.value)}
+          />
+          <span>
+            <strong>{c.label}</strong> <span className="set-muted">— {c.hint}</span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 function StewardSourcesEditor({ id, draft, setDraft, disabled }: EditorProps<boolean>) {
   return (
     <div className="set-field">
@@ -575,6 +616,21 @@ export const BUDGETS: SectionSpec<string> = {
   Editor: BudgetWarnEditor,
 };
 
+/**
+ * The runtime of new Stewards (P8-07). After the wizard's sections: a second runtime is set up
+ * later, if ever. The server refuses a runtime it has no adapter for, with the reason.
+ */
+export const STEWARD_RUNTIME: SectionSpec<AgentRuntime | ''> = {
+  field: 'stewardRuntime',
+  title: 'Steward runtime',
+  intro:
+    'Which agent runtime new Stewards run on. The Harmonizer and Waykeepers always stay on their own runtime; running Stewards keep theirs. An ACP agent must be set up first (acp.command in config.json).',
+  fromSettings: (s) => s.stewardRuntime ?? '',
+  validate: () => undefined,
+  toPatch: (d) => ({ stewardRuntime: d === '' ? null : d }),
+  Editor: StewardRuntimeEditor,
+};
+
 /** A section of any draft type (the list below mixes them; each is used with its own). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnySectionSpec = SectionSpec<any>;
@@ -583,7 +639,7 @@ export type AnySectionSpec = SectionSpec<any>;
  * The settings page's sections after the wizard's (P8-01): set later, when a budget is in use,
  * so they are not first-run steps.
  */
-export const LATER_SECTIONS: readonly AnySectionSpec[] = [BUDGETS];
+export const LATER_SECTIONS: readonly AnySectionSpec[] = [BUDGETS, STEWARD_RUNTIME];
 
 /** Every section, in the order the page and the wizard show them. */
 export const SECTIONS: readonly AnySectionSpec[] = [

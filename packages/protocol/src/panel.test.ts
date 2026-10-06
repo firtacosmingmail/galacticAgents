@@ -99,6 +99,12 @@ describe('settings schemas (P25-01)', () => {
       defaultPermissionPolicy: null,
     });
   });
+
+  it('takes the Steward runtime as a runtime name, `null` to clear it (P8-07)', () => {
+    expect(Settings.parse({ ...valid, stewardRuntime: 'acp' }).stewardRuntime).toBe('acp');
+    expect(SettingsPatch.parse({ stewardRuntime: null })).toEqual({ stewardRuntime: null });
+    expect(SettingsPatch.safeParse({ stewardRuntime: 'cursor' }).success).toBe(false);
+  });
 });
 
 describe('notificationOf (P25-01; SPEC §4.5)', () => {
