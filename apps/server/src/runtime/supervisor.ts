@@ -50,6 +50,10 @@ import { osProcessTable, type ProcessTable } from './process-table.js';
  *
  * Children get a small allow-listed environment (P1-24; TECHNOLOGY §8): the server's own
  * variables — its token, any API keys — are not theirs unless the spec passes them explicitly.
+ *
+ * Every fork is preceded by a durable launch intent (P8-11, `launch()`): a server killed between
+ * the fork and the PID table's row leaves the intent, and the next start's `reconcileLaunches()`
+ * finds that launch's processes by the launch id in their environment.
  */
 
 export type RestartPolicy =
@@ -252,6 +256,7 @@ interface Launched {
   launchId: string;
   pending: boolean;
 }
+
 /** How long after `exit` to wait for stdio to drain (`close`) before settling. */
 const DRAIN_MS = 250;
 
@@ -862,7 +867,8 @@ export class ProcessSupervisor {
    * killing a stranger is worse than leaving an orphan. When the leader is dead but its group
    * still has members (children that stayed in the CLI's group), the group is killed too. A
    * Bash tool command's shell runs in a group of its own under Claude Code and is not reached
-   * here (P4-14's attribution looks for it, with the marker).
+   * here (P4-14's attribution looks for it, with the marker). A launch whose row was never
+   * written is `reconcileLaunches()`'s (P8-11).
    */
   reconcile(): ReconcileResult {
     const result: ReconcileResult = { dead: [], orphans: [] };
