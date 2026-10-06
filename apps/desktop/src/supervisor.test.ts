@@ -133,6 +133,20 @@ describe('Supervisor', () => {
     expect(t.owns).toHaveLength(1);
   });
 
+  it('never starts over an import or a restore holding the data, however long it takes', async () => {
+    for (const role of ['import', 'restore']) {
+      const t = setup({ lock: { pid: 7, role } });
+      await t.supervisor.tick();
+      t.advance(10 * 60_000);
+      await t.supervisor.tick();
+      expect(t.owns, role).toHaveLength(0);
+      expect(t.lastStatus()).toMatchObject({
+        state: 'starting',
+        detail: `a galactic ${role} is using the data`,
+      });
+    }
+  });
+
   it('restarts its own server after a crash, and gives up after three', async () => {
     const t = setup();
     await t.supervisor.tick();

@@ -14,6 +14,14 @@
 #   movesOn     "Which one? ", then carries on without an answer; exit 0
 #   env         its agent marker, process group and PTY_TEST_SECRET; exit 0
 #   fails       exit 3
+#   aider       "Add notes.md to the chat? (Y)es/(N)o [Yes]: " — "answer=<line>", then the prompt
+#   spinner     20 carriage-return redraws over 2 s, then "spun"; exit 0
+#   size        "task bytes: <n> ends: <last 12 characters>", then the prompt
+#
+# A line "Read your instructions from <path>" (a long message, P8-08 review) is replaced by the
+# file's contents, first line or later; `--prompt-file <path>` gives the task from a file
+# (`{promptFile}`) instead of reading it from the terminal. At the prompt, a line from a file is
+# echoed as "file echo: <bytes> bytes, ends: <last 12 characters>".
 #
 # Run alone: bash fake-pty-agent.sh (bash: `read -t`; a trapped Ctrl-C does not end a plain read)
 
@@ -41,7 +49,15 @@ repl() {
     prompt
     read_line line
     case $? in
-      0) [ -n "$line" ] && printf 'echo: %s\n' "$line" ;;
+      0)
+        case "$line" in
+          'Read your instructions from '*)
+            body=$(cat "${line#Read your instructions from }")
+            printf 'file echo: %s bytes, ends: %s\n' "${#body}" "${body: -12}"
+            ;;
+          *) [ -n "$line" ] && printf 'echo: %s\n' "$line" ;;
+        esac
+        ;;
       130) printf '\n' ;;
       *) exit 0 ;;
     esac
@@ -49,8 +65,20 @@ repl() {
 }
 
 printf '\033[1mfake pty agent\033[0m 1.0\n'
-prompt
-read_line task || exit 0
+if [ "$1" = --prompt-file ]; then
+  task=$(cat "$2")
+  printf 'task from %s\n' "$2"
+else
+  prompt
+  read_line task || exit 0
+fi
+case "$task" in
+  'Read your instructions from '*)
+    file=${task#Read your instructions from }
+    task=$(cat "$file")
+    printf 'instructions read from a file\n'
+    ;;
+esac
 case "$task" in
   *scenario:happy*)
     printf '\033[32mreading\033[0m the README\n'
@@ -116,6 +144,29 @@ case "$task" in
   *scenario:env*)
     printf 'agent=%s pgid=%s secret=%s\n' "$GALACTIC_AGENT_ID" "$(ps -o pgid= -p $$ | tr -d ' ')" "${PTY_TEST_SECRET:-none}"
     exit 0
+    ;;
+  *scenario:aider*)
+    printf 'Add notes.md to the chat? (Y)es/(N)o [Yes]: '
+    if read_line answer; then
+      printf 'answer=%s\n' "$answer"
+    else
+      printf '\n'
+    fi
+    repl
+    ;;
+  *scenario:spinner*)
+    i=1
+    while [ "$i" -le 20 ]; do
+      printf '\r%s working %s' '|/-\\' "$i"
+      sleep 0.1
+      i=$((i + 1))
+    done
+    printf '\nspun\n'
+    exit 0
+    ;;
+  *scenario:size*)
+    printf 'task bytes: %s ends: %s\n' "${#task}" "${task: -12}"
+    repl
     ;;
   *scenario:fails*)
     printf 'something broke\n'

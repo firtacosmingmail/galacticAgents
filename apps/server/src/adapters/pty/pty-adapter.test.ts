@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -11,8 +11,14 @@ import type {
 } from '@galactic/protocol';
 import { MemoryProcessStore } from '../../runtime/process-store.js';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
-import { FAKE_PTY_AGENT, FAKE_PTY_IDLE } from './fake-agent.js';
-import { checkPassEnv, PTY_SESSION_TOOL, PtyAdapter, type PtyAgentCommand } from './pty-adapter.js';
+import { FAKE_PTY_AGENT, FAKE_PTY_CLARIFICATIONS, FAKE_PTY_IDLE } from './fake-agent.js';
+import {
+  checkPassEnv,
+  PTY_SESSION_TOOL,
+  PtyAdapter,
+  TABLE_NO_LONGER_ALLOWS,
+  type PtyAgentCommand,
+} from './pty-adapter.js';
 import { ensureSpawnHelper, signalName } from './pty-child.js';
 
 /**
@@ -52,6 +58,7 @@ function rig(agent: { [K in keyof PtyAgentCommand]?: PtyAgentCommand[K] | undefi
         command: 'bash',
         args: [FAKE_PTY_AGENT],
         idlePattern: FAKE_PTY_IDLE,
+        clarificationPatterns: FAKE_PTY_CLARIFICATIONS,
         quietMs: 120,
         ...agent,
       }).filter(([, v]) => v !== undefined),
@@ -129,6 +136,15 @@ describe('PtyAdapter', () => {
       /denied by policy/,
     );
     expect(r.events).toEqual([]);
+    // A push in the command line: its own reason (a push always asks, decision 49).
+    const push = (): GateVerdict => ({
+      decision: 'ask',
+      action: 'push',
+      reasons: ['the command mentions git push, which leaves the machine'],
+    });
+    await expect(r.adapter.spawn(spawnOpts(r, 'scenario:happy', push))).rejects.toThrow(
+      /mentions a push, and a push always asks the user \(decision 49\)/,
+    );
   });
 
   it('streams raw terminal chunks and their stripped text; exit 0 finishes with the last lines', async () => {
@@ -216,6 +232,8 @@ describe('PtyAdapter', () => {
     await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
     await r.adapter.input(sessionId, 'typed\nby hand');
     await waitFor(() => outputs(r, 'text').includes('echo: typed by hand'), 'echo');
+    // Typed while idle, the line opened a turn: the idle prompt coming back ends it.
+    await waitFor(() => of(r, 'agent.idle').length === 2, 'the typed turn ends');
     await r.adapter.pause(sessionId);
     await expect(r.adapter.input(sessionId, 'x')).rejects.toThrow(/paused/);
     await r.adapter.resume(sessionId);
@@ -230,16 +248,161 @@ describe('PtyAdapter', () => {
     expect(outputs(r, 'text')).toContain('echo: hello');
   });
 
-  it('a send re-checks the table; a mid-turn send without interrupt is refused', async () => {
+  it('a mid-turn send without interrupt is refused', async () => {
     const r = rig();
-    let verdict: GateVerdict = { decision: 'allow' };
-    const { sessionId } = await r.adapter.spawn(spawnOpts(r, 'scenario:echo', () => verdict));
+    const { sessionId } = await r.adapter.spawn(spawnOpts(r, 'scenario:echo'));
     await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
-    verdict = { decision: 'ask', reasons: ['now cautious'] };
-    await expect(r.adapter.send(sessionId, 'hi')).rejects.toThrow(/now cautious/);
-    verdict = { decision: 'allow' };
     await r.adapter.send(sessionId, 'hi');
     await expect(r.adapter.send(sessionId, 'again')).rejects.toThrow(/mid-turn/);
+  });
+
+  it('a send the table no longer allows ends the agent with the reason (decision 112)', async () => {
+    const r = rig();
+    let verdict: GateVerdict = { decision: 'allow' };
+    const agentId = `pty-tightened-${Math.random()}`;
+    const { sessionId } = await r.adapter.spawn(
+      spawnOpts(r, 'scenario:echo', () => verdict, agentId),
+    );
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    verdict = { decision: 'ask', reasons: ['now cautious'] };
+    await expect(r.adapter.send(sessionId, 'hi')).rejects.toThrow(TABLE_NO_LONGER_ALLOWS);
+    expect(of(r, 'agent.failed')).toEqual([
+      { type: 'agent.failed', agentId, error: TABLE_NO_LONGER_ALLOWS, reason: 'runtime' },
+    ]);
+    await waitFor(() => r.supervisor.get(agentId)?.state === 'exited', 'process stopped');
+    expect(outputs(r, 'text')).not.toContain('echo: hi');
+    await expect(r.adapter.send(sessionId, 'again')).rejects.toThrow(/has failed/);
+    expect(r.adapter.sessionCount).toBe(0);
+  });
+
+  it('a clarification answer re-checks the table; a permission answer is the user own', async () => {
+    const r = rig();
+    let verdict: GateVerdict = { decision: 'allow' };
+    await r.adapter.spawn(spawnOpts(r, 'scenario:asks', () => verdict));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+    const q = of(r, 'agent.needs_input')[0]!;
+    expect(q.kind).toBe('clarification');
+    verdict = { decision: 'deny', reason: 'tightened' };
+    await expect(r.adapter.answer(q.questionId, 'blue')).rejects.toThrow(TABLE_NO_LONGER_ALLOWS);
+    expect(of(r, 'agent.failed')[0]).toMatchObject({ error: TABLE_NO_LONGER_ALLOWS });
+    expect(outputs(r, 'text')).not.toContain('you chose');
+  });
+
+  it('fails closed: a question no clarification pattern matched is a free-form permission', async () => {
+    for (const [answer, said] of [
+      ['allow', 'you chose: '],
+      ['no', 'interrupted'],
+    ] as const) {
+      const r = rig({ clarificationPatterns: undefined });
+      await r.adapter.spawn(spawnOpts(r, 'scenario:asks'));
+      await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+      const q = of(r, 'agent.needs_input')[0]!;
+      expect(q.kind).toBe('permission');
+      expect(q.question.toolCall).toBeUndefined();
+      expect(q.question.text).toMatch(/Allow presses Enter.*Refuse interrupts it/);
+      await r.adapter.answer(q.questionId, answer);
+      if (answer === 'allow') {
+        await waitFor(() => of(r, 'agent.finished').length === 1, 'finished');
+        expect(outputs(r, 'text')).toContain(said);
+      } else {
+        // Ctrl-C: the fixture drops back to its prompt, the turn ends; nothing was typed.
+        await waitFor(() => of(r, 'agent.idle').length === 1, 'idle after the interrupt');
+        expect(outputs(r, 'text')).not.toContain('you chose');
+      }
+    }
+  });
+
+  it("an aider-style prompt is a permission; allow types y, refuse n (the style's tokens)", async () => {
+    for (const [answer, typed] of [
+      ['allow', 'answer=y'],
+      ['refuse', 'answer=n'],
+    ] as const) {
+      const r = rig();
+      await r.adapter.spawn(spawnOpts(r, 'scenario:aider'));
+      await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+      const q = of(r, 'agent.needs_input')[0]!;
+      expect(q.kind).toBe('permission');
+      expect(q.question.text).toContain('(Y)es/(N)o [Yes]:');
+      await r.adapter.answer(q.questionId, answer);
+      await waitFor(() => outputs(r, 'text').includes(typed), typed);
+    }
+  });
+
+  it('no control character reaches the terminal: first prompt, messages, answers, typing', async () => {
+    const r = rig();
+    const { sessionId } = await r.adapter.spawn(spawnOpts(r, 'scenario:echo\x03\x15'));
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    await r.adapter.send(sessionId, 'one\x03two\x15three\x1b[31mred\x7f\x9bX');
+    await waitFor(() => outputs(r, 'text').includes('echo: onetwothree[31mredX'), 'send');
+    await waitFor(() => of(r, 'agent.idle').length === 2, 'idle again');
+    await r.adapter.input(sessionId, 'kill\x03 \x04line\x15');
+    await waitFor(() => outputs(r, 'text').includes('echo: kill line'), 'typed');
+    expect(of(r, 'agent.failed')).toEqual([]);
+
+    const r2 = rig();
+    await r2.adapter.spawn(spawnOpts(r2, 'scenario:asks'));
+    await waitFor(() => of(r2, 'agent.needs_input').length === 1, 'question');
+    await r2.adapter.answer(of(r2, 'agent.needs_input')[0]!.questionId, 'bl\x03ue\x1b[0m');
+    await waitFor(() => of(r2, 'agent.finished').length === 1, 'finished');
+    expect(outputs(r2, 'text')).toContain('you chose: blue[0m');
+  });
+
+  it('a long first prompt or message goes through a 0600 file, removed at the end', async () => {
+    const dir = join(cwd, '.galactic', 'pty');
+    const r = rig();
+    const long = `scenario:size ${'x'.repeat(3_000)} THE-END-MARK`;
+    const { sessionId } = await r.adapter.spawn(spawnOpts(r, long));
+    await waitFor(() => outputs(r, 'text').includes('task bytes:'), 'size');
+    expect(outputs(r, 'text')).toContain('instructions read from a file');
+    expect(outputs(r, 'text')).toContain(`task bytes: ${long.length} ends: THE-END-MARK`);
+    const files = readdirSync(dir);
+    expect(files).toHaveLength(1);
+    expect(statSync(join(dir, files[0]!)).mode & 0o777).toBe(0o600);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    await r.adapter.send(sessionId, `${'y'.repeat(2_000)}LAST-CHARS-1`);
+    await waitFor(
+      () => outputs(r, 'text').includes('file echo: 2012 bytes, ends: LAST-CHARS-1'),
+      'echo',
+    );
+    await r.adapter.stop(sessionId);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('{promptFile} passes the first prompt as a file; nothing is typed', async () => {
+    const r = rig({ args: [FAKE_PTY_AGENT, '--prompt-file', '{promptFile}'] });
+    const { sessionId } = await r.adapter.spawn(spawnOpts(r, 'scenario:size short'));
+    await waitFor(() => outputs(r, 'text').includes('task bytes:'), 'size');
+    expect(outputs(r, 'text')).toMatch(/task from \S+\.galactic\/pty\/\S+\.txt/);
+    expect(outputs(r, 'text')).toContain('ends: o:size short');
+    // Judged as configured: the placeholder, not the prompt.
+    expect(r.checks[0]!.call.input).toMatchObject({
+      command: `bash ${FAKE_PTY_AGENT} --prompt-file {promptFile}`,
+    });
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    expect(outputs(r, 'text')).not.toContain('echo:');
+    await r.adapter.stop(sessionId);
+    expect(existsSync(join(cwd, '.galactic', 'pty'))).toBe(false);
+  });
+
+  it('carriage-return redraws (a spinner) are coalesced into about one chunk a second', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:spinner'));
+    await waitFor(() => of(r, 'agent.finished').length === 1, 'finished');
+    const chunks = of(r, 'agent.output').filter((e) => e.kind === 'terminal');
+    const frames = chunks.filter((e) => e.text.includes('working'));
+    // 20 frames over 2 s: ten-a-second batching would give about 20 rows.
+    expect(frames.length).toBeLessThanOrEqual(6);
+    expect(chunks.map((e) => e.text).join('')).toContain('working 20');
+    expect(outputs(r, 'text')).toContain('spun');
+  });
+
+  it('a long answer or typed line is typed as is, with a warning in the transcript', async () => {
+    const r = rig();
+    const { sessionId } = await r.adapter.spawn(spawnOpts(r, 'scenario:echo'));
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    await r.adapter.input(sessionId, 'z'.repeat(1_500));
+    await waitFor(() => outputs(r, 'text').includes('Warning: a 1500-byte line'), 'warning');
   });
 
   it('refuses brains and bare mode', async () => {

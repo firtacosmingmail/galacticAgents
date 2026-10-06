@@ -223,7 +223,7 @@ prompts; `--mode` gives it session modes (`default`, `plan`, `acceptEdits`, `byp
 
 Any command-line agent with no machine protocol, run under a pseudo-terminal (`node-pty` 1.1.0,
 MIT) and read like a person reads its screen. Configured as `pty: {command, args?, passEnv?,
-idlePattern?, questionPatterns?, quietMs?, idleAfterMs?}` in `config.json` (or
+idlePattern?, questionPatterns?, clarificationPatterns?, quietMs?, idleAfterMs?}` in `config.json` (or
 `GALACTIC_PTY_COMMAND`); registered only then, and `node-pty` loads at the first spawn.
 
 - **Process:** `ProcessSupervisor.adopt()` with the spec's `fork` hook (`pty-child.ts`, the only
@@ -231,15 +231,21 @@ idlePattern?, questionPatterns?, quietMs?, idleAfterMs?}` in `config.json` (or
   so launch intent, PID row, agent marker, graceful stop and group reaping are the usual ones. A
   fixed 120×32 terminal (`PTY_TERMINAL_SIZE` in the protocol). Environment: allow-list +
   `TERM`/`COLORTERM` + `pty.passEnv` (never `GALACTIC_*`).
-- **Trust rule** (decision 112): before every spawn and every message the gate is asked
-  about `{toolName: 'pty:session', input: {command, cwd}}` with `reserve: false`; only `allow`
-  (a table allowing unclassified calls: the trusted preset) runs it.
-- **Turns:** the prompt (system prompt first) and every message are typed as one line + Enter
-  once the CLI is ready. After `quietMs` of silence the cursor's line is read (`detect.ts`):
-  `idlePattern` → `agent.idle`; a yes/no confirmation → `agent.needs_input(permission)` **without
-  a tool call** (only the user can answer it; allow types `y`/`yes`, anything else `n`/`no`);
-  another question → `clarification`, its answer typed. `idleAfterMs` ends a turn on silence.
-  A question the CLI moved on from is answered without typing.
+- **Trust rule** (decision 112): before every spawn, every message and every clarification
+  answer the gate is asked about `{toolName: 'pty:session', input: {command, cwd}}` with
+  `reserve: false`; only `allow` (a table allowing unclassified calls: the trusted preset) runs it.
+  Refused later, the agent ends: `agent.failed(runtime, TABLE_NO_LONGER_ALLOWS)`.
+- **Turns:** the first prompt (for a Steward, its role instructions ahead of the task — the CLI
+  reads them as ordinary input, not as a system prompt) and every message are typed as one line
+  - Enter once the CLI is ready; `oneLine()` turns newlines into spaces and drops every other
+    control character. A line over 1000 bytes goes through a 0600 file in `<cwd>/.galactic/pty/`
+    (`Read your instructions from <path>`); `{promptFile}` in `args` passes the first prompt that
+    way. After `quietMs` of silence the cursor's line is read (`detect.ts`): `idlePattern` →
+    `agent.idle`; any question → `agent.needs_input(permission)` **without a tool call** (fail
+    closed: only the user answers it; on a yes/no prompt allow types its yes token, anything else
+    its no; on a free-form one allow presses Enter, anything else interrupts), unless a
+    `clarificationPatterns` regex matched → `clarification`, its answer typed. `idleAfterMs` ends a
+    turn on silence. A question the CLI moved on from is answered without typing.
 - **Output:** raw bytes as `agent.output(kind: 'terminal')` (batched ≈100 ms / 8 KB) for the
   panel's xterm.js view, and the stripped text (`terminal-text.ts`) as `text` blocks; the first
   line of a turn and one every 30 s as `agent.progress`.
@@ -249,10 +255,11 @@ idlePattern?, questionPatterns?, quietMs?, idleAfterMs?}` in `config.json` (or
 - **Controls:** interrupt = Ctrl-C (turn ends at the idle prompt, or quiet without one, ≤ 3 s);
   pause = SIGSTOP/SIGCONT; stop hook = Ctrl-C, turn end, Ctrl-D, then SIGTERM/SIGKILL;
   `input(sessionId, text)` types a line now (the Mac's own browser only, logged as the user's
-  message).
+  message, redacted); typed while idle it opens a turn.
 
 The scripted terminal agent `pty/fake-pty-agent.sh` (bash; `fixture> ` prompt; scenarios `happy`,
-`asks`, `permission`, `long`, `echo`, `stalls`, `movesOn`, `env`, `fails` from `scenario:<name>` in
-the first line) drives `pty/pty.conformance.test.ts` in CI with `toolCalls: false`,
+`asks`, `permission`, `long`, `echo`, `stalls`, `movesOn`, `env`, `fails`, `aider`, `spinner`,
+`size` from `scenario:<name>` in the first line; `--prompt-file <path>` and `Read your instructions
+from <path>` lines are understood; `FAKE_PTY_CLARIFICATIONS` lists its free-form questions) drives `pty/pty.conformance.test.ts` in CI with `toolCalls: false`,
 `permissionEvidence: 'deleted build'`, the trusted `spawnPolicy`, and the optional `policyDeny` and
 `toolCalls` cases skipped.

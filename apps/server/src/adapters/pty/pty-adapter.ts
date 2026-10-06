@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   PTY_TERMINAL_SIZE,
   type Actor,
@@ -21,6 +22,7 @@ import type {
 } from '../../runtime/supervisor.js';
 import {
   ALLOW,
+  compileClarifications,
   compileIdle,
   compilePatterns,
   detect,
@@ -44,15 +46,26 @@ import { TerminalText } from './terminal-text.js';
  *
  * **Who may run one** (decision 112). A terminal agent's tool calls are invisible: no
  * structured call reaches the permission table, so GalacticAgents cannot judge what it does.
- * Every spawn (and every later message) first asks the gate about the session as a whole — an
- * unclassified call `pty:session` with the command line — and runs only when the project's table
- * allows what it cannot classify (the `trusted` preset, or a custom table saying so). A refusal
- * fails the spawn with the reason.
+ * Every spawn (and every later message, and every clarification answer) first asks the gate about
+ * the session as a whole — an unclassified call `pty:session` with the command line — and runs
+ * only when the project's table allows what it cannot classify (the `trusted` preset, or a custom
+ * table saying so). A refusal fails the spawn with the reason; later, it ends the agent
+ * (`agent.failed`: "the project's permission table no longer allows terminal agents").
  *
  * **The prompt is typed into the terminal**: once the CLI is ready — its idle prompt is on the
- * screen, or it has been quiet for `quietMs` — the first prompt (a Steward's system prompt before
- * it) is typed as one line and Enter; every later message the same way. Newlines become spaces
- * (they would submit early).
+ * screen, or it has been quiet for `quietMs` — the first prompt (a Steward's role instructions
+ * before it) is typed as one line and Enter; every later message the same way. Newlines become
+ * spaces (they would submit early) and every other control character is dropped (`oneLine`), so
+ * nothing typed acts as a keystroke.
+ *
+ * **Long lines.** A terminal in line mode keeps at most 1024 bytes of a line (macOS `MAX_CANON`);
+ * the rest is lost. So the first prompt and every message longer than `LONG_LINE` (1000 bytes)
+ * go into a file — `<cwd>/.galactic/pty/<session>-<n>.txt`, the directory 0700, the file 0600,
+ * removed when the session ends (`.galactic/` is excluded from git) — and the line typed is
+ * `Read your instructions from <path>`. When `args` holds `{promptFile}`, the first prompt is
+ * written to such a file and its path passed on the command line instead of typing anything.
+ * An answer or the user's own line is typed as is (it answers a prompt, a file would not do),
+ * with a warning in the transcript when it is that long.
  *
  * **Output.** The raw terminal output (escapes kept) goes to the transcript as `terminal` chunks,
  * batched (≈ every 100 ms or 8 KB), for the terminal view; its text — escapes stripped, `\r`
@@ -63,10 +76,12 @@ import { TerminalText } from './terminal-text.js';
  * **Status, heuristically.** Output is work (the status store's `touch`); silence past the PTY
  * stall threshold (2 min) is `stalled` (the status store). Once the output has been quiet for
  * `quietMs`, the line the cursor sits on is read (`detect.ts`): the CLI's own prompt
- * (`idlePattern`) ends the turn with `agent.idle`; a yes/no confirmation opens a
- * permission-kind question (never answered by a brain or the table: it carries no tool call, so
- * the user answers it, and "allow" types `y`, anything else `n`); another question a
- * clarification whose answer is typed. With `idleAfterMs`, silence that long also ends a turn.
+ * (`idlePattern`) ends the turn with `agent.idle`; any question opens a permission-kind question
+ * (fail closed: never answered by a brain or the table — it carries no tool call — so the user
+ * answers it: on a yes/no prompt "allow" types its yes token, anything else its no token; on a
+ * free-form one "allow" presses Enter and anything else interrupts), unless a configured
+ * `clarificationPatterns` regex matched it: a clarification, whose answer is typed. With
+ * `idleAfterMs`, silence that long also ends a turn.
  * The exit code decides the end: 0 → `agent.finished` (its last lines as the result), another
  * code → `agent.failed(runtime)`, a signal → `agent.failed(crash)`.
  *
@@ -84,7 +99,8 @@ import { TerminalText } from './terminal-text.js';
  *
  * **Typing by the user** (`input`): one line into the terminal now, whatever the turn does — the
  * panel offers it on the Mac only (the route refuses remote clients) and the runtime logs it as
- * the user's message.
+ * the user's message (secrets redacted). Typed while the agent is idle, it opens a turn: the
+ * screen is read again for questions, and the runtime holds queued messages until it ends.
  */
 
 /** The CLI the adapter starts for every session, and how its screen is read. */
@@ -97,8 +113,10 @@ export interface PtyAgentCommand {
   env?: Record<string, string | undefined>;
   /** The CLI's own input prompt, as a regular expression on the cursor's line: the turn is over. */
   idlePattern?: string;
-  /** Question patterns tried before the built-in ones. */
+  /** Permission (yes/no) shapes tried before the built-in ones. */
   questionPatterns?: QuestionPatternConfig[];
+  /** Prompt lines its supervisor may answer (clarifications); any other question is a permission. */
+  clarificationPatterns?: string[];
   /** Silence after which the screen is read (default 750 ms). */
   quietMs?: number;
   /** Silence after which a turn ends with `agent.idle` even without an idle prompt (default off). */
@@ -118,6 +136,8 @@ export interface PtyAdapterOptions {
   progressEveryMs?: number;
   /** Raw output batch interval (default 100 ms). */
   flushMs?: number;
+  /** How long a batch of only `\r` redraws (a spinner) is held (default 1 s). */
+  redrawFlushMs?: number;
   onError?: (error: unknown, context: string) => void;
   /** The runtime check (P25-01); default `ptyPreflight(agent)`. */
   preflight?: () => Promise<RuntimePreflight>;
@@ -147,6 +167,13 @@ const CONTEXT_LINES = 3;
 const RESULT_LINES = 5;
 const CTRL_C = '\x03';
 const CTRL_D = '\x04';
+/** A line longer than this (bytes) goes through a file: line mode keeps 1024 at most. */
+export const LONG_LINE = 1000;
+/** The `args` placeholder for the first prompt's file. */
+export const PROMPT_FILE_PLACEHOLDER = '{promptFile}';
+/** The reason a running terminal agent ends when its table stops allowing it (decision 112). */
+export const TABLE_NO_LONGER_ALLOWS =
+  "the project's permission table no longer allows terminal agents";
 
 type Phase = 'starting' | 'turn' | 'idle';
 
@@ -155,8 +182,15 @@ interface OpenQuestion {
   kind: 'permission' | 'clarification';
   yes: string;
   no: string;
+  /** A permission with no yes/no tokens: allow presses Enter, refuse interrupts. */
+  freeform: boolean;
   /** Non-empty lines completed since it was asked: the CLI went on without the answer. */
   movedOn: boolean;
+}
+
+/** Whether a raw batch only redraws the cursor's line: a `\r` and no newline. */
+export function isRedrawOnly(raw: string): boolean {
+  return raw.includes('\r') && !raw.includes('\n');
 }
 
 class Session {
@@ -183,10 +217,14 @@ class Session {
   progressAt: number | undefined;
   quietTimer: NodeJS.Timeout | undefined;
   rawTimer: NodeJS.Timeout | undefined;
+  /** When the raw batch got its first byte. */
+  rawSince = 0;
   readyTimer: NodeJS.Timeout | undefined;
   interruptTimer: NodeJS.Timeout | undefined;
   idleTimer: NodeJS.Timeout | undefined;
   stopDone: Promise<void> | undefined;
+  /** Prompt files written for this session (removed when it ends). */
+  readonly files: string[] = [];
   private turnWaiters: (() => void)[] = [];
 
   constructor(
@@ -239,6 +277,7 @@ export class PtyAdapter implements AgentAdapter {
   private readonly onError: (error: unknown, context: string) => void;
   private readonly idle: RegExp | undefined;
   private readonly patterns: QuestionPattern[];
+  private readonly clarifications: RegExp[];
   private readonly quietMs: number;
   private readonly flushMs: number;
   private disposed = false;
@@ -248,6 +287,7 @@ export class PtyAdapter implements AgentAdapter {
     this.onError = opts.onError ?? (() => {});
     this.idle = compileIdle(opts.agent.idlePattern);
     this.patterns = compilePatterns(opts.agent.questionPatterns);
+    this.clarifications = compileClarifications(opts.agent.clarificationPatterns);
     this.quietMs = opts.agent.quietMs ?? 750;
     this.flushMs = opts.flushMs ?? 100;
   }
@@ -278,11 +318,18 @@ export class PtyAdapter implements AgentAdapter {
     this.sessions.set(session.sessionId, session);
     this.byAgent.set(opts.agentId, session);
     const { agent } = this.opts;
+    let args = agent.args ?? [];
     try {
+      if (args.some((a) => a.includes(PROMPT_FILE_PLACEHOLDER))) {
+        // The first prompt goes on the command line as a file: nothing to type once it is ready.
+        const file = this.promptFile(session, first);
+        args = args.map((a) => a.split(PROMPT_FILE_PLACEHOLDER).join(file));
+        session.phase = 'turn';
+      }
       session.process = this.opts.supervisor.adopt({
         agentId: opts.agentId,
         command: agent.command,
-        args: agent.args ?? [],
+        args,
         cwd: opts.cwd,
         env: this.env(),
         meta: { runtime: 'pty', command: agent.command },
@@ -293,12 +340,18 @@ export class PtyAdapter implements AgentAdapter {
       });
     } catch (error) {
       session.terminal = 'failed';
+      this.removeFiles(session);
       this.forget(session);
       throw error;
     }
     // Ready: the idle prompt, or quiet (`onQuiet`); at the latest after the ready timeout.
     this.armQuiet(session);
-    session.readyTimer = setTimeout(() => this.ready(session), this.opts.readyTimeoutMs ?? 15_000);
+    if (session.phase === 'starting') {
+      session.readyTimer = setTimeout(
+        () => this.ready(session),
+        this.opts.readyTimeoutMs ?? 15_000,
+      );
+    }
     return { sessionId: session.sessionId };
   }
 
@@ -321,6 +374,16 @@ export class PtyAdapter implements AgentAdapter {
       verdict = { decision: 'deny' as const, reason: (error as Error).message };
     }
     if (verdict.decision === 'allow') return undefined;
+    if (
+      verdict.decision === 'ask' &&
+      (verdict.action === 'push' || verdict.reasons.some((r) => /\bpush\b/i.test(r)))
+    ) {
+      return (
+        "the terminal agent's command line mentions a push, and a push always asks the user " +
+        '(decision 49): a terminal agent cannot stop to ask, so it cannot run with this command ' +
+        `(${verdict.reasons.join('; ')})`
+      );
+    }
     const why =
       verdict.decision === 'deny' ? verdict.reason : verdict.reasons.join('; ') || 'it asks';
     return (
@@ -342,14 +405,10 @@ export class PtyAdapter implements AgentAdapter {
 
   private onData(session: Session, chunk: string): void {
     if (session.terminal) return;
+    if (!session.raw) session.rawSince = Date.now();
     session.raw += chunk;
     if (session.raw.length >= RAW_BATCH) this.flushRaw(session);
-    else if (!session.rawTimer) {
-      session.rawTimer = setTimeout(() => {
-        session.rawTimer = undefined;
-        this.flushRaw(session);
-      }, this.flushMs);
-    }
+    else if (!session.rawTimer) this.armRawFlush(session, this.flushMs);
     for (const line of session.text.feed(chunk)) this.onLine(session, line);
     session.fresh = true;
     this.armQuiet(session);
@@ -379,6 +438,25 @@ export class PtyAdapter implements AgentAdapter {
         });
       }
     }
+  }
+
+  /**
+   * Schedules the raw batch's flush. A batch that is only carriage-return redraws (a spinner, a
+   * progress bar: `\r` and no newline) is held up to `redrawFlushMs` (default 1 s) instead of
+   * `flushMs`, so a spinner costs a transcript row a second, not ten (P8-08 review); the view
+   * renders the same final frame either way.
+   */
+  private armRawFlush(session: Session, ms: number): void {
+    session.rawTimer = setTimeout(() => {
+      session.rawTimer = undefined;
+      const held = Date.now() - session.rawSince;
+      const redrawMs = this.opts.redrawFlushMs ?? 1_000;
+      if (isRedrawOnly(session.raw) && held < redrawMs) {
+        this.armRawFlush(session, redrawMs - held);
+        return;
+      }
+      this.flushRaw(session);
+    }, ms);
   }
 
   /** The raw batch as one `terminal` chunk. Held while paused (nothing is emitted then). */
@@ -451,7 +529,11 @@ export class PtyAdapter implements AgentAdapter {
     if (!session.fresh) return;
     session.fresh = false;
     if (session.phase !== 'turn' || session.question) return;
-    const found = detect(session.text.current, { idle: this.idle, patterns: this.patterns });
+    const found = detect(session.text.current, {
+      idle: this.idle,
+      patterns: this.patterns,
+      clarifications: this.clarifications,
+    });
     if (session.interrupting) {
       // After Ctrl-C: the prompt is back (or, with no prompt to wait for, the output stopped).
       if (found?.kind === 'idle' || !this.idle) this.endTurn(session);
@@ -476,10 +558,32 @@ export class PtyAdapter implements AgentAdapter {
     this.startTurn(session, session.firstPrompt);
   }
 
+  /** A message (the first prompt, a later one): a long one goes through a file. */
   private startTurn(session: Session, text: string): void {
     session.phase = 'turn';
     session.progressAt = undefined;
-    this.type(session, oneLine(text));
+    const line = oneLine(text);
+    if (Buffer.byteLength(line) > LONG_LINE) {
+      this.type(session, `Read your instructions from ${this.promptFile(session, text)}`);
+    } else {
+      this.type(session, line);
+    }
+  }
+
+  /** An answer or the user's own line: typed as is, with a warning when line mode may cut it. */
+  private typeReply(session: Session, text: string): void {
+    const line = oneLine(text);
+    const bytes = Buffer.byteLength(line);
+    if (bytes > LONG_LINE) {
+      this.flushAll(session);
+      this.output(
+        session,
+        'text',
+        `Warning: a ${bytes}-byte line was typed into the terminal; a terminal in line mode ` +
+          'keeps about 1024 bytes of a line, so its end may be lost.',
+      );
+    }
+    this.type(session, line);
   }
 
   /** Types one line and Enter; what came before it is not read again. */
@@ -488,6 +592,34 @@ export class PtyAdapter implements AgentAdapter {
     session.fresh = false;
     session.process?.write(`${line}\r`);
     this.armQuiet(session);
+  }
+
+  /**
+   * Writes `text` to a new prompt file in the working directory's private folder
+   * (`.galactic/pty/`, 0700; the file 0600) and returns its path; removed when the session ends.
+   */
+  private promptFile(session: Session, text: string): string {
+    const dir = join(session.cwd, '.galactic', 'pty');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = join(dir, `${session.sessionId}-${session.files.length + 1}.txt`);
+    writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`, { mode: 0o600, flag: 'wx' });
+    session.files.push(file);
+    return file;
+  }
+
+  private removeFiles(session: Session): void {
+    for (const file of session.files.splice(0)) {
+      try {
+        rmSync(file, { force: true });
+      } catch (error) {
+        this.onError(error, `pty prompt file ${file}`);
+      }
+    }
+    try {
+      rmdirSync(join(session.cwd, '.galactic', 'pty')); // only when empty
+    } catch {
+      // not empty (another session's files) or already gone
+    }
   }
 
   private endTurn(session: Session): void {
@@ -514,16 +646,26 @@ export class PtyAdapter implements AgentAdapter {
     // The lines before the prompt (the prompt itself is the cursor's line, not one of them).
     const context = session.recent.slice(-CONTEXT_LINES).filter((l) => l !== found.line);
     const lead =
-      found.kind === 'permission'
-        ? 'The terminal agent asks for confirmation (GalacticAgents cannot see what it would do):'
-        : 'The terminal agent asks:';
-    const text = [lead, ...context.map((l) => `  ${l}`), `> ${found.line}`].join('\n');
+      found.kind === 'clarification'
+        ? 'The terminal agent asks:'
+        : found.freeform
+          ? 'The terminal agent asks (GalacticAgents cannot see what the answer leads to):'
+          : 'The terminal agent asks for confirmation (GalacticAgents cannot see what it would do):';
+    const tail =
+      found.kind === 'permission' && found.freeform
+        ? [
+            'Allow presses Enter (its default answer); Refuse interrupts it. To answer in words, ' +
+              "type into its terminal from this Mac's browser.",
+          ]
+        : [];
+    const text = [lead, ...context.map((l) => `  ${l}`), `> ${found.line}`, ...tail].join('\n');
     const id = `q-${randomUUID()}`;
     session.question = {
       id,
       kind: found.kind,
       yes: found.kind === 'permission' ? found.yes : '',
       no: found.kind === 'permission' ? found.no : '',
+      freeform: found.kind === 'permission' && found.freeform,
       movedOn: false,
     };
     this.byQuestion.set(id, session);
@@ -559,9 +701,43 @@ export class PtyAdapter implements AgentAdapter {
       );
       return;
     }
-    const line =
-      q.kind === 'permission' ? (ALLOW.test(answer.trim()) ? q.yes : q.no) : oneLine(answer);
-    this.type(session, line);
+    if (q.kind === 'clarification') {
+      // A supervisor may answer it: the table may have changed since (decision 112).
+      if (this.judgeSession(session.gate, session.cwd)) throw this.endRefused(session);
+      this.typeReply(session, answer);
+      return;
+    }
+    const allowed = ALLOW.test(answer.trim());
+    if (q.freeform) {
+      // Allow: Enter, the CLI's default. Refuse: interrupt, typing nothing it could act on.
+      if (allowed) this.type(session, '');
+      else await this.interrupt(session.sessionId);
+      return;
+    }
+    this.type(session, allowed ? q.yes : q.no);
+  }
+
+  /**
+   * The table no longer allows terminal agents (decision 112): the agent ends,
+   * `agent.failed(runtime)` with the reason, and its process is stopped. Returns the error the
+   * refused call throws.
+   */
+  private endRefused(session: Session): Error {
+    const proc = session.process;
+    this.flushAll(session);
+    this.terminal(session, {
+      type: 'agent.failed',
+      agentId: session.agentId,
+      error: TABLE_NO_LONGER_ALLOWS,
+      reason: 'runtime',
+    });
+    if (proc && proc.state !== 'exited') {
+      session.stopping = true;
+      this.opts.supervisor
+        .stop(session.agentId, { graceMs: this.opts.graceMs ?? 10_000, by: SYSTEM })
+        .catch((error: unknown) => this.onError(error, `pty stop ${session.agentId}`));
+    }
+    return new Error(TABLE_NO_LONGER_ALLOWS);
   }
 
   // --- control -------------------------------------------------------------------
@@ -584,8 +760,7 @@ export class PtyAdapter implements AgentAdapter {
     }
     if (session.terminal) throw new Error(`session ${sessionId} has ${session.terminal}`);
     // The table may have changed since the spawn (decision 112).
-    const refused = this.judgeSession(session.gate, session.cwd);
-    if (refused) throw new Error(refused);
+    if (this.judgeSession(session.gate, session.cwd)) throw this.endRefused(session);
     this.startTurn(session, message);
   }
 
@@ -594,7 +769,12 @@ export class PtyAdapter implements AgentAdapter {
     if (session.terminal) throw new Error(`session ${sessionId} has ${session.terminal}`);
     if (session.stopping) throw new Error(`session ${sessionId} is stopping`);
     if (session.paused) throw new Error(`session ${sessionId} is paused: resume it first`);
-    this.type(session, oneLine(text));
+    if (session.phase === 'idle') {
+      // Typed while idle: it starts work the screen must be read for (questions, the turn's end).
+      session.phase = 'turn';
+      session.progressAt = undefined;
+    }
+    this.typeReply(session, text);
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -794,6 +974,7 @@ export class PtyAdapter implements AgentAdapter {
     session.clearTimers();
     this.settleQuestion(session);
     session.closeTurn('idle');
+    this.removeFiles(session);
     this.forget(session);
   }
 

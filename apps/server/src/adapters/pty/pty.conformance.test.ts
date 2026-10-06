@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { PERMISSION_POLICY_PRESETS } from '@galactic/protocol';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
 import { describeAdapterConformance } from '../conformance.js';
-import { FAKE_PTY_AGENT, FAKE_PTY_IDLE } from './fake-agent.js';
+import { FAKE_PTY_AGENT, FAKE_PTY_CLARIFICATIONS, FAKE_PTY_IDLE } from './fake-agent.js';
 import { PtyAdapter } from './pty-adapter.js';
 
 /**
@@ -31,6 +31,7 @@ describeAdapterConformance({
         command: 'bash',
         args: [FAKE_PTY_AGENT],
         idlePattern: FAKE_PTY_IDLE,
+        clarificationPatterns: FAKE_PTY_CLARIFICATIONS,
         quietMs: 120,
       },
       graceMs: 3_000,

@@ -53,8 +53,9 @@ Checked on this Mac (Node 22.14, arm64): the prebuild loads; forks are session l
 (`pgid = pid`, own controlling tty); the output is all delivered before the exit event.
 **`node-pty` 1.1.0's macOS `spawn-helper` is published without the execute bit** and its install
 script does not add it, so every spawn fails "posix_spawnp failed". The 1.2 betas fix it; the
-stable 1.1.0 is kept and the adapter adds the bit before loading (`ensureSpawnHelper`, owner's
-file only), the preflight reporting a helper it cannot fix.
+stable 1.1.0 is kept and the adapter adds the execute bits before loading (`ensureSpawnHelper`:
+`mode | 0o111`, owner, group and others like an installed binary — on a file the user owns; it
+cannot change one it does not), the preflight reporting a helper it cannot fix.
 
 ## Design decisions
 
@@ -68,7 +69,8 @@ file only), the preflight reporting a helper it cannot fix.
    new per-project opt-in flag: it reuses a decision the user already makes knowingly ("trusted"
    says "anything it cannot classify"), needs no schema, and the gate stays the one place
    permissions are decided.
-2. **Question detection.** After `quietMs` (750 ms) of silence the cursor's line (a prompt has no
+2. **Question detection** (changed by the review: every question is now a permission unless
+   `pty.clarificationPatterns` matched it — see Review fixes 4). After `quietMs` (750 ms) of silence the cursor's line (a prompt has no
    newline) is read: `idlePattern` → `agent.idle`; a yes/no confirmation (`[y/N]`, `(yes/no)`,
    "Continue? / Proceed? / Are you sure / Do you want to / Allow / Overwrite / Delete / Remove /
    Install / Run / Push … ?") → **permission**-kind with **no tool call**, so the runtime cannot
@@ -79,8 +81,9 @@ file only), the preflight reporting a helper it cannot fix.
    A question the CLI moved on from (complete lines followed it) is answered, nothing typed, and
    the transcript says so. One question at a time.
 3. **Turns.** The first prompt is typed once the CLI is ready (idle prompt, or quiet; ≤ 15 s).
-   Messages and answers are typed as one line + Enter (newlines → spaces). Without `idlePattern`
-   a turn ends only by `idleAfterMs` (if set) or the exit; silence otherwise makes it `stalled`
+   Messages and answers are typed as one line + Enter (newlines → spaces; since the review every
+   other control character is dropped and long lines go through a file — see below). Without
+   `idlePattern` a turn ends only by `idleAfterMs` (if set) or the exit; silence otherwise makes it `stalled`
    (status store, 2 min for PTY).
 4. **Transcript forms (decided).** Raw bytes (escapes kept, UTF-8 decoded by node-pty) as
    `terminal` chunks, batched ≈100 ms / 8 KB, for the xterm view only; the stripped text as `text`
@@ -100,7 +103,7 @@ file only), the preflight reporting a helper it cannot fix.
 (runtime, "exited with code N: <last line>")`; signal → `agent.failed(crash)`. No cost.
 8. **Brains and `bare` refused**, as for ACP.
 
-## Proposed SPEC §7 decisions (not recorded in §7)
+## SPEC §7 decisions (recorded as 112–114; the texts below are as first proposed — §7 is current, see the review fixes)
 
 > **decision 112 — Terminal agents run only where the table trusts what it cannot see**
 > (P8-08; decisions 5, 7, 49, 109): a terminal agent (a command-line tool driven through a
@@ -171,3 +174,50 @@ interrupt during a `read` takes up to a second.
 - `node-pty` 1.2 (stable) would drop the `spawn-helper` chmod workaround.
 - The fake PTY agent is not copied into `dist/` (like the fake ACP agent).
 - Decisions 112–114 are recorded in SPEC §7.
+
+## Review fixes (2026-10-06, branch `p8-wave4-review-fixes`)
+
+1. **Control characters.** `oneLine()` drops C0 but TAB, DEL and C1 (so ESC and every escape
+   sequence it would start) after turning newlines into spaces, on every typed path: the first
+   prompt, messages, clarification answers, the user's `/terminal` line. The route refuses them
+   first (`TerminalInputBody` refine on `TERMINAL_CONTROL_CHARS`, 400 with a readable `message`).
+   Tests: `detect.test.ts` (^C, ^U, ESC[31m, DEL, CSI), `pty-adapter.test.ts` (all four paths
+   against the fixture), `terminal-routes.test.ts` (400, nothing logged), `rest.test.ts`.
+2. **Long lines** (macOS `MAX_CANON` 1024). Chosen: a file. A first prompt or message over 1000
+   bytes is written to `<cwd>/.galactic/pty/<session>-<n>.txt` (dir 0700, file 0600, `wx`; the
+   `.galactic/` exclusion already covers it) and `Read your instructions from <path>` is typed;
+   files are removed when the session ends. `{promptFile}` in `pty.args` passes the first prompt
+   that way on the command line (nothing typed; the gate judges the unexpanded command line).
+   `{prompt}` (the text as an argument) was **not** added: arguments land in the launch-intent rows
+   (P8-11) and in `ps`. Answers and the user's line are typed raw (they answer a prompt) with a
+   transcript warning over 1000 bytes. Tests: 3 000-byte first prompt and 2 012-byte message read
+   back whole by the fixture, file and dir modes, removal at stop; `{promptFile}`; the warning.
+3. **Typing while idle** opens a turn in the adapter (`phase = 'turn'`), and `typeInto` marks the
+   agent busy (`idle = false`, `inbox.working()`), so a queued message waits for the turn's end.
+   Tests: a second `agent.idle` after typing (adapter); inbox `working` right after the route, and
+   the queued message echoed after the typed one (route).
+4. **Fail closed.** Every detected question is a permission unless a `pty.clarificationPatterns`
+   regex matched it (a yes/no confirmation stays a permission even then). New built-in yes/no
+   shapes: aider's `(Y)es/(N)o … [Yes]:` (tokens `y`/`n`), `yes/no [no]:` and `[Yes]/[No]`
+   (`yes`/`no`). A free-form permission: allow presses Enter, anything else interrupts (Ctrl-C);
+   the card says a worded answer is typed from the Mac. `pty.questionPatterns` are permission
+   shapes only (`kind: 'clarification'` is refused by the config with a pointer to
+   `clarificationPatterns`). The fixture's free-form questions are listed in
+   `FAKE_PTY_CLARIFICATIONS` for the conformance suite.
+5. **Tightening the table.** A `send()` or a clarification `answer()` the gate refuses ends the
+   agent: `agent.failed(runtime, "the project's permission table no longer allows terminal
+   agents")`, the process stopped through the supervisor; the call throws the same reason (the
+   inbox then sees the agent ended and stops retrying). A permission answer is the user's own and
+   is not re-checked. SPEC 112 reworded to match. A command line mentioning a push gets its own
+   refusal reason (decision 49).
+6. **Redaction.** `typeInto` logs `redactSecrets(text)`; the echo on the terminal was already
+   redacted by the transcript pipeline. The input's help says the line is logged and not to type
+   passwords. Test: an `hf_…` token absent from the log and the transcript.
+
+Nits: SPEC 90/114 say the phone may restart a terminal agent from its first prompt (the recover
+route), the gate re-checked at spawn; spinner redraws (`\r` only, no newline) are held up to 1 s
+per raw batch (`redrawFlushMs`; test: 20 frames → ≤ 6 rows); the terminal view keeps the last
+512 KB (trimmed to half, "Earlier output trimmed") and opens OSC 8 links through an explicit
+`linkHandler` (http(s) only, confirm, `noopener,noreferrer`); TECHNOLOGY §3.3 and the adapters
+README say the Steward's role instructions are typed ahead of the task (the CLI does not get a
+system prompt).

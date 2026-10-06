@@ -140,6 +140,40 @@ describe('POST /api/agents/:id/terminal (P8-08)', () => {
     expect(refused.body['message']).toMatch(/no terminal/);
     expect((await post(`/api/agents/${result.agent.id}/terminal`, {})).status).toBe(400);
   });
+
+  it('refuses control characters with a clear 400; nothing is typed or logged', async () => {
+    const id = await spawnEcho();
+    for (const bad of ['stop\x03', '\x15wipe', '\x1b[31mred', 'two\nlines']) {
+      const res = await post(`/api/agents/${id}/terminal`, { text: bad });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expect(res.body['message']).toMatch(/control characters/);
+    }
+    expect(events(id).filter((e) => e.type === 'message.sent')).toEqual([]);
+  });
+
+  it('logs the typed line with secrets redacted', async () => {
+    const id = await spawnEcho();
+    const token = 'hf_AbCdEfGhIjKlMnOpQrStUvWxYz01234567';
+    expect((await post(`/api/agents/${id}/terminal`, { text: `token ${token}` })).status).toBe(200);
+    await waitFor(() => text(id).includes('echo: token'), 'echo');
+    const sent = events(id).filter((e) => e.type === 'message.sent');
+    expect(sent).toEqual([expect.objectContaining({ text: 'token [redacted:huggingface-token]' })]);
+    expect(JSON.stringify(events(id))).not.toContain(token);
+    expect(text(id)).not.toContain(token);
+  });
+
+  it('typing into an idle agent makes it busy: queued messages wait for the turn to end', async () => {
+    const id = await spawnEcho();
+    expect(composed.runtime.inbox(id)?.currentState).toBe('idle');
+    expect((await post(`/api/agents/${id}/terminal`, { text: 'by hand' })).status).toBe(200);
+    expect(composed.runtime.inbox(id)?.currentState).toBe('working');
+    composed.runtime.send(id, 'queued after', { sender: { type: 'user' } });
+    await waitFor(() => text(id).includes('echo: queued after'), 'the queued message');
+    const echoes = text(id)
+      .split('\n')
+      .filter((l) => l.startsWith('echo: '));
+    expect(echoes).toEqual(['echo: by hand', 'echo: queued after']);
+  });
 });
 
 describe('restarting an interrupted terminal agent (P8-08)', () => {

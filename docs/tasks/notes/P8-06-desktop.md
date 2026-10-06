@@ -23,7 +23,7 @@ Dependencies (all Apache-2.0 OR MIT): `@tauri-apps/cli` 2.12.1 (dev), crates `ta
 5. **The status socket's token** comes from `GALACTIC_TOKEN` / `config.json` (the shell is a local process of the same user, the trust model of REMOTE_ACCESS §4), sent only in `hello`, never logged; the launcher banner's token line is redacted in the shell log.
 6. **Not bundling the server**: the `.app` runs the checkout it was built from (`GALACTIC_REPO`). Bundling Node, `better-sqlite3` and the agent SDK into the app is a bigger task (signing native modules, updates) — not needed for a single developer.
 
-## Proposed SPEC decisions (not in §7 yet)
+## SPEC decisions (recorded in §7 as 110 and 111; the texts below are as first proposed — §7 is current)
 
 **Decision 110 — The desktop app** (P8-06; §5, decisions 59, 90, 91, 104): GalacticAgents can also run as a macOS app with a Dock icon and a menu bar icon. It shows the same panel as the browser. When Mission Control already runs on this Mac's data, the app uses it; otherwise the app starts it. Quitting the app stops Mission Control only if the app started it (the Quit item says so); one started another way keeps running. If the app's Mission Control stops unexpectedly the app starts it again, at most three times in five minutes; if a Mission Control the app did not start stops, the app does not replace it and offers "Start Mission Control". Closing the window keeps the app in the menu bar. The menu bar shows whether Mission Control is live, disconnected or not running, a storage problem, and how many things wait for the user. "Start at Login" is off until the user turns it on; at login the app starts in the menu bar without a window. The phone and the PWA are unaffected.
 
@@ -50,3 +50,19 @@ Disk: `src-tauri/target` 1.7 GB after a `cargo check` and the release build (≈
 - Hand checks on the real desktop: the menu bar title and items, a notification (permission prompt on first use), Start at Login on and off, ⌘Q from the app menu, Dock reopen.
 - Notification clicks cannot select the item (the plugin has no desktop click callback); a later version could use `UNUserNotificationCenter` directly.
 - A signed / notarized build and a bundled server are out of scope.
+
+## Review fixes (2026-10-06, branch `p8-wave4-review-fixes`)
+
+- **Login shell probe** (`probe_login_shell`): `spawn_node_side` now runs on its own thread (the
+  setup no longer blocks up to 10 s); the shell is `$SHELL -lc` (no `-i`: `.zshrc` and what it
+  starts are not run without a terminal — a PATH set only in `.zshrc` is missed, `.zprofile` /
+  `.zshenv` are read, Homebrew/Volta/nvm folders are tried, `GALACTIC_NODE` overrides; DESKTOP.md
+  §3); on the 10 s timeout the child is killed and reaped. A quit during the probe starts nothing.
+- **Navigation guard:** links handed to `/usr/bin/open` are rate-limited (one a second, five a
+  minute; the rest are logged and dropped).
+- **Supervisor:** a lock held by an import or a restore is waited out, never raced after the
+  grace (only a non-answering *server* holder is); test added (28 Vitest tests).
+- **Notification overlap** documented (DESKTOP.md §2/§5, SPEC 111): a browser tab on the Mac still
+  notifies on its own; push stays per device.
+- Verified: `cargo check` (no warnings) and a debug `cargo build` of the shell: `src-tauri/target`
+  2.2 GB in the review worktree. The release bundle (`pnpm desktop:build`) was not rebuilt.

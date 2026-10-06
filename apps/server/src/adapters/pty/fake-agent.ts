@@ -9,3 +9,9 @@ export const FAKE_PTY_AGENT = fileURLToPath(new URL('./fake-pty-agent.sh', impor
 
 /** The fixture's own prompt, as `pty.idlePattern`. */
 export const FAKE_PTY_IDLE = 'fixture> $';
+
+/**
+ * The fixture's free-form questions its supervisor may answer (`pty.clarificationPatterns`):
+ * without them every question it asks is a permission (fail closed, decision 112).
+ */
+export const FAKE_PTY_CLARIFICATIONS = ['^Which colour', '^Which one'];

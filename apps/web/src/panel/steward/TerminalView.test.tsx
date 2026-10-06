@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PTY_TERMINAL_SIZE, type TranscriptChunk } from '@galactic/protocol';
 import { ApiContext } from '../../console/hierarchy/shared.js';
 import type { Api } from '../../console/api.js';
-import { TerminalInput, TerminalView } from './TerminalView.js';
+import { TERMINAL_LINKS, TerminalInput, TerminalView, trimTerminal } from './TerminalView.js';
 
 /** xterm.js stand-in: what was written, and the options it was made with (jsdom has no canvas). */
 const xterm = vi.hoisted(() => ({
@@ -118,5 +118,50 @@ describe('TerminalInput (P8-08)', () => {
     );
     expect(screen.queryByLabelText('Type into its terminal')).toBeNull();
     expect(screen.getByText(/only from the Mac/)).toBeTruthy();
+  });
+});
+
+describe('TerminalView limits (P8-08 review)', () => {
+  it('keeps the last output up to the cap, trimming to half of it, and says so', () => {
+    const all = [1, 2, 3, 4, 5].map((n) => chunk(n, 'terminal', 'x'.repeat(30)));
+    expect(trimTerminal(all, 0, 200)).toEqual({ chunks: all, from: 0, trimmed: false });
+    const big = [...all, chunk(6, 'terminal', 'y'.repeat(100))];
+    const cut = trimTerminal(big, 0, 200);
+    expect(cut.chunks.map((c) => c.seq)).toEqual([6]);
+    expect(cut).toMatchObject({ from: 6, trimmed: true });
+    // Stable: later chunks under the cap keep the same start (no redraw each time).
+    const more = [...big, chunk(7, 'terminal', 'z')];
+    expect(trimTerminal(more, cut.from, 200)).toMatchObject({ from: 6, trimmed: true });
+  });
+
+  it('shows the trimmed notice', async () => {
+    render(
+      <TerminalView
+        chunks={[chunk(1, 'terminal', 'a'.repeat(600 * 1024)), chunk(2, 'terminal', 'b')]}
+      />,
+    );
+    const note = screen.getByText(/Earlier output trimmed/);
+    await vi.waitFor(() => expect(note.hidden).toBe(false));
+    expect(xterm.writes).toEqual(['b']);
+  });
+
+  it('opens only http(s) links, after a confirmation, without an opener', () => {
+    const open = vi.fn();
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal('open', open);
+    vi.stubGlobal('confirm', confirm);
+    const ev = {} as MouseEvent;
+    const range = { start: { x: 0, y: 0 }, end: { x: 0, y: 0 } };
+    TERMINAL_LINKS.activate(ev, 'javascript:alert(1)', range);
+    TERMINAL_LINKS.activate(ev, 'file:///etc/passwd', range);
+    TERMINAL_LINKS.activate(ev, 'not a url', range);
+    expect(confirm).not.toHaveBeenCalled();
+    TERMINAL_LINKS.activate(ev, 'https://example.com/x', range);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith('https://example.com/x', '_blank', 'noopener,noreferrer');
+    confirm.mockReturnValue(false);
+    TERMINAL_LINKS.activate(ev, 'http://example.com/', range);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(TERMINAL_LINKS.allowNonHttpProtocols).toBe(false);
   });
 });
