@@ -24,6 +24,7 @@ import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { Archival, type Timers } from './archival.js';
 import { BudgetWatcher } from './budgets.js';
 import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
+import { StorageMonitor } from './storage-health.js';
 import { StatusStore } from './status-store.js';
 import { StewardProcesses, type StewardProcessesOptions } from './steward-processes.js';
 import { stewardReports, type StewardReports } from './steward-reports.js';
@@ -122,6 +123,8 @@ export interface ComposedRuntime {
   processes?: StewardProcesses;
   /** Budget notices and the Harmonizer's chat lines about them (P8-01). */
   budgets: BudgetWatcher;
+  /** The database's write health, for the panel's storage banner (P8-09). */
+  storage: StorageMonitor;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
   startBrain(
     definition: BrainDefinition,
@@ -259,6 +262,12 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     caps: { ...(opts.caps ?? {}), defaults: defaultCaps },
     ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
     ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
+  // The database's write health for the panel (P8-09): the held queue and refused commands.
+  const storage = new StorageMonitor({
+    log,
+    state: () => runtime.storageState(),
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
 
@@ -403,6 +412,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     transcriptRetention,
     ...(processes ? { processes } : {}),
     budgets,
+    storage,
     startBrain: async (definition, placement, brainOpts = {}) =>
       adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),
     defineBrains(defs, brainOpts = {}) {
@@ -494,6 +504,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();
+      storage.dispose();
       await runtime.shutdown();
       await runtime.dispose();
       statuses.dispose();
@@ -506,6 +517,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();
+      storage.dispose();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();

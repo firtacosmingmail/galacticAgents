@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Id, Question } from '@galactic/protocol';
+import { isStorageErrorCode, type Id, type Question } from '@galactic/protocol';
 import { ApiError, type Api } from '../console/api.js';
 import type { ConnectionStatus } from './client.js';
 import { useAppStore } from '../state/store.js';
@@ -218,10 +218,13 @@ export function isOffline(status: ConnectionStatus = useAppStore.getState().stat
 /**
  * A passing failure: the server (or a proxy before it) is restarting, overloaded or timed out —
  * 5xx, 408, 429. Like a request that never got an answer, the answer stays queued and is retried
- * with the same answerId; it is not a decision about the answer.
+ * with the same answerId; it is not a decision about the answer. A storage refusal (507
+ * `storage_full`, 503 `storage_unavailable` / `storage_unwritable`, P8-09) is not passing in this
+ * sense: decision 99 refuses the action whole and never queues it — the card shows "the disk is
+ * full" and the user answers again once there is room.
  */
 const isTransient = (e: ApiError): boolean =>
-  e.status >= 500 || e.status === 408 || e.status === 429;
+  !isStorageErrorCode(e.code) && (e.status >= 500 || e.status === 408 || e.status === 429);
 
 /** A refusal from the server, as opposed to a request that never got an answer or a passing failure. */
 const isRefusal = (e: unknown): e is ApiError => e instanceof ApiError && !isTransient(e);
