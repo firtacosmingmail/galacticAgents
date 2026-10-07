@@ -1,4 +1,12 @@
-import type { Body, Deliverable, Host, WorkState } from '@galactic/protocol';
+import {
+  isActiveDeliverable,
+  isCountedDeliverable,
+  isRunLive,
+  type Body,
+  type Deliverable,
+  type Host,
+  type WorkState,
+} from '@galactic/protocol';
 import type { WorldState } from '../../state/reduce.js';
 import { bodyName } from '../picking/body-action.js';
 
@@ -68,8 +76,6 @@ export interface DeliverablesMark {
 /** `project:<id>` / `task:<id>` → the mark of that work. */
 export type MarkIndex = ReadonlyMap<string, DeliverablesMark>;
 
-const isRunning = (d: Deliverable) => d.lastRun !== undefined && d.lastRun.state !== 'ended';
-
 /**
  * One pass over the world's deliverables (cheap: once per change of the map, never per frame):
  * the marks of every project (its own rows and its tasks', as the panel's Deliverables view rolls
@@ -79,8 +85,8 @@ export function deliverableMarks(deliverables: LabelWorld['deliverables']): Mark
   const index = new Map<string, DeliverablesMark>();
   if (!deliverables) return index;
   const add = (key: string, d: Deliverable) => {
-    const counted = d.source !== 'detected';
-    const running = isRunning(d);
+    const counted = isCountedDeliverable(d);
+    const running = isRunLive(d);
     if (!counted && !running) return;
     const mark = index.get(key) ?? { count: 0, running: false };
     if (counted) mark.count++;
@@ -88,7 +94,7 @@ export function deliverableMarks(deliverables: LabelWorld['deliverables']): Mark
     index.set(key, mark);
   };
   for (const d of Object.values(deliverables)) {
-    if (d.removedAt !== undefined) continue;
+    if (!isActiveDeliverable(d)) continue;
     if (d.projectId !== undefined) add(`project:${d.projectId}`, d);
     if (d.taskId !== undefined) add(`task:${d.taskId}`, d);
   }

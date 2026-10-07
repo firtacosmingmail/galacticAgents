@@ -152,6 +152,18 @@ describe('StatusWatcher', () => {
     expect(t.watcher.state.waiting).toBe(2);
   });
 
+  it('a finished project says how many deliverables it left (decision 134)', () => {
+    const t = setup();
+    t.last().open();
+    // The screenshot an agent declared counts; the detected `dev` command does not.
+    t.last().receive(
+      snapshot(5, { deliverables: [domain.deliverable, domain.commandDeliverable] }),
+    );
+    t.last().receive(projectDone(6));
+    expect(t.notes.map((n) => n.title)).toEqual(['Project finished · 1 deliverable']);
+    expect(t.notes[0]!.body).toBe(project.name);
+  });
+
   it('leaves out the kinds the shell does not post (tasks)', () => {
     const t = setup();
     t.last().open();
