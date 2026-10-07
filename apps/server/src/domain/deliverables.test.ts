@@ -46,6 +46,24 @@ function setup() {
   const harmonizer = w.run((ctx) =>
     createAgent(ctx, { role: 'harmonizer', runtime: 'fake', caps: CAPS, bodyId: EARTH_ID }),
   ).value;
+  w.run((ctx) =>
+    createAgent(ctx, {
+      agentId: 'a-steward',
+      role: 'steward',
+      runtime: 'fake',
+      caps: CAPS,
+      taskId: task.id,
+    }),
+  );
+  w.run((ctx) =>
+    createAgent(ctx, {
+      agentId: 'a-wk',
+      role: 'waykeeper',
+      runtime: 'fake',
+      caps: CAPS,
+      projectId: project.id,
+    }),
+  );
   const steward: Actor = { type: 'agent', id: 'a-steward' };
   /** A Steward's file; `over` may also blank a field out (`undefined`) to test a refusal. */
   const file = (over: Record<string, unknown> = {}): AddDeliverableInput =>
@@ -284,6 +302,122 @@ describe('updateDeliverable, removeDeliverable, restoreDeliverable', () => {
   });
 });
 
+describe('who may write (review S6, N2)', () => {
+  it('keeps an agent to its own work: a Steward its task, a Waykeeper its project', () => {
+    const { run, project, other, steward, file, harmonizer } = setup();
+    const waykeeper: Actor = { type: 'agent', id: 'a-wk' };
+    const add = (input: AddDeliverableInput, by: Actor) =>
+      refusal(() => run((ctx) => addDeliverable(ctx, input, by)));
+    // Another task of the same project: not the Steward's.
+    const sibling = run((ctx) =>
+      createTask(ctx, { projectId: project.id, description: 'signup' }),
+    ).value;
+    expect(add(file({ taskId: sibling.id }), steward).message).toMatch(
+      /a steward reaches its own task only/,
+    );
+    // A project-level row: not the Steward's either; the Waykeeper's.
+    const projectRow = file({ taskId: undefined, projectId: project.id });
+    expect(add(projectRow, steward).code).toBe('invalid');
+    expect(run((ctx) => addDeliverable(ctx, projectRow, waykeeper)).value.projectId).toBe(
+      project.id,
+    );
+    expect(
+      run((ctx) => addDeliverable(ctx, file({ taskId: sibling.id }), waykeeper)).value,
+    ).toBeDefined();
+    // Another project: not the Waykeeper's.
+    expect(add(file({ taskId: undefined, projectId: other.id }), waykeeper).message).toMatch(
+      /its own project only/,
+    );
+    // The Harmonizer: standalone tasks only.
+    const h: Actor = { type: 'agent', id: harmonizer.id };
+    expect(add(file(), h).message).toMatch(/standalone tasks only/);
+    const chore = run((ctx) =>
+      createTask(ctx, { description: 'chore', meta: { workspace: '/w/s' } }),
+    ).value;
+    expect(run((ctx) => addDeliverable(ctx, file({ taskId: chore.id }), h)).value.taskId).toBe(
+      chore.id,
+    );
+    // An agent the log does not know, or none named.
+    expect(add(file(), { type: 'agent', id: 'a-ghost' }).message).toMatch(/no agent a-ghost/);
+    expect(add(file(), { type: 'agent' }).code).toBe('invalid');
+    // Edits, removals and restores of another task's row are refused the same way.
+    const theirs = run((ctx) =>
+      addDeliverable(ctx, file({ taskId: sibling.id, title: 'Theirs' }), waykeeper),
+    ).value;
+    expect(
+      refusal(() => run((ctx) => updateDeliverable(ctx, theirs.id, { title: 'x' }, steward))).code,
+    ).toBe('invalid');
+    expect(
+      refusal(() => run((ctx) => removeDeliverable(ctx, theirs.id, steward, 'scratch'))).code,
+    ).toBe('invalid');
+    run((ctx) => removeDeliverable(ctx, theirs.id, waykeeper, 'scratch'));
+    expect(refusal(() => run((ctx) => restoreDeliverable(ctx, theirs.id, steward))).code).toBe(
+      'invalid',
+    );
+    expect(run((ctx) => restoreDeliverable(ctx, theirs.id, waykeeper)).value.removedAt).toBe(
+      undefined,
+    );
+  });
+
+  it('never lets an agent restore a row the user removed', () => {
+    const { run, steward, file } = setup();
+    const waykeeper: Actor = { type: 'agent', id: 'a-wk' };
+    const d = run((ctx) => addDeliverable(ctx, file(), steward)).value;
+    run((ctx) => removeDeliverable(ctx, d.id, USER, 'not wanted', LOCAL));
+    for (const agent of [steward, waykeeper]) {
+      const refused = refusal(() => run((ctx) => restoreDeliverable(ctx, d.id, agent)));
+      expect(refused.code).toBe('conflict');
+      expect(refused.message).toMatch(/removed by the user/);
+    }
+    expect(run((ctx) => restoreDeliverable(ctx, d.id, USER, LOCAL)).types).toEqual([
+      'deliverable.restored',
+    ]);
+  });
+
+  it("refuses a remote user's write with remote_control unless autoApproveRemote", () => {
+    const { run, steward, file } = setup();
+    const d = run((ctx) => addDeliverable(ctx, file(), steward)).value;
+    for (const fn of [
+      () => run((ctx) => addDeliverable(ctx, file({ source: 'user' }), USER, { origin: 'remote' })),
+      () => run((ctx) => updateDeliverable(ctx, d.id, { title: 'x' }, USER, { origin: 'remote' })),
+      () => run((ctx) => removeDeliverable(ctx, d.id, USER, undefined, { origin: 'remote' })),
+      () => run((ctx) => updateDeliverable(ctx, d.id, { title: 'x' }, USER)), // no origin: remote
+    ]) {
+      expect(refusal(fn).code).toBe('remote_control');
+    }
+  });
+
+  it('refuses a run started by an agent (N3) and an unscoped row list (N5)', () => {
+    const { run, tables, project, steward } = setup();
+    const dev = run((ctx) =>
+      addDeliverable(
+        ctx,
+        {
+          projectId: project.id,
+          kind: 'command',
+          title: 'dev',
+          source: 'detected',
+          detectedKey: 'package.json#dev',
+          command: { line: 'pnpm run dev', cwd: '/w/app' },
+        },
+        SYSTEM,
+      ),
+    ).value;
+    const refused = refusal(() =>
+      run((ctx) =>
+        recordRunStarted(
+          ctx,
+          { deliverableId: dev.id, line: 'pnpm run dev', cwd: '/w/app' },
+          steward,
+        ),
+      ),
+    );
+    expect(refused.message).toMatch(/an agent cannot start a run/);
+    expect(tables.runs.all()).toEqual([]);
+    expect(() => tables.deliverables.of({})).toThrow(/projectId or a taskId/);
+  });
+});
+
 describe('runs', () => {
   it('records a run, its ports and its end; one live run per deliverable; the history projected', () => {
     const { run, tables, project, file, steward } = setup();
@@ -363,10 +497,16 @@ describe('runs', () => {
 
 describe('moves carry deliverables (decision 124)', () => {
   it('moveTask and transferTask carry every row of the task, removed ones too, in the same command', () => {
-    const { run, tables, project, other, steward, file, harmonizer } = setup();
+    const { run, tables, project, other, file, harmonizer } = setup();
     const standalone = run((ctx) =>
       createTask(ctx, { description: 'chore', meta: { workspace: '/w/s' } }),
     ).value;
+    const steward: Actor = {
+      type: 'agent',
+      id: run((ctx) =>
+        createAgent(ctx, { role: 'steward', runtime: 'fake', caps: CAPS, taskId: standalone.id }),
+      ).value.id,
+    };
     const a = run((ctx) => addDeliverable(ctx, file({ taskId: standalone.id }), steward)).value;
     expect(a).not.toHaveProperty('projectId');
     const b = run((ctx) =>

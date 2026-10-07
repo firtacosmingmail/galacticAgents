@@ -401,7 +401,10 @@ export interface Tables {
   questions: Table<Question>;
   /** Deliverables (P9-01; TECHNOLOGY §9.1), removed ones included. */
   deliverables: Table<Deliverable> & {
-    /** The rows of a project (its own and its tasks') or of a task, in `rowid` order. */
+    /**
+     * The rows of a project (its own and its tasks') or of a task, in `rowid` order. Throws
+     * without either id (every row is `all()`).
+     */
     of(target: { projectId?: Id; taskId?: Id }): Deliverable[];
     /** The project's row for a detected key (`package.json#dev`), removed or not. */
     detected(projectId: Id, detectedKey: string): Deliverable | undefined;
@@ -529,7 +532,10 @@ export function tables(db: Database): Tables {
         if (target.taskId !== undefined) {
           return (deliverablesOfTask().all(target.taskId) as Row[]).map(readDeliverable);
         }
-        if (target.projectId === undefined) return deliverablesTable.all();
+        // Never "every row" by accident (an undefined id): `all()` says so.
+        if (target.projectId === undefined) {
+          throw new Error('deliverables.of needs a projectId or a taskId');
+        }
         return (deliverablesOfProject().all(target.projectId) as Row[]).map(readDeliverable);
       },
       detected: (projectId: Id, detectedKey: string) => {
