@@ -198,6 +198,11 @@ class Session {
   }
   lastCost: Cost | undefined;
   lastResult: string | undefined;
+  /**
+   * The open turn put text in the transcript (the model's words, a local command's output):
+   * a successful result's text is then not repeated (P8-13 review S4).
+   */
+  turnSpoke = false;
   /** The session's slash commands as the CLI last reported them (P8-13); unknown until then. */
   commands: SlashCommand[] | undefined;
   /** A `supportedCommands()` call in flight (one at a time). */
@@ -227,6 +232,7 @@ class Session {
 
   closeTurn(): void {
     this.turnOpen = false;
+    this.turnSpoke = false;
     this.verdicts.clear();
     this.toolCalls.clear();
     for (const w of this.turnWaiters.splice(0)) w();
@@ -564,6 +570,13 @@ export class ClaudeSdkAdapter implements AgentAdapter {
       }
       case 'user': {
         const m = message as Extract<SdkMessage, { type: 'user' }>;
+        // A local command's answer (`/context`, `/cost` …: the CLI runs it without the model)
+        // comes back as a user message wrapped in `<local-command-stdout>` (P8-13 review S4).
+        const local = localCommandOutput(m.message.content);
+        if (local) {
+          this.emit(session, { type: 'agent.output', agentId, kind: 'text', text: local });
+          return;
+        }
         if (m.isSynthetic || typeof m.message.content === 'string') return;
         for (const block of m.message.content) {
           if (block.type !== 'tool_result') continue;
@@ -594,6 +607,11 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         const failed = m.subtype !== 'success' || m.is_error === true;
         if (!failed) {
           if (m.result !== undefined) session.lastResult = m.result;
+          // A turn that said nothing else (a slash command the CLI answered itself): its result
+          // text is the answer the user waits for (P8-13 review S4).
+          const answer = m.result !== undefined ? stripLocalCommandTags(m.result) : '';
+          if (answer && !session.turnSpoke)
+            this.emit(session, { type: 'agent.output', agentId, kind: 'text', text: answer });
         } else if (!session.interrupting && !session.stopping) {
           const what = m.subtype === 'success' ? 'an error' : m.subtype;
           const detail = m.errors?.length ? m.errors.join('; ') : (m.result ?? '');
@@ -979,6 +997,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
   private emit(session: Session, event: AgentEvent): void {
     // One terminal event per session and nothing after it; a replaced session is silent.
     if (session.terminal || !this.current(session)) return;
+    if (event.type === 'agent.output' && event.kind === 'text') session.turnSpoke = true;
     this.events.push(event);
   }
 
@@ -1101,6 +1120,32 @@ function costOf(m: { total_cost_usd?: number; usage?: SdkUsage }): Cost | undefi
     ...(input !== undefined ? { inputTokens: input } : {}),
     ...(u?.output_tokens !== undefined ? { outputTokens: u.output_tokens } : {}),
   };
+}
+
+const LOCAL_COMMAND = /<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/g;
+const LOCAL_CAVEAT = /<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g;
+
+/**
+ * The text of a local command's output in a user message (P8-13 review S4): what the CLI wrapped
+ * in `<local-command-stdout>` / `<local-command-stderr>`, tags removed, or `''` when there is
+ * none. The shape is what the SDK's bundled CLI (0.3.285) names; a real run must confirm where
+ * `/context` and `/cost` put it (a string content or a text block).
+ */
+function localCommandOutput(content: unknown): string {
+  const text = toolResultText(content);
+  if (!text.includes('<local-command-std')) return '';
+  return [...text.matchAll(LOCAL_COMMAND)]
+    .map((match) => match[2]!.trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** `text` without the CLI's local-command wrappers (a result may carry them), trimmed. */
+function stripLocalCommandTags(text: string): string {
+  return text
+    .replace(LOCAL_CAVEAT, '')
+    .replace(LOCAL_COMMAND, (_m, _s, inner: string) => inner)
+    .trim();
 }
 
 function toolResultText(content: unknown): string {

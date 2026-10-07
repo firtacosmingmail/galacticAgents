@@ -39,7 +39,15 @@ export type FakeAction =
   /** The message iterator throws (the CLI keeps running). */
   | { throwStream: string }
   /** A `system/commands_changed` push with the session's new command list (P8-13). */
-  | { commandsChanged: SdkSlashCommand[] };
+  | { commandsChanged: SdkSlashCommand[] }
+  /**
+   * A local command's output (P8-13 review S4): what the bundled CLI names for `/context`,
+   * `/cost` — a replayed user message whose string content is wrapped in
+   * `<local-command-stdout>` (or `-stderr`). Not yet confirmed against a real run.
+   */
+  | { localCommand: string; stream?: 'stdout' | 'stderr' }
+  /** The turn's `result` text, instead of its last `text` action's. */
+  | { resultText: string };
 
 export interface FakeQuestion {
   question: string;
@@ -263,6 +271,16 @@ export class FakeSdk implements SdkSurface {
             commands: action.commandsChanged,
             session_id: sessionId,
           });
+        } else if ('localCommand' in action) {
+          const tag = `local-command-${action.stream ?? 'stdout'}`;
+          out.push({
+            type: 'user',
+            message: { role: 'user', content: `<${tag}>${action.localCommand}</${tag}>` },
+            parent_tool_use_id: null,
+            session_id: sessionId,
+          });
+        } else if ('resultText' in action) {
+          // Read when the result is built.
         } else if ('throwStream' in action) {
           out.fail(new Error(action.throwStream));
           return;
@@ -370,9 +388,10 @@ export class FakeSdk implements SdkSurface {
           result: isError,
         });
       } else {
-        const lastText = [...actions]
-          .reverse()
-          .find((a): a is { text: string } => 'text' in a)?.text;
+        const given = actions.find((a): a is { resultText: string } => 'resultText' in a);
+        const lastText =
+          given?.resultText ??
+          [...actions].reverse().find((a): a is { text: string } => 'text' in a)?.text;
         out.push({
           type: 'result',
           subtype: 'success',
