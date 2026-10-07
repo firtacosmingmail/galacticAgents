@@ -35,9 +35,9 @@ import {
   FALLBACK_DELIVERABLES_DIR,
   FOLDER_META_KEY,
   recordedFolder,
-  standaloneWorkspace,
 } from './folder.js';
-import { checkPath, deliverableRoots } from './paths.js';
+import { checkPath } from './paths.js';
+import { rootsOf, standaloneWorkspace } from './roots.js';
 import { checkFreeSpace, DEFAULT_RESERVE_BYTES, TREE_MAX_ENTRIES, treeSize } from './space.js';
 
 /**
@@ -225,7 +225,7 @@ export class DeliverableCopies implements DeliverableCopier {
       return this.projectPlace(project, task);
     }
     if (!task) throw new DomainError('invalid', 'a copy belongs to a project or a task');
-    const workspace = standaloneWorkspace(task);
+    const workspace = standaloneWorkspace(this.tables, task.id);
     if (!workspace) {
       throw new DomainError('invalid', `standalone task ${task.id} has no workspace to copy into`);
     }
@@ -572,18 +572,13 @@ export class DeliverableCopies implements DeliverableCopier {
   ): Promise<{ lost?: string }> {
     const rel = relative(root, location.path);
     if (await this.carried(rel, root, repoRoot, info.mergedCommit)) {
-      const roots = deliverableRoots(
-        {
-          workspace: project.workspace,
-          ...(workspaceMeta(project)?.repoRoot ? { repoRoot } : {}),
-          ...(recordedFolder(project.meta)
-            ? { deliverablesFolder: recordedFolder(project.meta)! }
-            : {}),
-        },
+      const roots = rootsOf(
+        this.tables,
+        { projectId: project.id },
         { dataDir: this.dataDir, home: this.home },
       );
-      const check = checkPath(join(repoRoot, rel), roots);
-      if (check.ok) {
+      const check = roots ? checkPath(join(repoRoot, rel), roots) : undefined;
+      if (check?.ok) {
         await this.update(d, { location: { storage: 'in_place', path: check.path } });
         return {};
       }

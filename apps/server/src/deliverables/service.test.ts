@@ -2,6 +2,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -24,7 +25,7 @@ import { createAgent } from '../domain/agents.js';
 import { DomainError } from '../domain/errors.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { worktreeRoot } from '../workspace/workspaces.js';
-import type { DeliverableCopies, StrayCopyRequest } from './copy-interface.js';
+import type { CopyTarget, DeliverableCopier } from './copies.js';
 import { DeliverableService, type DeclareInput, type DeclareTarget } from './service.js';
 
 /**
@@ -40,7 +41,7 @@ let tmp: string;
 let composed: ComposedRuntime;
 let service: DeliverableService;
 let limits: DeclarationLimits;
-let copied: StrayCopyRequest[];
+let copied: { source: string; target: CopyTarget }[];
 
 let project: Project;
 let other: Project;
@@ -437,10 +438,15 @@ describe('DeliverableService.declare (P9-04)', () => {
     await expect(without.declare(steward.id, {}, input)).rejects.toThrow(
       /temporary folder.*not available/,
     );
-    const copies: DeliverableCopies = {
-      keep: async (req) => {
-        copied.push(req);
-        return { path: join(project.workspace, 'deliverables', 'chart.png'), bytes: 2 };
+    const copies: DeliverableCopier = {
+      copyIn: async (source, target) => {
+        copied.push({ source, target });
+        const path = join(project.workspace, 'deliverables', 'chart.png');
+        return {
+          location: { storage: 'copy', path, originalPath: source },
+          bytes: 2,
+          folder: join(project.workspace, 'deliverables'),
+        };
       },
     };
     const withCopies = new DeliverableService({
@@ -452,9 +458,7 @@ describe('DeliverableService.declare (P9-04)', () => {
       copies,
     });
     const { deliverable } = await withCopies.declare(steward.id, {}, input);
-    expect(copied).toEqual([
-      { source: stray, type: 'file', projectId: project.id, taskId: task.id },
-    ]);
+    expect(copied).toEqual([{ source: stray, target: { projectId: project.id, taskId: task.id } }]);
     expect(deliverable.location).toEqual({
       storage: 'copy',
       path: join(project.workspace, 'deliverables', 'chart.png'),
@@ -471,7 +475,7 @@ describe('DeliverableService.declare (P9-04)', () => {
       dataDir: join(tmp, 'data'),
       tmpDirs: [join(tmp, 'strays')],
       copies: {
-        keep: () =>
+        copyIn: () =>
           Promise.reject(new DomainError('invalid', 'not enough space: needs 2 B, 1 B free')),
       },
     });
@@ -480,6 +484,54 @@ describe('DeliverableService.declare (P9-04)', () => {
       full.declare(steward.id, {}, { kind: 'image', title: 'O', path: other }),
     ).rejects.toThrow(/not enough space/);
     expect(composed.log.tables.deliverables.all()).toHaveLength(1);
+  });
+
+  it('the composed service copies a stray into <workspace>/deliverables/<task-slug>/ (P9-06)', async () => {
+    const stray = file(join(tmp, 'strays', 'chart.png'), 'png bytes');
+    const { deliverable } = await service.declare(
+      steward.id,
+      {},
+      {
+        kind: 'image',
+        title: 'Chart',
+        path: stray,
+      },
+    );
+    const folder = join(project.workspace, 'deliverables');
+    const copy = join(folder, 'build-it', 'chart.png');
+    expect(deliverable.location).toEqual({ storage: 'copy', path: copy, originalPath: stray });
+    expect(deliverable.meta).toMatchObject({ copy: { bytes: 9 } });
+    expect(deliverable.source).toBe('agent');
+    expect(readFileSync(copy, 'utf8')).toBe('png bytes');
+    expect(composed.log.tables.projects.get(project.id)!.meta).toMatchObject({
+      deliverablesFolder: folder,
+    });
+    // The Waykeeper's stray for the project goes to the folder's top.
+    const plan = file(join(tmp, 'strays', 'plan.md'));
+    const top = await service.declare(
+      waykeeper.id,
+      { projectId: project.id },
+      { kind: 'file', title: 'Plan', path: plan },
+    );
+    expect(top.deliverable.location).toMatchObject({
+      storage: 'copy',
+      path: join(folder, 'plan.md'),
+    });
+    // The Harmonizer's stray for a scratch task goes to that task's own folder.
+    const notes = file(join(tmp, 'strays', 'notes.txt'));
+    const scratch = await service.declare(
+      harmonizer.id,
+      { taskId: standalone.id },
+      { kind: 'file', title: 'Notes', path: notes },
+    );
+    const scratchFolder = join(tmp, 'projects', 'scratch', 'tidy', 'deliverables');
+    expect(scratch.deliverable.location).toMatchObject({
+      storage: 'copy',
+      path: join(scratchFolder, 'notes.txt'),
+    });
+    expect(composed.log.tables.tasks.get(standalone.id)!.meta).toMatchObject({
+      deliverablesFolder: scratchFolder,
+    });
   });
 
   it('a supervisor removes an agent’s scratch with a reason, never the user’s row', async () => {

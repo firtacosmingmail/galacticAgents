@@ -8,7 +8,6 @@ import {
   type DeclarationLimits,
   type Id,
 } from '@galactic/protocol';
-import type { DeliverableCopies as StrayCopies } from '../deliverables/copy-interface.js';
 import { DeliverableService } from '../deliverables/service.js';
 import { stewardDeliverableTools } from '../brains/deliverable-tools.js';
 import type { Database } from '../db/database.js';
@@ -446,14 +445,6 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   // The brains this composition drives (P2-16): started here or resumed by recovery.
   const deliverablesDataDir = opts.deliverables?.dataDir ?? opts.workspaces?.dataDir;
   const home = opts.deliverables?.home ?? opts.workspaces?.home;
-  const strayCopies: StrayCopies | undefined = deliverableCopies
-    ? {
-        keep: async ({ source, projectId, taskId }) => {
-          const copy = await deliverableCopies.copyIn(source, { projectId, taskId });
-          return { path: copy.location.path, bytes: copy.bytes };
-        },
-      }
-    : undefined;
   const deliverables: DeliverableService | undefined = deliverablesDataDir
     ? new DeliverableService({
         commands,
@@ -461,7 +452,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
         dataDir: deliverablesDataDir,
         ...(home ? { home } : {}),
         ...(opts.deliverables?.limits ? { limits: opts.deliverables.limits } : {}),
-        ...(strayCopies ? { copies: strayCopies } : {}),
+        // A declared stray is copied into the project's deliverables folder (P9-06, decision 122).
+        ...(deliverableCopies ? { copies: deliverableCopies } : {}),
         ...(opts.deliverables?.tmpDirs ? { tmpDirs: opts.deliverables.tmpDirs } : {}),
       })
     : undefined;

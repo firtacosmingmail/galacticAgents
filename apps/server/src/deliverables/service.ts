@@ -19,11 +19,11 @@ import type { Tables } from '../db/tables.js';
 import { DomainError } from '../domain/errors.js';
 import { containsSecret, redactSecrets } from '../runtime/redact.js';
 export { TOOL_RUNTIMES, stewardDeclares } from '../runtime/tool-runtimes.js';
-import type { DeliverableCopies } from './copy-interface.js';
+import type { DeliverableCopier } from './copies.js';
 import { IMAGE_TYPES, extensionOf, isAppName } from './facts.js';
+import { rootsOf, standaloneWorkspace } from './roots.js';
 import {
   checkPath,
-  deliverableRoots,
   nodePathFs,
   type DeliverableRoots,
   type PathAccepted,
@@ -95,8 +95,11 @@ export interface DeliverableServiceOptions {
   home?: string;
   /** The declaration limits now (the `deliverables.declarations` setting); default decision 120's. */
   limits?: () => DeclarationLimits;
-  /** P9-06's copies: without them, a stray is refused. */
-  copies?: DeliverableCopies;
+  /**
+   * The deliverables folder's copies (P9-06, `DeliverableCopies`, composed with the workspaces):
+   * an accepted stray is copied in through `copyIn`. Without them a stray is refused.
+   */
+  copies?: DeliverableCopier;
   fs?: PathFs;
   /** The temporary folders strays may come from (tests); default `os.tmpdir()` and `/private/tmp`. */
   tmpDirs?: string[];
@@ -156,14 +159,13 @@ export class DeliverableService {
             'deliverables folder is not available on this server yet: save it inside your working folder and declare it there',
         );
       }
-      const kept = await this.opts.copies.keep({
-        source: shape.stray.path,
-        type: shape.stray.type,
-        ...(owner.projectId ? { projectId: owner.projectId } : {}),
-        ...(owner.taskId ? { taskId: owner.taskId } : {}),
+      // Into the task's subfolder (a task's stray) or the folder's top (a project's).
+      const copy = await this.opts.copies.copyIn(shape.stray.path, {
+        projectId: owner.projectId,
+        taskId: owner.taskId,
       });
-      location = { storage: 'copy', path: kept.path, originalPath: shape.stray.path };
-      meta = { ...meta, copy: { bytes: kept.bytes } };
+      location = copy.location;
+      meta = { ...meta, copy: { bytes: copy.bytes } };
     }
     const commands = opts.commands ?? this.opts.commands;
     const { value } = await commands.addDeliverable(
@@ -460,44 +462,26 @@ export class DeliverableService {
   private defaultFolder(owner: { task?: Task; project?: Project }): string {
     if (owner.task?.worktreePath) return owner.task.worktreePath;
     if (owner.project) return owner.project.workspace;
-    const w = owner.task?.meta?.['workspace'];
-    if (typeof w === 'string' && w !== '') return w;
+    const w = owner.task ? standaloneWorkspace(this.opts.tables, owner.task.id) : undefined;
+    if (w) return w;
     throw new DomainError('invalid', 'this task has no folder yet: nothing can be declared in it');
   }
 
-  private roots(owner: { taskId?: Id; task?: Task; project?: Project }): DeliverableRoots {
-    const places = {
-      dataDir: this.opts.dataDir,
-      ...(this.opts.home ? { home: this.opts.home } : {}),
-    };
-    if (owner.project) {
-      const repoRoot = (owner.project.meta?.['workspace'] as { repoRoot?: unknown } | undefined)
-        ?.repoRoot;
-      const folder = owner.project.meta?.['deliverablesFolder'];
-      return deliverableRoots(
-        {
-          workspace: owner.project.workspace,
-          ...(typeof repoRoot === 'string' ? { repoRoot } : {}),
-          ...(owner.taskId ? { taskId: owner.taskId } : {}),
-          ...(typeof folder === 'string' ? { deliverablesFolder: folder } : {}),
-        },
-        places,
-        this.fs,
-      );
-    }
-    const workspace = owner.task?.meta?.['workspace'];
-    if (typeof workspace !== 'string' || workspace === '') {
+  /** The target's roots (the shared computation, `roots.ts`). */
+  private roots(owner: { projectId?: Id; taskId?: Id }): DeliverableRoots {
+    const roots = rootsOf(
+      this.opts.tables,
+      { projectId: owner.projectId, taskId: owner.taskId },
+      { dataDir: this.opts.dataDir, ...(this.opts.home ? { home: this.opts.home } : {}) },
+      this.fs,
+    );
+    if (!roots) {
       throw new DomainError(
         'invalid',
         'this task has no folder yet: nothing can be declared in it',
       );
     }
-    const folder = owner.task?.meta?.['deliverablesFolder'];
-    return deliverableRoots(
-      { workspace, ...(typeof folder === 'string' ? { deliverablesFolder: folder } : {}) },
-      places,
-      this.fs,
-    );
+    return roots;
   }
 
   private checkAgentPath(

@@ -27,12 +27,6 @@ export function recordedFolder(meta: Meta | undefined): string | undefined {
   return typeof value === 'string' && isAbsolute(value) ? value : undefined;
 }
 
-/** A standalone task's workspace (`Task.meta.workspace`, chosen on its card). */
-export function standaloneWorkspace(task: Pick<Task, 'meta'>): string | undefined {
-  const value = task.meta?.['workspace'];
-  return typeof value === 'string' && isAbsolute(value) ? value : undefined;
-}
-
 export interface FolderLookup {
   project(id: Id): Project | undefined;
   task(id: Id): Task | undefined;

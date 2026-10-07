@@ -22,6 +22,7 @@ import {
 import type { ServerConfig } from '../config/config.js';
 import { isAppName, fileFacts, TEXT_CONTENT_TYPE } from '../deliverables/facts.js';
 import { confirmationCovers, OpenerError, type Opener } from '../deliverables/opener.js';
+import { rootsOf } from '../deliverables/roots.js';
 import {
   checkPath,
   identityOf,
@@ -38,7 +39,6 @@ import {
   fileHeaders,
   openForServing,
   refusalStatus,
-  rootsOf,
   streamFile,
   ticketMatches,
   type OpenedFile,

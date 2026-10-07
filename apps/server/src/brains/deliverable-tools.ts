@@ -130,7 +130,8 @@ export function stewardDeliverableTools(
         'Declares something you produced that the user will want to open from the app: an app, ' +
         'a report, a screenshot, a generated folder, a command to run (a dev server), an ' +
         'address. Not every file you changed: only what the user would look for. The path ' +
-        'must be inside your working folder (secret files such as .env or keys are refused). ' +
+        'must be inside your working folder (secret files such as .env or keys are refused); a ' +
+        "file you made in a temporary folder is copied into the project's deliverables folder. " +
         'Declaring the same thing again returns the existing entry. Limited per task and per hour.',
       inputSchema: {
         type: 'object',

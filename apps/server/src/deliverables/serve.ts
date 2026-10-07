@@ -3,8 +3,6 @@ import { createReadStream } from 'node:fs';
 import { basename } from 'node:path';
 import type { Readable } from 'node:stream';
 import type { Deliverable, DeliverableFacts, Id } from '@galactic/protocol';
-import type { Tables } from '../db/tables.js';
-import { workspaceMeta } from '../workspace/workspaces.js';
 import {
   OCTET_STREAM,
   PREVIEW_IMAGE_BYTES,
@@ -14,7 +12,6 @@ import {
   type FileFacts,
 } from './facts.js';
 import {
-  deliverableRoots,
   identityOf,
   nodePathFs,
   openChecked,
@@ -26,7 +23,6 @@ import {
   type PathFs,
   type PathRefusal,
   type PathRefusalCode,
-  type RefusedPlaces,
 } from './paths.js';
 
 /**
@@ -147,68 +143,6 @@ export class DownloadTickets {
 
 /** A ticket as minted: 32 bytes, base64url without padding. */
 export const TICKET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-
-/**
- * The folder a standalone task works in (decision 34): `Task.meta.workspace` when recorded, else
- * the newest of its Stewards' `meta.workspace` (or `meta.cwd`), as the Harmonizer spawned it.
- */
-export function standaloneWorkspace(tables: Tables, taskId: Id): string | undefined {
-  const task = tables.tasks.get(taskId);
-  const own = (task?.meta as { workspace?: unknown } | undefined)?.workspace;
-  if (typeof own === 'string' && own) return own;
-  const stewards = tables.agents
-    .all()
-    .filter((a) => a.role === 'steward' && a.taskId === taskId)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  for (const agent of stewards) {
-    const meta = (agent.meta ?? {}) as { workspace?: unknown; cwd?: unknown };
-    if (typeof meta.workspace === 'string' && meta.workspace) return meta.workspace;
-    if (typeof meta.cwd === 'string' && meta.cwd) return meta.cwd;
-  }
-  return undefined;
-}
-
-function folderOf(meta: unknown): string | undefined {
-  const folder = (meta as { deliverablesFolder?: unknown } | undefined)?.deliverablesFolder;
-  return typeof folder === 'string' && folder ? folder : undefined;
-}
-
-/** Where a project or task keeps the deliverables it may point at, before canonicalisation. */
-export function rootsInputOf(
-  tables: Tables,
-  target: { projectId?: Id | undefined; taskId?: Id | undefined },
-): { workspace: string; repoRoot?: string; taskId?: Id; deliverablesFolder?: string } | undefined {
-  if (target.projectId) {
-    const project = tables.projects.get(target.projectId);
-    if (!project) return undefined;
-    const repoRoot = workspaceMeta(project)?.repoRoot;
-    const folder = folderOf(project.meta);
-    return {
-      workspace: project.workspace,
-      ...(repoRoot ? { repoRoot } : {}),
-      ...(target.taskId ? { taskId: target.taskId } : {}),
-      ...(folder ? { deliverablesFolder: folder } : {}),
-    };
-  }
-  if (target.taskId) {
-    const workspace = standaloneWorkspace(tables, target.taskId);
-    if (!workspace) return undefined;
-    const folder = folderOf(tables.tasks.get(target.taskId)?.meta);
-    return { workspace, ...(folder ? { deliverablesFolder: folder } : {}) };
-  }
-  return undefined;
-}
-
-/** The canonical roots a deliverable (or a new one for `target`) may point into. */
-export function rootsOf(
-  tables: Tables,
-  target: { projectId?: Id | undefined; taskId?: Id | undefined },
-  places: RefusedPlaces,
-  fs: PathFs = nodePathFs,
-): DeliverableRoots | undefined {
-  const input = rootsInputOf(tables, target);
-  return input ? deliverableRoots(input, places, fs) : undefined;
-}
 
 /**
  * The re-check's rules for a stored row: an agent's row keeps the agents' rules (secret names,
