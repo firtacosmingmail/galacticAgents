@@ -21,7 +21,7 @@ import {
 } from '@galactic/protocol';
 import type { ServerConfig } from '../config/config.js';
 import { isAppName, fileFacts, TEXT_CONTENT_TYPE } from '../deliverables/facts.js';
-import type { DeliverableCopier } from '../deliverables/copies.js';
+import { copyMeta, type DeliverableCopier } from '../deliverables/copies.js';
 import { confirmationCovers, OpenerError, type Opener } from '../deliverables/opener.js';
 import { rootsOf } from '../deliverables/roots.js';
 import {
@@ -48,7 +48,7 @@ import type { Commands } from '../domain/commands.js';
 import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
-import { bearerGuard, originOf, requireLocal } from './security.js';
+import { bearerGuard, originOf, requireLocal, tailscaleIdentityOf } from './security.js';
 import { sendStorageRefusal } from './storage-refusal.js';
 
 /**
@@ -62,6 +62,7 @@ import { sendStorageRefusal } from './storage-refusal.js';
  * | `GET /api/deliverables/:id/content` — the viewer's bytes (preview limits, `X-Truncated`) | yes |
  * | `POST /api/deliverables/:id/download` → `{url: '/files/<ticket>'}` | yes |
  * | `GET /files/:ticket` — outside the bearer scope; single use, 60 s, bound to the file | yes |
+ * | `POST /api/deliverables` with a path outside the project (copied in) | never (403 `remote_control`) |
  * | `POST /api/deliverables`, `PATCH /api/deliverables/:id`, `POST …/:id/remove`, `…/restore`, `POST /api/projects/:id/deliverables/rescan` | only with `autoApproveRemote` (403 `remote_control`) |
  * | `POST /api/deliverables/:id/open {action, fingerprint?}` | never (403 `remote_control`) |
  *
@@ -304,7 +305,13 @@ export function registerDeliverableRoutes(
       const file = openRow(row, reply);
       if (!file) return reply;
       closeQuietly(file.opened.fd);
-      const ticket = tickets.mint(row.id, identityOf(file.opened.stat));
+      // Counted per client (at most `MAX_TICKETS_PER_CLIENT` live): the local panel, or the
+      // remote client by its Tailscale identity when it has one.
+      const client =
+        originOf(req) === 'local'
+          ? 'local'
+          : `remote:${tailscaleIdentityOf(req, config) ?? 'token'}`;
+      const ticket = tickets.mint(row.id, identityOf(file.opened.stat), client);
       return { url: `/files/${ticket}` } satisfies DownloadTicketResponse;
     });
 
@@ -326,15 +333,30 @@ export function registerDeliverableRoutes(
         opts.copies !== undefined,
       );
       if ('error' in hand) return send(reply, hand.status, hand.error, hand.message);
+      if (hand.copyFrom) {
+        // A file from outside the project is copied in and then served to every client, so only
+        // the Mac's own panel may pick one, whatever `autoApproveRemote` says (decision 131):
+        // a remote client could otherwise copy ~/.ssh in and download it.
+        const refused = requireLocal(req, {
+          always: true,
+          what: 'Adding a file from outside the project',
+        });
+        if (refused) return reply.code(403).send(refused);
+      }
       try {
         let input = hand.input;
         if (hand.copyFrom && opts.copies) {
           // From outside the project: copied in first (decision 122), then recorded as the copy.
-          const copy = await opts.copies.copyIn(hand.copyFrom, { projectId, taskId: body.taskId });
+          // A copy left behind when the command below refuses stays (never deleted, §9.4).
+          const copy = await opts.copies.copyIn(
+            hand.copyFrom,
+            { projectId, taskId: body.taskId },
+            { outside: true },
+          );
           input = {
             ...input,
             location: copy.location,
-            meta: { ...input.meta, copy: { bytes: copy.bytes } },
+            meta: { ...input.meta, ...copyMeta(copy) },
           };
         }
         const { value } = await commands.addDeliverable(input, USER, { origin: originOf(req) });
