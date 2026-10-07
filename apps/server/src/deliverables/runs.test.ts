@@ -5,6 +5,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -204,6 +205,16 @@ const outputOf = (s: Setup, runId: string) =>
     .chunks.map((c) => c.chunk)
     .join('');
 
+/** What the Run dialog sends back: the preview's version and confirmation (for `line`). */
+function ok(s: Setup, id: string, line?: string) {
+  const preview = s.composed.runs!.preview(id, line);
+  return {
+    version: preview.version,
+    confirmation: preview.confirmation!,
+    ...(line !== undefined ? { line } : {}),
+  };
+}
+
 async function refusal(p: Promise<unknown>): Promise<RunError> {
   try {
     await p;
@@ -218,7 +229,7 @@ describe('a run of the fixture server (P9-08)', () => {
   it('streams its redacted output, shows its port, and Stop ends it with everything it started', async () => {
     const s = await setup();
     const d = await s.command(`${NODE} server.mjs`);
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     expect(run).toMatchObject({
       deliverableId: d.id,
       state: 'running',
@@ -267,7 +278,7 @@ describe('a run of the fixture server (P9-08)', () => {
     });
     started.add(steward.pid);
     const d = await s.command(`${NODE} server.mjs`);
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     const pids = await s.pidsOf();
     const table = osProcessTable();
     const procs = (await table.list())!;
@@ -296,15 +307,14 @@ describe('starting a run (decision 129)', () => {
     const d = await s.command('sleep 30');
     const other = await s.command('sleep 30', { title: 'Other' });
     const runs = s.composed.runs!;
-    expect(
-      (await refusal(runs.start(d.id, { version: d.version }, { type: 'agent', id: 'a-1' }))).code,
-    ).toBe('invalid');
-    const run = await runs.start(d.id, { version: d.version }, USER);
-    started.add(run.meta!['pid'] as number);
-    expect((await refusal(runs.start(d.id, { version: d.version }, USER))).code).toBe('running');
-    expect((await refusal(runs.start(other.id, { version: other.version }, USER))).code).toBe(
-      'run_cap',
+    const before = ok(s, d.id);
+    expect((await refusal(runs.start(d.id, ok(s, d.id), { type: 'agent', id: 'a-1' }))).code).toBe(
+      'invalid',
     );
+    const run = await runs.start(d.id, ok(s, d.id), USER);
+    started.add(run.meta!['pid'] as number);
+    expect((await refusal(runs.start(d.id, ok(s, d.id), USER))).code).toBe('running');
+    expect((await refusal(runs.start(other.id, ok(s, other.id), USER))).code).toBe('run_cap');
     expect(runs.preview(other.id).refusal?.code).toBe('run_cap');
     await runs.stop(run.id, USER);
 
@@ -315,7 +325,7 @@ describe('starting a run (decision 129)', () => {
       USER,
       LOCAL,
     );
-    const stale = await refusal(runs.start(d.id, { version: d.version }, USER));
+    const stale = await refusal(runs.start(d.id, before, USER));
     expect(stale.code).toBe('stale');
     expect(stale.status).toBe(409);
     expect(stale.deliverable?.command?.line).toBe('sleep 31');
@@ -324,11 +334,7 @@ describe('starting a run (decision 129)', () => {
   it('runs the line the user edited for that run, keeping the stored one', async () => {
     const s = await setup();
     const d = await s.command('echo stored');
-    const run = await s.composed.runs!.start(
-      d.id,
-      { version: d.version, line: 'echo edited-for-this-run' },
-      USER,
-    );
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id, 'echo edited-for-this-run'), USER);
     expect(run).toMatchObject({ line: 'echo edited-for-this-run', meta: { edited: true } });
     await eventually(() => runOf(s, run.id).state === 'ended');
     expect(runOf(s, run.id)).toMatchObject({ outcome: 'exited', exitCode: 0 });
@@ -351,7 +357,7 @@ describe('starting a run (decision 129)', () => {
     expect(preview.envKeys).not.toContain('GALACTIC_TOKEN');
     expect(preview.envKeys).not.toContain('ANTHROPIC_API_KEY');
     expect(preview.envKeys).not.toContain('GALACTIC_AGENT_ID');
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     await eventually(() => runOf(s, run.id).state === 'ended');
     const env = outputOf(s, run.id);
     expect(env).toContain(`GALACTIC_RUN_ID=${run.id}`);
@@ -383,7 +389,7 @@ describe('starting a run (decision 129)', () => {
       )
     ).value;
     expect(s.composed.runs!.preview(d.id).refusal).toMatchObject({ code: 'after_merge' });
-    const r = await refusal(s.composed.runs!.start(d.id, { version: d.version }, USER));
+    const r = await refusal(s.composed.runs!.start(d.id, ok(s, d.id), USER));
     expect(r.code).toBe('after_merge');
   });
 
@@ -396,7 +402,7 @@ describe('starting a run (decision 129)', () => {
       expect.arrayContaining(['deletes or overwrites files', 'uses the network']),
     );
     expect(preview.refusal).toBeUndefined();
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     await eventually(() => runOf(s, run.id).state === 'ended');
     expect(existsSync(join(s.ws, 'build'))).toBe(false);
   }, 20_000);
@@ -410,7 +416,7 @@ describe('starting a run (decision 129)', () => {
     const first = s.composed.runs!.preview(d.id);
     expect(first).toMatchObject({ body: 'vite' });
     expect(first.bodyChanged).toBeUndefined(); // never run
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     expect(run.meta).toMatchObject({ body: 'vite' });
     await eventually(() => runOf(s, run.id).state === 'ended');
     expect(s.composed.runs!.preview(d.id).bodyChanged).toBe(false);
@@ -431,19 +437,153 @@ describe('starting a run (decision 129)', () => {
     const s = await setup();
     const crash = await s.command('kill -9 $$');
     const exit = await s.command('exit 3', { title: 'exit' });
-    const a = await s.composed.runs!.start(crash.id, { version: crash.version }, USER);
-    const b = await s.composed.runs!.start(exit.id, { version: exit.version }, USER);
+    const a = await s.composed.runs!.start(crash.id, ok(s, crash.id), USER);
+    const b = await s.composed.runs!.start(exit.id, ok(s, exit.id), USER);
     await eventually(() => runOf(s, a.id).state === 'ended' && runOf(s, b.id).state === 'ended');
     expect(runOf(s, a.id)).toMatchObject({ outcome: 'failed', signal: 'SIGKILL' });
     expect(runOf(s, b.id)).toMatchObject({ outcome: 'exited', exitCode: 3 });
   }, 20_000);
 });
 
+describe('the marker sweep spares what the user shares (wave-3 review S4)', () => {
+  /** Detached children under other names (bash `exec -a`), all carrying the run's marker. */
+  const DAEMONS = `
+import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const node = process.execPath;
+const as = (name) => {
+  const c = spawn('/bin/bash', ['-c', 'exec -a "$0" "$1" -e "setInterval(() => {}, 1000)"', name, node], {
+    stdio: 'ignore',
+    detached: true,
+  });
+  c.unref();
+  return c.pid;
+};
+const pids = {
+  watchman: as('watchman'),
+  mux: as('ssh: /tmp/galactic-test-control [mux]'),
+  gradle: as('java -Xmx512m org.gradle.launcher.daemon.bootstrap.GradleDaemon 8.10'),
+  app: as('/Applications/Fake.app/Contents/MacOS/Fake'),
+  plain: as('galactic-plain-child'),
+};
+writeFileSync('daemons.json', JSON.stringify(pids));
+console.log('spawned');
+setInterval(() => {}, 1000);
+`;
+
+  it('a shared daemon and an app with the marker survive the stop; an ordinary marked child goes', async () => {
+    const s = await setup();
+    writeFileSync(join(s.ws, 'daemons.mjs'), DAEMONS);
+    // A process the run never started (no marker), started after it: never touched.
+    const d = await s.command(`${NODE} daemons.mjs`);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
+    const file = join(s.ws, 'daemons.json');
+    await eventually(() => existsSync(file));
+    let pids!: Record<'watchman' | 'mux' | 'gradle' | 'app' | 'plain', number>;
+    await eventually(() => {
+      try {
+        pids = JSON.parse(readFileSync(file, 'utf8')) as typeof pids;
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    for (const pid of Object.values(pids)) started.add(pid);
+    const { spawn } = await import('node:child_process');
+    const unmarked = spawn(
+      '/bin/bash',
+      [
+        '-c',
+        'exec -a "$0" "$1" -e "setInterval(() => {}, 1000)"',
+        'galactic-unmarked',
+        process.execPath,
+      ],
+      { stdio: 'ignore', detached: true },
+    );
+    unmarked.unref();
+    started.add(unmarked.pid!);
+    // The names are in the process table before the stop looks.
+    const table = osProcessTable();
+    await eventually(async () => {
+      const procs = (await table.list()) ?? [];
+      return procs.some((p) => p.pid === pids.watchman && p.command.startsWith('watchman'));
+    });
+
+    await s.composed.runs!.stop(run.id, USER);
+    await eventually(() => !alive(pids.plain), 5_000);
+    expect(alive(pids.watchman)).toBe(true);
+    expect(alive(pids.mux)).toBe(true);
+    expect(alive(pids.gradle)).toBe(true);
+    expect(alive(pids.app)).toBe(true);
+    expect(alive(unmarked.pid!)).toBe(true);
+  }, 30_000);
+});
+
+describe('restart and the roots (wave-3 review S1, S6, N6)', () => {
+  it('a restart at the cap replaces the run (it does not count itself)', async () => {
+    const s = await setup({ settings: { maxConcurrent: 1 } });
+    const d = await s.command('sleep 30');
+    const first = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
+    started.add(first.meta!['pid'] as number);
+    const second = await s.composed.runs!.restart(first.id, ok(s, d.id), USER);
+    started.add(second.meta!['pid'] as number);
+    expect(runOf(s, first.id)).toMatchObject({ outcome: 'stopped' });
+    expect(second.state).toBe('running');
+    await s.composed.runs!.stop(second.id, USER);
+  }, 20_000);
+
+  it('a restart that could not start again stops nothing', async () => {
+    const s = await setup();
+    const d = await s.command('sleep 30');
+    const first = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
+    started.add(first.meta!['pid'] as number);
+    const confirmation = ok(s, d.id);
+    rmSync(s.ws, { recursive: true, force: true });
+    const r = await refusal(s.composed.runs!.restart(first.id, confirmation, USER));
+    expect(r.code).toBe('folder');
+    expect(runOf(s, first.id).state).toBe('running');
+    expect(s.composed.runs!.liveCount).toBe(1);
+    await s.composed.runs!.stop(first.id, USER);
+  }, 20_000);
+
+  it('refuses a folder in the repository outside the project folder', async () => {
+    const s = await setup();
+    const tools = join(s.root, 'tools');
+    mkdirSync(tools);
+    await s.composed.commands.updateProject(s.projectId, {
+      meta: { workspace: { git: true, repoRoot: s.root, serialStewards: false } },
+    });
+    const d = await s.command('echo hi', { command: { line: 'echo hi', cwd: tools } });
+    expect(s.composed.runs!.preview(d.id).refusal).toMatchObject({ code: 'folder' });
+    expect((await refusal(s.composed.runs!.start(d.id, ok(s, d.id), USER))).code).toBe('folder');
+  });
+
+  it('a deliverables folder replaced by a symlink is no root to run in', async () => {
+    const s = await setup();
+    const folder = join(s.ws, 'deliverables');
+    mkdirSync(join(folder, 'site'), { recursive: true });
+    await s.composed.commands.updateProject(s.projectId, {
+      meta: { deliverablesFolder: folder },
+    });
+    const d = await s.command('echo hi', {
+      command: { line: 'echo hi', cwd: join(folder, 'site') },
+    });
+    expect(s.composed.runs!.preview(d.id).refusal).toBeUndefined();
+    // Swapped for a link to a folder outside the project, with the same inner path.
+    const elsewhere = join(s.root, 'elsewhere');
+    mkdirSync(join(elsewhere, 'site'), { recursive: true });
+    rmSync(folder, { recursive: true });
+    symlinkSync(elsewhere, folder);
+    expect(s.composed.runs!.preview(d.id).refusal).toMatchObject({ code: 'folder' });
+    expect((await refusal(s.composed.runs!.start(d.id, ok(s, d.id), USER))).code).toBe('folder');
+  });
+});
+
 describe('runs stopped with their work and the server (decision 130)', () => {
   it('closing the project stops its run', async () => {
     const s = await setup();
     const d = await s.command(`${NODE} server.mjs`);
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     const pids = await s.pidsOf();
     await s.composed.commands.closeProject(s.projectId, USER);
     await eventually(() => runOf(s, run.id).state === 'ended');
@@ -454,7 +594,7 @@ describe('runs stopped with their work and the server (decision 130)', () => {
   it('removing the deliverable stops its run', async () => {
     const s = await setup();
     const d = await s.command('sleep 30');
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     await s.composed.commands.removeDeliverable(d.id, USER, undefined, LOCAL);
     await eventually(() => runOf(s, run.id).state === 'ended');
     expect(runOf(s, run.id)).toMatchObject({ outcome: 'stopped', reason: 'deliverable_removed' });
@@ -463,7 +603,7 @@ describe('runs stopped with their work and the server (decision 130)', () => {
   it('shutdown stops every run and starts no new one', async () => {
     const s = await setup();
     const d = await s.command(`${NODE} server.mjs`);
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     const pids = await s.pidsOf();
     const log = s.composed.log;
     await s.composed.shutdown();
@@ -479,7 +619,7 @@ describe('runs stopped with their work and the server (decision 130)', () => {
     const store = new MemoryProcessStore();
     const s = await setup({ store });
     const d = await s.command(`${NODE} server.mjs`);
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     const pids = await s.pidsOf();
     s.composed.runs!.dispose(); // no stop: the run outlives "the server"
     expect(store.get(`run:${run.id}`)?.status).toBe('running');
@@ -518,7 +658,7 @@ describe("a run's output limits (decision 130)", () => {
     const script = `for (let i = 0; i < 4000; i++) console.log('line ' + i + ' ' + 'x'.repeat(80));`;
     writeFileSync(join(s.ws, 'loud.mjs'), script);
     const d = await s.command(`${NODE} loud.mjs`);
-    const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     await eventually(() => runOf(s, run.id).state === 'ended');
     const page = s.composed.runOutput!.page(run.id, 0, 5_000);
     const text = page.chunks.map((c) => c.chunk).join('');
@@ -535,7 +675,7 @@ describe("a run's output limits (decision 130)", () => {
     const d = await s.command('echo run');
     const ids: string[] = [];
     for (let i = 0; i < 3; i++) {
-      const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
+      const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
       ids.push(run.id);
       await eventually(() => runOf(s, run.id).state === 'ended');
       await new Promise((r) => setTimeout(r, 5)); // distinct start times

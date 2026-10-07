@@ -124,7 +124,12 @@ async function main(): Promise<void> {
       { origin: 'local' },
     )
   ).value;
-  const run = await composed.runs!.start(d.id, { version: d.version }, { type: 'user' });
+  const { confirmation } = composed.runs!.preview(d.id);
+  const run = await composed.runs!.start(
+    d.id,
+    { version: d.version, confirmation: confirmation! },
+    { type: 'user' },
+  );
   const pids = await readJson<RunPids>(join(dirs.app, 'pids.json'));
   const ready: RunReady = { server: process.pid, deliverableId: d.id, runId: run.id, pids };
   writeFileSync(join(root, 'ready.json'), JSON.stringify(ready, null, 2));

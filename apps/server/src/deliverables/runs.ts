@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   type Actor,
   type Deliverable,
@@ -24,6 +24,7 @@ import { classifyCommand, mentionsPush } from '../domain/permissions.js';
 import { LAUNCH_ID_ENV } from '../runtime/launch-intents.js';
 import {
   isReaper,
+  isSharedDaemon,
   isUserFacingApp,
   RUN_ID_ENV,
   runProcessKey,
@@ -32,6 +33,7 @@ import {
   type ProcEntry,
 } from '../runtime/process-attribution.js';
 import { osProcessTable, type ProcessTable } from '../runtime/process-table.js';
+import { redactSecrets } from '../runtime/redact.js';
 import {
   isGroupAlive,
   processStartTime,
@@ -42,7 +44,7 @@ import {
   type StopProcessOptions,
 } from '../runtime/supervisor.js';
 import { checkPath, type RefusedPlaces } from './paths.js';
-import { rootsOf } from './roots.js';
+import { rootsInputOf, rootsOf } from './roots.js';
 import type { RunOutput } from './run-output.js';
 
 /**
@@ -53,29 +55,36 @@ import type { RunOutput } from './run-output.js';
  * service refuses an agent's call, and no agent tool reaches it.
  *
  * **Starting** (`start`): the row's `version` must be the one the dialog showed (409 `stale` with
- * the current row), one live run per command (409 `running`), at most
- * `deliverables.runs.maxConcurrent` at once (409 `run_cap`), and the command's folder must still
- * pass the path rules and be the project's folder (or a standalone task's workspace) — a folder in
- * a task's worktree waits for the merge (409 `after_merge`). The line is the stored one, or the
- * user's edit for this run. The process goes through the supervisor like an agent's
+ * the current row), the preview's `confirmation` must cover exactly the line started (400
+ * `unconfirmed`: a token bound to the deliverable, its version and the line's hash), one live run
+ * per command (409 `running`), at most `deliverables.runs.maxConcurrent` at once (409 `run_cap`),
+ * and the command's folder must still pass the path rules and be the project's folder or its
+ * deliverables folder (or a standalone task's workspace) — a folder in a task's worktree waits for
+ * the merge (409 `after_merge`). The line is the stored one, or the user's edit for this run: one
+ * line, no control character, no `[redacted:…]` mask (400 `invalid`). The event log gets the line
+ * redacted (`redactSecrets`); the process runs the real one. The process goes through the supervisor like an agent's
  * (`ProcessSpec.owner = {kind: 'run'}`): `/bin/sh -c <line>` in its own process group, the launch
  * intent written first (a disk that refuses it refuses the run: 507), the allow-listed
  * environment plus `GALACTIC_RUN_ID` and the launch id, never an agent marker, never the server's
- * token or keys; stdin is closed at once. `run.started` is logged after the fork, with the body a
+ * token or keys; stdin is a pipe closed at once (the command reads end-of-file). `run.started` is logged after the fork, with the body a
  * detected command had when it was confirmed (`meta.body`), so the next preview can say "changed
  * since the last run".
  *
  * **Output** goes to `RunOutput` (redacted, `run_output`, the `run_output` stream). **Ports**
  * come from the output (`http://localhost:<port>`) and from the system — `lsof` over the run's
- * process group, the processes below it and those carrying its marker — every 2 s for the first
- * minute, every 10 s after; the system's set wins once it has one (an address printed in the
- * output may be another program's). `run.ports` when the set changes, at most once per 2 s.
+ * process group, the processes below it and those carrying its marker — every 2 s while a run is
+ * in its first minute, every 10 s after: one process-table snapshot and one `lsof` per tick for
+ * all the runs, the markers (other processes' environments) read every 15 s only and never kept
+ * beyond the match; the system's set wins once it has one (an address printed in the output may
+ * be another program's). `run.ports` when the set changes, at most once per 2 s.
  *
  * **Stopping** (`stop`; open to remote clients, decision 131): SIGTERM to the group and to the
  * processes outside it carrying the run's marker (each identity-checked — pid and start time read
  * again — and never a user-facing app or anything below one), SIGKILL after `termMs` (5 s) to what
  * is still the same process; then `run.ended{outcome: 'stopped', by, reason?}`. A run that ends by
- * itself is swept the same way after its `run.ended` (what it left carrying its marker). The log
+ * itself is swept the same way after its `run.ended` (what it left carrying its marker). The
+ * marker sweep never takes a daemon shared by the user's session (`isSharedDaemon`: an ssh
+ * ControlMaster, ssh-agent, gpg-agent, watchman, the Gradle daemon, …) — the group kill does. The log
  * subscriber stops runs when their project (or a parent) is closed, cancelled or archived
  * (`project_closed`), their standalone task finishes or is archived (`task_finished`), or their
  * deliverable is removed (`deliverable_removed`); `stopAll('server_stopping')` at shutdown.
@@ -114,8 +123,11 @@ export interface RunServiceOptions {
   groupAlive?: (pgid: number) => boolean;
   /** SIGTERM → SIGKILL (decision 130: five seconds). */
   termMs?: number;
-  /** Port polling: every `fastMs` for `fastForMs`, then every `slowMs`. */
-  ports?: { fastMs?: number; slowMs?: number; fastForMs?: number };
+  /**
+   * Port polling: every `fastMs` while a run is younger than `fastForMs`, else every `slowMs`;
+   * the marker carriers are looked for every `markerMs` (default 15 s).
+   */
+  ports?: { fastMs?: number; slowMs?: number; fastForMs?: number; markerMs?: number };
   /** How often a refused `run.ended` is tried again. */
   retryMs?: number;
   onError?: (error: unknown, context: string) => void;
@@ -133,6 +145,7 @@ export class RunError extends Error {
       | 'after_merge'
       | 'folder'
       | 'not_running'
+      | 'unconfirmed'
       | 'start_failed',
     message: string,
     readonly deliverable?: Deliverable,
@@ -142,7 +155,7 @@ export class RunError extends Error {
 
   get status(): number {
     if (this.code === 'not_found') return 404;
-    if (this.code === 'invalid') return 400;
+    if (this.code === 'invalid' || this.code === 'unconfirmed') return 400;
     if (this.code === 'start_failed') return 500;
     return 409;
   }
@@ -170,8 +183,9 @@ interface LiveRun {
   outputPorts: Set<number>;
   outputTail: string;
   systemPorts: Set<number>;
+  /** Marker carriers found by the last marker scan: pid → start time (re-checked each tick). */
+  carriers: Map<number, number>;
   lastPortsAt: number;
-  portsTimer?: NodeJS.Timeout | undefined;
   reportTimer?: NodeJS.Timeout | undefined;
   ended: Promise<void>;
   resolveEnded: () => void;
@@ -189,6 +203,14 @@ const WARNING_OF: Partial<Record<PermissionAction, string>> = {
   outside_workspace: 'reaches outside the project folder',
 };
 const CLOSED = new Set(['completed', 'failed', 'archived']);
+/** How long a preview's confirmation is good for. */
+const CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
+/**
+ * What an edited line may not hold: a newline or another control character (C0 but tab, DEL, C1,
+ * the Unicode line and paragraph separators) — the dialog shows one line, so the run is one line.
+ */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029]/;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -200,6 +222,29 @@ export function portsInOutput(text: string): number[] {
     if (Number.isInteger(port) && port >= 1 && port <= 65_535) out.push(port);
   }
   return out;
+}
+
+/**
+ * A line the user edited in the Run dialog (review S2): trimmed, one line — no newline or other
+ * control character — and no `[redacted:…]` mask (the dialog shows a stored secret masked: an
+ * edit must type it again rather than run the mask).
+ */
+export function checkEditedLine(edited: string): string {
+  const line = edited.trim();
+  if (line === '') throw new RunError('invalid', 'A run needs a command line.');
+  if (CONTROL.test(line)) {
+    throw new RunError(
+      'invalid',
+      'An edited command is one line: no newline or other control character.',
+    );
+  }
+  if (line.includes('[redacted:')) {
+    throw new RunError(
+      'invalid',
+      'The command still holds a hidden secret ([redacted:…]): type it again, or run the stored command unedited.',
+    );
+  }
+  return line;
 }
 
 export class RunService {
@@ -214,7 +259,14 @@ export class RunService {
   private readonly fastMs: number;
   private readonly slowMs: number;
   private readonly fastForMs: number;
+  private readonly markerMs: number;
   private readonly retryMs: number;
+  /** Signs the previews' confirmations (this server run only). */
+  private readonly confirmKey = randomBytes(32);
+  /** The one port-polling timer for every live run (one snapshot per tick). */
+  private portsTimer: NodeJS.Timeout | undefined;
+  private polling = false;
+  private lastMarkerScanAt = 0;
   private readonly onError: (error: unknown, context: string) => void;
   /** Live runs by run id. */
   private readonly live = new Map<Id, LiveRun>();
@@ -236,6 +288,7 @@ export class RunService {
     this.fastMs = opts.ports?.fastMs ?? 2_000;
     this.slowMs = opts.ports?.slowMs ?? 10_000;
     this.fastForMs = opts.ports?.fastForMs ?? 60_000;
+    this.markerMs = opts.ports?.markerMs ?? 15_000;
     this.retryMs = opts.retryMs ?? 1_000;
     this.onError = opts.onError ?? (() => {});
   }
@@ -259,12 +312,16 @@ export class RunService {
 
   // -- the confirmation ------------------------------------------------------------------------
 
-  /** What the Run dialog shows (decision 129); `refusal` when a start now would be refused. */
-  preview(deliverableId: Id): RunPreviewResponse {
+  /**
+   * What the Run dialog shows (decision 129); `refusal` when a start now would be refused. With
+   * `edited`, the line the user edited in the dialog: its warnings, and a confirmation for it
+   * (wave-3 review S3). The line shown is redacted; the confirmation covers the real one.
+   */
+  preview(deliverableId: Id, edited?: string): RunPreviewResponse {
     const row = this.commandRow(deliverableId);
     const command = row.command!;
     const cwd = this.checkCwd(row);
-    const line = command.line;
+    const line = edited === undefined ? command.line : checkEditedLine(edited);
     const { warnings, reasons } = this.warningsOf(line, row, cwd.ok ? cwd.cwd : command.cwd);
     const detected = row.meta?.['detected'] as { body?: unknown } | undefined;
     const body = typeof detected?.body === 'string' ? detected.body : undefined;
@@ -281,7 +338,7 @@ export class RunService {
     return {
       deliverableId: row.id,
       version: row.version,
-      line,
+      line: redactSecrets(line),
       cwd: cwd.ok ? cwd.cwd : command.cwd,
       envKeys: this.envKeys(row.id),
       warnings,
@@ -293,20 +350,47 @@ export class RunService {
       ...(changed !== undefined ? { bodyChanged: changed } : {}),
       ...(changed && typeof lastBody === 'string' ? { lastRunBody: lastBody } : {}),
       ...(refusal ? { refusal } : {}),
+      confirmation: this.confirmationOf(row.id, row.version, line),
     };
+  }
+
+  /** A token for exactly `line` at `version` of the deliverable: `<issued ms, base 36>.<HMAC>`. */
+  private confirmationOf(deliverableId: Id, version: number, line: string, at = Date.now()) {
+    return `${at.toString(36)}.${this.macOf(deliverableId, version, line, at)}`;
+  }
+
+  private macOf(deliverableId: Id, version: number, line: string, at: number): string {
+    const lineHash = createHash('sha256').update(line, 'utf8').digest('hex');
+    return createHmac('sha256', this.confirmKey)
+      .update(`run-confirmation\n${deliverableId}\n${version}\n${at}\n${lineHash}`)
+      .digest('base64url');
+  }
+
+  /** Whether `token` is a confirmation of this server run for exactly `line` at `version`. */
+  private covers(token: string, deliverableId: Id, version: number, line: string): boolean {
+    const [issued, mac, extra] = token.split('.');
+    if (!issued || !mac || extra !== undefined || !/^[0-9a-z]{1,12}$/.test(issued)) return false;
+    const at = parseInt(issued, 36);
+    const age = Date.now() - at;
+    if (!Number.isSafeInteger(at) || age < -60_000 || age > CONFIRMATION_TTL_MS) return false;
+    const want = Buffer.from(this.macOf(deliverableId, version, line, at));
+    const got = Buffer.from(mac);
+    return want.length === got.length && timingSafeEqual(want, got);
   }
 
   // -- starting --------------------------------------------------------------------------------
 
   /**
-   * Starts a run the user confirmed on the Mac (the routes check where the request comes from).
-   * Resolves once the process runs and `run.started` is logged.
+   * Every check a start makes before anything happens (the row, its version, the confirmation of
+   * the exact line, one run per command, the cap, the folder). `replacing` is the run a restart
+   * stops first: it counts neither as the command's live run nor against the cap.
    */
-  async start(
+  private prepare(
     deliverableId: Id,
-    confirmed: { version: number; line?: string | undefined },
+    confirmed: { version: number; line?: string | undefined; confirmation: string },
     by: Actor,
-  ): Promise<DeliverableRun> {
+    replacing?: Id,
+  ): { row: Deliverable; cwd: string; line: string } {
     if (by.type === 'agent') {
       throw new RunError('invalid', 'An agent cannot start a run: the user starts it on the Mac.');
     }
@@ -319,18 +403,39 @@ export class RunService {
         row,
       );
     }
-    if (this.liveRun(row.id)) {
+    const line = confirmed.line === undefined ? row.command!.line : checkEditedLine(confirmed.line);
+    if (line.trim() === '' || line.includes('\0')) {
+      throw new RunError('invalid', 'A run needs a command line (without NUL characters).');
+    }
+    if (!this.covers(confirmed.confirmation, row.id, row.version, line)) {
+      throw new RunError(
+        'unconfirmed',
+        'The confirmation does not cover this command line: open the Run dialog again.',
+      );
+    }
+    const live = this.liveRun(row.id);
+    if (live && live.runId !== replacing) {
       throw new RunError('running', 'This command is already running: stop it first.');
     }
-    if (this.live.size >= this.opts.settings().maxConcurrent) {
+    const others = [...this.live.keys()].filter((id) => id !== replacing).length;
+    if (others >= this.opts.settings().maxConcurrent) {
       throw new RunError('run_cap', this.capMessage());
     }
     const cwd = this.checkCwd(row);
     if (!cwd.ok) throw new RunError(cwd.refusal.code as RunError['code'], cwd.refusal.message);
-    const line = (confirmed.line ?? row.command!.line).trim();
-    if (line === '' || line.includes('\0')) {
-      throw new RunError('invalid', 'A run needs a command line (without NUL characters).');
-    }
+    return { row, cwd: cwd.cwd, line };
+  }
+
+  /**
+   * Starts a run the user confirmed on the Mac (the routes check where the request comes from).
+   * Resolves once the process runs and `run.started` is logged.
+   */
+  async start(
+    deliverableId: Id,
+    confirmed: { version: number; line?: string | undefined; confirmation: string },
+    by: Actor,
+  ): Promise<DeliverableRun> {
+    const { row, cwd, line } = this.prepare(deliverableId, confirmed, by);
 
     const runId = `r-${randomUUID()}`;
     let resolveEnded!: () => void;
@@ -339,13 +444,14 @@ export class RunService {
       deliverableId: row.id,
       key: runProcessKey(runId),
       line,
-      cwd: cwd.cwd,
+      cwd,
       forkedAt: Date.now(),
       state: 'starting',
       recorded: false,
       outputPorts: new Set(),
       outputTail: '',
       systemPorts: new Set(),
+      carriers: new Map(),
       lastPortsAt: 0,
       ended: new Promise<void>((r) => (resolveEnded = r)),
       resolveEnded: () => resolveEnded(),
@@ -376,8 +482,10 @@ export class RunService {
           {
             runId,
             deliverableId: row.id,
-            line,
-            cwd: cwd.cwd,
+            // The log keeps the line redacted (a token typed into it is never stored); the
+            // process runs the real one.
+            line: redactSecrets(line),
+            cwd,
             meta: {
               pid: proc.pid,
               ...(typeof detected?.body === 'string' ? { body: detected.body } : {}),
@@ -410,9 +518,27 @@ export class RunService {
       delete run.pending;
       void this.ended(run, outcome);
     } else {
-      this.schedulePorts(run);
+      this.schedulePorts();
     }
     return recorded;
+  }
+
+  /**
+   * Restart (`POST /api/runs/:id/restart`): every check a start makes runs first — the version,
+   * the confirmation of the exact line, the folder, the cap without this run — so a restart that
+   * could not start again stops nothing (wave-3 review S6); then the run is stopped and a new one
+   * started (which checks again).
+   */
+  async restart(
+    runId: Id,
+    confirmed: { version: number; line?: string | undefined; confirmation: string },
+    by: Actor,
+  ): Promise<DeliverableRun> {
+    const previous = this.log.tables.runs.get(runId);
+    if (!previous) throw new RunError('not_found', `no run ${runId}`);
+    this.prepare(previous.deliverableId, confirmed, by, runId);
+    await this.stop(runId, by);
+    return this.start(previous.deliverableId, confirmed, by);
   }
 
   private specOf(run: LiveRun): ProcessSpec {
@@ -522,11 +648,18 @@ export class RunService {
     return started !== undefined && Math.abs(started - p.startedAt) <= START_SLACK_MS;
   }
 
-  /** Processes carrying `GALACTIC_RUN_ID=<runId>`, started after the run (outside `pgid`). */
+  /**
+   * Processes carrying `GALACTIC_RUN_ID=<runId>`, started after the run (outside `pgid`), but
+   * never a daemon shared by the user's session (`isSharedDaemon`).
+   */
   private async carriers(runId: Id, since: number, pgid?: number): Promise<ProcEntry[]> {
     const procs = await this.table.list();
     if (!procs || !this.table.environment) return [];
-    const candidates = this.candidates(procs, since).filter((p) => p.pgid !== pgid);
+    // A daemon shared by the user's session is never the run's to take (review S4): the group
+    // kill reaches it only when it stayed in the run's group.
+    const candidates = this.candidates(procs, since).filter(
+      (p) => p.pgid !== pgid && !isSharedDaemon(p),
+    );
     if (candidates.length === 0) return [];
     const env = await this.table.environment(candidates, [RUN_ID_ENV]);
     return candidates.filter((p) => env.get(p.pid)?.get(RUN_ID_ENV) === runId);
@@ -638,50 +771,99 @@ export class RunService {
 
   // -- ports -----------------------------------------------------------------------------------
 
-  private schedulePorts(run: LiveRun): void {
-    const age = Date.now() - run.forkedAt;
-    const delay = age < this.fastForMs ? this.fastMs : this.slowMs;
-    run.portsTimer = setTimeout(() => {
-      run.portsTimer = undefined;
-      void this.pollPorts(run)
-        .catch((error: unknown) => this.onError(error, `run ${run.runId}: ports`))
-        .finally(() => {
-          if (this.live.get(run.runId) === run && run.state === 'running') this.schedulePorts(run);
-        });
-    }, delay);
-    run.portsTimer.unref?.();
+  /**
+   * The one polling timer (review N1): every `fastMs` while a live run is younger than
+   * `fastForMs`, else every `slowMs`; armed while a run is running.
+   */
+  private schedulePorts(): void {
+    if (this.portsTimer || this.polling || this.closing) return;
+    const running = [...this.live.values()].filter((r) => r.state === 'running');
+    if (running.length === 0) return;
+    const now = Date.now();
+    const young = running.some((r) => now - r.forkedAt < this.fastForMs);
+    this.portsTimer = setTimeout(
+      () => {
+        this.portsTimer = undefined;
+        this.polling = true;
+        void this.pollPorts()
+          .catch((error: unknown) => this.onError(error, 'runs: ports'))
+          .finally(() => {
+            this.polling = false;
+            this.schedulePorts();
+          });
+      },
+      young ? this.fastMs : this.slowMs,
+    );
+    this.portsTimer.unref?.();
   }
 
-  /** `lsof` over the run's group, what is below it, and what carries its marker. */
-  private async pollPorts(run: LiveRun): Promise<void> {
-    if (run.pgid === undefined) return;
+  /**
+   * One tick for every running run: one process-table snapshot; each run's group, what is below
+   * it, and its marker carriers — looked for in other processes' environments every `markerMs`
+   * only, the environments dropped once matched (only the matching pids and their start times are
+   * kept, re-checked against each snapshot); then one `lsof` over all of them.
+   */
+  private async pollPorts(): Promise<void> {
+    const runs = [...this.live.values()].filter((r) => r.state === 'running' && r.pgid);
+    if (runs.length === 0) return;
     const procs = await this.table.list();
     if (!procs) return;
-    const pids = new Set(procs.filter((p) => p.pgid === run.pgid && !p.zombie).map((p) => p.pid));
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const p of procs) {
-        if (!pids.has(p.pid) && pids.has(p.ppid) && !p.zombie && !isUserFacingApp(p)) {
-          pids.add(p.pid);
-          grew = true;
+    const byPid = new Map(procs.map((p) => [p.pid, p]));
+    const pidsOf = new Map<LiveRun, Set<number>>();
+    for (const run of runs) {
+      const pids = new Set(procs.filter((p) => p.pgid === run.pgid && !p.zombie).map((p) => p.pid));
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const p of procs) {
+          if (!pids.has(p.pid) && pids.has(p.ppid) && !p.zombie && !isUserFacingApp(p)) {
+            pids.add(p.pid);
+            grew = true;
+          }
+        }
+      }
+      pidsOf.set(run, pids);
+    }
+    const now = Date.now();
+    if (this.table.environment && now - this.lastMarkerScanAt >= this.markerMs) {
+      this.lastMarkerScanAt = now;
+      const since = Math.min(...runs.map((r) => r.forkedAt));
+      const taken = new Set([...pidsOf.values()].flatMap((set) => [...set]));
+      const rest = this.candidates(procs, since).filter((p) => !taken.has(p.pid));
+      const found = new Map<Id, Map<number, number>>();
+      if (rest.length > 0) {
+        const env = await this.table.environment(rest, [RUN_ID_ENV]);
+        for (const p of rest) {
+          const id = env.get(p.pid)?.get(RUN_ID_ENV);
+          if (id === undefined) continue;
+          if (!found.has(id)) found.set(id, new Map());
+          found.get(id)!.set(p.pid, p.startedAt);
+        }
+        env.clear();
+      }
+      for (const run of runs) run.carriers = found.get(run.runId) ?? new Map();
+    }
+    for (const run of runs) {
+      for (const [pid, startedAt] of run.carriers) {
+        const p = byPid.get(pid);
+        if (!p || p.zombie || Math.abs(p.startedAt - startedAt) > START_SLACK_MS) {
+          run.carriers.delete(pid);
+        } else {
+          pidsOf.get(run)!.add(pid);
         }
       }
     }
-    if (this.table.environment) {
-      const rest = this.candidates(procs, run.forkedAt).filter((p) => !pids.has(p.pid));
-      if (rest.length > 0) {
-        const env = await this.table.environment(rest, [RUN_ID_ENV]);
-        for (const p of rest) if (env.get(p.pid)?.get(RUN_ID_ENV) === run.runId) pids.add(p.pid);
+    const all = [...new Set([...pidsOf.values()].flatMap((set) => [...set]))];
+    const portsByPid = await this.table.ports(all);
+    for (const run of runs) {
+      if (this.live.get(run.runId) !== run) continue;
+      const found = new Set<number>();
+      for (const pid of pidsOf.get(run)!) {
+        for (const port of portsByPid.get(pid) ?? []) found.add(port);
       }
+      run.systemPorts = found;
+      this.reportPorts(run);
     }
-    const found = new Set<number>();
-    for (const ports of (await this.table.ports([...pids])).values()) {
-      for (const port of ports) found.add(port);
-    }
-    if (this.live.get(run.runId) !== run) return;
-    run.systemPorts = found;
-    this.reportPorts(run);
   }
 
   /** `run.ports` when the set changed, at most once per `fastMs`. */
@@ -712,9 +894,7 @@ export class RunService {
   }
 
   private clearTimers(run: LiveRun): void {
-    if (run.portsTimer) clearTimeout(run.portsTimer);
     if (run.reportTimer) clearTimeout(run.reportTimer);
-    run.portsTimer = undefined;
     run.reportTimer = undefined;
   }
 
@@ -842,6 +1022,8 @@ export class RunService {
       run.resolveEnded();
     }
     this.live.clear();
+    if (this.portsTimer) clearTimeout(this.portsTimer);
+    this.portsTimer = undefined;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
   }
@@ -861,8 +1043,10 @@ export class RunService {
   }
 
   /**
-   * The command's folder, re-checked (§9.2): inside the project's folder (or a standalone task's
-   * workspace), never a task's worktree — that one waits for the merge.
+   * The command's folder, re-checked (§9.2) over the same roots every read uses (`rootsOf`, so a
+   * deliverables folder or worktree replaced by a link is no root): inside the project's folder or
+   * its deliverables folder (or a standalone task's workspace), never a task's worktree — that one
+   * waits for the merge.
    */
   private checkCwd(
     row: Deliverable,
@@ -887,10 +1071,9 @@ export class RunService {
         },
       };
     }
-    if (
-      check.type !== 'folder' ||
-      !['workspace', 'repository', 'deliverables'].includes(check.where)
-    ) {
+    // The project's folder (or its deliverables folder), never the rest of the repository it is
+    // in (decision 129: "a run happens in the project's folder"; review N6).
+    if (check.type !== 'folder' || !['workspace', 'deliverables'].includes(check.where)) {
       return {
         ok: false,
         refusal: { code: 'folder', message: 'A run happens in the project folder.' },
@@ -905,10 +1088,18 @@ export class RunService {
     cwd: string,
   ): { warnings: string[]; reasons: string[] } {
     const roots = rootsOf(this.log.tables, row, this.opts.places);
+    // The recorded folder as written counts as the user's even when it is no root (a link).
+    const folders = [
+      ...new Set(
+        [roots?.deliverablesFolder, rootsInputOf(this.log.tables, row)?.deliverablesFolder].filter(
+          (f): f is string => f !== undefined,
+        ),
+      ),
+    ];
     const verdict = classifyCommand(line, {
       workspace: roots?.workspace ?? cwd,
       cwd,
-      ...(roots?.deliverablesFolder ? { userFolders: [roots.deliverablesFolder] } : {}),
+      ...(folders.length > 0 ? { userFolders: folders } : {}),
     });
     const warnings: string[] = [];
     for (const action of verdict.actions) {

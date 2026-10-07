@@ -107,7 +107,20 @@ async function setup(opts: { autoApproveRemote?: boolean; diskFull?: boolean } =
     const text = await res.text();
     return { status: res.status, json: (text ? JSON.parse(text) : {}) as Record<string, unknown> };
   };
-  return { t, composed, command, call, ws };
+  /** The Run dialog's preview: the body a start (or restart) sends back. */
+  const confirm = async (id: string, line?: string) => {
+    const res =
+      line === undefined
+        ? await call('GET', `/api/deliverables/${id}/run-preview`)
+        : await call('POST', `/api/deliverables/${id}/run-preview`, { line });
+    const preview = RunPreviewResponse.parse(res.json);
+    return {
+      version: preview.version,
+      confirmation: preview.confirmation!,
+      ...(line !== undefined ? { line } : {}),
+    };
+  };
+  return { t, composed, command, call, confirm, ws };
 }
 
 describe('the run routes (P9-08)', () => {
@@ -121,7 +134,7 @@ describe('the run routes (P9-08)', () => {
       cwd: s.ws,
       version: d.version,
     });
-    const started = await s.call('POST', `/api/deliverables/${d.id}/runs`, { version: d.version });
+    const started = await s.call('POST', `/api/deliverables/${d.id}/runs`, await s.confirm(d.id));
     expect(started.status).toBe(201);
     const { run } = StartRunResponse.parse(started.json);
     await eventually(async () => {
@@ -131,7 +144,7 @@ describe('the run routes (P9-08)', () => {
     const list = RunsResponse.parse((await s.call('GET', `/api/deliverables/${d.id}/runs`)).json);
     expect(list.runs.map((r) => [r.id, r.state])).toEqual([[run.id, 'running']]);
     // A second Run while one lives.
-    const again = await s.call('POST', `/api/deliverables/${d.id}/runs`, { version: d.version });
+    const again = await s.call('POST', `/api/deliverables/${d.id}/runs`, await s.confirm(d.id));
     expect(again).toMatchObject({ status: 409, json: { error: 'running' } });
     const stopped = await s.call('POST', `/api/runs/${run.id}/stop`);
     expect(stopped.status).toBe(200);
@@ -148,6 +161,7 @@ describe('the run routes (P9-08)', () => {
   it('refuses a stale confirmation with the current row, and a bad body', async () => {
     const s = await setup();
     const d = await s.command('echo one');
+    const before = await s.confirm(d.id);
     await s.composed.commands.updateDeliverable(
       d.id,
       { command: { line: 'echo two', cwd: s.ws } },
@@ -156,14 +170,17 @@ describe('the run routes (P9-08)', () => {
         origin: 'local',
       },
     );
-    const stale = await s.call('POST', `/api/deliverables/${d.id}/runs`, { version: d.version });
+    const stale = await s.call('POST', `/api/deliverables/${d.id}/runs`, before);
     expect(stale.status).toBe(409);
     expect(stale.json).toMatchObject({
       error: 'stale',
       deliverable: { id: d.id, command: { line: 'echo two' } },
     });
     expect((await s.call('POST', `/api/deliverables/${d.id}/runs`, {})).status).toBe(400);
-    expect((await s.call('POST', '/api/deliverables/nope/runs', { version: 1 })).status).toBe(404);
+    expect(
+      (await s.call('POST', '/api/deliverables/nope/runs', { version: 1, confirmation: 'x' }))
+        .status,
+    ).toBe(404);
   });
 
   for (const autoApproveRemote of [false, true]) {
@@ -173,18 +190,18 @@ describe('the run routes (P9-08)', () => {
       const start = await s.call(
         'POST',
         `/api/deliverables/${d.id}/runs`,
-        { version: d.version },
+        await s.confirm(d.id),
         REMOTE,
       );
       expect(start).toMatchObject({ status: 403, json: { error: 'remote_control' } });
       expect(s.composed.runs!.liveCount).toBe(0);
       const { run } = StartRunResponse.parse(
-        (await s.call('POST', `/api/deliverables/${d.id}/runs`, { version: d.version })).json,
+        (await s.call('POST', `/api/deliverables/${d.id}/runs`, await s.confirm(d.id))).json,
       );
       const restart = await s.call(
         'POST',
         `/api/runs/${run.id}/restart`,
-        { version: d.version },
+        await s.confirm(d.id),
         REMOTE,
       );
       expect(restart).toMatchObject({ status: 403, json: { error: 'remote_control' } });
@@ -207,12 +224,28 @@ describe('the run routes (P9-08)', () => {
     const s = await setup();
     const d = await s.command('sleep 30');
     const first = StartRunResponse.parse(
-      (await s.call('POST', `/api/deliverables/${d.id}/runs`, { version: d.version })).json,
+      (await s.call('POST', `/api/deliverables/${d.id}/runs`, await s.confirm(d.id))).json,
     ).run;
-    const stale = await s.call('POST', `/api/runs/${first.id}/restart`, { version: d.version + 1 });
+    const ok = await s.confirm(d.id);
+    const stale = await s.call('POST', `/api/runs/${first.id}/restart`, {
+      ...ok,
+      version: d.version + 1,
+    });
     expect(stale.json).toMatchObject({ error: 'stale' });
     expect(s.composed.log.tables.runs.get(first.id)?.state).toBe('running'); // nothing stopped
-    const restarted = await s.call('POST', `/api/runs/${first.id}/restart`, { version: d.version });
+    // A confirmation of another line, or a folder that no longer passes: nothing stopped either.
+    const other = await s.call('POST', `/api/runs/${first.id}/restart`, {
+      ...ok,
+      line: 'sleep 31',
+    });
+    expect(other).toMatchObject({ status: 400, json: { error: 'unconfirmed' } });
+    expect(s.composed.log.tables.runs.get(first.id)?.state).toBe('running');
+    rmSync(s.ws, { recursive: true, force: true });
+    const gone = await s.call('POST', `/api/runs/${first.id}/restart`, ok);
+    expect(gone).toMatchObject({ status: 409, json: { error: 'folder' } });
+    expect(s.composed.log.tables.runs.get(first.id)?.state).toBe('running');
+    mkdirSync(s.ws);
+    const restarted = await s.call('POST', `/api/runs/${first.id}/restart`, ok);
     expect(restarted.status).toBe(201);
     const second = StartRunResponse.parse(restarted.json).run;
     expect(second.id).not.toBe(first.id);
@@ -223,17 +256,94 @@ describe('the run routes (P9-08)', () => {
   it('answers 507 when the launch cannot be recorded (a full disk), starting nothing', async () => {
     const s = await setup({ diskFull: true });
     const d = await s.command('echo never');
-    const res = await s.call('POST', `/api/deliverables/${d.id}/runs`, { version: d.version });
+    const res = await s.call('POST', `/api/deliverables/${d.id}/runs`, await s.confirm(d.id));
     expect(res).toMatchObject({ status: 507, json: { error: 'storage_full' } });
     expect(s.composed.log.tables.runs.of(d.id)).toEqual([]);
     expect(s.composed.runs!.liveCount).toBe(0);
   });
 
+  it('starts only the exact line the confirmation covers; an edited line is previewed first', async () => {
+    const s = await setup();
+    const d = await s.command('echo stored');
+    const stored = await s.confirm(d.id);
+    // The stored line's confirmation does not cover an edit (wave-3 review S3)…
+    const swapped = await s.call('POST', `/api/deliverables/${d.id}/runs`, {
+      ...stored,
+      line: 'echo something-else',
+    });
+    expect(swapped).toMatchObject({ status: 400, json: { error: 'unconfirmed' } });
+    // …nor does a made-up token, or none.
+    const forged = await s.call('POST', `/api/deliverables/${d.id}/runs`, {
+      ...stored,
+      confirmation: `${Date.now().toString(36)}.AAAA`,
+    });
+    expect(forged).toMatchObject({ status: 400, json: { error: 'unconfirmed' } });
+    expect(
+      (await s.call('POST', `/api/deliverables/${d.id}/runs`, { version: d.version })).status,
+    ).toBe(400);
+    // The edited line's own preview classifies it, and its confirmation starts it.
+    const preview = await s.call('POST', `/api/deliverables/${d.id}/run-preview`, {
+      line: 'curl -s https://example.invalid || true',
+    });
+    expect(RunPreviewResponse.parse(preview.json).warnings).toContain('uses the network');
+    const edited = await s.confirm(d.id, 'echo edited');
+    const started = await s.call('POST', `/api/deliverables/${d.id}/runs`, edited);
+    expect(started.status).toBe(201);
+    expect(StartRunResponse.parse(started.json).run).toMatchObject({ line: 'echo edited' });
+    expect(s.composed.log.tables.runs.of(d.id)).toHaveLength(1);
+  }, 20_000);
+
+  it('refuses an edited line with a newline or a control character (400), in the preview too', async () => {
+    const s = await setup();
+    const d = await s.command('echo stored');
+    for (const line of ['echo a\nrm -rf x', 'echo a\rb', 'echo \u001b[2Jx', 'echo a\u2028b']) {
+      const preview = await s.call('POST', `/api/deliverables/${d.id}/run-preview`, { line });
+      expect(preview).toMatchObject({ status: 400, json: { error: 'invalid' } });
+      const start = await s.call('POST', `/api/deliverables/${d.id}/runs`, {
+        ...(await s.confirm(d.id)),
+        line,
+      });
+      expect(start).toMatchObject({ status: 400, json: { error: 'invalid' } });
+    }
+    expect(s.composed.log.tables.runs.of(d.id)).toEqual([]);
+  });
+
+  it('logs and previews a line with a secret redacted, and runs the real one', async () => {
+    const s = await setup();
+    const key = `sk-ant-${'b'.repeat(40)}`;
+    const d = await s.command('echo stored');
+    const line = `TOKEN=${key} sh -c 'echo "$TOKEN" | wc -c'`;
+    const preview = RunPreviewResponse.parse(
+      (await s.call('POST', `/api/deliverables/${d.id}/run-preview`, { line })).json,
+    );
+    expect(preview.line).not.toContain(key);
+    expect(preview.line).toContain('[redacted:');
+    const started = await s.call('POST', `/api/deliverables/${d.id}/runs`, {
+      version: preview.version,
+      confirmation: preview.confirmation,
+      line,
+    });
+    expect(started.status).toBe(201);
+    const { run } = StartRunResponse.parse(started.json);
+    expect(run.line).not.toContain(key);
+    await eventually(() => s.composed.log.tables.runs.get(run.id)?.state === 'ended');
+    // The real line ran: the key's length (plus the newline) came out.
+    const out = RunOutputResponse.parse((await s.call('GET', `/api/runs/${run.id}/output`)).json);
+    expect(out.chunks.map((c) => c.chunk).join('')).toContain(String(key.length + 1));
+    const events = JSON.stringify(s.composed.log.tables.runs.of(d.id));
+    expect(events).not.toContain(key);
+    // The mask itself is never run: an edit must type the secret again.
+    const masked = await s.call('POST', `/api/deliverables/${d.id}/run-preview`, {
+      line: preview.line,
+    });
+    expect(masked).toMatchObject({ status: 400, json: { error: 'invalid' } });
+  }, 20_000);
+
   it('streams a run’s output to a socket that subscribed (run.subscribe → run_output)', async () => {
     const s = await setup();
     const d = await s.command('echo streamed-line; sleep 30');
     const { run } = StartRunResponse.parse(
-      (await s.call('POST', `/api/deliverables/${d.id}/runs`, { version: d.version })).json,
+      (await s.call('POST', `/api/deliverables/${d.id}/runs`, await s.confirm(d.id))).json,
     );
     const outcome = await connectWs(s.t.wsUrl, {
       send: [

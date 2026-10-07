@@ -174,6 +174,46 @@ export function isUserFacingApp(p: Pick<ProcEntry, 'command'>): boolean {
   return MULTIPLEXERS.has(executable(p.command).replace(/:$/, '').toLowerCase());
 }
 
+/**
+ * Daemons a command may start but that serve the user's whole session, not the run (review S4 of
+ * P9 wave 3; SPEC decision 130, TECHNOLOGY §9.8): a run's marker sweep never signals them, even
+ * when they carry its marker because the run happened to start them first. Matched on the
+ * executable's name (lower case)…
+ */
+export const SHARED_DAEMONS: ReadonlySet<string> = new Set([
+  'ssh-agent',
+  'gpg-agent',
+  'keyboxd',
+  'dirmngr',
+  'scdaemon',
+  'watchman',
+  'sccache',
+  'buck2d',
+]);
+
+/**
+ * …or on the command line: an ssh ControlMaster (`ssh: <socket> [mux]`), the Gradle and Kotlin
+ * daemons (their Java main classes), git's fsmonitor daemon, the nx and turbo daemons, the adb
+ * server, a Bazel server.
+ */
+const SHARED_DAEMON_LINES: readonly RegExp[] = [
+  /^ssh: .*\[mux\]/,
+  /\bGradleDaemon\b/,
+  /\bKotlinCompileDaemon\b/,
+  /\bfsmonitor--daemon\b/,
+  /[/\\]nx[/\\]src[/\\]daemon[/\\]/,
+  /(^|[/\\\s])turbo\s+daemon\b/,
+  /(^|[/\\])adb\s.*\bfork-server\b/,
+  /\bA-server\.jar\b/,
+];
+
+/** A daemon shared by the user's session (`SHARED_DAEMONS`): never taken by a run's marker sweep. */
+export function isSharedDaemon(p: Pick<ProcEntry, 'command'>): boolean {
+  const command = p.command.trim();
+  if (SHARED_DAEMONS.has(executable(command).toLowerCase())) return true;
+  return SHARED_DAEMON_LINES.some((rule) => rule.test(command));
+}
+
 /** Whether `child` is `parent` or inside it (both absolute). */
 export function isInside(child: string, parent: string): boolean {
   const rel = relative(resolve(parent), resolve(child));
