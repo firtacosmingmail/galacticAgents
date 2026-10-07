@@ -1,6 +1,8 @@
 import type { Id } from '@galactic/protocol';
 import {
   AGENT_ID_ENV,
+  RUN_ID_ENV,
+  runIdOfKey,
   isInside,
   isReaper,
   isUserFacingApp,
@@ -103,14 +105,24 @@ export function launchCandidates(
   );
 }
 
-/** Whether `p`'s readable environment names this launch of this agent. */
+/**
+ * The marker a launch's processes carry: the agent marker, or for a managed run (P9-08, key
+ * `run:<runId>`) the run marker — a run's processes never carry an agent's.
+ */
+export function launchMarker(intent: Pick<LaunchIntent, 'agentId'>): [name: string, value: string] {
+  const runId = runIdOfKey(intent.agentId);
+  return runId !== undefined ? [RUN_ID_ENV, runId] : [AGENT_ID_ENV, intent.agentId];
+}
+
+/** Whether `p`'s readable environment names this launch of this agent (or run). */
 export function carriesLaunch(
   p: ProcEntry,
   intent: LaunchIntent,
   envOf: LaunchMatchInput['envOf'],
 ): boolean {
   const env = envOf.get(p.pid);
-  return env?.get(AGENT_ID_ENV) === intent.agentId && env.get(LAUNCH_ID_ENV) === intent.id;
+  const [name, value] = launchMarker(intent);
+  return env?.get(name) === value && env.get(LAUNCH_ID_ENV) === intent.id;
 }
 
 /** The process groups of the snapshot that are this launch's, by the rules above. */

@@ -435,6 +435,63 @@ describe('checkPath: the deliverables folder', () => {
   });
 });
 
+describe('deliverableRoots: a link never becomes a root (review S1)', () => {
+  it('drops a deliverables folder replaced by a symlink', () => {
+    const folder = join(ws, 'deliverables');
+    symlinkSync(outside, folder);
+    const r = deliverableRoots({ workspace: ws, deliverablesFolder: folder }, { dataDir, home });
+    expect(r.deliverablesFolder).toBeUndefined();
+    expect(checkPath(join(folder, 'secret.txt'), r)).toMatchObject({ ok: false, code: 'outside' });
+  });
+
+  it('drops a deliverables folder whose parent was replaced by a symlink', () => {
+    const sub = join(ws, 'sub');
+    mkdirSync(join(outside, 'deliverables'), { recursive: true });
+    file(join(outside, 'deliverables', 'leak.txt'));
+    symlinkSync(outside, sub);
+    const folder = join(sub, 'deliverables');
+    const r = deliverableRoots({ workspace: ws, deliverablesFolder: folder }, { dataDir, home });
+    expect(r.deliverablesFolder).toBeUndefined();
+    expect(checkPath(join(folder, 'leak.txt'), r)).toMatchObject({ ok: false, code: 'outside' });
+  });
+
+  it('keeps a real folder, and one not made yet whose existing part holds no link', () => {
+    const folder = join(ws, 'deliverables');
+    mkdirSync(folder);
+    expect(
+      deliverableRoots({ workspace: ws, deliverablesFolder: folder }, { dataDir, home })
+        .deliverablesFolder,
+    ).toBe(folder);
+    const later = join(ws, 'galactic-deliverables');
+    expect(
+      deliverableRoots({ workspace: ws, deliverablesFolder: later }, { dataDir, home })
+        .deliverablesFolder,
+    ).toBe(later);
+  });
+
+  it('drops a task worktree replaced by a symlink (or reached through one)', () => {
+    rmSync(join(ws, '.galactic', 'worktrees', 'T2'), { recursive: true });
+    symlinkSync(outside, join(ws, '.galactic', 'worktrees', 'T2'));
+    const r = deliverableRoots({ workspace: ws, taskId: 'T2' }, { dataDir, home });
+    expect(r.worktree).toBeUndefined();
+    expect(checkPath(join(ws, '.galactic', 'worktrees', 'T2', 'secret.txt'), r)).toMatchObject({
+      ok: false,
+      code: 'outside',
+    });
+    // `.galactic/worktrees` itself a link: the real worktree is elsewhere, so it is no root.
+    const other = join(tmp, 'elsewhere');
+    mkdirSync(join(other, 'T3'), { recursive: true });
+    const ws2 = join(tmp, 'ws2');
+    mkdirSync(join(ws2, '.galactic'), { recursive: true });
+    symlinkSync(other, join(ws2, '.galactic', 'worktrees'));
+    expect(
+      deliverableRoots({ workspace: ws2, taskId: 'T3' }, { dataDir, home }).worktree,
+    ).toBeUndefined();
+    // The real one stays.
+    expect(roots.worktree).toBe(join(ws, '.galactic', 'worktrees', 'T1'));
+  });
+});
+
 describe('checkPath: from outside, to copy (the user by hand, decision 122)', () => {
   it('accepts a file or folder outside the roots as `outside`, only with the option', () => {
     expect(checkPath(join(outside, 'secret.txt'), roots)).toMatchObject({ code: 'outside' });

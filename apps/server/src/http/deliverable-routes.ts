@@ -1,4 +1,4 @@
-import { closeSync } from 'node:fs';
+import { closeSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
@@ -9,6 +9,7 @@ import {
   OpenDeliverableBody,
   PATH_KINDS,
   RemoveDeliverableBody,
+  RevealFolderBody,
   type Actor,
   type AddDeliverableInput,
   type Deliverable,
@@ -28,6 +29,7 @@ import {
   checkPath,
   identityOf,
   openChecked,
+  trustedFolder,
   type DeliverableRoots,
 } from '../deliverables/paths.js';
 import {
@@ -65,6 +67,7 @@ import { sendStorageRefusal } from './storage-refusal.js';
  * | `POST /api/deliverables` with a path outside the project (copied in) | never (403 `remote_control`) |
  * | `POST /api/deliverables`, `PATCH /api/deliverables/:id`, `POST …/:id/remove`, `…/restore`, `POST /api/projects/:id/deliverables/rescan` | only with `autoApproveRemote` (403 `remote_control`) |
  * | `POST /api/deliverables/:id/open {action, fingerprint?}` | never (403 `remote_control`) |
+ * | `POST /api/deliverables/folder/reveal {projectId \| taskId}` — the `deliverables/` folder | never (403 `remote_control`) |
  *
  * Errors: 400 `invalid_query` / `invalid_body` / `invalid`; 403 `remote_control`; 404
  * `not_found` (unknown or removed id); 409 `changed` (the file was swapped since the check),
@@ -436,6 +439,63 @@ export function registerDeliverableRoutes(
     }
 
     // -- opening on the Mac: never from a remote client (decision 131) --------------------------
+
+    // The project's (or standalone task's) `deliverables/` folder in the Finder (decision 122;
+    // P9-09's folder line). Not a deliverable: the folder is the one recorded on the work, never a
+    // path from the request, re-checked against the work's roots like any read.
+    app.post('/api/deliverables/folder/reveal', async (req, reply) => {
+      const refused = requireLocal(req, { always: true, what: 'Revealing a folder' });
+      if (refused) return reply.code(403).send(refused);
+      const body = parse(RevealFolderBody, req.body, reply, 'invalid_body');
+      if (!body) return;
+      const task = body.taskId ? tables.tasks.get(body.taskId) : undefined;
+      if (body.taskId && !task) return send(reply, 404, 'not_found', `no task ${body.taskId}`);
+      const projectId = body.projectId ?? task?.projectId;
+      const project = projectId ? tables.projects.get(projectId) : undefined;
+      if (projectId && !project) return send(reply, 404, 'not_found', `no project ${projectId}`);
+      const folder = (project ?? task)?.meta?.['deliverablesFolder'];
+      if (typeof folder !== 'string' || folder === '') {
+        return send(reply, 404, 'not_found', 'this work has no deliverables folder yet');
+      }
+      if (!opener || !opener.supported) {
+        return send(
+          reply,
+          501,
+          'not_mac',
+          'Opening works only when Mission Control runs on a Mac.',
+        );
+      }
+      // The recorded folder is canonical: anything else (the folder or a parent swapped for a
+      // link) is refused before the roots are even computed — a link there would make its target
+      // look like a root. The same rule (`trustedFolder`) decides whether the roots keep it.
+      let real: string | undefined;
+      try {
+        real = realpathSync.native(folder);
+      } catch {
+        return send(reply, 410, 'missing', 'the deliverables folder is not there any more');
+      }
+      if (trustedFolder(folder) !== real) {
+        return send(reply, 409, 'changed', 'the deliverables folder was replaced by a link');
+      }
+      const roots = rootsFor(project ? { projectId: project.id } : { taskId: body.taskId });
+      const check = roots ? checkPath(real, roots) : undefined;
+      if (!check) return send(reply, 410, 'missing', 'the folder of this work is not known');
+      if (!check.ok) return send(reply, refusalStatus(check.code), check.code, check.reason);
+      if (check.type !== 'folder' || check.where !== 'deliverables') {
+        return send(
+          reply,
+          409,
+          'not_folder',
+          `${basename(check.path)} is not the deliverables folder`,
+        );
+      }
+      try {
+        await opener.reveal(check.path);
+      } catch (error) {
+        return refuse(req, reply, error);
+      }
+      return { ok: true };
+    });
 
     app.post('/api/deliverables/:id/open', async (req, reply) => {
       const refused = requireLocal(req, { always: true, what: 'Opening a deliverable' });

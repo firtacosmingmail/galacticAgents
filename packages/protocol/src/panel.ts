@@ -265,13 +265,43 @@ export const DEFAULT_DECLARATION_LIMITS: DeclarationLimits = {
 };
 
 /**
- * The deliverables settings (Phase 9). P9-03: the IDE; P9-04: the agents' declaration limits
- * (optional so a page reading an older server still parses; this server always sends them); the
- * later tasks add their keys (run concurrency, output retention) beside them.
+ * `deliverables.runs.output` (P9-08, decision 130): how much of a managed run's output is kept —
+ * at most `maxBytesPerRun` per run (the oldest output goes first; 64 KiB to 64 MiB), for the
+ * newest `keepRuns` runs of each command, at most `maxAgeDays` days.
+ */
+export const RunOutputRetention = z.object({
+  maxBytesPerRun: z
+    .number()
+    .int()
+    .min(64 * 1024)
+    .max(64 * 1024 * 1024),
+  keepRuns: z.number().int().min(1).max(100),
+  maxAgeDays: z.number().int().min(1).max(3650),
+});
+export type RunOutputRetention = z.infer<typeof RunOutputRetention>;
+
+/** `deliverables.runs` (P9-08, decision 130): the runs at once, and their output's retention. */
+export const RunSettings = z.object({
+  maxConcurrent: z.number().int().min(1).max(32),
+  output: RunOutputRetention,
+});
+export type RunSettings = z.infer<typeof RunSettings>;
+
+/** Decision 130's defaults: 4 runs at once; 2 MiB per run, the last 5 runs, 30 days. */
+export const DEFAULT_RUN_SETTINGS: RunSettings = {
+  maxConcurrent: 4,
+  output: { maxBytesPerRun: 2 * 1024 * 1024, keepRuns: 5, maxAgeDays: 30 },
+};
+
+/**
+ * The deliverables settings (Phase 9). P9-03: the IDE; P9-04: the agents' declaration limits;
+ * P9-08: the managed runs (optional so a page reading an older server still parses; this server
+ * always sends them).
  */
 export const SettingsDeliverables = z.object({
   ide: IdeSetting,
   declarations: DeclarationLimits.optional(),
+  runs: RunSettings.optional(),
 });
 export type SettingsDeliverables = z.infer<typeof SettingsDeliverables>;
 
@@ -353,6 +383,14 @@ export const SettingsPatch = z
         ide: IdeSetting.optional(),
         /** Merged key by key (P9-04). */
         declarations: DeclarationLimits.partial().strict().optional(),
+        /** Merged key by key, `output` too (P9-08). */
+        runs: z
+          .object({
+            maxConcurrent: RunSettings.shape.maxConcurrent.optional(),
+            output: RunOutputRetention.partial().strict().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

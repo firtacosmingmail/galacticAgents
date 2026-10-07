@@ -7,7 +7,11 @@ import {
   type AgentRuntime as RuntimeName,
   type DeclarationLimits,
   type Id,
+  type RunSettings,
+  DEFAULT_RUN_SETTINGS,
 } from '@galactic/protocol';
+import { RunOutput } from '../deliverables/run-output.js';
+import { RunService, type RunServiceOptions, type RunSupervisor } from '../deliverables/runs.js';
 import { DeliverableService } from '../deliverables/service.js';
 import { stewardDeliverableTools } from '../brains/deliverable-tools.js';
 import type { Database } from '../db/database.js';
@@ -129,6 +133,19 @@ export interface ComposeOptions {
     limits?: () => DeclarationLimits;
     tmpDirs?: string[];
   } & Pick<DeliverableCopiesOptions, 'reserveBytes' | 'freeBytes'>;
+  /**
+   * Managed runs (P9-08): with the process supervisor the composition builds the run service and
+   * its output store. `settings` is the `deliverables.runs` setting, read at every start, output
+   * write and retention run (default `DEFAULT_RUN_SETTINGS`); the data folder and home come from
+   * `deliverables` / `workspaces`. Tests tune the process table, the stop delay and port polling.
+   */
+  runs?: {
+    supervisor: RunSupervisor;
+    settings?: () => RunSettings;
+  } & Pick<
+    RunServiceOptions,
+    'table' | 'self' | 'startTime' | 'groupAlive' | 'termMs' | 'ports' | 'retryMs'
+  > & { flushMs?: number; holdMs?: number };
 }
 
 export interface ComposedRuntime {
@@ -163,6 +180,10 @@ export interface ComposedRuntime {
   deliverables?: DeliverableService;
   /** The database's write health, for the panel's storage banner (P8-09). */
   storage: StorageMonitor;
+  /** Managed runs (P9-08), when composed with `runs` and a data folder. */
+  runs?: RunService;
+  /** The runs' output store and stream (P9-08), with `runs`. */
+  runOutput?: RunOutput;
   /**
    * The project's deliverables folder and its copies (P9-06), with `workspaces`: the declaration
    * tools' `copyIn` and the merge hook `Workspaces` calls before a worktree is removed.
@@ -417,10 +438,12 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'archival') } : {}),
   });
   if (opts.archival?.intervalMs) archival.start(opts.archival.intervalMs);
+  const runSettings = opts.runs?.settings ?? (() => DEFAULT_RUN_SETTINGS);
   const tr = opts.transcriptRetention;
   const transcriptRetention = new TranscriptRetention({
     db,
     tables: log.tables,
+    runOutput: () => runSettings().output,
     ...(tr?.policy ? { policy: tr.policy } : {}),
     ...(tr?.timers ? { timers: tr.timers } : {}),
     ...(tr?.pause ? { pause: tr.pause } : {}),
@@ -464,6 +487,36 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
         ...(opts.deliverables?.tmpDirs ? { tmpDirs: opts.deliverables.tmpDirs } : {}),
       })
     : undefined;
+  // Managed runs (P9-08): the user's runs of command deliverables, through the same supervisor.
+  const runOutput: RunOutput | undefined =
+    opts.runs && deliverablesDataDir
+      ? new RunOutput(db, {
+          maxBytesPerRun: () => runSettings().output.maxBytesPerRun,
+          ...(opts.runs.flushMs !== undefined ? { flushMs: opts.runs.flushMs } : {}),
+          ...(opts.runs.holdMs !== undefined ? { holdMs: opts.runs.holdMs } : {}),
+          ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'run output') } : {}),
+        })
+      : undefined;
+  const runs: RunService | undefined =
+    opts.runs && runOutput && deliverablesDataDir
+      ? new RunService({
+          log,
+          supervisor: opts.runs.supervisor,
+          output: runOutput,
+          settings: runSettings,
+          places: { dataDir: deliverablesDataDir, ...(home ? { home } : {}) },
+          ...(opts.runs.table ? { table: opts.runs.table } : {}),
+          ...(opts.runs.self ? { self: opts.runs.self } : {}),
+          ...(opts.runs.startTime ? { startTime: opts.runs.startTime } : {}),
+          ...(opts.runs.groupAlive ? { groupAlive: opts.runs.groupAlive } : {}),
+          ...(opts.runs.termMs !== undefined ? { termMs: opts.runs.termMs } : {}),
+          ...(opts.runs.ports ? { ports: opts.runs.ports } : {}),
+          ...(opts.runs.retryMs !== undefined ? { retryMs: opts.runs.retryMs } : {}),
+          ...(opts.onError ? { onError: opts.onError } : {}),
+        })
+      : undefined;
+  runs?.watch();
+
   // A Steward on a runtime that serves the server's tools declares its own deliverables (P9-04).
   if (deliverables) {
     runtime.setStewardTools((agent) => stewardDeliverableTools(deliverables, agent));
@@ -529,6 +582,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(deliverables ? { deliverables } : {}),
     storage,
     ...(deliverableCopies ? { deliverableCopies } : {}),
+    ...(runs ? { runs } : {}),
+    ...(runOutput ? { runOutput } : {}),
     startBrain: async (definition, placement, brainOpts = {}) =>
       adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),
     defineBrains(defs, brainOpts = {}) {
@@ -622,7 +677,13 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       transcriptRetention.stop();
       reports.dispose();
       storage.dispose();
-      await runtime.shutdown();
+      // Every run is stopped beside the agents' graceful stop, and awaited (TECHNOLOGY §9.8).
+      await Promise.all([
+        runs?.stopAll('server_stopping').catch((e: unknown) => opts.onError?.(e, 'runs: stop')),
+        runtime.shutdown(),
+      ]);
+      runs?.dispose();
+      runOutput?.dispose();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();
@@ -636,6 +697,9 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       transcriptRetention.stop();
       reports.dispose();
       storage.dispose();
+      await runs?.stopAll('server_stopping').catch((e: unknown) => opts.onError?.(e, 'runs: stop'));
+      runs?.dispose();
+      runOutput?.dispose();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();

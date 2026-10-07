@@ -12,6 +12,8 @@ import {
   DeclarationLimits,
   IdeSetting,
   PermissionPolicy,
+  RunOutputRetention,
+  RunSettings,
   QualityTier,
   SettingsBudgets,
   SettingsCaps,
@@ -129,12 +131,19 @@ export const ConfigFile = z.object({
    * `auto` (default: the first installed of WebStorm, IntelliJ IDEA, Cursor, VS Code, Zed) or a
    * bundle id such as `com.jetbrains.WebStorm`. Settable from the panel on the Mac.
    * `declarations` are the agents' declaration limits (P9-04, decision 120), key by key over
-   * `DEFAULT_DECLARATION_LIMITS`.
+   * `DEFAULT_DECLARATION_LIMITS`. `runs` are the managed runs' limits (P9-08, decision 130): the
+   * runs at once and the output's retention, key by key over `DEFAULT_RUN_SETTINGS`.
    */
   deliverables: z
     .object({
       ide: IdeSetting.optional(),
       declarations: DeclarationLimits.partial().optional(),
+      runs: z
+        .object({
+          maxConcurrent: RunSettings.shape.maxConcurrent.optional(),
+          output: RunOutputRetention.partial().optional(),
+        })
+        .optional(),
     })
     .optional(),
   /**
@@ -296,6 +305,11 @@ export interface ServerConfig {
   deliverables?: {
     ide?: IdeSetting;
     declarations?: { [K in keyof DeclarationLimits]?: DeclarationLimits[K] | undefined };
+    /** The managed runs (P9-08); absent keys = `DEFAULT_RUN_SETTINGS`. */
+    runs?: {
+      maxConcurrent?: number | undefined;
+      output?: { [K in keyof RunOutputRetention]?: RunOutputRetention[K] | undefined } | undefined;
+    };
   };
   /** The ACP agent command (P8-07); absent = no `acp` runtime registered. */
   acp?: {
@@ -558,12 +572,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
       ...backupsOf(file.backups, env['GALACTIC_BACKUPS']),
       ...(stewardRuntime ? { stewardRuntime } : {}),
-      ...(file.deliverables?.ide || file.deliverables?.declarations
+      ...(file.deliverables?.ide || file.deliverables?.declarations || file.deliverables?.runs
         ? {
             deliverables: {
               ...(file.deliverables.ide ? { ide: file.deliverables.ide } : {}),
               ...(file.deliverables.declarations
                 ? { declarations: { ...file.deliverables.declarations } }
+                : {}),
+              ...(file.deliverables.runs
+                ? {
+                    runs: {
+                      ...file.deliverables.runs,
+                      ...(file.deliverables.runs.output
+                        ? { output: { ...file.deliverables.runs.output } }
+                        : {}),
+                    },
+                  }
                 : {}),
             },
           }

@@ -521,7 +521,20 @@ export class PtyAdapter implements AgentAdapter {
   /** The output went quiet: read the cursor's line. */
   private onQuiet(session: Session): void {
     if (session.terminal || session.paused || session.stopping) return;
-    this.flushAll(session);
+    // A redraw-only batch (a spinner) younger than `redrawFlushMs` stays with its redraw timer
+    // (`armRawFlush`): the quiet read must not flush it early — that broke the one-row-a-second
+    // promise whenever the spinner paused for `quietMs`.
+    const redrawMs = this.opts.redrawFlushMs ?? 1_000;
+    if (
+      session.raw &&
+      isRedrawOnly(session.raw) &&
+      Date.now() - session.rawSince < redrawMs &&
+      session.rawTimer
+    ) {
+      this.flushText(session, true);
+    } else {
+      this.flushAll(session);
+    }
     if (session.phase === 'starting') {
       this.ready(session);
       return;

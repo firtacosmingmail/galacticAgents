@@ -91,3 +91,19 @@ describe('PWA files', () => {
     }
   });
 });
+
+describe("the page's Content-Security-Policy (wave-3 review B1)", () => {
+  it('sends a strict policy with the page, for every deep link', async () => {
+    for (const path of ['/', '/index.html', '/steward/a-2']) {
+      const csp = (await fetch(`${t.baseUrl}${path}`)).headers.get('content-security-policy');
+      expect(csp, path).toContain("script-src 'self'");
+      expect(csp, path).toContain("object-src 'none'");
+      expect(csp, path).toContain("base-uri 'none'");
+      expect(csp, path).toContain("frame-ancestors 'none'");
+      expect(csp, path).not.toMatch(/script-src[^;]*unsafe/);
+      expect(csp, path).toMatch(/connect-src 'self' ws:\/\/[^ ;]+ wss:\/\/[^ ;]+/);
+    }
+    const asset = await fetch(`${t.baseUrl}/assets/index-abc123.js`);
+    expect(asset.headers.get('content-security-policy')).toBeNull();
+  });
+});
