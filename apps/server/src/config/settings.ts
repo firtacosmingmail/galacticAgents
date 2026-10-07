@@ -47,6 +47,7 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `qualityTier` | live (stored for the renderer, Phase 3) |
  * | `budgets` | live: every budgeted project and task is judged against the new threshold (P8-01) |
  * | `stewardRuntime` | live: the next Steward a brain spawns (P8-07); only a registered runtime |
+ * | `deliverables.ide` | live: the next Open in IDE (P9-03); `auto` or an installed IDE's bundle id |
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
  *
@@ -100,6 +101,12 @@ export interface SettingsServiceOptions {
    * (`GALACTIC_DEV`). Default `config.dev`; tests may pass it explicitly.
    */
   allowFakeRuntime?: boolean;
+  /**
+   * The IDEs the opener found (P9-03): `deliverables.ide` may name only one of them. The caller
+   * runs a detection before a patch that sets it (`Opener.ides()`); `undefined` (none yet, or no
+   * opener) refuses every IDE but `auto`.
+   */
+  ides?: { readonly supported: boolean; installedBundleIds(): readonly string[] | undefined };
 }
 
 /** What a remote client may patch (decision 51): the policy only floored (decision 37). */
@@ -249,6 +256,9 @@ export class SettingsService {
       }
       next.stewardRuntime = patch.stewardRuntime;
     }
+    if (patch.deliverables?.ide !== undefined) {
+      next.deliverables = { ...next.deliverables, ide: this.checkIde(patch.deliverables.ide) };
+    }
 
     // The first-run marker (P25-08): stamped once, never moved back.
     const setupCompletedAt =
@@ -259,6 +269,27 @@ export class SettingsService {
     if (setupCompletedAt) this.config.setupCompletedAt = setupCompletedAt;
     this.saved = next;
     return this.response(patch.defaultPermissionPolicy !== undefined ? { floored } : {});
+  }
+
+  /** `auto`, or the bundle id of an IDE the last detection found (decision 127). */
+  private checkIde(ide: string): string {
+    if (ide === 'auto') return ide;
+    if (this.opts.ides && !this.opts.ides.supported) {
+      throw new SettingsError(
+        'invalid',
+        'Mission Control does not run on a Mac here, so it opens nothing: the IDE stays Automatic.',
+      );
+    }
+    const installed = this.opts.ides?.installedBundleIds();
+    if (!installed?.includes(ide)) {
+      throw new SettingsError(
+        'invalid',
+        installed && installed.length > 0
+          ? `${ide} is not an IDE installed on this Mac (installed: ${installed.join(', ')}).`
+          : `${ide} is not an IDE installed on this Mac (none was found).`,
+      );
+    }
+    return ide;
   }
 
   /** The settings the process started with (the config, the global default policy as set). */
@@ -284,6 +315,7 @@ export class SettingsService {
       transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
       budgets: { warnAtPercent: c.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT },
       ...(c.stewardRuntime ? { stewardRuntime: c.stewardRuntime } : {}),
+      deliverables: { ide: c.deliverables?.ide ?? 'auto' },
     };
   }
 
@@ -312,6 +344,12 @@ export class SettingsService {
     }
     if (patch.stewardRuntime === null) delete raw['stewardRuntime'];
     else if (patch.stewardRuntime !== undefined) raw['stewardRuntime'] = next.stewardRuntime;
+    if (patch.deliverables?.ide !== undefined) {
+      raw['deliverables'] = {
+        ...((raw['deliverables'] as object | undefined) ?? {}),
+        ide: next.deliverables?.ide,
+      };
+    }
     if (setupCompletedAt) raw['setupCompletedAt'] = setupCompletedAt;
     const checked = ConfigFile.safeParse(raw);
     if (!checked.success) {
@@ -362,6 +400,9 @@ export class SettingsService {
     if (patch.stewardRuntime !== undefined) {
       if (next.stewardRuntime) this.config.stewardRuntime = next.stewardRuntime;
       else delete this.config.stewardRuntime;
+    }
+    if (patch.deliverables?.ide !== undefined && next.deliverables) {
+      this.config.deliverables = { ...this.config.deliverables, ide: next.deliverables.ide };
     }
   }
 }

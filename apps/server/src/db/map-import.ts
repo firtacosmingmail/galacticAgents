@@ -81,7 +81,19 @@ export interface ImportReport {
   pushSubscriptionsKept: number;
 }
 
-const ROW_KINDS = ['bodies', 'projects', 'tasks', 'agents', 'questions', 'proposals'] as const;
+/**
+ * The row kinds the import checks and writes. `deliverables` (P9-01) is optional in an export: one
+ * from a build before Phase 9 has none and nothing is checked for them.
+ */
+const ROW_KINDS = [
+  'bodies',
+  'projects',
+  'tasks',
+  'agents',
+  'questions',
+  'proposals',
+  'deliverables',
+] as const;
 
 /** Whether the database holds nothing worth keeping: no events, work, agents or transcripts. */
 export function isEmptyDatabase(db: Database): boolean {
@@ -99,6 +111,7 @@ export function isEmptyDatabase(db: Database): boolean {
     'agents',
     'questions',
     'proposals',
+    'deliverables',
     'transcript_chunks',
   ].every((table) => count(table) === 0);
 }
@@ -131,6 +144,7 @@ export function foldRows(seed: readonly Body[], events: readonly ExportedEvent[]
     agents: Object.values(world.agents),
     questions: Object.values(world.questions),
     proposals: Object.values(world.proposals),
+    deliverables: Object.values(world.deliverables),
   };
 }
 
@@ -149,8 +163,10 @@ function canonical(value: unknown): string {
 export function diffRows(got: ExportedRows, want: ExportedRows): string[] {
   const lines: string[] = [];
   for (const kind of ROW_KINDS) {
-    const mine = new Map<Id, Record<string, unknown>>(got[kind].map((r) => [r.id, r]));
-    const theirs = new Map<Id, Record<string, unknown>>(want[kind].map((r) => [r.id, r]));
+    const wanted = want[kind];
+    if (wanted === undefined) continue; // an export from before the kind existed: not checked
+    const mine = new Map<Id, Record<string, unknown>>((got[kind] ?? []).map((r) => [r.id, r]));
+    const theirs = new Map<Id, Record<string, unknown>>(wanted.map((r) => [r.id, r]));
     for (const [id, row] of theirs) {
       const rebuilt = mine.get(id);
       if (!rebuilt) {
@@ -192,6 +208,9 @@ function writeRows(t: Tables, rows: ExportedRows, order: ExportedRows): void {
   for (const a of sorted(rows.agents, order.agents)) t.agents.insert(a);
   for (const q of sorted(rows.questions, order.questions)) t.questions.insert(q);
   for (const p of sorted(rows.proposals, order.proposals)) t.proposals.insert(p);
+  for (const d of sorted(rows.deliverables ?? [], order.deliverables ?? [])) {
+    t.deliverables.insert(d);
+  }
 }
 
 /** Refuses an export whose schema this build does not have (a newer build, or another branch). */
@@ -304,7 +323,29 @@ export async function importMap(
         );
       }
       const rows = drift.length === 0 && rebuilt ? rebuilt : data.rows;
+      // The run history is folded from the log's `run.*` events after the import (`EventLog`):
+      // with the exported rows preferred, a run of a deliverable they lack would fail there as a
+      // bare foreign-key error. Say so here instead, nothing written.
+      const kept = new Set((rows.deliverables ?? []).map((d) => d.id));
+      const orphans = new Set<string>();
+      for (const e of data.events) {
+        if (e.event.type !== 'run.started') continue;
+        const run = e.event['run'] as { id?: unknown; deliverableId?: unknown } | undefined;
+        const deliverableId = String(run?.deliverableId);
+        if (!kept.has(deliverableId)) {
+          orphans.add(`run ${String(run?.id)} (seq ${e.seq}) of deliverable ${deliverableId}`);
+        }
+      }
+      if (orphans.size > 0) {
+        throw new ImportError(
+          'drift',
+          `The exported rows lack the deliverable of ${orphans.size} run(s) in the log; ` +
+            'nothing was imported.',
+          [...orphans],
+        );
+      }
       writeRows(t, rows, data.rows);
+      const deliverables = rows.deliverables ?? [];
       let chunks = 0;
       if (data.transcripts) {
         const chunk = db.prepare(
@@ -333,6 +374,7 @@ export async function importMap(
         drift,
         rebuilt: drift.length === 0 ? ('replayed' as const) : ('rows' as const),
         chunks,
+        deliverables,
       };
     })();
 
@@ -347,7 +389,8 @@ export async function importMap(
         db.exec('DETACH DATABASE previous');
       }
     }
-    // A new log identity, and the budget projections folded from the imported log (P8-01).
+    // A new log identity, and the projections folded from the imported log: the budgets (P8-01)
+    // and the run history (`deliverable_runs`, P9-01).
     const log = new EventLog(db);
     const broken = db.pragma('foreign_key_check') as unknown[];
     if (broken.length > 0)
@@ -359,7 +402,10 @@ export async function importMap(
       seq: data.events.at(-1)?.seq ?? 0,
       logId: log.logId,
       rows: Object.fromEntries(
-        ROW_KINDS.map((k) => [k, data.rows[k].length]),
+        ROW_KINDS.map((k) => [
+          k,
+          (k === 'deliverables' ? outcome.deliverables : data.rows[k]).length,
+        ]),
       ) as ImportReport['rows'],
       transcriptChunks: outcome.chunks,
       rebuilt: outcome.rebuilt,

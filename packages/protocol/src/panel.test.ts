@@ -8,6 +8,8 @@ import {
   HistoryWorkParams,
   HistoryWorkQuery,
   HistoryWorkResponse,
+  IdeResponse,
+  KNOWN_IDES,
   NotificationsQuery,
   Settings,
   SettingsPatch,
@@ -104,6 +106,38 @@ describe('settings schemas (P25-01)', () => {
     expect(Settings.parse({ ...valid, stewardRuntime: 'acp' }).stewardRuntime).toBe('acp');
     expect(SettingsPatch.parse({ stewardRuntime: null })).toEqual({ stewardRuntime: null });
     expect(SettingsPatch.safeParse({ stewardRuntime: 'cursor' }).success).toBe(false);
+  });
+
+  it('takes the IDE as auto or a bundle id, never a path or an option (P9-03)', () => {
+    expect(Settings.parse({ ...valid, deliverables: { ide: 'auto' } }).deliverables?.ide).toBe(
+      'auto',
+    );
+    expect(SettingsPatch.parse({ deliverables: { ide: 'com.jetbrains.WebStorm' } })).toEqual({
+      deliverables: { ide: 'com.jetbrains.WebStorm' },
+    });
+    for (const ide of ['/Applications/WebStorm.app', '-a', 'Web Storm', '', 'x;rm']) {
+      expect(SettingsPatch.safeParse({ deliverables: { ide } }).success).toBe(false);
+    }
+    expect(SettingsPatch.safeParse({ deliverables: { other: 1 } }).success).toBe(false);
+  });
+
+  it('lists the IDEs in decision 127 order and parses the IDE reply', () => {
+    expect(KNOWN_IDES.map((i) => i.name)).toEqual([
+      'WebStorm',
+      'IntelliJ IDEA Ultimate',
+      'IntelliJ IDEA CE',
+      'Cursor',
+      'Visual Studio Code',
+      'Zed',
+    ]);
+    const ws = {
+      bundleId: 'com.jetbrains.WebStorm',
+      name: 'WebStorm',
+      path: '/Applications/WebStorm.app',
+    };
+    expect(
+      IdeResponse.parse({ supported: true, installed: [ws], setting: 'auto', effective: ws }),
+    ).toBeTruthy();
   });
 });
 

@@ -26,6 +26,7 @@ import { unparkWaiting } from './parking.js';
 import { FINISHED_WORK, setTaskState } from './states.js';
 import { effectiveChanges } from './changes.js';
 import { handOverTask, type HandOverOptions } from './handover.js';
+import { carryTaskDeliverables } from './deliverables.js';
 
 /**
  * Task commands (P2-01; SPEC §2.7, §3.1, §3.4, decisions 9, 11, 11b). A project task lives on its
@@ -184,7 +185,8 @@ export function reopenTask(
  * A standalone task joins a project (SPEC §3.4, decision 9): it lives on the project's body from
  * now on, its asteroid shows "moved to …" (`body.moved` with `intoProjectId`) until the retention
  * sweep frees it, and its agents fly over. Its Stewards are handed over in the same command
- * (P2-12, decision 32): the project and its Waykeeper — refused while the project has none.
+ * (P2-12, decision 32): the project and its Waykeeper — refused while the project has none. Its
+ * deliverables go with it in the same command (decision 124).
  */
 export function moveTask(
   ctx: CommandContext,
@@ -222,5 +224,7 @@ export function moveTask(
   if (old) markMoved(ctx, old, hostOf(taskId), project.bodyId, toProjectId);
   moveAgents(ctx, hostOf(taskId), current.bodyId, project.bodyId);
   handOverTask(ctx, taskId, handOver);
+  // Its deliverables roll up into the project from now on (decision 124).
+  carryTaskDeliverables(ctx, taskId, toProjectId);
   return task;
 }

@@ -14,6 +14,7 @@ import { isFree, type ChooseOptions, type Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { handOverTask, type HandOverOptions } from './handover.js';
+import { carryTaskDeliverables } from './deliverables.js';
 import { promotedParent, roomFor } from './parking.js';
 import { createProject, updateProject } from './projects.js';
 import { FINISHED_WORK } from './states.js';
@@ -37,6 +38,7 @@ export const carriedOut = (p: Pick<Proposal, 'meta'> | undefined): PromotionOutc
  * planet of its own): it lives on the new project's body from now on, its Stewards fly there and
  * are handed over to the new project's Waykeeper in the same command. The old project's body
  * keeps its host, so no body shows a marker; the new project's `meta.promotedFrom` is the link.
+ * The task's deliverables go with it in the same command (decision 124).
  */
 export function transferTask(
   ctx: CommandContext,
@@ -69,6 +71,8 @@ export function transferTask(
   });
   moveAgents(ctx, { kind: 'task', id: taskId }, current.bodyId, project.bodyId);
   handOverTask(ctx, taskId, handOver);
+  // Its deliverables roll up into the new project (decision 124).
+  carryTaskDeliverables(ctx, taskId, toProjectId);
   return task;
 }
 
@@ -158,7 +162,8 @@ export function promotionRoom(
  * The new project of a task promotion card, on `body`: created once (found again by
  * `meta.proposalId`), with `meta.promotedFrom` — the permanent link in history (decision 15),
  * besides the `body.moved` event. A Waykeeper's moon is a sub-project of its project. Usable in
- * the approval transaction (P2-09's `carryOut`) as well as by the flow.
+ * the approval transaction (P2-09's `carryOut`) as well as by the flow. The task itself — and its
+ * deliverables (decision 124) — moves afterwards, with `moveTask` or `transferTask`.
  */
 export function createPromotedProject(ctx: CommandContext, p: Proposal, body: Body): Project {
   const existing = ctx.tables.projects.all().find((x) => x.meta?.['proposalId'] === p.id);

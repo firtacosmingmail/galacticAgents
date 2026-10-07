@@ -29,6 +29,14 @@ import {
   ToolCall,
   TrustLevel,
 } from './domain.js';
+import {
+  Deliverable,
+  DeliverableChanges,
+  DeliverableRun,
+  OpenAction,
+  Port,
+  RunOutcome,
+} from './deliverables.js';
 
 // ---------------------------------------------------------------------------
 // agent.* — emitted by adapters, normalised (TECHNOLOGY §3.4)
@@ -599,6 +607,82 @@ export const BudgetSpawnRefused = z.object({
   reason: z.string(),
 });
 
+// ---------------------------------------------------------------------------
+// deliverable.* and run.* (Phase 9; SPEC §4.7, decisions 118–134; TECHNOLOGY §9.1)
+// ---------------------------------------------------------------------------
+
+/** A deliverable was added (declared, detected or added by hand): the whole row. */
+export const DeliverableAdded = z.object({
+  type: z.literal('deliverable.added'),
+  deliverable: Deliverable,
+});
+
+/**
+ * A deliverable's own fields changed: edited, re-pointed or copied by the merge hook, marked
+ * missing, an application's confirmed open (`meta.confirmedOpen`), or moved with its task to
+ * another project (`changes.projectId`, decision 124). `version` is the row's new version; an
+ * absent key is unchanged, `null` clears a clearable field (`CLEARABLE_DELIVERABLE_FIELDS`).
+ */
+export const DeliverableUpdated = z.object({
+  type: z.literal('deliverable.updated'),
+  deliverableId: Id,
+  changes: DeliverableChanges.refine((c) => Object.keys(c).length > 0, {
+    message: 'an update changes something',
+  }),
+  version: z.number().int().positive(),
+});
+
+/** Removed from the lists — never a file (decision 122); the row stays for the history. */
+export const DeliverableRemoved = z.object({
+  type: z.literal('deliverable.removed'),
+  deliverableId: Id,
+  by: Actor,
+  reason: z.string().min(1).optional(),
+  version: z.number().int().positive(),
+});
+
+/** A removed deliverable is listed again ("Show removed" → Restore, decision 119). */
+export const DeliverableRestored = z.object({
+  type: z.literal('deliverable.restored'),
+  deliverableId: Id,
+  by: Actor,
+  version: z.number().int().positive(),
+});
+
+/** The audit of an open on the Mac (decision 127): folds to nothing. */
+export const DeliverableOpened = z.object({
+  type: z.literal('deliverable.opened'),
+  deliverableId: Id,
+  action: OpenAction,
+  by: Actor,
+});
+
+/** A command's run started (decision 130), logged after the fork: the run as it starts. */
+export const RunStarted = z.object({ type: z.literal('run.started'), run: DeliverableRun });
+
+/** The ports a run listens on changed (from its output and the system, TECHNOLOGY §9.8). */
+export const RunPorts = z.object({
+  type: z.literal('run.ports'),
+  runId: Id,
+  deliverableId: Id,
+  ports: z.array(Port),
+});
+
+/**
+ * A run ended: `exited` with its code, `failed` (a signal or a start failure), `stopped` by
+ * someone (`by`) or by the server with a `reason` (`RUN_END_REASONS`).
+ */
+export const RunEnded = z.object({
+  type: z.literal('run.ended'),
+  runId: Id,
+  deliverableId: Id,
+  outcome: RunOutcome,
+  exitCode: z.number().int().optional(),
+  signal: z.string().min(1).optional(),
+  reason: z.string().min(1).optional(),
+  by: Actor.optional(),
+});
+
 /** Every event that can appear in the `events` log and on the WebSocket stream. */
 export const Event = z.discriminatedUnion('type', [
   AgentCreated,
@@ -657,6 +741,14 @@ export const Event = z.discriminatedUnion('type', [
   BudgetWarning,
   BudgetExceeded,
   BudgetSpawnRefused,
+  DeliverableAdded,
+  DeliverableUpdated,
+  DeliverableRemoved,
+  DeliverableRestored,
+  DeliverableOpened,
+  RunStarted,
+  RunPorts,
+  RunEnded,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event['type'];

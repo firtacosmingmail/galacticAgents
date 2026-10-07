@@ -201,6 +201,39 @@ export function originOf(req: RequestLike): RequestOrigin {
   return isRemoteRequest(req) ? 'remote' : 'local';
 }
 
+/** What a route answers (403) when `requireLocal` refuses a request. */
+export interface LocalRefusal {
+  error: 'remote_control';
+  message: string;
+}
+
+/**
+ * The deliverables' remote rule (P9-03, TECHNOLOGY §9.9; SPEC decision 131): `undefined` when the
+ * request may go on, else the 403 body. With `always`, only the Mac itself may — opening a file,
+ * revealing it, opening an IDE or an application, starting a run: they run programs on the Mac,
+ * so `autoApproveRemote` does not lift it — like decision 113's typing, and with the same 403
+ * `remote_control` (one code for "not from a remote client"; the message says it is never).
+ * Without it, the decision-51 rule: a remote client only when the server trusts remote clients.
+ */
+export function requireLocal(
+  req: RequestLike,
+  opts: { always?: boolean; autoApproveRemote?: boolean; what?: string } = {},
+): LocalRefusal | undefined {
+  if (originOf(req) === 'local') return undefined;
+  const what = opts.what ?? 'This';
+  if (opts.always) {
+    return {
+      error: 'remote_control',
+      message: `${what} works only on the Mac itself, never from a remote client.`,
+    };
+  }
+  if (opts.autoApproveRemote) return undefined;
+  return {
+    error: 'remote_control',
+    message: `${what} works only from this machine's own browser (not from a remote client).`,
+  };
+}
+
 /** Proxy headers besides the `X-Forwarded-*` and `Tailscale-*` families. */
 const FORWARDING_HEADERS = new Set(['forwarded', 'x-real-ip', 'via']);
 

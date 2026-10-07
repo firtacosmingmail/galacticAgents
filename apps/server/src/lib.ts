@@ -61,6 +61,21 @@ export {
   retentionDue,
 } from './domain/cascade.js';
 export { DomainError } from './domain/errors.js';
+export {
+  addDeliverable,
+  carryTaskDeliverables,
+  projectRunEvent,
+  recordOpened,
+  recordRunEnded,
+  recordRunPorts,
+  recordRunStarted,
+  removeDeliverable,
+  restoreDeliverable,
+  updateDeliverable,
+  type DeliverableWrite,
+  type RunEndInput,
+  type RunStartInput,
+} from './domain/deliverables.js';
 export { seedDemoProject, retireFreeDemoBodies } from './domain/demo.js';
 export { clearDemoProjects } from './runtime/demo-clear.js';
 export { TRANSITIONS, canTransition } from './domain/states.js';

@@ -15,6 +15,7 @@ import {
   type HistoryQuestionsResponse,
   type HistoryWorkDetail,
   type HistoryWorkResponse,
+  type IdeResponse,
   type NotificationsResponse,
   type PreflightResponse,
   type RuntimePreflight,
@@ -22,6 +23,7 @@ import {
   type TranscriptResponse,
 } from '@galactic/protocol';
 import type { ServerConfig } from '../config/config.js';
+import type { Opener } from '../deliverables/opener.js';
 import { SettingsError, writableFor, type SettingsService } from '../config/settings.js';
 import type { EventLog } from '../domain/event-log.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
@@ -51,7 +53,9 @@ import { fileWriteRefusal, storageRefusal } from './storage-refusal.js';
  * - `GET /api/history/work/:kind/:id` — one project or task inspected from the history (P5-03):
  *   its trail, state changes, tasks, agents and their questions; 404 when there is none;
  * - `GET /api/history/events` — the timeline scrubber (P4-07): the events that touch one project,
- *   oldest first, paged forward by `seq` (read-only; `runtime/history-events.ts`).
+ *   oldest first, paged forward by `seq` (read-only; `runtime/history-events.ts`);
+ * - `GET /api/ide` — the IDEs installed on the Mac, the IDE setting and the one Open in IDE uses
+ *   (P9-03; TECHNOLOGY §9.7): open to every client (the phone shows the list, read-only).
  *
  * Errors: 400 `invalid_query` / `invalid_body` (zod issues) or `invalid` (a value the settings
  * refuse, with a message), 403 `remote_settings` (a remote client may change only the quality
@@ -63,6 +67,8 @@ export interface PanelRoutesOptions {
   runtime?: AgentRuntime;
   transcripts?: TranscriptPipeline;
   settings?: SettingsService;
+  /** The opener (P9-03): enables `GET /api/ide` and checks `deliverables.ide` patches. */
+  opener?: Opener;
   /** How long a preflight result is reused (default 30 s); `?refresh=1` runs it again. */
   preflightTtlMs?: number;
   /**
@@ -180,6 +186,15 @@ export function registerPanelRoutes(
         if (!patch) return;
         try {
           const write = writeOf(req);
+          // An IDE can be chosen only among the installed ones: detect first (cached 60 s).
+          // A remote patch is refused by `update` before anything is detected.
+          if (
+            patch.deliverables?.ide !== undefined &&
+            patch.deliverables.ide !== 'auto' &&
+            writableFor(write) === 'all'
+          ) {
+            await opts.opener?.ides();
+          }
           return {
             ...settings.update(patch, write),
             writable: writableFor(write),
@@ -198,6 +213,19 @@ export function registerPanelRoutes(
           req.log.error(error);
           return reply.code(500).send({ error: 'internal' });
         }
+      });
+    }
+
+    const { opener } = opts;
+    if (opener) {
+      app.get('/api/ide', async (): Promise<IdeResponse> => {
+        const [installed, effective] = [await opener.ides(), await opener.effectiveIde()];
+        return {
+          supported: opener.supported,
+          installed,
+          setting: config.deliverables?.ide ?? 'auto',
+          ...(effective ? { effective } : {}),
+        };
       });
     }
 

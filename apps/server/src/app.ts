@@ -18,6 +18,7 @@ import type { BackupService } from './db/backup.js';
 import { isWebFile, webCacheControl } from './http/web-cache.js';
 import { registerPushRoutes, type Push } from './push/index.js';
 import type { SettingsService } from './config/settings.js';
+import type { Opener } from './deliverables/opener.js';
 import type { EventLog } from './domain/event-log.js';
 import type { StatusStore } from './runtime/status-store.js';
 import type { TranscriptPipeline } from './runtime/transcripts.js';
@@ -49,6 +50,8 @@ export interface AppOptions {
   restartHarmonizer?: AgentRoutesOptions['restartHarmonizer'];
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
+  /** The opener on the Mac (P9-03): enables `GET /api/ide`. */
+  opener?: Opener;
   /** Web Push (P7-04): enables `/api/push*`. */
   push?: Push;
   /** The database's write health (P8-09): sent to every socket for the panel's banner. */
@@ -173,6 +176,7 @@ export function buildApp(opts: AppOptions): App {
       ...(opts.runtime ? { runtime: opts.runtime } : {}),
       ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
       ...(opts.settings ? { settings: opts.settings } : {}),
+      ...(opts.opener ? { opener: opts.opener } : {}),
     });
   }
 

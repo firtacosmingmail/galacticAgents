@@ -193,6 +193,61 @@ export const SettingsBudgets = z.object({
 });
 export type SettingsBudgets = z.infer<typeof SettingsBudgets>;
 
+// --- the IDE (P9-03; SPEC decision 127, TECHNOLOGY §9.7) ----------------------------------
+
+/**
+ * The IDEs Mission Control looks for on the Mac, in the order "Automatic" tries them (decision
+ * 127): each by its bundle id, which `open -b` launches wherever the app is installed.
+ */
+export const KNOWN_IDES = [
+  { bundleId: 'com.jetbrains.WebStorm', name: 'WebStorm' },
+  { bundleId: 'com.jetbrains.intellij', name: 'IntelliJ IDEA Ultimate' },
+  { bundleId: 'com.jetbrains.intellij.ce', name: 'IntelliJ IDEA CE' },
+  { bundleId: 'com.todesktop.230313mzl4w4u92', name: 'Cursor' },
+  { bundleId: 'com.microsoft.VSCode', name: 'Visual Studio Code' },
+  { bundleId: 'dev.zed.Zed', name: 'Zed' },
+] as const satisfies readonly { bundleId: string; name: string }[];
+
+/** A bundle id as macOS writes it (`CFBundleIdentifier`): never starts with `-`, no spaces. */
+export const BundleId = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/, 'a bundle id such as com.jetbrains.WebStorm');
+
+/** `deliverables.ide`: `auto` (the first installed of `KNOWN_IDES`) or a detected bundle id. */
+export const IdeSetting = z.union([z.literal('auto'), BundleId]);
+export type IdeSetting = z.infer<typeof IdeSetting>;
+
+/** An IDE found on the Mac: its bundle id, its name and where the app is. */
+export const DetectedIde = z.object({
+  bundleId: BundleId,
+  name: z.string().min(1),
+  path: z.string().min(1),
+});
+export type DetectedIde = z.infer<typeof DetectedIde>;
+
+/**
+ * `GET /api/ide` (P9-03): the IDEs installed on the Mac (in `KNOWN_IDES` order), the setting, and
+ * the IDE Open in IDE uses now (absent: none installed, or the chosen one is gone).
+ * `supported: false` when Mission Control does not run on macOS (nothing can be opened).
+ * Open to every client, like the deliverables list (TECHNOLOGY §9.9).
+ */
+export const IdeResponse = z.object({
+  supported: z.boolean(),
+  installed: z.array(DetectedIde),
+  setting: IdeSetting,
+  effective: DetectedIde.optional(),
+});
+export type IdeResponse = z.infer<typeof IdeResponse>;
+
+/**
+ * The deliverables settings (Phase 9). P9-03: the IDE; the later tasks add their keys (run
+ * concurrency, output retention, declaration limits) beside it.
+ */
+export const SettingsDeliverables = z.object({
+  ide: IdeSetting,
+});
+export type SettingsDeliverables = z.infer<typeof SettingsDeliverables>;
+
 /** The settings the panel shows and edits (SPEC §4.6), persisted in `config.json`. */
 export const Settings = z.object({
   /** Where new project folders go (SPEC §3.5): an absolute path or `~/…`. */
@@ -221,6 +276,11 @@ export const Settings = z.object({
    * for can be chosen. The Harmonizer and Waykeepers stay on their own runtime.
    */
   stewardRuntime: AgentRuntime.optional(),
+  /**
+   * The deliverables settings (Phase 9): the IDE Open in IDE uses (P9-03, decision 127). Optional
+   * so a page reading an older server still parses; this server always sends it.
+   */
+  deliverables: SettingsDeliverables.optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -235,6 +295,7 @@ export const SettingName = z.enum([
   'transcriptRetention',
   'budgets',
   'stewardRuntime',
+  'deliverables',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
 
@@ -256,6 +317,11 @@ export const SettingsPatch = z
     budgets: SettingsBudgets.partial().strict().optional(),
     /** The runtime of new Stewards (P8-07); `null` = the spawning brain's own again. */
     stewardRuntime: AgentRuntime.nullable().optional(),
+    /**
+     * The deliverables settings (Phase 9), merged key by key; local requests only unless
+     * `autoApproveRemote` (decisions 51, 131). `ide` must be `auto` or an installed IDE.
+     */
+    deliverables: SettingsDeliverables.partial().strict().optional(),
     /**
      * Marks the first-run setup as done (P25-08): the server stamps `setupCompletedAt` in
      * `config.json` (kept if already set). Local requests only, like every setting but the tier
