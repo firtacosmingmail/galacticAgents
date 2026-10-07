@@ -27,3 +27,33 @@ export function isWebFile(url: string): boolean {
     path === '/manifest.webmanifest'
   );
 }
+
+/** A `Host` header that can be named in a policy (a name or IP, an optional port). */
+const HOST = /^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
+
+/**
+ * The Content-Security-Policy of the app's own page (wave-3 review B1, defence in depth; TECHNOLOGY
+ * §9.5, §9.9): scripts and workers from the server only (Vite's build has no inline script and no
+ * `eval`; the scene's paint worker and the service worker are files of the build), no plugins, no
+ * `<base>`, never framed, forms to the server only. Styles allow inline ones (React style props,
+ * xterm.js's injected sheets); images `data:` and `blob:` (the viewer's pictures, a rasterised
+ * SVG); the socket to this host (`ws:`/`wss:` named for older Safari, whose `'self'` missed them).
+ * `host` is the request's `Host` header; without a usable one the socket falls back to `'self'`.
+ */
+export function webCsp(host?: string): string {
+  const sockets = host !== undefined && HOST.test(host) ? ` ws://${host} wss://${host}` : '';
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "worker-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    `connect-src 'self'${sockets}`,
+    "media-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+  ].join('; ');
+}
