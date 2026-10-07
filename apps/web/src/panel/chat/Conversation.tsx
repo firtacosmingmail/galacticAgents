@@ -34,6 +34,7 @@ import { NavLink } from '../Navigation.js';
 import { compactionNote } from '../compaction.js';
 import { ThreadCard } from './InlineCards.js';
 import { useComposerAssist } from '../composer/ComposerAssist.js';
+import { composing, type HistoryEntry } from '../composer/assist-model.js';
 import './chat.css';
 
 /**
@@ -195,8 +196,10 @@ export function Conversation({ agentId }: { agentId: Id }) {
   // What ↑ recalls (P8-14): the user's own lines in the loaded conversation, then those still
   // being sent, oldest first.
   const sentByUser = [
-    ...entries.filter((e) => e.kind === 'message' && e.sender.type === 'user').map((e) => e.text),
-    ...waiting.map((p) => p.text),
+    ...entries
+      .filter((e) => e.kind === 'message' && e.sender.type === 'user')
+      .map((e) => ({ id: e.id, text: e.text })),
+    ...waiting.map((p) => ({ id: messageEntryId(p.messageId), text: p.text })),
   ];
   const working = status?.state === 'working' ? status.currentActivity : undefined;
 
@@ -349,7 +352,7 @@ function Composer({
   name: string;
   ended: boolean;
   /** The user's earlier messages to this agent, oldest first (↑ recalls them, P8-14). */
-  history: readonly string[];
+  history: readonly HistoryEntry[];
   onSent: (messageId: Id, text: string) => void;
 }) {
   const api = useApi();
@@ -370,6 +373,7 @@ function Composer({
     textarea: field,
     history,
     commands: !ended,
+    send: () => void send(),
   });
   const send = async (e?: FormEvent) => {
     e?.preventDefault();
@@ -388,7 +392,8 @@ function Composer({
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (assist.onKeyDown(e)) return;
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    // WebKit's composition-ending Enter has `isComposing` false and keyCode 229 (review S5).
+    if (e.key === 'Enter' && !e.shiftKey && !composing(e)) {
       e.preventDefault();
       void send();
     }

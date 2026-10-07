@@ -227,6 +227,64 @@ describe('slash commands in the chat composer (P8-13)', () => {
     expect(list()).toBeNull();
   });
 
+  it('Enter on a command typed out in full sends it; Tab still inserts (review N9)', async () => {
+    const f = fakeApi({ commands: COMMANDS });
+    const { box } = await chat(f.api);
+    await type(box, '/compact');
+    expect(list()).not.toBeNull();
+    await key(box, 'Tab');
+    expect(box.value).toBe('/compact ');
+
+    await type(box, '/comp');
+    await key(box, 'Enter'); // not a whole name: inserts
+    expect(box.value).toBe('/compact ');
+    expect(f.sent).toEqual([]);
+
+    await type(box, '/compact');
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter' });
+    });
+    await waitFor(() => expect(f.sent).toEqual(['/compact']));
+    await waitFor(() => expect(box.value).toBe(''));
+  });
+
+  it('lists an alias with its command and finds the command by it (review N2)', async () => {
+    const f = fakeApi({
+      commands: [...COMMANDS, { name: 'usage', aliases: ['cost'], builtin: true }],
+    });
+    const { box } = await chat(f.api);
+    await type(box, '/cos');
+    expect(names()).toEqual(['/usage']);
+    expect(options()[0]!.textContent).toBe('/usage (also /cost)');
+    await type(box, '/cost');
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter' });
+    });
+    await waitFor(() => expect(f.sent).toEqual(['/cost']));
+  });
+
+  it('an input method’s Enter neither chooses nor sends (review S5)', async () => {
+    const f = fakeApi({ commands: COMMANDS });
+    const { box } = await chat(f.api);
+    await type(box, '/re');
+    // WebKit (the desktop app's WKWebView): the committing Enter has keyCode 229.
+    await key(box, 'Enter', { keyCode: 229 });
+    expect(box.value).toBe('/re');
+    await key(box, 'Enter', { isComposing: true });
+    expect(box.value).toBe('/re');
+
+    await type(box, 'こんにちは');
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', keyCode: 229 });
+      fireEvent.keyDown(box, { key: 'Enter', isComposing: true });
+    });
+    expect(f.sent).toEqual([]);
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    });
+    await waitFor(() => expect(f.sent).toEqual(['こんにちは']));
+  });
+
   it('is clean for axe with the list open', async () => {
     const f = fakeApi({ commands: COMMANDS });
     const { box, view } = await chat(f.api);
@@ -342,6 +400,18 @@ describe('the clarification box (P8-13, P8-14)', () => {
     expect(el.value).toBe('');
   });
 
+  it('↑ leaves out permission verdicts: only clarification answers are history (review N1)', async () => {
+    const f = fakeApi();
+    const el = box(f.api, [
+      earlier(1, 'use the old name', { type: 'user' }),
+      { ...earlier(2, 'allow', { type: 'user' }), kind: 'permission' },
+    ]);
+    await key(el, 'ArrowUp');
+    expect(el.value).toBe('use the old name');
+    await key(el, 'ArrowUp');
+    expect(el.value).toBe('use the old name');
+  });
+
   it('offers the skills and plugin commands, not the runtime’s own, and Enter inserts', async () => {
     const f = fakeApi({ commands: COMMANDS });
     const el = box(f.api, []);
@@ -351,6 +421,11 @@ describe('the clarification box (P8-13, P8-14)', () => {
     expect(names()).toEqual(['/research', '/review', '/xss']);
     await key(el, 'Enter');
     expect(el.value).toBe('/research ');
+    // A name typed out in full: Enter still inserts here (the box answers on Cmd+Enter only).
+    await type(el, '/research');
+    await key(el, 'Enter');
+    expect(el.value).toBe('/research ');
+    expect(f.answered).toEqual([]);
     // Cmd+Enter still answers.
     await type(el, '/research the cookie');
     await act(async () => {

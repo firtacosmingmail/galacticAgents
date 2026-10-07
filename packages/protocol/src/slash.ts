@@ -39,7 +39,10 @@ export const SlashCommand = z.object({
   /** What the command takes after its name, e.g. `<file>`. */
   argumentHint: z.string().max(SLASH_HINT_MAX).optional(),
   /** Other names that run the same command (Claude Code: `/cost` for `/usage`), without `/`. */
-  aliases: z.array(z.string().min(1).max(SLASH_NAME_MAX).regex(NAME)).max(SLASH_ALIASES_MAX).optional(),
+  aliases: z
+    .array(z.string().min(1).max(SLASH_NAME_MAX).regex(NAME))
+    .max(SLASH_ALIASES_MAX)
+    .optional(),
   /**
    * The runtime's own command (Claude Code's `/compact`, `/context`…), as opposed to a skill, a
    * plugin's or the project's. Absent when the runtime does not say.

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { SlashCommand } from '@galactic/protocol';
 import {
+  composing,
   historyStep,
   insertion,
+  isWholeCommand,
   matchCommands,
   onFirstLine,
   onLastLine,
@@ -45,13 +47,37 @@ describe('slash list (P8-13)', () => {
   it('inserts /name and a space', () => {
     expect(insertion(commands[0]!)).toBe('/review ');
   });
+
+  it('finds a command by an alias (review N2)', () => {
+    const usage: SlashCommand = { name: 'usage', aliases: ['cost'], builtin: true };
+    expect(matchCommands([...commands, usage], 'cos').map((c) => c.name)).toEqual(['usage']);
+    expect(isWholeCommand([usage], 'cost')).toBe(true);
+  });
+
+  it('knows a whole command name typed exactly (review N9)', () => {
+    expect(isWholeCommand(commands, 'compact')).toBe(true);
+    expect(isWholeCommand(commands, 'comp')).toBe(false);
+    expect(isWholeCommand(commands, 'Compact')).toBe(false);
+    expect(isWholeCommand(commands, '')).toBe(false);
+  });
+
+  it('takes WebKit’s keyCode 229 as composing (review S5)', () => {
+    expect(composing({ nativeEvent: { isComposing: true }, keyCode: 13 })).toBe(true);
+    expect(composing({ nativeEvent: { isComposing: false }, keyCode: 229 })).toBe(true);
+    expect(composing({ nativeEvent: { isComposing: false }, keyCode: 13 })).toBe(false);
+  });
 });
 
 describe('history recall (P8-14)', () => {
-  const history = recallList(['one', '', 'two', 'two', 'three\nlines']);
+  const entries = (...texts: string[]) => texts.map((text, i) => ({ id: `m${i}`, text }));
+  const history = recallList(entries('one', '', 'two', 'two', 'three\nlines'));
 
   it('keeps the user’s messages oldest first, without blanks or a repeat in a row', () => {
-    expect(history).toEqual(['one', 'two', 'three\nlines']);
+    expect(history).toEqual([
+      { id: 'm0', text: 'one' },
+      { id: 'm2', text: 'two' },
+      { id: 'm4', text: 'three\nlines' },
+    ]);
   });
 
   it('knows the caret’s line', () => {
@@ -63,7 +89,7 @@ describe('history recall (P8-14)', () => {
 
   it('walks back from an empty composer, newest first, and forward to empty again', () => {
     const s1 = historyStep(history, undefined, '', 0, 'older')!;
-    expect(s1).toEqual({ at: { index: 0, shown: 'three\nlines' }, text: 'three\nlines' });
+    expect(s1).toEqual({ at: { id: 'm4', shown: 'three\nlines' }, text: 'three\nlines' });
     // A recalled message of two lines: ↑ moves the caret up first (caret at its end).
     expect(historyStep(history, s1.at, s1.text, s1.text.length, 'older')).toBeUndefined();
     const s2 = historyStep(history, s1.at, s1.text, 0, 'older')!;
@@ -90,5 +116,15 @@ describe('history recall (P8-14)', () => {
     expect(historyStep(history, s1.at, 'edited', 6, 'newer')).toBeUndefined();
     expect(historyStep(history, undefined, '', 0, 'newer')).toBeUndefined();
     expect(historyStep([], undefined, '', 0, 'older')).toBeUndefined();
+  });
+
+  it('stays on the recalled message when a new one arrives meanwhile (review N8)', () => {
+    const s1 = historyStep(history, undefined, '', 0, 'older')!;
+    const s2 = historyStep(history, s1.at, s1.text, 0, 'older')!;
+    expect(s2.text).toBe('two');
+    // The user's message sent from another device lands at the end while "two" is shown.
+    const grown = [...history, { id: 'm9', text: 'new one' }];
+    expect(historyStep(grown, s2.at, 'two', 0, 'older')!.text).toBe('one');
+    expect(historyStep(grown, s2.at, 'two', 3, 'newer')!.text).toBe('three\nlines');
   });
 });

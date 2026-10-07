@@ -881,7 +881,12 @@ describe('ClaudeSdkAdapter — slash commands (P8-13)', () => {
     expect(commands).toEqual([
       { name: 'compact', description: 'Clear history but keep a summary', builtin: true },
       { name: 'review', description: 'Review a pull request', argumentHint: '<pr>' },
-      { name: 'plugin:deploy', description: 'Deploy now', argumentHint: '[env]', aliases: ['ship'] },
+      {
+        name: 'plugin:deploy',
+        description: 'Deploy now',
+        argumentHint: '[env]',
+        aliases: ['ship'],
+      },
     ]);
     // Prefetched at init, then cached: one call to the CLI.
     expect(await adapter.commands(handle.sessionId)).toBe(commands);
