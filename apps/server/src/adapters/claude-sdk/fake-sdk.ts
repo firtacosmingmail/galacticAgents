@@ -8,6 +8,7 @@ import type {
   SdkQueryOptions,
   SdkRateLimitEvent,
   SdkStreamingPrompt,
+  SdkSlashCommand,
   SdkSurface,
   SdkUsage,
   SdkUserMessage,
@@ -36,7 +37,17 @@ export type FakeAction =
   /** A subscription `rate_limit_event`. */
   | { rateLimit: SdkRateLimitEvent['rate_limit_info'] }
   /** The message iterator throws (the CLI keeps running). */
-  | { throwStream: string };
+  | { throwStream: string }
+  /** A `system/commands_changed` push with the session's new command list (P8-13). */
+  | { commandsChanged: SdkSlashCommand[] }
+  /**
+   * A local command's output (P8-13 review S4): what the bundled CLI names for `/context`,
+   * `/cost` — a replayed user message whose string content is wrapped in
+   * `<local-command-stdout>` (or `-stderr`). Not yet confirmed against a real run.
+   */
+  | { localCommand: string; stream?: 'stdout' | 'stderr' }
+  /** The turn's `result` text, instead of its last `text` action's. */
+  | { resultText: string };
 
 export interface FakeQuestion {
   question: string;
@@ -62,6 +73,11 @@ export interface FakeSdkOptions {
   throwOnInterrupt?: boolean;
   /** `system/init` reports this session id instead of the requested one. */
   initSessionId?: string;
+  /**
+   * What `query.supportedCommands()` answers (P8-13); a function is called each time, and one
+   * that throws makes the call reject. Absent: the query has no `supportedCommands` at all.
+   */
+  commands?: unknown[] | (() => unknown[]);
 }
 
 export interface FakeSdkCall {
@@ -85,6 +101,8 @@ export class FakeSdk implements SdkSurface {
   interrupts = 0;
   /** How many prompts were closed by the adapter (the CLI then sees stdin EOF). */
   inputClosed = 0;
+  /** How many times `query.supportedCommands()` was called (P8-13). */
+  commandCalls = 0;
 
   constructor(private readonly opts: FakeSdkOptions) {}
 
@@ -111,6 +129,8 @@ export class FakeSdk implements SdkSurface {
     const out = new Queue<SdkMessage>();
     let interrupted = false;
     let turn = 0;
+    /** The latest `commands_changed` push, which `supportedCommands()` then reports (as the SDK does). */
+    let commands: unknown[] | undefined;
     let cost = 0;
     const hook: SdkHook | undefined = options.hooks?.PreToolUse?.[0]?.hooks[0];
     const canUseTool: SdkCanUseTool | undefined = options.canUseTool;
@@ -243,6 +263,24 @@ export class FakeSdk implements SdkSurface {
             rate_limit_info: action.rateLimit,
             session_id: sessionId,
           });
+        } else if ('commandsChanged' in action) {
+          commands = action.commandsChanged;
+          out.push({
+            type: 'system',
+            subtype: 'commands_changed',
+            commands: action.commandsChanged,
+            session_id: sessionId,
+          });
+        } else if ('localCommand' in action) {
+          const tag = `local-command-${action.stream ?? 'stdout'}`;
+          out.push({
+            type: 'user',
+            message: { role: 'user', content: `<${tag}>${action.localCommand}</${tag}>` },
+            parent_tool_use_id: null,
+            session_id: sessionId,
+          });
+        } else if ('resultText' in action) {
+          // Read when the result is built.
         } else if ('throwStream' in action) {
           out.fail(new Error(action.throwStream));
           return;
@@ -350,9 +388,10 @@ export class FakeSdk implements SdkSurface {
           result: isError,
         });
       } else {
-        const lastText = [...actions]
-          .reverse()
-          .find((a): a is { text: string } => 'text' in a)?.text;
+        const given = actions.find((a): a is { resultText: string } => 'resultText' in a);
+        const lastText =
+          given?.resultText ??
+          [...actions].reverse().find((a): a is { text: string } => 'text' in a)?.text;
         out.push({
           type: 'result',
           subtype: 'success',
@@ -403,6 +442,16 @@ export class FakeSdk implements SdkSurface {
         onInterrupt?.();
         return { still_queued: [] };
       },
+      ...(this.opts.commands !== undefined
+        ? {
+            supportedCommands: async () => {
+              this.commandCalls++;
+              const given = this.opts.commands!;
+              return (commands ??
+                (typeof given === 'function' ? given() : given)) as SdkSlashCommand[];
+            },
+          }
+        : {}),
     };
   }
 }

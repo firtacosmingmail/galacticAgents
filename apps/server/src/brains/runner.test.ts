@@ -359,3 +359,113 @@ describe('BrainRunner', () => {
     await rig.h.done();
   });
 });
+
+describe('BrainRunner — the user’s slash commands (P8-13)', () => {
+  /** What Claude Code offers a brain (`settingSources: []`): its built-ins and bundled skills. */
+  const OFFERED = [
+    { name: 'compact', builtin: true },
+    { name: 'clear', aliases: ['reset', 'new'], builtin: true },
+    { name: 'init', builtin: true },
+    { name: 'review', builtin: true },
+    { name: 'security-review', builtin: true },
+    { name: 'context', builtin: true },
+    { name: 'usage', aliases: ['cost'], builtin: true },
+  ];
+
+  it('sends a slash command the session offers as typed, as its own turn; anything else is folded', async () => {
+    const h = brainHarness({ adapter: { commands: OFFERED } });
+    lives.push(h);
+    const hq = await h.startHarmonizer();
+    await hq.settled();
+    // No client read the commands: the runtime read them itself when the session opened.
+    hq.tell('/compact');
+    await hq.settled();
+    expect(hq.prompts().at(-1)).toBe('/compact');
+
+    const before = hq.prompts().length;
+    hq.tell('first thing');
+    hq.tell('/compact keep the plan');
+    hq.tell('/tmp/x is full');
+    hq.tell('/unknown');
+    await hq.settled();
+    const turns = hq.prompts().slice(before);
+    expect(turns).toHaveLength(3);
+    expect(turns[0]).toContain('Since your last turn:\n1. the user said: "first thing"');
+    expect(turns[0]).not.toContain('/compact');
+    // As typed: no "since your last turn", no seed — the runtime runs the command.
+    expect(turns[1]).toBe('/compact keep the plan');
+    expect(turns[2]).toContain('the user said: "/tmp/x is full"');
+    expect(turns[2]).toContain('the user said: "/unknown"');
+    // The user's command was delivered like any folded message (a restart does not resend it).
+    const delivered = h.log
+      .eventsSince(0, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter((e) => e.type === 'message.delivered');
+    const sent = h.log
+      .eventsSince(0, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .find(
+        (e) =>
+          e.type === 'message.sent' &&
+          e.sender.type === 'user' &&
+          e.text === '/compact keep the plan',
+      );
+    expect(
+      delivered.some(
+        (e) => sent?.type === 'message.sent' && 'messageId' in e && e.messageId === sent.messageId,
+      ),
+    ).toBe(true);
+    await h.done();
+  });
+
+  it('runs only the allowlist for a brain: /clear, /init, /review stay text (review S1)', async () => {
+    const h = brainHarness({ adapter: { commands: OFFERED } });
+    lives.push(h);
+    const hq = await h.startHarmonizer();
+    await hq.settled();
+    // The endpoint, the composer's list and the runner read the same cut list.
+    expect((await h.composed.runtime.commands(hq.agentId)).map((c) => c.name)).toEqual([
+      'compact',
+      'context',
+      'usage',
+    ]);
+    for (const name of ['clear', 'reset', 'init', 'review', 'security-review'])
+      expect(h.composed.runtime.hasCommand(hq.agentId, name)).toBe(false);
+    // An alias runs its command (review N2): `/cost` is Claude Code's `/usage`.
+    expect(h.composed.runtime.hasCommand(hq.agentId, 'cost')).toBe(true);
+
+    const before = hq.prompts().length;
+    hq.tell('/clear');
+    hq.tell('/init');
+    hq.tell('/review 12');
+    await hq.settled();
+    const turns = hq.prompts().slice(before);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toContain('the user said: "/clear"');
+    expect(turns[0]).toContain('the user said: "/init"');
+    expect(turns[0]).toContain('the user said: "/review 12"');
+
+    hq.tell('/cost');
+    await hq.settled();
+    expect(hq.prompts().at(-1)).toBe('/cost');
+    await h.done();
+  });
+
+  it('a Steward keeps its runtime’s whole list', async () => {
+    const h = brainHarness({ adapter: { commands: OFFERED } });
+    lives.push(h);
+    const steward = await h.composed.runtime.spawn({
+      runtime: 'fake',
+      role: 'steward',
+      cwd: '/tmp',
+      prompt: 'scenario:echo',
+    });
+    if (!steward.ok) throw new Error(steward.reason);
+    expect((await h.composed.runtime.commands(steward.agent.id)).map((c) => c.name)).toEqual(
+      OFFERED.map((c) => c.name),
+    );
+    expect(h.composed.runtime.hasCommand(steward.agent.id, 'clear')).toBe(true);
+    await h.composed.runtime.stop(steward.agent.id, USER);
+    await h.done();
+  });
+});

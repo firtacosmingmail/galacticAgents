@@ -40,6 +40,7 @@ import { DockHandle, DOCK_BODY_ID, UnreadReplies } from './Dock.js';
 import { useDockPrefs, type DockControl } from './dock-state.js';
 import { COMPACT_TOP_BAR_QUERY, STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
 import { SceneOffer } from './SceneOffer.js';
+import { NavSheet, useEdgeSwipe, useNavSheet } from './nav-sheet.js';
 import { BrainDock, DockViewToggle, SystemStatusView } from './status/StatusViews.js';
 import { useDockView } from './status/dock-view.js';
 import {
@@ -66,8 +67,10 @@ const NavigationMemo = memo(Navigation);
  * (P4-10). The dock splits the centre with the scene: a handle sets its height, and it minimises
  * to its bar and comes back, remembered per browser. With the scene hidden ("list mode") the main
  * area takes the whole centre. Narrow screens (STACKED_LAYOUT_QUERY) stack the scene, the
- * navigation and the side column in one scrolling area with the dock under it. The shell is
- * exactly the viewport: the page never scrolls, every column scrolls on its own.
+ * navigation and the side column in one scrolling area with the dock under it; on a phone
+ * (COMPACT_TOP_BAR_QUERY) the navigation leaves the stack for a sheet that slides in from the left
+ * (P8-15). The shell is exactly the viewport: the page never scrolls, every column scrolls on its
+ * own.
  *
  * Everything comes from the store (TECHNOLOGY §6.3); the selection is the store's too, mirrored in
  * the URL. The managed-agents section (P4-09) and the inbox (P4-12) can each be hidden per
@@ -100,6 +103,11 @@ export function Panel({
   // P7-03: list mode on a phone offers the scene with one tap (the bar's toggle is in its menu).
   const compact = useMediaQuery(COMPACT_TOP_BAR_QUERY);
   const offerScene = compact && route === 'panel' && !scene.visible && !scene.failure;
+  // P8-15: on a phone the navigation is a sheet that slides in from the left, not a block of the
+  // stack; the top bar's "Agents" button and a swipe from the left edge open it.
+  const sheeted = compact && route === 'panel';
+  const navSheet = useNavSheet(sheeted);
+  useEdgeSwipe(navSheet, sheeted);
   const dock = useDockPrefs();
   // Minimising makes sense where something else shares the space: the scene, or the stack.
   const collapsible = stacked || showScene;
@@ -112,6 +120,9 @@ export function Panel({
     side && !inbox.visible && 'pnl-grid-no-inbox',
     !side && 'pnl-grid-no-side',
     stacked && 'pnl-grid-stacked',
+    sheeted && 'pnl-grid-nav-sheet',
+    // A phone in list mode with the side column hidden has nothing above the dock: it fills.
+    sheeted && !showScene && !side && 'pnl-grid-dock-fills',
     collapsible && (open ? 'pnl-grid-dock-open' : 'pnl-grid-dock-min'),
   ]
     .filter(Boolean)
@@ -129,6 +140,7 @@ export function Panel({
               scene={scene}
               agents={agents}
               inbox={inbox}
+              {...(sheeted ? { navSheet } : {})}
               {...(onForget ? { onForget } : {})}
             />
             {/* While the database refuses writes (P8-09): the disk is full, actions refused. */}
@@ -149,11 +161,16 @@ export function Panel({
                       <div className="pnl-stack">
                         {showScene && <SceneAreaMemo onFailure={scene.fail} />}
                         {offerScene && <SceneOffer scene={scene} />}
-                        <NavigationMemo />
+                        {!sheeted && <NavigationMemo />}
                         {side && <SideColumn agents={agents} inbox={inbox} />}
                       </div>
                       <ReplayBar sceneShown={showScene} />
                       {main}
+                      {sheeted && (
+                        <NavSheet control={navSheet}>
+                          <NavigationMemo />
+                        </NavSheet>
+                      )}
                     </div>
                   ) : (
                     <div className={gridClass}>

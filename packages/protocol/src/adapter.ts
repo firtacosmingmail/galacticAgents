@@ -3,6 +3,7 @@ import type { AgentRole, AgentRuntime, PermissionAction } from './enums.js';
 import type { AgentEvent } from './events.js';
 import type { RuntimePreflight } from './panel.js';
 import type { Id } from './primitives.js';
+import type { SlashCommand } from './slash.js';
 
 /**
  * A tool the server hands to a brain (Harmonizer, Waykeeper). The adapter registers it with the
@@ -121,6 +122,14 @@ export interface AgentAdapter {
    * doing (P8-08). Only terminal runtimes (PTY) have it; the runtime logs it as the user's message.
    */
   input?(sessionId: string, text: string): Promise<void>;
+  /**
+   * The slash commands the session's runtime offers now (P8-13): Claude Code's
+   * `supportedCommands()`, ACP's `available_commands_update`. Runtime state, never an event: the
+   * adapter keeps the session's last report (and replaces it when the runtime announces a
+   * change) and returns `[]` until there is one. Normalised (`normalizeSlashCommands`). Absent
+   * for runtimes that have none (PTY). Never throws: an unknown or ended session gives `[]`.
+   */
+  commands?(sessionId: string): Promise<SlashCommand[]>;
   /**
    * The normalised event stream for every session of this adapter — the only source of
    * `agent.*` events for its sessions (the runtime adds `agent.spawned`).
