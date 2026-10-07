@@ -13,8 +13,10 @@ import {
   DEFAULT_BUDGET_WARN_PERCENT,
   DEFAULT_DECLARATION_LIMITS,
   DEFAULT_PERMISSION_POLICY,
+  DEFAULT_RUN_SETTINGS,
   DEFAULT_TRANSCRIPT_RETENTION,
   Timestamp,
+  type RunSettings,
   type AgentRuntime,
   type DeclarationLimits,
   type PermissionPolicy,
@@ -51,6 +53,7 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `stewardRuntime` | live: the next Steward a brain spawns (P8-07); only a registered runtime |
  * | `deliverables.ide` | live: the next Open in IDE (P9-03); `auto` or an installed IDE's bundle id |
  * | `deliverables.declarations` | live: the next agent declaration (P9-04, decision 120) |
+ * | `deliverables.runs` | live: the next run's start (`maxConcurrent`), the run's own output cap at its next write, retention's next run (P9-08, decision 130) |
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
  *
@@ -264,10 +267,24 @@ export class SettingsService {
     }
     if (patch.deliverables?.declarations) {
       next.deliverables = {
+        ...next.deliverables,
         ide: next.deliverables?.ide ?? 'auto',
         declarations: {
           ...declarationLimits(this.config),
           ...definedOnly(patch.deliverables.declarations),
+        },
+      };
+    }
+    if (patch.deliverables?.runs) {
+      const current = runSettings(this.config);
+      const { output, ...top } = patch.deliverables.runs;
+      next.deliverables = {
+        ...next.deliverables,
+        ide: next.deliverables?.ide ?? 'auto',
+        runs: {
+          ...current,
+          ...definedOnly(top),
+          output: { ...current.output, ...definedOnly(output ?? {}) },
         },
       };
     }
@@ -327,7 +344,11 @@ export class SettingsService {
       transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
       budgets: { warnAtPercent: c.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT },
       ...(c.stewardRuntime ? { stewardRuntime: c.stewardRuntime } : {}),
-      deliverables: { ide: c.deliverables?.ide ?? 'auto', declarations: declarationLimits(c) },
+      deliverables: {
+        ide: c.deliverables?.ide ?? 'auto',
+        declarations: declarationLimits(c),
+        runs: runSettings(c),
+      },
     };
   }
 
@@ -366,6 +387,12 @@ export class SettingsService {
       raw['deliverables'] = {
         ...((raw['deliverables'] as object | undefined) ?? {}),
         declarations: next.deliverables?.declarations,
+      };
+    }
+    if (patch.deliverables?.runs) {
+      raw['deliverables'] = {
+        ...((raw['deliverables'] as object | undefined) ?? {}),
+        runs: next.deliverables?.runs,
       };
     }
     if (setupCompletedAt) raw['setupCompletedAt'] = setupCompletedAt;
@@ -429,7 +456,28 @@ export class SettingsService {
         declarations: { ...next.deliverables.declarations },
       };
     }
+    // Read by `RunService` at every start and output write, and by retention (P9-08).
+    if (patch.deliverables?.runs && next.deliverables?.runs) {
+      this.config.deliverables = {
+        ...this.config.deliverables,
+        runs: { ...next.deliverables.runs, output: { ...next.deliverables.runs.output } },
+      };
+    }
   }
+}
+
+/**
+ * The managed runs' limits as configured now (P9-08, decision 130): the file's keys over
+ * `DEFAULT_RUN_SETTINGS`, the output's key by key. Read at every start, so a change applies at once.
+ */
+export function runSettings(config: Pick<ServerConfig, 'deliverables'>): RunSettings {
+  const runs = config.deliverables?.runs ?? {};
+  const { output, ...top } = runs;
+  return {
+    ...DEFAULT_RUN_SETTINGS,
+    ...definedOnly(top),
+    output: { ...DEFAULT_RUN_SETTINGS.output, ...definedOnly(output ?? {}) },
+  };
 }
 
 /**

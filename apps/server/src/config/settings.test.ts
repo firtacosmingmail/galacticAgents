@@ -6,10 +6,18 @@ import { setGlobalDefaultPolicy } from '../domain/permissions.js';
 import { loadConfig } from './config.js';
 import {
   DEFAULT_DECLARATION_LIMITS,
+  DEFAULT_RUN_SETTINGS,
+  SettingsPatch,
   type TranscriptRetention as TranscriptRetentionPolicy,
 } from '@galactic/protocol';
 import type { TranscriptRetention } from '../runtime/transcript-retention.js';
-import { SettingsError, SettingsService, declarationLimits, writableFor } from './settings.js';
+import {
+  SettingsError,
+  SettingsService,
+  declarationLimits,
+  runSettings,
+  writableFor,
+} from './settings.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -281,6 +289,7 @@ describe('the IDE setting (P9-03; decision 127)', () => {
     expect(settings.current().deliverables).toEqual({
       ide: 'auto',
       declarations: DEFAULT_DECLARATION_LIMITS,
+      runs: DEFAULT_RUN_SETTINGS,
     });
     const res = settings.update({ deliverables: { ide: 'com.microsoft.VSCode' } }, local);
     expect(res.settings.deliverables?.ide).toBe('com.microsoft.VSCode');
@@ -341,6 +350,7 @@ describe('the declaration limits (P9-04; decision 120)', () => {
     expect(res.settings.deliverables).toEqual({
       ide: 'auto',
       declarations: { ...DEFAULT_DECLARATION_LIMITS, perTask: 3 },
+      runs: DEFAULT_RUN_SETTINGS,
     });
     // Live: the service reads `declarationLimits(config)` at every declaration.
     expect(declarationLimits(config).perTask).toBe(3);
@@ -359,6 +369,7 @@ describe('the declaration limits (P9-04; decision 120)', () => {
     ).toEqual({
       ide: 'auto',
       declarations: { ...DEFAULT_DECLARATION_LIMITS, perTask: 3, perAgentPerHour: 5 },
+      runs: DEFAULT_RUN_SETTINGS,
     });
   });
 
@@ -372,5 +383,58 @@ describe('the declaration limits (P9-04; decision 120)', () => {
     );
     expect(file()).toEqual(before);
     expect(declarationLimits(config).perTask).toBe(50);
+  });
+});
+
+describe('the managed runs (P9-08; decision 130)', () => {
+  it('default to decision 130, merge key by key (output too), apply live and survive a restart', () => {
+    const { env, config, home, file } = setup();
+    const settings = new SettingsService({ config, home });
+    expect(runSettings(config)).toEqual(DEFAULT_RUN_SETTINGS);
+    settings.update({ deliverables: { declarations: { perTask: 3 } } }, local);
+    const res = settings.update(
+      { deliverables: { runs: { maxConcurrent: 2, output: { keepRuns: 3 } } } },
+      local,
+    );
+    expect(res.settings.deliverables?.runs).toEqual({
+      maxConcurrent: 2,
+      output: { ...DEFAULT_RUN_SETTINGS.output, keepRuns: 3 },
+    });
+    // The declarations set before stay.
+    expect(res.settings.deliverables?.declarations?.perTask).toBe(3);
+    // Live: `RunService` reads `runSettings(config)` at every start.
+    expect(runSettings(config).maxConcurrent).toBe(2);
+    settings.update({ deliverables: { runs: { output: { maxAgeDays: 7 } } } }, local);
+    expect(runSettings(config).output).toEqual({
+      maxBytesPerRun: 2 * 1024 * 1024,
+      keepRuns: 3,
+      maxAgeDays: 7,
+    });
+    expect(file()['deliverables']).toMatchObject({
+      runs: { maxConcurrent: 2, output: { keepRuns: 3, maxAgeDays: 7 } },
+    });
+    expect(runSettings(loadConfig(env).config)).toEqual({
+      maxConcurrent: 2,
+      output: { maxBytesPerRun: 2 * 1024 * 1024, keepRuns: 3, maxAgeDays: 7 },
+    });
+  });
+
+  it('refuse a value out of range and a remote write without autoApproveRemote', () => {
+    const { config, home, file } = setup();
+    const settings = new SettingsService({ config, home });
+    const before = file();
+    expect(SettingsPatch.safeParse({ deliverables: { runs: { maxConcurrent: 0 } } }).success).toBe(
+      false,
+    );
+    const patch = { deliverables: { runs: { maxConcurrent: 8 } } };
+    expect(refusal(() => settings.update(patch, { origin: 'remote' }))?.code).toBe(
+      'remote_settings',
+    );
+    expect(file()).toEqual(before);
+    expect(runSettings(config).maxConcurrent).toBe(4);
+    expect(
+      settings.update(patch, { origin: 'remote', autoApproveRemote: true }).settings.deliverables
+        ?.runs?.maxConcurrent,
+    ).toBe(8);
   });
 });

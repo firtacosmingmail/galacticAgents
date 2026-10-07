@@ -342,6 +342,22 @@ export const StartRunBody = z.object({
 });
 export type StartRunBody = z.infer<typeof StartRunBody>;
 
+/** `POST /api/deliverables/:id/runs` → the run that started. */
+export const StartRunResponse = z.object({ run: DeliverableRun });
+export type StartRunResponse = z.infer<typeof StartRunResponse>;
+
+/**
+ * Why a run cannot start now, as the preview reports it before the user confirms (and the start
+ * answers it): `after_merge` (the command's folder is a task's worktree — "available after the
+ * merge"), `running` (one run per command), `run_cap` (`deliverables.runs.maxConcurrent`),
+ * `folder` (the folder no longer passes the path rules), `removed`.
+ */
+export const RunRefusal = z.object({
+  code: z.string().min(1),
+  message: z.string().min(1),
+});
+export type RunRefusal = z.infer<typeof RunRefusal>;
+
 /** `GET /api/deliverables/:id/run-preview`: what the confirmation shows (decision 129). */
 export const RunPreviewResponse = z.object({
   deliverableId: Id,
@@ -352,8 +368,26 @@ export const RunPreviewResponse = z.object({
   envKeys: z.array(z.string()),
   /** The permission engine's reading of the line ("deletes files", "uses the network", …). */
   warnings: z.array(z.string()),
+  /** The engine's own lines behind the warnings (what it read where), for a "details" toggle. */
+  reasons: z.array(z.string()).optional(),
   source: DeliverableSource,
   addedBy: Actor,
+  /** The file a detected command was found in (`package.json`, `Makefile`, …). */
+  detectedFrom: z.string().min(1).optional(),
+  /**
+   * What a detected command runs as its file says it now (`meta.detected.body`: the script, rule
+   * or recipe body, redacted; P9-05). For display only: the run executes `line`.
+   */
+  body: z.string().optional(),
+  /**
+   * The body differs from the one the command's last run was confirmed with (wave-2 review S4):
+   * "changed since the last run". Absent when there was no run with a body, or none at all.
+   */
+  bodyChanged: z.boolean().optional(),
+  /** The body the last run was confirmed with, when it differs from `body`. */
+  lastRunBody: z.string().optional(),
+  /** Set when a start now would be refused (the dialog says why and offers no Run). */
+  refusal: RunRefusal.optional(),
 });
 export type RunPreviewResponse = z.infer<typeof RunPreviewResponse>;
 
