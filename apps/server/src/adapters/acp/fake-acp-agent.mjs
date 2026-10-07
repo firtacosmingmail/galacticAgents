@@ -140,6 +140,7 @@ app.onRequest(acp.methods.agent.session.new, ({ params, client }) => {
       scenario: undefined,
       pending: false,
       mode: startMode,
+      meta: params._meta ?? null,
     },
     loaded: false,
   });
@@ -176,6 +177,7 @@ app.onRequest(acp.methods.agent.session.load, async ({ params, client }) => {
   } catch {
     throw acp.RequestError.resourceNotFound(params.sessionId);
   }
+  state.loadMeta = params._meta ?? null;
   sessions.set(params.sessionId, { state, loaded: true });
   // ACP replays the conversation before answering a load; the client must not take it as new.
   for (const update of [
@@ -315,12 +317,13 @@ async function askToRun(ctx, toolCallId, call) {
 }
 
 /** A form elicitation; resolves with the accepted content, or `undefined`. */
-async function elicit(ctx, message, properties, required) {
+async function elicit(ctx, message, properties, required, toolCallId) {
   const response = await ctx.client.request(
     acp.methods.client.elicitation.create,
     {
       sessionId: ctx.id,
       mode: 'form',
+      ...(toolCallId ? { toolCallId } : {}),
       message,
       requestedSchema: { type: 'object', properties, ...(required ? { required } : {}) },
     },
@@ -366,6 +369,95 @@ const SCENARIOS = {
     );
     await ctx.stream(content ? `You chose: ${content.choice}` : 'No answer; carrying on.');
   },
+  /**
+   * `claude-agent-acp`'s question (real trace, P8-07): an `AskUserQuestion` tool call (kind
+   * `other`, never asked about), a form elicitation naming it — the choice and its optional
+   * "Other" box, nothing required — then the call completes with the answer.
+   */
+  asksTool: async (ctx) => {
+    const toolCallId = 'toolu_ask';
+    const meta = { claudeCode: { toolName: 'AskUserQuestion' } };
+    await ctx.update({
+      sessionUpdate: 'tool_call',
+      toolCallId,
+      _meta: meta,
+      title: 'Asking for your input',
+      kind: 'other',
+      status: 'pending',
+      rawInput: {},
+      content: [],
+    });
+    const option = (label) => ({ const: label, title: label, description: `Choose the ${label}` });
+    const content = await elicit(
+      ctx,
+      'Which option do you prefer?',
+      {
+        question_0: {
+          type: 'string',
+          title: 'Option',
+          oneOf: [option('First option'), option('Second option')],
+        },
+        question_0_custom: {
+          type: 'string',
+          title: 'Other',
+          description:
+            'Type your own answer, or add a note to the option you chose above (optional).',
+        },
+      },
+      undefined,
+      toolCallId,
+    );
+    const answer = content?.question_0 ?? content?.question_0_custom ?? 'nothing';
+    await ctx.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId,
+      _meta: meta,
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: `answered: ${answer}` } }],
+    });
+    await ctx.stream(`You chose: ${answer}`);
+  },
+  /**
+   * A call the agent's own rules refuse before it runs (`claude-agent-acp`, real trace, P8-07): the
+   * call is announced, then reported `failed` with the denial marker — no permission request.
+   */
+  refusesItself: async (ctx) => {
+    const toolCallId = 'toolu_refused';
+    const command = 'rm -rf scratch-dir';
+    await ctx.update({
+      sessionUpdate: 'tool_call',
+      toolCallId,
+      title: 'Terminal',
+      kind: 'execute',
+      status: 'pending',
+      rawInput: {},
+    });
+    await ctx.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId,
+      rawInput: { command },
+      title: command,
+    });
+    await ctx.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId,
+      status: 'failed',
+      content: [
+        {
+          type: 'content',
+          content: {
+            type: 'text',
+            text: `Permission denied: Permission to use Bash with command ${command} has been denied.`,
+          },
+        },
+      ],
+      _meta: {
+        claudeCode: { toolName: 'Bash', toolResponse: { decisionReasonType: 'subcommandResults' } },
+      },
+    });
+    await sleep(100, ctx.signal);
+    await ctx.stream('I could not run it.');
+  },
   /** A destructive command behind a permission request; finishes either way. */
   permission: async (ctx) => {
     await ctx.stream('Cleaning the build output.');
@@ -399,6 +491,10 @@ const SCENARIOS = {
       }
     }
     await ctx.stream('finished');
+  },
+  /** Says the `_meta` its session was created (and last loaded) with. */
+  meta: async (ctx) => {
+    await ctx.stream(`meta: ${JSON.stringify(ctx.state.meta)}`);
   },
   /** A short first turn; every later prompt is echoed. */
   echo: async (ctx) => {

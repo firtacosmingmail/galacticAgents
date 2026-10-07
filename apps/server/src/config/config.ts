@@ -130,7 +130,11 @@ export const ConfigFile = z.object({
    * server variables the agent needs — every credential (its API key or token): only routing
    * variables pass by default — never a `GALACTIC_*` one. `mode` is the session mode every session
    * is set to; a mode known to run tool calls without asking is refused unless
-   * `allowPermissiveMode` (decision 108).
+   * `allowPermissiveMode` (decision 108). Sessions run with isolated settings — for
+   * `claude-agent-acp`, none of the user's `~/.claude` rules, hooks, skills or plugins, nor the
+   * repository's `.claude` settings — unless `userSettings: true` (decision 108 amendment,
+   * 2026-10-07); `sessionMeta` is extra `_meta` for `session/new` and `session/load` (merged over
+   * the isolation defaults), for another agent's session options.
    */
   acp: z
     .object({
@@ -146,6 +150,8 @@ export const ConfigFile = z.object({
         .optional(),
       mode: z.string().min(1).optional(),
       allowPermissiveMode: z.boolean().optional(),
+      userSettings: z.boolean().optional(),
+      sessionMeta: z.record(z.string(), z.unknown()).optional(),
     })
     .optional(),
   /**
@@ -275,6 +281,8 @@ export interface ServerConfig {
     passEnv?: string[] | undefined;
     mode?: string | undefined;
     allowPermissiveMode?: boolean | undefined;
+    userSettings?: boolean | undefined;
+    sessionMeta?: Record<string, unknown> | undefined;
   };
   /** The terminal agent (P8-08); absent = no `pty` runtime registered. */
   pty?: NonNullable<ConfigFile['pty']>;
