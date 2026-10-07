@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-07 (blocked on a real ACP runtime installed locally); everything else done · **Task status:** blocked
-**Phase status:** in progress (11/12 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07 (11/12 done; the phase stays open as the ongoing backlog, P8-07 blocked)
+**Current task:** P8-13, P8-14, P8-15 (wave 5, branch `p8-wave5-composer-mobile`); P8-07 blocked on a real ACP runtime · **Task status:** in progress
+**Phase status:** in progress (11/15 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07 (11/12 done; the phase stays open as the ongoing backlog, P8-07 blocked)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -91,6 +91,21 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Status:** done (2026-10-06) · **Depends on:** P7-04, P8-09 · **Parallel with:** all
 - Found while building P8-09: `PushService.deliver` calls `markSent` inside the send's `try`, so on a full disk a delivered push fails `markSent`, is treated as a network error and is sent again (up to three attempts). Separate delivery from bookkeeping; a bookkeeping failure must never re-send.
 - **Acceptance:** with SQLITE_FULL on the push bookkeeping, each push is delivered once; a test proves it.
+
+### P8-13 — Slash-command autocomplete in the composer (added 2026-10-07)
+- **Status:** in progress · **Depends on:** P5-06, P8-07 · **Parallel with:** P8-14, P8-15
+- Cosmin's request: as in the Claude terminal, typing `/` at the start of a message opens a list of the slash commands the agent being talked to supports (its skills and plugin commands, as its runtime reports them — the Claude SDK's supported commands; ACP's available commands; none for terminal agents), filtered as the user types; arrows move, Tab/Enter inserts, Esc closes. Works in every composer (Harmonizer chat, Waykeeper chat, Steward clarification box where sending is allowed), keyboard and touch, accessible (combobox/listbox).
+- **Acceptance:** with the fake adapter reporting commands, `/` lists them, typing filters, Enter inserts the command; a runtime with no commands shows nothing; axe clean.
+
+### P8-14 — Message history with ↑ in an empty composer (added 2026-10-07)
+- **Status:** in progress · **Depends on:** P5-02 · **Parallel with:** P8-13, P8-15
+- Cosmin's request: pressing ↑ in an empty composer recalls the user's previous messages to that agent (newest first), ↓ walks forward and back to empty, as in a terminal; editing a recalled message and sending sends the edited text; a draft is never lost (↑ only when the composer is empty or showing a recalled entry).
+- **Acceptance:** ↑/↓ walk the user's own sent messages for that conversation; non-empty drafts are untouched; tests.
+
+### P8-15 — Hidable navigation sheet on phones (added 2026-10-07)
+- **Status:** in progress · **Depends on:** P7-03, P4-10 · **Parallel with:** P8-13, P8-14
+- Cosmin's request: on the phone, the left navigation (Harmonizer, projects, asteroids — the agents sheet) becomes a sheet that slides in from the left edge and hides again: a button in the top bar, an edge swipe, tap outside or Esc to close; it closes after a selection; desktop layout unchanged; reduced motion respected; focus trapped while open.
+- **Acceptance:** on a phone-sized viewport the sheet is hidden by default, opens from the button and the edge swipe, closes on selection/outside tap/Esc; e2e or jsdom tests; axe clean.
 
 ## Exit criteria
 
