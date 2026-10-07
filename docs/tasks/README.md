@@ -15,7 +15,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 5 — Panel polish and scene integration | `PHASE_5_PANEL_POLISH.md` | done (2026-10-04) | 7/7 | — |
 | 6 — Planet zoom and structure | `PHASE_6_PLANET_ZOOM.md` | done (2026-10-05) | 7/7 | — |
 | 7 — Remote and mobile access | `PHASE_7_REMOTE_MOBILE.md` | in progress (branch `phase-7`) | 6/7 | P7-06 (device run with Cosmin; needs Tailscale) |
-| 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | in progress (branch `phase-8`) | 11/12 | P8-07 blocked (needs a real ACP runtime installed) |
+| 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | in progress (branch `phase-8`, merged into `main` 2026-10-07) | 11/12 | P8-07 blocked (needs a real ACP runtime installed) |
 
 Phases run in order 0 → 1 → 2 → 2.5 → 3 → 4 → 5 → 6 → 7; Phase 8 tasks are picked whenever their dependencies are met. Phase 7 depends on Phase 5, not on Phase 6.
 

@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
 **Current task:** P8-07 (blocked on a real ACP runtime installed locally); everything else done · **Task status:** blocked
-**Phase status:** in progress (11/12 done) — on branch `phase-8`, cut from `phase-7`; Phase 7 merged into `main` on 2026-10-06 and into `phase-8` after it
+**Phase status:** in progress (11/12 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07 (11/12 done; the phase stays open as the ongoing backlog, P8-07 blocked)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
