@@ -16,6 +16,7 @@ import type {
   HistoryWorkResponse,
   HistoryWorkState,
   HostKind,
+  IdeResponse,
   MessagesResponse,
   PreflightResponse,
   ProposalDecisionBody,
@@ -151,6 +152,8 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     settings: () => call<SettingsResponse>('GET', '/api/settings'),
     patchSettings: (patch: SettingsPatch) =>
       call<SettingsResponse>('PATCH', '/api/settings', patch),
+    /** The IDEs installed on the Mac and the IDE setting (P9-03). */
+    ide: () => call<IdeResponse>('GET', '/api/ide'),
     /** The runtime preflight; `refresh` runs the checks again instead of the cached result. */
     preflight: (refresh = false) =>
       call<PreflightResponse>('GET', `/api/preflight${refresh ? '?refresh=1' : ''}`),
