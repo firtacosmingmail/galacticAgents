@@ -38,8 +38,9 @@ name)` answers from it synchronously.
   delivered **alone and as typed**, as its own turn (no "Since your last turn", no seed), so the
   CLI runs the command; the mailbox items before it make one turn first, those after it the next.
   Anything else (an unknown name, a path, another agent's message) stays a line of the turn
-  prompt. The runner learns the names from `hasCommand`, i.e. from the last `commands()` read —
-  which the composer makes when it mounts and again when `/` is typed (see "Limitations").
+  prompt. The runner learns the names from `hasCommand`; since the review the runtime reads a
+  brain's commands itself when its session opens, and a brain runs only an allowlist (see
+  "Review fixes").
 - **Web** (`apps/web/src/panel/composer/`): `useComposerAssist()` over each composer's own
   `<textarea>` — the Harmonizer's and a Waykeeper's chat (`chat/Conversation.tsx`) and the
   Steward's clarification box (`steward/ClarificationComposer.tsx`). `slash-commands.ts` reads the
@@ -105,9 +106,12 @@ name)` answers from it synchronously.
   plugin skills) and for a brain (`settingSources: []`: probably the built-ins and bundled skills
   only), and that a streamed user message `/compact` or `/<skill> args` runs as the command in
   this SDK version (the SDK documents slash commands sent as the prompt; not verified here).
-- A brain runs a slash command only once the server has read its commands (`hasCommand`): the
-  composer does that on mount, so a command typed in the panel works; one sent another way before
-  any read (the ops console) is folded into a turn prompt as text.
+- ~~A brain runs a slash command only once the server has read its commands~~ — fixed in the
+  review: the runtime reads them when a brain's session opens, with the allowlist as fallback.
+- **Needs a real Claude run** (review S4): where `/context` and `/cost` put their answer. The
+  bundled CLI names `<local-command-stdout>` / `-stderr` / `-caveat`; the SDK types a replayed user
+  message (`isReplay`). The adapter shows the wrapped text from a user message (string content or
+  text blocks) and, for a turn that said nothing else, the result text — check both on a real run.
 - A slash command in a brain's session's first prompt (a spawn or a reset folding the mailbox) is
   folded, not run.
 - The clarification box's commands reach the agent as answer text; whether the agent then invokes
@@ -117,7 +121,48 @@ name)` answers from it synchronously.
 - The terminal agent's one-line input (P8-08) has neither feature (a terminal agent has no
   readable commands, and its own CLI keeps its history).
 
+## Review fixes (2026-10-07, branch `p8-wave5-review-fixes`)
+
+Review of `phase-8...p8-wave5-composer-mobile`; SPEC decision 115 and TECHNOLOGY §3.4/§5.2 updated.
+
+- **S1 — brains run any command their session offers.** A brain spawns with `settingSources: []`,
+  so it offers Claude Code's built-ins and bundled skills: `/clear` from the phone would reset it
+  behind the runner's back (and break the saved `sessionRef`), `/init`, `/review`,
+  `/security-review` would make it do Steward work. Now `AgentRuntime.commands()` keeps only
+  `BRAIN_SLASH_COMMANDS` (`compact`, `context`, `cost`, `usage`; `brainSlashCommands` in
+  `packages/protocol/src/slash.ts`, the runtime's own rows — a skill named like one, `builtin:
+  false`, is not) for the Harmonizer and Waykeepers, so the endpoint, the composer's list and
+  `hasCommand` agree; anything else stays a line of the turn prompt. Stewards keep their full
+  list. Tests: `slash.test.ts`, `runner.test.ts` (allowlist, `/clear` `/init` `/review` folded,
+  `/cost` by alias, a Steward's full list).
+- **S3 — detection depended on a client having read the list.** The runtime now reads a brain's
+  commands when its session opens (`start()`: spawn, resume, reset), and until that read returns
+  a list, `hasCommand` takes the allowlist as offered by a runtime that has `commands` at all. An
+  empty answer is not remembered (adapters return `[]` for "not known yet": a CLI still starting,
+  the 5 s timeout). Test: `resume.test.ts` — restart, `/compact` sent at once is its own turn,
+  `/clear` folded (fails without the change).
+- **S4 — local command output invisible.** The Claude SDK adapter emits a user message's
+  `<local-command-stdout>`/`-stderr` text (tags stripped) as `agent.output` (text), and a
+  successful turn that put no text in the transcript emits its `result` text (tags stripped; an
+  ordinary turn's result is its last text, already shown, so nothing doubles). The stand-in SDK
+  scripts both (`localCommand`, `resultText`). Shape to confirm on a real run (above).
+- **S5 — IME Enter in WKWebView.** `composing(e)` (`assist-model.ts`): `isComposing` or
+  `keyCode === 229` (WebKit's composition-ending Enter has `isComposing` false). The assist, the
+  chat's Enter-send and the clarification box's Cmd+Enter ignore it. Tests: model and component.
+- **N1** — the clarification box recalls only `kind: 'clarification'` answers (not "allow"/"deny").
+- **N2** — `SlashCommand.aliases` kept by `normalizeSlashCommands` (one word, no repeat of the
+  name, at most 10), matched by `slashCommandIs` (runtime) and by the list's filter, shown as
+  "(also /cost)" in the row; `/cost` typed out sends.
+- **N8** — the recall position is the message's id (`HistoryEntry {id, text}`; the chat's entry id
+  — a pending message uses the id its entry will have), so a message arriving meanwhile does not
+  shift it.
+- **N9** — with the list open, Enter on a name or alias typed out in full sends (the chat passes
+  `send`); Tab still inserts. In the clarification box Enter still inserts (it answers on
+  Cmd/Ctrl+Enter only).
+
 ## Proposed SPEC §7 text (not edited in SPEC; numbers to be assigned on merge — P8-15 may also propose 115)
+
+(Superseded: decisions 115 and 116 are in SPEC §7; 115 was reworded by the review.)
 
 | 115 | Slash commands in the composer | **`/` lists what the agent's runtime offers; the message goes as typed** (2026-10-07, Cosmin, P8-13; §4.2, decisions 13, 57, 81, 90): typing `/` as the first character of a message in the Harmonizer's or a Waykeeper's chat, or in a Steward's clarification box, opens a list of the slash commands that agent's runtime reports for its live session — Claude Code's built-in commands, skills and plugin commands; an ACP agent's available commands; none for a terminal agent — filtered as the name is typed; arrows move, Tab or Enter insert `/name `, Escape closes, a click or tap chooses. No list when the agent offers none or has no live session. The message is sent as typed, so the runtime runs the command; to a brain, a user's message that starts with a command its session offers is delivered alone, as its own turn, instead of being folded into the next turn's summary. The clarification box offers skills and plugin commands only (an answer cannot run the runtime's own commands). The list is read-only information, open to remote clients; its text is the agent's and is shown as plain text. |
 | 116 | Message history in the composer | **↑ in an empty composer recalls what the user sent to that agent** (2026-10-07, Cosmin, P8-14; decisions 81, 96): in an empty composer ↑ recalls the user's earlier messages to that conversation, newest first, and ↓ walks back to the empty composer, as in a terminal. Only an empty composer or an unedited recalled message reacts, and a recalled message of several lines first moves the caret through its lines, so a draft is never lost; editing a recalled message and sending sends the edited text. A Steward's clarification box recalls the user's earlier answers to that Steward. The history is the conversation the page has loaded; answers still queued offline are not part of it. While the slash list is open, the arrows belong to the list. |

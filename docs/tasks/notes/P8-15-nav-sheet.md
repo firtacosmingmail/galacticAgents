@@ -61,7 +61,8 @@ Under reduced motion the panel-wide P5-04 rule (`transition-duration: 0.01ms !im
 `.pnl *`, property `all` by default) makes descendants *transition* the inherited `visibility`:
 the rows stayed `visibility: hidden` for a frame or two after the sheet opened, and Chrome
 dropped the `focus()` (seen in Playwright, not in jsdom). Fixed with `transition: none` on the
-sheet's descendants, plus a one-frame retry of the focus. Any other component that reveals
+sheet's descendants (under reduced motion only, since the review), plus a one-frame retry of the
+focus. Any other component that reveals
 content by `visibility` and focuses it at once would hit the same thing.
 
 ## Tests
@@ -100,6 +101,43 @@ than in the sheet. Installed as a PWA (standalone, P7-01) there is no back swipe
 swipe is the sheet's. The button is the primary way; the swipe is a convenience. **To check on
 a real iPhone**: Safari tab vs. installed app, with and without history.
 
+## Review fixes (2026-10-07, branch `p8-wave5-review-fixes`)
+
+SPEC decision 117 and TECHNOLOGY §2.4 updated.
+
+- **S2 — the system's Back.** The user's phone (Samsung S24, One UI gesture navigation) takes a
+  swipe from either edge as Back before the page sees it, so the edge swipe mostly navigated back:
+  with the sheet open, Back changed the selection, or at the installed app's first entry left the
+  app. Now opening pushes `{navSheet: true}` (same URL; not if the top entry is already the
+  sheet's); `popstate` while open closes it (selection untouched, focus back on the button);
+  closed any other way (scrim, ×, Escape, swipe, the current row, leaving the phone layout) it
+  calls `history.back()` once — `backPending` guards a second call before the `popstate`, and a
+  sheet reopened meanwhile pushes its entry again when that `popstate` arrives; a selection made
+  in it is a `navigate` that *replaces* the sheet's entry (`state/store.ts`: an entry with
+  `navSheet` on top is replaced, not pushed over), so Back after it goes to the previous
+  selection. A sheet entry found on load (a reload) is turned into a plain one. The "Agents"
+  button stays the primary way. Tests: jsdom history (Back closes and keeps the selection; ×
+  and Escape take the entry back; a selection then Back goes to the previous selection; the
+  current row takes the entry back) and Playwright `page.goBack()` with and without reduced
+  motion.
+- **N3** — `.pnl-nav-sheet-panel * { transition: none; }` only inside `@media
+  (prefers-reduced-motion: reduce)`; the e2e checks the focus on the selected row under reduced
+  motion too.
+- **N4** — a selection in the sheet puts the focus on the new page's title (`main h1`, decision
+  81), with a few frames' grace while the dock renders; other closes still go to the button.
+- **N5** — `inertOutside` also makes inert what is added beside the page while the sheet is open
+  (a `MutationObserver` on each ancestor's children), undone on close. The sheet stays where it is
+  in the tree (a portal at body level would leave the `.pnl` scope its styles and variables need).
+- **N6** — Tab stops skip elements without client rects (CSS-hidden), where the browser has
+  layout (jsdom has none: the check is skipped there; a test stubs `getClientRects`).
+- **N7** — an edge swipe that starts on a horizontally scrollable element (overflow-x auto/scroll
+  and wider content) is that element's.
+- The swipe e2e no longer seeds a project: the harness's seven planets are all taken by the time
+  the new Back test seeds one.
+
 ## Decision 117 (not yet in SPEC §7)
+
+(Superseded: decision 117 is in SPEC §7, reworded by the review for Back and the focus after a
+selection.)
 
 | 117 | The navigation as a sheet on phones | **On a phone the navigation slides in from the left and hides** (2026-10-07, P8-15; refines decisions 67, 71, 81, 92, 94): at 760 px wide or less the panel's navigation (the Harmonizer, the projects, the asteroids) is not part of the page: it is a sheet, hidden by default, that slides in from the left over the dimmed page. The top bar's first item, an "Agents" button (with a dot while something waits for the user), opens it, and so does a one-finger swipe that starts at the screen's left edge; it closes when something is selected in it, on a tap on the dimmed page, on Escape, on its close button and on a swipe to the left. While open it is a modal dialog: the focus moves to the selected row, stays in the sheet, and goes back to the "Agents" button on close. With the system's reduced-motion setting it appears and goes without sliding. Whether it is open is never remembered: every load starts with it hidden. Gestures on the scene are unchanged, except that a touch starting at the very left edge belongs to the sheet. Wider screens keep the navigation where it was. |
