@@ -17,7 +17,15 @@ This builds the server, the web app and the app's Node side, then the app bundle
 apps/desktop/src-tauri/target/release/bundle/macos/GalacticAgents.app
 ```
 
-The bundle is not signed by a developer certificate (ad-hoc only) and not notarized. Run it from where it was built, or copy it to `/Applications`; the first time, macOS may ask you to confirm opening it (right-click → Open). The build needs about 2–4 GB of disk for Cargo's build files (a debug build alone took 2.2 GB) under `apps/desktop/src-tauri/target/` (safe to delete; `cargo clean` there).
+To build it and put it in `/Applications` in one step (quit the app first if it runs; options `--skip-build`, `--to <folder>`, `--open`):
+
+```sh
+pnpm desktop:install
+```
+
+It replaces `/Applications/GalacticAgents.app` only when the copy there is this app (same bundle identifier), and refuses while the app is running. Run it again after `git pull`: the app runs the repository it was built from.
+
+The bundle is not signed by a developer certificate (ad-hoc only) and not notarized. Run it from where it was built, or copy it to `/Applications` (`pnpm desktop:install`); the first time, macOS may ask you to confirm opening it (right-click → Open). The build needs about 2–4 GB of disk for Cargo's build files (a debug build alone took 2.2 GB) under `apps/desktop/src-tauri/target/` (safe to delete; `cargo clean` there).
 
 **The app does not contain the server.** It runs the repository it was built from: `apps/server` (with `galactic start`), `apps/web/dist` and `apps/desktop/dist`. After `git pull`, run `pnpm build` again (no Rust rebuild needed unless `apps/desktop/src-tauri` changed). Moved the repository? Set `GALACTIC_REPO` or rebuild.
 

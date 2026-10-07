@@ -19,6 +19,7 @@
     "remote": "node scripts/remote-start.mjs",
     "desktop:dev": "pnpm build && pnpm --filter @galactic/desktop dev",
     "desktop:build": "pnpm build && pnpm --filter @galactic/desktop bundle",
+    "desktop:install": "node scripts/desktop-install.mjs",
     "desktop:smoke": "pnpm build && pnpm --filter @galactic/desktop smoke",
     "check:real": "pnpm build:deps && node scripts/check-real.mjs",
     "drills": "pnpm build:deps && GALACTIC_DRILLS=${GALACTIC_DRILLS:-25} pnpm --filter @galactic/server exec vitest run src/test/drills",
