@@ -13,6 +13,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
+import type { DeliverableService } from '../deliverables/service.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import type { Workspaces } from '../workspace/workspaces.js';
 import type { WakeRules } from './wake.js';
@@ -93,6 +94,11 @@ export interface BrainToolContext {
    * `undefined` (or absent) = the brain's own runtime. Read at every Steward spawn.
    */
   stewardRuntime?: () => AgentRuntime | undefined;
+  /**
+   * Agents' declarations (P9-04): the deliverable tools declare, remove and list through it.
+   * Present when the server was composed with a data folder; absent, those tools refuse.
+   */
+  deliverables?: DeliverableService;
 }
 
 export interface BrainTool {

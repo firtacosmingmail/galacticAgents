@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './config/config.js';
-import { SettingsService } from './config/settings.js';
+import { SettingsService, declarationLimits } from './config/settings.js';
 import { Opener } from './deliverables/opener.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
 import { buildApp } from './app.js';
@@ -186,6 +186,8 @@ const composed = composeRuntime(db, {
   processes: { groups: supervisor },
   // Dollar budgets (P8-01): the warning threshold.
   ...(config.budgets ? { budgets: config.budgets } : {}),
+  // Agents' declarations (P9-04): the limits are read at every declaration, so the settings apply live.
+  deliverables: { dataDir: config.dataDir, limits: () => declarationLimits(config) },
 });
 const { log, statuses, transcripts } = composed;
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.

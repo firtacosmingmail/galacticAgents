@@ -4,9 +4,12 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { setGlobalDefaultPolicy } from '../domain/permissions.js';
 import { loadConfig } from './config.js';
-import type { TranscriptRetention as TranscriptRetentionPolicy } from '@galactic/protocol';
+import {
+  DEFAULT_DECLARATION_LIMITS,
+  type TranscriptRetention as TranscriptRetentionPolicy,
+} from '@galactic/protocol';
 import type { TranscriptRetention } from '../runtime/transcript-retention.js';
-import { SettingsError, SettingsService, writableFor } from './settings.js';
+import { SettingsError, SettingsService, declarationLimits, writableFor } from './settings.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -275,15 +278,18 @@ describe('the IDE setting (P9-03; decision 127)', () => {
       'com.jetbrains.WebStorm',
       'com.microsoft.VSCode',
     ]);
-    expect(settings.current().deliverables).toEqual({ ide: 'auto' });
+    expect(settings.current().deliverables).toEqual({
+      ide: 'auto',
+      declarations: DEFAULT_DECLARATION_LIMITS,
+    });
     const res = settings.update({ deliverables: { ide: 'com.microsoft.VSCode' } }, local);
     expect(res.settings.deliverables?.ide).toBe('com.microsoft.VSCode');
     expect(config.deliverables?.ide).toBe('com.microsoft.VSCode'); // the opener reads it live
     expect(file()['deliverables']).toEqual({ ide: 'com.microsoft.VSCode' });
     expect(loadConfig(env).config.deliverables?.ide).toBe('com.microsoft.VSCode');
-    expect(settings.update({ deliverables: { ide: 'auto' } }, local).settings.deliverables).toEqual(
-      { ide: 'auto' },
-    );
+    expect(
+      settings.update({ deliverables: { ide: 'auto' } }, local).settings.deliverables?.ide,
+    ).toBe('auto');
     expect(file()['deliverables']).toEqual({ ide: 'auto' });
   });
 
@@ -323,5 +329,47 @@ describe('the IDE setting (P9-03; decision 127)', () => {
     expect(file()).toEqual(before);
     const trusted = settings.update(patch, { origin: 'remote', autoApproveRemote: true });
     expect(trusted.settings.deliverables?.ide).toBe('com.jetbrains.WebStorm');
+  });
+});
+
+describe('the declaration limits (P9-04; decision 120)', () => {
+  it('default to decision 120, merge key by key, apply live, survive a restart and keep the IDE', () => {
+    const { env, config, home, file } = setup();
+    const settings = new SettingsService({ config, home });
+    expect(declarationLimits(config)).toEqual(DEFAULT_DECLARATION_LIMITS);
+    const res = settings.update({ deliverables: { declarations: { perTask: 3 } } }, local);
+    expect(res.settings.deliverables).toEqual({
+      ide: 'auto',
+      declarations: { ...DEFAULT_DECLARATION_LIMITS, perTask: 3 },
+    });
+    // Live: the service reads `declarationLimits(config)` at every declaration.
+    expect(declarationLimits(config).perTask).toBe(3);
+    settings.update({ deliverables: { declarations: { perAgentPerHour: 5 } } }, local);
+    expect(declarationLimits(config)).toMatchObject({ perTask: 3, perAgentPerHour: 5 });
+    expect(file()['deliverables']).toMatchObject({
+      declarations: { perTask: 3, perAgentPerHour: 5 },
+    });
+    expect(declarationLimits(loadConfig(env).config)).toMatchObject({
+      perTask: 3,
+      perAgentPerHour: 5,
+      perProject: 200,
+    });
+    expect(new SettingsService({ config: loadConfig(env).config, home }).current().deliverables)
+      .toEqual({
+        ide: 'auto',
+        declarations: { ...DEFAULT_DECLARATION_LIMITS, perTask: 3, perAgentPerHour: 5 },
+      });
+  });
+
+  it('are changed only from this machine unless autoApproveRemote', () => {
+    const { config, home, file } = setup();
+    const settings = new SettingsService({ config, home });
+    const before = file();
+    const patch = { deliverables: { declarations: { perTask: 1 } } };
+    expect(refusal(() => settings.update(patch, { origin: 'remote' }))?.code).toBe(
+      'remote_settings',
+    );
+    expect(file()).toEqual(before);
+    expect(declarationLimits(config).perTask).toBe(50);
   });
 });

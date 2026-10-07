@@ -4,3 +4,4 @@ export * from './seed.js';
 export * from './wake.js';
 export * from './steward-prompt.js';
 export * from './steward-tools.js';
+export * from './deliverable-tools.js';

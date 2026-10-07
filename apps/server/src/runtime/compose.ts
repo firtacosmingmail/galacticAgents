@@ -5,8 +5,12 @@ import {
   type Agent,
   type AgentAdapter,
   type AgentRuntime as RuntimeName,
+  type DeclarationLimits,
   type Id,
 } from '@galactic/protocol';
+import type { DeliverableCopies } from '../deliverables/copy-interface.js';
+import { DeliverableService } from '../deliverables/service.js';
+import { stewardDeliverableTools } from '../brains/deliverable-tools.js';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
@@ -104,6 +108,19 @@ export interface ComposeOptions {
    * runtime.
    */
   stewardRuntime?: () => RuntimeName | undefined;
+  /**
+   * Agents' declarations (P9-04): the service is built when a data folder is known (this
+   * `dataDir`, else `workspaces.dataDir`); `limits` is read at every declaration (the
+   * `deliverables.declarations` setting), `copies` keeps strays (P9-06; without it they are
+   * refused).
+   */
+  deliverables?: {
+    dataDir?: string;
+    home?: string;
+    limits?: () => DeclarationLimits;
+    copies?: DeliverableCopies;
+    tmpDirs?: string[];
+  };
 }
 
 export interface ComposedRuntime {
@@ -129,6 +146,8 @@ export interface ComposedRuntime {
   processes?: StewardProcesses;
   /** Budget notices and the Harmonizer's chat lines about them (P8-01). */
   budgets: BudgetWatcher;
+  /** Agents' declarations (P9-04), when composed with a data folder. */
+  deliverables?: DeliverableService;
   /** The database's write health, for the panel's storage banner (P8-09). */
   storage: StorageMonitor;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
@@ -364,6 +383,24 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   budgets.start();
 
   // The brains this composition drives (P2-16): started here or resumed by recovery.
+  const deliverablesDataDir = opts.deliverables?.dataDir ?? opts.workspaces?.dataDir;
+  const home = opts.deliverables?.home ?? opts.workspaces?.home;
+  const deliverables: DeliverableService | undefined = deliverablesDataDir
+    ? new DeliverableService({
+        commands,
+        tables: log.tables,
+        dataDir: deliverablesDataDir,
+        ...(home ? { home } : {}),
+        ...(opts.deliverables?.limits ? { limits: opts.deliverables.limits } : {}),
+        ...(opts.deliverables?.copies ? { copies: opts.deliverables.copies } : {}),
+        ...(opts.deliverables?.tmpDirs ? { tmpDirs: opts.deliverables.tmpDirs } : {}),
+      })
+    : undefined;
+  // A Steward on a runtime that serves the server's tools declares its own deliverables (P9-04).
+  if (deliverables) {
+    runtime.setStewardTools((agent) => stewardDeliverableTools(deliverables, agent));
+  }
+
   const runners = new Map<Id, BrainRunner>();
   const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
     log,
@@ -373,6 +410,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(workspaces ? { workspaces } : {}),
     ...(processes ? { processes } : {}),
     ...(opts.stewardRuntime ? { stewardRuntime: opts.stewardRuntime } : {}),
+    ...(deliverables ? { deliverables } : {}),
     ...extra,
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
@@ -419,6 +457,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     transcriptRetention,
     ...(processes ? { processes } : {}),
     budgets,
+    ...(deliverables ? { deliverables } : {}),
     storage,
     startBrain: async (definition, placement, brainOpts = {}) =>
       adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),

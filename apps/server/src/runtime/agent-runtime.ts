@@ -48,6 +48,7 @@ import {
 import { createPermissionGate, type RuntimeGate } from './permission-gate.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
+import { TOOL_RUNTIMES } from './tool-runtimes.js';
 import type { TranscriptPipeline } from './transcripts.js';
 
 /**
@@ -220,6 +221,14 @@ export type ReopenResult = SpawnResult & { mode?: 'resumed' | 'fresh' };
 export type BrainResumer = (agent: Agent) => Promise<SpawnResult> | undefined;
 
 /**
+ * The server's tools a Steward gets (P9-04: `declare_deliverable`, `list_deliverables`), for its
+ * row, or `undefined` for none. Asked at every start of a Steward's session — a spawn, a resume,
+ * a fresh restart — that carries no tools of its own; only runtimes in `TOOL_RUNTIMES` are asked
+ * (ACP and PTY sessions cannot serve the server's tools).
+ */
+export type StewardTools = (agent: Agent) => ToolDefinition[] | undefined;
+
+/**
  * The first message of a resumed session (P2-16): the agent continues where it was, instead of
  * being handed its original task prompt again.
  */
@@ -360,6 +369,7 @@ export class AgentRuntime {
   private disposed = false;
   private readonly turnListeners = new Set<(turn: TurnEnd) => void>();
   private brainResumer: BrainResumer | undefined;
+  private stewardTools: StewardTools | undefined;
   /**
    * Interrupted agents startup recovery is about to reopen (P2-16): the brains resumed first must
    * not replace them, so `isReserved` tells the spawn guards they are on their way back.
@@ -571,6 +581,7 @@ export class AgentRuntime {
     how: { mailbox?: boolean; resumed?: boolean; foldedUpTo?: number; probation?: Probation } = {},
   ): Promise<SpawnResult> {
     const caps = agent.caps;
+    const tools = this.toolsOf(agent, req);
     // Registered before the adapter runs: whatever it emits before the handle comes back is
     // buffered and routed after `agent.spawned`, and counts against the caps from the start.
     // The project's table as of each check (P2-04): a changed policy applies to the next call.
@@ -580,7 +591,7 @@ export class AgentRuntime {
       workspace: () => this.workspaceOf(agent.id, req),
       cwd: req.cwd,
       caps: this.caps,
-      ...(req.tools ? { serverTools: req.tools.map((t) => t.name) } : {}),
+      ...(tools ? { serverTools: tools.map((t) => t.name) } : {}),
       onDeny: (call, verdict, action) =>
         this.permissionDecided(live, {
           toolCall: call,
@@ -646,7 +657,7 @@ export class AgentRuntime {
         prompt: req.prompt,
         gate,
         caps,
-        ...(req.tools ? { tools: req.tools } : {}),
+        ...(tools ? { tools } : {}),
         ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}),
         ...(req.bare ? { bare: true } : {}),
       });
@@ -1166,6 +1177,21 @@ export class AgentRuntime {
    */
   setBrainResumer(resumer: BrainResumer | undefined): void {
     this.brainResumer = resumer;
+  }
+
+  /** Who gives Stewards the server's tools (P9-04): the composition registers it. */
+  setStewardTools(tools: StewardTools | undefined): void {
+    this.stewardTools = tools;
+  }
+
+  /** The tools of a start: the request's own, else a Steward's on a runtime that serves them. */
+  private toolsOf(agent: Agent, req: SpawnRequest): ToolDefinition[] | undefined {
+    if (req.tools) return req.tools;
+    if (agent.role !== 'steward' || !agent.taskId || !TOOL_RUNTIMES.has(agent.runtime)) {
+      return undefined;
+    }
+    const tools = this.stewardTools?.(agent);
+    return tools && tools.length > 0 ? tools : undefined;
   }
 
   /**

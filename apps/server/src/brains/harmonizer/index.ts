@@ -6,6 +6,7 @@ import {
   type Id,
 } from '@galactic/protocol';
 import type { BrainDefinition } from '../definition.js';
+import { DELIVERABLE_TOOLS } from '../deliverable-tools.js';
 import { STEWARD_TOOLS } from '../steward-tools.js';
 import type { BrainPlacement, BrainRunner, BrainRunnerOptions } from '../runner.js';
 import { SUPERVISOR_TOOLS } from './agent-tools.js';
@@ -54,6 +55,7 @@ export function harmonizerBrain(deps: HarmonizerDeps): BrainDefinition {
       ...CONTROL_TOOLS,
       ...SUPERVISOR_TOOLS,
       ...STEWARD_TOOLS,
+      ...DELIVERABLE_TOOLS,
     ],
     // Closure requests recorded while no Harmonizer could relay them (P2-16).
     startNotes: harmonizerStartNotes,

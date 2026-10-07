@@ -240,11 +240,38 @@ export const IdeResponse = z.object({
 export type IdeResponse = z.infer<typeof IdeResponse>;
 
 /**
- * The deliverables settings (Phase 9). P9-03: the IDE; the later tasks add their keys (run
- * concurrency, output retention, declaration limits) beside it.
+ * `deliverables.declarations` (P9-04, decision 120): how many deliverables agents may declare.
+ * `perTask` / `perProject` count the active agent-declared rows of a task / of a project (its
+ * tasks' included); `perAgentPerHour` counts one agent's declarations in a sliding hour (kept in
+ * memory). `titleChars` / `descriptionChars` bound the agent's text. They count declarations,
+ * never bytes (decision 122).
+ */
+export const DeclarationLimits = z.object({
+  perTask: z.number().int().min(1).max(10_000),
+  perProject: z.number().int().min(1).max(100_000),
+  perAgentPerHour: z.number().int().min(1).max(10_000),
+  titleChars: z.number().int().min(10).max(500),
+  descriptionChars: z.number().int().min(0).max(10_000),
+});
+export type DeclarationLimits = z.infer<typeof DeclarationLimits>;
+
+/** Decision 120's defaults. */
+export const DEFAULT_DECLARATION_LIMITS: DeclarationLimits = {
+  perTask: 50,
+  perProject: 200,
+  perAgentPerHour: 30,
+  titleChars: 120,
+  descriptionChars: 2000,
+};
+
+/**
+ * The deliverables settings (Phase 9). P9-03: the IDE; P9-04: the agents' declaration limits
+ * (optional so a page reading an older server still parses; this server always sends them); the
+ * later tasks add their keys (run concurrency, output retention) beside them.
  */
 export const SettingsDeliverables = z.object({
   ide: IdeSetting,
+  declarations: DeclarationLimits.optional(),
 });
 export type SettingsDeliverables = z.infer<typeof SettingsDeliverables>;
 
@@ -321,7 +348,14 @@ export const SettingsPatch = z
      * The deliverables settings (Phase 9), merged key by key; local requests only unless
      * `autoApproveRemote` (decisions 51, 131). `ide` must be `auto` or an installed IDE.
      */
-    deliverables: SettingsDeliverables.partial().strict().optional(),
+    deliverables: z
+      .object({
+        ide: IdeSetting.optional(),
+        /** Merged key by key (P9-04). */
+        declarations: DeclarationLimits.partial().strict().optional(),
+      })
+      .strict()
+      .optional(),
     /**
      * Marks the first-run setup as done (P25-08): the server stamps `setupCompletedAt` in
      * `config.json` (kept if already set). Local requests only, like every setting but the tier
