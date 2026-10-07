@@ -24,6 +24,8 @@ export interface ClientOptions {
   setTimeoutImpl?: typeof setTimeout;
   /** The last transcript `seq` the client holds for an agent: re-subscriptions resume from it. */
   transcriptSince?: (agentId: string) => number;
+  /** The last output `seq` the client holds for a run: re-subscriptions resume from it (P9-10). */
+  runSince?: (runId: string) => number;
 }
 
 /**
@@ -42,6 +44,8 @@ export class GalacticClient {
   private _status: ConnectionStatus = 'idle';
   /** Agents whose transcript this client wants; re-sent after every reconnect. */
   private readonly transcripts = new Set<string>();
+  /** Runs whose output this client wants (P9-10); re-sent after every reconnect. */
+  private readonly runs = new Set<string>();
 
   constructor(private readonly opts: ClientOptions) {
     this._lastEventId = opts.lastEventId;
@@ -98,11 +102,35 @@ export class GalacticClient {
     this.socket?.send(JSON.stringify({ type: 'transcript.subscribe', agentId, since }));
   }
 
+  /**
+   * Opens a managed run's output stream (P9-08 `run.subscribe`; P9-10). Like a transcript, it
+   * survives reconnects: re-sent from the last `seq` the store holds whenever the stream goes live.
+   */
+  subscribeRun(runId: string): void {
+    this.runs.add(runId);
+    if (this._status === 'live') this.sendRunSubscribe(runId);
+  }
+
+  unsubscribeRun(runId: string): void {
+    this.runs.delete(runId);
+    if (this.socket?.readyState === WS_OPEN) {
+      this.socket.send(JSON.stringify({ type: 'run.unsubscribe', runId }));
+    }
+  }
+
+  private sendRunSubscribe(runId: string): void {
+    const since = this.opts.runSince?.(runId) ?? 0;
+    this.socket?.send(JSON.stringify({ type: 'run.subscribe', runId, since }));
+  }
+
   private setStatus(status: ConnectionStatus, detail?: string): void {
     const wentLive = status === 'live' && this._status !== 'live';
     this._status = status;
     this.opts.onStatus?.(status, detail);
-    if (wentLive) for (const agentId of this.transcripts) this.sendTranscriptSubscribe(agentId);
+    if (wentLive) {
+      for (const agentId of this.transcripts) this.sendTranscriptSubscribe(agentId);
+      for (const runId of this.runs) this.sendRunSubscribe(runId);
+    }
   }
 
   private open(): void {

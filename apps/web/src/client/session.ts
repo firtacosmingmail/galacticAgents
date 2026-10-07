@@ -185,11 +185,14 @@ export function startSession(token: string): () => void {
         useAppStore.getState().transcripts[agentId]?.at(-1)?.seq ?? 0,
         conversationSince(agentId),
       ),
+    runSince: (runId) => useAppStore.getState().runOutputs[runId]?.at(-1)?.seq ?? 0,
   });
   store.setStatus('connecting');
   useAppStore.setState({
     subscribeTranscript: (agentId) => client.subscribeTranscript(agentId),
     unsubscribeTranscript: (agentId) => client.unsubscribeTranscript(agentId),
+    subscribeRun: (runId) => client.subscribeRun(runId),
+    unsubscribeRun: (runId) => client.unsubscribeRun(runId),
   });
   // Answers given offline are sent once the stream is live again, after the catch-up (P7-05).
   const stopAnswers = startAnswerQueue(token, createApi(token));
@@ -197,7 +200,12 @@ export function startSession(token: string): () => void {
   // A push subscription the browser rotated is handed to the server again (P7-04; best effort).
   void syncPush(token);
   return () => {
-    useAppStore.setState({ subscribeTranscript: undefined, unsubscribeTranscript: undefined });
+    useAppStore.setState({
+      subscribeTranscript: undefined,
+      unsubscribeTranscript: undefined,
+      subscribeRun: undefined,
+      unsubscribeRun: undefined,
+    });
     stopAnswers();
     notifier.stop();
     client.close();
