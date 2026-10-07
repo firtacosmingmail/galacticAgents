@@ -5,7 +5,6 @@ import {
   PATH_KINDS,
   isActiveDeliverable,
   isDeliverableUrl,
-  type Actor,
   type Agent,
   type DeclarationLimits,
   type Deliverable,

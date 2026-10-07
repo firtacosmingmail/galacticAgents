@@ -388,13 +388,15 @@ describe('DeliverableService.declare (P9-04)', () => {
       );
     limits = { ...limits, perTask: 1 };
     await declare(1);
-    expect((await declare(2).catch((e: Error) => e)).message).toMatch(
+    expect(((await declare(2).catch((e: Error) => e)) as Error).message).toMatch(
       /1 deliverables declared by agents \(limit 1\)/,
     );
     limits = { ...limits, perTask: 50, perProject: 1 };
-    expect((await declare(2).catch((e: Error) => e)).message).toMatch(/project .* \(limit 1\)/);
+    expect(((await declare(2).catch((e: Error) => e)) as Error).message).toMatch(
+      /project .* \(limit 1\)/,
+    );
     limits = { ...limits, perProject: 200, perAgentPerHour: 1 };
-    expect((await declare(2).catch((e: Error) => e)).message).toMatch(
+    expect(((await declare(2).catch((e: Error) => e)) as Error).message).toMatch(
       /in the last hour \(limit 1\)/,
     );
     limits = { ...limits, perAgentPerHour: 30 };
