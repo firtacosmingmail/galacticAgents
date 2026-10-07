@@ -350,7 +350,12 @@ export function RunDialog({
                     <strong className="run-changed"> · changed since the last run</strong>
                   )}
                 </p>
-                <pre className="run-body-text" tabIndex={0} aria-label="the script's body">
+                <pre
+                  className="run-body-text"
+                  tabIndex={0}
+                  role="region"
+                  aria-label="the script's body"
+                >
                   {bodyLines(shown!.body, shown!.bodyChanged ? shown!.lastRunBody : undefined).map(
                     (l, i) =>
                       l.changed ? (

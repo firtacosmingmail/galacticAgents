@@ -295,7 +295,7 @@ function RunOutputView({
         </p>
       )}
       {plain ? (
-        <pre className="run-output-text" tabIndex={0} aria-label="the output as text">
+        <pre className="run-output-text" tabIndex={0} role="region" aria-label="the output as text">
           {text || 'No output yet.'}
         </pre>
       ) : (
