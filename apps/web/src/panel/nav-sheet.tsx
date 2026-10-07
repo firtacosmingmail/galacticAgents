@@ -185,13 +185,20 @@ export function NavSheet({ control, children }: { control: NavSheetControl; chil
     const panel = panelRef.current;
     if (!open || !root || !panel) return;
     const opener = document.activeElement as HTMLElement | null;
-    const undo = inertOutside(root);
     const first =
       panel.querySelector<HTMLElement>('nav [aria-current="page"]') ??
       panel.querySelector<HTMLElement>('nav a[href]') ??
       tabStops(panel)[0];
-    first?.focus({ preventScroll: false });
+    first?.focus();
+    // A row still `visibility: hidden` for an instant (a transition the stylesheet missed) drops
+    // the focus: once more on the next frame.
+    const retry =
+      first && document.activeElement !== first && typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame(() => first.focus())
+        : undefined;
+    const undo = inertOutside(root);
     return () => {
+      if (retry !== undefined) cancelAnimationFrame(retry);
       undo();
       const button = document.getElementById(NAV_SHEET_BUTTON_ID);
       const target = button ?? (opener?.isConnected ? opener : null);

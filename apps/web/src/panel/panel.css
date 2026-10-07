@@ -671,12 +671,18 @@
   /* a sideways swipe is the sheet's (it closes it); vertical scrolling and zoom stay the page's */
   touch-action: pan-y pinch-zoom;
 }
+/* opening: visible at once (no transition of visibility at all — the panel-wide reduced-motion
+   rule would otherwise stretch it to 0.01 ms, and a focus() in that instant is dropped) */
 .pnl-nav-sheet.is-open > .pnl-nav-sheet-panel {
   transform: none;
   visibility: visible;
-  transition:
-    transform 220ms ease,
-    visibility 0s;
+  transition: transform 220ms ease;
+}
+/* nothing inside transitions: under reduced motion the panel-wide rule gives every element a
+   0.01 ms transition of all properties, and the rows would inherit the panel's `visibility: hidden`
+   for a frame or two after it opens — long enough for the browser to drop the focus put on them */
+.pnl-nav-sheet-panel * {
+  transition: none;
 }
 /* reduced motion: it appears and goes at once (the panel-wide rule does the same) */
 .pnl-nav-sheet.is-still > .pnl-nav-scrim,
