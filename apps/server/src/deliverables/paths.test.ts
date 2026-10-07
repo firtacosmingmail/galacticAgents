@@ -16,7 +16,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CHECKED_OPEN_FLAGS,
+  O_NOFOLLOW_ANY_DARWIN,
   checkPath,
+  checkedOpenFlags,
   deliverableRoots,
   identityOf,
   isSecretName,
@@ -179,9 +182,31 @@ describe('checkPath: the roots', () => {
     expect(checkPath(deep, roots)).toMatchObject({ ok: false });
   });
 
-  it('accepts a hard link inside the project (known limit: realpath cannot tell)', () => {
+  it("refuses an agent's hard-linked file, accepts the user's (realpath cannot tell)", () => {
     linkSync(join(outside, 'secret.txt'), join(ws, 'hard.txt'));
     expect(checkPath(join(ws, 'hard.txt'), roots)).toMatchObject({ ok: true });
+    const refused = checkPath(join(ws, 'hard.txt'), roots, { secretNames: true });
+    expect(refused).toMatchObject({ ok: false, code: 'hard_link' });
+    expect(refused.ok ? '' : refused.reason).toMatch(/2 hard links/);
+    // The original, outside, has two links as well; a lone file and a folder are fine.
+    expect(checkPath(join(ws, 'src', 'app.ts'), roots, { secretNames: true }).ok).toBe(true);
+    expect(checkPath(join(ws, 'src'), roots, { secretNames: true }).ok).toBe(true);
+  });
+
+  it('refuses a hard-linked stray', () => {
+    const t = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-stray-hl-')));
+    try {
+      file(join(t, 'a.txt'));
+      linkSync(join(t, 'a.txt'), join(t, 'b.txt'));
+      expect(
+        checkPath(join(t, 'b.txt'), roots, {
+          secretNames: true,
+          stray: { firstSpawnAt: 0, tmpDirs: [t] },
+        }),
+      ).toMatchObject({ ok: false, code: 'hard_link' });
+    } finally {
+      rmSync(t, { recursive: true, force: true });
+    }
   });
 });
 
@@ -297,6 +322,18 @@ describe('checkPath: secret names (agents)', () => {
     '.git-credentials',
     'credentials.json',
     'Credentials',
+    '.envrc',
+    'AuthKey_ABC123DEF4.p8',
+    'putty.ppk',
+    'release.jks',
+    'upload.keystore',
+    '.pgpass',
+    '.htpasswd',
+    '.vault-token',
+    'terraform.tfstate',
+    'terraform.tfstate.backup',
+    'Passwords.kdbx',
+    'office.ovpn',
   ];
 
   it.each(names)('refuses %s to an agent and accepts it from the user', (name) => {
@@ -314,6 +351,8 @@ describe('checkPath: secret names (agents)', () => {
     '.gnupg/pubring.kbx',
     '.docker/config.json',
     '.kube/config',
+    '.azure/msal_token_cache.json',
+    '.config/gcloud/application_default_credentials.json',
   ])('refuses %s (a secret configuration folder)', (rel) => {
     const path = file(join(ws, 'home-copy', rel));
     expect(checkPath(path, roots, { secretNames: true })).toMatchObject({
@@ -346,8 +385,26 @@ describe('checkPath: secret names (agents)', () => {
     });
   });
 
+  it('refuses .config/gcloud only as a pair', () => {
+    expect(
+      checkPath(file(join(ws, 'tools', 'gcloud', 'deploy.sh')), roots, { secretNames: true }).ok,
+    ).toBe(true);
+    expect(checkPath(file(join(ws, '.config', 'app.json')), roots, { secretNames: true }).ok).toBe(
+      true,
+    );
+  });
+
   it('leaves ordinary names alone', () => {
-    for (const name of ['env.ts', 'keyboard.ts', 'monkey.png', 'README.md', 'my-credentials-ui']) {
+    for (const name of [
+      'env.ts',
+      'keyboard.ts',
+      'monkey.png',
+      'README.md',
+      'my-credentials-ui',
+      'notes.p8.md',
+      'tfstate.ts',
+      'environment.ts',
+    ]) {
       expect(isSecretName(name)).toBe(false);
     }
   });
@@ -536,6 +593,76 @@ describe('openChecked', () => {
       code: 'changed',
     });
   });
+
+  it('refuses a parent swapped for a link during the check (the lstat step)', () => {
+    file(join(outside, 'app.ts'), 'outside\n');
+    let swapped = false;
+    const fs: PathFs = {
+      ...nodePathFs,
+      lstat: (p) => {
+        if (!swapped && p === join(ws, 'src', 'app.ts')) {
+          swapped = true;
+          renameSync(join(ws, 'src'), join(ws, 'src-old'));
+          symlinkSync(outside, join(ws, 'src'));
+        }
+        return nodePathFs.lstat(p);
+      },
+    };
+    expect(checkPath(join(ws, 'src', 'app.ts'), roots, {}, fs)).toMatchObject({
+      ok: false,
+      code: 'changed',
+    });
+    expect(swapped).toBe(true);
+  });
+
+  it.runIf(process.platform === 'darwin')(
+    'refuses a parent swapped during the check when the check itself was fooled (the open step)',
+    () => {
+      // The swap lands right after the first realpath and the re-read is fooled (as a swap and a
+      // swap back would): the check's lstat and a following open would both see the outside file
+      // (same dev and ino). Only O_NOFOLLOW_ANY on the open catches the parent link.
+      file(join(outside, 'app.ts'), 'outside\n');
+      let calls = 0;
+      let seen = -1;
+      const lying: PathFs = {
+        ...nodePathFs,
+        realpath: (p) => {
+          calls += 1;
+          if (calls > 1) return p;
+          const r = nodePathFs.realpath(p);
+          renameSync(join(ws, 'src'), join(ws, 'src-old'));
+          symlinkSync(outside, join(ws, 'src'));
+          return r;
+        },
+        lstat: (p) => {
+          const st = nodePathFs.lstat(p);
+          seen = st.ino;
+          return st;
+        },
+      };
+      const r = openChecked(join(ws, 'src', 'app.ts'), roots, {}, lying);
+      expect(seen).toBe(nodePathFs.stat(join(outside, 'app.ts')).ino);
+      expect(r).toMatchObject({ ok: false, code: 'changed' });
+    },
+  );
+
+  it.runIf(process.platform === 'darwin')(
+    'opens with O_NOFOLLOW_ANY: a link in any component is ELOOP',
+    () => {
+      symlinkSync(join(ws, 'src'), join(ws, 'linked'));
+      expect(() => nodePathFs.open(join(ws, 'linked', 'app.ts'), CHECKED_OPEN_FLAGS)).toThrow(
+        expect.objectContaining({ code: 'ELOOP' }),
+      );
+      symlinkSync(join(ws, 'src', 'app.ts'), join(ws, 'src', 'final'));
+      expect(() => nodePathFs.open(join(ws, 'src', 'final'), CHECKED_OPEN_FLAGS)).toThrow(
+        expect.objectContaining({ code: 'ELOOP' }),
+      );
+      const fd = nodePathFs.open(join(ws, 'src', 'app.ts'), CHECKED_OPEN_FLAGS);
+      nodePathFs.close(fd);
+      expect(checkedOpenFlags('linux') & O_NOFOLLOW_ANY_DARWIN).toBe(0);
+      expect(checkedOpenFlags('darwin') & O_NOFOLLOW_ANY_DARWIN).toBe(O_NOFOLLOW_ANY_DARWIN);
+    },
+  );
 
   it('reports a file deleted between the check and the open as missing', () => {
     const path = join(ws, 'src', 'app.ts');
