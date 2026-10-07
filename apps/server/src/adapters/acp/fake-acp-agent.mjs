@@ -140,6 +140,7 @@ app.onRequest(acp.methods.agent.session.new, ({ params, client }) => {
       scenario: undefined,
       pending: false,
       mode: startMode,
+      meta: params._meta ?? null,
     },
     loaded: false,
   });
@@ -176,6 +177,7 @@ app.onRequest(acp.methods.agent.session.load, async ({ params, client }) => {
   } catch {
     throw acp.RequestError.resourceNotFound(params.sessionId);
   }
+  state.loadMeta = params._meta ?? null;
   sessions.set(params.sessionId, { state, loaded: true });
   // ACP replays the conversation before answering a load; the client must not take it as new.
   for (const update of [
@@ -489,6 +491,10 @@ const SCENARIOS = {
       }
     }
     await ctx.stream('finished');
+  },
+  /** Says the `_meta` its session was created (and last loaded) with. */
+  meta: async (ctx) => {
+    await ctx.stream(`meta: ${JSON.stringify(ctx.state.meta)}`);
   },
   /** A short first turn; every later prompt is echoed. */
   echo: async (ctx) => {

@@ -143,6 +143,60 @@ export interface AcpAgentCommand {
    * Default `false`: such a spawn is refused.
    */
   allowPermissiveMode?: boolean;
+  /**
+   * Lets the agent load the user's own agent settings (decision 108 amendment, 2026-10-07): for
+   * `claude-agent-acp`, the login's `~/.claude` allow/deny rules, hooks, skills and plugins, and the
+   * repository's `.claude` settings and `CLAUDE.md`. Default `false`: every session asks for
+   * isolated settings (`ISOLATED_SESSION_META`), so the agent's permission requests — and with them
+   * the table — decide before a call runs, not rules the user wrote for interactive use.
+   */
+  userSettings?: boolean;
+  /**
+   * Extra `_meta` sent with `session/new` and `session/load`, merged (deeply, these values winning)
+   * over the isolation defaults: how another agent's session options are set, or a narrower
+   * opening of Claude's (`{"claudeCode": {"options": {"settingSources": ["project"]}}}`).
+   */
+  sessionMeta?: Record<string, unknown>;
+}
+
+/**
+ * The `_meta` every session asks for unless `acp.userSettings` (decision 108 amendment): Claude's
+ * session options, which `claude-agent-acp` passes to the Agent SDK — no filesystem settings at
+ * all (`settingSources: []`: no user, project or local settings, so no allow rule, hook, skill or
+ * plugin the user set up for interactive use). Agents that do not know `claudeCode` ignore it
+ * (ACP's `_meta` is the extension point; unknown keys are not errors).
+ */
+export const ISOLATED_SESSION_META: Readonly<Record<string, unknown>> = {
+  claudeCode: { options: { settingSources: [] } },
+};
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** `over` merged into `base`, objects deeply, everything else replaced. */
+function mergeMeta(
+  base: Readonly<Record<string, unknown>>,
+  over: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    out[k] = isPlainObject(v) && isPlainObject(out[k]) ? mergeMeta(out[k], v) : v;
+  }
+  return out;
+}
+
+/**
+ * The `_meta` of a `session/new` / `session/load` (decision 108 amendment): the isolation
+ * defaults unless `userSettings`; Claude's bypass mode switched off unless `allowPermissiveMode`;
+ * `sessionMeta` over both. `undefined` when there is nothing to send.
+ */
+export function sessionMetaFor(agent: AcpAgentCommand): Record<string, unknown> | undefined {
+  let meta: Record<string, unknown> = agent.userSettings === true ? {} : ISOLATED_SESSION_META;
+  if (agent.allowPermissiveMode !== true) {
+    meta = mergeMeta(meta, { claudeCode: { options: { allowDangerouslySkipPermissions: false } } });
+  }
+  if (agent.sessionMeta) meta = mergeMeta(meta, agent.sessionMeta);
+  return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
 export interface AcpAdapterOptions {
@@ -348,6 +402,7 @@ export class AcpAdapter implements AgentAdapter {
     this.byAgent.set(opts.agentId, session);
     try {
       const conn = this.connect(session, opts.cwd);
+      const meta = sessionMetaFor(this.opts.agent);
       const init = await this.during(
         session,
         conn.agent.request(acp.methods.agent.initialize, {
@@ -375,6 +430,7 @@ export class AcpAdapter implements AgentAdapter {
             sessionId: resume,
             cwd: opts.cwd,
             mcpServers: [],
+            ...(meta ? { _meta: meta } : {}),
           }),
           'session/load',
         );
@@ -384,7 +440,11 @@ export class AcpAdapter implements AgentAdapter {
       } else {
         const created = await this.during(
           session,
-          conn.agent.request(acp.methods.agent.session.new, { cwd: opts.cwd, mcpServers: [] }),
+          conn.agent.request(acp.methods.agent.session.new, {
+            cwd: opts.cwd,
+            mcpServers: [],
+            ...(meta ? { _meta: meta } : {}),
+          }),
           'session/new',
         );
         session.acpSessionId = created.sessionId;

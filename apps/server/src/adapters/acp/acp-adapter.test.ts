@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -7,7 +7,13 @@ import * as acp from '@agentclientprotocol/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentEvent, GateCheckOptions, GateVerdict, ToolCall } from '@galactic/protocol';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
-import { ACP_PASS_ENV, AcpAdapter, CLIENT_CAPABILITIES } from './acp-adapter.js';
+import {
+  ACP_PASS_ENV,
+  AcpAdapter,
+  CLIENT_CAPABILITIES,
+  ISOLATED_SESSION_META,
+  sessionMetaFor,
+} from './acp-adapter.js';
 import { FAKE_ACP_AGENT } from './fake-agent.js';
 
 /**
@@ -391,6 +397,52 @@ describe('AcpAdapter', () => {
     });
   });
 
+  describe('isolated settings (decision 108 amendment)', () => {
+    it('asks for no filesystem settings and no bypass mode by default; userSettings and sessionMeta open it', () => {
+      expect(ISOLATED_SESSION_META).toEqual({ claudeCode: { options: { settingSources: [] } } });
+      expect(sessionMetaFor({ command: 'x' })).toEqual({
+        claudeCode: { options: { settingSources: [], allowDangerouslySkipPermissions: false } },
+      });
+      expect(sessionMetaFor({ command: 'x', userSettings: true })).toEqual({
+        claudeCode: { options: { allowDangerouslySkipPermissions: false } },
+      });
+      expect(
+        sessionMetaFor({ command: 'x', userSettings: true, allowPermissiveMode: true }),
+      ).toBeUndefined();
+      // sessionMeta merges deeply over the defaults, its values winning.
+      expect(
+        sessionMetaFor({
+          command: 'x',
+          sessionMeta: {
+            claudeCode: { options: { settingSources: ['project'] } },
+            other: { a: 1 },
+          },
+        }),
+      ).toEqual({
+        claudeCode: {
+          options: { settingSources: ['project'], allowDangerouslySkipPermissions: false },
+        },
+        other: { a: 1 },
+      });
+    });
+
+    it('sends the isolation _meta with session/new', async () => {
+      const r = rig();
+      await r.adapter.spawn(spawnOpts(r, 'scenario:meta'));
+      await waitFor(() => idles(r) === 1, 'idle');
+      expect(texts(r)).toContain(
+        'meta: {"claudeCode":{"options":{"settingSources":[],"allowDangerouslySkipPermissions":false}}}',
+      );
+    });
+
+    it('sends the configured _meta, and none with userSettings and allowPermissiveMode', async () => {
+      const r = rig([], { userSettings: true, allowPermissiveMode: true });
+      await r.adapter.spawn(spawnOpts(r, 'scenario:meta'));
+      await waitFor(() => idles(r) === 1, 'idle');
+      expect(texts(r)).toContain('meta: null');
+    });
+  });
+
   it('passes routing variables by default, never a credential; refuses GALACTIC_* in passEnv', () => {
     for (const secret of [
       'CLAUDE_CODE_OAUTH_TOKEN',
@@ -540,6 +592,11 @@ describe('AcpAdapter', () => {
     expect(again.sessionRef).toBe(h.sessionRef);
     await waitFor(() => idles(second) === 1, 'idle after resume');
     expect(texts(second)).toEqual(['echo: continue please']);
+    // session/load carries the isolation _meta too (the fake agent saves what it got).
+    const saved = JSON.parse(
+      readFileSync(join(state, `${h.sessionRef!.slice(4).replace(/[^\w-]/g, '_')}.json`), 'utf8'),
+    ) as { loadMeta: unknown };
+    expect(saved.loadMeta).toEqual(sessionMetaFor({ command: 'x' }));
   });
 
   it('cannot resume without loadSession: the resume fails and no process is left', async () => {

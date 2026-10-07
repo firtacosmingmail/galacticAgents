@@ -110,6 +110,8 @@ const adapters: AgentAdapter[] = [
             ...(config.acp.passEnv ? { passEnv: config.acp.passEnv } : {}),
             ...(config.acp.mode ? { mode: config.acp.mode } : {}),
             ...(config.acp.allowPermissiveMode ? { allowPermissiveMode: true } : {}),
+            ...(config.acp.userSettings ? { userSettings: true } : {}),
+            ...(config.acp.sessionMeta ? { sessionMeta: config.acp.sessionMeta } : {}),
           },
           onError,
         }),

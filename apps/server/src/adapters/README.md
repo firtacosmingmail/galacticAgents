@@ -166,6 +166,10 @@ supervisor's allow-list, the routing variables of `ACP_PASS_ENV` (base URLs, pro
 region, profile — no credential) and what `acp.passEnv` names (every API key or token; never a
 `GALACTIC_*` name). The session mode is set to `acp.mode` when configured; a session in a known
 permissive mode (`PERMISSIVE_MODES`) is refused unless `acp.allowPermissiveMode` (decision 108).
+Sessions run with isolated settings: `session/new` / `session/load` carry
+`_meta.claudeCode.options.settingSources: []` (and `allowDangerouslySkipPermissions: false`), so
+`claude-agent-acp` loads none of the user's or the repository's Claude settings; `acp.userSettings`
+lifts it, `acp.sessionMeta` adds `_meta` for other agents (decision 108 amendment).
 
 **The capability set it advertises in `initialize`** (`CLIENT_CAPABILITIES`), asserted by the fake
 agent:

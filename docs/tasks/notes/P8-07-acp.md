@@ -171,6 +171,37 @@ place (a `Bash` named by an elicitation is still judged).
 **After the fixes: 22 passed, 0 failed, 0 skipped**, twice — full reruns of 144 s and 159 s (the
 second after every gate was green) — with no `claude-agent-acp` process left behind.
 
+### Isolated settings (decision 108 amendment, 2026-10-07)
+
+The run showed that `claude-agent-acp` loads the login's settings (`--setting-sources=user,
+project,local`): Cosmin's `Bash(git add:*)` / `Bash(git push:*)` allow rules let those calls run
+before the table could judge them (only the after-the-fact hold was left). Cosmin decided that ACP
+Stewards run with isolated settings, accepting that his skills and plugins do not load.
+
+- How `claude-agent-acp` 0.86.0 chooses: `options.settingSources` defaults to
+  `["user", "project", "local"]` and is overridden by `session/new`'s
+  `_meta.claudeCode.options` (spread over its defaults; it is also part of the session
+  fingerprint, so `session/load` must send the same). No env var or CLI flag sets it; only
+  `CLAUDE_CONFIG_DIR` moves the user directory.
+- The adapter sends `_meta: {claudeCode: {options: {settingSources: [], allowDangerouslySkipPermissions: false}}}`
+  with `session/new` and `session/load` (`sessionMetaFor`; the second part only unless
+  `acp.allowPermissiveMode`). `acp.userSettings: true` drops the isolation; `acp.sessionMeta`
+  is merged over it (other agents' options, or `settingSources: ["project"]`).
+- `[]`, not `["project"]`: the worktree is the user's repository, whose `.claude/settings.json` can
+  carry allow rules and hooks that act before the table. The cost: no repository `CLAUDE.md` for
+  ACP Stewards (their task context comes from their prompt).
+- Limit: `claude-agent-acp`'s own settings manager still reads `~/.claude/settings.json` for the
+  starting mode and model; a permissive starting mode is refused at spawn (decision 108), and
+  `acp.mode` sets it explicitly. Agents other than Claude's ignore `claudeCode`; nothing controls
+  their settings from here (the settings caveat says so).
+- Verified with the real agent (two throw-away runs, nothing in `~/.claude` touched): isolated,
+  `git add README.md` (a user allow rule) and `rm -rf …` (a user deny rule) both arrived as
+  `session/request_permission`, and the mode list had no bypass mode; with `userSettings: true`,
+  `git add` ran unasked (`pending` → `completed`) and `rm -rf` was refused by the agent itself.
+- Tests: `acp-adapter.test.ts` +3 (`sessionMetaFor` defaults/opt-ins/merge; the `_meta` the fake
+  agent receives on `session/new`, none when opened up; `session/load` carries it),
+  `config.test.ts` (`userSettings`, `sessionMeta`), the web caveat.
+
 What the run settled about `claude-agent-acp` 0.86.0:
 
 - `initialize`: protocol 1, `loadSession: true` (and `sessionCapabilities` close/delete/fork/list/
