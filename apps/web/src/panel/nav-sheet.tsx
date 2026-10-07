@@ -12,6 +12,7 @@ import {
 import { useAppStore } from '../state/store.js';
 import { summaryOf } from '../state/reduce.js';
 import { REDUCED_MOTION_QUERY } from '../scene/motion.js';
+import { focusElement, mainElement } from './a11y.js';
 import { useMediaQuery } from './use-media-query.js';
 
 /**
@@ -21,8 +22,16 @@ import { useMediaQuery } from './use-media-query.js';
  * top bar's "Agents" button is pressed or a finger swipes in from the screen's left edge, and
  * slides out again on a selection, a tap on the dimmed page beside it, Escape, its close button
  * or a swipe to the left. While open it is a modal dialog: the focus moves into it, Tab stays in
- * it, the rest of the page is `inert`, and on close the focus goes back to the "Agents" button.
- * Its open state is not remembered: every load starts with it hidden.
+ * it, the rest of the page is `inert`, and on close the focus goes back to the "Agents" button —
+ * or, when a selection closed it, to the new page's title (decision 81). Its open state is not
+ * remembered: every load starts with it hidden.
+ *
+ * Back closes it (P8-15 review): opening pushes a history entry of its own (`{navSheet: true}`,
+ * same URL), so the system's Back — Android's edge-swipe gesture takes a swipe from either edge
+ * before the page sees it — pops that entry and closes the sheet instead of changing the
+ * selection or leaving the installed app. Closed any other way, the sheet takes its entry back
+ * (`history.back()`); a selection made in it replaces the entry (the store's `navigate`), so Back
+ * after a selection goes to the previous selection.
  */
 
 export const NAV_SHEET_ID = 'pnl-nav-sheet';
@@ -38,10 +47,41 @@ export interface NavSheetControl {
   setOpen: (open: boolean) => void;
 }
 
-/** The sheet's open state: plain component state (never persisted), closed on every load. */
+/** Whether the history's current entry is the one the open sheet pushed. */
+const onSheetEntry = (): boolean =>
+  typeof window !== 'undefined' &&
+  (window.history.state as { navSheet?: unknown } | null)?.navSheet === true;
+
+/** A `history.back()` of ours whose `popstate` has not arrived yet (one sheet per page). */
+let backPending = false;
+
+/** Opening: an entry of the sheet's own on top of the current one (once), same URL. */
+function enterSheetEntry(): void {
+  if (onSheetEntry()) return;
+  window.history.pushState({ navSheet: true }, '', window.location.href);
+}
+
+/**
+ * Closed other than by Back: the sheet's entry goes (once — a second call before the `popstate`
+ * would go back a page further).
+ */
+function leaveSheetEntry(): void {
+  if (backPending || !onSheetEntry()) return;
+  backPending = true;
+  window.history.back();
+}
+
+/**
+ * The sheet's open state: plain component state (never persisted), closed on every load, kept in
+ * step with its history entry (see the module comment).
+ */
 export function useNavSheet(active: boolean): NavSheetControl {
   const [open, setOpenState] = useState(false);
-  const setOpen = useCallback((next: boolean) => setOpenState(next), []);
+  const setOpen = useCallback((next: boolean) => {
+    if (next) enterSheetEntry();
+    else leaveSheetEntry();
+    setOpenState(next);
+  }, []);
   // Leaving the phone layout (a rotation, a wider window) drops the sheet; it comes back closed.
   const [wasActive, setWasActive] = useState(active);
   if (wasActive !== active) {
@@ -49,6 +89,28 @@ export function useNavSheet(active: boolean): NavSheetControl {
     if (!active) setOpenState(false);
   }
   const shown = active && open;
+  const shownRef = useRef(shown);
+  useEffect(() => {
+    shownRef.current = shown;
+    // Closed without `setOpen` (the layout changed): its entry goes too.
+    if (!shown) leaveSheetEntry();
+  }, [shown]);
+  useEffect(() => {
+    // A sheet entry left over from before a reload is not a sheet any more.
+    if (onSheetEntry() && !backPending) window.history.replaceState(null, '', window.location.href);
+    const onPop = () => {
+      if (backPending) {
+        // Our own `back()`: the sheet is already closed — unless it was opened again meanwhile.
+        backPending = false;
+        if (shownRef.current) enterSheetEntry();
+        return;
+      }
+      // Back (or the system's back gesture) while open: the sheet's entry is gone; close it.
+      if (shownRef.current) setOpenState(false);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   return useMemo(() => ({ open: shown, setOpen }), [shown, setOpen]);
 }
 
@@ -61,30 +123,66 @@ const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
   'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-/** The sheet's Tab stops, in order (not those in a closed disclosure, hidden or inert). */
+/**
+ * The sheet's Tab stops, in order: not those in a closed disclosure, hidden or inert, nor — where
+ * the browser lays the page out — those CSS hides (`display: none`: no client rects; review N6).
+ * Without layout (jsdom) nothing has client rects, so that last test is skipped.
+ */
 function tabStops(container: HTMLElement): HTMLElement[] {
+  const laidOut = container.getClientRects().length > 0;
   return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-    (el) => !el.closest('[hidden], [inert], details:not([open]) > :not(summary)'),
+    (el) =>
+      !el.closest('[hidden], [inert], details:not([open]) > :not(summary)') &&
+      (!laidOut || el.getClientRects().length > 0),
   );
 }
 
 /**
  * Makes everything outside `keep` inert (each sibling of it and of its ancestors up to the body),
- * as a modal dialog needs; returns the undo. Elements already inert stay so.
+ * as a modal dialog needs, and whatever is added beside them while it lasts (a notice, a toast;
+ * review N5); returns the undo. Elements already inert stay so.
  */
 function inertOutside(keep: HTMLElement): () => void {
   const changed: HTMLElement[] = [];
+  const makeInert = (sibling: Element) => {
+    if (!(sibling instanceof HTMLElement) || sibling.contains(keep)) return;
+    if (sibling.hasAttribute('inert') || sibling.tagName === 'SCRIPT') return;
+    sibling.setAttribute('inert', '');
+    changed.push(sibling);
+  };
+  const parents: HTMLElement[] = [];
   for (let el: HTMLElement | null = keep; el && el !== document.body; el = el.parentElement) {
     const parent: HTMLElement | null = el.parentElement;
     if (!parent) break;
-    for (const sibling of Array.from(parent.children)) {
-      if (sibling === el || !(sibling instanceof HTMLElement)) continue;
-      if (sibling.hasAttribute('inert') || sibling.tagName === 'SCRIPT') continue;
-      sibling.setAttribute('inert', '');
-      changed.push(sibling);
-    }
+    parents.push(parent);
+    for (const sibling of Array.from(parent.children)) if (sibling !== el) makeInert(sibling);
   }
-  return () => changed.forEach((el) => el.removeAttribute('inert'));
+  const observer =
+    typeof MutationObserver === 'function'
+      ? new MutationObserver((records) => {
+          for (const r of records)
+            r.addedNodes.forEach((n) => n instanceof Element && makeInert(n));
+        })
+      : undefined;
+  for (const parent of parents) observer?.observe(parent, { childList: true });
+  return () => {
+    observer?.disconnect();
+    changed.forEach((el) => el.removeAttribute('inert'));
+  };
+}
+
+/**
+ * Whether a touch at `target` starts on something that scrolls sideways (a wide table, a row of
+ * chips): its swipe is that element's, not the sheet's (review N7).
+ */
+function inHorizontalScroller(target: EventTarget | null): boolean {
+  for (let el = target instanceof Element ? target : null; el; el = el.parentElement) {
+    if (el === document.body || el === document.documentElement) return false;
+    if (el.scrollWidth <= el.clientWidth) continue;
+    const overflow = getComputedStyle(el).overflowX;
+    if (overflow === 'auto' || overflow === 'scroll') return true;
+  }
+  return false;
 }
 
 /**
@@ -134,7 +232,9 @@ export function useEdgeSwipe(control: NavSheetControl, active: boolean): void {
     const onStart = (e: TouchEvent) => {
       const t = e.touches.length === 1 ? e.touches[0] : undefined;
       start =
-        t && t.clientX <= EDGE_ZONE ? { id: t.identifier, x: t.clientX, y: t.clientY } : undefined;
+        t && t.clientX <= EDGE_ZONE && !inHorizontalScroller(e.target)
+          ? { id: t.identifier, x: t.clientX, y: t.clientY }
+          : undefined;
     };
     const onMove = (e: TouchEvent) => {
       if (!start) return;
@@ -177,9 +277,12 @@ export function NavSheet({ control, children }: { control: NavSheetControl; chil
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), [setOpen]);
+  /** A selection is closing the sheet: the focus goes to the new page's title (decision 81). */
+  const selecting = useRef(false);
 
   // Open: the rest of the page goes inert, the focus moves in (the selected row, else the first
-  // row); closed again, the page comes back and the focus returns to the "Agents" button.
+  // row); closed again, the page comes back and the focus returns to the "Agents" button — or to
+  // the page's title after a selection.
   useEffect(() => {
     const root = rootRef.current;
     const panel = panelRef.current;
@@ -200,6 +303,11 @@ export function NavSheet({ control, children }: { control: NavSheetControl; chil
     return () => {
       if (retry !== undefined) cancelAnimationFrame(retry);
       undo();
+      if (selecting.current) {
+        selecting.current = false;
+        focusPageTitle(root);
+        return;
+      }
       const button = document.getElementById(NAV_SHEET_BUTTON_ID);
       const target = button ?? (opener?.isConnected ? opener : null);
       // Only if the focus was in the sheet (or lost): a tap elsewhere keeps its own focus.
@@ -242,8 +350,9 @@ export function NavSheet({ control, children }: { control: NavSheetControl; chil
   useEffect(() => {
     if (lastLocation.current === location) return;
     lastLocation.current = location;
+    if (open) selecting.current = true;
     setOpen(false);
-  }, [location, setOpen]);
+  }, [location, open, setOpen]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Tab' || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -264,6 +373,7 @@ export function NavSheet({ control, children }: { control: NavSheetControl; chil
   const onClick = (e: ReactMouseEvent<HTMLDivElement>) => {
     const link = (e.target as HTMLElement).closest('a[href]');
     if (!link || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    selecting.current = true;
     close();
   };
 
@@ -331,4 +441,22 @@ export function NavSheet({ control, children }: { control: NavSheetControl; chil
       </div>
     </div>
   );
+}
+
+/**
+ * After a selection in the sheet: the focus goes to the main area's title (the selected agent's
+ * name in the dock), as on any page change (decision 81) — if the focus was in the sheet or lost.
+ * The dock may still be rendering the new selection: a few frames' grace.
+ */
+function focusPageTitle(sheet: HTMLElement): void {
+  let tries = 10;
+  const attempt = () => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected && !sheet.contains(active)) return;
+    const heading = mainElement()?.querySelector<HTMLElement>('h1');
+    if (heading && focusElement(heading)) return;
+    if (tries-- > 0 && typeof requestAnimationFrame === 'function') requestAnimationFrame(attempt);
+    else document.getElementById(NAV_SHEET_BUTTON_ID)?.focus();
+  };
+  attempt();
 }

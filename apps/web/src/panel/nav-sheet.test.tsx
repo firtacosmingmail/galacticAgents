@@ -20,8 +20,9 @@ import {
 /**
  * P8-15: on a phone the navigation is a sheet that slides in from the left. Hidden by default;
  * opened by the top bar's "Agents" button or a swipe from the left edge; closed by a selection,
- * the scrim, Escape, its close button or a swipe to the left; a modal dialog while open (focus in,
- * trapped, back to the button). Wider screens keep the navigation where it was.
+ * the scrim, Escape, its close button, a swipe to the left or Back; a modal dialog while open
+ * (focus in, trapped, back to the button — or to the new page's title after a selection). Wider
+ * screens keep the navigation where it was.
  */
 
 const PHONE = [COMPACT_TOP_BAR_QUERY, STACKED_LAYOUT_QUERY];
@@ -56,6 +57,15 @@ const isOpen = () => {
 };
 const nav = () => within(dialog()).getByRole('navigation', { name: 'navigation' });
 const flush = () => act(async () => new Promise((r) => setTimeout(r, 0)));
+/** jsdom runs a history traversal (`back()`) as a task, then fires `popstate`. */
+const settleHistory = () => act(async () => new Promise((r) => setTimeout(r, 20)));
+const back = async () => {
+  await act(async () => {
+    window.history.back();
+  });
+  await settleHistory();
+};
+const sheetEntry = () => (window.history.state as { navSheet?: boolean } | null)?.navSheet === true;
 
 async function openSheet() {
   await act(async () => {
@@ -153,7 +163,7 @@ describe('the phone navigation sheet (P8-15)', () => {
     expect(dialog().contains(document.activeElement)).toBe(true);
   });
 
-  it('closes on a selection, the focus back on the button and the page live again', async () => {
+  it('closes on a selection, the focus on the new page’s title and the page live again', async () => {
     stubMedia(PHONE);
     await openApp('/');
     await openSheet();
@@ -163,7 +173,10 @@ describe('the phone navigation sheet (P8-15)', () => {
     await flush();
     expect(useAppStore.getState().selection).toEqual({ kind: 'waykeeper', id: 'a-waykeeper-1' });
     expect(isOpen()).toBe(false);
-    expect(document.activeElement).toBe(button());
+    // Decision 81: a page change puts the focus on the new page's title (review N4).
+    const title = screen.getByRole('main').querySelector('h1')!;
+    expect(title.textContent).toMatch(/Auth refactor/);
+    expect(document.activeElement).toBe(title);
     expect(document.querySelector('header.pnl-top')!.hasAttribute('inert')).toBe(false);
     expect(document.querySelector('.pnl-stack')!.hasAttribute('inert')).toBe(false);
     // The dock shows the selection.
@@ -299,6 +312,143 @@ describe('the phone navigation sheet (P8-15)', () => {
     expect(css).toMatch(
       /@media \(prefers-reduced-motion: reduce\) \{\s*\.pnl-nav-scrim,\s*\.pnl-nav-sheet-panel \{\s*transition: none;/,
     );
+    // The rows' own transitions are off only under reduced motion (review N3): inside that block.
+    const block =
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.pnl-nav-scrim,[\s\S]*?\n\}/.exec(css)![0];
+    expect(block).toMatch(/\.pnl-nav-sheet-panel \* \{\s*transition: none;/);
+    expect(css.replace(block, '')).not.toMatch(/\.pnl-nav-sheet-panel \* \{/);
+  });
+
+  it('Back closes it without changing the selection; closed otherwise, its history entry goes (review S2)', async () => {
+    stubMedia(PHONE);
+    await openApp('/');
+    const url = window.location.href;
+    const selection = useAppStore.getState().selection;
+    await openSheet();
+    // An entry of its own, same URL.
+    expect(sheetEntry()).toBe(true);
+    expect(window.location.href).toBe(url);
+
+    // Back (Android's edge gesture, the browser's button): the sheet closes, nothing else moves.
+    await back();
+    expect(isOpen()).toBe(false);
+    expect(sheetEntry()).toBe(false);
+    expect(window.location.href).toBe(url);
+    expect(useAppStore.getState().selection).toEqual(selection);
+    expect(document.activeElement).toBe(button());
+
+    // Closed by its close button: it takes its entry back (no "sheet open" entry left behind).
+    await openSheet();
+    expect(sheetEntry()).toBe(true);
+    await act(async () => {
+      fireEvent.click(within(dialog()).getByRole('button', { name: 'Close the agents list' }));
+    });
+    await settleHistory();
+    expect(isOpen()).toBe(false);
+    expect(sheetEntry()).toBe(false);
+    expect(window.location.href).toBe(url);
+    // Opening again works and pushes a fresh entry (no loop of backs).
+    await openSheet();
+    expect(sheetEntry()).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await settleHistory();
+    expect(isOpen()).toBe(false);
+    expect(sheetEntry()).toBe(false);
+    expect(useAppStore.getState().selection).toEqual(selection);
+  });
+
+  it('a selection replaces the sheet’s entry: Back then goes to the previous selection (review S2)', async () => {
+    stubMedia(PHONE);
+    await openApp('/');
+    const before = useAppStore.getState().selection;
+    const beforePath = window.location.pathname;
+    await openSheet();
+    await act(async () => {
+      fireEvent.click(within(nav()).getByRole('link', { name: /Auth refactor/ }));
+    });
+    await settleHistory();
+    expect(isOpen()).toBe(false);
+    expect(useAppStore.getState().selection).toEqual({ kind: 'waykeeper', id: 'a-waykeeper-1' });
+    expect(window.location.pathname).not.toBe(beforePath);
+    expect(sheetEntry()).toBe(false);
+    // One Back: the previous selection, not a dangling "sheet open" step.
+    await back();
+    expect(window.location.pathname).toBe(beforePath);
+    expect(useAppStore.getState().selection).toEqual(before);
+    expect(isOpen()).toBe(false);
+
+    // The row already selected: no navigation, the sheet's entry is taken back.
+    await openSheet();
+    await act(async () => {
+      fireEvent.click(within(nav()).getByRole('link', { current: 'page' }));
+    });
+    await settleHistory();
+    expect(isOpen()).toBe(false);
+    expect(sheetEntry()).toBe(false);
+    expect(window.location.pathname).toBe(beforePath);
+  });
+
+  it('keeps what appears beside the page while open inert too (review N5)', async () => {
+    stubMedia(PHONE);
+    await openApp('/');
+    await openSheet();
+    const notice = document.createElement('div');
+    notice.innerHTML = '<button type="button">Reload</button>';
+    await act(async () => {
+      document.body.appendChild(notice);
+    });
+    await flush();
+    expect(notice.hasAttribute('inert')).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await settleHistory();
+    expect(notice.hasAttribute('inert')).toBe(false);
+    notice.remove();
+  });
+
+  it('Tab skips what CSS hides in the sheet (review N6)', async () => {
+    stubMedia(PHONE);
+    // Layout as a browser has it: everything has a box except what is `display: none`.
+    vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function (this: Element) {
+      return (this.closest('.css-hidden') ? [] : [{}]) as unknown as DOMRectList;
+    });
+    await openApp('/');
+    await openSheet();
+    const hidden = document.createElement('button');
+    hidden.className = 'css-hidden';
+    hidden.textContent = 'hidden by CSS';
+    dialog().appendChild(hidden);
+    const stops = Array.from(
+      dialog().querySelectorAll<HTMLElement>('a[href], button, input'),
+    ).filter((el) => !el.closest('[hidden]') && el !== hidden);
+    const first = stops[0]!;
+    const last = stops.at(-1)!;
+    last.focus();
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+    hidden.remove();
+    vi.restoreAllMocks();
+  });
+
+  it('leaves an edge swipe that starts on a sideways-scrolling element to it (review N7)', async () => {
+    stubMedia(PHONE);
+    await openApp('/');
+    const strip = document.createElement('div');
+    strip.style.overflowX = 'auto';
+    Object.defineProperty(strip, 'scrollWidth', { value: 800 });
+    Object.defineProperty(strip, 'clientWidth', { value: 300 });
+    const chip = document.createElement('span');
+    strip.appendChild(chip);
+    document.querySelector('.pnl-stack')!.appendChild(strip);
+    swipe(chip, { x: 4, y: 300 }, { x: 120, y: 300 });
+    await flush();
+    expect(isOpen()).toBe(false);
+    // The same swipe elsewhere at the edge opens it.
+    swipe(document.querySelector('.pnl-stack')!, { x: 4, y: 300 }, { x: 120, y: 300 });
+    await flush();
+    expect(isOpen()).toBe(true);
+    strip.remove();
   });
 
   it('is not remembered: a reload starts with it hidden', async () => {
