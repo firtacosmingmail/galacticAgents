@@ -237,7 +237,20 @@
   font-size: 11px;
   padding: 1px 8px;
 }
+/* with the "Agents" button (P8-15) the row holds six items: tighter on the narrowest phones */
+@media (max-width: 399px) {
+  .pnl-top.pnl-top-compact {
+    gap: 4px;
+  }
+}
 @media (max-width: 374px) {
+  .pnl-top.pnl-top-compact {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+  .pnl-top-compact .pnl-brand.pnl-link {
+    font-size: 13px;
+  }
   /* "N waiting" at 320–374 px; the full words stay in the accessible name */
   .pnl-top-waiting-tail {
     position: absolute;
@@ -632,7 +645,9 @@
 .pnl-nav-sheet {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  /* modal: over everything, the app's notices (pwa.css, 1000) too — they are inert behind it and
+     come back when it closes */
+  z-index: 1010;
   pointer-events: none;
 }
 .pnl-nav-sheet.is-open {
