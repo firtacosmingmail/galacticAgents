@@ -28,7 +28,7 @@ import { openDatabase } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog } from '../domain/event-log.js';
-import { createProject } from '../domain/projects.js';
+import { createProject, updateProject } from '../domain/projects.js';
 import { createTask } from '../domain/tasks.js';
 import { PREVIEW_TEXT_BYTES } from '../deliverables/facts.js';
 import {
@@ -895,5 +895,45 @@ describe('opening on the Mac (P9-07)', () => {
     expect(
       await s.call('POST', `/api/deliverables/${value.id}/open`, { action: 'launch' }),
     ).toMatchObject({ status: 400, json: { error: 'invalid_body' } });
+  });
+});
+
+describe("revealing the project's deliverables folder (P9-09)", () => {
+  it('reveals the recorded folder on the Mac only, never a path from the request', async () => {
+    const s = await setup({ autoApproveRemote: true });
+    const reveal = (body: unknown, headers: Record<string, string> = {}) =>
+      s.call('POST', '/api/deliverables/folder/reveal', body, headers);
+    // No folder yet: nothing to reveal.
+    expect(await reveal({ projectId: s.project.id })).toMatchObject({
+      status: 404,
+      json: { error: 'not_found' },
+    });
+    const folder = join(s.ws, 'deliverables');
+    mkdirSync(folder);
+    s.log.runCommand((ctx) =>
+      updateProject(ctx, s.project.id, { meta: { deliverablesFolder: folder } }),
+    );
+    // A task of the project reveals the project's folder.
+    expect(await reveal({ projectId: s.project.id })).toMatchObject({ status: 200 });
+    expect(await reveal({ taskId: s.task.id })).toMatchObject({ status: 200 });
+    expect(opens(s.calls).map((c) => c.args)).toEqual([
+      ['-R', folder],
+      ['-R', folder],
+    ]);
+    // Never from a remote client, even with autoApproveRemote; a path in the body is not read.
+    expect(await reveal({ projectId: s.project.id }, REMOTE)).toMatchObject({
+      status: 403,
+      json: { error: 'remote_control' },
+    });
+    expect(await reveal({ path: s.outside })).toMatchObject({
+      status: 400,
+      json: { error: 'invalid_body' },
+    });
+    expect(opens(s.calls)).toHaveLength(2);
+    // A folder swapped for a link out of the project is refused.
+    rmSync(folder, { recursive: true });
+    symlinkSync(s.outside, folder);
+    expect((await reveal({ projectId: s.project.id })).status).toBe(409);
+    expect(opens(s.calls)).toHaveLength(2);
   });
 });

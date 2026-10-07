@@ -331,6 +331,18 @@ export const OpenConfirmation = z.object({
 });
 export type OpenConfirmation = z.infer<typeof OpenConfirmation>;
 
+/**
+ * `POST /api/deliverables/folder/reveal`: Reveal in Finder for a project's (or a standalone
+ * task's) `deliverables/` folder (decision 122), which is not a deliverable of its own. The server
+ * finds the recorded folder itself; the request never names a path. Mac only, never remote.
+ */
+export const RevealFolderBody = z
+  .object({ projectId: Id.optional(), taskId: Id.optional() })
+  .refine((b) => (b.projectId === undefined) !== (b.taskId === undefined), {
+    message: 'a project or a task',
+  });
+export type RevealFolderBody = z.infer<typeof RevealFolderBody>;
+
 /** `POST /api/deliverables/:id/download` → a one-time link (decision 126). */
 export const DownloadTicketResponse = z.object({ url: z.string().startsWith('/files/') });
 export type DownloadTicketResponse = z.infer<typeof DownloadTicketResponse>;

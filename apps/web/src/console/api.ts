@@ -1,4 +1,5 @@
 import type {
+  AddDeliverableBody,
   AgentCommandsResponse,
   AnswerBody,
   AnswerResponse,
@@ -7,6 +8,12 @@ import type {
   ConversationQuery,
   ConversationResponse,
   DecideResponse,
+  Deliverable,
+  DeliverablesResponse,
+  DeliverablesUsageResponse,
+  DownloadTicketResponse,
+  EditDeliverableBody,
+  OpenDeliverableBody,
   HistoryQuestionsQuery,
   HistoryQuestionsResponse,
   HistoryEventsQuery,
@@ -21,6 +28,7 @@ import type {
   PreflightResponse,
   ProposalDecisionBody,
   RestartHarmonizerResponse,
+  RevealFolderBody,
   RuntimesInfo,
   SendBody,
   SendResponse,
@@ -169,10 +177,88 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     /** The timeline scrubber (P4-07): one project's events, oldest first, paged by `after`. */
     historyEvents: (query: HistoryEventsQuery) =>
       call<HistoryEventsResponse>('GET', `/api/history/events${queryString(query)}`),
+    // -- deliverables (P9-09; TECHNOLOGY §9.6, §9.7) ------------------------------------------
+    /** The rows of a project or a task, with their live file facts and the deliverables folder. */
+    deliverables: (query: { projectId?: string; taskId?: string; removed?: boolean }) =>
+      call<DeliverablesResponse>(
+        'GET',
+        `/api/deliverables${queryString({ ...query, removed: query.removed ? '1' : undefined })}`,
+      ),
+    /**
+     * A file deliverable's bytes for the viewer, with the bearer token (never in an address): the
+     * body, its content type and whether the server cut it at the preview limit (`X-Truncated`).
+     */
+    deliverableContent: async (id: string): Promise<DeliverableContent> => {
+      const res = await fetchImpl(`/api/deliverables/${encodeURIComponent(id)}/content`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let data: Record<string, unknown> = {};
+        try {
+          data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+        } catch {
+          // not JSON: the status says it
+        }
+        const message =
+          (data['message'] as string | undefined) ??
+          (data['error'] as string | undefined) ??
+          `${res.status}`;
+        throw new ApiError(res.status, message, data['error'] as string | undefined, data);
+      }
+      return {
+        bytes: await res.arrayBuffer(),
+        contentType: res.headers.get('content-type') ?? '',
+        truncated: res.headers.get('x-truncated') === '1',
+      };
+    },
+    /** A one-time download link (`/files/<ticket>`, 60 s, decision 126). */
+    downloadDeliverable: (id: string) =>
+      call<DownloadTicketResponse>('POST', `/api/deliverables/${encodeURIComponent(id)}/download`),
+    addDeliverable: (body: AddDeliverableBody) =>
+      call<{ deliverable: Deliverable }>('POST', '/api/deliverables', body),
+    editDeliverable: (id: string, body: EditDeliverableBody) =>
+      call<{ deliverable: Deliverable }>(
+        'PATCH',
+        `/api/deliverables/${encodeURIComponent(id)}`,
+        body,
+      ),
+    removeDeliverable: (id: string, reason?: string) =>
+      call<{ deliverable: Deliverable }>(
+        'POST',
+        `/api/deliverables/${encodeURIComponent(id)}/remove`,
+        reason ? { reason } : {},
+      ),
+    restoreDeliverable: (id: string) =>
+      call<{ deliverable: Deliverable }>(
+        'POST',
+        `/api/deliverables/${encodeURIComponent(id)}/restore`,
+      ),
+    /** Opens on the Mac (decision 127); an application answers 409 `confirm` first (128). */
+    openDeliverable: (id: string, body: OpenDeliverableBody) =>
+      call<{ ok: true }>('POST', `/api/deliverables/${encodeURIComponent(id)}/open`, body),
+    /** Reveal in Finder for the project's (or standalone task's) `deliverables/` folder. */
+    revealDeliverablesFolder: (body: RevealFolderBody) =>
+      call<{ ok: true }>('POST', '/api/deliverables/folder/reveal', body),
+    /** Scans the project's folder for run scripts again (decision 119). */
+    rescanDeliverables: (projectId: string) =>
+      call<{ ok: true }>(
+        'POST',
+        `/api/projects/${encodeURIComponent(projectId)}/deliverables/rescan`,
+      ),
+    /** Each `deliverables/` folder's size on disk (decision 122). */
+    deliverablesUsage: () => call<DeliverablesUsageResponse>('GET', '/api/deliverables/usage'),
   };
 }
 
 export type Api = ReturnType<typeof createApi>;
+
+/** A deliverable's bytes as the viewer receives them (`Api.deliverableContent`). */
+export interface DeliverableContent {
+  bytes: ArrayBuffer;
+  contentType: string;
+  truncated: boolean;
+}
 
 /** `GET /api/history/work`'s query as the client builds it (`state` as a list). */
 export type HistoryWorkFilter = Omit<HistoryWorkQuery, 'state'> & { state?: HistoryWorkState[] };

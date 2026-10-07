@@ -38,6 +38,11 @@ export function useSettingsData(): SettingsData {
   return data;
 }
 
+/** The settings when a provider is there (a view also rendered outside the panel), else none. */
+export function useOptionalSettingsData(): SettingsData | undefined {
+  return useContext(SettingsContext);
+}
+
 export function SettingsProvider({ api, children }: { api: Api; children: ReactNode }) {
   const [state, setState] = useState<Pick<SettingsData, 'status' | 'response' | 'error'>>({
     status: 'loading',

@@ -6,6 +6,10 @@ import { workActions, type CardWork } from './agent-cards-model.js';
 import { ActionRow, ControlFeedback, useControls } from './controls.js';
 import { useApi } from '../console/hierarchy/shared.js';
 import { startReplay } from '../replay/store.js';
+import type { Selection } from '../state/selection.js';
+import { useDockView } from './status/dock-view.js';
+import { requestDockOpen } from './dock-state.js';
+import { useDeliverablesFocus } from './deliverables/use-deliverables.js';
 
 /**
  * A navigation row's work actions (P4-12): what the controls strip offers for the task or project
@@ -19,6 +23,7 @@ export function NavRowActions({
   kind,
   id,
   label,
+  selection,
   onDone,
 }: {
   /** The group's element id, for the "⋯" button's `aria-controls`. */
@@ -26,6 +31,8 @@ export function NavRowActions({
   kind: 'project' | 'task';
   id: Id;
   label: string;
+  /** The row's agent (its Waykeeper or Steward), where its Deliverables show (P9-09). */
+  selection?: Selection | undefined;
   /** Closes the actions (Escape); focus goes back to the row's "⋯". */
   onDone: () => void;
 }) {
@@ -34,7 +41,18 @@ export function NavRowActions({
   const work = item ? ({ kind, item } as CardWork) : undefined;
   const c = useControls(undefined, work);
   const api = useApi();
+  const navigate = useAppStore((s) => s.navigate);
   if (!work) return null;
+  // "⋯ Deliverables" (P9-09): the project's Deliverables view in its Waykeeper's dock, or the
+  // task's section of its Steward view, brought into sight with the focus on its title.
+  const showDeliverables = () => {
+    if (!selection) return;
+    navigate({ route: 'panel', selection });
+    if (kind === 'project') useDockView.getState().setView('deliverables');
+    requestDockOpen();
+    useDeliverablesFocus.getState().ask(`${kind}:${id}`);
+    onDone();
+  };
   const actions = workActions(work).filter((a) => a.action !== 'edit');
   const note = work.kind === 'project' ? openTasksNote(world, work.item) : undefined;
 
@@ -64,6 +82,13 @@ export function NavRowActions({
       />
       {note && <p className="pnl-row-note">{note}</p>}
       <ControlFeedback controls={c} work={work} />
+      {selection && (
+        <p className="pnl-row-replay">
+          <button type="button" className="secondary" onClick={showDeliverables}>
+            Deliverables
+          </button>
+        </p>
+      )}
       {work.kind === 'project' && (
         // The timeline scrubber (P4-07): the project's history replayed in the scene.
         <p className="pnl-row-replay">
