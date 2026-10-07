@@ -14,6 +14,7 @@ import type {
   WorkBodyKind,
 } from '@galactic/protocol';
 import { DomainError, must } from '../../domain/errors.js';
+import { stewardDeclares } from '../../runtime/tool-runtimes.js';
 import { slugify, workspaceMeta } from '../../workspace/workspaces.js';
 import type { BrainQueries, BrainTool, BrainToolContext } from '../definition.js';
 import { asInput, isLiving, oneOf, S, str, strings } from './input.js';
@@ -63,7 +64,10 @@ export interface HarmonizerDeps {
     runtime: AgentRuntime;
   }) => Promise<{ agentId: Id }>;
   /** The first prompt of an asteroid Steward (P2-11 owns the template). */
-  stewardPrompt?: (task: Task, extra: { workspace: string; instructions?: string }) => string;
+  stewardPrompt?: (
+    task: Task,
+    extra: { workspace: string; instructions?: string; declares?: boolean },
+  ) => string;
   /** The runtime of the agents the Harmonizer spawns. Default: its own. */
   runtime?: AgentRuntime;
 }
@@ -74,13 +78,14 @@ export const SCRATCH_DIR = 'scratch';
 /** The asteroid Steward's prompt: P2-11's shared template, with the Harmonizer as supervisor. */
 export function defaultStewardPrompt(
   task: Task,
-  extra: { workspace: string; instructions?: string },
+  extra: { workspace: string; instructions?: string; declares?: boolean },
 ): string {
   return stewardTemplate({
     task,
     supervisor: 'harmonizer',
     cwd: extra.workspace,
     ...(extra.instructions ? { instructions: extra.instructions } : {}),
+    ...(extra.declares !== undefined ? { declares: extra.declares } : {}),
   });
 }
 
@@ -846,14 +851,19 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         throw new DomainError('invalid', `cannot create ${workspace}: ${(error as Error).message}`);
       }
       const instructions = str(input, 'instructions', true);
+      // The `stewardRuntime` setting (P8-07), else the Harmonizer's own runtime.
+      const runtime = ctx.stewardRuntime?.() ?? runtimeOf(ctx);
       const { value } = await ctx.commands.spawnAgent({
         role: 'steward',
-        // The `stewardRuntime` setting (P8-07), else the Harmonizer's own runtime.
-        runtime: ctx.stewardRuntime?.() ?? runtimeOf(ctx),
+        runtime,
         taskId,
         supervisorId: ctx.brainId,
         cwd: workspace,
-        prompt: stewardPrompt(task, { workspace, ...(instructions ? { instructions } : {}) }),
+        prompt: stewardPrompt(task, {
+          workspace,
+          ...(instructions ? { instructions } : {}),
+          declares: stewardDeclares(runtime),
+        }),
       });
       return { agentId: value.id, taskId, workspace, bodyId: value.bodyId };
     },

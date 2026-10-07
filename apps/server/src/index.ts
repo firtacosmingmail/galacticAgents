@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './config/config.js';
-import { SettingsService } from './config/settings.js';
+import { SettingsService, declarationLimits } from './config/settings.js';
 import { Opener } from './deliverables/opener.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
 import { buildApp } from './app.js';
@@ -171,8 +171,6 @@ const composed = composeRuntime(db, {
   stewardRuntime: () => config.stewardRuntime,
   // Brain tools create worktrees and merge through this service (P2-05, P2-10).
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
-  // A copy into a deliverables folder leaves the backups' reserve free (P9-06, decision 122).
-  deliverables: { reserveBytes: () => config.backups?.reserveBytes },
   onError,
   autoApproveRemote: config.autoApproveRemote,
   // Spawn caps (decision 18, P2-17): concurrency, Stewards per Waykeeper, spawns per hour.
@@ -188,6 +186,13 @@ const composed = composeRuntime(db, {
   processes: { groups: supervisor },
   // Dollar budgets (P8-01): the warning threshold.
   ...(config.budgets ? { budgets: config.budgets } : {}),
+  // Agents' declarations (P9-04): the limits are read at every declaration, so the settings apply
+  // live; a copy into a deliverables folder leaves the backups' reserve free (P9-06, decision 122).
+  deliverables: {
+    dataDir: config.dataDir,
+    limits: () => declarationLimits(config),
+    reserveBytes: () => config.backups?.reserveBytes,
+  },
 });
 const { log, statuses, transcripts } = composed;
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.

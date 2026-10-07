@@ -131,7 +131,7 @@ describe('the IDE setting over PATCH /api/settings (P9-03)', () => {
     });
     const res = await call('PATCH', '/api/settings', { deliverables: { ide: VSCODE } });
     expect(res.status).toBe(200);
-    expect(SettingsResponse.parse(res.body).settings.deliverables).toEqual({ ide: VSCODE });
+    expect(SettingsResponse.parse(res.body).settings.deliverables?.ide).toBe(VSCODE);
     expect(file()['deliverables']).toEqual({ ide: VSCODE });
     expect(config.deliverables?.ide).toBe(VSCODE);
     const ide = IdeResponse.parse((await call('GET', '/api/ide')).body);

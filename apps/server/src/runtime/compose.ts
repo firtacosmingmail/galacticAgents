@@ -5,8 +5,12 @@ import {
   type Agent,
   type AgentAdapter,
   type AgentRuntime as RuntimeName,
+  type DeclarationLimits,
   type Id,
 } from '@galactic/protocol';
+import type { DeliverableCopies as StrayCopies } from '../deliverables/copy-interface.js';
+import { DeliverableService } from '../deliverables/service.js';
+import { stewardDeliverableTools } from '../brains/deliverable-tools.js';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
@@ -113,10 +117,19 @@ export interface ComposeOptions {
    */
   stewardRuntime?: () => RuntimeName | undefined;
   /**
-   * The deliverables folder's copies (P9-06): the free space a copy leaves (`backups.reserveMiB`)
-   * and, for tests, the free-space probe. Built with `workspaces`.
+   * The deliverables (P9-04, P9-06). Agents' declarations: the service is built when a data
+   * folder is known (this `dataDir`, else `workspaces.dataDir`); `limits` is read at every
+   * declaration (the `deliverables.declarations` setting); `tmpDirs` are where strays may come
+   * from (tests). The deliverables folder's copies, built with `workspaces`: the free space a copy
+   * leaves (`reserveBytes`, `backups.reserveMiB`) and, for tests, the free-space probe. A stray is
+   * copied into the folder through those copies; without `workspaces` it is refused.
    */
-  deliverables?: Pick<DeliverableCopiesOptions, 'reserveBytes' | 'freeBytes'>;
+  deliverables?: {
+    dataDir?: string;
+    home?: string;
+    limits?: () => DeclarationLimits;
+    tmpDirs?: string[];
+  } & Pick<DeliverableCopiesOptions, 'reserveBytes' | 'freeBytes'>;
 }
 
 export interface ComposedRuntime {
@@ -147,6 +160,8 @@ export interface ComposedRuntime {
   processes?: StewardProcesses;
   /** Budget notices and the Harmonizer's chat lines about them (P8-01). */
   budgets: BudgetWatcher;
+  /** Agents' declarations (P9-04), when composed with a data folder. */
+  deliverables?: DeliverableService;
   /** The database's write health, for the panel's storage banner (P8-09). */
   storage: StorageMonitor;
   /**
@@ -374,7 +389,10 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
         dataDir: opts.workspaces.dataDir,
         ...(opts.workspaces.home ? { home: opts.workspaces.home } : {}),
         ...(opts.workspaces.git ? { git: opts.workspaces.git } : {}),
-        ...opts.deliverables,
+        ...(opts.deliverables?.reserveBytes !== undefined
+          ? { reserveBytes: opts.deliverables.reserveBytes }
+          : {}),
+        ...(opts.deliverables?.freeBytes ? { freeBytes: opts.deliverables.freeBytes } : {}),
         notify: (agentId, text) => {
           runtime.send(agentId, text, { sender: { type: 'system' } });
         },
@@ -426,6 +444,32 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   budgets.start();
 
   // The brains this composition drives (P2-16): started here or resumed by recovery.
+  const deliverablesDataDir = opts.deliverables?.dataDir ?? opts.workspaces?.dataDir;
+  const home = opts.deliverables?.home ?? opts.workspaces?.home;
+  const strayCopies: StrayCopies | undefined = deliverableCopies
+    ? {
+        keep: async ({ source, projectId, taskId }) => {
+          const copy = await deliverableCopies.copyIn(source, { projectId, taskId });
+          return { path: copy.location.path, bytes: copy.bytes };
+        },
+      }
+    : undefined;
+  const deliverables: DeliverableService | undefined = deliverablesDataDir
+    ? new DeliverableService({
+        commands,
+        tables: log.tables,
+        dataDir: deliverablesDataDir,
+        ...(home ? { home } : {}),
+        ...(opts.deliverables?.limits ? { limits: opts.deliverables.limits } : {}),
+        ...(strayCopies ? { copies: strayCopies } : {}),
+        ...(opts.deliverables?.tmpDirs ? { tmpDirs: opts.deliverables.tmpDirs } : {}),
+      })
+    : undefined;
+  // A Steward on a runtime that serves the server's tools declares its own deliverables (P9-04).
+  if (deliverables) {
+    runtime.setStewardTools((agent) => stewardDeliverableTools(deliverables, agent));
+  }
+
   const runners = new Map<Id, BrainRunner>();
   const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
     log,
@@ -435,6 +479,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(workspaces ? { workspaces } : {}),
     ...(processes ? { processes } : {}),
     ...(opts.stewardRuntime ? { stewardRuntime: opts.stewardRuntime } : {}),
+    ...(deliverables ? { deliverables } : {}),
     ...extra,
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
@@ -482,6 +527,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     transcriptRetention,
     ...(processes ? { processes } : {}),
     budgets,
+    ...(deliverables ? { deliverables } : {}),
     storage,
     ...(deliverableCopies ? { deliverableCopies } : {}),
     startBrain: async (definition, placement, brainOpts = {}) =>

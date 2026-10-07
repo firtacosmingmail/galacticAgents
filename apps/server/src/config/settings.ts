@@ -11,10 +11,12 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import {
   DEFAULT_BUDGET_WARN_PERCENT,
+  DEFAULT_DECLARATION_LIMITS,
   DEFAULT_PERMISSION_POLICY,
   DEFAULT_TRANSCRIPT_RETENTION,
   Timestamp,
   type AgentRuntime,
+  type DeclarationLimits,
   type PermissionPolicy,
   type Settings,
   type SettingName,
@@ -48,6 +50,7 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `budgets` | live: every budgeted project and task is judged against the new threshold (P8-01) |
  * | `stewardRuntime` | live: the next Steward a brain spawns (P8-07); only a registered runtime |
  * | `deliverables.ide` | live: the next Open in IDE (P9-03); `auto` or an installed IDE's bundle id |
+ * | `deliverables.declarations` | live: the next agent declaration (P9-04, decision 120) |
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
  *
@@ -259,6 +262,15 @@ export class SettingsService {
     if (patch.deliverables?.ide !== undefined) {
       next.deliverables = { ...next.deliverables, ide: this.checkIde(patch.deliverables.ide) };
     }
+    if (patch.deliverables?.declarations) {
+      next.deliverables = {
+        ide: next.deliverables?.ide ?? 'auto',
+        declarations: {
+          ...declarationLimits(this.config),
+          ...definedOnly(patch.deliverables.declarations),
+        },
+      };
+    }
 
     // The first-run marker (P25-08): stamped once, never moved back.
     const setupCompletedAt =
@@ -315,7 +327,7 @@ export class SettingsService {
       transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
       budgets: { warnAtPercent: c.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT },
       ...(c.stewardRuntime ? { stewardRuntime: c.stewardRuntime } : {}),
-      deliverables: { ide: c.deliverables?.ide ?? 'auto' },
+      deliverables: { ide: c.deliverables?.ide ?? 'auto', declarations: declarationLimits(c) },
     };
   }
 
@@ -348,6 +360,12 @@ export class SettingsService {
       raw['deliverables'] = {
         ...((raw['deliverables'] as object | undefined) ?? {}),
         ide: next.deliverables?.ide,
+      };
+    }
+    if (patch.deliverables?.declarations) {
+      raw['deliverables'] = {
+        ...((raw['deliverables'] as object | undefined) ?? {}),
+        declarations: next.deliverables?.declarations,
       };
     }
     if (setupCompletedAt) raw['setupCompletedAt'] = setupCompletedAt;
@@ -404,7 +422,28 @@ export class SettingsService {
     if (patch.deliverables?.ide !== undefined && next.deliverables) {
       this.config.deliverables = { ...this.config.deliverables, ide: next.deliverables.ide };
     }
+    // Read by `DeliverableService` at every declaration (`index.ts` hands it this config).
+    if (patch.deliverables?.declarations && next.deliverables?.declarations) {
+      this.config.deliverables = {
+        ...this.config.deliverables,
+        declarations: { ...next.deliverables.declarations },
+      };
+    }
   }
+}
+
+/**
+ * The agents' declaration limits as configured now (P9-04, decision 120): the file's keys over
+ * `DEFAULT_DECLARATION_LIMITS`. Read at every declaration, so a changed setting applies at once.
+ */
+export function declarationLimits(config: Pick<ServerConfig, 'deliverables'>): DeclarationLimits {
+  return { ...DEFAULT_DECLARATION_LIMITS, ...definedOnly(config.deliverables?.declarations ?? {}) };
+}
+
+function definedOnly<T extends object>(value: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as {
+    [K in keyof T]?: Exclude<T[K], undefined>;
+  };
 }
 
 /** A policy with every category filled (the SPEC's table under it), as the settings show it. */
