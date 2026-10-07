@@ -9,7 +9,21 @@ import { HARMONIZER, selectionKey } from '../../state/selection.js';
 import { pickingWorld } from '../picking/fixtures.js';
 import { usePickingStore } from '../picking/store.js';
 import { LabelLayer } from './LabelLayer.js';
-import { labelEntries, labelStats, resetLabelStats, updateLabel } from './registry.js';
+import {
+  labelEntries,
+  labelHitAt,
+  labelStats,
+  registerLabel,
+  resetLabelStats,
+  setShown,
+  updateLabel,
+  writePosition,
+} from './registry.js';
+import { domain as fx } from '@galactic/protocol/fixtures';
+import type { Deliverable } from '@galactic/protocol';
+import { activateMark } from '../picking/store.js';
+import { useDockView } from '../../panel/status/dock-view.js';
+import { useDeliverablesFocus } from '../../panel/deliverables/use-deliverables.js';
 import { useDetailStore } from '../detail/mode.js';
 
 /**
@@ -465,5 +479,79 @@ describe('LabelProjector (one pass for every label)', () => {
     expect(shown('b-jupiter')).toBe(true);
     rerender(<LabelLayer />);
     expect(shown('b-jupiter')).toBe(false);
+  });
+});
+
+describe('the deliverables mark (P9-11, decision 133)', () => {
+  const NOW = fx.deliverable.createdAt;
+  const withDeliverables = (...rows: Deliverable[]) =>
+    act(() => {
+      const world = useAppStore.getState().world;
+      useAppStore.setState({
+        world: { ...world, deliverables: Object.fromEntries(rows.map((r) => [r.id, r])) },
+      });
+    });
+  const image: Deliverable = {
+    ...fx.deliverable,
+    id: 'd-img',
+    projectId: undefined,
+    taskId: 't-ast',
+  };
+  const dev = (state: 'running' | 'ended'): Deliverable => ({
+    ...fx.commandDeliverable,
+    id: 'd-dev',
+    projectId: 'p-big',
+    lastRun: { runId: 'r-1', state, startedAt: NOW, ports: [5173] },
+  });
+  const mark = (bodyId: string) => label(bodyId).querySelector<HTMLElement>('.scene-label-mark');
+
+  it('shows "◆ n" with words for assistive technology, and "▶" while a command runs', () => {
+    render(<LabelLayer />);
+    expect(mark('b-ast-7')).toBeNull();
+    withDeliverables(image, dev('running'));
+    expect(mark('b-ast-7')!.textContent).toBe('◆ 1');
+    expect(mark('b-ast-7')!.getAttribute('aria-label')).toBe('1 deliverable');
+    expect(label('b-ast-7').className).toContain('has-mark');
+    // Jupiter: only a detected command, running — no count, the arrow alone.
+    expect(mark('b-jupiter')!.textContent).toBe('▶');
+    expect(mark('b-jupiter')!.className).toContain('is-running');
+    withDeliverables(image, dev('ended'));
+    expect(mark('b-jupiter')).toBeNull();
+    // The rest of the label is unchanged.
+    expect(label('b-ast-7').textContent).toContain('Fix the date test');
+  });
+
+  it("the mark's box is measured with the label and told apart by the hit test", () => {
+    const el = document.createElement('div');
+    const off = registerLabel({ bodyId: 'b-x', el, priority: 1, w: 0, h: 0 });
+    updateLabel('b-x', { priority: 1, w: 100, h: 20, mark: { x: 70, y: 2, w: 24, h: 14 } });
+    const [entry] = [...labelEntries()].filter((e) => e.bodyId === 'b-x');
+    setShown(entry!, true);
+    writePosition(entry!, 200, 100); // bottom centre: the label spans x 150–250, y 80–100
+    expect(labelHitAt(160, 90)).toEqual({ bodyId: 'b-x', onMark: false });
+    expect(labelHitAt(225, 90)).toEqual({ bodyId: 'b-x', onMark: true });
+    expect(labelHitAt(300, 90)).toBeUndefined();
+    updateLabel('b-x', { priority: 1, w: 100, h: 20 });
+    expect(labelHitAt(225, 90)).toEqual({ bodyId: 'b-x', onMark: false });
+    off();
+  });
+
+  it("a click on the mark selects the work's agent and opens its Deliverables", () => {
+    useDockView.getState().setView('chat');
+    activateMark('b-ast-7', { x: 1, y: 1 });
+    expect(selected()).toBe('steward:a-st');
+    expect(useDeliverablesFocus.getState().request).toBe('task:t-ast');
+    expect(useDockView.getState().view).toBe('chat'); // a Steward view: its own section
+    activateMark('b-jupiter', { x: 1, y: 1 });
+    expect(selected()).toMatch(/^waykeeper:/);
+    expect(useDockView.getState().view).toBe('deliverables');
+    expect(useDeliverablesFocus.getState().request).toBe('project:p-big');
+  });
+
+  it('work with no agent yet shows its card, and opens nothing', () => {
+    useDeliverablesFocus.setState({ request: undefined });
+    const action = activateMark('b-ast-9', { x: 1, y: 1 });
+    expect(action.kind).toBe('info');
+    expect(useDeliverablesFocus.getState().request).toBeUndefined();
   });
 });

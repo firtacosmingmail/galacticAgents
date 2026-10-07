@@ -124,6 +124,26 @@ describe('finished labels: dimmer, still readable (WCAG AA, 4.5:1)', () => {
   });
 });
 
+describe('the deliverables mark (P9-11, decision 133)', () => {
+  const scene = color(rule('.pnl-scene').background!).rgb;
+  const label = over(rule('.scene-label').background!, scene);
+
+  it('its colours (both ends of the running pulse) keep at least 4.5:1', () => {
+    const mark = color(rule('.scene-label-mark').color!).rgb;
+    expect(contrast(mark, label)).toBeGreaterThanOrEqual(4.5);
+    const running = color(rule('.scene-label-mark.is-running').color!).rgb;
+    expect(contrast(running, label)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('the running pulse stops under reduced motion and the mark never takes the pointer', () => {
+    const labels = sheets[3]!;
+    expect(labels).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.scene-label-mark\.is-running\s*\{\s*animation: none;/,
+    );
+    expect(rule('.scene-label-mark')['pointer-events']).toBeUndefined();
+  });
+});
+
 describe('touch gestures (P7-03, decision 92)', () => {
   it('the canvas and its wrappers own every gesture; the scene area does not block pinch-zoom', () => {
     expect(rule('.pnl-scene canvas')['touch-action']).toBe('none !important');
