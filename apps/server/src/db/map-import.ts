@@ -323,6 +323,27 @@ export async function importMap(
         );
       }
       const rows = drift.length === 0 && rebuilt ? rebuilt : data.rows;
+      // The run history is folded from the log's `run.*` events after the import (`EventLog`):
+      // with the exported rows preferred, a run of a deliverable they lack would fail there as a
+      // bare foreign-key error. Say so here instead, nothing written.
+      const kept = new Set((rows.deliverables ?? []).map((d) => d.id));
+      const orphans = new Set<string>();
+      for (const e of data.events) {
+        if (e.event.type !== 'run.started') continue;
+        const run = e.event['run'] as { id?: unknown; deliverableId?: unknown } | undefined;
+        const deliverableId = String(run?.deliverableId);
+        if (!kept.has(deliverableId)) {
+          orphans.add(`run ${String(run?.id)} (seq ${e.seq}) of deliverable ${deliverableId}`);
+        }
+      }
+      if (orphans.size > 0) {
+        throw new ImportError(
+          'drift',
+          `The exported rows lack the deliverable of ${orphans.size} run(s) in the log; ` +
+            'nothing was imported.',
+          [...orphans],
+        );
+      }
       writeRows(t, rows, data.rows);
       const deliverables = rows.deliverables ?? [];
       let chunks = 0;
