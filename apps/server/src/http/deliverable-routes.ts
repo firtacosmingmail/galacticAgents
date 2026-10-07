@@ -29,6 +29,7 @@ import {
   checkPath,
   identityOf,
   openChecked,
+  trustedFolder,
   type DeliverableRoots,
 } from '../deliverables/paths.js';
 import {
@@ -466,22 +467,27 @@ export function registerDeliverableRoutes(
       }
       // The recorded folder is canonical: anything else (the folder or a parent swapped for a
       // link) is refused before the roots are even computed — a link there would make its target
-      // look like a root.
+      // look like a root. The same rule (`trustedFolder`) decides whether the roots keep it.
       let real: string | undefined;
       try {
         real = realpathSync.native(folder);
       } catch {
         return send(reply, 410, 'missing', 'the deliverables folder is not there any more');
       }
-      if (real !== folder) {
+      if (trustedFolder(folder) !== real) {
         return send(reply, 409, 'changed', 'the deliverables folder was replaced by a link');
       }
       const roots = rootsFor(project ? { projectId: project.id } : { taskId: body.taskId });
-      const check = roots ? checkPath(folder, roots) : undefined;
+      const check = roots ? checkPath(real, roots) : undefined;
       if (!check) return send(reply, 410, 'missing', 'the folder of this work is not known');
       if (!check.ok) return send(reply, refusalStatus(check.code), check.code, check.reason);
-      if (check.type !== 'folder') {
-        return send(reply, 409, 'not_folder', `${basename(check.path)} is not a folder`);
+      if (check.type !== 'folder' || check.where !== 'deliverables') {
+        return send(
+          reply,
+          409,
+          'not_folder',
+          `${basename(check.path)} is not the deliverables folder`,
+        );
       }
       try {
         await opener.reveal(check.path);

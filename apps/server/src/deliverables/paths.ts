@@ -239,6 +239,34 @@ export function canonicalWith(path: string, fs: PathFs = nodePathFs): string {
   }
 }
 
+/**
+ * The recorded deliverables folder as a root, or `undefined` when it cannot be trusted as one
+ * (review S1). The folder is recorded canonical (`copies.ts`), so its real path must be the path
+ * itself (compared case-folded: APFS is case-insensitive by default) and the folder itself must not
+ * be a link: a folder — or a parent of it — replaced by a symlink would otherwise make the link's
+ * target an allowed root. A folder not made yet is kept only when the part of it that exists holds
+ * no link either (nothing can be inside it yet). Returns the on-disk real path.
+ */
+export function trustedFolder(folder: string, fs: PathFs = nodePathFs): string | undefined {
+  const abs = resolve(folder);
+  let real: string;
+  try {
+    real = fs.realpath(abs);
+  } catch (e) {
+    if (errCode(e) !== 'ENOENT') return undefined;
+    const canon = canonicalWith(abs, fs);
+    return foldName(canon) === foldName(abs) ? canon : undefined;
+  }
+  if (foldName(real) !== foldName(abs)) return undefined;
+  try {
+    const st = fs.lstat(abs);
+    if (st.isSymbolicLink() || !st.isDirectory()) return undefined;
+  } catch {
+    return undefined;
+  }
+  return real;
+}
+
 /** The canonical roots for one project (and task). */
 export function deliverableRoots(
   input: RootsInput,
@@ -246,15 +274,21 @@ export function deliverableRoots(
   fs: PathFs = nodePathFs,
 ): DeliverableRoots {
   const workspace = canonicalWith(input.workspace, fs);
+  // The task's worktree is a root only where it must be — `<workspace>/.galactic/worktrees/<id>`
+  // on disk — never through a link (the worktree, `.galactic` or `worktrees` replaced by one).
+  const worktree = input.taskId
+    ? canonicalWith(worktreeRoot(input.workspace, input.taskId), fs)
+    : undefined;
+  const trustedWorktree =
+    worktree !== undefined && input.taskId !== undefined
+      ? worktree === worktreeRoot(workspace, input.taskId)
+      : false;
+  const folder = input.deliverablesFolder ? trustedFolder(input.deliverablesFolder, fs) : undefined;
   return {
     workspace,
     ...(input.repoRoot ? { repoRoot: canonicalWith(input.repoRoot, fs) } : {}),
-    ...(input.taskId
-      ? { worktree: canonicalWith(worktreeRoot(input.workspace, input.taskId), fs) }
-      : {}),
-    ...(input.deliverablesFolder
-      ? { deliverablesFolder: canonicalWith(input.deliverablesFolder, fs) }
-      : {}),
+    ...(trustedWorktree && worktree !== undefined ? { worktree } : {}),
+    ...(folder ? { deliverablesFolder: folder } : {}),
     dataDir: canonicalWith(places.dataDir, fs),
     home: canonicalWith(places.home ?? homedir(), fs),
   };
