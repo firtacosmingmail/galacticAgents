@@ -17,6 +17,7 @@ import {
   KIND_LABEL,
   rowActions,
   runStateText,
+  safeLink,
   skippedOf,
   skippedText,
   whereText,
@@ -253,8 +254,13 @@ export function DeliverableRow({
               Reveal in Finder
             </button>
           )}
-          {has('link') && row.url && (
-            <a className="dlv-link" href={row.url} target="_blank" rel="noopener noreferrer">
+          {has('link') && safeLink(row.url) && (
+            <a
+              className="dlv-link"
+              href={safeLink(row.url)}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               Open address
             </a>
           )}

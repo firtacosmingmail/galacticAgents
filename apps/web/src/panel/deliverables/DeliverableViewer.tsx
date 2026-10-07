@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import Markdown, { type Components } from 'react-markdown';
 import type { DeliverableListItem } from '@galactic/protocol';
 import { ApiError } from '../../console/api.js';
@@ -9,8 +9,10 @@ import {
   languageOf,
   mediaType,
   safeLink,
+  SVG_TYPE,
 } from './deliverables-model.js';
 import { highlight } from './highlight.js';
+import { svgPreview } from './svg-image.js';
 
 /**
  * The viewer (P9-09; SPEC decisions 125, 126; TECHNOLOGY §9.5), loaded lazily with
@@ -22,8 +24,9 @@ import { highlight } from './highlight.js';
  * - Markdown rendered without its raw HTML, its links kept only for http(s) and mailto and opened
  *   in a new tab with `noopener`, its images never loaded (their alt text, and a link for a web
  *   address), with a "Source" switch;
- * - an image from a `blob:` URL made with an allow-listed type, in an `<img>` only — an SVG's
- *   scripts never run there;
+ * - an image from a `blob:` URL made with an allow-listed raster type, in an `<img>` only; an SVG
+ *   never from a `blob:` URL (it would be a document of the panel's origin in a new tab, wave-3
+ *   review B1): rasterised to a PNG, else from its opaque-origin `data:` URL (`svg-image.ts`);
  * - "first 2 MB" when the server cut the text (`X-Truncated`); a refusal (too large, missing,
  *   changed) in words, with Open / Download left to the row.
  */
@@ -59,11 +62,20 @@ export default function DeliverableViewer({
   useEffect(() => {
     let live = true;
     let url: string | undefined;
+    let revoke: (() => void) | undefined;
     api.deliverableContent(row.id).then(
-      (content) => {
+      async (content) => {
         if (!live) return;
         const image = imageTypeOf(content.contentType);
-        if (image) {
+        if (image === SVG_TYPE) {
+          const svg = await svgPreview(content.bytes);
+          if (!live) {
+            svg.revoke?.();
+            return;
+          }
+          revoke = svg.revoke;
+          setShown({ kind: 'image', url: svg.url });
+        } else if (image) {
           // An explicit, allow-listed type: never HTML, never sniffed.
           url = URL.createObjectURL(new Blob([content.bytes], { type: image }));
           setShown({ kind: 'image', url });
@@ -94,6 +106,7 @@ export default function DeliverableViewer({
     return () => {
       live = false;
       if (url) URL.revokeObjectURL(url);
+      revoke?.();
     };
   }, [api, row.id]);
 
@@ -177,7 +190,8 @@ export default function DeliverableViewer({
 
 /** Code and text: highlight.js's escaped HTML, or the text as text. */
 function CodeView({ text, language }: { text: string; language: string | undefined }) {
-  const html = highlight(text, language);
+  // Highlighting a large file is the viewer's costliest step: once per text and language.
+  const html = useMemo(() => highlight(text, language), [text, language]);
   return (
     <pre className="dlv-code" tabIndex={0} aria-label="file contents">
       {html !== undefined ? (

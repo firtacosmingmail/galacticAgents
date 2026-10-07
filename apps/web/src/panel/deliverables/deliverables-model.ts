@@ -405,7 +405,12 @@ export function rowActions(d: DeliverableListItem, rules: ClientRules): RowActio
 
 // --- the viewer --------------------------------------------------------------------------------
 
-/** The image types the viewer puts in an `<img>` from a blob (TECHNOLOGY §9.5): never HTML. */
+/**
+ * The image types the viewer shows in an `<img>` (TECHNOLOGY §9.5): never HTML. The raster ones
+ * from a `blob:` URL with that type; an SVG never from a `blob:` URL (it would be a document of the
+ * panel's origin when opened in a tab: wave-3 review B1) — rasterised to PNG, else a `data:` URL
+ * (`svg-image.ts`).
+ */
 export const IMAGE_TYPES: ReadonlySet<string> = new Set([
   'image/png',
   'image/jpeg',
@@ -414,6 +419,9 @@ export const IMAGE_TYPES: ReadonlySet<string> = new Set([
   'image/avif',
   'image/svg+xml',
 ]);
+
+/** The one image type that is a document too: never given a `blob:` URL of its own type. */
+export const SVG_TYPE = 'image/svg+xml';
 
 /** The bare media type of a `Content-Type` header, lower-cased. */
 export const mediaType = (contentType: string): string =>
