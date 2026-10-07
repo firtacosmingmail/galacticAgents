@@ -47,6 +47,21 @@ import type { Id, ProcessAttribution } from '@galactic/protocol';
  */
 export const AGENT_ID_ENV = 'GALACTIC_AGENT_ID';
 
+/**
+ * The marker of a managed run's processes (P9-08; TECHNOLOGY §9.8): `GALACTIC_RUN_ID=<runId>`
+ * instead of the agent marker, so attribution never takes a run's process for a Steward's, and
+ * a run's stop and the restart pass find what escaped its process group.
+ */
+export const RUN_ID_ENV = 'GALACTIC_RUN_ID';
+
+/** The supervisor's key (PID-table row, launch intent) of a managed run: `run:<runId>`. */
+export const runProcessKey = (runId: Id): Id => `run:${runId}`;
+
+/** The run id of a `run:<runId>` key; `undefined` for an agent's key. */
+export function runIdOfKey(key: Id): Id | undefined {
+  return key.startsWith('run:') ? key.slice(4) : undefined;
+}
+
 /** One row of the process table. `startedAt` is epoch ms, floored to the second (`ps lstart`). */
 export interface ProcEntry {
   pid: number;

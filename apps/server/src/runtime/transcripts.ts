@@ -1,4 +1,4 @@
-import type { Database, Statement } from 'better-sqlite3';
+import type { Database } from 'better-sqlite3';
 import type { Id, TranscriptChunk } from '@galactic/protocol';
 import {
   PRIVATE_KEY_BEGIN,
@@ -34,6 +34,41 @@ import {
 
 export type TranscriptListener = (chunks: TranscriptChunk[]) => void;
 
+/**
+ * Where a pipeline writes its chunks and reads them back: `transcript_chunks` by default. A
+ * managed run's output (P9-08, `run_output`) goes through the same redaction with a store of its
+ * own (`deliverables/run-output.ts`); there the `kind` is always `text` and the id a run's.
+ */
+export interface ChunkStore {
+  /** Writes a batch in one transaction; throws when the storage refuses it (nothing written). */
+  write(chunks: readonly TranscriptChunk[]): void;
+  /** The persisted chunks of `id` with `seq > since`, in order. */
+  read(id: Id, since: number, limit: number): TranscriptChunk[];
+  /** The newest `seq` `id` ever had (0 for none): numbering continues after it. */
+  highWater(id: Id): number;
+}
+
+/** The default store: `transcript_chunks`, numbered past retention's high-water mark (P8-02). */
+export function transcriptStore(db: Database): ChunkStore {
+  const insert = db.prepare(
+    'INSERT INTO transcript_chunks (agent_id, seq, at, chunk) VALUES (?, ?, ?, ?)',
+  );
+  const selectSince = db.prepare(
+    'SELECT agent_id, seq, at, chunk FROM transcript_chunks WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?',
+  );
+  const selectMax = db.prepare(HIGH_WATER_SQL);
+  const writeAll = db.transaction((chunks: readonly TranscriptChunk[]) => {
+    for (const c of chunks) {
+      insert.run(c.agentId, c.seq, c.at, JSON.stringify({ kind: c.kind, text: c.text }));
+    }
+  });
+  return {
+    write: (chunks) => writeAll(chunks),
+    read: (id, since, limit) => (selectSince.all(id, since, limit) as Row[]).map(fromRow),
+    highWater: (id) => (selectMax.get(id, id) as { seq: number }).seq,
+  };
+}
+
 export interface TranscriptOptions {
   /** Batch interval. */
   flushMs?: number;
@@ -47,6 +82,8 @@ export interface TranscriptOptions {
   onError?: (error: unknown) => void;
   /** Max chunks kept in memory per agent before a flush is forced. */
   maxBuffered?: number;
+  /** Where chunks go (default `transcript_chunks`, `transcriptStore`). */
+  store?: ChunkStore;
 }
 
 interface Row {
@@ -97,9 +134,7 @@ export class TranscriptPipeline {
   private readonly redact: (text: string) => string;
   private readonly onError: (error: unknown) => void;
   private readonly maxBuffered: number;
-  private readonly insert: Statement;
-  private readonly selectSince: Statement;
-  private readonly selectMax: Statement;
+  private readonly store: ChunkStore;
   private readonly nextSeq = new Map<Id, number>();
   private readonly buffer = new Map<Id, Pending[]>();
   /** The raw tail of each agent's output so far, for a boundary with an already flushed chunk. */
@@ -109,10 +144,7 @@ export class TranscriptPipeline {
   private timer: NodeJS.Timeout | undefined;
   private disposed = false;
 
-  constructor(
-    private readonly db: Database,
-    opts: TranscriptOptions = {},
-  ) {
+  constructor(db: Database, opts: TranscriptOptions = {}) {
     this.flushMs = opts.flushMs ?? 100;
     this.holdMs = opts.holdMs ?? 250;
     this.now = opts.now ?? (() => new Date().toISOString());
@@ -120,13 +152,7 @@ export class TranscriptPipeline {
     this.redact = opts.redact ?? ((text) => redactSecrets(text, this.rules));
     this.onError = opts.onError ?? (() => {});
     this.maxBuffered = opts.maxBuffered ?? 500;
-    this.insert = db.prepare(
-      'INSERT INTO transcript_chunks (agent_id, seq, at, chunk) VALUES (?, ?, ?, ?)',
-    );
-    this.selectSince = db.prepare(
-      'SELECT agent_id, seq, at, chunk FROM transcript_chunks WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?',
-    );
-    this.selectMax = db.prepare(HIGH_WATER_SQL);
+    this.store = opts.store ?? transcriptStore(db);
   }
 
   /**
@@ -176,7 +202,7 @@ export class TranscriptPipeline {
 
   /** The persisted chunks of an agent with `seq > since`, in order. */
   read(agentId: Id, since = 0, limit = 1_000): TranscriptChunk[] {
-    return (this.selectSince.all(agentId, since, limit) as Row[]).map(fromRow);
+    return this.store.read(agentId, since, limit);
   }
 
   /** Every persisted chunk after `since`, paged. */
@@ -258,12 +284,7 @@ export class TranscriptPipeline {
     if (held) this.schedule();
     if (batches.length === 0) return;
     try {
-      this.db.transaction(() => {
-        for (const [, chunks] of batches) {
-          for (const c of chunks)
-            this.insert.run(c.agentId, c.seq, c.at, JSON.stringify({ kind: c.kind, text: c.text }));
-        }
-      })();
+      this.store.write(batches.flatMap(([, chunks]) => chunks));
     } catch (error) {
       this.onError(error); // the rows are lost (a full disk is a Phase 8 concern)
       return;
@@ -355,7 +376,7 @@ export class TranscriptPipeline {
   private allocateSeq(agentId: Id, advance = true): number {
     let next = this.nextSeq.get(agentId);
     if (next === undefined) {
-      next = (this.selectMax.get(agentId, agentId) as { seq: number }).seq;
+      next = this.store.highWater(agentId);
       this.nextSeq.set(agentId, next);
     }
     if (!advance) return next;

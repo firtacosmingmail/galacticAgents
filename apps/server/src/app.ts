@@ -18,6 +18,9 @@ import { registerDeliverableRoutes } from './http/deliverable-routes.js';
 import type { BackupService } from './db/backup.js';
 import type { DeliverableCopies } from './deliverables/copies.js';
 import { registerDeliverablesUsageRoute } from './http/deliverables-usage-route.js';
+import { registerRunRoutes } from './http/run-routes.js';
+import type { RunService } from './deliverables/runs.js';
+import type { RunOutput } from './deliverables/run-output.js';
 import { isWebFile, webCacheControl } from './http/web-cache.js';
 import { registerPushRoutes, type Push } from './push/index.js';
 import type { SettingsService } from './config/settings.js';
@@ -68,6 +71,11 @@ export interface AppOptions {
    * user's file from outside the project added by hand (decision 122).
    */
   deliverableCopies?: Pick<DeliverableCopies, 'usage' | 'copyIn'>;
+  /**
+   * Managed runs (P9-08): enables the run routes (`/api/deliverables/:id/run-preview`, `…/runs`,
+   * `/api/runs/:id/output|stop|restart`) and `run.subscribe` on the socket.
+   */
+  runs?: { service: RunService; output: RunOutput };
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -209,6 +217,15 @@ export function buildApp(opts: AppOptions): App {
     });
   }
 
+  // Managed runs (P9-08).
+  if (opts.log && opts.runs) {
+    registerRunRoutes(fastify, config, {
+      log: opts.log,
+      runs: opts.runs.service,
+      output: opts.runs.output,
+    });
+  }
+
   // The deliverables folders' sizes for the settings page (P9-06).
   if (opts.deliverableCopies) {
     registerDeliverablesUsageRoute(fastify, config, opts.deliverableCopies);
@@ -226,6 +243,7 @@ export function buildApp(opts: AppOptions): App {
           ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
           ...(opts.statuses ? { statuses: opts.statuses } : {}),
           ...(opts.storage ? { storage: opts.storage } : {}),
+          ...(opts.runs ? { runOutput: opts.runs.output } : {}),
         })
       : () => {
           throw new Error('buildApp needs either onSession or log');

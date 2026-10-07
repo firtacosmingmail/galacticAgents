@@ -7,10 +7,12 @@ import {
   deliverableShapeError,
   isDeliverableUrl,
   isRunLive,
+  RunPreviewResponse,
 } from './deliverables.js';
+import { DEFAULT_RUN_SETTINGS, RunSettings } from './panel.js';
 import { Event, EVENT_TYPES, type EventEnvelope } from './events.js';
 import { applyEvent, applySnapshot, emptyWorld } from './world.js';
-import { ServerMessage, SnapshotMessage } from './ws.js';
+import { ClientMessage, ServerMessage, SnapshotMessage } from './ws.js';
 import * as d from './fixtures/domain.js';
 import { events } from './fixtures/events.js';
 
@@ -180,5 +182,53 @@ describe('protocol evolution (TECHNOLOGY §6.3 rule 5)', () => {
       expect(previousTypes.includes(frame.event.type), type).toBe(false);
       expect(ServerMessage.parse(frame), type).toEqual(frame);
     }
+  });
+});
+
+describe('managed runs on the wire (P9-08)', () => {
+  it('parses run.subscribe / run.unsubscribe and the run_output batches', () => {
+    expect(ClientMessage.parse({ type: 'run.subscribe', runId: 'r-1', since: 4 })).toEqual({
+      type: 'run.subscribe',
+      runId: 'r-1',
+      since: 4,
+    });
+    expect(ClientMessage.parse({ type: 'run.unsubscribe', runId: 'r-1' }).type).toBe(
+      'run.unsubscribe',
+    );
+    expect(ClientMessage.safeParse({ type: 'run.subscribe', runId: '' }).success).toBe(false);
+    const batch = {
+      type: 'run_output',
+      runId: 'r-1',
+      chunks: [{ runId: 'r-1', seq: 1, at: at(1), chunk: '\u001b[32mready\u001b[0m\n' }],
+    };
+    expect(ServerMessage.parse(batch)).toEqual(batch);
+  });
+
+  it('a preview carries the body and whether it changed since the last run', () => {
+    const preview = {
+      deliverableId: 'd-2',
+      version: 3,
+      line: 'pnpm run dev',
+      cwd: '/p',
+      envKeys: ['HOME', 'PATH'],
+      warnings: [],
+      source: 'detected',
+      addedBy: { type: 'system' },
+      detectedFrom: 'package.json',
+      body: 'vite --port 5173',
+      bodyChanged: true,
+      lastRunBody: 'vite',
+    };
+    expect(RunPreviewResponse.parse(preview)).toEqual(preview);
+  });
+
+  it('the run settings default to decision 130 and refuse nonsense', () => {
+    expect(RunSettings.parse(DEFAULT_RUN_SETTINGS)).toEqual({
+      maxConcurrent: 4,
+      output: { maxBytesPerRun: 2 * 1024 * 1024, keepRuns: 5, maxAgeDays: 30 },
+    });
+    expect(RunSettings.safeParse({ ...DEFAULT_RUN_SETTINGS, maxConcurrent: 0 }).success).toBe(
+      false,
+    );
   });
 });
