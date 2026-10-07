@@ -201,6 +201,7 @@ export class GalacticClient {
       case 'pong':
       case 'status':
       case 'transcript':
+      case 'run_output': // P9-08: only after the page's own `run.subscribe`
         this.opts.onMessage(message);
         return;
     }

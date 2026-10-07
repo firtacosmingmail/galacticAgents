@@ -233,6 +233,10 @@ export const useAppStore = create<AppState>((set, get) => ({
             : all.slice(-MAX_TRANSCRIPT);
           return { transcripts: { ...s.transcripts, [message.agentId]: merged } };
         }
+        case 'run_output':
+          // A managed run's output (P9-08) is only sent to a page that subscribed to it; the run
+          // view keeps it in its own state (P9-10), not in the folded world.
+          return {};
       }
     }),
   addMessages: (agentId, messages) =>
