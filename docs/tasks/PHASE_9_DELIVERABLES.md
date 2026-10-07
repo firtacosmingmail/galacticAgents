@@ -1,0 +1,117 @@
+# Phase 9 — Deliverables
+
+**Current task:** — (not started; wave 1 is P9-01, P9-02, P9-03) · **Task status:** —
+**Phase status:** not started (0/13 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
+
+> Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
+
+## Purpose
+
+When a project or a task has deliverables, Cosmin reaches them from the app: a file is kept and can be seen and opened; a folder of code opens in the IDE or the Finder; the important run commands (`package.json` scripts and the like) are listed and run from the panel with live output; an application opens; an image is shown. Agents declare deliverables, the server detects the project folder and its run scripts, and the user adds or removes them by hand. The phone lists, views and downloads; only the Mac opens, launches and runs.
+
+## Entry criteria
+
+- Phase 5 exit criteria met (the panel, the Steward view, the history inspector).
+- P8-11 (launch intents), P8-02 (transcript retention), P8-03 (export/import) and P8-06 (desktop shell) done — Phase 9 builds on each.
+- Cosmin has answered, or accepted the conservative defaults of, the items under "Before implementation" below.
+
+## References
+
+- `SPEC.md` §4.7 (deliverables for the user), decisions 118–134, §8 open questions dated 2026-10-07; and the decisions they lean on: 4, 9, 22, 27, 30, 36, 37, 41, 49, 51, 57, 59, 61, 76, 88, 90, 97, 105–107, 110–113.
+- `TECHNOLOGY.md` §9 (data model, paths, declaration and detection, kept copies and merges, viewer, file serving, opener, managed runs, security table, retention/export/desktop); §2.2 "Process cleanup" (attribution, `StewardProcesses`), §2.3 (desktop shell), §2.4 (service worker), §3.1 (the adapter's `tools`), §5.3 (brain tools, `maySupervise`), §6.1–§6.4 (write rule, streams, protocol rule 5, export/import), §8 (security, "Server-run git", "Remote clients").
+- `IMPLEMENTATION_PLAN.md` → Phase 9; corner cases 35–44.
+- Code: `apps/server/src/workspace/workspaces.ts` (`mergeTask`, `removeWorktree`, `canonical`, `worktreeRoot`, the serial lock), `apps/server/src/runtime/supervisor.ts` and `launch-intents.ts` (process groups, launch intents, `reconcile()`), `runtime/process-attribution.ts` / `steward-processes.ts` (markers, identity-checked stops, `isUserFacingApp`), `runtime/redact.ts`, `runtime/transcript-retention.ts`, `domain/permissions.ts` (`classifyCommand`, `mentionsPush`), `brains/steward-tools.ts`, `brains/steward-prompt.ts`, `http/security.ts` (`isRemoteRequest`), `db/map-export.ts` / `map-import.ts`, `apps/web/src/panel/steward/`, `panel/history/WorkInspector.tsx`, `panel/status/dock-view.ts`, `apps/desktop/src-tauri/src/main.rs` (navigation rule).
+- `docs/BACKUP_RESTORE.md`, `docs/DESKTOP.md`, `docs/REMOTE_ACCESS.md` (to be updated in P9-11).
+
+## Design notes for implementation
+
+- **A deliverable is a pointer.** The row says where the thing is; the bytes stay in the project's folder, the task's worktree or a kept copy. File facts (exists, size, text or binary) are computed on read and never stored as truth.
+- **One vocabulary.** `packages/protocol/src/deliverables.ts` holds the types; the world fold in `packages/protocol/src/world.ts` folds `deliverable.*` and `run.*`, so the client, the import and the conformance test agree. New snapshot fields and events are optional for the previous build's parser (TECHNOLOGY §6.3 rule 5); the run output stream is a new socket message only sent to a page that subscribed.
+- **Paths are checked on the real path, every time.** `deliverables/paths.ts` is pure over an `fs` facade; reads go through a descriptor opened with `O_NOFOLLOW` and compared with the checked path's `(dev, ino)`. Never a path from a request: routes take a deliverable id.
+- **The merge hook runs inside the repository lock.** `beforeWorktreeRemoved` is called by `mergeTask` / `removeWorktree` after the merge and before `git worktree remove --force`; it never fails the merge.
+- **Runs reuse the supervisor, not the agent machinery.** `ProcessSpec.owner = {kind: 'run', id}`: PID row `run:<id>`, launch intent, `GALACTIC_RUN_ID` marker, no agent marker, no caps, no status record. Stopping reuses the identity-checked signalling of `StewardProcesses`.
+- **Remote rules are a table** (TECHNOLOGY §9.9). Opening, launching and runs use `requireLocal(req, {always: true})` (403 `remote_never`, not lifted by `autoApproveRemote`); edits by hand use the decision-51 rule (403 `remote_control` unless `autoApproveRemote`).
+- **Tests:** the fake adapter and scripted brains (`brains/testing/`) for declarations; temporary folders and a temporary git repository for paths, copies and merges; a fake `open` (injected `execFile`) for the opener; a real `/bin/sh` child for runs (a script that prints a URL and listens on a port), with the supervisor's test probe for the restart pass. Real-Claude and real-IDE checks are local only and tagged.
+- **Before implementation** (Cosmin, or accept the conservative default written in SPEC §8): the phone's Stop of a run (default: no); kept copies' lifetime (default: until the user removes them); whether ACP Stewards get the tool through an ACP `mcpServers` bridge (default: they declare through their supervisor's report); the size limits (100 MB / 500 MB / 2 GB) and the run limits (4 at once, 5 runs × 2 MB × 30 days); the two new web dependencies (`react-markdown`, `highlight.js`) and one server dependency (`smol-toml`).
+
+## Execution order
+
+| Wave | Tasks | Notes |
+|---|---|---|
+| 1 (parallel) | P9-01, P9-02, P9-03 | The domain model, the path checks (pure) and the opener (macOS `open`, IDE detection) are independent. |
+| 2 (parallel) | P9-04, P9-05, P9-06, P9-07 | Declaration tools, detection, copies and the merge hook, file serving and routes; all need P9-01 and most P9-02. |
+| 3 (parallel) | P9-08, P9-09 | Managed runs on the server; the panel's deliverables views and viewer. |
+| 4 (parallel) | P9-10, P9-11 | The panel's runs; the scene mark, the desktop shell and the docs. |
+| 5 | P9-12 | Security review, end-to-end and conformance. |
+| 6 | P9-13 | Acceptance run on the Mac (real Claude, WebStorm) and the phone. |
+
+## Tasks
+
+### P9-01 — Deliverables domain model, protocol and migration
+- **Status:** todo · **Depends on:** — · **Parallel with:** P9-02, P9-03
+- Migration 0014 (`deliverables`, `deliverable_runs`, `run_output`, indexes — TECHNOLOGY §9.1); `packages/protocol/src/deliverables.ts` (`Deliverable`, `DeliverableKind`, `DeliverableSource`, `DeliverableLocation`, `DeliverableCommand`, `RunSummary`, REST bodies); the events `deliverable.added/updated/removed/restored/opened` and `run.started/ports/ended`; the world fold (`WorldState.deliverables`, `lastRun` folded from `run.*`) and `Snapshot.deliverables?`; `DomainCommands.addDeliverable/updateDeliverable/removeDeliverable/restoreDeliverable` with `DomainError` refusals and `version` bumps; `moveTask`, `transferTask` and `createPromotedProject` carry a task's deliverables (`projectId`) in the same command (decision 124); fixtures; export `rows.deliverables` (optional) and the import's `diffRows` check (decision 132).
+- **Acceptance:** the conformance test drives every new event through the real commands and the replayed world equals the snapshot after every commit; a moved and a promoted task's deliverables roll up into the new project; export → wipe → import reproduces the deliverables; a page built before this change parses a snapshot that carries them.
+
+### P9-02 — Path checks and file facts
+- **Status:** todo · **Depends on:** — · **Parallel with:** P9-01, P9-03
+- `apps/server/src/deliverables/paths.ts` (TECHNOLOGY §9.2): allowed roots per project/task (workspace, repository root, the task's worktree root by `worktreeRoot`, a standalone task's workspace, the kept-copy folder); refused areas (`.git`, other worktrees, `.galactic/`, the data folder, `/`, home); symlinks resolved and refused when they leave the roots; the agents' secret-name list; strays in temporary folders (owner, not a link, born after the agent's first spawn); the checked-descriptor read (`O_NOFOLLOW`, `(dev, ino)` compare); file facts (exists, size, mtime, text/binary sniff, preview content type, "would run code" per decision 128).
+- **Acceptance:** unit tests on temporary folders cover every rule — inside, outside, `..`, a symlink out (file and parent folder), a link swapped after the check (409 `changed`), each secret name, a stray accepted and one refused (older than the agent, a link, another owner), a file in another task's worktree; the facts classify text, binary, SVG, an `.app` and a `.command` correctly.
+
+### P9-03 — Opening on the Mac and the IDE setting
+- **Status:** todo · **Depends on:** — · **Parallel with:** P9-01, P9-02
+- `apps/server/src/deliverables/opener.ts` (TECHNOLOGY §9.7): `open`, `open -R`, `open -b <bundleId>`, application open, all through an injectable `execFile` with argument arrays and a timeout; 501 `not_mac` elsewhere; IDE detection by bundle id (`mdfind`, then `/Applications`, `~/Applications`, `~/Applications/JetBrains Toolbox`) in the order WebStorm, IntelliJ IDEA (Ultimate, CE), Cursor, VS Code, Zed; the application fingerprint (bundle and file); settings `deliverables.ide` (`auto` or a detected bundle id; local only, decision 51) in `SettingsService`, `GET /api/ide`; the settings page's "IDE" field listing what is installed (decision 127).
+- **Acceptance:** tests with a fake `execFile` check every argument vector (paths after options, never a shell); auto picks WebStorm when installed and the next one when not; a settings value that is not a detected bundle id is refused; the fingerprint changes when an app bundle's executable or plist changes. Local check (tagged): the project folder opens in WebStorm on Cosmin's Mac.
+
+### P9-04 — Agents declare deliverables
+- **Status:** todo · **Depends on:** P9-01, P9-02 · **Parallel with:** P9-05, P9-06, P9-07
+- `DeliverableService.declare` (target rules, limits of decision 120, redaction of agent text, the stray copy through P9-06's `copies.ts` once it lands — until then strays are refused); the Steward's `declare_deliverable` / `list_deliverables` via `SpawnOptions.tools` on `claude-sdk` only, with the permission gate allowing the server's own `mcp__galactic__*` tools and nothing else changing for the Steward's other tools; `brains/deliverable-tools.ts` for the Waykeeper and the Harmonizer (`declare_deliverable`, `remove_deliverable`, `list_deliverables`, reach by `maySupervise`); prompt changes — Steward etiquette (declare what the user will want to open; non-Claude runtimes: a "Deliverables:" list in the "Done:" report), Waykeeper (review on task close, declare what a non-Claude Steward listed, remove scratch with a reason, prefer a declared dev command to a left-running server).
+- **Acceptance:** scripted-brain tests: a Steward declares a file in its worktree and an image; a Waykeeper declares a project command and removes a Steward's scratch log; an agent is refused for a path outside the project, a secret name, another project's task, a user-added row, and past each limit (with the reason in the tool result); a fake-adapter Steward's Bash call still reaches the permission gate after the tool is added; an ACP Steward is spawned without the tool.
+
+### P9-05 — The project folder and detected run scripts
+- **Status:** todo · **Depends on:** P9-01 · **Parallel with:** P9-04, P9-06, P9-07
+- `apps/server/src/deliverables/detect.ts` (pure parsers, TECHNOLOGY §9.3): `package.json` with the package manager from the lockfile, Makefile, justfile, `pyproject.toml` (uv, poetry, pdm), `Cargo.toml`, Compose files, `deno.json(c)`; keys `<file>#<name>`, the important ones first, at most 50; `smol-toml` for TOML. The scan service: the project folder deliverable on `prepareProject`; scans after `prepareProject`, after each successful merge and on `POST /api/projects/:id/deliverables/rescan` (local unless `autoApproveRemote`), at most once per 10 s per project; diffs into `deliverable.added/updated/removed` by `system`, never re-adding a key the user removed (decision 119).
+- **Acceptance:** fixture folders for each format (including malformed files that add nothing); a scan after a merge that adds a script adds one row, one that deletes it removes it; a user-removed script stays removed after a rescan and comes back with Restore; nothing is executed (a `Makefile` whose parsing would run a shell is only read).
+
+### P9-06 — Kept copies and the merge hook
+- **Status:** todo · **Depends on:** P9-01, P9-02 · **Parallel with:** P9-04, P9-05, P9-07
+- `apps/server/src/deliverables/copies.ts` (TECHNOLOGY §9.4): copies into `<dataDir>/deliverables/<project or task>/<deliverable>/` (0700/0600, `.partial` then rename, links left out, size limits from `deliverables.copies`, the 1 GiB free-space reserve); `Workspaces.mergeTask` and `removeWorktree` call `beforeWorktreeRemoved(taskId, root, {mergedCommit?})` inside the serial lock before the worktree removal; carried (tracked in the merged commit, nothing uncommitted or ignored under it) → re-pointed to `<repoRoot>/<rel>`; otherwise copied, or `missing{reason}` with a system message to the supervisor; worktree commands re-pointed the same way; removal with "also delete the kept copy"; `GET /api/deliverables/usage`.
+- **Acceptance:** with a temporary repository: a committed file is re-pointed into the workspace after the merge; an ignored build output is copied before the worktree is removed and opens from the copy; one over the limit is marked missing and the Waykeeper is told; a conflicting merge changes nothing; a cancelled task's forced removal copies first; a failing copy does not fail the merge; a stray from the temporary folder is copied at declaration; removing with and without "delete the kept copy" does what it says.
+
+### P9-07 — File serving, routes and remote rules
+- **Status:** todo · **Depends on:** P9-01, P9-02, P9-03 · **Parallel with:** P9-04, P9-05, P9-06
+- `http/deliverable-routes.ts` and `deliverables/serve.ts` (TECHNOLOGY §9.6, §9.7, §9.9): list with file facts, content for the viewer (preview types and limits, `X-Truncated`), download tickets (`POST …/download`, `GET /files/:ticket` outside the bearer scope, single use, 60 s, bound to the file's identity), add / edit / remove / restore by hand, open (`open`, `reveal`, `ide`, `app` with the fingerprint confirmation and `confirmedOpen`), `deliverable.opened` logging; every response header of §9.6; `requireLocal(req, {always})` for open routes; the service worker's never-intercepted list gains `/files/`.
+- **Acceptance:** route tests: a path is never accepted from a request; HTML and Markdown come back as `text/plain`, SVG as `image/svg+xml` with the sandboxing CSP and `nosniff`; a binary file is `attachment`; a ticket works once, expires after 60 s and is refused when the file changed; a remote request may list, view and download but gets 403 `remote_never` for every open even with `autoApproveRemote`, and 403 `remote_control` for edits without it; an app opens only with the current fingerprint.
+
+### P9-08 — Managed runs (server)
+- **Status:** todo · **Depends on:** P9-01, P9-02 · **Parallel with:** P9-09
+- `deliverables/runs.ts` (`RunService`, TECHNOLOGY §9.8): `ProcessSpec.owner` in the supervisor (PID row `run:<id>`, launch intent, `GALACTIC_RUN_ID`, no agent marker); start with the `version` stale check, an edited line, one live run per deliverable, `maxConcurrentRuns`, the worktree refusal; `run-preview` with the permission engine's warnings and the environment's keys; output redaction, `run_output` batches, the `run.subscribe` / `run_output` stream and the REST page; ports from output and `lsof`; stop (group and marker carriers, identity-checked, SIGKILL after 5 s); stops on project closed / cancelled / archived, standalone task finished / archived, deliverable removed, shutdown; the restart pass (PID rows, launch intents, `run.ended{reason: 'server_restarted'}`); output retention in `TranscriptRetention`; 507 when the launch intent cannot be written. All run routes local only, never remote.
+- **Acceptance:** a test command that prints `http://localhost:<port>` and listens shows its port, streams its output and ends with Stop together with a background child it started; a second Run while one lives is 409; a stale `version` is 409 with the new row; closing the project stops its run; a kill of the server during a run leaves nothing after the next start's pass and shows the run stopped; Steward attribution never lists a run's process and a run's stop never touches a Steward's; output past 2 MB keeps the newest part; a remote start or stop is 403 `remote_never`.
+
+### P9-09 — Panel: deliverables views and the viewer
+- **Status:** todo · **Depends on:** P9-07 · **Parallel with:** P9-08
+- `apps/web/src/panel/deliverables/`: the pure grouping model (project's own, tasks newest first, sub-projects folded — decision 124); the Waykeeper dock's third view ("Chat | Status | Deliverables", remembered per browser like decision 80's switch); the Steward view's Deliverables section; the history inspector's list (decision 132); the navigation row's "⋯ Deliverables"; rows with kind, title, location ("kept copy", "missing"), who added it, actions per kind and per client (the phone shows "on the Mac"); the viewer (text with `highlight.js`, Markdown with `react-markdown` without raw HTML or images, images via allow-listed blob types, the size limits, binary/PDF → Open / Download), lazy-loaded; add by hand, edit, remove (with "also delete the kept copy"), "Show removed" / Restore; the application confirmation dialog; downloads through tickets; keyboard and screen-reader rules of decision 81.
+- **Acceptance:** component tests: grouping and ordering; a `<script>` in a source file, raw HTML in Markdown and an SVG with a script never execute (jsdom checks no script element or handler is created); a remote client sees no open or edit actions; the dock's third view survives a reload; axe passes on the views.
+
+### P9-10 — Panel: runs
+- **Status:** todo · **Depends on:** P9-08, P9-09 · **Parallel with:** P9-11
+- The Run confirmation (the exact command, editable; the folder; the environment's keys; who added it; the engine's warnings; a stale refusal shows the new command), the run view (the read-only `TerminalView` over the run stream, backfilled over REST, "earlier output dropped" when truncated), Stop and Restart with confirmations, the ports as links on the Mac and as text on the phone, the run history of a command, the state on each command row ("running · :5173", "exited 1", "stopped — Mission Control restarted").
+- **Acceptance:** component tests against a fake stream for every run state; the confirmation cannot be sent with a stale version; the phone shows output and state but no Run, Stop or Restart; links open in a new tab with `noopener`.
+
+### P9-11 — Scene mark, desktop shell and documentation
+- **Status:** todo · **Depends on:** P9-09 · **Parallel with:** P9-10
+- The label mark of decision 133 ("◆ n", "▶" while a run lives; a click selects the work and opens its Deliverables) — optional, dropped without harm if it costs frame time; inside the desktop app no Download, port links open in the default browser (decision 134); the "task finished" / "project finished" notification text adds "N deliverables" (decision 134); `docs/BACKUP_RESTORE.md` (kept copies are not in backups or exports; copy `~/.galactic/deliverables/` by hand), `docs/DESKTOP.md` (opening, downloads, port links), `docs/REMOTE_ACCESS.md` (what the phone may do with deliverables).
+- **Acceptance:** the scene smoke test (P8-05) still passes and shows the mark on a harness body with a deliverable; in the desktop app a port link opens in Safari/Chrome, not in the window; the three docs are updated and consistent with SPEC decisions 131–134.
+
+### P9-12 — Security review, end-to-end and conformance
+- **Status:** todo · **Depends on:** P9-01 … P9-11 · **Parallel with:** —
+- A security review of the phase's diff against TECHNOLOGY §9.9 (path traversal and symlink races, served content types and headers, tickets, remote rules incl. `autoApproveRemote`, the run's environment, argument arrays, redaction of run output, attribution of run processes) recorded in `docs/tasks/notes/P9-12-security-review.md`, findings fixed; a Playwright flow (P8-05 harness, fake adapter) — a harness Steward declares an image and a text file, both show in the Steward view and the project's Deliverables, a detected `package.json` script runs a fixture server, its output and port appear, Stop ends it; a remote-flagged page cannot open or run; the conformance and export/import tests extended to every new event.
+- **Acceptance:** review notes committed with every finding fixed or recorded as a task or §8 question; `pnpm e2e` green with the new flow; `pnpm build`, `typecheck`, `lint`, `format:check`, `test` green.
+
+### P9-13 — Acceptance run
+- **Status:** todo · **Depends on:** P9-12 · **Parallel with:** —
+- With Cosmin, on real Claude on the Mac and the phone over Tailscale: the Phase 9 exit criteria (IMPLEMENTATION_PLAN) one by one — a Steward builds a small web app and a screenshot, declares them; the merge re-points or keeps them; the folder opens in WebStorm and the Finder; `pnpm dev` runs from the panel, its port opens, Stop ends it; closing the project stops a run; a restart shows it stopped with nothing left; the phone lists, views and downloads and is refused every open and run. Record in `docs/tasks/notes/P9-13-acceptance.md`.
+- **Acceptance:** exit criteria met; notes committed; findings become tasks or §8 questions.
+
+## Exit criteria (from the plan)
+
+On the Mac, a Steward on real Claude finishes a task that builds a small web app and a screenshot: the screenshot shows in the Steward view and, after the Waykeeper's merge, still shows from the project's Deliverables (re-pointed or kept); the project folder opens in WebStorm and in the Finder; `pnpm dev` from `package.json` runs from the panel after a confirmation, its output streams, its port opens in the browser, and Stop ends it and everything it started; closing the project stops a run left running; after a server restart the run shows stopped and nothing is left of it. From the phone the same deliverables are listed, the screenshot and a text file are viewed and a file downloaded, while every open, launch and run is refused. An agent's attempt to declare a path outside the project (a private key, a symlink out of the worktree) is refused.
