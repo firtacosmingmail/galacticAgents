@@ -70,6 +70,22 @@ describe('loadConfig', () => {
       mode: 'read-only',
       allowPermissiveMode: false,
     });
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        acp: {
+          command: 'claude-agent-acp',
+          userSettings: true,
+          sessionMeta: { claudeCode: { options: { settingSources: ['project'] } } },
+        },
+      }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.acp).toEqual({
+      command: 'claude-agent-acp',
+      userSettings: true,
+      sessionMeta: { claudeCode: { options: { settingSources: ['project'] } } },
+    });
     expect(() =>
       loadConfig({ GALACTIC_HOME: home, GALACTIC_ACP_COMMAND: '["unterminated' }),
     ).toThrow(/not a JSON array/);

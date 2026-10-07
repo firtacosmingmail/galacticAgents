@@ -43,6 +43,7 @@ import {
   describeTool,
   findMode,
   formFields,
+  type FormValue,
   gateCall,
   isPermissiveMode,
   mergeTool,
@@ -50,10 +51,12 @@ import {
   modeState,
   type ModeState,
   planProgress,
+  refusedBeforeRunning,
   toolResultText,
   type ToolState,
 } from './mapping.js';
 import { acpPreflight } from './preflight.js';
+import { traceFromEnv, type AcpTrace } from './trace.js';
 
 /**
  * The `acp` adapter (P8-07; TECHNOLOGY §3.2): GalacticAgents as an Agent Client Protocol
@@ -140,6 +143,60 @@ export interface AcpAgentCommand {
    * Default `false`: such a spawn is refused.
    */
   allowPermissiveMode?: boolean;
+  /**
+   * Lets the agent load the user's own agent settings (decision 108 amendment, 2026-10-07): for
+   * `claude-agent-acp`, the login's `~/.claude` allow/deny rules, hooks, skills and plugins, and the
+   * repository's `.claude` settings and `CLAUDE.md`. Default `false`: every session asks for
+   * isolated settings (`ISOLATED_SESSION_META`), so the agent's permission requests — and with them
+   * the table — decide before a call runs, not rules the user wrote for interactive use.
+   */
+  userSettings?: boolean;
+  /**
+   * Extra `_meta` sent with `session/new` and `session/load`, merged (deeply, these values winning)
+   * over the isolation defaults: how another agent's session options are set, or a narrower
+   * opening of Claude's (`{"claudeCode": {"options": {"settingSources": ["project"]}}}`).
+   */
+  sessionMeta?: Record<string, unknown>;
+}
+
+/**
+ * The `_meta` every session asks for unless `acp.userSettings` (decision 108 amendment): Claude's
+ * session options, which `claude-agent-acp` passes to the Agent SDK — no filesystem settings at
+ * all (`settingSources: []`: no user, project or local settings, so no allow rule, hook, skill or
+ * plugin the user set up for interactive use). Agents that do not know `claudeCode` ignore it
+ * (ACP's `_meta` is the extension point; unknown keys are not errors).
+ */
+export const ISOLATED_SESSION_META: Readonly<Record<string, unknown>> = {
+  claudeCode: { options: { settingSources: [] } },
+};
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** `over` merged into `base`, objects deeply, everything else replaced. */
+function mergeMeta(
+  base: Readonly<Record<string, unknown>>,
+  over: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    out[k] = isPlainObject(v) && isPlainObject(out[k]) ? mergeMeta(out[k], v) : v;
+  }
+  return out;
+}
+
+/**
+ * The `_meta` of a `session/new` / `session/load` (decision 108 amendment): the isolation
+ * defaults unless `userSettings`; Claude's bypass mode switched off unless `allowPermissiveMode`;
+ * `sessionMeta` over both. `undefined` when there is nothing to send.
+ */
+export function sessionMetaFor(agent: AcpAgentCommand): Record<string, unknown> | undefined {
+  let meta: Record<string, unknown> = agent.userSettings === true ? {} : ISOLATED_SESSION_META;
+  if (agent.allowPermissiveMode !== true) {
+    meta = mergeMeta(meta, { claudeCode: { options: { allowDangerouslySkipPermissions: false } } });
+  }
+  if (agent.sessionMeta) meta = mergeMeta(meta, agent.sessionMeta);
+  return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
 export interface AcpAdapterOptions {
@@ -154,6 +211,8 @@ export interface AcpAdapterOptions {
   onError?: (error: unknown, context: string) => void;
   /** The runtime check (P25-01); default `acpPreflight(agent)`. */
   preflight?: () => Promise<RuntimePreflight>;
+  /** A JSON-RPC trace (debugging a real agent); default: `GALACTIC_ACP_TRACE` (`trace.ts`). */
+  trace?: AcpTrace;
 }
 
 /**
@@ -243,6 +302,8 @@ class Session {
   /** The input each decided call was judged on: a changed input is judged once more. */
   readonly judgedOn = new Map<string, string>();
   readonly rejudged = new Set<string>();
+  /** Tool calls that are the agent's question to the user (an elicitation names them). */
+  readonly questionTools = new Set<string>();
   /** The agent's session modes, when it has any; `expectedMode` is the one it should be in. */
   mode: ModeState | undefined;
   expectedMode: string | undefined;
@@ -285,6 +346,7 @@ class Session {
     this.decided.clear();
     this.judgedOn.clear();
     this.rejudged.clear();
+    this.questionTools.clear();
     for (const w of this.turnWaiters.splice(0)) w();
   }
 }
@@ -298,12 +360,14 @@ export class AcpAdapter implements AgentAdapter {
   private readonly ended = new Map<string, NonNullable<Session['terminal']>>();
   private readonly onError: (error: unknown, context: string) => void;
   private readonly maxToolResultChars: number;
+  private readonly trace: AcpTrace | undefined;
   private disposed = false;
 
   constructor(private readonly opts: AcpAdapterOptions) {
     checkPassEnv(opts.agent.passEnv);
     this.onError = opts.onError ?? (() => {});
     this.maxToolResultChars = opts.maxToolResultChars ?? 2_000;
+    this.trace = opts.trace ?? traceFromEnv();
   }
 
   preflight(): Promise<RuntimePreflight> {
@@ -338,6 +402,7 @@ export class AcpAdapter implements AgentAdapter {
     this.byAgent.set(opts.agentId, session);
     try {
       const conn = this.connect(session, opts.cwd);
+      const meta = sessionMetaFor(this.opts.agent);
       const init = await this.during(
         session,
         conn.agent.request(acp.methods.agent.initialize, {
@@ -365,6 +430,7 @@ export class AcpAdapter implements AgentAdapter {
             sessionId: resume,
             cwd: opts.cwd,
             mcpServers: [],
+            ...(meta ? { _meta: meta } : {}),
           }),
           'session/load',
         );
@@ -374,7 +440,11 @@ export class AcpAdapter implements AgentAdapter {
       } else {
         const created = await this.during(
           session,
-          conn.agent.request(acp.methods.agent.session.new, { cwd: opts.cwd, mcpServers: [] }),
+          conn.agent.request(acp.methods.agent.session.new, {
+            cwd: opts.cwd,
+            mcpServers: [],
+            ...(meta ? { _meta: meta } : {}),
+          }),
           'session/new',
         );
         session.acpSessionId = created.sessionId;
@@ -405,10 +475,13 @@ export class AcpAdapter implements AgentAdapter {
     const decoder = new TextDecoder();
     const writable = new WritableStream<Uint8Array>({
       write: (chunk) => {
-        session.process?.write(decoder.decode(chunk, { stream: true }));
+        const text = decoder.decode(chunk, { stream: true });
+        trace?.(session.agentId, '->', text);
+        session.process?.write(text);
       },
     });
     const { agent } = this.opts;
+    const trace = this.trace;
     session.process = this.opts.supervisor.adopt({
       agentId: session.agentId,
       command: agent.command,
@@ -417,6 +490,7 @@ export class AcpAdapter implements AgentAdapter {
       env: this.env(),
       meta: { runtime: 'acp', command: agent.command },
       onStdout: (chunk) => {
+        trace?.(session.agentId, '<-', chunk);
         try {
           session.stdout?.enqueue(encoder.encode(chunk));
         } catch {
@@ -424,6 +498,7 @@ export class AcpAdapter implements AgentAdapter {
         }
       },
       onStderr: (chunk) => {
+        trace?.(session.agentId, 'stderr', chunk.endsWith('\n') ? chunk : `${chunk}\n`);
         const line = chunk.trim();
         if (line) this.onError(new Error(line.slice(0, 500)), `acp stderr ${session.agentId}`);
       },
@@ -713,7 +788,7 @@ export class AcpAdapter implements AgentAdapter {
         this.flush(session);
         const tool = mergeTool(session.tools.get(u.toolCallId), u);
         session.tools.set(u.toolCallId, tool);
-        this.onToolStatus(session, tool);
+        this.onToolStatus(session, tool, refusedBeforeRunning(u));
         return;
       }
       case 'plan': {
@@ -765,13 +840,22 @@ export class AcpAdapter implements AgentAdapter {
     this.output(session, block.kind, block.text);
   }
 
-  private onToolStatus(session: Session, tool: ToolState): void {
+  /**
+   * A tool call's status changed. `refused`: the agent reported it refused the call itself before
+   * it ran (its own permission rules, `refusedBeforeRunning`) — nothing ran, so nothing is judged.
+   */
+  private onToolStatus(session: Session, tool: ToolState, refused = false): void {
     const id = tool.toolCallId;
     const status = tool.status ?? 'pending';
     const started = status === 'in_progress' || status === 'completed' || status === 'failed';
     const bookkeeping =
-      tool.kind !== undefined && tool.kind !== null && BOOKKEEPING_KINDS.has(tool.kind);
-    if (started && !session.decided.has(id)) {
+      (tool.kind !== undefined && tool.kind !== null && BOOKKEEPING_KINDS.has(tool.kind)) ||
+      // The agent's question tool: the user answered it (an elicitation), it does nothing else.
+      // Only a call the table cannot place (`acp:*`): a known action is judged even then.
+      (session.questionTools.has(id) && gateCall(tool).toolName.startsWith('acp:'));
+    if (started && !session.decided.has(id) && refused) {
+      session.decided.add(id);
+    } else if (started && !session.decided.has(id)) {
       // The agent runs a call it did not ask about: the gate still judges it.
       session.decided.add(id);
       session.judgedOn.set(id, inputKey(tool));
@@ -1049,6 +1133,9 @@ export class AcpAdapter implements AgentAdapter {
     }
     if (params.mode !== 'form' || !('requestedSchema' in params)) return { action: 'decline' };
     this.flush(session);
+    if ('toolCallId' in params && typeof params.toolCallId === 'string') {
+      session.questionTools.add(params.toolCallId);
+    }
     const schema = params.requestedSchema as {
       properties?: Record<string, ElicitationPropertySchema>;
       required?: string[] | null;
@@ -1058,9 +1145,9 @@ export class AcpAdapter implements AgentAdapter {
       const answer = await this.ask(session, 'clarification', { text: params.message }, signal);
       return answer === undefined ? { action: 'cancel' } : { action: 'accept', content: {} };
     }
-    const content: Record<string, string | number | boolean | string[]> = {};
+    const content: Record<string, FormValue> = {};
     for (const field of fields) {
-      let value: string | number | boolean | string[] | undefined;
+      let value: Record<string, FormValue> | undefined;
       let text = field.text;
       // A typed field asks again until the answer reads (a number, yes/no).
       for (let attempt = 0; value === undefined && attempt < 3; attempt++) {
@@ -1075,7 +1162,7 @@ export class AcpAdapter implements AgentAdapter {
         text = `${field.text} (could not read "${answer}"; please answer again)`;
       }
       if (value === undefined) return { action: 'decline' };
-      content[field.key] = value;
+      Object.assign(content, value);
     }
     return { action: 'accept', content };
   }

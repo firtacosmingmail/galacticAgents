@@ -559,6 +559,7 @@ describe('settings page (P25-08)', () => {
         .map((r) => (r as HTMLInputElement).value),
     ).toEqual(['', 'claude-sdk', 'acp']);
     expect(within(section).getByText(/most careful one/)).toBeTruthy();
+    expect(within(section).getByText(/isolated settings.*acp.userSettings/)).toBeTruthy();
     await click(within(section).getByRole('radio', { name: /ACP agent/ }));
     await click(within(section).getByRole('button', { name: /^Save/ }));
     expect(server.patches.at(-1)).toEqual({ stewardRuntime: 'acp' });

@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-07 (blocked on a real ACP runtime installed locally); everything else done · **Task status:** blocked
-**Phase status:** in progress (14/15 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07 (11/12 done; the phase stays open as the ongoing backlog, P8-07 blocked)
+**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** —
+**Phase status:** in progress (15/15 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -63,7 +63,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** `.app` bundle runs the same UI against the local server.
 
 ### P8-07 — ACP adapter (Codex / Gemini CLI / claude-agent-acp)
-- **Status:** blocked (code merged and conformance green against the fake ACP agent; the acceptance run against a real ACP runtime needs one installed locally — none was, 2026-10-06) · **Depends on:** P1-13, P1-04 · **Parallel with:** all
+- **Status:** done (2026-10-07; conformance 22/22 against claude-agent-acp 0.86.0, isolated settings by default; codex-acp and Gemini not checked) · **Depends on:** P1-13, P1-04 · **Parallel with:** all
 - Official TypeScript ACP SDK client; `initialize` capability set documented (advertise `elicitation.form`; no `fs/*`/`terminal/*` unless implemented); `session/new|prompt|update|cancel|load`; `request_permission` → permission-kind; `elicitation/create` → clarification-kind; fake ACP agent script for the conformance suite; runtime selection in spawn options and settings.
 - **Acceptance:** conformance suite green against the fake ACP agent in CI and against one real ACP runtime locally.
 
