@@ -359,3 +359,55 @@ describe('BrainRunner', () => {
     await rig.h.done();
   });
 });
+
+describe('BrainRunner — the user’s slash commands (P8-13)', () => {
+  it('sends a slash command the session offers as typed, as its own turn; anything else is folded', async () => {
+    const h = brainHarness({ adapter: { commands: [{ name: 'compact', builtin: true }] } });
+    lives.push(h);
+    const hq = await h.startHarmonizer();
+    await hq.settled();
+    // Not read yet: the runner does not know the command and folds it like any line.
+    hq.tell('/compact');
+    await hq.settled();
+    expect(hq.prompts().at(-1)).toContain('the user said: "/compact"');
+
+    // The panel read the commands (`GET /api/agents/:id/commands`): now the runner knows them.
+    expect(await h.composed.runtime.commands(hq.agentId)).toEqual([
+      { name: 'compact', builtin: true },
+    ]);
+    const before = hq.prompts().length;
+    hq.tell('first thing');
+    hq.tell('/compact keep the plan');
+    hq.tell('/tmp/x is full');
+    hq.tell('/unknown');
+    await hq.settled();
+    const turns = hq.prompts().slice(before);
+    expect(turns).toHaveLength(3);
+    expect(turns[0]).toContain('Since your last turn:\n1. the user said: "first thing"');
+    expect(turns[0]).not.toContain('/compact');
+    // As typed: no "since your last turn", no seed — the runtime runs the command.
+    expect(turns[1]).toBe('/compact keep the plan');
+    expect(turns[2]).toContain('the user said: "/tmp/x is full"');
+    expect(turns[2]).toContain('the user said: "/unknown"');
+    // The user's command was delivered like any folded message (a restart does not resend it).
+    const delivered = h.log
+      .eventsSince(0, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter((e) => e.type === 'message.delivered');
+    const sent = h.log
+      .eventsSince(0, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .find(
+        (e) =>
+          e.type === 'message.sent' &&
+          e.sender.type === 'user' &&
+          e.text === '/compact keep the plan',
+      );
+    expect(
+      delivered.some(
+        (e) => sent?.type === 'message.sent' && 'messageId' in e && e.messageId === sent.messageId,
+      ),
+    ).toBe(true);
+    await h.done();
+  });
+});

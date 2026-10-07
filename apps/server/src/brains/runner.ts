@@ -8,6 +8,7 @@ import type {
   Id,
   ToolDefinition,
 } from '@galactic/protocol';
+import { leadingSlashCommand } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 import { originOfMessages } from '../domain/permissions.js';
 import type { ReopenOptions, ReopenResult, SpawnResult } from '../runtime/agent-runtime.js';
@@ -58,6 +59,11 @@ export interface BrainRuntime {
   renewSession(agentId: Id, prompt: string, reason?: string): Promise<SpawnResult>;
   /** Reopens an interrupted agent (P2-16); `BrainRunner.resume` needs it. */
   reopen?(agentId: Id, opts: ReopenOptions): Promise<ReopenResult>;
+  /**
+   * Whether the brain's session offers the slash command `/name` (P8-13): a user's message that
+   * starts with one goes to the brain as it is, as its own turn. Absent: never.
+   */
+  hasCommand?(agentId: Id, name: string): boolean;
 }
 
 /** Where the brain runs. */
@@ -489,8 +495,32 @@ export class BrainRunner {
       this.notify();
       return;
     }
-    const items = this.mailbox.splice(0);
+    // A slash command of the user's (P8-13) is a turn of its own, sent as typed, so the runtime
+    // runs the command; what came before it makes one turn first, what comes after the next.
+    const command = this.slashCommand(this.mailbox[0]!);
+    if (command !== undefined) {
+      this.deliver('mailbox', command, this.mailbox.splice(0, 1));
+      return;
+    }
+    const next = this.mailbox.findIndex((item) => this.slashCommand(item) !== undefined);
+    const items = this.mailbox.splice(0, next < 0 ? this.mailbox.length : next);
     this.deliver('mailbox', this.turnPrompt(items), items);
+  }
+
+  /**
+   * The text of a mailbox item that is the user's slash command (P8-13): a user's message whose
+   * first word is `/name` and that the brain's session offers (`BrainRuntime.hasCommand`, as the
+   * runtime last read its commands). Anything else — another sender, an unknown name, a path such
+   * as `/tmp/x` — stays a line of the next turn's prompt.
+   */
+  private slashCommand(item: MailboxItem): string | undefined {
+    const event = item.event;
+    if (event?.type !== 'message.sent' || event.sender.type !== 'user' || !this.id)
+      return undefined;
+    const name = leadingSlashCommand(event.text);
+    return name !== undefined && this.opts.runtime.hasCommand?.(this.id, name) === true
+      ? event.text
+      : undefined;
   }
 
   /** Sends one turn to the brain. The runtime's inbox delivers it at once: the brain is idle. */

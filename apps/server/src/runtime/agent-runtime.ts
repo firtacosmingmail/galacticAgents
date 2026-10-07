@@ -13,6 +13,7 @@ import {
   type PermissionAction,
   type PermissionPolicy,
   type RequestOrigin,
+  type SlashCommand,
   type SpawnHandle,
   type SpawnOptions,
   type ToolCall,
@@ -283,6 +284,8 @@ interface Live {
   probation: Probation | undefined;
   /** The session did something (output, a tool call, a question) since it opened. */
   activity: boolean;
+  /** The session's slash commands as last read from the adapter (P8-13; `commands()`). */
+  commands?: SlashCommand[] | undefined;
 }
 
 /** What a resumed session falls back to if it ends before its first turn did (P2-16). */
@@ -407,6 +410,36 @@ export class AgentRuntime {
   /** Agents with a live adapter session. */
   liveAgents(): Agent[] {
     return [...this.live.values()].map((l) => l.agent);
+  }
+
+  /**
+   * The slash commands the agent's live session offers (P8-13; `AgentAdapter.commands`): `[]`
+   * for an agent without a live session, one still starting or ending, and a runtime without
+   * commands. Read from the adapter on every call and remembered for `hasCommand`.
+   */
+  async commands(agentId: Id): Promise<SlashCommand[]> {
+    const live = this.live.get(agentId);
+    if (!live?.handle || live.terminal || !live.adapter.commands) return [];
+    const sessionId = live.handle.sessionId;
+    try {
+      const commands = await live.adapter.commands(sessionId);
+      // The session may have been replaced meanwhile (a renewal): keep only a current answer.
+      if (this.live.get(agentId) === live && live.handle?.sessionId === sessionId) {
+        live.commands = commands;
+      }
+      return commands;
+    } catch (error) {
+      this.onError(error, `commands ${agentId}`);
+      return [];
+    }
+  }
+
+  /**
+   * Whether the agent's session offered `/name` when its commands were last read (`commands()`);
+   * `false` when they never were. Synchronous, for the brain runner (P8-13).
+   */
+  hasCommand(agentId: Id, name: string): boolean {
+    return this.live.get(agentId)?.commands?.some((c) => c.name === name) ?? false;
   }
 
   inbox(agentId: Id): AgentInbox | undefined {
@@ -608,6 +641,7 @@ export class AgentRuntime {
       return { ok: false, reason: message };
     }
     live.handle = handle;
+    live.commands = undefined; // a new session: its commands are read again (P8-13)
     // The row's session ref and `agent.spawned` in one transaction (one write rule). A full disk
     // holds it like any agent event (P8-04 review): lost, the next start would take the agent for
     // one that never started and begin afresh instead of resuming its session.

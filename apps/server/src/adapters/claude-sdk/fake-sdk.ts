@@ -8,6 +8,7 @@ import type {
   SdkQueryOptions,
   SdkRateLimitEvent,
   SdkStreamingPrompt,
+  SdkSlashCommand,
   SdkSurface,
   SdkUsage,
   SdkUserMessage,
@@ -36,7 +37,9 @@ export type FakeAction =
   /** A subscription `rate_limit_event`. */
   | { rateLimit: SdkRateLimitEvent['rate_limit_info'] }
   /** The message iterator throws (the CLI keeps running). */
-  | { throwStream: string };
+  | { throwStream: string }
+  /** A `system/commands_changed` push with the session's new command list (P8-13). */
+  | { commandsChanged: SdkSlashCommand[] };
 
 export interface FakeQuestion {
   question: string;
@@ -62,6 +65,11 @@ export interface FakeSdkOptions {
   throwOnInterrupt?: boolean;
   /** `system/init` reports this session id instead of the requested one. */
   initSessionId?: string;
+  /**
+   * What `query.supportedCommands()` answers (P8-13); a function is called each time, and one
+   * that throws makes the call reject. Absent: the query has no `supportedCommands` at all.
+   */
+  commands?: unknown[] | (() => unknown[]);
 }
 
 export interface FakeSdkCall {
@@ -85,6 +93,8 @@ export class FakeSdk implements SdkSurface {
   interrupts = 0;
   /** How many prompts were closed by the adapter (the CLI then sees stdin EOF). */
   inputClosed = 0;
+  /** How many times `query.supportedCommands()` was called (P8-13). */
+  commandCalls = 0;
 
   constructor(private readonly opts: FakeSdkOptions) {}
 
@@ -111,6 +121,8 @@ export class FakeSdk implements SdkSurface {
     const out = new Queue<SdkMessage>();
     let interrupted = false;
     let turn = 0;
+    /** The latest `commands_changed` push, which `supportedCommands()` then reports (as the SDK does). */
+    let commands: unknown[] | undefined;
     let cost = 0;
     const hook: SdkHook | undefined = options.hooks?.PreToolUse?.[0]?.hooks[0];
     const canUseTool: SdkCanUseTool | undefined = options.canUseTool;
@@ -241,6 +253,14 @@ export class FakeSdk implements SdkSurface {
           out.push({
             type: 'rate_limit_event',
             rate_limit_info: action.rateLimit,
+            session_id: sessionId,
+          });
+        } else if ('commandsChanged' in action) {
+          commands = action.commandsChanged;
+          out.push({
+            type: 'system',
+            subtype: 'commands_changed',
+            commands: action.commandsChanged,
             session_id: sessionId,
           });
         } else if ('throwStream' in action) {
@@ -403,6 +423,16 @@ export class FakeSdk implements SdkSurface {
         onInterrupt?.();
         return { still_queued: [] };
       },
+      ...(this.opts.commands !== undefined
+        ? {
+            supportedCommands: async () => {
+              this.commandCalls++;
+              const given = this.opts.commands!;
+              return (commands ??
+                (typeof given === 'function' ? given() : given)) as SdkSlashCommand[];
+            },
+          }
+        : {}),
     };
   }
 }

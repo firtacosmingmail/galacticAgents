@@ -18,6 +18,7 @@ import { AcpAdapter } from './adapters/acp/index.js';
 import { PtyAdapter } from './adapters/pty/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
+import { DEV_FAKE_COMMANDS } from './adapters/fake/scenario.js';
 import { BACKUP_CHECK_INTERVAL_MS, BACKUP_DIR, BackupService } from './db/backup.js';
 import { acquireDataLock, DataLockError, removeStaleTempDatabases } from './db/data-lock.js';
 import { openDatabase } from './db/database.js';
@@ -86,7 +87,8 @@ for (const take of launches.taken) {
 // Adapters: the fake one always (dev mode without Claude), the real one for Claude Code, and the
 // ACP one for any ACP agent when `acp.command` is configured (P8-07), the PTY one for a
 // command-line agent when `pty.command` is (P8-08; node-pty loads at its first spawn).
-const fake = new FakeAdapter();
+// The fake one's sessions report a few slash commands, so the composer's list can be tried (P8-13).
+const fake = new FakeAdapter({ commands: DEV_FAKE_COMMANDS });
 const adapters: AgentAdapter[] = [
   fake,
   new ClaudeSdkAdapter({

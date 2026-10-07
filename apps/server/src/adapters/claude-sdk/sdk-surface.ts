@@ -169,10 +169,34 @@ export interface SdkQueryOptions {
 
 export type SdkStreamingPrompt = AsyncIterable<SdkUserMessage>;
 
+/**
+ * One entry of `supportedCommands()` and of a `system/commands_changed` push (`SlashCommand` in
+ * the SDK): a built-in command, a skill, a plugin's or the project's command.
+ */
+export interface SdkSlashCommand {
+  /** Without the leading slash. */
+  name: string;
+  description: string;
+  argumentHint: string;
+  aliases?: string[];
+  /** Claude Code's own command; absent for a user, project, plugin or MCP command. */
+  builtin?: boolean;
+}
+
+/** `system/commands_changed`: the session's full command list after a change (replace the cache). */
+export interface SdkCommandsChanged {
+  type: 'system';
+  subtype: 'commands_changed';
+  commands: SdkSlashCommand[];
+  session_id?: string;
+}
+
 /** The handle `query()` returns: the message stream plus control calls. */
 export interface SdkQuery extends AsyncIterable<SdkMessage> {
   interrupt(): Promise<unknown>;
   close?(): void;
+  /** The session's slash commands (P8-13); tracks the latest `commands_changed` push. */
+  supportedCommands?(): Promise<SdkSlashCommand[]>;
 }
 
 export interface SdkToolHandler {
