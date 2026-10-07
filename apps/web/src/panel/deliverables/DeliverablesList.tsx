@@ -221,14 +221,22 @@ function DeliverablesBlock({ scope, mode }: { scope: DeliverablesScope; mode: Mo
         />
       )}
       {subProjects.map((p) => (
-        <details key={p.id} className="dlv-sub">
-          <summary>
-            Sub-project <strong>{p.name}</strong>
-          </summary>
-          <DeliverablesBlock scope={{ projectId: p.id }} mode="sub" />
-        </details>
+        <SubProject key={p.id} projectId={p.id} name={p.name} />
       ))}
     </section>
+  );
+}
+
+/** A sub-project, folded (decision 124): its own view, read when unfolded. */
+function SubProject({ projectId, name }: { projectId: Id; name: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details className="dlv-sub" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>
+        Sub-project <strong>{name}</strong>
+      </summary>
+      {open && <DeliverablesBlock scope={{ projectId }} mode="sub" />}
+    </details>
   );
 }
 
