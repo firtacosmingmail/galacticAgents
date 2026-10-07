@@ -1,0 +1,67 @@
+/*
+ * The composer's slash-command list (P8-13), on the panel's tokens (panel.css): it opens above
+ * the text box it belongs to, over the conversation, and scrolls on its own. The active row is
+ * marked in the "here" blue (amber stays reserved for "blocked on you").
+ */
+.cmp-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.stw-composer-row > .cmp-field {
+  flex: 1;
+}
+.cmp-slash {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 5;
+  max-height: min(16rem, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--pnl-surface);
+  color: var(--pnl-ink);
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.cmp-slash li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  padding: 6px 8px;
+  /* A finger-sized row on touch screens. */
+  min-height: 32px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.cmp-slash li.is-active {
+  background: var(--pnl-here-soft);
+  outline: 1px solid var(--pnl-here);
+}
+.cmp-slash-name {
+  font-family: var(--pnl-mono);
+  font-weight: 600;
+}
+.cmp-slash-hint {
+  font-family: var(--pnl-mono);
+  color: var(--pnl-muted);
+}
+.cmp-slash-desc {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--pnl-muted);
+}
+@media (pointer: coarse) {
+  .cmp-slash li {
+    min-height: 44px;
+  }
+}
