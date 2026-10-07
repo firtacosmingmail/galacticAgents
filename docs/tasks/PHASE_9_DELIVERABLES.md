@@ -1,7 +1,7 @@
 # Phase 9 — Deliverables
 
-**Current task:** P9-10, P9-11 (wave 4, branch `p9-wave4-runs-ui-scene-docs`) · **Task status:** in progress
-**Phase status:** in progress (9/13 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
+**Current task:** P9-12 (wave 5, branch `p9-wave5-security-e2e`) · **Task status:** in progress
+**Phase status:** in progress (11/13 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -94,17 +94,17 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 - **Acceptance:** component tests: grouping and ordering; a `<script>` in a source file, raw HTML in Markdown and an SVG with a script never execute (jsdom checks no script element or handler is created); a remote client sees no open or edit actions; the dock's third view survives a reload; axe passes on the views.
 
 ### P9-10 — Panel: runs
-- **Status:** in progress · **Depends on:** P9-08, P9-09 · **Parallel with:** P9-11
+- **Status:** done (2026-10-08; reviewed with the whole phase in P9-12) · **Depends on:** P9-08, P9-09 · **Parallel with:** P9-11
 - The Run confirmation (the exact command, editable; the folder; the environment's keys; who added it; the engine's warnings; for a detected command what it runs — the script, rule or recipe body from the preview — with "changed since the last run" when the preview flags it; a stale refusal shows the new command), the run view (the read-only `TerminalView` over the run stream, backfilled over REST, "earlier output dropped" when truncated), Stop and Restart with confirmations, the ports as links on the Mac and as text on the phone, the run history of a command, the state on each command row ("running · :5173", "exited 1", "stopped — Mission Control restarted").
 - **Acceptance:** component tests against a fake stream for every run state; the confirmation cannot be sent with a stale version; the phone shows output, state and Stop (with a confirmation) but no Run or Restart; links open in a new tab with `noopener`.
 
 ### P9-11 — Scene mark, desktop shell and documentation
-- **Status:** in progress · **Depends on:** P9-09 · **Parallel with:** P9-10
+- **Status:** done (2026-10-08; reviewed with the whole phase in P9-12) · **Depends on:** P9-09 · **Parallel with:** P9-10
 - The label mark of decision 133 ("◆ n", "▶" while a run lives; a click selects the work and opens its Deliverables) — optional, dropped without harm if it costs frame time; inside the desktop app no Download, port links open in the default browser (decision 134); the "task finished" / "project finished" notification text adds "N deliverables" (decision 134); `docs/BACKUP_RESTORE.md` (a project's `deliverables/` folder is not in backups or exports; it is part of the project's folder, backed up with it), `docs/DESKTOP.md` (opening, downloads, port links), `docs/REMOTE_ACCESS.md` (what the phone may do with deliverables).
 - **Acceptance:** the scene smoke test (P8-05) still passes and shows the mark on a harness body with a deliverable; in the desktop app a port link opens in Safari/Chrome, not in the window; the three docs are updated and consistent with SPEC decisions 131–134.
 
 ### P9-12 — Security review, end-to-end and conformance
-- **Status:** todo · **Depends on:** P9-01 … P9-11 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P9-01 … P9-11 · **Parallel with:** —
 - A security review of the phase's diff against TECHNOLOGY §9.9 (path traversal and symlink races, served content types and headers, tickets, remote rules incl. `autoApproveRemote`, the run's environment, argument arrays, redaction of run output, attribution of run processes) recorded in `docs/tasks/notes/P9-12-security-review.md`, findings fixed; a Playwright flow (P8-05 harness, fake adapter) — a harness Steward declares an image and a text file, both show in the Steward view and the project's Deliverables, a detected `package.json` script runs a fixture server, its output and port appear, Stop ends it; a remote-flagged page cannot open or run; the conformance and export/import tests extended to every new event.
 - **Acceptance:** review notes committed with every finding fixed or recorded as a task or §8 question; `pnpm e2e` green with the new flow; `pnpm build`, `typecheck`, `lint`, `format:check`, `test` green.
 
