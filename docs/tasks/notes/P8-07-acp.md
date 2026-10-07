@@ -140,23 +140,56 @@ Optional capabilities per the interface: `resumeSession` is present; it fails (a
 `interrupted`) for an agent without `loadSession` — tested in `acp-adapter.test.ts`. A real
 non-resumable agent runs the suite with `GALACTIC_REAL_ACP_RESUMABLE=0`.
 
-## Real-runtime check
+## Real runtime run
 
-**Not run: no real ACP runtime is installed on this machine.** `claude-agent-acp`,
-`claude-code-acp`, `codex-acp` and `gemini` are not on the `PATH`; `/opt/homebrew/bin/codex` is a
-broken symlink (its Homebrew cask 0.104.0 is gone), and Codex's ACP mode is the separate
-`codex-acp` anyway. Nothing was downloaded or logged in for this. To run it:
+**`claude-agent-acp` 0.86.0** (`@agentclientprotocol/claude-agent-acp`, installed globally, logged
+in with the user's Claude Team login), 2026-10-07, branch `p8-07-real-acp`:
 
 ```
-npm i -g @agentclientprotocol/claude-agent-acp     # 0.86.0 on npm today, Apache-2.0
 GALACTIC_REAL_ACP="claude-agent-acp" pnpm --filter @galactic/server exec vitest run acp-real
+GALACTIC_ACP_TRACE=<file>   # optional: the JSON-RPC traffic, credentials redacted (acp/trace.ts)
 ```
 
-(or `GALACTIC_REAL_ACP="gemini --acp"`, `"codex-acp"`). Still to confirm there: what each agent
-reports for cost (`usage_update.cost`), whether it advertises `loadSession`, whether its question
-tool uses form elicitation, and how its tool calls' `rawInput` looks to `gateCall` (an `execute`
-whose command we cannot read stays unclassified and asks). The task's acceptance ("against one
-real ACP runtime locally") is therefore **open**.
+**First run (main at da658a5): 14 passed, 8 failed, 54 min.** Diagnosed with the new trace
+(`GALACTIC_ACP_TRACE`) one case at a time:
+
+| # | Case | Root cause | Fix |
+|---|---|---|---|
+| 1 | clarification: asked again after the answer | `claude-agent-acp`'s `AskUserQuestion` form is `question_0` (a `oneOf` choice) plus `question_0_custom` (an optional free-text "Other" box), nothing required; the adapter asked one question per field, so the "Other" box was a second question nobody answered. Also: "the first option" did not match the choice `First option` (exact match only), and the question tool's own `completed` update would have been judged as an unasked `acp:AskUserQuestion` call (the table asks about unclassified calls: a hold). | Adapter: a free-text optional field right after a choice field is its "Other" box — not asked; an answer naming no choice goes there. A choice also matches when the answer names exactly one of them. The tool call an elicitation names is not judged when the table cannot place it (`acp:*`), as the claude-sdk adapter keeps `AskUserQuestion` out of the gate. |
+| 2, 3 | permission allow / one `tool_call` per tool use: another `tool_call` + question after allow | The prompt's `rm -rf …` matches the login's own deny rule `Bash(rm -rf:*)` (`~/.claude/settings.json`; the agent runs with `--setting-sources=user,project,local`). The agent refused the call itself — `tool_call` `pending`, then `failed` with `_meta.claudeCode.toolResponse.decisionReasonType` — and never sent `session/request_permission`. The adapter took the `failed` call as one that ran without asking, the table said `ask`: a hold; allowed, the agent retried, was refused again, another hold — forever. | Adapter: a `failed` update carrying `claude-agent-acp`'s denial marker is a call refused before it ran — not judged, held or reported (its denial is in the transcript). Conformance target: the permission prompt uses `rm -r` (the table asks about any `rm`; Claude's default mode asks; a typical login does not deny it). |
+| 4 | permission deny: `agent.failed` | Same loop: the suite's `deny` answered the hold, and a refused hold stops the Steward (decision 108). | As 2. |
+| 5 | policy deny: nothing after `agent.spawned` | Same agent-refused `failed` call judged as unasked; the deny policy made it a `fail()` stop. Why no `agent.failed` was logged in that run was not reproduced: an unasked call the table denies does stop a real `claude-agent-acp` session as `agent.failed` (checked with a throw-away test: a `Read` under `read_workspace: deny`). | As 2; the call is no longer judged. |
+| 6 | two sessions at once: one never idle | Not reproduced, in isolation or in the full reruns (both sessions start in ~1.5 s). Most likely a knock-on of the hold loops above (a held session never goes idle) under that run's load. | — |
+| 7 | resume without a ref: `session/new` not answered in 60 s | Not reproduced: `session/new` answers in ~1.4 s (the agent's own `[session/create]` timings on stderr). Most likely load from the earlier cases' looping sessions; `startTimeoutMs` stays 60 s. | — |
+| 8 | resume after the adapter went away: asked again after resume | The "Other" box of 1. | As 1. |
+
+Nothing in decision 108 changed: every call that runs is still judged; a call the table would ask
+about still reaches the user (a call the agent refused never ran, and its own deny is stricter than
+`ask`); "always" is never chosen; the question-tool exemption covers only calls the table cannot
+place (a `Bash` named by an elicitation is still judged).
+
+**After the fixes: 22 passed, 0 failed, 0 skipped** — first full rerun 144 s, second full run
+recorded below — with no `claude-agent-acp` process left behind.
+
+What the run settled about `claude-agent-acp` 0.86.0:
+
+- `initialize`: protocol 1, `loadSession: true` (and `sessionCapabilities` close/delete/fork/list/
+  resume), no auth method needed with a login; `session/new` answers in ~1.4 s.
+- Modes `default` ("Manual", the start), `acceptEdits`, `plan`, `auto`, `bypassPermissions`, also
+  as a `mode` config option; `default` is not permissive, so no `acp.mode` is needed.
+- Cost: `usage_update.cost` in USD at each turn's end (cumulative), tokens on the prompt response.
+- Tool calls: announced `pending` with `rawInput: {}`, the input filled by later updates; a call
+  it runs without asking goes `pending` → `completed` (`in_progress` only on long calls' progress
+  beats); `Read` inside the cwd runs without asking; `Bash` asks (`allow_once` / `allow_always` /
+  `reject_once`; the adapter answers `allow_once`).
+- It applies the login's own settings first: allow rules run without asking (the unasked-call
+  checks apply — a `Bash(git push:*)` allow becomes a hold), deny rules refuse before running.
+- Questions: `AskUserQuestion` → `elicitation/create` (form, `toolCallId` set) as above.
+- `session/load` resumes the conversation; the replay is ignored.
+
+Token cost of this work: about 9 real runs — 2 diagnostic single cases, 2 confirming single cases,
+2 batches of 3 cases, 1 throw-away `fail()` check, and 2 full runs of 22 cases — a few dollars of
+Opus on the subscription.
 
 ## Tests
 
@@ -178,6 +211,12 @@ real ACP runtime locally") is therefore **open**.
   modes / a switch refused and allowed, `passEnv` defaults and `GALACTIC_*` refused);
   `config.test.ts` +1 (`acp.mode`, JSON command, `GALACTIC_*` refused).
 - `acp/acp-real.conformance.test.ts`: skipped unless `GALACTIC_REAL_ACP`.
+- Real-run fixes: `mapping.test.ts` +1 (claude-agent-acp's question form: one question, the
+  "Other" box, a named choice, two questions, required fields); `acp-adapter.test.ts` +3 (the
+  `asksTool` scenario: one clarification, no hold, no check; an answer into the "Other" box; the
+  `refusesItself` scenario: not judged, held or reported); `trace.test.ts` 3 (off by default,
+  redaction, whole lines). The fake ACP agent's `asksTool` and `refusesItself` scenarios replay
+  the shapes of the real trace.
 - `brains/steward-runtime.test.ts`: 2 — a fake-runtime Harmonizer's asteroid Steward runs on the
   ACP runtime (a real fake-agent process) when the setting says `acp`, and on `fake` when unset.
 - `config/config.test.ts` +1, `config/settings.test.ts` +1, `protocol panel.test.ts` +1, web
@@ -185,7 +224,7 @@ real ACP runtime locally") is therefore **open**.
 
 ## Left / follow-ups
 
-- The real-runtime run (above), and the facts it settles in TECHNOLOGY §3.2.
+- `codex-acp` and `gemini --acp` are still unverified (not installed).
 - Decisions 108 and 109 are recorded in SPEC §7.
 - A resumed ACP session whose agent restarts its own cost tally is under-counted until it passes
   its earlier total (the spend fold keeps the highest figure per session).
