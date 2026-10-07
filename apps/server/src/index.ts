@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './config/config.js';
-import { SettingsService, declarationLimits } from './config/settings.js';
+import { SettingsService, declarationLimits, runSettings } from './config/settings.js';
 import { Opener } from './deliverables/opener.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
 import { buildApp } from './app.js';
@@ -193,6 +193,8 @@ const composed = composeRuntime(db, {
     limits: () => declarationLimits(config),
     reserveBytes: () => config.backups?.reserveBytes,
   },
+  // Managed runs (P9-08): through the same supervisor; the limits are read at every start.
+  runs: { supervisor, settings: () => runSettings(config) },
 });
 const { log, statuses, transcripts } = composed;
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
@@ -299,6 +301,17 @@ composed.defineBrains({
   waykeeper: () => waykeeperDefinition(),
 });
 
+// Runs the previous server life left live show as stopped (decision 130): what still carries
+// their marker is stopped (`reconcile()` above took their groups), and none is started again.
+if (composed.runs && !shuttingDown) {
+  const runs = await composed.runs.recover();
+  if (runs.ended.length > 0) {
+    console.log(
+      `Runs: ${runs.ended.length} stopped by the restart` +
+        (runs.stopped.length > 0 ? ` (pids ${runs.stopped.join(', ')} stopped)` : ''),
+    );
+  }
+}
 // Resume what the previous server life left running (SPEC decision 8): supervisors first.
 const recovery = await composed.recover();
 if (recovery.resumed.length + recovery.needAttention.length > 0) {
@@ -338,6 +351,9 @@ const app = buildApp({
   storage: composed.storage,
   backups,
   ...(composed.deliverableCopies ? { deliverableCopies: composed.deliverableCopies } : {}),
+  ...(composed.runs && composed.runOutput
+    ? { runs: { service: composed.runs, output: composed.runOutput } }
+    : {}),
   // The panel's Rescan (P9-05): the same scan as after a merge, within its 10 s window.
   ...(composed.detection
     ? { rescanDeliverables: (id: string) => composed.detection!.detectProject(id) }

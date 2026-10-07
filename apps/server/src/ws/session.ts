@@ -4,6 +4,7 @@ import type { EventLog } from '../domain/event-log.js';
 import type { StatusStore } from '../runtime/status-store.js';
 import type { StorageMonitor } from '../runtime/storage-health.js';
 import type { TranscriptPipeline } from '../runtime/transcripts.js';
+import type { RunOutput } from '../deliverables/run-output.js';
 import { CLOSE_PROTOCOL_VIOLATION, send, type SessionHandler } from './gateway.js';
 import { buildSnapshot } from './snapshot.js';
 
@@ -22,6 +23,11 @@ export interface SessionOptions {
    * not log it.
    */
   storage?: StorageMonitor;
+  /**
+   * Managed runs' output (P9-08): `run.subscribe{runId, since?}` → `run_output` batches, like a
+   * transcript. Without it a subscription is refused (`unsupported`).
+   */
+  runOutput?: Pick<RunOutput, 'subscribe'>;
 }
 
 /**
@@ -42,6 +48,8 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
     let unsubscribeStorage: (() => void) | undefined;
     /** Transcript subscriptions of this socket, one per agent. */
     const transcriptSubs = new Map<string, () => void>();
+    /** Run output subscriptions of this socket, one per run (P9-08). */
+    const runSubs = new Map<string, () => void>();
 
     const teardown = () => {
       unsubscribe?.();
@@ -52,6 +60,8 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
       unsubscribeStorage = undefined;
       for (const off of transcriptSubs.values()) off();
       transcriptSubs.clear();
+      for (const off of runSubs.values()) off();
+      runSubs.clear();
     };
 
     const fail = (code: number, error: 'protocol_violation', message: string) => {
@@ -168,6 +178,25 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
         case 'transcript.unsubscribe':
           transcriptSubs.get(parsed.data.agentId)?.();
           transcriptSubs.delete(parsed.data.agentId);
+          break;
+        case 'run.subscribe': {
+          const { runId, since } = parsed.data;
+          if (!opts.runOutput) {
+            send(socket, { type: 'error', code: 'unsupported', message: 'runs unavailable' });
+            break;
+          }
+          runSubs.get(runId)?.();
+          runSubs.set(
+            runId,
+            opts.runOutput.subscribe(runId, since ?? 0, (chunks) => {
+              if (ready()) send(socket, { type: 'run_output', runId, chunks });
+            }),
+          );
+          break;
+        }
+        case 'run.unsubscribe':
+          runSubs.get(parsed.data.runId)?.();
+          runSubs.delete(parsed.data.runId);
           break;
       }
     });
