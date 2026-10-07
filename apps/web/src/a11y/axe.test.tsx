@@ -131,4 +131,13 @@ describe('axe-core over the main views (P5-04)', () => {
     await click(screen.getByRole('button', { name: 'Menu' }));
     await check('phone-menu');
   });
+
+  it('phone width with the navigation sheet closed, then open (P8-15)', async () => {
+    stubMedia([COMPACT_TOP_BAR_QUERY, STACKED_LAYOUT_QUERY]);
+    await openApp('/waykeeper/a-waykeeper-1');
+    await check('phone-nav-sheet-closed');
+    await click(screen.getByRole('button', { name: /^Agents/ }));
+    expect(screen.getByRole('dialog', { name: 'Agents' })).toBeTruthy();
+    await check('phone-nav-sheet-open');
+  });
 });
