@@ -54,6 +54,7 @@ import {
   type ToolState,
 } from './mapping.js';
 import { acpPreflight } from './preflight.js';
+import { traceFromEnv, type AcpTrace } from './trace.js';
 
 /**
  * The `acp` adapter (P8-07; TECHNOLOGY §3.2): GalacticAgents as an Agent Client Protocol
@@ -154,6 +155,8 @@ export interface AcpAdapterOptions {
   onError?: (error: unknown, context: string) => void;
   /** The runtime check (P25-01); default `acpPreflight(agent)`. */
   preflight?: () => Promise<RuntimePreflight>;
+  /** A JSON-RPC trace (debugging a real agent); default: `GALACTIC_ACP_TRACE` (`trace.ts`). */
+  trace?: AcpTrace;
 }
 
 /**
@@ -298,12 +301,14 @@ export class AcpAdapter implements AgentAdapter {
   private readonly ended = new Map<string, NonNullable<Session['terminal']>>();
   private readonly onError: (error: unknown, context: string) => void;
   private readonly maxToolResultChars: number;
+  private readonly trace: AcpTrace | undefined;
   private disposed = false;
 
   constructor(private readonly opts: AcpAdapterOptions) {
     checkPassEnv(opts.agent.passEnv);
     this.onError = opts.onError ?? (() => {});
     this.maxToolResultChars = opts.maxToolResultChars ?? 2_000;
+    this.trace = opts.trace ?? traceFromEnv();
   }
 
   preflight(): Promise<RuntimePreflight> {
@@ -405,10 +410,13 @@ export class AcpAdapter implements AgentAdapter {
     const decoder = new TextDecoder();
     const writable = new WritableStream<Uint8Array>({
       write: (chunk) => {
-        session.process?.write(decoder.decode(chunk, { stream: true }));
+        const text = decoder.decode(chunk, { stream: true });
+        trace?.(session.agentId, '->', text);
+        session.process?.write(text);
       },
     });
     const { agent } = this.opts;
+    const trace = this.trace;
     session.process = this.opts.supervisor.adopt({
       agentId: session.agentId,
       command: agent.command,
@@ -417,6 +425,7 @@ export class AcpAdapter implements AgentAdapter {
       env: this.env(),
       meta: { runtime: 'acp', command: agent.command },
       onStdout: (chunk) => {
+        trace?.(session.agentId, '<-', chunk);
         try {
           session.stdout?.enqueue(encoder.encode(chunk));
         } catch {
@@ -424,6 +433,7 @@ export class AcpAdapter implements AgentAdapter {
         }
       },
       onStderr: (chunk) => {
+        trace?.(session.agentId, 'stderr', chunk.endsWith('\n') ? chunk : `${chunk}\n`);
         const line = chunk.trim();
         if (line) this.onError(new Error(line.slice(0, 500)), `acp stderr ${session.agentId}`);
       },
