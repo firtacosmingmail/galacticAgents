@@ -104,6 +104,24 @@ const SCRIPTS: Record<string, FakeScenario> = {
       { kind: 'finish', result: 'shipped' },
     ],
   },
+  /** A write in the workspace, then one into the project's deliverables folder (P9-06). */
+  'deliverables-write': {
+    steps: [
+      {
+        kind: 'permission',
+        toolName: 'Write',
+        input: { file_path: '/w/csv/src/a.ts', content: 'x' },
+        permissionAction: 'edit_workspace',
+      },
+      {
+        kind: 'permission',
+        toolName: 'Write',
+        input: { file_path: '/w/csv/deliverables/report.md', content: 'x' },
+        permissionAction: 'edit_workspace',
+      },
+      { kind: 'finish', result: 'written' },
+    ],
+  },
 };
 
 const lives: ComposedRuntime[] = [];
@@ -175,6 +193,21 @@ async function hierarchy(opts: { policy?: PermissionPolicy; ungated?: boolean; p
 const SYSTEM = { type: 'system' };
 
 describe('permission routing (P2-04)', () => {
+  it("a Steward's own write into the project's deliverables folder asks (P9-06, decision 22)", async () => {
+    const h = await hierarchy({ prompt: 'scenario:deliverables-write' });
+    await until(() => h.ofType('question.opened').length > 0);
+    const opened = h.ofType('question.opened');
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.question).toMatchObject({ kind: 'permission' });
+    expect(JSON.stringify(opened[0]!.question)).toContain('/w/csv/deliverables/report.md');
+    expect(JSON.stringify(opened[0]!.question)).not.toContain('/w/csv/src/a.ts');
+    // The write in the workspace before it was allowed by the gate alone.
+    const calls = h.ofType('agent.tool_call').filter((e) => e.agentId === h.steward.id);
+    expect(calls.map((e) => (e.input as { file_path?: string }).file_path)).toContain(
+      '/w/csv/src/a.ts',
+    );
+  });
+
   it('an allowed action never creates a question: the system answers and logs it', async () => {
     const h = await hierarchy({
       ungated: true,

@@ -171,6 +171,8 @@ const composed = composeRuntime(db, {
   stewardRuntime: () => config.stewardRuntime,
   // Brain tools create worktrees and merge through this service (P2-05, P2-10).
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
+  // A copy into a deliverables folder leaves the backups' reserve free (P9-06, decision 122).
+  deliverables: { reserveBytes: () => config.backups?.reserveBytes },
   onError,
   autoApproveRemote: config.autoApproveRemote,
   // Spawn caps (decision 18, P2-17): concurrency, Stewards per Waykeeper, spawns per hour.

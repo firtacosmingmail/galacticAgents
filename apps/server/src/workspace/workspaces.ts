@@ -174,7 +174,24 @@ export interface WorkspacesOptions {
   identity?: { name: string; email: string };
   commands?: WorkspaceCommands;
   tables?: Tables;
+  /** Called before a task's worktree is removed (P9-06); see `WorktreeRemovalHook`. */
+  beforeWorktreeRemoved?: WorktreeRemovalHook;
+  /** Told about a hook that threw (the removal goes on). */
+  onError?: (error: unknown, context: string) => void;
 }
+
+/**
+ * Called inside the repository's serial lock, after a successful merge (`mergedCommit`: the base
+ * branch's commit) or before a removal without one, and before `git worktree remove` (P9-06,
+ * decision 123: the deliverables in the worktree are re-pointed, copied or marked missing). It
+ * must not use `Workspaces` itself (the lock is held). A throw is reported and never fails the
+ * merge or the removal.
+ */
+export type WorktreeRemovalHook = (
+  taskId: Id,
+  root: string,
+  info: { mergedCommit?: string },
+) => Promise<void>;
 
 export const DEFAULT_IDENTITY = { name: 'GalacticAgents', email: 'galactic@localhost' };
 
@@ -259,8 +276,12 @@ export class Workspaces {
   private readonly commands: WorkspaceCommands | undefined;
   private readonly tables: Tables | undefined;
   private readonly locks = new Map<string, Promise<unknown>>();
+  private removalHook: WorktreeRemovalHook | undefined;
+  private readonly onError: WorkspacesOptions['onError'];
 
   constructor(opts: WorkspacesOptions) {
+    this.removalHook = opts.beforeWorktreeRemoved;
+    this.onError = opts.onError;
     this.projectsRoot = canonical(expandHome(opts.projectsRoot));
     this.dataDir = canonical(opts.dataDir);
     this.home = canonical(opts.home ?? homedir());
@@ -268,6 +289,29 @@ export class Workspaces {
     this.identity = opts.identity ?? DEFAULT_IDENTITY;
     this.commands = opts.commands;
     this.tables = opts.tables;
+  }
+
+  /** Sets (or clears) the hook run before a worktree is removed (the composition's copies). */
+  setBeforeWorktreeRemoved(hook: WorktreeRemovalHook | undefined): void {
+    this.removalHook = hook;
+  }
+
+  /** Runs the removal hook; a throw is reported, never passed on (decision 123). */
+  private async beforeRemoval(
+    taskId: Id,
+    root: string,
+    info: { mergedCommit?: string },
+  ): Promise<void> {
+    if (!this.removalHook) return;
+    try {
+      await this.removalHook(taskId, root, info);
+    } catch (error) {
+      try {
+        this.onError?.(error, `before removing the worktree of ${taskId}`);
+      } catch {
+        // Reporting never stops the removal.
+      }
+    }
   }
 
   // -- workspaces ------------------------------------------------------------------------------
@@ -655,7 +699,11 @@ export class Workspaces {
         }
       }
       const commit = await this.rev(cwd, 'HEAD');
-      if (live) await this.git(repoRoot, ['worktree', 'remove', '--force', root]);
+      if (live) {
+        // Its deliverables are kept before the folder goes (P9-06, decision 123).
+        await this.beforeRemoval(taskId, root, { mergedCommit: commit });
+        await this.git(repoRoot, ['worktree', 'remove', '--force', root]);
+      }
       await this.git(repoRoot, ['worktree', 'prune']);
       const deleted = await this.git(repoRoot, ['branch', '-d', branch], { allowFailure: true });
       return {
@@ -715,6 +763,8 @@ export class Workspaces {
       if (await this.isWorktree(repoRoot, root)) {
         const pending = await this.changes(root, true);
         if (pending.length > 0 && !opts.force) return { removed: false, files: pending };
+        // Copied first: nothing was merged, so nothing is carried (P9-06, decision 123).
+        await this.beforeRemoval(taskId, root, {});
         await this.git(repoRoot, ['worktree', 'remove', '--force', root]);
       }
       await this.git(repoRoot, ['worktree', 'prune']);
