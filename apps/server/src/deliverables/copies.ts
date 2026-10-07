@@ -62,9 +62,12 @@ import { checkFreeSpace, DEFAULT_RESERVE_BYTES, TREE_MAX_ENTRIES, treeSize } fro
  *   `<git common dir>/info/exclude` — never `.gitignore`, never a tracked file, never a commit —
  *   so the workspace stays clean for the next merge. A folder that is not a repository just gets
  *   the folder.
- * - **Copies.** `fs.cp` into a unique `.partial` name inside the destination folder, then renamed
- *   (a file is linked into place, so an existing name is never replaced); symlinks and anything
- *   but files and folders left out, never followed; modes kept minus group/other write and
+ * - **Copies.** The source checked again right before (with the rules it was accepted with), then
+ *   copied entry by entry (`copyInto`: `lstat` walk, every entry checked with the same rules,
+ *   files read through `openChecked`, never through a symlink in any component) into a unique
+ *   `.partial` name inside the destination folder, then moved into place (a file is linked, a
+ *   folder's name claimed first, so an existing name is never replaced); symlinks, anything but
+ *   files and folders, and entries the rules refuse left out and listed; modes kept minus group/other write and
  *   set-uid/set-gid/sticky; a name already taken gets ` (2)`, ` (3)` …; no size limit but the
  *   free-space guard (`checkFreeSpace`: the backups' reserve stays free). A failure removes the
  *   partial copy, never anything else.
