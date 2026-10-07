@@ -14,6 +14,7 @@ import { registerDevRoutes } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
 import { registerBackupRoutes } from './http/backup-routes.js';
+import { registerDeliverableRoutes } from './http/deliverable-routes.js';
 import type { BackupService } from './db/backup.js';
 import { isWebFile, webCacheControl } from './http/web-cache.js';
 import { registerPushRoutes, type Push } from './push/index.js';
@@ -50,8 +51,10 @@ export interface AppOptions {
   restartHarmonizer?: AgentRoutesOptions['restartHarmonizer'];
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
-  /** The opener on the Mac (P9-03): enables `GET /api/ide`. */
+  /** The opener on the Mac (P9-03): enables `GET /api/ide` and the deliverables' opens (P9-07). */
   opener?: Opener;
+  /** Detection's rescan of a project (P9-05): enables `POST /api/projects/:id/deliverables/rescan`. */
+  rescanDeliverables?: (projectId: string) => Promise<unknown>;
   /** Web Push (P7-04): enables `/api/push*`. */
   push?: Push;
   /** The database's write health (P8-09): sent to every socket for the panel's banner. */
@@ -139,6 +142,7 @@ export function buildApp(opts: AppOptions): App {
         !req.url.startsWith('/dev/') &&
         !req.url.startsWith('/api/') &&
         !req.url.startsWith('/health') &&
+        !req.url.startsWith('/files/') &&
         !isWebFile(req.url)
       ) {
         return reply.sendFile('index.html');
@@ -181,6 +185,15 @@ export function buildApp(opts: AppOptions): App {
   }
 
   // Backups and the map export (P8-03).
+  if (opts.log && opts.commands) {
+    registerDeliverableRoutes(fastify, config, {
+      log: opts.log,
+      commands: opts.commands,
+      ...(opts.opener ? { opener: opts.opener } : {}),
+      ...(opts.rescanDeliverables ? { rescan: opts.rescanDeliverables } : {}),
+    });
+  }
+
   if (opts.log) {
     registerBackupRoutes(fastify, config, {
       log: opts.log,
