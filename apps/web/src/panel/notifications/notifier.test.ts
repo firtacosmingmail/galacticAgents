@@ -187,6 +187,22 @@ describe('desktop notifications (P25-07)', () => {
     expect(task!.options.body).toBe(fx.task.description);
   });
 
+  it('a finished task or project names how many deliverables it left (decision 134)', () => {
+    const feedPage = openPage();
+    // The Steward's screenshot (agent) counts; the detected `dev` command does not.
+    feedPage({
+      ...snapshot(10),
+      deliverables: [fx.deliverable, fx.commandDeliverable],
+    } as ServerMessage);
+    feedPage(...triggers().slice(2, 5));
+    const titles = Object.fromEntries(FakeNotification.instances.map((n) => [n.tag, n.title]));
+    expect(titles).toEqual({
+      'task:t-1:completed:13': 'Task finished · 1 deliverable',
+      'task:t-2:failed:14': 'Task failed',
+      'project:p-1:completed:15': 'Project finished · 1 deliverable',
+    });
+  });
+
   it('raises a question once however often it reaches the user', () => {
     const feedPage = openPage();
     const held = userQuestion({ id: 'q-e', holder: { type: 'agent', id: waykeeper.id } });

@@ -11,6 +11,7 @@ import {
   TranscriptChunk,
 } from './domain.js';
 import type { EventEnvelope } from './events.js';
+import { deliverablesPhrase } from './deliverables.js';
 
 // ---------------------------------------------------------------------------
 // The side panel's REST surface (P25-01; SPEC §4.2–4.6, TECHNOLOGY §2.2 "a small REST surface
@@ -566,6 +567,11 @@ export interface NotificationLookup {
   project?(id: Id): { name?: string } | undefined;
   question?(id: Id): Pick<Question, 'kind' | 'context'> | undefined;
   agent?(id: Id): { role?: AgentRole } | undefined;
+  /**
+   * How many deliverables the work has (`countDeliverables`, decision 134): a finished task or
+   * project says "· N deliverables" in its title when there are any.
+   */
+  deliverables?(target: { kind: 'project' | 'task'; id: Id }): number | undefined;
 }
 
 /** The event types `notificationOf` may turn into a notification (for an indexed scan). */
@@ -620,11 +626,15 @@ export function notificationOf(
       const name = isTask ? lookup.task?.(id)?.description : lookup.project?.(id)?.name;
       const what = isTask ? 'Task' : 'Project';
       const done = event.to === 'completed';
+      // Decision 134: the finish says what it left — a count, never a deliverable's title, so it
+      // may show on a lock screen whose device chose no details (decision 95).
+      const count = done ? lookup.deliverables?.({ kind: isTask ? 'task' : 'project', id }) : 0;
+      const left = count ? ` · ${deliverablesPhrase(count)}` : '';
       return {
         ...base,
         id: `${isTask ? 'task' : 'project'}:${id}:${event.to}:${seq}`,
         kind: `${isTask ? 'task' : 'project'}_${done ? 'completed' : 'failed'}`,
-        title: `${what} ${done ? 'finished' : 'failed'}`,
+        title: `${what} ${done ? 'finished' : 'failed'}${left}`,
         ...(name ? { body: clip(name) } : {}),
         target: { kind: isTask ? 'task' : 'project', id },
       };

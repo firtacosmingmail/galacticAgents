@@ -194,6 +194,34 @@ export const isActiveDeliverable = (d: Pick<Deliverable, 'removedAt'>): boolean 
 export const isRunLive = (d: Pick<Deliverable, 'lastRun'>): boolean =>
   d.lastRun !== undefined && d.lastRun.state !== 'ended';
 
+/**
+ * Whether a deliverable counts as one of the work's deliverables for the user (decisions 133,
+ * 134): current, and declared by an agent or added by the user — the project's folder and its
+ * detected commands are always there, so they do not count.
+ */
+export const isCountedDeliverable = (d: Pick<Deliverable, 'removedAt' | 'source'>): boolean =>
+  isActiveDeliverable(d) && d.source !== 'detected';
+
+/**
+ * How many counted deliverables a project (its own and its tasks') or a task has, over any set
+ * of rows (the world's map, a table's rows).
+ */
+export function countDeliverables(
+  rows: Iterable<Pick<Deliverable, 'projectId' | 'taskId' | 'removedAt' | 'source'>>,
+  target: { kind: 'project' | 'task'; id: Id },
+): number {
+  let n = 0;
+  for (const d of rows) {
+    const owner = target.kind === 'project' ? d.projectId : d.taskId;
+    if (owner === target.id && isCountedDeliverable(d)) n++;
+  }
+  return n;
+}
+
+/** "1 deliverable", "3 deliverables" (decision 134's notification text). */
+export const deliverablesPhrase = (n: number): string =>
+  n === 1 ? '1 deliverable' : `${n} deliverables`;
+
 /** An address a `url` deliverable may hold: `http` or `https` only (decision 121). */
 export function isDeliverableUrl(value: string): boolean {
   try {

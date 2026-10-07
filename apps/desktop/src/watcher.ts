@@ -3,6 +3,7 @@ import {
   applySnapshot,
   CLOSE_UNAUTHORIZED,
   emptyWorld,
+  countDeliverables,
   notificationOf,
   ServerMessage,
   unknownEventFrame,
@@ -104,6 +105,8 @@ const lookupOf = (world: WorldState): NotificationLookup => ({
   project: (id) => world.projects[id],
   question: (id) => world.questions[id],
   agent: (id) => world.agents[id],
+  // Decision 134: "Task finished · 2 deliverables" (older servers send none: no count).
+  deliverables: (target) => countDeliverables(Object.values(world.deliverables ?? {}), target),
 });
 
 const importance = (n: PanelNotification) =>
