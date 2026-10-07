@@ -17,6 +17,7 @@ import {
   notificationOf,
 } from './panel.js';
 import { DEFAULT_PERMISSION_POLICY, type Question } from './domain.js';
+import { countDeliverables } from './deliverables.js';
 
 const at = '2026-10-02T10:00:00.000Z';
 const env = (seq: number, event: EventEnvelope['event']): EventEnvelope => ({ seq, at, event });
@@ -207,6 +208,37 @@ describe('notificationOf (P25-01; SPEC §4.5)', () => {
         env(11, { type: 'task.state_changed', taskId: 't1', from: 'approved', to: 'in_progress' }),
       ),
     ).toBeUndefined();
+  });
+
+  it('a finished task or project adds "· N deliverables" (decision 134), a failure never', () => {
+    const finished = (to: 'completed' | 'failed', n: number | undefined, isTask = true) =>
+      notificationOf(
+        env(
+          20,
+          isTask
+            ? { type: 'task.state_changed', taskId: 't1', from: 'awaiting_closure', to }
+            : { type: 'project.state_changed', projectId: 'p1', from: 'in_progress', to },
+        ),
+        { deliverables: () => n },
+      )!.title;
+    expect(finished('completed', 3)).toBe('Task finished · 3 deliverables');
+    expect(finished('completed', 1, false)).toBe('Project finished · 1 deliverable');
+    expect(finished('completed', 0)).toBe('Task finished');
+    expect(finished('completed', undefined)).toBe('Task finished');
+    expect(finished('failed', 3)).toBe('Task failed');
+  });
+
+  it('countDeliverables counts current agent and user rows of the project or the task', () => {
+    const rows = [
+      { projectId: 'p1', taskId: 't1', source: 'agent' as const },
+      { projectId: 'p1', source: 'user' as const },
+      { projectId: 'p1', source: 'detected' as const },
+      { projectId: 'p1', source: 'agent' as const, removedAt: '2026-10-07T10:00:00.000Z' },
+      { projectId: 'p2', taskId: 't2', source: 'agent' as const },
+    ];
+    expect(countDeliverables(rows, { kind: 'project', id: 'p1' })).toBe(2);
+    expect(countDeliverables(rows, { kind: 'task', id: 't1' })).toBe(1);
+    expect(countDeliverables(rows, { kind: 'task', id: 't9' })).toBe(0);
   });
 
   it('notifies work recovery left interrupted and a refusal for lack of space only', () => {

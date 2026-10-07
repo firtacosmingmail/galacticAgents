@@ -142,3 +142,30 @@
   border-color: #7fb2ff;
   z-index: 1;
 }
+/*
+ * The deliverables mark (P9-11, decision 133): "◆ n" after the state pill, "▶" while a command
+ * runs. Quiet (the state pill stays the label's message); the running arrow breathes gently, and
+ * holds still under reduced motion. Its colour keeps 4.5:1 against the label's background.
+ */
+.scene-label-mark {
+  flex: none;
+  padding: 0 3px;
+  font-size: 10px;
+  line-height: 14px;
+  color: #c9b8ff;
+  font-variant-numeric: tabular-nums;
+}
+.scene-label-mark.is-running {
+  color: #9be8b0;
+  animation: scene-label-run 2.4s ease-in-out infinite;
+}
+@keyframes scene-label-run {
+  50% {
+    color: #c9b8ff;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene-label-mark.is-running {
+    animation: none;
+  }
+}

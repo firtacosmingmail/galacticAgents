@@ -1,4 +1,5 @@
 import {
+  countDeliverables,
   NOTIFYING_EVENT_TYPES,
   notificationOf,
   type Event,
@@ -41,6 +42,13 @@ export function notificationLookup(log: EventLog): NotificationLookup {
     project: (id) => t.projects.get(id),
     question: (id) => t.questions.get(id),
     agent: (id) => t.agents.get(id),
+    deliverables: (target) =>
+      countDeliverables(
+        t.deliverables.of(
+          target.kind === 'task' ? { taskId: target.id } : { projectId: target.id },
+        ),
+        target,
+      ),
   };
 }
 

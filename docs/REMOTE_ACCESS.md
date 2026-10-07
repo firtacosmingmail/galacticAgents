@@ -79,8 +79,22 @@ The classification is made per request: on every REST call and on the WebSocket 
 | Spawn a free-form agent (`POST /api/agents`, the ops console's development tool, decision 24); stop a Steward's leftover processes; restart the Harmonizer | yes | 403 `remote_control` (`SPEC.md` decision 90) |
 | Answer questions (permission and clarification), decide cards, chat, pause / resume / recover / stop / cancel work and agents | yes | yes: an explicit user decision, or work already started (decision 90) |
 | `/dev/*` | yes | 403 `remote_dev` |
+| Deliverables: list, view text and images, download, follow a run's state, ports and output, **stop** a run | yes | yes (decision 131) |
+| Deliverables: add, edit, remove, restore by hand, Rescan; the deliverables settings (IDE, runs, declaration limits) | yes | 403 `remote_control` / `remote_settings` |
+| Deliverables: Open, Reveal in Finder, Open in IDE, open an application, **start or restart** a run; add a path from **outside** the project | yes | 403 `remote_control`, **even with `autoApproveRemote`** |
 
-`autoApproveRemote: true` (or `GALACTIC_AUTO_APPROVE_REMOTE=1`) treats remote clients like the local page in every row above. It is off by default. Leave it off unless the phone is the only remote device and you accept that.
+`autoApproveRemote: true` (or `GALACTIC_AUTO_APPROVE_REMOTE=1`) treats remote clients like the local page in every row above except the last one. It is off by default. Leave it off unless the phone is the only remote device and you accept that.
+
+### Deliverables from the phone
+
+What a project or task produced (`SPEC.md` §4.7) is listed on the phone as on the Mac: the project's Deliverables view, the task's section in the Steward view, the history inspector. On the phone you may:
+
+- **view** text, code, Markdown and images in the panel (the same preview limits as on the Mac);
+- **download** a file: the page asks for a one-time link (`POST /api/deliverables/:id/download`), and the browser fetches `/files/<ticket>`. The link works once, for 60 seconds, only for that file as it was when asked (a file changed meanwhile is refused), and carries no token. Files of any size are streamed. The service worker never caches `/files/`;
+- **follow a run**: its state, its output (live) and its ports, shown as text: a dev server is usually unauthenticated and is not forwarded by Serve (`SPEC.md` §8);
+- **stop a run**, after a confirmation, as you may stop an agent (decision 90): stopping only ends what the Mac started.
+
+Never from the phone, whatever `autoApproveRemote` says, because each one runs a program on the Mac: opening a file, revealing it in the Finder, opening the IDE, launching an application, and starting or restarting a run. Adding a file or folder from outside the project is the Mac's alone too: it would be copied into the project's `deliverables/` folder and become downloadable, so a phone could otherwise copy `~/.ssh` in and download it. The phone shows these actions as "on the Mac" instead of offering them. Adding, editing, removing and restoring deliverables inside the project, a Rescan, and the deliverables settings follow the settings rule (decision 51): refused unless `autoApproveRemote`.
 
 ## 4. Optional: Tailscale identity instead of the token
 

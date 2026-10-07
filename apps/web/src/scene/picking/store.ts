@@ -7,7 +7,9 @@ import {
   type SelectionKey,
 } from '../../state/selection.js';
 import { agentLabel } from '../../console/hierarchy/shared.js';
-import { revealChat } from '../../panel/dock-state.js';
+import { requestDockOpen, revealChat } from '../../panel/dock-state.js';
+import { useDockView } from '../../panel/status/dock-view.js';
+import { useDeliverablesFocus } from '../../panel/deliverables/use-deliverables.js';
 import { useCameraStore } from '../camera/store.js';
 import { getSatellite } from '../satellites/registry.js';
 import type { SatelliteMode } from '../satellites/machine.js';
@@ -249,6 +251,24 @@ export function activateBody(bodyId: string, at: Point, opts: { fly?: boolean } 
   } else {
     usePickingStore.setState({ popover: { kind: 'info', ...at, action } });
   }
+  return action;
+}
+
+/**
+ * A click on a label's deliverables mark (P9-11, decision 133): activates the body as a click on
+ * it does, then — when that selected the work's agent — opens its Deliverables as the navigation
+ * row's "⋯ Deliverables" does: a project's view in its Waykeeper's dock, a task's section of its
+ * Steward view, brought into sight with the focus on its title. Work with no agent yet shows the
+ * body's card like any click.
+ */
+export function activateMark(bodyId: string, at: Point): BodyAction {
+  const action = activateBody(bodyId, at);
+  if (action.kind !== 'select') return action;
+  const host = sceneWorld(useAppStore.getState()).bodies[bodyId]?.host;
+  if (!host) return action;
+  if (host.kind === 'project') useDockView.getState().setView('deliverables');
+  requestDockOpen();
+  useDeliverablesFocus.getState().ask(`${host.kind}:${host.id}`);
   return action;
 }
 
