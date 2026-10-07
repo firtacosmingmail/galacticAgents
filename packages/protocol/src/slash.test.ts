@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   AgentCommandsResponse,
+  brainSlashCommands,
+  slashCommandIs,
   leadingSlashCommand,
   normalizeSlashCommands,
   SLASH_COMMANDS_MAX,
@@ -57,5 +59,40 @@ describe('slash commands (P8-13)', () => {
   it('refuses a name with whitespace or a slash in the schema', () => {
     expect(SlashCommand.safeParse({ name: 'a b' }).success).toBe(false);
     expect(SlashCommand.safeParse({ name: '/a' }).success).toBe(false);
+  });
+
+  it('keeps aliases (one word, no repeat of the name) and matches them (review N2)', () => {
+    const [usage] = normalizeSlashCommands([
+      { name: 'usage', aliases: ['/cost', 'usage', 'two words', 'cost', 3], builtin: true },
+    ]);
+    expect(usage).toEqual({ name: 'usage', aliases: ['cost'], builtin: true });
+    expect(SlashCommand.safeParse(usage).success).toBe(true);
+    expect(slashCommandIs(usage!, 'usage')).toBe(true);
+    expect(slashCommandIs(usage!, 'cost')).toBe(true);
+    expect(slashCommandIs(usage!, 'clear')).toBe(false);
+  });
+
+  it("keeps only the brain's allowlist (review S1)", () => {
+    const all = normalizeSlashCommands([
+      { name: 'compact', builtin: true },
+      { name: 'clear', aliases: ['reset'], builtin: true },
+      { name: 'init', builtin: true },
+      { name: 'review', builtin: true },
+      { name: 'security-review', builtin: true },
+      { name: 'context', builtin: true },
+      { name: 'usage', aliases: ['cost'], builtin: true },
+      { name: 'cost' },
+      { name: 'docs:explain' },
+    ]);
+    expect(brainSlashCommands(all).map((c) => c.name)).toEqual([
+      'compact',
+      'context',
+      'usage',
+      'cost',
+    ]);
+    // A skill named like an allowed command (`builtin: false`) is not the runtime's own.
+    expect(
+      brainSlashCommands(normalizeSlashCommands([{ name: 'context', builtin: false }])),
+    ).toEqual([]);
   });
 });

@@ -19,9 +19,10 @@ export function slashQuery(text: string): string | undefined {
 }
 
 /**
- * The commands matching `query`, best first: names that start with it, then names that contain
- * it, then those whose description does; alphabetical within each group; case-insensitive. An
- * empty query lists every command alphabetically. At most `SLASH_LIST_MAX`.
+ * The commands matching `query`, best first: names (or aliases: `/cost` finds `/usage`) that
+ * start with it, then names that contain it, then those whose description does; alphabetical
+ * within each group; case-insensitive. An empty query lists every command alphabetically. At most
+ * `SLASH_LIST_MAX`.
  */
 export function matchCommands(commands: readonly SlashCommand[], query: string): SlashCommand[] {
   const q = query.toLowerCase();
@@ -30,9 +31,9 @@ export function matchCommands(commands: readonly SlashCommand[], query: string):
   const inName: SlashCommand[] = [];
   const inDescription: SlashCommand[] = [];
   for (const c of commands) {
-    const name = c.name.toLowerCase();
-    if (name.startsWith(q)) prefix.push(c);
-    else if (name.includes(q)) inName.push(c);
+    const names = [c.name, ...(c.aliases ?? [])].map((n) => n.toLowerCase());
+    if (names.some((n) => n.startsWith(q))) prefix.push(c);
+    else if (names.some((n) => n.includes(q))) inName.push(c);
     else if (q && c.description?.toLowerCase().includes(q)) inDescription.push(c);
   }
   return [...prefix.sort(byName), ...inName.sort(byName), ...inDescription.sort(byName)].slice(
@@ -45,14 +46,36 @@ export function matchCommands(commands: readonly SlashCommand[], query: string):
 export const insertion = (command: SlashCommand): string => `/${command.name} `;
 
 /**
- * The user's earlier messages for ↑, oldest first, without a message repeated right after itself
- * (pressing ↑ never shows the same text twice in a row) and without blank ones.
+ * Whether `query` (the text after the `/`) is already a whole command name or alias, exactly as
+ * typed: Enter then sends the message instead of inserting (as Claude Code does, P8-13 review N9).
  */
-export function recallList(texts: readonly string[]): string[] {
-  const out: string[] = [];
-  for (const t of texts) {
-    if (!t.trim()) continue;
-    if (out[out.length - 1] !== t) out.push(t);
+export const isWholeCommand = (commands: readonly SlashCommand[], query: string): boolean =>
+  query !== '' && commands.some((c) => c.name === query || (c.aliases?.includes(query) ?? false));
+
+/**
+ * A key event that belongs to an input method's composition (P8-13 review S5): `isComposing`,
+ * or the `keyCode` 229 that WebKit (Safari, the desktop app's WKWebView) gives the Enter that
+ * commits a composition — after `compositionend`, with `isComposing` already false.
+ */
+export const composing = (e: { nativeEvent: { isComposing?: boolean }; keyCode?: number }) =>
+  e.nativeEvent.isComposing === true || e.keyCode === 229;
+
+/** One of the user's earlier messages: its id (stable while the list grows) and its text. */
+export interface HistoryEntry {
+  id: string;
+  text: string;
+}
+
+/**
+ * The user's earlier messages for ↑, oldest first, without a message repeated right after itself
+ * (pressing ↑ never shows the same text twice in a row; the first of a run keeps its id) and
+ * without blank ones.
+ */
+export function recallList(entries: readonly HistoryEntry[]): HistoryEntry[] {
+  const out: HistoryEntry[] = [];
+  for (const e of entries) {
+    if (!e.text.trim()) continue;
+    if (out[out.length - 1]?.text !== e.text) out.push(e);
   }
   return out;
 }
@@ -66,12 +89,13 @@ export const onLastLine = (text: string, caret: number): boolean =>
   !text.slice(caret).includes('\n');
 
 /**
- * Where ↑/↓ are in the history: `index` counts back from the newest message (0 is the newest);
- * `shown` is the text it put in the composer. Anything the user types forgets the position, so a
- * draft — typed or an edited recalled message — is never replaced.
+ * Where ↑/↓ are in the history: `id` is the recalled message's (P8-13 review N8: a message that
+ * arrives meanwhile does not shift the position, as an index from the newest would); `shown` is
+ * the text it put in the composer. Anything the user types forgets the position, so a draft —
+ * typed or an edited recalled message — is never replaced.
  */
 export interface HistoryPosition {
-  index: number;
+  id: string;
   shown: string;
 }
 
@@ -82,7 +106,7 @@ export interface HistoryPosition {
  * nothing older. `↓` past the newest message gives back an empty composer (`at: undefined`).
  */
 export function historyStep(
-  history: readonly string[],
+  history: readonly HistoryEntry[],
   at: HistoryPosition | undefined,
   text: string,
   caret: number,
@@ -90,17 +114,18 @@ export function historyStep(
 ): { at: HistoryPosition | undefined; text: string } | undefined {
   const recalled = at !== undefined && text === at.shown;
   if (!recalled && text !== '') return undefined; // a draft: never replaced
+  // Where the recalled message is now (oldest first); one no longer listed counts as "now".
+  const found = recalled ? history.findIndex((h) => h.id === at.id) : -1;
+  const here = found < 0 ? history.length : found;
+  const step = (i: number) => {
+    const entry = history[i]!;
+    return { at: { id: entry.id, shown: entry.text }, text: entry.text };
+  };
   if (direction === 'older') {
     if (recalled && !onFirstLine(text, caret)) return undefined; // move up inside the message
-    const index = (recalled ? at.index : -1) + 1;
-    if (index >= history.length) return undefined;
-    const shown = history[history.length - 1 - index]!;
-    return { at: { index, shown }, text: shown };
+    return here - 1 >= 0 ? step(here - 1) : undefined;
   }
   if (!recalled) return undefined; // ↓ in an empty composer: nothing newer than now
   if (!onLastLine(text, caret)) return undefined;
-  const index = at.index - 1;
-  if (index < 0) return { at: undefined, text: '' };
-  const shown = history[history.length - 1 - index]!;
-  return { at: { index, shown }, text: shown };
+  return here + 1 < history.length ? step(here + 1) : { at: undefined, text: '' };
 }

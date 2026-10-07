@@ -59,7 +59,10 @@ function world(): World {
   };
 }
 
-function boot(w: World, adapter: Pick<FakeAdapterOptions, 'resumeFails'> = {}): BrainHarness {
+function boot(
+  w: World,
+  adapter: Pick<FakeAdapterOptions, 'resumeFails' | 'commands'> = {},
+): BrainHarness {
   const h = brainHarness({
     db: w.db,
     adapter: { scenarios: w.scenarios, sessionStore: w.sessions, ...adapter },
@@ -289,6 +292,37 @@ describe('hierarchy restart and resume (P2-16)', () => {
     expect(h2.log.tables.proposals.get(one.card.id)?.state).toBe('pending');
     expect(noterReports(h2)).toHaveLength(1);
     h2.verify();
+  });
+
+  it('a slash command sent right after a restart is its own turn, without any client reading the list (P8-13 review S3)', async () => {
+    const w = world();
+    const commands = [
+      { name: 'compact', builtin: true },
+      { name: 'clear', builtin: true },
+    ];
+    const h1 = boot(w, { commands });
+    const hq = await h1.startHarmonizer({
+      definition: hqDefinition(),
+      scriptOptions: { strict: false },
+    });
+    await h1.settle(LONG);
+    await h1.composed.shutdown();
+
+    const h2 = boot(w, { commands });
+    defineBrains(h2);
+    h2.script('harmonizer', { strict: false });
+    const { report } = await h2.recover();
+    expect(report.resumed).toContain(hq.agentId);
+    const hq2 = h2.brains.find((b) => b.agentId === hq.agentId)!;
+    // At once: nothing has asked for the commands (`GET /api/agents/:id/commands`).
+    hq2.tell('/compact');
+    hq2.tell('/clear');
+    await h2.settle(LONG);
+    const prompts = hq2.prompts();
+    expect(prompts).toContain('/compact');
+    // `/clear` is not on a brain's allowlist: a line of a turn, never sent alone.
+    expect(prompts).not.toContain('/clear');
+    expect(prompts.some((p) => p.includes('the user said: "/clear"'))).toBe(true);
   });
 
   it('a brain whose session cannot be resumed gets a fresh, re-seeded session on the same row', async () => {

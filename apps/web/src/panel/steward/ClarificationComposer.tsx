@@ -11,6 +11,7 @@ import {
   useQueuedAnswer,
 } from '../cards/QueuedAnswer.js';
 import { useComposerAssist } from '../composer/ComposerAssist.js';
+import { composing } from '../composer/assist-model.js';
 
 /**
  * An answer reaches the agent as text inside its question's tool result, not as a message its
@@ -41,8 +42,9 @@ export function ClarificationComposer({
   const [value, setValue] = useState('');
   const queued = useQueuedAnswer(q.id);
   const field = useRef<HTMLTextAreaElement>(null);
-  // What ↑ recalls (P8-14): the user's earlier answers to this agent's questions, oldest first.
-  // Answers still queued offline (P7-05) are not sent yet: they are not history.
+  // What ↑ recalls (P8-14): the user's earlier answers to this agent's clarification questions,
+  // oldest first — not permission verdicts ("allow"/"deny" are not something to type again;
+  // review N1). Answers still queued offline (P7-05) are not sent yet: they are not history.
   const history = useMemo(
     () =>
       Object.values(world.questions)
@@ -50,11 +52,12 @@ export function ClarificationComposer({
           (x) =>
             x.originAgentId === q.originAgentId &&
             x.id !== q.id &&
+            x.kind === 'clarification' &&
             x.answeredBy?.type === 'user' &&
             x.answer !== undefined,
         )
         .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
-        .map((x) => x.answer!),
+        .map((x) => ({ id: x.id, text: x.answer! })),
     [world.questions, q.originAgentId, q.id],
   );
   const assist = useComposerAssist({
@@ -136,7 +139,7 @@ export function ClarificationComposer({
             onChange={(e) => assist.onChange(e.target.value)}
             onKeyDown={(e) => {
               if (assist.onKeyDown(e)) return;
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(e);
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !composing(e)) submit(e);
             }}
             {...assist.inputProps}
           />

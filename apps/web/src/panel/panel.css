@@ -693,12 +693,6 @@
   visibility: visible;
   transition: transform 220ms ease;
 }
-/* nothing inside transitions: under reduced motion the panel-wide rule gives every element a
-   0.01 ms transition of all properties, and the rows would inherit the panel's `visibility: hidden`
-   for a frame or two after it opens — long enough for the browser to drop the focus put on them */
-.pnl-nav-sheet-panel * {
-  transition: none;
-}
 /* reduced motion: it appears and goes at once (the panel-wide rule does the same) */
 .pnl-nav-sheet.is-still > .pnl-nav-scrim,
 .pnl-nav-sheet.is-still > .pnl-nav-sheet-panel {
@@ -707,6 +701,13 @@
 @media (prefers-reduced-motion: reduce) {
   .pnl-nav-scrim,
   .pnl-nav-sheet-panel {
+    transition: none;
+  }
+  /* nothing inside transitions either: the panel-wide rule above gives every element a 0.01 ms
+     transition of all properties, and the rows would inherit the panel's `visibility: hidden` for
+     a frame or two after it opens — long enough for the browser to drop the focus put on them.
+     Without reduced motion the rows keep their own transitions (none of them of visibility). */
+  .pnl-nav-sheet-panel * {
     transition: none;
   }
 }

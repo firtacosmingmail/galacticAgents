@@ -136,7 +136,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       // carry flags that are not the panel's (`?show_fps=true`, P3-11) and must outlive it.
       if (opts?.replace)
         window.history.replaceState(null, '', path + window.location.search + window.location.hash);
-      else if (window.location.pathname !== path) window.history.pushState(null, '', path);
+      else if (window.location.pathname !== path) {
+        // An overlay's own entry on top (the phone's navigation sheet pushes one so that Back
+        // closes it, P8-15): the navigation that dismisses it takes its place, so Back then goes
+        // to the previous page rather than to a dangling "sheet open" entry.
+        const overlay = (window.history.state as { navSheet?: unknown } | null)?.navSheet === true;
+        if (overlay) window.history.replaceState(null, '', path);
+        else window.history.pushState(null, '', path);
+      }
     }
     if (!unchanged) set({ route: location.route, selection: location.selection });
   },

@@ -11,11 +11,14 @@ import {
 import type { Id, SlashCommand } from '@galactic/protocol';
 import { useApi } from '../../console/hierarchy/shared.js';
 import {
+  composing,
   historyStep,
   insertion,
+  isWholeCommand,
   matchCommands,
   recallList,
   slashQuery,
+  type HistoryEntry,
   type HistoryPosition,
 } from './assist-model.js';
 import { useSlashCommands } from './slash-commands.js';
@@ -26,7 +29,8 @@ import './composer.css';
  *
  * - **Slash commands.** A `/` as the first character opens a list of the commands the agent's
  *   runtime offers (`GET /api/agents/:id/commands`), filtered as the user types the name. ↑/↓
- *   move, Tab or Enter put `/name ` in the composer, Escape closes, a click or tap chooses. The
+ *   move, Tab or Enter put `/name ` in the composer, Escape closes, a click or tap chooses; Enter
+ *   on a name typed out in full sends it (`send`), as Claude Code does. The
  *   textarea keeps the focus throughout (an editable text box with a list: `aria-autocomplete`,
  *   `aria-controls`, `aria-activedescendant`; a `<textarea>` may not take the combobox role), and
  *   a polite status line says how many commands match. Names, hints and descriptions are the
@@ -46,12 +50,17 @@ export interface ComposerAssistOptions {
   text: string;
   setText: (text: string) => void;
   textarea: RefObject<HTMLTextAreaElement | null>;
-  /** The user's earlier messages in this conversation, oldest first. */
-  history: readonly string[];
+  /** The user's earlier messages in this conversation, oldest first, by id (P8-13 review N8). */
+  history: readonly HistoryEntry[];
   /** Whether to offer the agent's slash commands at all (false: it has no live session). */
   commands: boolean;
   /** Which of the agent's commands this composer offers (default: all). */
   commandFilter?: (command: SlashCommand) => boolean;
+  /**
+   * How Enter sends this composer's message: with the list open, Enter on a command name typed
+   * out in full (`/compact`) sends instead of inserting. Absent: Enter always inserts.
+   */
+  send?: () => void;
 }
 
 export interface ComposerAssist {
@@ -127,7 +136,8 @@ export function useComposerAssist(opts: ComposerAssistOptions): ComposerAssist {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
-    if (e.nativeEvent.isComposing || e.altKey || e.metaKey || e.ctrlKey) return false;
+    // An input method's Enter commits its text, never a command or the message (review S5).
+    if (composing(e) || e.altKey || e.metaKey || e.ctrlKey) return false;
     if (open) {
       switch (e.key) {
         case 'ArrowDown':
@@ -145,7 +155,8 @@ export function useComposerAssist(opts: ComposerAssistOptions): ComposerAssist {
         case 'Enter':
           if (e.shiftKey) return false;
           e.preventDefault();
-          choose(matches[current]!);
+          if (opts.send && query !== undefined && isWholeCommand(commands, query)) opts.send();
+          else choose(matches[current]!);
           return true;
         case 'Escape':
           e.preventDefault();
@@ -200,6 +211,12 @@ export function useComposerAssist(opts: ComposerAssistOptions): ComposerAssist {
             >
               <span className="cmp-slash-name">/{c.name}</span>
               {c.argumentHint && <span className="cmp-slash-hint"> {c.argumentHint}</span>}
+              {c.aliases?.length ? (
+                <span className="cmp-slash-hint">
+                  {' '}
+                  (also {c.aliases.map((a) => `/${a}`).join(', ')})
+                </span>
+              ) : null}
               {c.description && <span className="cmp-slash-desc">{c.description}</span>}
             </li>
           ))}
