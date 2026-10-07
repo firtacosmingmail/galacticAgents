@@ -174,6 +174,12 @@ export interface WorkspacesOptions {
   identity?: { name: string; email: string };
   commands?: WorkspaceCommands;
   tables?: Tables;
+  /**
+   * Told after a project's folder was prepared and after each successful merge into it (P9-05:
+   * the run-script detection rescans, TECHNOLOGY §9.3). Called once the change is recorded; it
+   * must not throw and is not awaited.
+   */
+  onFolderChanged?: (projectId: Id, why: 'prepared' | 'merged') => void;
 }
 
 export const DEFAULT_IDENTITY = { name: 'GalacticAgents', email: 'galactic@localhost' };
@@ -258,6 +264,7 @@ export class Workspaces {
   private readonly identity: { name: string; email: string };
   private readonly commands: WorkspaceCommands | undefined;
   private readonly tables: Tables | undefined;
+  private readonly onFolderChanged: WorkspacesOptions['onFolderChanged'];
   private readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(opts: WorkspacesOptions) {
@@ -268,6 +275,7 @@ export class Workspaces {
     this.identity = opts.identity ?? DEFAULT_IDENTITY;
     this.commands = opts.commands;
     this.tables = opts.tables;
+    this.onFolderChanged = opts.onFolderChanged;
   }
 
   // -- workspaces ------------------------------------------------------------------------------
@@ -455,6 +463,7 @@ export class Workspaces {
       ...(info.git ? { repoPath: info.repoRoot ?? path } : {}),
       meta: { ...project.meta, workspace: meta },
     });
+    this.onFolderChanged?.(projectId, 'prepared');
     return info;
   }
 
@@ -694,6 +703,7 @@ export class Workspaces {
           merges: [...mergeRecords(task), record],
         },
       });
+      this.onFolderChanged?.(project.id, 'merged');
     }
     return result;
   }

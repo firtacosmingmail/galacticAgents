@@ -32,6 +32,7 @@ import { TranscriptPipeline } from './transcripts.js';
 import { TranscriptRetention, type RetentionPolicy } from './transcript-retention.js';
 import { WorkStateDeriver } from './work-state-deriver.js';
 import { Workspaces, type WorkspacesOptions } from '../workspace/workspaces.js';
+import { ProjectDetection, type DetectionOptions } from '../deliverables/detection.js';
 
 /**
  * The runtime composition root: log, status store, transcript pipeline, adapters and the agent
@@ -99,6 +100,12 @@ export interface ComposeOptions {
   /** Dollar budgets (P8-01): the warning threshold (`config.budgets`, default 80 %). */
   budgets?: { warnAtPercent?: number };
   /**
+   * Run-script detection (P9-05): composed with `workspaces`, on by default — a project's folder
+   * and run scripts are detected when it is prepared and after each merge. `false` turns it off;
+   * an object tunes it (tests: `minIntervalMs: 0`, a fake `fs`).
+   */
+  detection?: false | Omit<DetectionOptions, 'tables' | 'commands' | 'onProblem'>;
+  /**
    * The runtime new Stewards run on (P8-07; the `stewardRuntime` setting, read at every spawn):
    * handed to every brain's tools. Absent or `undefined`: a brain spawns Stewards on its own
    * runtime.
@@ -121,6 +128,11 @@ export interface ComposedRuntime {
   queries: BrainQueries;
   /** Workspaces and worktrees, when composed with `workspaces` paths (P2-10). */
   workspaces?: Workspaces;
+  /**
+   * The project folder and run-script detection (P9-05), with `workspaces`: `detectProject` is
+   * the panel's Rescan and P9-06's after-merge hook.
+   */
+  detection?: ProjectDetection;
   /** The retention / archival job (P2-13); its timer runs when composed with an interval. */
   archival: Archival;
   /** Transcript retention and compaction (P8-02); its timer runs when composed with an interval. */
@@ -321,8 +333,26 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
         : status;
     },
   });
+  const detection: ProjectDetection | undefined =
+    opts.workspaces && opts.detection !== false
+      ? new ProjectDetection({
+          ...(opts.detection ?? {}),
+          tables: log.tables,
+          commands,
+          ...(opts.onError
+            ? { onProblem: (message: string) => opts.onError!(new Error(message), 'detection') }
+            : {}),
+        })
+      : undefined;
   const workspaces: Workspaces | undefined = opts.workspaces
-    ? new Workspaces({ ...opts.workspaces, commands, tables: log.tables })
+    ? new Workspaces({
+        ...opts.workspaces,
+        commands,
+        tables: log.tables,
+        ...(detection
+          ? { onFolderChanged: (projectId: Id) => void detection.detectProject(projectId) }
+          : {}),
+      })
     : undefined;
   const archival = new Archival({
     log,
@@ -415,6 +445,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     reports,
     queries,
     ...(workspaces ? { workspaces } : {}),
+    ...(detection ? { detection } : {}),
     archival,
     transcriptRetention,
     ...(processes ? { processes } : {}),
@@ -506,6 +537,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     async shutdown() {
       // A graceful shutdown interrupts agents (they come back): nothing of theirs is swept.
       processes?.dispose();
+      detection?.dispose();
       budgets.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
@@ -519,6 +551,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     },
     async dispose() {
       processes?.dispose();
+      detection?.dispose();
       budgets.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
