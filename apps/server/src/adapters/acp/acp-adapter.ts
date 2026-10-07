@@ -43,6 +43,7 @@ import {
   describeTool,
   findMode,
   formFields,
+  type FormValue,
   gateCall,
   isPermissiveMode,
   mergeTool,
@@ -50,6 +51,7 @@ import {
   modeState,
   type ModeState,
   planProgress,
+  refusedBeforeRunning,
   toolResultText,
   type ToolState,
 } from './mapping.js';
@@ -246,6 +248,8 @@ class Session {
   /** The input each decided call was judged on: a changed input is judged once more. */
   readonly judgedOn = new Map<string, string>();
   readonly rejudged = new Set<string>();
+  /** Tool calls that are the agent's question to the user (an elicitation names them). */
+  readonly questionTools = new Set<string>();
   /** The agent's session modes, when it has any; `expectedMode` is the one it should be in. */
   mode: ModeState | undefined;
   expectedMode: string | undefined;
@@ -288,6 +292,7 @@ class Session {
     this.decided.clear();
     this.judgedOn.clear();
     this.rejudged.clear();
+    this.questionTools.clear();
     for (const w of this.turnWaiters.splice(0)) w();
   }
 }
@@ -723,7 +728,7 @@ export class AcpAdapter implements AgentAdapter {
         this.flush(session);
         const tool = mergeTool(session.tools.get(u.toolCallId), u);
         session.tools.set(u.toolCallId, tool);
-        this.onToolStatus(session, tool);
+        this.onToolStatus(session, tool, refusedBeforeRunning(u));
         return;
       }
       case 'plan': {
@@ -775,13 +780,22 @@ export class AcpAdapter implements AgentAdapter {
     this.output(session, block.kind, block.text);
   }
 
-  private onToolStatus(session: Session, tool: ToolState): void {
+  /**
+   * A tool call's status changed. `refused`: the agent reported it refused the call itself before
+   * it ran (its own permission rules, `refusedBeforeRunning`) — nothing ran, so nothing is judged.
+   */
+  private onToolStatus(session: Session, tool: ToolState, refused = false): void {
     const id = tool.toolCallId;
     const status = tool.status ?? 'pending';
     const started = status === 'in_progress' || status === 'completed' || status === 'failed';
     const bookkeeping =
-      tool.kind !== undefined && tool.kind !== null && BOOKKEEPING_KINDS.has(tool.kind);
-    if (started && !session.decided.has(id)) {
+      (tool.kind !== undefined && tool.kind !== null && BOOKKEEPING_KINDS.has(tool.kind)) ||
+      // The agent's question tool: the user answered it (an elicitation), it does nothing else.
+      // Only a call the table cannot place (`acp:*`): a known action is judged even then.
+      (session.questionTools.has(id) && gateCall(tool).toolName.startsWith('acp:'));
+    if (started && !session.decided.has(id) && refused) {
+      session.decided.add(id);
+    } else if (started && !session.decided.has(id)) {
       // The agent runs a call it did not ask about: the gate still judges it.
       session.decided.add(id);
       session.judgedOn.set(id, inputKey(tool));
@@ -1059,6 +1073,9 @@ export class AcpAdapter implements AgentAdapter {
     }
     if (params.mode !== 'form' || !('requestedSchema' in params)) return { action: 'decline' };
     this.flush(session);
+    if ('toolCallId' in params && typeof params.toolCallId === 'string') {
+      session.questionTools.add(params.toolCallId);
+    }
     const schema = params.requestedSchema as {
       properties?: Record<string, ElicitationPropertySchema>;
       required?: string[] | null;
@@ -1068,9 +1085,9 @@ export class AcpAdapter implements AgentAdapter {
       const answer = await this.ask(session, 'clarification', { text: params.message }, signal);
       return answer === undefined ? { action: 'cancel' } : { action: 'accept', content: {} };
     }
-    const content: Record<string, string | number | boolean | string[]> = {};
+    const content: Record<string, FormValue> = {};
     for (const field of fields) {
-      let value: string | number | boolean | string[] | undefined;
+      let value: Record<string, FormValue> | undefined;
       let text = field.text;
       // A typed field asks again until the answer reads (a number, yes/no).
       for (let attempt = 0; value === undefined && attempt < 3; attempt++) {
@@ -1085,7 +1102,7 @@ export class AcpAdapter implements AgentAdapter {
         text = `${field.text} (could not read "${answer}"; please answer again)`;
       }
       if (value === undefined) return { action: 'decline' };
-      content[field.key] = value;
+      Object.assign(content, value);
     }
     return { action: 'accept', content };
   }

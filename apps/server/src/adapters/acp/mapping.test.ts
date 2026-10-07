@@ -227,8 +227,8 @@ describe('mapping helpers', () => {
       },
     });
     expect(choice).toMatchObject({ text: 'Pick', options: ['First', 'Second'] });
-    expect(choice!.parse('second')).toBe('v2');
-    expect(choice!.parse('something else')).toBe('something else');
+    expect(choice!.parse('second')).toEqual({ c: 'v2' });
+    expect(choice!.parse('something else')).toEqual({ c: 'something else' });
     const fields = formFields(
       'Q',
       {
@@ -239,7 +239,63 @@ describe('mapping helpers', () => {
     );
     expect(fields.map((f) => f.key)).toEqual(['name', 'tags']); // required first
     expect(fields[1]!.text).toBe('Q — Tags (one or more: separate them with commas)');
-    expect(fields[1]!.parse('a, b')).toEqual(['a', 'b']);
+    expect(fields[1]!.parse('a, b')).toEqual({ tags: ['a', 'b'] });
+  });
+
+  it("formFields: claude-agent-acp's AskUserQuestion form is one question, its Other box the free text", () => {
+    // The form claude-agent-acp 0.86 sends for one AskUserQuestion (real trace, P8-07): a choice
+    // and its optional "Other" box, nothing required.
+    const option = (label: string) => ({
+      const: label,
+      title: label,
+      description: `Choose the ${label.toLowerCase()}`,
+    });
+    const fields = formFields('Which option do you prefer?', {
+      question_0: {
+        type: 'string',
+        title: 'Option',
+        oneOf: [option('First option'), option('Second option')],
+      },
+      question_0_custom: {
+        type: 'string',
+        title: 'Other',
+        description:
+          'Type your own answer, or add a note to the option you chose above (optional).',
+      },
+    });
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toMatchObject({
+      key: 'question_0',
+      otherKey: 'question_0_custom',
+      text: 'Which option do you prefer?',
+      options: ['First option', 'Second option'],
+    });
+    expect(fields[0]!.parse('second option')).toEqual({ question_0: 'Second option' });
+    expect(fields[0]!.parse('the first option')).toEqual({ question_0: 'First option' });
+    expect(fields[0]!.parse('neither, a third')).toEqual({ question_0_custom: 'neither, a third' });
+    // Two questions: each with its own box, asked in order.
+    const two = formFields('Please answer the following questions.', {
+      question_0: { type: 'string', title: 'A', oneOf: [option('Yes'), option('No')] },
+      question_0_custom: { type: 'string', title: 'Other' },
+      question_1: { type: 'array', title: 'B', items: { anyOf: [option('x'), option('y')] } },
+      question_1_custom: { type: 'string', title: 'Other' },
+    });
+    expect(two.map((f) => [f.key, f.otherKey])).toEqual([
+      ['question_0', 'question_0_custom'],
+      ['question_1', 'question_1_custom'],
+    ]);
+    expect(two[1]!.parse('x, z')).toEqual({ question_1: ['x'], question_1_custom: 'z' });
+    // A required choice keeps a free answer itself; a required text field is asked.
+    const req = formFields(
+      'Q',
+      {
+        pick: { type: 'string', enum: ['a', 'b'] },
+        note: { type: 'string', title: 'Note' },
+      },
+      ['pick', 'note'],
+    );
+    expect(req.map((f) => f.key)).toEqual(['pick', 'note']);
+    expect(req[0]!.parse('c')).toEqual({ pick: 'c' });
   });
 
   it('planProgress and toolResultText', () => {

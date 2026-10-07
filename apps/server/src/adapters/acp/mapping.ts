@@ -203,6 +203,20 @@ export function gateCall(tool: ToolState): ToolCall {
   }
 }
 
+/**
+ * Whether a `tool_call_update` reports a call the agent refused itself before it ran: a `failed`
+ * status with `claude-agent-acp`'s permission-denial marker (`_meta.claudeCode.toolResponse
+ * .decisionReasonType`, which it sets only on the report of a call a rule, its classifier or its
+ * mode denied — never on a call that ran and failed; the model cannot write it). Such a call never
+ * ran: there is nothing for the gate to judge (decision 108's unasked-call check is for calls that
+ * run). Any other `failed` call is taken as one that ran.
+ */
+export function refusedBeforeRunning(update: { status?: string | null; _meta?: unknown }): boolean {
+  if (update.status !== 'failed') return false;
+  const claudeCode = asRecord(asRecord(update._meta)['claudeCode']);
+  return typeof asRecord(claudeCode['toolResponse'])['decisionReasonType'] === 'string';
+}
+
 /** A one-line description of a call for the permission card and the transcript. */
 export function describeTool(tool: ToolState): string {
   return tool.title ?? tool.name ?? `${tool.kind ?? 'a'} tool call`;
@@ -318,34 +332,70 @@ export class CostMeter {
   }
 }
 
-/** One field of a form elicitation, as a clarification question and how its answer is read. */
+/** A value a form field takes. */
+export type FormValue = string | number | boolean | string[];
+
+/** One question of a form elicitation, as a clarification and how its answer is read. */
 export interface FormField {
+  /** The field the answer goes to. */
   key: string;
   text: string;
   options?: string[];
-  /** The answer text → the value the form wants; `undefined` when it cannot be read. */
-  parse(answer: string): string | number | boolean | string[] | undefined;
+  /**
+   * The free-text field that goes with a choice field (its "Other" box: an optional plain string
+   * right after it, as `claude-agent-acp`'s `question_<n>_custom`): not asked on its own; an answer
+   * that matches none of the choices goes there instead.
+   */
+  otherKey?: string;
+  /** The answer text → the form content it gives; `undefined` when it cannot be read. */
+  parse(answer: string): Record<string, FormValue> | undefined;
 }
 
+type Prop = Record<string, unknown> & { type: string };
+
+/** A choice field: a string with an enum / `oneOf`, or an array of them. */
+const isChoice = (p: Prop): boolean =>
+  (p.type === 'string' && (Array.isArray(p['enum']) || Array.isArray(p['oneOf']))) ||
+  p.type === 'array';
+/** A plain free-text field: a string without choices. */
+const isFreeText = (p: Prop): boolean =>
+  p.type === 'string' && !Array.isArray(p['enum']) && !Array.isArray(p['oneOf']);
+
 /**
- * A form elicitation → one clarification per field (TECHNOLOGY §3.2: "the form's first field is
+ * A form elicitation → one clarification per question (TECHNOLOGY §3.2: "the form's first field is
  * the question, its enum the options"): the message is the question, a field's title is added
  * when there are several, an enum (or `oneOf`) gives the options and the answer is matched back to
- * the value, a boolean asks yes/no, a number must parse, a multi-select takes labels separated by
- * commas.
+ * the value (by title or value, or the one choice the answer names: "the first option" → "First
+ * option"), a boolean asks yes/no, a number must parse, a multi-select takes labels separated by
+ * commas. An optional free-text field right after a choice field is that choice's "Other" box
+ * (`otherKey`): it is not asked, and an answer that names no choice goes there — the choice left
+ * out unless it is required.
  */
 export function formFields(
   message: string,
   properties: Record<string, ElicitationPropertySchema>,
   required: readonly string[] = [],
 ): FormField[] {
-  const keys = Object.keys(properties);
+  const order = Object.keys(properties);
+  const prop = (k: string) => properties[k] as unknown as Prop;
+  const other = new Map<string, string>();
+  for (let i = 0; i + 1 < order.length; i++) {
+    const [a, b] = [order[i]!, order[i + 1]!];
+    if (isChoice(prop(a)) && isFreeText(prop(b)) && !required.includes(b) && !other.has(a)) {
+      other.set(a, b);
+      i++;
+    }
+  }
+  const companions = new Set(other.values());
+  const keys = order.filter((k) => !companions.has(k));
   // Required fields first, each group in the schema's order.
   keys.sort((a, b) => Number(required.includes(b)) - Number(required.includes(a)));
   return keys.map((key) => {
-    const p = properties[key] as Record<string, unknown> & { type: string };
+    const p = prop(key);
     const label = str(p['title']) ?? str(p['description']) ?? key;
     const text = keys.length > 1 ? `${message} — ${label}` : message;
+    const otherKey = other.get(key);
+    const one = (v: FormValue | undefined) => (v === undefined ? undefined : { [key]: v });
     switch (p.type) {
       case 'boolean':
         return {
@@ -353,11 +403,13 @@ export function formFields(
           text,
           options: ['yes', 'no'],
           parse: (a) =>
-            /^(y|yes|true|ok|1)$/i.test(a.trim())
-              ? true
-              : /^(n|no|false|0)$/i.test(a.trim())
-                ? false
-                : undefined,
+            one(
+              /^(y|yes|true|ok|1)$/i.test(a.trim())
+                ? true
+                : /^(n|no|false|0)$/i.test(a.trim())
+                  ? false
+                  : undefined,
+            ),
         };
       case 'number':
       case 'integer':
@@ -367,7 +419,7 @@ export function formFields(
           parse: (a) => {
             const n = Number(a.trim());
             if (!Number.isFinite(n) || a.trim() === '') return undefined;
-            return p.type === 'integer' ? (Number.isInteger(n) ? n : undefined) : n;
+            return one(p.type === 'integer' ? (Number.isInteger(n) ? n : undefined) : n);
           },
         };
       case 'array': {
@@ -377,12 +429,22 @@ export function formFields(
           key,
           text: `${text} (one or more: separate them with commas)`,
           ...(choices.length ? { options: choices.map((c) => c.title) } : {}),
-          parse: (a) =>
-            a
+          ...(otherKey ? { otherKey } : {}),
+          parse: (a) => {
+            const parts = a
               .split(',')
               .map((s) => s.trim())
-              .filter(Boolean)
-              .map((s) => matchChoice(choices, s)),
+              .filter(Boolean);
+            if (!otherKey || choices.length === 0) {
+              return { [key]: parts.map((s) => matchChoice(choices, s) ?? s) };
+            }
+            const picks = parts.map((s) => matchChoice(choices, s));
+            const rest = parts.filter((_, i) => picks[i] === undefined);
+            return {
+              [key]: picks.filter((v): v is string => v !== undefined),
+              ...(rest.length ? { [otherKey]: rest.join(', ') } : {}),
+            };
+          },
         };
       }
       default: {
@@ -391,7 +453,14 @@ export function formFields(
           key,
           text,
           ...(choices.length ? { options: choices.map((c) => c.title) } : {}),
-          parse: (a) => matchChoice(choices, a.trim()),
+          ...(otherKey ? { otherKey } : {}),
+          parse: (a) => {
+            const answer = a.trim();
+            const picked = matchChoice(choices, answer);
+            if (picked !== undefined) return { [key]: picked };
+            if (otherKey && !required.includes(key)) return { [otherKey]: answer };
+            return { [key]: answer };
+          },
         };
       }
     }
@@ -421,12 +490,19 @@ function enumChoices(plain: unknown, titled: unknown): Choice[] {
   return [];
 }
 
-/** An answer matched to a choice by title or value (any case); free text when nothing matches. */
-function matchChoice(choices: Choice[], answer: string): string {
+/**
+ * An answer matched to a choice: by title or value (any case), else the one choice whose title or
+ * value the answer contains as words ("the first option" → "First option"); `undefined` when
+ * nothing (or more than one) matches.
+ */
+function matchChoice(choices: Choice[], answer: string): string | undefined {
   const a = answer.toLowerCase();
-  return (
-    choices.find((c) => c.title.toLowerCase() === a || c.value.toLowerCase() === a)?.value ?? answer
-  );
+  const exact = choices.find((c) => c.title.toLowerCase() === a || c.value.toLowerCase() === a);
+  if (exact) return exact.value;
+  const words = (s: string) =>
+    new RegExp(`(^|\\W)${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|\\W)`, 'i');
+  const named = choices.filter((c) => words(c.title).test(a) || words(c.value).test(a));
+  return named.length === 1 ? named[0]!.value : undefined;
 }
 
 // --- session modes ---------------------------------------------------------------

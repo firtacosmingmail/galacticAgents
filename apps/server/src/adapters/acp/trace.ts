@@ -16,7 +16,7 @@ const SECRET_KEY = /token|secret|password|passwd|authorization|cookie|api[-_]?ke
 export function redactLine(line: string): string {
   try {
     return JSON.stringify(JSON.parse(line), (k, v: unknown) =>
-      k && SECRET_KEY.test(k) && v !== null && typeof v !== 'object' ? '[redacted]' : v,
+      k && SECRET_KEY.test(k) && typeof v === 'string' ? '[redacted]' : v,
     );
   } catch {
     return line.replace(/(sk-ant-[\w-]{4})[\w-]+/g, '$1[redacted]');

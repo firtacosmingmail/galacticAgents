@@ -276,6 +276,27 @@ describe('AcpAdapter', () => {
     expect(r.checks[0]).toMatchObject({ toolName: 'Bash', input: { command: 'rm -rf /tmp/x' } });
   });
 
+  it("a call the agent's own rules refused before it ran is not judged, held or reported (claude-agent-acp)", async () => {
+    // Real trace (P8-07): claude-agent-acp reports a call its permission rules denied as `failed`
+    // with a denial marker, without asking; nothing ran, so there is nothing to ask the user.
+    const r = rig();
+    await r.adapter.spawn(
+      spawnOpts(r, 'scenario:refusesItself', () => ({
+        decision: 'ask',
+        action: 'destructive',
+        reasons: ['rm'],
+      })),
+    );
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(r.checks).toEqual([]);
+    expect(of(r, 'agent.needs_input')).toEqual([]);
+    expect(of(r, 'agent.tool_call')).toEqual([]);
+    expect(
+      texts(r).some((t) => /^tool failed \(rm -rf scratch-dir\): Permission denied/.test(t)),
+    ).toBe(true);
+    expect(texts(r)).toContain('I could not run it.');
+  });
+
   it('a call whose input changes after it was judged is judged once more, not reserved again', async () => {
     const r = rig();
     await r.adapter.spawn(spawnOpts(r, 'scenario:rewrites', askPush));
@@ -414,6 +435,37 @@ describe('AcpAdapter', () => {
     await waitFor(() => idles(r) === 1, 'idle');
     expect(texts(r)).toContain('form: {"count":3,"ship":true}');
     await expect(r.adapter.answer(q3.questionId, 'again')).rejects.toThrow(/no pending question/);
+  });
+
+  it("claude-agent-acp's question tool: one clarification, the answer matched to its choice, no hold", async () => {
+    // Real trace (P8-07): AskUserQuestion is a tool call of kind `other` the agent never asks
+    // about; its form has the choice and an optional "Other" box. One question, not two, and the
+    // tool call completing after the answer is not an unasked call to hold.
+    const r = rig();
+    await r.adapter.spawn(
+      spawnOpts(r, 'scenario:asksTool', () => ({ decision: 'ask', reasons: ['unclassified'] })),
+    );
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+    const q = of(r, 'agent.needs_input')[0]!;
+    expect(q).toMatchObject({
+      kind: 'clarification',
+      question: { text: 'Which option do you prefer?', options: ['First option', 'Second option'] },
+    });
+    await r.adapter.answer(q.questionId, 'the first option');
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(texts(r)).toContain('You chose: First option');
+    expect(of(r, 'agent.needs_input')).toHaveLength(1);
+    expect(r.checks).toEqual([]);
+    expect(of(r, 'agent.tool_call')).toEqual([]);
+  });
+
+  it('an answer that names no choice goes to the "Other" box', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:asksTool'));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+    await r.adapter.answer(of(r, 'agent.needs_input')[0]!.questionId, 'a third one');
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(texts(r)).toContain('You chose: a third one');
   });
 
   it('a permission request asked of the user: allow answers allow_once and reports the call', async () => {

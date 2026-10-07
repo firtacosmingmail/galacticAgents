@@ -51,7 +51,9 @@ if (!commandLine) {
     prompts: {
       finish: 'Read README.md in the current directory, then reply with exactly: done',
       ask: 'Before doing anything, ask me (with your question tool) which option I prefer: first option or second option. Then reply with exactly the option I chose.',
-      permission: `Run the shell command \`rm -rf ${join(cwd, 'scratch-dir')}\` (it may not exist, that is fine), then reply with exactly: cleaned`,
+      // `rm -r`, not `rm -rf`: a Claude login's own deny rules often list `Bash(rm -rf:*)`, and an
+      // agent that refuses the call itself never asks (P8-07 real run). The table asks about any `rm`.
+      permission: `Run the shell command \`rm -r ${join(cwd, 'scratch-dir')}\` (it may not exist, that is fine), then reply with exactly: cleaned`,
       long: 'Run the shell command `for i in 1 2 3 4 5 6 7 8 9 10; do echo step $i; sleep 3; done`, then reply with exactly: finished',
       echo: 'Reply with exactly: ready',
     },
