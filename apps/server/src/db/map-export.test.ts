@@ -163,7 +163,84 @@ async function buildMap(dbPath: string): Promise<void> {
   await until(() => log.tables.questions.all().some((q) => q.originAgentId === steward.id));
   const asked = log.tables.questions.all().find((q) => q.originAgentId === steward.id)!;
   await commands.answerQuestion({ questionId: asked.id, answer: 'ISO 8601', by: USER, version: 0 });
+
+  // Deliverables (P9-01): detected, declared, added by hand; edited, removed, restored, opened,
+  // a run that ended and one still live at the export; the standalone task's moves with it.
+  const LOCAL = { origin: 'local' as const };
+  const SYSTEM: Actor = { type: 'system' };
+  const dev = (
+    await commands.addDeliverable(
+      {
+        projectId: project.id,
+        kind: 'command',
+        title: 'dev',
+        source: 'detected',
+        detectedKey: 'package.json#dev',
+        command: { line: 'pnpm run dev', cwd: '/w/csv', detectedFrom: 'package.json' },
+        meta: { important: 0 },
+      },
+      SYSTEM,
+    )
+  ).value;
+  const shot = (
+    await commands.addDeliverable(
+      {
+        taskId: parse.id,
+        kind: 'image',
+        title: 'Parsed rows',
+        source: 'agent',
+        location: { storage: 'worktree', path: '/w/csv/.galactic/worktrees/p/rows.png' },
+      },
+      { type: 'agent', id: steward.id },
+    )
+  ).value;
+  await commands.updateDeliverable(
+    shot.id,
+    {
+      location: {
+        storage: 'copy',
+        path: '/w/csv/deliverables/parse-csv/rows.png',
+        originalPath: '/w/csv/.galactic/worktrees/p/rows.png',
+      },
+      meta: { copy: { bytes: 1234 } },
+    },
+    SYSTEM,
+  );
+  await commands.recordDeliverableOpened(shot.id, 'reveal', USER);
+  const notes = (
+    await commands.addDeliverable(
+      {
+        taskId: flaky.id,
+        kind: 'file',
+        title: 'Flake notes',
+        description: 'what made the test flaky',
+        source: 'user',
+        location: { storage: 'in_place', path: '/w/scratch/notes.md' },
+      },
+      USER,
+      LOCAL,
+    )
+  ).value;
+  await commands.removeDeliverable(notes.id, USER, 'not needed', LOCAL);
+  await commands.restoreDeliverable(notes.id, USER, LOCAL);
+  const first = (
+    await commands.recordRunStarted(
+      { deliverableId: dev.id, line: 'pnpm run dev', cwd: '/w/csv' },
+      USER,
+    )
+  ).value;
+  await commands.recordRunPorts(first.id, [5173]);
+  await commands.recordRunEnded(first.id, { outcome: 'stopped', by: USER });
+  const live = (
+    await commands.recordRunStarted(
+      { deliverableId: dev.id, line: 'pnpm run dev --port 5174', cwd: '/w/csv' },
+      USER,
+    )
+  ).value;
+  await commands.recordRunPorts(live.id, [5174]);
+
   await commands.moveTask(flaky.id, project.id, USER);
+  expect(log.tables.deliverables.get(notes.id)?.projectId).toBe(project.id);
   await until(() => statuses.get(happy.id)?.state === 'finished');
 
   const held = (
@@ -220,6 +297,8 @@ interface Observed {
   /** Each agent's chat: the messages (from the log) and its replies (from the transcript). */
   chats: { entries: { kind: string }[] }[];
   drift: string[];
+  /** The run history (P9-01): a projection of `run.*`, rebuilt by the import. */
+  runs: unknown[];
 }
 
 function observe(dbPath: string): Observed {
@@ -260,6 +339,7 @@ function observe(dbPath: string): Observed {
       history,
       chats: log.tables.agents.all().map((a) => chat.conversation(a.id, { limit: 200 })),
       drift: logDrift(log),
+      runs: log.tables.runs.all(),
     };
   } finally {
     db.close();
@@ -309,6 +389,12 @@ describe('map export and import (P8-03)', () => {
     expect(newId).not.toBe(oldId);
     expect(report.logId).toBe(newId);
     expect(after.snapshot.spend?.length).toBeGreaterThan(0); // folded from the log again
+    // Deliverables (P9-01): the rows (removed, moved, with their runs) and the run history.
+    expect(exported.rows.deliverables?.length).toBe(3);
+    expect(after.snapshot.deliverables).toEqual(before.snapshot.deliverables);
+    expect(after.snapshot.deliverables?.some((d) => d.lastRun?.state === 'running')).toBe(true);
+    expect(before.runs).toHaveLength(2);
+    expect(after.runs).toEqual(before.runs);
     expect(after.statuses).toEqual(before.statuses);
     expect(after.history).toEqual(before.history);
     // Without the transcripts, the chats keep their messages and lose the agents' replies.
@@ -325,6 +411,14 @@ describe('map export and import (P8-03)', () => {
     expect(whole.chats).toEqual(before.chats);
     expect(whole.history).toEqual(before.history);
     expect(whole.events).toEqual(before.events);
+
+    // `rows.deliverables` is optional (P9-01): an export without it (a build before Phase 9)
+    // imports, nothing checked for them; the rebuild still folds them from the events.
+    const { deliverables: _rows, ...olderRows } = exported.rows;
+    const older = join(tempDir(), 'galactic.sqlite');
+    const olderReport = await importMap(older, { ...exported, rows: olderRows });
+    expect(olderReport).toMatchObject({ rebuilt: 'replayed', drift: [] });
+    expect(observe(older).snapshot.deliverables).toEqual(before.snapshot.deliverables);
   });
 
   it('carries the transcripts only when asked, with their compaction markers', async () => {

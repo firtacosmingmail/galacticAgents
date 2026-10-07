@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Agent, Body, Project, Proposal, Question, Task } from './domain.js';
 import { Id, Timestamp } from './primitives.js';
+import { Deliverable } from './deliverables.js';
 
 // --- backups (P8-03; TECHNOLOGY §6.4, docs/BACKUP_RESTORE.md) -----------------------------------
 
@@ -104,6 +105,11 @@ export const ExportedRows = z.object({
   agents: z.array(Agent),
   questions: z.array(Question),
   proposals: z.array(Proposal),
+  /**
+   * The deliverables, removed ones included (P9-01; decision 132). Optional: an export from a
+   * build before Phase 9 has none, and its import checks nothing for them.
+   */
+  deliverables: z.array(Deliverable).optional(),
 });
 export type ExportedRows = z.infer<typeof ExportedRows>;
 
