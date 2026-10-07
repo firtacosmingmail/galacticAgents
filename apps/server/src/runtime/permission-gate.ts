@@ -47,6 +47,11 @@ export interface GateOptions {
   workspace: string | (() => string);
   /** Where the agent resolves relative paths from (its worktree). */
   cwd: string;
+  /**
+   * The user's folders inside the workspace (P9-06: the project's `deliverables/` folder), read on
+   * every check like the workspace: a write under one asks (`PolicyContext.userFolders`).
+   */
+  userFolders?: () => readonly string[];
   caps: CapsEnforcer;
   /**
    * The server's own tools handed to a brain (`SpawnOptions.tools`, P2-06): their handlers run in
@@ -108,10 +113,12 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
     const workspace = workspaceNow();
     const misplaced = misplacedCwd(workspace, opts.cwd);
     if (misplaced) return { verdict: { decision: 'ask', reasons: [misplaced] } };
+    const userFolders = opts.userFolders?.() ?? [];
     const verdict = evaluate(policyNow(), call, {
       workspace,
       cwd: opts.cwd,
       aliases: aliasesOf(workspace, opts.cwd),
+      ...(userFolders.length > 0 ? { userFolders } : {}),
     });
     const action = verdict.dominant ? { action: verdict.dominant } : {};
     switch (verdict.decision) {

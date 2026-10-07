@@ -33,6 +33,7 @@ import { TranscriptRetention, type RetentionPolicy } from './transcript-retentio
 import { WorkStateDeriver } from './work-state-deriver.js';
 import { Workspaces, type WorkspacesOptions } from '../workspace/workspaces.js';
 import { ProjectDetection, type DetectionOptions } from '../deliverables/detection.js';
+import { DeliverableCopies, type DeliverableCopiesOptions } from '../deliverables/copies.js';
 
 /**
  * The runtime composition root: log, status store, transcript pipeline, adapters and the agent
@@ -111,6 +112,11 @@ export interface ComposeOptions {
    * runtime.
    */
   stewardRuntime?: () => RuntimeName | undefined;
+  /**
+   * The deliverables folder's copies (P9-06): the free space a copy leaves (`backups.reserveMiB`)
+   * and, for tests, the free-space probe. Built with `workspaces`.
+   */
+  deliverables?: Pick<DeliverableCopiesOptions, 'reserveBytes' | 'freeBytes'>;
 }
 
 export interface ComposedRuntime {
@@ -143,6 +149,11 @@ export interface ComposedRuntime {
   budgets: BudgetWatcher;
   /** The database's write health, for the panel's storage banner (P8-09). */
   storage: StorageMonitor;
+  /**
+   * The project's deliverables folder and its copies (P9-06), with `workspaces`: the declaration
+   * tools' `copyIn` and the merge hook `Workspaces` calls before a worktree is removed.
+   */
+  deliverableCopies?: DeliverableCopies;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
   startBrain(
     definition: BrainDefinition,
@@ -352,8 +363,29 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
         ...(detection
           ? { onFolderChanged: (projectId: Id) => void detection.detectProject(projectId) }
           : {}),
+        ...(opts.onError ? { onError: opts.onError } : {}),
       })
     : undefined;
+  // A task's deliverables in its worktree are kept before the worktree goes (P9-06).
+  const deliverableCopies: DeliverableCopies | undefined = opts.workspaces
+    ? new DeliverableCopies({
+        tables: log.tables,
+        commands,
+        dataDir: opts.workspaces.dataDir,
+        ...(opts.workspaces.home ? { home: opts.workspaces.home } : {}),
+        ...(opts.workspaces.git ? { git: opts.workspaces.git } : {}),
+        ...opts.deliverables,
+        notify: (agentId, text) => {
+          runtime.send(agentId, text, { sender: { type: 'system' } });
+        },
+        ...(opts.onError ? { onError: opts.onError } : {}),
+      })
+    : undefined;
+  if (workspaces && deliverableCopies) {
+    workspaces.setBeforeWorktreeRemoved((taskId, root, info) =>
+      deliverableCopies.beforeWorktreeRemoved(taskId, root, info),
+    );
+  }
   const archival = new Archival({
     log,
     ...(opts.archival?.retentionMs !== undefined ? { retentionMs: opts.archival.retentionMs } : {}),
@@ -451,6 +483,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(processes ? { processes } : {}),
     budgets,
     storage,
+    ...(deliverableCopies ? { deliverableCopies } : {}),
     startBrain: async (definition, placement, brainOpts = {}) =>
       adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),
     defineBrains(defs, brainOpts = {}) {

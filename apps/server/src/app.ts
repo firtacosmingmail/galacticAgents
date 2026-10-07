@@ -16,6 +16,8 @@ import { registerPanelRoutes } from './http/panel-routes.js';
 import { registerBackupRoutes } from './http/backup-routes.js';
 import { registerDeliverableRoutes } from './http/deliverable-routes.js';
 import type { BackupService } from './db/backup.js';
+import type { DeliverableCopies } from './deliverables/copies.js';
+import { registerDeliverablesUsageRoute } from './http/deliverables-usage-route.js';
 import { isWebFile, webCacheControl } from './http/web-cache.js';
 import { registerPushRoutes, type Push } from './push/index.js';
 import type { SettingsService } from './config/settings.js';
@@ -61,6 +63,8 @@ export interface AppOptions {
   storage?: StorageMonitor;
   /** Backups (P8-03): enables `GET`/`POST /api/backups` (the export needs only `log`). */
   backups?: BackupService;
+  /** The deliverables folders (P9-06): enables `GET /api/deliverables/usage`. */
+  deliverableCopies?: Pick<DeliverableCopies, 'usage'>;
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -199,6 +203,11 @@ export function buildApp(opts: AppOptions): App {
       log: opts.log,
       ...(opts.backups ? { backups: opts.backups } : {}),
     });
+  }
+
+  // The deliverables folders' sizes for the settings page (P9-06).
+  if (opts.deliverableCopies) {
+    registerDeliverablesUsageRoute(fastify, config, opts.deliverableCopies);
   }
 
   if (opts.push) {

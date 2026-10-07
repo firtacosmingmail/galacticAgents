@@ -26,6 +26,25 @@ const read = { toolName: 'Read', input: { file_path: 'src/a.ts' } };
 const push = { toolName: 'Bash', input: { command: 'git push' } };
 
 describe('createPermissionGate', () => {
+  it("asks before a Steward writes into the project's deliverables folder, read on every check (P9-06)", () => {
+    let folders: string[] = [];
+    const gate = createPermissionGate({
+      ...base,
+      cwd: '/w/proj/.galactic/worktrees/t1',
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+      userFolders: () => folders,
+    });
+    const write = {
+      toolName: 'Write',
+      input: { file_path: '/w/proj/deliverables/t1/report.md', content: 'x' },
+    };
+    expect(gate.check(write)).toEqual({ decision: 'allow' });
+    folders = ['/w/proj/deliverables'];
+    expect(gate.check(write)).toMatchObject({ decision: 'ask', action: 'outside_workspace' });
+    expect(gate.check({ toolName: 'Read', input: write.input })).toEqual({ decision: 'allow' });
+  });
+
   it('treats the resolved and the given spelling of a symlinked workspace as one place (dev-machine run)', () => {
     // macOS: a temp folder is /var/folders/…, which is really /private/var/folders/…; Claude Code
     // resolves its cwd, so it asks about the resolved path. Reproduced with a symlink anywhere.
