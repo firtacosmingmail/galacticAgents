@@ -82,6 +82,11 @@ a.run-port {
   padding: 3px 10px;
   font-size: 13px;
 }
+.pnl .run-output-bar button[aria-pressed='true'],
+.pnl .run-history button[aria-pressed='true'] {
+  background: var(--pnl-here-soft);
+  box-shadow: inset 0 0 0 1px var(--pnl-here);
+}
 .run-output-text {
   margin: 0;
   max-height: 320px;
