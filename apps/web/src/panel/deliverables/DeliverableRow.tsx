@@ -22,6 +22,7 @@ import {
   whereText,
   type ClientRules,
   type DeliverableAction,
+  type Places,
 } from './deliverables-model.js';
 
 /** The viewer and its libraries load on the first "View" (TECHNOLOGY §9.5). */
@@ -69,7 +70,7 @@ export function DeliverableRow({
 }: {
   row: DeliverableListItem;
   rules: ClientRules;
-  places: { workspace?: string | undefined; worktree?: string | undefined };
+  places: Places;
   ideName: string | undefined;
   /** A write went through: read the list again. */
   onChanged: () => void;

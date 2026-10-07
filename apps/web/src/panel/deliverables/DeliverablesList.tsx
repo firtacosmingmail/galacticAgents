@@ -13,11 +13,14 @@ import { useAppStore } from '../../state/store.js';
 import { focusElement } from '../a11y.js';
 import { DeliverableRow, formatBytes } from './DeliverableRow.js';
 import {
+  canonicalWorkspace,
   groupForProject,
   KIND_LABEL,
+  rebase,
   orderTask,
   relativeTo,
   type ClientRules,
+  type Places,
 } from './deliverables-model.js';
 import {
   scopeKey,
@@ -110,6 +113,8 @@ function DeliverablesBlock({ scope, mode }: { scope: DeliverablesScope; mode: Mo
         : 'Deliverables';
 
   const rows = list.status === 'ready' ? list.data.deliverables : [];
+  const folderPath = list.status === 'ready' ? list.data.folder : undefined;
+  const canonical = canonicalWorkspace(rows, folderPath, places.workspace);
   const active = rows.filter((d) => d.removedAt === undefined).length;
 
   const doRescan = async () => {
@@ -196,7 +201,7 @@ function DeliverablesBlock({ scope, mode }: { scope: DeliverablesScope; mode: Mo
       {list.status === 'ready' && list.data.folder && mode !== 'sub' && (
         <FolderLine
           folder={list.data.folder}
-          workspace={places.workspace}
+          workspace={canonical}
           scope={project ? { projectId: project.id } : scope}
           rules={rules}
         />
@@ -217,6 +222,7 @@ function DeliverablesBlock({ scope, mode }: { scope: DeliverablesScope; mode: Mo
           rules={rules}
           ideName={ideName}
           places={places}
+          canonical={canonical}
           onChanged={list.reload}
         />
       )}
@@ -246,13 +252,15 @@ function Rows({
   rules,
   ideName,
   places,
+  canonical,
   onChanged,
 }: {
   rows: DeliverableListItem[];
   mode: Mode;
   rules: ClientRules;
   ideName: string | undefined;
-  places: { workspace?: string | undefined; worktree?: string | undefined };
+  places: Places;
+  canonical: string | undefined;
   onChanged: () => void;
 }) {
   const world = useAppStore((s) => s.world);
@@ -261,10 +269,13 @@ function Rows({
       key={d.id}
       row={d}
       rules={rules}
-      places={{
-        ...places,
-        worktree: d.taskId !== undefined ? world.tasks[d.taskId]?.worktreePath : places.worktree,
-      }}
+      places={rebase(
+        {
+          ...places,
+          worktree: d.taskId !== undefined ? world.tasks[d.taskId]?.worktreePath : places.worktree,
+        },
+        canonical,
+      )}
       ideName={ideName}
       onChanged={onChanged}
     />

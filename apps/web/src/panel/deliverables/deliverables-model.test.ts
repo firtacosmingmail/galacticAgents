@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DeliverableListItem, Task } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import {
+  canonicalWorkspace,
   canPreview,
   clientRules,
   groupForProject,
@@ -9,6 +10,7 @@ import {
   languageOf,
   missingText,
   orderOwn,
+  rebase,
   rowActions,
   runStateText,
   safeLink,
@@ -251,6 +253,33 @@ describe('the actions of a row (SPEC §4.7, decisions 125, 127, 128, 131, 134)',
     const removed = row({ id: 'r', removedAt: at(3), removedBy: { type: 'user' } });
     expect(rowActions(removed, MAC)).toEqual({ actions: ['restore'], macOnly: [] });
     expect(rowActions(removed, PHONE)).toEqual({ actions: [], macOnly: [] });
+  });
+});
+
+describe('paths as the server wrote them (canonical)', () => {
+  it('finds the canonical project folder and shows paths relative to it', () => {
+    const own = row({
+      id: 'f',
+      kind: 'folder',
+      source: 'detected',
+      detectedKey: 'folder',
+      location: { storage: 'in_place', path: '/private/tmp/p' },
+    });
+    expect(canonicalWorkspace([own], undefined, '/tmp/p')).toBe('/private/tmp/p');
+    expect(canonicalWorkspace([], '/private/tmp/p/deliverables', '/tmp/p')).toBe('/private/tmp/p');
+    expect(canonicalWorkspace([], undefined, '/tmp/p')).toBe('/tmp/p');
+    expect(
+      rebase({ workspace: '/tmp/p', worktree: '/tmp/p/.galactic/worktrees/t' }, '/private/tmp/p'),
+    ).toEqual({
+      workspace: '/private/tmp/p',
+      worktree: '/private/tmp/p/.galactic/worktrees/t',
+    });
+    // macOS's /tmp, even without a hint from the rows.
+    expect(
+      whereText(row({ id: 'n', location: { storage: 'in_place', path: '/private/tmp/p/n.md' } }), {
+        workspace: '/tmp/p',
+      }),
+    ).toEqual({ text: 'in the project folder', path: 'n.md' });
   });
 });
 

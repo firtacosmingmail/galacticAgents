@@ -163,6 +163,48 @@ export function relativeTo(path: string, base: string | undefined): string | und
   return path.startsWith(`${b}/`) ? path.slice(b.length + 1) : undefined;
 }
 
+/** The folders a row's path is shown relative to. */
+export interface Places {
+  workspace?: string | undefined;
+  worktree?: string | undefined;
+}
+
+/**
+ * The project's folder as the server wrote its paths (canonical: links resolved, e.g. macOS's
+ * `/tmp` → `/private/tmp`): the detected "Project folder" row's path, else the parent of the
+ * recorded `deliverables/` folder, else the folder the world knows.
+ */
+export function canonicalWorkspace(
+  rows: readonly Deliverable[],
+  folder: string | undefined,
+  workspace: string | undefined,
+): string | undefined {
+  const own = rows.find(
+    (d) => d.source === 'detected' && d.detectedKey === 'folder' && d.location !== undefined,
+  )?.location?.path;
+  if (own) return own;
+  if (folder && folder.lastIndexOf('/') > 0) return folder.slice(0, folder.lastIndexOf('/'));
+  return workspace;
+}
+
+/** `places` with the workspace (and a worktree inside it) moved onto `canonical`. */
+export function rebase(places: Places, canonical: string | undefined): Places {
+  const ws = places.workspace;
+  if (!canonical || !ws || canonical === ws) return places;
+  const wt = places.worktree;
+  return {
+    workspace: canonical,
+    worktree: wt !== undefined && wt.startsWith(`${ws}/`) ? canonical + wt.slice(ws.length) : wt,
+  };
+}
+
+/** `relativeTo`, also trying macOS's canonical form of `/tmp`, `/var` and `/etc`. */
+function relativeToAny(path: string, base: string | undefined): string | undefined {
+  const rel = relativeTo(path, base);
+  if (rel !== undefined || !base || !/^\/(tmp|var|etc)(\/|$)/.test(base)) return rel;
+  return relativeTo(path, `/private${base}`);
+}
+
 /** Where a row is, in words (SPEC §4.7), and whether it is missing. */
 export interface WhereText {
   text: string;
@@ -176,12 +218,9 @@ export interface WhereText {
  * task's worktree while the task works, the folder a command runs in, an address — or "missing"
  * with why (a copy refused, the file moved or deleted, a link that now leaves the project).
  */
-export function whereText(
-  d: DeliverableListItem,
-  places: { workspace?: string | undefined; worktree?: string | undefined },
-): WhereText {
+export function whereText(d: DeliverableListItem, places: Places): WhereText {
   if (d.kind === 'command' && d.command) {
-    const rel = relativeTo(d.command.cwd, places.workspace);
+    const rel = relativeToAny(d.command.cwd, places.workspace);
     return {
       text: rel === '' ? 'runs in the project folder' : 'runs in',
       ...(rel === '' ? {} : { path: rel ?? d.command.cwd }),
@@ -191,8 +230,9 @@ export function whereText(
   const loc = d.location;
   if (!loc) return { text: 'nowhere', missing: 'it has no path' };
   const missing = loc.missing?.reason ?? missingText(d.facts);
-  const inWorktree = loc.storage === 'worktree' ? relativeTo(loc.path, places.worktree) : undefined;
-  const rel = inWorktree ?? relativeTo(loc.path, places.workspace);
+  const inWorktree =
+    loc.storage === 'worktree' ? relativeToAny(loc.path, places.worktree) : undefined;
+  const rel = inWorktree ?? relativeToAny(loc.path, places.workspace);
   const text =
     loc.storage === 'copy'
       ? 'in the deliverables folder'
