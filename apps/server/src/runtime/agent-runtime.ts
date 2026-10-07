@@ -37,6 +37,7 @@ import {
 } from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
 import { globalDefaultPolicy } from '../domain/permissions.js';
+import { userFoldersOf } from '../deliverables/folder.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import {
   CapsEnforcer,
@@ -578,6 +579,8 @@ export class AgentRuntime {
       agentId: agent.id,
       policy: () => this.policyOf(agent.id, req),
       workspace: () => this.workspaceOf(agent.id, req),
+      // The project's deliverables folder is the user's (P9-06, decision 122): a write asks.
+      userFolders: () => this.userFoldersOf(agent.id, req),
       cwd: req.cwd,
       caps: this.caps,
       ...(req.tools ? { serverTools: req.tools.map((t) => t.name) } : {}),
@@ -1523,6 +1526,23 @@ export class AgentRuntime {
     const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
     const project = projectId ? tables.projects.get(projectId) : undefined;
     return project?.workspace ?? req.workspace ?? req.cwd;
+  }
+
+  private userFoldersOf(agentId: Id, req: SpawnRequest): string[] {
+    const { tables } = this.opts.log;
+    const agent = tables.agents.get(agentId);
+    return userFoldersOf(
+      {
+        project: (id) => tables.projects.get(id),
+        task: (id) => tables.tasks.get(id),
+        projects: () => tables.projects.all(),
+      },
+      {
+        projectId: agent?.projectId ?? req.projectId,
+        taskId: agent?.taskId ?? req.taskId,
+      },
+      this.workspaceOf(agentId, req),
+    );
   }
 
   private policyOf(agentId: Id, req: SpawnRequest): PermissionPolicy {

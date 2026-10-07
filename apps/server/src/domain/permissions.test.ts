@@ -863,3 +863,63 @@ describe('P2-22 — a trusted project: everything except push without cards', ()
     expect(policyForWrite(trusted, { origin: 'remote', autoApproveRemote: true })).toEqual(trusted);
   });
 });
+
+describe("the project's deliverables folder (P9-06, decisions 22 and 122)", () => {
+  // A Steward in its worktree; the folder is in the project's main folder.
+  const dctx = {
+    workspace: '/w/proj',
+    cwd: '/w/proj/.galactic/worktrees/t1',
+    home: '/home/u',
+    userFolders: ['/w/proj/deliverables'],
+  };
+  const verdict = (toolName: string, input: unknown, c: typeof dctx = dctx) =>
+    evaluate(policy, { toolName, input }, c);
+
+  it('asks before an agent writes into it, by an edit tool or a shell line', () => {
+    const rows: [string, unknown][] = [
+      ['Write', { file_path: '/w/proj/deliverables/report.pdf', content: '' }],
+      ['Write', { file_path: '/w/proj/deliverables', content: '' }],
+      ['Edit', { file_path: '../../../deliverables/t/a.md', old_string: 'a', new_string: 'b' }],
+      ['MultiEdit', { file_path: '/w/proj/deliverables/x/y.txt', edits: [] }],
+      ['Bash', { command: 'cp out.pdf /w/proj/deliverables/' }],
+      ['Bash', { command: 'echo x > ../../../deliverables/a.txt' }],
+      ['Bash', { command: 'rm -rf /w/proj/deliverables' }],
+      ['Bash', { command: 'cd /w/proj && touch deliverables/x' }],
+      ['Bash', { command: 'mkdir -p /w/proj/deliverables/{a,b}' }],
+    ];
+    for (const [tool, input] of rows) {
+      const v = verdict(tool, input);
+      expect({ tool, input, decision: v.decision }).toEqual({ tool, input, decision: 'ask' });
+      expect(v.actions).toContain('outside_workspace');
+      expect(v.reasons.join('\n')).toMatch(/deliverables folder, which belongs to the user/);
+    }
+  });
+
+  it('lets an agent read it, and write next to it', () => {
+    const rows: [string, unknown][] = [
+      ['Read', { file_path: '/w/proj/deliverables/report.pdf' }],
+      ['Bash', { command: 'cat /w/proj/deliverables/report.txt' }],
+      ['Bash', { command: 'ls /w/proj/deliverables' }],
+      // Relative to the worktree: its own `deliverables/`, not the project's.
+      ['Write', { file_path: 'deliverables/notes.md', content: '' }],
+      ['Write', { file_path: '/w/proj/deliverables-old/a', content: '' }],
+      ['Bash', { command: 'touch deliverables/x' }],
+    ];
+    for (const [tool, input] of rows) {
+      expect({ tool, input, decision: verdict(tool, input).decision }).toEqual({
+        tool,
+        input,
+        decision: 'allow',
+      });
+    }
+  });
+
+  it('applies to the recorded folder, whatever its name, and to nothing without one', () => {
+    const recorded = { ...dctx, userFolders: ['/w/proj/galactic-deliverables'] };
+    const write = (file_path: string, c: typeof dctx) =>
+      verdict('Write', { file_path, content: '' }, c).decision;
+    expect(write('/w/proj/galactic-deliverables/a', recorded)).toBe('ask');
+    expect(write('/w/proj/deliverables/a', recorded)).toBe('allow');
+    expect(write('/w/proj/deliverables/a', { ...dctx, userFolders: [] })).toBe('allow');
+  });
+});
