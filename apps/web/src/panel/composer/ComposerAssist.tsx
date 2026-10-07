@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useId,
   useLayoutEffect,
   useMemo,
@@ -106,35 +105,26 @@ export function useComposerAssist(opts: ComposerAssistOptions): ComposerAssist {
     caret.current = undefined;
   }, [text, textarea]);
 
-  const replace = useCallback(
-    (next: string) => {
-      caret.current = next.length;
-      setText(next);
-    },
-    [setText],
-  );
+  const replace = (next: string) => {
+    caret.current = next.length;
+    setText(next);
+  };
 
-  const choose = useCallback(
-    (command: SlashCommand) => {
-      position.current = undefined;
-      replace(insertion(command));
-      setActive(0);
-      textarea.current?.focus();
-    },
-    [replace, textarea],
-  );
+  const choose = (command: SlashCommand) => {
+    position.current = undefined;
+    replace(insertion(command));
+    setActive(0);
+    textarea.current?.focus();
+  };
 
-  const onChange = useCallback(
-    (next: string) => {
-      position.current = undefined; // typed: a draft from now on
-      if (next !== text) setDismissed(undefined);
-      // The first `/` of a message: make sure the list is current.
-      if (next.startsWith('/') && !text.startsWith('/')) refresh();
-      if (slashQuery(next) !== slashQuery(text)) setActive(0);
-      setText(next);
-    },
-    [text, setText, refresh],
-  );
+  const onChange = (next: string) => {
+    position.current = undefined; // typed: a draft from now on
+    if (next !== text) setDismissed(undefined);
+    // The first `/` of a message: make sure the list is current.
+    if (next.startsWith('/') && !text.startsWith('/')) refresh();
+    if (slashQuery(next) !== slashQuery(text)) setActive(0);
+    setText(next);
+  };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
     if (e.nativeEvent.isComposing || e.altKey || e.metaKey || e.ctrlKey) return false;
@@ -186,11 +176,11 @@ export function useComposerAssist(opts: ComposerAssistOptions): ComposerAssist {
     return false;
   };
 
-  const reset = useCallback(() => {
+  const reset = () => {
     position.current = undefined;
     setDismissed(undefined);
     setActive(0);
-  }, []);
+  };
 
   const popup = (
     <>
