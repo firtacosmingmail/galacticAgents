@@ -60,7 +60,7 @@ export async function svgPreview(
 ): Promise<SvgPreview> {
   const dataUrl = svgDataUrl(bytes);
   const canvas = doc.createElement('canvas');
-  let ctx: CanvasRenderingContext2D | null = null;
+  let ctx: CanvasRenderingContext2D | null;
   try {
     ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
   } catch {
