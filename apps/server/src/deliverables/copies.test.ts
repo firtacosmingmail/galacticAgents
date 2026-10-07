@@ -328,6 +328,15 @@ describe('copies (P9-06)', () => {
     expect(readdirSync(join(p.workspace, 'deliverables'))).toEqual([]);
   });
 
+  it("reports each recorded folder's size (GET /api/deliverables/usage)", async () => {
+    const p = await project('Usage');
+    expect(await copies.usage()).toEqual({ folders: [] });
+    await copies.copyIn(stray('a.txt', '12345'), { projectId: p.id });
+    expect(await copies.usage()).toEqual({
+      folders: [{ projectId: p.id, path: join(p.workspace, 'deliverables'), bytes: 5 }],
+    });
+  });
+
   it('refuses a symlink as the source and a folder of too many entries', async () => {
     const p = await project('Refusals');
     const link = join(tmp, 'outside', 'link');

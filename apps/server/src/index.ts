@@ -322,6 +322,7 @@ const app = buildApp({
   push,
   storage: composed.storage,
   backups,
+  ...(composed.deliverableCopies ? { deliverableCopies: composed.deliverableCopies } : {}),
   restartHarmonizer: async () => {
     const hq = await restartHarmonizer();
     console.log(
