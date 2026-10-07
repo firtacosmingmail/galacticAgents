@@ -40,7 +40,8 @@ import {
  *   half-saved `package.json` does not empty the list); its problem is logged once.
  *
  * Triggers: the project's folder prepared (`Workspaces.prepareProject`), every successful merge
- * (`Workspaces.mergeTask`), and the panel's Rescan (`detectProject`). At most one scan per project
+ * (`Workspaces.mergeTask`), the panel's Rescan (`detectProject`), and once at startup for every
+ * prepared, unarchived project (`detectAll`, staggered). At most one scan per project
  * per `minIntervalMs` (10 s): a call inside the window waits for its end and shares that scan.
  * A scan never throws: what fails is in its result.
  */
@@ -53,6 +54,9 @@ export const MAX_MANIFEST_BYTES = 1024 * 1024;
 
 /** At most one scan per project in this window (TECHNOLOGY §9.3). */
 export const SCAN_INTERVAL_MS = 10_000;
+
+/** The pause between two projects' scans of the startup pass (TECHNOLOGY §9.3). */
+export const STARTUP_GAP_MS = 250;
 
 const SYSTEM: Actor = { type: 'system' };
 
@@ -256,6 +260,32 @@ export class ProjectDetection {
     })();
     state.pending = pending;
     return pending;
+  }
+
+  /** The projects a scan reads: prepared (decision 27) and not archived. */
+  scannable(): Id[] {
+    return this.tables.projects
+      .all()
+      .filter((p) => p.state !== 'archived' && workspaceMeta(p) !== undefined)
+      .map((p) => p.id);
+  }
+
+  /**
+   * The startup pass (TECHNOLOGY §9.3, decision 119): every scannable project once, one after the
+   * other with `gapMs` between two scans, so a large map does not hold the server's first seconds.
+   * What changed on disk while the server was down is then listed without a Rescan. Stops when
+   * disposed (the rest resolve as skipped); never rejects.
+   */
+  async detectAll(opts: { gapMs?: number } = {}): Promise<ScanResult[]> {
+    const gap = opts.gapMs ?? STARTUP_GAP_MS;
+    const results: ScanResult[] = [];
+    for (const [i, projectId] of this.scannable().entries()) {
+      if (this.disposed) break;
+      if (i > 0 && gap > 0) await this.sleep(gap);
+      if (this.disposed) break;
+      results.push(await this.detectProject(projectId));
+    }
+    return results;
   }
 
   /** Stops waiting scans (they resolve as skipped); a scan already writing finishes. */

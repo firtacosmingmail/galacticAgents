@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Deliverable, EventEnvelope, Id } from '@galactic/protocol';
 import { openDatabase } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
+import { archiveProject, closeProject } from '../domain/projects.js';
 import { composeRuntime } from '../runtime/compose.js';
 import { world } from '../test/world.js';
 import { gitRunner } from '../workspace/git.js';
@@ -447,6 +448,72 @@ describe('triggers', () => {
         type: 'system',
       });
     }
+  });
+});
+
+describe('the startup pass (decision 119: also at startup)', () => {
+  it('scans every prepared, unarchived project once, one after another with a gap', async () => {
+    const a = await project({ Makefile: 'all:\n' }, 'Alpha');
+    const b = await project({}, 'Beta');
+    const gone = await project({}, 'Gone');
+    w.run((ctx) => closeProject(ctx, gone.id, USER));
+    w.run((ctx) => archiveProject(ctx, gone.id, USER));
+    const raw = await commands.createProject({ name: 'Raw', workspace: join(tmp, 'raw') });
+    // What changed while the server was down.
+    writeFileSync(join(a.workspace, 'Makefile'), 'all:\ntest:\n');
+    writeFileSync(join(b.workspace, 'package.json'), pkg({ dev: 'vite' }));
+
+    let now = 5_000_000;
+    const timers: { fn: () => void; ms: number }[] = [];
+    const scans: Id[] = [];
+    detection.dispose();
+    detection = new ProjectDetection({
+      tables: w.tables,
+      commands,
+      minIntervalMs: 0,
+      now: () => now,
+      timers: {
+        set: (fn, ms) => {
+          const t = { fn, ms };
+          timers.push(t);
+          return t;
+        },
+        clear: (t) => void timers.splice(timers.indexOf(t as never), 1),
+      },
+    });
+    const scan = detection.detectProject.bind(detection);
+    detection.detectProject = (id) => (scans.push(id), scan(id));
+    expect(detection.scannable()).toEqual([a.id, b.id]);
+    expect(detection.scannable()).not.toContain(raw.value.id);
+
+    const pass = detection.detectAll();
+    await vi.waitFor(() => expect(timers).toHaveLength(1));
+    // The first project is scanned at once; the next waits for the gap (250 ms).
+    expect(scans).toEqual([a.id]);
+    expect(timers[0]!.ms).toBe(250);
+    now += 250;
+    timers.shift()!.fn();
+    const results = await pass;
+    expect(scans).toEqual([a.id, b.id]);
+    expect(results.map((r) => [r.projectId, r.added.length])).toEqual([
+      [a.id, 1],
+      [b.id, 1],
+    ]);
+    expect(active(a.id)).toEqual([FOLDER_KEY, 'Makefile#all', 'Makefile#test']);
+    expect(active(b.id)).toEqual([FOLDER_KEY, 'package.json#dev']);
+  });
+
+  it('stops when the server stops', async () => {
+    await project({}, 'One');
+    await project({}, 'Two');
+    detection.dispose();
+    detection = new ProjectDetection({ tables: w.tables, commands, minIntervalMs: 0 });
+    const pass = detection.detectAll({ gapMs: 60_000 });
+    await vi.waitFor(() => expect(w.tables.projects.all()).toHaveLength(2));
+    await new Promise((r) => setTimeout(r, 20));
+    detection.dispose();
+    const results = await pass;
+    expect(results).toHaveLength(1);
   });
 });
 
