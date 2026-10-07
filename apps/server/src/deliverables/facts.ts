@@ -36,7 +36,14 @@ export const IMAGE_TYPES: Readonly<Record<string, string>> = {
   '.svg': 'image/svg+xml',
 };
 
-/** Files (or bundles) the Finder runs when opened: applications, not files (decision 128). */
+/**
+ * Files (or bundles) that run something when the Finder opens them: applications, not files
+ * (decision 128), opened only after a confirmation. Besides programs and scripts: installers and
+ * system add-ons (`.pkg`, `.prefpane`, `.saver`, `.osax`, `.mobileconfig` — a configuration
+ * profile —, `.service`, `.action`, `.shortcut`), disk images (`.dmg`: mounting one may show its
+ * own installer) and location files (`.fileloc`, `.inetloc`, `.webloc`, `.url`), which open
+ * whatever file, app or address they name.
+ */
 export const APP_EXTENSIONS: readonly string[] = [
   '.app',
   '.command',
@@ -45,9 +52,21 @@ export const APP_EXTENSIONS: readonly string[] = [
   '.scpt',
   '.scptd',
   '.workflow',
+  '.action',
+  '.service',
+  '.shortcut',
   '.pkg',
   '.mpkg',
+  '.dmg',
   '.jar',
+  '.prefpane',
+  '.saver',
+  '.osax',
+  '.mobileconfig',
+  '.fileloc',
+  '.inetloc',
+  '.webloc',
+  '.url',
 ];
 
 export type KindGuess = 'text' | 'image' | 'pdf' | 'binary' | 'folder';
@@ -116,6 +135,15 @@ export function looksExecutable(head: Uint8Array): boolean {
 }
 
 /**
+ * A file the Finder would run in Terminal: the execute bit and either a Mach-O or `#!` start, or
+ * no extension at all (the Finder runs any executable file without one, whatever its bytes).
+ */
+export function runsAsCommand(name: string, stat: PathStat, head: Uint8Array): boolean {
+  if ((stat.mode & 0o111) === 0) return false;
+  return looksExecutable(head) || extensionOf(name) === '';
+}
+
+/**
  * The facts of a file or folder from its `stat` and its first `SNIFF_BYTES` (empty for a
  * folder). `name` is its basename (or path).
  */
@@ -133,10 +161,9 @@ export function factsOf(name: string, stat: PathStat, head: Uint8Array): FileFac
     };
   }
   const ext = extensionOf(name);
-  const executable = (stat.mode & 0o111) !== 0;
   const runsAs = isAppName(name)
     ? ('app' as const)
-    : executable && looksExecutable(head)
+    : runsAsCommand(name, stat, head)
       ? ('command' as const)
       : undefined;
   const runs = { runsCode: runsAs !== undefined, ...(runsAs ? { runsAs } : {}) };
