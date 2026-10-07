@@ -464,6 +464,51 @@ describe('ClaudeSdkAdapter — brains, bare, tools', () => {
     expect(calls).toEqual([{ agentId: 'a-9' }]);
   });
 
+  it("tells the gate each MCP call's server and provenance; a brain loads no other server", async () => {
+    const seen: ToolCall[] = [];
+    const tool = {
+      name: 'declare_deliverable',
+      description: 'Declare',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'ok',
+    };
+    const { adapter, events, sdk } = make(() => [
+      { tool: 'mcp__galactic__declare_deliverable', input: {} },
+      // A repository's `.mcp.json` server named `galactic` (the CLI reports its source).
+      {
+        tool: 'mcp__galactic__declare_deliverable',
+        input: {},
+        mcpServer: { name: 'galactic', source: 'project' },
+      },
+      { tool: 'Read', input: { file_path: 'a' } },
+      { text: 'done' },
+    ]);
+    await adapter.spawn(
+      spawnOpts('declare', {
+        tools: [tool],
+        gate: gate(
+          {
+            mcp__galactic__declare_deliverable: { decision: 'allow' },
+            Read: { decision: 'allow' },
+          },
+          seen,
+        ),
+      }),
+    );
+    await events.waitFor(has('agent.idle'));
+    expect(seen.map((c) => c.mcpServer)).toEqual([
+      { name: 'galactic', source: 'sdk' },
+      { name: 'galactic', source: 'project' },
+      undefined,
+    ]);
+    // A Steward keeps the repository's servers; a brain gets none but its own.
+    expect(sdk.calls[0]!.options.strictMcpConfig).toBeUndefined();
+    const brain = make(() => [{ text: 'ok' }]);
+    await brain.adapter.spawn(spawnOpts('x', { role: 'harmonizer', tools: [tool] }));
+    await brain.events.waitFor(has('agent.idle'));
+    expect(brain.sdk.calls[0]!.options.strictMcpConfig).toBe(true);
+  });
+
   it('a steward with a system prompt appends it to the Claude Code preset', async () => {
     const { adapter, events, sdk } = make(() => [{ text: 'ok' }]);
     await adapter.spawn(spawnOpts('x', { systemPrompt: 'Work in this worktree only.' }));

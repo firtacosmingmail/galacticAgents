@@ -365,6 +365,9 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         ),
       });
       options.mcpServers = { galactic: server };
+      // A brain has no use for any other server: none is loaded, so no configured server can
+      // even share the name (a Steward keeps the repository's own, told apart by provenance).
+      if (isBrain) options.strictMcpConfig = true;
       options.allowedTools = opts.tools.map((t) => `mcp__galactic__${t.name}`);
     }
     return options;
@@ -693,12 +696,24 @@ export class ClaudeSdkAdapter implements AgentAdapter {
 
   private async preToolUse(
     session: Session,
-    input: { tool_name?: string; tool_input?: unknown; tool_use_id?: string },
+    input: {
+      tool_name?: string;
+      tool_input?: unknown;
+      tool_use_id?: string;
+      mcp_server?: { name: string; source: string };
+    },
   ): Promise<SdkHookOutput> {
     const toolName = input.tool_name ?? 'unknown';
     try {
       if (toolName === 'AskUserQuestion') return {}; // a question, not a permission: canUseTool handles it
-      const verdict = session.gate.check({ toolName, input: input.tool_input });
+      // The tool's server and its provenance go to the gate: only the host's own in-process
+      // `galactic` server (`source: 'sdk'`) is the server's tools (a repository's `.mcp.json`
+      // server of the same name is not).
+      const verdict = session.gate.check({
+        toolName,
+        input: input.tool_input,
+        ...serverOf(input.mcp_server),
+      });
       if (input.tool_use_id !== undefined) session.verdicts.set(input.tool_use_id, verdict);
       switch (verdict.decision) {
         case 'allow':
@@ -731,7 +746,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     try {
       if (toolName === 'AskUserQuestion')
         return await this.askUserQuestion(session, input, options);
-      const call: ToolCall = { toolName, input };
+      const call: ToolCall = { toolName, input, ...serverOf(options.mcpServer) };
       const id = options.toolUseID;
       // The hook already asked the gate about this call: reuse its verdict (one check, one
       // reservation against the tool-call cap). Without one, ask the gate here.
@@ -1037,6 +1052,15 @@ export class ClaudeSdkAdapter implements AgentAdapter {
   get sessionCount(): number {
     return this.sessions.size;
   }
+}
+
+/** The CLI's `mcp_server` provenance as the gate's `ToolCall.mcpServer` (absent when not sent). */
+function serverOf(server: { name?: unknown; source?: unknown } | undefined): {
+  mcpServer?: { name: string; source: string };
+} {
+  return server && typeof server.name === 'string' && typeof server.source === 'string'
+    ? { mcpServer: { name: server.name, source: server.source } }
+    : {};
 }
 
 function hookDecision(decision: 'allow' | 'deny' | 'ask', reason?: string): SdkHookOutput {
