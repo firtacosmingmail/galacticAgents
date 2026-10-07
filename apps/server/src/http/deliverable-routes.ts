@@ -21,6 +21,7 @@ import {
 } from '@galactic/protocol';
 import type { ServerConfig } from '../config/config.js';
 import { isAppName, fileFacts, TEXT_CONTENT_TYPE } from '../deliverables/facts.js';
+import type { DeliverableCopier } from '../deliverables/copies.js';
 import { confirmationCovers, OpenerError, type Opener } from '../deliverables/opener.js';
 import { rootsOf } from '../deliverables/roots.js';
 import {
@@ -89,6 +90,12 @@ export interface DeliverableRoutesOptions {
    * `POST /api/projects/:id/deliverables/rescan`.
    */
   rescan?: (projectId: Id) => Promise<unknown>;
+  /**
+   * The deliverables folder's copies (P9-06): a user's file or folder from outside the project is
+   * copied into the project's `deliverables/` folder (decision 122). Without them it is refused
+   * (409 `outside`).
+   */
+  copies?: DeliverableCopier;
 }
 
 function send(reply: FastifyReply, status: number, error: string, message?: string) {
@@ -313,9 +320,23 @@ export function registerDeliverableRoutes(
       if (projectId && !tables.projects.get(projectId)) {
         return send(reply, 404, 'not_found', `no project ${projectId}`);
       }
-      const input = handInput(body, rootsFor({ projectId, taskId: body.taskId }));
-      if ('error' in input) return send(reply, input.status, input.error, input.message);
+      const hand = handInput(
+        body,
+        rootsFor({ projectId, taskId: body.taskId }),
+        opts.copies !== undefined,
+      );
+      if ('error' in hand) return send(reply, hand.status, hand.error, hand.message);
       try {
+        let input = hand.input;
+        if (hand.copyFrom && opts.copies) {
+          // From outside the project: copied in first (decision 122), then recorded as the copy.
+          const copy = await opts.copies.copyIn(hand.copyFrom, { projectId, taskId: body.taskId });
+          input = {
+            ...input,
+            location: copy.location,
+            meta: { ...input.meta, copy: { bytes: copy.bytes } },
+          };
+        }
         const { value } = await commands.addDeliverable(input, USER, { origin: originOf(req) });
         return { deliverable: value };
       } catch (error) {
@@ -550,13 +571,18 @@ function closeQuietly(fd: number): void {
  * What a user's addition by hand becomes (TECHNOLOGY §9.3 "By hand"): a path checked against the
  * target's roots without the agents' rules (the panel warns about secret names), a command's
  * folder checked the same way (the project's folder by default), an address as given (the
- * command checks it). A path outside the roots is refused (`outside`) — copying it into the
- * project's `deliverables/` folder is P9-06's.
+ * command checks it). A path outside the roots that passes the same rules (not `/`, the home
+ * folder itself, the data folder, `.git` or `.galactic`) is to be copied into the project's
+ * `deliverables/` folder (`copyFrom`, decision 122) when copies are available, else refused
+ * (`outside`).
  */
 function handInput(
   body: AddDeliverableBody,
   roots: DeliverableRoots | undefined,
-): AddDeliverableInput | { error: string; status: number; message: string } {
+  copies: boolean,
+):
+  | { input: AddDeliverableInput; copyFrom?: string }
+  | { error: string; status: number; message: string } {
   const base = {
     ...(body.projectId ? { projectId: body.projectId } : {}),
     ...(body.taskId ? { taskId: body.taskId } : {}),
@@ -572,7 +598,7 @@ function handInput(
     if (!roots) {
       return { error: 'invalid', status: 400, message: 'this work has no folder to point into' };
     }
-    const check = checkPath(body.path, roots);
+    const check = checkPath(body.path, roots, { outside: copies });
     if (!check.ok) {
       return {
         error: check.code,
@@ -597,13 +623,19 @@ function handInput(
       };
     }
     return {
-      ...base,
-      location: { storage: check.where === 'worktree' ? 'worktree' : 'in_place', path: check.path },
-      ...(check.type === 'file'
-        ? {
-            meta: { size: check.stat.size, mtime: new Date(check.stat.mtimeMs).toISOString() },
-          }
-        : {}),
+      input: {
+        ...base,
+        location: {
+          storage: check.where === 'worktree' ? 'worktree' : 'in_place',
+          path: check.path,
+        },
+        ...(check.type === 'file'
+          ? {
+              meta: { size: check.stat.size, mtime: new Date(check.stat.mtimeMs).toISOString() },
+            }
+          : {}),
+      },
+      ...(check.where === 'outside' ? { copyFrom: check.path } : {}),
     };
   }
   if (body.kind === 'command') {
@@ -624,10 +656,10 @@ function handInput(
     if (check.type !== 'folder') {
       return { error: 'invalid', status: 400, message: 'a command runs in a folder' };
     }
-    return { ...base, command: { line: body.command.line, cwd: check.path } };
+    return { input: { ...base, command: { line: body.command.line, cwd: check.path } } };
   }
   if (!body.url || body.path || body.command) {
     return { error: 'invalid', status: 400, message: 'a url deliverable is an address' };
   }
-  return { ...base, url: body.url };
+  return { input: { ...base, url: body.url } };
 }

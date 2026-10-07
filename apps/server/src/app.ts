@@ -63,8 +63,11 @@ export interface AppOptions {
   storage?: StorageMonitor;
   /** Backups (P8-03): enables `GET`/`POST /api/backups` (the export needs only `log`). */
   backups?: BackupService;
-  /** The deliverables folders (P9-06): enables `GET /api/deliverables/usage`. */
-  deliverableCopies?: Pick<DeliverableCopies, 'usage'>;
+  /**
+   * The deliverables folders (P9-06): enables `GET /api/deliverables/usage`, and the copy of a
+   * user's file from outside the project added by hand (decision 122).
+   */
+  deliverableCopies?: Pick<DeliverableCopies, 'usage' | 'copyIn'>;
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -195,6 +198,7 @@ export function buildApp(opts: AppOptions): App {
       commands: opts.commands,
       ...(opts.opener ? { opener: opts.opener } : {}),
       ...(opts.rescanDeliverables ? { rescan: opts.rescanDeliverables } : {}),
+      ...(opts.deliverableCopies ? { copies: opts.deliverableCopies } : {}),
     });
   }
 

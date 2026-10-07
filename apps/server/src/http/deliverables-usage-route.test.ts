@@ -12,7 +12,12 @@ afterEach(async () => {
 describe('GET /api/deliverables/usage (P9-06)', () => {
   it("lists each project's deliverables folder with its size, behind the bearer token", async () => {
     const folders = [{ projectId: 'p-1', path: '/w/a/deliverables', bytes: 1234 }];
-    const t = await startTestApp({ deliverableCopies: { usage: async () => ({ folders }) } });
+    const t = await startTestApp({
+      deliverableCopies: {
+        usage: async () => ({ folders }),
+        copyIn: () => Promise.reject(new Error('not used')),
+      },
+    });
     apps.push(t);
     const res = await fetch(`${t.baseUrl}/api/deliverables/usage`, {
       headers: { authorization: `Bearer ${TEST_TOKEN}` },

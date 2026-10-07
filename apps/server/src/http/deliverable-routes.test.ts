@@ -1,9 +1,11 @@
 import {
   appendFileSync,
   closeSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -37,7 +39,9 @@ import {
   type ExecFile,
   type OpenerFs,
 } from '../deliverables/opener.js';
+import { DeliverableCopies } from '../deliverables/copies.js';
 import { FILE_CSP, TICKET_TTL_MS } from '../deliverables/serve.js';
+import { gitRunner } from '../workspace/git.js';
 import { startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
 
 /**
@@ -70,7 +74,9 @@ const appsFs: OpenerFs = {
   exists: (p) => (p === WEBSTORM_APP ? Promise.resolve(true) : nodeOpenerFs.exists(p)),
 };
 
-async function setup(opts: { autoApproveRemote?: boolean; platform?: NodeJS.Platform } = {}) {
+async function setup(
+  opts: { autoApproveRemote?: boolean; platform?: NodeJS.Platform; copies?: boolean } = {},
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-p907-')));
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   const ws = join(root, 'app');
@@ -104,7 +110,23 @@ async function setup(opts: { autoApproveRemote?: boolean; platform?: NodeJS.Plat
     home: '/Users/nobody',
     verifySignatures: false,
   });
-  const t = await startTestApp({ config, log, commands, opener });
+  const copies = opts.copies
+    ? new DeliverableCopies({
+        tables: log.tables,
+        commands,
+        dataDir: config.dataDir,
+        home: join(root, 'home'),
+        git: gitRunner({ env: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }),
+        freeBytes: () => 2 ** 40,
+      })
+    : undefined;
+  const t = await startTestApp({
+    config,
+    log,
+    commands,
+    opener,
+    ...(copies ? { deliverableCopies: copies } : {}),
+  });
   cleanups.push(() => t.stop());
 
   const call = async (
@@ -495,7 +517,7 @@ describe('download tickets (P9-07)', () => {
 });
 
 describe('adding, editing, removing and restoring by hand (P9-07)', () => {
-  it('adds a file from the Mac, never a path outside the project', async () => {
+  it('adds a file from the Mac; without copies, never a path outside the project', async () => {
     const s = await setup();
     writeFileSync(join(s.ws, 'out.txt'), 'x');
     const res = await s.call('POST', '/api/deliverables', {
@@ -530,6 +552,76 @@ describe('adding, editing, removing and restoring by hand (P9-07)', () => {
       path: join(s.ws, 'out.txt'),
     });
     expect(wrongKind).toMatchObject({ status: 400, json: { error: 'invalid' } });
+  });
+
+  it('copies a file or folder from outside the project into its deliverables folder (decision 122)', async () => {
+    const s = await setup({ copies: true });
+    const source = join(s.outside, 'secret.txt');
+    const res = await s.call('POST', '/api/deliverables', {
+      taskId: s.task.id,
+      kind: 'file',
+      title: 'Notes',
+      path: source,
+    });
+    expect(res.status).toBe(200);
+    const folder = join(s.ws, 'deliverables');
+    const copy = join(folder, 'login-page', 'secret.txt');
+    expect(res.json['deliverable']).toMatchObject({
+      source: 'user',
+      projectId: s.project.id,
+      taskId: s.task.id,
+      location: { storage: 'copy', path: copy, originalPath: source },
+      meta: { copy: { bytes: 10 } },
+    });
+    expect(readFileSync(copy, 'utf8')).toBe('TOP SECRET');
+    expect(readFileSync(source, 'utf8')).toBe('TOP SECRET');
+    expect(s.log.tables.projects.get(s.project.id)!.meta).toMatchObject({
+      deliverablesFolder: folder,
+    });
+    // The copy is served like any deliverable: its roots hold the folder.
+    const id = (res.json['deliverable'] as { id: string }).id;
+    const content = await s.call('GET', `/api/deliverables/${id}/content`);
+    expect(content).toMatchObject({ status: 200, text: 'TOP SECRET' });
+
+    // A folder for the project goes to the folder's top.
+    mkdirSync(join(s.outside, 'site'));
+    writeFileSync(join(s.outside, 'site', 'index.html'), '<p>hi</p>');
+    const dir = await s.call('POST', '/api/deliverables', {
+      projectId: s.project.id,
+      kind: 'folder',
+      title: 'Site',
+      path: join(s.outside, 'site'),
+    });
+    expect(dir.json['deliverable']).toMatchObject({
+      location: { storage: 'copy', path: join(folder, 'site') },
+    });
+    expect(existsSync(join(folder, 'site', 'index.html'))).toBe(true);
+
+    // The user's rules still apply first: the data folder, a .git folder, / are refused.
+    const refusedPaths = [s.config.dataDir, '/'];
+    mkdirSync(join(s.outside, '.git'));
+    writeFileSync(join(s.outside, '.git', 'config'), '[core]');
+    refusedPaths.push(join(s.outside, '.git', 'config'));
+    for (const path of refusedPaths) {
+      const refused = await s.call('POST', '/api/deliverables', {
+        projectId: s.project.id,
+        kind: path.endsWith('config') ? 'file' : 'folder',
+        title: 'No',
+        path,
+      });
+      expect(refused, path).toMatchObject({ status: 409, json: { error: 'refused_area' } });
+    }
+    // A command still runs in the project's folder only.
+    const cmd = await s.call('POST', '/api/deliverables', {
+      projectId: s.project.id,
+      kind: 'command',
+      title: 'Elsewhere',
+      command: { line: 'ls', cwd: s.outside },
+    });
+    expect(cmd).toMatchObject({ status: 409, json: { error: 'outside' } });
+    expect(
+      s.log.tables.deliverables.all().filter((d) => d.location?.storage === 'copy'),
+    ).toHaveLength(2);
   });
 
   it('adds a command in the project folder by default, and an address', async () => {
