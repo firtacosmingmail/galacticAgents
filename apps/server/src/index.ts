@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './config/config.js';
 import { SettingsService } from './config/settings.js';
+import { Opener } from './deliverables/opener.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
 import { buildApp } from './app.js';
 import {
@@ -206,6 +207,8 @@ const backups = new BackupService({
     : {}),
   log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
 });
+// Opening on the Mac (P9-03): the IDE setting is read at each Open in IDE.
+const opener = new Opener({ ideSetting: () => config.deliverables?.ide ?? 'auto' });
 // The settings page (P25-01): caps and retention apply live through the runtime and the job.
 const settings = new SettingsService({
   config,
@@ -214,6 +217,7 @@ const settings = new SettingsService({
   transcriptRetention: composed.transcriptRetention,
   budgets: composed.budgets,
   runtimes: () => adapters.map((a) => a.runtime),
+  ides: opener,
 });
 
 // Shutdown is wired before anything is resumed or listening (P1-32): a signal during recovery
@@ -312,6 +316,7 @@ const app = buildApp({
   commands: composed.commands,
   ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
+  opener,
   push,
   storage: composed.storage,
   backups,

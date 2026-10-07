@@ -9,6 +9,7 @@ import {
   DEFAULT_BUDGET_WARN_PERCENT,
   DEFAULT_TRANSCRIPT_RETENTION,
   IDENTITY_TOKEN,
+  IdeSetting,
   PermissionPolicy,
   QualityTier,
   SettingsBudgets,
@@ -122,6 +123,12 @@ export const ConfigFile = z.object({
    * spawning brain's own runtime. Settable from the panel.
    */
   stewardRuntime: AgentRuntime.optional(),
+  /**
+   * The deliverables settings (Phase 9): `ide` is the IDE Open in IDE uses (P9-03, decision 127),
+   * `auto` (default: the first installed of WebStorm, IntelliJ IDEA, Cursor, VS Code, Zed) or a
+   * bundle id such as `com.jetbrains.WebStorm`. Settable from the panel on the Mac.
+   */
+  deliverables: z.object({ ide: IdeSetting.optional() }).optional(),
   /**
    * The ACP agent the `acp` runtime starts for every session (P8-07; TECHNOLOGY §3.2), e.g.
    * `{"command": "claude-agent-acp"}`, `{"command": "gemini", "args": ["--acp"]}` or
@@ -274,6 +281,8 @@ export interface ServerConfig {
   backups?: Partial<BackupSchedule> & { reserveBytes?: number };
   /** The runtime new Stewards run on (P8-07); absent = the spawning brain's own. */
   stewardRuntime?: AgentRuntime;
+  /** The deliverables settings (Phase 9): the IDE (P9-03); absent = `auto`. */
+  deliverables?: { ide?: IdeSetting };
   /** The ACP agent command (P8-07); absent = no `acp` runtime registered. */
   acp?: {
     command: string;
@@ -535,6 +544,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
       ...backupsOf(file.backups, env['GALACTIC_BACKUPS']),
       ...(stewardRuntime ? { stewardRuntime } : {}),
+      ...(file.deliverables?.ide ? { deliverables: { ide: file.deliverables.ide } } : {}),
       ...(acp ? { acp } : {}),
       ...(pty ? { pty } : {}),
     },
