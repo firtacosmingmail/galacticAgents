@@ -17,6 +17,17 @@ export const SLASH_DESCRIPTION_MAX = 300;
 export const SLASH_HINT_MAX = 100;
 /** Most commands kept per session (a runtime with more is cut, in its own order). */
 export const SLASH_COMMANDS_MAX = 500;
+/** Most alternate names kept per command. */
+export const SLASH_ALIASES_MAX = 10;
+
+/**
+ * The only slash commands a brain (the Harmonizer, a Waykeeper) runs (P8-13 review; SPEC
+ * decision 115): ones that report on or shrink its own session. Anything else a brain's session
+ * offers — `/clear` would reset it behind the brain runner's back, `/init` or `/review` would make
+ * it do a Steward's work — is neither listed nor run: a message starting with it stays text.
+ * Stewards keep their runtime's whole list (their permission table governs what they do).
+ */
+export const BRAIN_SLASH_COMMANDS: readonly string[] = ['compact', 'context', 'cost', 'usage'];
 
 /** A name is one word without whitespace, control characters or `/`. */
 const NAME = /^[^\s/\p{Cc}]+$/u;
@@ -27,6 +38,8 @@ export const SlashCommand = z.object({
   description: z.string().max(SLASH_DESCRIPTION_MAX).optional(),
   /** What the command takes after its name, e.g. `<file>`. */
   argumentHint: z.string().max(SLASH_HINT_MAX).optional(),
+  /** Other names that run the same command (Claude Code: `/cost` for `/usage`), without `/`. */
+  aliases: z.array(z.string().min(1).max(SLASH_NAME_MAX).regex(NAME)).max(SLASH_ALIASES_MAX).optional(),
   /**
    * The runtime's own command (Claude Code's `/compact`, `/context`…), as opposed to a skill, a
    * plugin's or the project's. Absent when the runtime does not say.
@@ -71,16 +84,44 @@ export function normalizeSlashCommands(raw: readonly unknown[] | undefined): Sla
     if (!name || name.length > SLASH_NAME_MAX || !NAME.test(name)) continue;
     const description = line(r['description'], SLASH_DESCRIPTION_MAX);
     const argumentHint = line(r['argumentHint'], SLASH_HINT_MAX);
+    const aliases = [
+      ...new Set(
+        (Array.isArray(r['aliases']) ? (r['aliases'] as unknown[]) : [])
+          .filter((a): a is string => typeof a === 'string')
+          .map((a) => a.trim().replace(/^\/+/, ''))
+          .filter((a) => a && a !== name && a.length <= SLASH_NAME_MAX && NAME.test(a)),
+      ),
+    ].slice(0, SLASH_ALIASES_MAX);
     const command: SlashCommand = {
       name,
       ...(description ? { description } : {}),
       ...(argumentHint ? { argumentHint } : {}),
+      ...(aliases.length ? { aliases } : {}),
       ...(typeof r['builtin'] === 'boolean' ? { builtin: r['builtin'] } : {}),
     };
     const seen = out.get(name);
     if (!seen || (command.builtin && !seen.builtin)) out.set(name, command);
   }
   return [...out.values()];
+}
+
+/** Whether `/name` runs `command`: its own name or one of its aliases. */
+export function slashCommandIs(command: SlashCommand, name: string): boolean {
+  return command.name === name || (command.aliases?.includes(name) ?? false);
+}
+
+/**
+ * The commands a brain may run (`BRAIN_SLASH_COMMANDS`): those whose name, or one of whose
+ * aliases, is on the list. A runtime's own row for an allowed name only — a skill or a plugin
+ * command is never one (`builtin: false`).
+ */
+export function brainSlashCommands(commands: readonly SlashCommand[]): SlashCommand[] {
+  return commands.filter(
+    (c) =>
+      c.builtin !== false &&
+      (BRAIN_SLASH_COMMANDS.includes(c.name) ||
+        (c.aliases ?? []).some((a) => BRAIN_SLASH_COMMANDS.includes(a))),
+  );
 }
 
 /**
