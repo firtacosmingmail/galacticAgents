@@ -31,6 +31,10 @@ import {
   type WorkState,
   type WriteOptions,
   type ControlOptions,
+  type AddDeliverableInput,
+  type DeliverableEdit,
+  type DeliverableWriteOptions,
+  type OpenAction,
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
@@ -40,6 +44,18 @@ import { EARTH_ID, chooseBody, freeMoons, freePlanets, type ChooseOptions } from
 import { recordControl } from './control.js';
 import { checkSpawnBudget, setBudget } from './budgets.js';
 import { DomainError, must } from './errors.js';
+import {
+  addDeliverable,
+  recordOpened,
+  recordRunEnded,
+  recordRunPorts,
+  recordRunStarted,
+  removeDeliverable,
+  restoreDeliverable,
+  updateDeliverable,
+  type RunEndInput,
+  type RunStartInput,
+} from './deliverables.js';
 import type { CommandContext, EventLog } from './event-log.js';
 import {
   archiveProject,
@@ -671,6 +687,57 @@ export class Commands implements DomainCommands {
         cancelQuestion(ctx, questionId, reason, holdersNow(ctx, questionId, this.questions)) ??
         question,
     );
+  }
+
+  // -- deliverables (P9-01) --------------------------------------------------------------------
+
+  /** How a deliverable write is judged: its origin, the server's setting, the version seen. */
+  private deliverableWrite(write: DeliverableWriteOptions = {}) {
+    return { ...write, autoApproveRemote: this.autoApproveRemote };
+  }
+  addDeliverable(input: AddDeliverableInput, by: Actor, write?: DeliverableWriteOptions) {
+    return this.run((ctx) => addDeliverable(ctx, input, by, this.deliverableWrite(write)));
+  }
+  updateDeliverable(
+    deliverableId: Id,
+    changes: DeliverableEdit,
+    by: Actor,
+    write?: DeliverableWriteOptions,
+  ) {
+    return this.run((ctx) =>
+      updateDeliverable(ctx, deliverableId, changes, by, this.deliverableWrite(write)),
+    );
+  }
+  removeDeliverable(
+    deliverableId: Id,
+    by: Actor,
+    reason?: string,
+    write?: DeliverableWriteOptions,
+  ) {
+    return this.run((ctx) =>
+      removeDeliverable(ctx, deliverableId, by, reason, this.deliverableWrite(write)),
+    );
+  }
+  restoreDeliverable(deliverableId: Id, by: Actor, write?: DeliverableWriteOptions) {
+    return this.run((ctx) =>
+      restoreDeliverable(ctx, deliverableId, by, this.deliverableWrite(write)),
+    );
+  }
+  /** The audit of an open on the Mac (decision 127); the opener (P9-03/P9-07) calls it. */
+  recordDeliverableOpened(deliverableId: Id, action: OpenAction, by: Actor) {
+    return this.run((ctx) => recordOpened(ctx, deliverableId, action, by));
+  }
+  /** A run started, after the fork (P9-08's `RunService`; decision 130). */
+  recordRunStarted(input: RunStartInput, by: Actor) {
+    return this.run((ctx) => recordRunStarted(ctx, input, by));
+  }
+  /** The ports a run listens on changed. */
+  recordRunPorts(runId: Id, ports: number[]) {
+    return this.run((ctx) => recordRunPorts(ctx, runId, ports));
+  }
+  /** A run ended (idempotent). */
+  recordRunEnded(runId: Id, input: RunEndInput) {
+    return this.run((ctx) => recordRunEnded(ctx, runId, input));
   }
 
   // -- panel actions ---------------------------------------------------------------------------

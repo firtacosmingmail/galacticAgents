@@ -78,6 +78,10 @@ const commands: DomainCommands = {
   withdrawQuestion: notImplemented,
   control: () => noop(undefined),
   setBudget: notImplemented,
+  addDeliverable: notImplemented,
+  updateDeliverable: notImplemented,
+  removeDeliverable: notImplemented,
+  restoreDeliverable: notImplemented,
 };
 
 describe('interfaces', () => {

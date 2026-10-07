@@ -63,6 +63,7 @@ export const REPLAY_SKIPPED_EVENT_TYPES: ReadonlySet<EventType> = new Set<EventT
   'control.archive',
   'control.pin',
   'control.reopen',
+  'deliverable.opened', // the audit of an open (decision 127): folds to nothing
 ]);
 
 /**

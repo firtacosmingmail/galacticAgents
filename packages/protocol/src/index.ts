@@ -26,3 +26,4 @@ export * from './storage.js';
 export * from './world.js';
 export * from './backup.js';
 export * from './slash.js';
+export * from './deliverables.js';
