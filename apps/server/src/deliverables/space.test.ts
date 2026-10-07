@@ -62,14 +62,32 @@ describe('checkFreeSpace', () => {
 });
 
 describe('treeSize', () => {
-  it('sums regular files and never follows a link', () => {
+  it('sums regular files and never follows a link', async () => {
     mkdirSync(join(tmp, 'out', 'sub'), { recursive: true });
     writeFileSync(join(tmp, 'out', 'a.txt'), 'abc');
     writeFileSync(join(tmp, 'out', 'sub', 'b.txt'), 'defgh');
     writeFileSync(join(tmp, 'big.bin'), 'x'.repeat(1000));
     symlinkSync(join(tmp, 'big.bin'), join(tmp, 'out', 'link.bin'));
     symlinkSync(tmp, join(tmp, 'out', 'loop'));
-    expect(treeSize(join(tmp, 'out'))).toBe(8);
-    expect(treeSize(join(tmp, 'out', 'a.txt'))).toBe(3);
+    expect(await treeSize(join(tmp, 'out'))).toEqual({ bytes: 8, entries: 6, complete: true });
+    expect(await treeSize(join(tmp, 'out', 'a.txt'))).toEqual({
+      bytes: 3,
+      entries: 1,
+      complete: true,
+    });
+  });
+
+  it('stops at the entry cap and says the sum is incomplete', async () => {
+    mkdirSync(join(tmp, 'many'));
+    for (let i = 0; i < 20; i++) writeFileSync(join(tmp, 'many', `f${i}`), 'x');
+    expect(await treeSize(join(tmp, 'many'), { maxEntries: 5 })).toMatchObject({
+      entries: 5,
+      complete: false,
+    });
+    expect(await treeSize(join(tmp, 'many'), { maxEntries: 21 })).toEqual({
+      bytes: 20,
+      entries: 21,
+      complete: true,
+    });
   });
 });
