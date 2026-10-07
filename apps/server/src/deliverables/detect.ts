@@ -1,4 +1,5 @@
 import { parse as parseToml } from 'smol-toml';
+import { redactSecrets } from '../runtime/redact.js';
 
 /**
  * Run-script detection (P9-05; TECHNOLOGY §9.3, SPEC decision 119): pure parsers over the text of
@@ -26,8 +27,19 @@ export interface DetectedCommand {
   title: string;
   /** The command line, names shell-quoted when they need it. */
   line: string;
-  /** The script's own text where the file has one (`package.json`, `deno.json`, pdm). */
+  /**
+   * The script's own text where the file has one (`package.json`, `deno.json`, pdm), redacted
+   * (`redactSecrets`) and capped: what the row shows.
+   */
   description?: string;
+  /**
+   * What running the command executes, as the file says it (S4 of the wave-2 review): the
+   * script's body (`package.json`, `deno.json`, pyproject), a Makefile rule's or a just recipe's
+   * lines — redacted and capped at `MAX_BODY_LENGTH`. Stored as `meta.detected.body`, so the run
+   * confirmation (P9-08, P9-10) shows it and flags it when it changed since the last run. Never
+   * executed: a run executes `line` (`pnpm run dev`), which the tool resolves itself.
+   */
+  body?: string;
   /** Rank among `IMPORTANT_NAMES` (0 = `dev`); absent for the others. */
   important?: number;
 }
@@ -71,6 +83,9 @@ const MAX_NAME_LENGTH = 200;
 /** A script's own text kept as the row's description, at most this long. */
 const MAX_DESCRIPTION_LENGTH = 500;
 
+/** A command's body (`DetectedCommand.body`) kept at most this long (longer: cut, with `…`). */
+export const MAX_BODY_LENGTH = 4000;
+
 /** Characters a command-line word may hold without quoting. */
 const PLAIN_WORD = /^[A-Za-z0-9_.:@/+=,%^-]+$/;
 
@@ -85,7 +100,9 @@ export function shellWord(name: string): string {
 
 /**
  * Whether a name may become a command: not empty, not too long, no control character (a newline
- * would make two commands), not starting with `-` (it would read as an option).
+ * would make two commands), no format or separator character (`\p{Cf}`: bidi overrides and
+ * zero-width characters that make a name read as another; `\p{Zl}`, `\p{Zp}`: line and
+ * paragraph separators), not starting with `-` (it would read as an option).
  */
 export function usableName(name: string): boolean {
   return (
@@ -93,7 +110,8 @@ export function usableName(name: string): boolean {
     name.length <= MAX_NAME_LENGTH &&
     !name.startsWith('-') &&
     // eslint-disable-next-line no-control-regex
-    !/[\u0000-\u001f\u007f]/.test(name)
+    !/[\u0000-\u001f\u007f-\u009f]/.test(name) &&
+    !/[\p{Cf}\p{Zl}\p{Zp}]/u.test(name)
   );
 }
 
@@ -102,21 +120,23 @@ function importance(name: string): number | undefined {
   return i === -1 ? undefined : i;
 }
 
-function describe(text: unknown): string | undefined {
+/** Trimmed, redacted (a token in a script is never stored or shown), cut at `max`. */
+function shown(text: unknown, max: number): string | undefined {
   if (typeof text !== 'string') return undefined;
-  const t = text.trim();
+  const t = redactSecrets(text.trim());
   if (!t) return undefined;
-  return t.length > MAX_DESCRIPTION_LENGTH ? `${t.slice(0, MAX_DESCRIPTION_LENGTH - 1)}…` : t;
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
 function command(
   file: string,
   name: string,
   line: string,
-  extra: { key?: string; description?: unknown; title?: string } = {},
+  extra: { key?: string; description?: unknown; body?: unknown; title?: string } = {},
 ): DetectedCommand {
   const important = importance(name);
-  const description = describe(extra.description);
+  const description = shown(extra.description, MAX_DESCRIPTION_LENGTH);
+  const body = shown(extra.body, MAX_BODY_LENGTH);
   return {
     key: extra.key ?? `${file}#${name}`,
     file,
@@ -124,6 +144,7 @@ function command(
     title: extra.title ?? name,
     line,
     ...(description !== undefined ? { description } : {}),
+    ...(body !== undefined ? { body } : {}),
     ...(important !== undefined ? { important } : {}),
   };
 }
@@ -161,7 +182,9 @@ const LIFECYCLE = new Set([
 /** The package manager the lockfile present names (TECHNOLOGY §9.3). */
 export function packageRunner(entries: ReadonlySet<string>): (script: string) => string {
   if (entries.has('pnpm-lock.yaml')) return (s) => `pnpm run ${s}`;
-  if (entries.has('yarn.lock')) return (s) => `yarn ${s}`;
+  // `yarn run <s>`, never `yarn <s>`: a Yarn built-in (`yarn add`, `yarn exec`) never shadows
+  // a script of the same name.
+  if (entries.has('yarn.lock')) return (s) => `yarn run ${s}`;
   if (entries.has('bun.lock') || entries.has('bun.lockb')) return (s) => `bun run ${s}`;
   return (s) => `npm run ${s}`;
 }
@@ -191,7 +214,7 @@ export function parsePackageJson(
     // `predev` / `postdev` run around `dev` by themselves.
     const hook = /^(pre|post)(.+)$/.exec(name);
     if (hook && all.has(hook[2]!)) continue;
-    out.push(command(file, name, run(shellWord(name)), { description: body }));
+    out.push(command(file, name, run(shellWord(name)), { description: body, body }));
   }
   return out;
 }
@@ -203,17 +226,31 @@ const MAKE_TARGET = /^([A-Za-z0-9_][A-Za-z0-9_./+-]*)[ \t]*(::?)(.*)$/;
 /**
  * Rule targets: `name:` lines at the start of a line — not recipe lines (a tab), not special
  * targets (`.PHONY`), not patterns (`%`) or variables (`$`), not assignments (`:=`, `::=`), not
- * inside `define … endef`. Several targets on one line are skipped (rarely run by hand).
+ * inside `define … endef`. Several targets on one line are skipped (rarely run by hand). A
+ * target's recipe lines (tab-indented, with their continuations) are its `body`.
  */
 export function parseMakefile(text: string, file = 'Makefile'): DetectedCommand[] {
   const seen = new Set<string>();
-  const out: DetectedCommand[] = [];
+  const found: { name: string; body: string[] }[] = [];
+  /** The recipe being read: the last target's lines, while tab-indented lines follow it. */
+  let recipe: string[] | undefined;
+  let inRecipeLine = false;
   let inDefine = 0;
   let continued = false;
   for (const raw of text.split(/\r?\n/)) {
     const wasContinued = continued;
     continued = raw.endsWith('\\');
-    if (wasContinued) continue;
+    if (wasContinued) {
+      if (recipe && inRecipeLine) recipe.push(raw);
+      continue;
+    }
+    inRecipeLine = false;
+    if (recipe && raw.startsWith('\t') && inDefine === 0) {
+      recipe.push(raw.slice(1));
+      inRecipeLine = true;
+      continue;
+    }
+    if (recipe && raw.trim() !== '') recipe = undefined;
     const trimmed = raw.trim();
     if (/^define\b/.test(trimmed)) {
       inDefine++;
@@ -230,9 +267,13 @@ export function parseMakefile(text: string, file = 'Makefile'): DetectedCommand[
     if (rest.startsWith('=') || rest.startsWith(':')) continue;
     if (name.includes('%') || seen.has(name) || !usableName(name)) continue;
     seen.add(name);
-    out.push(command(file, name, `make ${shellWord(name)}`));
+    const entry = { name, body: [] as string[] };
+    found.push(entry);
+    recipe = entry.body;
   }
-  return out;
+  return found.map(({ name, body }) =>
+    command(file, name, `make ${shellWord(name)}`, { body: body.join('\n') }),
+  );
 }
 
 // -- justfile ------------------------------------------------------------------------------------
@@ -242,16 +283,22 @@ const JUST_KEYWORDS = new Set(['set', 'alias', 'export', 'import', 'mod', 'unexp
 
 /**
  * Recipes: `name params…:` at the start of a line. Not assignments (`name := …`), settings,
- * aliases, imports, private recipes (`_name`, `[private]`) or indented lines.
+ * aliases, imports, private recipes (`_name`, `[private]`) or indented lines. A recipe's
+ * indented lines are its `body`.
  */
 export function parseJustfile(text: string, file = 'justfile'): DetectedCommand[] {
   const seen = new Set<string>();
-  const out: DetectedCommand[] = [];
+  const found: { name: string; body: string[] }[] = [];
+  let recipe: string[] | undefined;
   let privateNext = false;
   for (const raw of text.split(/\r?\n/)) {
-    if (!raw.trim() || raw.startsWith(' ') || raw.startsWith('\t') || raw.startsWith('#')) {
+    if (raw.startsWith(' ') || raw.startsWith('\t')) {
+      recipe?.push(raw.trim());
       continue;
     }
+    if (!raw.trim()) continue;
+    recipe = undefined;
+    if (raw.startsWith('#')) continue;
     if (raw.startsWith('[')) {
       if (/\bprivate\b/.test(raw)) privateNext = true;
       continue;
@@ -268,9 +315,13 @@ export function parseJustfile(text: string, file = 'justfile'): DetectedCommand[
     if (rest.startsWith('=')) continue;
     if (wasPrivate || name.startsWith('_') || seen.has(name) || !usableName(name)) continue;
     seen.add(name);
-    out.push(command(file, name, `just ${shellWord(name)}`));
+    const entry = { name, body: [] as string[] };
+    found.push(entry);
+    recipe = entry.body;
   }
-  return out;
+  return found.map(({ name, body }) =>
+    command(file, name, `just ${shellWord(name)}`, { body: body.join('\n') }),
+  );
 }
 
 // -- TOML: pyproject.toml, Cargo.toml -------------------------------------------------------------
@@ -319,7 +370,7 @@ export function parsePyproject(
   const add = (name: string, line: string, description?: unknown) => {
     if (!usableName(name) || seen.has(name)) return;
     seen.add(name);
-    out.push(command(file, name, line, { description }));
+    out.push(command(file, name, line, { description, body: description }));
   };
   for (const scripts of [
     table(doc, 'project', 'scripts'),
@@ -405,9 +456,10 @@ export function parseDeno(text: string, file = 'deno.json'): DetectedCommand[] {
   const out: DetectedCommand[] = [];
   for (const [name, task] of Object.entries(tasks)) {
     if (!usableName(name)) continue;
-    const body = isRecord(task) ? (task['description'] ?? task['command']) : task;
+    const description = isRecord(task) ? (task['description'] ?? task['command']) : task;
+    const body = isRecord(task) ? task['command'] : task;
     if (typeof task !== 'string' && !isRecord(task)) continue;
-    out.push(command(file, name, `deno task ${shellWord(name)}`, { description: body }));
+    out.push(command(file, name, `deno task ${shellWord(name)}`, { description, body }));
   }
   return out;
 }

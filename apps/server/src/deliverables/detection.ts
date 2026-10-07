@@ -183,10 +183,16 @@ export interface DetectionOptions {
 }
 
 /** What the scan wrote last for a detected row (`meta.detected`). */
-interface DetectedMeta {
+/**
+ * What the last scan wrote (`meta.detected`): the user's edit of a row stays until these change.
+ * `body` is what the command runs as the file says it (redacted, `DetectedCommand.body`): the run
+ * confirmation shows it, and flags it when it differs from the body of the last run (P9-08).
+ */
+export interface DetectedMeta {
   line?: string;
   title: string;
   description?: string;
+  body?: string;
   path?: string;
 }
 
@@ -437,6 +443,7 @@ export class ProjectDetection {
         line: c.line,
         title: c.title,
         ...(c.description !== undefined ? { description: c.description } : {}),
+        ...(c.body !== undefined ? { body: c.body } : {}),
         path: cwd,
       },
     };

