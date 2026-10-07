@@ -24,13 +24,18 @@ import { GALACTIC_DIR, worktreeRoot } from '../workspace/workspaces.js';
  * - **Secret names** (agents only): `SECRET_NAME_RULES`.
  * - **Strays** (decision 122): outside the roots, an agent's path is accepted only in a temporary
  *   folder, owned by the server's user, not a link itself, born after the agent's first spawn.
- * - **Reading** (`openChecked`): re-check, open the final component with `O_NOFOLLOW`, compare the
- *   descriptor's `(dev, ino)` with the checked path's; a mismatch is `changed`.
- *
- * Known limit: a hard link inside the project to a file elsewhere has the inside path as its real
- * path, so it passes (`realpath` cannot tell; refusing `nlink > 1` would refuse every file pnpm
- * links into `node_modules`). It is the same exposure as an agent copying a secret into an
- * ordinary file (TECHNOLOGY §9.9), and hard links cannot cross volumes.
+ * - **No symlink after the real path.** `real` holds no symlink by construction, so everything
+ *   after `realpath` refuses to follow one anywhere in it: `checkPath` `lstat`s it and re-reads
+ *   its real path, and `openChecked` opens it with macOS `O_NOFOLLOW_ANY` (`ELOOP` for a link in
+ *   *any* component, not only the last), then compares the descriptor's `(dev, ino)` with the
+ *   checked `stat`; a mismatch is `changed`. Without `O_NOFOLLOW_ANY` (not macOS) the open falls
+ *   back to `O_NOFOLLOW` (the final component only): a parent swapped for a link between the
+ *   check and the open is then caught only by the `(dev, ino)` comparison, which a swap made
+ *   before the `lstat` defeats — a weaker guarantee, documented in TECHNOLOGY §9.2.
+ * - **Hard links** (agents only, with `secretNames`): a file with `nlink > 1` is refused
+ *   (`hard_link`): a hard link inside the project to a file elsewhere has the inside path as its
+ *   real path, so `realpath` cannot tell. The user's additions and detected rows may (pnpm links
+ *   every file of `node_modules`).
  */
 
 /** The subset of `fs.Stats` the checks read. */
@@ -72,9 +77,23 @@ export const nodePathFs: PathFs = {
   close: (fd) => nodeFs.closeSync(fd),
 };
 
-/** `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`: never follow a final link, never hang on a FIFO. */
-export const CHECKED_OPEN_FLAGS =
-  nodeFs.constants.O_RDONLY | nodeFs.constants.O_NOFOLLOW | nodeFs.constants.O_NONBLOCK;
+/**
+ * macOS `O_NOFOLLOW_ANY` (`<sys/fcntl.h>`, macOS 11+): `ELOOP` when *any* component of the path is
+ * a symlink. Node does not export it. It replaces `O_NOFOLLOW` (the two together are `EINVAL`).
+ */
+export const O_NOFOLLOW_ANY_DARWIN = 0x20000000;
+
+/** The flags of the checked open on `platform`: `O_NOFOLLOW_ANY` on macOS, else `O_NOFOLLOW`. */
+export function checkedOpenFlags(platform: NodeJS.Platform = process.platform): number {
+  const { O_RDONLY, O_NONBLOCK, O_NOFOLLOW } = nodeFs.constants;
+  return O_RDONLY | O_NONBLOCK | (platform === 'darwin' ? O_NOFOLLOW_ANY_DARWIN : O_NOFOLLOW);
+}
+
+/**
+ * `O_RDONLY | O_NONBLOCK` and no symlink followed: on macOS in no component of the (real) path
+ * (`O_NOFOLLOW_ANY`), elsewhere in the final one (`O_NOFOLLOW`); never hang on a FIFO.
+ */
+export const CHECKED_OPEN_FLAGS = checkedOpenFlags();
 
 /** Where the project's own paths are. Paths need not be canonical; `deliverableRoots` makes them so. */
 export interface RootsInput {
@@ -121,6 +140,8 @@ export type PathRefusalCode =
   | 'secret'
   /** In a temporary folder but not an acceptable stray (a link, another owner, too old). */
   | 'stray_refused'
+  /** A file with more than one hard link (agents only): it may be a file from elsewhere. */
+  | 'hard_link'
   /** The file changed between the check and the open (HTTP 409 `changed`). */
   | 'changed';
 
@@ -157,7 +178,10 @@ export interface StrayRule {
 export interface CheckOptions {
   /** Resolves a relative path (the agent's working folder); a relative path without it is refused. */
   cwd?: string;
-  /** Refuse secret-looking names (`SECRET_NAME_RULES`): agents' declarations and their re-checks. */
+  /**
+   * The agents' rules, on their declarations and the re-checks of their rows: refuse
+   * secret-looking names (`SECRET_NAME_RULES`) and files with more than one hard link.
+   */
   secretNames?: boolean;
   /** Accept a stray in a temporary folder (an agent's declaration only, before it is copied). */
   stray?: StrayRule;
@@ -224,17 +248,28 @@ export function deliverableRoots(
 
 /**
  * Secret-looking names (TECHNOLOGY §9.2, decision 121), matched against folded basenames: `.env`,
- * `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keychain*`, private SSH keys, `.npmrc`,
- * `.netrc`, `.pypirc`, `.git-credentials`, `credentials*`.
+ * `.env.*`, `.envrc`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `AuthKey_*.p8`, `*.ppk`, `*.jks`,
+ * `*.keystore`, `*.keychain*`, `*.kdbx`, `*.ovpn`, `*.tfstate` (and `*.tfstate.backup`), private
+ * SSH keys, `.npmrc`, `.netrc`, `.pypirc`, `.pgpass`, `.htpasswd`, `.vault-token`,
+ * `.git-credentials`, `credentials*`.
  */
 export const SECRET_NAME_RULES: readonly RegExp[] = [
   /^\.env$/,
   /^\.env\..*/,
+  /^\.envrc$/,
   /\.pem$/,
   /\.key$/,
   /\.p12$/,
   /\.pfx$/,
+  /^authkey_.*\.p8$/,
+  /\.ppk$/,
+  /\.jks$/,
+  /\.keystore$/,
   /\.keychain/,
+  /\.kdbx$/,
+  /\.ovpn$/,
+  /\.tfstate$/,
+  /\.tfstate\.backup$/,
   /^id_rsa/,
   /^id_dsa/,
   /^id_ecdsa/,
@@ -242,12 +277,25 @@ export const SECRET_NAME_RULES: readonly RegExp[] = [
   /^\.npmrc$/,
   /^\.netrc$/,
   /^\.pypirc$/,
+  /^\.pgpass$/,
+  /^\.htpasswd$/,
+  /^\.vault-token$/,
   /^\.git-credentials$/,
   /^credentials/,
 ];
 
 /** Configuration folders whose contents are all secret (any component of the path). */
-export const SECRET_FOLDERS: readonly string[] = ['.ssh', '.aws', '.gnupg', '.docker', '.kube'];
+export const SECRET_FOLDERS: readonly string[] = [
+  '.ssh',
+  '.aws',
+  '.azure',
+  '.gnupg',
+  '.docker',
+  '.kube',
+];
+
+/** Configuration folders known by two components (`.config/gcloud`: Google Cloud's credentials). */
+export const SECRET_FOLDER_PAIRS: readonly (readonly [string, string])[] = [['.config', 'gcloud']];
 
 /** Whether a basename looks like it holds secrets. */
 export function isSecretName(name: string): boolean {
@@ -312,10 +360,13 @@ function secretIn(real: string, requested: string, base: string): string | undef
   for (const name of [basename(real), basename(requested)]) {
     if (isSecretName(name)) return `"${name}" looks like it holds secrets`;
   }
-  const folder = components(relative(base, real))
-    .map(foldName)
-    .find((c) => SECRET_FOLDERS.includes(c));
-  return folder ? `it is inside a ${folder} folder, which holds secrets` : undefined;
+  const parts = components(relative(base, real)).map(foldName);
+  const folder = parts.find((c) => SECRET_FOLDERS.includes(c));
+  if (folder) return `it is inside a ${folder} folder, which holds secrets`;
+  const pair = SECRET_FOLDER_PAIRS.find(([a, b]) =>
+    parts.some((c, i) => c === a && parts[i + 1] === b),
+  );
+  return pair ? `it is inside a ${pair.join('/')} folder, which holds secrets` : undefined;
 }
 
 /**
@@ -338,15 +389,30 @@ export function checkPath(
   const requested = isAbsolute(path) ? resolve(path) : resolve(opts.cwd as string, path);
 
   let real: string;
-  let stat: PathStat;
   try {
     real = fs.realpath(requested);
-    stat = fs.stat(real);
   } catch (e) {
     const code = errCode(e);
     if (code === 'ENAMETOOLONG') return refuse('invalid', 'the path is too long');
     if (code === 'ELOOP') return refuse('invalid', `${path} is a symlink loop`);
     return refuse('missing', `${path} does not exist`);
+  }
+  // `real` holds no symlink, so nothing after this follows one: `lstat` (a final component swapped
+  // for a link is not a file or a folder), then the real path read again — a parent swapped for a
+  // link meanwhile no longer resolves to `real`. (`openChecked` closes the rest of the window.)
+  let stat: PathStat;
+  try {
+    stat = fs.lstat(real);
+    if (fs.realpath(real) !== real) {
+      return refuse('changed', `${path} changed while it was being checked`);
+    }
+  } catch (e) {
+    const code = errCode(e);
+    if (code === 'ELOOP') return refuse('changed', `${path} changed while it was being checked`);
+    return refuse('missing', `${path} does not exist`);
+  }
+  if (stat.isSymbolicLink()) {
+    return refuse('changed', `${path} changed while it was being checked`);
   }
   const type = stat.isFile() ? 'file' : stat.isDirectory() ? 'folder' : undefined;
   if (!type) return refuse('invalid', `${path} is neither a file nor a folder`);
@@ -367,6 +433,8 @@ export function checkPath(
     if (opts.secretNames) {
       const secret = secretIn(real, requested, base);
       if (secret) return refuse('secret', `${path} is refused: ${secret}`);
+      const linked = hardLinked(path, type, stat);
+      if (linked) return linked;
     }
     return { ok: true, path: real, where, type, stat };
   }
@@ -375,6 +443,20 @@ export function checkPath(
     return refuse('outside', `${path} is outside the project's folder`);
   }
   return checkStray(path, requested, real, stat, type, roots, opts, fs);
+}
+
+/** An agent's file with more than one hard link: it may be a file from outside the project. */
+function hardLinked(
+  path: string,
+  type: 'file' | 'folder',
+  stat: PathStat,
+): PathRefusal | undefined {
+  if (type !== 'file' || stat.nlink <= 1) return undefined;
+  return refuse(
+    'hard_link',
+    `${path} is refused: it has ${stat.nlink} hard links, so it may be a file from outside the ` +
+      'project; declare a copy of it instead',
+  );
 }
 
 function checkStray(
@@ -400,6 +482,8 @@ function checkStray(
   if (opts.secretNames) {
     const secret = secretIn(real, requested, tmp);
     if (secret) return refuse('secret', `${path} is refused: ${secret}`);
+    const linked = hardLinked(path, type, stat);
+    if (linked) return linked;
   }
   let own: PathStat;
   try {
@@ -453,9 +537,10 @@ export interface CheckedOpen {
 
 /**
  * The checked-descriptor read (every read, view, download, open): re-checks `path`, opens its real
- * path with `O_NOFOLLOW` and compares the descriptor's `(dev, ino)` with the checked `stat`. A
- * file swapped between the two (a new file, a link — `ELOOP` — or a link in a parent folder) is
- * `changed`; the descriptor is closed. A stored path is passed as is (absolute).
+ * path with `CHECKED_OPEN_FLAGS` (macOS: `O_NOFOLLOW_ANY`, so a link in any component is `ELOOP`)
+ * and compares the descriptor's `(dev, ino)` with the checked `stat`. A file swapped between the
+ * two (a new file, a link, a link in a parent folder) is `changed`; the descriptor is closed. A
+ * stored path is passed as is (absolute).
  */
 export function openChecked(
   path: string,

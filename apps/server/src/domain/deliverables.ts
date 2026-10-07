@@ -47,12 +47,15 @@ export type DeliverableWrite = DeliverableWriteOptions & Pick<PolicyWrite, 'auto
 const TITLE_MAX = 500;
 const DESCRIPTION_MAX = 10_000;
 
-/** The user's own changes come from the Mac unless `autoApproveRemote` (decision 131). */
+/**
+ * The user's own changes come from the Mac unless `autoApproveRemote` (decision 131): refused with
+ * `remote_control` (REST 403, the code the routes' own `requireLocal` answers).
+ */
 function checkOrigin(by: Actor, write: DeliverableWrite, what: string): void {
   if (by.type !== 'user') return;
   if (write.origin === 'local' || write.autoApproveRemote) return;
   throw new DomainError(
-    'invalid',
+    'remote_control',
     `${what} a deliverable works only from this machine (a remote client may view, download ` +
       'and stop a run)',
   );
@@ -73,6 +76,53 @@ function checkAgentReach(current: Deliverable, by: Actor, what: string): void {
     throw new DomainError(
       'conflict',
       `deliverable ${current.id} was ${current.source === 'user' ? 'added by the user' : 'detected'}: an agent cannot ${what} it`,
+    );
+  }
+}
+
+/**
+ * The supervision rule's second line (decision 120; the tools check it first with `maySupervise`,
+ * P9-04): an agent writes only the deliverables of the work it is on — a Steward its own task's,
+ * a Waykeeper its project's (the project's own and its tasks'), the Harmonizer standalone tasks'.
+ * An agent the log does not know writes nothing.
+ */
+function checkAgentScope(
+  ctx: CommandContext,
+  by: Actor,
+  target: { projectId?: Id | undefined; taskId?: Id | undefined },
+  what: string,
+): void {
+  if (by.type !== 'agent') return;
+  const agent = by.id ? ctx.tables.agents.get(by.id) : undefined;
+  if (!agent) {
+    throw new DomainError(
+      'invalid',
+      `no agent ${by.id ?? '(no id)'}: it cannot ${what} a deliverable`,
+    );
+  }
+  const allowed =
+    agent.role === 'steward'
+      ? target.taskId !== undefined && target.taskId === agent.taskId
+      : agent.role === 'waykeeper'
+        ? target.projectId !== undefined && target.projectId === agent.projectId
+        : agent.role === 'harmonizer'
+          ? target.taskId !== undefined && target.projectId === undefined
+          : false;
+  if (!allowed) {
+    const of = target.taskId
+      ? `task ${target.taskId}`
+      : target.projectId
+        ? `project ${target.projectId}`
+        : 'nothing';
+    const reach =
+      agent.role === 'steward'
+        ? 'its own task'
+        : agent.role === 'waykeeper'
+          ? 'its own project'
+          : 'standalone tasks';
+    throw new DomainError(
+      'invalid',
+      `agent ${agent.id} cannot ${what} a deliverable of ${of}: a ${agent.role} reaches ${reach} only`,
     );
   }
 }
@@ -125,6 +175,12 @@ export function addDeliverable(
   if (input.source === 'user' && by.type !== 'user') {
     throw new DomainError('invalid', "a user's deliverable is added by the user");
   }
+  checkAgentScope(
+    ctx,
+    by,
+    { ...(projectId ? { projectId } : {}), ...(task ? { taskId: task.id } : {}) },
+    'add',
+  );
   if (input.detectedKey !== undefined) {
     if (input.source !== 'detected' || !projectId || task) {
       throw new DomainError('invalid', "only a project's detected deliverable has a detected key");
@@ -194,6 +250,7 @@ export function updateDeliverable(
   const current = must(ctx.tables.deliverables.get(deliverableId), 'deliverable', deliverableId);
   checkVersion(current, write);
   checkAgentReach(current, by, 'edit');
+  checkAgentScope(ctx, by, current, 'edit');
   for (const key of ['projectId', 'taskId', 'source', 'addedBy', 'detectedKey', 'version']) {
     if (key in edit) {
       throw new DomainError('invalid', `a deliverable's ${key} is not edited`);
@@ -245,6 +302,7 @@ export function removeDeliverable(
   const current = must(ctx.tables.deliverables.get(deliverableId), 'deliverable', deliverableId);
   checkVersion(current, write);
   checkAgentReach(current, by, 'remove');
+  checkAgentScope(ctx, by, current, 'remove');
   if (current.removedAt !== undefined) {
     throw new DomainError('invalid_transition', `deliverable ${deliverableId} is already removed`);
   }
@@ -268,7 +326,10 @@ export function removeDeliverable(
   return row;
 }
 
-/** Lists a removed deliverable again (`deliverable.restored`; "Show removed" → Restore). */
+/**
+ * Lists a removed deliverable again (`deliverable.restored`; "Show removed" → Restore). An agent
+ * restores only what an agent removed (never a row the user removed).
+ */
 export function restoreDeliverable(
   ctx: CommandContext,
   deliverableId: Id,
@@ -279,8 +340,16 @@ export function restoreDeliverable(
   const current = must(ctx.tables.deliverables.get(deliverableId), 'deliverable', deliverableId);
   checkVersion(current, write);
   checkAgentReach(current, by, 'restore');
+  checkAgentScope(ctx, by, current, 'restore');
   if (current.removedAt === undefined) {
     throw new DomainError('invalid_transition', `deliverable ${deliverableId} is not removed`);
+  }
+  // What the user removed stays removed until the user restores it (decision 120).
+  if (by.type === 'agent' && current.removedBy?.type === 'user') {
+    throw new DomainError(
+      'conflict',
+      `deliverable ${deliverableId} was removed by the user: an agent cannot restore it`,
+    );
   }
   const { removedAt: _at, removedBy: _by, removedReason: _reason, ...rest } = current;
   const version = current.version + 1;
@@ -332,7 +401,7 @@ export interface RunStartInput {
 /**
  * A command's run started (`run.started`, decision 130): logged by the run service after the
  * fork. Refused for a deliverable that is not a live command or already has a live run (one run
- * per deliverable). The run history row (`deliverable_runs`) is the event's projection
+ * per deliverable), and to an agent (decision 129: the user starts runs). The run history row (`deliverable_runs`) is the event's projection
  * (`projectRunEvent`); the deliverable's `lastRun` is written here.
  */
 export function recordRunStarted(
@@ -340,6 +409,10 @@ export function recordRunStarted(
   input: RunStartInput,
   by: Actor,
 ): DeliverableRun {
+  // Only the user starts a run, after a confirmation on the Mac (decision 129); never an agent.
+  if (by.type === 'agent') {
+    throw new DomainError('invalid', 'an agent cannot start a run: the user starts it on the Mac');
+  }
   const current = must(
     ctx.tables.deliverables.get(input.deliverableId),
     'deliverable',

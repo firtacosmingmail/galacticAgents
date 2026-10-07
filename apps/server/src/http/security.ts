@@ -203,7 +203,7 @@ export function originOf(req: RequestLike): RequestOrigin {
 
 /** What a route answers (403) when `requireLocal` refuses a request. */
 export interface LocalRefusal {
-  error: 'remote_never' | 'remote_control';
+  error: 'remote_control';
   message: string;
 }
 
@@ -211,9 +211,9 @@ export interface LocalRefusal {
  * The deliverables' remote rule (P9-03, TECHNOLOGY §9.9; SPEC decision 131): `undefined` when the
  * request may go on, else the 403 body. With `always`, only the Mac itself may — opening a file,
  * revealing it, opening an IDE or an application, starting a run: they run programs on the Mac,
- * so `autoApproveRemote` does not lift it (`remote_never`, like decision 113's typing). Without
- * it, the decision-51 rule: a remote client only when the server trusts remote clients
- * (`remote_control` otherwise).
+ * so `autoApproveRemote` does not lift it — like decision 113's typing, and with the same 403
+ * `remote_control` (one code for "not from a remote client"; the message says it is never).
+ * Without it, the decision-51 rule: a remote client only when the server trusts remote clients.
  */
 export function requireLocal(
   req: RequestLike,
@@ -223,7 +223,7 @@ export function requireLocal(
   const what = opts.what ?? 'This';
   if (opts.always) {
     return {
-      error: 'remote_never',
+      error: 'remote_control',
       message: `${what} works only on the Mac itself, never from a remote client.`,
     };
   }

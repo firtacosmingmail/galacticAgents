@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync } from 'node:fs';
+import { lstat, readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { diskFree } from '../db/vacuum.js';
 
@@ -25,17 +25,42 @@ export function formatBytes(bytes: number): string {
   return `${bytes} bytes`;
 }
 
+/** Entries `treeSize` visits before it gives up (a copy of more is refused, §9.4). */
+export const TREE_MAX_ENTRIES = 100_000;
+
+export interface TreeSize {
+  /** The regular files' bytes summed (of the entries visited). */
+  bytes: number;
+  /** Entries visited (files, folders, links and the rest). */
+  entries: number;
+  /** False when the walk stopped at the entry cap: `bytes` is then a lower bound. */
+  complete: boolean;
+}
+
 /**
  * Bytes a copy of `path` takes: a file's size, or the regular files under a folder summed by an
- * `lstat` walk that never follows a link (copies leave links out, §9.4).
+ * `lstat` walk that never follows a link (copies leave links out, §9.4). Asynchronous, so a big
+ * folder never blocks the event loop, and bounded: past `maxEntries` it stops (`complete: false`).
  */
-export function treeSize(path: string): number {
-  const st = lstatSync(path);
-  if (st.isFile()) return st.size;
-  if (!st.isDirectory()) return 0;
-  let total = 0;
-  for (const name of readdirSync(path)) total += treeSize(join(path, name));
-  return total;
+export async function treeSize(
+  path: string,
+  opts: { maxEntries?: number } = {},
+): Promise<TreeSize> {
+  const max = opts.maxEntries ?? TREE_MAX_ENTRIES;
+  let bytes = 0;
+  let entries = 0;
+  const stack = [path];
+  while (stack.length > 0) {
+    if (entries >= max) return { bytes, entries, complete: false };
+    const at = stack.pop()!;
+    const st = await lstat(at);
+    entries += 1;
+    if (st.isFile()) bytes += st.size;
+    else if (st.isDirectory()) {
+      for (const name of await readdir(at)) stack.push(join(at, name));
+    }
+  }
+  return { bytes, entries, complete: true };
 }
 
 export type SpaceCheck =

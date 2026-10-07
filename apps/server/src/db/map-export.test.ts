@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MapExport, type Actor, type HistoryEventsResponse } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { seedDemoProject } from '../domain/demo.js';
+import { addDeliverable, recordRunStarted } from '../domain/deliverables.js';
 import { EventLog } from '../domain/event-log.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { HistoryEvents } from '../runtime/history-events.js';
@@ -590,6 +591,49 @@ describe('map export and import (P8-03)', () => {
       name: 'Renamed by hand',
     });
     db.close();
+  });
+
+  it('refuses rows that lack a deliverable a run in the log belongs to (--prefer-rows)', async () => {
+    const home = tempDir();
+    const source = openDatabase(join(home, 'a.sqlite'));
+    const log = new EventLog(source);
+    const demo = log.runCommand((ctx) => seedDemoProject(ctx)).value;
+    const dev = log.runCommand((ctx) =>
+      addDeliverable(
+        ctx,
+        {
+          projectId: demo.id,
+          kind: 'command',
+          title: 'dev',
+          source: 'detected',
+          detectedKey: 'package.json#dev',
+          command: { line: 'pnpm run dev', cwd: '/w/demo' },
+        },
+        { type: 'system' },
+      ),
+    ).value;
+    log.runCommand((ctx) =>
+      recordRunStarted(
+        ctx,
+        { runId: 'r-1', deliverableId: dev.id, line: 'pnpm run dev', cwd: '/w/demo' },
+        { type: 'user' },
+      ),
+    );
+    const exported = JSON.parse(JSON.stringify(exportMap(source))) as {
+      rows: { deliverables?: unknown[] };
+    };
+    source.close();
+    exported.rows.deliverables = []; // edited by hand: the run's deliverable is gone
+
+    const target = join(home, 'b.sqlite');
+    const refused = await importMap(target, exported, { preferRows: true }).catch(
+      (e: unknown) => e,
+    );
+    expect(refused).toBeInstanceOf(ImportError);
+    expect(refused).toMatchObject({ code: 'drift' });
+    expect((refused as ImportError).message).toMatch(/lack the deliverable of 1 run/);
+    expect((refused as ImportError).drift.join('\n')).toContain(`run r-1`);
+    expect(() => statSync(target)).toThrow(); // nothing left behind
   });
 
   it('refuses files it cannot read and exports of another or newer build', async () => {

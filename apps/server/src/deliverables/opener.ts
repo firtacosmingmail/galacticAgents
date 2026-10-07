@@ -1,9 +1,10 @@
 import { execFile as nodeExecFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, readFile, readdir, stat } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import { BundleId, KNOWN_IDES, type DetectedIde, type IdeSetting } from '@galactic/protocol';
+import { extensionOf, isAppName } from './facts.js';
 
 /**
  * Opening on the Mac (P9-03; TECHNOLOGY §9.7, SPEC decisions 127, 128, 131). The server, not the
@@ -14,27 +15,34 @@ import { BundleId, KNOWN_IDES, type DetectedIde, type IdeSetting } from '@galact
  * |---|---|
  * | Open (the default app, like a double-click) | `open <path>` |
  * | Reveal in Finder | `open -R <path>` |
- * | Open in IDE | `open -b <bundleId> <folder>` |
+ * | Open in IDE | `open -a <the detected app's absolute path> <folder>` |
  * | Open an application (decision 128) | `open <path.app \| file>` |
  *
  * Always `execFile` with an argument array, a small allow-listed environment and a 10 s timeout —
  * never a shell. A path must be absolute (it starts with `/`, so `open` never reads it as an
  * option) and the callers pass only the canonical paths `deliverables/paths.ts` just re-checked;
- * a bundle id is only ever one of the detected IDEs (never a name or a path from a request).
- * macOS only: elsewhere every open throws `OpenerError('not_mac')` (501).
+ * an IDE is only ever one of the detected IDEs (never a name or a path from a request). Open
+ * refuses what would run code (an application name, an executable without an extension:
+ * `use_app`), whatever the caller checked. macOS only: elsewhere every open throws
+ * `OpenerError('not_mac')` (501).
  *
  * Who may is the routes' business (P9-07): every open is local only, never remote, even with
  * `autoApproveRemote` — `requireLocal(req, {always: true})` in `http/security.ts`.
  *
  * IDE detection (decision 127): each of `KNOWN_IDES` by its bundle id, with Spotlight
  * (`mdfind "kMDItemCFBundleIdentifier == '<id>'"`) and a scan of `/Applications`,
- * `~/Applications` and `~/Applications/JetBrains Toolbox` (Spotlight may be off or stale: a found
- * path must still exist); cached 60 s. `open -b` then launches the app wherever it is — a CLI
- * launcher (`webstorm`, `code`) is never used, it may be missing from the server's PATH.
+ * `~/Applications` and `~/Applications/JetBrains Toolbox`; cached 60 s. An app counts only when
+ * its real path (links followed) lies under `/Applications` or `~/Applications` — a project or a
+ * worktree may hold a fake `WebStorm.app` with the right bundle id — and its code signature
+ * satisfies `anchor apple generic`, its bundle id and, where known, its maker's Team ID
+ * (`codesign --verify -R=…`, cached while the bundle's main files are unchanged). `open -a <that
+ * path>` then launches exactly the app the settings page shows (never `open -b`, which lets
+ * Launch Services pick any registered copy) — a CLI launcher (`webstorm`, `code`) is never used,
+ * it may be missing from the server's PATH.
  */
 
 export type OpenerErrorCode =
-  'not_mac' | 'invalid_path' | 'no_ide' | 'ide_not_installed' | 'open_failed';
+  'not_mac' | 'invalid_path' | 'no_ide' | 'ide_not_installed' | 'use_app' | 'open_failed';
 
 export class OpenerError extends Error {
   constructor(
@@ -54,6 +62,7 @@ export class OpenerError extends Error {
         return 400;
       case 'no_ide':
       case 'ide_not_installed':
+      case 'use_app':
         return 409;
       case 'open_failed':
         return 502;
@@ -68,15 +77,28 @@ export type ExecFile = (
   options: { timeout: number; env: Record<string, string> },
 ) => Promise<{ stdout: string; stderr: string }>;
 
+/** What the opener reads of an `lstat`. */
+export interface OpenerStat {
+  dev: number;
+  ino: number;
+  mode: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  isDirectory(): boolean;
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+}
+
 /** The file system the detection and the fingerprint read (tests inject a fake). */
 export interface OpenerFs {
   /** Entry names of a folder; throws when it does not exist. */
   readdir(path: string): Promise<string[]>;
   readFile(path: string): Promise<Buffer>;
   /** Without following a final symlink. */
-  lstat(
-    path: string,
-  ): Promise<{ dev: number; ino: number; size: number; mtimeMs: number; isDirectory(): boolean }>;
+  lstat(path: string): Promise<OpenerStat>;
+  /** Every symlink followed (on-disk names). */
+  realpath(path: string): Promise<string>;
   /** Whether something is there (following links). */
   exists(path: string): Promise<boolean>;
 }
@@ -85,6 +107,7 @@ export const nodeOpenerFs: OpenerFs = {
   readdir: (path) => readdir(path),
   readFile: (path) => readFile(path),
   lstat: (path) => lstat(path),
+  realpath: (path) => realpath(path),
   exists: (path) =>
     stat(path).then(
       () => true,
@@ -108,6 +131,44 @@ export const nodeExec: ExecFile = (file, args, options) =>
 export const OPEN = '/usr/bin/open';
 export const MDFIND = '/usr/bin/mdfind';
 export const PLUTIL = '/usr/bin/plutil';
+export const CODESIGN = '/usr/bin/codesign';
+
+/**
+ * The Team IDs (the signing certificate's `OU`) of the IDE makers, checked by the signature
+ * requirement. Read from the apps on Cosmin's Mac with `codesign -dv` and checked with
+ * `codesign --verify -R=…` (2026-10-07): JetBrains (WebStorm) `2ZEFAR8TH3`, Microsoft (Visual
+ * Studio Code) `UBF8T346G9`. Cursor (Anysphere) and Zed are not installed there, so theirs are not
+ * recorded: they are checked for an Apple-anchored signature with their bundle id only.
+ */
+export const IDE_TEAM_IDS: Readonly<Record<string, string>> = {
+  'com.jetbrains.WebStorm': '2ZEFAR8TH3',
+  'com.jetbrains.intellij': '2ZEFAR8TH3',
+  'com.jetbrains.intellij.ce': '2ZEFAR8TH3',
+  'com.microsoft.VSCode': 'UBF8T346G9',
+};
+
+/** The code requirement an IDE's bundle must satisfy (`codesign --verify -R=<it>`). */
+export function ideRequirement(bundleId: string): string {
+  const id = BundleId.parse(bundleId);
+  const team = IDE_TEAM_IDS[id];
+  return (
+    `anchor apple generic and identifier "${id}"` +
+    (team ? ` and certificate leaf[subject.OU] = "${team}"` : '')
+  );
+}
+
+/** Entries a bundle's fingerprint walks before it gives up (then it always asks again). */
+export const FINGERPRINT_MAX_ENTRIES = 50_000;
+/** Marks the fingerprint of a bundle past `FINGERPRINT_MAX_ENTRIES`. */
+export const TOO_LARGE_FINGERPRINT = 'toolarge:';
+
+/**
+ * Whether a stored confirmation (`meta.confirmedOpen.fingerprint`) still covers `current`: never
+ * for a bundle too large to walk whole — the user confirms every open of it.
+ */
+export function confirmationCovers(stored: string | undefined, current: string): boolean {
+  return stored === current && !current.startsWith(TOO_LARGE_FINGERPRINT);
+}
 const TIMEOUT_MS = 10_000;
 const DETECT_TTL_MS = 60_000;
 /** What `open` and the detection tools inherit: no token, no keys (TECHNOLOGY §8). */
@@ -120,6 +181,10 @@ export interface OpenerOptions {
   platform?: NodeJS.Platform;
   /** Default `os.homedir()`: where `~/Applications` is. */
   home?: string;
+  /** Check an IDE's code signature (default true; `codesign` through `execFile`). */
+  verifySignatures?: boolean;
+  /** Entries a bundle's fingerprint walks at most (default `FINGERPRINT_MAX_ENTRIES`). */
+  fingerprintMaxEntries?: number;
   /** The `deliverables.ide` setting as it is now (default `auto`). */
   ideSetting?: () => IdeSetting;
   /** How long a detection is reused (default 60 s). */
@@ -133,6 +198,8 @@ export class Opener {
   private readonly env: Record<string, string>;
   private detected: { at: number; ides: DetectedIde[] } | undefined;
   private detecting: Promise<DetectedIde[]> | undefined;
+  /** Signature checks by real path, valid while the bundle's main files are unchanged. */
+  private readonly signatures = new Map<string, { key: string; ok: boolean }>();
 
   constructor(private readonly opts: OpenerOptions = {}) {
     this.exec = opts.execFile ?? nodeExec;
@@ -149,9 +216,22 @@ export class Opener {
     return (this.opts.platform ?? process.platform) === 'darwin';
   }
 
-  /** **Open**: the file (or folder) with the Mac's default app for it, as a double-click does. */
+  /**
+   * **Open**: the file (or folder) with the Mac's default app for it, as a double-click does.
+   * Refuses (409 `use_app`) what would run code — an application by its name (decision 128) or
+   * an executable file without an extension, which the Finder runs in Terminal — whatever the
+   * caller checked: those go through `openApp` after a confirmation, or are commands.
+   */
   async open(path: string): Promise<void> {
-    await this.run([checkedPath(path)]);
+    const p = checkedPath(path);
+    this.requireMac();
+    if (await this.wouldRunCode(p)) {
+      throw new OpenerError(
+        'use_app',
+        `${basename(p)} would run code when opened: it opens as an application, after a confirmation.`,
+      );
+    }
+    await this.run([p]);
   }
 
   /** **Reveal in Finder**: a Finder window on the item's folder, the item selected. */
@@ -188,8 +268,16 @@ export class Opener {
             `${ideName(setting)} is not installed any more: pick another IDE in the settings.`,
           );
     }
-    await this.run(['-b', BundleId.parse(ide.bundleId), path]);
-    return ide;
+    // The detection is cached: the app must still be where it was, and still signed.
+    const app = await this.trustedApp(ide.path, ide.bundleId);
+    if (!app) {
+      throw new OpenerError(
+        'ide_not_installed',
+        `${ide.name} at ${ide.path} is gone or failed its signature check: pick another IDE in the settings.`,
+      );
+    }
+    await this.run(['-a', app, path]);
+    return { ...ide, path: app };
   }
 
   /** The IDE Open in IDE would use now: the setting's if installed, else none. */
@@ -228,6 +316,7 @@ export class Opener {
   /** Drops the cached detection (a test, or the settings page's "look again"). */
   forget(): void {
     this.detected = undefined;
+    this.signatures.clear();
   }
 
   private async detect(): Promise<DetectedIde[]> {
@@ -235,25 +324,109 @@ export class Opener {
       Promise.all(KNOWN_IDES.map((ide) => this.mdfind(ide.bundleId))),
       this.scan(),
     ]);
-    const found: DetectedIde[] = [];
-    for (const [i, ide] of KNOWN_IDES.entries()) {
-      // The folders' copy first (a known place), then Spotlight's first live hit that is not on
-      // another volume or in the Trash (an index can be stale; a mounted backup has apps too).
-      let path = scanned.get(ide.bundleId);
-      if (!path) {
-        for (const hit of spotlight[i] ?? []) {
-          if (!hit.endsWith('.app') || hit.startsWith('/Volumes/') || hit.includes('/.Trash/')) {
-            continue;
-          }
-          if (await this.fs.exists(hit)) {
-            path = hit;
-            break;
-          }
+    const found = await Promise.all(
+      KNOWN_IDES.map(async (ide, i): Promise<DetectedIde | undefined> => {
+        // The folders' copies first, then Spotlight's hits (an index can be stale): the first
+        // that is really in an Applications folder and signed by the IDE's maker.
+        const candidates = [...(scanned.get(ide.bundleId) ?? []), ...(spotlight[i] ?? [])];
+        for (const candidate of new Set(candidates)) {
+          const path = await this.trustedApp(candidate, ide.bundleId);
+          if (path) return { bundleId: ide.bundleId, name: ide.name, path };
         }
+        return undefined;
+      }),
+    );
+    return found.filter((i): i is DetectedIde => i !== undefined);
+  }
+
+  /** The Applications folders an IDE may be in (real paths). */
+  private async appRoots(): Promise<string[]> {
+    const home = this.opts.home ?? homedir();
+    const roots: string[] = [];
+    for (const root of ['/Applications', join(home, 'Applications')]) {
+      try {
+        roots.push(await this.fs.realpath(root));
+      } catch {
+        // not there
       }
-      if (path) found.push({ bundleId: ide.bundleId, name: ide.name, path });
     }
-    return found;
+    return roots;
+  }
+
+  /**
+   * `candidate`'s real path when it is an `.app` that exists inside `/Applications` or
+   * `~/Applications` (links followed: a link from there into a project does not count) and is
+   * signed for `bundleId` (`ideRequirement`); else `undefined`.
+   */
+  private async trustedApp(candidate: string, bundleId: string): Promise<string | undefined> {
+    if (!candidate.startsWith('/') || !candidate.endsWith('.app')) return undefined;
+    let real: string;
+    try {
+      real = await this.fs.realpath(candidate);
+    } catch {
+      return undefined;
+    }
+    if (!real.endsWith('.app') || !(await this.fs.exists(real))) return undefined;
+    const roots = await this.appRoots();
+    if (!roots.some((root) => isStrictlyInside(real, root))) return undefined;
+    return (await this.signedFor(real, bundleId)) ? real : undefined;
+  }
+
+  /** Whether the bundle at `app` (a real path) satisfies `ideRequirement(bundleId)`; cached. */
+  private async signedFor(app: string, bundleId: string): Promise<boolean> {
+    if (this.opts.verifySignatures === false) return true;
+    const key = `${bundleId}\0${await this.bundleKey(app)}`;
+    const cached = this.signatures.get(app);
+    if (cached && cached.key === key) return cached.ok;
+    let ok: boolean;
+    try {
+      await this.exec(CODESIGN, ['--verify', `-R=${ideRequirement(bundleId)}`, app], {
+        timeout: TIMEOUT_MS,
+        env: this.env,
+      });
+      ok = true;
+    } catch {
+      ok = false;
+    }
+    this.signatures.set(app, { key, ok });
+    return ok;
+  }
+
+  /**
+   * What a cached signature check stays valid for: the identity and times of the bundle, its
+   * `Contents`, `Contents/MacOS`, `Contents/Info.plist` and `Contents/_CodeSignature` (replacing
+   * the executable or re-signing changes one of them; a part appearing or vanishing too).
+   */
+  private async bundleKey(app: string): Promise<string> {
+    const parts = [
+      '',
+      'Contents',
+      'Contents/MacOS',
+      'Contents/Info.plist',
+      'Contents/_CodeSignature',
+    ];
+    const keys = await Promise.all(
+      parts.map(async (rel) => {
+        try {
+          const st = await this.fs.lstat(rel ? join(app, rel) : app);
+          return `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+        } catch {
+          return 'missing';
+        }
+      }),
+    );
+    return keys.join('|');
+  }
+
+  /** Whether opening `path` with its default app would run code (`open` refuses it). */
+  private async wouldRunCode(path: string): Promise<boolean> {
+    if (isAppName(path)) return true;
+    try {
+      const st = await this.fs.lstat(path);
+      return st.isFile() && (st.mode & 0o111) !== 0 && extensionOf(path) === '';
+    } catch {
+      return false; // nothing there: `open` says so
+    }
   }
 
   /** Spotlight's paths for a bundle id; none when Spotlight is off or fails. */
@@ -275,9 +448,9 @@ export class Opener {
   /**
    * `/Applications`, `~/Applications` and `~/Applications/JetBrains Toolbox` (and one level of
    * sub-folders of each, as `/Applications/Utilities` or a Toolbox folder), app by app: bundle id
-   * → the first path that has it.
+   * → the paths that have it, in scan order.
    */
-  private async scan(): Promise<Map<string, string>> {
+  private async scan(): Promise<Map<string, string[]>> {
     const wanted = new Set<string>(KNOWN_IDES.map((i) => i.bundleId));
     const home = this.opts.home ?? homedir();
     const roots = [
@@ -297,10 +470,10 @@ export class Opener {
         }
       }
     }
-    const found = new Map<string, string>();
+    const found = new Map<string, string[]>();
     for (const app of apps) {
       const id = await this.bundleIdOf(app, wanted);
-      if (id && wanted.has(id) && !found.has(id)) found.set(id, app);
+      if (id && wanted.has(id)) found.set(id, [...(found.get(id) ?? []), app]);
     }
     return found;
   }
@@ -346,39 +519,61 @@ export class Opener {
 
   /**
    * An application's fingerprint (decision 128): what the user confirmed opening. For an `.app`
-   * bundle, SHA-256 over its `Contents/Info.plist` and the main executable's `(size, mtime)`; for
-   * a file, over its `(dev, ino, size, mtime)`. Changes whenever the app or file does.
+   * bundle (any folder), SHA-256 over its `Contents/Info.plist` and an `lstat` walk of the whole
+   * bundle — each entry's relative path, type, size, mtime and ctime, in sorted order, links never
+   * followed — so any file added, removed, rewritten or touched changes it. Past
+   * `FINGERPRINT_MAX_ENTRIES` the walk stops and the fingerprint starts with
+   * `TOO_LARGE_FINGERPRINT`: `confirmationCovers` then never reuses a confirmation. For a file,
+   * over its `(dev, ino, size, mtime, ctime)`.
    */
   async fingerprint(path: string): Promise<string> {
     const p = checkedPath(path);
     const hash = createHash('sha256');
     const info = await this.fs.lstat(p);
-    if (info.isDirectory()) {
-      hash.update('bundle\0');
-      const plist = join(p, 'Contents', 'Info.plist');
-      let bytes: Buffer = Buffer.alloc(0);
-      try {
-        bytes = await this.fs.readFile(plist);
-      } catch {
-        // No Info.plist: the fingerprint still covers the (missing) executable below.
-      }
-      hash.update(bytes);
-      const xml = bytes.length > 0 ? await this.plistXml(plist, bytes) : undefined;
-      const executable = xml ? plistString(xml, 'CFBundleExecutable') : undefined;
-      if (executable && !executable.includes('/')) {
-        try {
-          const exe = await this.fs.lstat(join(p, 'Contents', 'MacOS', executable));
-          hash.update(`\0exe\0${executable}\0${exe.size}\0${Math.trunc(exe.mtimeMs)}`);
-        } catch {
-          hash.update(`\0exe\0${executable}\0missing`);
-        }
-      } else {
-        hash.update('\0exe\0none');
-      }
-    } else {
-      hash.update(`file\0${info.dev}\0${info.ino}\0${info.size}\0${Math.trunc(info.mtimeMs)}`);
+    const times = (st: OpenerStat) => `${Math.trunc(st.mtimeMs)}\0${Math.trunc(st.ctimeMs)}`;
+    if (!info.isDirectory()) {
+      hash.update(`file\0${info.dev}\0${info.ino}\0${info.size}\0${times(info)}`);
+      return `sha256:${hash.digest('hex')}`;
     }
-    return `sha256:${hash.digest('hex')}`;
+    hash.update(`bundle\0${info.dev}\0${info.ino}\0${times(info)}\0`);
+    try {
+      hash.update(await this.fs.readFile(join(p, 'Contents', 'Info.plist')));
+    } catch {
+      hash.update('no Info.plist');
+    }
+    let entries = 0;
+    let tooLarge = false;
+    const folders = [''];
+    walk: while (folders.length > 0) {
+      const rel = folders.pop()!;
+      let names: string[];
+      try {
+        names = (await this.fs.readdir(rel ? join(p, rel) : p)).sort();
+      } catch {
+        hash.update(`\0unreadable\0${rel}`);
+        continue;
+      }
+      for (const name of names) {
+        entries += 1;
+        if (entries > (this.opts.fingerprintMaxEntries ?? FINGERPRINT_MAX_ENTRIES)) {
+          tooLarge = true;
+          break walk;
+        }
+        const child = rel ? `${rel}/${name}` : name;
+        let st: OpenerStat;
+        try {
+          st = await this.fs.lstat(join(p, child));
+        } catch {
+          hash.update(`\0${child}\0gone`);
+          continue;
+        }
+        const type = st.isSymbolicLink() ? 'l' : st.isDirectory() ? 'd' : st.isFile() ? 'f' : 'o';
+        hash.update(`\0${child}\0${type}\0${st.size}\0${times(st)}`);
+        if (type === 'd') folders.push(child);
+      }
+    }
+    const digest = `sha256:${hash.digest('hex')}`;
+    return tooLarge ? `${TOO_LARGE_FINGERPRINT}${digest}` : digest;
   }
 
   private setting(): IdeSetting {
@@ -431,16 +626,58 @@ function isBinaryPlist(bytes: Buffer): boolean {
   return bytes.subarray(0, 6).toString('latin1') === 'bplist';
 }
 
+function isStrictlyInside(child: string, parent: string): boolean {
+  const rel = relative(parent, child);
+  return rel !== '' && rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel);
+}
+
 /** The name of a known IDE (else the bundle id itself). */
 export function ideName(bundleId: string): string {
   return KNOWN_IDES.find((i) => i.bundleId === bundleId)?.name ?? bundleId;
 }
 
-/** A `<key>…</key><string>…</string>` value of an XML property list (top-level keys). */
+/**
+ * The string value of a top-level key of an XML property list (`<plist><dict>` → `<key>` →
+ * `<string>`): a key of the same name inside a nested `<dict>` or `<array>` is not read, nor is
+ * a top-level key whose value is not a string.
+ */
 export function plistString(xml: string, key: string): string | undefined {
-  const re = new RegExp(`<key>\\s*${key}\\s*</key>\\s*<string>([^<]*)</string>`);
-  const value = re.exec(xml)?.[1]?.trim();
-  return value ? decodeXml(value) : undefined;
+  const tags = /<(\/?)(dict|array|key|string|integer|real|true|false|date|data)\b[^>]*?(\/?)>/g;
+  let depth = 0;
+  let lastKey: string | undefined;
+  /** The text up to `</tag>` after the current match; moves the scan past it. */
+  const textUntil = (tag: string): string => {
+    const end = xml.indexOf(`</${tag}>`, tags.lastIndex);
+    const text = end < 0 ? '' : xml.slice(tags.lastIndex, end);
+    tags.lastIndex = end < 0 ? xml.length : end + tag.length + 3;
+    return text;
+  };
+  for (let m = tags.exec(xml); m; m = tags.exec(xml)) {
+    const [, closing, tag, selfClosing] = m;
+    if (tag === 'dict' || tag === 'array') {
+      if (closing) depth -= 1;
+      else {
+        if (depth === 1) lastKey = undefined;
+        if (!selfClosing) depth += 1;
+      }
+      continue;
+    }
+    if (closing) continue;
+    if (tag === 'key') {
+      const name = selfClosing ? '' : decodeXml(textUntil('key').trim());
+      if (depth === 1) lastKey = name;
+      continue;
+    }
+    const text = selfClosing ? '' : textUntil(tag!);
+    if (depth === 1) {
+      if (lastKey === key) {
+        const value = tag === 'string' ? text.trim() : '';
+        return value ? decodeXml(value) : undefined;
+      }
+      lastKey = undefined;
+    }
+  }
+  return undefined;
 }
 
 function decodeXml(s: string): string {

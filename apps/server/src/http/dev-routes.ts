@@ -141,7 +141,14 @@ function registerHarness(app: FastifyInstance, harness: SceneHarness): void {
       if (error instanceof NotHarnessError) {
         return reply.code(409).send({ error: 'not_harness', message: error.message });
       }
-      const status = error.code === 'not_found' ? 404 : error.code === 'invalid' ? 400 : 409;
+      const status =
+        error.code === 'not_found'
+          ? 404
+          : error.code === 'invalid'
+            ? 400
+            : error.code === 'remote_control'
+              ? 403
+              : 409;
       return reply.code(status).send({ error: error.code, message: error.message });
     }
   };

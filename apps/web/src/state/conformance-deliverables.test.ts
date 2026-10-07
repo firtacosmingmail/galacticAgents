@@ -78,7 +78,10 @@ describe('replay vs snapshot conformance: deliverables (P9-01)', () => {
         prompt: 'scenario:long',
       })
     ).value;
-    const steward: Actor = { type: 'agent', id: 'a-steward-x' };
+    // Agents declare within their reach (the domain's supervision check): the Waykeeper for its
+    // project's tasks, the Harmonizer for a standalone task.
+    const wk: Actor = { type: 'agent', id: waykeeper.id };
+    const hz: Actor = { type: 'agent', id: harmonizer.id };
 
     // --- the project's own: its folder and a detected script, a command added by hand
     await commands.addDeliverable(
@@ -164,7 +167,7 @@ describe('replay vs snapshot conformance: deliverables (P9-01)', () => {
           location: { storage: 'worktree', path: '/w/app/.galactic/worktrees/l/login.png' },
           meta: { size: 1200 },
         },
-        steward,
+        wk,
       )
     ).value;
     await commands.updateDeliverable(
@@ -234,7 +237,7 @@ describe('replay vs snapshot conformance: deliverables (P9-01)', () => {
           source: 'agent',
           location: { storage: 'in_place', path: '/w/imp/NOTES.md' },
         },
-        steward,
+        hz,
       )
     ).value;
     const card = (
@@ -274,7 +277,7 @@ describe('replay vs snapshot conformance: deliverables (P9-01)', () => {
           source: 'agent',
           location: { storage: 'in_place', path: '/w/app/openapi.yaml' },
         },
-        steward,
+        wk,
       )
     ).value;
     const wkCard = (

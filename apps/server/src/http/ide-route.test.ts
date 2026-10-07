@@ -41,6 +41,7 @@ function fakes(apps: Record<string, string>) {
     lstat: async () => {
       throw new Error('ENOENT');
     },
+    realpath: async (p) => p,
     exists: async (p) => paths.has(p),
   };
   return { exec, fs, calls };

@@ -161,6 +161,14 @@ describe('fileFacts', () => {
       'b.workflow',
       'setup.pkg',
       'tool.jar',
+      'Home.fileloc',
+      'Site.inetloc',
+      'Site.webloc',
+      'Site.url',
+      'Profile.mobileconfig',
+      'Do it.shortcut',
+      'Installer.dmg',
+      'Thing.action',
     ]) {
       expect(fileFacts(put(name, 'echo hi\n'), roots)).toMatchObject({
         runsCode: true,
@@ -191,6 +199,18 @@ describe('fileFacts', () => {
     expect(fileFacts(put('bin/lib.o', macho, 0o644), roots).runsCode).toBe(false);
   });
 
+  it('suggests a command for an executable file without an extension, whatever its bytes', () => {
+    // The Finder runs any executable file without an extension in Terminal.
+    expect(fileFacts(put('bin/plain', 'echo hi\n', 0o755), roots)).toMatchObject({
+      kindGuess: 'text',
+      runsCode: true,
+      runsAs: 'command',
+    });
+    expect(fileFacts(put('bin/plain-ro', 'echo hi\n', 0o644), roots).runsCode).toBe(false);
+    // With an extension and no #! or Mach-O start, the default app opens it as a document.
+    expect(fileFacts(put('notes.txt', 'echo hi\n', 0o755), roots).runsCode).toBe(false);
+  });
+
   it('reports a missing or refused file as not existing, with the reason', () => {
     expect(fileFacts(join(ws, 'gone.txt'), roots)).toMatchObject({
       exists: false,
@@ -212,5 +232,8 @@ describe('isAppName', () => {
     expect(isAppName('/x/run.Command')).toBe(true);
     expect(isAppName('apple.txt')).toBe(false);
     expect(isAppName('app')).toBe(false);
+    for (const name of ['Pane.prefPane', 'Flurry.saver', 'X.osax', 'Y.service', 'Z.WEBLOC']) {
+      expect(isAppName(name)).toBe(true);
+    }
   });
 });

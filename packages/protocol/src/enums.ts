@@ -123,5 +123,10 @@ export const DomainErrorCode = z.enum([
   'stale',
   /** The input is malformed or contradicts itself. */
   'invalid',
+  /**
+   * Refused to a remote client (P9-01; decisions 51, 131): a user's write that works only from the
+   * Mac unless `autoApproveRemote`. REST answers 403 `remote_control`, like the routes' own check.
+   */
+  'remote_control',
 ]);
 export type DomainErrorCode = z.infer<typeof DomainErrorCode>;
