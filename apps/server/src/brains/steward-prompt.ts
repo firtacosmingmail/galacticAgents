@@ -11,7 +11,10 @@ import type { Id, Project, Task, WorkState } from '@galactic/protocol';
  *     text to the supervisor as the Steward's report (`runtime/steward-reports.ts`);
  *   - **ask when unsure** through the runtime's question tool (a clarification question, held by
  *     the supervisor, decision 26), never in prose;
- *   - **never ask permission in prose**: the permission gate decides every tool call (decision 31).
+ *   - **never ask permission in prose**: the permission gate decides every tool call (decision 31);
+ *   - **declare deliverables** (P9-04, decision 120): what the user will want to open, with
+ *     `declare_deliverable` on a runtime that serves the server's tools, else as a "Deliverables:"
+ *     list in the "Done:" report (`deliverables/report-block.ts` reads it for the supervisor).
  *
  * Pure text: no SDK, no database. Callers pass what they read from the queries.
  */
@@ -35,6 +38,11 @@ export interface StewardBrief {
   lead?: string;
   /** Other tasks of the project, so the Steward stays out of their way. */
   related?: Pick<Task, 'id' | 'description' | 'state'>[];
+  /**
+   * The Steward has `declare_deliverable` (its runtime serves the server's tools: `claude-sdk`,
+   * `fake`); `false`: it lists its deliverables in its report (ACP, PTY). Default true.
+   */
+  declares?: boolean;
 }
 
 /** At most this many related tasks are listed. */
@@ -48,7 +56,9 @@ const SUPERVISOR_NAME: Record<StewardSupervisor, string> = {
 const DONE_STATES: ReadonlySet<WorkState> = new Set(['completed', 'archived', 'moved']);
 
 /** The etiquette every Steward follows (exported for tests and the docs). */
-export function stewardEtiquette(brief: Pick<StewardBrief, 'supervisor' | 'branch'>): string[] {
+export function stewardEtiquette(
+  brief: Pick<StewardBrief, 'supervisor' | 'branch' | 'declares'>,
+): string[] {
   const boss = SUPERVISOR_NAME[brief.supervisor];
   return [
     'How you work:',
@@ -61,8 +71,22 @@ export function stewardEtiquette(brief: Pick<StewardBrief, 'supervisor' | 'branc
           '- Commit your work on your branch before you report done, and leave the worktree clean. Never switch branches, never push, never merge into the base branch yourself (unless you are told to merge the base branch into yours).',
         ]
       : []),
+    ...deliverableEtiquette(brief.declares ?? true),
     `- Report when you stop. End your turn with a final message that is your report to ${boss}: begin it with "Done:" when the task is complete (what you changed, how you checked it — tests, build — and anything left over or risky), or "Not done:" with what stops you. That last message is delivered as your report; ${boss} decides whether the task is closed or gives you more to do. Every end of your turn counts as a report, so do not stop half-way unless you are blocked.`,
   ];
+}
+
+/** The line that asks for deliverables: the tool, or the report's list (decision 120). */
+export function deliverableEtiquette(declares: boolean): string[] {
+  const what =
+    'what the user will want to open when you are done — an app, a report, a screenshot, a generated folder, a command to run (a dev server, a script), an address — not every file you changed, and never a secret (.env, keys)';
+  return declares
+    ? [
+        `- Deliverables. Before your final report, declare ${what} with declare_deliverable (kind, title, and the path inside your working directory, the command or the address). Prefer declaring a command such as the dev server to leaving one running. list_deliverables shows what your task already has.`,
+      ]
+    : [
+        `- Deliverables. You cannot declare deliverables yourself, so list ${what} in your "Done:" report under a line "Deliverables:", one per line, exactly: "- <kind> | <path, command or address> | <title>", where kind is file, image, folder, app, command or url and a path is relative to your working directory. Example: "- image | screenshots/home.png | Home page screenshot". ${'Your supervisor declares them.'}`,
+      ];
 }
 
 export function stewardPrompt(brief: StewardBrief): string {

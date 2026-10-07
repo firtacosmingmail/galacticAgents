@@ -1,5 +1,7 @@
 import type { Actor, Agent, AgentState, EventEnvelope, Id, Task } from '@galactic/protocol';
+import { parseReportBlock, reportBlockText } from '../deliverables/report-block.js';
 import type { TurnEnd } from './agent-runtime.js';
+import { stewardDeclares } from './tool-runtimes.js';
 
 /**
  * A Steward's done report (P2-11; SPEC §2.3, §2.7, decision 11). A Steward reports by ending its
@@ -19,6 +21,11 @@ import type { TurnEnd } from './agent-runtime.js';
  *
  * A Steward that *finishes* (its process exits) is reported by `agent.finished`, which already
  * wakes its supervisor; the runtime fills a missing `result` with the turn's last text.
+ *
+ * A Steward on a runtime that cannot declare deliverables itself (ACP, a terminal agent; P9-04,
+ * decision 120) lists them under "Deliverables:" in its report: the block is read from the whole
+ * report (before any cut) and added under it, one ready `declare_deliverable` input per line with
+ * paths resolved against the Steward's working directory, for the supervisor to declare.
  *
  * Across a restart (P2-16), with the log:
  *   - a report the supervisor missed (no mailbox when the Steward's turn ended) is sent again when
@@ -53,17 +60,30 @@ export interface ReportHistory {
 /** A report longer than this is cut; the whole text stays in the Steward's transcript. */
 export const MAX_REPORT_CHARS = 4_000;
 
-/** The line the supervisor reads ("agent <steward> reported: …"). */
-export function reportText(task: Task | undefined, text: string | undefined): string {
+/**
+ * The line the supervisor reads ("agent <steward> reported: …"). `steward` (its runtime and
+ * working directory) adds the "Deliverables:" block of a Steward that cannot declare its own.
+ */
+export function reportText(
+  task: Task | undefined,
+  text: string | undefined,
+  steward?: Pick<Agent, 'runtime' | 'meta'>,
+): string {
   const what = task ? `Task ${task.id} ("${task.description}")` : 'Your Steward';
   const body = text?.trim() ?? '';
   const cut =
     body.length > MAX_REPORT_CHARS
       ? `${body.slice(0, MAX_REPORT_CHARS)} … (cut; the whole report is in its transcript)`
       : body;
-  return cut === ''
-    ? `${what}: the Steward ended its turn without a report.`
-    : `${what}: the Steward ended its turn. Its report: ${cut}`;
+  if (cut === '') return `${what}: the Steward ended its turn without a report.`;
+  const listed = steward && !stewardDeclares(steward.runtime) ? listedText(body, task, steward) : '';
+  return `${what}: the Steward ended its turn. Its report: ${cut}${listed ? `\n\n${listed}` : ''}`;
+}
+
+function listedText(body: string, task: Task | undefined, steward: Pick<Agent, 'meta'>): string {
+  const cwd = (steward.meta as { cwd?: unknown } | undefined)?.cwd;
+  const block = parseReportBlock(body, typeof cwd === 'string' ? cwd : undefined);
+  return block ? reportBlockText(block, task?.id) : '';
 }
 
 export interface StewardReports {
@@ -135,7 +155,7 @@ export function stewardReports(
     const supervisorId = agent.supervisorId;
     if (!supervisorId || !runtime.hasMailbox(supervisorId)) return false;
     const task = agent.taskId ? tables.tasks.get(agent.taskId) : undefined;
-    const body = reportText(task, text);
+    const body = reportText(task, text, agent);
     try {
       const { id } = runtime.send(
         supervisorId,
