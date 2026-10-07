@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './config/config.js';
-import { SettingsService } from './config/settings.js';
+import { SettingsService, declarationLimits } from './config/settings.js';
 import { Opener } from './deliverables/opener.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
 import { buildApp } from './app.js';
@@ -186,6 +186,13 @@ const composed = composeRuntime(db, {
   processes: { groups: supervisor },
   // Dollar budgets (P8-01): the warning threshold.
   ...(config.budgets ? { budgets: config.budgets } : {}),
+  // Agents' declarations (P9-04): the limits are read at every declaration, so the settings apply
+  // live; a copy into a deliverables folder leaves the backups' reserve free (P9-06, decision 122).
+  deliverables: {
+    dataDir: config.dataDir,
+    limits: () => declarationLimits(config),
+    reserveBytes: () => config.backups?.reserveBytes,
+  },
 });
 const { log, statuses, transcripts } = composed;
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
@@ -299,6 +306,16 @@ if (recovery.resumed.length + recovery.needAttention.length > 0) {
     `Recovered: ${recovery.resumed.length} agents resumed, ${recovery.needAttention.length} need attention`,
   );
 }
+// One detection pass over the active projects (P9-05, decision 119), after recovery and in the
+// background, staggered: what changed in their folders while the server was down is listed.
+if (composed.detection && !shuttingDown) {
+  void composed.detection.detectAll().then((results) => {
+    const changed = results.filter(
+      (r) => r.added.length + r.updated.length + r.removed.length + r.restored.length > 0,
+    ).length;
+    if (changed > 0) console.log(`Deliverables: ${changed} project(s) changed since the last run`);
+  });
+}
 // The panel's "Restart Harmonizer" (P5-06): on the last Harmonizer's runtime, else the boot one.
 const restartHarmonizer = harmonizerRestarter(composed, {
   ...(hqRuntime ? { defaultRuntime: hqRuntime } : {}),
@@ -320,6 +337,11 @@ const app = buildApp({
   push,
   storage: composed.storage,
   backups,
+  ...(composed.deliverableCopies ? { deliverableCopies: composed.deliverableCopies } : {}),
+  // The panel's Rescan (P9-05): the same scan as after a merge, within its 10 s window.
+  ...(composed.detection
+    ? { rescanDeliverables: (id: string) => composed.detection!.detectProject(id) }
+    : {}),
   restartHarmonizer: async () => {
     const hq = await restartHarmonizer();
     console.log(

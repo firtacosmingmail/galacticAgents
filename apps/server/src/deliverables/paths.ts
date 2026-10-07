@@ -125,7 +125,14 @@ export interface DeliverableRoots {
   home: string;
 }
 
-export type PathWhere = 'worktree' | 'deliverables' | 'workspace' | 'repository' | 'stray';
+export type PathWhere =
+  | 'worktree'
+  | 'deliverables'
+  | 'workspace'
+  | 'repository'
+  | 'stray'
+  /** Outside every root, accepted for a copy (the user's addition by hand, `outside`). */
+  | 'outside';
 
 export type PathRefusalCode =
   /** Malformed: empty, a NUL byte, relative without a working folder, too long, not a file or folder. */
@@ -185,6 +192,13 @@ export interface CheckOptions {
   secretNames?: boolean;
   /** Accept a stray in a temporary folder (an agent's declaration only, before it is copied). */
   stray?: StrayRule;
+  /**
+   * Accept a path outside every root (`where: 'outside'`), to be copied into the deliverables
+   * folder: the user's addition by hand (decision 122). The refused areas still apply — `/`, the
+   * home folder itself, the data folder (or a folder holding it), anything inside `.git` or
+   * `.galactic` — and the secret-name rules when `secretNames` is set.
+   */
+  outside?: boolean;
 }
 
 /** Longest path accepted before touching the disk (macOS `PATH_MAX` is 1024). */
@@ -439,6 +453,15 @@ export function checkPath(
     return { ok: true, path: real, where, type, stat };
   }
 
+  if (opts.outside) {
+    const area = refusedArea(real, 'outside', roots, '/');
+    if (area) return refuse('refused_area', `${path} is refused: ${area}`);
+    if (opts.secretNames) {
+      const secret = secretIn(real, requested, '/');
+      if (secret) return refuse('secret', `${path} is refused: ${secret}`);
+    }
+    return { ok: true, path: real, where: 'outside', type, stat };
+  }
   if (!opts.stray) {
     return refuse('outside', `${path} is outside the project's folder`);
   }

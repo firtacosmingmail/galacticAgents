@@ -34,7 +34,7 @@ import {
 /**
  * The scripted fake-LLM harness for brains (P2-07). It boots a composed runtime (real event log,
  * commands, runtime, status store) over an in-memory database and a fake adapter whose brains —
- * every spawn that carries server tools — are driven by `BrainScript`s instead of a model:
+ * every non-Steward spawn that carries server tools — are driven by `BrainScript`s instead of a model:
  *
  *   const h = brainHarness();
  *   const hq = await h.startHarmonizer();
@@ -362,9 +362,12 @@ export class BrainHarness {
 
   // -- the fake LLM ------------------------------------------------------------------------------
 
-  /** A brain is a spawn with server tools (a Steward has none): it gets a scripted scenario. */
+  /**
+   * A brain is a spawn with server tools: it gets a scripted scenario. A Steward is never one —
+   * it may carry the server's deliverable tools (P9-04) and still runs its `scenario:<name>`.
+   */
   private scenarioFor(spawn: SpawnOptions): { name: string; scenario: FakeScenario } | undefined {
-    if (!spawn.tools || spawn.tools.length === 0) return undefined;
+    if (spawn.role === 'steward' || !spawn.tools || spawn.tools.length === 0) return undefined;
     let s = this.scripted.get(spawn.agentId);
     if (!s) {
       s = {

@@ -14,7 +14,10 @@ import { registerDevRoutes } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
 import { registerBackupRoutes } from './http/backup-routes.js';
+import { registerDeliverableRoutes } from './http/deliverable-routes.js';
 import type { BackupService } from './db/backup.js';
+import type { DeliverableCopies } from './deliverables/copies.js';
+import { registerDeliverablesUsageRoute } from './http/deliverables-usage-route.js';
 import { isWebFile, webCacheControl } from './http/web-cache.js';
 import { registerPushRoutes, type Push } from './push/index.js';
 import type { SettingsService } from './config/settings.js';
@@ -50,14 +53,21 @@ export interface AppOptions {
   restartHarmonizer?: AgentRoutesOptions['restartHarmonizer'];
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
-  /** The opener on the Mac (P9-03): enables `GET /api/ide`. */
+  /** The opener on the Mac (P9-03): enables `GET /api/ide` and the deliverables' opens (P9-07). */
   opener?: Opener;
+  /** Detection's rescan of a project (P9-05): enables `POST /api/projects/:id/deliverables/rescan`. */
+  rescanDeliverables?: (projectId: string) => Promise<unknown>;
   /** Web Push (P7-04): enables `/api/push*`. */
   push?: Push;
   /** The database's write health (P8-09): sent to every socket for the panel's banner. */
   storage?: StorageMonitor;
   /** Backups (P8-03): enables `GET`/`POST /api/backups` (the export needs only `log`). */
   backups?: BackupService;
+  /**
+   * The deliverables folders (P9-06): enables `GET /api/deliverables/usage`, and the copy of a
+   * user's file from outside the project added by hand (decision 122).
+   */
+  deliverableCopies?: Pick<DeliverableCopies, 'usage' | 'copyIn'>;
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -139,6 +149,7 @@ export function buildApp(opts: AppOptions): App {
         !req.url.startsWith('/dev/') &&
         !req.url.startsWith('/api/') &&
         !req.url.startsWith('/health') &&
+        !req.url.startsWith('/files/') &&
         !isWebFile(req.url)
       ) {
         return reply.sendFile('index.html');
@@ -181,11 +192,26 @@ export function buildApp(opts: AppOptions): App {
   }
 
   // Backups and the map export (P8-03).
+  if (opts.log && opts.commands) {
+    registerDeliverableRoutes(fastify, config, {
+      log: opts.log,
+      commands: opts.commands,
+      ...(opts.opener ? { opener: opts.opener } : {}),
+      ...(opts.rescanDeliverables ? { rescan: opts.rescanDeliverables } : {}),
+      ...(opts.deliverableCopies ? { copies: opts.deliverableCopies } : {}),
+    });
+  }
+
   if (opts.log) {
     registerBackupRoutes(fastify, config, {
       log: opts.log,
       ...(opts.backups ? { backups: opts.backups } : {}),
     });
+  }
+
+  // The deliverables folders' sizes for the settings page (P9-06).
+  if (opts.deliverableCopies) {
+    registerDeliverablesUsageRoute(fastify, config, opts.deliverableCopies);
   }
 
   if (opts.push) {

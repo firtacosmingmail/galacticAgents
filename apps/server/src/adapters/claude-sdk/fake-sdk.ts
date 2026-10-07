@@ -26,7 +26,18 @@ import type {
 export type FakeAction =
   | { text: string }
   | { thinking: string }
-  | { tool: string; input: Record<string, unknown>; result?: string; isError?: boolean }
+  | {
+      tool: string;
+      input: Record<string, unknown>;
+      result?: string;
+      isError?: boolean;
+      /**
+       * The `mcp_server` the CLI reports for an `mcp__<server>__…` tool. By default, as the real
+       * CLI: `{name, source: 'sdk'}` when the query registered an in-process server of that name
+       * (`options.mcpServers`), else `{name, source: 'project'}` (a `.mcp.json` server).
+       */
+      mcpServer?: { name: string; source: string };
+    }
   | { askUser: FakeQuestion }
   /** One `AskUserQuestion` call carrying several questions. */
   | { askUsers: FakeQuestion[] }
@@ -290,6 +301,7 @@ export class FakeSdk implements SdkSurface {
           if (!(await askUser(toolUseId('AskUserQuestion'), action.askUsers))) break;
         } else if ('tool' in action) {
           const id = toolUseId(action.tool);
+          const server = action.mcpServer ?? provenanceOf(action.tool, options);
           out.push({
             type: 'assistant',
             message: {
@@ -309,6 +321,7 @@ export class FakeSdk implements SdkSurface {
                 tool_input: action.input,
                 tool_use_id: id,
                 session_id: sessionId,
+                ...(server ? { mcp_server: server } : {}),
               },
               id,
               { signal: abort.signal },
@@ -325,6 +338,7 @@ export class FakeSdk implements SdkSurface {
               toolUseID: id,
               decisionReason: reason,
               title: `Claude wants to run ${action.tool}`,
+              ...(server ? { mcpServer: server } : {}),
             });
             if (interrupted) break;
             decision = v.behavior;
@@ -515,3 +529,15 @@ class Queue<T> implements AsyncIterable<T> {
 }
 
 export type { SdkUserMessage };
+
+/** What the CLI reports as an `mcp__<server>__<tool>` call's server (see `FakeAction.mcpServer`). */
+function provenanceOf(
+  tool: string,
+  options: SdkQueryOptions,
+): { name: string; source: string } | undefined {
+  const match = /^mcp__([^_]+(?:_[^_]+)*)__/.exec(tool);
+  if (!match) return undefined;
+  const name = match[1]!;
+  const registered = options.mcpServers?.[name] as { type?: unknown } | undefined;
+  return { name, source: registered?.type === 'sdk' ? 'sdk' : 'project' };
+}

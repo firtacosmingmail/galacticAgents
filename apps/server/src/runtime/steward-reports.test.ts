@@ -162,4 +162,34 @@ describe('Steward reports (P2-11)', () => {
     expect(long).toContain('(cut; the whole report is in its transcript)');
     expect(long.length).toBeLessThan(MAX_REPORT_CHARS + 200);
   });
+
+  it('a Steward that cannot declare (ACP, PTY): its "Deliverables:" list is added for the supervisor (P9-04)', () => {
+    const task = { id: 't-1', description: 'fix it' } as Task;
+    const report =
+      'Done: built.\nDeliverables:\n- image | shot.png | Screenshot\n- command | pnpm dev | Dev';
+    const meta = { cwd: '/w/wt' };
+    for (const runtime of ['acp', 'pty'] as const) {
+      const text = reportText(task, report, { runtime, meta });
+      expect(text).toContain('Its report: Done: built.');
+      expect(text).toContain('declare_deliverable, taskId t-1');
+      expect(text).toContain(
+        JSON.stringify({
+          taskId: 't-1',
+          kind: 'image',
+          title: 'Screenshot',
+          path: '/w/wt/shot.png',
+        }),
+      );
+      expect(text).toContain(
+        JSON.stringify({ taskId: 't-1', kind: 'command', title: 'Dev', command: 'pnpm dev' }),
+      );
+    }
+    // A Steward with the tool declared its own: nothing is added.
+    expect(reportText(task, report, { runtime: 'claude-sdk', meta })).toBe(
+      `Task t-1 ("fix it"): the Steward ended its turn. Its report: ${report}`,
+    );
+    // The block is read from the whole report, even when the report is cut.
+    const long = `${'x'.repeat(MAX_REPORT_CHARS + 10)}\nDeliverables:\n- url | https://x.dev | X`;
+    expect(reportText(task, long, { runtime: 'acp', meta })).toContain('"url":"https://x.dev"');
+  });
 });

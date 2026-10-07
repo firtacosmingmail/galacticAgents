@@ -9,7 +9,8 @@
  *   present, else fetched and kept.
  * - The other shell files (manifest, icons) are network-first like the page.
  * - Everything else is not touched at all — the API (`/api`), the socket (`/ws`), `/health`, the
- *   development routes (`/dev`), the ops console (`/debug`), any request with credentials, any
+ *   development routes (`/dev`), the ops console (`/debug`), the one-time downloads (`/files`,
+ *   P9-07: an `<a download>` click may arrive as a navigation), any request with credentials, any
  *   non-GET and anything cross-origin: the browser handles them as if there were no worker.
  *
  * The build (`build-plugin.ts`) fills BUILD — the version (a hash of the build's file names and
@@ -22,7 +23,7 @@ const BUILD = /*BUILD*/ { version: 'dev', precache: ['/'] }; /*END*/
 const PREFIX = 'galactic-shell-';
 const CACHE = PREFIX + BUILD.version;
 const SHELL = '/';
-const BYPASS = ['/api', '/ws', '/health', '/dev', '/debug'];
+const BYPASS = ['/api', '/ws', '/health', '/dev', '/debug', '/files'];
 
 /** True when the worker must leave the request to the network untouched. */
 function bypassed(request, url) {

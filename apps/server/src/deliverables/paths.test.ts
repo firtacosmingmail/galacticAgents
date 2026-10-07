@@ -435,6 +435,47 @@ describe('checkPath: the deliverables folder', () => {
   });
 });
 
+describe('checkPath: from outside, to copy (the user by hand, decision 122)', () => {
+  it('accepts a file or folder outside the roots as `outside`, only with the option', () => {
+    expect(checkPath(join(outside, 'secret.txt'), roots)).toMatchObject({ code: 'outside' });
+    expect(checkPath(join(outside, 'secret.txt'), roots, { outside: true })).toMatchObject({
+      ok: true,
+      where: 'outside',
+      type: 'file',
+      path: join(outside, 'secret.txt'),
+    });
+    expect(checkPath(outside, roots, { outside: true })).toMatchObject({ where: 'outside' });
+    // Inside the roots it is still where it is.
+    expect(checkPath(join(ws, 'src', 'app.ts'), roots, { outside: true })).toMatchObject({
+      where: 'workspace',
+    });
+  });
+
+  it('keeps the refused areas: /, home, the data folder or one holding it, .git, .galactic', () => {
+    file(join(outside, '.git', 'HEAD'));
+    file(join(outside, 'repo', '.galactic', 'x.txt'));
+    for (const path of [
+      '/',
+      home,
+      dataDir,
+      tmp,
+      join(outside, '.git', 'HEAD'),
+      join(outside, 'repo', '.galactic', 'x.txt'),
+    ]) {
+      expect(checkPath(path, roots, { outside: true }), path).toMatchObject({
+        ok: false,
+        code: 'refused_area',
+      });
+    }
+    // With the agents' rules, secret names too.
+    file(join(outside, '.env'));
+    expect(checkPath(join(outside, '.env'), roots, { outside: true })).toMatchObject({ ok: true });
+    expect(
+      checkPath(join(outside, '.env'), roots, { outside: true, secretNames: true }),
+    ).toMatchObject({ code: 'secret' });
+  });
+});
+
 describe('checkPath: strays in a temporary folder (decision 122)', () => {
   let strays: string;
   const stray = (extra: Partial<{ firstSpawnAt: number; uid: number }> = {}) => ({

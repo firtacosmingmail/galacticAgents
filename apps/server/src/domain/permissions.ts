@@ -37,6 +37,13 @@ export interface PolicyContext {
    * resolves its cwd and asks about resolved paths. The engine itself stays lexical.
    */
   aliases?: readonly { from: string; to: string }[];
+  /**
+   * Folders inside the workspace that belong to the user (P9-06; SPEC decisions 22, 122): the
+   * project's `deliverables/` folder. A write or edit under one counts as outside the workspace,
+   * like agent configuration, so an agent's own write there asks; reading it is a workspace read.
+   * Absolute (or `~/`), compared lexically like everything here.
+   */
+  userFolders?: readonly string[];
 }
 
 export interface Classification {
@@ -316,6 +323,8 @@ function classifyPaths(
     if (!isInsideWorkspace(p, ctx)) reasons.push(`${tool} on ${p}: outside the workspace`);
     else if (edit && isAgentConfigPath(p, ctx)) {
       reasons.push(`${tool} on ${p}: agent or git configuration, which runs outside the gate`);
+    } else if (edit && isUserFolderPath(p, ctx)) {
+      reasons.push(`${tool} on ${p}: ${USER_FOLDER_REASON}`);
     }
   }
   const base = typeof input['path'] === 'string' ? input['path'] : undefined;
@@ -1240,6 +1249,10 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       actions.add('outside_workspace');
       reasons.push(`${p}: agent or git configuration, which runs outside the gate`);
     }
+    for (const p of userFolderTargets(simple, here)) {
+      actions.add('outside_workspace');
+      reasons.push(`${p}: ${USER_FOLDER_REASON}`);
+    }
 
     const h = commandHead(simple.words);
     const name = simple.words[h]?.toLowerCase();
@@ -1314,6 +1327,40 @@ function configTargets(command: SimpleCommand, ctx: PolicyContext): string[] {
   for (const c of candidates) {
     for (const alt of expandBraces(c) ?? [c]) {
       if (CONFIG_WORD.test(alt) && isInsideWorkspace(alt, ctx) && isAgentConfigPath(alt, ctx)) {
+        out.push(alt);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** Why a write under a user folder asks (P9-06). */
+const USER_FOLDER_REASON =
+  "the project's deliverables folder, which belongs to the user (only the server copies into it)";
+
+/**
+ * What a simple command may write under one of `ctx.userFolders` (P9-06): its write
+ * redirections' targets and, unless the command only reads, every argument (an option's value
+ * too). Plain words count here (`cp out.pdf deliverables/`): they resolve from the command's cwd.
+ */
+function userFolderTargets(command: SimpleCommand, ctx: PolicyContext): string[] {
+  if (!ctx.userFolders || ctx.userFolders.length === 0) return [];
+  const candidates = command.redirects
+    .filter((r) => WRITE_REDIRECTS.has(r.op))
+    .map((r) => r.target);
+  const h = commandHead(command.words);
+  const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
+  if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
+    for (const w of command.words.slice(h + 1)) {
+      const eq = w.indexOf('=');
+      candidates.push(eq > 0 && w.startsWith('-') ? w.slice(eq + 1) : w);
+    }
+  }
+  const out: string[] = [];
+  for (const c of candidates) {
+    for (const alt of expandBraces(c) ?? [c]) {
+      if (isUserFolderPath(alt, ctx)) {
         out.push(alt);
         break;
       }
@@ -1437,6 +1484,25 @@ export function isAgentConfigPath(p: string, ctx: PolicyContext): boolean {
     segments.some((s) => s === '.claude' || s === '.git' || s === '.husky') ||
     segments[segments.length - 1] === '.mcp.json'
   );
+}
+
+/**
+ * Whether `p` (absolute, `~`-prefixed or relative to `ctx.cwd`) is one of `ctx.userFolders` or
+ * lies under one (P9-06: the project's deliverables folder). Lexical, like `isInsideWorkspace`;
+ * the path is compared as resolved and as unaliased to the workspace's spelling.
+ */
+export function isUserFolderPath(p: string, ctx: PolicyContext): boolean {
+  if (!ctx.userFolders || ctx.userFolders.length === 0) return false;
+  if (/^~[^/]/.test(p)) return false;
+  const raw = resolvePath(p, ctx, cwdOf(ctx));
+  const targets = [raw, unalias(raw, ctx)];
+  // Case-folded: on a case-insensitive volume (APFS by default) `Deliverables/x` is the same
+  // folder; on a case-sensitive one this only asks more often (fail closed).
+  const fold = (q: string) => q.normalize('NFC').toLowerCase();
+  return ctx.userFolders.some((f) => {
+    const folder = fold(resolve(expandHome(f, ctx)));
+    return targets.some((t) => within(folder, fold(t)));
+  });
 }
 
 function expandHome(p: string, ctx: PolicyContext): string {

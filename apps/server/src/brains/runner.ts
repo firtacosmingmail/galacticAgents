@@ -9,6 +9,7 @@ import type {
   ToolDefinition,
 } from '@galactic/protocol';
 import { leadingSlashCommand } from '@galactic/protocol';
+import type { DeliverableService } from '../deliverables/service.js';
 import type { EventLog } from '../domain/event-log.js';
 import { originOfMessages } from '../domain/permissions.js';
 import type { ReopenOptions, ReopenResult, SpawnResult } from '../runtime/agent-runtime.js';
@@ -101,6 +102,8 @@ export interface BrainRunnerOptions {
   processes?: StewardProcessControl;
   /** Handed to the brain's tools as `ctx.stewardRuntime` (P8-07). */
   stewardRuntime?: () => RuntimeName | undefined;
+  /** Handed to the brain's tools as `ctx.deliverables` (P9-04). */
+  deliverables?: DeliverableService;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -751,6 +754,7 @@ export class BrainRunner {
       ...(this.opts.workspaces ? { workspaces: this.opts.workspaces } : {}),
       ...(this.opts.processes ? { processes: this.opts.processes } : {}),
       ...(this.opts.stewardRuntime ? { stewardRuntime: this.opts.stewardRuntime } : {}),
+      ...(this.opts.deliverables ? { deliverables: this.opts.deliverables } : {}),
     };
   }
 

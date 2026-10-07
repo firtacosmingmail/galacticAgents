@@ -122,6 +122,7 @@ describe('the service worker (P7-01)', () => {
       '/dev/seed',
       '/debug',
       '/debug/anything',
+      '/files/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
     ]) {
       expect(await dispatch(path), path).toBeUndefined();
       expect(await dispatch(path, { navigate: true }), `${path} (navigation)`).toBeUndefined();
