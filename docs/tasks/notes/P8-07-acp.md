@@ -198,6 +198,8 @@ Stewards run with isolated settings, accepting that his skills and plugins do no
   `git add README.md` (a user allow rule) and `rm -rf …` (a user deny rule) both arrived as
   `session/request_permission`, and the mode list had no bypass mode; with `userSettings: true`,
   `git add` ran unasked (`pending` → `completed`) and `rm -rf` was refused by the agent itself.
+- Full real run with isolation on (every `session/new` / `session/load` sent `settingSources: []`):
+  **22 passed, 0 failed, 0 skipped, 154 s**; no agent process left behind.
 - Tests: `acp-adapter.test.ts` +3 (`sessionMetaFor` defaults/opt-ins/merge; the `_meta` the fake
   agent receives on `session/new`, none when opened up; `session/load` carries it),
   `config.test.ts` (`userSettings`, `sessionMeta`), the web caveat.
