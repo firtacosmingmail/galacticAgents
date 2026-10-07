@@ -9,11 +9,13 @@ import type {
   PermissionGate,
   RuntimePreflight,
   SendOptions,
+  SlashCommand,
   SpawnHandle,
   SpawnOptions,
   StopOptions,
   ToolCall,
 } from '@galactic/protocol';
+import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import type {
   ManagedProcess,
@@ -25,6 +27,7 @@ import { claudePreflight } from './preflight.js';
 import {
   loadSdk,
   type SdkCanUseToolOptions,
+  type SdkCommandsChanged,
   type SdkContentBlock,
   type SdkHookOutput,
   type SdkMessage,
@@ -89,6 +92,8 @@ export interface ClaudeSdkAdapterOptions {
   passEnv?: string[];
   /** How long `stop()` waits for the turn to end after `interrupt()`. */
   graceMs?: number;
+  /** How long `commands()` waits for the CLI's answer before giving `[]` (default 5 s; P8-13). */
+  commandsTimeoutMs?: number;
   /** Longest tool-result excerpt kept in the transcript. */
   maxToolResultChars?: number;
   /**
@@ -193,6 +198,15 @@ class Session {
   }
   lastCost: Cost | undefined;
   lastResult: string | undefined;
+  /**
+   * The open turn put text in the transcript (the model's words, a local command's output):
+   * a successful result's text is then not repeated (P8-13 review S4).
+   */
+  turnSpoke = false;
+  /** The session's slash commands as the CLI last reported them (P8-13); unknown until then. */
+  commands: SlashCommand[] | undefined;
+  /** A `supportedCommands()` call in flight (one at a time). */
+  commandsFetch: Promise<SlashCommand[]> | undefined;
   /** The `PreToolUse` hook's verdict per `toolUseId`, reused by `canUseTool` (one gate check per call). */
   readonly verdicts = new Map<string, GateVerdict>();
   /** `toolUseId`s already reported as `agent.tool_call`. Cleared at every turn end. */
@@ -218,6 +232,7 @@ class Session {
 
   closeTurn(): void {
     this.turnOpen = false;
+    this.turnSpoke = false;
     this.verdicts.clear();
     this.toolCalls.clear();
     for (const w of this.turnWaiters.splice(0)) w();
@@ -522,6 +537,17 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     switch (message.type) {
       case 'system': {
         const m = message as { subtype?: string; session_id?: unknown };
+        if (m.subtype === 'commands_changed') {
+          // The full list after a change (skills found in a subdirectory …): replaces the cache.
+          const changed = message as unknown as SdkCommandsChanged;
+          session.commands = normalizeSlashCommands(
+            Array.isArray(changed.commands) ? changed.commands : [],
+          );
+          return;
+        }
+        // The CLI is up: read its commands now, so the composer's list is ready (P8-13).
+        if (m.subtype === 'init' && session.commands === undefined)
+          void this.fetchCommands(session);
         if (
           m.subtype === 'init' &&
           typeof m.session_id === 'string' &&
@@ -544,6 +570,13 @@ export class ClaudeSdkAdapter implements AgentAdapter {
       }
       case 'user': {
         const m = message as Extract<SdkMessage, { type: 'user' }>;
+        // A local command's answer (`/context`, `/cost` …: the CLI runs it without the model)
+        // comes back as a user message wrapped in `<local-command-stdout>` (P8-13 review S4).
+        const local = localCommandOutput(m.message.content);
+        if (local) {
+          this.emit(session, { type: 'agent.output', agentId, kind: 'text', text: local });
+          return;
+        }
         if (m.isSynthetic || typeof m.message.content === 'string') return;
         for (const block of m.message.content) {
           if (block.type !== 'tool_result') continue;
@@ -574,6 +607,11 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         const failed = m.subtype !== 'success' || m.is_error === true;
         if (!failed) {
           if (m.result !== undefined) session.lastResult = m.result;
+          // A turn that said nothing else (a slash command the CLI answered itself): its result
+          // text is the answer the user waits for (P8-13 review S4).
+          const answer = m.result !== undefined ? stripLocalCommandTags(m.result) : '';
+          if (answer && !session.turnSpoke)
+            this.emit(session, { type: 'agent.output', agentId, kind: 'text', text: answer });
         } else if (!session.interrupting && !session.stopping) {
           const what = m.subtype === 'success' ? 'an error' : m.subtype;
           const detail = m.errors?.length ? m.errors.join('; ') : (m.result ?? '');
@@ -803,6 +841,43 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     });
   }
 
+  // --- slash commands (P8-13) ----------------------------------------------------
+
+  /**
+   * The session's slash commands: the cached list, else `supportedCommands()` (once at a time,
+   * bounded by `commandsTimeoutMs`). `[]` for an ended or unknown session, an SDK without the
+   * call, a call that fails (reported, not cached: the next call asks again) or a slow one.
+   */
+  async commands(sessionId: string): Promise<SlashCommand[]> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.terminal) return [];
+    if (session.commands) return session.commands;
+    return withTimeout(this.fetchCommands(session), this.opts.commandsTimeoutMs ?? 5_000, []);
+  }
+
+  private fetchCommands(session: Session): Promise<SlashCommand[]> {
+    const query = session.query;
+    if (session.commands) return Promise.resolve(session.commands);
+    if (!query?.supportedCommands || session.terminal) return Promise.resolve([]);
+    session.commandsFetch ??= query
+      .supportedCommands()
+      .then(
+        (raw) => {
+          // A `commands_changed` push that arrived meanwhile is newer: keep it.
+          session.commands ??= normalizeSlashCommands(Array.isArray(raw) ? raw : []);
+          return session.commands;
+        },
+        (error: unknown) => {
+          if (!session.terminal) this.onError(error, `supportedCommands ${session.agentId}`);
+          return [] as SlashCommand[];
+        },
+      )
+      .finally(() => {
+        session.commandsFetch = undefined;
+      });
+    return session.commandsFetch;
+  }
+
   // --- control -----------------------------------------------------------------
 
   async send(sessionId: string, message: string, opts: SendOptions = {}): Promise<void> {
@@ -922,6 +997,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
   private emit(session: Session, event: AgentEvent): void {
     // One terminal event per session and nothing after it; a replaced session is silent.
     if (session.terminal || !this.current(session)) return;
+    if (event.type === 'agent.output' && event.kind === 'text') session.turnSpoke = true;
     this.events.push(event);
   }
 
@@ -996,6 +1072,15 @@ function rateLimitSummary(m: SdkRateLimitEvent): string | undefined {
   return `close to the ${which}rate limit${used}`;
 }
 
+/** `p`'s value, or `fallback` when it has not settled within `ms`. */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<T>((r) => {
+    timer = setTimeout(() => r(fallback), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
 /** Resolves `true` when `p` settles within `ms`, `false` otherwise. */
 function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined;
@@ -1035,6 +1120,32 @@ function costOf(m: { total_cost_usd?: number; usage?: SdkUsage }): Cost | undefi
     ...(input !== undefined ? { inputTokens: input } : {}),
     ...(u?.output_tokens !== undefined ? { outputTokens: u.output_tokens } : {}),
   };
+}
+
+const LOCAL_COMMAND = /<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/g;
+const LOCAL_CAVEAT = /<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g;
+
+/**
+ * The text of a local command's output in a user message (P8-13 review S4): what the CLI wrapped
+ * in `<local-command-stdout>` / `<local-command-stderr>`, tags removed, or `''` when there is
+ * none. The shape is what the SDK's bundled CLI (0.3.285) names; a real run must confirm where
+ * `/context` and `/cost` put it (a string content or a text block).
+ */
+function localCommandOutput(content: unknown): string {
+  const text = toolResultText(content);
+  if (!text.includes('<local-command-std')) return '';
+  return [...text.matchAll(LOCAL_COMMAND)]
+    .map((match) => match[2]!.trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** `text` without the CLI's local-command wrappers (a result may carry them), trimmed. */
+function stripLocalCommandTags(text: string): string {
+  return text
+    .replace(LOCAL_CAVEAT, '')
+    .replace(LOCAL_COMMAND, (_m, _s, inner: string) => inner)
+    .trim();
 }
 
 function toolResultText(content: unknown): string {

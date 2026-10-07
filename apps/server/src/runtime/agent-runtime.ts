@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
+  BRAIN_SLASH_COMMANDS,
+  brainSlashCommands,
   isHarnessMeta,
+  slashCommandIs,
   type Actor,
   type Agent,
   type AgentAdapter,
@@ -13,6 +16,7 @@ import {
   type PermissionAction,
   type PermissionPolicy,
   type RequestOrigin,
+  type SlashCommand,
   type SpawnHandle,
   type SpawnOptions,
   type ToolCall,
@@ -283,6 +287,11 @@ interface Live {
   probation: Probation | undefined;
   /** The session did something (output, a tool call, a question) since it opened. */
   activity: boolean;
+  /**
+   * The session's slash commands as last read from the adapter (P8-13; `commands()`), a brain's
+   * already cut to its allowlist; `undefined` until the first read of this session ends.
+   */
+  commands?: SlashCommand[] | undefined;
 }
 
 /** What a resumed session falls back to if it ends before its first turn did (P2-16). */
@@ -407,6 +416,59 @@ export class AgentRuntime {
   /** Agents with a live adapter session. */
   liveAgents(): Agent[] {
     return [...this.live.values()].map((l) => l.agent);
+  }
+
+  /**
+   * The slash commands the agent's live session offers (P8-13; `AgentAdapter.commands`): `[]`
+   * for an agent without a live session, one still starting or ending, and a runtime without
+   * commands. Read from the adapter on every call and remembered for `hasCommand`.
+   *
+   * A brain (the Harmonizer, a Waykeeper) gets only `BRAIN_SLASH_COMMANDS` (SPEC decision 115,
+   * P8-13 review): `/clear` would reset its session behind the brain runner's back, `/init` or
+   * `/review` would make it do a Steward's work. The endpoint, the composer's list and the
+   * runner's `hasCommand` all read this one answer. A Steward keeps the runtime's whole list.
+   */
+  async commands(agentId: Id): Promise<SlashCommand[]> {
+    const live = this.live.get(agentId);
+    if (!live?.handle || live.terminal || !live.adapter.commands) return [];
+    const sessionId = live.handle.sessionId;
+    try {
+      const offered = await live.adapter.commands(sessionId);
+      const commands = isBrainRole(live.agent.role) ? brainSlashCommands(offered) : offered;
+      // The session may have been replaced meanwhile (a renewal): keep only a current answer.
+      // An empty answer is not remembered: adapters also give `[]` for "not known yet" (a CLI
+      // still starting, a slow call), and a brain then keeps `hasCommand`'s allowlist fallback.
+      if (
+        offered.length > 0 &&
+        this.live.get(agentId) === live &&
+        live.handle?.sessionId === sessionId
+      ) {
+        live.commands = commands;
+      }
+      return commands;
+    } catch (error) {
+      this.onError(error, `commands ${agentId}`);
+      return [];
+    }
+  }
+
+  /**
+   * Whether the agent's session offered `/name` (its name or an alias) when its commands were
+   * last read (`commands()`). Synchronous, for the brain runner (P8-13). A brain's session has
+   * its commands read as soon as it opens (`start`); until that read ends, a brain whose runtime
+   * has commands at all is taken to offer its allowlist (Claude Code's own `/compact`, `/context`,
+   * `/cost`, `/usage`), so a command sent right after a start or a restart still runs. `false`
+   * otherwise.
+   */
+  hasCommand(agentId: Id, name: string): boolean {
+    const live = this.live.get(agentId);
+    if (!live) return false;
+    if (live.commands) return live.commands.some((c) => slashCommandIs(c, name));
+    return (
+      isBrainRole(live.agent.role) &&
+      live.adapter.commands !== undefined &&
+      BRAIN_SLASH_COMMANDS.includes(name)
+    );
   }
 
   inbox(agentId: Id): AgentInbox | undefined {
@@ -608,6 +670,7 @@ export class AgentRuntime {
       return { ok: false, reason: message };
     }
     live.handle = handle;
+    live.commands = undefined; // a new session: its commands are read again (P8-13)
     // The row's session ref and `agent.spawned` in one transaction (one write rule). A full disk
     // holds it like any agent event (P8-04 review): lost, the next start would take the agent for
     // one that never started and begin afresh instead of resuming its session.
@@ -625,6 +688,9 @@ export class AgentRuntime {
     for (const event of live.decisions.splice(0)) this.record(event);
     for (const event of live.early.splice(0)) this.route(event);
     if (live.pendingCap && !live.terminal) void this.onCapHit(agent.id, live.pendingCap);
+    // A brain's runner decides from `hasCommand` whether a user's `/name` is a turn of its own:
+    // read the new session's commands now rather than when a client first asks (P8-13 review).
+    if (isBrainRole(agent.role) && !live.terminal) void this.commands(agent.id);
     return { ok: true, agent: live.agent };
   }
 
@@ -2071,4 +2137,9 @@ export class AgentRuntime {
     }
     this.failForCap(live);
   }
+}
+
+/** The roles run by a brain runner (SPEC decision 115: their slash commands are an allowlist). */
+function isBrainRole(role: AgentRole): boolean {
+  return role === 'harmonizer' || role === 'waykeeper';
 }

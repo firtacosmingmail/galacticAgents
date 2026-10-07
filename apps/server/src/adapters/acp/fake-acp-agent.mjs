@@ -6,11 +6,13 @@
 // `fs/*` and `terminal/*` must not be.
 //
 //   node fake-acp-agent.mjs [--state <dir>] [--no-load] [--no-cost] [--speed <factor>]
-//                           [--mode <id>] [--config-modes]
+//                           [--mode <id>] [--config-modes] [--commands]
 //
 // `--mode <id>` gives every session ACP session modes (`default`, `plan`, `acceptEdits`,
 // `bypassPermissions`), starting in `<id>`, settable with `session/set_mode`; `--config-modes`
 // offers the same modes as a `mode` config option instead (`session/set_config_option`).
+// `--commands` announces slash commands (`available_commands_update`, P8-13) right after a
+// session is created or loaded.
 //
 // The first prompt of a session picks the scenario (`scenario:<name>` anywhere in it; anything
 // else runs `echo`); every later prompt is echoed ("echo: <prompt>"), except the first prompt
@@ -39,6 +41,24 @@ const reportsCost = !flag('--no-cost');
 const speed = Number(option('--speed', '1'));
 const startMode = option('--mode', undefined);
 const configModes = flag('--config-modes');
+const announcesCommands = flag('--commands');
+/** What `--commands` announces: one with an input hint, one without. */
+const COMMANDS = [
+  { name: 'research_codebase', description: 'Research the codebase', input: { hint: '<topic>' } },
+  { name: 'create_plan', description: 'Write a plan\nfor the task' },
+];
+/** Announces the commands once the session/new or session/load response is out. */
+function announceCommands(client, sessionId) {
+  if (!announcesCommands) return;
+  setTimeout(() => {
+    void client
+      .notify(acp.methods.client.session.update, {
+        sessionId,
+        update: { sessionUpdate: 'available_commands_update', availableCommands: COMMANDS },
+      })
+      .catch(() => {});
+  }, 0);
+}
 const MODES = [
   { id: 'default', name: 'Default' },
   { id: 'plan', name: 'Plan Mode' },
@@ -110,7 +130,7 @@ app.onRequest(acp.methods.agent.initialize, ({ params }) => {
   };
 });
 
-app.onRequest(acp.methods.agent.session.new, ({ params }) => {
+app.onRequest(acp.methods.agent.session.new, ({ params, client }) => {
   const id = `fake-${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`;
   sessions.set(id, {
     state: {
@@ -124,6 +144,7 @@ app.onRequest(acp.methods.agent.session.new, ({ params }) => {
     loaded: false,
   });
   save(id);
+  announceCommands(client, id);
   return { sessionId: id, ...modesOf(startMode) };
 });
 
@@ -166,6 +187,7 @@ app.onRequest(acp.methods.agent.session.load, async ({ params, client }) => {
       update,
     });
   }
+  announceCommands(client, params.sessionId);
   return modesOf(state.mode);
 });
 

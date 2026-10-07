@@ -856,3 +856,120 @@ describe('ClaudeSdkAdapter — mapping gaps (P1-36)', () => {
     expect(sdk.calls[0]!.options.stderr).toBeUndefined();
   });
 });
+
+describe('ClaudeSdkAdapter — slash commands (P8-13)', () => {
+  const reported = [
+    {
+      name: 'compact',
+      description: 'Clear history but keep a summary',
+      argumentHint: '',
+      builtin: true,
+    },
+    { name: 'review', description: 'Review a pull request', argumentHint: '<pr>' },
+    { name: 'plugin:deploy', description: 'Deploy\nnow', argumentHint: '[env]', aliases: ['ship'] },
+  ];
+  const idles = (n: number) => (e: AgentEvent[]) =>
+    e.filter((x) => x.type === 'agent.idle').length >= n;
+
+  it('maps supportedCommands() after init, caches it, and sends a slash command as the user message', async () => {
+    const { adapter, events, sdk } = make((message) => [{ text: `ran ${message}` }], {
+      fake: { commands: reported },
+    });
+    const handle = await adapter.spawn(spawnOpts('hello'));
+    await events.waitFor(has('agent.idle'));
+    const commands = await adapter.commands(handle.sessionId);
+    expect(commands).toEqual([
+      { name: 'compact', description: 'Clear history but keep a summary', builtin: true },
+      { name: 'review', description: 'Review a pull request', argumentHint: '<pr>' },
+      {
+        name: 'plugin:deploy',
+        description: 'Deploy now',
+        argumentHint: '[env]',
+        aliases: ['ship'],
+      },
+    ]);
+    // Prefetched at init, then cached: one call to the CLI.
+    expect(await adapter.commands(handle.sessionId)).toBe(commands);
+    expect(sdk.commandCalls).toBe(1);
+    // A message that starts with `/name` reaches the CLI unchanged: the CLI runs the command.
+    await adapter.send(handle.sessionId, '/review 12');
+    await events.waitFor(idles(2));
+    expect(events.items).toContainEqual({
+      type: 'agent.output',
+      agentId: 'a-1',
+      kind: 'text',
+      text: 'ran /review 12',
+    });
+  });
+
+  it('replaces the cache on a commands_changed push', async () => {
+    const { adapter, events } = make(
+      (_m, turn) =>
+        turn === 2
+          ? [{ commandsChanged: [{ name: 'fresh', description: 'new skill', argumentHint: '' }] }]
+          : [],
+      { fake: { commands: reported } },
+    );
+    const handle = await adapter.spawn(spawnOpts('hello'));
+    await events.waitFor(has('agent.idle'));
+    expect(await adapter.commands(handle.sessionId)).toHaveLength(3);
+    await adapter.send(handle.sessionId, 'look around');
+    await events.waitFor(idles(2));
+    expect(await adapter.commands(handle.sessionId)).toEqual([
+      { name: 'fresh', description: 'new skill' },
+    ]);
+  });
+
+  it('gives [] for an SDK without the call, a failing call, and an ended or unknown session', async () => {
+    const plain = make(() => []);
+    const h1 = await plain.adapter.spawn(spawnOpts('hello'));
+    await plain.events.waitFor(has('agent.idle'));
+    expect(await plain.adapter.commands(h1.sessionId)).toEqual([]);
+
+    const failing = make(() => [], {
+      fake: {
+        commands: () => {
+          throw new Error('control request failed');
+        },
+      },
+    });
+    const h2 = await failing.adapter.spawn(spawnOpts('hello', { agentId: 'a-2' }));
+    await failing.events.waitFor(has('agent.idle'));
+    expect(await failing.adapter.commands(h2.sessionId)).toEqual([]);
+    expect(failing.errors.some((e) => e.context.startsWith('supportedCommands'))).toBe(true);
+
+    await failing.adapter.stop(h2.sessionId);
+    expect(await failing.adapter.commands(h2.sessionId)).toEqual([]);
+    expect(await failing.adapter.commands('nope')).toEqual([]);
+  });
+
+  it("shows a local command's output: the stdout message, or the result of a turn that said nothing else (review S4)", async () => {
+    const { adapter, events } = make((message) => {
+      if (message === '/context') return [{ localCommand: 'Context: 12k / 200k tokens' }];
+      if (message === '/cost')
+        return [
+          { localCommand: 'Total cost: $0.12' },
+          { resultText: '<local-command-stdout>Total cost: $0.12</local-command-stdout>' },
+        ];
+      if (message === '/usage') return [{ resultText: 'Session: 3 turns' }];
+      return [{ text: `said ${message}` }];
+    });
+    const handle = await adapter.spawn(spawnOpts('hello'));
+    await events.waitFor(has('agent.idle'));
+    for (const [i, command] of ['/context', '/cost', '/usage'].entries()) {
+      await adapter.send(handle.sessionId, command);
+      await events.waitFor(idles(i + 2));
+    }
+    const texts = events.items
+      .filter((e) => e.type === 'agent.output' && e.kind === 'text')
+      .map((e) => (e as Extract<AgentEvent, { type: 'agent.output' }>).text);
+    // One line each: the stdout tags stripped; a result is not repeated after its stdout, and an
+    // ordinary turn's result (its last text) is not repeated either.
+    expect(texts).toEqual([
+      'said hello',
+      'Context: 12k / 200k tokens',
+      'Total cost: $0.12',
+      'Session: 3 turns',
+    ]);
+  });
+});

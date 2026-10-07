@@ -2,6 +2,7 @@ export { FakeAdapter, type FakeAdapterOptions } from './fake-adapter.js';
 export {
   SCENARIOS,
   DEFAULT_SCENARIO,
+  DEV_FAKE_COMMANDS,
   scenarioFromPrompt,
   echo,
   FakeTurnCancelled,

@@ -33,6 +33,8 @@ import {
 import { NavLink } from '../Navigation.js';
 import { compactionNote } from '../compaction.js';
 import { ThreadCard } from './InlineCards.js';
+import { useComposerAssist } from '../composer/ComposerAssist.js';
+import { composing, type HistoryEntry } from '../composer/assist-model.js';
 import './chat.css';
 
 /**
@@ -191,6 +193,14 @@ export function Conversation({ agentId }: { agentId: Id }) {
   };
 
   const ended = status !== undefined && ENDED_STATES.has(status.state);
+  // What ↑ recalls (P8-14): the user's own lines in the loaded conversation, then those still
+  // being sent, oldest first.
+  const sentByUser = [
+    ...entries
+      .filter((e) => e.kind === 'message' && e.sender.type === 'user')
+      .map((e) => ({ id: e.id, text: e.text })),
+    ...waiting.map((p) => ({ id: messageEntryId(p.messageId), text: p.text })),
+  ];
   const working = status?.state === 'working' ? status.currentActivity : undefined;
 
   return (
@@ -256,6 +266,7 @@ export function Conversation({ agentId }: { agentId: Id }) {
         agentId={agentId}
         name={name}
         ended={ended}
+        history={sentByUser}
         onSent={(messageId, text) => setPending((all) => [...all, { messageId, text }])}
       />
     </section>
@@ -334,11 +345,14 @@ function Composer({
   agentId,
   name,
   ended,
+  history,
   onSent,
 }: {
   agentId: Id;
   name: string;
   ended: boolean;
+  /** The user's earlier messages to this agent, oldest first (↑ recalls them, P8-14). */
+  history: readonly HistoryEntry[];
   onSent: (messageId: Id, text: string) => void;
 }) {
   const api = useApi();
@@ -349,6 +363,18 @@ function Composer({
   const setDraft = useConversationStore((s) => s.setDraft);
   const setText = (t: string) => setDraft(agentId, t);
   const [interrupt, setInterrupt] = useState(false);
+  const field = useRef<HTMLTextAreaElement>(null);
+  // Slash commands (P8-13) and ↑ history (P8-14). A message that starts with `/name` goes to the
+  // agent as typed: its runtime runs the command (a brain takes it as a turn of its own).
+  const assist = useComposerAssist({
+    agentId,
+    text,
+    setText,
+    textarea: field,
+    history,
+    commands: !ended,
+    send: () => void send(),
+  });
   const send = async (e?: FormEvent) => {
     e?.preventDefault();
     const t = text.trim();
@@ -361,27 +387,37 @@ function Composer({
       if (messageId) onSent(messageId, t);
       setText('');
       setInterrupt(false);
+      assist.reset();
     }
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (assist.onKeyDown(e)) return;
+    // WebKit's composition-ending Enter has `isComposing` false and keyCode 229 (review S5).
+    if (e.key === 'Enter' && !e.shiftKey && !composing(e)) {
       e.preventDefault();
       void send();
     }
   };
   return (
     <form className="pnl-composer" onSubmit={send}>
-      <textarea
-        aria-label={`message to ${name}`}
-        value={text}
-        rows={2}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={
-          ended ? 'it has ended' : `Message ${name} (Enter sends, Shift+Enter: new line)`
-        }
-        disabled={ended}
-      />
+      <div className="cmp-field">
+        <textarea
+          ref={field}
+          aria-label={`message to ${name}`}
+          value={text}
+          rows={2}
+          onChange={(e) => assist.onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={
+            ended
+              ? 'it has ended'
+              : `Message ${name} (Enter sends, Shift+Enter: new line, / for commands, ↑ for earlier messages)`
+          }
+          disabled={ended}
+          {...assist.inputProps}
+        />
+        {assist.popup}
+      </div>
       <div className="pnl-composer-row">
         <label className="check" title="cancel its current turn and handle this first">
           <input

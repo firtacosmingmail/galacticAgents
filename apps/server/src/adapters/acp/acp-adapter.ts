@@ -22,10 +22,12 @@ import type {
   PermissionGate,
   RuntimePreflight,
   SendOptions,
+  SlashCommand,
   SpawnHandle,
   SpawnOptions,
   StopOptions,
 } from '@galactic/protocol';
+import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import type {
   ManagedProcess,
@@ -250,6 +252,8 @@ class Session {
   failure: string | undefined;
   readonly meter = new CostMeter();
   lastResult: string | undefined;
+  /** The agent's slash commands, from its last `available_commands_update` (P8-13). */
+  commands: SlashCommand[] = [];
   /** The message block being streamed: chunks joined until the block ends. */
   block: { kind: 'text' | 'thinking'; text: string } | undefined;
   /** The last text block of the turn, kept as the `result` of an `agent.finished`. */
@@ -681,9 +685,22 @@ export class AcpAdapter implements AgentAdapter {
   // --- session/update ------------------------------------------------------------
 
   private onUpdate(session: Session, n: SessionNotification): void {
-    if (session.loading || session.terminal) return; // a load replays history: not news
+    if (session.terminal) return;
     if (session.acpSessionId !== undefined && n.sessionId !== session.acpSessionId) return;
     const u = n.update;
+    if (u.sessionUpdate === 'available_commands_update') {
+      // State, not transcript: kept during a load too (the agent may send it then).
+      session.commands = normalizeSlashCommands(
+        (Array.isArray(u.availableCommands) ? u.availableCommands : []).map((c) => ({
+          name: c.name,
+          description: c.description,
+          argumentHint:
+            c.input && typeof c.input === 'object' && 'hint' in c.input ? c.input.hint : undefined,
+        })),
+      );
+      return;
+    }
+    if (session.loading) return; // a load replays history: not news
     switch (u.sessionUpdate) {
       case 'agent_message_chunk':
         this.chunk(session, 'text', contentText(u.content));
@@ -726,7 +743,7 @@ export class AcpAdapter implements AgentAdapter {
         );
         return;
       default:
-        // user_message_chunk (our own prompt echoed), commands, session info, compaction,
+        // user_message_chunk (our own prompt echoed), session info, compaction,
         // subagents, session messages: not transcript.
         return;
     }
@@ -1094,6 +1111,12 @@ export class AcpAdapter implements AgentAdapter {
   }
 
   // --- control -------------------------------------------------------------------
+
+  /** The commands the agent last announced (`available_commands_update`); `[]` until then (P8-13). */
+  async commands(sessionId: string): Promise<SlashCommand[]> {
+    const session = this.sessions.get(sessionId);
+    return session && !session.terminal ? session.commands : [];
+  }
 
   async send(sessionId: string, message: string, opts: SendOptions = {}): Promise<void> {
     const session = this.session(sessionId);

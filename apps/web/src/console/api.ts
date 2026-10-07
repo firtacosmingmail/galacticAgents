@@ -1,4 +1,5 @@
 import type {
+  AgentCommandsResponse,
   AnswerBody,
   AnswerResponse,
   ControlBody,
@@ -102,6 +103,9 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     interrupt: (agentId: string) => call('POST', `/api/agents/${agentId}/interrupt`),
     stop: (agentId: string) => call('POST', `/api/agents/${agentId}/stop`),
     recover: (agentId: string) => call('POST', `/api/agents/${agentId}/recover`),
+    /** The slash commands the agent's live session offers (P8-13); `[]` without one. */
+    commands: (agentId: string) =>
+      call<AgentCommandsResponse>('GET', `/api/agents/${encodeURIComponent(agentId)}/commands`),
     /** Types one line into a terminal agent's terminal (P8-08); the Mac's own browser only. */
     terminal: (agentId: string, text: string) =>
       call<{ messageId: string }>('POST', `/api/agents/${encodeURIComponent(agentId)}/terminal`, {

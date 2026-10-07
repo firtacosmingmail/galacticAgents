@@ -19,6 +19,7 @@ import { COMPACT_TOP_BAR_QUERY, useMediaQuery } from './use-media-query.js';
 
 import { revealInbox } from './inbox-reveal.js';
 import { SkipLink } from './a11y.js';
+import { NavSheetButton, type NavSheetControl } from './nav-sheet.js';
 
 /** The inbox section's id, for the compact bar's "waiting for you" button (P3-12). */
 export { INBOX_ID } from './inbox-reveal.js';
@@ -30,6 +31,8 @@ interface TopBarProps {
   agents?: ManagedAgentsControl;
   /** The inbox's visibility (P4-12); absent, no toggle shows. */
   inbox?: InboxControl;
+  /** The phone's navigation sheet (P8-15); present, the compact bar has its "Agents" button. */
+  navSheet?: NavSheetControl;
   onForget?: () => void;
 }
 
@@ -127,7 +130,7 @@ function WideTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
   );
 }
 
-function CompactTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
+function CompactTopBar({ scene, agents, inbox, navSheet, onForget }: TopBarProps) {
   const status = useAppStore((s) => s.status);
   const route = useAppStore((s) => s.route);
   const selection = useAppStore((s) => s.selection);
@@ -209,6 +212,7 @@ function CompactTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
   return (
     <header className="pnl-top pnl-top-compact">
       <SkipLink />
+      {navSheet && <NavSheetButton control={navSheet} />}
       <NavLink to={{ route: 'panel', selection: HARMONIZER }} className="pnl-brand">
         GalacticAgents
       </NavLink>
