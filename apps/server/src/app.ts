@@ -21,7 +21,7 @@ import { registerDeliverablesUsageRoute } from './http/deliverables-usage-route.
 import { registerRunRoutes } from './http/run-routes.js';
 import type { RunService } from './deliverables/runs.js';
 import type { RunOutput } from './deliverables/run-output.js';
-import { isWebFile, webCacheControl } from './http/web-cache.js';
+import { isWebFile, webCacheControl, webCsp } from './http/web-cache.js';
 import { registerPushRoutes, type Push } from './push/index.js';
 import type { SettingsService } from './config/settings.js';
 import type { Opener } from './deliverables/opener.js';
@@ -148,6 +148,19 @@ export function buildApp(opts: AppOptions): App {
       dotfiles: 'ignore',
       setHeaders: (reply, path) =>
         void reply.header('cache-control', webCacheControl(webDir, path)),
+    });
+    // The page's CSP (wave-3 review B1): every HTML answer of the app that sets none of its own
+    // (`/files/` downloads keep theirs).
+    fastify.addHook('onSend', async (req, reply, payload) => {
+      const type = reply.getHeader('content-type');
+      if (
+        typeof type === 'string' &&
+        type.startsWith('text/html') &&
+        !reply.hasHeader('content-security-policy')
+      ) {
+        void reply.header('content-security-policy', webCsp(req.headers.host));
+      }
+      return payload;
     });
     fastify.setNotFoundHandler((req, reply) => {
       // Single-page app: unknown GET paths load the page; API-shaped paths stay 404, and so do

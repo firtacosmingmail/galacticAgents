@@ -347,12 +347,28 @@ export type RevealFolderBody = z.infer<typeof RevealFolderBody>;
 export const DownloadTicketResponse = z.object({ url: z.string().startsWith('/files/') });
 export type DownloadTicketResponse = z.infer<typeof DownloadTicketResponse>;
 
-/** `POST /api/deliverables/:id/runs` (decision 129): the confirmed version, the edited line. */
+/**
+ * `POST /api/deliverables/:id/runs` and `POST /api/runs/:id/restart` (decision 129): the confirmed
+ * version, the line edited for this run, and the preview's `confirmation` for exactly that line
+ * (the stored one when `line` is absent) — a token bound to the deliverable, its version and the
+ * line's hash, so a start never runs a line the dialog did not show (wave-3 review S3). An edited
+ * line is one line: no newline or other control character (400 `invalid`).
+ */
 export const StartRunBody = z.object({
   version: z.number().int().positive(),
   line: z.string().min(1).max(10_000).optional(),
+  confirmation: z.string().min(1).max(256),
 });
 export type StartRunBody = z.infer<typeof StartRunBody>;
+
+/**
+ * `POST /api/deliverables/:id/run-preview {line?}`: the preview of the line the user edited in the
+ * dialog (its warnings and its `confirmation`); without `line`, the stored one (as `GET`).
+ */
+export const RunPreviewBody = z.object({
+  line: z.string().min(1).max(10_000).optional(),
+});
+export type RunPreviewBody = z.infer<typeof RunPreviewBody>;
 
 /** `POST /api/deliverables/:id/runs` → the run that started. */
 export const StartRunResponse = z.object({ run: DeliverableRun });
@@ -374,6 +390,7 @@ export type RunRefusal = z.infer<typeof RunRefusal>;
 export const RunPreviewResponse = z.object({
   deliverableId: Id,
   version: z.number().int().positive(),
+  /** The line the run would execute, redacted (`[redacted:…]` where a secret was). */
   line: z.string().min(1),
   cwd: z.string().min(1),
   /** The environment's keys, never their values. */
@@ -400,6 +417,11 @@ export const RunPreviewResponse = z.object({
   lastRunBody: z.string().optional(),
   /** Set when a start now would be refused (the dialog says why and offers no Run). */
   refusal: RunRefusal.optional(),
+  /**
+   * What the start (or restart) sends back to confirm exactly this `line` at this `version`
+   * (wave-3 review S3): opaque, valid for 15 minutes and for this server run only.
+   */
+  confirmation: z.string().min(1).optional(),
 });
 export type RunPreviewResponse = z.infer<typeof RunPreviewResponse>;
 

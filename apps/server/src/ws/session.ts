@@ -8,6 +8,9 @@ import type { RunOutput } from '../deliverables/run-output.js';
 import { CLOSE_PROTOCOL_VIOLATION, send, type SessionHandler } from './gateway.js';
 import { buildSnapshot } from './snapshot.js';
 
+/** Run output subscriptions one socket may hold at once (review N2). */
+export const MAX_RUN_SUBSCRIPTIONS = 16;
+
 export interface SessionOptions {
   /** Bytes queued on a socket before the connection is dropped as a slow consumer. */
   maxBufferedBytes?: number;
@@ -183,6 +186,14 @@ export function createSessionHandler(log: EventLog, opts: SessionOptions = {}): 
           const { runId, since } = parsed.data;
           if (!opts.runOutput) {
             send(socket, { type: 'error', code: 'unsupported', message: 'runs unavailable' });
+            break;
+          }
+          if (!runSubs.has(runId) && runSubs.size >= MAX_RUN_SUBSCRIPTIONS) {
+            send(socket, {
+              type: 'error',
+              code: 'too_many_subscriptions',
+              message: `at most ${MAX_RUN_SUBSCRIPTIONS} run outputs per connection: unsubscribe one first`,
+            });
             break;
           }
           runSubs.get(runId)?.();

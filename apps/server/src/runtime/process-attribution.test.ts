@@ -3,6 +3,7 @@ import {
   attribute,
   heldBy,
   isInside,
+  isSharedDaemon,
   isUserFacingApp,
   serverTree,
   withDescendants,
@@ -582,5 +583,35 @@ describe('process table parsing (P4-14)', () => {
     expect(worktreeRootOf('/home/u/proj')).toBeUndefined();
     expect(isInside(`${WT}/x`, WT)).toBe(true);
     expect(isInside(`${WT}-2`, WT)).toBe(false);
+  });
+});
+
+describe('isSharedDaemon (wave-3 review S4)', () => {
+  it("names the session's shared daemons, by executable or by command line", () => {
+    for (const command of [
+      '/usr/bin/ssh-agent -l',
+      '/opt/homebrew/bin/gpg-agent --homedir /Users/u/.gnupg --use-standard-socket --daemon',
+      '/opt/homebrew/bin/watchman --foreground --logfile=/tmp/w.log',
+      'sccache',
+      'ssh: /Users/u/.ssh/cm-git@github.com:22 [mux]',
+      '/usr/bin/java -Xmx2g -cp gradle-launcher.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon 8.10',
+      'java -cp kotlin-daemon.jar org.jetbrains.kotlin.daemon.KotlinCompileDaemon',
+      'git fsmonitor--daemon run --detach',
+      'node /w/node_modules/nx/src/daemon/server/start.js',
+      '/w/node_modules/.bin/turbo daemon',
+      'adb -L tcp:5037 fork-server server --reply-fd 4',
+    ]) {
+      expect(isSharedDaemon({ command }), command).toBe(true);
+    }
+    for (const command of [
+      'ssh user@host',
+      'node server.js',
+      'java -jar app.jar',
+      'git status',
+      'turbo run dev',
+      'npx nx serve web',
+    ]) {
+      expect(isSharedDaemon({ command }), command).toBe(false);
+    }
   });
 });

@@ -114,8 +114,9 @@ export const RulesContext = createContext<ClientRules | undefined>(undefined);
 export function useClientRules(): ClientRules {
   const forced = useContext(RulesContext);
   const settings = useOptionalSettingsData();
-  const writable =
-    settings?.status === 'ready' ? (settings.response?.writable ?? 'all') : undefined;
+  // A response without `writable` (an older server) says nothing: the Mac's own page only
+  // (review N4), never "everyone may edit".
+  const writable = settings?.status === 'ready' ? settings.response?.writable : undefined;
   return useMemo(
     () =>
       forced ??

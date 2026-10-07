@@ -662,7 +662,7 @@ describe('the viewer: nothing it shows runs (decisions 125, 126)', () => {
     expect(v.querySelector('pre code')!.textContent).toBe(md);
   });
 
-  it('shows an SVG with a script only as a picture, from a blob with an allow-listed type', async () => {
+  it('shows an SVG with a script only as a picture, never from a blob: URL (review B1)', async () => {
     const svg =
       '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>window.__pwned=3</script><rect width="4" height="4"/></svg>';
     const v = await view(shot, content(svg, 'image/svg+xml'));
@@ -671,9 +671,12 @@ describe('the viewer: nothing it shows runs (decisions 125, 126)', () => {
       expect(el).toBeTruthy();
       return el!;
     });
-    expect(img.getAttribute('src')).toMatch(/^blob:/);
-    const blob = vi.mocked(URL.createObjectURL).mock.calls[0]![0] as Blob;
-    expect(blob.type).toBe('image/svg+xml');
+    // jsdom has no canvas: the opaque-origin data: URL stands in for the PNG.
+    expect(img.getAttribute('src')).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(atob(img.getAttribute('src')!.split(',')[1]!)).toBe(svg);
+    for (const [arg] of vi.mocked(URL.createObjectURL).mock.calls) {
+      expect((arg as Blob).type).not.toBe('image/svg+xml');
+    }
     expect(document.querySelectorAll('script, svg, iframe, object, embed, [onload]')).toHaveLength(
       0,
     );

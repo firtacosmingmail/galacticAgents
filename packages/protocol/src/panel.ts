@@ -266,15 +266,15 @@ export const DEFAULT_DECLARATION_LIMITS: DeclarationLimits = {
 
 /**
  * `deliverables.runs.output` (P9-08, decision 130): how much of a managed run's output is kept —
- * at most `maxBytesPerRun` per run (the oldest output goes first), for the newest `keepRuns` runs
- * of each command, at most `maxAgeDays` days.
+ * at most `maxBytesPerRun` per run (the oldest output goes first; 64 KiB to 64 MiB), for the
+ * newest `keepRuns` runs of each command, at most `maxAgeDays` days.
  */
 export const RunOutputRetention = z.object({
   maxBytesPerRun: z
     .number()
     .int()
     .min(64 * 1024)
-    .max(1024 * 1024 * 1024),
+    .max(64 * 1024 * 1024),
   keepRuns: z.number().int().min(1).max(100),
   maxAgeDays: z.number().int().min(1).max(3650),
 });
