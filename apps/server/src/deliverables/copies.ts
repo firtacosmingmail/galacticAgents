@@ -304,7 +304,9 @@ export class DeliverableCopies implements DeliverableCopier {
       .all()
       .filter((d) => d.location?.storage === 'copy' && isInside(d.location.path, folder));
     const nameOf = (d: Deliverable) => relative(folder, d.location!.path).split(sep)[0];
-    const own = copies.find((d) => d.taskId === task.id && nameOf(d) !== basename(d.location!.path));
+    const own = copies.find(
+      (d) => d.taskId === task.id && nameOf(d) !== basename(d.location!.path),
+    );
     if (own) return nameOf(own)!;
     const slug = slugify(task.description, 40, 'task');
     const candidates = [slug, `${slug}-${task.id.slice(0, 6)}`, `${slug}-${task.id}`];
@@ -614,9 +616,13 @@ export class DeliverableCopies implements DeliverableCopier {
     if (!commit || !/^[0-9a-f]{7,64}$/.test(commit)) return false;
     if (rel === '') return true;
     const spec = rel.split(sep).join('/');
-    const tree = await this.git(repoRoot, ['ls-tree', '-r', '--name-only', '-z', commit, '--', spec], {
-      allowFailure: true,
-    });
+    const tree = await this.git(
+      repoRoot,
+      ['ls-tree', '-r', '--name-only', '-z', commit, '--', spec],
+      {
+        allowFailure: true,
+      },
+    );
     if (tree.code !== 0 || splitZ(tree.stdout).length === 0) return false;
     const status = await this.git(
       root,

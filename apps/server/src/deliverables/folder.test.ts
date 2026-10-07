@@ -21,9 +21,9 @@ describe('userFoldersOf (P9-06)', () => {
     expect(userFoldersOf(lookup([recorded]), { projectId: 'p-1' }, '/w/a')).toEqual([
       '/w/a/galactic-deliverables',
     ]);
-    expect(userFoldersOf(lookup([project('p-2', '/w/b')]), { projectId: 'p-2' }, '/w/b')).toEqual(
-      ['/w/b/deliverables'],
-    );
+    expect(userFoldersOf(lookup([project('p-2', '/w/b')]), { projectId: 'p-2' }, '/w/b')).toEqual([
+      '/w/b/deliverables',
+    ]);
   });
 
   it("is a standalone task's own folder and the folder of the project whose workspace it uses", () => {
