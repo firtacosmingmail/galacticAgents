@@ -685,6 +685,33 @@ describe('adding, editing, removing and restoring by hand (P9-07)', () => {
     expect(restored).toMatchObject({ status: 200, json: { deliverable: { version: 4 } } });
   });
 
+  it('never copies a path from outside the project for a remote client, even with autoApproveRemote', async () => {
+    const s = await setup({ autoApproveRemote: true, copies: true });
+    const res = await s.call(
+      'POST',
+      '/api/deliverables',
+      {
+        projectId: s.project.id,
+        kind: 'file',
+        title: 'Keys',
+        path: join(s.outside, 'secret.txt'),
+      },
+      REMOTE,
+    );
+    expect(res).toMatchObject({ status: 403, json: { error: 'remote_control' } });
+    expect(existsSync(join(s.ws, 'deliverables'))).toBe(false);
+    expect(s.log.tables.deliverables.of({ projectId: s.project.id })).toEqual([]);
+    // A path inside the project is still the remote client's to add (decision 131).
+    writeFileSync(join(s.ws, 'inside.txt'), 'in');
+    const inside = await s.call(
+      'POST',
+      '/api/deliverables',
+      { projectId: s.project.id, kind: 'file', title: 'In', path: join(s.ws, 'inside.txt') },
+      REMOTE,
+    );
+    expect(inside.status).toBe(200);
+  });
+
   it('refuses a stale edit with the current row, and edits a command line in place', async () => {
     const s = await setup();
     const { value: cmd } = await s.commands.addDeliverable(

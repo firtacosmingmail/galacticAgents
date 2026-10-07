@@ -57,7 +57,12 @@ export interface GateOptions {
    * The server's own tools handed to a brain (`SpawnOptions.tools`, P2-06): their handlers run in
    * the server against `DomainCommands`, which refuses what the brain may not do, so the policy
    * table (about files, shells and the network) has nothing to say about them. Allowed after the
-   * tool-call cap; matched by bare name or as the SDK's `mcp__galactic__<name>`.
+   * tool-call cap: by bare name (an adapter running them in process, never an `mcp__` name), or
+   * as `mcp__galactic__<name>` only when the runtime says the call is served by the host's own
+   * in-process `galactic` server (`ToolCall.mcpServer` `{name: 'galactic', source: 'sdk'}`). A
+   * server of the same name from the repository's `.mcp.json`, the user's or a plugin's
+   * configuration reports another source — and a call without provenance proves nothing — so
+   * both go through the policy table like any other tool (an unknown tool asks).
    */
   serverTools?: readonly string[];
   /**
@@ -73,7 +78,10 @@ export interface GateOptions {
 }
 
 /** The MCP server name the Claude SDK adapter registers brain tools under. */
-export const SERVER_TOOL_PREFIX = 'mcp__galactic__';
+export const SERVER_TOOL_SERVER = 'galactic';
+export const SERVER_TOOL_PREFIX = `mcp__${SERVER_TOOL_SERVER}__`;
+/** `ToolCall.mcpServer.source` of an in-process server the host registered (Claude SDK). */
+export const IN_PROCESS_SOURCE = 'sdk';
 
 /** Every action asks: what the gate falls back to when the policy does not parse. */
 export const FAIL_CLOSED_POLICY: PermissionPolicy = {
@@ -99,9 +107,16 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
   const workspaceNow = () =>
     typeof opts.workspace === 'function' ? opts.workspace() : opts.workspace;
   const serverTools = new Set(opts.serverTools ?? []);
-  const isServerTool = (name: string) =>
-    serverTools.has(name) ||
-    (name.startsWith(SERVER_TOOL_PREFIX) && serverTools.has(name.slice(SERVER_TOOL_PREFIX.length)));
+  const isServerTool = (call: ToolCall) => {
+    const name = call.toolName;
+    if (!name.startsWith('mcp__')) return serverTools.has(name);
+    return (
+      name.startsWith(SERVER_TOOL_PREFIX) &&
+      serverTools.has(name.slice(SERVER_TOOL_PREFIX.length)) &&
+      call.mcpServer?.name === SERVER_TOOL_SERVER &&
+      call.mcpServer.source === IN_PROCESS_SOURCE
+    );
+  };
   /** The verdict, plus the category behind a denial (the gate's verdict does not carry it). */
   const decideCall = (call: ToolCall, reserve: boolean): Decision => {
     if (reserve) {
@@ -109,7 +124,7 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
       if (!reserved.ok)
         return { verdict: { decision: 'deny', reason: reserved.reason }, cap: true };
     }
-    if (isServerTool(call.toolName)) return { verdict: { decision: 'allow' } };
+    if (isServerTool(call)) return { verdict: { decision: 'allow' } };
     const workspace = workspaceNow();
     const misplaced = misplacedCwd(workspace, opts.cwd);
     if (misplaced) return { verdict: { decision: 'ask', reasons: [misplaced] } };

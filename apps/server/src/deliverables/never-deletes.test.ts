@@ -104,7 +104,7 @@ describe('the deliverables folder is never deleted from (decision 122)', () => {
     };
     const keep = async (taskId: Id | undefined, projectId: Id | undefined, name: string) => {
       const target = taskId ? { taskId } : { projectId: projectId! };
-      const copy = await copies.copyIn(stray(name), target);
+      const copy = await copies.copyIn(stray(name), target, { outside: true });
       return (
         await commands.addDeliverable(
           { ...target, kind: 'file', title: name, source: 'user', location: copy.location },

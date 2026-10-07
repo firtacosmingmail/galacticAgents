@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DownloadTickets,
+  MAX_TICKETS_PER_CLIENT,
   TICKET_PATTERN,
   TICKET_TTL_MS,
   contentDisposition,
@@ -44,6 +45,20 @@ describe('DownloadTickets', () => {
     tickets.mint('d-3', ID);
     expect(tickets.size).toBe(2);
     expect(tickets.take(first)).toBeUndefined();
+  });
+
+  it('keeps at most 64 live tickets per client, dropping that client’s oldest only', () => {
+    expect(MAX_TICKETS_PER_CLIENT).toBe(64);
+    const tickets = new DownloadTickets({ maxPerClient: 2 });
+    const local = tickets.mint('d-1', ID);
+    const phone1 = tickets.mint('d-1', ID, 'remote:phone');
+    const phone2 = tickets.mint('d-2', ID, 'remote:phone');
+    const phone3 = tickets.mint('d-3', ID, 'remote:phone');
+    expect(tickets.size).toBe(3);
+    expect(tickets.take(phone1)).toBeUndefined();
+    expect(tickets.take(phone2)).toMatchObject({ deliverableId: 'd-2', client: 'remote:phone' });
+    expect(tickets.take(phone3)).toBeDefined();
+    expect(tickets.take(local)).toMatchObject({ client: 'local' });
   });
 });
 

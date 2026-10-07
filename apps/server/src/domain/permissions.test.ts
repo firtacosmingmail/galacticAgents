@@ -922,4 +922,12 @@ describe("the project's deliverables folder (P9-06, decisions 22 and 122)", () =
     expect(write('/w/proj/deliverables/a', recorded)).toBe('allow');
     expect(write('/w/proj/deliverables/a', { ...dctx, userFolders: [] })).toBe('allow');
   });
+
+  it('matches the folder whatever the case of its name (APFS is case-insensitive)', () => {
+    const write = (file_path: string) => verdict('Write', { file_path, content: '' }).decision;
+    expect(write('/w/proj/Deliverables/a.md')).toBe('ask');
+    expect(write('/W/PROJ/DELIVERABLES/a.md')).toBe('ask');
+    expect(verdict('Bash', { command: 'cp x /w/proj/DELIVERABLES/' }).decision).toBe('ask');
+    expect(write('/w/proj/Deliverables-old/a.md')).toBe('allow');
+  });
 });

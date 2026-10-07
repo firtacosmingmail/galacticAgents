@@ -359,6 +359,13 @@ const ENDED_MEMORY = 1_000;
 export class AgentRuntime {
   private readonly adapters = new Map<RuntimeName, AgentAdapter>();
   private readonly live = new Map<Id, Live>();
+  /**
+   * Where each agent's deliverables folder would be made while none is recorded yet (P9-06,
+   * `setDeliverablesFolderLookup`): `galactic-deliverables/` when the repository tracks a
+   * `deliverables/` folder of its own, so writes to that source folder do not ask.
+   */
+  private readonly folderCandidates = new Map<Id, string>();
+  private folderLookup?: (target: { projectId?: Id; taskId?: Id }) => Promise<string | undefined>;
   private readonly byQuestion = new Map<Id, Id>();
   /** Recently ended agents, oldest first. */
   private readonly ended = new Set<Id>();
@@ -646,6 +653,7 @@ export class AgentRuntime {
       activity: false,
     };
     this.live.set(agent.id, live);
+    this.lookUpFolderCandidate(agent.id, req);
     this.caps.track(agent.id, caps, {
       role: agent.role,
       ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
@@ -1554,9 +1562,35 @@ export class AgentRuntime {
     return project?.workspace ?? req.workspace ?? req.cwd;
   }
 
+  /**
+   * How the gate learns where a project's deliverables folder would be before it is recorded
+   * (`DeliverableCopies.placeOf`, which asks whether `deliverables/` is tracked). Looked up once
+   * per spawn, without holding the spawn up: until it answers, `<workspace>/deliverables`.
+   */
+  setDeliverablesFolderLookup(
+    lookup: (target: { projectId?: Id; taskId?: Id }) => Promise<string | undefined>,
+  ): void {
+    this.folderLookup = lookup;
+  }
+
+  private lookUpFolderCandidate(agentId: Id, req: SpawnRequest): void {
+    const lookup = this.folderLookup;
+    if (!lookup) return;
+    const agent = this.opts.log.tables.agents.get(agentId);
+    const projectId = agent?.projectId ?? req.projectId;
+    const taskId = agent?.taskId ?? req.taskId;
+    if (!projectId && !taskId) return;
+    void lookup({ ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) })
+      .then((folder) => {
+        if (folder && this.live.has(agentId)) this.folderCandidates.set(agentId, folder);
+      })
+      .catch(() => undefined);
+  }
+
   private userFoldersOf(agentId: Id, req: SpawnRequest): string[] {
     const { tables } = this.opts.log;
     const agent = tables.agents.get(agentId);
+    const candidate = this.folderCandidates.get(agentId);
     return userFoldersOf(
       {
         project: (id) => tables.projects.get(id),
@@ -1568,6 +1602,7 @@ export class AgentRuntime {
         taskId: agent?.taskId ?? req.taskId,
       },
       this.workspaceOf(agentId, req),
+      candidate,
     );
   }
 
@@ -2153,6 +2188,7 @@ export class AgentRuntime {
     this.caps.release(live.agent.id);
     // The log and the status store keep the history; the runtime forgets the session.
     this.live.delete(live.agent.id);
+    this.folderCandidates.delete(live.agent.id);
     this.ended.add(live.agent.id);
     if (this.ended.size > ENDED_MEMORY) {
       const oldest = this.ended.values().next().value;

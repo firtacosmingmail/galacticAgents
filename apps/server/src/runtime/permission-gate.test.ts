@@ -99,14 +99,47 @@ describe('createPermissionGate', () => {
       caps: caps(),
       serverTools: ['ask_user'],
     });
+    const inProcess = { name: 'galactic', source: 'sdk' };
     expect(gate.check({ toolName: 'ask_user', input: {} })).toEqual({ decision: 'allow' });
-    expect(gate.check({ toolName: 'mcp__galactic__ask_user' })).toEqual({ decision: 'allow' });
+    expect(gate.check({ toolName: 'mcp__galactic__ask_user', mcpServer: inProcess })).toEqual({
+      decision: 'allow',
+    });
     const other = createPermissionGate({
       ...base,
       policy: DEFAULT_PERMISSION_POLICY,
       caps: caps(),
     });
-    expect(other.check({ toolName: 'mcp__galactic__ask_user' })).toMatchObject({ decision: 'ask' });
+    expect(
+      other.check({ toolName: 'mcp__galactic__ask_user', mcpServer: inProcess }),
+    ).toMatchObject({ decision: 'ask' });
+  });
+
+  it("allows an MCP name only from the host's own in-process server, never a namesake (P9 review)", () => {
+    const gate = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+      serverTools: ['declare_deliverable'],
+    });
+    const call = { toolName: 'mcp__galactic__declare_deliverable', input: {} };
+    // A repository's `.mcp.json` (or the user's, or a plugin's) server named `galactic`.
+    for (const source of ['project', 'local', 'user', 'plugin', 'dynamic']) {
+      expect(gate.check({ ...call, mcpServer: { name: 'galactic', source } })).toMatchObject({
+        decision: 'ask',
+      });
+    }
+    // No provenance proves nothing.
+    expect(gate.check(call)).toMatchObject({ decision: 'ask' });
+    // Another in-process server's tool of the same bare name, or a prefixed bare-name lookalike.
+    expect(
+      gate.check({
+        toolName: 'mcp__other__declare_deliverable',
+        mcpServer: { name: 'other', source: 'sdk' },
+      }),
+    ).toMatchObject({ decision: 'ask' });
+    expect(gate.check({ ...call, mcpServer: { name: 'galactic', source: 'sdk' } })).toEqual({
+      decision: 'allow',
+    });
   });
 
   it('decides allowed, asked and denied calls from the policy', () => {

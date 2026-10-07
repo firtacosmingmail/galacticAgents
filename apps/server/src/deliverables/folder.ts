@@ -36,13 +36,16 @@ export interface FolderLookup {
 /**
  * The folders an agent may not write into on its own (decision 22 via 122): the recorded
  * deliverables folder of its project (or its standalone task, or the project whose folder that
- * task works in), else `<workspace>/deliverables/` — the folder it would be. The permission gate
- * counts a write under any of them as outside the workspace.
+ * task works in), else the folder it would be: `candidate` (where `DeliverableCopies.placeOf`
+ * says it would be made — `galactic-deliverables/` when the repository tracks a `deliverables/`
+ * source folder), else `<workspace>/deliverables/`. The permission gate counts a write under any
+ * of them as outside the workspace (compared case-insensitively: APFS is, by default).
  */
 export function userFoldersOf(
   lookup: FolderLookup,
   agent: { projectId?: Id | undefined; taskId?: Id | undefined },
   workspace: string,
+  candidate?: string,
 ): string[] {
   const folders = new Set<string>();
   const project = agent.projectId ? lookup.project(agent.projectId) : undefined;
@@ -59,6 +62,6 @@ export function userFoldersOf(
       if (theirs && resolve(p.workspace) === here) folders.add(theirs);
     }
   }
-  if (folders.size === 0) folders.add(join(workspace, DELIVERABLES_DIR));
+  if (folders.size === 0) folders.add(candidate ?? join(workspace, DELIVERABLES_DIR));
   return [...folders];
 }

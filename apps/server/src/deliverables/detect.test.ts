@@ -62,7 +62,8 @@ describe('package.json', () => {
       ['package.json#lint', 'pnpm run lint'],
       ['package.json#x; rm -rf ~', `pnpm run 'x; rm -rf ~'`],
     ]);
-    expect(parsePackageJson(pkg, new Set(['yarn.lock']))[0]!.line).toBe('yarn build');
+    // `yarn run`, so a Yarn built-in never shadows a script of the same name.
+    expect(parsePackageJson(pkg, new Set(['yarn.lock']))[0]!.line).toBe('yarn run build');
     expect(parsePackageJson(pkg, new Set(['bun.lockb']))[0]!.line).toBe('bun run build');
     expect(parsePackageJson(pkg, new Set(['bun.lock']))[0]!.line).toBe('bun run build');
     expect(parsePackageJson(pkg, new Set())[0]!.line).toBe('npm run build');
@@ -73,6 +74,33 @@ describe('package.json', () => {
     expect(build).toMatchObject({ title: 'build', description: 'tsc', important: 4 });
     expect(dev).toMatchObject({ important: 0 });
     expect(lint!.important).toBeUndefined();
+  });
+
+  it('keeps what a script runs as its body, redacted like its description (S4, S5)', () => {
+    const token = 'ghp_' + 'a'.repeat(36);
+    const [deploy] = parsePackageJson(
+      JSON.stringify({ scripts: { deploy: `curl -H "Authorization: Bearer ${token}" x` } }),
+      new Set(),
+    );
+    expect(deploy!.line).toBe('npm run deploy');
+    expect(deploy!.body).toBeDefined();
+    expect(deploy!.body).toBe(deploy!.description);
+    expect(deploy!.body).not.toContain(token);
+    expect(deploy!.description).not.toContain(token);
+  });
+
+  it('refuses names with bidi, zero-width or separator characters', () => {
+    const scripts = {
+      'dev\u202e': 'x',
+      'te\u200bst': 'x',
+      'a\u2028b': 'x',
+      'a\u2029b': 'x',
+      'c1\u0085': 'x',
+      ok: 'x',
+    };
+    expect(parsePackageJson(JSON.stringify({ scripts }), new Set()).map((c) => c.name)).toEqual([
+      'ok',
+    ]);
   });
 
   it('a package without scripts adds nothing; a malformed one throws for the caller', () => {
@@ -117,6 +145,22 @@ describe('Makefile', () => {
     ]);
   });
 
+  it("keeps a target's recipe lines as its body", () => {
+    const text = [
+      'build: deps',
+      '\tcc -o app \\',
+      '\t  main.c',
+      '',
+      '\t@echo done',
+      'OUT := x',
+      '\tnot a recipe of build',
+      'test:',
+    ].join('\n');
+    const [build, test] = parseMakefile(text);
+    expect(build!.body).toBe('cc -o app \\\n\t  main.c\n@echo done');
+    expect(test!.body).toBeUndefined();
+  });
+
   it('reads a Makefile that would run a shell when evaluated as text only', () => {
     const text = 'X := $(shell touch /tmp/galactic-pwned)\nrun: ; $(shell rm -rf /)\n';
     expect(lines(parseMakefile(text))).toEqual([['Makefile#run', 'make run']]);
@@ -154,6 +198,13 @@ describe('justfile', () => {
       ['justfile#serve', 'just serve'],
       ['justfile#deploy', 'just deploy'],
     ]);
+    const bodies = Object.fromEntries(parseJustfile(text).map((c) => [c.name, c.body]));
+    expect(bodies).toEqual({
+      default: undefined,
+      build: 'cargo build',
+      serve: './serve {{port}}',
+      deploy: './deploy {{target}}',
+    });
   });
 });
 

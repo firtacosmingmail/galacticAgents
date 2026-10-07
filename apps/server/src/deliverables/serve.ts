@@ -53,6 +53,11 @@ export const FILE_HEADERS: Readonly<Record<string, string>> = {
 export const TICKET_TTL_MS = 60_000;
 /** Live tickets kept at most; minting past it drops the oldest (a page cannot grow memory). */
 export const MAX_TICKETS = 1_024;
+/**
+ * Live tickets one client keeps at most: minting past it drops that client's oldest, so one
+ * client (a remote page in a loop) cannot crowd out the others' tickets.
+ */
+export const MAX_TICKETS_PER_CLIENT = 64;
 
 /**
  * `filename*=UTF-8''…` (RFC 6266 / RFC 8187): every byte outside the attribute characters
@@ -93,20 +98,37 @@ export interface Ticket {
   /** The file's `(dev, ino, size, mtime)` when the ticket was minted. */
   identity: FileIdentity;
   expiresAt: number;
+  /** Who minted it (`DownloadTickets.mint`'s `client`): the per-client cap counts by it. */
+  client: string;
 }
 
 export class DownloadTickets {
   private readonly tickets = new Map<string, Ticket>();
 
-  constructor(private readonly opts: { ttlMs?: number; max?: number; now?: () => number } = {}) {}
+  constructor(
+    private readonly opts: {
+      ttlMs?: number;
+      max?: number;
+      maxPerClient?: number;
+      now?: () => number;
+    } = {},
+  ) {}
 
   private now(): number {
     return this.opts.now?.() ?? Date.now();
   }
 
-  /** A new ticket for the deliverable's file as it is now. */
-  mint(deliverableId: Id, identity: FileIdentity): string {
+  /**
+   * A new ticket for the deliverable's file as it is now, for `client` (the route passes who asks:
+   * the local panel, or the remote client's identity).
+   */
+  mint(deliverableId: Id, identity: FileIdentity, client = 'local'): string {
     this.prune();
+    const perClient = this.opts.maxPerClient ?? MAX_TICKETS_PER_CLIENT;
+    const mine = [...this.tickets].filter(([, t]) => t.client === client);
+    for (const [key] of mine.slice(0, Math.max(0, mine.length - perClient + 1))) {
+      this.tickets.delete(key);
+    }
     const max = this.opts.max ?? MAX_TICKETS;
     while (this.tickets.size >= max) {
       const oldest = this.tickets.keys().next().value as string;
@@ -117,6 +139,7 @@ export class DownloadTickets {
       deliverableId,
       identity,
       expiresAt: this.now() + (this.opts.ttlMs ?? TICKET_TTL_MS),
+      client,
     });
     return ticket;
   }

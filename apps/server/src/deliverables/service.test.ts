@@ -446,6 +446,7 @@ describe('DeliverableService.declare (P9-04)', () => {
           location: { storage: 'copy', path, originalPath: source },
           bytes: 2,
           folder: join(project.workspace, 'deliverables'),
+          skipped: [],
         };
       },
     };
@@ -506,18 +507,27 @@ describe('DeliverableService.declare (P9-04)', () => {
     expect(composed.log.tables.projects.get(project.id)!.meta).toMatchObject({
       deliverablesFolder: folder,
     });
-    // The Waykeeper's stray for the project goes to the folder's top.
+    // The Waykeeper's stray for its task (measured from the task's Steward) goes to the task's
+    // subfolder; for the project itself there is no Steward to measure from: refused (S3).
     const plan = file(join(tmp, 'strays', 'plan.md'));
-    const top = await service.declare(
+    const forTask = await service.declare(
       waykeeper.id,
-      { projectId: project.id },
+      { taskId: task.id },
       { kind: 'file', title: 'Plan', path: plan },
     );
-    expect(top.deliverable.location).toMatchObject({
+    expect(forTask.deliverable.location).toMatchObject({
       storage: 'copy',
-      path: join(folder, 'plan.md'),
+      path: join(folder, 'build-it', 'plan.md'),
     });
-    // The Harmonizer's stray for a scratch task goes to that task's own folder.
+    const top = await refused(
+      waykeeper.id,
+      { projectId: project.id },
+      { kind: 'file', title: 'Plan', path: file(join(tmp, 'strays', 'top.md')) },
+    );
+    expect(top.message).toMatch(/only for a task with a Steward/);
+    // The Harmonizer's stray for a scratch task (once a Steward works on it) goes to that task's
+    // own folder.
+    agent('steward', { taskId: standalone.id });
     const notes = file(join(tmp, 'strays', 'notes.txt'));
     const scratch = await service.declare(
       harmonizer.id,

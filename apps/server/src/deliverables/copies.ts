@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { closeSync, createReadStream, createWriteStream, realpathSync } from 'node:fs';
 import {
+  appendFile,
   chmod,
-  cp,
   link,
   lstat,
   mkdir,
@@ -11,8 +11,9 @@ import {
   rename,
   rm,
   unlink,
-  writeFile,
+  utimes,
 } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, sep } from 'node:path';
 import type {
@@ -36,7 +37,13 @@ import {
   FOLDER_META_KEY,
   recordedFolder,
 } from './folder.js';
-import { checkPath } from './paths.js';
+import {
+  checkPath,
+  openChecked,
+  type CheckOptions,
+  type DeliverableRoots,
+  type PathStat,
+} from './paths.js';
 import { rootsOf, standaloneWorkspace } from './roots.js';
 import { checkFreeSpace, DEFAULT_RESERVE_BYTES, TREE_MAX_ENTRIES, treeSize } from './space.js';
 
@@ -55,9 +62,12 @@ import { checkFreeSpace, DEFAULT_RESERVE_BYTES, TREE_MAX_ENTRIES, treeSize } fro
  *   `<git common dir>/info/exclude` — never `.gitignore`, never a tracked file, never a commit —
  *   so the workspace stays clean for the next merge. A folder that is not a repository just gets
  *   the folder.
- * - **Copies.** `fs.cp` into a unique `.partial` name inside the destination folder, then renamed
- *   (a file is linked into place, so an existing name is never replaced); symlinks and anything
- *   but files and folders left out, never followed; modes kept minus group/other write and
+ * - **Copies.** The source checked again right before (with the rules it was accepted with), then
+ *   copied entry by entry (`copyInto`: `lstat` walk, every entry checked with the same rules,
+ *   files read through `openChecked`, never through a symlink in any component) into a unique
+ *   `.partial` name inside the destination folder, then moved into place (a file is linked, a
+ *   folder's name claimed first, so an existing name is never replaced); symlinks, anything but
+ *   files and folders, and entries the rules refuse left out and listed; modes kept minus group/other write and
  *   set-uid/set-gid/sticky; a name already taken gets ` (2)`, ` (3)` …; no size limit but the
  *   free-space guard (`checkFreeSpace`: the backups' reserve stays free). A failure removes the
  *   partial copy, never anything else.
@@ -98,16 +108,76 @@ export interface CopyResult {
   bytes: number;
   /** The deliverables folder it went into. */
   folder: string;
+  /** Entries of a folder left out of the copy, and why (`copyInto`). */
+  skipped: CopySkip[];
+}
+
+/** An entry left out of a folder's copy: its path below the source, and why. */
+export interface CopySkip {
+  path: string;
+  /**
+   * `symlink`, `special` (neither a file nor a folder), `missing`, `changed` (it no longer was
+   * its own real path, or was swapped while it was opened) or a path refusal's code (`secret`,
+   * `hard_link`, `stray_refused`, `refused_area`, `outside`).
+   */
+  reason: string;
+}
+
+/** What a copy is checked against: the target's roots and the source's own check options. */
+export interface CopyContext {
+  roots: DeliverableRoots;
+  rules: CheckOptions;
+}
+
+/** A copied file or folder. */
+export interface CopiedTree {
+  path: string;
+  bytes: number;
+  skipped: CopySkip[];
+}
+
+/** A folder copy's walk. */
+interface Walk extends CopyContext {
+  source: string;
+  bytes: number;
+  entries: number;
+  max: number;
+  skipped: CopySkip[];
+}
+
+/** At most this many skipped entries are listed in a row's `meta.copy.skipped` (all counted). */
+export const MAX_SKIPPED_LISTED = 50;
+
+/**
+ * A copy as a row records it: `meta.copy = {bytes, skipped?, skippedCount?}`, the skipped entries
+ * listed (at most `MAX_SKIPPED_LISTED`) so the panel can say what was left out (P9-09).
+ */
+export function copyMeta(copy: Pick<CopyResult, 'bytes' | 'skipped'>): {
+  copy: { bytes: number; skipped?: CopySkip[]; skippedCount?: number };
+} {
+  return {
+    copy: {
+      bytes: copy.bytes,
+      ...(copy.skipped.length > 0
+        ? {
+            skipped: copy.skipped.slice(0, MAX_SKIPPED_LISTED),
+            skippedCount: copy.skipped.length,
+          }
+        : {}),
+    },
+  };
 }
 
 /**
  * The copy API for the declarations (P9-04) and the user's additions from outside the project
  * (decision 121): `copyIn` copies a checked path (a stray in a temporary folder, the user's file)
- * into the target's place and returns the location to record. Refusals are `DomainError`s whose
- * message is meant for the agent's tool result or the panel as is (`not enough space: needs …`).
+ * into the target's place and returns the location to record; `rules` are the check options the
+ * path was accepted with, applied again right before the copy and to every entry of a folder.
+ * Refusals are `DomainError`s whose message is meant for the agent's tool result or the panel as
+ * is (`not enough space: needs …`).
  */
 export interface DeliverableCopier {
-  copyIn(source: string, target: CopyTarget): Promise<CopyResult>;
+  copyIn(source: string, target: CopyTarget, rules: CheckOptions): Promise<CopyResult>;
 }
 
 /** What the hook needs from the command surface. */
@@ -167,16 +237,72 @@ export function copiedMode(mode: number, directory: boolean): number {
   return directory ? kept | 0o700 : kept | 0o400;
 }
 
-/** Applies `copiedMode` to everything under `path` (an `lstat` walk; links are not there). */
-async function sanitizeModes(path: string): Promise<void> {
-  const st = await lstat(path);
-  if (st.isSymbolicLink()) return;
-  if (st.isDirectory()) {
-    await chmod(path, copiedMode(st.mode, true));
-    for (const name of await readdir(path)) await sanitizeModes(join(path, name));
-  } else if (st.isFile()) {
-    await chmod(path, copiedMode(st.mode, false));
+function closeQuietly(fd: number): void {
+  try {
+    closeSync(fd);
+  } catch {
+    // already closed
   }
+}
+
+/**
+ * Copies an opened (checked) file's bytes into a new file `dst` (`wx`: never over anything),
+ * then gives it `copiedMode` and the source's modification time. Closes `fd`. The bytes copied.
+ */
+async function copyFd(fd: number, dst: string, stat: PathStat): Promise<number> {
+  let bytes = 0;
+  const from = createReadStream('', { fd, autoClose: true, start: 0 });
+  from.on('data', (chunk) => {
+    bytes += chunk.length;
+  });
+  try {
+    await pipeline(from, createWriteStream(dst, { flags: 'wx', mode: 0o600 }));
+  } finally {
+    if (!from.closed) from.destroy();
+  }
+  await chmod(dst, copiedMode(stat.mode, false));
+  const at = new Date(stat.mtimeMs);
+  await utimes(dst, at, at);
+  return bytes;
+}
+
+/**
+ * A path as one `info/exclude` pattern: the glob characters (`[`, `*`, `?`, `\`) escaped, and a
+ * trailing space kept with a backslash. A name with a newline cannot be written as a pattern:
+ * refused (the copy is refused, so the folder never shows up in `git status`).
+ */
+export function excludePattern(rel: string): string {
+  if (/[\r\n]/.test(rel)) {
+    throw new DomainError(
+      'invalid',
+      `the deliverables folder ${rel} has a line break in its path: it cannot be kept out of git`,
+    );
+  }
+  const escaped = rel.replace(/[[\]*?\\]/g, (c) => `\\${c}`).replace(/ $/, '\\ ');
+  return `/${escaped}/`;
+}
+
+/** `info/exclude` writes, one at a time per file (two copies may make two folders at once). */
+const excludeLocks = new Map<string, Promise<void>>();
+
+async function withExcludeLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  const before = excludeLocks.get(file) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((r) => (release = r));
+  const chained = before.then(() => mine);
+  excludeLocks.set(file, chained);
+  await before;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (excludeLocks.get(file) === chained) excludeLocks.delete(file);
+  }
+}
+
+/** The check options a stored row is re-checked with: an agent's keeps the agents' rules. */
+function rowRules(d: Pick<Deliverable, 'source'>): CheckOptions {
+  return d.source === 'agent' ? { secretNames: true } : {};
 }
 
 function message(e: unknown): string {
@@ -368,21 +494,25 @@ export class DeliverableCopies implements DeliverableCopier {
     ).stdout.trim();
     const rel = relative(canonical(top), folder).split(sep).join('/');
     if (!rel || rel.startsWith('..')) return;
-    const line = `/${rel}/`;
+    const line = excludePattern(rel);
     const file = join(common, 'info', 'exclude');
-    let current = '';
-    try {
-      current = await readFile(file, 'utf8');
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-    }
-    if (current.split('\n').some((l) => l.trim() === line)) return;
-    await mkdir(dirname(file), { recursive: true });
-    const sepLine = current && !current.endsWith('\n') ? '\n' : '';
-    await writeFile(
-      file,
-      `${current}${sepLine}# GalacticAgents: the project's deliverables, kept out of git on this Mac (P9-06)\n${line}\n`,
-    );
+    // Appended (never rewritten, so a line written by git or the user meanwhile is never lost),
+    // one writer per file at a time.
+    await withExcludeLock(file, async () => {
+      let current = '';
+      try {
+        current = await readFile(file, 'utf8');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      }
+      if (current.split('\n').some((l) => l === line)) return;
+      await mkdir(dirname(file), { recursive: true });
+      const sepLine = current && !current.endsWith('\n') ? '\n' : '';
+      await appendFile(
+        file,
+        `${sepLine}# GalacticAgents: the project's deliverables, kept out of git on this Mac (P9-06)\n${line}\n`,
+      );
+    });
   }
 
   private async record(place: FolderPlace): Promise<void> {
@@ -405,21 +535,40 @@ export class DeliverableCopies implements DeliverableCopier {
 
   /**
    * Copies `source` (a checked real path: a stray, the user's file, a worktree's build output)
-   * into the target's place and returns the location to record. A symlink is refused; so is a
-   * copy that would leave less than the reserve free, or a folder of more than `maxEntries`.
+   * into the target's place and returns the location to record. `rules` are the options the
+   * source was checked with (the agents' rules, the stray rule, `outside` for the user's file):
+   * immediately before the copy `source` is checked again with them against the target's roots
+   * and must still be its own real path, and every entry of a folder is checked with them too
+   * (`copyInto`). A symlink is refused; so is a copy that would leave less than the reserve free,
+   * or a folder of more than `maxEntries`.
    */
-  async copyIn(source: string, target: CopyTarget): Promise<CopyResult> {
+  async copyIn(source: string, target: CopyTarget, rules: CheckOptions): Promise<CopyResult> {
     const place = await this.ensureFolder(target);
-    const copied = await this.copyInto(source, place.dir);
+    const roots = rootsOf(this.tables, target, { dataDir: this.dataDir, home: this.home });
+    if (!roots) throw new DomainError('invalid', 'this work has no folder to copy for');
+    const copied = await this.copyInto(source, place.dir, { roots, rules });
     return {
       location: { storage: 'copy', path: copied.path, originalPath: source },
       bytes: copied.bytes,
       folder: place.folder,
+      skipped: copied.skipped,
     };
   }
 
-  /** The copy itself: `source` into the folder `dir`, under a free name. */
-  async copyInto(source: string, dir: string): Promise<{ path: string; bytes: number }> {
+  /**
+   * The copy itself: `source` into the folder `dir`, under a free name, never following a
+   * symlink in any component (TECHNOLOGY §9.4):
+   *
+   * - `source` is checked again (`checkPath` with `ctx.rules`) and must be its own real path — a
+   *   parent swapped for a symlink since the declaration no longer resolves to it;
+   * - a file is read only through `openChecked` (macOS `O_NOFOLLOW_ANY`, `(dev, ino)` compared);
+   * - a folder is walked with `lstat`, entry by entry: links and special files are left out, and
+   *   every folder and file is checked with the same rules (secret names and hard links for an
+   *   agent's source, the owner and birth time for a stray), must be its own real path (so it is
+   *   under the source's), and every file is read through `openChecked`. What is left out is
+   *   listed in `skipped`, never a reason to refuse the copy.
+   */
+  async copyInto(source: string, dir: string, ctx: CopyContext): Promise<CopiedTree> {
     if (!isAbsolute(source)) throw new DomainError('invalid', `${source} is not absolute`);
     const st = await lstat(source).catch(() => undefined);
     if (!st) throw new DomainError('invalid', `${source} does not exist`);
@@ -431,6 +580,14 @@ export class DeliverableCopies implements DeliverableCopier {
     }
     if (isInside(dir, source)) {
       throw new DomainError('invalid', `${source} contains the folder it would be copied into`);
+    }
+    const checked = checkPath(source, ctx.roots, ctx.rules);
+    if (!checked.ok) throw new DomainError('invalid', `${checked.reason} (${checked.code})`);
+    if (checked.path !== source) {
+      throw new DomainError(
+        'invalid',
+        `${source} changed since it was checked: it now leads to ${checked.path} (changed)`,
+      );
     }
     const max = this.opts.maxEntries ?? TREE_MAX_ENTRIES;
     const size = await treeSize(source, { maxEntries: max });
@@ -444,23 +601,25 @@ export class DeliverableCopies implements DeliverableCopier {
     if (!space.ok) throw new DomainError('invalid', space.message);
 
     const partial = join(dir, `.${basename(source)}.${randomBytes(4).toString('hex')}.partial`);
+    const walk: Walk = { ...ctx, source, bytes: 0, entries: 0, max, skipped: [] };
     try {
-      await cp(source, partial, {
-        recursive: true,
-        errorOnExist: true,
-        force: false,
-        verbatimSymlinks: true,
-        preserveTimestamps: true,
-        filter: async (src) => {
-          // A worktree's `.git` (a link back into the repository) is never part of a copy.
-          if (src !== source && basename(src) === '.git') return false;
-          const s = await lstat(src);
-          return s.isFile() || s.isDirectory();
-        },
-      });
-      await sanitizeModes(partial);
-      const path = await this.settle(partial, dir, basename(source), st.isDirectory());
-      return { path: realpathSync.native(path), bytes: size.bytes };
+      if (checked.type === 'file') {
+        const opened = openChecked(source, ctx.roots, ctx.rules);
+        if (!opened.ok) throw new DomainError('invalid', `${opened.reason} (${opened.code})`);
+        if (opened.path !== source) {
+          closeQuietly(opened.fd);
+          throw new DomainError('invalid', `${source} changed while it was being copied (changed)`);
+        }
+        walk.bytes += await copyFd(opened.fd, partial, opened.stat);
+      } else {
+        await mkdir(partial, { mode: 0o700 });
+        await this.copyFolder(source, partial, walk);
+        await chmod(partial, copiedMode(checked.stat.mode, true));
+        const at = new Date(checked.stat.mtimeMs);
+        await utimes(partial, at, at);
+      }
+      const path = await this.settle(partial, dir, basename(source), checked.type === 'folder');
+      return { path: realpathSync.native(path), bytes: walk.bytes, skipped: walk.skipped };
     } catch (e) {
       // Only the copy's own partial name is ever removed (decision 122).
       await rm(partial, { recursive: true, force: true }).catch(() => undefined);
@@ -468,7 +627,71 @@ export class DeliverableCopies implements DeliverableCopier {
     }
   }
 
-  /** Moves the partial copy to a free name without ever replacing what is there. */
+  /** One folder's entries into `to` (already made), each one checked (see `copyInto`). */
+  private async copyFolder(from: string, to: string, walk: Walk): Promise<void> {
+    for (const name of await readdir(from)) {
+      // A worktree's `.git` (a link back into the repository) is never part of a copy.
+      if (name === '.git') continue;
+      walk.entries += 1;
+      if (walk.entries > walk.max) {
+        throw new DomainError('invalid', `too many files to copy: more than ${walk.max} entries`);
+      }
+      const entry = join(from, name);
+      const skip = (reason: string) => {
+        walk.skipped.push({ path: relative(walk.source, entry), reason });
+      };
+      const st = await lstat(entry).catch(() => undefined);
+      if (!st) {
+        skip('missing');
+        continue;
+      }
+      if (st.isSymbolicLink()) {
+        skip('symlink');
+        continue;
+      }
+      if (!st.isFile() && !st.isDirectory()) {
+        skip('special');
+        continue;
+      }
+      const dst = join(to, name);
+      if (st.isDirectory()) {
+        const check = checkPath(entry, walk.roots, walk.rules);
+        if (!check.ok) {
+          skip(check.code);
+          continue;
+        }
+        if (check.path !== entry || check.type !== 'folder') {
+          skip('changed');
+          continue;
+        }
+        await mkdir(dst, { mode: 0o700 });
+        await this.copyFolder(entry, dst, walk);
+        await chmod(dst, copiedMode(check.stat.mode, true));
+        const at = new Date(check.stat.mtimeMs);
+        await utimes(dst, at, at);
+        continue;
+      }
+      const opened = openChecked(entry, walk.roots, walk.rules);
+      if (!opened.ok) {
+        skip(opened.code);
+        continue;
+      }
+      if (opened.path !== entry || opened.type !== 'file') {
+        closeQuietly(opened.fd);
+        skip('changed');
+        continue;
+      }
+      walk.bytes += await copyFd(opened.fd, dst, opened.stat);
+    }
+  }
+
+  /**
+   * Moves the partial copy to a free name without ever replacing anything: a file is linked into
+   * place (`EEXIST` on a taken name); for a folder the name is first claimed with an exclusive
+   * `mkdir` (`EEXIST` when anything is there), so the `rename` only ever replaces that empty
+   * folder of our own — a name made by someone else meanwhile is skipped, never replaced, and if
+   * something lands in the claimed folder first the `rename` fails and the next name is tried.
+   */
   private async settle(
     partial: string,
     dir: string,
@@ -478,8 +701,19 @@ export class DeliverableCopies implements DeliverableCopier {
     for (let attempt = 0; attempt < 5; attempt++) {
       const dst = join(dir, await freeName(dir, name));
       if (directory) {
-        if (await exists(dst)) continue;
-        await rename(partial, dst);
+        try {
+          await mkdir(dst, { mode: 0o700 });
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;
+          throw e;
+        }
+        try {
+          await rename(partial, dst);
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code;
+          if (code === 'ENOTEMPTY' || code === 'EEXIST') continue;
+          throw e;
+        }
         return dst;
       }
       try {
@@ -577,18 +811,17 @@ export class DeliverableCopies implements DeliverableCopier {
         { projectId: project.id },
         { dataDir: this.dataDir, home: this.home },
       );
-      const check = roots ? checkPath(join(repoRoot, rel), roots) : undefined;
+      const check = roots ? checkPath(join(repoRoot, rel), roots, rowRules(d)) : undefined;
       if (check?.ok) {
         await this.update(d, { location: { storage: 'in_place', path: check.path } });
         return {};
       }
     }
     try {
-      const copy = await this.copyIn(location.path, { taskId: task.id });
-      await this.update(d, {
-        location: copy.location,
-        meta: { copy: { bytes: copy.bytes } },
-      });
+      // The row's own rules again, on the path and on every entry of a folder (B1: a parent
+      // swapped for a symlink since the declaration is refused, never followed).
+      const copy = await this.copyIn(location.path, { taskId: task.id }, rowRules(d));
+      await this.update(d, { location: copy.location, meta: copyMeta(copy) });
       return {};
     } catch (e) {
       const reason = `it was in the task's worktree: ${message(e)}`;
@@ -613,7 +846,7 @@ export class DeliverableCopies implements DeliverableCopier {
     const spec = rel.split(sep).join('/');
     const tree = await this.git(
       repoRoot,
-      ['ls-tree', '-r', '--name-only', '-z', commit, '--', spec],
+      ['--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', commit, '--', spec],
       {
         allowFailure: true,
       },
@@ -621,7 +854,16 @@ export class DeliverableCopies implements DeliverableCopier {
     if (tree.code !== 0 || splitZ(tree.stdout).length === 0) return false;
     const status = await this.git(
       root,
-      ['status', '--porcelain', '-z', '--ignored', '--untracked-files=all', '--', spec],
+      [
+        '--literal-pathspecs',
+        'status',
+        '--porcelain',
+        '-z',
+        '--ignored',
+        '--untracked-files=all',
+        '--',
+        spec,
+      ],
       { allowFailure: true },
     );
     return status.code === 0 && splitZ(status.stdout).length === 0;

@@ -40,6 +40,18 @@ describe('userFoldersOf (P9-06)', () => {
     ]);
   });
 
+  it('is the folder it would be made as before one is recorded (a tracked deliverables/ is not it)', () => {
+    const fresh = lookup([project('p-1', '/w/a')]);
+    expect(
+      userFoldersOf(fresh, { projectId: 'p-1' }, '/w/a', '/w/a/galactic-deliverables'),
+    ).toEqual(['/w/a/galactic-deliverables']);
+    // A recorded folder wins over the candidate.
+    const recorded = lookup([project('p-2', '/w/b', { deliverablesFolder: '/w/b/deliverables' })]);
+    expect(
+      userFoldersOf(recorded, { projectId: 'p-2' }, '/w/b', '/w/b/galactic-deliverables'),
+    ).toEqual(['/w/b/deliverables']);
+  });
+
   it('ignores a recorded value that is not an absolute path', () => {
     expect(recordedFolder({ deliverablesFolder: 'relative' })).toBeUndefined();
     expect(recordedFolder({ deliverablesFolder: 42 })).toBeUndefined();

@@ -398,6 +398,13 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
         ...(opts.onError ? { onError: opts.onError } : {}),
       })
     : undefined;
+  // Before a project's folder is recorded, the gate guards the one it would be (P9-06): a
+  // tracked `deliverables/` source folder is the project's, `galactic-deliverables/` the user's.
+  if (deliverableCopies) {
+    runtime.setDeliverablesFolderLookup(
+      async (target) => (await deliverableCopies.placeOf(target)).folder,
+    );
+  }
   if (workspaces && deliverableCopies) {
     workspaces.setBeforeWorktreeRemoved((taskId, root, info) =>
       deliverableCopies.beforeWorktreeRemoved(taskId, root, info),
