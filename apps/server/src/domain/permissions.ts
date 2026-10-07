@@ -1496,9 +1496,12 @@ export function isUserFolderPath(p: string, ctx: PolicyContext): boolean {
   if (/^~[^/]/.test(p)) return false;
   const raw = resolvePath(p, ctx, cwdOf(ctx));
   const targets = [raw, unalias(raw, ctx)];
+  // Case-folded: on a case-insensitive volume (APFS by default) `Deliverables/x` is the same
+  // folder; on a case-sensitive one this only asks more often (fail closed).
+  const fold = (q: string) => q.normalize('NFC').toLowerCase();
   return ctx.userFolders.some((f) => {
-    const folder = resolve(expandHome(f, ctx));
-    return targets.some((t) => within(folder, t));
+    const folder = fold(resolve(expandHome(f, ctx)));
+    return targets.some((t) => within(folder, fold(t)));
   });
 }
 
