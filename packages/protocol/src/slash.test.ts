@@ -24,7 +24,11 @@ describe('slash commands (P8-13)', () => {
       { name: 'long', description: 'x'.repeat(1_000) },
     ]);
     expect(out.map((c) => c.name)).toEqual(['review', 'compact', 'dup', 'long']);
-    expect(out[0]).toEqual({ name: 'review', description: 'Review the diff', argumentHint: '<pr>' });
+    expect(out[0]).toEqual({
+      name: 'review',
+      description: 'Review the diff',
+      argumentHint: '<pr>',
+    });
     expect(out[1]).toEqual({ name: 'compact' });
     expect(out[2]).toEqual({ name: 'dup', description: 'own', builtin: true });
     expect(out[3]!.description).toHaveLength(SLASH_DESCRIPTION_MAX);

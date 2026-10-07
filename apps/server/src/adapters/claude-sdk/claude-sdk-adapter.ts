@@ -9,11 +9,13 @@ import type {
   PermissionGate,
   RuntimePreflight,
   SendOptions,
+  SlashCommand,
   SpawnHandle,
   SpawnOptions,
   StopOptions,
   ToolCall,
 } from '@galactic/protocol';
+import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import type {
   ManagedProcess,
@@ -25,6 +27,7 @@ import { claudePreflight } from './preflight.js';
 import {
   loadSdk,
   type SdkCanUseToolOptions,
+  type SdkCommandsChanged,
   type SdkContentBlock,
   type SdkHookOutput,
   type SdkMessage,
@@ -89,6 +92,8 @@ export interface ClaudeSdkAdapterOptions {
   passEnv?: string[];
   /** How long `stop()` waits for the turn to end after `interrupt()`. */
   graceMs?: number;
+  /** How long `commands()` waits for the CLI's answer before giving `[]` (default 5 s; P8-13). */
+  commandsTimeoutMs?: number;
   /** Longest tool-result excerpt kept in the transcript. */
   maxToolResultChars?: number;
   /**
@@ -193,6 +198,10 @@ class Session {
   }
   lastCost: Cost | undefined;
   lastResult: string | undefined;
+  /** The session's slash commands as the CLI last reported them (P8-13); unknown until then. */
+  commands: SlashCommand[] | undefined;
+  /** A `supportedCommands()` call in flight (one at a time). */
+  commandsFetch: Promise<SlashCommand[]> | undefined;
   /** The `PreToolUse` hook's verdict per `toolUseId`, reused by `canUseTool` (one gate check per call). */
   readonly verdicts = new Map<string, GateVerdict>();
   /** `toolUseId`s already reported as `agent.tool_call`. Cleared at every turn end. */
@@ -522,6 +531,17 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     switch (message.type) {
       case 'system': {
         const m = message as { subtype?: string; session_id?: unknown };
+        if (m.subtype === 'commands_changed') {
+          // The full list after a change (skills found in a subdirectory …): replaces the cache.
+          const changed = message as unknown as SdkCommandsChanged;
+          session.commands = normalizeSlashCommands(
+            Array.isArray(changed.commands) ? changed.commands : [],
+          );
+          return;
+        }
+        // The CLI is up: read its commands now, so the composer's list is ready (P8-13).
+        if (m.subtype === 'init' && session.commands === undefined)
+          void this.fetchCommands(session);
         if (
           m.subtype === 'init' &&
           typeof m.session_id === 'string' &&
@@ -803,6 +823,43 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     });
   }
 
+  // --- slash commands (P8-13) ----------------------------------------------------
+
+  /**
+   * The session's slash commands: the cached list, else `supportedCommands()` (once at a time,
+   * bounded by `commandsTimeoutMs`). `[]` for an ended or unknown session, an SDK without the
+   * call, a call that fails (reported, not cached: the next call asks again) or a slow one.
+   */
+  async commands(sessionId: string): Promise<SlashCommand[]> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.terminal) return [];
+    if (session.commands) return session.commands;
+    return withTimeout(this.fetchCommands(session), this.opts.commandsTimeoutMs ?? 5_000, []);
+  }
+
+  private fetchCommands(session: Session): Promise<SlashCommand[]> {
+    const query = session.query;
+    if (session.commands) return Promise.resolve(session.commands);
+    if (!query?.supportedCommands || session.terminal) return Promise.resolve([]);
+    session.commandsFetch ??= query
+      .supportedCommands()
+      .then(
+        (raw) => {
+          // A `commands_changed` push that arrived meanwhile is newer: keep it.
+          session.commands ??= normalizeSlashCommands(Array.isArray(raw) ? raw : []);
+          return session.commands;
+        },
+        (error: unknown) => {
+          if (!session.terminal) this.onError(error, `supportedCommands ${session.agentId}`);
+          return [] as SlashCommand[];
+        },
+      )
+      .finally(() => {
+        session.commandsFetch = undefined;
+      });
+    return session.commandsFetch;
+  }
+
   // --- control -----------------------------------------------------------------
 
   async send(sessionId: string, message: string, opts: SendOptions = {}): Promise<void> {
@@ -994,6 +1051,15 @@ function rateLimitSummary(m: SdkRateLimitEvent): string | undefined {
   const used =
     info.utilization !== undefined ? ` (${Math.round(info.utilization * 100)}% used)` : '';
   return `close to the ${which}rate limit${used}`;
+}
+
+/** `p`'s value, or `fallback` when it has not settled within `ms`. */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<T>((r) => {
+    timer = setTimeout(() => r(fallback), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 /** Resolves `true` when `p` settles within `ms`, `false` otherwise. */
