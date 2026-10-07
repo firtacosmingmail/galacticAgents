@@ -16,6 +16,7 @@ import { composeRuntime } from '../runtime/compose.js';
 import { MemoryProcessStore } from '../runtime/process-store.js';
 import { ProcessSupervisor } from '../runtime/supervisor.js';
 import { connectWs, startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
+import { MAX_RUN_SUBSCRIPTIONS } from '../ws/session.js';
 
 /**
  * P9-08 — the runs' routes and the run output stream (TECHNOLOGY §9.8, §9.9; SPEC decision 131):
@@ -338,6 +339,20 @@ describe('the run routes (P9-08)', () => {
     });
     expect(masked).toMatchObject({ status: 400, json: { error: 'invalid' } });
   }, 20_000);
+
+  it('limits the run subscriptions of one socket (review N2)', async () => {
+    const s = await setup();
+    const subscribe = Array.from({ length: MAX_RUN_SUBSCRIPTIONS + 1 }, (_, i) => ({
+      type: 'run.subscribe',
+      runId: `r-${i}`,
+    }));
+    const outcome = await connectWs(s.t.wsUrl, {
+      send: [{ type: 'hello', token: TEST_TOKEN }, ...subscribe],
+      until: (messages) => messages.some((m) => m.type === 'error'),
+    });
+    const errors = outcome.messages.filter((m) => m.type === 'error');
+    expect(errors).toEqual([expect.objectContaining({ code: 'too_many_subscriptions' })]);
+  });
 
   it('streams a run’s output to a socket that subscribed (run.subscribe → run_output)', async () => {
     const s = await setup();

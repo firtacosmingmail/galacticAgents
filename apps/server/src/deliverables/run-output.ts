@@ -99,6 +99,31 @@ const toRunChunk = (c: TranscriptChunk): RunOutputChunk => ({
   chunk: c.text,
 });
 
+/** The most bytes of output one `run_output` message carries (a larger single chunk goes alone). */
+export const RUN_OUTPUT_PAGE_BYTES = 256 * 1024;
+
+/** `chunks` split into runs of at most `max` bytes, in order. */
+export function pagesOf(
+  chunks: readonly RunOutputChunk[],
+  max = RUN_OUTPUT_PAGE_BYTES,
+): RunOutputChunk[][] {
+  const pages: RunOutputChunk[][] = [];
+  let page: RunOutputChunk[] = [];
+  let bytes = 0;
+  for (const c of chunks) {
+    const n = Buffer.byteLength(c.chunk);
+    if (page.length > 0 && bytes + n > max) {
+      pages.push(page);
+      page = [];
+      bytes = 0;
+    }
+    page.push(c);
+    bytes += n;
+  }
+  if (page.length > 0) pages.push(page);
+  return pages;
+}
+
 export class RunOutput {
   private readonly pipeline: TranscriptPipeline;
   private readonly oldest;
@@ -119,9 +144,15 @@ export class RunOutput {
     if (text !== '') this.pipeline.append(runId, 'text', text);
   }
 
-  /** Persisted output after `since`, then each written batch (`run.subscribe`). */
+  /**
+   * Persisted output after `since`, then each written batch (`run.subscribe`), handed over in
+   * pages of at most `RUN_OUTPUT_PAGE_BYTES` (review N2: a 64 MiB backlog is not one socket
+   * message; a single chunk larger than a page goes alone).
+   */
   subscribe(runId: Id, since: number, listener: (chunks: RunOutputChunk[]) => void): () => void {
-    return this.pipeline.subscribe(runId, since, (chunks) => listener(chunks.map(toRunChunk)));
+    return this.pipeline.subscribe(runId, since, (chunks) => {
+      for (const page of pagesOf(chunks.map(toRunChunk))) listener(page);
+    });
   }
 
   /** `GET /api/runs/:id/output?after=&limit=`. */

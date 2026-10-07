@@ -176,6 +176,8 @@ export const ErrorCode = z.enum([
   'protocol_violation',
   'slow_consumer',
   'unsupported',
+  /** More `run.subscribe`s than one socket may hold (P9-08 review N2; only a runs client sees it). */
+  'too_many_subscriptions',
   'internal',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
