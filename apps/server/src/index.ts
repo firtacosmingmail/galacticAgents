@@ -29,6 +29,7 @@ import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { composeRuntime } from './runtime/compose.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
+import { runIdOfKey } from './runtime/process-attribution.js';
 import { ProcessSupervisor } from './runtime/supervisor.js';
 import { Workspaces } from './workspace/workspaces.js';
 
@@ -304,7 +305,14 @@ composed.defineBrains({
 // Runs the previous server life left live show as stopped (decision 130): what still carries
 // their marker is stopped (`reconcile()` above took their groups), and none is started again.
 if (composed.runs && !shuttingDown) {
-  const runs = await composed.runs.recover();
+  // The previous life's runs by their PID rows and launch intents: what escaped their groups is
+  // found by the marker, even for a run whose `run.started` the crash never let it write.
+  const rows = [...reconciled.dead, ...reconciled.orphans].flatMap((key) => {
+    const runId = runIdOfKey(key);
+    const row = runId !== undefined ? supervisor.processRecord(key) : undefined;
+    return runId !== undefined && row ? [{ runId, intendedAt: row.startedAt }] : [];
+  });
+  const runs = await composed.runs.recover({ launches: [...rows, ...(launches.runs ?? [])] });
   if (runs.ended.length > 0) {
     console.log(
       `Runs: ${runs.ended.length} stopped by the restart` +

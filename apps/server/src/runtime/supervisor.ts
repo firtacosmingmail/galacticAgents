@@ -14,6 +14,7 @@ import {
 import {
   AGENT_ID_ENV,
   RUN_ID_ENV,
+  runIdOfKey,
   START_SLACK_MS,
   type AgentGroup,
   type ProcEntry,
@@ -235,6 +236,12 @@ export interface LaunchReconcileResult {
   none: Id[];
   /** Launches this platform cannot check (no process table): forgotten, nothing stopped. */
   unchecked: Id[];
+  /**
+   * The managed runs among them (P9-08; present when there is one), whatever became of them: the
+   * run service's restart pass stops what still carries their marker outside the group taken
+   * here (a run's stop takes everything that carries its marker, decision 130).
+   */
+  runs?: { runId: Id; intendedAt: string }[];
 }
 
 export interface SupervisorOptions {
@@ -979,6 +986,10 @@ export class ProcessSupervisor {
     }
     const open: LaunchIntent[] = [];
     for (const intent of intents) {
+      const runId = runIdOfKey(intent.agentId);
+      if (runId !== undefined && !this.otherBoot(intent.bootAt)) {
+        (result.runs ??= []).push({ runId, intendedAt: intent.intendedAt });
+      }
       if (this.otherBoot(intent.bootAt)) {
         result.none.push(intent.agentId);
         this.forgetLaunch(intent.id, intent.agentId);

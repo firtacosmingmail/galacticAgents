@@ -780,12 +780,32 @@ export class RunService {
    * `reconcileLaunches()`, what still carries the marker of a run the log has live is stopped,
    * and each such run ends `stopped` with `server_restarted`. Returns the runs it ended.
    */
-  async recover(): Promise<{ ended: Id[]; stopped: number[] }> {
+  async recover(
+    opts: { launches?: readonly { runId: Id; intendedAt: string }[] | undefined } = {},
+  ): Promise<{ ended: Id[]; stopped: number[] }> {
     const open = this.log.tables.deliverables
       .all()
       .filter((d) => d.lastRun && d.lastRun.state !== 'ended' && !this.live.has(d.lastRun.runId));
     const ended: Id[] = [];
     const stopped: number[] = [];
+    // Runs forked just before the crash that the log may not know (`run.started` never written):
+    // the supervisor took their group by the launch intent; what escaped it carries the marker.
+    const known = new Set(open.map((d) => d.lastRun!.runId));
+    for (const launch of opts.launches ?? []) {
+      if (known.has(launch.runId) || this.live.has(launch.runId)) continue;
+      const since = Date.parse(launch.intendedAt);
+      try {
+        stopped.push(
+          ...(await this.sweepCarriers(
+            launch.runId,
+            Number.isNaN(since) ? 0 : since,
+            Date.now() + this.termMs,
+          )),
+        );
+      } catch (error) {
+        this.onError(error, `run ${launch.runId}: restart sweep`);
+      }
+    }
     for (const d of open) {
       const runId = d.lastRun!.runId;
       const since = Date.parse(d.lastRun!.startedAt);
