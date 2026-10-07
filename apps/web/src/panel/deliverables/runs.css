@@ -1,0 +1,263 @@
+/*
+ * The panel's runs (P9-10): a command row's state, ports, actions, output and history, and the
+ * Run confirmation. Over the panel's tokens; the amber beacon stays reserved for "blocked on
+ * you" (SPEC §4.4) — the engine's warnings use the failed red, a changed body the "here" blue.
+ */
+
+.run-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dlv-run-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.run-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--pnl-line);
+}
+.run-dot.is-live {
+  background: #4fb37a;
+  box-shadow: 0 0 0 0 rgba(79, 179, 122, 0.6);
+  animation: run-pulse 1.6s ease-out infinite;
+}
+.run-dot.is-failed {
+  background: var(--pnl-failed);
+}
+.run-dot.is-exited {
+  background: var(--pnl-muted);
+}
+@keyframes run-pulse {
+  to {
+    box-shadow: 0 0 0 6px rgba(79, 179, 122, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-dot.is-live {
+    animation: none;
+  }
+}
+.run-ports {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.run-port {
+  font-family: var(--pnl-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+a.run-port {
+  color: var(--pnl-here);
+}
+
+/* the output */
+.run-output,
+.run-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  min-width: 0;
+}
+.run-output-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.run-output-bar .pnl-eyebrow,
+.run-history .pnl-eyebrow {
+  margin: 0;
+}
+.pnl .run-output-bar button,
+.pnl .run-history button,
+.pnl .run-buttons button {
+  padding: 3px 10px;
+  font-size: 13px;
+}
+.run-output-text {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: #000;
+  font: 12px/1.4 var(--pnl-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.run-truncated {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* the history */
+.run-history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.run-history-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.run-history-list li.is-shown {
+  background: var(--pnl-here-soft);
+}
+.run-history-list time {
+  color: var(--pnl-muted);
+  font-size: 12px;
+}
+.run-history-list code {
+  font-family: var(--pnl-mono);
+  font-size: 12px;
+}
+
+/* the Run confirmation: a modal over the page */
+.run-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(5, 7, 12, 0.66);
+}
+.run-dialog {
+  width: min(640px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 10px;
+  background: var(--pnl-surface);
+  color: var(--pnl-ink);
+  font-size: 13px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.run-dialog p {
+  margin: 0;
+}
+.run-dialog-title {
+  margin: 0;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.run-dialog-title:focus {
+  outline: none;
+}
+.run-label {
+  font-weight: 600;
+}
+.run-line {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-family: var(--pnl-mono);
+  font-size: 13px;
+}
+.run-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+}
+.run-facts dt {
+  color: var(--pnl-muted);
+}
+.run-facts dd {
+  margin: 0;
+  min-width: 0;
+}
+.run-facts code {
+  font-family: var(--pnl-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.run-env {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.run-env code {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--pnl-raised);
+}
+.run-warnings {
+  padding: 6px 10px;
+  border-left: 3px solid var(--pnl-failed);
+  border-radius: 4px;
+  background: rgba(210, 106, 106, 0.1);
+}
+.run-warnings ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.run-warnings-head {
+  font-weight: 600;
+}
+.run-notice {
+  padding-left: 6px;
+  border-left: 3px solid var(--pnl-here);
+}
+.run-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.run-changed {
+  color: var(--pnl-here);
+}
+.run-body-text {
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: var(--pnl-bg);
+  font: 12px/1.4 var(--pnl-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+mark.run-body-changed {
+  display: block;
+  background: var(--pnl-here-soft);
+  color: inherit;
+  box-shadow: inset 3px 0 0 var(--pnl-here);
+}
+.run-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+@media (max-width: 760px) {
+  .pnl .run-output-bar button,
+  .pnl .run-history button,
+  .pnl .run-buttons button {
+    min-height: 44px;
+  }
+  .run-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

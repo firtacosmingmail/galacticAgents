@@ -304,8 +304,9 @@ describe('the project view: grouping and rows (decision 124, SPEC §4.7)', () =>
     expect(d.textContent).toContain('runs in the project folder');
     expect(d.textContent).toContain('running · :5173');
     expect(d.textContent).toContain('added by detected');
-    // No Run button: the runs are the next task's (P9-10).
-    expect(within(d).queryByRole('button', { name: /Run/ })).toBeNull();
+    // A live run: Stop and Restart, no Run (P9-10's runs; tested in runs.test.tsx).
+    expect(within(d).queryByRole('button', { name: 'Run…' })).toBeNull();
+    expect(within(d).getByRole('button', { name: 'Stop' })).toBeTruthy();
     const g = rowOf('Coverage report');
     expect(g.textContent).toContain('missing — not there any more');
     expect(within(g).queryByRole('button', { name: 'View' })).toBeNull();
