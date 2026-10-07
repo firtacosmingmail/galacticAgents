@@ -103,7 +103,7 @@ describe('the deliverables folder is never deleted from (decision 122)', () => {
       return join(tmp, 'outside', name);
     };
     const keep = async (taskId: Id | undefined, projectId: Id | undefined, name: string) => {
-      const target = taskId ? { taskId } : { projectId };
+      const target = taskId ? { taskId } : { projectId: projectId! };
       const copy = await copies.copyIn(stray(name), target);
       return (
         await commands.addDeliverable(
