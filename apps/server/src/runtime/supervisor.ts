@@ -213,9 +213,9 @@ export interface StopProcessOptions {
   by?: Actor;
   /**
    * SIGTERM → SIGKILL delay for the group members left when the leader exits during the stop
-   * (default `termMs`).
+   * (default `termMs`); a function is read when the leader exits (a deadline's remainder).
    */
-  reapMs?: number;
+  reapMs?: number | (() => number);
 }
 
 export interface ReconcileResult {
@@ -303,7 +303,7 @@ class Managed implements ManagedProcess {
   /** Set while the restart policy is between exit and the new child. */
   restarting: Promise<void> | undefined;
   /** SIGTERM → SIGKILL delay for the group left behind when the leader exits (a stop's `termMs`). */
-  reapMs: number | undefined;
+  reapMs: number | (() => number) | undefined;
   private resolveExit!: (info: ExitInfo) => void;
   private turnWaiters: (() => void)[] = [];
   /** Bumped by `turnEnded()`; a stop compares it to the value it saw when it started. */
@@ -773,7 +773,12 @@ export class ProcessSupervisor {
       const pgid = child.pid ?? -1;
       this.endRunGroup(spec.agentId, pgid, exitedAt);
       void withTimeout(closed, DRAIN_MS)
-        .then(() => this.reapGroup(pgid, managed.reapMs ?? this.termMs))
+        .then(() =>
+          this.reapGroup(
+            pgid,
+            typeof managed.reapMs === 'function' ? managed.reapMs() : (managed.reapMs ?? this.termMs),
+          ),
+        )
         .catch((error: unknown) => this.onError(error, spec.agentId))
         .then(() => this.onExit(managed, child, { code, signal, at }));
     });
