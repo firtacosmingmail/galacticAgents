@@ -47,14 +47,16 @@ function setup() {
     createAgent(ctx, { role: 'harmonizer', runtime: 'fake', caps: CAPS, bodyId: EARTH_ID }),
   ).value;
   const steward: Actor = { type: 'agent', id: 'a-steward' };
-  const file = (over: Partial<AddDeliverableInput> = {}): AddDeliverableInput => ({
-    taskId: task.id,
-    kind: 'file',
-    title: 'Report',
-    source: 'agent',
-    location: { storage: 'worktree', path: '/w/app/.galactic/worktrees/t/report.md' },
-    ...over,
-  });
+  /** A Steward's file; `over` may also blank a field out (`undefined`) to test a refusal. */
+  const file = (over: Record<string, unknown> = {}): AddDeliverableInput =>
+    ({
+      taskId: task.id,
+      kind: 'file',
+      title: 'Report',
+      source: 'agent',
+      location: { storage: 'worktree', path: '/w/app/.galactic/worktrees/t/report.md' },
+      ...over,
+    }) as AddDeliverableInput;
   return { ...w, project, other, task, harmonizer, steward, file };
 }
 
@@ -93,9 +95,7 @@ describe('addDeliverable', () => {
       refusal(() => run((ctx) => addDeliverable(ctx, input, by, write)));
     expect(add(file({ taskId: 't-none' })).code).toBe('not_found');
     expect(add(file({ projectId: other.id })).message).toMatch(/belongs to project/);
-    expect(add({ ...file(), taskId: undefined } as AddDeliverableInput).message).toMatch(
-      /project or a task/,
-    );
+    expect(add(file({ taskId: undefined })).message).toMatch(/project or a task/);
     expect(add(file({ location: undefined })).message).toMatch(/needs a path/);
     expect(add(file({ location: { storage: 'in_place', path: 'rel/x.md' } })).message).toMatch(
       /absolute/,
@@ -146,7 +146,15 @@ describe('addDeliverable', () => {
     expect(
       refusal(() =>
         run((ctx) =>
-          addDeliverable(ctx, { ...detected, projectId: undefined, taskId: task.id }, SYSTEM),
+          addDeliverable(
+            ctx,
+            {
+              ...detected,
+              projectId: undefined,
+              taskId: task.id,
+            } as unknown as AddDeliverableInput,
+            SYSTEM,
+          ),
         ),
       ).message,
     ).toMatch(/project's detected/);
