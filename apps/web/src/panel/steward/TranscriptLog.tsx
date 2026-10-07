@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import type { TranscriptChunk } from '@galactic/protocol';
 import type { TranscriptView } from '../../state/transcript-view.js';
+import { compactionNote } from '../compaction.js';
 
 /** Within this many pixels of an edge counts as "at" it. */
 const EDGE_PX = 48;
@@ -67,11 +68,17 @@ export function TranscriptLog({
             {view.loadingOlder ? 'Loading earlier…' : 'Load earlier'}
           </button>
         )}
+        {/* P8-02: retention removed the start; said where the transcript now begins. */}
+        {view.status === 'ready' && !view.hasMore && view.compacted && (
+          <p className="muted stw-compacted" role="note">
+            {compactionNote(view.compacted, 'transcript')}
+          </p>
+        )}
         {view.status === 'loading' && chunks.length === 0 && <p className="muted">Loading…</p>}
-        {view.status !== 'loading' && chunks.length === 0 && <p className="muted">Nothing yet.</p>}
-        {chunks.map((c) => (
-          <Chunk key={c.seq} chunk={c} />
-        ))}
+        {view.status !== 'loading' && chunks.length === 0 && !view.compacted && (
+          <p className="muted">Nothing yet.</p>
+        )}
+        {chunks.map((c) => (c.kind === 'terminal' ? null : <Chunk key={c.seq} chunk={c} />))}
       </div>
       {view.error && (
         <p className="error" role="alert">
@@ -98,6 +105,8 @@ function Chunk({ chunk: c }: { chunk: TranscriptChunk }) {
           <code>{c.text}</code>
         </div>
       );
+    case 'terminal':
+      return null; // a terminal agent's raw screen: the terminal view's (P8-08)
     case 'text':
       return (
         <p className="stw-chunk stw-text" data-seq={c.seq}>

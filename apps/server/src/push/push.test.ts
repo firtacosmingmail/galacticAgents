@@ -12,11 +12,12 @@ import {
   type PushSubscriptionJson,
   type Question,
 } from '@galactic/protocol';
+import { isStorageFailure, type Database } from '../db/database.js';
 import { world } from '../test/world.js';
 import { isPushServiceEndpoint, pushDeviceId } from './endpoint.js';
 import { PushSendError, PushService, webPushTransport, type PushTransport } from './service.js';
 import { PushStore } from './store.js';
-import { loadOrCreateVapidKeys, vapidSubject, VAPID_FILE } from './vapid.js';
+import { loadOrCreateVapidKeys, vapidKeyId, vapidSubject, VAPID_FILE } from './vapid.js';
 
 /**
  * Web Push on the server (P7-04): the key pair, the device table, what is sent for which event,
@@ -34,6 +35,21 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
+
+/**
+ * A data directory whose VAPID keys were made long ago, as on a server where devices subscribe
+ * after the keys exist (subscriptions written at or before the keys' creation are bound to older
+ * keys and cleared).
+ */
+const keyedDir = (createdAt = '2000-01-01T00:00:00.000Z') => {
+  const d = tempDir();
+  writeFileSync(
+    join(d, VAPID_FILE),
+    JSON.stringify({ ...webpush.generateVAPIDKeys(), createdAt }),
+    { mode: 0o600 },
+  );
+  return d;
+};
 
 /** A browser-like subscription: a real P-256 key pair and auth secret, on an allowed service. */
 function fakeSubscription(n = 1, host = 'fcm.googleapis.com') {
@@ -171,6 +187,22 @@ describe('PushStore', () => {
     expect(store.clear()).toBe(2);
     expect(store.list()).toHaveLength(0);
   });
+
+  it('clears only rows written at or before a cutoff, records the key, and removes by version', () => {
+    const { log } = world();
+    let clock = '2026-01-01T00:00:00.000Z';
+    const store = new PushStore(log.db, () => clock);
+    const old = store.upsert({ subscription: fakeSubscription(1).subscription, origin: 'local' });
+    clock = '2026-02-01T00:00:00.000Z';
+    const fresh = store.upsert({ subscription: fakeSubscription(2).subscription, origin: 'local' });
+    expect(store.clearedForKey()).toBeUndefined();
+    expect(store.clearBoundToOldKeys('2026-01-01T00:00:00.000Z', 'key-a')).toBe(1);
+    expect(store.clearedForKey()).toBe('key-a');
+    expect(store.get(old.device.id)).toBeUndefined();
+    // A removal of an older version of the row leaves the newer one.
+    expect(store.remove(fresh.device.id, '2026-01-01T00:00:00.000Z')).toBe(false);
+    expect(store.remove(fresh.device.id, fresh.device.updatedAt)).toBe(true);
+  });
 });
 
 describe('PushService', () => {
@@ -185,7 +217,7 @@ describe('PushService', () => {
   const make = (over: Partial<ConstructorParameters<typeof PushService>[0]> = {}) => {
     service = new PushService({
       store,
-      dataDir: tempDir(),
+      dataDir: keyedDir(),
       subject: 'mailto:test@example.com',
       transport,
       log: { info: (m) => logs.push(m), warn: (m) => logs.push(m) },
@@ -450,6 +482,370 @@ describe('PushService', () => {
     emit({ type: 'question.opened', question: question('q2') });
     await service.idle();
     expect(transport).not.toHaveBeenCalled();
+  });
+});
+
+/** SQLITE_FULL, as better-sqlite3 throws it. */
+const diskFull = () =>
+  Object.assign(new Error('database or disk is full'), { code: 'SQLITE_FULL' });
+
+/**
+ * The database cannot grow and has no free page left — not even slack on the subscriptions' own
+ * page, so a row that grows (`last_sent_at` from NULL to a time) fails too: every such write fails
+ * with a real SQLITE_FULL until the returned function gives the space back (the disk-full drill's
+ * technique, P8-04).
+ */
+function fillDisk(db: Database, deviceId: string): () => void {
+  const pages = db.pragma('page_count', { simple: true }) as number;
+  db.pragma(`max_page_count = ${pages}`);
+  const fill = (write: (n: number, filler: string) => void) => {
+    let n = 0;
+    for (const size of [4_000, 400, 40, 1]) {
+      for (;;) {
+        try {
+          write(n++, 'x'.repeat(size));
+        } catch (error) {
+          if (!isStorageFailure(error)) throw error;
+          break;
+        }
+      }
+    }
+  };
+  const insert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+  fill((n, filler) => insert.run(`push-filler-${n}`, filler));
+  const grow = db.prepare('UPDATE push_subscriptions SET label = label || ? WHERE id = ?');
+  fill((_n, filler) => grow.run(filler, deviceId));
+  return () => void db.pragma('max_page_count = 1073741823');
+}
+
+/** A store whose writes (records, pruning, clearing) fail with SQLITE_FULL while `full`. */
+class FullStore extends PushStore {
+  full = false;
+  writes = 0;
+  private guard<T>(write: () => T): T {
+    this.writes++;
+    if (this.full) throw diskFull();
+    return write();
+  }
+  override markSent(id: string) {
+    this.guard(() => super.markSent(id));
+  }
+  override markFailed(id: string, error: string) {
+    this.guard(() => super.markFailed(id, error));
+  }
+  override remove(id: string, ifUpdatedAt?: string) {
+    return this.guard(() => super.remove(id, ifUpdatedAt));
+  }
+  override clearBoundToOldKeys(cutoff: string, keyId: string) {
+    return this.guard(() => super.clearBoundToOldKeys(cutoff, keyId));
+  }
+}
+
+describe('PushService on a full disk (P8-12)', () => {
+  let w: ReturnType<typeof world>;
+  let logs: string[];
+  let calls: string[];
+  let transport: ReturnType<typeof vi.fn<PushTransport>>;
+
+  const make = (
+    store: PushStore,
+    over: Partial<ConstructorParameters<typeof PushService>[0]> = {},
+  ) => {
+    const service = new PushService({
+      store,
+      dataDir: keyedDir(),
+      subject: 'mailto:test@example.com',
+      transport,
+      log: { info: (m) => logs.push(m), warn: (m) => logs.push(m) },
+      sleep: async () => undefined,
+      ...over,
+    });
+    service.start(w.log);
+    return service;
+  };
+  const emit = (event: Event) => w.log.runCommand((ctx) => ctx.emit(event));
+  const storageLines = () => logs.filter((l) => /database refused/.test(l));
+  const idOf = (payload: string) => (JSON.parse(payload) as PushPayload).id;
+
+  beforeEach(() => {
+    w = world();
+    logs = [];
+    calls = [];
+    transport = vi.fn<PushTransport>(async (target, payload) => {
+      calls.push(`${target.endpoint} ${idOf(payload)}`);
+    });
+  });
+
+  it('a delivered push whose record the full database refuses is sent once, not retried', async () => {
+    const store = new PushStore(w.log.db);
+    const a = fakeSubscription(1);
+    const b = fakeSubscription(2);
+    store.upsert({ subscription: a.subscription, origin: 'remote' });
+    const filler = store.upsert({ subscription: b.subscription, origin: 'local' });
+    const service = make(store);
+    // The event commits, then the disk fills before the deliveries record themselves: their
+    // `markSent` meets a real SQLITE_FULL.
+    emit({ type: 'question.opened', question: question('q1') });
+    const giveBack = fillDisk(w.log.db, filler.device.id);
+    await service.idle();
+    expect(calls.sort()).toEqual(
+      [`${a.subscription.endpoint} question:q1`, `${b.subscription.endpoint} question:q1`].sort(),
+    );
+    expect(store.list().every((s) => s.device.lastSentAt === undefined)).toBe(true);
+    // One line for the episode, naming the code, never an endpoint.
+    expect(storageLines()).toHaveLength(1);
+    expect(storageLines()[0]).toContain('SQLITE_FULL');
+    expect(logs.join('\n')).not.toContain(a.subscription.endpoint);
+    giveBack();
+    // Escalated to the user again in this server life: still not pushed twice.
+    emit({
+      type: 'question.escalated',
+      questionId: 'q1',
+      from: { type: 'agent', id: 'w1' },
+      to: { type: 'user' },
+      version: 1,
+    });
+    await service.idle();
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
+  it('with every record refused, each push of a busy stretch is delivered exactly once', async () => {
+    const store = new FullStore(w.log.db);
+    const devices = [1, 2, 3].map((n) => fakeSubscription(n));
+    for (const d of devices) store.upsert({ subscription: d.subscription, origin: 'remote' });
+    const flaky = devices[2]!.subscription.endpoint;
+    let flakyCalls = 0;
+    transport.mockImplementation(async (target, payload) => {
+      if (target.endpoint === flaky && ++flakyCalls === 1) throw new PushSendError(503);
+      calls.push(`${target.endpoint} ${idOf(payload)}`);
+    });
+    const service = make(store);
+    service.publicKey(); // the keys are loaded (and checked) before the disk fills
+    store.writes = 0;
+    store.full = true;
+    emit({ type: 'question.opened', question: question('q1') });
+    emit({ type: 'question.opened', question: question('q2', { kind: 'permission' }) });
+    emit({ type: 'project.state_changed', projectId: 'p1', from: 'in_progress', to: 'completed' });
+    await service.idle();
+    // Every (device, notification) pair exactly once: the 503 was retried, the refused records not.
+    const counts = new Map<string, number>();
+    for (const c of calls) counts.set(c, (counts.get(c) ?? 0) + 1);
+    expect(counts.size).toBe(9);
+    expect([...counts.values()].every((n) => n === 1)).toBe(true);
+    expect(store.writes).toBe(9);
+    expect(storageLines()).toHaveLength(1);
+    // A test push on the full disk is still "sent".
+    expect(await service.test(devices[0]!.subscription.endpoint)).toBe('sent');
+    expect(storageLines()).toHaveLength(1);
+  });
+
+  it('a 410 whose removal the database refuses is not sent again, and the removal is retried', async () => {
+    const store = new FullStore(w.log.db);
+    const gone = fakeSubscription(1);
+    const ok = fakeSubscription(2);
+    const stored = store.upsert({ subscription: gone.subscription, origin: 'remote' });
+    store.upsert({ subscription: ok.subscription, origin: 'remote' });
+    transport.mockImplementation(async (target, payload) => {
+      calls.push(`${target.endpoint} ${idOf(payload)}`);
+      if (target.endpoint === gone.subscription.endpoint) throw new PushSendError(410);
+    });
+    const service = make(store);
+    service.publicKey(); // the keys are loaded (and checked) before the disk fills
+    store.full = true;
+    emit({ type: 'question.opened', question: question('q1') });
+    await service.idle();
+    const toGone = () => calls.filter((c) => c.startsWith(gone.subscription.endpoint));
+    expect(toGone()).toHaveLength(1);
+    expect(store.get(stored.device.id)).toBeDefined(); // the removal could not be saved
+    expect(logs.some((l) => /skipped until its removal can be saved/.test(l))).toBe(true);
+    // The next push skips the gone device while the disk is still full…
+    emit({ type: 'question.opened', question: question('q2') });
+    await service.idle();
+    expect(toGone()).toHaveLength(1);
+    expect(await service.test(gone.subscription.endpoint)).toBeUndefined();
+    // …and once there is space, the removal is saved on the next push and records resume.
+    store.full = false;
+    emit({ type: 'question.opened', question: question('q3') });
+    await service.idle();
+    expect(toGone()).toHaveLength(1);
+    expect(store.get(stored.device.id)).toBeUndefined();
+    expect(logs.some((l) => /the database takes writes again/.test(l))).toBe(true);
+    expect(store.byEndpoint(ok.subscription.endpoint)!.device.lastSentAt).toBeDefined();
+  });
+
+  it('after the storage recovers, records are kept again and a new episode is logged again', async () => {
+    const store = new FullStore(w.log.db);
+    const s = fakeSubscription();
+    store.upsert({ subscription: s.subscription, origin: 'remote' });
+    transport.mockImplementation(async (_target, payload) => {
+      const id = idOf(payload);
+      calls.push(id);
+      if (id === 'question:q2') throw new PushSendError(403);
+    });
+    const service = make(store);
+    service.publicKey(); // the keys are loaded (and checked) before the disk fills
+    store.full = true;
+    emit({ type: 'question.opened', question: question('q1') });
+    await service.idle();
+    expect(store.list()[0]!.device.lastSentAt).toBeUndefined();
+    store.full = false;
+    emit({ type: 'question.opened', question: question('q2') });
+    await service.idle();
+    expect(store.list()[0]!.device.lastError).toBe('HTTP 403');
+    emit({ type: 'question.opened', question: question('q3') });
+    await service.idle();
+    expect(store.list()[0]!.device.lastSentAt).toEqual(expect.any(String));
+    expect(store.list()[0]!.device.lastError).toBeUndefined();
+    store.full = true;
+    emit({ type: 'question.opened', question: question('q4') });
+    await service.idle();
+    expect(calls).toEqual(['question:q1', 'question:q2', 'question:q3', 'question:q4']);
+    expect(storageLines()).toHaveLength(2);
+    expect(logs.filter((l) => /the database takes writes again/.test(l))).toHaveLength(1);
+  });
+
+  it('new keys whose clearing the database refuses: old subscriptions are skipped, then cleared', async () => {
+    const store = new FullStore(w.log.db);
+    const dataDir = tempDir();
+    const first = make(store, { dataDir });
+    first.vapidKeys();
+    store.upsert({ subscription: fakeSubscription(1).subscription, origin: 'remote' });
+    first.stop();
+    writeFileSync(join(dataDir, VAPID_FILE), '{broken');
+    store.full = true;
+    const fresh = make(store, { dataDir });
+    expect(fresh.publicKey()).toMatch(/^[A-Za-z0-9_-]{87}$/);
+    expect(store.list()).toHaveLength(1);
+    emit({ type: 'question.opened', question: question('q1') });
+    await fresh.idle();
+    expect(transport).not.toHaveBeenCalled(); // bound to the replaced key: nothing could reach it
+    store.full = false;
+    fresh.publicKey();
+    expect(store.list()).toHaveLength(0);
+    expect(logs.some((l) => /1 device subscription bound to the old keys removed/.test(l))).toBe(
+      true,
+    );
+  });
+
+  /** A store whose clock the test sets (`updated_at` of each write). */
+  const clocked = () => {
+    const at = { now: '2026-10-06T10:00:00.000Z' };
+    return { store: new FullStore(w.log.db, () => at.now), at };
+  };
+
+  it('a device gone (410, removal refused) that writes its subscription again is kept and sent to', async () => {
+    const { store, at } = clocked();
+    const s = fakeSubscription(1);
+    const first = store.upsert({ subscription: s.subscription, origin: 'remote' });
+    let gone = true;
+    transport.mockImplementation(async (target, payload) => {
+      calls.push(`${target.endpoint} ${idOf(payload)}`);
+      if (gone) throw new PushSendError(410);
+    });
+    const service = make(store);
+    service.publicKey();
+    store.full = true;
+    emit({ type: 'question.opened', question: question('q1') });
+    await service.idle();
+    expect(store.get(first.device.id)).toBeDefined(); // removal refused: on the gone list
+    // The browser writes the same endpoint again (a later row) without going through the service.
+    gone = false;
+    at.now = '2026-10-06T10:05:00.000Z';
+    store.upsert({ subscription: s.subscription, origin: 'remote' });
+    store.full = false;
+    emit({ type: 'question.opened', question: question('q2') });
+    await service.idle();
+    // The retried removal was for the old row only: the device stays and gets the push.
+    expect(store.get(first.device.id)).toBeDefined();
+    expect(calls).toEqual([
+      `${s.subscription.endpoint} question:q1`,
+      `${s.subscription.endpoint} question:q2`,
+    ]);
+  });
+
+  it('subscribing through the service takes a gone device off the gone list at once', async () => {
+    const { store, at } = clocked();
+    const s = fakeSubscription(1);
+    store.upsert({ subscription: s.subscription, origin: 'remote' });
+    let gone = true;
+    transport.mockImplementation(async (target, payload) => {
+      calls.push(`${target.endpoint} ${idOf(payload)}`);
+      if (gone) throw new PushSendError(404);
+    });
+    const service = make(store);
+    service.publicKey();
+    store.full = true;
+    emit({ type: 'question.opened', question: question('q1') });
+    await service.idle();
+    expect(await service.test(s.subscription.endpoint)).toBeUndefined(); // skipped while gone
+    gone = false;
+    at.now = '2026-10-06T10:05:00.000Z';
+    const again = service.subscribe({ subscription: s.subscription, origin: 'remote' });
+    // Still on a full disk: the test push goes, and a later retry does not remove the device.
+    expect(await service.test(s.subscription.endpoint)).toBe('sent');
+    store.full = false;
+    emit({ type: 'question.opened', question: question('q2') });
+    await service.idle();
+    expect(store.get(again.device.id)).toBeDefined();
+    expect(calls.filter((c) => c.endsWith('question:q2'))).toHaveLength(1);
+  });
+
+  it('new keys keep a device subscribed with them while the old ones wait to be cleared', async () => {
+    const { store, at } = clocked();
+    const dataDir = tempDir();
+    const first = make(store, { dataDir });
+    first.vapidKeys();
+    at.now = '2001-01-01T00:00:00.000Z'; // before the next keys are made
+    const old = store.upsert({ subscription: fakeSubscription(1).subscription, origin: 'remote' });
+    first.stop();
+    writeFileSync(join(dataDir, VAPID_FILE), '{broken');
+    store.full = true;
+    const fresh = make(store, { dataDir });
+    fresh.publicKey(); // new keys; clearing refused
+    at.now = '2999-01-01T00:00:00.000Z'; // after the new keys: bound to them
+    const mine = fakeSubscription(2);
+    const kept = fresh.subscribe({ subscription: mine.subscription, origin: 'remote' });
+    emit({ type: 'question.opened', question: question('q1') });
+    await fresh.idle();
+    expect(calls).toEqual([`${mine.subscription.endpoint} question:q1`]);
+    store.full = false;
+    fresh.publicKey();
+    expect(store.get(old.device.id)).toBeUndefined();
+    expect(store.get(kept.device.id)).toBeDefined();
+  });
+
+  it('a clearing refused before a restart is done after it, keeping newer subscriptions', async () => {
+    const { store, at } = clocked();
+    const dataDir = tempDir();
+    const first = make(store, { dataDir });
+    first.vapidKeys();
+    at.now = '2001-01-01T00:00:00.000Z';
+    const old = store.upsert({ subscription: fakeSubscription(1).subscription, origin: 'remote' });
+    first.stop();
+    writeFileSync(join(dataDir, VAPID_FILE), '{broken');
+    store.full = true;
+    const fresh = make(store, { dataDir });
+    const keys = fresh.vapidKeys(); // new keys; clearing refused, then the server stops
+    fresh.stop();
+    at.now = '2999-01-01T00:00:00.000Z';
+    const mine = fakeSubscription(2);
+    const kept = store.upsert({ subscription: mine.subscription, origin: 'remote' });
+    store.full = false;
+    // Restart: the file is intact now (no new keys), but the old subscriptions were never cleared.
+    const restarted = make(store, { dataDir });
+    emit({ type: 'question.opened', question: question('q1') });
+    await restarted.idle();
+    expect(restarted.vapidKeys()).toEqual(keys);
+    expect(store.get(old.device.id)).toBeUndefined();
+    expect(store.get(kept.device.id)).toBeDefined();
+    expect(calls).toEqual([`${mine.subscription.endpoint} question:q1`]);
+    expect(store.clearedForKey()).toBe(vapidKeyId(keys.publicKey));
+    // A further restart does not clear again.
+    restarted.stop();
+    at.now = '2000-06-01T00:00:00.000Z';
+    store.upsert({ subscription: fakeSubscription(3).subscription, origin: 'remote' });
+    make(store, { dataDir }).vapidKeys();
+    expect(store.list()).toHaveLength(2);
   });
 });
 

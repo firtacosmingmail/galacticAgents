@@ -103,7 +103,17 @@ function fakeServer(initial: SettingsResponse) {
   /** Holds the settings read until it resolves (to a reply other than the settings, if given). */
   let readGate: Promise<Refusal | void> | undefined;
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+  /** What `GET /api/runtimes` lists: the runtimes with an adapter on this server. */
+  let runtimes: string[] = ['fake', 'claude-sdk', 'acp'];
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === '/api/runtimes') {
+      return json({
+        runtimes: runtimes.map((name) => ({ name, resumable: true })),
+        policies: ['default'],
+        caps: initial.settings.caps,
+        maxConcurrentAgents: 4,
+      });
+    }
     if (url === '/api/settings' && (init?.method ?? 'GET') === 'GET') {
       const instead = readGate ? await readGate : undefined;
       return instead ? json(instead.body, instead.status) : json(state.response);
@@ -142,6 +152,7 @@ function fakeServer(initial: SettingsResponse) {
     setPreflights: (list: PreflightResponse[]) => (preflights = list),
     setRefuse: (fn: typeof refuse) => (refuse = fn),
     setReadGate: (gate: Promise<Refusal | void>) => (readGate = gate),
+    setRuntimes: (list: string[]) => (runtimes = list),
   };
 }
 
@@ -421,7 +432,7 @@ describe('settings page (P25-08)', () => {
       (within(caps).getByRole('button', { name: 'Save caps' }) as HTMLButtonElement).disabled,
     ).toBe(true);
     type(within(caps).getByLabelText('Stewards working at once'), '8');
-    type(within(caps).getByLabelText('Wall-clock time per agent'), '30');
+    type(within(caps).getByLabelText('Wall-clock time per Steward'), '30');
 
     server.setRefuse((p) => {
       if (p.caps)
@@ -482,13 +493,100 @@ describe('settings page (P25-08)', () => {
     await open('/settings', stored);
     const caps = await screen.findByRole('region', { name: 'Caps' });
     expect(
-      (within(caps).getByLabelText('Wall-clock time per agent') as HTMLInputElement).value,
+      (within(caps).getByLabelText('Wall-clock time per Steward') as HTMLInputElement).value,
     ).toBe('1.5');
     type(within(caps).getByLabelText('Stewards working at once'), '8');
     expect(within(caps).queryByRole('alert')).toBeNull();
     await click(within(caps).getByRole('button', { name: 'Save caps' }));
     expect(server.patches).toEqual([{ caps: { maxConcurrentAgents: 8 } }]);
     expect(within(caps).getByRole('status').textContent).toBe('Saved.');
+  });
+
+  it('leaves transcript retention out for a server without it (P8-02)', async () => {
+    await open('/settings', done());
+    await screen.findByRole('region', { name: 'Caps' });
+    expect(screen.queryByRole('region', { name: 'Transcript retention' })).toBeNull();
+  });
+
+  it('edits transcript retention: days, or empty to keep forever (P8-02)', async () => {
+    const withRetention = done();
+    withRetention.settings.transcriptRetention = { maxAgeDays: 90, archivedDays: 30 };
+    await open('/settings', withRetention);
+    const tr = await screen.findByRole('region', { name: 'Transcript retention' });
+    const age = within(tr).getByLabelText('Remove agent output older than') as HTMLInputElement;
+    const archived = within(tr).getByLabelText('Remove archived work’s output') as HTMLInputElement;
+    expect([age.value, archived.value]).toEqual(['90', '30']);
+    type(age, '0');
+    expect(within(tr).getByRole('alert').textContent).toMatch(/whole number of days from 1/);
+    type(age, '1.5');
+    expect(within(tr).getByRole('alert').textContent).toMatch(/whole number of days from 1/);
+    type(age, '30');
+    type(archived, '0');
+    expect(within(tr).getByRole('alert').textContent).toMatch(/whole number of days from 1/);
+    type(age, ''); // keep forever
+    type(archived, '7');
+    await click(within(tr).getByRole('button', { name: 'Save transcript retention' }));
+    expect(server.patches).toEqual([
+      { transcriptRetention: { maxAgeDays: null, archivedDays: 7 } },
+    ]);
+    expect(within(tr).getByRole('status').textContent).toBe('Saved.');
+  });
+
+  it('saves the budget warning threshold on the settings page, not in the wizard (P8-01)', async () => {
+    await open('/settings', done());
+    const budgets = await screen.findByRole('region', { name: 'Budgets' });
+    const input = within(budgets).getByLabelText('Warn when a budget is') as HTMLInputElement;
+    expect(input.value).toBe('80');
+    type(input, '101');
+    expect(within(budgets).getByRole('alert').textContent).toMatch(/from 1 to 100/);
+    type(input, '65');
+    await click(within(budgets).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ budgets: { warnAtPercent: 65 } });
+  });
+
+  it('sets the runtime of new Stewards, and back to the brain’s own (P8-07)', async () => {
+    await open('/settings', done());
+    const section = await screen.findByRole('region', { name: 'Steward runtime' });
+    const same = within(section).getByRole('radio', {
+      name: /Same as its brain/,
+    }) as HTMLInputElement;
+    expect(same.checked).toBe(true);
+    // The runtimes the server lists, never the dev-only fake one.
+    await within(section).findByRole('radio', { name: /ACP agent/ });
+    expect(
+      within(section)
+        .getAllByRole('radio')
+        .map((r) => (r as HTMLInputElement).value),
+    ).toEqual(['', 'claude-sdk', 'acp']);
+    expect(within(section).getByText(/most careful one/)).toBeTruthy();
+    await click(within(section).getByRole('radio', { name: /ACP agent/ }));
+    await click(within(section).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ stewardRuntime: 'acp' });
+    await click(within(section).getByRole('radio', { name: /Same as its brain/ }));
+    await click(within(section).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ stewardRuntime: null });
+  });
+
+  it('offers only the runtimes set up on the server, and keeps a value set outside the panel (P8-07)', async () => {
+    const outside = done();
+    outside.settings.stewardRuntime = 'fake';
+    await open('/settings', outside, undefined, (s) => s.setRuntimes(['fake', 'claude-sdk']));
+    const section = await screen.findByRole('region', { name: 'Steward runtime' });
+    await within(section).findByRole('radio', { name: /Claude Code/ });
+    expect(within(section).queryByRole('radio', { name: /ACP agent/ })).toBeNull();
+    const current = within(section).getByRole('radio', {
+      name: /set outside the panel/,
+    }) as HTMLInputElement;
+    expect(current.value).toBe('fake');
+    expect(current.checked).toBe(true);
+    // Choosing another runtime keeps the saved value on offer until the save.
+    await click(within(section).getByRole('radio', { name: /Claude Code/ }));
+    expect(within(section).getByRole('radio', { name: /set outside the panel/ })).toBeTruthy();
+    await click(within(section).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ stewardRuntime: 'claude-sdk' });
+    await waitFor(() =>
+      expect(within(section).queryByRole('radio', { name: /set outside the panel/ })).toBeNull(),
+    );
   });
 
   it('resets the default table to the §3.6 table', async () => {

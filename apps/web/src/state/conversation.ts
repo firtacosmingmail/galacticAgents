@@ -8,6 +8,7 @@ import {
   type ConversationEntry,
   type ConversationQuery,
   type Id,
+  type TranscriptCompaction,
   type Proposal,
   type Question,
   type TranscriptChunk,
@@ -52,6 +53,11 @@ export interface Thread {
    * replays from the start, which the dedup absorbs).
    */
   liveFrom?: number | undefined;
+  /**
+   * What retention removed of the agent's replies (P8-02), from the latest page read: the chat
+   * says so, since its messages are kept and the thread would otherwise just lack the replies.
+   */
+  compacted?: TranscriptCompaction | undefined;
   error?: string | undefined;
 }
 
@@ -303,6 +309,7 @@ export const useConversationStore = create<ConversationState>((set, get) => {
         oldestCursor: first?.cursor ?? (restart ? undefined : t.oldestCursor),
         newestCursor: page.entries.at(-1)?.cursor ?? (restart ? undefined : t.newestCursor),
         hasOlder: page.hasMore,
+        compacted: page.compacted ?? t.compacted,
       };
     });
     return page.lastSeq;
@@ -325,6 +332,7 @@ export const useConversationStore = create<ConversationState>((set, get) => {
         entries: mergeEntries(t.entries, page.entries),
         newestCursor: page.entries.at(-1)?.cursor ?? t.newestCursor,
         oldestCursor: t.oldestCursor ?? page.entries[0]?.cursor,
+        compacted: page.compacted ?? t.compacted,
       }));
       if (!page.hasMore) return page.lastSeq;
     }
@@ -366,6 +374,7 @@ export const useConversationStore = create<ConversationState>((set, get) => {
           oldestCursor: page.entries[0]?.cursor ?? cur.oldestCursor,
           hasOlder: page.hasMore,
           loadingOlder: false,
+          compacted: page.compacted ?? cur.compacted,
         }));
       } catch (error) {
         failed(agentId, error);

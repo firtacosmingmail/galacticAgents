@@ -12,6 +12,8 @@ import {
   Actor,
   Agent,
   Body,
+  BudgetTarget,
+  BudgetUsd,
   Cost,
   Host,
   PermissionPolicy,
@@ -71,11 +73,15 @@ export const AgentSpawned = z.object({
   foldedUpTo: z.number().int().nonnegative().optional(),
 });
 
-/** Transcript traffic. Routed to `transcript_chunks`, never persisted in `events` (TECHNOLOGY §6.2). */
+/**
+ * Transcript traffic. Routed to `transcript_chunks`, never persisted in `events` (TECHNOLOGY §6.2).
+ * `terminal` (P8-08) is a PTY agent's raw terminal output, escape sequences included, for the
+ * terminal view; the same output also arrives as `text` with the escapes stripped.
+ */
 export const AgentOutput = z.object({
   type: z.literal('agent.output'),
   ...agentBase,
-  kind: z.enum(['text', 'tool', 'thinking']),
+  kind: z.enum(['text', 'tool', 'thinking', 'terminal']),
   text: z.string(),
 });
 
@@ -106,7 +112,11 @@ export const AgentProgress = z.object({
   progress: Progress.optional(),
 });
 
-/** A turn ended and the agent waits for its next message. Runtimes that meter per turn report the running cost here. */
+/**
+ * A turn ended and the agent waits for its next message. `cost` is the session's running total
+ * (cumulative per session, the `AgentAdapter` contract): a runtime that meters per turn sums its
+ * turns in the adapter.
+ */
 export const AgentIdle = z.object({
   type: z.literal('agent.idle'),
   ...agentBase,
@@ -339,6 +349,8 @@ export const ProposalEdited = z.object({
       initGit: z.boolean().optional(),
       /** The trust level the user chose for the project (decision 49): `meta.trust`. */
       trust: TrustLevel.optional(),
+      /** The budget the user gave the work (P8-01): `meta.budgetUsd`; `null` drops it. */
+      budgetUsd: BudgetUsd.nullable().optional(),
     })
     .partial(),
 });
@@ -434,12 +446,17 @@ export const ProjectChanges = Project.omit({
     repoPath: z.string().nullable(),
     parentProjectId: Id.nullable(),
     permissionPolicy: PermissionPolicy.nullable(),
+    budgetUsd: BudgetUsd.nullable(),
   })
   .partial();
 export type ProjectChanges = z.infer<typeof ProjectChanges>;
 
 export const TaskChanges = Task.omit({ id: true, createdAt: true, updatedAt: true, state: true })
-  .extend({ worktreePath: z.string().nullable(), branch: z.string().nullable() })
+  .extend({
+    worktreePath: z.string().nullable(),
+    branch: z.string().nullable(),
+    budgetUsd: BudgetUsd.nullable(),
+  })
   .partial();
 export type TaskChanges = z.infer<typeof TaskChanges>;
 
@@ -448,8 +465,9 @@ export const CLEARABLE_PROJECT_FIELDS = [
   'repoPath',
   'parentProjectId',
   'permissionPolicy',
+  'budgetUsd',
 ] as const;
-export const CLEARABLE_TASK_FIELDS = ['worktreePath', 'branch'] as const;
+export const CLEARABLE_TASK_FIELDS = ['worktreePath', 'branch', 'budgetUsd'] as const;
 
 /**
  * Folds `changes` into `current` (P2-20): `undefined` leaves a field unchanged, `null` removes it,
@@ -525,6 +543,62 @@ export const ControlReopen = z.object({ type: z.literal('control.reopen'), ...co
 // The union, the envelope
 // ---------------------------------------------------------------------------
 
+/**
+ * A budget was set, changed or removed (P8-01; SPEC decision 18): logged with the
+ * `project.updated` / `task.updated` that changes the row's `budgetUsd`, which is what folds it.
+ * `usd` absent: the budget was removed. Re-arms the warning and the exceeded notice.
+ */
+export const BudgetSet = z.object({
+  type: z.literal('budget.set'),
+  target: BudgetTarget,
+  usd: BudgetUsd.optional(),
+  previousUsd: BudgetUsd.optional(),
+  by: Actor,
+});
+
+/**
+ * The reported cost of a budgeted project or task reached the warning threshold (P8-01; the
+ * settings' `budgets.warnAtPercent`, default 80 %). Logged once per budget value; the server
+ * posts it in the Harmonizer's chat and wakes the Waykeeper that runs the work.
+ */
+export const BudgetWarning = z.object({
+  type: z.literal('budget.warning'),
+  target: BudgetTarget,
+  spentUsd: z.number().nonnegative(),
+  budgetUsd: BudgetUsd,
+  warnAtPercent: z.number().positive().max(100),
+});
+
+/**
+ * The reported cost reached the budget (P8-01). Running agents are not stopped (SPEC
+ * decision 98); new spawns for the work are refused until the budget is raised or removed.
+ * Logged once per budget value.
+ */
+export const BudgetExceeded = z.object({
+  type: z.literal('budget.exceeded'),
+  target: BudgetTarget,
+  spentUsd: z.number().nonnegative(),
+  budgetUsd: BudgetUsd,
+});
+
+/**
+ * A spawn was refused because the work is over its budget (P8-01). Logged by the refused
+ * `spawnAgent` (no agent row, body or session is written); the caller gets a `conflict` error
+ * with the same reason, and the Harmonizer's chat shows it.
+ */
+export const BudgetSpawnRefused = z.object({
+  type: z.literal('budget.spawn_refused'),
+  target: BudgetTarget,
+  role: AgentRole,
+  taskId: Id.optional(),
+  projectId: Id.optional(),
+  /** The brain that asked for the spawn (absent: the panel or the server). */
+  supervisorId: Id.optional(),
+  spentUsd: z.number().nonnegative(),
+  budgetUsd: BudgetUsd,
+  reason: z.string(),
+});
+
 /** Every event that can appear in the `events` log and on the WebSocket stream. */
 export const Event = z.discriminatedUnion('type', [
   AgentCreated,
@@ -579,6 +653,10 @@ export const Event = z.discriminatedUnion('type', [
   ControlArchive,
   ControlPin,
   ControlReopen,
+  BudgetSet,
+  BudgetWarning,
+  BudgetExceeded,
+  BudgetSpawnRefused,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event['type'];

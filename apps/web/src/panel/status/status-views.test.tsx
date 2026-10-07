@@ -131,6 +131,26 @@ describe('the status views', () => {
   });
   afterEach(() => cleanup());
 
+  it('shows a project’s and a task’s budget against the folded spend (P8-01)', async () => {
+    useAppStore.getState().reset();
+    useAppStore.getState().apply({
+      ...snapshot,
+      projects: [{ ...fx.project, budgetUsd: 2 }],
+      tasks: [{ ...fx.task, budgetUsd: 1 }, blockedTask],
+      spend: [
+        { agentId: 'a-steward-1', usd: 1.7, reported: true, session: 's', sessions: { s: 1.7 } },
+      ],
+    } as ServerMessage);
+    show(<ProjectStatusView projectId="p-1" />);
+    const line = await screen.findByText(/^\$1\.70 of \$2\.00 \(85%\) — near the budget/);
+    expect(line.closest('.sts-budget')?.classList.contains('is-warning')).toBe(true);
+    cleanup();
+    show(<TaskStatusFacts agentId="a-steward-1" />);
+    expect(
+      screen.getByText('$1.70 of $1.00 (170%) — exceeded: new agents are refused'),
+    ).toBeTruthy();
+  });
+
   it('shows the system: blocked on you first and amber, counts, cost and caps', async () => {
     show(<SystemStatusView />);
     const view = screen.getByRole('region', { name: 'system status' });

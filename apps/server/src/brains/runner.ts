@@ -93,6 +93,8 @@ export interface BrainRunnerOptions {
   workspaces?: Workspaces;
   /** Handed to the brain's tools as `ctx.processes` (P4-14). */
   processes?: StewardProcessControl;
+  /** Handed to the brain's tools as `ctx.stewardRuntime` (P8-07). */
+  stewardRuntime?: () => RuntimeName | undefined;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -275,11 +277,15 @@ export class BrainRunner {
       throw error;
     }
     this.id = agentId;
-    this.scope = createWakeScope(this.opts.log.tables, {
-      brainId: agentId,
-      role: this.definition.role,
-      ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
-    });
+    this.scope = createWakeScope(
+      this.opts.log.tables,
+      {
+        brainId: agentId,
+        role: this.definition.role,
+        ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
+      },
+      { status: (id) => this.opts.queries.status(id) },
+    );
     this.opts.runtime.attachMailbox(agentId);
     const early = this.early ?? [];
     this.early = undefined;
@@ -298,11 +304,15 @@ export class BrainRunner {
     this.early = undefined;
     this.markReady();
     this.stateValue = 'renewing'; // a failed resume's `agent.interrupted` must not end the runner
-    this.scope = createWakeScope(log.tables, {
-      brainId: agentId,
-      role: this.definition.role,
-      ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
-    });
+    this.scope = createWakeScope(
+      log.tables,
+      {
+        brainId: agentId,
+        role: this.definition.role,
+        ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
+      },
+      { status: (id) => this.opts.queries.status(id) },
+    );
     const notes = [...(await this.startNotes(agentId, true)), ...extra].map((line) =>
       this.noteItem(line),
     );
@@ -710,6 +720,7 @@ export class BrainRunner {
       }),
       ...(this.opts.workspaces ? { workspaces: this.opts.workspaces } : {}),
       ...(this.opts.processes ? { processes: this.opts.processes } : {}),
+      ...(this.opts.stewardRuntime ? { stewardRuntime: this.opts.stewardRuntime } : {}),
     };
   }
 

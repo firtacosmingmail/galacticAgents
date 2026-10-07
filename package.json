@@ -17,7 +17,13 @@
     "start": "node apps/server/bin/galactic.mjs start",
     "galactic": "node apps/server/bin/galactic.mjs",
     "remote": "node scripts/remote-start.mjs",
-    "check:real": "pnpm build:deps && node scripts/check-real.mjs"
+    "desktop:dev": "pnpm build && pnpm --filter @galactic/desktop dev",
+    "desktop:build": "pnpm build && pnpm --filter @galactic/desktop bundle",
+    "desktop:smoke": "pnpm build && pnpm --filter @galactic/desktop smoke",
+    "check:real": "pnpm build:deps && node scripts/check-real.mjs",
+    "drills": "pnpm build:deps && GALACTIC_DRILLS=${GALACTIC_DRILLS:-25} pnpm --filter @galactic/server exec vitest run src/test/drills",
+    "e2e": "pnpm build && pnpm --filter @galactic/e2e e2e",
+    "e2e:install": "pnpm --filter @galactic/e2e exec playwright install chromium"
   },
   "engines": {
     "node": ">=22.12",
@@ -39,7 +45,8 @@
   "packageManager": "pnpm@10.34.6",
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild"
+      "esbuild",
+      "node-pty"
     ]
   }
 }

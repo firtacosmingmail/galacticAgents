@@ -165,6 +165,31 @@ describe('the Steward view (P25-05)', () => {
     expect(within(view()).getByText('Read src/session.ts')).toBeTruthy();
   });
 
+  it('says where retention removed the start of the transcript (P8-02)', async () => {
+    transcriptReply = async () => ({
+      chunks: [chunk(41, 'text', 'Still here.')],
+      hasMore: false,
+      lastSeq: 41,
+      compacted: {
+        throughSeq: 40,
+        throughAt: '2026-07-01T10:00:00.000Z',
+        removedAt: '2026-10-05T09:00:00.000Z',
+        reason: 'age',
+      },
+    });
+    await open();
+    await vi.waitFor(() => expect(shownSeqs()).toEqual([41]));
+    const note = within(view()).getByRole('note');
+    expect(note.textContent).toMatch(
+      /^Older transcript \(up to .*2026\) removed on .*2026 by retention\.$/,
+    );
+    // Above the oldest chunk left.
+    expect(
+      note.compareDocumentPosition(view().querySelector('[data-seq="41"]')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('answers an open clarification from the composer, which then disappears', async () => {
     const socket = await open([userClarification]);
     expect(within(view()).getByText('blocked on you')).toBeTruthy();

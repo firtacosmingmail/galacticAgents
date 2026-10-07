@@ -1,5 +1,15 @@
 import type { Database, Statement } from 'better-sqlite3';
-import { Agent, Body, Project, Proposal, Question, Task, type Id } from '@galactic/protocol';
+import {
+  Agent,
+  AgentSpend,
+  Body,
+  Project,
+  Proposal,
+  Question,
+  Task,
+  type BudgetTarget,
+  type Id,
+} from '@galactic/protocol';
 import type { ZodType } from 'zod';
 
 type Row = Record<string, unknown>;
@@ -24,59 +34,77 @@ interface Mapper<T extends { id: Id }> {
   fromRow(row: Row): T;
 }
 
-/** A thin typed accessor for one domain table. Validates on the way in and on the way out. */
+/**
+ * A thin typed accessor for one domain table. Validates on the way in and on the way out. Its
+ * statements are prepared on first use, so tables can be opened over an older schema (a
+ * migration test) as long as only the columns that exist there are used.
+ */
 export class Table<T extends { id: Id }> {
-  private readonly insertStmt: Statement;
-  private readonly upsertStmt: Statement;
-  private readonly getStmt: Statement;
-  private readonly allStmt: Statement;
-  private readonly deleteStmt: Statement;
+  private readonly stmts = new Map<string, Statement>();
 
   constructor(
-    db: Database,
+    private readonly db: Database,
     private readonly mapper: Mapper<T>,
-    columns: string[],
-  ) {
-    const cols = columns.join(', ');
-    const params = columns.map((c) => `@${c}`).join(', ');
-    const updates = columns
-      .filter((c) => c !== 'id')
-      .map((c) => `${c} = excluded.${c}`)
-      .join(', ');
-    this.insertStmt = db.prepare(`INSERT INTO ${mapper.table} (${cols}) VALUES (${params})`);
-    this.upsertStmt = db.prepare(
-      `INSERT INTO ${mapper.table} (${cols}) VALUES (${params}) ON CONFLICT(id) DO UPDATE SET ${updates}`,
-    );
-    this.getStmt = db.prepare(`SELECT * FROM ${mapper.table} WHERE id = ?`);
-    this.allStmt = db.prepare(`SELECT * FROM ${mapper.table} ORDER BY rowid`);
-    this.deleteStmt = db.prepare(`DELETE FROM ${mapper.table} WHERE id = ?`);
+    private readonly columns: string[],
+  ) {}
+
+  private stmt(name: 'insert' | 'upsert' | 'get' | 'all' | 'delete'): Statement {
+    let s = this.stmts.get(name);
+    if (!s) {
+      s = this.db.prepare(this.sql(name));
+      this.stmts.set(name, s);
+    }
+    return s;
+  }
+
+  private sql(name: 'insert' | 'upsert' | 'get' | 'all' | 'delete'): string {
+    const { table } = this.mapper;
+    const cols = this.columns.join(', ');
+    const params = this.columns.map((c) => `@${c}`).join(', ');
+    switch (name) {
+      case 'insert':
+        return `INSERT INTO ${table} (${cols}) VALUES (${params})`;
+      case 'upsert': {
+        const updates = this.columns
+          .filter((c) => c !== 'id')
+          .map((c) => `${c} = excluded.${c}`)
+          .join(', ');
+        return `INSERT INTO ${table} (${cols}) VALUES (${params}) ON CONFLICT(id) DO UPDATE SET ${updates}`;
+      }
+      case 'get':
+        return `SELECT * FROM ${table} WHERE id = ?`;
+      case 'all':
+        return `SELECT * FROM ${table} ORDER BY rowid`;
+      case 'delete':
+        return `DELETE FROM ${table} WHERE id = ?`;
+    }
   }
 
   insert(value: T): T {
     const v = this.mapper.schema.parse(value);
-    this.insertStmt.run(this.mapper.toRow(v));
+    this.stmt('insert').run(this.mapper.toRow(v));
     return v;
   }
 
   upsert(value: T): T {
     const v = this.mapper.schema.parse(value);
-    this.upsertStmt.run(this.mapper.toRow(v));
+    this.stmt('upsert').run(this.mapper.toRow(v));
     return v;
   }
 
   get(id: Id): T | undefined {
-    const row = this.getStmt.get(id) as Row | undefined;
+    const row = this.stmt('get').get(id) as Row | undefined;
     return row ? this.mapper.schema.parse(compact(this.mapper.fromRow(row))) : undefined;
   }
 
   all(): T[] {
-    return (this.allStmt.all() as Row[]).map((r) =>
+    return (this.stmt('all').all() as Row[]).map((r) =>
       this.mapper.schema.parse(compact(this.mapper.fromRow(r))),
     );
   }
 
   delete(id: Id): boolean {
-    return this.deleteStmt.run(id).changes > 0;
+    return this.stmt('delete').run(id).changes > 0;
   }
 }
 
@@ -119,6 +147,7 @@ const projects: Mapper<Project> = {
     state: p.state,
     permission_policy: json(p.permissionPolicy),
     pinned: flag(p.pinned),
+    budget_usd: p.budgetUsd ?? null,
     created_at: p.createdAt,
     updated_at: p.updatedAt,
     meta: json(p.meta),
@@ -133,6 +162,7 @@ const projects: Mapper<Project> = {
     state: r['state'] as Project['state'],
     permissionPolicy: parse<Project['permissionPolicy']>(r['permission_policy']),
     pinned: unflag(r['pinned']),
+    budgetUsd: opt<number>(r['budget_usd']),
     createdAt: r['created_at'] as string,
     updatedAt: r['updated_at'] as string,
     meta: parse(r['meta']),
@@ -153,6 +183,7 @@ const tasks: Mapper<Task> = {
     blocked_by: JSON.stringify(t.blockedBy),
     state: t.state,
     pinned: flag(t.pinned),
+    budget_usd: t.budgetUsd ?? null,
     created_at: t.createdAt,
     updated_at: t.updatedAt,
     meta: json(t.meta),
@@ -168,6 +199,7 @@ const tasks: Mapper<Task> = {
     blockedBy: parse<Id[]>(r['blocked_by']) ?? [],
     state: r['state'] as Task['state'],
     pinned: unflag(r['pinned']),
+    budgetUsd: opt<number>(r['budget_usd']),
     createdAt: r['created_at'] as string,
     updatedAt: r['updated_at'] as string,
     meta: parse(r['meta']),
@@ -281,14 +313,93 @@ export interface Tables {
     get<T = unknown>(key: string): T | undefined;
     set(key: string, value: unknown): void;
   };
+  /** Each agent's reported cost (P8-01): the `foldSpend` projection, written with its event. */
+  spend: {
+    get(agentId: Id): AgentSpend | undefined;
+    all(): AgentSpend[];
+    put(spend: AgentSpend): void;
+  };
+  /** The highest budget notice logged for a target's current budget (P8-01). */
+  budgetNotices: {
+    get(target: BudgetTarget): { level: 'warning' | 'exceeded'; budgetUsd: number } | undefined;
+    put(target: BudgetTarget, level: 'warning' | 'exceeded', budgetUsd: number): void;
+    clear(target: BudgetTarget): void;
+  };
 }
+
+type SpendRow = {
+  agent_id: string;
+  usd: number;
+  reported: number;
+  session: string;
+  sessions: string;
+};
+const fromSpendRow = (r: SpendRow): AgentSpend =>
+  AgentSpend.parse({
+    agentId: r.agent_id,
+    usd: r.usd,
+    reported: r.reported === 1,
+    session: r.session,
+    sessions: JSON.parse(r.sessions) as unknown,
+  });
 
 export function tables(db: Database): Tables {
   const getSetting = db.prepare('SELECT value FROM settings WHERE key = ?');
   const setSetting = db.prepare(
     'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
   );
+  // Prepared on first use, like `Table`'s (migration 0012 adds these tables).
+  const lazy = (sql: string) => {
+    let s: Statement | undefined;
+    return () => (s ??= db.prepare(sql));
+  };
+  const getSpend = lazy('SELECT * FROM agent_spend WHERE agent_id = ?');
+  const allSpend = lazy('SELECT * FROM agent_spend ORDER BY rowid');
+  const putSpend = lazy(
+    `INSERT INTO agent_spend (agent_id, usd, reported, session, sessions)
+     VALUES (@agent_id, @usd, @reported, @session, @sessions)
+     ON CONFLICT(agent_id) DO UPDATE SET usd = excluded.usd, reported = excluded.reported,
+       session = excluded.session, sessions = excluded.sessions`,
+  );
+  const getNotice = lazy(
+    'SELECT level, budget_usd FROM budget_notices WHERE target_kind = ? AND target_id = ?',
+  );
+  const putNotice = lazy(
+    `INSERT INTO budget_notices (target_kind, target_id, level, budget_usd) VALUES (?, ?, ?, ?)
+     ON CONFLICT(target_kind, target_id) DO UPDATE SET level = excluded.level,
+       budget_usd = excluded.budget_usd`,
+  );
+  const clearNotice = lazy('DELETE FROM budget_notices WHERE target_kind = ? AND target_id = ?');
   return {
+    spend: {
+      get: (agentId) => {
+        const row = getSpend().get(agentId) as SpendRow | undefined;
+        return row ? fromSpendRow(row) : undefined;
+      },
+      all: () => (allSpend().all() as SpendRow[]).map(fromSpendRow),
+      put: (s) => {
+        putSpend().run({
+          agent_id: s.agentId,
+          usd: s.usd,
+          reported: s.reported ? 1 : 0,
+          session: s.session,
+          sessions: JSON.stringify(s.sessions),
+        });
+      },
+    },
+    budgetNotices: {
+      get: (t) => {
+        const row = getNotice().get(t.kind, t.id) as
+          { level: 'warning' | 'exceeded'; budget_usd: number } | undefined;
+        return row ? { level: row.level, budgetUsd: row.budget_usd } : undefined;
+      },
+      put: (t, level, budgetUsd) => {
+        putNotice().run(t.kind, t.id, level, budgetUsd);
+      },
+      clear: (t) => {
+        clearNotice().run(t.kind, t.id);
+      },
+    },
     bodies: new Table(db, bodies, [
       'id',
       'kind',
@@ -309,6 +420,7 @@ export function tables(db: Database): Tables {
       'state',
       'permission_policy',
       'pinned',
+      'budget_usd',
       'created_at',
       'updated_at',
       'meta',
@@ -324,6 +436,7 @@ export function tables(db: Database): Tables {
       'blocked_by',
       'state',
       'pinned',
+      'budget_usd',
       'created_at',
       'updated_at',
       'meta',

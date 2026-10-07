@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { setGlobalDefaultPolicy } from '../domain/permissions.js';
 import { loadConfig } from './config.js';
+import type { TranscriptRetention as TranscriptRetentionPolicy } from '@galactic/protocol';
+import type { TranscriptRetention } from '../runtime/transcript-retention.js';
 import { SettingsError, SettingsService, writableFor } from './settings.js';
 
 const dirs: string[] = [];
@@ -123,6 +125,29 @@ describe('SettingsService (P25-01)', () => {
     expect(trusted.settings.caps.maxConcurrentAgents).toBe(8);
   });
 
+  it('saves and applies the budget warning threshold, locally only (P8-01)', () => {
+    const home = temp('galactic-home-');
+    const env = { GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv;
+    const { config } = loadConfig(env);
+    const watcher = { warnAtPercent: 80 };
+    const settings = new SettingsService({ config, home, budgets: watcher });
+    expect(settings.current().budgets).toEqual({ warnAtPercent: 80 });
+    expect(refusal(() => settings.update({ budgets: { warnAtPercent: 50 } }, {}))?.code).toBe(
+      'remote_settings',
+    );
+    const res = settings.update({ budgets: { warnAtPercent: 65 } }, local);
+    expect(res.settings.budgets).toEqual({ warnAtPercent: 65 });
+    expect(watcher.warnAtPercent).toBe(65);
+    expect(loadConfig(env).config.budgets).toEqual({ warnAtPercent: 65 }); // the restart keeps it
+    // The environment decides it: read-only in the panel.
+    const locked = loadConfig({ ...env, GALACTIC_BUDGET_WARN_PERCENT: '90' }).config;
+    expect(locked.budgets).toEqual({ warnAtPercent: 90 });
+    expect(locked.envOverrides).toContain('budgets');
+    expect(() => loadConfig({ ...env, GALACTIC_BUDGET_WARN_PERCENT: '0' })).toThrow(
+      /budget warning threshold/,
+    );
+  });
+
   it('reports a hand-edited first-run marker as a timestamp, still done (P25-08)', () => {
     const { config, settings } = setup();
     config.setupCompletedAt = '2026-10-01';
@@ -138,5 +163,98 @@ describe('SettingsService (P25-01)', () => {
     expect(writableFor({ origin: 'remote' })).toBe('limited');
     expect(writableFor({})).toBe('limited'); // unknown origin fails closed
     expect(writableFor({ origin: 'remote', autoApproveRemote: true })).toBe('all');
+  });
+});
+
+describe('transcript retention settings (P8-02)', () => {
+  it('defaults, saves key by key, applies live and survives a restart', () => {
+    const { env, config, home, file } = setup();
+    const job = { policy: { maxAgeDays: 90, archivedDays: 30 } as TranscriptRetentionPolicy };
+    const settings = new SettingsService({
+      config,
+      home,
+      transcriptRetention: job as unknown as TranscriptRetention,
+    });
+    expect(settings.current().transcriptRetention).toEqual({ maxAgeDays: 90, archivedDays: 30 });
+    const res = settings.update({ transcriptRetention: { maxAgeDays: null } }, local);
+    expect(res.settings.transcriptRetention).toEqual({ maxAgeDays: null, archivedDays: 30 });
+    expect(job.policy).toEqual({ maxAgeDays: null, archivedDays: 30 });
+    expect(file()['transcriptRetention']).toEqual({ maxAgeDays: null, archivedDays: 30 });
+    expect(loadConfig(env).config.transcriptRetention).toEqual({
+      maxAgeDays: null,
+      archivedDays: 30,
+    });
+  });
+
+  it('is changed only from this machine (decisions 51, 90)', () => {
+    const { settings, file } = setup();
+    const before = file();
+    const r = refusal(() =>
+      settings.update({ transcriptRetention: { archivedDays: 1 } }, { origin: 'remote' }),
+    );
+    expect(r?.code).toBe('remote_settings');
+    expect(file()).toEqual(before);
+    expect(
+      settings.update(
+        { transcriptRetention: { archivedDays: 1 } },
+        { origin: 'remote', autoApproveRemote: true },
+      ).settings.transcriptRetention,
+    ).toEqual({ maxAgeDays: 90, archivedDays: 1 });
+  });
+
+  it('takes whole days from 1, or null (P8-02 review)', () => {
+    const { settings, file } = setup();
+    const before = file();
+    for (const bad of [{ archivedDays: 0 }, { maxAgeDays: 0.5 }, { maxAgeDays: -1 }]) {
+      expect(refusal(() => settings.update({ transcriptRetention: bad }, local))).toBeDefined();
+    }
+    expect(file()).toEqual(before);
+  });
+
+  it('sets the runtime of new Stewards live, to a registered runtime only (P8-07)', () => {
+    const home = temp('galactic-home-');
+    const { config } = loadConfig({ GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv);
+    const settings = new SettingsService({
+      config,
+      home,
+      runtimes: () => ['fake', 'claude-sdk', 'acp'],
+    });
+    const file = () =>
+      JSON.parse(readFileSync(config.configPath, 'utf8')) as Record<string, unknown>;
+    expect(settings.current().stewardRuntime).toBeUndefined();
+    expect(settings.update({ stewardRuntime: 'acp' }, local).settings.stewardRuntime).toBe('acp');
+    expect(config.stewardRuntime).toBe('acp'); // live: the brains read the config at each spawn
+    expect(file()['stewardRuntime']).toBe('acp');
+    expect(settings.response().restartRequired).toEqual([]);
+    expect(refusal(() => settings.update({ stewardRuntime: 'pty' }, local))).toMatchObject({
+      code: 'invalid',
+      message: expect.stringMatching(/no pty runtime is set up/),
+    });
+    expect(
+      refusal(() => settings.update({ stewardRuntime: 'fake' }, { origin: 'remote' })),
+    ).toMatchObject({ code: 'remote_settings' });
+    expect(
+      settings.update({ stewardRuntime: null }, local).settings.stewardRuntime,
+    ).toBeUndefined();
+    expect(config.stewardRuntime).toBeUndefined();
+    expect(file()).not.toHaveProperty('stewardRuntime');
+  });
+
+  it('refuses the fake runtime outside dev mode, even though it is registered (P8 wave 3 review)', () => {
+    const home = temp('galactic-home-');
+    const { config } = loadConfig({ GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv);
+    expect(config.dev).toBe(false);
+    const runtimes = () => ['fake', 'claude-sdk', 'acp'] as const;
+    const prod = new SettingsService({ config, home, runtimes });
+    expect(refusal(() => prod.update({ stewardRuntime: 'fake' }, local))).toMatchObject({
+      code: 'invalid',
+      message: expect.stringMatching(/fake runtime is for development only/),
+    });
+    expect(config.stewardRuntime).toBeUndefined();
+    // Dev mode (or a test that says so) may run new Stewards on the fake adapter.
+    const dev = new SettingsService({ config: { ...config, dev: true }, home, runtimes });
+    expect(dev.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
+    const allowed = new SettingsService({ config, home, runtimes, allowFakeRuntime: true });
+    expect(allowed.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
   });
 });

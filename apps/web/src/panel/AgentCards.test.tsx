@@ -69,7 +69,11 @@ function load(w: World = {}) {
     proposals: [],
     statuses: [
       status('a-harmonizer'),
-      status('a-wk', w.waykeeperState),
+      // A brain: not wall-clock capped (SPEC decision 103); the limit stays for older clients.
+      {
+        ...status('a-wk', w.waykeeperState),
+        caps: { ...fx.status.caps, wallClockMs: { used: 0, limit: 3_600_000, capped: false } },
+      },
       status('a-st', w.stewardState),
       ...(w.extraAgents ?? []).map((a) => status(a.id)),
     ],
@@ -378,6 +382,22 @@ describe('managed-agents cards: every control action of SPEC §4.3 (P25-04)', ()
     );
   });
 
+  it('gives a project a dollar budget from its edit form (P8-01)', async () => {
+    load();
+    show();
+    fireEvent.click(within(group(WAYKEEPER, 'project')).getByRole('button', { name: 'Edit' }));
+    const c = card(WAYKEEPER);
+    expect((within(c).getByLabelText('budget ($)') as HTMLInputElement).value).toBe('');
+    fireEvent.change(within(c).getByLabelText('budget ($)'), { target: { value: '12.5' } });
+    fireEvent.click(within(c).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(control).toHaveBeenCalledWith({
+        target: projectT,
+        action: { action: 'edit', changes: { budgetUsd: 12.5 } },
+      }),
+    );
+  });
+
   it('opens (selects) the agent from its card', () => {
     load();
     show();
@@ -443,6 +463,8 @@ describe('managed-agents cards: what they show (P25-04)', () => {
     expect(c.getByLabelText('cost so far').textContent).toBe('$0.4200');
     expect(c.getByLabelText('tool calls').textContent).toMatch(/^17 \/ 500/);
     expect(c.getByLabelText('wall clock').textContent).toBe('5 min / 1 h');
+    // A Waykeeper has no wall-clock cap (P8-10, decision 103): only its time.
+    expect(within(card(WAYKEEPER)).getByLabelText('wall clock').textContent).toBe('5 min');
     expect(card(STEWARD).querySelector('.agc-qbadge')?.textContent).toBe('1 open question');
     // Held by a supervisor: not blocked on the user.
     expect(c.queryByText('blocked on you')).toBeNull();

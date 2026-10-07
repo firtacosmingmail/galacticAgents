@@ -20,6 +20,7 @@ import { ScaleToggle } from './bodies/ScaleToggle.js';
 import { PickingOverlay } from './picking/PickingOverlay.js';
 import { LabelLayer } from './labels/LabelLayer.js';
 import { SatelliteLegend } from './legend/Legend.js';
+import { SceneProbe } from './probe.js';
 import { activateBody, deselectFromScene, usePickingStore } from './picking/store.js';
 import { useSelectionSync } from './picking/sync.js';
 import { bodyAction } from './picking/body-action.js';
@@ -100,6 +101,7 @@ export function SceneArea({ onFailure }: { onFailure: (reason: string) => void }
       {showFps && <FpsMeter sample={sample} tier={quality.tier} />}
       <ScaleToggle />
       <SatelliteLegend />
+      <SceneProbe />
     </section>
   );
 }

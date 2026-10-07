@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IDENTITY_TOKEN } from '@galactic/protocol';
-import { DEFAULT_PORT, DEFAULT_PROJECTS_DIR, loadConfig } from './config.js';
+import { DEFAULT_PORT, DEFAULT_PROJECTS_DIR, dataPaths, loadConfig } from './config.js';
 
 let home: string;
 beforeEach(() => {
@@ -12,6 +12,137 @@ beforeEach(() => {
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 describe('loadConfig', () => {
+  it('reads the Steward runtime and the ACP agent command (P8-07)', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        stewardRuntime: 'acp',
+        acp: { command: 'gemini', args: ['--acp'], passEnv: ['GEMINI_API_KEY'] },
+      }),
+    );
+    const fromFile = loadConfig({ GALACTIC_HOME: home }).config;
+    expect(fromFile.stewardRuntime).toBe('acp');
+    expect(fromFile.acp).toEqual({
+      command: 'gemini',
+      args: ['--acp'],
+      passEnv: ['GEMINI_API_KEY'],
+    });
+    expect(fromFile.envOverrides).not.toContain('stewardRuntime');
+    const fromEnv = loadConfig({
+      GALACTIC_HOME: home,
+      GALACTIC_STEWARD_RUNTIME: 'claude-sdk',
+      GALACTIC_ACP_COMMAND: ' codex-acp  --verbose ',
+    }).config;
+    expect(fromEnv.stewardRuntime).toBe('claude-sdk');
+    expect(fromEnv.envOverrides).toContain('stewardRuntime');
+    expect(fromEnv.acp).toEqual({
+      command: 'codex-acp',
+      args: ['--verbose'],
+      passEnv: ['GEMINI_API_KEY'],
+    });
+    expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_STEWARD_RUNTIME: 'cursor' })).toThrow(
+      /Steward runtime/,
+    );
+  });
+
+  it('reads acp.mode and allowPermissiveMode; refuses GALACTIC_* in passEnv; a JSON command', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        acp: { command: 'codex-acp', mode: 'read-only', allowPermissiveMode: false },
+      }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.acp).toEqual({
+      command: 'codex-acp',
+      mode: 'read-only',
+      allowPermissiveMode: false,
+    });
+    expect(
+      loadConfig({
+        GALACTIC_HOME: home,
+        GALACTIC_ACP_COMMAND: '["/opt/my agent/bin/acp", "--flag", "a b"]',
+      }).config.acp,
+    ).toEqual({
+      command: '/opt/my agent/bin/acp',
+      args: ['--flag', 'a b'],
+      mode: 'read-only',
+      allowPermissiveMode: false,
+    });
+    expect(() =>
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_ACP_COMMAND: '["unterminated' }),
+    ).toThrow(/not a JSON array/);
+    expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_ACP_COMMAND: '[]' })).toThrow(
+      /non-empty JSON array/,
+    );
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        acp: { command: 'x', passEnv: ['GEMINI_API_KEY', 'GALACTIC_TOKEN'] },
+      }),
+    );
+    expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow(/GALACTIC_\*/);
+  });
+
+  it('reads the terminal agent (P8-08): file, GALACTIC_PTY_COMMAND, GALACTIC_* refused', () => {
+    const pty = {
+      command: 'aider',
+      args: ['--no-auto-commits'],
+      passEnv: ['OPENAI_API_KEY'],
+      idlePattern: '^> $',
+      questionPatterns: [{ pattern: 'Ready\\s*$', kind: 'permission', yes: 'go' }],
+      clarificationPatterns: ['Name:\\s*$'],
+      quietMs: 500,
+      idleAfterMs: 5_000,
+    };
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef', pty }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.pty).toEqual(pty);
+    expect(
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_PTY_COMMAND: '["/opt/my cli", "-q"]' }).config.pty,
+    ).toEqual({ ...pty, command: '/opt/my cli', args: ['-q'] });
+    expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_PTY_COMMAND: '[]' })).toThrow(
+      /GALACTIC_PTY_COMMAND must be/,
+    );
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        pty: { command: 'x', passEnv: ['GALACTIC_TOKEN'] },
+      }),
+    );
+    expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow(/GALACTIC_\*/);
+    // Fail closed (decision 112): a free-form shape is a clarification pattern, not a question one.
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({
+        token: 'file-token-0123456789abcdef',
+        pty: { command: 'x', questionPatterns: [{ pattern: 'Name:', kind: 'clarification' }] },
+      }),
+    );
+    expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow(/clarificationPatterns/);
+  });
+
+  it('drops a fake Steward runtime outside dev mode, with a warning (P8 wave 3 review)', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef', stewardRuntime: 'fake' }),
+    );
+    const fromFile = loadConfig({ GALACTIC_HOME: home });
+    expect(fromFile.config.stewardRuntime).toBeUndefined();
+    expect(fromFile.warnings).toContainEqual(expect.stringMatching(/stewardRuntime is fake/));
+    const fromEnv = loadConfig({ GALACTIC_HOME: home, GALACTIC_STEWARD_RUNTIME: 'fake' });
+    expect(fromEnv.config.stewardRuntime).toBeUndefined();
+    expect(fromEnv.warnings).toContainEqual(expect.stringMatching(/development only/));
+    const dev = loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '1' });
+    expect(dev.config.stewardRuntime).toBe('fake');
+    expect(dev.warnings.some((w) => w.includes('stewardRuntime'))).toBe(false);
+  });
+
   it('generates a token on first start, persists it with mode 0600 and reuses it afterwards', () => {
     const first = loadConfig({ GALACTIC_HOME: home });
     expect(first.tokenGenerated).toBe(true);
@@ -282,5 +413,38 @@ describe('loadConfig', () => {
       JSON.stringify({ token: 'file-token-0123456789abcdef' }),
     );
     expect(loadConfig({ GALACTIC_HOME: home }).warnings.join('\n')).not.toMatch(/HTTP-mode/);
+  });
+
+  it('reads the backups setting (P8-03), the environment switching the schedule on or off', () => {
+    const token = 'file-token-0123456789abcdef';
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ token }));
+    expect(loadConfig({ GALACTIC_HOME: home }).config.backups).toBeUndefined();
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token, backups: { keepDaily: 3, keepWeekly: 2, reserveMiB: 10 } }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.backups).toEqual({
+      keepDaily: 3,
+      keepWeekly: 2,
+      reserveBytes: 10 * 2 ** 20,
+    });
+    expect(loadConfig({ GALACTIC_HOME: home, GALACTIC_BACKUPS: '0' }).config.backups).toMatchObject(
+      {
+        enabled: false,
+      },
+    );
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ token, backups: { keepDaily: -1 } }));
+    expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow();
+  });
+
+  it('names the data paths without touching the disk', () => {
+    expect(dataPaths({ GALACTIC_HOME: home })).toEqual({
+      dataDir: home,
+      configPath: join(home, 'config.json'),
+      dbPath: join(home, 'galactic.sqlite'),
+    });
+    expect(dataPaths({ GALACTIC_HOME: home, GALACTIC_DB: '/x/y.sqlite' }).dbPath).toBe(
+      '/x/y.sqlite',
+    );
   });
 });

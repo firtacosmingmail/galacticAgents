@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
 import {
+  AgentRuntime as AgentRuntimeName,
   AnswerBody,
   ControlBody,
   PERMISSION_POLICY_PRESETS,
@@ -8,6 +9,7 @@ import {
   SendBody,
   SpawnBody,
   StopProcessesBody,
+  TerminalInputBody,
   type Actor,
   type AnswerResponse,
   type ChatMessage,
@@ -32,6 +34,7 @@ import { redactSecrets } from '../runtime/redact.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { policyForWrite } from '../domain/permissions.js';
 import { bearerGuard, originOf } from './security.js';
+import { sendStorageRefusal } from './storage-refusal.js';
 
 /**
  * The agent control surface the ops console uses (P1-11; TECHNOLOGY §2.2 "a small REST
@@ -80,7 +83,11 @@ export function registerAgentRoutes(
     const parse = <T>(schema: z.ZodType<T>, body: unknown, reply: FastifyReply): T | undefined => {
       const parsed = schema.safeParse(body ?? {});
       if (parsed.success) return parsed.data;
-      void reply.code(400).send({ error: 'invalid_body', issues: parsed.error.issues });
+      void reply.code(400).send({
+        error: 'invalid_body',
+        message: parsed.error.issues[0]?.message ?? 'invalid body',
+        issues: parsed.error.issues,
+      });
       return undefined;
     };
     const agentId = (req: FastifyRequest) => (req.params as { id: string }).id;
@@ -104,13 +111,16 @@ export function registerAgentRoutes(
       try {
         return (await fn()) ?? { ok: true };
       } catch (error) {
+        // A full disk is not a conflict: 507 `storage_full` (P8-09), nothing done.
+        if (sendStorageRefusal(reply, error)) return reply;
         return reply.code(409).send(refusal('rejected', (error as Error).message));
       }
     };
 
     /** What the spawn form can offer. */
     app.get('/api/runtimes', async (): Promise<RuntimesInfo> => ({
-      runtimes: (['fake', 'claude-sdk'] as const)
+      // Every runtime with an adapter registered here (ACP only when `acp` is configured).
+      runtimes: AgentRuntimeName.options
         .filter((name) => runtime.adapter(name) !== undefined)
         .map((name) => ({
           name,
@@ -141,6 +151,8 @@ export function registerAgentRoutes(
         }),
         ...(body.caps ? { caps: compact(body.caps) } : {}),
         ...(body.bare ? { bare: true } : {}),
+        // Whatever its role, a free-form agent keeps the wall-clock cap (SPEC decision 103).
+        freeForm: true,
       });
       if (!result.ok) return reply.code(409).send(refusal('refused', result.reason));
       return reply.code(201).send({ agentId: result.agent.id } satisfies SpawnResponse);
@@ -159,6 +171,26 @@ export function registerAgentRoutes(
         });
         return { messageId: message.id } satisfies SendResponse;
       });
+    });
+
+    /**
+     * Types a line into a terminal agent's terminal (P8-08; decision 113): only from
+     * this machine's own browser — never from a remote client, `autoApproveRemote` or not: a
+     * keyboard on an agent no table can judge is the Mac's alone. 409 when the agent has no
+     * terminal or is not running; logged as the user's message.
+     */
+    app.post('/api/agents/:id/terminal', async (req, reply) => {
+      if (originOf(req) !== 'local') {
+        return reply.code(403).send({
+          error: 'remote_control',
+          message: "Typing into an agent's terminal works only from this machine's own browser.",
+        });
+      }
+      const body = parse(TerminalInputBody, req.body, reply);
+      if (!body) return;
+      return attempt(reply, async () =>
+        runtime.typeInto(agentId(req), body.text, { by: USER, origin: 'local' }),
+      );
     });
 
     app.post('/api/agents/:id/pause', (req, reply) =>
@@ -189,6 +221,7 @@ export function registerAgentRoutes(
         try {
           return (await restartHarmonizer()) satisfies RestartHarmonizerResponse;
         } catch (error) {
+          if (sendStorageRefusal(reply, error)) return reply;
           if (!(error instanceof DomainError)) {
             req.log.error(error);
             return reply.code(500).send({
@@ -210,6 +243,7 @@ export function registerAgentRoutes(
     /**
      * Reopens an interrupted agent from its session ref (the manual half of P1-14): the same
      * path as startup recovery (P1-29) — 409 unless the agent is interrupted and not running.
+     * An agent whose runtime cannot resume (PTY, P8-08) is restarted from its first prompt.
      * Open to remote clients like resume (decision 90): it continues work already started.
      */
     app.post('/api/agents/:id/recover', async (req, reply) => {
@@ -229,10 +263,13 @@ export function registerAgentRoutes(
     const { commands } = opts;
     /**
      * A refused domain command as the console reads it (P2-14, P2-18): 404 unknown, 400 invalid,
-     * 409 for a state that refuses it (`stale` keeps its code: "already answered by …"), 500 for
-     * anything that is not a refusal (a bug or a runtime failure, never reported as a conflict).
+     * 409 for a state that refuses it (`stale` keeps its code: "already answered by …"), 507 / 503
+     * when the storage refused it (P8-09), 500 for anything that is not a refusal (a bug or a
+     * runtime failure, never reported as a conflict).
      */
     const refuse = (req: FastifyRequest, reply: FastifyReply, error: unknown) => {
+      // The storage refused it (P8-09): 507 `storage_full` / 503, nothing done.
+      if (sendStorageRefusal(reply, error)) return reply;
       if (!(error instanceof DomainError)) {
         req.log.error(error);
         return reply.code(500).send({ error: 'internal' });

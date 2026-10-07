@@ -109,15 +109,6 @@ describe('TranscriptPipeline', () => {
     expect(errors).toHaveLength(1);
   });
 
-  it('prune drops chunks up to a seq (retention hook, unused in v1)', () => {
-    const { p } = make();
-    for (let i = 0; i < 4; i++) p.append('a-1', 'text', `l${i}`);
-    p.flush();
-    expect(p.prune('a-1', 2)).toBe(2);
-    expect(p.read('a-1').map((c) => c.seq)).toEqual([3, 4]);
-    expect(p.append('a-1', 'text', 'next').seq).toBe(5);
-  });
-
   it('dispose flushes; later appends are dropped, not thrown', () => {
     const { db, p } = make();
     p.append('a-1', 'text', 'last words');
@@ -344,6 +335,24 @@ describe('TranscriptPipeline', () => {
       p.flush();
       expect(w.rows()).toEqual(['token [redacted:github-token]', 'third']);
     });
+
+    it('a terminal stream and its text interleaved: each catches its own split key (P8-08)', () => {
+      const { p } = make({ holdMs: 250 });
+      const head = FAKE_KEY.slice(0, 18);
+      const tail = FAKE_KEY.slice(18);
+      // A PTY agent's raw output and its stripped text arrive interleaved, the same bytes twice.
+      const t1 = p.append('a-1', 'terminal', `\x1b[32mkey=${head}`);
+      const x1 = p.append('a-1', 'text', `key=${head}`);
+      const t2 = p.append('a-1', 'terminal', `${tail}\x1b[0m\r\n`);
+      const x2 = p.append('a-1', 'text', `${tail}`);
+      p.flush();
+      const all = [t1, x1, t2, x2].map((c) => c.text).join('|');
+      expect(all).not.toContain(head);
+      expect(all).not.toContain(tail);
+      expect(t2.text).toContain('[redacted:anthropic-key]');
+      expect(x2.text).toContain('[redacted:anthropic-key]');
+      expect(p.read('a-1').map((c) => c.kind)).toEqual(['terminal', 'text', 'terminal', 'text']);
+    });
   });
 
   describe('what a subscriber gets is what is stored (P1-31)', () => {
@@ -412,18 +421,23 @@ describe('TranscriptPipeline', () => {
       expect(received).toEqual([2]);
     });
 
-    it('prune keeps the newest chunk so seq stays monotonic after a restart', () => {
+    it('numbers after the high-water mark when retention removed every chunk (P8-02)', () => {
       const db = openDatabase(':memory:');
       dbs.push(db);
       const first = new TranscriptPipeline(db, { flushMs: 5, holdMs: 0 });
       for (const t of ['a', 'b', 'c']) first.append('a-1', 'text', t);
       first.flush();
-      expect(first.prune('a-1', 3)).toBe(2);
-      expect(first.read('a-1').map((c) => c.seq)).toEqual([3]);
-      expect(first.prune('a-1', 99)).toBe(0);
       first.dispose();
+      // What the retention job does: remove the chunks, record the agent's newest seq.
+      db.prepare('DELETE FROM transcript_chunks WHERE agent_id = ?').run('a-1');
+      db.prepare(
+        `INSERT INTO transcript_compactions
+           (agent_id, through_seq, through_at, last_seq, removed_at, reason)
+         VALUES ('a-1', 3, 'x', 3, 'y', 'age')`,
+      ).run();
       const second = new TranscriptPipeline(db, { flushMs: 5, holdMs: 0 });
       pipes.push(second);
+      expect(second.lastSeq('a-1')).toBe(3);
       expect(second.append('a-1', 'text', 'd').seq).toBe(4);
     });
   });

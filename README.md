@@ -6,12 +6,13 @@ Read `docs/SPEC.md` (what), `docs/TECHNOLOGY.md` (with what) and `docs/IMPLEMENT
 
 ## Quickstart
 
-Requirements: Node 22 LTS (22.12 or newer; `jsdom` prints a warning below 22.22, which is harmless) and pnpm 10 (`corepack enable` or `npm i -g pnpm`). No native toolchain is needed: `better-sqlite3` ships prebuilt binaries (its install script is intentionally not run).
+Requirements: Node 22 LTS (22.12 or newer; `jsdom` prints a warning below 22.22, which is harmless) and pnpm 10 (`corepack enable` or `npm i -g pnpm`). No native toolchain is needed on macOS or Windows: `better-sqlite3` ships prebuilt binaries (its install script is intentionally not run), and so does `node-pty` (the terminal-agent runtime, P8-08), whose install script pnpm is allowed to run (`pnpm.onlyBuiltDependencies`); on Linux `node-pty` is compiled at install (python3, make, a C++ compiler).
 
 ```sh
-pnpm install          # workspace: packages/protocol, apps/server, apps/web (npm/yarn are refused)
+pnpm install          # workspace: packages/protocol, apps/server, apps/web, e2e (npm/yarn are refused)
 pnpm build            # protocol → server → web (also copies SQL migrations)
 pnpm test             # builds protocol + server first, then every package's Vitest suite, incl. the resume/gap test
+pnpm e2e              # builds, then the Playwright browser smoke tests (once: pnpm e2e:install); docs/tasks/notes/P8-05-smoke.md
 pnpm start            # = galactic start: serves the built web app, prints URL + token, opens the browser
 ```
 
@@ -25,6 +26,7 @@ The token is generated on first start and printed by `galactic start`. The page 
 
 ```sh
 pnpm remote           # for the phone: Tailscale Serve + build + galactic start --dev (docs/REMOTE_ACCESS.md)
+pnpm desktop:build    # the optional macOS app (Tauri 2, needs Rust): Dock + menu bar + notifications (docs/DESKTOP.md)
 pnpm dev              # builds the protocol once, then protocol (tsc --watch) + server (tsx watch, GALACTIC_DEV=1) + web (vite) with hot reload
 ```
 
@@ -37,6 +39,7 @@ Other scripts: `pnpm lint`, `pnpm format`, `pnpm typecheck` (includes the tests)
 ```
 apps/server/      Fastify + ws + SQLite + agent runtime — see apps/server/README.md
 apps/web/         Vite + React 19 (+ React Three Fiber from Phase 3)
+apps/desktop/     optional Tauri 2 shell: Rust window/menu bar + a Node side for the server lifecycle (docs/DESKTOP.md)
 packages/protocol zod schemas, event model, AgentAdapter + DomainCommands interfaces (the single vocabulary)
 docs/             SPEC, TECHNOLOGY, IMPLEMENTATION_PLAN, tasks/
 ```

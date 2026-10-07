@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   Agent,
   Body,
@@ -14,6 +15,8 @@ import {
   Task,
   TrustLevel,
   trustLevelOf,
+  wallClockCapApplies,
+  wallClockLimit,
 } from './domain.js';
 import { AgentState, PermissionAction, WorkState } from './enums.js';
 import * as fx from './fixtures/domain.js';
@@ -119,5 +122,34 @@ describe('trust levels (P2-22, decision 49)', () => {
     });
     expect(proposalTrust({ meta: { trust: 'yolo' } })).toBe('default');
     expect(proposalTrust(undefined)).toBe('default');
+  });
+
+  it('the wall-clock cap applies to Stewards and free-form agents, not to brains (decision 103)', () => {
+    expect(wallClockCapApplies({ role: 'steward' })).toBe(true);
+    expect(wallClockCapApplies({})).toBe(true);
+    expect(wallClockCapApplies({ role: 'harmonizer' })).toBe(false);
+    expect(wallClockCapApplies({ role: 'waykeeper', meta: { cwd: '/w' } })).toBe(false);
+    expect(wallClockCapApplies({ role: 'waykeeper', meta: { freeForm: true } })).toBe(true);
+    expect(wallClockCapApplies({ role: 'steward', meta: { freeForm: true } })).toBe(true);
+  });
+
+  it('an uncapped brain keeps its numeric limit and says `capped: false` (readable by old builds)', () => {
+    const caps = {
+      ...fx.status.caps,
+      wallClockMs: { used: 5_000, limit: 3_600_000, capped: false },
+    };
+    const parsed = StatusRecord.parse({ ...fx.status, caps });
+    expect(wallClockLimit(parsed.caps.wallClockMs)).toBeUndefined();
+    expect(wallClockLimit(fx.status.caps.wallClockMs)).toBe(3_600_000);
+    // The previous build's schema (limit required, no `capped`) still accepts the record.
+    const previous = z.object({
+      used: z.number().nonnegative(),
+      limit: z.number().positive(),
+    });
+    expect(previous.safeParse(caps.wallClockMs).success).toBe(true);
+    // A record without a limit is refused: old parsers would refuse it too.
+    expect(
+      StatusRecord.safeParse({ ...fx.status, caps: { ...caps, wallClockMs: { used: 1 } } }).success,
+    ).toBe(false);
   });
 });

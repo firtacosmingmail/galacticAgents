@@ -61,6 +61,9 @@ describe('WAKE_RULES', () => {
         'control.archive',
         'control.pin',
         'control.reopen',
+        'budget.set',
+        'budget.warning',
+        'budget.exceeded',
       ].sort(),
     );
   });
@@ -140,6 +143,93 @@ describe('WAKE_RULES', () => {
         s,
       ),
     ).toBeUndefined();
+  });
+
+  it('wakes the brain that runs budgeted work on its budget notices (P8-01)', () => {
+    const exceeded: Event = {
+      type: 'budget.exceeded',
+      target: { kind: 'project', id: 'p-1' },
+      spentUsd: 5.5,
+      budgetUsd: 5,
+    };
+    const line = wakeLine(exceeded, scope());
+    expect(line).toMatch(/^budget exceeded: project p-1 has spent \$5\.50 of its \$5\.00 budget/);
+    expect(wakeLine(exceeded, scope({ runsProject: () => false }))).toBeUndefined();
+    // The Harmonizer is not woken for its Waykeepers' projects: its chat shows the notice already.
+    expect(wakeLine(exceeded, scope({ role: 'harmonizer' }))).toBeUndefined();
+    // A task's notice wakes whoever runs the task: the Harmonizer for an asteroid task.
+    const warning: Event = { ...fixtures['budget.warning'], target: { kind: 'task', id: 't-9' } };
+    expect(wakeLine(warning, scope({ role: 'harmonizer' }))).toMatch(/^budget warning: task t-9/);
+    expect(wakeLine(warning, scope({ runsTask: () => false }))).toBeUndefined();
+    expect(wakeLine(fixtures['budget.set'], scope())).toBe(
+      'the budget of project p-1 is now $5.00 (was $2.00) — spawns refused for the budget may be tried again',
+    );
+    // A refused spawn is the asker's tool error, not a mailbox line.
+    expect(wakeLine(fixtures['budget.spawn_refused'], scope())).toBeUndefined();
+  });
+
+  it('wakes the Harmonizer on a raised or removed budget of work nobody runs (P8-01 review)', () => {
+    const raised = fixtures['budget.set']; // project p-1: $2.00 → $5.00
+    const hq = (unattended: boolean) =>
+      scope({ role: 'harmonizer', runsProject: () => false, unattended: () => unattended });
+    expect(wakeLine(raised, hq(true))).toBe(
+      'the budget of project p-1 is now $5.00 (was $2.00) — spawns refused for the budget may be ' +
+        'tried again; project p-1 has no running Waykeeper: if the budget now allows it, ' +
+        'spawn_waykeeper for it',
+    );
+    // Its Waykeeper runs: nothing for the Harmonizer to start.
+    expect(wakeLine(raised, hq(false))).toBeUndefined();
+    // Lowered, or set for the first time: no spawn it refused can now go through.
+    const lowered: Event = { ...raised, usd: 1 } as Event;
+    expect(wakeLine(lowered, hq(true))).toBeUndefined();
+    const first: Event = {
+      type: 'budget.set',
+      target: raised.target,
+      usd: 5,
+      by: { type: 'user' },
+    };
+    expect(wakeLine(first, hq(true))).toBeUndefined();
+    // Removed: an asteroid task without its Steward.
+    const removed: Event = {
+      type: 'budget.set',
+      target: { kind: 'task', id: 't-9' },
+      previousUsd: 3,
+      by: { type: 'user' },
+    };
+    expect(
+      wakeLine(
+        removed,
+        scope({ role: 'harmonizer', runsTask: () => false, unattended: () => true }),
+      ),
+    ).toMatch(/was removed .*; task t-9 has no running Steward: .* spawn_steward for it$/);
+  });
+
+  it('knows which work is unattended: active, and no running Waykeeper or asteroid Steward', () => {
+    const { log } = world();
+    const running = new Set<string>();
+    const run = <T>(fn: Parameters<typeof log.runCommand<T>>[0]) => log.runCommand(fn).value;
+    const project = run((ctx) => createProject(ctx, { name: 'P', workspace: '/w/p' }));
+    const asteroid = run((ctx) => createTask(ctx, { description: 'a' }));
+    const projectTask = run((ctx) => createTask(ctx, { description: 't', projectId: project.id }));
+    const s = createWakeScope(
+      log.tables,
+      { brainId: 'hq', role: 'harmonizer' },
+      { status: (id) => (running.has(id) ? ({ state: 'idle' } as never) : undefined) },
+    );
+    expect(s.unattended?.({ kind: 'project', id: project.id })).toBe(true);
+    expect(s.unattended?.({ kind: 'task', id: asteroid.id })).toBe(true);
+    // A project's task is its Waykeeper's to staff.
+    expect(s.unattended?.({ kind: 'task', id: projectTask.id })).toBe(false);
+    const wk = run((ctx) =>
+      createAgent(ctx, {
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: project.id,
+        caps: d.agent.caps,
+      }),
+    );
+    running.add(wk.id);
+    expect(s.unattended?.({ kind: 'project', id: project.id })).toBe(false);
   });
 
   it('wakes on finished, failed and stalled only for supervised agents', () => {

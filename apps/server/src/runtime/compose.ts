@@ -1,6 +1,7 @@
 import {
   ENDED_STATES,
   isHarnessMeta,
+  wallClockCapApplies,
   type Agent,
   type AgentAdapter,
   type AgentRuntime as RuntimeName,
@@ -21,11 +22,14 @@ import {
 } from '../brains/index.js';
 import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { Archival, type Timers } from './archival.js';
+import { BudgetWatcher } from './budgets.js';
 import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
+import { StorageMonitor } from './storage-health.js';
 import { StatusStore } from './status-store.js';
 import { StewardProcesses, type StewardProcessesOptions } from './steward-processes.js';
 import { stewardReports, type StewardReports } from './steward-reports.js';
 import { TranscriptPipeline } from './transcripts.js';
+import { TranscriptRetention, type RetentionPolicy } from './transcript-retention.js';
 import { WorkStateDeriver } from './work-state-deriver.js';
 import { Workspaces, type WorkspacesOptions } from '../workspace/workspaces.js';
 
@@ -76,11 +80,30 @@ export interface ComposeOptions {
    */
   archival?: { retentionMs?: number; intervalMs?: number; timers?: Timers };
   /**
+   * Transcript retention (P8-02): `policy` from the settings (default
+   * `DEFAULT_TRANSCRIPT_RETENTION`); the timer runs only with an `intervalMs`, like archival
+   * (tests call `transcriptRetention.run()`).
+   */
+  transcriptRetention?: {
+    policy?: RetentionPolicy;
+    intervalMs?: number;
+    timers?: Timers;
+    pause?: () => Promise<void>;
+  };
+  /**
    * Steward process cleanup (P4-14): `index.ts` passes the supervisor as `groups`. With it, brains
    * get the process tools' service and a Steward's leftovers are swept when it ends or its task
    * closes; without it there are no sweeps and the tools refuse.
    */
   processes?: Omit<StewardProcessesOptions, 'log' | 'statuses' | 'onError'>;
+  /** Dollar budgets (P8-01): the warning threshold (`config.budgets`, default 80 %). */
+  budgets?: { warnAtPercent?: number };
+  /**
+   * The runtime new Stewards run on (P8-07; the `stewardRuntime` setting, read at every spawn):
+   * handed to every brain's tools. Absent or `undefined`: a brain spawns Stewards on its own
+   * runtime.
+   */
+  stewardRuntime?: () => RuntimeName | undefined;
 }
 
 export interface ComposedRuntime {
@@ -100,8 +123,14 @@ export interface ComposedRuntime {
   workspaces?: Workspaces;
   /** The retention / archival job (P2-13); its timer runs when composed with an interval. */
   archival: Archival;
+  /** Transcript retention and compaction (P8-02); its timer runs when composed with an interval. */
+  transcriptRetention: TranscriptRetention;
   /** A Steward's processes: list, stop, sweep (P4-14), when composed with `processes`. */
   processes?: StewardProcesses;
+  /** Budget notices and the Harmonizer's chat lines about them (P8-01). */
+  budgets: BudgetWatcher;
+  /** The database's write health, for the panel's storage banner (P8-09). */
+  storage: StorageMonitor;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
   startBrain(
     definition: BrainDefinition,
@@ -186,12 +215,19 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   const statuses = new StatusStore({
     capsOf: (id) => log.tables.agents.get(id)?.caps,
     defaultCaps,
+    // A brain shows its time without a limit (SPEC decision 103).
+    wallClockCapped: (id) => {
+      const agent = log.tables.agents.get(id);
+      return !agent || wallClockCapApplies(agent);
+    },
     // The scene harness's fake agents (P4-06) have no process to fall silent: they stall only
     // when the harness says so.
     stallThresholdMs: (runtime, agentId) =>
       isHarnessMeta(log.tables.agents.get(agentId)?.meta)
         ? Number.POSITIVE_INFINITY
         : stallThreshold(runtime),
+    // A stall the ticker saw is logged (P8-04): the supervisor is woken, the history shows it.
+    onStalled: (agentId, silentForMs) => runtime.noteStalled(agentId, silentForMs),
     ...(opts.flushMs !== undefined ? { flushMs: opts.flushMs } : {}),
     ...(opts.tickMs !== undefined ? { tickMs: opts.tickMs } : {}),
     ...(opts.retainEndedMs !== undefined ? { retainEndedMs: opts.retainEndedMs } : {}),
@@ -232,6 +268,12 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     caps: { ...(opts.caps ?? {}), defaults: defaultCaps },
     ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
     ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
+  // The database's write health for the panel (P8-09): the held queue and refused commands.
+  const storage = new StorageMonitor({
+    log,
+    state: () => runtime.storageState(),
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
 
@@ -289,6 +331,17 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'archival') } : {}),
   });
   if (opts.archival?.intervalMs) archival.start(opts.archival.intervalMs);
+  const tr = opts.transcriptRetention;
+  const transcriptRetention = new TranscriptRetention({
+    db,
+    tables: log.tables,
+    ...(tr?.policy ? { policy: tr.policy } : {}),
+    ...(tr?.timers ? { timers: tr.timers } : {}),
+    ...(tr?.pause ? { pause: tr.pause } : {}),
+    ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'transcript retention') } : {}),
+  });
+  if (tr?.intervalMs) transcriptRetention.start(tr.intervalMs);
   const processes: StewardProcesses | undefined = opts.processes
     ? new StewardProcesses({
         ...opts.processes,
@@ -299,6 +352,17 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     : undefined;
   processes?.watch();
 
+  const budgets = new BudgetWatcher({
+    log,
+    harmonizer: () => runtime.liveAgents().find((a) => a.role === 'harmonizer')?.id,
+    post: (agentId, text) => void runtime.send(agentId, text, { sender: { type: 'system' } }),
+    ...(opts.budgets?.warnAtPercent !== undefined
+      ? { warnAtPercent: opts.budgets.warnAtPercent }
+      : {}),
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
+  budgets.start();
+
   // The brains this composition drives (P2-16): started here or resumed by recovery.
   const runners = new Map<Id, BrainRunner>();
   const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
@@ -308,6 +372,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     queries,
     ...(workspaces ? { workspaces } : {}),
     ...(processes ? { processes } : {}),
+    ...(opts.stewardRuntime ? { stewardRuntime: opts.stewardRuntime } : {}),
     ...extra,
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
@@ -351,7 +416,10 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     queries,
     ...(workspaces ? { workspaces } : {}),
     archival,
+    transcriptRetention,
     ...(processes ? { processes } : {}),
+    budgets,
+    storage,
     startBrain: async (definition, placement, brainOpts = {}) =>
       adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),
     defineBrains(defs, brainOpts = {}) {
@@ -438,9 +506,12 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     async shutdown() {
       // A graceful shutdown interrupts agents (they come back): nothing of theirs is swept.
       processes?.dispose();
+      budgets.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
+      transcriptRetention.stop();
       reports.dispose();
+      storage.dispose();
       await runtime.shutdown();
       await runtime.dispose();
       statuses.dispose();
@@ -448,9 +519,12 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     },
     async dispose() {
       processes?.dispose();
+      budgets.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
+      transcriptRetention.stop();
       reports.dispose();
+      storage.dispose();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();

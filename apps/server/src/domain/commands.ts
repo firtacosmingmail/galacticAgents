@@ -7,6 +7,7 @@ import {
   type AgentPlacement,
   type AnswerQuestionInput,
   type BodyRequest,
+  type BudgetTarget,
   type CommandResult,
   type ControlAction,
   type ControlTarget,
@@ -14,6 +15,8 @@ import {
   type CreateProposalInput,
   type CreateTaskInput,
   type DomainCommands,
+  type ProjectEdit,
+  type TaskEdit,
   type Event,
   type Host,
   type Id,
@@ -35,6 +38,7 @@ import { assignBody, freeBody, moveHost, sweepMarkers } from './bodies.js';
 import { agentEffect, agentsOf } from './cascade.js';
 import { EARTH_ID, chooseBody, freeMoons, freePlanets, type ChooseOptions } from './catalogue.js';
 import { recordControl } from './control.js';
+import { checkSpawnBudget, setBudget } from './budgets.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext, EventLog } from './event-log.js';
 import {
@@ -44,7 +48,6 @@ import {
   pinProject,
   reopenProject,
   updateProject,
-  type ProjectChanges,
 } from './projects.js';
 import { noLooserThan, resolvePolicy, type PolicyWrite } from './permissions.js';
 import type { ProposalOptions } from './approval.js';
@@ -76,7 +79,6 @@ import {
   pinTask,
   reopenTask,
   updateTask,
-  type TaskChanges,
 } from './tasks.js';
 
 /**
@@ -116,7 +118,20 @@ export interface CommandsOptions {
   checkWorkspace?: (path: string) => string;
 }
 
+/**
+ * A row's budget changes through `setBudget` only (P8-01): its own event and remote rule. The types
+ * leave `budgetUsd` out of the update commands; this refuses an untyped caller's.
+ */
+function noBudget(changes: object): void {
+  if ((changes as { budgetUsd?: unknown }).budgetUsd !== undefined) {
+    throw new DomainError('invalid', 'a budget is set with setBudget, not by an update');
+  }
+}
+
 const ENDINGS = new Set(['agent.finished', 'agent.failed', 'agent.stopped', 'agent.interrupted']);
+
+/** How often the same refused spawn is logged again (P8-01 review): once an hour. */
+export const SPAWN_REFUSED_EVERY_MS = 3_600_000;
 
 /**
  * `DomainCommands` (P2-01; TECHNOLOGY §5, §6.1): the one command surface brain tools, panel
@@ -138,6 +153,12 @@ export class Commands implements DomainCommands {
    * both pass the "one live agent" check (wave-4 review).
    */
   private readonly spawning = new Set<string>();
+  /**
+   * Refused spawns already logged (P8-01 review): one `budget.spawn_refused` per work, role and
+   * budget value per `SPAWN_REFUSED_EVERY_MS`, so a brain retrying a refused spawn does not fill
+   * the log. The caller is refused every time.
+   */
+  private readonly refusedLogged = new Map<string, number>();
   /**
    * Answers being handed to an agent's adapter, by `<questionId> <answerId>` (P7-05): a retry of
    * the same answer (its acknowledgement was lost) waits for the first copy instead of being
@@ -244,10 +265,11 @@ export class Commands implements DomainCommands {
     return this.run((ctx) => createProject(ctx, input, this.choose, this.policyWrite(write)));
   }
   /** A new `permissionPolicy` is floored at the global default unless `write.origin` is local. */
-  updateProject(projectId: Id, changes: ProjectChanges, write?: WriteOptions) {
-    return this.run((ctx) =>
-      updateProject(ctx, projectId, changes, this.policyWrite(write), this.handOver()),
-    );
+  updateProject(projectId: Id, changes: ProjectEdit, write?: WriteOptions) {
+    return this.run((ctx) => {
+      noBudget(changes);
+      return updateProject(ctx, projectId, changes, this.policyWrite(write), this.handOver());
+    });
   }
   setProjectState(projectId: Id, state: WorkState) {
     return this.run((ctx) => setProjectState(ctx, projectId, state));
@@ -267,8 +289,18 @@ export class Commands implements DomainCommands {
   createTask(input: CreateTaskInput) {
     return this.run((ctx) => createTask(ctx, input));
   }
-  updateTask(taskId: Id, changes: TaskChanges) {
-    return this.run((ctx) => updateTask(ctx, taskId, changes));
+  updateTask(taskId: Id, changes: TaskEdit) {
+    return this.run((ctx) => {
+      noBudget(changes);
+      return updateTask(ctx, taskId, changes);
+    });
+  }
+
+  // -- budgets (P8-01) -------------------------------------------------------------------------
+
+  /** Raising or removing a budget is refused for a remote or unknown origin (see `setBudget`). */
+  setBudget(target: BudgetTarget, usd: number | null, by: Actor, write?: WriteOptions) {
+    return this.run((ctx) => setBudget(ctx, target, usd, by, this.policyWrite(write)));
   }
   setTaskState(taskId: Id, state: WorkState) {
     return this.run((ctx) => setTaskState(ctx, taskId, state));
@@ -389,6 +421,42 @@ export class Commands implements DomainCommands {
           `${slot.what}${running ? ` (${running.id})` : ' (a spawn is under way)'}`,
         );
       }
+    }
+    // Dollar budgets (P8-01): no new Waykeeper or Steward for work that has spent its budget.
+    // The refusal is logged (the Harmonizer's chat shows it) and the caller gets the reason.
+    const overBudget = checkSpawnBudget(tables, {
+      role: input.role,
+      taskId: task?.id,
+      projectId,
+    });
+    if (overBudget) {
+      const key = [
+        overBudget.target.kind,
+        overBudget.target.id,
+        overBudget.usage.budgetUsd,
+        input.role,
+        task?.id ?? projectId ?? '',
+      ].join(':');
+      const now = Date.now();
+      const last = this.refusedLogged.get(key);
+      if (last !== undefined && now - last < SPAWN_REFUSED_EVERY_MS) {
+        throw new DomainError('conflict', overBudget.reason);
+      }
+      this.refusedLogged.set(key, now);
+      this.log.runCommand((ctx) =>
+        ctx.emit({
+          type: 'budget.spawn_refused',
+          target: overBudget.target,
+          role: input.role,
+          ...(task ? { taskId: task.id } : {}),
+          ...(projectId ? { projectId } : {}),
+          ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
+          spentUsd: overBudget.usage.spentUsd,
+          budgetUsd: overBudget.usage.budgetUsd!,
+          reason: overBudget.reason,
+        }),
+      );
+      throw new DomainError('conflict', overBudget.reason);
     }
     if (input.role === 'harmonizer') must(tables.bodies.get(EARTH_ID), 'body', EARTH_ID);
     // Earth is the headquarters (SPEC §3.1): the Harmonizer orbits it without it hosting work, so

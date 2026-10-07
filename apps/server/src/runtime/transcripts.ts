@@ -72,6 +72,16 @@ interface KeyState {
   carry: string;
 }
 
+/**
+ * An agent's newest `seq`: its newest chunk, or — when transcript retention removed that one too
+ * — the high-water mark it recorded (P8-02, `transcript_compactions.last_seq`), so `seq` keeps
+ * increasing across restarts whatever was removed. Bind the agent id twice.
+ */
+export const HIGH_WATER_SQL = `SELECT MAX(
+    COALESCE((SELECT MAX(seq) FROM transcript_chunks WHERE agent_id = ?), 0),
+    COALESCE((SELECT last_seq FROM transcript_compactions WHERE agent_id = ?), 0)
+  ) AS seq`;
+
 /** How much of the previous chunk's tail is matched together with the new text. */
 const TAIL = 512;
 /** How much raw text is kept to find a key header split over two chunks (> any header line). */
@@ -90,12 +100,11 @@ export class TranscriptPipeline {
   private readonly insert: Statement;
   private readonly selectSince: Statement;
   private readonly selectMax: Statement;
-  private readonly deleteBefore: Statement;
   private readonly nextSeq = new Map<Id, number>();
   private readonly buffer = new Map<Id, Pending[]>();
   /** The raw tail of each agent's output so far, for a boundary with an already flushed chunk. */
-  private readonly tails = new Map<Id, { kind: TranscriptChunk['kind']; text: string }>();
-  private readonly keys = new Map<Id, KeyState>();
+  private readonly tails = new Map<string, { kind: TranscriptChunk['kind']; text: string }>();
+  private readonly keys = new Map<string, KeyState>();
   private readonly listeners = new Map<Id, Set<TranscriptListener>>();
   private timer: NodeJS.Timeout | undefined;
   private disposed = false;
@@ -117,10 +126,7 @@ export class TranscriptPipeline {
     this.selectSince = db.prepare(
       'SELECT agent_id, seq, at, chunk FROM transcript_chunks WHERE agent_id = ? AND seq > ? ORDER BY seq LIMIT ?',
     );
-    this.selectMax = db.prepare(
-      'SELECT COALESCE(MAX(seq), 0) AS seq FROM transcript_chunks WHERE agent_id = ?',
-    );
-    this.deleteBefore = db.prepare('DELETE FROM transcript_chunks WHERE agent_id = ? AND seq <= ?');
+    this.selectMax = db.prepare(HIGH_WATER_SQL);
   }
 
   /**
@@ -134,11 +140,15 @@ export class TranscriptPipeline {
       pending = [];
       this.buffer.set(agentId, pending);
     }
-    let raw = this.maskPrivateKeys(agentId, text);
+    // A PTY agent's raw `terminal` output is a stream of its own beside its stripped `text`
+    // (P8-08): the same bytes twice, so each continues only itself — boundaries, tails and the
+    // private-key state are kept per stream.
+    const stream = streamOf(agentId, kind);
+    let raw = this.maskPrivateKeys(stream, text);
     // Only consecutive chunks of one kind continue each other: a text delta and a tool output
     // never split one secret, and joining them would take the next word for part of a key.
-    const prev = pending.at(-1);
-    const tail = this.tails.get(agentId);
+    const prev = lastOf(pending, (p) => (p.chunk.kind === 'terminal') === (kind === 'terminal'));
+    const tail = this.tails.get(stream);
     let before = tail?.kind === kind ? tail.text : '';
     if (prev?.chunk.kind === kind) {
       const hit = this.boundaryMatch(prev.raw, raw);
@@ -155,7 +165,7 @@ export class TranscriptPipeline {
       const hit = this.boundaryMatch(before, raw);
       if (hit) raw = mask(hit.rule) + raw.slice(hit.end);
     }
-    this.tails.set(agentId, { kind, text: (before + raw).slice(-TAIL) });
+    this.tails.set(stream, { kind, text: (before + raw).slice(-TAIL) });
     const chunk: TranscriptChunk = { agentId, seq, at: this.now(), kind, text: this.redact(raw) };
     if (this.disposed) return chunk; // shutting down: dropped, never an exception for the caller
     pending.push({ chunk, raw, appendedAt: Date.now() });
@@ -263,18 +273,6 @@ export class TranscriptPipeline {
     }
   }
 
-  /**
-   * Retention hook (Phase 8): drops an agent's chunks up to `throughSeq`. A no-op unless called;
-   * v1 keeps everything. The newest persisted chunk is always kept: its `seq` is where the
-   * agent's numbering resumes after a restart, so dropping it would hand out a `seq` again.
-   */
-  prune(agentId: Id, throughSeq: number): number {
-    const max = (this.selectMax.get(agentId) as { seq: number }).seq;
-    const through = Math.min(throughSeq, max - 1);
-    if (through <= 0) return 0;
-    return this.deleteBefore.run(agentId, through).changes;
-  }
-
   /** Flushes everything and stops the timer. */
   dispose(): void {
     this.flush();
@@ -286,11 +284,11 @@ export class TranscriptPipeline {
    * Masks private-key blocks in the raw stream of `agentId`, whatever the chunking: from the
    * BEGIN line to the END line, or for {@link PRIVATE_KEY_CAP} characters.
    */
-  private maskPrivateKeys(agentId: Id, text: string): string {
-    let st = this.keys.get(agentId);
+  private maskPrivateKeys(stream: string, text: string): string {
+    let st = this.keys.get(stream);
     if (!st) {
       st = { inKey: false, masked: 0, carry: '' };
-      this.keys.set(agentId, st);
+      this.keys.set(stream, st);
     }
     const s = st.carry + text;
     const offset = st.carry.length;
@@ -357,7 +355,7 @@ export class TranscriptPipeline {
   private allocateSeq(agentId: Id, advance = true): number {
     let next = this.nextSeq.get(agentId);
     if (next === undefined) {
-      next = (this.selectMax.get(agentId) as { seq: number }).seq;
+      next = (this.selectMax.get(agentId, agentId) as { seq: number }).seq;
       this.nextSeq.set(agentId, next);
     }
     if (!advance) return next;
@@ -381,6 +379,16 @@ export class TranscriptPipeline {
       this.onError(error);
     }
   }
+}
+
+function lastOf<T>(list: T[], pred: (item: T) => boolean): T | undefined {
+  for (let i = list.length - 1; i >= 0; i--) if (pred(list[i]!)) return list[i];
+  return undefined;
+}
+
+/** The redaction stream of a chunk: an agent's `terminal` output apart from the rest (P8-08). */
+function streamOf(agentId: Id, kind: TranscriptChunk['kind']): string {
+  return kind === 'terminal' ? `${agentId}\u0000terminal` : agentId;
 }
 
 /** The first match of `pattern` in `s` at or after `from` that ends after `after`. */

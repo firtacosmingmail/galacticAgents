@@ -1,4 +1,11 @@
-import { proposalPlan, type AgentRole, type Id, type StatusRecord } from '@galactic/protocol';
+import {
+  ENDED_STATES,
+  proposalPlan,
+  type AgentRole,
+  type Id,
+  type StatusRecord,
+  type WorkState,
+} from '@galactic/protocol';
 import type { Tables } from '../db/tables.js';
 import type { BrainQueries } from './definition.js';
 import { concernedSupervisors } from '../domain/cascade.js';
@@ -51,12 +58,28 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
   return queries;
 }
 
+/** Work that should have an agent running it (P8-01 review): not proposed, paused or finished. */
+const ATTENDED_STATES = new Set<WorkState>([
+  'approved',
+  'in_progress',
+  'blocked_on_user',
+  'awaiting_closure',
+]);
+
 /** The brain's place in the hierarchy, as the wake rules ask about it. */
 export function createWakeScope(
   tables: Tables,
   brain: { brainId: Id; role: AgentRole; projectId?: Id },
-  opts: { isLive?: (agentId: Id) => boolean } = {},
+  opts: {
+    isLive?: (agentId: Id) => boolean;
+    /** Agents' status records: `unattended` asks whether a Waykeeper or Steward runs. */
+    status?: (agentId: Id) => StatusRecord | undefined;
+  } = {},
 ): WakeScope {
+  const running = (id: Id) => {
+    const s = opts.status?.(id);
+    return s !== undefined && !ENDED_STATES.has(s.state);
+  };
   const supervises = (id: Id | undefined) =>
     id !== undefined && tables.agents.get(id)?.supervisorId === brain.brainId;
   const supervised = () => tables.agents.all().filter((a) => a.supervisorId === brain.brainId);
@@ -100,6 +123,25 @@ export function createWakeScope(
       concernedSupervisors(tables, event, opts.isLive ? { isLive: opts.isLive } : {}).includes(
         brain.brainId,
       ),
+    ...(opts.status
+      ? {
+          unattended: (target) => {
+            if (target.kind === 'project') {
+              const project = tables.projects.get(target.id);
+              if (!project || !ATTENDED_STATES.has(project.state)) return false;
+              return !tables.agents
+                .all()
+                .some((a) => a.role === 'waykeeper' && a.projectId === target.id && running(a.id));
+            }
+            const task = tables.tasks.get(target.id);
+            // A project's task is its Waykeeper's to staff; only an asteroid is the Harmonizer's.
+            if (!task || task.projectId || !ATTENDED_STATES.has(task.state)) return false;
+            return !tables.agents
+              .all()
+              .some((a) => a.role === 'steward' && a.taskId === target.id && running(a.id));
+          },
+        }
+      : {}),
   };
 }
 

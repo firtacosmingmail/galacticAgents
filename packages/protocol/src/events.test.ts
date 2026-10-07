@@ -24,7 +24,8 @@ function classify(
   | 'body'
   | 'project'
   | 'task'
-  | 'control' {
+  | 'control'
+  | 'budget' {
   switch (e.type) {
     case 'agent.created':
     case 'agent.updated':
@@ -89,6 +90,11 @@ function classify(
       return 'control';
     case 'recovery.needs_attention':
       return 'recovery';
+    case 'budget.set':
+    case 'budget.warning':
+    case 'budget.exceeded':
+    case 'budget.spawn_refused':
+      return 'budget';
     default:
       return assertNever(e);
   }

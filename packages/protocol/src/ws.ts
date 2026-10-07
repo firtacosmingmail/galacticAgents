@@ -12,6 +12,8 @@ import {
 } from './domain.js';
 import { EVENT_TYPES, EventEnvelope } from './events.js';
 import { RequestOrigin } from './enums.js';
+import { AgentSpend } from './budget.js';
+import { StorageHealth } from './storage.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
@@ -82,6 +84,16 @@ export const SnapshotMessage = z.object({
   questions: z.array(Question),
   proposals: z.array(Proposal),
   statuses: z.array(StatusRecord),
+  /**
+   * Every agent's reported cost at `seq` (P8-01): the `agent_spend` projection, which the client
+   * keeps folding from the stream with `foldSpend`. Absent from older servers: no spend known.
+   */
+  spend: z.array(AgentSpend).optional(),
+  /**
+   * Whether the database takes writes (P8-09): runtime state, never an event (a full disk could
+   * not log it). Absent from older servers: taken as `ok`.
+   */
+  storage: StorageHealth.optional(),
   /**
    * The server's clock when it sent this (P4-06 review): the client's offset to it, so "is this
    * event news?" compares event times with the server's clock, not a skewed client's.
@@ -154,6 +166,12 @@ export const PongMessage = z.object({ type: z.literal('pong') });
  * With `replace: true` the message is the complete current set (sent after a replay's
  * `caught_up`, P1-38): the client drops every record it holds that is not in it, so records
  * removed by retention while it was away do not linger. A replacing set may be empty.
+ *
+ * `storage` (P8-09) is the database's write health when it changed (or with a replacing set): the
+ * client keeps the latest. The server sends it only on a replacing message — the complete set
+ * plus `storage` — because a page built before the field fails a message with neither records,
+ * removals nor `replace` (the refine below), and an unknown message kind would close its socket
+ * (TECHNOLOGY §6.3). This build accepts `storage` alone, so a later server may drop the set.
  */
 export const StatusMessage = z
   .object({
@@ -163,10 +181,17 @@ export const StatusMessage = z
     removed: z.array(Id).optional(),
     /** The statuses are the whole set, not a diff. */
     replace: z.boolean().optional(),
+    /** The database's write health (P8-09), when it changed. */
+    storage: StorageHealth.optional(),
   })
-  .refine((m) => m.replace === true || m.statuses.length > 0 || (m.removed?.length ?? 0) > 0, {
-    message: 'a status message carries records or removals, or replaces the set',
-  });
+  .refine(
+    (m) =>
+      m.replace === true ||
+      m.statuses.length > 0 ||
+      (m.removed?.length ?? 0) > 0 ||
+      m.storage !== undefined,
+    { message: 'a status message carries records, removals or storage, or replaces the set' },
+  );
 export type StatusMessage = z.infer<typeof StatusMessage>;
 
 /** A batch of transcript chunks for one subscribed agent, in `seq` order. */

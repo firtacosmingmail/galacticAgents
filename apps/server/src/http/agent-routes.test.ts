@@ -93,6 +93,19 @@ describe('/api agent routes (P1-11)', () => {
     });
   });
 
+  it('lists every registered runtime, ACP included, and only those (P8 wave 3 review)', async () => {
+    const real = composed.runtime.adapter.bind(composed.runtime);
+    vi.spyOn(composed.runtime, 'adapter').mockImplementation((name) =>
+      name === 'acp' ? ({ runtime: 'acp' } as ReturnType<typeof real>) : real(name),
+    );
+    const { body } = await call('/api/runtimes');
+    const names = RuntimesInfo.parse(body).runtimes.map((r) => [r.name, r.resumable]);
+    expect(names).toEqual([
+      ['fake', true],
+      ['acp', false],
+    ]);
+  });
+
   it('refuses a free-form spawn from a remote client (SPEC decision 90)', async () => {
     const spawn = (headers: Record<string, string>) =>
       fetch(`${t.baseUrl}/api/agents`, {

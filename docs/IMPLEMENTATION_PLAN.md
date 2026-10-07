@@ -30,7 +30,7 @@ Each phase ends with something you can run. Estimates assume one developer worki
 **Goal:** spawn, observe, pause, answer and stop real agents from a plain web page. No 3D yet.
 
 - Process supervisor: spawn/kill with process-group handling, stdio capture, crash detection, restart policy, per-agent working directory, **graceful stop** (interrupt, wait for the turn to end, then terminate), and a persisted PID/session table reconciled on startup.
-- **Hard caps from day one (decision 18):** per-agent wall-clock and tool-call caps, global max concurrent agents; a cap hit produces `agent.failed(reason: cap)`.
+- **Hard caps from day one (decision 18):** per-agent wall-clock and tool-call caps (the wall clock for Stewards and free-form agents only, decision 103, P8-10), global max concurrent agents; a cap hit produces `agent.failed(reason: cap)`.
 - **Adapter interface first** (decision 5): `AgentAdapter` from `packages/protocol` — `spawn(opts{cwd, prompt, tools?, systemPrompt?, gate, caps})`, `send(sessionId, message, {interrupt?})` (starts a turn now; the server's inbox is what waits for idle), `answer(questionId, answer)`, `interrupt`, `pause`, `resume`, `stop`, `resumeSession?(sessionRef)`, plus the `events` stream. The `gate` is the server's decision function for tool calls (policy table + caps); adapters never see the policy. Nothing outside `src/adapters` may import a runtime-specific module. A **fake adapter** implementing the interface is written before any real one and used by the UI, the brains and the tests.
 - **`claude-sdk` adapter — the only real one on day one** (`TECHNOLOGY.md` §3.1): Claude Agent SDK (TypeScript), **subscription login, no `--bare` by default** (decision 17); `PreToolUse` hook → the spawn's `gate` → allowed actions pass, denied ones are refused with the reason, the rest become `agent.needs_input(kind: permission)`; `AskUserQuestion` → `agent.needs_input(kind: clarification)`; final `result` → `agent.finished(cost)`; `resume: sessionRef` for `resumeSession`. *Verified in P1-08* (`docs/tasks/notes/P1-08-sdk-spike.md`): SDK auth under subscription login works for in-process brains, and per-session cost is reported as a cumulative estimate (SPEC §8).
 - **Deferred adapters** (not built now, but the interface must accommodate them): **ACP** for Codex / Gemini CLI / `claude-agent-acp` (must advertise `elicitation.form`; `request_permission` ≠ clarification — `TECHNOLOGY.md` §3.2), and a **PTY adapter** (`node-pty` + xterm.js) for CLIs with no machine protocol. Keep a short "how to add a runtime" doc in `src/adapters/README.md` from the start.
@@ -154,12 +154,12 @@ Each phase ends with something you can run. Estimates assume one developer worki
 
 ## Phase 8 — Hardening, cost and polish (ongoing)
 
-- Dollar budgets per project/task, with the Harmonizer warning or refusing before exceeding them (hard caps already exist since Phase 1).
+- Dollar budgets per project/task, measured against the cost the runtimes report: a warning in the Harmonizer's chat at a threshold, new Waykeepers and Stewards refused at the budget, running agents never stopped (P8-01; hard caps already exist since Phase 1).
 - Log retention and `transcript_chunks` compaction (the `events` stream is kept long for resume and replay).
-- Backups of the SQLite file; export/import of the map.
+- Backups of the SQLite file; export/import of the map (P8-03: daily online backups with rotation and `galactic restore`; a JSON export of the event log that `galactic import` replays into a new database — `docs/BACKUP_RESTORE.md`, TECHNOLOGY §6.4).
 - Crash recovery drills: kill -9 the server mid-project, reboot the machine, unplug the network.
 - Tests: adapter conformance, brain tool contracts (scripted LLM), WebSocket protocol, scene smoke tests via Playwright.
-- Tauri 2 desktop shell (tray icon, auto-start) if you want the "real app" feel.
+- Tauri 2 desktop shell (tray icon, auto-start) if you want the "real app" feel — P8-06, `docs/DESKTOP.md`.
 - ACP adapter for the second runtime (Codex / Gemini CLI), PTY adapter for arbitrary CLIs.
 
 ---

@@ -10,6 +10,8 @@ import {
 } from '@galactic/protocol';
 import { tables, type Tables } from '../db/tables.js';
 import type { ChooseOptions } from './catalogue.js';
+import { projectBudgetEvent } from './budgets.js';
+import { isStorageFailure } from '../db/database.js';
 
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
 export interface CommandContext {
@@ -38,6 +40,28 @@ export interface CommandOutcome<T> {
 }
 
 export type Subscriber = (envelope: EventEnvelope) => void;
+
+/**
+ * Runs before every outermost command (P8-04 review): the agent runtime registers one that writes
+ * the agent events it holds for a full disk first, so no command commits ahead of them — and
+ * throws the storage error when they still cannot be written, which refuses the command whole.
+ */
+export type BeforeCommand = () => void;
+
+/**
+ * Told how every outermost command went with the storage (P8-09): `error` when the storage refused
+ * it (`isStorageFailure`), undefined when it committed events. A command that fails for another
+ * reason, or commits nothing, says nothing about the storage and is not reported.
+ */
+export type StorageObserver = (error: unknown) => void;
+
+export interface RunOptions {
+  /**
+   * The command's clock reading, when it is not now: an agent event held while the disk was full
+   * keeps the time it happened (P8-04 review). Default: the log's clock.
+   */
+  at?: string;
+}
 
 function db_get(db: Database, key: string): string | undefined {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
@@ -97,6 +121,12 @@ export class EventLog {
   private selectLatestOf: Statement | undefined;
   /** True while subscribers are being notified; commands run by a subscriber queue behind the batch. */
   private publishing = false;
+  private readonly beforeCommand = new Set<BeforeCommand>();
+  /** True while the `beforeCommand` hooks run: the commands they run do not call them again. */
+  private inHook = false;
+  private readonly storageObservers = new Set<StorageObserver>();
+  /** Outermost commits that wrote at least one event (their own or a nested command's). */
+  private eventCommits = 0;
 
   constructor(
     readonly db: Database,
@@ -113,6 +143,25 @@ export class EventLog {
     this.selectMax = db.prepare('SELECT COALESCE(MAX(id), 0) AS seq FROM events');
     this.selectMin = db.prepare('SELECT COALESCE(MIN(id), 0) AS seq FROM events');
     this.logId = this.loadLogId();
+    this.backfillProjections();
+  }
+
+  /**
+   * Folds a log written before the budget projections existed (migration 0012, P8-01) into
+   * `agent_spend` and `budget_notices`, once (settings key `budget_projection`).
+   */
+  private backfillProjections(): void {
+    if (this.tables.settings.get('budget_projection') !== undefined) return;
+    this.db.transaction(() => {
+      let after = 0;
+      for (;;) {
+        const page = this.eventsSince(after, 5_000);
+        if (page.length === 0) break;
+        for (const envelope of page) projectBudgetEvent(this.tables, envelope);
+        after = page.at(-1)!.seq;
+      }
+      this.tables.settings.set('budget_projection', 1);
+    })();
   }
 
   private loadLogId(): string {
@@ -123,11 +172,64 @@ export class EventLog {
     return id;
   }
 
+  /** The log's clock: what a command run now would carry as `at`. */
+  clock(): string {
+    return this.now();
+  }
+
+  /** Registers a hook run before every outermost command (see `BeforeCommand`). */
+  addBeforeCommand(hook: BeforeCommand): () => void {
+    this.beforeCommand.add(hook);
+    return () => {
+      this.beforeCommand.delete(hook);
+    };
+  }
+
+  /** Registers a storage observer (see `StorageObserver`). */
+  addStorageObserver(observer: StorageObserver): () => void {
+    this.storageObservers.add(observer);
+    return () => {
+      this.storageObservers.delete(observer);
+    };
+  }
+
   /** Runs `fn` under the one write rule. Nested calls join the outer transaction. */
-  runCommand<T>(fn: (ctx: CommandContext) => T): CommandOutcome<T> {
+  runCommand<T>(fn: (ctx: CommandContext) => T, opts: RunOptions = {}): CommandOutcome<T> {
+    if (this.depth > 0 || this.storageObservers.size === 0) return this.run(fn, opts);
+    let outcome: CommandOutcome<T>;
+    const commits = this.eventCommits;
+    try {
+      outcome = this.run(fn, opts);
+    } catch (error) {
+      if (isStorageFailure(error)) this.tellStorage(error);
+      throw error;
+    }
+    if (this.eventCommits > commits) this.tellStorage(undefined);
+    return outcome;
+  }
+
+  private tellStorage(error: unknown): void {
+    for (const observer of [...this.storageObservers]) {
+      try {
+        observer(error);
+      } catch {
+        // An observer's failure must not change the command's outcome.
+      }
+    }
+  }
+
+  private run<T>(fn: (ctx: CommandContext) => T, opts: RunOptions): CommandOutcome<T> {
+    if (this.depth === 0 && !this.inHook && this.beforeCommand.size > 0) {
+      this.inHook = true;
+      try {
+        for (const hook of [...this.beforeCommand]) hook();
+      } finally {
+        this.inHook = false;
+      }
+    }
     const mine: EventEnvelope[] = [];
     const queued: Event[] = [];
-    const at = this.now();
+    const at = opts.at ?? this.now();
     const ctx: CommandContext = {
       tables: this.tables,
       now: at,
@@ -149,13 +251,17 @@ export class EventLog {
         const result = fn(ctx);
         for (const event of queued) {
           const info = this.insertEvent.run(at, event.type, JSON.stringify(event));
-          mine.push({ seq: Number(info.lastInsertRowid), at, event });
+          const envelope = { seq: Number(info.lastInsertRowid), at, event };
+          // The log's own projections (P8-01: spend and budget notices), in the same transaction.
+          projectBudgetEvent(this.tables, envelope);
+          mine.push(envelope);
         }
         return result;
       })();
       this.uncommitted.push(...mine);
       if (this.depth === 1) {
         // The outermost command committed: its events (and its nested commands') are published.
+        if (this.uncommitted.length > 0) this.eventCommits++;
         this.pending.push(...this.uncommitted);
         this.uncommitted = [];
       }
@@ -269,6 +375,7 @@ export class EventLog {
       tasks: this.tables.tasks.all(),
       questions: this.tables.questions.all(),
       proposals: this.tables.proposals.all(),
+      spend: this.tables.spend.all(),
     }))();
   }
 }

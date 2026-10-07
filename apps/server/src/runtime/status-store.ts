@@ -32,10 +32,22 @@ export interface StatusStoreOptions {
   capsOf: (agentId: Id) => AgentCaps | undefined;
   defaultCaps: AgentCaps;
   /**
+   * Whether the wall-clock cap applies to the agent (SPEC decision 103: not to a brain); when it
+   * does not, the record's `caps.wallClockMs` says `capped: false` (its `limit` stays, for older
+   * clients). Default: it applies.
+   */
+  wallClockCapped?: (agentId: Id) => boolean;
+  /**
    * Silence after which a working agent is `stalled`, per runtime (and agent: the scene harness's
    * fake agents never stall on their own, P4-06).
    */
   stallThresholdMs: (runtime: AgentRuntime | undefined, agentId: Id) => number;
+  /**
+   * Called once per silence when the ticker turns a working agent `stalled` (P8-04): the
+   * composition logs it as `agent.stalled`, so the stall is a real event (corner case 2) that
+   * wakes the agent's supervisor and stays in the history. The store itself never writes.
+   */
+  onStalled?: (agentId: Id, silentForMs: number) => void;
   /** Batch interval for diffs. */
   flushMs?: number;
   /** How often the wall clock of live agents is refreshed and stalls are checked. */
@@ -197,6 +209,7 @@ export class StatusStore {
 
   /** One ticker pass: stall detection. Only a record that changed is marked for the next diff. */
   tick(now: number = this.now()): void {
+    const stalled: { agentId: Id; silentForMs: number }[] = [];
     for (const entry of this.entries.values()) {
       const { record } = entry;
       if (record.state !== 'working' && record.state !== 'starting') continue;
@@ -204,8 +217,17 @@ export class StatusStore {
       if (now - entry.lastEventAt < threshold) continue;
       entry.record = { ...record, state: 'stalled', caps: this.caps(entry, now) };
       this.mark(record.agentId);
+      stalled.push({ agentId: record.agentId, silentForMs: now - entry.lastEventAt });
     }
     this.prune(now);
+    // After the pass: logging the stall folds its event back into this store.
+    for (const { agentId, silentForMs } of stalled) {
+      try {
+        this.opts.onStalled?.(agentId, silentForMs);
+      } catch (error) {
+        this.onError(error);
+      }
+    }
   }
 
   /** Retention (P1-16): drops ended records past their time or beyond the cap, oldest first. */
@@ -421,7 +443,13 @@ export class StatusStore {
     const ended = ENDED_STATES.has(entry.record.state);
     const used = ended ? entry.record.caps.wallClockMs.used : Math.max(0, now - entry.spawnedAt);
     return {
-      wallClockMs: { used, limit: caps.maxWallClockMs },
+      wallClockMs: {
+        used,
+        limit: caps.maxWallClockMs,
+        ...((this.opts.wallClockCapped?.(entry.record.agentId) ?? true)
+          ? {}
+          : { capped: false as const }),
+      },
       toolCalls: { used: entry.toolCalls, limit: caps.maxToolCalls },
     };
   }

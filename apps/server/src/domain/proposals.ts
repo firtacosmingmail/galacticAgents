@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
+  BudgetUsd,
   foldProposalMeta,
+  proposalBudget,
   proposalPlan,
   TrustLevel,
   type Actor,
@@ -13,6 +15,7 @@ import {
   type Task,
 } from '@galactic/protocol';
 import { carryOut, type ProposalOptions } from './approval.js';
+import { setBudget } from './budgets.js';
 import { describeRefusal } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
@@ -198,7 +201,12 @@ export function decideProposal(
     if (by?.type === 'agent') {
       throw new DomainError('invalid', `plan ${proposalId} is the user's to decide`);
     }
-    if (decision.decision === 'edit' || decision.decision === 'park') {
+    // Its budget (P8-01) is the one thing a plan card's edit may set: the project's budget.
+    const budgetOnly =
+      decision.decision === 'edit' &&
+      Object.entries(decision.changes).every(([k, v]) => k === 'budgetUsd' || v === undefined) &&
+      (current.state === 'pending' || current.state === 'edited');
+    if ((decision.decision === 'edit' && !budgetOnly) || decision.decision === 'park') {
       throw new DomainError(
         'invalid',
         `plan ${proposalId} is not ${DONE[decision.decision]}: edit its tasks, or reject it with a reason`,
@@ -214,7 +222,7 @@ export function decideProposal(
   // Any decision but a park drops the card's parking (P2-09; `foldProposalMeta`, as clients fold).
   const save = (
     changes: Partial<Proposal>,
-    user: { initGit?: boolean; trust?: TrustLevel } = {},
+    user: { initGit?: boolean; trust?: TrustLevel; budgetUsd?: number | null } = {},
   ) => {
     const meta = foldProposalMeta(current.meta, { parked: null, ...user });
     const next: Proposal = { ...current, ...changes, updatedAt: ctx.now };
@@ -245,15 +253,46 @@ export function decideProposal(
         }
       }
       // What the card asks for is created in the approval's transaction (P2-09, `approval.ts`).
-      if (!plan) carryOut(ctx, proposal, room?.ok ? room.body : undefined, workspace, opts);
+      const made = plan
+        ? undefined
+        : carryOut(ctx, proposal, room?.ok ? room.body : undefined, workspace, opts);
+      // The budget the user gave the card (P8-01): the new project's or task's, a plan's project's.
+      const budget = proposalBudget(proposal);
+      const target = plan
+        ? { kind: 'project' as const, id: plan.projectId }
+        : made?.kind === 'project'
+          ? { kind: 'project' as const, id: made.project.id }
+          : made?.kind === 'task'
+            ? { kind: 'task' as const, id: made.task.id }
+            : undefined;
+      if (budget !== undefined && target) {
+        setBudget(ctx, target, budget, by ?? { type: 'system' }, opts.policyWrite ?? {});
+      }
       return proposal;
     }
     case 'edit': {
-      const { initGit, trust, ...changes } = Object.fromEntries(
+      const { initGit, trust, budgetUsd, ...changes } = Object.fromEntries(
         Object.entries(decision.changes).filter(([, v]) => v !== undefined),
       ) as typeof decision.changes;
-      if (Object.keys(changes).length === 0 && initGit === undefined && trust === undefined)
+      if (
+        Object.keys(changes).length === 0 &&
+        initGit === undefined &&
+        trust === undefined &&
+        budgetUsd === undefined
+      )
         throw new DomainError('invalid', 'an edit changes something');
+      if (budgetUsd !== undefined) {
+        // P8-01: the work's budget is the user's to give on the card, like its trust level.
+        if (by?.type !== 'user') {
+          throw new DomainError('invalid', "only the user sets a card's budget");
+        }
+        if (budgetUsd !== null && !BudgetUsd.safeParse(budgetUsd).success) {
+          throw new DomainError(
+            'invalid',
+            `a budget is a positive amount of dollars, not ${budgetUsd}`,
+          );
+        }
+      }
       if (initGit !== undefined && by?.type !== 'user') {
         // Decision 27: only the user agrees to turn their folder into a repository.
         throw new DomainError('invalid', 'only the user agrees to git init a workspace');
@@ -271,6 +310,7 @@ export function decideProposal(
       const user = {
         ...(initGit !== undefined ? { initGit } : {}),
         ...(trust !== undefined ? { trust } : {}),
+        ...(budgetUsd !== undefined ? { budgetUsd } : {}),
       };
       if (changes.workspace !== undefined && opts.checkWorkspace) {
         changes.workspace = opts.checkWorkspace(changes.workspace);

@@ -317,6 +317,26 @@ describe('StatusStore — stall detection', () => {
     expect(store.get('a-1')!.lastEventAt).toBe(at(610));
   });
 
+  it('reports each silence once, after the pass, for the composition to log (P8-04)', () => {
+    const stalls: [string, number][] = [];
+    const { store } = make({ onStalled: (id, ms) => stalls.push([id, ms]) });
+    store.fold({ seq: 1, at: at(0), event: spawned });
+    store.fold({
+      seq: 2,
+      at: at(100),
+      event: { type: 'agent.tool_call', agentId: 'a-1', toolName: 'Bash' },
+    });
+    store.tick(T0 + 450);
+    store.tick(T0 + 900); // still the same silence: not reported again
+    expect(stalls).toEqual([['a-1', 350]]);
+    store.touch('a-1', T0 + 1_000);
+    store.tick(T0 + 1_400);
+    expect(stalls).toEqual([
+      ['a-1', 350],
+      ['a-1', 400],
+    ]);
+  });
+
   it('idle, paused and waiting agents never stall; thresholds are per runtime', () => {
     const { store } = make();
     store.rebuild(

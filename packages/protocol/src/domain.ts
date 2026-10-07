@@ -99,6 +99,17 @@ export const PermissionPolicy = z.object({
 });
 export type PermissionPolicy = z.infer<typeof PermissionPolicy>;
 
+/**
+ * A dollar budget (P8-01; SPEC decision 18): a positive amount of US dollars, compared with the
+ * cost the runtimes report (an estimate; notional under a subscription login, P1-08).
+ */
+export const BudgetUsd = z.number().positive().finite().max(1_000_000);
+export type BudgetUsd = z.infer<typeof BudgetUsd>;
+
+/** What a budget belongs to (P8-01): a project or a task. */
+export const BudgetTarget = z.object({ kind: z.enum(['project', 'task']), id: Id });
+export type BudgetTarget = z.infer<typeof BudgetTarget>;
+
 export const Project = z.object({
   id: Id,
   name: z.string().min(1),
@@ -113,6 +124,11 @@ export const Project = z.object({
   permissionPolicy: PermissionPolicy.optional(),
   /** Pinned work is never archived by the retention timer (decision 4, 11b). */
   pinned: z.boolean().optional(),
+  /**
+   * The project's dollar budget (P8-01): its agents', its tasks' and its sub-projects' reported
+   * cost together. Absent: no budget. Set through `setBudget` (logged as `budget.set`).
+   */
+  budgetUsd: BudgetUsd.optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -131,6 +147,8 @@ export const Task = z.object({
   blockedBy: z.array(Id),
   state: WorkState,
   pinned: z.boolean().optional(),
+  /** The task's dollar budget (P8-01): its Stewards' reported cost together. Absent: none. */
+  budgetUsd: BudgetUsd.optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -259,6 +277,8 @@ export function foldProposalMeta(
   else if (changes.initGit === false) delete next['initGit'];
   if (changes.trust === 'default') delete next['trust'];
   else if (changes.trust !== undefined) next['trust'] = changes.trust;
+  if (changes.budgetUsd === null) delete next['budgetUsd'];
+  else if (changes.budgetUsd !== undefined) next['budgetUsd'] = changes.budgetUsd;
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
@@ -268,6 +288,17 @@ export interface ProposalMetaChanges {
   initGit?: boolean;
   /** The trust level the user chose on the card (decision 49): `default` drops `meta.trust`. */
   trust?: TrustLevel;
+  /**
+   * The budget the user gave the work on the card (P8-01): `meta.budgetUsd`, applied to the
+   * project or task the approval creates (a plan card: to its project). `null` drops it.
+   */
+  budgetUsd?: number | null;
+}
+
+/** The budget the user gave a card (P8-01): `meta.budgetUsd`, when it is a valid amount. */
+export function proposalBudget(proposal: Pick<Proposal, 'meta'> | undefined): number | undefined {
+  const parsed = BudgetUsd.safeParse(proposal?.meta?.['budgetUsd']);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
@@ -415,6 +446,39 @@ export const Progress = z.object({
 export type Progress = z.infer<typeof Progress>;
 
 const CapUsage = z.object({ used: z.number().nonnegative(), limit: z.number().positive() });
+/**
+ * The wall clock. `limit` is always present (the agent's configured cap), so the previous build's
+ * parser still reads the record (TECHNOLOGY §6.3, protocol evolution); `capped: false` marks an
+ * agent the wall-clock cap does not apply to (a brain, SPEC decision 103) — the meter is hidden and
+ * the agent is never "near its cap". Absent means capped. Read it through `wallClockLimit()`.
+ */
+const WallClockUsage = z.object({
+  used: z.number().nonnegative(),
+  limit: z.number().positive(),
+  capped: z.boolean().optional(),
+});
+
+/** The wall-clock limit that applies to the agent, or `undefined` when it is not capped (decision 103). */
+export function wallClockLimit(usage: {
+  limit: number;
+  capped?: boolean | undefined;
+}): number | undefined {
+  return usage.capped === false ? undefined : usage.limit;
+}
+
+/**
+ * Whether the per-agent wall-clock cap applies to an agent (SPEC decision 103, P8-10): it does to
+ * Stewards and to free-form agents (the ops console's, `meta.freeForm`, whatever role they were
+ * given); it does not to the Harmonizer and the Waykeepers, which are idle most of their life and
+ * bounded by the hierarchy and their tool-call cap instead. An agent of unknown role is capped.
+ */
+export function wallClockCapApplies(agent: {
+  role?: AgentRole | undefined;
+  meta?: Meta | undefined;
+}): boolean {
+  if (agent.role !== 'harmonizer' && agent.role !== 'waykeeper') return true;
+  return agent.meta?.freeForm === true;
+}
 
 /** Per-agent status record: a projection of the event log, never the source of truth (TECHNOLOGY §4). */
 export const StatusRecord = z.object({
@@ -428,7 +492,7 @@ export const StatusRecord = z.object({
   progress: Progress.optional(),
   costSoFar: Cost.optional(),
   /** `wallClockMs.used` is as of `lastEventAt` for a live agent; the client extrapolates from `startedAt`. */
-  caps: z.object({ wallClockMs: CapUsage, toolCalls: CapUsage }),
+  caps: z.object({ wallClockMs: WallClockUsage, toolCalls: CapUsage }),
 });
 export type StatusRecord = z.infer<typeof StatusRecord>;
 
@@ -450,10 +514,20 @@ export const TranscriptChunk = z.object({
   /** Per-agent, strictly increasing; the transcript stream is resumed from it. */
   seq: z.number().int().positive(),
   at: Timestamp,
-  kind: z.enum(['text', 'tool', 'thinking']),
+  /**
+   * `terminal` (P8-08): a PTY agent's raw terminal bytes (ANSI escapes kept) for the terminal
+   * view only; its `text` chunks carry the same output stripped, for the conversation and history.
+   */
+  kind: z.enum(['text', 'tool', 'thinking', 'terminal']),
   text: z.string(),
 });
 export type TranscriptChunk = z.infer<typeof TranscriptChunk>;
+
+/**
+ * The terminal size every PTY agent runs in (P8-08): the terminal view in the panel draws its
+ * `terminal` chunks at exactly this size, so cursor movement lands where the CLI meant it.
+ */
+export const PTY_TERMINAL_SIZE = { cols: 120, rows: 32 } as const;
 
 /**
  * A project's trust level (decision 49): the name of the policy preset the user chose for it on

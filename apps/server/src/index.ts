@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadConfig } from './config/config.js';
 import { SettingsService } from './config/settings.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
@@ -12,12 +13,19 @@ import {
 import { harmonizerRestarter } from './brains/harmonizer/restart.js';
 import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
+import type { AgentAdapter } from '@galactic/protocol';
+import { AcpAdapter } from './adapters/acp/index.js';
+import { PtyAdapter } from './adapters/pty/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
+import { BACKUP_CHECK_INTERVAL_MS, BACKUP_DIR, BackupService } from './db/backup.js';
+import { acquireDataLock, DataLockError, removeStaleTempDatabases } from './db/data-lock.js';
 import { openDatabase } from './db/database.js';
+import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
 import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { composeRuntime } from './runtime/compose.js';
+import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { ProcessSupervisor } from './runtime/supervisor.js';
 import { Workspaces } from './workspace/workspaces.js';
@@ -30,7 +38,33 @@ setGlobalDefaultPolicy(config.defaultPermissionPolicy);
 const onError = (error: unknown, context: string) =>
   console.error(`[runtime] ${context}:`, error instanceof Error ? error.message : error);
 
+// The data lock (P8-03 review): one server per database, and no import or restore under it.
+// Taken before the database is opened; removed on exit (a killed server leaves it stale).
+let dataLock: ReturnType<typeof acquireDataLock>;
+try {
+  dataLock = acquireDataLock(config.dbPath, 'server');
+} catch (error) {
+  console.error(
+    error instanceof DataLockError
+      ? `Cannot start: ${error.message} Stop it first.`
+      : `Cannot take the data lock: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}
+process.on('exit', () => dataLock.release());
+for (const name of removeStaleTempDatabases(config.dbPath)) {
+  console.log(`Removed ${name}, left by an import or restore that did not finish`);
+}
+
 const db = openDatabase(config.dbPath);
+// Transcript retention gives space back in small steps (P8-02), which needs incremental
+// auto-vacuum; a database made before it is converted once, here, before the server listens —
+// unless the disk lacks room for it, or it already failed too often (`db/vacuum.ts`).
+startupConversion(db, {
+  dbPath: config.dbPath,
+  retry: process.env[CONVERSION_RETRY_ENV] === '1',
+  log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
+});
 // The supervisor owns every agent child process; its PID table lives in the same database.
 const supervisor = new ProcessSupervisor({ store: new SqliteProcessStore(db) });
 const reconciled = supervisor.reconcile();
@@ -39,22 +73,97 @@ if (reconciled.dead.length + reconciled.orphans.length > 0) {
     `Reconciled the process table: ${reconciled.dead.length} dead, ${reconciled.orphans.length} orphaned (killed)`,
   );
 }
+// Launches the killed run forked but never recorded (P8-11): their processes are found by the
+// launch id in their environment and stopped, before anything of this run is spawned.
+const launches = await supervisor.reconcileLaunches();
+for (const take of launches.taken) {
+  console.log(
+    `Stopped an unrecorded launch of agent ${take.agentId} from the previous run: ` +
+      `pids ${take.pids.join(', ')}${take.forced ? ' (forced)' : ''}`,
+  );
+}
 
-// Adapters: the fake one always (dev mode without Claude), the real one for Claude Code.
+// Adapters: the fake one always (dev mode without Claude), the real one for Claude Code, and the
+// ACP one for any ACP agent when `acp.command` is configured (P8-07), the PTY one for a
+// command-line agent when `pty.command` is (P8-08; node-pty loads at its first spawn).
 const fake = new FakeAdapter();
+const adapters: AgentAdapter[] = [
+  fake,
+  new ClaudeSdkAdapter({
+    supervisor,
+    ...(process.env['GALACTIC_MODEL'] ? { model: process.env['GALACTIC_MODEL'] } : {}),
+    // SPEC §8 open question: Stewards load `~/.claude` unless the settings say not (P25-01).
+    ...(config.stewardsLoadUserSettings === false
+      ? { stewardSettingSources: ['project', 'local'] as ('project' | 'local')[] }
+      : {}),
+    onError,
+  }),
+  ...(config.acp
+    ? [
+        new AcpAdapter({
+          supervisor,
+          agent: {
+            command: config.acp.command,
+            ...(config.acp.args ? { args: config.acp.args } : {}),
+            ...(config.acp.passEnv ? { passEnv: config.acp.passEnv } : {}),
+            ...(config.acp.mode ? { mode: config.acp.mode } : {}),
+            ...(config.acp.allowPermissiveMode ? { allowPermissiveMode: true } : {}),
+          },
+          onError,
+        }),
+      ]
+    : []),
+  ...(config.pty
+    ? [
+        new PtyAdapter({
+          supervisor,
+          agent: {
+            command: config.pty.command,
+            ...(config.pty.args ? { args: config.pty.args } : {}),
+            ...(config.pty.passEnv ? { passEnv: config.pty.passEnv } : {}),
+            ...(config.pty.idlePattern ? { idlePattern: config.pty.idlePattern } : {}),
+            ...(config.pty.questionPatterns
+              ? {
+                  questionPatterns: config.pty.questionPatterns.map((q) => ({
+                    pattern: q.pattern,
+                    ...(q.flags !== undefined ? { flags: q.flags } : {}),
+                    ...(q.yes !== undefined ? { yes: q.yes } : {}),
+                    ...(q.no !== undefined ? { no: q.no } : {}),
+                  })),
+                }
+              : {}),
+            ...(config.pty.clarificationPatterns
+              ? { clarificationPatterns: config.pty.clarificationPatterns }
+              : {}),
+            ...(config.pty.quietMs !== undefined ? { quietMs: config.pty.quietMs } : {}),
+            ...(config.pty.idleAfterMs !== undefined
+              ? { idleAfterMs: config.pty.idleAfterMs }
+              : {}),
+          },
+          onError,
+        }),
+      ]
+    : []),
+];
+if (config.stewardRuntime && !adapters.some((a) => a.runtime === config.stewardRuntime)) {
+  console.warn(
+    `[config] stewardRuntime is ${config.stewardRuntime}, which is not set up here: ` +
+      `new Stewards run on their brain's runtime`,
+  );
+  delete config.stewardRuntime;
+} else if (config.stewardRuntime === 'fake' && !config.dev) {
+  // The fake adapter is always registered (the ops console's dev tools), but real work never runs
+  // on it outside dev mode (`loadConfig` already drops it; this guards a config built elsewhere).
+  console.warn(
+    `[config] stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
+      `new Stewards run on their brain's runtime`,
+  );
+  delete config.stewardRuntime;
+}
 const composed = composeRuntime(db, {
-  adapters: [
-    fake,
-    new ClaudeSdkAdapter({
-      supervisor,
-      ...(process.env['GALACTIC_MODEL'] ? { model: process.env['GALACTIC_MODEL'] } : {}),
-      // SPEC §8 open question: Stewards load `~/.claude` unless the settings say not (P25-01).
-      ...(config.stewardsLoadUserSettings === false
-        ? { stewardSettingSources: ['project', 'local'] as ('project' | 'local')[] }
-        : {}),
-      onError,
-    }),
-  ],
+  adapters,
+  // The runtime new Stewards run on (P8-07): read at every spawn, so the settings apply live.
+  stewardRuntime: () => config.stewardRuntime,
   // Brain tools create worktrees and merge through this service (P2-05, P2-10).
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
@@ -63,8 +172,15 @@ const composed = composeRuntime(db, {
   caps: config.caps,
   // Finished work past decision 4's retention period is archived hourly (P2-13).
   archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
+  // Transcript chunks past the transcript retention policy are removed hourly (P8-02).
+  transcriptRetention: {
+    ...(config.transcriptRetention ? { policy: config.transcriptRetention } : {}),
+    intervalMs: TRANSCRIPT_RETENTION_INTERVAL_MS,
+  },
   // Stewards' leftover processes (P4-14): attributed from the supervisor's process groups.
   processes: { groups: supervisor },
+  // Dollar budgets (P8-01): the warning threshold.
+  ...(config.budgets ? { budgets: config.budgets } : {}),
 });
 const { log, statuses, transcripts } = composed;
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
@@ -72,11 +188,28 @@ const push = createPush(db, config, {
   log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
 });
 push.service.start(log);
+// Backups (P8-03): daily when the log is quiet, rotated; "Back up now" from the settings page.
+const backups = new BackupService({
+  db,
+  dir: join(config.dataDir, BACKUP_DIR),
+  ...(config.backups
+    ? {
+        schedule: (({ reserveBytes: _r, ...schedule }) => schedule)(config.backups),
+        ...(config.backups.reserveBytes !== undefined
+          ? { reserveBytes: config.backups.reserveBytes }
+          : {}),
+      }
+    : {}),
+  log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
+});
 // The settings page (P25-01): caps and retention apply live through the runtime and the job.
 const settings = new SettingsService({
   config,
   caps: composed.runtime.caps,
   archival: composed.archival,
+  transcriptRetention: composed.transcriptRetention,
+  budgets: composed.budgets,
+  runtimes: () => adapters.map((a) => a.runtime),
 });
 
 // Shutdown is wired before anything is resumed or listening (P1-32): a signal during recovery
@@ -98,9 +231,12 @@ function shutdown(code: number): void {
   // The promotion flow stops with the runtime: no card is carried out while agents are stopping.
   promotions?.stop();
   push.service.stop();
-  void composed
-    .shutdown()
-    .catch((error) => console.error('[runtime] shutdown:', error))
+  backups.stop();
+  // A backup being taken finishes (or fails) before the process exits, so no half copy is left.
+  void Promise.all([
+    composed.shutdown().catch((error) => console.error('[runtime] shutdown:', error)),
+    backups.idle(),
+  ])
     .then(() => supervisor.dispose())
     .catch((error) => console.error('[supervisor] dispose:', error))
     .then(() => server.app?.close())
@@ -173,6 +309,8 @@ const app = buildApp({
   ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
   push,
+  storage: composed.storage,
+  backups,
   restartHarmonizer: async () => {
     const hq = await restartHarmonizer();
     console.log(
@@ -193,6 +331,9 @@ if (tokenGenerated) {
 }
 try {
   const port = await app.listen();
+  dataLock.update({ port, host: config.host });
+  // The first check waits for the server to be up; a backup already due runs once the log is quiet.
+  backups.start(BACKUP_CHECK_INTERVAL_MS);
   // `galactic start` watches for this line to print its banner and open the browser.
   console.log(`GalacticAgents Mission Control listening on http://${config.host}:${port}`);
 } catch (error) {

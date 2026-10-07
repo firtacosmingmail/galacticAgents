@@ -77,6 +77,7 @@ const commands: DomainCommands = {
   reassignQuestion: notImplemented,
   withdrawQuestion: notImplemented,
   control: () => noop(undefined),
+  setBudget: notImplemented,
 };
 
 describe('interfaces', () => {

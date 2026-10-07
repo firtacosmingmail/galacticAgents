@@ -8,6 +8,8 @@ import type {
   TranscriptResponse,
 } from '@galactic/protocol';
 import { CursorError } from './cursor-error.js';
+import { readCompaction } from './transcript-retention.js';
+import { HIGH_WATER_SQL } from './transcripts.js';
 
 /**
  * Paged reads for the side panel (P25-01): an agent's conversation and its transcript, straight
@@ -155,10 +157,12 @@ export class History {
     entries.sort((a, b) => compare(a[0], b[0]) * (forward ? 1 : -1));
     const page = entries.slice(0, q.limit);
     if (!forward) page.reverse();
+    const compacted = readCompaction(this.db, agentId);
     return {
       entries: page.map(([, entry]) => entry),
       hasMore: entries.length > q.limit,
       lastSeq: this.maxSeq(agentId),
+      ...(compacted ? { compacted } : {}),
     };
   }
 
@@ -196,7 +200,9 @@ export class History {
     ).all(...args) as ChunkRow[];
     const page = rows.slice(0, q.limit);
     if (!forward) page.reverse();
+    const compacted = readCompaction(this.db, agentId);
     return {
+      ...(compacted ? { compacted } : {}),
       chunks: page.map((r) => {
         const { kind, text } = JSON.parse(r.chunk) as Pick<TranscriptChunk, 'kind' | 'text'>;
         return { agentId, seq: r.seq, at: r.at, kind, text };
@@ -206,13 +212,12 @@ export class History {
     };
   }
 
-  /** The newest persisted `seq` of an agent (no pipeline to ask). */
+  /**
+   * The newest persisted `seq` of an agent (no pipeline to ask), or its high-water mark when
+   * retention removed its newest chunks (P8-02).
+   */
   maxSeq(agentId: Id): number {
-    return (
-      this.stmt(
-        'SELECT COALESCE(MAX(seq), 0) AS seq FROM transcript_chunks WHERE agent_id = ?',
-      ).get(agentId) as { seq: number }
-    ).seq;
+    return (this.stmt(HIGH_WATER_SQL).get(agentId, agentId) as { seq: number }).seq;
   }
 }
 

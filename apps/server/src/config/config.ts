@@ -4,10 +4,16 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  AgentRuntime,
+  BackupSchedule,
+  DEFAULT_BUDGET_WARN_PERCENT,
+  DEFAULT_TRANSCRIPT_RETENTION,
   IDENTITY_TOKEN,
   PermissionPolicy,
   QualityTier,
+  SettingsBudgets,
   SettingsCaps,
+  TranscriptRetention,
   type AgentCaps,
   type SettingName,
 } from '@galactic/protocol';
@@ -67,6 +73,12 @@ export const ConfigFile = z.object({
    */
   retentionDays: z.number().positive().optional(),
   /**
+   * Transcript retention (P8-02), in days, `null` = keep forever: chunks older than `maxAgeDays`
+   * are removed, and the whole transcript of an agent whose work was archived `archivedDays` ago.
+   * Defaults 90 and 30 (`DEFAULT_TRANSCRIPT_RETENTION`).
+   */
+  transcriptRetention: TranscriptRetention.partial().optional(),
+  /**
    * Hard caps on spawning (decision 18; P2-17): live Stewards (brains not counted), live
    * Stewards per Waykeeper, spawns per sliding hour in all and per spawning brain.
    */
@@ -90,11 +102,102 @@ export const ConfigFile = z.object({
    * repository's (SPEC §8 open question). Default `true` (keep loading them).
    */
   stewardsLoadUserSettings: z.boolean().optional(),
+  /** Dollar budgets (P8-01): the warning threshold in percent of a budget (default 80). */
+  budgets: SettingsBudgets.partial().optional(),
   /**
    * When the panel's first-run setup was finished or skipped (P25-08); absent = not yet. Written
    * as an ISO timestamp, but read leniently: a hand-edited value must not stop the server.
    */
   setupCompletedAt: z.string().min(1).optional(),
+  /**
+   * Backups (P8-03; docs/BACKUP_RESTORE.md): whether the daily backup runs (default true; also
+   * `GALACTIC_BACKUPS=0`), how many are kept, and how much free space a backup must leave on the
+   * disk (MiB, default 1024).
+   */
+  backups: BackupSchedule.partial()
+    .extend({ reserveMiB: z.number().int().nonnegative().optional() })
+    .optional(),
+  /**
+   * The runtime new Stewards run on (P8-07; also `GALACTIC_STEWARD_RUNTIME`); absent = the
+   * spawning brain's own runtime. Settable from the panel.
+   */
+  stewardRuntime: AgentRuntime.optional(),
+  /**
+   * The ACP agent the `acp` runtime starts for every session (P8-07; TECHNOLOGY §3.2), e.g.
+   * `{"command": "claude-agent-acp"}`, `{"command": "gemini", "args": ["--acp"]}` or
+   * `{"command": "codex-acp"}`; also `GALACTIC_ACP_COMMAND` (a command line split on spaces, or
+   * a JSON array `["cmd", "an arg with spaces"]`). Absent: no `acp` runtime. `passEnv` names the
+   * server variables the agent needs — every credential (its API key or token): only routing
+   * variables pass by default — never a `GALACTIC_*` one. `mode` is the session mode every session
+   * is set to; a mode known to run tool calls without asking is refused unless
+   * `allowPermissiveMode` (decision 108).
+   */
+  acp: z
+    .object({
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+      passEnv: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .refine((k) => !/^GALACTIC_/i.test(k), 'acp.passEnv may not name GALACTIC_* variables'),
+        )
+        .optional(),
+      mode: z.string().min(1).optional(),
+      allowPermissiveMode: z.boolean().optional(),
+    })
+    .optional(),
+  /**
+   * The command-line agent the `pty` runtime runs under a pseudo-terminal for every session
+   * (P8-08; TECHNOLOGY §3.3), e.g. `{"command": "aider", "args": ["--no-auto-commits"],
+   * "idlePattern": "^> $"}`; also `GALACTIC_PTY_COMMAND` (like `GALACTIC_ACP_COMMAND`). Absent:
+   * no `pty` runtime. `passEnv` names the server variables it needs (credentials by name; never
+   * `GALACTIC_*`). `idlePattern` is its input prompt (a regular expression on the cursor's line):
+   * the turn is over. Every question it asks is a permission (only the user answers it,
+   * decision 112) unless a `clarificationPatterns` regex matches its prompt line (its supervisor
+   * may answer those); `questionPatterns` add yes/no shapes (`yes`/`no`: what is typed).
+   * `args` may hold `{prompt}` (replaced by the first prompt) or `{promptFile}` (the path of a
+   * 0600 file holding it): the first prompt is then not typed. `quietMs` is the silence after which the screen
+   * is read (default 750); `idleAfterMs` ends a turn after that much silence when there is no
+   * prompt to recognise. A terminal agent runs only where the permission table allows what it
+   * cannot classify (the trusted preset; decision 112).
+   */
+  pty: z
+    .object({
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+      passEnv: z
+        .array(
+          z
+            .string()
+            .min(1)
+            .refine((k) => !/^GALACTIC_/i.test(k), 'pty.passEnv may not name GALACTIC_* variables'),
+        )
+        .optional(),
+      idlePattern: z.string().min(1).optional(),
+      questionPatterns: z
+        .array(
+          z.object({
+            pattern: z.string().min(1),
+            flags: z.string().optional(),
+            kind: z
+              .literal('permission', {
+                error:
+                  'pty.questionPatterns are permission shapes only; a prompt its supervisor may ' +
+                  'answer goes in pty.clarificationPatterns',
+              })
+              .optional(),
+            yes: z.string().optional(),
+            no: z.string().optional(),
+          }),
+        )
+        .optional(),
+      clarificationPatterns: z.array(z.string().min(1)).optional(),
+      quietMs: z.number().int().min(50).max(60_000).optional(),
+      idleAfterMs: z.number().int().min(500).optional(),
+    })
+    .optional(),
 });
 export type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -144,6 +247,8 @@ export interface ServerConfig {
    * `GALACTIC_MAX_SPAWNS_PER_HOUR_PER_BRAIN`; defaults 4, 3, 30 and 20.
    */
   caps: SpawnCaps & { maxConcurrentAgents: number; defaults?: AgentCaps };
+  /** Transcript retention (P8-02); absent = `DEFAULT_TRANSCRIPT_RETENTION`. */
+  transcriptRetention?: TranscriptRetention;
   /** The global default permission table from the file (P25-01); absent = the SPEC's table. */
   defaultPermissionPolicy?: PermissionPolicy;
   /** The renderer's quality tier (P25-01); absent = `high`. */
@@ -154,6 +259,25 @@ export interface ServerConfig {
   envOverrides?: SettingName[];
   /** When the panel's first-run setup was done (P25-08); absent = the wizard shows. */
   setupCompletedAt?: string;
+  /**
+   * Dollar budgets (P8-01): `budgets.warnAtPercent` in the file or `GALACTIC_BUDGET_WARN_PERCENT`;
+   * absent = 80.
+   */
+  budgets?: { warnAtPercent: number };
+  /** Backups (P8-03): the rotation and the free space a backup leaves; absent = the defaults. */
+  backups?: Partial<BackupSchedule> & { reserveBytes?: number };
+  /** The runtime new Stewards run on (P8-07); absent = the spawning brain's own. */
+  stewardRuntime?: AgentRuntime;
+  /** The ACP agent command (P8-07); absent = no `acp` runtime registered. */
+  acp?: {
+    command: string;
+    args?: string[] | undefined;
+    passEnv?: string[] | undefined;
+    mode?: string | undefined;
+    allowPermissiveMode?: boolean | undefined;
+  };
+  /** The terminal agent (P8-08); absent = no `pty` runtime registered. */
+  pty?: NonNullable<ConfigFile['pty']>;
 }
 
 export interface LoadedConfig {
@@ -185,9 +309,25 @@ export function generateToken(): string {
  * Loads the config: defaults ← `~/.galactic/config.json` ← environment.
  * Generates and persists a token on first start (file mode 0600).
  */
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
+/**
+ * Where the data lives (`~/.galactic`, or `$GALACTIC_HOME`; the database `$GALACTIC_DB`), without
+ * reading or writing anything: the export and import commands (P8-03) use it.
+ */
+export function dataPaths(env: NodeJS.ProcessEnv = process.env): {
+  dataDir: string;
+  configPath: string;
+  dbPath: string;
+} {
   const dataDir = env['GALACTIC_HOME'] ?? join(homedir(), '.galactic');
-  const configPath = join(dataDir, 'config.json');
+  return {
+    dataDir,
+    configPath: join(dataDir, 'config.json'),
+    dbPath: env['GALACTIC_DB'] ?? join(dataDir, 'galactic.sqlite'),
+  };
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
+  const { dataDir, configPath, dbPath } = dataPaths(env);
 
   let file: ConfigFile = {};
   if (existsSync(configPath)) {
@@ -298,7 +438,49 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     maxWallClockMs: file.caps?.maxWallClockMs ?? DEFAULT_CAPS.maxWallClockMs,
     maxToolCalls: file.caps?.maxToolCalls ?? DEFAULT_CAPS.maxToolCalls,
   };
+  const warnEnv = env['GALACTIC_BUDGET_WARN_PERCENT'];
+  const warnAtPercent =
+    warnEnv !== undefined
+      ? Number(warnEnv)
+      : (file.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT);
+  if (!SettingsBudgets.shape.warnAtPercent.safeParse(warnAtPercent).success) {
+    throw new Error(
+      `Invalid budget warning threshold (1–100 %): ${warnEnv ?? file.budgets?.warnAtPercent}`,
+    );
+  }
+  const runtimeEnv = env['GALACTIC_STEWARD_RUNTIME'];
+  let stewardRuntime = file.stewardRuntime;
+  if (runtimeEnv !== undefined) {
+    const parsed = AgentRuntime.safeParse(runtimeEnv.trim());
+    if (!parsed.success) throw new Error(`Invalid Steward runtime: ${runtimeEnv}`);
+    stewardRuntime = parsed.data;
+  }
+  const dev = env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true';
+  if (stewardRuntime === 'fake' && !dev) {
+    // The scripted fake adapter is for development and tests only (P8 wave 3 review).
+    warnings.push(
+      `stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
+        `new Stewards run on their brain's runtime.`,
+    );
+    stewardRuntime = undefined;
+  }
+  const acpEnv = parseAcpCommand(env['GALACTIC_ACP_COMMAND']);
+  const acp =
+    acpEnv && acpEnv.length > 0
+      ? {
+          ...file.acp,
+          command: acpEnv[0]!,
+          args: acpEnv.slice(1),
+        }
+      : file.acp;
+  const ptyEnv = parseAcpCommand(env['GALACTIC_PTY_COMMAND'], 'GALACTIC_PTY_COMMAND');
+  const pty =
+    ptyEnv && ptyEnv.length > 0
+      ? { ...file.pty, command: ptyEnv[0]!, args: ptyEnv.slice(1) }
+      : file.pty;
   const envOverrides: SettingName[] = [];
+  if (runtimeEnv !== undefined) envOverrides.push('stewardRuntime');
+  if (warnEnv !== undefined) envOverrides.push('budgets');
   if (env['GALACTIC_PROJECTS_ROOT'] !== undefined) envOverrides.push('projectsRoot');
   if (retentionEnv !== undefined) envOverrides.push('retentionDays');
   if (CAP_ENV.some(([, name]) => env[name] !== undefined)) envOverrides.push('caps');
@@ -311,10 +493,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       allowedHosts,
       ...(remoteHost ? { remoteHost } : {}),
       ...(tailscaleIdentityLogins ? { tailscaleIdentityLogins } : {}),
-      dev: env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true',
+      dev,
       dataDir,
       configPath,
-      dbPath: env['GALACTIC_DB'] ?? join(dataDir, 'galactic.sqlite'),
+      dbPath,
       projectsRoot: resolve(projectsRoot),
       autoApproveRemote:
         env['GALACTIC_AUTO_APPROVE_REMOTE'] !== undefined
@@ -322,6 +504,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
             env['GALACTIC_AUTO_APPROVE_REMOTE'] === 'true'
           : (file.autoApproveRemote ?? false),
       retentionMs: Math.round(retentionDays * DAY_MS),
+      ...(file.transcriptRetention
+        ? {
+            transcriptRetention: {
+              ...DEFAULT_TRANSCRIPT_RETENTION,
+              ...Object.fromEntries(
+                Object.entries(file.transcriptRetention).filter(([, v]) => v !== undefined),
+              ),
+            },
+          }
+        : {}),
       caps: { ...caps, defaults },
       ...(file.defaultPermissionPolicy
         ? { defaultPermissionPolicy: file.defaultPermissionPolicy }
@@ -331,11 +523,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
         ? { stewardsLoadUserSettings: file.stewardsLoadUserSettings }
         : {}),
       envOverrides,
+      budgets: { warnAtPercent },
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
+      ...backupsOf(file.backups, env['GALACTIC_BACKUPS']),
+      ...(stewardRuntime ? { stewardRuntime } : {}),
+      ...(acp ? { acp } : {}),
+      ...(pty ? { pty } : {}),
     },
     tokenGenerated,
     warnings,
   };
+}
+
+/** The backups setting (P8-03): the file's values, the environment's on/off over them. */
+function backupsOf(
+  file: ConfigFile['backups'],
+  envFlag: string | undefined,
+): { backups?: NonNullable<ServerConfig['backups']> } {
+  const { reserveMiB, ...schedule } = file ?? {};
+  const backups: NonNullable<ServerConfig['backups']> = {
+    // Keys present with `undefined` are dropped (an absent key means the default).
+    ...(Object.fromEntries(
+      Object.entries(schedule).filter(([, v]) => v !== undefined),
+    ) as Partial<BackupSchedule>),
+    ...(reserveMiB !== undefined ? { reserveBytes: reserveMiB * 2 ** 20 } : {}),
+    ...(envFlag !== undefined ? { enabled: envFlag === '1' || envFlag === 'true' } : {}),
+  };
+  return Object.keys(backups).length > 0 ? { backups } : {};
 }
 
 /** `~` and `~/…` name the home directory; anything else is returned as written. */
@@ -343,4 +557,34 @@ export function expandHome(path: string): string {
   if (path === '~') return homedir();
   if (path.startsWith('~/')) return join(homedir(), path.slice(2));
   return path;
+}
+
+/**
+ * `GALACTIC_ACP_COMMAND`: a JSON array of strings (`["cmd", "an arg with spaces"]`), or a command
+ * line split on whitespace (no quoting). `undefined` when unset or empty.
+ */
+export function parseAcpCommand(
+  value: string | undefined,
+  name = 'GALACTIC_ACP_COMMAND',
+): string[] | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (text.startsWith('[')) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error(`${name} is not a JSON array: ${text}`);
+    }
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      !parsed.every((p) => typeof p === 'string') ||
+      !(parsed[0] as string).trim()
+    ) {
+      throw new Error(`${name} must be a non-empty JSON array of strings`);
+    }
+    return parsed as string[];
+  }
+  return text.split(/\s+/).filter(Boolean);
 }

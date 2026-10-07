@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { KIND_LABELS, useNotificationPrefs } from './prefs.js';
 import { showNotification } from './notifier.js';
+import { shellPostsNotifications } from '../../desktop-shell.js';
 import './notifications.css';
 
 /**
@@ -23,6 +24,19 @@ export function NotificationSettings({ heading = true }: { heading?: boolean }) 
   useEffect(() => refreshPermission(), [refreshPermission]);
 
   const on = enabled && permission === 'granted';
+
+  if (shellPostsNotifications()) {
+    // Inside the desktop shell (P8-06): the menu bar app posts them, never the page.
+    return (
+      <section className="ntf-settings" aria-label="desktop notifications">
+        {heading && <h3 className="ntf-heading">Desktop notifications</h3>}
+        <p className="ntf-status">
+          The GalacticAgents app posts these notifications: permission requests, questions for you,
+          and finished or failed projects. Turn them off in the system’s notification settings.
+        </p>
+      </section>
+    );
+  }
 
   let status;
   if (permission === 'unsupported') {

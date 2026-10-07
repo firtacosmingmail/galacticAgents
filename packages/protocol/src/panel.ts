@@ -66,6 +66,40 @@ export const ConversationQuery = z
   .refine((q) => !(q.before && q.after), { message: 'before and after are exclusive' });
 export type ConversationQuery = z.input<typeof ConversationQuery>;
 
+// --- transcript retention (P8-02) ---------------------------------------------------------------
+
+/**
+ * What transcript retention removed from one agent's transcript (P8-02; TECHNOLOGY §6.2): every
+ * chunk up to `throughSeq` (written up to `throughAt`) is gone, last removed at `removedAt`.
+ * `reason`: `age` — older than the transcript age limit; `archived` — the agent's work was
+ * archived longer ago than the archived-work limit. Only `transcript_chunks` are compacted; the
+ * event log (messages, tool calls, states) is kept whole.
+ */
+export const TranscriptCompaction = z.object({
+  throughSeq: z.number().int().positive(),
+  throughAt: Timestamp,
+  removedAt: Timestamp,
+  reason: z.enum(['age', 'archived']),
+});
+export type TranscriptCompaction = z.infer<typeof TranscriptCompaction>;
+
+/**
+ * The transcript retention policy (P8-02; settings, decision 51), in whole days, at least one,
+ * `null` = keep forever. `maxAgeDays`: any agent's chunks older than this are removed (a running
+ * Harmonizer's too). `archivedDays`: an agent's whole transcript is removed this long after its
+ * work (task or project) was archived. Pinned work is never compacted.
+ */
+export const TranscriptRetention = z.object({
+  maxAgeDays: z.number().int().min(1).max(3650).nullable(),
+  archivedDays: z.number().int().min(1).max(3650).nullable(),
+});
+export type TranscriptRetention = z.infer<typeof TranscriptRetention>;
+
+export const DEFAULT_TRANSCRIPT_RETENTION: TranscriptRetention = {
+  maxAgeDays: 90,
+  archivedDays: 30,
+};
+
 /** A page of a conversation, always oldest first; `hasMore`: there is more in the paged direction. */
 export const ConversationResponse = z.object({
   entries: z.array(ConversationEntry),
@@ -76,6 +110,12 @@ export const ConversationResponse = z.object({
    * in the pipeline (not in the page yet) arrives on the stream instead of being missed.
    */
   lastSeq: z.number().int().nonnegative(),
+  /**
+   * Set when retention removed part of the agent's transcript (P8-02): its replies up to
+   * `throughAt` are gone (its messages are not), so the chat says so instead of showing a thread
+   * with the replies silently missing. Optional: an older server never sends it.
+   */
+  compacted: TranscriptCompaction.optional(),
 });
 export type ConversationResponse = z.infer<typeof ConversationResponse>;
 
@@ -115,6 +155,11 @@ export const TranscriptResponse = z.object({
    * subscriber with the next flush, which a `since` past them would drop.
    */
   lastSeq: z.number().int().nonnegative(),
+  /**
+   * Set when retention removed the start of the transcript (P8-02): the chunks up to
+   * `throughSeq` are gone, so the oldest page says "older transcript removed … by retention".
+   */
+  compacted: TranscriptCompaction.optional(),
 });
 export type TranscriptResponse = z.infer<typeof TranscriptResponse>;
 
@@ -142,6 +187,12 @@ export const SettingsCaps = z.object({
 });
 export type SettingsCaps = z.infer<typeof SettingsCaps>;
 
+/** Dollar budgets (P8-01): when a budgeted project or task warns, as a percentage of its budget. */
+export const SettingsBudgets = z.object({
+  warnAtPercent: z.number().int().min(1).max(100),
+});
+export type SettingsBudgets = z.infer<typeof SettingsBudgets>;
+
 /** The settings the panel shows and edits (SPEC §4.6), persisted in `config.json`. */
 export const Settings = z.object({
   /** Where new project folders go (SPEC §3.5): an absolute path or `~/…`. */
@@ -157,6 +208,19 @@ export const Settings = z.object({
    * repository's (SPEC §8 open question; default keep). Brains never do.
    */
   stewardsLoadUserSettings: z.boolean(),
+  /**
+   * Transcript retention (P8-02). Optional so a page reading an older server still parses (the
+   * settings page then leaves the section out); this server always sends it.
+   */
+  transcriptRetention: TranscriptRetention.optional(),
+  /** Budget warnings (P8-01); the server always reports it, older servers leave it out. */
+  budgets: SettingsBudgets.optional(),
+  /**
+   * The runtime new Stewards run on (P8-07), whichever brain spawns them; absent = the spawning
+   * brain's own runtime (the behaviour before P8-07). Only a runtime the server has an adapter
+   * for can be chosen. The Harmonizer and Waykeepers stay on their own runtime.
+   */
+  stewardRuntime: AgentRuntime.optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -168,6 +232,9 @@ export const SettingName = z.enum([
   'caps',
   'qualityTier',
   'stewardsLoadUserSettings',
+  'transcriptRetention',
+  'budgets',
+  'stewardRuntime',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
 
@@ -184,6 +251,11 @@ export const SettingsPatch = z
     caps: SettingsCaps.partial().strict().optional(),
     qualityTier: QualityTier.optional(),
     stewardsLoadUserSettings: z.boolean().optional(),
+    /** Transcript retention (P8-02), merged key by key; local requests only (decision 51, 90). */
+    transcriptRetention: TranscriptRetention.partial().strict().optional(),
+    budgets: SettingsBudgets.partial().strict().optional(),
+    /** The runtime of new Stewards (P8-07); `null` = the spawning brain's own again. */
+    stewardRuntime: AgentRuntime.nullable().optional(),
     /**
      * Marks the first-run setup as done (P25-08): the server stamps `setupCompletedAt` in
      * `config.json` (kept if already set). Local requests only, like every setting but the tier

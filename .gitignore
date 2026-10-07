@@ -5,7 +5,13 @@ yarn.lock
 dist/
 build/
 .turbo/
+# the desktop shell's Rust build (P8-06): Cargo's target dir and Tauri's generated schemas
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
 *.tsbuildinfo
+# Playwright smoke tests' output (P8-05); the baselines under e2e/tests/__screenshots__ are kept
+e2e/test-results/
+e2e/playwright-report/
 
 # runtime data
 *.sqlite

@@ -848,7 +848,8 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       const instructions = str(input, 'instructions', true);
       const { value } = await ctx.commands.spawnAgent({
         role: 'steward',
-        runtime: runtimeOf(ctx),
+        // The `stewardRuntime` setting (P8-07), else the Harmonizer's own runtime.
+        runtime: ctx.stewardRuntime?.() ?? runtimeOf(ctx),
         taskId,
         supervisorId: ctx.brainId,
         cwd: workspace,

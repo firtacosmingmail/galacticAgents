@@ -1,7 +1,9 @@
 import {
   DEFAULT_PERMISSION_POLICY,
+  DEFAULT_TRANSCRIPT_RETENTION,
   Settings,
   SettingsCaps,
+  TranscriptRetention,
   type PermissionAction,
   type PermissionDecision,
   type PermissionPolicy,
@@ -23,6 +25,7 @@ export const ENV_VARIABLES: Partial<Record<SettingName, string>> = {
   projectsRoot: 'GALACTIC_PROJECTS_ROOT',
   retentionDays: 'GALACTIC_RETENTION_DAYS',
   caps: 'GALACTIC_MAX_* (any of the cap variables)',
+  budgets: 'GALACTIC_BUDGET_WARN_PERCENT',
 };
 
 /** One editable row of the default permission table (SPEC §3.6, decision 49's `unclassified`). */
@@ -99,6 +102,36 @@ export function validateRetention(value: string): string | undefined {
   return undefined;
 }
 
+/** Transcript retention as typed (P8-02): days, or empty for "keep forever". */
+export interface TranscriptRetentionDraft {
+  maxAgeDays: string;
+  archivedDays: string;
+}
+
+export function transcriptRetentionDraft(settings: Settings): TranscriptRetentionDraft {
+  const r = settings.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION;
+  return {
+    maxAgeDays: r.maxAgeDays === null ? '' : String(r.maxAgeDays),
+    archivedDays: r.archivedDays === null ? '' : String(r.archivedDays),
+  };
+}
+
+/** The policy a draft stands for, or what is wrong with it. */
+export function parseTranscriptRetention(
+  draft: TranscriptRetentionDraft,
+): { value: TranscriptRetention; error?: undefined } | { value?: undefined; error: string } {
+  const days = (raw: string) => (raw.trim() === '' ? null : Number(raw));
+  const value = { maxAgeDays: days(draft.maxAgeDays), archivedDays: days(draft.archivedDays) };
+  if (!TranscriptRetention.shape.maxAgeDays.safeParse(value.maxAgeDays).success)
+    return { error: 'Keep output for a whole number of days from 1 to 3650, or leave it empty.' };
+  if (!TranscriptRetention.shape.archivedDays.safeParse(value.archivedDays).success)
+    return {
+      error:
+        'Keep archived work’s output for a whole number of days from 1 to 3650, or leave it empty.',
+    };
+  return { value };
+}
+
 /** One cap field: the form shows `ms` caps in minutes. */
 export interface CapField {
   key: keyof SettingsCaps;
@@ -115,7 +148,7 @@ const MINUTE = 60_000;
 export const CAP_FIELDS: readonly CapField[] = [
   {
     key: 'maxWallClockMs',
-    label: 'Wall-clock time per agent',
+    label: 'Wall-clock time per Steward',
     unit: 'minutes',
     min: 1,
     max: 7 * 24 * 60,

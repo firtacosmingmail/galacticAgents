@@ -8,6 +8,7 @@ import {
   type PermissionPolicyPreset,
   type StatusRecord,
   type TranscriptChunk,
+  wallClockLimit,
 } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { createApi, type Api } from './api.js';
@@ -261,7 +262,9 @@ function AgentPanel({
           <dt>wall clock</dt>
           <dd>
             {status
-              ? `${Math.round(status.caps.wallClockMs.used / 1000)} s / ${Math.round(status.caps.wallClockMs.limit / 60000)} min`
+              ? wallClockLimit(status.caps.wallClockMs) !== undefined
+                ? `${Math.round(status.caps.wallClockMs.used / 1000)} s / ${Math.round(status.caps.wallClockMs.limit / 60000)} min`
+                : `${Math.round(status.caps.wallClockMs.used / 1000)} s (no cap)`
               : '—'}
           </dd>
         </div>
@@ -323,11 +326,14 @@ function AgentPanel({
         {chunks.length === 0 ? (
           <span className="muted">nothing yet</span>
         ) : (
-          chunks.map((c) => (
-            <div key={c.seq} className={`chunk chunk-${c.kind}`}>
-              <span className="muted">{c.kind}</span> {c.text}
-            </div>
-          ))
+          // A terminal agent's raw screen (P8-08) is the panel's terminal view; its text is here.
+          chunks
+            .flatMap((c) => (c.kind === 'terminal' ? [] : [c]))
+            .map((c) => (
+              <div key={c.seq} className={`chunk chunk-${c.kind}`}>
+                <span className="muted">{c.kind}</span> {c.text}
+              </div>
+            ))
         )}
       </pre>
     </div>

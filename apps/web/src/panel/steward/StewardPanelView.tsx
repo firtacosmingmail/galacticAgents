@@ -6,6 +6,7 @@ import {
   type Id,
   type Question,
   type StatusRecord,
+  wallClockLimit,
 } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
@@ -26,6 +27,7 @@ import { ControlsStrip } from '../controls.js';
 import { ClarificationComposer } from './ClarificationComposer.js';
 import { OfflineAnswers } from '../cards/QueuedAnswer.js';
 import { StewardProcesses } from './StewardProcesses.js';
+import { TerminalInput, TerminalView } from './TerminalView.js';
 import { TranscriptLog } from './TranscriptLog.js';
 import { TaskStatusFacts } from '../status/StatusViews.js';
 import { useStewardTranscript } from './useStewardTranscript.js';
@@ -52,13 +54,16 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
   const permissions = open.filter((q) => q.kind === 'permission');
   const blocked = blockedOnUser(world, agentId, open);
   const task = agent?.taskId ? world.tasks[agent.taskId] : undefined;
+  // A terminal agent (P8-08): its screen, its text transcript folded below, and the Mac's keyboard.
+  const terminal = agent?.runtime === 'pty';
+  const live = status !== undefined && !ENDED_STATES.has(status.state);
 
   return (
     <section className="steward stw" aria-label={`view of ${name}`}>
       <StatusHeader agent={agent} status={status} blocked={blocked} />
       <TaskStatusFacts agentId={agentId} />
       <div className="stw-controls-row">
-        <Controls agentId={agentId} status={status} />
+        <Controls agentId={agentId} status={status} restartable={agent?.runtime === 'pty'} />
         {task && (
           // The task's own controls (P4-09), next to the agent's: reachable with the cards hidden.
           <ControlsStrip
@@ -96,7 +101,18 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
           onDismiss={() => setRefusal(undefined)}
         />
       )}
-      <TranscriptLog chunks={chunks} view={view} loadOlder={loadOlder} />
+      {terminal ? (
+        <>
+          <TerminalView chunks={chunks} />
+          <details className="stw-text-transcript">
+            <summary>Text transcript</summary>
+            <TranscriptLog chunks={chunks} view={view} loadOlder={loadOlder} />
+          </details>
+        </>
+      ) : (
+        <TranscriptLog chunks={chunks} view={view} loadOlder={loadOlder} />
+      )}
+      {terminal && live && <TerminalInput agentId={agentId} />}
       {clarification ? (
         <ClarificationComposer
           key={clarification.id}
@@ -105,10 +121,12 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
           onSent={() => setRefusal(undefined)}
         />
       ) : (
-        <p className="muted stw-readonly">
-          Read-only: Stewards take no messages; their supervisor speaks for you. A message box
-          appears here only while it asks a clarification question.
-        </p>
+        !terminal && (
+          <p className="muted stw-readonly">
+            Read-only: Stewards take no messages; their supervisor speaks for you. A message box
+            appears here only while it asks a clarification question.
+          </p>
+        )
       )}
     </section>
   );
@@ -189,7 +207,9 @@ function StatusHeader({
         </Fact>
         <Fact label="wall clock">
           {status
-            ? `${formatDuration(wallClockUsed(status, now))} / ${formatDuration(status.caps.wallClockMs.limit)}`
+            ? wallClockLimit(status.caps.wallClockMs) !== undefined
+              ? `${formatDuration(wallClockUsed(status, now))} / ${formatDuration(status.caps.wallClockMs.limit)}`
+              : formatDuration(wallClockUsed(status, now))
             : '—'}
         </Fact>
         {status?.progress && (
@@ -219,7 +239,16 @@ function Fact({
   );
 }
 
-function Controls({ agentId, status }: { agentId: Id; status: StatusRecord | undefined }) {
+function Controls({
+  agentId,
+  status,
+  restartable = false,
+}: {
+  agentId: Id;
+  status: StatusRecord | undefined;
+  /** Its runtime cannot resume a session (PTY): the action starts it again from its prompt. */
+  restartable?: boolean;
+}) {
   const api = useApi();
   const { run, error, busy } = useAction();
   const [confirmStop, setConfirmStop] = useState(false);
@@ -270,7 +299,7 @@ function Controls({ agentId, status }: { agentId: Id; status: StatusRecord | und
       )}
       {status?.state === 'interrupted' && (
         <button type="button" disabled={busy} onClick={() => void run(() => api.recover(agentId))}>
-          Resume session
+          {restartable ? 'Restart from its first prompt' : 'Resume session'}
         </button>
       )}
       <ErrorLine error={error} />

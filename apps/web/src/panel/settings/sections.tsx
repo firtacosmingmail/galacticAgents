@@ -1,5 +1,14 @@
-import { useId, useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import {
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from 'react';
 import type {
+  AgentRuntime,
   PermissionDecision,
   PermissionPolicy,
   QualityTier,
@@ -7,6 +16,7 @@ import type {
   Settings,
   SettingsPatch,
 } from '@galactic/protocol';
+import { ApiContext } from '../../console/hierarchy/shared.js';
 import { useSettingsData } from './SettingsData.js';
 import {
   CAP_FIELDS,
@@ -16,15 +26,18 @@ import {
   ENV_VARIABLES,
   isSpecTable,
   parseCaps,
+  parseTranscriptRetention,
   POLICY_ROWS,
   policyValue,
   refusalMessage,
   RESTART_FIELDS,
   specDefault,
+  transcriptRetentionDraft,
   validateProjectsRoot,
   validateRetention,
   withPolicyValue,
   type CapsDraft,
+  type TranscriptRetentionDraft,
 } from './settings-model.js';
 
 /**
@@ -324,6 +337,52 @@ function RetentionEditor({ id, draft, setDraft, disabled }: EditorProps<string>)
   );
 }
 
+function TranscriptRetentionEditor({
+  id,
+  draft,
+  setDraft,
+  disabled,
+}: EditorProps<TranscriptRetentionDraft>) {
+  return (
+    <div className="set-field">
+      <div className="set-inline">
+        <label htmlFor={`${id}-age`}>Remove agent output older than</label>
+        <input
+          id={`${id}-age`}
+          className="set-input set-input-num"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={3650}
+          step={1}
+          placeholder="keep"
+          value={draft.maxAgeDays}
+          disabled={disabled}
+          onChange={(e) => setDraft({ ...draft, maxAgeDays: e.target.value })}
+        />
+        <span className="set-muted">days</span>
+      </div>
+      <div className="set-inline">
+        <label htmlFor={`${id}-archived`}>Remove archived work’s output</label>
+        <input
+          id={`${id}-archived`}
+          className="set-input set-input-num"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={3650}
+          step={1}
+          placeholder="keep"
+          value={draft.archivedDays}
+          disabled={disabled}
+          onChange={(e) => setDraft({ ...draft, archivedDays: e.target.value })}
+        />
+        <span className="set-muted">days after it was archived</span>
+      </div>
+    </div>
+  );
+}
+
 function CapsEditor({ id, draft, setDraft, disabled }: EditorProps<CapsDraft>) {
   const parsed = parseCaps(draft);
   return (
@@ -385,6 +444,96 @@ function TierEditor({ id, draft, setDraft, disabled }: EditorProps<QualityTier>)
   );
 }
 
+type RuntimeChoice = { value: AgentRuntime | ''; label: string; hint: string };
+
+/** `''`: the spawning brain's own runtime (P8-07); always offered. */
+const SAME_AS_BRAIN: RuntimeChoice = {
+  value: '',
+  label: 'Same as its brain',
+  hint: 'the runtime of the Waykeeper or Harmonizer that starts it',
+};
+
+/** How each runtime is offered; `fake` (the dev adapter) never is. */
+const RUNTIME_LABELS: Partial<Record<AgentRuntime, { label: string; hint: string }>> = {
+  'claude-sdk': { label: 'Claude Code', hint: 'the Claude Agent SDK' },
+  acp: {
+    label: 'ACP agent',
+    hint: 'the agent set as acp.command (Codex, Gemini CLI, claude-agent-acp …)',
+  },
+  pty: {
+    label: 'Terminal agent',
+    hint: 'the command-line agent set as pty.command, driven through a terminal; only in trusted projects',
+  },
+};
+
+const choiceOf = (runtime: AgentRuntime, hint?: string): RuntimeChoice => ({
+  value: runtime,
+  label: RUNTIME_LABELS[runtime]?.label ?? runtime,
+  hint: hint ?? RUNTIME_LABELS[runtime]?.hint ?? runtime,
+});
+
+/**
+ * The runtimes this server has adapters for (`GET /api/runtimes`), without the dev-only `fake`;
+ * empty until it answers, or when it cannot be read.
+ */
+function useRegisteredRuntimes(): AgentRuntime[] {
+  const api = useContext(ApiContext);
+  const [runtimes, setRuntimes] = useState<AgentRuntime[]>([]);
+  useEffect(() => {
+    if (!api) return;
+    let cancelled = false;
+    api.runtimes().then(
+      (info) => {
+        if (cancelled || !Array.isArray(info?.runtimes)) return;
+        setRuntimes(info.runtimes.map((r) => r.name).filter((name) => name !== 'fake'));
+      },
+      () => {
+        // Unreadable: only the brain's own runtime (and the current value) is offered.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+  return runtimes;
+}
+
+function StewardRuntimeEditor({
+  id,
+  draft,
+  setDraft,
+  disabled,
+  settings,
+}: EditorProps<AgentRuntime | ''>) {
+  const registered = useRegisteredRuntimes();
+  const offered = [SAME_AS_BRAIN, ...registered.map((r) => choiceOf(r))];
+  // A saved value the panel does not offer (set in config.json or the environment) stays shown.
+  const saved = settings.stewardRuntime;
+  const choices =
+    saved && !offered.some((c) => c.value === saved)
+      ? [...offered, choiceOf(saved, 'set outside the panel')]
+      : offered;
+  return (
+    <fieldset className="set-field set-radios" disabled={disabled}>
+      <legend className="set-visually-hidden">Steward runtime</legend>
+      {choices.map((c) => (
+        <label key={c.value || 'brain'} className="set-radio">
+          <input
+            type="radio"
+            name={id}
+            value={c.value}
+            checked={draft === c.value}
+            onChange={() => setDraft(c.value)}
+          />
+          <span>
+            <strong>{c.label}</strong> <span className="set-muted">— {c.hint}</span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 function StewardSourcesEditor({ id, draft, setDraft, disabled }: EditorProps<boolean>) {
   return (
     <div className="set-field">
@@ -401,6 +550,35 @@ function StewardSourcesEditor({ id, draft, setDraft, disabled }: EditorProps<boo
       </label>
     </div>
   );
+}
+
+function BudgetWarnEditor({ id, draft, setDraft, disabled }: EditorProps<string>) {
+  return (
+    <div className="set-field set-inline">
+      <label htmlFor={id}>Warn when a budget is</label>
+      <input
+        id={id}
+        className="set-input set-input-num"
+        type="number"
+        inputMode="numeric"
+        min={1}
+        max={100}
+        step={1}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+      />
+      <span className="set-muted">% spent</span>
+    </div>
+  );
+}
+
+/** The budget warning threshold's draft (P8-01): a whole percentage from 1 to 100. */
+export function validateBudgetWarn(draft: string): string | undefined {
+  const n = Number(draft.trim());
+  return draft.trim() !== '' && Number.isInteger(n) && n >= 1 && n <= 100
+    ? undefined
+    : 'A whole percentage from 1 to 100.';
 }
 
 // --- the specs --------------------------------------------------------------------------------
@@ -442,7 +620,7 @@ export const CAPS: SectionSpec<CapsDraft> = {
   field: 'caps',
   title: 'Caps',
   intro:
-    'Hard limits that keep agents from running away. New agents get the new per-agent caps; running agents keep theirs, and lowering a cap stops nobody.',
+    'Hard limits that keep agents from running away. New agents get the new per-agent caps; running agents keep theirs, and lowering a cap stops nobody. The wall-clock cap stops Stewards (and agents started from the ops console) only; the Harmonizer and Waykeepers are bounded by their tool calls and the hierarchy.',
   fromSettings: (s) => capsDraft(s.caps),
   validate: (d) => (parseCaps(d).errors ? 'Fix the caps marked above.' : undefined),
   toPatch: (d, saved) => ({ caps: changedCaps(parseCaps(d, saved.caps).caps!, saved.caps) }),
@@ -471,9 +649,56 @@ export const STEWARD_SOURCES: SectionSpec<boolean> = {
   Editor: StewardSourcesEditor,
 };
 
+/**
+ * Transcript retention (P8-02). On the settings page only, not in the first-run wizard: the
+ * defaults suit a first run, and an older server without the setting leaves it out.
+ */
+export const TRANSCRIPT_RETENTION: SectionSpec<TranscriptRetentionDraft> = {
+  field: 'transcriptRetention',
+  title: 'Transcript retention',
+  intro:
+    'How long agents’ output (their replies, tool calls and thinking) is kept. Removed output is gone for good; the transcript and chat say where it was removed. Messages, questions, states and the replay history are always kept, and pinned work is never touched. Leave a field empty to keep that output forever. Changed only on this Mac.',
+  fromSettings: transcriptRetentionDraft,
+  validate: (d) => parseTranscriptRetention(d).error,
+  toPatch: (d) => ({ transcriptRetention: parseTranscriptRetention(d).value! }),
+  Editor: TranscriptRetentionEditor,
+};
+
+export const BUDGETS: SectionSpec<string> = {
+  field: 'budgets',
+  title: 'Budgets',
+  intro:
+    'A project or task may get a dollar budget on its card or its edit form. Spending is the cost the runtimes report (an estimate; notional under a subscription login); work whose cost is not reported is not held to its budget. At this share of a budget you are warned in the Harmonizer’s chat; at the budget, new agents for the work are refused and running ones go on.',
+  fromSettings: (s) => String(s.budgets?.warnAtPercent ?? 80),
+  validate: validateBudgetWarn,
+  toPatch: (d) => ({ budgets: { warnAtPercent: Number(d.trim()) } }),
+  Editor: BudgetWarnEditor,
+};
+
+/**
+ * The runtime of new Stewards (P8-07). After the wizard's sections: a second runtime is set up
+ * later, if ever. The server refuses a runtime it has no adapter for, with the reason.
+ */
+export const STEWARD_RUNTIME: SectionSpec<AgentRuntime | ''> = {
+  field: 'stewardRuntime',
+  title: 'Steward runtime',
+  intro:
+    'Which agent runtime new Stewards run on. The Harmonizer and Waykeepers always stay on their own runtime; running Stewards keep theirs. An ACP agent must be set up first (acp.command in config.json). An ACP agent may run a tool call before the permission table judges it: its own permission mode decides first, and GalacticAgents checks each call as it starts, stopping it or asking you when the table would not have allowed it — so set the agent’s own mode to its most careful one. A terminal agent (pty.command) runs commands GalacticAgents cannot see or judge at all: it runs only in projects whose permission table is “trusted” (elsewhere its Stewards fail to start, saying so, and a running one ends once the table stops allowing it), its questions come to you unless pty.clarificationPatterns lists them, it cannot resume after a restart, and it reports no cost.',
+  fromSettings: (s) => s.stewardRuntime ?? '',
+  validate: () => undefined,
+  toPatch: (d) => ({ stewardRuntime: d === '' ? null : d }),
+  Editor: StewardRuntimeEditor,
+};
+
 /** A section of any draft type (the list below mixes them; each is used with its own). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnySectionSpec = SectionSpec<any>;
+
+/**
+ * The settings page's sections after the wizard's (P8-01): set later, when a budget is in use,
+ * so they are not first-run steps.
+ */
+export const LATER_SECTIONS: readonly AnySectionSpec[] = [BUDGETS, STEWARD_RUNTIME];
 
 /** Every section, in the order the page and the wizard show them. */
 export const SECTIONS: readonly AnySectionSpec[] = [

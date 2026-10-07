@@ -2,3 +2,5 @@ node_modules
 dist
 pnpm-lock.yaml
 docs
+apps/desktop/src-tauri/target
+apps/desktop/src-tauri/gen
