@@ -11,6 +11,7 @@ import {
   StopProcessesBody,
   TerminalInputBody,
   type Actor,
+  type AgentCommandsResponse,
   type AnswerResponse,
   type ChatMessage,
   type ControlAction,
@@ -354,6 +355,19 @@ export function registerAgentRoutes(
         });
       }
       return { messages } satisfies MessagesResponse;
+    });
+
+    /**
+     * The slash commands the agent's live session offers (P8-13; SPEC proposed decision 115): what
+     * its runtime reported, read from the adapter (runtime state, never logged). `[]` for an agent
+     * without a live session or whose runtime has none; 404 for an unknown agent. Read-only, so
+     * open to remote clients too. The text is the runtime's (skill and plugin authors'): the page
+     * shows it as plain text.
+     */
+    app.get('/api/agents/:id/commands', async (req, reply) => {
+      const id = agentId(req);
+      if (!log.tables.agents.get(id)) return reply.code(404).send({ error: 'not_found' });
+      return { commands: await runtime.commands(id) } satisfies AgentCommandsResponse;
     });
 
     /**
