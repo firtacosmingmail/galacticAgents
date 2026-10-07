@@ -148,9 +148,14 @@ describe('the run routes (P9-08)', () => {
   it('refuses a stale confirmation with the current row, and a bad body', async () => {
     const s = await setup();
     const d = await s.command('echo one');
-    await s.composed.commands.updateDeliverable(d.id, { command: { line: 'echo two', cwd: s.ws } }, USER, {
-      origin: 'local',
-    });
+    await s.composed.commands.updateDeliverable(
+      d.id,
+      { command: { line: 'echo two', cwd: s.ws } },
+      USER,
+      {
+        origin: 'local',
+      },
+    );
     const stale = await s.call('POST', `/api/deliverables/${d.id}/runs`, { version: d.version });
     expect(stale.status).toBe(409);
     expect(stale.json).toMatchObject({
@@ -185,8 +190,12 @@ describe('the run routes (P9-08)', () => {
       expect(restart).toMatchObject({ status: 403, json: { error: 'remote_control' } });
       expect(s.composed.log.tables.runs.get(run.id)?.state).toBe('running');
       // Viewing works from the phone…
-      expect((await s.call('GET', `/api/deliverables/${d.id}/run-preview`, undefined, REMOTE)).status).toBe(200);
-      expect((await s.call('GET', `/api/runs/${run.id}/output`, undefined, REMOTE)).status).toBe(200);
+      expect(
+        (await s.call('GET', `/api/deliverables/${d.id}/run-preview`, undefined, REMOTE)).status,
+      ).toBe(200);
+      expect((await s.call('GET', `/api/runs/${run.id}/output`, undefined, REMOTE)).status).toBe(
+        200,
+      );
       // …and so does Stop.
       const stop = await s.call('POST', `/api/runs/${run.id}/stop`, undefined, REMOTE);
       expect(stop.status).toBe(200);

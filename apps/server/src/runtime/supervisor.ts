@@ -783,7 +783,9 @@ export class ProcessSupervisor {
         .then(() =>
           this.reapGroup(
             pgid,
-            typeof managed.reapMs === 'function' ? managed.reapMs() : (managed.reapMs ?? this.termMs),
+            typeof managed.reapMs === 'function'
+              ? managed.reapMs()
+              : (managed.reapMs ?? this.termMs),
           ),
         )
         .catch((error: unknown) => this.onError(error, spec.agentId))

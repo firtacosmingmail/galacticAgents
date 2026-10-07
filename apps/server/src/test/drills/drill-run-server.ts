@@ -59,7 +59,11 @@ export interface RunForked {
 }
 
 export function runDrillDirs(root: string) {
-  return { app: join(root, 'app'), data: join(root, 'data'), db: join(root, 'data', 'galactic.sqlite') };
+  return {
+    app: join(root, 'app'),
+    data: join(root, 'data'),
+    db: join(root, 'data', 'galactic.sqlite'),
+  };
 }
 
 async function readJson<T>(path: string): Promise<T> {

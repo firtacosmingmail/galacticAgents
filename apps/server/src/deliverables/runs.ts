@@ -371,19 +371,22 @@ export class RunService {
     let recorded: DeliverableRun;
     try {
       recorded = this.log.runCommand((ctx) =>
-        recordRunStarted(ctx,
-        {
-          runId,
-          deliverableId: row.id,
-          line,
-          cwd: cwd.cwd,
-          meta: {
-            pid: proc.pid,
-            ...(typeof detected?.body === 'string' ? { body: detected.body } : {}),
-            ...(confirmed.line !== undefined && line !== row.command!.line ? { edited: true } : {}),
+        recordRunStarted(
+          ctx,
+          {
+            runId,
+            deliverableId: row.id,
+            line,
+            cwd: cwd.cwd,
+            meta: {
+              pid: proc.pid,
+              ...(typeof detected?.body === 'string' ? { body: detected.body } : {}),
+              ...(confirmed.line !== undefined && line !== row.command!.line
+                ? { edited: true }
+                : {}),
+            },
           },
-        },
-        by,
+          by,
         ),
       ).value;
     } catch (error) {
@@ -811,7 +814,11 @@ export class RunService {
       const since = Date.parse(d.lastRun!.startedAt);
       try {
         stopped.push(
-          ...(await this.sweepCarriers(runId, Number.isNaN(since) ? 0 : since, Date.now() + this.termMs)),
+          ...(await this.sweepCarriers(
+            runId,
+            Number.isNaN(since) ? 0 : since,
+            Date.now() + this.termMs,
+          )),
         );
       } catch (error) {
         this.onError(error, `run ${runId}: restart sweep`);
@@ -880,7 +887,10 @@ export class RunService {
         },
       };
     }
-    if (check.type !== 'folder' || !['workspace', 'repository', 'deliverables'].includes(check.where)) {
+    if (
+      check.type !== 'folder' ||
+      !['workspace', 'repository', 'deliverables'].includes(check.where)
+    ) {
       return {
         ok: false,
         refusal: { code: 'folder', message: 'A run happens in the project folder.' },

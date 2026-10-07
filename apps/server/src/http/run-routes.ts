@@ -106,7 +106,8 @@ export function registerRunRoutes(
         return reply.code(404).send({ error: 'not_found', message: `no run ${runId}` });
       }
       const q = RunOutputQuery.safeParse(req.query ?? {});
-      if (!q.success) return reply.code(400).send({ error: 'invalid_query', issues: q.error.issues });
+      if (!q.success)
+        return reply.code(400).send({ error: 'invalid_query', issues: q.error.issues });
       return output.page(runId, q.data.after ?? 0, q.data.limit) satisfies RunOutputResponse;
     });
 

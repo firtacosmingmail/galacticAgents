@@ -35,9 +35,7 @@ export function runOutputStore(db: Database, maxBytes: () => number): ChunkStore
   const since = db.prepare(
     'SELECT run_id, seq, at, chunk FROM run_output WHERE run_id = ? AND seq > ? ORDER BY seq LIMIT ?',
   );
-  const max = db.prepare(
-    'SELECT COALESCE(MAX(seq), 0) AS seq FROM run_output WHERE run_id = ?',
-  );
+  const max = db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM run_output WHERE run_id = ?');
   const total = db.prepare(
     'SELECT COALESCE(SUM(length(CAST(chunk AS BLOB))), 0) AS n FROM run_output WHERE run_id = ?',
   );

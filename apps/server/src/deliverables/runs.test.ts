@@ -199,8 +199,8 @@ async function setup(
 const rowOf = (s: Setup, id: string) => s.composed.log.tables.deliverables.get(id)!;
 const runOf = (s: Setup, id: string) => s.composed.log.tables.runs.get(id)!;
 const outputOf = (s: Setup, runId: string) =>
-  s.composed.runOutput!
-    .page(runId, 0, 5_000)
+  s.composed
+    .runOutput!.page(runId, 0, 5_000)
     .chunks.map((c) => c.chunk)
     .join('');
 
@@ -219,7 +219,12 @@ describe('a run of the fixture server (P9-08)', () => {
     const s = await setup();
     const d = await s.command(`${NODE} server.mjs`);
     const run = await s.composed.runs!.start(d.id, { version: d.version }, USER);
-    expect(run).toMatchObject({ deliverableId: d.id, state: 'running', cwd: s.ws, startedBy: USER });
+    expect(run).toMatchObject({
+      deliverableId: d.id,
+      state: 'running',
+      cwd: s.ws,
+      startedBy: USER,
+    });
     expect(rowOf(s, d.id).lastRun).toMatchObject({ runId: run.id, state: 'running' });
     const streamed: RunOutputChunk[] = [];
     const off = s.composed.runOutput!.subscribe(run.id, 0, (chunks) => streamed.push(...chunks));
@@ -227,7 +232,12 @@ describe('a run of the fixture server (P9-08)', () => {
     const pids = await s.pidsOf();
 
     // Output: streamed, stored, and the key redacted before either.
-    await eventually(() => streamed.map((c) => c.chunk).join('').includes('ready on'));
+    await eventually(() =>
+      streamed
+        .map((c) => c.chunk)
+        .join('')
+        .includes('ready on'),
+    );
     await eventually(() => outputOf(s, run.id).includes('[redacted:'));
     const text = streamed.map((c) => c.chunk).join('');
     expect(text).not.toContain('sk-ant-');
@@ -286,9 +296,9 @@ describe('starting a run (decision 129)', () => {
     const d = await s.command('sleep 30');
     const other = await s.command('sleep 30', { title: 'Other' });
     const runs = s.composed.runs!;
-    expect((await refusal(runs.start(d.id, { version: d.version }, { type: 'agent', id: 'a-1' }))).code).toBe(
-      'invalid',
-    );
+    expect(
+      (await refusal(runs.start(d.id, { version: d.version }, { type: 'agent', id: 'a-1' }))).code,
+    ).toBe('invalid');
     const run = await runs.start(d.id, { version: d.version }, USER);
     started.add(run.meta!['pid'] as number);
     expect((await refusal(runs.start(d.id, { version: d.version }, USER))).code).toBe('running');

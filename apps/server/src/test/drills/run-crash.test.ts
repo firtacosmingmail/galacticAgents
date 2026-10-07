@@ -64,7 +64,9 @@ function readJson<T>(path: string): T | undefined {
 }
 
 /** Runs the drill server until it is ready (or paused after the run's fork), then kills it. */
-async function killMidRun(pause: boolean): Promise<{ root: string; pids: RunPids; ready?: RunReady }> {
+async function killMidRun(
+  pause: boolean,
+): Promise<{ root: string; pids: RunPids; ready?: RunReady }> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-run-crash-')));
   roots.push(root);
   const child = spawn(
@@ -149,9 +151,7 @@ describe('a server killed during a managed run (P9-08 drill)', () => {
     const { root, pids } = await killMidRun(true);
     expect([pids.server, pids.bg, pids.escaped].every(alive)).toBe(true);
     const { composed, launches, recovered } = await nextLife(root);
-    expect(launches.taken.map((t) => t.agentId)).toEqual([
-      expect.stringMatching(/^run:/),
-    ]);
+    expect(launches.taken.map((t) => t.agentId)).toEqual([expect.stringMatching(/^run:/)]);
     expect(launches.runs).toHaveLength(1);
     expect(recovered.stopped).toContain(pids.escaped);
     expect(await eventually(() => ![pids.server, pids.bg, pids.escaped].some(alive), 8_000)).toBe(
