@@ -177,12 +177,15 @@ export const declareDeliverableTool: BrainTool = {
     '(a Waykeeper: the project itself or one of its tasks; the Harmonizer: a standalone task). ' +
     'Use it for what a Steward on another runtime listed under "Deliverables:" in its report ' +
     '(it cannot declare them itself), and for a project-level command such as the dev server ' +
-    'instead of leaving one running. Paths must be inside the project (or the task\'s ' +
-    'worktree); relative paths resolve against the task\'s worktree or the project folder.',
+    "instead of leaving one running. Paths must be inside the project (or the task's " +
+    "worktree); relative paths resolve against the task's worktree or the project folder.",
   inputSchema: {
     type: 'object',
     properties: {
-      taskId: { type: 'string', description: 'The task it belongs to (omit for the project itself).' },
+      taskId: {
+        type: 'string',
+        description: 'The task it belongs to (omit for the project itself).',
+      },
       projectId: {
         type: 'string',
         description: 'The project (default: yours, for a Waykeeper).',

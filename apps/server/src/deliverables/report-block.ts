@@ -64,7 +64,12 @@ export function parseReportBlock(text: string, cwd?: string): ReportBlock | unde
   return block;
 }
 
-const unquote = (s: string) => s.trim().replace(/^`(.*)`$/, '$1').replace(/^"(.*)"$/, '$1').trim();
+const unquote = (s: string) =>
+  s
+    .trim()
+    .replace(/^`(.*)`$/, '$1')
+    .replace(/^"(.*)"$/, '$1')
+    .trim();
 
 function parseItem(body: string, cwd: string | undefined): ListedDeliverable | undefined {
   const parts = body.split('|').map(unquote);
@@ -97,8 +102,7 @@ export function reportBlockText(block: ReportBlock, taskId: string | undefined):
   const lines = [
     `Deliverables it listed (its runtime cannot declare them; declare the ones the user will want with declare_deliverable${taskId ? `, taskId ${taskId}` : ''}, and leave out scratch):`,
     ...block.items.map(
-      (item, i) =>
-        `${i + 1}. ${JSON.stringify({ ...(taskId ? { taskId } : {}), ...item })}`,
+      (item, i) => `${i + 1}. ${JSON.stringify({ ...(taskId ? { taskId } : {}), ...item })}`,
     ),
     ...(block.dropped > 0 ? [`(${block.dropped} more not shown: ask it which matter)`] : []),
     ...(block.skipped.length > 0

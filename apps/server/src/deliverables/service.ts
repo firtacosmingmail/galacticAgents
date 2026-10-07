@@ -154,7 +154,7 @@ export class DeliverableService {
         throw new DomainError(
           'invalid',
           `${input.path} is in a temporary folder, and copying it into the project's ` +
-            "deliverables folder is not available on this server yet: save it inside your working folder and declare it there",
+            'deliverables folder is not available on this server yet: save it inside your working folder and declare it there',
         );
       }
       const kept = await this.opts.copies.keep({
@@ -296,7 +296,10 @@ export class DeliverableService {
   ): { projectId?: Id; taskId?: Id; task?: Task; project?: Project } {
     if (agent.role === 'steward') {
       if (!agent.taskId) throw new DomainError('invalid', `Steward ${agent.id} has no task`);
-      if ((target.taskId && target.taskId !== agent.taskId) || (target.projectId && !target.taskId)) {
+      if (
+        (target.taskId && target.taskId !== agent.taskId) ||
+        (target.projectId && !target.taskId)
+      ) {
         throw new DomainError(
           'invalid',
           `a Steward can ${what} the deliverables of its own task (${agent.taskId}) only`,
@@ -372,7 +375,10 @@ export class DeliverableService {
     if (PATH_KINDS.has(kind)) {
       if (!given('path')) throw new DomainError('invalid', `a ${kind} deliverable needs a path`);
       if (given('command') || given('url')) {
-        throw new DomainError('invalid', `a ${kind} deliverable has a path only (no command, no url)`);
+        throw new DomainError(
+          'invalid',
+          `a ${kind} deliverable has a path only (no command, no url)`,
+        );
       }
       const checked = this.checkAgentPath(agent, owner, input.path!, opts);
       checkKindFits(kind, checked, input.path!);
@@ -390,14 +396,21 @@ export class DeliverableService {
       };
     }
     if (kind === 'command') {
-      if (!given('command')) throw new DomainError('invalid', 'a command deliverable needs a command line');
+      if (!given('command'))
+        throw new DomainError('invalid', 'a command deliverable needs a command line');
       if (given('url')) throw new DomainError('invalid', 'a command deliverable has no url');
       const line = input.command!.trim();
       if (line.length > COMMAND_LINE_MAX) {
-        throw new DomainError('invalid', `a command line is at most ${COMMAND_LINE_MAX} characters`);
+        throw new DomainError(
+          'invalid',
+          `a command line is at most ${COMMAND_LINE_MAX} characters`,
+        );
       }
       if (/[\0\r\n]/.test(line)) {
-        throw new DomainError('invalid', 'a command is one line (no newlines): put several steps in a script and declare that');
+        throw new DomainError(
+          'invalid',
+          'a command is one line (no newlines): put several steps in a script and declare that',
+        );
       }
       if (containsSecret(line)) {
         throw new DomainError(
@@ -411,24 +424,35 @@ export class DeliverableService {
         throw new DomainError('invalid', `${folder} is not a folder: a command runs in a folder`);
       }
       if (checked.where === 'stray') {
-        throw new DomainError('invalid', 'a command runs in the project’s folder, not a temporary one');
+        throw new DomainError(
+          'invalid',
+          'a command runs in the project’s folder, not a temporary one',
+        );
       }
       return { command: { line, cwd: checked.path } };
     }
     // url
     if (!given('url')) throw new DomainError('invalid', 'a url deliverable needs an address (url)');
     if (given('command') || given('path')) {
-      throw new DomainError('invalid', 'a url deliverable has an address only (no path, no command)');
+      throw new DomainError(
+        'invalid',
+        'a url deliverable has an address only (no path, no command)',
+      );
     }
     const url = input.url!.trim();
-    if (url.length > URL_MAX) throw new DomainError('invalid', `an address is at most ${URL_MAX} characters`);
-    if (!isDeliverableUrl(url)) throw new DomainError('invalid', 'an address is http or https only');
+    if (url.length > URL_MAX)
+      throw new DomainError('invalid', `an address is at most ${URL_MAX} characters`);
+    if (!isDeliverableUrl(url))
+      throw new DomainError('invalid', 'an address is http or https only');
     const parsed = new URL(url);
     if (parsed.username || parsed.password) {
       throw new DomainError('invalid', 'an address with a user name or password is refused');
     }
     if (containsSecret(url)) {
-      throw new DomainError('invalid', 'the address contains what looks like a secret (a token): leave it out');
+      throw new DomainError(
+        'invalid',
+        'the address contains what looks like a secret (a token): leave it out',
+      );
     }
     return { url };
   }
@@ -443,7 +467,10 @@ export class DeliverableService {
   }
 
   private roots(owner: { taskId?: Id; task?: Task; project?: Project }): DeliverableRoots {
-    const places = { dataDir: this.opts.dataDir, ...(this.opts.home ? { home: this.opts.home } : {}) };
+    const places = {
+      dataDir: this.opts.dataDir,
+      ...(this.opts.home ? { home: this.opts.home } : {}),
+    };
     if (owner.project) {
       const repoRoot = (owner.project.meta?.['workspace'] as { repoRoot?: unknown } | undefined)
         ?.repoRoot;
@@ -461,7 +488,10 @@ export class DeliverableService {
     }
     const workspace = owner.task?.meta?.['workspace'];
     if (typeof workspace !== 'string' || workspace === '') {
-      throw new DomainError('invalid', 'this task has no folder yet: nothing can be declared in it');
+      throw new DomainError(
+        'invalid',
+        'this task has no folder yet: nothing can be declared in it',
+      );
     }
     const folder = owner.task?.meta?.['deliverablesFolder'];
     return deliverableRoots(
@@ -499,7 +529,12 @@ export class DeliverableService {
   private sameAs(
     owner: { projectId?: Id; taskId?: Id },
     kind: DeliverableKind,
-    shape: { location?: DeliverableLocation; command?: DeliverableCommand; url?: string; stray?: PathAccepted },
+    shape: {
+      location?: DeliverableLocation;
+      command?: DeliverableCommand;
+      url?: string;
+      stray?: PathAccepted;
+    },
   ): Deliverable | undefined {
     const rows = owner.taskId
       ? this.opts.tables.deliverables.of({ taskId: owner.taskId })
@@ -582,7 +617,10 @@ function agentText(value: unknown, what: string, max: number): string {
   if (typeof value !== 'string') throw new DomainError('invalid', `${what} must be a string`);
   const text = value.trim();
   if (text.length > max) {
-    throw new DomainError('invalid', `a ${what} is at most ${max} characters (this one has ${text.length})`);
+    throw new DomainError(
+      'invalid',
+      `a ${what} is at most ${max} characters (this one has ${text.length})`,
+    );
   }
   return redactSecrets(text);
 }
@@ -596,7 +634,8 @@ function checkKindFits(kind: DeliverableKind, checked: PathAccepted, path: strin
     throw new DomainError('invalid', `${path} is a file: declare it as kind file`);
   }
   if (kind === 'image') {
-    if (checked.type !== 'file') throw new DomainError('invalid', `${path} is a folder, not an image`);
+    if (checked.type !== 'file')
+      throw new DomainError('invalid', `${path} is a folder, not an image`);
     if (!IMAGE_TYPES[extensionOf(checked.path)]) {
       throw new DomainError(
         'invalid',

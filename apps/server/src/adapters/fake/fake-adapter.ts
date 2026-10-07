@@ -254,7 +254,13 @@ export class FakeAdapter implements AgentAdapter {
     this.sessionStore.set(ref, startAt);
     // A resumed brain whose first turn was done: the resume prompt is its next turn (P2-16). A
     // Steward's server tools (P9-04) do not make it a brain.
-    if (resumed && tools.size > 0 && opts.role !== 'steward' && startAt >= scenario.steps.length && opts.prompt) {
+    if (
+      resumed &&
+      tools.size > 0 &&
+      opts.role !== 'steward' &&
+      startAt >= scenario.steps.length &&
+      opts.prompt
+    ) {
       session.messageCount++;
       const steps = scenario.onMessage?.(opts.prompt, session.messageCount) ?? echo(opts.prompt);
       queueMicrotask(() => void this.runTurn(session, steps, 0, undefined));

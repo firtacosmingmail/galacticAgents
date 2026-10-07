@@ -354,11 +354,12 @@ describe('the declaration limits (P9-04; decision 120)', () => {
       perAgentPerHour: 5,
       perProject: 200,
     });
-    expect(new SettingsService({ config: loadConfig(env).config, home }).current().deliverables)
-      .toEqual({
-        ide: 'auto',
-        declarations: { ...DEFAULT_DECLARATION_LIMITS, perTask: 3, perAgentPerHour: 5 },
-      });
+    expect(
+      new SettingsService({ config: loadConfig(env).config, home }).current().deliverables,
+    ).toEqual({
+      ide: 'auto',
+      declarations: { ...DEFAULT_DECLARATION_LIMITS, perTask: 3, perAgentPerHour: 5 },
+    });
   });
 
   it('are changed only from this machine unless autoApproveRemote', () => {

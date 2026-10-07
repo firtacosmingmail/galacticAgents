@@ -76,7 +76,8 @@ export function reportText(
       ? `${body.slice(0, MAX_REPORT_CHARS)} … (cut; the whole report is in its transcript)`
       : body;
   if (cut === '') return `${what}: the Steward ended its turn without a report.`;
-  const listed = steward && !stewardDeclares(steward.runtime) ? listedText(body, task, steward) : '';
+  const listed =
+    steward && !stewardDeclares(steward.runtime) ? listedText(body, task, steward) : '';
   return `${what}: the Steward ended its turn. Its report: ${cut}${listed ? `\n\n${listed}` : ''}`;
 }
 
