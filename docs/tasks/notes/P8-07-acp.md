@@ -168,8 +168,8 @@ about still reaches the user (a call the agent refused never ran, and its own de
 `ask`); "always" is never chosen; the question-tool exemption covers only calls the table cannot
 place (a `Bash` named by an elicitation is still judged).
 
-**After the fixes: 22 passed, 0 failed, 0 skipped** — first full rerun 144 s, second full run
-recorded below — with no `claude-agent-acp` process left behind.
+**After the fixes: 22 passed, 0 failed, 0 skipped**, twice — full reruns of 144 s and 159 s (the
+second after every gate was green) — with no `claude-agent-acp` process left behind.
 
 What the run settled about `claude-agent-acp` 0.86.0:
 
