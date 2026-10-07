@@ -15,6 +15,7 @@ import { formatCost, formatDuration } from '../agent-cards-model.js';
 import { useSettingsData } from '../settings/SettingsData.js';
 import { brainView, useDockView, type DockView } from './dock-view.js';
 import { ProjectDeliverables } from '../deliverables/DeliverablesList.js';
+import { liveRunCount } from '../deliverables/runs-model.js';
 import {
   budgetText,
   COST_CAVEAT,
@@ -89,13 +90,23 @@ export function BudgetFact({ label, budget }: { label: string; budget: BudgetUsa
  * Waykeeper's has a third view, its project's Deliverables (P9-09: "Chat | Status |
  * Deliverables").
  */
-export function DockViewToggle({ role = 'harmonizer' }: { role?: 'harmonizer' | 'waykeeper' }) {
+export function DockViewToggle({
+  role = 'harmonizer',
+  projectId,
+}: {
+  role?: 'harmonizer' | 'waykeeper';
+  /** The Waykeeper's project: its Deliverables button shows "▶" while one of its runs lives. */
+  projectId?: Id | undefined;
+}) {
   const view = brainView(
     useDockView((s) => s.view),
     role,
   );
   const setView = useDockView((s) => s.setView);
-  const option = (value: DockView, label: string) => (
+  const running = useAppStore((s) =>
+    role === 'waykeeper' && projectId ? liveRunCount(s.world, projectId) : 0,
+  );
+  const option = (value: DockView, label: string, extra?: ReactNode) => (
     <button
       type="button"
       className={`sts-toggle-option${view === value ? ' is-on' : ''}`}
@@ -103,6 +114,7 @@ export function DockViewToggle({ role = 'harmonizer' }: { role?: 'harmonizer' | 
       onClick={() => setView(value)}
     >
       {label}
+      {extra}
     </button>
   );
   return (
@@ -117,7 +129,20 @@ export function DockViewToggle({ role = 'harmonizer' }: { role?: 'harmonizer' | 
     >
       {option('chat', 'Chat')}
       {option('status', 'Status')}
-      {role === 'waykeeper' && option('deliverables', 'Deliverables')}
+      {role === 'waykeeper' &&
+        option(
+          'deliverables',
+          'Deliverables',
+          running > 0 ? (
+            <span className="sts-running" title={`${running} running`}>
+              <span aria-hidden="true"> ▶</span>
+              <span className="pnl-visually-hidden">
+                {' '}
+                ({running} {running === 1 ? 'command' : 'commands'} running)
+              </span>
+            </span>
+          ) : undefined,
+        )}
     </span>
   );
 }

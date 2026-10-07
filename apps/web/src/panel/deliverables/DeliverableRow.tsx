@@ -12,6 +12,7 @@ import { ApiError } from '../../console/api.js';
 import { actorLabel, ErrorLine, useApi } from '../../console/hierarchy/shared.js';
 import { useAppStore } from '../../state/store.js';
 import { ConfirmBox } from '../controls.js';
+import { RunPanel } from './RunPanel.js';
 import {
   addedByText,
   KIND_LABEL,
@@ -178,9 +179,15 @@ export function DeliverableRow({
           </p>
           <p className="dlv-where muted">
             {where.text} {where.path !== undefined && <code>{where.path}</code>}
-            {row.command.detectedFrom && <> · from {row.command.detectedFrom}</>} ·{' '}
-            <span className="dlv-run">{runStateText(row.lastRun)}</span>
+            {row.command.detectedFrom && <> · from {row.command.detectedFrom}</>}
+            {removed && (
+              <>
+                {' '}
+                · <span className="dlv-run">{runStateText(row.lastRun)}</span>
+              </>
+            )}
           </p>
+          {!removed && <RunPanel row={row} rules={rules} />}
         </>
       ) : row.kind === 'url' ? (
         <p className="dlv-where">

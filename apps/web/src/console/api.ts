@@ -29,7 +29,12 @@ import type {
   ProposalDecisionBody,
   RestartHarmonizerResponse,
   RevealFolderBody,
+  RunOutputResponse,
+  RunPreviewResponse,
+  RunsResponse,
   RuntimesInfo,
+  StartRunBody,
+  StartRunResponse,
   SendBody,
   SendResponse,
   SettingsPatch,
@@ -248,6 +253,38 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
       ),
     /** Each `deliverables/` folder's size on disk (decision 122). */
     deliverablesUsage: () => call<DeliverablesUsageResponse>('GET', '/api/deliverables/usage'),
+
+    // -- managed runs (P9-08 routes, P9-10 panel; TECHNOLOGY §9.8) ------------------------------
+    /**
+     * What the Run dialog shows (decision 129): the stored line, or `line` as the user edited it
+     * (its own warnings and its own `confirmation`). Read only; remote clients too.
+     */
+    runPreview: (id: string, line?: string) =>
+      line === undefined
+        ? call<RunPreviewResponse>('GET', `/api/deliverables/${encodeURIComponent(id)}/run-preview`)
+        : call<RunPreviewResponse>(
+            'POST',
+            `/api/deliverables/${encodeURIComponent(id)}/run-preview`,
+            { line },
+          ),
+    /** Run, after the confirmation (the Mac only, decision 131). */
+    startRun: (id: string, body: StartRunBody) =>
+      call<StartRunResponse>('POST', `/api/deliverables/${encodeURIComponent(id)}/runs`, body),
+    /** Stop, after the panel's confirmation (the phone too, decision 131). */
+    stopRun: (runId: string) =>
+      call<StartRunResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/stop`),
+    /** Restart with a new confirmation (the Mac only). */
+    restartRun: (runId: string, body: StartRunBody) =>
+      call<StartRunResponse>('POST', `/api/runs/${encodeURIComponent(runId)}/restart`, body),
+    /** A command's runs, newest first (at most 50). */
+    runs: (id: string) =>
+      call<RunsResponse>('GET', `/api/deliverables/${encodeURIComponent(id)}/runs`),
+    /** A run's output after `after` (a `seq`), oldest first, `limit` chunks at most. */
+    runOutput: (runId: string, query: { after?: number; limit?: number } = {}) =>
+      call<RunOutputResponse>(
+        'GET',
+        `/api/runs/${encodeURIComponent(runId)}/output${queryString(query)}`,
+      ),
   };
 }
 

@@ -405,7 +405,10 @@ function MainHeader({
         />
       )}
       {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && (
-        <DockViewToggle role={agent?.role === 'waykeeper' ? 'waykeeper' : 'harmonizer'} />
+        <DockViewToggle
+          role={agent?.role === 'waykeeper' ? 'waykeeper' : 'harmonizer'}
+          projectId={agent?.role === 'waykeeper' ? agent.projectId : undefined}
+        />
       )}
       {toggle && (
         <button
