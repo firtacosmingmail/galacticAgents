@@ -278,6 +278,7 @@ function NavRow({
           kind={item.kind}
           id={item.id}
           label={item.label}
+          selection={item.selection}
           onDone={() => setActing(false)}
         />
       )}

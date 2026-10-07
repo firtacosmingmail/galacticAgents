@@ -13,7 +13,8 @@ import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy
 import { Beacon, NavLink } from '../Navigation.js';
 import { formatCost, formatDuration } from '../agent-cards-model.js';
 import { useSettingsData } from '../settings/SettingsData.js';
-import { useDockView, type DockView } from './dock-view.js';
+import { brainView, useDockView, type DockView } from './dock-view.js';
+import { ProjectDeliverables } from '../deliverables/DeliverablesList.js';
 import {
   budgetText,
   COST_CAVEAT,
@@ -83,9 +84,16 @@ export function BudgetFact({ label, budget }: { label: string; budget: BudgetUsa
 
 // --- the dock's switch ----------------------------------------------------------------------------
 
-/** The dock bar's "Chat | Status" switch (Harmonizer and Waykeepers), remembered per browser. */
-export function DockViewToggle() {
-  const view = useDockView((s) => s.view);
+/**
+ * The dock bar's "Chat | Status" switch (Harmonizer and Waykeepers), remembered per browser; a
+ * Waykeeper's has a third view, its project's Deliverables (P9-09: "Chat | Status |
+ * Deliverables").
+ */
+export function DockViewToggle({ role = 'harmonizer' }: { role?: 'harmonizer' | 'waykeeper' }) {
+  const view = brainView(
+    useDockView((s) => s.view),
+    role,
+  );
   const setView = useDockView((s) => s.setView);
   const option = (value: DockView, label: string) => (
     <button
@@ -98,9 +106,18 @@ export function DockViewToggle() {
     </button>
   );
   return (
-    <span className="sts-toggle" role="group" aria-label="show the chat or the status">
+    <span
+      className="sts-toggle"
+      role="group"
+      aria-label={
+        role === 'waykeeper'
+          ? 'show the chat, the status or the deliverables'
+          : 'show the chat or the status'
+      }
+    >
       {option('chat', 'Chat')}
       {option('status', 'Status')}
+      {role === 'waykeeper' && option('deliverables', 'Deliverables')}
     </span>
   );
 }
@@ -111,20 +128,29 @@ export function DockViewToggle() {
  * while the dock is minimised: its scroll position, its live thread and the draft survive.
  */
 export function BrainDock({ agent, children }: { agent: Agent; children: ReactNode }) {
-  const view = useDockView((s) => s.view);
-  const status = view === 'status';
+  const view = brainView(
+    useDockView((s) => s.view),
+    agent.role === 'waykeeper' ? 'waykeeper' : 'harmonizer',
+  );
+  const hidden = view !== 'chat';
+  const projectId = agent.role === 'waykeeper' ? agent.projectId : undefined;
   return (
     <>
       <div
-        className={`sts-pane sts-pane-chat${status ? ' is-hidden' : ''}`}
-        inert={status}
-        {...(status ? { 'aria-hidden': true } : {})}
+        className={`sts-pane sts-pane-chat${hidden ? ' is-hidden' : ''}`}
+        inert={hidden}
+        {...(hidden ? { 'aria-hidden': true } : {})}
       >
         {children}
       </div>
-      {status && (
+      {view === 'status' && (
         <div className="sts-pane sts-pane-status">
           <StatusPane agent={agent} />
+        </div>
+      )}
+      {view === 'deliverables' && projectId && (
+        <div className="sts-pane sts-pane-status sts-pane-deliverables">
+          <ProjectDeliverables projectId={projectId} />
         </div>
       )}
     </>

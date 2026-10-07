@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { HistoryWorkDetail } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { StatePill, useApi } from '../../console/hierarchy/shared.js';
+import { HistoryDeliverables } from '../deliverables/DeliverablesList.js';
 import {
   AgentLink,
   byLabel,
@@ -185,6 +186,11 @@ export function WorkInspector({
               </ul>
             </div>
           )}
+
+          {/* What the work produced (decision 132): kept with it, removed rows included. */}
+          <div className="his-block">
+            <HistoryDeliverables key={key} target={target} />
+          </div>
 
           {detail.agents.length > 0 && (
             <div className="his-block">
