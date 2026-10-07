@@ -258,3 +258,70 @@ describe('transcript retention settings (P8-02)', () => {
     expect(allowed.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
   });
 });
+
+describe('the IDE setting (P9-03; decision 127)', () => {
+  function withIdes(installed: readonly string[] | undefined, supported = true) {
+    const s = setup();
+    const settings = new SettingsService({
+      config: s.config,
+      home: s.home,
+      ides: { supported, installedBundleIds: () => installed },
+    });
+    return { ...s, settings };
+  }
+
+  it('defaults to auto, saves an installed IDE, applies it live and survives a restart', () => {
+    const { env, config, settings, file } = withIdes([
+      'com.jetbrains.WebStorm',
+      'com.microsoft.VSCode',
+    ]);
+    expect(settings.current().deliverables).toEqual({ ide: 'auto' });
+    const res = settings.update({ deliverables: { ide: 'com.microsoft.VSCode' } }, local);
+    expect(res.settings.deliverables?.ide).toBe('com.microsoft.VSCode');
+    expect(config.deliverables?.ide).toBe('com.microsoft.VSCode'); // the opener reads it live
+    expect(file()['deliverables']).toEqual({ ide: 'com.microsoft.VSCode' });
+    expect(loadConfig(env).config.deliverables?.ide).toBe('com.microsoft.VSCode');
+    expect(settings.update({ deliverables: { ide: 'auto' } }, local).settings.deliverables).toEqual(
+      { ide: 'auto' },
+    );
+    expect(file()['deliverables']).toEqual({ ide: 'auto' });
+  });
+
+  it('refuses a bundle id that is not a detected IDE, writing nothing', () => {
+    const { settings, file } = withIdes(['com.jetbrains.WebStorm']);
+    const before = file();
+    for (const ide of ['com.microsoft.VSCode', 'com.apple.Terminal']) {
+      const r = refusal(() => settings.update({ deliverables: { ide } }, local));
+      expect(r?.code).toBe('invalid');
+      expect(r?.message).toMatch(/not an IDE installed on this Mac \(installed: com\.jetbrains/);
+    }
+    expect(file()).toEqual(before);
+    // Without a detection (or an opener) only auto is accepted.
+    const none = withIdes(undefined).settings;
+    const webstorm = { deliverables: { ide: 'com.jetbrains.WebStorm' } };
+    expect(refusal(() => none.update(webstorm, local))?.code).toBe('invalid');
+    expect(none.update({ deliverables: { ide: 'auto' } }, local).settings.deliverables?.ide).toBe(
+      'auto',
+    );
+  });
+
+  it('cannot be changed off macOS', () => {
+    const { settings } = withIdes([], false);
+    const webstorm = { deliverables: { ide: 'com.jetbrains.WebStorm' } };
+    expect(refusal(() => settings.update(webstorm, local))?.message).toMatch(
+      /does not run on a Mac/,
+    );
+  });
+
+  it('is changed only from this machine unless autoApproveRemote (decisions 51, 131)', () => {
+    const { settings, file } = withIdes(['com.jetbrains.WebStorm']);
+    const before = file();
+    const patch = { deliverables: { ide: 'com.jetbrains.WebStorm' } };
+    for (const write of [{ origin: 'remote' as const }, {}]) {
+      expect(refusal(() => settings.update(patch, write))?.code).toBe('remote_settings');
+    }
+    expect(file()).toEqual(before);
+    const trusted = settings.update(patch, { origin: 'remote', autoApproveRemote: true });
+    expect(trusted.settings.deliverables?.ide).toBe('com.jetbrains.WebStorm');
+  });
+});
