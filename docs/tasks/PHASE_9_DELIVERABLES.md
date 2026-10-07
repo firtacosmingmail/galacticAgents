@@ -1,7 +1,7 @@
 # Phase 9 — Deliverables
 
-**Current task:** — (not started; wave 1 is P9-01, P9-02, P9-03) · **Task status:** —
-**Phase status:** not started (0/13 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
+**Current task:** P9-01, P9-02, P9-03 (wave 1, branch `p9-wave1-model-paths-opener`) · **Task status:** in progress
+**Phase status:** in progress (0/13 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -49,17 +49,17 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 ## Tasks
 
 ### P9-01 — Deliverables domain model, protocol and migration
-- **Status:** todo · **Depends on:** — · **Parallel with:** P9-02, P9-03
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P9-02, P9-03
 - Migration 0014 (`deliverables`, `deliverable_runs`, `run_output`, indexes — TECHNOLOGY §9.1); `packages/protocol/src/deliverables.ts` (`Deliverable`, `DeliverableKind`, `DeliverableSource`, `DeliverableLocation`, `DeliverableCommand`, `RunSummary`, REST bodies); the events `deliverable.added/updated/removed/restored/opened` and `run.started/ports/ended`; the world fold (`WorldState.deliverables`, `lastRun` folded from `run.*`) and `Snapshot.deliverables?`; `DomainCommands.addDeliverable/updateDeliverable/removeDeliverable/restoreDeliverable` with `DomainError` refusals and `version` bumps; `moveTask`, `transferTask` and `createPromotedProject` carry a task's deliverables (`projectId`) in the same command (decision 124); fixtures; export `rows.deliverables` (optional) and the import's `diffRows` check (decision 132).
 - **Acceptance:** the conformance test drives every new event through the real commands and the replayed world equals the snapshot after every commit; a moved and a promoted task's deliverables roll up into the new project; export → wipe → import reproduces the deliverables; a page built before this change parses a snapshot that carries them.
 
 ### P9-02 — Path checks and file facts
-- **Status:** todo · **Depends on:** — · **Parallel with:** P9-01, P9-03
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P9-01, P9-03
 - `apps/server/src/deliverables/paths.ts` (TECHNOLOGY §9.2): allowed roots per project/task (workspace, repository root, the task's worktree root by `worktreeRoot`, a standalone task's workspace, the project's `deliverables/` folder, inside the workspace anyway); refused areas (`.git`, other worktrees, `.galactic/`, the data folder, `/`, home); symlinks resolved and refused when they leave the roots; the agents' secret-name list; strays in temporary folders (owner, not a link, born after the agent's first spawn); the checked-descriptor read (`O_NOFOLLOW`, `(dev, ino)` compare); file facts (exists, size, mtime, text/binary sniff, preview content type, "would run code" per decision 128).
 - **Acceptance:** unit tests on temporary folders cover every rule — inside, outside, `..`, a symlink out (file and parent folder), a link swapped after the check (409 `changed`), each secret name, a stray accepted and one refused (older than the agent, a link, another owner), a file in another task's worktree; a file already inside the project's `deliverables/` folder is accepted in place; the facts classify text, binary, SVG, an `.app` and a `.command` correctly.
 
 ### P9-03 — Opening on the Mac and the IDE setting
-- **Status:** todo · **Depends on:** — · **Parallel with:** P9-01, P9-02
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P9-01, P9-02
 - `apps/server/src/deliverables/opener.ts` (TECHNOLOGY §9.7): `open`, `open -R`, `open -b <bundleId>`, application open, all through an injectable `execFile` with argument arrays and a timeout; 501 `not_mac` elsewhere; IDE detection by bundle id (`mdfind`, then `/Applications`, `~/Applications`, `~/Applications/JetBrains Toolbox`) in the order WebStorm, IntelliJ IDEA (Ultimate, CE), Cursor, VS Code, Zed; the application fingerprint (bundle and file); settings `deliverables.ide` (`auto` or a detected bundle id; local only, decision 51) in `SettingsService`, `GET /api/ide`; the settings page's "IDE" field listing what is installed (decision 127).
 - **Acceptance:** tests with a fake `execFile` check every argument vector (paths after options, never a shell); auto picks WebStorm when installed and the next one when not; a settings value that is not a detected bundle id is refused; the fingerprint changes when an app bundle's executable or plist changes. Local check (tagged): the project folder opens in WebStorm on Cosmin's Mac.
 
