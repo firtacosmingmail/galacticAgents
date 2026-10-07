@@ -23,12 +23,14 @@ import { DomainError } from '../domain/errors.js';
 import { world } from '../test/world.js';
 import { gitRunner } from '../workspace/git.js';
 import { Workspaces } from '../workspace/workspaces.js';
-import { DeliverableCopies, copiedMode, freeName } from './copies.js';
+import { DeliverableCopies, copiedMode, excludePattern, freeName } from './copies.js';
 
 const GIT_ENV = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 const USER: Actor = { type: 'user' };
 const LOCAL = { origin: 'local' } as const;
 const GiB = 2 ** 30;
+/** The user's addition from outside the project (the rules `copyIn` re-checks with). */
+const OUT = { outside: true } as const;
 
 let tmp: string;
 let w: ReturnType<typeof world>;
@@ -139,7 +141,7 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
     const p = await project('Report');
     expect(existsSync(join(p.workspace, 'deliverables'))).toBe(false);
     const tracked = git(p.workspace, 'ls-files');
-    const out = await copies.copyIn(stray('report.pdf'), { projectId: p.id });
+    const out = await copies.copyIn(stray('report.pdf'), { projectId: p.id }, OUT);
 
     const folder = join(p.workspace, 'deliverables');
     expect(out).toMatchObject({
@@ -164,7 +166,7 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
     expect(git(p.workspace, 'ls-files')).toBe(tracked);
     expect(status(p.workspace)).toBe('');
     // A second copy does not add the line again.
-    await copies.copyIn(stray('other.txt'), { projectId: p.id });
+    await copies.copyIn(stray('other.txt'), { projectId: p.id }, OUT);
     expect(
       readFileSync(join(p.workspace, '.git', 'info', 'exclude'), 'utf8')
         .split('\n')
@@ -176,7 +178,7 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
     const p = await project('Two tasks');
     const a = await task(p.id, 'Render the chart');
     const b = await task(p.id, 'Render the chart');
-    const first = await copies.copyIn(stray('chart.png'), { taskId: a.id });
+    const first = await copies.copyIn(stray('chart.png'), { taskId: a.id }, OUT);
     await commands.addDeliverable(
       { taskId: a.id, kind: 'image', title: 'chart', source: 'user', location: first.location },
       USER,
@@ -185,12 +187,12 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
     expect(first.location.path).toBe(
       join(p.workspace, 'deliverables', 'render-the-chart', 'chart.png'),
     );
-    const second = await copies.copyIn(stray('chart.png'), { taskId: b.id });
+    const second = await copies.copyIn(stray('chart.png'), { taskId: b.id }, OUT);
     expect(second.location.path).toBe(
       join(p.workspace, 'deliverables', `render-the-chart-${b.id.slice(0, 6)}`, 'chart.png'),
     );
     // The first task's next copy goes back to its own subfolder, under a free name.
-    const again = await copies.copyIn(stray('chart.png'), { taskId: a.id });
+    const again = await copies.copyIn(stray('chart.png'), { taskId: a.id }, OUT);
     expect(again.location.path).toBe(
       join(p.workspace, 'deliverables', 'render-the-chart', 'chart (2).png'),
     );
@@ -199,7 +201,7 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
   it('is galactic-deliverables/ when the repository tracks a deliverables/ folder', async () => {
     const p = await project('Tracked');
     commitFile(p.workspace, 'deliverables/spec.md', '# the project’s own');
-    const out = await copies.copyIn(stray('a.txt'), { projectId: p.id });
+    const out = await copies.copyIn(stray('a.txt'), { projectId: p.id }, OUT);
     expect(out.folder).toBe(join(p.workspace, 'galactic-deliverables'));
     const exclude = readFileSync(join(p.workspace, '.git', 'info', 'exclude'), 'utf8');
     expect(exclude.split('\n')).toContain('/galactic-deliverables/');
@@ -216,7 +218,7 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
     git(repo, 'init', '-q');
     commitFile(repo, 'apps/web/index.ts', 'x');
     const p = await project('Web', { workspace: join(repo, 'apps', 'web') });
-    await copies.copyIn(stray('a.txt'), { projectId: p.id });
+    await copies.copyIn(stray('a.txt'), { projectId: p.id }, OUT);
     const exclude = readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8');
     expect(exclude.split('\n')).toContain('/apps/web/deliverables/');
     expect(status(repo)).toBe('');
@@ -227,7 +229,7 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
     mkdirSync(folder);
     writeFileSync(join(folder, 'notes.txt'), 'mine');
     const p = await project('Plain', { workspace: folder });
-    const out = await copies.copyIn(stray('a.txt'), { projectId: p.id });
+    const out = await copies.copyIn(stray('a.txt'), { projectId: p.id }, OUT);
     expect(out.location.path).toBe(join(folder, 'deliverables', 'a.txt'));
     expect(existsSync(join(folder, '.git'))).toBe(false);
   });
@@ -238,7 +240,7 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
     const solo = (
       await commands.createTask({ description: 'One-off', meta: { workspace: scratch } })
     ).value;
-    const out = await copies.copyIn(stray('a.txt'), { taskId: solo.id });
+    const out = await copies.copyIn(stray('a.txt'), { taskId: solo.id }, OUT);
     expect(out.location.path).toBe(join(scratch, 'deliverables', 'a.txt'));
     expect(w.tables.tasks.get(solo.id)!.meta?.['deliverablesFolder']).toBe(
       join(scratch, 'deliverables'),
@@ -251,7 +253,7 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
         meta: { workspace: p.workspace, relatedProjectId: p.id },
       })
     ).value;
-    const related = await copies.copyIn(stray('b.txt'), { taskId: fix.id });
+    const related = await copies.copyIn(stray('b.txt'), { taskId: fix.id }, OUT);
     expect(related.location.path).toBe(join(p.workspace, 'deliverables', 'quick-fix', 'b.txt'));
     expect(w.tables.projects.get(p.id)!.meta?.['deliverablesFolder']).toBe(
       join(p.workspace, 'deliverables'),
@@ -262,12 +264,14 @@ describe('the deliverables folder (P9-06, decision 122)', () => {
     const p = await project('Linked');
     mkdirSync(join(tmp, 'elsewhere'));
     symlinkSync(join(tmp, 'elsewhere'), join(p.workspace, 'deliverables'));
-    await expect(copies.copyIn(stray('a.txt'), { projectId: p.id })).rejects.toThrow(/symlink/);
+    await expect(copies.copyIn(stray('a.txt'), { projectId: p.id }, OUT)).rejects.toThrow(
+      /symlink/,
+    );
     expect(readdirSync(join(tmp, 'elsewhere'))).toEqual([]);
 
     const q = await project('Filed');
     writeFileSync(join(q.workspace, 'deliverables'), 'a file');
-    await expect(copies.copyIn(stray('a.txt'), { projectId: q.id })).rejects.toThrow(
+    await expect(copies.copyIn(stray('a.txt'), { projectId: q.id }, OUT)).rejects.toThrow(
       /not a folder/,
     );
     expect(w.tables.projects.get(q.id)!.meta?.['deliverablesFolder']).toBeUndefined();
@@ -288,7 +292,7 @@ describe('copies (P9-06)', () => {
     symlinkSync(join(tmp, 'home'), join(src, 'dirlink'));
     execFileSync('mkfifo', [join(src, 'fifo')]);
 
-    const out = await copies.copyIn(src, { projectId: p.id });
+    const out = await copies.copyIn(src, { projectId: p.id }, OUT);
     const dst = join(p.workspace, 'deliverables', 'build');
     expect(out.location.path).toBe(dst);
     expect(readdirSync(dst).sort()).toEqual(['bin', 'readme.txt']);
@@ -297,6 +301,26 @@ describe('copies (P9-06)', () => {
     expect(out.bytes).toBe('#!/bin/sh\necho hi\n'.length + 'read me'.length);
     // No partial copy is left beside it.
     expect(readdirSync(join(p.workspace, 'deliverables'))).toEqual(['build']);
+  });
+
+  it('writes info/exclude patterns with glob characters escaped, appended, never rewritten', async () => {
+    expect(excludePattern('deliverables')).toBe('/deliverables/');
+    expect(excludePattern('a[1]/b*?c\\d/deliverables')).toBe(
+      '/a\\[1\\]/b\\*\\?c\\\\d/deliverables/',
+    );
+    expect(excludePattern('trailing ')).toBe('/trailing\\ /');
+    expect(() => excludePattern('two\nlines')).toThrow(/line break/);
+
+    const p = await project('Excluded');
+    const file = join(p.workspace, '.git', 'info', 'exclude');
+    writeFileSync(file, '# mine\n*.log');
+    await Promise.all([
+      copies.copyIn(stray('a.txt'), { projectId: p.id }, OUT),
+      copies.copyIn(stray('b.txt'), { projectId: p.id }, OUT),
+    ]);
+    const lines = readFileSync(file, 'utf8').split('\n');
+    expect(lines.slice(0, 2)).toEqual(['# mine', '*.log']);
+    expect(lines.filter((l) => l === '/deliverables/')).toHaveLength(1);
   });
 
   it('names a taken name (2), (3), and never replaces what is there', async () => {
@@ -320,7 +344,7 @@ describe('copies (P9-06)', () => {
     const p = await project('Full disk');
     free = GiB + 10;
     const src = stray('big.bin', 'x'.repeat(100));
-    const refused = await copies.copyIn(src, { projectId: p.id }).catch((e: unknown) => e);
+    const refused = await copies.copyIn(src, { projectId: p.id }, OUT).catch((e: unknown) => e);
     expect(refused).toBeInstanceOf(DomainError);
     expect((refused as DomainError).message).toMatch(
       /^not enough space: needs 1 GiB, 1 GiB free \(100 bytes to copy, 1 GiB kept free\)$/,
@@ -331,7 +355,7 @@ describe('copies (P9-06)', () => {
   it("reports each recorded folder's size (GET /api/deliverables/usage)", async () => {
     const p = await project('Usage');
     expect(await copies.usage()).toEqual({ folders: [] });
-    await copies.copyIn(stray('a.txt', '12345'), { projectId: p.id });
+    await copies.copyIn(stray('a.txt', '12345'), { projectId: p.id }, OUT);
     expect(await copies.usage()).toEqual({
       folders: [{ projectId: p.id, path: join(p.workspace, 'deliverables'), bytes: 5 }],
     });
@@ -342,7 +366,7 @@ describe('copies (P9-06)', () => {
     const link = join(tmp, 'outside', 'link');
     stray('target.txt');
     symlinkSync(join(tmp, 'outside', 'target.txt'), link);
-    await expect(copies.copyIn(link, { projectId: p.id })).rejects.toThrow(/symlink/);
+    await expect(copies.copyIn(link, { projectId: p.id }, OUT)).rejects.toThrow(/symlink/);
 
     const few = new DeliverableCopies({
       tables: w.tables,
@@ -355,7 +379,7 @@ describe('copies (P9-06)', () => {
     const many = join(tmp, 'outside', 'many');
     mkdirSync(many);
     for (const n of [1, 2, 3, 4]) writeFileSync(join(many, `${n}`), '');
-    await expect(few.copyIn(many, { projectId: p.id })).rejects.toThrow(/too many files/);
+    await expect(few.copyIn(many, { projectId: p.id }, OUT)).rejects.toThrow(/too many files/);
   });
 });
 
@@ -527,10 +551,10 @@ describe('the merge hook (P9-06, decision 123)', () => {
     // The first copy fails mid-way (the source vanishes under it); the second goes through.
     let calls = 0;
     const original = copies.copyInto.bind(copies);
-    copies.copyInto = async (source, dir) => {
+    copies.copyInto = async (source, dir, ctx) => {
       calls += 1;
       if (calls === 1) throw new Error('EIO: the disk said no');
-      return original(source, dir);
+      return original(source, dir, ctx);
     };
     expect((await spaces.mergeTask(t.id)).ok).toBe(true);
     expect(row(a.id).location?.missing?.reason).toMatch(/EIO: the disk said no/);

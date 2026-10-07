@@ -19,12 +19,13 @@ import type { Tables } from '../db/tables.js';
 import { DomainError } from '../domain/errors.js';
 import { containsSecret, redactSecrets } from '../runtime/redact.js';
 export { TOOL_RUNTIMES, stewardDeclares } from '../runtime/tool-runtimes.js';
-import type { DeliverableCopier } from './copies.js';
+import { copyMeta, type DeliverableCopier } from './copies.js';
 import { IMAGE_TYPES, extensionOf, isAppName } from './facts.js';
 import { rootsOf, standaloneWorkspace } from './roots.js';
 import {
   checkPath,
   nodePathFs,
+  type CheckOptions,
   type DeliverableRoots,
   type PathAccepted,
   type PathFs,
@@ -160,12 +161,14 @@ export class DeliverableService {
         );
       }
       // Into the task's subfolder (a task's stray) or the folder's top (a project's).
-      const copy = await this.opts.copies.copyIn(shape.stray.path, {
-        projectId: owner.projectId,
-        taskId: owner.taskId,
-      });
+      // Checked again right before the copy, with the same rules, entry by entry (B1).
+      const copy = await this.opts.copies.copyIn(
+        shape.stray.checked.path,
+        { projectId: owner.projectId, taskId: owner.taskId },
+        shape.stray.rules,
+      );
       location = copy.location;
-      meta = { ...meta, copy: { bytes: copy.bytes } };
+      meta = { ...meta, ...copyMeta(copy) };
     }
     const commands = opts.commands ?? this.opts.commands;
     const { value } = await commands.addDeliverable(
@@ -369,7 +372,7 @@ export class DeliverableService {
     command?: DeliverableCommand;
     url?: string;
     meta?: Record<string, unknown>;
-    stray?: PathAccepted;
+    stray?: { checked: PathAccepted; rules: CheckOptions };
   }> {
     const given = (name: 'path' | 'command' | 'url') =>
       typeof input[name] === 'string' && input[name].trim() !== '';
@@ -381,13 +384,13 @@ export class DeliverableService {
           `a ${kind} deliverable has a path only (no command, no url)`,
         );
       }
-      const checked = this.checkAgentPath(agent, owner, input.path!, opts);
+      const { checked, rules } = this.checkAgentPath(agent, owner, input.path!, opts);
       checkKindFits(kind, checked, input.path!);
       const meta =
         checked.type === 'file'
           ? { size: checked.stat.size, mtime: new Date(checked.stat.mtimeMs).toISOString() }
           : {};
-      if (checked.where === 'stray') return { stray: checked, meta };
+      if (checked.where === 'stray') return { stray: { checked, rules }, meta };
       return {
         location: {
           storage: checked.where === 'worktree' ? 'worktree' : 'in_place',
@@ -420,7 +423,7 @@ export class DeliverableService {
         );
       }
       const folder = given('path') ? input.path! : (opts.cwd ?? this.defaultFolder(owner));
-      const checked = this.checkAgentPath(agent, owner, folder, opts, false);
+      const { checked } = this.checkAgentPath(agent, owner, folder, opts, false);
       if (checked.type !== 'folder') {
         throw new DomainError('invalid', `${folder} is not a folder: a command runs in a folder`);
       }
@@ -490,21 +493,53 @@ export class DeliverableService {
     path: string,
     opts: DeclareOptions,
     strays = true,
-  ): PathAccepted {
+  ): { checked: PathAccepted; rules: CheckOptions } {
     const roots = this.roots(owner);
     const cwd = opts.cwd ?? (isAbsolute(path) ? undefined : this.defaultFolder(owner));
-    const stray: StrayRule = {
-      firstSpawnAt: Date.parse(agent.createdAt),
-      ...(this.opts.tmpDirs ? { tmpDirs: this.opts.tmpDirs } : {}),
-    };
+    const since = strays ? this.strayBornAfter(agent, owner) : undefined;
+    const stray: StrayRule | undefined =
+      since === undefined
+        ? undefined
+        : { firstSpawnAt: since, ...(this.opts.tmpDirs ? { tmpDirs: this.opts.tmpDirs } : {}) };
+    // The rules the copy applies again, right before it and to every entry (B1).
+    const rules: CheckOptions = { secretNames: true, ...(stray ? { stray } : {}) };
     const checked = checkPath(
       path,
       roots,
-      { ...(cwd ? { cwd: resolve(cwd) } : {}), secretNames: true, ...(strays ? { stray } : {}) },
+      { ...(cwd ? { cwd: resolve(cwd) } : {}), ...rules },
       this.fs,
     );
-    if (!checked.ok) throw new DomainError('invalid', `${checked.reason} (${checked.code})`);
-    return checked;
+    if (!checked.ok) {
+      if (checked.code === 'outside' && strays && !stray) {
+        throw new DomainError(
+          'invalid',
+          `${checked.reason} (outside): a stray in a temporary folder is accepted only for a ` +
+            "task with a Steward (its files are born after the Steward's first session)",
+        );
+      }
+      throw new DomainError('invalid', `${checked.reason} (${checked.code})`);
+    }
+    return { checked, rules };
+  }
+
+  /**
+   * When a stray must be born after (decision 122, ms): a Steward's own first session; for a
+   * brain declaring for a task, the task's earliest Steward (the brain's own start may be long
+   * before the work, so a file it did not make could pass); for a brain declaring for a project
+   * with no Steward to measure from, no stray at all (`undefined`).
+   */
+  private strayBornAfter(
+    agent: Agent,
+    owner: { taskId?: Id; task?: Task; project?: Project },
+  ): number | undefined {
+    if (agent.role === 'steward') return Date.parse(agent.createdAt);
+    if (!owner.taskId) return undefined;
+    const born = this.opts.tables.agents
+      .all()
+      .filter((a) => a.role === 'steward' && a.taskId === owner.taskId)
+      .map((a) => Date.parse(a.createdAt))
+      .filter((t) => Number.isFinite(t));
+    return born.length > 0 ? Math.min(...born) : undefined;
   }
 
   // -- limits -------------------------------------------------------------------------------------
@@ -516,7 +551,7 @@ export class DeliverableService {
       location?: DeliverableLocation;
       command?: DeliverableCommand;
       url?: string;
-      stray?: PathAccepted;
+      stray?: { checked: PathAccepted };
     },
   ): Deliverable | undefined {
     const rows = owner.taskId
@@ -528,7 +563,7 @@ export class DeliverableService {
         d.source === 'agent' &&
         d.kind === kind &&
         ((shape.location && d.location?.path === shape.location.path) ||
-          (shape.stray && d.location?.originalPath === shape.stray.path) ||
+          (shape.stray && d.location?.originalPath === shape.stray.checked.path) ||
           (shape.command &&
             d.command?.line === shape.command.line &&
             d.command.cwd === shape.command.cwd) ||
