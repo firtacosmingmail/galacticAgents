@@ -79,7 +79,19 @@ export interface FakeScenario {
   onMessage?: (message: string, n: number) => FakeStep[];
   /** Delay before every step that does not set its own; scaled by the adapter's `speed`. */
   stepDelayMs?: number;
+  /** The slash commands a session of this scenario reports (P8-13); default the adapter's. */
+  commands?: readonly unknown[];
 }
+
+/**
+ * The slash commands the development server's fake runtime reports (P8-13), so the composer's
+ * list can be tried without Claude: a built-in, a skill with an argument hint, a plugin command.
+ */
+export const DEV_FAKE_COMMANDS = [
+  { name: 'compact', description: 'Clear the conversation but keep a summary', builtin: true },
+  { name: 'review', description: 'Review a pull request', argumentHint: '<pr number>' },
+  { name: 'docs:explain', description: 'Explain a file in plain words', argumentHint: '<path>' },
+] as const;
 
 export const echo = (message: string): FakeStep[] => [
   { kind: 'output', text: `received: ${message}` },

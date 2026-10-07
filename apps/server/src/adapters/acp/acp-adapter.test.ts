@@ -552,4 +552,39 @@ describe('AcpAdapter', () => {
     const types = r.events.map((e) => e.type);
     expect(types.indexOf('agent.resumed')).toBeLessThan(types.indexOf('agent.idle'));
   });
+
+  it('keeps the commands of available_commands_update, also across a load (P8-13)', async () => {
+    const r = rig(['--commands']);
+    const h = await r.adapter.spawn(spawnOpts(r, 'hello'));
+    await waitFor(() => idles(r) === 1, 'idle');
+    const expected = [
+      { name: 'research_codebase', description: 'Research the codebase', argumentHint: '<topic>' },
+      { name: 'create_plan', description: 'Write a plan for the task' },
+    ];
+    // Announced just after session/new: poll until it has arrived.
+    let commands = await r.adapter.commands(h.sessionId);
+    for (let i = 0; i < 50 && commands.length === 0; i++) {
+      await new Promise((res) => setTimeout(res, 10));
+      commands = await r.adapter.commands(h.sessionId);
+    }
+    expect(commands).toEqual(expected);
+    // Not transcript.
+    expect(texts(r).join(' ')).not.toContain('research_codebase');
+
+    await r.adapter.stop(h.sessionId);
+    expect(await r.adapter.commands(h.sessionId)).toEqual([]);
+    const resumed = await r.adapter.resumeSession(
+      h.sessionRef!,
+      spawnOpts(r, 'again', allowAll, 'a-load'),
+    );
+    await waitFor(() => idles(r) >= 2, 'idle after load');
+    expect(await r.adapter.commands(resumed.sessionId)).toEqual(expected);
+  });
+
+  it('reports no commands for an agent that announces none', async () => {
+    const r = rig();
+    const h = await r.adapter.spawn(spawnOpts(r, 'hello'));
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(await r.adapter.commands(h.sessionId)).toEqual([]);
+  });
 });

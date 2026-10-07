@@ -10,12 +10,14 @@ import type {
   PermissionGate,
   RuntimePreflight,
   SendOptions,
+  SlashCommand,
   SpawnHandle,
   SpawnOptions,
   StopOptions,
   ToolCall,
   ToolDefinition,
 } from '@galactic/protocol';
+import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import {
   echo,
@@ -78,6 +80,11 @@ export interface FakeAdapterOptions {
     opts: SpawnOptions,
     sessionRef: string,
   ) => { ends: 'failed' | 'finished'; error?: string } | undefined;
+  /**
+   * The slash commands every session reports (P8-13), as a runtime would (normalised on the way
+   * out), or per spawn. A scenario's own `commands` win. Default: none.
+   */
+  commands?: readonly unknown[] | ((opts: SpawnOptions) => readonly unknown[] | undefined);
 }
 
 type Ended = 'finished' | 'failed' | 'stopped';
@@ -115,6 +122,8 @@ class FakeSession {
   stopping: Promise<void> | undefined;
   /** The session's running cost, set by `cost` steps (P8-01); every later idle reports it. */
   cost: Cost | undefined;
+  /** What `commands()` reports (P8-13). */
+  commands: SlashCommand[] = [];
 
   constructor(
     readonly agentId: Id,
@@ -148,6 +157,7 @@ export class FakeAdapter implements AgentAdapter {
   /** Scenarios chosen by `scenarioFor`, by name, for `resumeSession`. */
   private readonly picked = new Map<string, FakeScenario>();
   private readonly resumeFails: FakeAdapterOptions['resumeFails'];
+  private readonly commandsFor: FakeAdapterOptions['commands'];
   private disposed = false;
 
   constructor(opts: FakeAdapterOptions = {}) {
@@ -157,6 +167,7 @@ export class FakeAdapter implements AgentAdapter {
     this.checkCwd = opts.checkCwd ?? false;
     this.scenarioFor = opts.scenarioFor;
     this.resumeFails = opts.resumeFails;
+    this.commandsFor = opts.commands;
   }
 
   /** The scenario names this adapter knows, for the ops console's spawn form. */
@@ -234,6 +245,10 @@ export class FakeAdapter implements AgentAdapter {
     }
     const tools = new Map((opts.tools ?? []).map((t) => [t.name, t]));
     const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt, tools);
+    const given =
+      scenario.commands ??
+      (typeof this.commandsFor === 'function' ? this.commandsFor(opts) : this.commandsFor);
+    session.commands = normalizeSlashCommands(given);
     this.sessions.set(session.sessionId, session);
     const ref = session.sessionRef;
     this.sessionStore.set(ref, startAt);
@@ -265,6 +280,12 @@ export class FakeAdapter implements AgentAdapter {
     session.messageCount++;
     const steps = session.scenario.onMessage?.(message, session.messageCount) ?? echo(message);
     void this.runTurn(session, steps, 0, undefined);
+  }
+
+  /** The session's scripted slash commands (P8-13); `[]` for an ended or unknown one. */
+  async commands(sessionId: string): Promise<SlashCommand[]> {
+    const session = this.sessions.get(sessionId);
+    return session && !session.ended ? session.commands : [];
   }
 
   async answer(questionId: Id, answer: string): Promise<void> {

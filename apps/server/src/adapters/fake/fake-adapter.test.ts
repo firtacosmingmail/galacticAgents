@@ -614,3 +614,26 @@ describe('FakeAdapter — script steps (P2-07)', () => {
     expect(results).toHaveLength(1);
   });
 });
+
+describe('FakeAdapter — slash commands (P8-13)', () => {
+  it('reports the scripted commands, normalised; a scenario’s own win; none by default', async () => {
+    const none = makeAdapter();
+    const h0 = await none.adapter.spawn(spawnOpts('hello'));
+    expect(await none.adapter.commands(h0.sessionId)).toEqual([]);
+
+    const scenario: FakeScenario = { steps: [], commands: [{ name: 'own' }] };
+    const { adapter } = makeAdapter({
+      commands: [{ name: '/review', description: 'Review', argumentHint: '<pr>' }, { name: 'a b' }],
+      scenarios: { ...SCENARIOS, mine: scenario },
+    });
+    const h1 = await adapter.spawn(spawnOpts('hello', 'a-1'));
+    expect(await adapter.commands(h1.sessionId)).toEqual([
+      { name: 'review', description: 'Review', argumentHint: '<pr>' },
+    ]);
+    const h2 = await adapter.spawn(spawnOpts('scenario:mine', 'a-2'));
+    expect(await adapter.commands(h2.sessionId)).toEqual([{ name: 'own' }]);
+    await adapter.stop(h1.sessionId);
+    expect(await adapter.commands(h1.sessionId)).toEqual([]);
+    expect(await adapter.commands('unknown')).toEqual([]);
+  });
+});
