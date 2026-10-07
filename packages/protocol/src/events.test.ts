@@ -25,7 +25,9 @@ function classify(
   | 'project'
   | 'task'
   | 'control'
-  | 'budget' {
+  | 'budget'
+  | 'deliverable'
+  | 'run' {
   switch (e.type) {
     case 'agent.created':
     case 'agent.updated':
@@ -95,6 +97,16 @@ function classify(
     case 'budget.exceeded':
     case 'budget.spawn_refused':
       return 'budget';
+    case 'deliverable.added':
+    case 'deliverable.updated':
+    case 'deliverable.removed':
+    case 'deliverable.restored':
+    case 'deliverable.opened':
+      return 'deliverable';
+    case 'run.started':
+    case 'run.ports':
+    case 'run.ended':
+      return 'run';
     default:
       return assertNever(e);
   }

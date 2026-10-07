@@ -8,6 +8,7 @@ import type {
   StatusRecord,
   Task,
 } from '../domain.js';
+import type { Deliverable, DeliverableRun } from '../deliverables.js';
 
 export const NOW = '2026-09-30T10:00:00.000Z';
 
@@ -150,3 +151,51 @@ export const status: StatusRecord = {
 };
 
 export const policy: PermissionPolicy = { rules: { destructive: 'deny', network: 'allow' } };
+
+/** A Steward's screenshot in its worktree (P9-01). */
+export const deliverable: Deliverable = {
+  id: 'd-1',
+  projectId: 'p-1',
+  taskId: 't-1',
+  kind: 'image',
+  title: 'Login screen',
+  description: 'The new login page, light theme',
+  source: 'agent',
+  addedBy: { type: 'agent', id: 'a-steward-1' },
+  location: {
+    storage: 'worktree',
+    path: '/home/cosmin/work/auth/.galactic/worktrees/t-1/screenshots/login.png',
+  },
+  version: 1,
+  createdAt: NOW,
+  updatedAt: NOW,
+  meta: { size: 48_213 },
+};
+
+/** A detected `package.json` script of the project (P9-01), with a live run. */
+export const commandDeliverable: Deliverable = {
+  id: 'd-2',
+  projectId: 'p-1',
+  kind: 'command',
+  title: 'dev',
+  source: 'detected',
+  addedBy: { type: 'system' },
+  command: { line: 'pnpm run dev', cwd: '/home/cosmin/work/auth', detectedFrom: 'package.json' },
+  detectedKey: 'package.json#dev',
+  version: 2,
+  lastRun: { runId: 'r-1', state: 'running', startedAt: NOW, ports: [5173] },
+  createdAt: NOW,
+  updatedAt: NOW,
+  meta: { important: 0 },
+};
+
+export const run: DeliverableRun = {
+  id: 'r-1',
+  deliverableId: 'd-2',
+  line: 'pnpm run dev',
+  cwd: '/home/cosmin/work/auth',
+  state: 'running',
+  startedAt: NOW,
+  ports: [],
+  startedBy: { type: 'user' },
+};

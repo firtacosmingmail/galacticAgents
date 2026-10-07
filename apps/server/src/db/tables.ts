@@ -3,6 +3,8 @@ import {
   Agent,
   AgentSpend,
   Body,
+  Deliverable,
+  DeliverableRun,
   Project,
   Proposal,
   Question,
@@ -301,6 +303,94 @@ const questions: Mapper<Question> = {
   }),
 };
 
+const deliverables: Mapper<Deliverable> = {
+  table: 'deliverables',
+  schema: Deliverable,
+  toRow: (d) => ({
+    id: d.id,
+    project_id: d.projectId ?? null,
+    task_id: d.taskId ?? null,
+    kind: d.kind,
+    title: d.title,
+    description: d.description ?? null,
+    source: d.source,
+    added_by: JSON.stringify(d.addedBy),
+    location: json(d.location),
+    command: json(d.command),
+    url: d.url ?? null,
+    detected_key: d.detectedKey ?? null,
+    version: d.version,
+    removed_at: d.removedAt ?? null,
+    removed_by: json(d.removedBy),
+    removed_reason: d.removedReason ?? null,
+    last_run: json(d.lastRun),
+    created_at: d.createdAt,
+    updated_at: d.updatedAt,
+    meta: json(d.meta),
+  }),
+  fromRow: (r) => ({
+    id: r['id'] as Id,
+    projectId: opt<Id>(r['project_id']),
+    taskId: opt<Id>(r['task_id']),
+    kind: r['kind'] as Deliverable['kind'],
+    title: r['title'] as string,
+    description: opt<string>(r['description']),
+    source: r['source'] as Deliverable['source'],
+    addedBy: parse<Deliverable['addedBy']>(r['added_by'])!,
+    location: parse(r['location']),
+    command: parse(r['command']),
+    url: opt<string>(r['url']),
+    detectedKey: opt<string>(r['detected_key']),
+    version: r['version'] as number,
+    removedAt: opt<string>(r['removed_at']),
+    removedBy: parse(r['removed_by']),
+    removedReason: opt<string>(r['removed_reason']),
+    lastRun: parse(r['last_run']),
+    createdAt: r['created_at'] as string,
+    updatedAt: r['updated_at'] as string,
+    meta: parse(r['meta']),
+  }),
+};
+
+const deliverableRuns: Mapper<DeliverableRun> = {
+  table: 'deliverable_runs',
+  schema: DeliverableRun,
+  toRow: (r) => ({
+    id: r.id,
+    deliverable_id: r.deliverableId,
+    line: r.line,
+    cwd: r.cwd,
+    state: r.state,
+    started_at: r.startedAt,
+    ended_at: r.endedAt ?? null,
+    exit_code: r.exitCode ?? null,
+    signal: r.signal ?? null,
+    outcome: r.outcome ?? null,
+    reason: r.reason ?? null,
+    ports: JSON.stringify(r.ports),
+    started_by: JSON.stringify(r.startedBy),
+    stopped_by: json(r.stoppedBy),
+    meta: json(r.meta),
+  }),
+  fromRow: (r) => ({
+    id: r['id'] as Id,
+    deliverableId: r['deliverable_id'] as Id,
+    line: r['line'] as string,
+    cwd: r['cwd'] as string,
+    state: r['state'] as DeliverableRun['state'],
+    startedAt: r['started_at'] as string,
+    endedAt: opt<string>(r['ended_at']),
+    exitCode: opt<number>(r['exit_code']),
+    signal: opt<string>(r['signal']),
+    outcome: opt<DeliverableRun['outcome']>(r['outcome']),
+    reason: opt<string>(r['reason']),
+    ports: parse<number[]>(r['ports']) ?? [],
+    startedBy: parse<DeliverableRun['startedBy']>(r['started_by'])!,
+    stoppedBy: parse(r['stopped_by']),
+    meta: parse(r['meta']),
+  }),
+};
+
 /** All domain tables of one database, ready to use. */
 export interface Tables {
   bodies: Table<Body>;
@@ -309,6 +399,18 @@ export interface Tables {
   agents: Table<Agent>;
   proposals: Table<Proposal>;
   questions: Table<Question>;
+  /** Deliverables (P9-01; TECHNOLOGY §9.1), removed ones included. */
+  deliverables: Table<Deliverable> & {
+    /** The rows of a project (its own and its tasks') or of a task, in `rowid` order. */
+    of(target: { projectId?: Id; taskId?: Id }): Deliverable[];
+    /** The project's row for a detected key (`package.json#dev`), removed or not. */
+    detected(projectId: Id, detectedKey: string): Deliverable | undefined;
+  };
+  /** The run history (`deliverable_runs`): a projection of `run.*` events (P9-01). */
+  runs: Table<DeliverableRun> & {
+    /** A deliverable's runs, newest first. */
+    of(deliverableId: Id, limit?: number): DeliverableRun[];
+  };
   settings: {
     get<T = unknown>(key: string): T | undefined;
     set(key: string, value: unknown): void;
@@ -370,7 +472,75 @@ export function tables(db: Database): Tables {
        budget_usd = excluded.budget_usd`,
   );
   const clearNotice = lazy('DELETE FROM budget_notices WHERE target_kind = ? AND target_id = ?');
+  const deliverablesTable = new Table(db, deliverables, [
+    'id',
+    'project_id',
+    'task_id',
+    'kind',
+    'title',
+    'description',
+    'source',
+    'added_by',
+    'location',
+    'command',
+    'url',
+    'detected_key',
+    'version',
+    'removed_at',
+    'removed_by',
+    'removed_reason',
+    'last_run',
+    'created_at',
+    'updated_at',
+    'meta',
+  ]);
+  const runsTable = new Table(db, deliverableRuns, [
+    'id',
+    'deliverable_id',
+    'line',
+    'cwd',
+    'state',
+    'started_at',
+    'ended_at',
+    'exit_code',
+    'signal',
+    'outcome',
+    'reason',
+    'ports',
+    'started_by',
+    'stopped_by',
+    'meta',
+  ]);
+  const deliverablesOfProject = lazy(
+    'SELECT * FROM deliverables WHERE project_id = ? ORDER BY rowid',
+  );
+  const deliverablesOfTask = lazy('SELECT * FROM deliverables WHERE task_id = ? ORDER BY rowid');
+  const detectedRow = lazy('SELECT * FROM deliverables WHERE project_id = ? AND detected_key = ?');
+  const runsOf = lazy(
+    'SELECT * FROM deliverable_runs WHERE deliverable_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?',
+  );
+  const readDeliverable = (row: Row): Deliverable =>
+    Deliverable.parse(compact(deliverables.fromRow(row)));
+  const readRun = (row: Row): DeliverableRun =>
+    DeliverableRun.parse(compact(deliverableRuns.fromRow(row)));
   return {
+    deliverables: Object.assign(deliverablesTable, {
+      of: (target: { projectId?: Id; taskId?: Id }) => {
+        if (target.taskId !== undefined) {
+          return (deliverablesOfTask().all(target.taskId) as Row[]).map(readDeliverable);
+        }
+        if (target.projectId === undefined) return deliverablesTable.all();
+        return (deliverablesOfProject().all(target.projectId) as Row[]).map(readDeliverable);
+      },
+      detected: (projectId: Id, detectedKey: string) => {
+        const row = detectedRow().get(projectId, detectedKey) as Row | undefined;
+        return row ? readDeliverable(row) : undefined;
+      },
+    }),
+    runs: Object.assign(runsTable, {
+      of: (deliverableId: Id, limit = 100) =>
+        (runsOf().all(deliverableId, limit) as Row[]).map(readRun),
+    }),
     spend: {
       get: (agentId) => {
         const row = getSpend().get(agentId) as SpendRow | undefined;

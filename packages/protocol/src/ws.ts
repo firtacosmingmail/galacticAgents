@@ -14,6 +14,7 @@ import { EVENT_TYPES, EventEnvelope } from './events.js';
 import { RequestOrigin } from './enums.js';
 import { AgentSpend } from './budget.js';
 import { StorageHealth } from './storage.js';
+import { Deliverable } from './deliverables.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
@@ -89,6 +90,13 @@ export const SnapshotMessage = z.object({
    * keeps folding from the stream with `foldSpend`. Absent from older servers: no spend known.
    */
   spend: z.array(AgentSpend).optional(),
+  /**
+   * Every deliverable at `seq`, removed ones included (P9-01; decision 132): the client keeps
+   * folding them from the stream. Optional so a page of the previous build, which does not know
+   * them, still reads the snapshot (zod strips the key; TECHNOLOGY §6.3 rule 5). Absent from
+   * older servers: none.
+   */
+  deliverables: z.array(Deliverable).optional(),
   /**
    * Whether the database takes writes (P8-09): runtime state, never an event (a full disk could
    * not log it). Absent from older servers: taken as `ok`.
