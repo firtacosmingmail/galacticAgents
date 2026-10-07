@@ -1,6 +1,6 @@
 # GalacticAgents — Implementation Plan
 
-**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3) · **Date:** 2026-09-30
+**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3; Phase 9 — deliverables, decisions 118–134 — added 2026-10-07) · **Date:** 2026-09-30
 
 Companion to `SPEC.md` (what) and `TECHNOLOGY.md` (with what). The plan is ordered so that **the agent runtime is proven before the 3D scene is built**: the space interface is the product's soul, but if agents cannot be spawned, observed and answered reliably, the scene has nothing true to show. Following decision 19, a **minimal usable side panel (Phase 2.5)** now comes before the scene, so the product is usable daily long before it is beautiful.
 
@@ -164,6 +164,23 @@ Each phase ends with something you can run. Estimates assume one developer worki
 
 ---
 
+## Phase 9 — Deliverables (≈ 2–3 weeks)
+
+**Goal:** when a project or a task has deliverables, reach them from the app: see and open files, open a folder of code in the IDE or the Finder, see and run the important commands, open an application, look at an image — on the Mac; list, view and download from the phone (SPEC §4.7, decisions 118–134; TECHNOLOGY §9).
+
+- **Domain model:** `deliverables`, `deliverable_runs` and `run_output` (migration 0014); `deliverable.*` and `run.*` events in `packages/protocol`, folded into the world (`WorldState.deliverables`, `Snapshot.deliverables?`) and covered by the conformance test; moves and promotions carry a task's deliverables; export rows and import check.
+- **Where they come from:** a Steward's `declare_deliverable` tool (Claude Code Stewards; others list them in their "Done:" report), the brains' declare / remove / list tools, the project folder and detected run scripts (`package.json`, Makefile, justfile, pyproject, Cargo, Compose, deno — parsed, never executed), and the user by hand on the Mac.
+- **Paths and copies:** every path checked on its real path inside the project (workspace, repository, the task's worktree), secret names refused to agents, re-checked on every read; strays from temporary folders and worktree files a merge does not carry are copied to `~/.galactic/deliverables/` within size limits; a merge re-points the rest into the project's folder, inside the repository lock, before the worktree is removed.
+- **Viewing and serving:** a viewer for text and code (highlighted), Markdown (no raw HTML, no images loaded) and images (SVG only as a picture); bytes served by deliverable id with `nosniff`, a sandboxing CSP and `attachment` outside the preview types; one-time download tickets.
+- **Opening on the Mac:** `open`, `open -R`, `open -b <IDE bundle id>`; an IDE setting with auto-detection (WebStorm, IntelliJ IDEA, Cursor, VS Code, Zed); applications open after a confirmation tied to a fingerprint.
+- **Managed runs:** a confirmed run of a command in the project's folder as a tracked process (process group, launch intent, `GALACTIC_RUN_ID` marker), live redacted output with retention, detected ports, Stop/Restart, stopped with the project and on shutdown, shown as stopped after a restart and never restarted by itself.
+- **Panel:** the Waykeeper dock's "Chat | Status | Deliverables", the Steward view's Deliverables section, the history inspector's list, the run view; a small mark on the scene's labels (optional).
+- **Remote rules:** the phone lists, views and downloads; opening, launching and runs are the Mac's alone, even with `autoApproveRemote`; adding and removing by hand are local unless `autoApproveRemote`.
+
+**Exit criteria:** on the Mac, a Steward on real Claude finishes a task that builds a small web app and a screenshot: the screenshot shows in the Steward view and, after the Waykeeper's merge, still shows from the project's Deliverables (re-pointed or kept); the project folder opens in WebStorm and in the Finder; `pnpm dev` from `package.json` runs from the panel after a confirmation, its output streams, its port opens in the browser, and Stop ends it and everything it started; closing the project stops a run left running; after a server restart the run shows stopped and nothing is left of it. From the phone the same deliverables are listed, the screenshot and a text file are viewed and a file downloaded, while every open, launch and run is refused. An agent's attempt to declare a path outside the project (a private key, a symlink out of the worktree) is refused.
+
+---
+
 ## High-level corner cases and risks
 
 Grouped by area. Each has a suggested handling so it can become a ticket later. Items marked *Decided* reference SPEC.md §7.
@@ -225,6 +242,19 @@ Grouped by area. Each has a suggested handling so it can become a ticket later. 
 32. **Status summaries that lie.** LLM-written one-liners can drift from reality; always keep the raw last event next to the summary and let the user open the full transcript.
 33. **Debuggability.** Every decision (sizing, assignment, spawn, stop, escalation, supervisor answer, control action) is an event with a rationale in the `events` stream; that stream — separate from transcript chunks and retained long — is enough to reconstruct any state.
 34. **Billing surprises.** *Decided (17):* subscription login for Stewards; whether the in-process brains can use it is an open question (SPEC §8) — if they need an API key, show brain cost separately.
+
+### Deliverables (Phase 9)
+
+35. **An agent points a deliverable at a secret or outside the project** (a key file, the home folder, a symlink out of the worktree). *Decided (121):* real-path checks against the project's roots on declaration and on every read; secret names refused to agents; a descriptor checked against the real path, so a link swapped after the check is caught.
+36. **The worktree goes away under a deliverable.** *Decided (123):* the merge hook runs inside the repository lock before `git worktree remove`: re-point what the merge carried, copy what it did not (ignored build output), mark the rest missing with the reason; the merge is never held up.
+37. **A file served to the browser runs as code** (an HTML report, an SVG with a script, a Markdown file with raw HTML). *Decided (126):* text is always `text/plain`, SVG only in `<img>`, Markdown without raw HTML; `nosniff` and a sandboxing CSP on every file response; blobs only with allow-listed image types.
+38. **The command the user confirmed is not the one that runs** (an agent edits a declared command, or `package.json` changes, between the dialog and the click). *Decided (129):* the run carries the deliverable's `version`; a changed row is refused as stale and the dialog shows the new command.
+39. **Runs outlive their work or the server** (a dev server keeps a port after the project closed, or after a crash). *Decided (130):* runs are stopped with their project or task and on shutdown; after a crash their PID rows and launch intents are reconciled by the `GALACTIC_RUN_ID` marker and the launch id; never restarted by themselves.
+40. **A run's processes mistaken for a Steward's, or the reverse.** *Decided (130, 76):* runs carry `GALACTIC_RUN_ID` and never `GALACTIC_AGENT_ID`; Steward attribution needs the agent marker; runs stop only their own group and marker carriers.
+41. **Opening something runs code** (an app bundle, a `.command` file, a `.pkg`). *Decided (128):* those are applications, opened only after a confirmation tied to a fingerprint, asked again when it changes; Open refuses them.
+42. **The phone as a remote control for the Mac's programs.** *Decided (131):* open, launch and run routes refuse remote clients even with `autoApproveRemote`; viewing and downloads stay open (one-time tickets, never the token in an address).
+43. **Kept copies fill the disk.** *Decided (122):* per-file, per-deliverable and per-project limits and the backups' free-space reserve; the settings page shows the total; deletion only on the user's confirmation (§8 asks about a period).
+44. **Detected scripts are noise** (a project with forty npm scripts, a Makefile of internal targets). *Decided (119):* the common scripts first, at most 50 listed, removal by hand remembered across scans.
 
 ---
 
