@@ -107,6 +107,22 @@ export type AnswerBody = z.infer<typeof AnswerBody>;
 export const AnswerResponse = z.object({ ok: z.literal(true), duplicate: z.boolean().optional() });
 export type AnswerResponse = z.infer<typeof AnswerResponse>;
 
+/**
+ * `POST /api/questions/:id/dismiss` (P9-14, SPEC decision 135): the user withdraws a question
+ * without answering it. A clarification is withdrawn and its agent told "the user dismissed this
+ * question"; a permission request is denied ("dismissed by the user"), never allowed. `version`
+ * as for an answer: a question answered or moved since is refused with 409 `stale`. Never queued
+ * offline; open to remote clients like an answer (decision 90).
+ */
+export const DismissBody = z.object({
+  version: z.number().int().nonnegative().optional(),
+});
+export type DismissBody = z.infer<typeof DismissBody>;
+
+/** `POST /api/questions/:id/dismiss`'s reply. */
+export const DismissResponse = z.object({ ok: z.literal(true) });
+export type DismissResponse = z.infer<typeof DismissResponse>;
+
 /** A refused answer: `stale` when the question was answered or moved since `version`. */
 export const AnswerRefusal = z.object({
   error: z.enum(['stale', 'rejected', 'not_found', 'invalid']),

@@ -17,6 +17,12 @@ import type {
 } from '@galactic/protocol';
 import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
+import {
+  dismissedClarification,
+  dismissedPermission,
+  isDismissed,
+  type Dismissed,
+} from '../dismissal.js';
 import type {
   ManagedProcess,
   ProcessOutcome,
@@ -129,7 +135,8 @@ export const CLAUDE_PASS_ENV: readonly string[] = [
 
 interface PendingQuestion {
   id: Id;
-  resolve: (answer: string | undefined) => void;
+  /** An answer, a dismissal (P9-14), or `undefined` when the turn ended before either. */
+  resolve: (answer: string | Dismissed | undefined) => void;
 }
 
 /** A push-driven `AsyncIterable` of user messages: the SDK's streaming prompt. */
@@ -774,6 +781,9 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         options.signal,
       );
       if (answer === undefined) return interruptedBeforeAnswer();
+      // Dismissed (P9-14): a refusal, never an allow.
+      if (isDismissed(answer))
+        return { behavior: 'deny', message: dismissedPermission(answer.dismissed) };
       if (/^(allow|yes|y|ok|approve|approved)$/i.test(answer.trim())) {
         this.toolCall(session, toolName, id, input);
         return { behavior: 'allow', updatedInput: input };
@@ -807,6 +817,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         options.signal,
       );
       if (answer === undefined) return interruptedBeforeAnswer();
+      if (isDismissed(answer)) return dismissedQuestion(answer);
       return { behavior: 'allow', updatedInput: { ...input, answers: {} } };
     }
     const answers: Record<string, string> = {};
@@ -822,6 +833,9 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         options.signal,
       );
       if (answer === undefined) return interruptedBeforeAnswer();
+      // Dismissed (P9-14): the whole tool call is refused with what the user did; the questions
+      // after it are not asked.
+      if (isDismissed(answer)) return dismissedQuestion(answer);
       answers[q.question] = answer;
     }
     return { behavior: 'allow', updatedInput: { ...input, answers } };
@@ -832,11 +846,11 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     kind: 'clarification' | 'permission',
     question: Extract<AgentEvent, { type: 'agent.needs_input' }>['question'],
     signal: AbortSignal,
-  ): Promise<string | undefined> {
+  ): Promise<string | Dismissed | undefined> {
     if (signal.aborted || session.terminal) return Promise.resolve(undefined);
     const id = `q-${randomUUID()}`;
     return new Promise((resolve) => {
-      const done = (answer: string | undefined) => {
+      const done = (answer: string | Dismissed | undefined) => {
         session.pending.delete(id);
         this.byQuestion.delete(id);
         signal.removeEventListener('abort', onAbort);
@@ -915,6 +929,17 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     const pending = session?.pending.get(questionId);
     if (!pending) throw new Error(`no pending question ${questionId}`);
     pending.resolve(answer);
+  }
+
+  /**
+   * The user dismissed the question (P9-14): an `AskUserQuestion` call is refused with a result
+   * that says so (the agent carries on or asks again), a permission request is denied.
+   */
+  async dismiss(questionId: Id, reason: string): Promise<void> {
+    const session = this.byQuestion.get(questionId);
+    const pending = session?.pending.get(questionId);
+    if (!pending) throw new Error(`no pending question ${questionId}`);
+    pending.resolve({ dismissed: reason });
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -1071,6 +1096,11 @@ function hookDecision(decision: 'allow' | 'deny' | 'ask', reason?: string): SdkH
       ...(reason !== undefined ? { permissionDecisionReason: reason } : {}),
     },
   };
+}
+
+/** An `AskUserQuestion` the user dismissed (P9-14): refused, with what the agent should do. */
+function dismissedQuestion(d: Dismissed): SdkPermissionResult {
+  return { behavior: 'deny', message: dismissedClarification(d.dismissed) };
 }
 
 function interruptedBeforeAnswer(): SdkPermissionResult {

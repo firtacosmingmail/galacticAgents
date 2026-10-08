@@ -336,6 +336,18 @@ button.danger {
   gap: 8px;
   align-items: baseline;
 }
+/* The × that dismisses a question card (P9-14): at the header's end, a comfortable target. */
+.card header button.card-dismiss {
+  margin-left: auto;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 8px;
+  line-height: 1;
+  font-size: 1.1rem;
+}
+.card-dismiss-error {
+  flex-basis: 100%;
+}
 .tree {
   list-style: none;
   margin: 4px 0;

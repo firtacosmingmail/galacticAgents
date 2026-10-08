@@ -1,4 +1,4 @@
-import { formatUsd } from '@galactic/protocol';
+import { formatUsd, SUPERSEDED_BY_MESSAGE } from '@galactic/protocol';
 import type {
   Actor,
   AgentRole,
@@ -177,7 +177,26 @@ export const WAKE_RULES: WakeRules = {
   'question.cancelled': {
     wakes: (e, s) =>
       heldBefore(e.holders, s, s.question(e.questionId)) || concerns(s.question(e.questionId), s),
-    describe: (e) => `${e.questionId} was withdrawn (${e.reason})`,
+    describe: (e, s) => {
+      if (!e.by) return `${e.questionId} was withdrawn (${e.reason})`;
+      // A dismissal (P9-14, decision 135): the asker must not wait for an answer.
+      const q = s.question(e.questionId);
+      const what = q ? ` (${quote(q.context.text)})` : '';
+      const mine = q?.originAgentId === s.brainId;
+      if (e.reason === SUPERSEDED_BY_MESSAGE) {
+        return mine
+          ? `${e.questionId}${what} was withdrawn: superseded by the user's message — read ` +
+              'their message instead of waiting for an answer'
+          : `${e.questionId}${what} was withdrawn: the user wrote to its agent directly — it ` +
+              'needs no answer from you any more';
+      }
+      return (
+        `the user dismissed ${e.questionId}${what} without answering — ` +
+        (mine
+          ? 'do not wait for an answer: carry on with what you know, or ask again if it still matters'
+          : 'it needs no answer from you any more')
+      );
+    },
   },
   'question.escalated': {
     wakes: (e, s) =>

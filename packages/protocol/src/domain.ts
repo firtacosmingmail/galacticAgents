@@ -445,6 +445,24 @@ export const Question = z.object({
 });
 export type Question = z.infer<typeof Question>;
 
+/** The reason of a question the user dismissed (P9-14, SPEC decision 135). */
+export const DISMISSED_BY_USER = 'dismissed by the user';
+/** The reason of a clarification the user's own message to its agent superseded (P9-14). */
+export const SUPERSEDED_BY_MESSAGE = "superseded by the user's message";
+
+/**
+ * Who dismissed a cancelled question and why (P9-14), from the row's `meta.cancelledBy` /
+ * `meta.cancelReason`; `undefined` for a question that was not dismissed.
+ */
+export function dismissalOf(
+  question: Pick<Question, 'status' | 'meta'> | undefined,
+): { by: Actor; reason: string } | undefined {
+  if (question?.status !== 'cancelled') return undefined;
+  const by = Actor.safeParse(question.meta?.['cancelledBy']);
+  const reason = question.meta?.['cancelReason'];
+  return by.success && typeof reason === 'string' ? { by: by.data, reason } : undefined;
+}
+
 export const Cost = z.object({
   usd: z.number().nonnegative().optional(),
   inputTokens: z.number().int().nonnegative().optional(),

@@ -109,6 +109,15 @@ export interface AgentAdapter {
   send(sessionId: string, message: string, opts?: SendOptions): Promise<void>;
   /** Answers a pending `agent.needs_input` (clarification or permission). */
   answer(questionId: Id, answer: string): Promise<void>;
+  /**
+   * The user dismissed a pending `agent.needs_input` without answering it (P9-14, SPEC decision
+   * 135); `reason` says why ("dismissed by the user", "superseded by the user's message"). A
+   * clarification resolves the agent's question tool with a refusal that says so (the agent
+   * carries on, or asks again); a permission request is denied — never allowed. A runtime that
+   * cannot tell the agent (a terminal) only withdraws the question. Absent: the runtime answers
+   * a permission with a refusal and a clarification with the reason as text.
+   */
+  dismiss?(questionId: Id, reason: string): Promise<void>;
   /** Cancels the current turn; the session reports `agent.idle` when it has. */
   interrupt(sessionId: string): Promise<void>;
   pause(sessionId: string): Promise<void>;

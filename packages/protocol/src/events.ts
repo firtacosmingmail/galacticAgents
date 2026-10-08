@@ -295,6 +295,12 @@ export const QuestionAnswered = z.object({
  * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an
  * interrupt withdrew it (the agent went idle without an answer). A resumed agent re-asks under a
  * new id.
+ *
+ * A **dismissal** (P9-14, SPEC decision 135) carries `by`: the user dismissed it (`by: user`,
+ * reason "dismissed by the user") or the system withdrew a clarification the user's own message
+ * to its agent superseded (`by: system`, reason "superseded by the user's message"). The asking
+ * agent is told and carries on; a dismissed permission request was denied. Folded into the row
+ * as `meta.cancelledBy` / `meta.cancelReason`. Absent on every other cancellation.
  */
 export const QuestionCancelled = z.object({
   type: z.literal('question.cancelled'),
@@ -304,6 +310,10 @@ export const QuestionCancelled = z.object({
   version: z.number().int().nonnegative(),
   /** Every agent that held the question, past and present (as on `question.answered`). */
   holders: z.array(Id).optional(),
+  /** Who dismissed it (P9-14); absent for a cancellation that is not a dismissal. */
+  by: Actor.optional(),
+  /** Where the user's dismissal came from (P9-14; decision 90): the phone may dismiss. */
+  origin: RequestOrigin.optional(),
 });
 /** Holder changed without an escalation, e.g. the holder died (orphaned question). */
 export const QuestionReassigned = z.object({

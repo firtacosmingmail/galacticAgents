@@ -368,6 +368,52 @@ describe('the asker hears its own question resolve (wave 3)', () => {
   });
 });
 
+describe('a dismissal tells the asker not to wait (P9-14)', () => {
+  const own = {
+    ...d.question,
+    kind: 'clarification' as const,
+    originAgentId: BRAIN,
+    holder: { type: 'user' as const },
+    context: { text: 'Which licence?' },
+    meta: { source: 'command' },
+  };
+  const dismissed = (reason: string, by: Actor): Event => ({
+    type: 'question.cancelled',
+    questionId: own.id,
+    agentId: BRAIN,
+    reason,
+    version: 2,
+    by,
+    holders: ['a-harmonizer-1'],
+  });
+
+  it('the asker: dismissed by the user, or superseded by its message', () => {
+    const s = { ...scope({ supervises: () => false }), question: () => own };
+    const byUser = wakeLine(dismissed('dismissed by the user', { type: 'user' }), s);
+    expect(byUser).toContain(`the user dismissed ${own.id} ("Which licence?") without answering`);
+    expect(byUser).toContain('do not wait for an answer');
+    const superseded = wakeLine(
+      dismissed("superseded by the user's message", { type: 'system' }),
+      s,
+    );
+    expect(superseded).toContain("superseded by the user's message");
+    expect(superseded).toContain('read their message');
+  });
+
+  it('a former holder hears it needs no answer from it', () => {
+    const s = {
+      ...scope({ brainId: 'a-harmonizer-1', role: 'harmonizer', supervises: () => false }),
+      question: () => own,
+    };
+    expect(wakeLine(dismissed('dismissed by the user', { type: 'user' }), s)).toContain(
+      'needs no answer from you',
+    );
+    expect(
+      wakeLine(dismissed("superseded by the user's message", { type: 'system' }), s),
+    ).toContain('the user wrote to its agent directly');
+  });
+});
+
 describe('a brain’s own blocked questions stay with its adapter (wave-3 review)', () => {
   it('never wakes the asker for its own permission question, nor for one its session raised', () => {
     const base = { ...d.question, originAgentId: BRAIN, holder: { type: 'user' as const } };
