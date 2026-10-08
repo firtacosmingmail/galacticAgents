@@ -32,6 +32,8 @@ import { SqliteProcessStore } from './runtime/process-store.js';
 import { runIdOfKey } from './runtime/process-attribution.js';
 import { ProcessSupervisor } from './runtime/supervisor.js';
 import { Workspaces } from './workspace/workspaces.js';
+import { agentPeerGuard } from './http/peer-guard.js';
+import { osProcessTable } from './runtime/process-table.js';
 
 const { config, tokenGenerated, warnings } = loadConfig();
 // Remote-access settings that work but deserve a word (P7-02): wildcards, identity headers.
@@ -360,7 +362,14 @@ const app = buildApp({
   backups,
   ...(composed.deliverableCopies ? { deliverableCopies: composed.deliverableCopies } : {}),
   ...(composed.runs && composed.runOutput
-    ? { runs: { service: composed.runs, output: composed.runOutput } }
+    ? {
+        runs: {
+          service: composed.runs,
+          output: composed.runOutput,
+          // A start from an agent's or a run's process is refused (P9-12 review S3).
+          peer: agentPeerGuard({ table: osProcessTable() }),
+        },
+      }
     : {}),
   // The panel's Rescan (P9-05): the same scan as after a merge, within its 10 s window.
   ...(composed.detection

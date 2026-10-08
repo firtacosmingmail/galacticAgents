@@ -18,6 +18,7 @@ import { registerDeliverableRoutes } from './http/deliverable-routes.js';
 import type { BackupService } from './db/backup.js';
 import type { DeliverableCopies } from './deliverables/copies.js';
 import { registerDeliverablesUsageRoute } from './http/deliverables-usage-route.js';
+import type { PeerCheck } from './http/peer-guard.js';
 import { registerRunRoutes } from './http/run-routes.js';
 import type { RunService } from './deliverables/runs.js';
 import type { RunOutput } from './deliverables/run-output.js';
@@ -75,7 +76,8 @@ export interface AppOptions {
    * Managed runs (P9-08): enables the run routes (`/api/deliverables/:id/run-preview`, `…/runs`,
    * `/api/runs/:id/output|stop|restart`) and `run.subscribe` on the socket.
    */
-  runs?: { service: RunService; output: RunOutput };
+  /** `peer`: the agent speed bump on starts (P9-12 review S3); `index.ts` passes the OS one. */
+  runs?: { service: RunService; output: RunOutput; peer?: PeerCheck };
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -236,6 +238,7 @@ export function buildApp(opts: AppOptions): App {
       log: opts.log,
       runs: opts.runs.service,
       output: opts.runs.output,
+      ...(opts.runs.peer ? { peer: opts.runs.peer } : {}),
     });
   }
 
