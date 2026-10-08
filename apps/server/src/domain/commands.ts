@@ -725,9 +725,18 @@ export class Commands implements DomainCommands {
    * permission request, never a question opened for the user alone (decision 30: a merge
    * conflict), never the Harmonizer's (the user's single contact talks with them open, and its
    * closure and confirmation questions are answered only by the user's choice). A question
-   * answered or withdrawn meanwhile is skipped. Returns the ids withdrawn.
+   * answered or withdrawn meanwhile is skipped. A question whose session could not be told (an
+   * adapter error) is reported to `onError` and the others are still withdrawn. Returns the ids
+   * withdrawn.
    */
-  async supersedeQuestions(agentId: Id): Promise<Id[]> {
+  async supersedeQuestions(
+    agentId: Id,
+    onError: (questionId: Id, error: unknown) => void = (questionId, error) =>
+      console.warn(
+        `[commands] superseding ${questionId} failed:`,
+        error instanceof Error ? error.message : error,
+      ),
+  ): Promise<Id[]> {
     const agent = this.log.tables.agents.get(agentId);
     if (!agent || agent.role === 'harmonizer') return [];
     const open = this.log.tables.questions
@@ -745,8 +754,9 @@ export class Commands implements DomainCommands {
         const { events } = await this.dismissWith(q, SUPERSEDED_BY_MESSAGE, { by: SYSTEM });
         if (events.length > 0) withdrawn.push(q.id);
       } catch (error) {
-        // Answered or withdrawn meanwhile: nothing to supersede. Anything else is reported.
-        if (!(error instanceof DomainError)) throw error;
+        // Answered or withdrawn meanwhile: nothing to supersede. Anything else (the adapter
+        // could not be told) is reported, and the next question is still superseded.
+        if (!(error instanceof DomainError)) onError(q.id, error);
       }
     }
     return withdrawn;
