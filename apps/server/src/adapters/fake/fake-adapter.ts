@@ -19,6 +19,7 @@ import type {
 } from '@galactic/protocol';
 import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
+import { dismissedClarification, isDismissed, type Dismissed } from '../dismissal.js';
 import {
   echo,
   FakeTurnCancelled,
@@ -91,7 +92,8 @@ type Ended = 'finished' | 'failed' | 'stopped';
 
 interface PendingQuestion {
   id: Id;
-  resolve: (answer: string | undefined) => void;
+  /** An answer, a dismissal (P9-14), or `undefined` when the turn was abandoned. */
+  resolve: (answer: string | Dismissed | undefined) => void;
 }
 
 /** One deferred that anything can wake: an answer, a resume, an interrupt, a stop. */
@@ -306,6 +308,21 @@ export class FakeAdapter implements AgentAdapter {
     pending.resolve(answer);
   }
 
+  /**
+   * The user dismissed the question (P9-14): a clarification prints what the agent was told
+   * (`dismissed: …`) and the turn goes on; a permission request is skipped as refused.
+   */
+  async dismiss(questionId: Id, reason: string): Promise<void> {
+    const session = this.byQuestion.get(questionId);
+    if (!session || session.pending?.id !== questionId) {
+      throw new Error(`no pending question ${questionId}`);
+    }
+    const pending = session.pending;
+    session.pending = undefined;
+    this.byQuestion.delete(questionId);
+    pending.resolve({ dismissed: reason });
+  }
+
   async interrupt(sessionId: string): Promise<void> {
     const session = this.session(sessionId);
     if (session.turn) this.cancelTurn(session);
@@ -511,7 +528,14 @@ export class FakeAdapter implements AgentAdapter {
         if (answer === undefined) return 'cancelled';
         await this.holdWhilePaused(session, turn);
         if (turn.cancelled) return 'cancelled';
-        this.emit({ type: 'agent.output', agentId, kind: 'text', text: `answer: ${answer}` });
+        this.emit({
+          type: 'agent.output',
+          agentId,
+          kind: 'text',
+          text: isDismissed(answer)
+            ? `dismissed: ${dismissedClarification(answer.dismissed)}`
+            : `answer: ${answer}`,
+        });
         return 'next';
       }
       case 'permission':
@@ -657,7 +681,11 @@ export class FakeAdapter implements AgentAdapter {
     if (answer === undefined) return { outcome: 'cancelled' };
     await this.holdWhilePaused(session, turn);
     if (turn.cancelled) return { outcome: 'cancelled' };
-    const result = /^(allow|yes|y|ok)$/i.test(answer.trim()) ? await run() : skip('answered no');
+    const result = isDismissed(answer)
+      ? skip(answer.dismissed) // never allowed (P9-14)
+      : /^(allow|yes|y|ok)$/i.test(answer.trim())
+        ? await run()
+        : skip('answered no');
     return { outcome: 'next', result };
   }
 
@@ -665,7 +693,7 @@ export class FakeAdapter implements AgentAdapter {
     session: FakeSession,
     kind: 'clarification' | 'permission',
     question: Extract<AgentEvent, { type: 'agent.needs_input' }>['question'],
-  ): Promise<string | undefined> {
+  ): Promise<string | Dismissed | undefined> {
     const id = `q-${randomUUID()}`;
     return new Promise((resolve) => {
       session.pending = { id, resolve };

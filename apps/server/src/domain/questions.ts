@@ -1,4 +1,11 @@
-import type { Actor, Id, Question, QuestionContext, QuestionKind } from '@galactic/protocol';
+import type {
+  Actor,
+  Id,
+  Question,
+  QuestionContext,
+  QuestionKind,
+  RequestOrigin,
+} from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 
@@ -67,8 +74,15 @@ export function describeActor(actor: Actor): string {
 
 const sameActor = (a: Actor, b: Actor): boolean => a.type === b.type && a.id === b.id;
 
-/** Refuses a question that is no longer open, saying who answered it first. */
+/**
+ * Refuses a question that is no longer open, saying who answered it first, or that it was
+ * withdrawn (dismissed, superseded or cancelled with its agent): both are `stale`, so a late
+ * answer (an offline queue, a second device) reads "already withdrawn" rather than an error.
+ */
 function checkOpen(current: Question): void {
+  if (current.status === 'cancelled') {
+    throw new DomainError('stale', `question ${current.id} was already withdrawn`);
+  }
   if (current.status === 'answered') {
     throw new DomainError(
       'stale',
@@ -221,6 +235,24 @@ export function checkAnswer(current: Question, input: AnswerInput): void {
 }
 
 /**
+ * The checks of a dismissal (P9-14, SPEC decision 135) before anything reaches the agent: only
+ * the user (or the system, superseding a clarification for the user's own message) dismisses; a
+ * question that was answered, withdrawn or moved since `version` is refused as stale, saying so.
+ */
+export function checkDismiss(current: Question, by: Actor, version?: number): void {
+  if (by.type === 'agent') {
+    throw new DomainError('invalid', `an agent withdraws its own question; it does not dismiss`);
+  }
+  checkOpen(current);
+  if (version !== undefined && version !== current.version) {
+    throw new DomainError(
+      'stale',
+      `question ${current.id} changed since version ${version} (now held by ${describeActor(current.holder)})`,
+    );
+  }
+}
+
+/**
  * Hands a clarification one level up (SPEC §2.6): from the holding agent to its supervisor, or to
  * the user when it has none. With `isLiving` (the question service, P2-03) the first living
  * supervisor up the chain takes it, else the user. Only the holder (or the system) escalates; the
@@ -319,6 +351,7 @@ export function cancelQuestion(
   questionId: Id,
   reason: string,
   holders?: Id[],
+  dismissal?: Dismissal,
 ): Question | undefined {
   const current = ctx.tables.questions.get(questionId);
   if (!current || current.status !== 'open') return undefined;
@@ -327,6 +360,10 @@ export function cancelQuestion(
     status: 'cancelled',
     version: current.version + 1,
     updatedAt: ctx.now,
+    // A dismissal says who and why on the row (P9-14), as the world fold does.
+    ...(dismissal
+      ? { meta: { ...current.meta, cancelledBy: dismissal.by, cancelReason: reason } }
+      : {}),
   };
   ctx.tables.questions.upsert(question);
   ctx.emit({
@@ -336,8 +373,19 @@ export function cancelQuestion(
     reason,
     version: question.version,
     ...(holders?.length ? { holders } : {}),
+    ...(dismissal ? { by: dismissal.by } : {}),
+    ...(dismissal?.origin ? { origin: dismissal.origin } : {}),
+    ...(dismissal?.stillWaiting ? { stillWaiting: true as const } : {}),
   });
   return question;
+}
+
+/** Who dismissed a question (P9-14, SPEC decision 135), carried on its `question.cancelled`. */
+export interface Dismissal {
+  by: Actor;
+  origin?: RequestOrigin | undefined;
+  /** The adapter could not unblock the agent (a terminal's prompt is still up). */
+  stillWaiting?: boolean | undefined;
 }
 
 /** Cancels every open question of an agent (it ended or was interrupted). */

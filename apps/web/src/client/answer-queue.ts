@@ -439,14 +439,14 @@ async function flushOnce(): Promise<void> {
         flushAgain = false;
         return;
       }
-      const reason: NotSentReason =
-        e.code === 'stale'
+      // A withdrawn question is refused as `stale` "was already withdrawn" (P9-14).
+      const reason: NotSentReason = /withdrawn|cancelled/.test(e.message)
+        ? 'withdrawn'
+        : e.code === 'stale'
           ? 'stale'
           : e.status === 404
             ? 'gone'
-            : /cancelled/.test(e.message)
-              ? 'withdrawn'
-              : 'refused';
+            : 'refused';
       update(entry.questionId, entry.answerId, { state: 'not_sent', reason, message: e.message });
       const world = useAppStore.getState().world;
       announce(

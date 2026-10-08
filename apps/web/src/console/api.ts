@@ -3,6 +3,8 @@ import type {
   AgentCommandsResponse,
   AnswerBody,
   AnswerResponse,
+  DismissBody,
+  DismissResponse,
   ControlBody,
   ControlResponse,
   ConversationQuery,
@@ -132,11 +134,19 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
      * `answerId`: the idempotency key of this answer, the same on every retry (P7-05).
      */
     answer: (questionId: string, answer: string, version?: number, answerId?: string) =>
-      call<AnswerResponse>('POST', `/api/questions/${questionId}/answer`, {
+      call<AnswerResponse>('POST', `/api/questions/${encodeURIComponent(questionId)}/answer`, {
         answer,
         ...(version !== undefined ? { version } : {}),
         ...(answerId !== undefined ? { answerId } : {}),
       } satisfies AnswerBody),
+    /**
+     * Dismisses a question without answering it (P9-14): a clarification is withdrawn, a
+     * permission request denied. `version` as for an answer (a stale one is refused). Never queued.
+     */
+    dismiss: (questionId: string, version?: number) =>
+      call<DismissResponse>('POST', `/api/questions/${encodeURIComponent(questionId)}/dismiss`, {
+        ...(version !== undefined ? { version } : {}),
+      } satisfies DismissBody),
     decide: (proposalId: string, decision: ProposalDecisionBody) =>
       call<DecideResponse>('POST', `/api/proposals/${proposalId}/decide`, decision),
     control: (body: ControlBody) => call<ControlResponse>('POST', '/api/control', body),

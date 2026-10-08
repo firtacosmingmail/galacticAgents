@@ -185,15 +185,21 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
           updatedAt: at,
         }),
       };
-    case 'question.cancelled':
+    case 'question.cancelled': {
+      // A dismissal (P9-14) says who and why on the row, as the server keeps it.
+      const prior = next.questions[event.questionId]?.meta;
       return {
         ...next,
         questions: patch(next.questions, event.questionId, {
           status: 'cancelled',
           version: event.version,
           updatedAt: at,
+          ...(event.by
+            ? { meta: { ...prior, cancelledBy: event.by, cancelReason: event.reason } }
+            : {}),
         }),
       };
+    }
     case 'question.answered': {
       // The answer's idempotency key goes on the row as the server keeps it (P7-05).
       const prior = next.questions[event.questionId]?.meta;

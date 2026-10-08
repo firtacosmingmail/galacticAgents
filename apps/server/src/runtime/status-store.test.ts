@@ -221,6 +221,36 @@ describe('StatusStore — folding', () => {
       pendingQuestionId: 'q-2',
     });
   });
+
+  it('a dismissal that left the prompt up keeps the agent waiting; one that unblocked it does not (P9-14)', () => {
+    const dismissed = (stillWaiting: boolean): Event => ({
+      type: 'question.cancelled',
+      questionId: 'q-1',
+      agentId: 'a-1',
+      reason: 'dismissed by the user',
+      version: 1,
+      by: { type: 'user' },
+      ...(stillWaiting ? { stillWaiting: true as const } : {}),
+    });
+    const ask: Event = {
+      type: 'agent.needs_input',
+      agentId: 'a-1',
+      questionId: 'q-1',
+      kind: 'clarification',
+      question: { text: 'Which format?' },
+    };
+    const terminal = make().store;
+    terminal.rebuild(log([spawned, ask, dismissed(true)]));
+    expect(terminal.get('a-1')?.state).toBe('waiting_for_input');
+    expect(terminal.get('a-1')?.pendingQuestionId).toBeUndefined();
+    // Someone typed into it: its output says it is working again.
+    terminal.fold(log([{ type: 'agent.output', agentId: 'a-1', kind: 'text', text: 'ok' }])[0]!);
+    expect(terminal.get('a-1')?.state).toBe('working');
+
+    const told = make().store;
+    told.rebuild(log([spawned, ask, dismissed(false)]));
+    expect(told.get('a-1')?.state).toBe('working');
+  });
 });
 
 describe('StatusStore — rebuild and diffs', () => {

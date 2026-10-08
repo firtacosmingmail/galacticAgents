@@ -133,12 +133,16 @@ describe('answerQuestion', () => {
     ).toThrow(/held by the user/);
   });
 
-  it('refuses a cancelled question', () => {
+  it('refuses a cancelled question as stale: it was already withdrawn (P9-14)', () => {
     const { run } = hierarchy();
     run((ctx) => cancelQuestion(ctx, 'q-1', 'agent stopped'));
-    expect(() =>
-      run((ctx) => answerQuestion(ctx, { questionId: 'q-1', answer: 'x', answeredBy: USER })),
-    ).toThrow(/cancelled/);
+    let error: unknown;
+    try {
+      run((ctx) => answerQuestion(ctx, { questionId: 'q-1', answer: 'x', answeredBy: USER }));
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toMatchObject({ code: 'stale', message: 'question q-1 was already withdrawn' });
   });
 });
 

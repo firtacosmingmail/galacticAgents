@@ -25,7 +25,13 @@ import {
 import { isStorageFailure } from '../db/database.js';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { createAgent, recordSpawned } from '../domain/agents.js';
-import { answerQuestion, cancelQuestion, checkAnswer } from '../domain/questions.js';
+import {
+  answerQuestion,
+  cancelQuestion,
+  checkAnswer,
+  checkDismiss,
+  type Dismissal,
+} from '../domain/questions.js';
 import {
   endAgentQuestions,
   holdersNow,
@@ -920,6 +926,49 @@ export class AgentRuntime {
         delivered: true,
         ...(answerId !== undefined ? { answerId } : {}),
       }),
+    );
+  }
+
+  /**
+   * Dismisses a question a live session waits on (P9-14, SPEC decision 135): the adapter first —
+   * a clarification is declined with `reason`, a permission request denied, never allowed — then
+   * `question.cancelled` with `by` (and the user's `origin`), so the log never says "dismissed"
+   * for a question the agent still waits on. Refused like an answer: the full check first, and
+   * whole on a full disk for the user's own dismissal (decision 99).
+   */
+  async dismiss(questionId: Id, reason: string, dismissal: Dismissal): Promise<void> {
+    const agentId = this.byQuestion.get(questionId);
+    if (!agentId) throw new Error(`no open question ${questionId}`);
+    const live = this.must(agentId);
+    if (live.answering.has(questionId)) {
+      throw new DomainError('stale', `question ${questionId} is already being answered`);
+    }
+    const current = this.opts.log.tables.questions.get(questionId);
+    if (!current) throw new Error(`no open question ${questionId}`);
+    checkDismiss(current, dismissal.by);
+    this.ensureWritable(dismissal.by);
+    live.answering.add(questionId);
+    let unblocked: boolean | void = true;
+    try {
+      if (live.adapter.dismiss) unblocked = await live.adapter.dismiss(questionId, reason);
+      // An adapter without `dismiss`: a permission is refused, a clarification gets the reason.
+      else if (current.kind === 'permission')
+        await live.adapter.answer(questionId, `no (${reason})`);
+      else await live.adapter.answer(questionId, `(no answer: ${reason})`);
+    } finally {
+      live.answering.delete(questionId);
+    }
+    live.questions.delete(questionId);
+    this.byQuestion.delete(questionId);
+    this.recordOrHold((ctx) =>
+      cancelQuestion(
+        ctx,
+        questionId,
+        reason,
+        holdersNow(ctx, questionId, this.questions),
+        // A terminal's prompt still up: the status store keeps the agent waiting.
+        unblocked === false ? { ...dismissal, stillWaiting: true } : dismissal,
+      ),
     );
   }
 

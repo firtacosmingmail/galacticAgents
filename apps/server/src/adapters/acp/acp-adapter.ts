@@ -29,6 +29,7 @@ import type {
 } from '@galactic/protocol';
 import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
+import { isDismissed, type Dismissed } from '../dismissal.js';
 import type {
   ManagedProcess,
   ProcessOutcome,
@@ -254,7 +255,8 @@ const ALLOW = /^(allow|yes|y|ok|approve|approved)$/i;
 
 interface PendingQuestion {
   id: Id;
-  resolve: (answer: string | undefined) => void;
+  /** An answer, a dismissal (P9-14), or `undefined` when nothing answered it. */
+  resolve: (answer: string | Dismissed | undefined) => void;
   /** A hold (decision 108): outlives the turn it cancelled; only a stop or interrupt settles it. */
   hold?: boolean;
 }
@@ -1003,20 +1005,32 @@ export class AcpAdapter implements AgentAdapter {
       },
       signal,
       true,
-    ).then((answer) => this.afterHold(session, spec, answer));
+    ).then((answer) =>
+      this.afterHold(
+        session,
+        spec,
+        answer === undefined
+          ? undefined
+          : isDismissed(answer)
+            ? // Dismissed (P9-14): refused, as a deny is — never allowed, whatever its reason says.
+              { allowed: false, text: answer.dismissed }
+            : { allowed: ALLOW.test(answer.trim()), text: answer },
+      ),
+    );
   }
 
+  /** `answer` is the user's verdict on a hold; undefined = withdrawn (an interrupt). */
   private async afterHold(
     session: Session,
     spec: HoldSpec,
-    answer: string | undefined,
+    answer: { allowed: boolean; text: string } | undefined,
   ): Promise<void> {
     await session.turnEnd();
     const { cancelledTurn } = session.hold ?? { cancelledTurn: false };
     session.hold = undefined;
     if (session.terminal || session.stopping) return;
-    if (answer !== undefined && !ALLOW.test(answer.trim())) {
-      this.fail(session, `${spec.refused}: ${answer}`);
+    if (answer !== undefined && !answer.allowed) {
+      this.fail(session, `${spec.refused}: ${answer.text}`);
       return;
     }
     if (answer !== undefined) {
@@ -1106,6 +1120,15 @@ export class AcpAdapter implements AgentAdapter {
         signal,
       );
       if (answer === undefined) return cancelled;
+      if (isDismissed(answer)) {
+        // Dismissed (P9-14): a refusal, never an allow.
+        this.output(
+          session,
+          'text',
+          `permission denied for ${describeTool(tool)}: ${answer.dismissed}`,
+        );
+        return answerWith(false);
+      }
       if (ALLOW.test(answer.trim())) {
         this.toolCall(session, tool, call);
         return answerWith(true);
@@ -1143,7 +1166,9 @@ export class AcpAdapter implements AgentAdapter {
     const fields = formFields(params.message, schema.properties ?? {}, schema.required ?? []);
     if (fields.length === 0) {
       const answer = await this.ask(session, 'clarification', { text: params.message }, signal);
-      return answer === undefined ? { action: 'cancel' } : { action: 'accept', content: {} };
+      if (answer === undefined) return { action: 'cancel' };
+      // Dismissed (P9-14): the user declined to answer.
+      return isDismissed(answer) ? { action: 'decline' } : { action: 'accept', content: {} };
     }
     const content: Record<string, FormValue> = {};
     for (const field of fields) {
@@ -1158,6 +1183,7 @@ export class AcpAdapter implements AgentAdapter {
           signal,
         );
         if (answer === undefined) return { action: 'cancel' };
+        if (isDismissed(answer)) return { action: 'decline' };
         value = field.parse(answer);
         text = `${field.text} (could not read "${answer}"; please answer again)`;
       }
@@ -1173,11 +1199,11 @@ export class AcpAdapter implements AgentAdapter {
     question: QuestionBody,
     signal: AbortSignal,
     hold = false,
-  ): Promise<string | undefined> {
+  ): Promise<string | Dismissed | undefined> {
     if (signal.aborted || session.terminal || session.stopping) return Promise.resolve(undefined);
     const id = `q-${randomUUID()}`;
     return new Promise((resolve) => {
-      const done = (answer: string | undefined) => {
+      const done = (answer: string | Dismissed | undefined) => {
         session.pending.delete(id);
         this.byQuestion.delete(id);
         signal.removeEventListener('abort', onAbort);
@@ -1226,6 +1252,16 @@ export class AcpAdapter implements AgentAdapter {
     const pending = this.byQuestion.get(questionId)?.pending.get(questionId);
     if (!pending) throw new Error(`no pending question ${questionId}`);
     pending.resolve(answer);
+  }
+
+  /**
+   * The user dismissed the question (P9-14): an elicitation is declined, a permission request
+   * rejected (`reject_once`), a hold refused — never allowed.
+   */
+  async dismiss(questionId: Id, reason: string): Promise<void> {
+    const pending = this.byQuestion.get(questionId)?.pending.get(questionId);
+    if (!pending) throw new Error(`no pending question ${questionId}`);
+    pending.resolve({ dismissed: reason });
   }
 
   async interrupt(sessionId: string): Promise<void> {

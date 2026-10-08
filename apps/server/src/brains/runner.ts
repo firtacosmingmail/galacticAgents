@@ -400,7 +400,15 @@ export class BrainRunner {
       return;
     }
     const event = env.event;
-    if ('agentId' in event && event.agentId === this.id && event.type !== 'message.sent') {
+    // A dismissal of the brain's own question (P9-14: `question.cancelled` with `by`, which names
+    // the brain as its `agentId`) is news for it, not its lifecycle: it must stop waiting.
+    const dismissal = event.type === 'question.cancelled' && event.by !== undefined;
+    if (
+      'agentId' in event &&
+      event.agentId === this.id &&
+      event.type !== 'message.sent' &&
+      !dismissal
+    ) {
       this.onOwnAgentEvent(event);
       return;
     }
