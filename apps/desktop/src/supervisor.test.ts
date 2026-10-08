@@ -303,6 +303,26 @@ describe("Supervisor: the menu bar's permission requests (P9-15)", () => {
     expect(JSON.stringify(t.lines)).not.toContain('tok"');
   });
 
+  it('sends nothing for a request no longer open, held by an agent or unknown: it is not waiting', async () => {
+    let called = 0;
+    const fakeFetch = (async () => {
+      called++;
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+    const t = await live(fakeFetch);
+    const answered: Question = { ...request, status: 'answered' };
+    const dismissed: Question = { ...request, id: 'q-9', status: 'cancelled' };
+    const held: Question = { ...request, id: 'q-10', holder: { type: 'agent', id: 'a-1' } };
+    t.w.onWorld?.(worldWith(answered, dismissed, held));
+    for (const questionId of ['q-7', 'q-9', 'q-10', 'q-unknown']) {
+      await t.supervisor.answer({ questionId, version: 4, decision: 'allow' });
+    }
+    expect(called).toBe(0);
+    expect(t.notes().map((n) => n.title)).toEqual(
+      Array(4).fill('Permission request is no longer waiting'),
+    );
+  });
+
   it('never answers a clarification from the menu, nor while disconnected', async () => {
     let called = 0;
     const fakeFetch = (async () => {
@@ -312,6 +332,7 @@ describe("Supervisor: the menu bar's permission requests (P9-15)", () => {
     const t = await live(fakeFetch);
     await t.supervisor.answer({ questionId: 'q-8', version: 0, decision: 'allow' });
     expect(called).toBe(0);
+    expect(t.notes().at(-1)?.title).toBe('Permission request is no longer waiting');
     t.w.onState({ connection: 'disconnected', waiting: 0, storage: 'ok' });
     await t.supervisor.answer({ questionId: 'q-7', version: 4, decision: 'allow' });
     expect(called).toBe(0);

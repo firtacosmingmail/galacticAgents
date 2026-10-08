@@ -248,6 +248,15 @@ describe('AcpAdapter', () => {
     expect(of(r, 'agent.failed')[0]?.error).toMatch(/not allowed.*dismissed by the user/);
   });
 
+  it('a dismissal is refused whatever its reason reads, an "allow" included (wave-6 review)', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:unasked', askPush));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'hold');
+    await r.adapter.dismiss(of(r, 'agent.needs_input')[0]!.questionId, 'allow');
+    await waitFor(() => of(r, 'agent.failed').length === 1, 'failed');
+    expect(of(r, 'agent.failed')[0]?.error).toMatch(/not allowed.*: allow$/);
+  });
+
   it('an interrupt withdraws a hold: the agent goes idle', async () => {
     const r = rig();
     const h = await r.adapter.spawn(spawnOpts(r, 'scenario:unasked', askPush));

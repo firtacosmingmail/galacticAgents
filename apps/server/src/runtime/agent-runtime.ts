@@ -948,8 +948,9 @@ export class AgentRuntime {
     checkDismiss(current, dismissal.by);
     this.ensureWritable(dismissal.by);
     live.answering.add(questionId);
+    let unblocked: boolean | void = true;
     try {
-      if (live.adapter.dismiss) await live.adapter.dismiss(questionId, reason);
+      if (live.adapter.dismiss) unblocked = await live.adapter.dismiss(questionId, reason);
       // An adapter without `dismiss`: a permission is refused, a clarification gets the reason.
       else if (current.kind === 'permission')
         await live.adapter.answer(questionId, `no (${reason})`);
@@ -965,7 +966,8 @@ export class AgentRuntime {
         questionId,
         reason,
         holdersNow(ctx, questionId, this.questions),
-        dismissal,
+        // A terminal's prompt still up: the status store keeps the agent waiting.
+        unblocked === false ? { ...dismissal, stillWaiting: true } : dismissal,
       ),
     );
   }

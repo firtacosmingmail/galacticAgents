@@ -218,7 +218,8 @@ describe('PtyAdapter', () => {
     await r.adapter.spawn(spawnOpts(r, 'scenario:permission'));
     await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
     const q = of(r, 'agent.needs_input')[0]!;
-    await r.adapter.dismiss(q.questionId, 'dismissed by the user');
+    // Refused: the agent goes on (unblocked).
+    expect(await r.adapter.dismiss(q.questionId, 'dismissed by the user')).toBe(true);
     await waitFor(() => of(r, 'agent.finished').length === 1, 'finished');
     expect(outputs(r, 'text')).toContain('kept build');
 
@@ -226,7 +227,8 @@ describe('PtyAdapter', () => {
     await r2.adapter.spawn(spawnOpts(r2, 'scenario:asks'));
     await waitFor(() => of(r2, 'agent.needs_input').length === 1, 'clarification');
     const c = of(r2, 'agent.needs_input')[0]!;
-    await r2.adapter.dismiss(c.questionId, 'dismissed by the user');
+    // Nothing typed: the prompt is still up, the agent is not unblocked.
+    expect(await r2.adapter.dismiss(c.questionId, 'dismissed by the user')).toBe(false);
     await waitFor(() => outputs(r2, 'text').includes('nothing was typed'), 'the note');
     expect(outputs(r2, 'text')).not.toContain('you chose');
     await expect(r2.adapter.dismiss(c.questionId, 'again')).rejects.toThrow(/no pending question/);

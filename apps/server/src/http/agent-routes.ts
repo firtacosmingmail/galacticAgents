@@ -175,9 +175,13 @@ export function registerAgentRoutes(
         // The user wrote to the agent directly: its open clarifications are superseded (P9-14,
         // SPEC decision 135) — not by a slash command, which is no reply. Never fails the send.
         if (commands && !body.text.trimStart().startsWith('/')) {
-          await commands.supersedeQuestions(agentId(req)).catch((error: unknown) => {
-            req.log.error({ err: error }, 'superseding questions after a message failed');
-          });
+          await commands
+            .supersedeQuestions(agentId(req), (questionId, error) => {
+              req.log.error({ err: error, questionId }, 'superseding a question failed');
+            })
+            .catch((error: unknown) => {
+              req.log.error({ err: error }, 'superseding questions after a message failed');
+            });
         }
         return { messageId: message.id } satisfies SendResponse;
       });

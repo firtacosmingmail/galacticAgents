@@ -69,12 +69,19 @@ export function wireNotificationClicks(
   win: Window = window,
   nav: Navigator = navigator,
 ): () => void {
-  const cleanups: (() => void)[] = [];
+  // One focus waits for the snapshot at a time: a newer click replaces it (and its listener),
+  // so a page left open does not collect one store subscription per hash change.
+  let pending: () => void = () => undefined;
+  const focusLater = (focus: Focus) => {
+    pending();
+    pending = focusWhenReady(focus);
+  };
+  const cleanups: (() => void)[] = [() => pending()];
   const initial = takeFocusFromFragment(win);
-  if (initial) cleanups.push(focusWhenReady(initial));
+  if (initial) focusLater(initial);
   const onHashChange = () => {
     const focus = takeFocusFromFragment(win);
-    if (focus) cleanups.push(focusWhenReady(focus));
+    if (focus) focusLater(focus);
   };
   win.addEventListener('hashchange', onHashChange);
   cleanups.push(() => win.removeEventListener('hashchange', onHashChange));
@@ -84,7 +91,7 @@ export function wireNotificationClicks(
       const data = e.data as { type?: unknown; target?: unknown } | undefined;
       if (!data || data.type !== 'NOTIFICATION_CLICK') return;
       const target = NotificationTarget.safeParse(data.target);
-      cleanups.push(focusWhenReady(target.success ? target.data : 'inbox'));
+      focusLater(target.success ? target.data : 'inbox');
     };
     sw.addEventListener('message', onMessage);
     cleanups.push(() => sw.removeEventListener('message', onMessage));

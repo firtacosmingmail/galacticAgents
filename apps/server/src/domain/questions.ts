@@ -74,8 +74,15 @@ export function describeActor(actor: Actor): string {
 
 const sameActor = (a: Actor, b: Actor): boolean => a.type === b.type && a.id === b.id;
 
-/** Refuses a question that is no longer open, saying who answered it first. */
+/**
+ * Refuses a question that is no longer open, saying who answered it first, or that it was
+ * withdrawn (dismissed, superseded or cancelled with its agent): both are `stale`, so a late
+ * answer (an offline queue, a second device) reads "already withdrawn" rather than an error.
+ */
 function checkOpen(current: Question): void {
+  if (current.status === 'cancelled') {
+    throw new DomainError('stale', `question ${current.id} was already withdrawn`);
+  }
   if (current.status === 'answered') {
     throw new DomainError(
       'stale',
@@ -236,9 +243,6 @@ export function checkDismiss(current: Question, by: Actor, version?: number): vo
   if (by.type === 'agent') {
     throw new DomainError('invalid', `an agent withdraws its own question; it does not dismiss`);
   }
-  if (current.status === 'cancelled') {
-    throw new DomainError('stale', `question ${current.id} was already withdrawn`);
-  }
   checkOpen(current);
   if (version !== undefined && version !== current.version) {
     throw new DomainError(
@@ -371,6 +375,7 @@ export function cancelQuestion(
     ...(holders?.length ? { holders } : {}),
     ...(dismissal ? { by: dismissal.by } : {}),
     ...(dismissal?.origin ? { origin: dismissal.origin } : {}),
+    ...(dismissal?.stillWaiting ? { stillWaiting: true as const } : {}),
   });
   return question;
 }
@@ -379,6 +384,8 @@ export function cancelQuestion(
 export interface Dismissal {
   by: Actor;
   origin?: RequestOrigin | undefined;
+  /** The adapter could not unblock the agent (a terminal's prompt is still up). */
+  stillWaiting?: boolean | undefined;
 }
 
 /** Cancels every open question of an agent (it ended or was interrupted). */

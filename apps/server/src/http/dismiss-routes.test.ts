@@ -261,3 +261,41 @@ describe('a direct message supersedes the agent’s open clarifications (P9-14)'
     );
   });
 });
+
+/** A runtime that cannot tell its agent (a terminal): the prompt stays up after a dismissal. */
+const promptStaysUp = () =>
+  Object.assign(new FakeAdapter({ speed: 1 }), {
+    dismiss: (): Promise<boolean> => Promise.resolve(false),
+  });
+
+describe('a dismissal its runtime could not tell (P9-14, wave-6 review)', () => {
+  it('cancels the question but keeps the agent waiting', async () => {
+    const own = composeRuntime(openDatabase(':memory:'), {
+      adapters: [promptStaysUp()],
+      flushMs: 10,
+      caps: { maxConcurrentAgents: 4 },
+    });
+    try {
+      const spawned = await own.runtime.spawn({
+        role: 'steward',
+        runtime: 'fake',
+        prompt: 'scenario:asks',
+        cwd: '/tmp',
+      });
+      const id = spawned.ok ? spawned.agent.id : '';
+      await waitFor(() => own.statuses.get(id)?.state === 'waiting_for_input', 'clarification');
+      const q = own.statuses.get(id)!.pendingQuestionId!;
+      await own.commands.dismissQuestion({ questionId: q, by: { type: 'user' } });
+      const event = own.log
+        .eventsSince(0)
+        .map((e) => e.event)
+        .find((e) => e.type === 'question.cancelled' && e.questionId === q);
+      expect(event).toMatchObject({ by: { type: 'user' }, stillWaiting: true });
+      expect(own.log.tables.questions.get(q)?.status).toBe('cancelled');
+      expect(own.statuses.get(id)).toMatchObject({ state: 'waiting_for_input' });
+      expect(own.statuses.get(id)?.pendingQuestionId).toBeUndefined();
+    } finally {
+      await own.dispose();
+    }
+  });
+});

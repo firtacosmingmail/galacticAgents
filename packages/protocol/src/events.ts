@@ -314,6 +314,11 @@ export const QuestionCancelled = z.object({
   by: Actor.optional(),
   /** Where the user's dismissal came from (P9-14; decision 90): the phone may dismiss. */
   origin: RequestOrigin.optional(),
+  /**
+   * A dismissal that did not unblock the agent (P9-14): its runtime could not be told (a
+   * terminal's prompt is still up), so it keeps waiting until someone types into it.
+   */
+  stillWaiting: z.literal(true).optional(),
 });
 /** Holder changed without an escalation, e.g. the holder died (orphaned question). */
 export const QuestionReassigned = z.object({

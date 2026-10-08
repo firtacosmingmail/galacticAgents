@@ -1006,22 +1006,31 @@ export class AcpAdapter implements AgentAdapter {
       signal,
       true,
     ).then((answer) =>
-      // Dismissed (P9-14): refused, as a deny is — never allowed.
-      this.afterHold(session, spec, isDismissed(answer) ? answer.dismissed : answer),
+      this.afterHold(
+        session,
+        spec,
+        answer === undefined
+          ? undefined
+          : isDismissed(answer)
+            ? // Dismissed (P9-14): refused, as a deny is — never allowed, whatever its reason says.
+              { allowed: false, text: answer.dismissed }
+            : { allowed: ALLOW.test(answer.trim()), text: answer },
+      ),
     );
   }
 
+  /** `answer` is the user's verdict on a hold; undefined = withdrawn (an interrupt). */
   private async afterHold(
     session: Session,
     spec: HoldSpec,
-    answer: string | undefined,
+    answer: { allowed: boolean; text: string } | undefined,
   ): Promise<void> {
     await session.turnEnd();
     const { cancelledTurn } = session.hold ?? { cancelledTurn: false };
     session.hold = undefined;
     if (session.terminal || session.stopping) return;
-    if (answer !== undefined && !ALLOW.test(answer.trim())) {
-      this.fail(session, `${spec.refused}: ${answer}`);
+    if (answer !== undefined && !answer.allowed) {
+      this.fail(session, `${spec.refused}: ${answer.text}`);
       return;
     }
     if (answer !== undefined) {

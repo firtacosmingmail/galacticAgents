@@ -877,3 +877,50 @@ describe('Commands questions for the user alone (wave-4 review)', () => {
     ).toEqual([]);
   });
 });
+
+describe('Commands.supersedeQuestions (wave-6 review)', () => {
+  it('an adapter error on one question is reported and the others are still superseded', async () => {
+    const log = new EventLog(openDatabase(':memory:'));
+    const agentId = 'a-steward-s';
+    const failing = new Set<string>();
+    const agents = {
+      spawn: () => Promise.reject(new Error('unused')),
+      stop: () => Promise.resolve(),
+      pause: () => Promise.resolve(),
+      resumeAgent: () => Promise.resolve(),
+      answer: () => Promise.resolve(),
+      hasQuestion: (id: string) => failing.has(id),
+      dismiss: () => Promise.reject(new Error('the session hung up')),
+    };
+    const commands = new Commands({ log, agents });
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/w' })).value;
+    const task = (await commands.createTask({ description: 'a', projectId: project.id })).value;
+    log.runCommand((ctx) =>
+      createAgent(ctx, {
+        agentId,
+        role: 'steward',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+        bodyId: project.bodyId,
+        taskId: task.id,
+      }),
+    );
+    const ask = async (text: string) =>
+      (
+        await commands.openQuestion({
+          kind: 'clarification',
+          originAgentId: agentId,
+          context: { text },
+        })
+      ).value.id;
+    const first = await ask('Which format?');
+    const second = await ask('Which folder?');
+    failing.add(first);
+    const reported: string[] = [];
+    const withdrawn = await commands.supersedeQuestions(agentId, (id) => reported.push(id));
+    expect(reported).toEqual([first]);
+    expect(withdrawn).toEqual([second]);
+    expect(log.tables.questions.get(first)?.status).toBe('open');
+    expect(log.tables.questions.get(second)?.status).toBe('cancelled');
+  });
+});
