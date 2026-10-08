@@ -3,6 +3,8 @@ import type {
   AgentCommandsResponse,
   AnswerBody,
   AnswerResponse,
+  DismissBody,
+  DismissResponse,
   ControlBody,
   ControlResponse,
   ConversationQuery,
@@ -137,6 +139,14 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         ...(version !== undefined ? { version } : {}),
         ...(answerId !== undefined ? { answerId } : {}),
       } satisfies AnswerBody),
+    /**
+     * Dismisses a question without answering it (P9-14): a clarification is withdrawn, a
+     * permission request denied. `version` as for an answer (a stale one is refused). Never queued.
+     */
+    dismiss: (questionId: string, version?: number) =>
+      call<DismissResponse>('POST', `/api/questions/${questionId}/dismiss`, {
+        ...(version !== undefined ? { version } : {}),
+      } satisfies DismissBody),
     decide: (proposalId: string, decision: ProposalDecisionBody) =>
       call<DecideResponse>('POST', `/api/proposals/${proposalId}/decide`, decision),
     control: (body: ControlBody) => call<ControlResponse>('POST', '/api/control', body),
