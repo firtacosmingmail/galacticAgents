@@ -320,16 +320,12 @@ export class Supervisor {
   /**
    * "Allow once" / "Deny" from the menu (P9-15): the panel's answer route, with the token and the
    * version the menu showed. A refusal is said in a notification ("already answered by …"); a
-   * success needs none (the stream updates the menu and the panel). Only permission requests are
-   * answered here; a second click while one is on its way is ignored.
+   * success needs none (the stream updates the menu and the panel). Only a permission request the
+   * world shows open and waiting on the user is answered here (anything else: "no longer
+   * waiting"); a second click while one is on its way is ignored.
    */
   async answer(answer: TrayAnswer): Promise<void> {
     if (this.quitting || this.sending.has(answer.questionId)) return;
-    const known = this.world?.questions[answer.questionId];
-    if (known && known.kind !== 'permission') {
-      this.opts.log('ignored a menu answer to a question that is not a permission request');
-      return;
-    }
     const server = this.server;
     const token = this.opts.token();
     const notice = (title: string, body: string) =>
@@ -343,6 +339,20 @@ export class Supervisor {
       notice(
         'Could not answer the permission request',
         'Mission Control is not connected. Answer it in GalacticAgents.',
+      );
+      return;
+    }
+    const known = this.world?.questions[answer.questionId];
+    if (
+      !known ||
+      known.kind !== 'permission' ||
+      known.status !== 'open' ||
+      known.holder.type !== 'user'
+    ) {
+      this.opts.log('ignored a menu answer to a question that is not a waiting permission request');
+      notice(
+        'Permission request is no longer waiting',
+        'Your answer was not sent. Open GalacticAgents to see what waits for you.',
       );
       return;
     }
