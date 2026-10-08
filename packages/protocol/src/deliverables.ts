@@ -73,6 +73,8 @@ export const RUN_END_REASONS = [
   'deliverable_removed',
   'server_stopping',
   'server_restarted',
+  /** The command's folder was no longer the checked one right after the start (P9-12 N2). */
+  'folder_changed',
 ] as const;
 export type RunEndReason = (typeof RUN_END_REASONS)[number];
 
@@ -254,6 +256,33 @@ export function deliverableShapeError(
     return 'a path is absolute';
   }
   if (d.command && !d.command.cwd.startsWith('/')) return "a command's folder is absolute";
+  return undefined;
+}
+
+/**
+ * Why a command line may not be stored or run (P9-12 review S1), `undefined` when it may: every
+ * writer's line — an agent's, the user's by hand, a remote edit — and every edited line of the Run
+ * dialog is one visible line. Refused: an empty line; a control character (C0 including tab and
+ * newline, DEL, C1) — `sh -c` would read a newline as a second command the one-line field never
+ * shows; a format character (`\p{Cf}`: bidi overrides, zero-width characters that make a line
+ * read as another), a line or paragraph separator (`\p{Zl}`, `\p{Zp}`), a private-use or lone
+ * surrogate code point, a space other than the plain space (a no-break space joins two words the
+ * eye reads as two); a `[redacted:…]` mask (the line would run the mask, not the secret).
+ */
+export function commandLineProblem(line: string): string | undefined {
+  if (line.trim() === '') return 'a command needs a command line';
+  // eslint-disable-next-line no-control-regex -- matching control characters is the point
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(line)) {
+    return 'a command is one line: no newline, tab or other control character';
+  }
+  if (/[\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cs}]/u.test(line)) {
+    return 'a command holds no invisible character (bidi or zero-width format characters, line separators)';
+  }
+  if (/[^\P{Zs} ]/u.test(line))
+    return 'a command uses the plain space only (no no-break or wide spaces)';
+  if (line.includes('[redacted:')) {
+    return 'a command holds a hidden secret ([redacted:…]): type the real value, or read it from the environment';
+  }
   return undefined;
 }
 
@@ -443,6 +472,20 @@ export const RunPreviewResponse = z.object({
   bodyChanged: z.boolean().optional(),
   /** The body the last run was confirmed with, when it differs from `body`. */
   lastRunBody: z.string().optional(),
+  /**
+   * P9-12 review S2: `body` is read from the file when the dialog opens (with the `pre`/`post`
+   * hooks the package manager runs). `scannedBody` is what the last scan stored, when it differs.
+   */
+  scannedBody: z.string().optional(),
+  /** `body` was cut for display (the run executes the whole file): open the file to read it all. */
+  bodyTruncated: z.boolean().optional(),
+  /** Part of `body` is hidden as a secret (`[redacted:…]`): open the file to read it all. */
+  bodySecretHidden: z.boolean().optional(),
+  /**
+   * Why no body is shown for a detected command: the line was edited by hand (it no longer runs
+   * the file's script as such), or the file could not be read now.
+   */
+  bodyMissing: z.string().optional(),
   /** Set when a start now would be refused (the dialog says why and offers no Run). */
   refusal: RunRefusal.optional(),
   /**

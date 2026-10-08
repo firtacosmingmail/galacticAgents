@@ -1,5 +1,8 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
 import {
+  commandLineProblem,
   type Actor,
   type Deliverable,
   type DeliverableRun,
@@ -43,6 +46,8 @@ import {
   type ProcessSpec,
   type StopProcessOptions,
 } from '../runtime/supervisor.js';
+import { commandBodyOf, MAX_BODY_LENGTH } from './detect.js';
+import { MAX_MANIFEST_BYTES, nodeScanFs, type DetectedMeta, type ScanFs } from './detection.js';
 import { checkPath, type RefusedPlaces } from './paths.js';
 import { rootsInputOf, rootsOf } from './roots.js';
 import type { RunOutput } from './run-output.js';
@@ -130,6 +135,10 @@ export interface RunServiceOptions {
   ports?: { fastMs?: number; slowMs?: number; fastForMs?: number; markerMs?: number };
   /** How often a refused `run.ended` is tried again. */
   retryMs?: number;
+  /** Reads a detected command's file when the dialog opens and at the start; default the scan's. */
+  scanFs?: ScanFs;
+  /** A folder's identity, for the check after the fork (review N2); default `statSync`. */
+  folderId?: (path: string) => string | undefined;
   onError?: (error: unknown, context: string) => void;
 }
 
@@ -205,12 +214,8 @@ const WARNING_OF: Partial<Record<PermissionAction, string>> = {
 const CLOSED = new Set(['completed', 'failed', 'archived']);
 /** How long a preview's confirmation is good for. */
 const CONFIRMATION_TTL_MS = 15 * 60 * 1_000;
-/**
- * What an edited line may not hold: a newline or another control character (C0 but tab, DEL, C1,
- * the Unicode line and paragraph separators) — the dialog shows one line, so the run is one line.
- */
-// eslint-disable-next-line no-control-regex -- matching control characters is the point
-const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029]/;
+/** The hash a confirmation carries for a command whose body is not read (not detected, edited). */
+const NO_BODY = 'none';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -232,20 +237,36 @@ export function portsInOutput(text: string): number[] {
 export function checkEditedLine(edited: string): string {
   const line = edited.trim();
   if (line === '') throw new RunError('invalid', 'A run needs a command line.');
-  if (CONTROL.test(line)) {
-    throw new RunError(
-      'invalid',
-      'An edited command is one line: no newline or other control character.',
-    );
-  }
   if (line.includes('[redacted:')) {
     throw new RunError(
       'invalid',
       'The command still holds a hidden secret ([redacted:…]): type it again, or run the stored command unedited.',
     );
   }
+  const problem = commandLineProblem(line);
+  if (problem) throw new RunError('invalid', `The edited command: ${problem}.`);
   return line;
 }
+
+/** What the dialog shows of a detected command's body, and what its confirmation binds. */
+interface BodyView {
+  /** What the confirmation binds: sha256 of the raw body read now, else a fixed tag. */
+  hash: string;
+  /** Redacted, cut at `MAX_BODY_LENGTH`. */
+  shown?: string;
+  truncated?: boolean;
+  secretHidden?: boolean;
+  /** The raw scripts, for the permission engine. */
+  parts?: string[];
+  /** Why no body shows for a detected command. */
+  missing?: string;
+  /** The last scan's body, when it differs from `shown`. */
+  scanned?: string;
+}
+
+const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
+/** The body hash as a confirmation carries it (fixed length, hex). */
+const bodyTagOf = (hash: string): string => sha256(hash).slice(0, 32);
 
 export class RunService {
   private readonly log: EventLog;
@@ -261,8 +282,12 @@ export class RunService {
   private readonly fastForMs: number;
   private readonly markerMs: number;
   private readonly retryMs: number;
+  private readonly scanFs: ScanFs;
+  private readonly folderId: (path: string) => string | undefined;
   /** Signs the previews' confirmations (this server run only). */
   private readonly confirmKey = randomBytes(32);
+  /** Confirmations a start used, until they expire (review N1: each one starts one run). */
+  private readonly usedConfirmations = new Map<string, number>();
   /** The one port-polling timer for every live run (one snapshot per tick). */
   private portsTimer: NodeJS.Timeout | undefined;
   private polling = false;
@@ -290,6 +315,17 @@ export class RunService {
     this.fastForMs = opts.ports?.fastForMs ?? 60_000;
     this.markerMs = opts.ports?.markerMs ?? 15_000;
     this.retryMs = opts.retryMs ?? 1_000;
+    this.scanFs = opts.scanFs ?? nodeScanFs;
+    this.folderId =
+      opts.folderId ??
+      ((path) => {
+        try {
+          const st = statSync(path);
+          return st.isDirectory() ? `${st.dev}:${st.ino}` : undefined;
+        } catch {
+          return undefined;
+        }
+      });
     this.onError = opts.onError ?? (() => {});
   }
 
@@ -316,66 +352,165 @@ export class RunService {
    * What the Run dialog shows (decision 129); `refusal` when a start now would be refused. With
    * `edited`, the line the user edited in the dialog: its warnings, and a confirmation for it
    * (wave-3 review S3). The line shown is redacted; the confirmation covers the real one.
+   *
+   * For a detected command run as detected, what it runs is read **now** from its file in the
+   * run's folder (P9-12 review S2: with the `pre`/`post` hooks, every script classified by the
+   * permission engine, "truncated" and "part hidden" said); the confirmation binds the line, the
+   * version, the folder and that body's hash, and a start whose body changed meanwhile is `stale`.
    */
   preview(deliverableId: Id, edited?: string): RunPreviewResponse {
     const row = this.commandRow(deliverableId);
     const command = row.command!;
     const cwd = this.checkCwd(row);
     const line = edited === undefined ? command.line : checkEditedLine(edited);
-    const { warnings, reasons } = this.warningsOf(line, row, cwd.ok ? cwd.cwd : command.cwd);
-    const detected = row.meta?.['detected'] as { body?: unknown } | undefined;
-    const body = typeof detected?.body === 'string' ? detected.body : undefined;
+    const folder = cwd.ok ? cwd.cwd : command.cwd;
+    const body = this.bodyOf(row, line, cwd.ok ? cwd.cwd : undefined);
+    const { warnings, reasons } = this.warningsOf(line, row, folder, body.parts);
     const lastBody = this.log.tables.runs.of(row.id, 1)[0]?.meta?.['body'];
     const changed =
-      body !== undefined && typeof lastBody === 'string' ? lastBody !== body : undefined;
+      body.shown !== undefined && typeof lastBody === 'string'
+        ? lastBody !== body.shown
+        : undefined;
+    const stored = edited === undefined ? commandLineProblem(line) : undefined;
     const refusal: RunRefusal | undefined = !cwd.ok
       ? cwd.refusal
-      : this.liveRun(row.id)
-        ? { code: 'running', message: 'This command is already running: stop it first.' }
-        : this.live.size >= this.opts.settings().maxConcurrent
-          ? { code: 'run_cap', message: this.capMessage() }
-          : undefined;
+      : stored
+        ? { code: 'invalid', message: `The stored command cannot run: ${stored}. Edit it first.` }
+        : this.liveRun(row.id)
+          ? { code: 'running', message: 'This command is already running: stop it first.' }
+          : this.live.size >= this.opts.settings().maxConcurrent
+            ? { code: 'run_cap', message: this.capMessage() }
+            : undefined;
     return {
       deliverableId: row.id,
       version: row.version,
       line: redactSecrets(line),
-      cwd: cwd.ok ? cwd.cwd : command.cwd,
+      cwd: folder,
       envKeys: this.envKeys(row.id),
       warnings,
       ...(reasons.length > 0 ? { reasons } : {}),
       source: row.source,
       addedBy: row.addedBy,
       ...(command.detectedFrom ? { detectedFrom: command.detectedFrom } : {}),
-      ...(body !== undefined ? { body } : {}),
+      ...(body.shown !== undefined ? { body: body.shown } : {}),
       ...(changed !== undefined ? { bodyChanged: changed } : {}),
       ...(changed && typeof lastBody === 'string' ? { lastRunBody: lastBody } : {}),
+      ...(body.scanned !== undefined ? { scannedBody: body.scanned } : {}),
+      ...(body.truncated ? { bodyTruncated: true } : {}),
+      ...(body.secretHidden ? { bodySecretHidden: true } : {}),
+      ...(body.missing !== undefined ? { bodyMissing: body.missing } : {}),
       ...(refusal ? { refusal } : {}),
-      confirmation: this.confirmationOf(row.id, row.version, line),
+      confirmation: this.confirmationOf(row.id, row.version, line, folder, body.hash),
     };
   }
 
-  /** A token for exactly `line` at `version` of the deliverable: `<issued ms, base 36>.<HMAC>`. */
-  private confirmationOf(deliverableId: Id, version: number, line: string, at = Date.now()) {
-    return `${at.toString(36)}.${this.macOf(deliverableId, version, line, at)}`;
+  /**
+   * A detected command's body as its file says now (review S2), read from the run's folder `cwd`
+   * with the scan's parsers. None for a row that is not detected, or whose line is not the one
+   * the scan wrote (edited by hand, in the row or in the dialog: the file's script is then not
+   * what the line runs as such).
+   */
+  private bodyOf(row: Deliverable, line: string, cwd: string | undefined): BodyView {
+    const detected = row.meta?.['detected'] as DetectedMeta | undefined;
+    if (row.source !== 'detected' || row.detectedKey === undefined || !detected) {
+      return { hash: NO_BODY };
+    }
+    const scanned = typeof detected.body === 'string' ? detected.body : undefined;
+    if (detected.line === undefined || line !== detected.line) {
+      return {
+        hash: NO_BODY,
+        missing:
+          "Edited by hand: the line runs as written, so the file's script is not shown as what it runs.",
+      };
+    }
+    if (cwd === undefined) return { hash: NO_BODY, ...(scanned !== undefined ? { scanned } : {}) };
+    let read: ReturnType<typeof commandBodyOf>;
+    try {
+      read = commandBodyOf(
+        {
+          entries: this.scanFs.readdir(cwd),
+          read: (name) => this.scanFs.readText(join(cwd, name), MAX_MANIFEST_BYTES),
+        },
+        row.detectedKey,
+      );
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? 'error';
+      read = { ok: false, reason: `the folder cannot be read (${code})` };
+    }
+    if (!read.ok) {
+      return {
+        hash: `missing:${read.reason}`,
+        missing: `What it runs could not be read now: ${redactSecrets(read.reason)}.`,
+        ...(scanned !== undefined ? { scanned } : {}),
+      };
+    }
+    if (read.raw === undefined) return { hash: NO_BODY };
+    const redacted = redactSecrets(read.raw.trim());
+    const truncated = redacted.length > MAX_BODY_LENGTH;
+    const shown = truncated ? `${redacted.slice(0, MAX_BODY_LENGTH - 1)}…` : redacted;
+    return {
+      hash: `body:${sha256(read.raw)}`,
+      shown,
+      ...(truncated ? { truncated } : {}),
+      ...(redacted !== read.raw.trim() ? { secretHidden: true } : {}),
+      ...(read.parts ? { parts: read.parts } : {}),
+      ...(scanned !== undefined && scanned !== shown ? { scanned } : {}),
+    };
   }
 
-  private macOf(deliverableId: Id, version: number, line: string, at: number): string {
-    const lineHash = createHash('sha256').update(line, 'utf8').digest('hex');
+  /**
+   * A token for exactly `line` at `version` of the deliverable, in `cwd`, with the body whose
+   * hash is `bodyHash`: `<issued ms, base 36>.<body tag>.<HMAC>` (single use, review N1).
+   */
+  private confirmationOf(
+    deliverableId: Id,
+    version: number,
+    line: string,
+    cwd: string,
+    bodyHash: string,
+    at = Date.now(),
+  ): string {
+    const tag = bodyTagOf(bodyHash);
+    return `${at.toString(36)}.${tag}.${this.macOf(deliverableId, version, line, cwd, tag, at)}`;
+  }
+
+  private macOf(
+    deliverableId: Id,
+    version: number,
+    line: string,
+    cwd: string,
+    bodyTag: string,
+    at: number,
+  ): string {
     return createHmac('sha256', this.confirmKey)
-      .update(`run-confirmation\n${deliverableId}\n${version}\n${at}\n${lineHash}`)
+      .update(
+        `run-confirmation\n${deliverableId}\n${version}\n${at}\n${sha256(line)}\n${sha256(cwd)}\n${bodyTag}`,
+      )
       .digest('base64url');
   }
 
-  /** Whether `token` is a confirmation of this server run for exactly `line` at `version`. */
-  private covers(token: string, deliverableId: Id, version: number, line: string): boolean {
-    const [issued, mac, extra] = token.split('.');
-    if (!issued || !mac || extra !== undefined || !/^[0-9a-z]{1,12}$/.test(issued)) return false;
+  /**
+   * Whether `token` is a confirmation of this server run for exactly `line` at `version` in
+   * `cwd`: then the body tag it carries (the caller compares it with the body read now) and when
+   * it expires; else `undefined`.
+   */
+  private covers(
+    token: string,
+    deliverableId: Id,
+    version: number,
+    line: string,
+    cwd: string,
+  ): { bodyTag: string; expires: number } | undefined {
+    const [issued, tag, mac, extra] = token.split('.');
+    if (!issued || !tag || !mac || extra !== undefined) return undefined;
+    if (!/^[0-9a-z]{1,12}$/.test(issued) || !/^[0-9a-f]{32}$/.test(tag)) return undefined;
     const at = parseInt(issued, 36);
     const age = Date.now() - at;
-    if (!Number.isSafeInteger(at) || age < -60_000 || age > CONFIRMATION_TTL_MS) return false;
-    const want = Buffer.from(this.macOf(deliverableId, version, line, at));
+    if (!Number.isSafeInteger(at) || age < -60_000 || age > CONFIRMATION_TTL_MS) return undefined;
+    const want = Buffer.from(this.macOf(deliverableId, version, line, cwd, tag, at));
     const got = Buffer.from(mac);
-    return want.length === got.length && timingSafeEqual(want, got);
+    if (want.length !== got.length || !timingSafeEqual(want, got)) return undefined;
+    return { bodyTag: tag, expires: at + CONFIRMATION_TTL_MS };
   }
 
   // -- starting --------------------------------------------------------------------------------
@@ -390,7 +525,8 @@ export class RunService {
     confirmed: { version: number; line?: string | undefined; confirmation: string },
     by: Actor,
     replacing?: Id,
-  ): { row: Deliverable; cwd: string; line: string } {
+    consume = false,
+  ): { row: Deliverable; cwd: string; line: string; body: BodyView } {
     if (by.type === 'agent') {
       throw new RunError('invalid', 'An agent cannot start a run: the user starts it on the Mac.');
     }
@@ -404,13 +540,34 @@ export class RunService {
       );
     }
     const line = confirmed.line === undefined ? row.command!.line : checkEditedLine(confirmed.line);
-    if (line.trim() === '' || line.includes('\0')) {
-      throw new RunError('invalid', 'A run needs a command line (without NUL characters).');
+    // The stored line is checked again at every start (review S1): a row written before the
+    // domain refused such lines, or imported, never runs a line the dialog could not show.
+    const problem = commandLineProblem(line);
+    if (problem) {
+      throw new RunError('invalid', `The stored command cannot run: ${problem}. Edit it first.`);
     }
-    if (!this.covers(confirmed.confirmation, row.id, row.version, line)) {
+    const cwd = this.checkCwd(row);
+    if (!cwd.ok) throw new RunError(cwd.refusal.code as RunError['code'], cwd.refusal.message);
+    const token = confirmed.confirmation;
+    const covered = this.covers(token, row.id, row.version, line, cwd.cwd);
+    if (!covered) {
       throw new RunError(
         'unconfirmed',
         'The confirmation does not cover this command line: open the Run dialog again.',
+      );
+    }
+    if (this.usedConfirmations.has(token)) {
+      throw new RunError(
+        'unconfirmed',
+        'This confirmation started a run already: open the Run dialog again.',
+      );
+    }
+    const body = this.bodyOf(row, line, cwd.cwd);
+    if (bodyTagOf(body.hash) !== covered.bodyTag) {
+      throw new RunError(
+        'stale',
+        'What the command runs changed in its file since the dialog opened: check it again.',
+        row,
       );
     }
     const live = this.liveRun(row.id);
@@ -421,9 +578,14 @@ export class RunService {
     if (others >= this.opts.settings().maxConcurrent) {
       throw new RunError('run_cap', this.capMessage());
     }
-    const cwd = this.checkCwd(row);
-    if (!cwd.ok) throw new RunError(cwd.refusal.code as RunError['code'], cwd.refusal.message);
-    return { row, cwd: cwd.cwd, line };
+    if (consume) {
+      const now = Date.now();
+      for (const [used, expires] of this.usedConfirmations) {
+        if (expires < now) this.usedConfirmations.delete(used);
+      }
+      this.usedConfirmations.set(token, covered.expires);
+    }
+    return { row, cwd: cwd.cwd, line, body };
   }
 
   /**
@@ -435,7 +597,8 @@ export class RunService {
     confirmed: { version: number; line?: string | undefined; confirmation: string },
     by: Actor,
   ): Promise<DeliverableRun> {
-    const { row, cwd, line } = this.prepare(deliverableId, confirmed, by);
+    const { row, cwd, line, body } = this.prepare(deliverableId, confirmed, by, undefined, true);
+    const folderId = this.folderId(cwd);
 
     const runId = `r-${randomUUID()}`;
     let resolveEnded!: () => void;
@@ -473,7 +636,6 @@ export class RunService {
     }
     run.pgid = proc.pid;
     proc.child.stdin?.end();
-    const detected = row.meta?.['detected'] as { body?: unknown } | undefined;
     let recorded: DeliverableRun;
     try {
       recorded = this.log.runCommand((ctx) =>
@@ -488,7 +650,7 @@ export class RunService {
             cwd,
             meta: {
               pid: proc.pid,
-              ...(typeof detected?.body === 'string' ? { body: detected.body } : {}),
+              ...(body.shown !== undefined ? { body: body.shown } : {}),
               ...(confirmed.line !== undefined && line !== row.command!.line
                 ? { edited: true }
                 : {}),
@@ -513,6 +675,19 @@ export class RunService {
     }
     run.recorded = true;
     if (run.state === 'starting') run.state = 'running';
+    // The folder checked before the fork is still the folder (review N2): one swapped for a link
+    // in between ends the run at once. What the shell did in that instant is not undone
+    // (TECHNOLOGY §9.9, a known limit).
+    const again = this.checkCwd(row);
+    const moved =
+      folderId === undefined || !again.ok || again.cwd !== cwd || this.folderId(cwd) !== folderId;
+    if (moved && !run.pending) {
+      this.onError(new Error(`its folder ${cwd} changed during the start`), `run ${runId}: folder`);
+      void this.stop(runId, SYSTEM, 'folder_changed' satisfies RunEndReason).catch(
+        (error: unknown) => this.onError(error, `run ${runId}: stop (folder_changed)`),
+      );
+      return recorded;
+    }
     if (run.pending) {
       const outcome = run.pending;
       delete run.pending;
@@ -1082,10 +1257,16 @@ export class RunService {
     return { ok: true, cwd: check.path };
   }
 
+  /**
+   * The permission engine's reading of the line and — for a detected command run as detected —
+   * of every line of the scripts it runs, unredacted (review S2): one list of warnings. The
+   * reasons quote what they read, so they are redacted like the line.
+   */
   private warningsOf(
     line: string,
     row: Deliverable,
     cwd: string,
+    parts: readonly string[] = [],
   ): { warnings: string[]; reasons: string[] } {
     const roots = rootsOf(this.log.tables, row, this.opts.places);
     // The recorded folder as written counts as the user's even when it is no root (a link).
@@ -1096,20 +1277,37 @@ export class RunService {
         ),
       ),
     ];
-    const verdict = classifyCommand(line, {
+    const ctx = {
       workspace: roots?.workspace ?? cwd,
       cwd,
       ...(folders.length > 0 ? { userFolders: folders } : {}),
-    });
+    };
+    // A script's lines: continuations joined, a Makefile recipe's `@`/`-`/`+` prefix dropped.
+    const scriptLines = parts.flatMap((part) =>
+      part
+        .replace(/\\\r?\n/g, ' ')
+        .split(/\r?\n/)
+        .map((l) => l.trim().replace(/^[@+-]+\s*/, ''))
+        .filter((l) => l !== '' && !l.startsWith('#')),
+    );
     const warnings: string[] = [];
-    for (const action of verdict.actions) {
-      const text = WARNING_OF[action];
-      if (text && !warnings.includes(text)) warnings.push(text);
+    const reasons: string[] = [];
+    const add = (text: string) => {
+      if (!warnings.includes(text)) warnings.push(text);
+    };
+    for (const [i, text] of [line, ...scriptLines].entries()) {
+      const verdict = classifyCommand(text, ctx);
+      for (const action of verdict.actions) {
+        const warning = WARNING_OF[action];
+        if (warning) add(warning);
+      }
+      if (verdict.unclassified) add('could not read all of it');
+      if (mentionsPush(text).length > 0) add(WARNING_OF.push!);
+      for (const reason of verdict.reasons) {
+        reasons.push(redactSecrets(i === 0 ? reason : `the script: ${reason}`));
+      }
     }
-    if (verdict.unclassified) warnings.push('could not read all of it');
-    const push = WARNING_OF.push!;
-    if (!warnings.includes(push) && mentionsPush(line).length > 0) warnings.push(push);
-    return { warnings, reasons: verdict.reasons };
+    return { warnings, reasons: [...new Set(reasons)] };
   }
 
   /** The environment's keys a run of this deliverable gets (never their values). */

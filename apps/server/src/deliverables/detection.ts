@@ -10,6 +10,7 @@ import type {
   Id,
 } from '@galactic/protocol';
 import type { Tables } from '../db/tables.js';
+import { redactSecrets } from '../runtime/redact.js';
 import { workspaceMeta } from '../workspace/workspaces.js';
 import {
   MANIFEST_FILES,
@@ -332,15 +333,18 @@ export class ProjectDetection {
     const key = `${projectId}\0${file}\0${reason}`;
     if (this.logged.has(key)) return;
     this.logged.add(key);
-    this.onProblem(`detection: project ${projectId}: ${file} ${reason}; it adds nothing`);
+    this.onProblem(
+      redactSecrets(`detection: project ${projectId}: ${file} ${reason}; it adds nothing`),
+    );
   }
 
   private async scan(projectId: Id): Promise<ScanResult> {
     try {
       return await this.scanNow(projectId);
     } catch (error) {
-      this.onProblem(`detection: project ${projectId}: scan failed: ${errorText(error)}`);
-      return this.skipped(projectId, `the scan failed: ${errorText(error)}`);
+      const why = redactSecrets(errorText(error));
+      this.onProblem(`detection: project ${projectId}: scan failed: ${why}`);
+      return this.skipped(projectId, `the scan failed: ${why}`);
     }
   }
 
@@ -371,7 +375,7 @@ export class ProjectDetection {
           ? this.fs.readText(join(dir, name), this.maxFileBytes)
           : { ok: false, reason: 'is not a manifest file' },
     });
-    for (const p of detection.problems) this.problem(projectId, p.file, p.reason);
+    for (const p of detection.problems) this.problem(projectId, p.file, redactSecrets(p.reason));
 
     const result: ScanResult = {
       projectId,
@@ -381,7 +385,7 @@ export class ProjectDetection {
       removed: [],
       restored: [],
       overflow: detection.overflow.length,
-      problems: [...detection.problems],
+      problems: detection.problems.map((p) => ({ ...p, reason: redactSecrets(p.reason) })),
     };
     const rows = new Map<string, Deliverable>();
     for (const d of this.tables.deliverables.of({ projectId })) {
@@ -393,8 +397,10 @@ export class ProjectDetection {
       try {
         await fn();
       } catch (error) {
-        result.problems.push({ file: keyFile(key), reason: errorText(error) });
-        this.onProblem(`detection: project ${projectId}: ${key}: ${errorText(error)}`);
+        result.problems.push({ file: keyFile(key), reason: redactSecrets(errorText(error)) });
+        this.onProblem(
+          redactSecrets(`detection: project ${projectId}: ${key}: ${errorText(error)}`),
+        );
       }
     };
 

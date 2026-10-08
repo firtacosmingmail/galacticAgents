@@ -5,6 +5,7 @@ import {
   type DeliverableEdit,
   type DeliverableWriteOptions,
   applyChanges,
+  commandLineProblem,
   deliverableShapeError,
   isRunLive,
   type Actor,
@@ -22,6 +23,7 @@ import { effectiveChanges } from './changes.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import type { PolicyWrite } from './permissions.js';
+import { containsSecret } from '../runtime/redact.js';
 
 /**
  * Deliverable commands (P9-01; SPEC §4.7, decisions 118–134; TECHNOLOGY §9.1). Each runs inside a
@@ -142,6 +144,22 @@ function checkText(title: string | undefined, description: string | null | undef
   }
 }
 
+/**
+ * A command line any writer stores (P9-12 review S1, N4): one visible line
+ * (`commandLineProblem`), and — written by a person or an agent, not the scan — nothing that
+ * looks like a secret: it would be stored, logged and shown (redacted), and run as the mask.
+ */
+function checkCommandLine(line: string, by: Actor): void {
+  const problem = commandLineProblem(line);
+  if (problem) throw new DomainError('invalid', problem);
+  if (by.type !== 'system' && containsSecret(line)) {
+    throw new DomainError(
+      'invalid',
+      'the command line contains what looks like a secret: read it from the environment or a file you keep instead (e.g. `TOKEN=$(cat ~/.my-token) pnpm deploy`)',
+    );
+  }
+}
+
 function checkShape(row: Deliverable): void {
   const error = deliverableShapeError(row);
   if (error) throw new DomainError('invalid', error);
@@ -196,6 +214,7 @@ export function addDeliverable(
     throw new DomainError('invalid', 'a detected deliverable has a detected key');
   }
   checkText(input.title, input.description);
+  if (input.command) checkCommandLine(input.command.line, by);
   const deliverable: Deliverable = {
     id: `d-${randomUUID()}`,
     ...(projectId ? { projectId } : {}),
@@ -263,6 +282,9 @@ export function updateDeliverable(
     );
   }
   checkText(edit.title, edit.description);
+  if (edit.command && edit.command.line !== current.command?.line) {
+    checkCommandLine(edit.command.line, by);
+  }
   const { meta: metaPatch, ...fields } = edit;
   const changes: DeliverableChanges = {};
   for (const [key, value] of Object.entries(fields)) {
