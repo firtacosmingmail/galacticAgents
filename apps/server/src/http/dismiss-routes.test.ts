@@ -263,16 +263,15 @@ describe('a direct message supersedes the agent’s open clarifications (P9-14)'
 });
 
 /** A runtime that cannot tell its agent (a terminal): the prompt stays up after a dismissal. */
-class PromptStaysUp extends FakeAdapter {
-  override dismiss(): Promise<boolean> {
-    return Promise.resolve(false);
-  }
-}
+const promptStaysUp = () =>
+  Object.assign(new FakeAdapter({ speed: 1 }), {
+    dismiss: (): Promise<boolean> => Promise.resolve(false),
+  });
 
 describe('a dismissal its runtime could not tell (P9-14, wave-6 review)', () => {
   it('cancels the question but keeps the agent waiting', async () => {
     const own = composeRuntime(openDatabase(':memory:'), {
-      adapters: [new PromptStaysUp({ speed: 1 })],
+      adapters: [promptStaysUp()],
       flushMs: 10,
       caps: { maxConcurrentAgents: 4 },
     });

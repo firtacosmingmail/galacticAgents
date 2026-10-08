@@ -490,9 +490,7 @@ describe('reconciling on reconnect (P7-05)', () => {
     snapshot([userHeld]);
     status('live');
     await answerOffline(userHeld);
-    answer.mockRejectedValueOnce(
-      new ApiError(409, 'question q-1 was already withdrawn', 'stale'),
-    );
+    answer.mockRejectedValueOnce(new ApiError(409, 'question q-1 was already withdrawn', 'stale'));
     status('live');
     await flushAnswerQueue();
     const entry = entries()['q-1']!;

@@ -116,7 +116,10 @@ describe('answerQuestion (the menu bar → the answer route)', () => {
   });
 
   it('a 409 rejected (a question no longer open) is gone', async () => {
-    server.reply = { status: 409, body: { error: 'rejected', message: 'question q-1 is cancelled' } };
+    server.reply = {
+      status: 409,
+      body: { error: 'rejected', message: 'question q-1 is cancelled' },
+    };
     expect(
       await answerQuestion({ questionId: 'q-1', version: 0, decision: 'allow' }, deps()),
     ).toEqual({ kind: 'gone' });

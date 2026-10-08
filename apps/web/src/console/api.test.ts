@@ -12,9 +12,6 @@ describe('createApi question routes', () => {
     const api = createApi('tok', fakeFetch);
     await api.answer('q/../x', 'yes', 1);
     await api.dismiss('q/../x', 1);
-    expect(urls).toEqual([
-      '/api/questions/q%2F..%2Fx/answer',
-      '/api/questions/q%2F..%2Fx/dismiss',
-    ]);
+    expect(urls).toEqual(['/api/questions/q%2F..%2Fx/answer', '/api/questions/q%2F..%2Fx/dismiss']);
   });
 });
