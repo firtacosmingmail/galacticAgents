@@ -12,7 +12,10 @@
 //!   capability is granted to any page (`capabilities: []`), and navigation is kept to the shell's
 //!   own pages and that origin; other http(s) links — a run's port, a URL deliverable, also when
 //!   they ask for a new window — open in the default browser, rate-limited (`links.rs`).
-//! - **Menu bar**: status line, server line, open, start, "Start at login", quit.
+//! - **Menu bar**: status line, server line, the permission requests and questions waiting for
+//!   the user (P9-15, `tray_menu.rs`: "Allow once" / "Deny" go to the Node side as an `answer`
+//!   command, which answers through the panel's route; "Open in GalacticAgents" shows the window at
+//!   `/#focus=question:<id>`), open, start, "Start at login", quit.
 //! - **Notifications**: posted from here (Rust) for the Node side's `notify` lines; the page's own
 //!   notifications are off inside the shell (`window.__GALACTIC_DESKTOP__`).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -28,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tauri::image::Image;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::webview::NewWindowResponse;
 use tauri::{
@@ -40,6 +43,8 @@ use tauri_plugin_notification::NotificationExt;
 
 mod links;
 use links::{navigation_target, new_window_target, LinkTarget, OpenLimiter};
+mod tray_menu;
+use tray_menu::{focus_url, parse_action, sections, Action, Entry, TrayMenu};
 
 /// Tells the page it runs inside the shell: the page then leaves notifications to the shell
 /// (apps/web/src/desktop-shell.ts). A flag only — it grants nothing.
@@ -55,6 +60,7 @@ enum Line {
     Server { server: ServerInfo },
     Status { view: TrayView },
     Notify { id: String, title: String, body: Option<String> },
+    Menu { menu: TrayMenu },
     Exited,
 }
 
@@ -78,6 +84,7 @@ struct TrayView {
 struct Menus {
     status: MenuItem<Wry>,
     server: MenuItem<Wry>,
+    open: MenuItem<Wry>,
     start: MenuItem<Wry>,
     autostart: CheckMenuItem<Wry>,
     quit: MenuItem<Wry>,
@@ -208,20 +215,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let at_login = app.autolaunch().is_enabled().unwrap_or(false);
     let autostart = CheckMenuItem::with_id(app, "autostart", "Start at Login", true, at_login, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit GalacticAgents", true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &status,
-            &server,
-            &PredefinedMenuItem::separator(app)?,
-            &open,
-            &start,
-            &PredefinedMenuItem::separator(app)?,
-            &autostart,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-        ],
-    )?;
+    let menus = Menus { status, server, open, start, autostart, quit };
+    let menu = compose_menu(app, &menus, &TrayMenu::default())?;
+    app.manage(menus);
     TrayIconBuilder::with_id("galactic")
         .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
         .icon_as_template(true)
@@ -233,11 +229,83 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "start" => send_command(app, "start"),
             "autostart" => toggle_autostart(app),
             "quit" => begin_quit(app),
-            _ => {}
+            id => match parse_action(id) {
+                Some(Action::Answer { question_id, version, allow }) => {
+                    send_answer(app, &question_id, version, allow)
+                }
+                Some(Action::Focus { question_id }) => focus_question(app, &question_id),
+                None => {}
+            },
         })
         .build(app)?;
-    app.manage(Menus { status, server, start, autostart, quit });
     Ok(())
+}
+
+/// The whole tray menu: the fixed items around the question sections (`tray_menu.rs`).
+fn compose_menu(app: &AppHandle, menus: &Menus, model: &TrayMenu) -> tauri::Result<Menu<Wry>> {
+    let menu = Menu::new(app)?;
+    menu.append(&menus.status)?;
+    menu.append(&menus.server)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    for section in sections(model) {
+        for entry in section {
+            match entry {
+                Entry::Item(i) => {
+                    menu.append(&MenuItem::with_id(app, i.id, i.text, i.enabled, None::<&str>)?)?
+                }
+                Entry::Submenu { title, items } => {
+                    let sub = Submenu::new(app, title, true)?;
+                    for i in items {
+                        sub.append(&MenuItem::with_id(app, i.id, i.text, i.enabled, None::<&str>)?)?;
+                    }
+                    menu.append(&sub)?;
+                }
+            }
+        }
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
+    menu.append(&menus.open)?;
+    menu.append(&menus.start)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&menus.autostart)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&menus.quit)?;
+    Ok(menu)
+}
+
+/// A `menu` line: the tray menu is rebuilt around the new question sections.
+fn on_menu(app: &AppHandle, model: TrayMenu) {
+    let menus = app.state::<Menus>();
+    match compose_menu(app, &menus, &model) {
+        Ok(menu) => {
+            if let Some(tray) = tray(app) {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+        Err(e) => eprintln!("[desktop] the menu could not be rebuilt: {e}"),
+    }
+}
+
+/// "Allow once" / "Deny": the Node side answers through the panel's route with the token and
+/// this version (never "always"; a stale answer is refused there and notified).
+fn send_answer(app: &AppHandle, question_id: &str, version: u64, allow: bool) {
+    let line = serde_json::json!({
+        "type": "answer",
+        "questionId": question_id,
+        "version": version,
+        "decision": if allow { "allow" } else { "deny" },
+    });
+    send_command(app, &line.to_string());
+}
+
+/// "Open in GalacticAgents": the window, on Mission Control's page, selecting the question.
+fn focus_question(app: &AppHandle, question_id: &str) {
+    show_window(app);
+    let port = *app.state::<Shell>().port.lock().unwrap();
+    let (Some(port), Some(window)) = (port, main_window(app)) else { return };
+    if let Ok(url) = Url::parse(&focus_url(port, question_id)) {
+        let _ = window.navigate(url);
+    }
 }
 
 fn tray(app: &AppHandle) -> Option<TrayIcon<Wry>> {
@@ -503,6 +571,7 @@ fn on_line(app: &AppHandle, line: Line) {
                 eprintln!("[desktop] notification {id}: {e}");
             }
         }
+        Line::Menu { menu } => on_menu(app, menu),
         Line::Exited => {}
     }
 }

@@ -7,12 +7,16 @@
  *    stops it (its pid is gone, the port closed, the lock removed);
  * 2. attach: a server started outside the shell → the shell attaches (owned: false); "quit"
  *    leaves that server running; then this script stops it.
+ * 3. the menu bar's permission requests (P9-15): on a server with the scene harness
+ *    (`GALACTIC_DEV=1`), a fake Steward's permission request reaches the shell's `menu` line; the
+ *    menu's "Allow once" (an `answer` command) answers it through the panel's route and the menu
+ *    empties; an answer with a version that changed is refused and notified ("already answered").
  *
  * Usage (after `pnpm build`): node apps/desktop/scripts/smoke.mjs
  * Never touches ~/.galactic or ports 4321 / 5173.
  */
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -131,6 +135,93 @@ try {
   const stopped = new Promise((r) => outside.on('exit', r));
   outside.kill('SIGTERM');
   await stopped;
+
+  console.log('# 3. permission requests in the menu bar');
+  const devServer = spawn(
+    process.execPath,
+    [launcher, 'start', '--no-open', '--port', String(port)],
+    { env: { ...env, GALACTIC_DEV: '1' }, stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+  devServer.stdout.resume();
+  for (let i = 0; i < 120 && !(await health()); i++) await new Promise((r) => setTimeout(r, 500));
+  const token = JSON.parse(readFileSync(join(env.GALACTIC_HOME, 'config.json'), 'utf8')).token;
+  const dev = async (path, body) => {
+    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify(body ?? {}),
+    });
+    if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`);
+    return res.json();
+  };
+  const c = shell();
+  await c.until((l) => l.type === 'status' && l.state === 'live');
+  const scenario = await dev('/dev/harness/scenario', { stewards: 1, asteroid: false });
+  const steward = scenario.stewardIds[0];
+  const { questionId } = await dev(`/dev/harness/agents/${steward}/question`, {
+    kind: 'permission',
+  });
+  const asked = Date.now();
+  const shown = await c.until(
+    (l) => l.type === 'menu' && l.menu.permissions.some((p) => p.id === questionId),
+    10_000,
+  );
+  const item = shown.menu.permissions.find((p) => p.id === questionId);
+  check(
+    Date.now() - asked < 1000,
+    `the request reached the menu within a second (${Date.now() - asked} ms)`,
+  );
+  check(
+    /Bash rm -rf build$/.test(item.title),
+    `the menu names the tool and command: "${item.title}"`,
+  );
+  c.child.stdin.write(
+    JSON.stringify({ type: 'answer', questionId, version: item.version, decision: 'allow' }) + '\n',
+  );
+  await c.until(
+    (l) => l.type === 'menu' && !l.menu.permissions.some((p) => p.id === questionId),
+    10_000,
+  );
+  check(true, 'Allow once answered it: the request left the menu');
+  const second = await dev(`/dev/harness/agents/${steward}/question`, { kind: 'permission' });
+  const again = await c.until(
+    (l) => l.type === 'menu' && l.menu.permissions.some((p) => p.id === second.questionId),
+    10_000,
+  );
+  const stale = again.menu.permissions.find((p) => p.id === second.questionId);
+  c.child.stdin.write(
+    JSON.stringify({
+      type: 'answer',
+      questionId: second.questionId,
+      version: stale.version + 1,
+      decision: 'deny',
+    }) + '\n',
+  );
+  const note = await c.until(
+    (l) => l.type === 'notify' && l.id.startsWith('galactic:tray-answer:'),
+  );
+  check(
+    note.title === 'Permission request already answered',
+    `a stale answer is refused: "${note.body}"`,
+  );
+  c.child.stdin.write(
+    JSON.stringify({
+      type: 'answer',
+      questionId: second.questionId,
+      version: stale.version,
+      decision: 'deny',
+    }) + '\n',
+  );
+  await c.until(
+    (l) => l.type === 'menu' && !l.menu.permissions.some((p) => p.id === second.questionId),
+    10_000,
+  );
+  check(true, 'Deny answered the second one');
+  c.child.stdin.end();
+  await c.exited;
+  const devStopped = new Promise((r) => devServer.on('exit', r));
+  devServer.kill('SIGTERM');
+  await devStopped;
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

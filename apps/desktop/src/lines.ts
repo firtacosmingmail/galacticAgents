@@ -1,4 +1,6 @@
 import type { StorageCondition } from '@galactic/protocol';
+import type { TrayAnswer } from './answer.js';
+import type { TrayMenu } from './tray-menu.js';
 
 /**
  * The line protocol between the desktop shell's two halves (P8-06, docs/DESKTOP.md):
@@ -9,8 +11,10 @@ import type { StorageCondition } from '@galactic/protocol';
  *   status watcher (one WebSocket to Mission Control, folded like the page folds it).
  *
  * Node → Rust: one JSON object per stdout line (`ShellLine`). Nothing else is ever written to
- * stdout; logs go to stderr. Rust → Node: one word per stdin line (`ShellCommand`); stdin closing
- * (the shell died) counts as `quit`.
+ * stdout; logs go to stderr. Rust → Node: one line per command (`ShellCommand`): a word (`quit`,
+ * `start`) or, for an answer from the menu (P9-15), a JSON object
+ * `{"type":"answer","questionId":…,"version":…,"decision":"allow"|"deny"}`; stdin closing (the
+ * shell died) counts as `quit`. Anything else is ignored.
  *
  * No line ever carries the token.
  */
@@ -62,11 +66,41 @@ export type ShellLine =
       detail?: string;
     }
   | { type: 'notify'; id: string; title: string; body?: string }
+  /**
+   * The menu's question sections (P9-15, `tray-menu.ts`): sent when they change, empty while
+   * the status socket is not live (nothing can be answered then).
+   */
+  | { type: 'menu'; menu: TrayMenu }
   | { type: 'exited' };
 
-export type ShellCommand = 'quit' | 'start';
+export type ShellCommand = 'quit' | 'start' | ({ type: 'answer' } & TrayAnswer);
+
+/** The longest command line read (an answer is well under it). */
+const MAX_COMMAND = 4096;
 
 export function parseCommand(line: string): ShellCommand | undefined {
-  const word = line.trim();
-  return word === 'quit' || word === 'start' ? word : undefined;
+  const text = line.trim();
+  if (text === 'quit' || text === 'start') return text;
+  if (!text.startsWith('{') || text.length > MAX_COMMAND) return undefined;
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (typeof data !== 'object' || data === null) return undefined;
+  const { type, questionId, version, decision } = data as Record<string, unknown>;
+  if (
+    type !== 'answer' ||
+    typeof questionId !== 'string' ||
+    questionId.length === 0 ||
+    questionId.length > 200 ||
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < 0 ||
+    (decision !== 'allow' && decision !== 'deny')
+  ) {
+    return undefined;
+  }
+  return { type: 'answer', questionId, version, decision };
 }

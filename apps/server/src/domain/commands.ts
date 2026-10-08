@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute, relative, resolve } from 'node:path';
 import {
   AgentEvent,
+  DISMISSED_BY_USER,
+  SUPERSEDED_BY_MESSAGE,
+  type DismissQuestionInput,
   type Actor,
   type Agent,
   type AgentPlacement,
@@ -80,6 +83,8 @@ import {
   answerQuestion,
   cancelQuestion,
   checkAnswer,
+  checkDismiss,
+  type Dismissal,
   consumeConfirmation,
   isRecordedAnswer,
   escalateQuestion,
@@ -111,6 +116,11 @@ export interface AgentControl {
   answer(questionId: Id, answer: string, by: Actor, answerId?: string): Promise<void>;
   /** Whether a live session asked the question and takes its answer through the adapter. */
   hasQuestion(questionId: Id): boolean;
+  /**
+   * Dismisses a question a live session waits on (P9-14): through the adapter, then logged as
+   * `question.cancelled` with `by`. Absent: such a question cannot be dismissed (refused).
+   */
+  dismiss?(questionId: Id, reason: string, dismissal: Dismissal): Promise<void>;
   /** Agents with a live adapter session: whom a task or project control reaches (P2-14). */
   liveAgents?(): Agent[];
 }
@@ -143,6 +153,8 @@ function noBudget(changes: object): void {
     throw new DomainError('invalid', 'a budget is set with setBudget, not by an update');
   }
 }
+
+const SYSTEM: Actor = { type: 'system' };
 
 const ENDINGS = new Set(['agent.finished', 'agent.failed', 'agent.stopped', 'agent.interrupted']);
 
@@ -687,6 +699,101 @@ export class Commands implements DomainCommands {
         cancelQuestion(ctx, questionId, reason, holdersNow(ctx, questionId, this.questions)) ??
         question,
     );
+  }
+
+  /**
+   * The user dismisses an open question (P9-14, SPEC decision 135). Checked like an answer (a
+   * stale `version`, an answered or withdrawn question: 409 `stale`). A question a live session
+   * waits on goes through its adapter first (a clarification declined, a permission request
+   * denied — never allowed), any other is cancelled in the log; either way `question.cancelled`
+   * with `by` and the reason "dismissed by the user", which wakes its asker and holders.
+   */
+  async dismissQuestion(input: DismissQuestionInput): Promise<CommandResult<Question>> {
+    const { questionId, by } = input;
+    const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    checkDismiss(question, by, input.version);
+    return this.dismissWith(question, DISMISSED_BY_USER, {
+      by,
+      ...(input.origin ? { origin: input.origin } : {}),
+    });
+  }
+
+  /**
+   * The user wrote to an agent (P9-14, SPEC decision 135): its own open clarifications, asked
+   * before the message, no longer wait for an answer — each is withdrawn as "superseded by the
+   * user's message" (`by: system`) and the agent told, so it reads the message instead. Never a
+   * permission request, never a question opened for the user alone (decision 30: a merge
+   * conflict), never the Harmonizer's (the user's single contact talks with them open, and its
+   * closure and confirmation questions are answered only by the user's choice). A question
+   * answered or withdrawn meanwhile is skipped. A question whose session could not be told (an
+   * adapter error) is reported to `onError` and the others are still withdrawn. Returns the ids
+   * withdrawn.
+   */
+  async supersedeQuestions(
+    agentId: Id,
+    onError: (questionId: Id, error: unknown) => void = (questionId, error) =>
+      console.warn(
+        `[commands] superseding ${questionId} failed:`,
+        error instanceof Error ? error.message : error,
+      ),
+  ): Promise<Id[]> {
+    const agent = this.log.tables.agents.get(agentId);
+    if (!agent || agent.role === 'harmonizer') return [];
+    const open = this.log.tables.questions
+      .all()
+      .filter(
+        (q) =>
+          q.originAgentId === agentId &&
+          q.status === 'open' &&
+          q.kind === 'clarification' &&
+          q.meta?.['toUser'] !== true,
+      );
+    const withdrawn: Id[] = [];
+    for (const q of open) {
+      try {
+        const { events } = await this.dismissWith(q, SUPERSEDED_BY_MESSAGE, { by: SYSTEM });
+        if (events.length > 0) withdrawn.push(q.id);
+      } catch (error) {
+        // Answered or withdrawn meanwhile: nothing to supersede. Anything else (the adapter
+        // could not be told) is reported, and the next question is still superseded.
+        if (!(error instanceof DomainError)) onError(q.id, error);
+      }
+    }
+    return withdrawn;
+  }
+
+  private async dismissWith(
+    question: Question,
+    reason: string,
+    dismissal: Dismissal,
+  ): Promise<CommandResult<Question>> {
+    const questionId = question.id;
+    if (this.agents?.hasQuestion(questionId)) {
+      if (!this.agents.dismiss) {
+        throw new DomainError('invalid', `the session waiting on ${questionId} cannot be told`);
+      }
+      const since = this.log.currentSeq();
+      await this.agents.dismiss(questionId, reason, dismissal);
+      const after = must(this.log.tables.questions.get(questionId), 'question', questionId);
+      const events = this.log
+        .eventsSince(since, Number.MAX_SAFE_INTEGER)
+        .map((e) => e.event)
+        .filter((e) => e.type === 'question.cancelled' && e.questionId === questionId);
+      return { value: after, events };
+    }
+    return this.run((ctx) => {
+      const current = must(ctx.tables.questions.get(questionId), 'question', questionId);
+      checkDismiss(current, dismissal.by);
+      return (
+        cancelQuestion(
+          ctx,
+          questionId,
+          reason,
+          holdersNow(ctx, questionId, this.questions),
+          dismissal,
+        ) ?? current
+      );
+    });
   }
 
   // -- deliverables (P9-01) --------------------------------------------------------------------

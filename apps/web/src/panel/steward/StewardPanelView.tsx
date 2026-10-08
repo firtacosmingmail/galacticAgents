@@ -25,6 +25,7 @@ import { useNow } from '../AgentCards.js';
 import { formatCost, formatDuration, wallClockUsed } from '../agent-cards-model.js';
 import { ControlsStrip } from '../controls.js';
 import { ClarificationComposer } from './ClarificationComposer.js';
+import { DismissQuestion } from '../cards/DismissQuestion.js';
 import { OfflineAnswers } from '../cards/QueuedAnswer.js';
 import { StewardProcesses } from './StewardProcesses.js';
 import { TerminalInput, TerminalView } from './TerminalView.js';
@@ -322,6 +323,7 @@ function ClarificationSummary({ question: q }: { question: Question }) {
       <header>
         <span className="pill kind-clarification">clarification</span>
         <span className="muted">held by {actorLabel(q.holder, world)}</span>
+        <DismissQuestion question={q} />
       </header>
       <p className="stw-question-text">{q.context.text}</p>
       <OriginContext question={q} />

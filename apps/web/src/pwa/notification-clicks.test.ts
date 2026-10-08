@@ -69,4 +69,26 @@ describe('notification taps (P7-04)', () => {
       [undefined],
     ]);
   });
+
+  it('a #focus= set on an open page (the desktop menu bar, P9-15) selects the item', () => {
+    useAppStore.setState({ snapshots: 1 });
+    teardown = wireNotificationClicks(window, {} as Navigator);
+    window.history.replaceState(null, '', '/#focus=question%3Aq9');
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    expect(focusTarget).toHaveBeenCalledWith({ kind: 'question', id: 'q9' });
+    expect(window.location.hash).toBe('');
+    window.history.replaceState(null, '', '/#other=1');
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    expect(focusTarget).toHaveBeenCalledTimes(1);
+  });
+
+  it('taps before the world arrives keep one waiting focus, the latest (wave-6 review)', () => {
+    teardown = wireNotificationClicks(window, {} as Navigator);
+    for (const id of ['q1', 'q2', 'q3']) {
+      window.history.replaceState(null, '', `/#focus=question%3A${id}`);
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    }
+    useAppStore.setState({ snapshots: 1 });
+    expect(focusTarget.mock.calls).toEqual([[{ kind: 'question', id: 'q3' }]]);
+  });
 });

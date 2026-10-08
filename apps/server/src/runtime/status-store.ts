@@ -150,7 +150,18 @@ export class StatusStore {
   fold(envelope: EventEnvelope, broadcast = true): void {
     const { event } = envelope;
     const at = Date.parse(envelope.at);
-    if (event.type === 'question.cancelled') {
+    // A dismissal its runtime could not tell (P9-14: a terminal's prompt is still up): the
+    // question is gone, but the agent keeps waiting until someone types into it.
+    if (event.type === 'question.cancelled' && event.stillWaiting) {
+      for (const e of this.entries.values()) {
+        if (!this.settle(e, event.questionId)) continue;
+        this.update(e, at, { pendingQuestionId: e.pending.at(-1) });
+        if (broadcast) this.mark(e.record.agentId);
+      }
+      return;
+    }
+    // A dismissal (P9-14, `by`) resolves the question as an answer does: the agent goes on.
+    if (event.type === 'question.cancelled' && event.by === undefined) {
       // The question is gone (P1-34); a waiting agent was interrupted out of it and goes idle.
       for (const e of this.entries.values()) {
         if (!this.settle(e, event.questionId)) continue;
@@ -161,7 +172,7 @@ export class StatusStore {
       }
       return;
     }
-    if (event.type === 'question.answered') {
+    if (event.type === 'question.answered' || event.type === 'question.cancelled') {
       for (const e of this.entries.values()) {
         if (!this.settle(e, event.questionId)) continue;
         const next = e.pending.at(-1);

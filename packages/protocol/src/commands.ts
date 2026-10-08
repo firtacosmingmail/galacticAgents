@@ -194,6 +194,20 @@ export interface AnswerQuestionInput {
   answerId?: string;
 }
 
+/**
+ * A dismissal (P9-14, SPEC decision 135): the user withdraws an open question without answering.
+ * A clarification is cancelled and its asker told; a permission request is denied through its
+ * adapter ("dismissed by the user") and cancelled — never allowed.
+ */
+export interface DismissQuestionInput {
+  questionId: Id;
+  by: Actor;
+  /** The version the user saw; a question answered or moved since is refused as stale. */
+  version?: number;
+  /** Where the dismissal came from (decision 90), recorded on the event. */
+  origin?: RequestOrigin;
+}
+
 export type ControlAction =
   | { action: 'stop' }
   | { action: 'cancel' }
@@ -362,6 +376,13 @@ export interface DomainCommands {
    * with its agent). A question that is not open is returned unchanged.
    */
   withdrawQuestion(questionId: Id, reason: string, by: Actor): Promise<CommandResult<Question>>;
+  /**
+   * The user dismisses an open question (P9-14, SPEC decision 135): `question.cancelled` with
+   * `by` and the reason "dismissed by the user". A question a live session waits on is resolved
+   * through its adapter first (a clarification declined with that text, a permission request
+   * denied); a stale `version` is refused like a stale answer.
+   */
+  dismissQuestion(input: DismissQuestionInput): Promise<CommandResult<Question>>;
 
   // budgets (P8-01; SPEC decision 18)
   /**

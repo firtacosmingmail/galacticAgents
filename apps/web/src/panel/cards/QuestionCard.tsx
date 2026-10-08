@@ -7,6 +7,7 @@ import { actorLabel, ErrorLine, useAction, useApi } from '../../console/hierarch
 import { AgentRef } from './links.js';
 import { submitAnswer } from '../../client/answer-queue.js';
 import { AnswerNoticeFor, isPending, QueuedAnswerBox, useQueuedAnswer } from './QueuedAnswer.js';
+import { DismissQuestion, withdrawnLabel } from './DismissQuestion.js';
 
 /**
  * Question cards (P2-18, extracted for the panel in P25-06; SPEC §2.6): one open question with its
@@ -15,7 +16,7 @@ import { AnswerNoticeFor, isPending, QueuedAnswerBox, useQueuedAnswer } from './
  * show the tool call and the action, with Allow / Refuse only (decisions 7, 31). Clarifications a
  * supervisor holds can still be answered by the user (answering anywhere resolves everywhere);
  * the ones a supervisor answered from context are read-only, with an Override that tells that
- * supervisor (decisions 12, 48).
+ * supervisor (decisions 12, 48). Every open card has a × that dismisses it (P9-14, decision 135).
  *
  * The cards read nothing but the store: the same question renders the same everywhere (the
  * inbox, a chat thread, the Steward view), and an answer anywhere updates all of them when the
@@ -139,6 +140,13 @@ export function QuestionCard({
       <header>
         <span className={`pill kind-${q.kind}`}>{q.kind}</span>
         <span className="muted">held by {actorLabel(q.holder, world)}</span>
+        {/* Dismiss (P9-14): not while an answer to it waits in the offline queue. */}
+        {!(queued && isPending(queued)) && (
+          <DismissQuestion
+            question={q}
+            onStale={(id, message) => (onStale ? onStale(id, message) : setOwnStale(message))}
+          />
+        )}
       </header>
       <p>{q.context.text}</p>
       <OriginContext question={q} />
@@ -277,6 +285,7 @@ export function AnsweredQuestionCard({ question: q }: { question: Question }) {
  */
 export function QuestionView({ questionId }: { questionId: Id }) {
   const q = useAppStore((s) => s.world.questions[questionId]);
+  const world = useAppStore((s) => s.world);
   const [stale, setStale] = useState<string | undefined>();
   if (!q) return null;
   return (
@@ -291,7 +300,7 @@ export function QuestionView({ questionId }: { questionId: Id }) {
         <AnsweredQuestionCard question={q} />
       ) : (
         <p className="muted" role="group" aria-label={`withdrawn question ${q.context.text}`}>
-          Withdrawn: {q.context.text}
+          {withdrawnLabel(q, world)}: {q.context.text}
         </p>
       )}
     </div>

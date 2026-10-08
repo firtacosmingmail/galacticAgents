@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import {
   AgentRuntime as AgentRuntimeName,
   AnswerBody,
+  DismissBody,
   ControlBody,
   PERMISSION_POLICY_PRESETS,
   ProposalDecisionBody,
@@ -13,6 +14,7 @@ import {
   type Actor,
   type AgentCommandsResponse,
   type AnswerResponse,
+  type DismissResponse,
   type ChatMessage,
   type ControlAction,
   type ControlResponse,
@@ -170,6 +172,17 @@ export function registerAgentRoutes(
           origin: originOf(req),
           ...(body.interrupt ? { interrupt: true } : {}),
         });
+        // The user wrote to the agent directly: its open clarifications are superseded (P9-14,
+        // SPEC decision 135) — not by a slash command, which is no reply. Never fails the send.
+        if (commands && !body.text.trimStart().startsWith('/')) {
+          await commands
+            .supersedeQuestions(agentId(req), (questionId, error) => {
+              req.log.error({ err: error, questionId }, 'superseding a question failed');
+            })
+            .catch((error: unknown) => {
+              req.log.error({ err: error }, 'superseding questions after a message failed');
+            });
+        }
         return { messageId: message.id } satisfies SendResponse;
       });
     });
@@ -439,6 +452,32 @@ export function registerAgentRoutes(
         return refuse(req, reply, error);
       }
     });
+
+    /**
+     * Dismisses a question as the user (P9-14, SPEC decision 135): a clarification is withdrawn
+     * and its agent told "the user dismissed this question"; a permission request is denied,
+     * never allowed. `version` refuses a stale dismissal with 409 `stale` like an answer (one
+     * answered or withdrawn meanwhile included). Open to remote clients — it is an answer
+     * (decision 90) — and logged with the request's origin. Needs the command surface.
+     */
+    if (commands) {
+      app.post('/api/questions/:id/dismiss', async (req, reply) => {
+        const body = parse(DismissBody, req.body ?? {}, reply);
+        if (!body) return;
+        const questionId = (req.params as { id: string }).id;
+        try {
+          await commands.dismissQuestion({
+            questionId,
+            by: USER,
+            origin: originOf(req),
+            ...(body.version !== undefined ? { version: body.version } : {}),
+          });
+          return { ok: true } satisfies DismissResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+    }
   });
 }
 

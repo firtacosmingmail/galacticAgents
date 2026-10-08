@@ -155,7 +155,7 @@ describe('restart recovery', () => {
       first.log.runCommand((ctx) =>
         answerQuestion(ctx, { questionId, answer: 'yes', answeredBy: USER }),
       ),
-    ).toThrow(/cancelled/);
+    ).toThrow(/already withdrawn/);
 
     // Second life: resumed, the message waits in the inbox with its original id — then the
     // server goes down again before the agent took it (P1-33).

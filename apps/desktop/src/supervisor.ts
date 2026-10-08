@@ -1,4 +1,5 @@
-import type { StorageCondition } from '@galactic/protocol';
+import type { StorageCondition, WorldState } from '@galactic/protocol';
+import { answerQuestion, outcomeNotice, type TrayAnswer } from './answer.js';
 import type { ConnectionState, ServerInfo, ShellLine } from './lines.js';
 import {
   DEFAULT_PLAN_DEPS,
@@ -10,6 +11,7 @@ import {
   type PlanDeps,
   type StartResult,
 } from './lifecycle.js';
+import { emptyTrayMenu, trayMenu } from './tray-menu.js';
 import { trayView } from './tray-view.js';
 import { StatusWatcher, type WatcherOptions, type WatcherState } from './watcher.js';
 
@@ -50,6 +52,8 @@ export interface SupervisorOptions {
   makeWatcher?: (opts: WatcherOptions) => Pick<StatusWatcher, 'start' | 'stop'>;
   now?: () => number;
   tickMs?: number;
+  /** The menu's answers go through it (a fake server in tests). */
+  fetch?: typeof fetch;
 }
 
 export class Supervisor {
@@ -67,6 +71,12 @@ export class Supervisor {
   private quitting = false;
   private interval: ReturnType<typeof setInterval> | undefined;
   private lastStatus: string | undefined;
+  /** The watcher's folded world (the menu's question sections, P9-15). */
+  private world: WorldState | undefined;
+  /** Permission requests answered from the menu whose answer has not come back yet. */
+  private readonly sending = new Set<string>();
+  private lastMenu: string | undefined;
+  private answers = 0;
 
   constructor(private readonly opts: SupervisorOptions) {}
 
@@ -217,6 +227,8 @@ export class Supervisor {
     this.watcher?.stop();
     this.server = info;
     this.watched = undefined;
+    this.world = undefined;
+    this.sending.clear();
     this.phase = 'connected';
     this.detail = undefined;
     this.opts.emit({ type: 'server', server: info });
@@ -234,6 +246,11 @@ export class Supervisor {
         if (this.watcher !== watcher) return;
         this.opts.emit({ type: 'notify', ...n });
       },
+      onWorld: (world) => {
+        if (this.watcher !== watcher) return;
+        this.world = world;
+        this.emitMenu();
+      },
     });
     this.watcher = watcher;
     this.emitStatus();
@@ -245,6 +262,9 @@ export class Supervisor {
     this.watcher = undefined;
     this.watched = undefined;
     this.server = undefined;
+    this.world = undefined;
+    this.sending.clear();
+    this.emitMenu();
   }
 
   private setPhase(phase: Exclude<Phase, 'connected'>, detail?: string): void {
@@ -279,8 +299,77 @@ export class Supervisor {
       ...(detail ? { detail } : {}),
     };
     const key = JSON.stringify(line);
-    if (key === this.lastStatus) return;
-    this.lastStatus = key;
-    this.opts.emit(line);
+    if (key !== this.lastStatus) {
+      this.lastStatus = key;
+      this.opts.emit(line);
+    }
+    this.emitMenu();
+  }
+
+  /** The menu's question sections, when they changed; empty unless the status socket is live. */
+  private emitMenu(): void {
+    const live = this.connectionState().state === 'live';
+    const menu =
+      live && this.world ? trayMenu(this.world, { sending: this.sending }) : emptyTrayMenu();
+    const key = JSON.stringify(menu);
+    if (key === this.lastMenu) return;
+    this.lastMenu = key;
+    this.opts.emit({ type: 'menu', menu });
+  }
+
+  /**
+   * "Allow once" / "Deny" from the menu (P9-15): the panel's answer route, with the token and the
+   * version the menu showed. A refusal is said in a notification ("already answered by …"); a
+   * success needs none (the stream updates the menu and the panel). Only a permission request the
+   * world shows open and waiting on the user is answered here (anything else: "no longer
+   * waiting"); a second click while one is on its way is ignored.
+   */
+  async answer(answer: TrayAnswer): Promise<void> {
+    if (this.quitting || this.sending.has(answer.questionId)) return;
+    const server = this.server;
+    const token = this.opts.token();
+    const notice = (title: string, body: string) =>
+      this.opts.emit({
+        type: 'notify',
+        id: `galactic:tray-answer:${answer.questionId}:${++this.answers}`,
+        title,
+        body,
+      });
+    if (!server || this.connectionState().state !== 'live' || !token) {
+      notice(
+        'Could not answer the permission request',
+        'Mission Control is not connected. Answer it in GalacticAgents.',
+      );
+      return;
+    }
+    const known = this.world?.questions[answer.questionId];
+    if (
+      !known ||
+      known.kind !== 'permission' ||
+      known.status !== 'open' ||
+      known.holder.type !== 'user'
+    ) {
+      this.opts.log('ignored a menu answer to a question that is not a waiting permission request');
+      notice(
+        'Permission request is no longer waiting',
+        'Your answer was not sent. Open GalacticAgents to see what waits for you.',
+      );
+      return;
+    }
+    this.sending.add(answer.questionId);
+    this.emitMenu();
+    try {
+      const outcome = await answerQuestion(answer, {
+        baseUrl: server.url,
+        token,
+        ...(this.opts.fetch ? { fetch: this.opts.fetch } : {}),
+      });
+      this.opts.log(`menu answer (${answer.decision}): ${outcome.kind}`);
+      const n = outcomeNotice(outcome, answer.decision);
+      if (n) notice(n.title, n.body);
+    } finally {
+      this.sending.delete(answer.questionId);
+      this.emitMenu();
+    }
   }
 }

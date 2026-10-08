@@ -215,7 +215,12 @@ export class FakeSdk implements SdkSurface {
             {
               type: 'tool_result',
               tool_use_id: id,
-              content: answers ? `The user answered: ${JSON.stringify(answers)}` : 'denied',
+              // A refusal's message is the tool result the model reads, as in the real SDK.
+              content: answers
+                ? `The user answered: ${JSON.stringify(answers)}`
+                : verdict.behavior === 'deny'
+                  ? verdict.message
+                  : 'denied',
               is_error: !answers,
             },
           ],
