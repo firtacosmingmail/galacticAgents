@@ -122,6 +122,7 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 - **Status:** in progress · **Depends on:** P8-06 · **Parallel with:** P9-14
 - Cosmin's request: the desktop app's menu bar icon lists the permission requests waiting for the user and lets him answer them there: each request as a submenu (agent, tool and the exact command or path, shortened safely) with "Allow once", "Deny" and "Open in GalacticAgents"; the count stays on the icon. Answers go through the same server route as the panel (local, the user's own action); never "always"; a request that changed or was answered elsewhere is refused cleanly. Optional: clarification questions listed with "Open" only (answers need typing).
 - **Acceptance:** with the desktop app running, a permission request appears in the menu bar menu within a second, Allow and Deny answer it, the panel updates; tests for the menu model and the answer path.
+- Notes: `docs/tasks/notes/P9-15-tray.md` (proposed SPEC decision, verification).
 
 ## Exit criteria (from the plan)
 
