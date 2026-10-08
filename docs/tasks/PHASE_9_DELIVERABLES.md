@@ -1,7 +1,7 @@
 # Phase 9 — Deliverables
 
-**Current task:** P9-12 (wave 5, branch `p9-wave5-security-e2e`) · **Task status:** in progress
-**Phase status:** in progress (11/13 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
+**Current task:** P9-13 (acceptance run with Cosmin on the Mac and the phone) · **Task status:** todo
+**Phase status:** in progress (12/13 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -104,7 +104,7 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 - **Acceptance:** the scene smoke test (P8-05) still passes and shows the mark on a harness body with a deliverable; in the desktop app a port link opens in Safari/Chrome, not in the window; the three docs are updated and consistent with SPEC decisions 131–134.
 
 ### P9-12 — Security review, end-to-end and conformance
-- **Status:** in progress · **Depends on:** P9-01 … P9-11 · **Parallel with:** —
+- **Status:** done (2026-10-08) · **Depends on:** P9-01 … P9-11 · **Parallel with:** —
 - A security review of the phase's diff against TECHNOLOGY §9.9 (path traversal and symlink races, served content types and headers, tickets, remote rules incl. `autoApproveRemote`, the run's environment, argument arrays, redaction of run output, attribution of run processes) recorded in `docs/tasks/notes/P9-12-security-review.md`, findings fixed; a Playwright flow (P8-05 harness, fake adapter) — a harness Steward declares an image and a text file, both show in the Steward view and the project's Deliverables, a detected `package.json` script runs a fixture server, its output and port appear, Stop ends it; a remote-flagged page cannot open or run; the conformance and export/import tests extended to every new event.
 - **Acceptance:** review notes committed with every finding fixed or recorded as a task or §8 question; `pnpm e2e` green with the new flow; `pnpm build`, `typecheck`, `lint`, `format:check`, `test` green.
 
