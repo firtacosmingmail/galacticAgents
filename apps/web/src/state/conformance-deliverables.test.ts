@@ -104,7 +104,10 @@ describe('replay vs snapshot conformance: deliverables (P9-01)', () => {
           source: 'detected',
           detectedKey: 'package.json#dev',
           command: { line: 'pnpm run dev', cwd: '/w/app', detectedFrom: 'package.json' },
-          meta: { important: 0 },
+          meta: {
+            important: 0,
+            detected: { line: 'pnpm run dev', title: 'dev', body: 'vite', path: '/w/app' },
+          },
         },
         SYSTEM,
       )
@@ -146,6 +149,31 @@ describe('replay vs snapshot conformance: deliverables (P9-01)', () => {
       )
     ).value;
     await commands.recordRunEnded(r2.id, { outcome: 'exited', exitCode: 1 });
+    // P9-12: the detected line edited by hand (the scan's meta stays); an invisible character
+    // refused with no event; a run stopped because its folder changed during the start.
+    const edited = { line: 'pnpm run dev --host', cwd: '/w/app', detectedFrom: 'package.json' };
+    await commands.updateDeliverable(dev.id, { command: edited }, USER, LOCAL);
+    const seqBefore = log.currentSeq();
+    await expect(
+      commands.updateDeliverable(
+        dev.id,
+        { command: { ...edited, line: 'pnpm run dev\u202e' } },
+        USER,
+        LOCAL,
+      ),
+    ).rejects.toMatchObject({ code: 'invalid' });
+    expect(log.currentSeq()).toBe(seqBefore);
+    const moved = (
+      await commands.recordRunStarted(
+        { deliverableId: dev.id, line: edited.line, cwd: '/w/app', meta: { pid: 7, edited: true } },
+        USER,
+      )
+    ).value;
+    await commands.recordRunEnded(moved.id, {
+      outcome: 'stopped',
+      by: SYSTEM,
+      reason: 'folder_changed',
+    });
     const r3 = (
       await commands.recordRunStarted(
         { deliverableId: dev.id, line: 'pnpm run dev', cwd: '/w/app' },

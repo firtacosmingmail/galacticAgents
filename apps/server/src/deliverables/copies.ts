@@ -127,6 +127,33 @@ export interface CopySkip {
 export interface CopyContext {
   roots: DeliverableRoots;
   rules: CheckOptions;
+  /** A merge's budget for all its copies (shared, spent as they go; review N6). */
+  budget?: CopyBudget;
+}
+
+/**
+ * What one merge (or worktree removal) may spend on copies while it holds the repository's lock
+ * (P9-12 review N6): entries walked and a deadline. Past it, what is left is marked missing with
+ * the reason, and the merge goes on.
+ */
+export interface CopyBudget {
+  /** Entries still allowed (files and folders, all copies together). */
+  entries: number;
+  /** Epoch ms after which no copy starts and a copy under way stops. */
+  deadline: number;
+}
+
+/** The default budget of one merge's copies. */
+export const MERGE_COPY_BUDGET = { entries: 100_000, ms: 120_000 } as const;
+
+/** The refusal a copy past the merge's budget gets (its row is marked missing with it). */
+function budgetSpent(budget: CopyBudget): DomainError {
+  return new DomainError(
+    'invalid',
+    budget.entries <= 0
+      ? `not copied: this merge's copies reached ${MERGE_COPY_BUDGET.entries} files already (the budget a merge may spend while it holds the repository)`
+      : `not copied: this merge's copies ran out of time (the budget a merge may spend while it holds the repository)`,
+  );
 }
 
 /** A copied file or folder. */
@@ -200,6 +227,8 @@ export interface DeliverableCopiesOptions {
   freeBytes?: (dir: string) => number;
   /** Entries a copied folder may hold (`treeSize`'s cap). */
   maxEntries?: number;
+  /** What one merge's copies may spend while the repository is locked (review N6). */
+  mergeBudget?: { entries: number; ms: number };
   /** Tells an agent (the task's supervisor) what could not be kept; must not throw. */
   notify?: (agentId: Id, text: string) => void;
   now?: () => string;
@@ -542,11 +571,21 @@ export class DeliverableCopies implements DeliverableCopier {
    * (`copyInto`). A symlink is refused; so is a copy that would leave less than the reserve free,
    * or a folder of more than `maxEntries`.
    */
-  async copyIn(source: string, target: CopyTarget, rules: CheckOptions): Promise<CopyResult> {
+  async copyIn(
+    source: string,
+    target: CopyTarget,
+    rules: CheckOptions,
+    budget?: CopyBudget,
+  ): Promise<CopyResult> {
+    if (budget && (budget.entries <= 0 || Date.now() > budget.deadline)) throw budgetSpent(budget);
     const place = await this.ensureFolder(target);
     const roots = rootsOf(this.tables, target, { dataDir: this.dataDir, home: this.home });
     if (!roots) throw new DomainError('invalid', 'this work has no folder to copy for');
-    const copied = await this.copyInto(source, place.dir, { roots, rules });
+    const copied = await this.copyInto(source, place.dir, {
+      roots,
+      rules,
+      ...(budget ? { budget } : {}),
+    });
     return {
       location: { storage: 'copy', path: copied.path, originalPath: source },
       bytes: copied.bytes,
@@ -589,9 +628,11 @@ export class DeliverableCopies implements DeliverableCopier {
         `${source} changed since it was checked: it now leads to ${checked.path} (changed)`,
       );
     }
-    const max = this.opts.maxEntries ?? TREE_MAX_ENTRIES;
+    const max = Math.min(this.opts.maxEntries ?? TREE_MAX_ENTRIES, ctx.budget?.entries ?? Infinity);
     const size = await treeSize(source, { maxEntries: max });
     if (!size.complete) {
+      if (ctx.budget && max === ctx.budget.entries)
+        throw budgetSpent({ ...ctx.budget, entries: 0 });
       throw new DomainError('invalid', `too many files to copy: more than ${max} entries`);
     }
     const space = checkFreeSpace(size.bytes, dir, {
@@ -619,6 +660,7 @@ export class DeliverableCopies implements DeliverableCopier {
         await utimes(partial, at, at);
       }
       const path = await this.settle(partial, dir, basename(source), checked.type === 'folder');
+      if (ctx.budget) ctx.budget.entries -= walk.entries + 1;
       return { path: realpathSync.native(path), bytes: walk.bytes, skipped: walk.skipped };
     } catch (e) {
       // Only the copy's own partial name is ever removed (decision 122).
@@ -636,6 +678,7 @@ export class DeliverableCopies implements DeliverableCopier {
       if (walk.entries > walk.max) {
         throw new DomainError('invalid', `too many files to copy: more than ${walk.max} entries`);
       }
+      if (walk.budget && Date.now() > walk.budget.deadline) throw budgetSpent(walk.budget);
       const entry = join(from, name);
       const skip = (reason: string) => {
         walk.skipped.push({ path: relative(walk.source, entry), reason });
@@ -766,11 +809,22 @@ export class DeliverableCopies implements DeliverableCopier {
     const meta = workspaceMeta(project);
     const repoRoot = canonical(meta?.repoRoot ?? project.workspace);
     const lost: string[] = [];
+    const limit = this.opts.mergeBudget ?? MERGE_COPY_BUDGET;
+    const budget: CopyBudget = { entries: limit.entries, deadline: Date.now() + limit.ms };
     for (const d of this.tables.deliverables.of({ taskId })) {
       if (d.removedAt !== undefined) continue;
       try {
         if (d.location && isInside(d.location.path, realRoot) && !d.location.missing) {
-          const kept = await this.keepPath(d, d.location, task, project, realRoot, repoRoot, info);
+          const kept = await this.keepPath(
+            d,
+            d.location,
+            task,
+            project,
+            realRoot,
+            repoRoot,
+            info,
+            budget,
+          );
           if (kept.lost) lost.push(kept.lost);
         } else if (d.command && isInside(d.command.cwd, realRoot)) {
           const cwd = join(repoRoot, relative(realRoot, d.command.cwd));
@@ -803,6 +857,7 @@ export class DeliverableCopies implements DeliverableCopier {
     root: string,
     repoRoot: string,
     info: { mergedCommit?: string },
+    budget?: CopyBudget,
   ): Promise<{ lost?: string }> {
     const rel = relative(root, location.path);
     if (await this.carried(rel, root, repoRoot, info.mergedCommit)) {
@@ -820,7 +875,7 @@ export class DeliverableCopies implements DeliverableCopier {
     try {
       // The row's own rules again, on the path and on every entry of a folder (B1: a parent
       // swapped for a symlink since the declaration is refused, never followed).
-      const copy = await this.copyIn(location.path, { taskId: task.id }, rowRules(d));
+      const copy = await this.copyIn(location.path, { taskId: task.id }, rowRules(d), budget);
       await this.update(d, { location: copy.location, meta: copyMeta(copy) });
       return {};
     } catch (e) {

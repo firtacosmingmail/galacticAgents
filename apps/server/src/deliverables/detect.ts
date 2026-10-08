@@ -128,6 +128,13 @@ function shown(text: unknown, max: number): string | undefined {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
+/**
+ * Each command's body as the file has it — not trimmed, redacted or cut — for the Run dialog's
+ * fresh read (`commandBodyOf`, P9-12 review S2). Kept beside the result, never in it: what a scan
+ * stores is the redacted, capped `body`.
+ */
+const rawBodies = new WeakMap<DetectedCommand, string>();
+
 function command(
   file: string,
   name: string,
@@ -137,7 +144,7 @@ function command(
   const important = importance(name);
   const description = shown(extra.description, MAX_DESCRIPTION_LENGTH);
   const body = shown(extra.body, MAX_BODY_LENGTH);
-  return {
+  const out: DetectedCommand = {
     key: extra.key ?? `${file}#${name}`,
     file,
     name,
@@ -147,6 +154,23 @@ function command(
     ...(body !== undefined ? { body } : {}),
     ...(important !== undefined ? { important } : {}),
   };
+  if (typeof extra.body === 'string' && extra.body.trim() !== '') rawBodies.set(out, extra.body);
+  return out;
+}
+
+/**
+ * A JSON parse error without the file's text (P9-12 review N3): V8's message quotes a snippet of
+ * the file, which may hold a secret, and the problem is logged. Only where it broke: the line and
+ * column when the message gives a position.
+ */
+function jsonProblem(error: unknown, text: string): string {
+  const message = error instanceof Error ? error.message : '';
+  const at = /\bposition (\d+)/.exec(message);
+  if (!at) return 'not valid JSON';
+  const before = text.slice(0, Number(at[1]));
+  const line = before.split('\n').length;
+  const column = before.length - before.lastIndexOf('\n');
+  return `not valid JSON (at line ${line}, column ${column})`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -198,7 +222,7 @@ export function parsePackageJson(
   try {
     json = JSON.parse(text);
   } catch (error) {
-    throw new Malformed(`not valid JSON (${(error as Error).message})`);
+    throw new Malformed(jsonProblem(error, text));
   }
   if (!isRecord(json)) throw new Malformed('not a JSON object');
   const scripts = json['scripts'];
@@ -330,8 +354,14 @@ function toml(text: string): Record<string, unknown> {
   try {
     return parseToml(text) as Record<string, unknown>;
   } catch (error) {
-    const first = ((error as Error).message ?? 'invalid').split('\n')[0];
-    throw new Malformed(`not valid TOML (${first})`);
+    // smol-toml's message carries a code frame (the file's lines) after the first line, and the
+    // first line may quote a value: only the position is kept (review N3).
+    const e = error as { line?: unknown; column?: unknown };
+    throw new Malformed(
+      typeof e.line === 'number' && typeof e.column === 'number'
+        ? `not valid TOML (at line ${e.line}, column ${e.column})`
+        : 'not valid TOML',
+    );
   }
 }
 
@@ -444,10 +474,11 @@ export function stripJsonc(text: string): string {
 /** `tasks` → `deno task <t>` (a task is a string or `{command, description}`). */
 export function parseDeno(text: string, file = 'deno.json'): DetectedCommand[] {
   let json: unknown;
+  const source = file.endsWith('c') ? stripJsonc(text) : text;
   try {
-    json = JSON.parse(file.endsWith('c') ? stripJsonc(text) : text);
+    json = JSON.parse(source);
   } catch (error) {
-    throw new Malformed(`not valid JSON (${(error as Error).message})`);
+    throw new Malformed(jsonProblem(error, source));
   }
   if (!isRecord(json)) throw new Malformed('not a JSON object');
   const tasks = json['tasks'];
@@ -483,16 +514,12 @@ export const MANIFEST_FILES: readonly string[] = [
   ...DENO_FILES,
 ];
 
-/**
- * The commands a folder's top level declares (pure over `input`). Files are looked at in a fixed
- * order (package.json, Makefile, justfile, pyproject.toml, Cargo.toml, Compose, deno.json); the
- * important names come first (by `IMPORTANT_NAMES`, then that order), then the rest in that
- * order; past `MAX_DETECTED_COMMANDS` they are counted in `overflow`.
- */
-export function detectCommands(input: DetectInput, max = MAX_DETECTED_COMMANDS): DetectResult {
-  const entries = new Set(input.entries);
+type Parser = (text: string, file: string) => DetectedCommand[];
+
+/** The manifest files present, in the fixed order, with their parsers. */
+function parsePlan(entries: ReadonlySet<string>): [string | undefined, Parser][] {
   const first = (names: string[]) => names.find((n) => entries.has(n));
-  const plan: [string | undefined, (text: string, file: string) => DetectedCommand[]][] = [
+  return [
     [
       entries.has('package.json') ? 'package.json' : undefined,
       (t, f) => parsePackageJson(t, entries, f),
@@ -510,6 +537,17 @@ export function detectCommands(input: DetectInput, max = MAX_DETECTED_COMMANDS):
     ],
     [first(DENO_FILES), parseDeno],
   ];
+}
+
+/**
+ * The commands a folder's top level declares (pure over `input`). Files are looked at in a fixed
+ * order (package.json, Makefile, justfile, pyproject.toml, Cargo.toml, Compose, deno.json); the
+ * important names come first (by `IMPORTANT_NAMES`, then that order), then the rest in that
+ * order; past `MAX_DETECTED_COMMANDS` they are counted in `overflow`.
+ */
+export function detectCommands(input: DetectInput, max = MAX_DETECTED_COMMANDS): DetectResult {
+  const entries = new Set(input.entries);
+  const plan = parsePlan(entries);
   const found: DetectedCommand[] = [];
   const problems: DetectionProblem[] = [];
   const files: string[] = [];
@@ -528,7 +566,10 @@ export function detectCommands(input: DetectInput, max = MAX_DETECTED_COMMANDS):
     } catch (error) {
       problems.push({
         file,
-        reason: error instanceof Malformed ? error.message : `could not be read (${String(error)})`,
+        reason:
+          error instanceof Malformed
+            ? error.message
+            : `could not be read (${redactSecrets(String(error))})`,
       });
       continue;
     }
@@ -548,4 +589,96 @@ export function detectCommands(input: DetectInput, max = MAX_DETECTED_COMMANDS):
     problems,
     files,
   };
+}
+
+// -- what a detected command runs now (the Run dialog) --------------------------------------------
+
+/** What `commandBodyOf` read: the body as the file has it now, or why it could not. */
+export type CommandBodyRead =
+  | {
+      ok: true;
+      /**
+       * The full text, neither redacted nor cut — the confirmation's hash and the permission
+       * engine read it; never sent as is. `undefined` when the command has no body of its own
+       * (`cargo run`, `docker compose up`).
+       */
+      raw?: string;
+      /** The scripts it is made of (a `package.json` script with its hooks: up to three), raw. */
+      parts?: string[];
+    }
+  | { ok: false; reason: string };
+
+/**
+ * Whether `npm run <s>` (or Yarn 1, Bun) runs `pre<s>` and `post<s>` around it: npm, Yarn classic
+ * (a `yarn.lock` without `.yarnrc.yml`) and Bun do; pnpm (7+) and Yarn Berry do not.
+ */
+function runsHooks(entries: ReadonlySet<string>): boolean {
+  if (entries.has('pnpm-lock.yaml')) return false;
+  if (entries.has('yarn.lock')) return !entries.has('.yarnrc.yml');
+  return true;
+}
+
+function packageBody(text: string, entries: ReadonlySet<string>, name: string): CommandBodyRead {
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (error) {
+    return { ok: false, reason: `package.json is ${jsonProblem(error, text)}` };
+  }
+  const scripts = isRecord(json) ? json['scripts'] : undefined;
+  const body = isRecord(scripts) ? scripts[name] : undefined;
+  if (typeof body !== 'string') {
+    return { ok: false, reason: `"${name}" is no longer in package.json` };
+  }
+  const hook = (h: string) =>
+    runsHooks(entries) && isRecord(scripts) && typeof scripts[h] === 'string'
+      ? (scripts[h] as string)
+      : undefined;
+  const pre = hook(`pre${name}`);
+  const post = hook(`post${name}`);
+  if (pre === undefined && post === undefined) return { ok: true, raw: body, parts: [body] };
+  const lines = [
+    ...(pre !== undefined ? [`# pre${name} (runs first)`, pre] : []),
+    `# ${name}`,
+    body,
+    ...(post !== undefined ? [`# post${name} (runs after)`, post] : []),
+  ];
+  return {
+    ok: true,
+    raw: lines.join('\n'),
+    parts: [pre, body, post].filter((p): p is string => p !== undefined),
+  };
+}
+
+/**
+ * What the detected command `key` (`<file>#<name>`) runs as its file says **now** (P9-12 review
+ * S2): read with the scan's parsers from the folder the run happens in, when the Run dialog opens
+ * and again at the start. A `package.json` script comes with the `pre`/`post` hooks its package
+ * manager runs around it. Pure over `input`; nothing is executed.
+ */
+export function commandBodyOf(input: DetectInput, key: string): CommandBodyRead {
+  const at = key.indexOf('#');
+  const file = at === -1 ? key : key.slice(0, at);
+  if (at === -1 || !MANIFEST_FILES.includes(file)) {
+    return { ok: false, reason: `${key} is not a detected script` };
+  }
+  const entries = new Set(input.entries);
+  const planned = parsePlan(entries).find(([f]) => f === file);
+  if (!planned) return { ok: false, reason: `${file} is no longer in the folder` };
+  const read = input.read(file);
+  if (!read.ok) return { ok: false, reason: `${file} ${read.reason}` };
+  if (file === 'package.json') return packageBody(read.text, entries, key.slice(at + 1));
+  let commands: DetectedCommand[];
+  try {
+    commands = planned[1](read.text, file);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `${file} is ${error instanceof Malformed ? error.message : 'not readable'}`,
+    };
+  }
+  const found = commands.find((c) => c.key === key);
+  if (!found) return { ok: false, reason: `${key.slice(at + 1)} is no longer in ${file}` };
+  const raw = rawBodies.get(found);
+  return raw === undefined ? { ok: true } : { ok: true, raw, parts: [raw] };
 }

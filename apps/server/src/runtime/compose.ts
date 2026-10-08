@@ -144,7 +144,15 @@ export interface ComposeOptions {
     settings?: () => RunSettings;
   } & Pick<
     RunServiceOptions,
-    'table' | 'self' | 'startTime' | 'groupAlive' | 'termMs' | 'ports' | 'retryMs'
+    | 'table'
+    | 'self'
+    | 'startTime'
+    | 'groupAlive'
+    | 'termMs'
+    | 'ports'
+    | 'retryMs'
+    | 'scanFs'
+    | 'folderId'
   > & { flushMs?: number; holdMs?: number };
 }
 
@@ -512,6 +520,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
           ...(opts.runs.termMs !== undefined ? { termMs: opts.runs.termMs } : {}),
           ...(opts.runs.ports ? { ports: opts.runs.ports } : {}),
           ...(opts.runs.retryMs !== undefined ? { retryMs: opts.runs.retryMs } : {}),
+          ...(opts.runs.scanFs ? { scanFs: opts.runs.scanFs } : {}),
+          ...(opts.runs.folderId ? { folderId: opts.runs.folderId } : {}),
           ...(opts.onError ? { onError: opts.onError } : {}),
         })
       : undefined;

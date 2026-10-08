@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Id, RunOutputChunk } from '@galactic/protocol';
 import { useApi } from '../../console/hierarchy/shared.js';
 import { useAppStore } from '../../state/store.js';
 
 /** Chunks per REST page (the endpoint allows 1–5000). */
 export const RUN_OUTPUT_PAGE = 1_000;
-/** REST pages read before the stream takes over (it sends the rest of the backlog too). */
+/**
+ * REST pages read before the stream takes over. The stream's backlog is the newest part only
+ * (P9-12 review N7): a longer output shows its start and its newest part, with `gap` set.
+ */
 export const RUN_OUTPUT_PAGES = 8;
 
 const NO_CHUNKS: RunOutputChunk[] = [];
@@ -16,6 +19,8 @@ export interface RunOutputState {
   error?: string | undefined;
   /** The server dropped output before this `seq` (its per-run size limit, decision 130). */
   truncatedBefore?: number | undefined;
+  /** Chunks between two held ones are not shown (a long output: its start and its end are). */
+  gap?: boolean;
 }
 
 /**
@@ -68,9 +73,14 @@ export function useRunOutput(runId: Id): RunOutputState {
     };
   }, [api, runId, logId, subscribe, unsubscribe]);
 
+  const gap = useMemo(
+    () => chunks.some((c, i) => i > 0 && c.seq > chunks[i - 1]!.seq + 1),
+    [chunks],
+  );
   if (read.for !== runId) return { chunks, status: 'loading' };
   return {
     chunks,
+    ...(gap ? { gap } : {}),
     status: read.status,
     error: read.error,
     truncatedBefore: read.truncatedBefore,

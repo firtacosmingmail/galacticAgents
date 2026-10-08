@@ -325,6 +325,7 @@ const REASON_WORDS: Record<string, string> = {
   project_closed: 'the project closed',
   task_finished: 'the task finished',
   deliverable_removed: 'it was removed',
+  folder_changed: 'its folder changed as it started',
 };
 
 /** A command's state (SPEC §4.7): "not run yet", "running · :5173", "exited 1", "stopped — …". */

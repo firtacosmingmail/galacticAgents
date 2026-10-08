@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_DETECTED_COMMANDS,
+  commandBodyOf,
   detectCommands,
   parseCargo,
   parseDeno,
@@ -383,5 +384,74 @@ describe('detectCommands', () => {
       problems: [],
       files: [],
     });
+  });
+});
+
+describe('commandBodyOf (P9-12 review S2) and problems without file text (N3)', () => {
+  const pkg = JSON.stringify({
+    scripts: { predev: 'echo before', dev: 'vite', postdev: 'echo after', test: 'vitest' },
+  });
+
+  it('a package.json script with the hooks its package manager runs', () => {
+    const npm = commandBodyOf(folder({ 'package.json': pkg }), 'package.json#dev');
+    expect(npm).toEqual({
+      ok: true,
+      raw: '# predev (runs first)\necho before\n# dev\nvite\n# postdev (runs after)\necho after',
+      parts: ['echo before', 'vite', 'echo after'],
+    });
+    for (const lock of ['bun.lock', 'yarn.lock']) {
+      const read = commandBodyOf(folder({ 'package.json': pkg, [lock]: '' }), 'package.json#dev');
+      expect(read.ok && read.parts).toHaveLength(3);
+    }
+    for (const files of [{ 'pnpm-lock.yaml': '' }, { 'yarn.lock': '', '.yarnrc.yml': '' }]) {
+      const read = commandBodyOf(folder({ 'package.json': pkg, ...files }), 'package.json#dev');
+      expect(read).toEqual({ ok: true, raw: 'vite', parts: ['vite'] });
+    }
+    expect(commandBodyOf(folder({ 'package.json': pkg }), 'package.json#test')).toMatchObject({
+      raw: 'vitest',
+    });
+  });
+
+  it('a Makefile rule and a just recipe; a command without a body; what is gone', () => {
+    const make = 'build:\n\tnpm ci\n\tnpm run build\n';
+    expect(commandBodyOf(folder({ Makefile: make }), 'Makefile#build')).toMatchObject({
+      ok: true,
+      raw: 'npm ci\nnpm run build',
+    });
+    expect(commandBodyOf(folder({ justfile: 'dev:\n  vite\n' }), 'justfile#dev')).toMatchObject({
+      raw: 'vite',
+    });
+    expect(
+      commandBodyOf(folder({ 'Cargo.toml': '[package]\nname = "x"\n' }), 'Cargo.toml#run'),
+    ).toEqual({ ok: true });
+    expect(commandBodyOf(folder({}), 'package.json#dev')).toMatchObject({ ok: false });
+    expect(commandBodyOf(folder({ Makefile: make }), 'Makefile#deploy')).toMatchObject({
+      ok: false,
+      reason: 'deploy is no longer in Makefile',
+    });
+    expect(commandBodyOf(folder({ '.env': 'x' }), '.env#x')).toMatchObject({ ok: false });
+  });
+
+  it('parse errors give the position, never a snippet of the file', () => {
+    const secret = 'sk-ant-' + 'z'.repeat(40);
+    const json = `{"scripts": {"dev": "${secret}" oops}}`;
+    let message = '';
+    try {
+      parsePackageJson(json, new Set());
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/^not valid JSON/);
+    expect(message).not.toContain('zzzz');
+    const toml = `[project.scripts]\nx = "${secret}\n`;
+    try {
+      parsePyproject(toml, new Set());
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/^not valid TOML/);
+    expect(message).not.toContain('zzzz');
+    const out = detectCommands(folder({ 'package.json': json }));
+    expect(out.problems[0]!.reason).not.toContain('zzzz');
   });
 });

@@ -447,6 +447,34 @@ describe('the merge hook (P9-06, decision 123)', () => {
     expect(errors).toEqual([]);
   });
 
+  it('spends at most its copy budget inside the lock; the rest is missing with the reason (review N6)', async () => {
+    const budgeted = new DeliverableCopies({
+      tables: w.tables,
+      commands,
+      dataDir: join(tmp, 'data'),
+      home: join(tmp, 'home'),
+      git: gitRunner({ env: GIT_ENV }),
+      freeBytes: () => free,
+      notify: (agentId, text) => told.push({ agentId, text }),
+      onError: (e) => errors.push(e),
+      mergeBudget: { entries: 3, ms: 60_000 },
+    });
+    spaces.setBeforeWorktreeRemoved((taskId, root, info) =>
+      budgeted.beforeWorktreeRemoved(taskId, root, info),
+    );
+    const { t, wt, waykeeper } = await setup();
+    mkdirSync(join(wt.path, 'dist', 'assets'), { recursive: true });
+    writeFileSync(join(wt.path, 'dist', 'app.bin'), 'built');
+    for (let i = 0; i < 5; i++) writeFileSync(join(wt.path, 'dist', 'assets', `${i}.js`), 'x');
+    const file = await declare(t.id, join(wt.path, 'dist', 'app.bin'));
+    const folder = await declare(t.id, join(wt.path, 'dist', 'assets'), 'folder');
+    expect((await spaces.mergeTask(t.id)).ok).toBe(true);
+    expect(row(file.id).location?.storage).toBe('copy');
+    expect(row(folder.id).location?.missing?.reason).toMatch(/budget/);
+    expect(told.at(-1)).toMatchObject({ agentId: waykeeper.id });
+    expect(told.at(-1)!.text).toMatch(/budget/);
+  });
+
   it('re-points a file committed after a refused merge, and a command run in the worktree', async () => {
     const { p, t, wt } = await setup();
     commitFile(wt.path, 'notes.md', 'v1');
