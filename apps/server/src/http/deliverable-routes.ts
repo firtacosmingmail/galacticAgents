@@ -384,7 +384,7 @@ export function registerDeliverableRoutes(
         if (!current.command) {
           return send(reply, 400, 'invalid', `a ${current.kind} deliverable has no command line`);
         }
-        edit.command = { ...current.command, line: body.command.line };
+        edit.command = { ...current.command, line: body.command.line.trim() };
       }
       try {
         const { value } = await commands.updateDeliverable(current.id, edit, USER, {
@@ -738,7 +738,7 @@ function handInput(
     if (check.type !== 'folder') {
       return { error: 'invalid', status: 400, message: 'a command runs in a folder' };
     }
-    return { input: { ...base, command: { line: body.command.line, cwd: check.path } } };
+    return { input: { ...base, command: { line: body.command.line.trim(), cwd: check.path } } };
   }
   if (!body.url || body.path || body.command) {
     return { error: 'invalid', status: 400, message: 'a url deliverable is an address' };

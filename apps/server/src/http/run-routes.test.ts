@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,9 +15,11 @@ import { openDatabase } from '../db/database.js';
 import { createProject } from '../domain/projects.js';
 import { composeRuntime } from '../runtime/compose.js';
 import { MemoryProcessStore } from '../runtime/process-store.js';
+import { osProcessTable } from '../runtime/process-table.js';
 import { ProcessSupervisor } from '../runtime/supervisor.js';
 import { connectWs, startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
 import { MAX_RUN_SUBSCRIPTIONS } from '../ws/session.js';
+import { agentPeerGuard, peerPidOf, type PeerCheck } from './peer-guard.js';
 
 /**
  * P9-08 — the runs' routes and the run output stream (TECHNOLOGY §9.8, §9.9; SPEC decision 131):
@@ -43,7 +46,9 @@ async function eventually(check: () => boolean | Promise<boolean>, ms = 10_000):
 const storageFull = () =>
   Object.assign(new Error('database or disk is full'), { code: 'SQLITE_FULL' });
 
-async function setup(opts: { autoApproveRemote?: boolean; diskFull?: boolean } = {}) {
+async function setup(
+  opts: { autoApproveRemote?: boolean; diskFull?: boolean; peer?: PeerCheck } = {},
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-p908-routes-')));
   const ws = join(root, 'app');
   mkdirSync(ws);
@@ -64,7 +69,11 @@ async function setup(opts: { autoApproveRemote?: boolean; diskFull?: boolean } =
     config,
     log: composed.log,
     commands: composed.commands,
-    runs: { service: composed.runs!, output: composed.runOutput! },
+    runs: {
+      service: composed.runs!,
+      output: composed.runOutput!,
+      ...(opts.peer ? { peer: opts.peer } : {}),
+    },
   });
   cleanups.push(async () => {
     await t.stop();
@@ -377,4 +386,96 @@ describe('the run routes (P9-08)', () => {
     expect(batch.runId).toBe(run.id);
     await s.call('POST', `/api/runs/${run.id}/stop`);
   }, 20_000);
+});
+
+describe('the agent speed bump on starts (P9-12 review S3)', () => {
+  it('finds the client end of a loopback connection in lsof output', () => {
+    const out = [
+      'p100',
+      'f20',
+      'n127.0.0.1:4321->127.0.0.1:50000',
+      'p200',
+      'f7',
+      'n127.0.0.1:50000->127.0.0.1:4321',
+      'p300',
+      'n[::1]:50001->[::1]:4321',
+    ].join('\n');
+    expect(peerPidOf(out, 50000, 4321, 100)).toBe(200);
+    expect(peerPidOf(out, 50001, 4321, 100)).toBe(300);
+    expect(peerPidOf(out, 50002, 4321, 100)).toBeUndefined();
+  });
+
+  it('an unidentified peer is allowed (and said so); an injected request is not looked up', async () => {
+    const guard = agentPeerGuard({
+      table: { list: async () => [], environment: async () => new Map() },
+      lsof: async () => undefined,
+    });
+    const socket = { remotePort: 5, localPort: 6, remoteAddress: '127.0.0.1' };
+    expect(await guard({ raw: { socket } } as never)).toEqual({ unknown: 'lsof is not available' });
+    expect(await guard({ raw: { socket: { ...socket, remotePort: undefined } } } as never)).toEqual(
+      {},
+    );
+  });
+
+  const lsofThere = existsSync('/usr/sbin/lsof') || existsSync('/usr/bin/lsof');
+
+  /** A request from a child process with `env`, as an agent's script would send it. */
+  const fromChild = (url: string, body: unknown, env: Record<string, string>) =>
+    new Promise<string>((resolve, reject) => {
+      const script = `const r = await fetch(process.env.T_URL, { method: 'POST', headers: { authorization: 'Bearer ' + process.env.T_TOKEN, 'content-type': 'application/json' }, body: process.env.T_BODY }); console.log(r.status + ' ' + (await r.text()));`;
+      execFile(
+        process.execPath,
+        ['--input-type=module', '-e', script],
+        {
+          env: {
+            ...process.env,
+            T_URL: url,
+            T_TOKEN: TEST_TOKEN,
+            T_BODY: JSON.stringify(body),
+            ...env,
+          },
+          timeout: 15_000,
+        },
+        (error, stdout) => (error ? reject(error) : resolve(stdout.trim())),
+      );
+    });
+
+  it.runIf(lsofThere)(
+    'refuses a start or an edited preview from a process carrying an agent or run marker',
+    async () => {
+      // `selfPid` elsewhere: the test's server is this very process, the children are below it.
+      const s = await setup({ peer: agentPeerGuard({ table: osProcessTable(), selfPid: -1 }) });
+      const d = await s.command('echo hi');
+      const url = `${s.t.baseUrl}/api/deliverables/${d.id}`;
+      for (const env of [{ GALACTIC_AGENT_ID: 'a-steward' }, { GALACTIC_RUN_ID: 'r-1' }]) {
+        const start = await fromChild(`${url}/runs`, await s.confirm(d.id), env);
+        expect(start).toMatch(/^403 .*agent_peer/);
+        const edited = await fromChild(`${url}/run-preview`, { line: 'echo other' }, env);
+        expect(edited).toMatch(/^403 .*agent_peer/);
+      }
+      expect(s.composed.log.tables.runs.of(d.id, 5)).toHaveLength(0);
+      // The same request without a marker starts it.
+      const ok = await fromChild(`${url}/runs`, await s.confirm(d.id), {});
+      expect(ok).toMatch(/^201 /);
+    },
+    30_000,
+  );
+
+  it.runIf(lsofThere)(
+    'refuses a process below Mission Control itself',
+    async () => {
+      const s = await setup({ peer: agentPeerGuard({ table: osProcessTable() }) });
+      const d = await s.command('echo hi');
+      const start = await fromChild(
+        `${s.t.baseUrl}/api/deliverables/${d.id}/runs`,
+        await s.confirm(d.id),
+        {},
+      );
+      expect(start).toMatch(/^403 .*agent_peer/);
+      // The server's own process (here, the test) is not its own peer: allowed.
+      const own = await s.call('POST', `/api/deliverables/${d.id}/runs`, await s.confirm(d.id));
+      expect(own.status).toBe(201);
+    },
+    30_000,
+  );
 });

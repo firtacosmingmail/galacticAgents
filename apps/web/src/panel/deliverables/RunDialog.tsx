@@ -16,6 +16,7 @@ import {
   blockingRefusal,
   bodyLines,
   initialFocus,
+  lineSegments,
   previewRefusalText,
   refusalText,
   warningsOf,
@@ -250,8 +251,14 @@ export function RunDialog({
         onKeyDown={onKeyDown}
       >
         <h2 id={titleId} ref={heading} tabIndex={-1} className="run-dialog-title">
-          {verb} {row.title}?
+          {verb} “{row.title}”?
         </h2>
+        {row.source === 'agent' && (
+          <p className="muted run-declared">
+            The title is an agent’s words, not a check: declared by {actorLabel(row.addedBy, world)}
+            . What runs is the command below.
+          </p>
+        )}
         {mode === 'restart' && (
           <p className="muted">
             Restart stops the run and everything it started, then runs the command again — if it can
@@ -271,6 +278,26 @@ export function RunDialog({
         )}
         {base && (
           <>
+            <p className="run-label" id={`${fieldId}-shown-label`}>
+              What runs, exactly
+            </p>
+            <pre
+              className="run-line-shown"
+              data-testid="run-line-shown"
+              tabIndex={0}
+              role="region"
+              aria-labelledby={`${fieldId}-shown-label`}
+            >
+              {lineSegments(field).map((seg, i) =>
+                seg.odd ? (
+                  <mark key={i} className="run-odd" title={seg.odd.title}>
+                    {seg.text}
+                  </mark>
+                ) : (
+                  <span key={i}>{seg.text}</span>
+                ),
+              )}
+            </pre>
             <label className="run-label" htmlFor={fieldId}>
               The exact command
             </label>
@@ -342,6 +369,9 @@ export function RunDialog({
             ) : (
               <p className="muted run-no-warnings">No warnings read in this command.</p>
             )}
+            {shown!.bodyMissing !== undefined && (
+              <p className="muted run-body-missing">{shown!.bodyMissing}</p>
+            )}
             {shown!.body !== undefined && (
               <div className="run-body">
                 <p className="run-body-head">
@@ -371,6 +401,20 @@ export function RunDialog({
                       ),
                   )}
                 </pre>
+                {(shown!.bodyTruncated || shown!.bodySecretHidden) && (
+                  <p className="run-notice run-body-notice">
+                    {shown!.bodyTruncated &&
+                      `Cut here: the script is longer than the dialog shows (all of it runs and was read for the warnings). `}
+                    {shown!.bodySecretHidden && 'A part is hidden as a secret ([redacted:…]). '}
+                    Open {shown!.detectedFrom ?? 'the file'} to read all of it.
+                  </p>
+                )}
+                {shown!.scannedBody !== undefined && (
+                  <details>
+                    <summary>What the last scan saw (the file changed since)</summary>
+                    <pre className="run-body-text">{shown!.scannedBody}</pre>
+                  </details>
+                )}
                 {shown!.bodyChanged && shown!.lastRunBody !== undefined && (
                   <details>
                     <summary>What the last run ran</summary>

@@ -9,6 +9,7 @@ import {
   isRunLive,
   RunPreviewResponse,
 } from './deliverables.js';
+import { commandLineProblem } from './deliverables.js';
 import { DEFAULT_RUN_SETTINGS, RunSettings } from './panel.js';
 import { Event, EVENT_TYPES, type EventEnvelope } from './events.js';
 import { applyEvent, applySnapshot, emptyWorld } from './world.js';
@@ -230,5 +231,34 @@ describe('managed runs on the wire (P9-08)', () => {
     expect(RunSettings.safeParse({ ...DEFAULT_RUN_SETTINGS, maxConcurrent: 0 }).success).toBe(
       false,
     );
+  });
+});
+
+describe('commandLineProblem (P9-12 review S1)', () => {
+  it('accepts one plain visible line, refuses anything the field could hide', () => {
+    for (const ok of ['pnpm dev', 'echo "héllo wörld" && ls -la', 'make  build', 'echo 日本']) {
+      expect(commandLineProblem(ok)).toBeUndefined();
+    }
+    for (const bad of [
+      '',
+      '   ',
+      'a\nb',
+      'a\rb',
+      'a\tb',
+      'a\u0000b',
+      'a\u007fb',
+      'a\u0085b',
+      'a\u2028b',
+      'a\u2029b',
+      'pnpm dev\u202e',
+      'pn\u200bpm',
+      'a\ufeffb',
+      'a\u00a0b',
+      'a\u3000b',
+      'a\ue000b',
+      'echo [redacted:token]',
+    ]) {
+      expect(commandLineProblem(bad), JSON.stringify(bad)).toBeTypeOf('string');
+    }
   });
 });

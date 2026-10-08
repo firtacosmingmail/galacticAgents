@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import {
   ENDED_STATES,
   HARNESS_META_KEY,
@@ -8,12 +9,14 @@ import {
   type AgentCaps,
   type AgentEvent,
   type AgentState,
+  type Deliverable,
   type HarnessActionResponse,
   type HarnessActivity,
   type HarnessActivityBody,
   type HarnessAgentBody,
   type HarnessAgentResponse,
   type HarnessClearResponse,
+  type HarnessDeclareBody,
   type HarnessListResponse,
   type HarnessQuestionBody,
   type HarnessScenarioBody,
@@ -77,6 +80,16 @@ export interface SceneHarnessOptions {
   /** Agents with a live adapter session (the runtime's): never given a fake ending. */
   liveSessions?: () => Agent[];
   caps?: AgentCaps;
+  /** P9-12: real project folders (`prepare: true`) under the projects root. */
+  workspaces?: { projectsRoot: string; prepareProject(projectId: Id): Promise<unknown> };
+  /** P9-12: agents' declarations (`declare`), the service a Steward's tool uses. */
+  deliverables?: {
+    declare(
+      agentId: Id,
+      target: { taskId?: Id; projectId?: Id },
+      input: HarnessDeclareBody,
+    ): Promise<{ deliverable: Deliverable }>;
+  };
 }
 
 const USER: Actor = { type: 'user' };
@@ -152,15 +165,25 @@ export class SceneHarness {
   async scenario(input: HarnessScenarioBody): Promise<HarnessScenarioResponse> {
     const stewards = input.stewards ?? 2;
     const n = this.log.tables.projects.all().filter((p) => isHarnessMeta(p.meta)).length + 1;
+    if (input.prepare && !this.opts.workspaces) {
+      throw new DomainError('invalid', 'this server cannot prepare project folders');
+    }
     const { value: project } = await this.commands.createProject(
       {
         name: `Harness project ${n}`,
-        workspace: `/tmp/galactic-harness/project-${n}`,
+        workspace: input.prepare
+          ? join(
+              this.opts.workspaces!.projectsRoot,
+              `harness-project-${n}-${randomUUID().slice(0, 8)}`,
+            )
+          : `/tmp/galactic-harness/project-${n}`,
         ...(input.bodyId ? { bodyId: input.bodyId } : { kind: input.kind ?? 'planet' }),
         meta: harnessMeta(),
       },
       { origin: 'local' },
     );
+    // A real folder, prepared like a user's project: detection scans it (P9-12).
+    if (input.prepare) await this.opts.workspaces!.prepareProject(project.id);
     const waykeeper = this.fake({ role: 'waykeeper', projectId: project.id });
     const taskIds: Id[] = [];
     const stewardIds: Id[] = [];
@@ -222,6 +245,20 @@ export class SceneHarness {
     }
     const agent = this.fake({ role: 'steward', taskId });
     return { seq: this.log.currentSeq(), agentId: agent.id, taskId };
+  }
+
+  /**
+   * A fake agent declares a deliverable for its own work (P9-12): a Steward for its task, a
+   * Waykeeper for its project — through the agents' declaration service, every rule applying.
+   */
+  async declare(agentId: Id, input: HarnessDeclareBody): Promise<{ deliverable: Deliverable }> {
+    const agent = this.fakeAgent(agentId);
+    if (!this.opts.deliverables) {
+      throw new DomainError('invalid', 'this server has no deliverables service');
+    }
+    const target =
+      agent.role === 'steward' ? { taskId: agent.taskId! } : { projectId: agent.projectId! };
+    return this.opts.deliverables.declare(agent.id, target, input);
   }
 
   /**

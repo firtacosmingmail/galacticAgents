@@ -12,6 +12,7 @@ import {
   runActions,
   stripAnsi,
 } from './runs-model.js';
+import { lineSegments } from './runs-model.js';
 
 const NOW = '2026-10-08T10:00:00.000Z';
 const cmd = { kind: 'command' as const, command: { line: 'pnpm dev', cwd: '/p' } };
@@ -108,5 +109,23 @@ describe('runs-model (P9-10)', () => {
       },
     };
     expect(liveRunCount(world, 'p-1')).toBe(2);
+  });
+});
+
+describe('lineSegments (P9-12 review S1)', () => {
+  it('keeps a plain line as is, marks space runs, tabs and invisible characters', () => {
+    expect(lineSegments('pnpm run dev')).toEqual([{ text: 'pnpm run dev' }]);
+    expect(lineSegments('a  b')).toEqual([{ text: 'a  b' }]);
+    expect(lineSegments('a   b').map((s) => s.text)).toEqual(['a', '␠×3', 'b']);
+    expect(lineSegments('a\tb c d').map((s) => s.text)).toEqual([
+      'a',
+      '⇥',
+      'b',
+      '⟨U+00A0⟩',
+      'c',
+      '⟨U+2028⟩',
+      'd',
+    ]);
+    expect(lineSegments('日本 ok')).toEqual([{ text: '日本 ok' }]);
   });
 });

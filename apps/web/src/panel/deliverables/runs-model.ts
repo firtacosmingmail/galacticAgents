@@ -130,6 +130,67 @@ export function addedByLine(
   return `declared by ${who}`;
 }
 
+/** A piece of a command line as the Run dialog shows it (P9-12 review S1). */
+export interface LineSegment {
+  text: string;
+  /** Something the eye would miss: shown as a marked placeholder, `title` saying what it is. */
+  odd?: { title: string };
+}
+
+/** A character the dialog never shows as is: control, format, separator, odd space. */
+// eslint-disable-next-line no-control-regex -- making control characters visible is the point
+const ODD = /[\u0000-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cs}]|[^\P{Zs} ]/u;
+
+/** Runs of spaces at least this long are shown as `␠×n`. */
+export const SPACE_RUN = 3;
+
+/**
+ * A command line cut into what the dialog shows as is and what it makes visible (P9-12 review
+ * S1): a run of `SPACE_RUN` or more spaces as `␠×n` (a payload pushed past the field's edge),
+ * a tab as `⇥`, and any control, format (bidi, zero-width), separator or other non-plain space
+ * character as `⟨U+XXXX⟩` — the server refuses those in a stored line, so they only show in a
+ * line kept from before, but the dialog never shows them invisibly.
+ */
+export function lineSegments(line: string): LineSegment[] {
+  const out: LineSegment[] = [];
+  let plain = '';
+  const flush = () => {
+    if (plain) out.push({ text: plain });
+    plain = '';
+  };
+  const chars = [...line];
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i]!;
+    if (c === ' ') {
+      let n = 1;
+      while (chars[i + n] === ' ') n++;
+      if (n >= SPACE_RUN) {
+        flush();
+        out.push({ text: `␠×${n}`, odd: { title: `${n} spaces` } });
+        i += n - 1;
+      } else {
+        plain += ' '.repeat(n);
+        i += n - 1;
+      }
+      continue;
+    }
+    if (c === '\t') {
+      flush();
+      out.push({ text: '⇥', odd: { title: 'a tab' } });
+      continue;
+    }
+    if (ODD.test(c)) {
+      flush();
+      const code = c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0');
+      out.push({ text: `⟨U+${code}⟩`, odd: { title: `an invisible character (U+${code})` } });
+      continue;
+    }
+    plain += c;
+  }
+  flush();
+  return out;
+}
+
 /**
  * The body's lines, each marked when it is not in the last run's body ("changed since the last
  * run", P9-08's `bodyChanged`). Without a last body nothing is marked.

@@ -173,6 +173,25 @@ a.run-port {
 .run-label {
   font-weight: 600;
 }
+.run-line-shown {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: var(--pnl-bg);
+  font: 13px/1.4 var(--pnl-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+mark.run-odd {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--pnl-here-soft);
+  box-shadow: inset 0 0 0 1px var(--pnl-here);
+  color: inherit;
+}
 .run-line {
   width: 100%;
   box-sizing: border-box;

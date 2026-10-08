@@ -5,6 +5,7 @@ import {
   HarnessActivityBody,
   HarnessAgentBody,
   HarnessAnswerBody,
+  HarnessDeclareBody,
   HarnessMoveBody,
   HarnessQuestionBody,
   HarnessScenarioBody,
@@ -18,7 +19,11 @@ import type { ServerConfig } from '../config/config.js';
 import type { StatusStore } from '../runtime/status-store.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
 import { clearDemoProjects } from '../runtime/demo-clear.js';
-import { NotHarnessError, SceneHarness } from '../runtime/scene-harness.js';
+import {
+  NotHarnessError,
+  SceneHarness,
+  type SceneHarnessOptions,
+} from '../runtime/scene-harness.js';
 import { bearerGuard, isRemoteRequest } from './security.js';
 
 export interface DevRoutesOptions {
@@ -28,6 +33,8 @@ export interface DevRoutesOptions {
   statuses?: StatusStore;
   /** The runtime: the harness never fakes an ending for an agent with a live session. */
   runtime?: Pick<AgentRuntime, 'liveAgents'>;
+  /** P9-12: prepared harness folders and agents' declarations (`SceneHarnessOptions`). */
+  harness?: Pick<SceneHarnessOptions, 'workspaces' | 'deliverables'>;
 }
 
 /**
@@ -118,6 +125,8 @@ export function registerDevRoutes(
           commands: opts.commands,
           statuses: opts.statuses,
           ...(opts.runtime ? { liveSessions: () => opts.runtime!.liveAgents() } : {}),
+          ...(opts.harness?.workspaces ? { workspaces: opts.harness.workspaces } : {}),
+          ...(opts.harness?.deliverables ? { deliverables: opts.harness.deliverables } : {}),
         }),
       );
     }
@@ -188,6 +197,11 @@ function registerHarness(app: FastifyInstance, harness: SceneHarness): void {
   app.post<{ Params: Params }>('/dev/harness/agents/:id/question', async (req, reply) => {
     const body = parse(HarnessQuestionBody, req.body, reply);
     if (body) return act(reply, req, () => harness.ask(req.params.id, body));
+  });
+
+  app.post<{ Params: Params }>('/dev/harness/agents/:id/declare', async (req, reply) => {
+    const body = parse(HarnessDeclareBody, req.body, reply);
+    if (body) return act(reply, req, () => harness.declare(req.params.id, body));
   });
 
   app.post<{ Params: Params }>('/dev/harness/questions/:id/answer', async (req, reply) => {

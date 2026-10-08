@@ -93,6 +93,8 @@ interface Setup {
   settings: RunSettings;
   projectId: string;
   command(line: string, extra?: Partial<AddDeliverableInput>): Promise<Deliverable>;
+  /** A detected command row (as the scan writes it) whose script is `key` in the folder's files. */
+  detected(line: string, key: string, scannedBody: string): Promise<Deliverable>;
   pidsOf(): Promise<{ server: number; bg: number; escaped: number; port: number }>;
 }
 
@@ -101,6 +103,7 @@ async function setup(
     settings?: { maxConcurrent?: number; output?: Partial<RunSettings['output']> };
     store?: ProcessStore;
     policy?: 'cautious';
+    folderId?: (path: string) => string | undefined;
   } = {},
 ): Promise<Setup> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-p908-')));
@@ -126,6 +129,7 @@ async function setup(
       ports: { fastMs: 150, slowMs: 300, fastForMs: 60_000 },
       flushMs: 20,
       holdMs: 20,
+      ...(opts.folderId ? { folderId: opts.folderId } : {}),
     },
   });
   cleanups.push(async () => {
@@ -177,6 +181,22 @@ async function setup(
           },
           USER,
           LOCAL,
+        )
+      ).value;
+    },
+    async detected(line, key, scannedBody) {
+      return (
+        await composed.commands.addDeliverable(
+          {
+            projectId: project.id,
+            kind: 'command',
+            title: key,
+            source: 'detected',
+            detectedKey: key,
+            command: { line, cwd: ws, detectedFrom: key.split('#')[0]! },
+            meta: { detected: { line, title: key, body: scannedBody, path: ws } },
+          },
+          { type: 'system' },
         )
       ).value;
     },
@@ -409,30 +429,183 @@ describe('starting a run (decision 129)', () => {
 
   it('shows a detected command’s body, flagged when it changed since the last run', async () => {
     const s = await setup();
-    const d = await s.command('echo dev', {
-      source: 'user',
-      meta: { detected: { line: 'echo dev', body: 'vite' } },
-    });
+    const pkg = (scripts: Record<string, string>) =>
+      writeFileSync(join(s.ws, 'package.json'), JSON.stringify({ scripts }));
+    pkg({ dev: 'vite' });
+    const d = await s.detected('echo dev', 'package.json#dev', 'vite');
     const first = s.composed.runs!.preview(d.id);
     expect(first).toMatchObject({ body: 'vite' });
     expect(first.bodyChanged).toBeUndefined(); // never run
+    expect(first.scannedBody).toBeUndefined(); // the scan saw the same
     const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
     expect(run.meta).toMatchObject({ body: 'vite' });
     await eventually(() => runOf(s, run.id).state === 'ended');
     expect(s.composed.runs!.preview(d.id).bodyChanged).toBe(false);
-    await s.composed.commands.updateDeliverable(
-      d.id,
-      { meta: { detected: { line: 'echo dev', body: 'vite --port 4000' } } },
-      { type: 'system' },
-    );
+    pkg({ dev: 'vite --port 4000' });
     const changed = s.composed.runs!.preview(d.id);
     expect(changed).toMatchObject({
       body: 'vite --port 4000',
       bodyChanged: true,
       lastRunBody: 'vite',
+      // The last scan's body, which no longer is what the file says.
+      scannedBody: 'vite',
     });
   }, 20_000);
+});
 
+describe('what a detected command runs, read when the dialog opens (P9-12 review S2)', () => {
+  const pkgOf = (s: Setup, scripts: Record<string, string>) =>
+    writeFileSync(join(s.ws, 'package.json'), JSON.stringify({ scripts }));
+
+  it('includes the pre/post hooks npm runs, and classifies them with the line', async () => {
+    const s = await setup();
+    pkgOf(s, { predev: 'rm -rf build', dev: 'vite', postdev: 'curl -s https://example.invalid' });
+    const d = await s.detected('echo dev', 'package.json#dev', 'vite');
+    const preview = s.composed.runs!.preview(d.id);
+    expect(preview.body).toBe(
+      '# predev (runs first)\nrm -rf build\n# dev\nvite\n# postdev (runs after)\ncurl -s https://example.invalid',
+    );
+    expect(preview.warnings).toEqual(
+      expect.arrayContaining(['deletes or overwrites files', 'uses the network']),
+    );
+    expect(preview.reasons?.some((r) => r.startsWith('the script: '))).toBe(true);
+    // pnpm runs no hooks: the body is the script alone.
+    writeFileSync(join(s.ws, 'pnpm-lock.yaml'), '');
+    expect(s.composed.runs!.preview(d.id).body).toBe('vite');
+  });
+
+  it('says when the body is cut or a part of it is hidden as a secret; classifies it whole', async () => {
+    const s = await setup();
+    const long = `echo start && ${'true && '.repeat(600)}rm -rf build`;
+    pkgOf(s, { dev: long, token: 'API_KEY=sk-ant-' + 'b'.repeat(40) + ' node x.js' });
+    const d = await s.detected('echo dev', 'package.json#dev', 'x');
+    const cut = s.composed.runs!.preview(d.id);
+    expect(cut.bodyTruncated).toBe(true);
+    expect(cut.body!.length).toBeLessThanOrEqual(4000);
+    // The part past the cut is still read by the engine.
+    expect(cut.warnings).toContain('deletes or overwrites files');
+    const t = await s.detected('echo token', 'package.json#token', 'x');
+    const hidden = s.composed.runs!.preview(t.id);
+    expect(hidden.bodySecretHidden).toBe(true);
+    expect(hidden.body).not.toContain('b'.repeat(40));
+    expect(JSON.stringify(hidden)).not.toContain('b'.repeat(40));
+  });
+
+  it('a body changed between the preview and the start is stale (409), nothing runs', async () => {
+    const s = await setup();
+    pkgOf(s, { dev: 'echo one' });
+    const d = await s.detected('echo dev', 'package.json#dev', 'echo one');
+    const confirmation = ok(s, d.id);
+    pkgOf(s, { dev: 'echo two' });
+    const r = await refusal(s.composed.runs!.start(d.id, confirmation, USER));
+    expect(r.code).toBe('stale');
+    expect(r.status).toBe(409);
+    expect(s.composed.log.tables.runs.of(d.id, 5)).toHaveLength(0);
+    // A script removed from the file is a change too; the dialog says it could not read it.
+    const again = ok(s, d.id);
+    pkgOf(s, {});
+    expect((await refusal(s.composed.runs!.start(d.id, again, USER))).code).toBe('stale');
+    expect(s.composed.runs!.preview(d.id).bodyMissing).toMatch(/no longer in package\.json/);
+  });
+
+  it('a detected line edited by hand (or in the dialog) shows no body, and says why', async () => {
+    const s = await setup();
+    pkgOf(s, { dev: 'vite' });
+    const d = await s.detected('echo dev', 'package.json#dev', 'vite');
+    const inDialog = s.composed.runs!.preview(d.id, 'echo other');
+    expect(inDialog.body).toBeUndefined();
+    expect(inDialog.bodyMissing).toMatch(/edited by hand/i);
+    const edited = (
+      await s.composed.commands.updateDeliverable(
+        d.id,
+        { command: { ...d.command!, line: 'echo mine' } },
+        USER,
+        LOCAL,
+      )
+    ).value;
+    const preview = s.composed.runs!.preview(edited.id);
+    expect(preview.body).toBeUndefined();
+    expect(preview.bodyMissing).toMatch(/edited by hand/i);
+    const run = await s.composed.runs!.start(edited.id, ok(s, edited.id), USER);
+    expect(run.meta?.['body']).toBeUndefined();
+    await eventually(() => runOf(s, run.id).state === 'ended');
+  }, 20_000);
+});
+
+describe('confirmations and stored lines (P9-12 review S1, N1, N2)', () => {
+  it('a confirmation starts one run only', async () => {
+    const s = await setup();
+    const d = await s.command('echo once');
+    const confirmation = ok(s, d.id);
+    const run = await s.composed.runs!.start(d.id, confirmation, USER);
+    await eventually(() => runOf(s, run.id).state === 'ended');
+    const r = await refusal(s.composed.runs!.start(d.id, confirmation, USER));
+    expect(r.code).toBe('unconfirmed');
+    // A fresh preview starts it again.
+    const next = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
+    await eventually(() => runOf(s, next.id).state === 'ended');
+  }, 20_000);
+
+  it('a restart uses its confirmation once (the start inside it)', async () => {
+    const s = await setup();
+    const d = await s.command('sleep 30');
+    const first = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
+    started.add(first.meta!['pid'] as number);
+    const confirmation = ok(s, d.id);
+    const second = await s.composed.runs!.restart(first.id, confirmation, USER);
+    started.add(second.meta!['pid'] as number);
+    const r = await refusal(s.composed.runs!.restart(second.id, confirmation, USER));
+    expect(r.code).toBe('unconfirmed');
+    expect(runOf(s, second.id).state).toBe('running');
+    await s.composed.runs!.stop(second.id, USER);
+  }, 20_000);
+
+  it('the domain refuses invisible characters in any stored line; an old row is refused at start', async () => {
+    const s = await setup();
+    for (const line of [
+      'echo a\necho b',
+      'echo a\tb',
+      'pnpm dev‮',
+      'pnpm​ dev',
+      'pnpm dev',
+      'echo a echo b',
+      'echo [redacted:token]',
+    ]) {
+      await expect(s.command(line)).rejects.toMatchObject({ code: 'invalid' });
+    }
+    // N4: a secret typed into a line by hand is refused, with the way to do it instead.
+    await expect(s.command(`curl -H "x-api-key: sk-ant-${'c'.repeat(40)}" x`)).rejects.toThrow(
+      /environment/,
+    );
+    const d = await s.command('echo fine');
+    await expect(
+      s.composed.commands.updateDeliverable(
+        d.id,
+        { command: { ...d.command!, line: 'echo fine\n rm -rf ~' } },
+        USER,
+        LOCAL,
+      ),
+    ).rejects.toMatchObject({ code: 'invalid' });
+    // A row written before these checks (or imported) is shown refused, and never starts.
+    const old = { ...rowOf(s, d.id), command: { ...d.command!, line: 'echo a\nrm -rf b' } };
+    s.composed.log.tables.deliverables.upsert(old);
+    expect(s.composed.runs!.preview(d.id).refusal).toMatchObject({ code: 'invalid' });
+    const r = await refusal(s.composed.runs!.start(d.id, ok(s, d.id), USER));
+    expect(r.code).toBe('invalid');
+  });
+
+  it('a folder that is not the checked one right after the start ends the run (folder_changed)', async () => {
+    let calls = 0;
+    const s = await setup({ folderId: () => `same:${calls++ === 0 ? 'a' : 'b'}` });
+    const d = await s.command('sleep 30');
+    const run = await s.composed.runs!.start(d.id, ok(s, d.id), USER);
+    started.add(run.meta!['pid'] as number);
+    await eventually(() => runOf(s, run.id).state === 'ended');
+    expect(runOf(s, run.id)).toMatchObject({ outcome: 'stopped', reason: 'folder_changed' });
+  }, 20_000);
+});
+
+describe('starting a run, continued', () => {
   it('a run that fails by a signal says so; a non-zero exit keeps its code', async () => {
     const s = await setup();
     const crash = await s.command('kill -9 $$');

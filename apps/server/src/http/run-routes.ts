@@ -15,6 +15,7 @@ import { RunError, type RunService } from '../deliverables/runs.js';
 import type { RunOutput } from '../deliverables/run-output.js';
 import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
+import type { PeerCheck } from './peer-guard.js';
 import { bearerGuard, requireLocal } from './security.js';
 import { sendStorageRefusal } from './storage-refusal.js';
 
@@ -39,6 +40,12 @@ import { sendStorageRefusal } from './storage-refusal.js';
  * `unconfirmed`; 403 `remote_control`; 404 `not_found`; 409 `stale` (with the current row, so the
  * dialog shows the new command), `running`, `run_cap`, `after_merge`, `folder`; 500 `start_failed`;
  * 507 / 503 when the launch intent or `run.started` cannot be written (decision 107).
+ *
+ * **The agent speed bump** (P9-12 review S3, `peer-guard.ts`): with `peer`, a start, a restart and
+ * the preview of an edited line from a process on this machine that is an agent's or a run's (its
+ * environment, or an ancestor's, carries the marker; or it runs below Mission Control) is 403
+ * `agent_peer`. The bearer token remains the only boundary: whoever holds it can run any command
+ * (TECHNOLOGY §9.9, docs/REMOTE_ACCESS.md §4).
  */
 
 const USER: Actor = { type: 'user' };
@@ -47,6 +54,8 @@ export interface RunRoutesOptions {
   log: EventLog;
   runs: RunService;
   output: RunOutput;
+  /** The agent speed bump (S3): who is on the other end of a start's connection. */
+  peer?: PeerCheck;
 }
 
 export function registerRunRoutes(
@@ -77,6 +86,23 @@ export function registerRunRoutes(
     return false;
   };
 
+  /** Refuses a request from an agent's or a run's process (the speed bump, S3). */
+  const notFromAnAgent = async (req: FastifyRequest, reply: FastifyReply): Promise<boolean> => {
+    if (!opts.peer) return true;
+    let verdict;
+    try {
+      verdict = await opts.peer(req);
+    } catch (error) {
+      req.log.warn({ err: error }, 'runs: the peer could not be identified; allowed');
+      return true;
+    }
+    if (verdict.unknown)
+      req.log.warn(`runs: the peer could not be identified (${verdict.unknown}); allowed`);
+    if (!verdict.refused) return true;
+    void reply.code(403).send({ error: 'agent_peer', message: verdict.refused });
+    return false;
+  };
+
   const withLiveState = (run: DeliverableRun): DeliverableRun => {
     if (run.state === 'ended') return run;
     const live = runs.liveRun(run.deliverableId);
@@ -102,6 +128,7 @@ export function registerRunRoutes(
       if (!body.success) {
         return reply.code(400).send({ error: 'invalid_body', issues: body.error.issues });
       }
+      if (body.data.line !== undefined && !(await notFromAnAgent(req, reply))) return reply;
       try {
         return runs.preview(idOf(req), body.data.line) satisfies RunPreviewResponse;
       } catch (error) {
@@ -130,6 +157,7 @@ export function registerRunRoutes(
 
     app.post('/api/deliverables/:id/runs', async (req, reply) => {
       if (!onTheMac(req, reply, 'Running a command')) return reply;
+      if (!(await notFromAnAgent(req, reply))) return reply;
       const body = StartRunBody.safeParse(req.body ?? {});
       if (!body.success) {
         return reply.code(400).send({ error: 'invalid_body', issues: body.error.issues });
@@ -153,6 +181,7 @@ export function registerRunRoutes(
 
     app.post('/api/runs/:id/restart', async (req, reply) => {
       if (!onTheMac(req, reply, 'Restarting a command')) return reply;
+      if (!(await notFromAnAgent(req, reply))) return reply;
       const body = StartRunBody.safeParse(req.body ?? {});
       if (!body.success) {
         return reply.code(400).send({ error: 'invalid_body', issues: body.error.issues });

@@ -46,3 +46,56 @@ attribution and identity-checked cleanup; panel XSS (Markdown `skipHtml`, highli
 SVG, `safeLink`, xterm http(s) links after a confirm, counts-only label marks and notifications);
 the desktop shell's `on_new_window` (deny, http(s) to the browser, rate-limited); the confirmation
 token's HMAC; resource limits; agents cannot start, stop or restart runs.
+
+## Fixed
+
+On `p9-12-fixes-e2e` (2026-10-08).
+
+- **S1** — `commandLineProblem` (`packages/protocol`): one visible line — no control character
+  (tab and newline included), no `\p{Cf}` / `\p{Zl}` / `\p{Zp}` / private-use / lone surrogate,
+  no space but the plain one, no `[redacted:…]` mask. The domain checks it in `addDeliverable`
+  and `updateDeliverable` for every writer (agents, by hand, remote), the routes trim the line,
+  and the run service checks the line again at every preview (a `refusal`) and start (400
+  `invalid`), so a row written before is never run. The Run dialog shows the whole line in a
+  wrapping read-only block above the field (`pre-wrap`, `overflow-wrap: anywhere`): a run of 3+
+  spaces as `␠×n`, a tab as `⇥`, anything invisible as `⟨U+XXXX⟩` (`lineSegments`).
+- **S2** — the preview re-reads the detected script from the run's folder with the scan's
+  parsers (`commandBodyOf`), with the `pre`/`post` hooks for npm, Yarn classic and Bun; the body
+  is shown redacted with `bodyTruncated` / `bodySecretHidden` notices ("open the file"), the last
+  scan's body when it differs (`scannedBody`), and every line of it is classified unredacted by
+  the permission engine (warnings merged, reasons redacted). The confirmation binds the body's
+  sha256 (with the line, version and folder); a start re-reads it and answers 409 `stale` when it
+  changed. A line edited by hand (in the row or the dialog) gets no body and `bodyMissing`
+  ("Edited by hand"). `run.started` keeps the body as read at the start.
+- **S3** — documented in `docs/REMOTE_ACCESS.md` §4 and TECHNOLOGY §9.9 (a token holder can run
+  any command); the speed bump `http/peer-guard.ts`: a start, restart or edited-line preview over
+  loopback whose peer (`lsof` by the connection's ports) or an ancestor carries
+  `GALACTIC_AGENT_ID` / `GALACTIC_RUN_ID`, or runs below Mission Control, is 403 `agent_peer`;
+  an unidentified peer is allowed and logged (decided: refusing would refuse the user's own
+  panel whenever `lsof` is slow or missing). SPEC §8 (2026-10-08): a run-only capability.
+- **N1** — a confirmation starts one run (remembered until it expires; a restart's own start
+  uses it, a second restart with it is `unconfirmed`); the folder is bound in the MAC.
+- **N2** — the folder's `(dev, ino)` and path are checked again right after the fork; a change
+  ends the run `stopped` / `folder_changed`. What the shell did in that instant is a known limit
+  (TECHNOLOGY §9.8 "As reviewed").
+- **N3** — JSON and TOML parse problems give the line and column only (no snippet, no code
+  frame); every detection problem is redacted before it is logged or returned.
+- **N4** — a command line added or edited by a person (or an agent) that looks like a secret is
+  refused: "read it from the environment or a file you keep instead".
+- **N5** — the dialog's heading quotes the title (`Run “…”?`); an agent's title is said to be
+  the agent's words, "declared by <agent>".
+- **N6** — `MERGE_COPY_BUDGET`: 100 000 entries and 120 s per merge for all its copies inside the
+  repository lock; past it a deliverable is marked missing with the reason and the supervisor is
+  told (`mergeBudget` option for tests).
+- **N7** — `run.subscribe` sends the newest 1 MiB of the backlog (`RUN_BACKLOG_BYTES`); the panel
+  reads the start over REST as before and says when the middle is not shown.
+
+End to end: `e2e/tests/09-deliverables-flow.spec.ts` — the scene harness prepares a real project
+folder (`prepare: true`, detection scans it) and its Steward declares an image and a text file
+through the agents' declaration service (`/dev/harness/agents/:id/declare`); both show in the
+Steward view and the project's Deliverables; the detected `package.json#dev` runs a fixture
+server from the Run dialog (exact line, the script as the file says), its output and port show,
+Stop ends it; a page loaded under a non-loopback host name (its own browser,
+`--host-resolver-rules`) lists the deliverables, offers no open and no Run ("on the Mac"), and
+its own `runs` / `open` calls get 403 `remote_control`. Conformance and export/import cover the
+scan's body, the run's body, an edited run, `folder_changed` and a refused line.

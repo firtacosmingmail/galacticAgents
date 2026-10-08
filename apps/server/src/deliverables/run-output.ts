@@ -25,6 +25,8 @@ export interface RunOutputOptions {
   holdMs?: number;
   now?: () => string;
   onError?: (error: unknown) => void;
+  /** The most bytes a subscription's backlog sends (default `RUN_BACKLOG_BYTES`). */
+  backlogBytes?: number;
 }
 
 type OutputRow = { run_id: string; seq: number; at: string; chunk: string };
@@ -102,6 +104,13 @@ const toRunChunk = (c: TranscriptChunk): RunOutputChunk => ({
 /** The most bytes of output one `run_output` message carries (a larger single chunk goes alone). */
 export const RUN_OUTPUT_PAGE_BYTES = 256 * 1024;
 
+/**
+ * The most bytes of stored output a `run.subscribe` sends as its backlog (P9-12 review N7): the
+ * newest part only. What is older is read over REST (`GET /api/runs/:id/output`), as the panel
+ * does first, so a long run's backlog never fills the socket's send buffer.
+ */
+export const RUN_BACKLOG_BYTES = 4 * RUN_OUTPUT_PAGE_BYTES;
+
 /** `chunks` split into runs of at most `max` bytes, in order. */
 export function pagesOf(
   chunks: readonly RunOutputChunk[],
@@ -127,6 +136,8 @@ export function pagesOf(
 export class RunOutput {
   private readonly pipeline: TranscriptPipeline;
   private readonly oldest;
+  private readonly newestFirst;
+  private readonly backlogBytes: number;
 
   constructor(db: Database, opts: RunOutputOptions) {
     this.pipeline = new TranscriptPipeline(db, {
@@ -137,6 +148,26 @@ export class RunOutput {
       ...(opts.onError ? { onError: opts.onError } : {}),
     });
     this.oldest = db.prepare('SELECT MIN(seq) AS seq FROM run_output WHERE run_id = ?');
+    this.newestFirst = db.prepare(
+      'SELECT seq, length(CAST(chunk AS BLOB)) AS n FROM run_output WHERE run_id = ? AND seq > ? ORDER BY seq DESC',
+    );
+    this.backlogBytes = opts.backlogBytes ?? RUN_BACKLOG_BYTES;
+  }
+
+  /**
+   * Where a subscription's backlog starts: `since`, or later when what is stored after `since`
+   * is more than `backlogBytes` — then only the newest chunks that fit (at least one) are sent.
+   */
+  private backlogFrom(runId: Id, since: number): number {
+    let bytes = 0;
+    for (const row of this.newestFirst.iterate(runId, since) as Iterable<{
+      seq: number;
+      n: number;
+    }>) {
+      if (bytes > 0 && bytes + row.n > this.backlogBytes) return row.seq;
+      bytes += row.n;
+    }
+    return since;
   }
 
   /** RAW output of a run (stdout or stderr): redacted, buffered, written in batches. */
@@ -147,10 +178,11 @@ export class RunOutput {
   /**
    * Persisted output after `since`, then each written batch (`run.subscribe`), handed over in
    * pages of at most `RUN_OUTPUT_PAGE_BYTES` (review N2: a 64 MiB backlog is not one socket
-   * message; a single chunk larger than a page goes alone).
+   * message; a single chunk larger than a page goes alone). The backlog is the newest
+   * `RUN_BACKLOG_BYTES` at most (P9-12 review N7): a client reads anything older over REST.
    */
   subscribe(runId: Id, since: number, listener: (chunks: RunOutputChunk[]) => void): () => void {
-    return this.pipeline.subscribe(runId, since, (chunks) => {
+    return this.pipeline.subscribe(runId, this.backlogFrom(runId, since), (chunks) => {
       for (const page of pagesOf(chunks.map(toRunChunk))) listener(page);
     });
   }
