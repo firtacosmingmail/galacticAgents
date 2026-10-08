@@ -155,7 +155,7 @@ describe('dismissing a question (P9-14)', () => {
   it('the inbox: × on both kinds, named for what it does, posts the version', async () => {
     await open([clarification, permission]);
     const clarifyX = dismissButton(inbox(), clarification.context.text);
-    expect(clarifyX.getAttribute('aria-label')).toMatch(/^Dismiss the question without answering/);
+    expect(clarifyX.getAttribute('aria-label')).toMatch(/^Dismiss the question, no reply: /);
     expect(clarifyX.tagName).toBe('BUTTON'); // a native button: Tab and Enter reach it
     const permissionX = dismissButton(inbox(), permission.context.text);
     expect(permissionX.getAttribute('aria-label')).toMatch(/\(deny it\)/);

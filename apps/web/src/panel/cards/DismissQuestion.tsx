@@ -27,7 +27,7 @@ export function DismissQuestion({
   const text = q.context.text.length > 80 ? `${q.context.text.slice(0, 79)}…` : q.context.text;
   const label = permission
     ? `Dismiss the permission request (deny it): ${text}`
-    : `Dismiss the question without answering: ${text}`;
+    : `Dismiss the question, no reply: ${text}`;
   const dismiss = async () => {
     let stale: string | undefined;
     await run(async () => {
