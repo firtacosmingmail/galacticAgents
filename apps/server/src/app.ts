@@ -10,7 +10,7 @@ import {
 } from './http/security.js';
 import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
-import { registerDevRoutes } from './http/dev-routes.js';
+import { registerDevRoutes, type DevRoutesOptions } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
 import { registerBackupRoutes } from './http/backup-routes.js';
@@ -76,6 +76,8 @@ export interface AppOptions {
    * Managed runs (P9-08): enables the run routes (`/api/deliverables/:id/run-preview`, `…/runs`,
    * `/api/runs/:id/output|stop|restart`) and `run.subscribe` on the socket.
    */
+  /** The scene harness's prepared folders and declarations (development only, P9-12). */
+  harness?: DevRoutesOptions['harness'];
   /** `peer`: the agent speed bump on starts (P9-12 review S3); `index.ts` passes the OS one. */
   runs?: { service: RunService; output: RunOutput; peer?: PeerCheck };
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
@@ -191,6 +193,7 @@ export function buildApp(opts: AppOptions): App {
       ...(opts.commands ? { commands: opts.commands } : {}),
       ...(opts.statuses ? { statuses: opts.statuses } : {}),
       ...(opts.runtime ? { runtime: opts.runtime } : {}),
+      ...(opts.harness ? { harness: opts.harness } : {}),
     });
   }
   if (opts.log && opts.runtime) {

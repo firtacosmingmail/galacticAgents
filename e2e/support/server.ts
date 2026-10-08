@@ -32,6 +32,9 @@ export interface E2eServer {
   stop: () => Promise<void>;
 }
 
+/** The host name the remote-client test maps to 127.0.0.1 in its own browser. */
+export const REMOTE_HOST = 'galactic-remote.test';
+
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SERVER_ENTRY = join(REPO_ROOT, 'apps', 'server', 'dist', 'index.js');
 const WEB_DIR = join(REPO_ROOT, 'apps', 'web', 'dist');
@@ -74,6 +77,9 @@ export async function startServer(): Promise<E2eServer> {
     GALACTIC_HARMONIZER: 'fake',
     GALACTIC_WEB_DIR: WEB_DIR,
     GALACTIC_LOG: 'silent',
+    // A name that resolves to this machine only inside the remote test's own browser (P9-12): the
+    // page it loads counts as a remote client's (`Host` not loopback), like the phone's.
+    GALACTIC_ALLOWED_HOSTS: REMOTE_HOST,
   });
 
   const logPath = join(root, 'server.log');

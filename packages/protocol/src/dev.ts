@@ -70,6 +70,12 @@ export const HarnessScenarioBody = z.object({
   kind: z.enum(['planet', 'moon']).default('planet'),
   bodyId: Id.optional(),
   asteroid: z.boolean().default(true),
+  /**
+   * P9-12: the project's folder is a real one, prepared like a user's project (a fresh folder
+   * under the server's projects root, `prepareProject`): detection scans it and its commands run.
+   * Without it the folder is a name under `/tmp/galactic-harness` that is never prepared.
+   */
+  prepare: z.boolean().default(false),
 });
 export type HarnessScenarioBody = z.input<typeof HarnessScenarioBody>;
 
@@ -112,6 +118,21 @@ export const HarnessQuestionBody = z.object({
   text: z.string().trim().min(1).max(300).optional(),
 });
 export type HarnessQuestionBody = z.infer<typeof HarnessQuestionBody>;
+
+/**
+ * `POST /dev/harness/agents/:id/declare` (P9-12): a fake Steward or Waykeeper declares a
+ * deliverable for its own work through the same service an agent's `declare_deliverable` uses —
+ * every rule of an agent's declaration applies.
+ */
+export const HarnessDeclareBody = z.object({
+  kind: z.string().min(1),
+  title: z.string().min(1),
+  path: z.string().min(1).optional(),
+  command: z.string().min(1).optional(),
+  url: z.string().min(1).optional(),
+  description: z.string().min(1).optional(),
+});
+export type HarnessDeclareBody = z.infer<typeof HarnessDeclareBody>;
 
 /** `POST /dev/harness/questions/:id/answer`. */
 export const HarnessAnswerBody = z.object({ answer: z.string().trim().min(1).max(300).optional() });

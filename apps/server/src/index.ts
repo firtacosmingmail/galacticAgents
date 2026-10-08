@@ -384,6 +384,25 @@ const app = buildApp({
     return hq;
   },
   scenarios: () => fake.scenarioNames(),
+  // The scene harness's real folders and Stewards' declarations (development only, P9-12).
+  harness: {
+    workspaces,
+    ...(composed.deliverables
+      ? {
+          deliverables: {
+            declare: (agentId, target, input) =>
+              composed.deliverables!.declare(agentId, target, {
+                kind: input.kind,
+                title: input.title,
+                ...(input.path !== undefined ? { path: input.path } : {}),
+                ...(input.command !== undefined ? { command: input.command } : {}),
+                ...(input.url !== undefined ? { url: input.url } : {}),
+                ...(input.description !== undefined ? { description: input.description } : {}),
+              }),
+          },
+        }
+      : {}),
+  },
   logger: process.env['GALACTIC_LOG'] !== 'silent',
   ...(webDir ? { webDir } : {}),
 });
