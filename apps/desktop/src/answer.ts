@@ -10,7 +10,8 @@ import { cleanMenuText } from './tray-menu.js';
  * - 200 → `answered` (the stream brings `question.answered`; the menu and the panel update).
  * - 409 `stale` → `stale`: someone answered first, or the question moved since the menu showed it;
  *   the server's message ("already answered by …") is kept, made safe for a notification.
- * - 404 → `gone`; anything else (another refusal, no server, a timeout) → `failed`.
+ *   A withdrawn (dismissed) question is `stale` too ("was already withdrawn").
+ * - 404 or 409 `rejected` → `gone`; anything else (another refusal, no server, a timeout) → `failed`.
  *
  * Neither the token nor the request's input is ever logged or returned.
  */
@@ -71,7 +72,10 @@ export async function answerQuestion(answer: TrayAnswer, deps: AnswerDeps): Prom
   if (response.status === 409 && body.error === 'stale') {
     return { kind: 'stale', message: message || 'already answered' };
   }
-  if (response.status === 404) return { kind: 'gone' };
+  // A question that is no longer open (an older server's "is cancelled" refusal) is gone too.
+  if (response.status === 404 || (response.status === 409 && body.error === 'rejected')) {
+    return { kind: 'gone' };
+  }
   if (response.status === 401) return { kind: 'failed', reason: 'the token was refused' };
   return {
     kind: 'failed',
@@ -89,7 +93,10 @@ export function outcomeNotice(
       return undefined;
     case 'stale':
       return {
-        title: 'Permission request already answered',
+        // Answered first by someone else, or withdrawn or moved since the menu showed it.
+        title: /already answered/i.test(outcome.message)
+          ? 'Permission request already answered'
+          : 'Permission request is no longer waiting',
         body: `Your ${decision === 'allow' ? 'Allow' : 'Deny'} was not sent: ${outcome.message.replace(/[.\s]+$/, '')}.`,
       };
     case 'gone':

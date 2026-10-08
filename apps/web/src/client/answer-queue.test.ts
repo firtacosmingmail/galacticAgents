@@ -485,6 +485,21 @@ describe('reconciling on reconnect (P7-05)', () => {
     expect(notSentLine(world, entries()['q-2']!)).toBe('the question no longer exists');
   });
 
+  it('a dismissed question (409 stale "was already withdrawn") reads as withdrawn (P9-14)', async () => {
+    stop = startAnswerQueue(TOKEN, api);
+    snapshot([userHeld]);
+    status('live');
+    await answerOffline(userHeld);
+    answer.mockRejectedValueOnce(
+      new ApiError(409, 'question q-1 was already withdrawn', 'stale'),
+    );
+    status('live');
+    await flushAnswerQueue();
+    const entry = entries()['q-1']!;
+    expect(entry).toMatchObject({ state: 'not_sent', reason: 'withdrawn' });
+    expect(notSentLine(useAppStore.getState().world, entry)).toBe('the question was withdrawn');
+  });
+
   it('before the world arrives (a reload), the refusal is worded from the server message', () => {
     const entry: QueuedAnswer = {
       answerId: 'x',

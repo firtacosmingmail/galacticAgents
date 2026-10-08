@@ -10,6 +10,8 @@ class FakeServer {
     [];
   questions = new Map<string, { version: number; answer?: string }>();
   status: number | undefined;
+  /** A fixed refusal for every request (status and body), when set. */
+  reply: { status: number; body: Record<string, unknown> } | undefined;
   private server: Server | undefined;
   url = '';
 
@@ -33,6 +35,7 @@ class FakeServer {
       res.end(JSON.stringify(data));
     };
     if (this.status) return send(this.status, { error: 'internal' });
+    if (this.reply) return send(this.reply.status, this.reply.body);
     if (req.headers.authorization !== 'Bearer secret-token') return send(401, { error: 'x' });
     const id = decodeURIComponent(
       /^\/api\/questions\/([^/]+)\/answer$/.exec(req.url ?? '')?.[1] ?? '',
@@ -94,6 +97,29 @@ describe('answerQuestion (the menu bar → the answer route)', () => {
       title: 'Permission request already answered',
       body: 'Your Allow was not sent: already answered by you: "allow".',
     });
+  });
+
+  it('a withdrawn (dismissed) question is stale and no longer waiting (P9-14)', async () => {
+    server.reply = {
+      status: 409,
+      body: { error: 'stale', message: 'question q-1 was already withdrawn' },
+    };
+    const outcome = await answerQuestion(
+      { questionId: 'q-1', version: 0, decision: 'deny' },
+      deps(),
+    );
+    expect(outcome).toEqual({ kind: 'stale', message: 'question q-1 was already withdrawn' });
+    expect(outcomeNotice(outcome, 'deny')).toEqual({
+      title: 'Permission request is no longer waiting',
+      body: 'Your Deny was not sent: question q-1 was already withdrawn.',
+    });
+  });
+
+  it('a 409 rejected (a question no longer open) is gone', async () => {
+    server.reply = { status: 409, body: { error: 'rejected', message: 'question q-1 is cancelled' } };
+    expect(
+      await answerQuestion({ questionId: 'q-1', version: 0, decision: 'allow' }, deps()),
+    ).toEqual({ kind: 'gone' });
   });
 
   it('an unknown question is gone; a server error or no server is a failure', async () => {

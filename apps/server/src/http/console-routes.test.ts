@@ -340,7 +340,7 @@ describe('POST /api/questions/:id/answer with an answerId (P7-05)', () => {
     expect(composed.log.tables.questions.get(q.id)?.answer).toBe('ISO 8601');
   });
 
-  it('a stale version is refused even with a fresh answerId, and a withdrawn question is rejected', async () => {
+  it('a stale version is refused even with a fresh answerId, and a withdrawn question is stale', async () => {
     const q = await askUser();
     const moved = await post(`/api/questions/${q.id}/answer`, {
       answer: 'x',
@@ -354,9 +354,11 @@ describe('POST /api/questions/:id/answer with an answerId (P7-05)', () => {
       version: q.version,
       answerId: 'ans-y',
     });
-    expect(withdrawn.status).toBe(409);
-    expect(withdrawn.body['message']).toMatch(/cancelled/);
-    expect(withdrawn.body['error']).not.toBe('stale');
+    // P9-14: a late answer to a withdrawn (dismissed) question reads "already withdrawn".
+    expect(withdrawn).toMatchObject({
+      status: 409,
+      body: { error: 'stale', message: `question ${q.id} was already withdrawn` },
+    });
   });
 
   it('a retry while the answer is still being handed to the adapter waits for it (live session)', async () => {
