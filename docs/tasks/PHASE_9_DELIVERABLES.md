@@ -1,7 +1,7 @@
 # Phase 9 — Deliverables
 
-**Current task:** P9-14, P9-15 (wave 6, branch `p9-wave6-dismiss-tray`); then P9-13 (acceptance run with Cosmin) · **Task status:** in progress
-**Phase status:** in progress (12/15 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
+**Current task:** P9-13 (acceptance run with Cosmin on the Mac and the phone) · **Task status:** todo
+**Phase status:** in progress (14/15 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -114,12 +114,12 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 - **Acceptance:** exit criteria met; notes committed; findings become tasks or §8 questions.
 
 ### P9-14 — Dismiss outdated questions (added 2026-10-08)
-- **Status:** in progress · **Depends on:** P2-03, P25-02 · **Parallel with:** P9-15
+- **Status:** done (2026-10-08) · **Depends on:** P2-03, P25-02 · **Parallel with:** P9-15
 - Cosmin's request: questions a Waykeeper asked that show in the Harmonizer's chat (and the inbox) went stale after he talked to the Waykeeper directly. (a) Every question card gets a dismiss (×) control: dismissing a clarification withdraws it and tells the asking agent "the user dismissed this question" so it can carry on; dismissing a permission question is a deny with the reason "dismissed by the user". (b) Automatic: when the user sends a message directly to the agent that asked (or to its supervisor about that work?) after a clarification opened, the clarification is withdrawn as "superseded by the user's message", and the agent is told; permission questions are never withdrawn automatically. Remote clients may dismiss (it is an answer, decision 90), logged with who.
 - **Acceptance:** × on every question card in the Harmonizer chat, the inbox and the Steward/Waykeeper views dismisses it; the asking agent is told; a direct message to the asking agent withdraws its open clarifications; permission questions only by hand; tests.
 
 ### P9-15 — Permission requests in the Mac menu bar (added 2026-10-08)
-- **Status:** in progress · **Depends on:** P8-06 · **Parallel with:** P9-14
+- **Status:** done (2026-10-08) · **Depends on:** P8-06 · **Parallel with:** P9-14
 - Cosmin's request: the desktop app's menu bar icon lists the permission requests waiting for the user and lets him answer them there: each request as a submenu (agent, tool and the exact command or path, shortened safely) with "Allow once", "Deny" and "Open in GalacticAgents"; the count stays on the icon. Answers go through the same server route as the panel (local, the user's own action); never "always"; a request that changed or was answered elsewhere is refused cleanly. Optional: clarification questions listed with "Open" only (answers need typing).
 - **Acceptance:** with the desktop app running, a permission request appears in the menu bar menu within a second, Allow and Deny answer it, the panel updates; tests for the menu model and the answer path.
 - Notes: `docs/tasks/notes/P9-15-tray.md` (proposed SPEC decision, verification).
