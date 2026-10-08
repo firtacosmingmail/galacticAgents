@@ -216,7 +216,7 @@ describe('trayView', () => {
   });
 });
 
-describe('Supervisor: the menu bar\'s permission requests (P9-15)', () => {
+describe("Supervisor: the menu bar's permission requests (P9-15)", () => {
   const { answeredBy: _by, answer: _a, ...base } = domain.permissionQuestion;
   const request: Question = { ...base, id: 'q-7', status: 'open', version: 4 };
   const clarification: Question = {

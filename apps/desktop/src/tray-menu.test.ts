@@ -66,7 +66,9 @@ describe('trayMenu', () => {
     const theirs = { ...question, id: 'c-2' }; // held by a Waykeeper
     const menu = trayMenu(world([mine, theirs]));
     expect(menu.questionCount).toBe(1);
-    expect(menu.questions).toEqual([{ id: 'c-1', title: expect.stringContaining(question.context.text) }]);
+    expect(menu.questions).toEqual([
+      { id: 'c-1', title: expect.stringContaining(question.context.text) },
+    ]);
     expect(menu.permissionCount).toBe(0);
   });
 
@@ -101,15 +103,19 @@ describe('trayMenu', () => {
   });
 
   it('removes control and bidirectional-override characters from agent text', () => {
-    const sneaky = 'rm -rf / ‮txt.exe‬​\u0007\u001b[31m';
+    const sneaky = 'rm -rf / \u202Etxt.exe\u202C\u200B\u0007\u001b[31m';
     const title = trayMenu(world([permission('q-1', { command: sneaky })])).permissions[0]!.title;
-    expect(title).not.toMatch(/[‪-‮⁦-⁩​\u0007\u001b]/);
+    const unsafe = [0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2069, 0x200b, 0x07, 0x1b];
+    expect([...title].filter((c) => unsafe.includes(c.codePointAt(0)!))).toEqual([]);
     expect(title).toContain('rm -rf / txt.exe[31m');
   });
 
   it('falls back to the action and the text when the request has no tool call', () => {
     const q = permission('q-1', undefined);
-    q.context = { text: 'The agent switched to mode bypass; let it continue?', permissionAction: 'network' };
+    q.context = {
+      text: 'The agent switched to mode bypass; let it continue?',
+      permissionAction: 'network',
+    };
     expect(trayMenu(world([q])).permissions[0]?.title).toMatch(/: network: The agent switched/);
   });
 

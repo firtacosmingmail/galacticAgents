@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { answerQuestion, outcomeNotice } from './answer.js';
@@ -23,7 +23,7 @@ class FakeServer {
     await new Promise<void>((resolve) => this.server?.close(() => resolve()));
   }
 
-  private async handle(req: IncomingMessage, res: import('node:http').ServerResponse) {
+  private async handle(req: IncomingMessage, res: ServerResponse) {
     let raw = '';
     for await (const chunk of req) raw += String(chunk);
     const body = JSON.parse(raw || '{}') as Record<string, unknown>;
@@ -34,7 +34,9 @@ class FakeServer {
     };
     if (this.status) return send(this.status, { error: 'internal' });
     if (req.headers.authorization !== 'Bearer secret-token') return send(401, { error: 'x' });
-    const id = decodeURIComponent(/^\/api\/questions\/([^/]+)\/answer$/.exec(req.url ?? '')?.[1] ?? '');
+    const id = decodeURIComponent(
+      /^\/api\/questions\/([^/]+)\/answer$/.exec(req.url ?? '')?.[1] ?? '',
+    );
     const q = this.questions.get(id);
     if (!q) return send(404, { error: 'not_found', message: `unknown question ${id}` });
     if (q.answer !== undefined || body['version'] !== q.version) {
@@ -60,7 +62,10 @@ const deps = () => ({ baseUrl: server.url, token: 'secret-token' });
 describe('answerQuestion (the menu bar → the answer route)', () => {
   it('Allow once sends the panel’s "allow" with the version and the token', async () => {
     server.questions.set('q-1', { version: 2 });
-    const outcome = await answerQuestion({ questionId: 'q-1', version: 2, decision: 'allow' }, deps());
+    const outcome = await answerQuestion(
+      { questionId: 'q-1', version: 2, decision: 'allow' },
+      deps(),
+    );
     expect(outcome).toEqual({ kind: 'answered' });
     expect(server.questions.get('q-1')?.answer).toBe('allow');
     const [req] = server.received;
@@ -79,7 +84,10 @@ describe('answerQuestion (the menu bar → the answer route)', () => {
 
   it('a question answered elsewhere or changed since the menu showed it is stale', async () => {
     server.questions.set('q-1', { version: 3 });
-    const outcome = await answerQuestion({ questionId: 'q-1', version: 2, decision: 'allow' }, deps());
+    const outcome = await answerQuestion(
+      { questionId: 'q-1', version: 2, decision: 'allow' },
+      deps(),
+    );
     expect(outcome).toEqual({ kind: 'stale', message: 'already answered by you: "allow".' });
     expect(server.questions.get('q-1')?.answer).toBeUndefined();
     expect(outcomeNotice(outcome, 'allow')).toEqual({
@@ -93,7 +101,10 @@ describe('answerQuestion (the menu bar → the answer route)', () => {
       await answerQuestion({ questionId: 'q-x', version: 0, decision: 'deny' }, deps()),
     ).toEqual({ kind: 'gone' });
     server.status = 500;
-    const failed = await answerQuestion({ questionId: 'q-x', version: 0, decision: 'deny' }, deps());
+    const failed = await answerQuestion(
+      { questionId: 'q-x', version: 0, decision: 'deny' },
+      deps(),
+    );
     expect(failed.kind).toBe('failed');
     await server.stop();
     const down = await answerQuestion(

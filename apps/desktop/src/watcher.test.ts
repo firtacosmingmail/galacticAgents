@@ -64,7 +64,15 @@ function setup(tokenValue: string | null = 'secret-token') {
   });
   watcher.start();
   const reconnect = () => timers.shift()?.();
-  return { watcher, sockets, states, notes, worlds, reconnect, last: () => sockets[sockets.length - 1]! };
+  return {
+    watcher,
+    sockets,
+    states,
+    notes,
+    worlds,
+    reconnect,
+    last: () => sockets[sockets.length - 1]!,
+  };
 }
 
 const userQuestion = (id: string, kind: Question['kind'] = 'clarification'): Question => ({
