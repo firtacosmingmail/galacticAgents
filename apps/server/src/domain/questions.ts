@@ -375,6 +375,7 @@ export function cancelQuestion(
     ...(holders?.length ? { holders } : {}),
     ...(dismissal ? { by: dismissal.by } : {}),
     ...(dismissal?.origin ? { origin: dismissal.origin } : {}),
+    ...(dismissal?.stillWaiting ? { stillWaiting: true as const } : {}),
   });
   return question;
 }
@@ -383,6 +384,8 @@ export function cancelQuestion(
 export interface Dismissal {
   by: Actor;
   origin?: RequestOrigin | undefined;
+  /** The adapter could not unblock the agent (a terminal's prompt is still up). */
+  stillWaiting?: boolean | undefined;
 }
 
 /** Cancels every open question of an agent (it ended or was interrupted). */

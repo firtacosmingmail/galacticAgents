@@ -734,13 +734,17 @@ export class PtyAdapter implements AgentAdapter {
    * The user dismissed the question (P9-14, SPEC decision 135). A permission prompt is refused as
    * Refuse refuses it (its "no", or an interrupt for a free-form prompt) — never allowed. A
    * terminal cannot be told anything else: a clarification's card is withdrawn and nothing is
-   * typed; the prompt stays in its terminal for the user's keyboard.
+   * typed; the prompt stays in its terminal for the user's keyboard, so the agent is not
+   * unblocked (`false`: it keeps waiting).
    */
-  async dismiss(questionId: Id, reason: string): Promise<void> {
+  async dismiss(questionId: Id, reason: string): Promise<boolean> {
     const session = this.byQuestion.get(questionId);
     const q = session?.question;
     if (!session || !q || q.id !== questionId) throw new Error(`no pending question ${questionId}`);
-    if (q.kind === 'permission') return this.answer(questionId, 'no');
+    if (q.kind === 'permission') {
+      await this.answer(questionId, 'no');
+      return true;
+    }
     this.settleQuestion(session);
     this.flushAll(session);
     this.output(
@@ -749,6 +753,7 @@ export class PtyAdapter implements AgentAdapter {
       `The question was ${reason}: nothing was typed. To answer it, type into its terminal ` +
         "from this Mac's browser.",
     );
+    return false;
   }
 
   /**

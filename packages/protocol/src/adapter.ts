@@ -114,10 +114,12 @@ export interface AgentAdapter {
    * 135); `reason` says why ("dismissed by the user", "superseded by the user's message"). A
    * clarification resolves the agent's question tool with a refusal that says so (the agent
    * carries on, or asks again); a permission request is denied — never allowed. A runtime that
-   * cannot tell the agent (a terminal) only withdraws the question. Absent: the runtime answers
-   * a permission with a refusal and a clarification with the reason as text.
+   * cannot tell the agent (a terminal) only withdraws the question, and resolves `false`: the
+   * agent is not unblocked — its prompt is still up, waiting for the user's keyboard. Any other
+   * result means the agent goes on. Absent: the runtime answers a permission with a refusal and
+   * a clarification with the reason as text.
    */
-  dismiss?(questionId: Id, reason: string): Promise<void>;
+  dismiss?(questionId: Id, reason: string): Promise<boolean | void>;
   /** Cancels the current turn; the session reports `agent.idle` when it has. */
   interrupt(sessionId: string): Promise<void>;
   pause(sessionId: string): Promise<void>;
