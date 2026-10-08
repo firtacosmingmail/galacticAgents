@@ -35,6 +35,26 @@ test('a clarification question is answered from the inbox', async ({ page, api, 
   await expect.poll(() => probeList(page, 'satellites')).toContain(steward);
 });
 
+test('a clarification is dismissed from the inbox (P9-14)', async ({ page, api, openApp }) => {
+  const world = await seedScenario(api, { stewards: 1, asteroid: false });
+  const steward = world.stewardIds[0]!;
+  await openApp();
+
+  const text = `Which font for the title ${stamp()}?`;
+  const questionId = await askUser(api, steward, 'clarification', text);
+  const card = inbox(page).locator(`article[data-question-id="${questionId}"]`);
+  await expect(card).toBeVisible();
+  await card.getByRole('button', { name: `Dismiss the question without answering: ${text}` }).click();
+
+  await expect(card).toHaveCount(0);
+  await expect.poll(async () => (await questionOnServer(api, text))?.status).toBe('cancelled');
+  const dismissed = await questionOnServer(api, text);
+  expect(dismissed?.meta).toMatchObject({
+    cancelledBy: { type: 'user' },
+    cancelReason: 'dismissed by the user',
+  });
+});
+
 test('a permission question is allowed from the inbox', async ({ page, api, openApp }) => {
   const world = await seedScenario(api, { stewards: 1, asteroid: false });
   const steward = world.stewardIds[0]!;
