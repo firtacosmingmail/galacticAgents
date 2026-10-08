@@ -286,6 +286,11 @@ function RunOutputView({
           Earlier output dropped: Mission Control keeps the newest part of each run.
         </p>
       )}
+      {out.gap && (
+        <p className="muted run-truncated">
+          Part of the output is not shown here (it is long): its start and its newest part are.
+        </p>
+      )}
       {out.status === 'loading' && out.chunks.length === 0 && (
         <p className="muted">Reading the output…</p>
       )}
