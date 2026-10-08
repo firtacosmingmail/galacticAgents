@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { emptyWorld, type Question, type WorldState } from '@galactic/protocol';
+import { domain } from '@galactic/protocol/fixtures';
 import type { ShellLine } from './lines.js';
 import {
   dataPaths,
@@ -31,7 +33,9 @@ class FakeOwn {
   }
 }
 
-function setup(opts: { lock?: LockHolder; healthy?: boolean; result?: StartResult } = {}) {
+function setup(
+  opts: { lock?: LockHolder; healthy?: boolean; result?: StartResult; fetch?: typeof fetch } = {},
+) {
   const lines: ShellLine[] = [];
   const owns: FakeOwn[] = [];
   const watchers: WatcherOptions[] = [];
@@ -58,6 +62,7 @@ function setup(opts: { lock?: LockHolder; healthy?: boolean; result?: StartResul
       return { start: () => {}, stop: () => {} };
     },
     now: () => clock,
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
   const servers = () => lines.flatMap((l) => (l.type === 'server' ? [l.server] : []));
   const lastStatus = () => [...lines].reverse().find((l) => l.type === 'status');
@@ -208,5 +213,108 @@ describe('trayView', () => {
       trayView({ state: 'live', waiting: 0, storage: 'ok', server: { ...server, owned: false } })
         .serverLabel,
     ).toBe('Attached to Mission Control on port 4400');
+  });
+});
+
+describe('Supervisor: the menu bar\'s permission requests (P9-15)', () => {
+  const { answeredBy: _by, answer: _a, ...base } = domain.permissionQuestion;
+  const request: Question = { ...base, id: 'q-7', status: 'open', version: 4 };
+  const clarification: Question = {
+    ...domain.question,
+    id: 'q-8',
+    holder: { type: 'user' },
+  };
+  const worldWith = (...questions: Question[]): WorldState => ({
+    ...emptyWorld(),
+    agents: { [domain.agent.id]: domain.agent },
+    questions: Object.fromEntries(questions.map((q) => [q.id, q])),
+  });
+
+  async function live(fetchImpl?: typeof fetch) {
+    const t = setup(fetchImpl ? { fetch: fetchImpl } : {});
+    await t.supervisor.tick();
+    const w = t.watchers[0]!;
+    w.onWorld?.(worldWith(request, clarification));
+    w.onState({ connection: 'live', waiting: 2, storage: 'ok' });
+    const menus = () => t.lines.flatMap((l) => (l.type === 'menu' ? [l.menu] : []));
+    const notes = () => t.lines.flatMap((l) => (l.type === 'notify' ? [l] : []));
+    return { ...t, w, menus, notes };
+  }
+
+  it('sends the waiting requests and questions while live, and an empty menu otherwise', async () => {
+    const t = await live();
+    const menu = t.menus().at(-1)!;
+    expect(menu.permissions).toEqual([
+      { id: 'q-7', version: 4, title: expect.stringContaining('Bash git push origin task/t-1') },
+    ]);
+    expect(menu.questions.map((q) => q.id)).toEqual(['q-8']);
+    // A change in the world is sent at once; an unchanged menu is not sent again.
+    const before = t.menus().length;
+    t.w.onWorld?.(worldWith(request, clarification));
+    expect(t.menus()).toHaveLength(before);
+    t.w.onWorld?.(worldWith(clarification));
+    expect(t.menus().at(-1)!.permissionCount).toBe(0);
+    t.w.onState({ connection: 'disconnected', waiting: 0, storage: 'ok' });
+    expect(t.menus().at(-1)).toEqual({
+      permissions: [],
+      permissionCount: 0,
+      questions: [],
+      questionCount: 0,
+    });
+  });
+
+  it('answers through the route with the token and the version, marking the item meanwhile', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    let resolve: (r: Response) => void = () => {};
+    const fakeFetch = ((url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Promise<Response>((r) => (resolve = r));
+    }) as unknown as typeof fetch;
+    const t = await live(fakeFetch);
+    const pending = t.supervisor.answer({ questionId: 'q-7', version: 4, decision: 'allow' });
+    expect(t.menus().at(-1)!.permissions[0]?.sending).toBe(true);
+    // A second click while the first is on its way sends nothing.
+    await t.supervisor.answer({ questionId: 'q-7', version: 4, decision: 'deny' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('http://127.0.0.1:4400/api/questions/q-7/answer');
+    expect((calls[0]!.init.headers as Record<string, string>)['authorization']).toBe('Bearer tok');
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({ answer: 'allow', version: 4 });
+    resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    await pending;
+    expect(t.menus().at(-1)!.permissions[0]?.sending).toBeUndefined();
+    expect(t.notes()).toEqual([]);
+  });
+
+  it('a stale answer is said in a notification', async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ error: 'stale', message: 'already answered by you' }), {
+        status: 409,
+      })) as unknown as typeof fetch;
+    const t = await live(fakeFetch);
+    await t.supervisor.answer({ questionId: 'q-7', version: 4, decision: 'deny' });
+    expect(t.notes()).toEqual([
+      {
+        type: 'notify',
+        id: 'galactic:tray-answer:q-7:1',
+        title: 'Permission request already answered',
+        body: 'Your Deny was not sent: already answered by you.',
+      },
+    ]);
+    expect(JSON.stringify(t.lines)).not.toContain('tok"');
+  });
+
+  it('never answers a clarification from the menu, nor while disconnected', async () => {
+    let called = 0;
+    const fakeFetch = (async () => {
+      called++;
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+    const t = await live(fakeFetch);
+    await t.supervisor.answer({ questionId: 'q-8', version: 0, decision: 'allow' });
+    expect(called).toBe(0);
+    t.w.onState({ connection: 'disconnected', waiting: 0, storage: 'ok' });
+    await t.supervisor.answer({ questionId: 'q-7', version: 4, decision: 'allow' });
+    expect(called).toBe(0);
+    expect(t.notes().at(-1)?.title).toBe('Could not answer the permission request');
   });
 });

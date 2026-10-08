@@ -45,6 +45,10 @@ input.on('line', (line) => {
   const command = parseCommand(line);
   if (command === 'quit') quit();
   else if (command === 'start') supervisor.requestStart();
+  else if (command?.type === 'answer') {
+    const { type: _type, ...answer } = command;
+    void supervisor.answer(answer);
+  }
 });
 // The shell closed our stdin (it quit or died): stop what we started.
 input.on('close', quit);

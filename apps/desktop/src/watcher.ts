@@ -83,6 +83,8 @@ export interface WatcherOptions {
   token: () => string | undefined;
   onState: (state: WatcherState) => void;
   onNotify: (n: ShellNotification) => void;
+  /** The folded world after each snapshot and event (the menu's question sections, P9-15). */
+  onWorld?: (world: WorldState) => void;
   openSocket?: (url: string) => SocketLike;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
@@ -269,6 +271,7 @@ export class StatusWatcher {
         this.replaying = false;
         this.pending = [];
         this.attempt = 0;
+        this.opts.onWorld?.(this.world);
         this.setConnection('live');
         return;
       }
@@ -278,6 +281,7 @@ export class StatusWatcher {
         this.world = applyEvent(this.world, envelope);
         this.lastSeq = message.seq;
         this.consider(envelope);
+        this.opts.onWorld?.(this.world);
         this.report();
         return;
       }

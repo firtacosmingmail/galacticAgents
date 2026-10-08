@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLOSE_UNAUTHORIZED, type Question } from '@galactic/protocol';
+import { CLOSE_UNAUTHORIZED, type Question, type WorldState } from '@galactic/protocol';
 import { domain } from '@galactic/protocol/fixtures';
 
 const { project, proposal, question } = domain;
@@ -45,12 +45,14 @@ function setup(tokenValue: string | null = 'secret-token') {
   const sockets: FakeSocket[] = [];
   const states: WatcherState[] = [];
   const notes: ShellNotification[] = [];
+  const worlds: WorldState[] = [];
   const timers: (() => void)[] = [];
   const watcher = new StatusWatcher({
     url: 'ws://127.0.0.1:4400/ws',
     token: () => token,
     onState: (s) => states.push(s),
     onNotify: (n) => notes.push(n),
+    onWorld: (w) => worlds.push(w),
     openSocket: () => {
       const s = new FakeSocket();
       sockets.push(s);
@@ -62,7 +64,7 @@ function setup(tokenValue: string | null = 'secret-token') {
   });
   watcher.start();
   const reconnect = () => timers.shift()?.();
-  return { watcher, sockets, states, notes, reconnect, last: () => sockets[sockets.length - 1]! };
+  return { watcher, sockets, states, notes, worlds, reconnect, last: () => sockets[sockets.length - 1]! };
 }
 
 const userQuestion = (id: string, kind: Question['kind'] = 'clarification'): Question => ({
@@ -119,6 +121,20 @@ const projectDone = (seq: number) => ({
 });
 
 describe('StatusWatcher', () => {
+  it('hands the folded world on after the snapshot and each event (the menu, P9-15)', () => {
+    const t = setup();
+    t.last().open();
+    t.last().receive(snapshot(5, { questions: [userQuestion('q-a', 'permission')] }));
+    t.last().receive(opened(6, userQuestion('q-b', 'permission')));
+    t.last().receive(answered(7, 'q-a'));
+    expect(t.worlds.map((w) => Object.keys(w.questions).sort())).toEqual([
+      ['q-a'],
+      ['q-a', 'q-b'],
+      ['q-a', 'q-b'],
+    ]);
+    expect(t.worlds[2]!.questions['q-a']!.status).toBe('answered');
+  });
+
   it('says hello with the token, then counts what waits for the user', () => {
     const t = setup();
     t.last().open();

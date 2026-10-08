@@ -9,6 +9,10 @@ import { focusTarget } from '../panel/notifications/focus.js';
  * there is no target). Either way the page selects the item as a desktop notification's click
  * does (decision 59), once the world has arrived — before the first snapshot the question or
  * project is not known yet and the click would fall back to the inbox.
+ *
+ * A `#focus=` set while the page is already open (the desktop app's menu bar "Open in
+ * GalacticAgents" navigates its window to `/#focus=question:<id>`, P9-15 — a same-document
+ * navigation, no reload) is read on `hashchange` the same way.
  */
 
 /** `inbox` (no target) or a target. */
@@ -68,6 +72,12 @@ export function wireNotificationClicks(
   const cleanups: (() => void)[] = [];
   const initial = takeFocusFromFragment(win);
   if (initial) cleanups.push(focusWhenReady(initial));
+  const onHashChange = () => {
+    const focus = takeFocusFromFragment(win);
+    if (focus) cleanups.push(focusWhenReady(focus));
+  };
+  win.addEventListener('hashchange', onHashChange);
+  cleanups.push(() => win.removeEventListener('hashchange', onHashChange));
   const sw = 'serviceWorker' in nav ? nav.serviceWorker : undefined;
   if (sw) {
     const onMessage = (e: MessageEvent) => {
