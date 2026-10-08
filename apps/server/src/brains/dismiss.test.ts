@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Id } from '@galactic/protocol';
 import type { BrainDefinition } from './definition.js';
-import { brainDefinition, brainHarness, tool, type BrainHarness } from './testing/index.js';
+import {
+  brainDefinition,
+  brainHarness,
+  tool,
+  type BrainHarness,
+  type BrainScript,
+} from './testing/index.js';
 
 /**
  * P9-14 (SPEC decision 135) through the brain runner: a Waykeeper's question the user dismisses,
@@ -36,7 +42,7 @@ const waykeeper: BrainDefinition = brainDefinition('waykeeper', [escalate, note]
   systemPrompt: 'You are the Waykeeper.',
 });
 
-async function setUp(waykeeperScript: Parameters<BrainHarness['startBrain']>[2]['script']) {
+async function setUp(waykeeperScript: (s: BrainScript) => void) {
   const h = brainHarness();
   lives.push(h);
   const prompts: string[] = [];

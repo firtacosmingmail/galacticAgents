@@ -207,8 +207,8 @@ Grouped by area. Each has a suggested handling so it can become a ticket later. 
 14. **Permission requests vs. clarification questions.** *Decided (7):* both are `Question`s with a `kind`; permission questions are resolved by the per-project policy table or the user only, never by a brain, and never enter a brain's mailbox; clarification questions may be answered by supervisors. Different UI for each.
 15. **The Harmonizer itself needs input to size a request.** It may ask clarifying questions before proposing; the UI treats this like any other question. `ask_user` is non-blocking: the turn ends and the answer arrives as a later wake-up.
 15b. **Concurrent wake-ups and re-entrancy in the brains.** One mailbox per brain, one turn at a time, drained into a single prompt; a brain's own tool side effects are never delivered to it mid-turn; only whitelisted events wake a brain (never `agent.output`).
-15d. **Questions that went stale** (the user talked to the agent directly meanwhile). *Decided (135, P9-14):* every question card can be dismissed (a clarification withdrawn and its agent told, a permission refused); the user's direct message to an agent withdraws that agent's own open clarifications as superseded — never a permission, a question opened for the user alone, or the Harmonizer's.
 15c. **Brain context growth.** Each turn is seeded from the DB; sessions are reset periodically with a carried-over summary so compaction never silently erases the project state.
+15d. **Questions that went stale** (the user talked to the agent directly meanwhile). *Decided (135, P9-14):* every question card can be dismissed (a clarification withdrawn and its agent told, a permission refused); the user's direct message to an agent withdraws that agent's own open clarifications as superseded — never a permission, a question opened for the user alone, or the Harmonizer's.
 
 ### Domain and sizing
 

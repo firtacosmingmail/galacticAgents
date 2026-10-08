@@ -44,7 +44,9 @@ test('a clarification is dismissed from the inbox (P9-14)', async ({ page, api, 
   const questionId = await askUser(api, steward, 'clarification', text);
   const card = inbox(page).locator(`article[data-question-id="${questionId}"]`);
   await expect(card).toBeVisible();
-  await card.getByRole('button', { name: `Dismiss the question without answering: ${text}` }).click();
+  await card
+    .getByRole('button', { name: `Dismiss the question without answering: ${text}` })
+    .click();
 
   await expect(card).toHaveCount(0);
   await expect.poll(async () => (await questionOnServer(api, text))?.status).toBe('cancelled');
