@@ -178,7 +178,11 @@ async function buildMap(dbPath: string): Promise<void> {
         source: 'detected',
         detectedKey: 'package.json#dev',
         command: { line: 'pnpm run dev', cwd: '/w/csv', detectedFrom: 'package.json' },
-        meta: { important: 0 },
+        // As a scan writes it (P9-12: the body the Run dialog compares with the file's).
+        meta: {
+          important: 0,
+          detected: { line: 'pnpm run dev', title: 'dev', body: 'vite', path: '/w/csv' },
+        },
       },
       SYSTEM,
     )
@@ -226,15 +230,30 @@ async function buildMap(dbPath: string): Promise<void> {
   await commands.restoreDeliverable(notes.id, USER, LOCAL);
   const first = (
     await commands.recordRunStarted(
-      { deliverableId: dev.id, line: 'pnpm run dev', cwd: '/w/csv' },
+      {
+        deliverableId: dev.id,
+        line: 'pnpm run dev',
+        cwd: '/w/csv',
+        meta: { pid: 4242, body: 'vite' },
+      },
       USER,
     )
   ).value;
   await commands.recordRunPorts(first.id, [5173]);
-  await commands.recordRunEnded(first.id, { outcome: 'stopped', by: USER });
+  // P9-12: a run ended because its folder changed during the start (review N2).
+  await commands.recordRunEnded(first.id, {
+    outcome: 'stopped',
+    by: SYSTEM,
+    reason: 'folder_changed',
+  });
   const live = (
     await commands.recordRunStarted(
-      { deliverableId: dev.id, line: 'pnpm run dev --port 5174', cwd: '/w/csv' },
+      {
+        deliverableId: dev.id,
+        line: 'pnpm run dev --port 5174',
+        cwd: '/w/csv',
+        meta: { pid: 4243, edited: true },
+      },
       USER,
     )
   ).value;
@@ -396,6 +415,15 @@ describe('map export and import (P8-03)', () => {
     expect(after.snapshot.deliverables?.some((d) => d.lastRun?.state === 'running')).toBe(true);
     expect(before.runs).toHaveLength(2);
     expect(after.runs).toEqual(before.runs);
+    // P9-12: the scan's detected body, the runs' confirmed body, an edited line, a new reason.
+    const devAfter = after.snapshot.deliverables?.find((d) => d.detectedKey === 'package.json#dev');
+    expect(devAfter?.meta).toMatchObject({ detected: { body: 'vite' } });
+    expect(after.runs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: 'folder_changed', meta: { pid: 4242, body: 'vite' } }),
+        expect.objectContaining({ meta: { pid: 4243, edited: true } }),
+      ]),
+    );
     expect(after.statuses).toEqual(before.statuses);
     expect(after.history).toEqual(before.history);
     // Without the transcripts, the chats keep their messages and lose the agents' replies.
