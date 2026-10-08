@@ -58,6 +58,14 @@ export const test = base.extend<Fixtures>({
     });
   },
   openApp: async ({ page, token }, use) => {
+    // The page's Content-Security-Policy (wave-3 review B1) must never refuse the app's own
+    // scripts, workers, styles, images or socket: every test that opens the app checks it.
+    const violations: string[] = [];
+    page.on('console', (msg) => {
+      if (/Content Security Policy|Content-Security-Policy/i.test(msg.text())) {
+        violations.push(msg.text());
+      }
+    });
     await use(async (options = {}) => {
       // Per-browser preferences before the first script runs: the scene shown or hidden, the
       // quality tier pinned (the settings say `balanced` too; this browser's choice wins).
@@ -77,6 +85,7 @@ export const test = base.extend<Fixtures>({
       await page.goto(`/#token=${encodeURIComponent(token)}`);
       await expectLive(page);
     });
+    expect(violations, 'CSP violations').toEqual([]);
   },
 });
 

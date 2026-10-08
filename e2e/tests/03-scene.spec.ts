@@ -1,5 +1,5 @@
 import { expect, test } from '../support/fixtures.js';
-import { probeList, sceneProbe, seedScenario } from '../support/world.js';
+import { clearHarness, probeList, sceneProbe, seedScenario, stamp } from '../support/world.js';
 
 /**
  * A fake-adapter project in the scene (SPEC §4.1): its body is drawn and labelled with the
@@ -42,4 +42,42 @@ test('a harness project shows its body, its label and its satellites', async ({
     .click();
   await expect(probe).toHaveAttribute('data-camera', world.bodyId);
   await expect(page.getByText(`Waykeeper · ${title}`).first()).toBeVisible();
+});
+
+/**
+ * The deliverables mark (P9-11, SPEC decision 133): a body whose project has a deliverable added
+ * by the user shows "◆ 1" on its label (the project's folder and detected commands do not count);
+ * a click on the mark selects the project's Waykeeper and opens its Deliverables view.
+ */
+test('a body whose work has a deliverable shows the mark; clicking it opens the Deliverables', async ({
+  page,
+  api,
+  openApp,
+}) => {
+  await clearHarness(api);
+  const world = await seedScenario(api, { stewards: 1, kind: 'planet', asteroid: false });
+  await openApp();
+  const label = page.locator(`.scene-label[data-body="${world.bodyId}"]`);
+  await expect(label.locator('.scene-label-title')).toHaveText(/^Harness project \d+$/);
+  await expect(label.locator('.scene-label-mark')).toHaveCount(0);
+
+  // A web address: no file needed, nothing opened.
+  await api.post('/api/deliverables', {
+    projectId: world.projectId,
+    kind: 'url',
+    title: `Staging site ${stamp()}`,
+    url: 'https://example.com/',
+  });
+  const mark = label.locator('.scene-label-mark');
+  await expect(mark).toHaveText('◆ 1');
+  await expect(mark).toHaveAttribute('aria-label', '1 deliverable');
+
+  // The labels take no pointer events: the click reaches the canvas and picking resolves it. The
+  // legend over the scene's corner may cover the label: put it away first.
+  await page.getByRole('button', { name: 'Hide legend' }).click();
+  await expect(label).toBeVisible();
+  const box = (await mark.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.getByTestId('deliverables-project')).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/waykeeper/${world.waykeeperId}`));
 });

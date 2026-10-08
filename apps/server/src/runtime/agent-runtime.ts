@@ -37,6 +37,7 @@ import {
 } from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
 import { globalDefaultPolicy } from '../domain/permissions.js';
+import { userFoldersOf } from '../deliverables/folder.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import {
   CapsEnforcer,
@@ -48,6 +49,7 @@ import {
 import { createPermissionGate, type RuntimeGate } from './permission-gate.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
+import { TOOL_RUNTIMES } from './tool-runtimes.js';
 import type { TranscriptPipeline } from './transcripts.js';
 
 /**
@@ -220,6 +222,14 @@ export type ReopenResult = SpawnResult & { mode?: 'resumed' | 'fresh' };
 export type BrainResumer = (agent: Agent) => Promise<SpawnResult> | undefined;
 
 /**
+ * The server's tools a Steward gets (P9-04: `declare_deliverable`, `list_deliverables`), for its
+ * row, or `undefined` for none. Asked at every start of a Steward's session — a spawn, a resume,
+ * a fresh restart — that carries no tools of its own; only runtimes in `TOOL_RUNTIMES` are asked
+ * (ACP and PTY sessions cannot serve the server's tools).
+ */
+export type StewardTools = (agent: Agent) => ToolDefinition[] | undefined;
+
+/**
  * The first message of a resumed session (P2-16): the agent continues where it was, instead of
  * being handed its original task prompt again.
  */
@@ -349,6 +359,13 @@ const ENDED_MEMORY = 1_000;
 export class AgentRuntime {
   private readonly adapters = new Map<RuntimeName, AgentAdapter>();
   private readonly live = new Map<Id, Live>();
+  /**
+   * Where each agent's deliverables folder would be made while none is recorded yet (P9-06,
+   * `setDeliverablesFolderLookup`): `galactic-deliverables/` when the repository tracks a
+   * `deliverables/` folder of its own, so writes to that source folder do not ask.
+   */
+  private readonly folderCandidates = new Map<Id, string>();
+  private folderLookup?: (target: { projectId?: Id; taskId?: Id }) => Promise<string | undefined>;
   private readonly byQuestion = new Map<Id, Id>();
   /** Recently ended agents, oldest first. */
   private readonly ended = new Set<Id>();
@@ -360,6 +377,7 @@ export class AgentRuntime {
   private disposed = false;
   private readonly turnListeners = new Set<(turn: TurnEnd) => void>();
   private brainResumer: BrainResumer | undefined;
+  private stewardTools: StewardTools | undefined;
   /**
    * Interrupted agents startup recovery is about to reopen (P2-16): the brains resumed first must
    * not replace them, so `isReserved` tells the spawn guards they are on their way back.
@@ -571,6 +589,7 @@ export class AgentRuntime {
     how: { mailbox?: boolean; resumed?: boolean; foldedUpTo?: number; probation?: Probation } = {},
   ): Promise<SpawnResult> {
     const caps = agent.caps;
+    const tools = this.toolsOf(agent, req);
     // Registered before the adapter runs: whatever it emits before the handle comes back is
     // buffered and routed after `agent.spawned`, and counts against the caps from the start.
     // The project's table as of each check (P2-04): a changed policy applies to the next call.
@@ -578,9 +597,11 @@ export class AgentRuntime {
       agentId: agent.id,
       policy: () => this.policyOf(agent.id, req),
       workspace: () => this.workspaceOf(agent.id, req),
+      // The project's deliverables folder is the user's (P9-06, decision 122): a write asks.
+      userFolders: () => this.userFoldersOf(agent.id, req),
       cwd: req.cwd,
       caps: this.caps,
-      ...(req.tools ? { serverTools: req.tools.map((t) => t.name) } : {}),
+      ...(tools ? { serverTools: tools.map((t) => t.name) } : {}),
       onDeny: (call, verdict, action) =>
         this.permissionDecided(live, {
           toolCall: call,
@@ -632,6 +653,7 @@ export class AgentRuntime {
       activity: false,
     };
     this.live.set(agent.id, live);
+    this.lookUpFolderCandidate(agent.id, req);
     this.caps.track(agent.id, caps, {
       role: agent.role,
       ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
@@ -646,7 +668,7 @@ export class AgentRuntime {
         prompt: req.prompt,
         gate,
         caps,
-        ...(req.tools ? { tools: req.tools } : {}),
+        ...(tools ? { tools } : {}),
         ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}),
         ...(req.bare ? { bare: true } : {}),
       });
@@ -1168,6 +1190,21 @@ export class AgentRuntime {
     this.brainResumer = resumer;
   }
 
+  /** Who gives Stewards the server's tools (P9-04): the composition registers it. */
+  setStewardTools(tools: StewardTools | undefined): void {
+    this.stewardTools = tools;
+  }
+
+  /** The tools of a start: the request's own, else a Steward's on a runtime that serves them. */
+  private toolsOf(agent: Agent, req: SpawnRequest): ToolDefinition[] | undefined {
+    if (req.tools) return req.tools;
+    if (agent.role !== 'steward' || !agent.taskId || !TOOL_RUNTIMES.has(agent.runtime)) {
+      return undefined;
+    }
+    const tools = this.stewardTools?.(agent);
+    return tools && tools.length > 0 ? tools : undefined;
+  }
+
   /**
    * Reopens one interrupted agent with explicit options (P2-16: a brain runner reopening its
    * brain). Refused unless the agent is `interrupted` and not running; one Harmonizer at a time.
@@ -1523,6 +1560,50 @@ export class AgentRuntime {
     const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
     const project = projectId ? tables.projects.get(projectId) : undefined;
     return project?.workspace ?? req.workspace ?? req.cwd;
+  }
+
+  /**
+   * How the gate learns where a project's deliverables folder would be before it is recorded
+   * (`DeliverableCopies.placeOf`, which asks whether `deliverables/` is tracked). Looked up once
+   * per spawn, without holding the spawn up: until it answers, `<workspace>/deliverables`.
+   */
+  setDeliverablesFolderLookup(
+    lookup: (target: { projectId?: Id; taskId?: Id }) => Promise<string | undefined>,
+  ): void {
+    this.folderLookup = lookup;
+  }
+
+  private lookUpFolderCandidate(agentId: Id, req: SpawnRequest): void {
+    const lookup = this.folderLookup;
+    if (!lookup) return;
+    const agent = this.opts.log.tables.agents.get(agentId);
+    const projectId = agent?.projectId ?? req.projectId;
+    const taskId = agent?.taskId ?? req.taskId;
+    if (!projectId && !taskId) return;
+    void lookup({ ...(projectId ? { projectId } : {}), ...(taskId ? { taskId } : {}) })
+      .then((folder) => {
+        if (folder && this.live.has(agentId)) this.folderCandidates.set(agentId, folder);
+      })
+      .catch(() => undefined);
+  }
+
+  private userFoldersOf(agentId: Id, req: SpawnRequest): string[] {
+    const { tables } = this.opts.log;
+    const agent = tables.agents.get(agentId);
+    const candidate = this.folderCandidates.get(agentId);
+    return userFoldersOf(
+      {
+        project: (id) => tables.projects.get(id),
+        task: (id) => tables.tasks.get(id),
+        projects: () => tables.projects.all(),
+      },
+      {
+        projectId: agent?.projectId ?? req.projectId,
+        taskId: agent?.taskId ?? req.taskId,
+      },
+      this.workspaceOf(agentId, req),
+      candidate,
+    );
   }
 
   private policyOf(agentId: Id, req: SpawnRequest): PermissionPolicy {
@@ -2107,6 +2188,7 @@ export class AgentRuntime {
     this.caps.release(live.agent.id);
     // The log and the status store keep the history; the runtime forgets the session.
     this.live.delete(live.agent.id);
+    this.folderCandidates.delete(live.agent.id);
     this.ended.add(live.agent.id);
     if (this.ended.size > ENDED_MEMORY) {
       const oldest = this.ended.values().next().value;

@@ -14,6 +14,7 @@ import { EVENT_TYPES, EventEnvelope } from './events.js';
 import { RequestOrigin } from './enums.js';
 import { AgentSpend } from './budget.js';
 import { StorageHealth } from './storage.js';
+import { Deliverable, RunOutputChunk } from './deliverables.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
@@ -62,11 +63,33 @@ export const TranscriptUnsubscribeMessage = z.object({
 });
 export type TranscriptUnsubscribeMessage = z.infer<typeof TranscriptUnsubscribeMessage>;
 
+/**
+ * A managed run's output is a third, per-run stream (P9-08; TECHNOLOGY §9.8): a client subscribes
+ * to the run it shows and receives `run_output` batches with `seq > since` (persisted output
+ * first, then live), in `seq` order, like a transcript. Open to remote clients (decision 131: the
+ * phone follows a run's output). A server built before P9-08 does not know these messages; the
+ * panel sends them only to a server that serves runs.
+ */
+export const RunSubscribeMessage = z.object({
+  type: z.literal('run.subscribe'),
+  runId: Id,
+  since: z.number().int().nonnegative().optional(),
+});
+export type RunSubscribeMessage = z.infer<typeof RunSubscribeMessage>;
+
+export const RunUnsubscribeMessage = z.object({
+  type: z.literal('run.unsubscribe'),
+  runId: Id,
+});
+export type RunUnsubscribeMessage = z.infer<typeof RunUnsubscribeMessage>;
+
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMessage,
   PingMessage,
   TranscriptSubscribeMessage,
   TranscriptUnsubscribeMessage,
+  RunSubscribeMessage,
+  RunUnsubscribeMessage,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -89,6 +112,13 @@ export const SnapshotMessage = z.object({
    * keeps folding from the stream with `foldSpend`. Absent from older servers: no spend known.
    */
   spend: z.array(AgentSpend).optional(),
+  /**
+   * Every deliverable at `seq`, removed ones included (P9-01; decision 132): the client keeps
+   * folding them from the stream. Optional so a page of the previous build, which does not know
+   * them, still reads the snapshot (zod strips the key; TECHNOLOGY §6.3 rule 5). Absent from
+   * older servers: none.
+   */
+  deliverables: z.array(Deliverable).optional(),
   /**
    * Whether the database takes writes (P8-09): runtime state, never an event (a full disk could
    * not log it). Absent from older servers: taken as `ok`.
@@ -146,6 +176,8 @@ export const ErrorCode = z.enum([
   'protocol_violation',
   'slow_consumer',
   'unsupported',
+  /** More `run.subscribe`s than one socket may hold (P9-08 review N2; only a runs client sees it). */
+  'too_many_subscriptions',
   'internal',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
@@ -202,6 +234,18 @@ export const TranscriptMessage = z.object({
 });
 export type TranscriptMessage = z.infer<typeof TranscriptMessage>;
 
+/**
+ * A batch of one subscribed run's output, in `seq` order (P9-08). Sent only to a socket that
+ * sent `run.subscribe`, so a page built before it never receives the kind (TECHNOLOGY §6.3
+ * rule 5).
+ */
+export const RunOutputMessage = z.object({
+  type: z.literal('run_output'),
+  runId: Id,
+  chunks: z.array(RunOutputChunk),
+});
+export type RunOutputMessage = z.infer<typeof RunOutputMessage>;
+
 export const ServerMessage = z.discriminatedUnion('type', [
   SnapshotMessage,
   EventMessage,
@@ -210,6 +254,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   PongMessage,
   StatusMessage,
   TranscriptMessage,
+  RunOutputMessage,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 

@@ -5,6 +5,7 @@ import { PushSettings } from '../../pwa/PushSettings.js';
 import { AccessToken } from './AccessToken.js';
 import { Backups } from './Backups.js';
 import { DeviceQuality } from './DeviceQuality.js';
+import { IDE } from './IdeSetting.js';
 import { PreflightCheck } from './PreflightCheck.js';
 import { useSettingsData } from './SettingsData.js';
 import {
@@ -59,6 +60,10 @@ export function SettingsPage({ token }: { token: string }) {
       )}
       {data.status === 'ready' &&
         LATER_SECTIONS.map((spec) => <PageSection key={spec.field} spec={spec} />)}
+      {/* P9-03: the IDE Open in IDE uses; only a server that has the setting sends it. */}
+      {data.status === 'ready' && data.response?.settings.deliverables && (
+        <PageSection spec={IDE} />
+      )}
 
       {/* P7-03: this browser's own tier, local — shown even without a settings endpoint. */}
       <DeviceQuality />

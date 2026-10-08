@@ -12,6 +12,7 @@ import {
   type PushSubscriptionJson,
   type Question,
 } from '@galactic/protocol';
+import { domain as fx } from '@galactic/protocol/fixtures';
 import { isStorageFailure, type Database } from '../db/database.js';
 import { world } from '../test/world.js';
 import { isPushServiceEndpoint, pushDeviceId } from './endpoint.js';
@@ -291,6 +292,45 @@ describe('PushService', () => {
       expect(raw).not.toContain(x.endpoint);
       expect(raw).not.toMatch(/token|Bearer/i);
     }
+  });
+
+  it('a project’s end counts its deliverables; the lock screen gets the count, never a title', async () => {
+    const plain = fakeSubscription(1);
+    const detailed = fakeSubscription(2);
+    store.upsert({ subscription: plain.subscription, origin: 'remote' });
+    store.upsert({ subscription: detailed.subscription, origin: 'remote', details: true });
+    const t = w.log.tables;
+    const bodyId = t.bodies.all().find((b) => b.kind === 'planet' && !b.meta?.['reserved'])!.id;
+    t.projects.insert({ ...fx.project, id: 'p-del', name: 'Shop site', bodyId });
+    const row = { ...fx.deliverable, projectId: 'p-del', taskId: undefined };
+    t.deliverables.insert({ ...row, id: 'd-a', title: 'Secret plan.pdf' });
+    t.deliverables.insert({ ...row, id: 'd-b', title: 'Screenshot' });
+    t.deliverables.insert({ ...row, id: 'd-gone', removedAt: fx.deliverable.createdAt });
+    t.deliverables.insert({ ...fx.commandDeliverable, id: 'd-dev', projectId: 'p-del' });
+    make();
+    emit({
+      type: 'project.state_changed',
+      projectId: 'p-del',
+      from: 'in_progress',
+      to: 'completed',
+    });
+    emit({ type: 'project.state_changed', projectId: 'p1', from: 'in_progress', to: 'completed' });
+    await service.idle();
+    const of = (s: { subscription: PushSubscriptionJson }, id: string) =>
+      sent.find((x) => x.endpoint === s.subscription.endpoint && x.payload.id.startsWith(id))!
+        .payload;
+    // Two counted: the removed row and the detected command do not count.
+    expect(of(plain, 'project:p-del')).toMatchObject({
+      title: 'Project finished · 2 deliverables',
+    });
+    expect(of(plain, 'project:p-del').body).toBeUndefined();
+    expect(JSON.stringify(of(plain, 'project:p-del'))).not.toMatch(/Secret plan|Screenshot|Shop/);
+    expect(of(detailed, 'project:p-del')).toMatchObject({
+      title: 'Project finished · 2 deliverables',
+      body: 'Shop site',
+    });
+    // None: the title is unchanged.
+    expect(of(plain, 'project:p1').title).toBe('Project finished');
   });
 
   it('nothing for tasks, interrupted work, a parked request or a question held by an agent', async () => {

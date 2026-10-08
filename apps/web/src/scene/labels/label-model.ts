@@ -1,4 +1,12 @@
-import type { Body, Host, WorkState } from '@galactic/protocol';
+import {
+  isActiveDeliverable,
+  isCountedDeliverable,
+  isRunLive,
+  type Body,
+  type Deliverable,
+  type Host,
+  type WorkState,
+} from '@galactic/protocol';
 import type { WorldState } from '../../state/reduce.js';
 import { bodyName } from '../picking/body-action.js';
 
@@ -42,13 +50,72 @@ export interface BodyLabel {
   partOf?: string;
   /** For a "moved to …" marker: the body the work went to. */
   movedTo?: { bodyId: string; name: string };
+  /** The deliverables mark (decision 133): absent when the work has none and runs nothing. */
+  mark?: DeliverablesMark;
   /** The body is the selected agent's body. */
   selected: boolean;
   /** De-clutter rank (higher wins an overlap): `labelPriority`. */
   priority: number;
 }
 
-export type LabelWorld = Pick<WorldState, 'bodies' | 'projects' | 'tasks'>;
+export type LabelWorld = Pick<WorldState, 'bodies' | 'projects' | 'tasks'> & {
+  /** Absent from a replayed world or an older server's snapshot: no marks. */
+  deliverables?: WorldState['deliverables'] | undefined;
+};
+
+/**
+ * The deliverables mark on a label (decision 133): "◆ n" for the work's deliverables declared by
+ * an agent or added by the user (its folder and detected commands do not count), "▶" while one
+ * of its commands — detected ones included — runs.
+ */
+export interface DeliverablesMark {
+  count: number;
+  running: boolean;
+}
+
+/** `project:<id>` / `task:<id>` → the mark of that work. */
+export type MarkIndex = ReadonlyMap<string, DeliverablesMark>;
+
+/**
+ * One pass over the world's deliverables (cheap: once per change of the map, never per frame):
+ * the marks of every project (its own rows and its tasks', as the panel's Deliverables view rolls
+ * them up — a sub-project's are its own) and every task. Removed rows count for nothing.
+ */
+export function deliverableMarks(deliverables: LabelWorld['deliverables']): MarkIndex {
+  const index = new Map<string, DeliverablesMark>();
+  if (!deliverables) return index;
+  const add = (key: string, d: Deliverable) => {
+    const counted = isCountedDeliverable(d);
+    const running = isRunLive(d);
+    if (!counted && !running) return;
+    const mark = index.get(key) ?? { count: 0, running: false };
+    if (counted) mark.count++;
+    if (running) mark.running = true;
+    index.set(key, mark);
+  };
+  for (const d of Object.values(deliverables)) {
+    if (!isActiveDeliverable(d)) continue;
+    if (d.projectId !== undefined) add(`project:${d.projectId}`, d);
+    if (d.taskId !== undefined) add(`task:${d.taskId}`, d);
+  }
+  return index;
+}
+
+/** What the mark shows: "◆ 3", "◆ 3 ▶", or "▶" alone for a running detected command. */
+export function markText(mark: DeliverablesMark): string {
+  const parts: string[] = [];
+  if (mark.count > 0) parts.push(`◆ ${mark.count}`);
+  if (mark.running) parts.push('▶');
+  return parts.join(' ');
+}
+
+/** The mark in words, for assistive technology and the tooltip. */
+export function markDescription(mark: DeliverablesMark): string {
+  const parts: string[] = [];
+  if (mark.count > 0) parts.push(mark.count === 1 ? '1 deliverable' : `${mark.count} deliverables`);
+  if (mark.running) parts.push('a command running');
+  return parts.join(', ');
+}
 
 /** Longest title a label shows before "…" (the tooltip has it all). */
 export const TITLE_MAX = 32;
@@ -132,6 +199,7 @@ export function bodyLabel(
   world: LabelWorld,
   bodyId: string,
   selectedBodyId?: string,
+  marks: MarkIndex = deliverableMarks(world.deliverables),
 ): BodyLabel | undefined {
   const body = world.bodies[bodyId];
   if (!body || isReserved(body)) return undefined;
@@ -155,6 +223,8 @@ export function bodyLabel(
       stateText: state ? stateText(state) : 'loading',
       tone: state ? stateTone(state) : 'waiting',
     };
+    const mark = marks.get(`${host.kind}:${host.id}`);
+    if (mark) label.mark = mark;
     const moon = moonRole(world, body);
     if (moon) label.moon = moon;
     if (moon === 'sub-project' && host.kind === 'project') {
@@ -187,8 +257,9 @@ export function bodyLabel(
 /** Every label of the world, in body-id order (a stable DOM order). */
 export function bodyLabels(world: LabelWorld, selectedBodyId?: string): BodyLabel[] {
   const labels: BodyLabel[] = [];
+  const marks = deliverableMarks(world.deliverables);
   for (const bodyId of Object.keys(world.bodies).sort()) {
-    const label = bodyLabel(world, bodyId, selectedBodyId);
+    const label = bodyLabel(world, bodyId, selectedBodyId, marks);
     if (label) labels.push(label);
   }
   return labels;

@@ -375,7 +375,21 @@ export const PromotionOutcome = z.object({
 export type PromotionOutcome = z.infer<typeof PromotionOutcome>;
 
 /** A tool call an agent wants to make, as the permission gate and the permission card see it. */
-export const ToolCall = z.object({ toolName: z.string(), input: z.unknown().optional() });
+/**
+ * Where an MCP tool came from, as the runtime reports it (the Claude CLI's `mcp_server`): `name`
+ * is the server's key, `source` `sdk` for an in-process server the host registered — only the
+ * host can register one, so a configured server of the same name never reads `sdk` — or the
+ * configuration scope (`project`, `user`, `local`, `plugin`, …) for anything else.
+ */
+export const ToolCallServer = z.object({ name: z.string(), source: z.string() });
+export type ToolCallServer = z.infer<typeof ToolCallServer>;
+
+export const ToolCall = z.object({
+  toolName: z.string(),
+  input: z.unknown().optional(),
+  /** An MCP tool's server and its provenance, when the runtime reports it (P9 review). */
+  mcpServer: ToolCallServer.optional(),
+});
 export type ToolCall = z.infer<typeof ToolCall>;
 
 /** One of the origin agent's last logged events, as a question card shows it (P2-03). */

@@ -11,6 +11,7 @@ import {
   TranscriptChunk,
 } from './domain.js';
 import type { EventEnvelope } from './events.js';
+import { deliverablesPhrase } from './deliverables.js';
 
 // ---------------------------------------------------------------------------
 // The side panel's REST surface (P25-01; SPEC §4.2–4.6, TECHNOLOGY §2.2 "a small REST surface
@@ -193,6 +194,118 @@ export const SettingsBudgets = z.object({
 });
 export type SettingsBudgets = z.infer<typeof SettingsBudgets>;
 
+// --- the IDE (P9-03; SPEC decision 127, TECHNOLOGY §9.7) ----------------------------------
+
+/**
+ * The IDEs Mission Control looks for on the Mac, in the order "Automatic" tries them (decision
+ * 127): each by its bundle id, which `open -b` launches wherever the app is installed.
+ */
+export const KNOWN_IDES = [
+  { bundleId: 'com.jetbrains.WebStorm', name: 'WebStorm' },
+  { bundleId: 'com.jetbrains.intellij', name: 'IntelliJ IDEA Ultimate' },
+  { bundleId: 'com.jetbrains.intellij.ce', name: 'IntelliJ IDEA CE' },
+  { bundleId: 'com.todesktop.230313mzl4w4u92', name: 'Cursor' },
+  { bundleId: 'com.microsoft.VSCode', name: 'Visual Studio Code' },
+  { bundleId: 'dev.zed.Zed', name: 'Zed' },
+] as const satisfies readonly { bundleId: string; name: string }[];
+
+/** A bundle id as macOS writes it (`CFBundleIdentifier`): never starts with `-`, no spaces. */
+export const BundleId = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/, 'a bundle id such as com.jetbrains.WebStorm');
+
+/** `deliverables.ide`: `auto` (the first installed of `KNOWN_IDES`) or a detected bundle id. */
+export const IdeSetting = z.union([z.literal('auto'), BundleId]);
+export type IdeSetting = z.infer<typeof IdeSetting>;
+
+/** An IDE found on the Mac: its bundle id, its name and where the app is. */
+export const DetectedIde = z.object({
+  bundleId: BundleId,
+  name: z.string().min(1),
+  path: z.string().min(1),
+});
+export type DetectedIde = z.infer<typeof DetectedIde>;
+
+/**
+ * `GET /api/ide` (P9-03): the IDEs installed on the Mac (in `KNOWN_IDES` order), the setting, and
+ * the IDE Open in IDE uses now (absent: none installed, or the chosen one is gone).
+ * `supported: false` when Mission Control does not run on macOS (nothing can be opened).
+ * Open to every client, like the deliverables list (TECHNOLOGY §9.9).
+ */
+export const IdeResponse = z.object({
+  supported: z.boolean(),
+  installed: z.array(DetectedIde),
+  setting: IdeSetting,
+  effective: DetectedIde.optional(),
+});
+export type IdeResponse = z.infer<typeof IdeResponse>;
+
+/**
+ * `deliverables.declarations` (P9-04, decision 120): how many deliverables agents may declare.
+ * `perTask` / `perProject` count the active agent-declared rows of a task / of a project (its
+ * tasks' included); `perAgentPerHour` counts one agent's declarations in a sliding hour (kept in
+ * memory). `titleChars` / `descriptionChars` bound the agent's text. They count declarations,
+ * never bytes (decision 122).
+ */
+export const DeclarationLimits = z.object({
+  perTask: z.number().int().min(1).max(10_000),
+  perProject: z.number().int().min(1).max(100_000),
+  perAgentPerHour: z.number().int().min(1).max(10_000),
+  titleChars: z.number().int().min(10).max(500),
+  descriptionChars: z.number().int().min(0).max(10_000),
+});
+export type DeclarationLimits = z.infer<typeof DeclarationLimits>;
+
+/** Decision 120's defaults. */
+export const DEFAULT_DECLARATION_LIMITS: DeclarationLimits = {
+  perTask: 50,
+  perProject: 200,
+  perAgentPerHour: 30,
+  titleChars: 120,
+  descriptionChars: 2000,
+};
+
+/**
+ * `deliverables.runs.output` (P9-08, decision 130): how much of a managed run's output is kept —
+ * at most `maxBytesPerRun` per run (the oldest output goes first; 64 KiB to 64 MiB), for the
+ * newest `keepRuns` runs of each command, at most `maxAgeDays` days.
+ */
+export const RunOutputRetention = z.object({
+  maxBytesPerRun: z
+    .number()
+    .int()
+    .min(64 * 1024)
+    .max(64 * 1024 * 1024),
+  keepRuns: z.number().int().min(1).max(100),
+  maxAgeDays: z.number().int().min(1).max(3650),
+});
+export type RunOutputRetention = z.infer<typeof RunOutputRetention>;
+
+/** `deliverables.runs` (P9-08, decision 130): the runs at once, and their output's retention. */
+export const RunSettings = z.object({
+  maxConcurrent: z.number().int().min(1).max(32),
+  output: RunOutputRetention,
+});
+export type RunSettings = z.infer<typeof RunSettings>;
+
+/** Decision 130's defaults: 4 runs at once; 2 MiB per run, the last 5 runs, 30 days. */
+export const DEFAULT_RUN_SETTINGS: RunSettings = {
+  maxConcurrent: 4,
+  output: { maxBytesPerRun: 2 * 1024 * 1024, keepRuns: 5, maxAgeDays: 30 },
+};
+
+/**
+ * The deliverables settings (Phase 9). P9-03: the IDE; P9-04: the agents' declaration limits;
+ * P9-08: the managed runs (optional so a page reading an older server still parses; this server
+ * always sends them).
+ */
+export const SettingsDeliverables = z.object({
+  ide: IdeSetting,
+  declarations: DeclarationLimits.optional(),
+  runs: RunSettings.optional(),
+});
+export type SettingsDeliverables = z.infer<typeof SettingsDeliverables>;
+
 /** The settings the panel shows and edits (SPEC §4.6), persisted in `config.json`. */
 export const Settings = z.object({
   /** Where new project folders go (SPEC §3.5): an absolute path or `~/…`. */
@@ -221,6 +334,11 @@ export const Settings = z.object({
    * for can be chosen. The Harmonizer and Waykeepers stay on their own runtime.
    */
   stewardRuntime: AgentRuntime.optional(),
+  /**
+   * The deliverables settings (Phase 9): the IDE Open in IDE uses (P9-03, decision 127). Optional
+   * so a page reading an older server still parses; this server always sends it.
+   */
+  deliverables: SettingsDeliverables.optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -235,6 +353,7 @@ export const SettingName = z.enum([
   'transcriptRetention',
   'budgets',
   'stewardRuntime',
+  'deliverables',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
 
@@ -256,6 +375,26 @@ export const SettingsPatch = z
     budgets: SettingsBudgets.partial().strict().optional(),
     /** The runtime of new Stewards (P8-07); `null` = the spawning brain's own again. */
     stewardRuntime: AgentRuntime.nullable().optional(),
+    /**
+     * The deliverables settings (Phase 9), merged key by key; local requests only unless
+     * `autoApproveRemote` (decisions 51, 131). `ide` must be `auto` or an installed IDE.
+     */
+    deliverables: z
+      .object({
+        ide: IdeSetting.optional(),
+        /** Merged key by key (P9-04). */
+        declarations: DeclarationLimits.partial().strict().optional(),
+        /** Merged key by key, `output` too (P9-08). */
+        runs: z
+          .object({
+            maxConcurrent: RunSettings.shape.maxConcurrent.optional(),
+            output: RunOutputRetention.partial().strict().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     /**
      * Marks the first-run setup as done (P25-08): the server stamps `setupCompletedAt` in
      * `config.json` (kept if already set). Local requests only, like every setting but the tier
@@ -428,6 +567,11 @@ export interface NotificationLookup {
   project?(id: Id): { name?: string } | undefined;
   question?(id: Id): Pick<Question, 'kind' | 'context'> | undefined;
   agent?(id: Id): { role?: AgentRole } | undefined;
+  /**
+   * How many deliverables the work has (`countDeliverables`, decision 134): a finished task or
+   * project says "· N deliverables" in its title when there are any.
+   */
+  deliverables?(target: { kind: 'project' | 'task'; id: Id }): number | undefined;
 }
 
 /** The event types `notificationOf` may turn into a notification (for an indexed scan). */
@@ -482,11 +626,15 @@ export function notificationOf(
       const name = isTask ? lookup.task?.(id)?.description : lookup.project?.(id)?.name;
       const what = isTask ? 'Task' : 'Project';
       const done = event.to === 'completed';
+      // Decision 134: the finish says what it left — a count, never a deliverable's title, so it
+      // may show on a lock screen whose device chose no details (decision 95).
+      const count = done ? lookup.deliverables?.({ kind: isTask ? 'task' : 'project', id }) : 0;
+      const left = count ? ` · ${deliverablesPhrase(count)}` : '';
       return {
         ...base,
         id: `${isTask ? 'task' : 'project'}:${id}:${event.to}:${seq}`,
         kind: `${isTask ? 'task' : 'project'}_${done ? 'completed' : 'failed'}`,
-        title: `${what} ${done ? 'finished' : 'failed'}`,
+        title: `${what} ${done ? 'finished' : 'failed'}${left}`,
         ...(name ? { body: clip(name) } : {}),
         target: { kind: isTask ? 'task' : 'project', id },
       };

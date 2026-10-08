@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { isStorageFailure, openDatabase } from '../db/database.js';
 import { storageRefusal } from '../http/storage-refusal.js';
 import { LAUNCH_ID_ENV } from './launch-intents.js';
-import { AGENT_ID_ENV, type ProcEntry } from './process-attribution.js';
+import { AGENT_ID_ENV, RUN_ID_ENV, type ProcEntry } from './process-attribution.js';
 import {
   MemoryProcessStore,
   SqliteProcessStore,
@@ -386,5 +387,163 @@ describe('ProcessSupervisor.reconcileLaunches (P8-11, scripted table)', () => {
     const { s } = make({ store, table: w.table, probe: w.probe });
     await s.reconcileLaunches({ termMs: 50 });
     expect(store.get('a-s1')).toEqual(newer);
+  });
+});
+
+describe('ProcessSupervisor — managed runs as owners (P9-08)', () => {
+  const runSpec = (script: string, extra: Partial<ProcessSpec> = {}): ProcessSpec =>
+    node(script, { agentId: 'run:r-1', owner: { kind: 'run', id: 'r-1' }, ...extra });
+
+  it("gives a run's child the run marker and never the agent marker, whatever its env says", () => {
+    const { s } = make();
+    const env = s.childEnv(
+      runSpec('', { env: { [AGENT_ID_ENV]: 'a-forged', [RUN_ID_ENV]: 'r-forged' } }),
+    );
+    expect(env[RUN_ID_ENV]).toBe('r-1');
+    expect(env[AGENT_ID_ENV]).toBeUndefined();
+    // And an agent's child never carries a run marker.
+    expect(s.childEnv(node('', { env: { [RUN_ID_ENV]: 'r-forged' } }))).not.toHaveProperty(
+      RUN_ID_ENV,
+    );
+  });
+
+  it('keys the PID row and the launch intent `run:<id>` with the run kind', async () => {
+    const db = openDatabase(':memory:');
+    const store = new SqliteProcessStore(db);
+    const intents: LaunchIntent[] = [];
+    const { s } = make({
+      store,
+      testHooks: { afterFork: () => intents.push(...store.launches()) },
+    });
+    let out = '';
+    const p = await s.spawn(
+      runSpec(
+        `console.log(JSON.stringify([process.env.${RUN_ID_ENV} ?? null, process.env.${AGENT_ID_ENV} ?? null, process.env.${LAUNCH_ID_ENV} ?? null]))`,
+        { onStdout: (c) => (out += c) },
+      ),
+    );
+    await p.exited;
+    await eventually(() => out.includes(']'));
+    const [runMarker, agentMarker, launchId] = JSON.parse(out) as (string | null)[];
+    expect(runMarker).toBe('r-1');
+    expect(agentMarker).toBeNull();
+    expect(intents).toEqual([
+      expect.objectContaining({ agentId: 'run:r-1', meta: { kind: 'run', runId: 'r-1' } }),
+    ]);
+    expect(launchId).toBe(intents[0]!.id);
+    expect(store.get('run:r-1')).toMatchObject({
+      status: 'exited',
+      meta: expect.objectContaining({ kind: 'run', runId: 'r-1', launchId }),
+    });
+    // The group is listed under the run's key: attribution sees another owner's group.
+    expect(s.agentGroups().map((g) => g.agentId)).toEqual(['run:r-1']);
+  });
+
+  it("reconcile takes a run's live leader by its start time alone (its shell may have exec'd)", async () => {
+    const store = new MemoryProcessStore();
+    const orphan = spawn(NODE, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    orphan.unref();
+    await new Promise((r) => orphan.once('spawn', r));
+    // Recorded as `/bin/sh`: the name no longer matches, the start time does.
+    store.upsert({
+      agentId: 'run:r-old',
+      pid: orphan.pid!,
+      startedAt: new Date().toISOString(),
+      status: 'running',
+      meta: { command: '/bin/sh', bootAt: bootTime(), kind: 'run', runId: 'r-old' },
+    });
+    const { s } = make({ store });
+    expect(s.reconcile()).toEqual({ dead: [], orphans: ['run:r-old'] });
+    await eventually(() => {
+      try {
+        process.kill(orphan.pid!, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+  });
+
+  it('a run row whose start time cannot be read is left alone (fail closed)', () => {
+    const store = new MemoryProcessStore();
+    store.upsert({
+      agentId: 'run:r-x',
+      pid: 4242,
+      startedAt: new Date().toISOString(),
+      status: 'running',
+      meta: { command: '/bin/sh', bootAt: bootTime(), kind: 'run', runId: 'r-x' },
+    });
+    const signalled: number[] = [];
+    const { s } = make({
+      store,
+      probe: {
+        alive: () => true,
+        groupAlive: () => false,
+        startTime: () => undefined,
+        name: () => 'sh',
+        signalGroup: (pgid) => signalled.push(pgid),
+      },
+    });
+    expect(s.reconcile()).toEqual({ dead: ['run:r-x'], orphans: [] });
+    expect(signalled).toEqual([]);
+  });
+
+  it("reconcileLaunches finds a run's unrecorded launch by the run marker", async () => {
+    const T = Date.now() - 60_000;
+    const store = new MemoryProcessStore();
+    store.addLaunch({
+      id: 'launch-r',
+      agentId: 'run:r-2',
+      command: '/bin/sh',
+      args: ['-c', 'pnpm dev'],
+      cwd: '/p',
+      runId: 'killed',
+      bootAt: bootTime(),
+      intendedAt: new Date(T).toISOString(),
+      meta: { kind: 'run', runId: 'r-2' },
+    });
+    const uid = process.getuid?.() ?? 501;
+    const leader: ProcEntry = {
+      pid: 5151,
+      ppid: 1,
+      pgid: 5151,
+      uid,
+      startedAt: Math.floor(T / 1000) * 1000,
+      command: 'node vite',
+    };
+    const signals: [number, string][] = [];
+    let alive = true;
+    const runEnv = new Map([
+      [RUN_ID_ENV, 'r-2'],
+      [LAUNCH_ID_ENV, 'launch-r'],
+    ]);
+    const { s } = make({
+      store,
+      table: {
+        list: async () => [leader],
+        cwds: async (pids) => new Map(pids.map((p) => [p, '/p'])),
+        ports: async () => new Map(),
+        kill: () => false,
+        environment: async () => new Map([[leader.pid, runEnv]]),
+      },
+      probe: {
+        alive: (pid) => alive && pid === leader.pid,
+        groupAlive: () => alive,
+        startTime: (pid) => (pid === leader.pid ? leader.startedAt : undefined),
+        name: () => 'node',
+        signalGroup: (pgid, sig) => {
+          signals.push([pgid, sig]);
+          if (sig === 'SIGTERM') alive = false;
+        },
+      },
+    });
+    const result = await s.reconcileLaunches({ termMs: 50 });
+    expect(result.taken).toEqual([
+      expect.objectContaining({ agentId: 'run:r-2', launchId: 'launch-r', pgids: [5151] }),
+    ]);
+    expect(signals[0]).toEqual([5151, 'SIGTERM']);
   });
 });

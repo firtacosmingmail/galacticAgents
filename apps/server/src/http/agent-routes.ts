@@ -264,7 +264,7 @@ export function registerAgentRoutes(
     const { commands } = opts;
     /**
      * A refused domain command as the console reads it (P2-14, P2-18): 404 unknown, 400 invalid,
-     * 409 for a state that refuses it (`stale` keeps its code: "already answered by …"), 507 / 503
+     * 403 `remote_control` (a write the Mac alone may make, P9-01), 409 for a state that refuses it (`stale` keeps its code: "already answered by …"), 507 / 503
      * when the storage refused it (P8-09), 500 for anything that is not a refusal (a bug or a
      * runtime failure, never reported as a conflict).
      */
@@ -283,6 +283,11 @@ export function registerAgentRoutes(
       }
       if (error.code === 'stale') {
         return reply.code(409).send({ error: 'stale', message: redactSecrets(error.message) });
+      }
+      if (error.code === 'remote_control') {
+        return reply
+          .code(403)
+          .send({ error: 'remote_control', message: redactSecrets(error.message) });
       }
       return reply.code(409).send(refusal('rejected', error.message));
     };

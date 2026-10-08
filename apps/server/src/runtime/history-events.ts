@@ -60,6 +60,8 @@ interface Members {
   questions: Set<Id>;
   proposals: Set<Id>;
   bodies: Set<Id>;
+  /** The deliverables of those projects and tasks (P9-01), removed ones included. */
+  deliverables: Set<Id>;
 }
 
 export class HistoryEvents {
@@ -208,7 +210,16 @@ export class HistoryEvents {
       if (e.type === 'body.assigned') bodies.add(e.bodyId);
       else bodies.add(e.fromBodyId).add(e.toBodyId);
     }
-    return { projects, tasks, agents, questions, proposals, bodies };
+    const deliverables = new Set<Id>();
+    const deliverableRows = this.stmt(
+      'SELECT id, project_id AS projectId, task_id AS taskId FROM deliverables',
+    ).all() as { id: Id; projectId: Id | null; taskId: Id | null }[];
+    for (const d of deliverableRows) {
+      if ((d.projectId && projects.has(d.projectId)) || (d.taskId && tasks.has(d.taskId))) {
+        deliverables.add(d.id);
+      }
+    }
+    return { projects, tasks, agents, questions, proposals, bodies, deliverables };
   }
 }
 
@@ -290,5 +301,16 @@ export function touches(event: Event, m: Members): boolean {
       return event.target.kind === 'project'
         ? m.projects.has(event.target.id)
         : m.tasks.has(event.target.id);
+    case 'deliverable.added':
+      return m.deliverables.has(event.deliverable.id);
+    case 'deliverable.updated':
+    case 'deliverable.removed':
+    case 'deliverable.restored':
+    case 'deliverable.opened':
+    case 'run.ports':
+    case 'run.ended':
+      return m.deliverables.has(event.deliverableId);
+    case 'run.started':
+      return m.deliverables.has(event.run.deliverableId);
   }
 }

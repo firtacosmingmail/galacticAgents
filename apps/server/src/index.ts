@@ -1,7 +1,8 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './config/config.js';
-import { SettingsService } from './config/settings.js';
+import { SettingsService, declarationLimits, runSettings } from './config/settings.js';
+import { Opener } from './deliverables/opener.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
 import { buildApp } from './app.js';
 import {
@@ -28,8 +29,11 @@ import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { composeRuntime } from './runtime/compose.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
+import { runIdOfKey } from './runtime/process-attribution.js';
 import { ProcessSupervisor } from './runtime/supervisor.js';
 import { Workspaces } from './workspace/workspaces.js';
+import { agentPeerGuard } from './http/peer-guard.js';
+import { osProcessTable } from './runtime/process-table.js';
 
 const { config, tokenGenerated, warnings } = loadConfig();
 // Remote-access settings that work but deserve a word (P7-02): wildcards, identity headers.
@@ -185,6 +189,15 @@ const composed = composeRuntime(db, {
   processes: { groups: supervisor },
   // Dollar budgets (P8-01): the warning threshold.
   ...(config.budgets ? { budgets: config.budgets } : {}),
+  // Agents' declarations (P9-04): the limits are read at every declaration, so the settings apply
+  // live; a copy into a deliverables folder leaves the backups' reserve free (P9-06, decision 122).
+  deliverables: {
+    dataDir: config.dataDir,
+    limits: () => declarationLimits(config),
+    reserveBytes: () => config.backups?.reserveBytes,
+  },
+  // Managed runs (P9-08): through the same supervisor; the limits are read at every start.
+  runs: { supervisor, settings: () => runSettings(config) },
 });
 const { log, statuses, transcripts } = composed;
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
@@ -206,6 +219,8 @@ const backups = new BackupService({
     : {}),
   log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
 });
+// Opening on the Mac (P9-03): the IDE setting is read at each Open in IDE.
+const opener = new Opener({ ideSetting: () => config.deliverables?.ide ?? 'auto' });
 // The settings page (P25-01): caps and retention apply live through the runtime and the job.
 const settings = new SettingsService({
   config,
@@ -214,6 +229,7 @@ const settings = new SettingsService({
   transcriptRetention: composed.transcriptRetention,
   budgets: composed.budgets,
   runtimes: () => adapters.map((a) => a.runtime),
+  ides: opener,
 });
 
 // Shutdown is wired before anything is resumed or listening (P1-32): a signal during recovery
@@ -288,12 +304,40 @@ composed.defineBrains({
   waykeeper: () => waykeeperDefinition(),
 });
 
+// Runs the previous server life left live show as stopped (decision 130): what still carries
+// their marker is stopped (`reconcile()` above took their groups), and none is started again.
+if (composed.runs && !shuttingDown) {
+  // The previous life's runs by their PID rows and launch intents: what escaped their groups is
+  // found by the marker, even for a run whose `run.started` the crash never let it write.
+  const rows = [...reconciled.dead, ...reconciled.orphans].flatMap((key) => {
+    const runId = runIdOfKey(key);
+    const row = runId !== undefined ? supervisor.processRecord(key) : undefined;
+    return runId !== undefined && row ? [{ runId, intendedAt: row.startedAt }] : [];
+  });
+  const runs = await composed.runs.recover({ launches: [...rows, ...(launches.runs ?? [])] });
+  if (runs.ended.length > 0) {
+    console.log(
+      `Runs: ${runs.ended.length} stopped by the restart` +
+        (runs.stopped.length > 0 ? ` (pids ${runs.stopped.join(', ')} stopped)` : ''),
+    );
+  }
+}
 // Resume what the previous server life left running (SPEC decision 8): supervisors first.
 const recovery = await composed.recover();
 if (recovery.resumed.length + recovery.needAttention.length > 0) {
   console.log(
     `Recovered: ${recovery.resumed.length} agents resumed, ${recovery.needAttention.length} need attention`,
   );
+}
+// One detection pass over the active projects (P9-05, decision 119), after recovery and in the
+// background, staggered: what changed in their folders while the server was down is listed.
+if (composed.detection && !shuttingDown) {
+  void composed.detection.detectAll().then((results) => {
+    const changed = results.filter(
+      (r) => r.added.length + r.updated.length + r.removed.length + r.restored.length > 0,
+    ).length;
+    if (changed > 0) console.log(`Deliverables: ${changed} project(s) changed since the last run`);
+  });
 }
 // The panel's "Restart Harmonizer" (P5-06): on the last Harmonizer's runtime, else the boot one.
 const restartHarmonizer = harmonizerRestarter(composed, {
@@ -312,9 +356,25 @@ const app = buildApp({
   commands: composed.commands,
   ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
+  opener,
   push,
   storage: composed.storage,
   backups,
+  ...(composed.deliverableCopies ? { deliverableCopies: composed.deliverableCopies } : {}),
+  ...(composed.runs && composed.runOutput
+    ? {
+        runs: {
+          service: composed.runs,
+          output: composed.runOutput,
+          // A start from an agent's or a run's process is refused (P9-12 review S3).
+          peer: agentPeerGuard({ table: osProcessTable() }),
+        },
+      }
+    : {}),
+  // The panel's Rescan (P9-05): the same scan as after a merge, within its 10 s window.
+  ...(composed.detection
+    ? { rescanDeliverables: (id: string) => composed.detection!.detectProject(id) }
+    : {}),
   restartHarmonizer: async () => {
     const hq = await restartHarmonizer();
     console.log(
@@ -324,6 +384,25 @@ const app = buildApp({
     return hq;
   },
   scenarios: () => fake.scenarioNames(),
+  // The scene harness's real folders and Stewards' declarations (development only, P9-12).
+  harness: {
+    workspaces,
+    ...(composed.deliverables
+      ? {
+          deliverables: {
+            declare: (agentId, target, input) =>
+              composed.deliverables!.declare(agentId, target, {
+                kind: input.kind,
+                title: input.title,
+                ...(input.path !== undefined ? { path: input.path } : {}),
+                ...(input.command !== undefined ? { command: input.command } : {}),
+                ...(input.url !== undefined ? { url: input.url } : {}),
+                ...(input.description !== undefined ? { description: input.description } : {}),
+              }),
+          },
+        }
+      : {}),
+  },
   logger: process.env['GALACTIC_LOG'] !== 'silent',
   ...(webDir ? { webDir } : {}),
 });

@@ -1,3 +1,6 @@
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   isHarnessMeta,
@@ -12,6 +15,7 @@ import { createWakeScope } from '../brains/seed.js';
 import { wakeLine } from '../brains/wake.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
+import { gitRunner } from '../workspace/git.js';
 
 /**
  * The scene harness's routes (P4-06): development only, local only, and every action a real
@@ -523,5 +527,79 @@ describe('the harness touches only its own rows (P4-06 review)', () => {
       { isLive: () => true },
     );
     expect(events.map((e) => wakeLine(e, scope)).filter(Boolean)).toEqual([]);
+  });
+});
+
+describe('a prepared harness project and its agents’ declarations (P9-12)', () => {
+  it('prepares a real folder (detection scans it) and a fake Steward declares through the agents’ rules', async () => {
+    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-harness-')));
+    const real = composeRuntime(openDatabase(':memory:'), {
+      adapters: [new FakeAdapter({ speed: 1 })],
+      workspaces: {
+        projectsRoot: join(tmp, 'projects'),
+        dataDir: join(tmp, 'data'),
+        home: join(tmp, 'home'),
+        git: gitRunner({ env: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }),
+      },
+      detection: { minIntervalMs: 0 },
+    });
+    const app = await startTestApp({
+      log: real.log,
+      statuses: real.statuses,
+      runtime: real.runtime,
+      commands: real.commands,
+      harness: {
+        workspaces: real.workspaces!,
+        deliverables: {
+          declare: (agentId, target, input) =>
+            real.deliverables!.declare(agentId, target, {
+              kind: input.kind,
+              title: input.title,
+              ...(input.path !== undefined ? { path: input.path } : {}),
+            }),
+        },
+      },
+    });
+    try {
+      const res = await post(
+        '/dev/harness/scenario',
+        { stewards: 1, asteroid: false, prepare: true },
+        {},
+        app.baseUrl,
+      );
+      expect(res.status).toBe(200);
+      const world = res.body as unknown as HarnessScenarioResponse;
+      const project = real.log.tables.projects.get(world.projectId)!;
+      expect(project.workspace.startsWith(join(tmp, 'projects'))).toBe(true);
+      expect(project.meta?.['workspace']).toBeDefined();
+      writeFileSync(join(project.workspace, 'notes.txt'), 'hello');
+      const declared = await post(
+        `/dev/harness/agents/${world.stewardIds[0]}/declare`,
+        { kind: 'file', title: 'Notes', path: join(project.workspace, 'notes.txt') },
+        {},
+        app.baseUrl,
+      );
+      expect(declared.status).toBe(200);
+      expect(declared.body).toMatchObject({
+        deliverable: { taskId: world.taskIds[0], source: 'agent', title: 'Notes' },
+      });
+      // The agents' rules apply: a path outside the project is refused.
+      const outside = await post(
+        `/dev/harness/agents/${world.stewardIds[0]}/declare`,
+        { kind: 'file', title: 'Secrets', path: join(tmp, 'home', '.ssh', 'id_ed25519') },
+        {},
+        app.baseUrl,
+      );
+      expect(outside.status).toBe(400);
+      // The folder deliverable from the prepared project's scan.
+      await real.detection!.detectProject(world.projectId);
+      expect(
+        real.log.tables.deliverables.of({ projectId: world.projectId }).map((d) => d.detectedKey),
+      ).toContain('folder');
+    } finally {
+      await app.stop();
+      await real.dispose();
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

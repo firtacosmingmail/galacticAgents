@@ -11,6 +11,7 @@ import {
 import { tables, type Tables } from '../db/tables.js';
 import type { ChooseOptions } from './catalogue.js';
 import { projectBudgetEvent } from './budgets.js';
+import { projectRunEvent } from './deliverables.js';
 import { isStorageFailure } from '../db/database.js';
 
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
@@ -144,6 +145,37 @@ export class EventLog {
     this.selectMin = db.prepare('SELECT COALESCE(MIN(id), 0) AS seq FROM events');
     this.logId = this.loadLogId();
     this.backfillProjections();
+    this.backfillRuns();
+  }
+
+  /**
+   * Folds the `run.*` events of a log into the run history (`deliverable_runs`, P9-01) once
+   * (settings key `run_projection`): a log imported from an export (TECHNOLOGY §6.4), whose rows
+   * the import rebuilt but whose run history is a projection of its events. Only the run events
+   * are read (by `type`, indexed).
+   */
+  private backfillRuns(): void {
+    if (this.tables.settings.get('run_projection') !== undefined) return;
+    const select = this.db.prepare(
+      `SELECT id, at, payload FROM events
+        WHERE type IN ('run.started', 'run.ports', 'run.ended') AND id > ? ORDER BY id LIMIT 5000`,
+    );
+    this.db.transaction(() => {
+      let after = 0;
+      for (;;) {
+        const page = select.all(after) as { id: number; at: string; payload: string }[];
+        if (page.length === 0) break;
+        for (const r of page) {
+          projectRunEvent(this.tables, {
+            seq: r.id,
+            at: r.at,
+            event: JSON.parse(r.payload) as Event,
+          });
+        }
+        after = page.at(-1)!.id;
+      }
+      this.tables.settings.set('run_projection', 1);
+    })();
   }
 
   /**
@@ -254,6 +286,7 @@ export class EventLog {
           const envelope = { seq: Number(info.lastInsertRowid), at, event };
           // The log's own projections (P8-01: spend and budget notices), in the same transaction.
           projectBudgetEvent(this.tables, envelope);
+          projectRunEvent(this.tables, envelope); // the run history (P9-01)
           mine.push(envelope);
         }
         return result;
@@ -376,6 +409,7 @@ export class EventLog {
       questions: this.tables.questions.all(),
       proposals: this.tables.proposals.all(),
       spend: this.tables.spend.all(),
+      deliverables: this.tables.deliverables.all(),
     }))();
   }
 }

@@ -4,9 +4,20 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { setGlobalDefaultPolicy } from '../domain/permissions.js';
 import { loadConfig } from './config.js';
-import type { TranscriptRetention as TranscriptRetentionPolicy } from '@galactic/protocol';
+import {
+  DEFAULT_DECLARATION_LIMITS,
+  DEFAULT_RUN_SETTINGS,
+  SettingsPatch,
+  type TranscriptRetention as TranscriptRetentionPolicy,
+} from '@galactic/protocol';
 import type { TranscriptRetention } from '../runtime/transcript-retention.js';
-import { SettingsError, SettingsService, writableFor } from './settings.js';
+import {
+  SettingsError,
+  SettingsService,
+  declarationLimits,
+  runSettings,
+  writableFor,
+} from './settings.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -256,5 +267,174 @@ describe('transcript retention settings (P8-02)', () => {
     expect(dev.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
     const allowed = new SettingsService({ config, home, runtimes, allowFakeRuntime: true });
     expect(allowed.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
+  });
+});
+
+describe('the IDE setting (P9-03; decision 127)', () => {
+  function withIdes(installed: readonly string[] | undefined, supported = true) {
+    const s = setup();
+    const settings = new SettingsService({
+      config: s.config,
+      home: s.home,
+      ides: { supported, installedBundleIds: () => installed },
+    });
+    return { ...s, settings };
+  }
+
+  it('defaults to auto, saves an installed IDE, applies it live and survives a restart', () => {
+    const { env, config, settings, file } = withIdes([
+      'com.jetbrains.WebStorm',
+      'com.microsoft.VSCode',
+    ]);
+    expect(settings.current().deliverables).toEqual({
+      ide: 'auto',
+      declarations: DEFAULT_DECLARATION_LIMITS,
+      runs: DEFAULT_RUN_SETTINGS,
+    });
+    const res = settings.update({ deliverables: { ide: 'com.microsoft.VSCode' } }, local);
+    expect(res.settings.deliverables?.ide).toBe('com.microsoft.VSCode');
+    expect(config.deliverables?.ide).toBe('com.microsoft.VSCode'); // the opener reads it live
+    expect(file()['deliverables']).toEqual({ ide: 'com.microsoft.VSCode' });
+    expect(loadConfig(env).config.deliverables?.ide).toBe('com.microsoft.VSCode');
+    expect(
+      settings.update({ deliverables: { ide: 'auto' } }, local).settings.deliverables?.ide,
+    ).toBe('auto');
+    expect(file()['deliverables']).toEqual({ ide: 'auto' });
+  });
+
+  it('refuses a bundle id that is not a detected IDE, writing nothing', () => {
+    const { settings, file } = withIdes(['com.jetbrains.WebStorm']);
+    const before = file();
+    for (const ide of ['com.microsoft.VSCode', 'com.apple.Terminal']) {
+      const r = refusal(() => settings.update({ deliverables: { ide } }, local));
+      expect(r?.code).toBe('invalid');
+      expect(r?.message).toMatch(/not an IDE installed on this Mac \(installed: com\.jetbrains/);
+    }
+    expect(file()).toEqual(before);
+    // Without a detection (or an opener) only auto is accepted.
+    const none = withIdes(undefined).settings;
+    const webstorm = { deliverables: { ide: 'com.jetbrains.WebStorm' } };
+    expect(refusal(() => none.update(webstorm, local))?.code).toBe('invalid');
+    expect(none.update({ deliverables: { ide: 'auto' } }, local).settings.deliverables?.ide).toBe(
+      'auto',
+    );
+  });
+
+  it('cannot be changed off macOS', () => {
+    const { settings } = withIdes([], false);
+    const webstorm = { deliverables: { ide: 'com.jetbrains.WebStorm' } };
+    expect(refusal(() => settings.update(webstorm, local))?.message).toMatch(
+      /does not run on a Mac/,
+    );
+  });
+
+  it('is changed only from this machine unless autoApproveRemote (decisions 51, 131)', () => {
+    const { settings, file } = withIdes(['com.jetbrains.WebStorm']);
+    const before = file();
+    const patch = { deliverables: { ide: 'com.jetbrains.WebStorm' } };
+    for (const write of [{ origin: 'remote' as const }, {}]) {
+      expect(refusal(() => settings.update(patch, write))?.code).toBe('remote_settings');
+    }
+    expect(file()).toEqual(before);
+    const trusted = settings.update(patch, { origin: 'remote', autoApproveRemote: true });
+    expect(trusted.settings.deliverables?.ide).toBe('com.jetbrains.WebStorm');
+  });
+});
+
+describe('the declaration limits (P9-04; decision 120)', () => {
+  it('default to decision 120, merge key by key, apply live, survive a restart and keep the IDE', () => {
+    const { env, config, home, file } = setup();
+    const settings = new SettingsService({ config, home });
+    expect(declarationLimits(config)).toEqual(DEFAULT_DECLARATION_LIMITS);
+    const res = settings.update({ deliverables: { declarations: { perTask: 3 } } }, local);
+    expect(res.settings.deliverables).toEqual({
+      ide: 'auto',
+      declarations: { ...DEFAULT_DECLARATION_LIMITS, perTask: 3 },
+      runs: DEFAULT_RUN_SETTINGS,
+    });
+    // Live: the service reads `declarationLimits(config)` at every declaration.
+    expect(declarationLimits(config).perTask).toBe(3);
+    settings.update({ deliverables: { declarations: { perAgentPerHour: 5 } } }, local);
+    expect(declarationLimits(config)).toMatchObject({ perTask: 3, perAgentPerHour: 5 });
+    expect(file()['deliverables']).toMatchObject({
+      declarations: { perTask: 3, perAgentPerHour: 5 },
+    });
+    expect(declarationLimits(loadConfig(env).config)).toMatchObject({
+      perTask: 3,
+      perAgentPerHour: 5,
+      perProject: 200,
+    });
+    expect(
+      new SettingsService({ config: loadConfig(env).config, home }).current().deliverables,
+    ).toEqual({
+      ide: 'auto',
+      declarations: { ...DEFAULT_DECLARATION_LIMITS, perTask: 3, perAgentPerHour: 5 },
+      runs: DEFAULT_RUN_SETTINGS,
+    });
+  });
+
+  it('are changed only from this machine unless autoApproveRemote', () => {
+    const { config, home, file } = setup();
+    const settings = new SettingsService({ config, home });
+    const before = file();
+    const patch = { deliverables: { declarations: { perTask: 1 } } };
+    expect(refusal(() => settings.update(patch, { origin: 'remote' }))?.code).toBe(
+      'remote_settings',
+    );
+    expect(file()).toEqual(before);
+    expect(declarationLimits(config).perTask).toBe(50);
+  });
+});
+
+describe('the managed runs (P9-08; decision 130)', () => {
+  it('default to decision 130, merge key by key (output too), apply live and survive a restart', () => {
+    const { env, config, home, file } = setup();
+    const settings = new SettingsService({ config, home });
+    expect(runSettings(config)).toEqual(DEFAULT_RUN_SETTINGS);
+    settings.update({ deliverables: { declarations: { perTask: 3 } } }, local);
+    const res = settings.update(
+      { deliverables: { runs: { maxConcurrent: 2, output: { keepRuns: 3 } } } },
+      local,
+    );
+    expect(res.settings.deliverables?.runs).toEqual({
+      maxConcurrent: 2,
+      output: { ...DEFAULT_RUN_SETTINGS.output, keepRuns: 3 },
+    });
+    // The declarations set before stay.
+    expect(res.settings.deliverables?.declarations?.perTask).toBe(3);
+    // Live: `RunService` reads `runSettings(config)` at every start.
+    expect(runSettings(config).maxConcurrent).toBe(2);
+    settings.update({ deliverables: { runs: { output: { maxAgeDays: 7 } } } }, local);
+    expect(runSettings(config).output).toEqual({
+      maxBytesPerRun: 2 * 1024 * 1024,
+      keepRuns: 3,
+      maxAgeDays: 7,
+    });
+    expect(file()['deliverables']).toMatchObject({
+      runs: { maxConcurrent: 2, output: { keepRuns: 3, maxAgeDays: 7 } },
+    });
+    expect(runSettings(loadConfig(env).config)).toEqual({
+      maxConcurrent: 2,
+      output: { maxBytesPerRun: 2 * 1024 * 1024, keepRuns: 3, maxAgeDays: 7 },
+    });
+  });
+
+  it('refuse a value out of range and a remote write without autoApproveRemote', () => {
+    const { config, home, file } = setup();
+    const settings = new SettingsService({ config, home });
+    const before = file();
+    expect(SettingsPatch.safeParse({ deliverables: { runs: { maxConcurrent: 0 } } }).success).toBe(
+      false,
+    );
+    const patch = { deliverables: { runs: { maxConcurrent: 8 } } };
+    expect(refusal(() => settings.update(patch, { origin: 'remote' }))?.code).toBe(
+      'remote_settings',
+    );
+    expect(file()).toEqual(before);
+    expect(runSettings(config).maxConcurrent).toBe(4);
+    expect(
+      settings.update(patch, { origin: 'remote', autoApproveRemote: true }).settings.deliverables
+        ?.runs?.maxConcurrent,
+    ).toBe(8);
   });
 });

@@ -10,13 +10,13 @@
 //! - **Window**: the shell's splash page, then `http://127.0.0.1:<port>` — the server's own origin,
 //!   so the page gets its token from `/health` and opens its socket exactly as in a browser. No IPC
 //!   capability is granted to any page (`capabilities: []`), and navigation is kept to the shell's
-//!   own pages and that origin; other links open in the default browser.
+//!   own pages and that origin; other http(s) links — a run's port, a URL deliverable, also when
+//!   they ask for a new window — open in the default browser, rate-limited (`links.rs`).
 //! - **Menu bar**: status line, server line, open, start, "Start at login", quit.
 //! - **Notifications**: posted from here (Rust) for the Node side's `notify` lines; the page's own
 //!   notifications are off inside the shell (`window.__GALACTIC_DESKTOP__`).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -30,12 +30,16 @@ use serde::Deserialize;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
+use tauri::webview::NewWindowResponse;
 use tauri::{
     AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     WindowEvent, Wry,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tauri_plugin_notification::NotificationExt;
+
+mod links;
+use links::{navigation_target, new_window_target, LinkTarget, OpenLimiter};
 
 /// Tells the page it runs inside the shell: the page then leaves notifications to the shell
 /// (apps/web/src/desktop-shell.ts). A flag only — it grants nothing.
@@ -115,6 +119,7 @@ fn main() {
                 .visible(!hidden)
                 .initialization_script(SHELL_FLAG_JS)
                 .on_navigation(move |url| navigation_allowed(url, &port))
+                .on_new_window(|url, _features| new_window(&url))
                 .build()?;
             let w = window.clone();
             window.on_window_event(move |event| {
@@ -155,48 +160,44 @@ fn main() {
         });
 }
 
-/// At most one link handed to the default browser a second, and `OPEN_PER_MINUTE` a minute: a
-/// page (or an agent's output in it) cannot flood the Mac with browser tabs.
-const OPEN_PER_MINUTE: usize = 5;
-static OPENED: Mutex<VecDeque<Instant>> = Mutex::new(VecDeque::new());
+/// The links handed to the default browser (`links::OpenLimiter`: one a second, five a minute).
+static OPENER: Mutex<OpenLimiter> = Mutex::new(OpenLimiter::new());
 
-/// Whether another link may go to the default browser now (and records it when it may).
-fn may_open_externally(now: Instant) -> bool {
-    let mut opened = OPENED.lock().unwrap();
-    while opened.front().is_some_and(|t| now.duration_since(*t) >= Duration::from_secs(60)) {
-        opened.pop_front();
+/// Hands a web address to the default browser, if the rate limit allows (`links.rs`). Only ever
+/// called for an `http(s)` URL: `open` gets nothing else.
+fn open_externally(url: &Url) {
+    if !matches!(url.scheme(), "http" | "https") {
+        return;
     }
-    let too_soon = opened.back().is_some_and(|t| now.duration_since(*t) < Duration::from_secs(1));
-    if too_soon || opened.len() >= OPEN_PER_MINUTE {
-        return false;
+    if OPENER.lock().unwrap().may_open(Instant::now()) {
+        let _ = Command::new("/usr/bin/open").arg(url.as_str()).spawn();
+    } else {
+        eprintln!("[desktop] not opening {url}: too many links opened just now");
     }
-    opened.push_back(now);
-    true
 }
 
 /// The window shows the shell's own pages and the Mission Control it is attached to; any other
-/// http(s) link opens in the default browser (rate-limited: `may_open_externally`).
+/// http(s) link (a run's port, a URL deliverable) opens in the default browser (`links.rs`).
 fn navigation_allowed(url: &Url, port: &Arc<Mutex<Option<u16>>>) -> bool {
-    match url.scheme() {
-        "tauri" | "about" => true,
-        "http" | "https" => {
-            let host = url.host_str().unwrap_or("");
-            if host == "tauri.localhost" {
-                return true;
-            }
-            let current = *port.lock().unwrap();
-            if url.scheme() == "http" && host == "127.0.0.1" && url.port().is_some() && url.port() == current {
-                return true;
-            }
-            if may_open_externally(Instant::now()) {
-                let _ = Command::new("/usr/bin/open").arg(url.as_str()).spawn();
-            } else {
-                eprintln!("[desktop] not opening {url}: too many links opened just now");
-            }
+    let current = *port.lock().unwrap();
+    match navigation_target(url.scheme(), url.host_str().unwrap_or(""), url.port(), current) {
+        LinkTarget::Window => true,
+        LinkTarget::Browser => {
+            open_externally(url);
             false
         }
-        _ => false,
+        LinkTarget::Refused => false,
     }
+}
+
+/// A link that asks for a new window (`target="_blank"` — the panel's port links and URL
+/// deliverables, decision 134 — or `window.open`): never a second shell window; an http(s) one
+/// opens in the default browser (`links.rs`). Without this handler WebKit drops the click.
+fn new_window(url: &Url) -> NewWindowResponse<Wry> {
+    if new_window_target(url.scheme(), url.host_str().unwrap_or("")) == LinkTarget::Browser {
+        open_externally(url);
+    }
+    NewWindowResponse::Deny
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {

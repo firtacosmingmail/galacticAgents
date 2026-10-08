@@ -62,7 +62,7 @@ What is lost: everything that happened after the backup was taken. The restored 
 
 - the **event log**, whole: every project, task, body, card, question, answer, message to an agent, state change and control. It is the truth everything else is folded from (`TECHNOLOGY.md` §6.1), so the map, the history, the inspector and the timeline replay all come back from it;
 - the **schema** it was written under (the applied migrations) and the app version;
-- the **rows** at the moment of the export (projects, tasks, bodies including retired demo bodies, agents, questions, cards), which the import uses as a check;
+- the **rows** at the moment of the export (projects, tasks, bodies including retired demo bodies, agents, questions, cards, deliverables), which the import uses as a check;
 - with `--transcripts` (or the checkbox), the **transcripts**: agents' output and the markers of what retention already removed.
 
 Never in it: the access token, `config.json`, the push (VAPID) keys, the phones' push subscriptions, the process table, agents' runtime sessions (they live in each CLI's own store, e.g. `~/.claude`), and the transcripts unless asked for. Text you wrote yourself is in it as written: messages, answers, prompts. A key you pasted into a chat is in the export, so treat the file like the database.
@@ -84,6 +84,7 @@ An export can be imported by the build that made it or a later one. A build that
 - The map, the history, the inspector and the timeline replay are as they were at the export.
 - Agents that were running at the export are resumed on the next start, as after any restart. On another machine their sessions are missing, so they show up as needing attention. Restart that work from the panel.
 - **Worktrees and repositories are not in the export.** Projects keep their workspace paths. On another machine, copy or clone the repositories to the same paths before resuming work, or edit the projects' paths.
+- **Deliverables come back as pointers, without their files** (§4). A deliverable whose file is not at its path on this Mac shows as "missing" until the file is there again. A command that was running at the export shows as stopped ("Mission Control restarted") and is never started again by itself.
 - Without `--transcripts`, agents' replies in the chats and the Steward transcript views are empty. The messages you sent are kept.
 - The budgets' spend is folded again from the log. Settings (`config.json`) are not part of the map: copy the file yourself if you want them, minus the token.
 - The database gets a new log identity: open panels reload instead of resuming.
@@ -112,5 +113,18 @@ Both the server at its start and the import / restore also remove the temporary 
 | Agents' runtime sessions (`~/.claude/…`) | no | no | no |
 | Worktrees and repositories on disk | no | no | no |
 | Transcript chunks retention removed (decision 97) | no | no | no (only the markers saying so) |
+| Deliverables (the list: what, where, who added it, removed ones) | yes | yes | yes |
+| Runs of commands (when, how they ended, their ports) | yes | rebuilt from the log | rebuilt from the log |
+| A run's output | yes, what retention kept | no | no |
+| The deliverables' files, and each project's `deliverables/` folder | no | no | no |
 
-For a whole-machine backup, also copy `~/.galactic/config.json` and `vapid.json` (secrets: keep them private), and back up your repositories as usual.
+For a whole-machine backup, also copy `~/.galactic/config.json` and `vapid.json` (secrets: keep them private), and back up your repositories as usual, with the projects' `deliverables/` folders in them (§4).
+
+## 4. Deliverables
+
+A deliverable is a pointer (`SPEC.md` §4.7, decisions 118, 132): the database holds the list (what it is, where it is, who added it, the runs of a command), never the file itself. So:
+
+- **Backups and exports hold the list, never the files.** A backup is the whole database: the deliverables, the run history and the run output that retention kept (decision 130). An export carries the deliverables (they are part of the history: the events, plus the rows as a check) and the run history (rebuilt from the events), but neither a run's output nor any file.
+- **The files live in your projects' folders.** A deliverable inside a project stays where the agent or you left it. What had to be copied (a file an agent made outside the project, a build output a merge did not carry) is in the project's own **`deliverables/` folder**, one subfolder per task, e.g. `~/GalacticProjects/my-app/deliverables/<task>/`. That folder is yours. It is excluded from git on this Mac only (the repository's `.git/info/exclude`), so a push or a clone does not carry it. GalacticAgents never deletes anything in it: not when a deliverable is removed, not when a project is archived or cancelled, not through retention.
+- **Back them up with the projects.** Time Machine, or whatever backs up your home folder, covers the projects root and so the `deliverables/` folders. GalacticAgents' own backups do not (`SPEC.md` §8). And since the folder is excluded from git, the repository's remote does not hold it either.
+- **After a restore**, the list is as it was at the backup; files deleted or moved since show as "missing". **After an import onto another Mac**, copy the project folders, with their `deliverables/` folders, to the same paths and the deliverables find their files again. Until then they show as "missing".

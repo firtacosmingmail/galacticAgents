@@ -1,0 +1,402 @@
+/*
+ * The deliverables views (P9-09): dense rows over the panel's tokens, like the status views.
+ * Amber stays reserved for "blocked on you" (SPEC §4.4): a missing deliverable is the failed red.
+ */
+
+.dlv {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 8px;
+  min-width: 0;
+}
+.dlv-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.dlv-head .dlv-heading,
+.dlv-head .his-subtitle {
+  margin: 0;
+}
+.dlv-count {
+  font-weight: 400;
+}
+.pnl .dlv-head button,
+.pnl .dlv-actions button,
+.pnl .dlv-folder button,
+.pnl .dlv-form button,
+.pnl .dlv-viewer-bar button {
+  padding: 3px 10px;
+  font-size: 13px;
+}
+.dlv-check {
+  margin: 0;
+  font-size: 13px;
+}
+.dlv-empty {
+  margin: 0;
+  font-size: 13px;
+}
+
+.dlv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dlv-group-title {
+  margin: 6px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dlv-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--pnl-line);
+  border-radius: 4px;
+  background: var(--pnl-surface);
+  min-width: 0;
+  font-size: 13px;
+}
+.dlv-row.is-missing {
+  border-left-color: var(--pnl-failed);
+}
+.dlv-row.is-removed {
+  opacity: 0.75;
+}
+.dlv-row p {
+  margin: 0;
+}
+.dlv-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+.dlv-kind {
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--pnl-line);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pnl-muted);
+}
+.dlv-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.dlv-by {
+  font-size: 12px;
+}
+.dlv-desc {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dlv-where code,
+.dlv-line code,
+.dlv-folder code,
+.dlv-skipped code,
+.dlv-mono {
+  font-family: var(--pnl-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.dlv-cmd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--pnl-raised);
+}
+.dlv-missing {
+  color: var(--pnl-failed);
+}
+.dlv-skipped summary {
+  cursor: pointer;
+  color: var(--pnl-muted);
+}
+.dlv-skipped ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.dlv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 2px;
+}
+.dlv-link {
+  color: var(--pnl-here);
+}
+.dlv-mac-only {
+  font-size: 12px;
+}
+.dlv-note {
+  font-size: 12px;
+}
+
+.dlv-folder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--pnl-line);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.dlv-folder p {
+  margin: 0;
+  flex: 1 1 240px;
+}
+
+.dlv-sub > summary {
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+/* add by hand, edit */
+.dlv-form {
+  display: grid;
+  grid-template-columns: minmax(80px, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: var(--pnl-raised);
+  font-size: 13px;
+}
+.dlv-form label {
+  color: var(--pnl-muted);
+}
+.dlv-form input,
+.dlv-form select,
+.dlv-form textarea {
+  min-width: 0;
+  font: inherit;
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--pnl-line);
+  background: var(--pnl-surface);
+  color: var(--pnl-ink);
+}
+.dlv-form .dlv-mono {
+  font-family: var(--pnl-mono);
+}
+.dlv-form .dlv-hint,
+.dlv-form .dlv-stale,
+.dlv-form .dlv-form-buttons,
+.dlv-form .error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.dlv-form .dlv-hint {
+  font-size: 12px;
+}
+.dlv-form .dlv-hint:not(:last-of-type) {
+  grid-column: 2;
+}
+.dlv-stale {
+  color: var(--pnl-ink);
+  border-left: 3px solid var(--pnl-here);
+  padding-left: 6px;
+}
+.dlv-form-buttons {
+  display: flex;
+  gap: 6px;
+}
+@media (max-width: 760px) {
+  .dlv-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dlv-form .dlv-hint:not(:last-of-type) {
+    grid-column: 1;
+  }
+  .pnl .dlv-head button,
+  .pnl .dlv-actions button,
+  .pnl .dlv-folder button,
+  .pnl .dlv-form button,
+  .pnl .dlv-viewer-bar button {
+    min-height: 44px;
+  }
+}
+
+/* the viewer */
+.dlv-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: var(--pnl-bg);
+  min-width: 0;
+}
+.dlv-viewer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.dlv-viewer-title {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.dlv-truncated {
+  font-size: 12px;
+  border-left: 3px solid var(--pnl-here);
+  padding-left: 6px;
+}
+.dlv-code {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--pnl-surface);
+  font-family: var(--pnl-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  tab-size: 2;
+}
+.dlv-image {
+  max-height: 60vh;
+  overflow: auto;
+  /* a checkerboard, so a transparent image shows its edges */
+  background: repeating-conic-gradient(var(--pnl-raised) 0 25%, var(--pnl-surface) 0 50%) 0 0 / 16px
+    16px;
+  border-radius: 4px;
+}
+.dlv-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.dlv-markdown {
+  max-height: 60vh;
+  overflow: auto;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.dlv-markdown a {
+  color: var(--pnl-here);
+}
+.dlv-markdown pre {
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--pnl-surface);
+  overflow: auto;
+}
+.dlv-markdown code {
+  font-family: var(--pnl-mono);
+  font-size: 12px;
+}
+.dlv-md-img {
+  color: var(--pnl-muted);
+  font-style: italic;
+}
+
+/* highlight.js tokens over the panel's tokens (no theme file to load) */
+.hljs-comment,
+.hljs-quote {
+  color: var(--pnl-muted);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag {
+  color: #c792ea;
+}
+.hljs-string,
+.hljs-attr-value,
+.hljs-regexp,
+.hljs-addition {
+  color: #9ece6a;
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-variable,
+.hljs-template-variable {
+  color: #f0a45d;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: #7aa2f7;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-type,
+.hljs-built_in {
+  color: #7dcfff;
+}
+.hljs-meta,
+.hljs-tag {
+  color: var(--pnl-muted);
+}
+.hljs-deletion {
+  color: var(--pnl-failed);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 700;
+}
+@media (prefers-color-scheme: light) {
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal,
+  .hljs-section,
+  .hljs-doctag {
+    color: #8a3fb8;
+  }
+  .hljs-string,
+  .hljs-attr-value,
+  .hljs-regexp,
+  .hljs-addition {
+    color: #3b7a1c;
+  }
+  .hljs-number,
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-variable,
+  .hljs-template-variable {
+    color: #a65812;
+  }
+  .hljs-title,
+  .hljs-title.function_,
+  .hljs-name,
+  .hljs-selector-id,
+  .hljs-selector-class {
+    color: #2f62d0;
+  }
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-property,
+  .hljs-type,
+  .hljs-built_in {
+    color: #106c8a;
+  }
+}

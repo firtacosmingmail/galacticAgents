@@ -1,5 +1,6 @@
 import type { AgentSpend } from './budget.js';
 import { foldSpend } from './budget.js';
+import type { Deliverable, RunSummary } from './deliverables.js';
 import type { Agent, Body, Project, Proposal, Question, StatusRecord, Task } from './domain.js';
 import { foldProposalMeta, type ProposalMetaChanges } from './domain.js';
 import { applyChanges, type EventEnvelope } from './events.js';
@@ -28,6 +29,11 @@ export interface WorldState {
   statuses: Record<Id, StatusRecord>;
   /** Every agent's reported cost (P8-01): the snapshot's, folded on with `foldSpend`. */
   spend: Record<Id, AgentSpend>;
+  /**
+   * Every deliverable (P9-01), removed ones included, each with its newest run folded from
+   * `run.*` (`lastRun`). The snapshot's `deliverables` (absent from older servers: none).
+   */
+  deliverables: Record<Id, Deliverable>;
 }
 
 export const emptyWorld = (): WorldState => ({
@@ -40,6 +46,7 @@ export const emptyWorld = (): WorldState => ({
   proposals: {},
   statuses: {},
   spend: {},
+  deliverables: {},
 });
 
 const byId = <T extends { id: Id }>(items: T[]): Record<Id, T> =>
@@ -56,6 +63,7 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
     proposals: byId(snapshot.proposals),
     statuses: Object.fromEntries(snapshot.statuses.map((s) => [s.agentId, s])),
     spend: Object.fromEntries((snapshot.spend ?? []).map((s) => [s.agentId, s])),
+    deliverables: byId(snapshot.deliverables ?? []),
   };
 }
 
@@ -340,7 +348,99 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
     case 'budget.exceeded':
     case 'budget.spawn_refused':
       return next;
+
+    // Deliverables (P9-01; TECHNOLOGY §9.1): the row's own changes stamp `updatedAt` and carry
+    // the new `version`; `run.*` only fold `lastRun`, which changes neither.
+    case 'deliverable.added': {
+      const deliverables = next.deliverables ?? {};
+      return {
+        ...next,
+        deliverables: { ...deliverables, [event.deliverable.id]: event.deliverable },
+      };
+    }
+    case 'deliverable.updated':
+      return {
+        ...next,
+        deliverables: patch(next.deliverables ?? {}, event.deliverableId, {
+          ...event.changes,
+          version: event.version,
+          updatedAt: at,
+        }),
+      };
+    case 'deliverable.removed':
+      return {
+        ...next,
+        deliverables: patch(next.deliverables ?? {}, event.deliverableId, {
+          removedAt: at,
+          removedBy: event.by,
+          removedReason: event.reason ?? null,
+          version: event.version,
+          updatedAt: at,
+        }),
+      };
+    case 'deliverable.restored':
+      return {
+        ...next,
+        deliverables: patch(next.deliverables ?? {}, event.deliverableId, {
+          removedAt: null,
+          removedBy: null,
+          removedReason: null,
+          version: event.version,
+          updatedAt: at,
+        }),
+      };
+    case 'deliverable.opened':
+      return next; // the audit of decision 127: nothing in the row changes
+    case 'run.started': {
+      const { run } = event;
+      const lastRun: RunSummary = {
+        runId: run.id,
+        state: run.state,
+        startedAt: run.startedAt,
+        ports: run.ports,
+      };
+      return {
+        ...next,
+        deliverables: patch(next.deliverables ?? {}, run.deliverableId, { lastRun }),
+      };
+    }
+    case 'run.ports':
+      return withLastRun(next, event.deliverableId, event.runId, (r) => ({
+        ...r,
+        ports: event.ports,
+      }));
+    case 'run.ended':
+      return withLastRun(next, event.deliverableId, event.runId, (r) => ({
+        ...r,
+        state: 'ended',
+        endedAt: at,
+        outcome: event.outcome,
+        ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+        ...(event.signal !== undefined ? { signal: event.signal } : {}),
+        ...(event.reason !== undefined ? { reason: event.reason } : {}),
+      }));
   }
+}
+
+/**
+ * Applies `change` to the deliverable's `lastRun` when it is the run `runId` (an event about an
+ * older run — one that ended after a newer one started — leaves the summary alone).
+ */
+function withLastRun(
+  state: WorldState,
+  deliverableId: Id,
+  runId: Id,
+  change: (run: RunSummary) => RunSummary,
+): WorldState {
+  const deliverable = state.deliverables?.[deliverableId];
+  if (deliverable?.lastRun?.runId !== runId) return state;
+  return {
+    ...state,
+    deliverables: {
+      ...state.deliverables,
+      [deliverableId]: { ...deliverable, lastRun: change(deliverable.lastRun) },
+    },
+  };
 }
 
 /**

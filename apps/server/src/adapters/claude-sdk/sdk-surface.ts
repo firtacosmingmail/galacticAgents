@@ -107,6 +107,8 @@ export interface SdkCanUseToolOptions {
   decisionReason?: string;
   blockedPath?: string;
   toolUseID?: string;
+  /** An MCP tool's server: `source: 'sdk'` only for the host's own in-process servers. */
+  mcpServer?: { name: string; source: string };
 }
 
 export type SdkCanUseTool = (
@@ -121,6 +123,8 @@ export interface SdkHookInput {
   tool_input?: unknown;
   tool_use_id?: string;
   session_id?: string;
+  /** An MCP tool's server: `source: 'sdk'` only for the host's own in-process servers. */
+  mcp_server?: { name: string; source: string };
 }
 
 export interface SdkHookOutput {
@@ -159,6 +163,8 @@ export interface SdkQueryOptions {
   canUseTool?: SdkCanUseTool;
   hooks?: { PreToolUse?: { hooks: SdkHook[] }[] };
   mcpServers?: Record<string, unknown>;
+  /** Only the servers in `mcpServers`: no `.mcp.json`, user or plugin servers. */
+  strictMcpConfig?: boolean;
   allowedTools?: string[];
   extraArgs?: Record<string, string | null>;
   env?: Record<string, string | undefined>;

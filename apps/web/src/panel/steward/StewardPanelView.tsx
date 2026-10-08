@@ -31,6 +31,7 @@ import { TerminalInput, TerminalView } from './TerminalView.js';
 import { TranscriptLog } from './TranscriptLog.js';
 import { TaskStatusFacts } from '../status/StatusViews.js';
 import { useStewardTranscript } from './useStewardTranscript.js';
+import { TaskDeliverables } from '../deliverables/DeliverablesList.js';
 import './steward.css';
 
 /**
@@ -101,6 +102,8 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
           onDismiss={() => setRefusal(undefined)}
         />
       )}
+      {/* The task's deliverables (P9-09), also once the Steward has ended. */}
+      {task && <TaskDeliverables key={task.id} taskId={task.id} />}
       {terminal ? (
         <>
           <TerminalView chunks={chunks} />

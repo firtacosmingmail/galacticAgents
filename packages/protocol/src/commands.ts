@@ -26,6 +26,13 @@ import type {
 } from './enums.js';
 import type { AgentEvent, ControlTarget, Event, ProjectChanges, TaskChanges } from './events.js';
 import type { ToolDefinition } from './adapter.js';
+import type {
+  Deliverable,
+  DeliverableCommand,
+  DeliverableKind,
+  DeliverableLocation,
+  DeliverableSource,
+} from './deliverables.js';
 import type { Id, Meta } from './primitives.js';
 
 // ---------------------------------------------------------------------------
@@ -218,6 +225,45 @@ export interface ControlOptions extends WriteOptions {
   confirmation?: Id | undefined;
 }
 
+/**
+ * What `addDeliverable` takes (P9-01): the row without its id, version, stamps, `addedBy` (the
+ * caller's actor) or run. `projectId` is derived from the task when absent (a project task's
+ * deliverable carries both). `detectedKey` only on a project's `detected` row.
+ */
+export interface AddDeliverableInput {
+  projectId?: Id;
+  taskId?: Id;
+  kind: DeliverableKind;
+  title: string;
+  description?: string;
+  source: DeliverableSource;
+  location?: DeliverableLocation;
+  command?: DeliverableCommand;
+  url?: string;
+  detectedKey?: string;
+  meta?: Meta;
+}
+
+/**
+ * What `updateDeliverable` may change (P9-01): the row's own fields, never its owner, source or
+ * detected key (those move only with their task, decision 124). `null` clears a clearable field;
+ * `meta` is merged into the row's (`null` drops a key).
+ */
+export interface DeliverableEdit {
+  kind?: DeliverableKind;
+  title?: string;
+  description?: string | null;
+  location?: DeliverableLocation | null;
+  command?: DeliverableCommand | null;
+  url?: string | null;
+  meta?: Record<string, unknown>;
+}
+
+/** A deliverable write's options: its origin (decision 131) and the version the writer saw. */
+export interface DeliverableWriteOptions extends WriteOptions {
+  expectedVersion?: number | undefined;
+}
+
 /** What every command returns: the affected aggregate plus the events it appended. */
 export interface CommandResult<T> {
   value: T;
@@ -330,6 +376,41 @@ export interface DomainCommands {
     by: Actor,
     write?: WriteOptions,
   ): Promise<CommandResult<Project | Task>>;
+
+  // deliverables (P9-01; SPEC §4.7, TECHNOLOGY §9.1)
+  /**
+   * Adds a deliverable for a project or a task (`deliverable.added`). No path is checked here:
+   * `DeliverableService` checks and copies before calling it. A user's addition is refused for a
+   * remote or unknown `write.origin` unless `autoApproveRemote` (decision 131).
+   */
+  addDeliverable(
+    input: AddDeliverableInput,
+    by: Actor,
+    write?: DeliverableWriteOptions,
+  ): Promise<CommandResult<Deliverable>>;
+  /**
+   * Edits its own fields (`deliverable.updated`, `version` bumped); `write.expectedVersion`
+   * refuses a changed row as `stale`. An agent edits only what an agent declared.
+   */
+  updateDeliverable(
+    deliverableId: Id,
+    changes: DeliverableEdit,
+    by: Actor,
+    write?: DeliverableWriteOptions,
+  ): Promise<CommandResult<Deliverable>>;
+  /** Removes it from the lists (`deliverable.removed`); never deletes a file (decision 122). */
+  removeDeliverable(
+    deliverableId: Id,
+    by: Actor,
+    reason?: string,
+    write?: DeliverableWriteOptions,
+  ): Promise<CommandResult<Deliverable>>;
+  /** Lists a removed deliverable again (`deliverable.restored`). */
+  restoreDeliverable(
+    deliverableId: Id,
+    by: Actor,
+    write?: DeliverableWriteOptions,
+  ): Promise<CommandResult<Deliverable>>;
 
   // panel actions (SPEC decision 11b)
   /**

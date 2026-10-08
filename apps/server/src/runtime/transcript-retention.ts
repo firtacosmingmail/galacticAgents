@@ -1,7 +1,9 @@
 import type { Database, Statement } from 'better-sqlite3';
 import {
+  DEFAULT_RUN_SETTINGS,
   DEFAULT_TRANSCRIPT_RETENTION,
   type Id,
+  type RunOutputRetention,
   type TranscriptCompaction,
   type TranscriptRetention as RetentionPolicy,
 } from '@galactic/protocol';
@@ -64,6 +66,8 @@ export interface CompactionReport {
   pinned: number;
   vacuum: VacuumReport;
   ms: number;
+  /** Managed runs whose output was removed (P9-08), when any was. */
+  runOutputRuns?: number;
 }
 
 export interface TranscriptRetentionOptions {
@@ -79,6 +83,12 @@ export interface TranscriptRetentionOptions {
   pause?: () => Promise<void>;
   onError?: (error: unknown) => void;
   onRun?: (report: CompactionReport) => void;
+  /**
+   * The managed runs' output retention (P9-08, decision 130; the `deliverables.runs.output`
+   * setting, read at every run): a command's runs beyond the newest `keepRuns`, and ended runs
+   * started more than `maxAgeDays` ago, lose their output. Default `DEFAULT_RUN_SETTINGS.output`.
+   */
+  runOutput?: () => RunOutputRetention;
 }
 
 /** What one agent's chunks are due for, by the policy (`undefined`: nothing). */
@@ -141,7 +151,7 @@ export class TranscriptRetention {
   private stopped = false;
   private inFlight: Promise<CompactionReport> | undefined;
   private readonly stmts: Record<
-    'nextAgent' | 'head' | 'maxSeq' | 'remove' | 'mark' | 'archivedAt',
+    'nextAgent' | 'head' | 'maxSeq' | 'remove' | 'mark' | 'archivedAt' | 'nextRun' | 'dropRun',
     Statement
   >;
 
@@ -178,6 +188,11 @@ export class TranscriptRetention {
            removed_chunks = removed_chunks + excluded.removed_chunks,
            reason = excluded.reason`,
       ),
+      // Runs with output, by index seeks on `run_output`'s primary key (run_id, seq).
+      nextRun: this.db.prepare(
+        'SELECT run_id FROM run_output WHERE run_id > ? ORDER BY run_id LIMIT 1',
+      ),
+      dropRun: this.db.prepare('DELETE FROM run_output WHERE run_id = ?'),
       // When each project or task last entered `archived` (the indexed `type`, then the payload).
       archivedAt: this.db.prepare(
         `SELECT coalesce(json_extract(payload, '$.taskId'), json_extract(payload, '$.projectId'))
@@ -291,7 +306,11 @@ export class TranscriptRetention {
       await this.pause();
       if (this.stopped) break;
     }
-    if (report.removedChunks > 0 && !this.stopped) {
+    if (!this.stopped) {
+      const runs = await this.pruneRunOutput(at);
+      if (runs > 0) report.runOutputRuns = runs;
+    }
+    if ((report.removedChunks > 0 || (report.runOutputRuns ?? 0) > 0) && !this.stopped) {
       report.vacuum = await vacuumIncrementally(this.db, {
         ...(this.opts.vacuumStepPages ? { stepPages: this.opts.vacuumStepPages } : {}),
         pause: this.pause,
@@ -329,6 +348,60 @@ export class TranscriptRetention {
       });
       return { removed, throughSeq: last.seq, more: n === rows.length };
     })();
+  }
+
+  /**
+   * Run output retention (P9-08): the output of every run beyond the newest `keepRuns` of its
+   * command, of every ended run started more than `maxAgeDays` ago, and of a run the log does not
+   * know; never a live run's, never pinned work's (TECHNOLOGY §9.10). One run per transaction,
+   * pausing between. Returns how many runs lost their output.
+   */
+  private async pruneRunOutput(at: string): Promise<number> {
+    const policy = this.opts.runOutput?.() ?? DEFAULT_RUN_SETTINGS.output;
+    const before = new Date(Date.parse(at) - policy.maxAgeDays * DAY_MS).toISOString();
+    const kept = new Map<Id, Set<Id>>();
+    let pruned = 0;
+    for (let runId = this.nextRun(''); runId !== undefined; runId = this.nextRun(runId)) {
+      const run = this.tables.runs.get(runId);
+      let due = run === undefined;
+      if (run && run.state === 'ended' && !this.runPinned(run.deliverableId)) {
+        if (!kept.has(run.deliverableId)) {
+          kept.set(
+            run.deliverableId,
+            new Set(this.tables.runs.of(run.deliverableId, policy.keepRuns).map((r) => r.id)),
+          );
+        }
+        due = !kept.get(run.deliverableId)!.has(run.id) || run.startedAt < before;
+      }
+      if (!due) continue;
+      this.stmts.dropRun.run(runId);
+      pruned += 1;
+      await this.pause();
+      if (this.stopped) break;
+    }
+    return pruned;
+  }
+
+  private nextRun(after: string): Id | undefined {
+    return (this.stmts.nextRun.get(after) as { run_id: Id } | undefined)?.run_id;
+  }
+
+  /** The deliverable's task or a project in its chain is pinned (its output is kept). */
+  private runPinned(deliverableId: Id): boolean {
+    const d = this.tables.deliverables.get(deliverableId);
+    if (!d) return false;
+    const task = d.taskId ? this.tables.tasks.get(d.taskId) : undefined;
+    if (task?.pinned) return true;
+    const seen = new Set<Id>();
+    for (
+      let projectId = d.projectId ?? task?.projectId;
+      projectId !== undefined && !seen.has(projectId);
+      projectId = this.tables.projects.get(projectId)?.parentProjectId
+    ) {
+      seen.add(projectId);
+      if (this.tables.projects.get(projectId)?.pinned) return true;
+    }
+    return false;
   }
 
   private isDue(row: { seq: number; at: string }, due: Due): boolean {

@@ -121,6 +121,7 @@ export function exportMap(db: Database, opts: ExportOptions = {}): MapExport {
         agents: t.agents.all(),
         questions: t.questions.all(),
         proposals: t.proposals.all(),
+        deliverables: t.deliverables.all(),
       },
     };
     if (opts.transcripts) {
@@ -212,6 +213,7 @@ export async function* exportMapText(
         agents: t.agents.all(),
         questions: t.questions.all(),
         proposals: t.proposals.all(),
+        deliverables: t.deliverables.all(),
       },
     };
     yield `${JSON.stringify(head).slice(0, -1)},"events":[`;

@@ -5,8 +5,15 @@ import {
   type Agent,
   type AgentAdapter,
   type AgentRuntime as RuntimeName,
+  type DeclarationLimits,
   type Id,
+  type RunSettings,
+  DEFAULT_RUN_SETTINGS,
 } from '@galactic/protocol';
+import { RunOutput } from '../deliverables/run-output.js';
+import { RunService, type RunServiceOptions, type RunSupervisor } from '../deliverables/runs.js';
+import { DeliverableService } from '../deliverables/service.js';
+import { stewardDeliverableTools } from '../brains/deliverable-tools.js';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
@@ -32,6 +39,8 @@ import { TranscriptPipeline } from './transcripts.js';
 import { TranscriptRetention, type RetentionPolicy } from './transcript-retention.js';
 import { WorkStateDeriver } from './work-state-deriver.js';
 import { Workspaces, type WorkspacesOptions } from '../workspace/workspaces.js';
+import { ProjectDetection, type DetectionOptions } from '../deliverables/detection.js';
+import { DeliverableCopies, type DeliverableCopiesOptions } from '../deliverables/copies.js';
 
 /**
  * The runtime composition root: log, status store, transcript pipeline, adapters and the agent
@@ -99,11 +108,52 @@ export interface ComposeOptions {
   /** Dollar budgets (P8-01): the warning threshold (`config.budgets`, default 80 %). */
   budgets?: { warnAtPercent?: number };
   /**
+   * Run-script detection (P9-05): composed with `workspaces`, on by default — a project's folder
+   * and run scripts are detected when it is prepared and after each merge. `false` turns it off;
+   * an object tunes it (tests: `minIntervalMs: 0`, a fake `fs`).
+   */
+  detection?: false | Omit<DetectionOptions, 'tables' | 'commands' | 'onProblem'>;
+  /**
    * The runtime new Stewards run on (P8-07; the `stewardRuntime` setting, read at every spawn):
    * handed to every brain's tools. Absent or `undefined`: a brain spawns Stewards on its own
    * runtime.
    */
   stewardRuntime?: () => RuntimeName | undefined;
+  /**
+   * The deliverables (P9-04, P9-06). Agents' declarations: the service is built when a data
+   * folder is known (this `dataDir`, else `workspaces.dataDir`); `limits` is read at every
+   * declaration (the `deliverables.declarations` setting); `tmpDirs` are where strays may come
+   * from (tests). The deliverables folder's copies, built with `workspaces`: the free space a copy
+   * leaves (`reserveBytes`, `backups.reserveMiB`) and, for tests, the free-space probe. A stray is
+   * copied into the folder through those copies; without `workspaces` it is refused.
+   */
+  deliverables?: {
+    dataDir?: string;
+    home?: string;
+    limits?: () => DeclarationLimits;
+    tmpDirs?: string[];
+  } & Pick<DeliverableCopiesOptions, 'reserveBytes' | 'freeBytes'>;
+  /**
+   * Managed runs (P9-08): with the process supervisor the composition builds the run service and
+   * its output store. `settings` is the `deliverables.runs` setting, read at every start, output
+   * write and retention run (default `DEFAULT_RUN_SETTINGS`); the data folder and home come from
+   * `deliverables` / `workspaces`. Tests tune the process table, the stop delay and port polling.
+   */
+  runs?: {
+    supervisor: RunSupervisor;
+    settings?: () => RunSettings;
+  } & Pick<
+    RunServiceOptions,
+    | 'table'
+    | 'self'
+    | 'startTime'
+    | 'groupAlive'
+    | 'termMs'
+    | 'ports'
+    | 'retryMs'
+    | 'scanFs'
+    | 'folderId'
+  > & { flushMs?: number; holdMs?: number };
 }
 
 export interface ComposedRuntime {
@@ -121,6 +171,11 @@ export interface ComposedRuntime {
   queries: BrainQueries;
   /** Workspaces and worktrees, when composed with `workspaces` paths (P2-10). */
   workspaces?: Workspaces;
+  /**
+   * The project folder and run-script detection (P9-05), with `workspaces`: `detectProject` is
+   * the panel's Rescan and P9-06's after-merge hook.
+   */
+  detection?: ProjectDetection;
   /** The retention / archival job (P2-13); its timer runs when composed with an interval. */
   archival: Archival;
   /** Transcript retention and compaction (P8-02); its timer runs when composed with an interval. */
@@ -129,8 +184,19 @@ export interface ComposedRuntime {
   processes?: StewardProcesses;
   /** Budget notices and the Harmonizer's chat lines about them (P8-01). */
   budgets: BudgetWatcher;
+  /** Agents' declarations (P9-04), when composed with a data folder. */
+  deliverables?: DeliverableService;
   /** The database's write health, for the panel's storage banner (P8-09). */
   storage: StorageMonitor;
+  /** Managed runs (P9-08), when composed with `runs` and a data folder. */
+  runs?: RunService;
+  /** The runs' output store and stream (P9-08), with `runs`. */
+  runOutput?: RunOutput;
+  /**
+   * The project's deliverables folder and its copies (P9-06), with `workspaces`: the declaration
+   * tools' `copyIn` and the merge hook `Workspaces` calls before a worktree is removed.
+   */
+  deliverableCopies?: DeliverableCopies;
   /** Spawns a brain through the runtime and drives its mailbox and turns (P2-06). */
   startBrain(
     definition: BrainDefinition,
@@ -321,9 +387,58 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
         : status;
     },
   });
+  const detection: ProjectDetection | undefined =
+    opts.workspaces && opts.detection !== false
+      ? new ProjectDetection({
+          ...(opts.detection ?? {}),
+          tables: log.tables,
+          commands,
+          ...(opts.onError
+            ? { onProblem: (message: string) => opts.onError!(new Error(message), 'detection') }
+            : {}),
+        })
+      : undefined;
   const workspaces: Workspaces | undefined = opts.workspaces
-    ? new Workspaces({ ...opts.workspaces, commands, tables: log.tables })
+    ? new Workspaces({
+        ...opts.workspaces,
+        commands,
+        tables: log.tables,
+        ...(detection
+          ? { onFolderChanged: (projectId: Id) => void detection.detectProject(projectId) }
+          : {}),
+        ...(opts.onError ? { onError: opts.onError } : {}),
+      })
     : undefined;
+  // A task's deliverables in its worktree are kept before the worktree goes (P9-06).
+  const deliverableCopies: DeliverableCopies | undefined = opts.workspaces
+    ? new DeliverableCopies({
+        tables: log.tables,
+        commands,
+        dataDir: opts.workspaces.dataDir,
+        ...(opts.workspaces.home ? { home: opts.workspaces.home } : {}),
+        ...(opts.workspaces.git ? { git: opts.workspaces.git } : {}),
+        ...(opts.deliverables?.reserveBytes !== undefined
+          ? { reserveBytes: opts.deliverables.reserveBytes }
+          : {}),
+        ...(opts.deliverables?.freeBytes ? { freeBytes: opts.deliverables.freeBytes } : {}),
+        notify: (agentId, text) => {
+          runtime.send(agentId, text, { sender: { type: 'system' } });
+        },
+        ...(opts.onError ? { onError: opts.onError } : {}),
+      })
+    : undefined;
+  // Before a project's folder is recorded, the gate guards the one it would be (P9-06): a
+  // tracked `deliverables/` source folder is the project's, `galactic-deliverables/` the user's.
+  if (deliverableCopies) {
+    runtime.setDeliverablesFolderLookup(
+      async (target) => (await deliverableCopies.placeOf(target)).folder,
+    );
+  }
+  if (workspaces && deliverableCopies) {
+    workspaces.setBeforeWorktreeRemoved((taskId, root, info) =>
+      deliverableCopies.beforeWorktreeRemoved(taskId, root, info),
+    );
+  }
   const archival = new Archival({
     log,
     ...(opts.archival?.retentionMs !== undefined ? { retentionMs: opts.archival.retentionMs } : {}),
@@ -331,10 +446,12 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'archival') } : {}),
   });
   if (opts.archival?.intervalMs) archival.start(opts.archival.intervalMs);
+  const runSettings = opts.runs?.settings ?? (() => DEFAULT_RUN_SETTINGS);
   const tr = opts.transcriptRetention;
   const transcriptRetention = new TranscriptRetention({
     db,
     tables: log.tables,
+    runOutput: () => runSettings().output,
     ...(tr?.policy ? { policy: tr.policy } : {}),
     ...(tr?.timers ? { timers: tr.timers } : {}),
     ...(tr?.pause ? { pause: tr.pause } : {}),
@@ -364,6 +481,57 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   budgets.start();
 
   // The brains this composition drives (P2-16): started here or resumed by recovery.
+  const deliverablesDataDir = opts.deliverables?.dataDir ?? opts.workspaces?.dataDir;
+  const home = opts.deliverables?.home ?? opts.workspaces?.home;
+  const deliverables: DeliverableService | undefined = deliverablesDataDir
+    ? new DeliverableService({
+        commands,
+        tables: log.tables,
+        dataDir: deliverablesDataDir,
+        ...(home ? { home } : {}),
+        ...(opts.deliverables?.limits ? { limits: opts.deliverables.limits } : {}),
+        // A declared stray is copied into the project's deliverables folder (P9-06, decision 122).
+        ...(deliverableCopies ? { copies: deliverableCopies } : {}),
+        ...(opts.deliverables?.tmpDirs ? { tmpDirs: opts.deliverables.tmpDirs } : {}),
+      })
+    : undefined;
+  // Managed runs (P9-08): the user's runs of command deliverables, through the same supervisor.
+  const runOutput: RunOutput | undefined =
+    opts.runs && deliverablesDataDir
+      ? new RunOutput(db, {
+          maxBytesPerRun: () => runSettings().output.maxBytesPerRun,
+          ...(opts.runs.flushMs !== undefined ? { flushMs: opts.runs.flushMs } : {}),
+          ...(opts.runs.holdMs !== undefined ? { holdMs: opts.runs.holdMs } : {}),
+          ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'run output') } : {}),
+        })
+      : undefined;
+  const runs: RunService | undefined =
+    opts.runs && runOutput && deliverablesDataDir
+      ? new RunService({
+          log,
+          supervisor: opts.runs.supervisor,
+          output: runOutput,
+          settings: runSettings,
+          places: { dataDir: deliverablesDataDir, ...(home ? { home } : {}) },
+          ...(opts.runs.table ? { table: opts.runs.table } : {}),
+          ...(opts.runs.self ? { self: opts.runs.self } : {}),
+          ...(opts.runs.startTime ? { startTime: opts.runs.startTime } : {}),
+          ...(opts.runs.groupAlive ? { groupAlive: opts.runs.groupAlive } : {}),
+          ...(opts.runs.termMs !== undefined ? { termMs: opts.runs.termMs } : {}),
+          ...(opts.runs.ports ? { ports: opts.runs.ports } : {}),
+          ...(opts.runs.retryMs !== undefined ? { retryMs: opts.runs.retryMs } : {}),
+          ...(opts.runs.scanFs ? { scanFs: opts.runs.scanFs } : {}),
+          ...(opts.runs.folderId ? { folderId: opts.runs.folderId } : {}),
+          ...(opts.onError ? { onError: opts.onError } : {}),
+        })
+      : undefined;
+  runs?.watch();
+
+  // A Steward on a runtime that serves the server's tools declares its own deliverables (P9-04).
+  if (deliverables) {
+    runtime.setStewardTools((agent) => stewardDeliverableTools(deliverables, agent));
+  }
+
   const runners = new Map<Id, BrainRunner>();
   const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
     log,
@@ -373,6 +541,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(workspaces ? { workspaces } : {}),
     ...(processes ? { processes } : {}),
     ...(opts.stewardRuntime ? { stewardRuntime: opts.stewardRuntime } : {}),
+    ...(deliverables ? { deliverables } : {}),
     ...extra,
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
@@ -415,11 +584,16 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     reports,
     queries,
     ...(workspaces ? { workspaces } : {}),
+    ...(detection ? { detection } : {}),
     archival,
     transcriptRetention,
     ...(processes ? { processes } : {}),
     budgets,
+    ...(deliverables ? { deliverables } : {}),
     storage,
+    ...(deliverableCopies ? { deliverableCopies } : {}),
+    ...(runs ? { runs } : {}),
+    ...(runOutput ? { runOutput } : {}),
     startBrain: async (definition, placement, brainOpts = {}) =>
       adopt(await BrainRunner.start(definition, placement, runnerOptions(brainOpts))),
     defineBrains(defs, brainOpts = {}) {
@@ -506,25 +680,36 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     async shutdown() {
       // A graceful shutdown interrupts agents (they come back): nothing of theirs is swept.
       processes?.dispose();
+      detection?.dispose();
       budgets.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();
       storage.dispose();
-      await runtime.shutdown();
+      // Every run is stopped beside the agents' graceful stop, and awaited (TECHNOLOGY §9.8).
+      await Promise.all([
+        runs?.stopAll('server_stopping').catch((e: unknown) => opts.onError?.(e, 'runs: stop')),
+        runtime.shutdown(),
+      ]);
+      runs?.dispose();
+      runOutput?.dispose();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();
     },
     async dispose() {
       processes?.dispose();
+      detection?.dispose();
       budgets.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();
       storage.dispose();
+      await runs?.stopAll('server_stopping').catch((e: unknown) => opts.onError?.(e, 'runs: stop'));
+      runs?.dispose();
+      runOutput?.dispose();
       await runtime.dispose();
       statuses.dispose();
       transcripts.dispose();

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { WorkState, type Body } from '@galactic/protocol';
+import { WorkState, type Body, type Deliverable } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { pickingWorld } from '../picking/fixtures.js';
 import {
   bodyLabel,
   bodyLabels,
+  deliverableMarks,
+  markDescription,
+  markText,
   independentMoons,
   labelPriority,
   PRIORITY,
@@ -248,5 +251,94 @@ describe('priority', () => {
     expect(PRIORITY.blocked).toBeGreaterThan(PRIORITY.active);
     expect(PRIORITY.active).toBeGreaterThan(PRIORITY.open);
     expect(PRIORITY.open).toBeGreaterThan(PRIORITY.done);
+  });
+});
+
+describe('the deliverables mark (P9-11, decision 133)', () => {
+  const NOW = fx.deliverable.createdAt;
+  const d = (over: Partial<Deliverable> & Pick<Deliverable, 'id'>): [string, Deliverable] => [
+    over.id,
+    { ...fx.deliverable, ...over },
+  ];
+  /** Jupiter's project: two agent files (one on its task), a user URL, a removed file, a
+   *  detected folder and a detected command; the asteroid task: one agent image. */
+  function markWorld(running = false): LabelWorld {
+    return {
+      ...labelWorld(),
+      deliverables: Object.fromEntries([
+        d({ id: 'd-a', projectId: 'p-big', taskId: undefined }),
+        d({ id: 'd-b', projectId: 'p-big', taskId: 't-in' }),
+        d({
+          id: 'd-c',
+          projectId: 'p-big',
+          taskId: undefined,
+          kind: 'url',
+          source: 'user',
+          addedBy: { type: 'user' },
+          url: 'https://example.com',
+        }),
+        d({ id: 'd-gone', projectId: 'p-big', taskId: undefined, removedAt: NOW }),
+        d({
+          id: 'd-folder',
+          projectId: 'p-big',
+          taskId: undefined,
+          kind: 'folder',
+          source: 'detected',
+          detectedKey: 'folder',
+        }),
+        [
+          'd-dev',
+          {
+            ...fx.commandDeliverable,
+            id: 'd-dev',
+            projectId: 'p-big',
+            lastRun: running
+              ? { runId: 'r-1', state: 'running', startedAt: NOW, ports: [5173] }
+              : {
+                  runId: 'r-1',
+                  state: 'ended',
+                  startedAt: NOW,
+                  endedAt: NOW,
+                  outcome: 'stopped',
+                  ports: [],
+                },
+          } satisfies Deliverable,
+        ],
+        d({ id: 'd-ast', projectId: undefined, taskId: 't-ast' }),
+      ]),
+    };
+  }
+
+  it('counts what agents and the user added, not the folder, detected commands or removed rows', () => {
+    const marks = deliverableMarks(markWorld().deliverables);
+    expect(marks.get('project:p-big')).toEqual({ count: 3, running: false });
+    expect(marks.get('task:t-in')).toEqual({ count: 1, running: false });
+    expect(marks.get('task:t-ast')).toEqual({ count: 1, running: false });
+    expect(marks.has('project:p-new')).toBe(false);
+  });
+
+  it('labels carry the mark of the work they host; none without deliverables', () => {
+    const labels = Object.fromEntries(bodyLabels(markWorld()).map((l) => [l.bodyId, l]));
+    expect(labels['b-jupiter']!.mark).toEqual({ count: 3, running: false });
+    expect(labels['b-ast-7']!.mark).toEqual({ count: 1, running: false });
+    expect(labels['b-io']!.mark).toBeUndefined();
+    expect(labels['b-venus']!.mark).toBeUndefined(); // a "moved to …" marker
+  });
+
+  it('"▶" while one of its commands runs, a detected one included', () => {
+    const mark = bodyLabel(markWorld(true), 'b-jupiter')!.mark!;
+    expect(mark).toEqual({ count: 3, running: true });
+    expect(markText(mark)).toBe('◆ 3 ▶');
+    expect(markDescription(mark)).toBe('3 deliverables, a command running');
+  });
+
+  it('a running detected command alone shows "▶" only; one deliverable reads singular', () => {
+    expect(markText({ count: 0, running: true })).toBe('▶');
+    expect(markText({ count: 1, running: false })).toBe('◆ 1');
+    expect(markDescription({ count: 1, running: false })).toBe('1 deliverable');
+  });
+
+  it('no deliverables in the world (a replay, an older server): no marks', () => {
+    expect(bodyLabels(labelWorld()).some((l) => l.mark)).toBe(false);
   });
 });

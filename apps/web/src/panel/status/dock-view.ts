@@ -13,11 +13,17 @@ import { create } from 'zustand';
  */
 export const DOCK_VIEW_KEY = 'galactic.panel.dock.view';
 
-export type DockView = 'chat' | 'status';
+export type DockView = 'chat' | 'status' | 'deliverables';
 
+/**
+ * The stored choice. `deliverables` (P9-09) is a project's third view ("Chat | Status |
+ * Deliverables"); the Harmonizer has no Deliverables view and shows its chat meanwhile
+ * (`brainView`).
+ */
 export function readDockView(): DockView {
   try {
-    return localStorage.getItem(DOCK_VIEW_KEY) === 'status' ? 'status' : 'chat';
+    const v = localStorage.getItem(DOCK_VIEW_KEY);
+    return v === 'status' || v === 'deliverables' ? v : 'chat';
   } catch {
     return 'chat';
   }
@@ -29,6 +35,11 @@ function writeDockView(view: DockView): void {
   } catch {
     // No storage (private mode): the choice lasts for this page only.
   }
+}
+
+/** What a brain's dock shows for `view`: only a Waykeeper has the Deliverables view. */
+export function brainView(view: DockView, role: 'harmonizer' | 'waykeeper'): DockView {
+  return view === 'deliverables' && role !== 'waykeeper' ? 'chat' : view;
 }
 
 interface DockViewState {

@@ -404,7 +404,12 @@ function MainHeader({
           restartFocusRef={restartFocusRef}
         />
       )}
-      {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && <DockViewToggle />}
+      {(agent ? agent.role !== 'steward' : selection.kind === 'harmonizer') && (
+        <DockViewToggle
+          role={agent?.role === 'waykeeper' ? 'waykeeper' : 'harmonizer'}
+          projectId={agent?.role === 'waykeeper' ? agent.projectId : undefined}
+        />
+      )}
       {toggle && (
         <button
           type="button"

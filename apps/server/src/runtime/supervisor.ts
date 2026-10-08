@@ -13,6 +13,8 @@ import {
 } from './launch-intents.js';
 import {
   AGENT_ID_ENV,
+  RUN_ID_ENV,
+  runIdOfKey,
   START_SLACK_MS,
   type AgentGroup,
   type ProcEntry,
@@ -115,8 +117,18 @@ export const INHERITED_ENV: readonly string[] = [
   'USERPROFILE',
 ];
 
+/**
+ * Whose process it is (P9-08): an agent's (the default) or a managed run's. A run's process is
+ * keyed `run:<runId>` (`runProcessKey`) in the PID table and on its launch intent, carries
+ * `GALACTIC_RUN_ID=<runId>` and never the agent marker, and its rows say `meta.kind = 'run'`.
+ */
+export type ProcessOwner = { kind: 'agent' } | { kind: 'run'; id: Id };
+
 export interface ProcessSpec {
+  /** The key of the process: the agent's id, or `run:<runId>` for a managed run. */
   agentId: Id;
+  /** Default: the agent `agentId` names. */
+  owner?: ProcessOwner;
   command: string;
   args?: string[];
   /** Per-agent working directory: the Steward's worktree, or the project workspace for brains. */
@@ -200,6 +212,11 @@ export interface StopProcessOptions {
   termMs?: number;
   /** Who asked; carried on the `stopped` outcome. */
   by?: Actor;
+  /**
+   * SIGTERM → SIGKILL delay for the group members left when the leader exits during the stop
+   * (default `termMs`); a function is read when the leader exits (a deadline's remainder).
+   */
+  reapMs?: number | (() => number);
 }
 
 export interface ReconcileResult {
@@ -219,6 +236,12 @@ export interface LaunchReconcileResult {
   none: Id[];
   /** Launches this platform cannot check (no process table): forgotten, nothing stopped. */
   unchecked: Id[];
+  /**
+   * The managed runs among them (P9-08; present when there is one), whatever became of them: the
+   * run service's restart pass stops what still carries their marker outside the group taken
+   * here (a run's stop takes everything that carries its marker, decision 130).
+   */
+  runs?: { runId: Id; intendedAt: string }[];
 }
 
 export interface SupervisorOptions {
@@ -287,7 +310,7 @@ class Managed implements ManagedProcess {
   /** Set while the restart policy is between exit and the new child. */
   restarting: Promise<void> | undefined;
   /** SIGTERM → SIGKILL delay for the group left behind when the leader exits (a stop's `termMs`). */
-  reapMs: number | undefined;
+  reapMs: number | (() => number) | undefined;
   private resolveExit!: (info: ExitInfo) => void;
   private turnWaiters: (() => void)[] = [];
   /** Bumped by `turnEnded()`; a stop compares it to the value it saw when it started. */
@@ -534,9 +557,23 @@ export class ProcessSupervisor {
       else env[name] = value;
     }
     // The agent marker (P4-14): every process the agent starts inherits it, so an orphan in a
-    // Steward's worktree can be told from the user's own daemon there. Never overridable.
-    env[AGENT_ID_ENV] = spec.agentId;
+    // Steward's worktree can be told from the user's own daemon there. Never overridable. A
+    // managed run gets the run marker instead and never the agent's (P9-08): its processes are
+    // never a Steward's.
+    if (spec.owner?.kind === 'run') {
+      delete env[AGENT_ID_ENV];
+      env[RUN_ID_ENV] = spec.owner.id;
+    } else {
+      delete env[RUN_ID_ENV];
+      env[AGENT_ID_ENV] = spec.agentId;
+    }
     return env;
+  }
+
+  /** What the PID row and the launch intent keep of the spec: its meta, and a run's kind. */
+  private metaOf(spec: ProcessSpec): Record<string, unknown> | undefined {
+    if (spec.owner?.kind !== 'run') return spec.meta;
+    return { ...(spec.meta ?? {}), kind: 'run', runId: spec.owner.id };
   }
 
   private report(managed: Managed, outcome: ProcessOutcome): void {
@@ -634,6 +671,7 @@ export class ProcessSupervisor {
    */
   private launch(spec: ProcessSpec): Launched {
     const launchId = randomUUID();
+    const meta = this.metaOf(spec);
     const intent: LaunchIntent = {
       id: launchId,
       agentId: spec.agentId,
@@ -644,7 +682,7 @@ export class ProcessSupervisor {
       bootAt: this.bootAt,
       // The real clock, like `ps lstart`: the window the fork falls in.
       intendedAt: new Date().toISOString(),
-      ...(spec.meta ? { meta: spec.meta } : {}),
+      ...(meta ? { meta } : {}),
     };
     try {
       this.store.addLaunch(intent);
@@ -742,7 +780,14 @@ export class ProcessSupervisor {
       const pgid = child.pid ?? -1;
       this.endRunGroup(spec.agentId, pgid, exitedAt);
       void withTimeout(closed, DRAIN_MS)
-        .then(() => this.reapGroup(pgid, managed.reapMs ?? this.termMs))
+        .then(() =>
+          this.reapGroup(
+            pgid,
+            typeof managed.reapMs === 'function'
+              ? managed.reapMs()
+              : (managed.reapMs ?? this.termMs),
+          ),
+        )
         .catch((error: unknown) => this.onError(error, spec.agentId))
         .then(() => this.onExit(managed, child, { code, signal, at }));
     });
@@ -834,7 +879,7 @@ export class ProcessSupervisor {
     if (managed.exit) return this.finishStop(managed, opts);
     const graceMs = opts.graceMs ?? this.graceMs;
     const termMs = opts.termMs ?? this.termMs;
-    managed.reapMs = termMs;
+    managed.reapMs = opts.reapMs ?? termMs;
 
     // 1. Ask the runtime to end the turn. The waiter is registered first so a hook that reports
     //    the turn end synchronously is not missed. The hook runs inside the grace window: one
@@ -943,6 +988,10 @@ export class ProcessSupervisor {
     }
     const open: LaunchIntent[] = [];
     for (const intent of intents) {
+      const runId = runIdOfKey(intent.agentId);
+      if (runId !== undefined && !this.otherBoot(intent.bootAt)) {
+        (result.runs ??= []).push({ runId, intendedAt: intent.intendedAt });
+      }
       if (this.otherBoot(intent.bootAt)) {
         result.none.push(intent.agentId);
         this.forgetLaunch(intent.id, intent.agentId);
@@ -970,7 +1019,10 @@ export class ProcessSupervisor {
     }
     const envOf =
       candidates.size > 0 && this.table.environment
-        ? await this.table.environment([...candidates.values()], [AGENT_ID_ENV, LAUNCH_ID_ENV])
+        ? await this.table.environment(
+            [...candidates.values()],
+            [AGENT_ID_ENV, RUN_ID_ENV, LAUNCH_ID_ENV],
+          )
         : new Map<number, Map<string, string>>();
     const marked = [...candidates.values()]
       .filter((p) => open.some((intent) => carriesLaunch(p, intent, envOf)))
@@ -1083,6 +1135,18 @@ export class ProcessSupervisor {
     const pid = row.pid!;
     if (!this.probe.alive(pid)) return false;
     if (this.fromOtherBoot(row)) return false;
+    if (row.meta?.['kind'] === 'run') {
+      // A run's `/bin/sh -c <line>` may have exec'd its command (`sh -c 'node x'` becomes node),
+      // so its name proves nothing: the boot and the start time decide, failing closed (P9-08).
+      if (typeof row.meta['bootAt'] !== 'string') return false;
+      const started = this.probe.startTime(pid);
+      const recorded = Date.parse(row.startedAt);
+      return (
+        started !== undefined &&
+        !Number.isNaN(recorded) &&
+        Math.abs(started - recorded) <= START_TIME_TOLERANCE_MS
+      );
+    }
     const command = row.meta?.['command'];
     if (typeof command !== 'string') return false;
     const live = this.probe.name(pid);
@@ -1128,7 +1192,8 @@ export class ProcessSupervisor {
    * member that started after the group ended (a recycled pgid) is not taken for one of its own.
    * Rows of the PID table from an earlier run are never used: the server was not watching during
    * the downtime, so their pgids may since name the user's processes (and their end is only the
-   * time of `reconcile()`).
+   * time of `reconcile()`). A managed run's groups are listed too, under their `run:<runId>` key
+   * (P9-08): attribution then sees them as another owner's, never a Steward's.
    */
   agentGroups(): AgentGroup[] {
     const groups: AgentGroup[] = [];
@@ -1204,7 +1269,7 @@ export class ProcessSupervisor {
       startedAt: managed.startedAt,
       status,
       meta: {
-        ...(managed.spec.meta ?? {}),
+        ...(this.metaOf(managed.spec) ?? {}),
         command: managed.spec.command,
         bootAt: this.bootAt,
         // The launch this row completes (P8-11): its intent is then no longer needed.

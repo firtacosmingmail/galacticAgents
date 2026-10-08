@@ -10,6 +10,7 @@ import {
   type TaskPriority,
 } from '@galactic/protocol';
 import { DomainError } from '../../domain/errors.js';
+import { stewardDeclares } from '../../runtime/tool-runtimes.js';
 import {
   stewardsSerialised,
   workspaceMeta,
@@ -294,6 +295,7 @@ export const spawnStewardTool: BrainTool = {
         supervisorId: ctx.brainId,
         prompt: stewardPrompt(task, project, where, instructions, {
           related: ctx.queries.projectTasks(project.id),
+          declares: stewardDeclares(stewardRuntimeOf(ctx)),
         }),
       }));
     } catch (error) {
@@ -560,7 +562,11 @@ async function sendBack(
         ? instructions
         : '(No instructions were recorded for this task; work from its description.)'
     }`,
-    { related: ctx.queries.projectTasks(project.id), lead: text },
+    {
+      related: ctx.queries.projectTasks(project.id),
+      lead: text,
+      declares: stewardDeclares(stewardRuntimeOf(ctx)),
+    },
   );
   const { value } = await ctx.commands.spawnAgent({
     role: 'steward',

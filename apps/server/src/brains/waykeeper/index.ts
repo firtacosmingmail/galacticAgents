@@ -1,4 +1,5 @@
 import { commonTools } from '../common-tools.js';
+import { DELIVERABLE_TOOLS } from '../deliverable-tools.js';
 import type { BrainDefinition } from '../definition.js';
 import { STEWARD_TOOLS } from '../steward-tools.js';
 import { WAYKEEPER_SYSTEM_PROMPT } from './prompt.js';
@@ -12,7 +13,7 @@ export function waykeeperDefinition(): BrainDefinition {
   return {
     role: 'waykeeper',
     systemPrompt: WAYKEEPER_SYSTEM_PROMPT,
-    tools: [...WAYKEEPER_TOOLS, ...commonTools(), ...STEWARD_TOOLS],
+    tools: [...WAYKEEPER_TOOLS, ...commonTools(), ...STEWARD_TOOLS, ...DELIVERABLE_TOOLS],
   };
 }
 

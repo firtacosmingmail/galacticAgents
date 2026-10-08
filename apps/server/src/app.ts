@@ -10,14 +10,22 @@ import {
 } from './http/security.js';
 import { WsGateway, type SessionHandler } from './ws/gateway.js';
 import { createSessionHandler } from './ws/session.js';
-import { registerDevRoutes } from './http/dev-routes.js';
+import { registerDevRoutes, type DevRoutesOptions } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
 import { registerBackupRoutes } from './http/backup-routes.js';
+import { registerDeliverableRoutes } from './http/deliverable-routes.js';
 import type { BackupService } from './db/backup.js';
-import { isWebFile, webCacheControl } from './http/web-cache.js';
+import type { DeliverableCopies } from './deliverables/copies.js';
+import { registerDeliverablesUsageRoute } from './http/deliverables-usage-route.js';
+import type { PeerCheck } from './http/peer-guard.js';
+import { registerRunRoutes } from './http/run-routes.js';
+import type { RunService } from './deliverables/runs.js';
+import type { RunOutput } from './deliverables/run-output.js';
+import { isWebFile, webCacheControl, webCsp } from './http/web-cache.js';
 import { registerPushRoutes, type Push } from './push/index.js';
 import type { SettingsService } from './config/settings.js';
+import type { Opener } from './deliverables/opener.js';
 import type { EventLog } from './domain/event-log.js';
 import type { StatusStore } from './runtime/status-store.js';
 import type { TranscriptPipeline } from './runtime/transcripts.js';
@@ -49,12 +57,29 @@ export interface AppOptions {
   restartHarmonizer?: AgentRoutesOptions['restartHarmonizer'];
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
+  /** The opener on the Mac (P9-03): enables `GET /api/ide` and the deliverables' opens (P9-07). */
+  opener?: Opener;
+  /** Detection's rescan of a project (P9-05): enables `POST /api/projects/:id/deliverables/rescan`. */
+  rescanDeliverables?: (projectId: string) => Promise<unknown>;
   /** Web Push (P7-04): enables `/api/push*`. */
   push?: Push;
   /** The database's write health (P8-09): sent to every socket for the panel's banner. */
   storage?: StorageMonitor;
   /** Backups (P8-03): enables `GET`/`POST /api/backups` (the export needs only `log`). */
   backups?: BackupService;
+  /**
+   * The deliverables folders (P9-06): enables `GET /api/deliverables/usage`, and the copy of a
+   * user's file from outside the project added by hand (decision 122).
+   */
+  deliverableCopies?: Pick<DeliverableCopies, 'usage' | 'copyIn'>;
+  /**
+   * Managed runs (P9-08): enables the run routes (`/api/deliverables/:id/run-preview`, `…/runs`,
+   * `/api/runs/:id/output|stop|restart`) and `run.subscribe` on the socket.
+   */
+  /** The scene harness's prepared folders and declarations (development only, P9-12). */
+  harness?: DevRoutesOptions['harness'];
+  /** `peer`: the agent speed bump on starts (P9-12 review S3); `index.ts` passes the OS one. */
+  runs?: { service: RunService; output: RunOutput; peer?: PeerCheck };
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -128,6 +153,19 @@ export function buildApp(opts: AppOptions): App {
       setHeaders: (reply, path) =>
         void reply.header('cache-control', webCacheControl(webDir, path)),
     });
+    // The page's CSP (wave-3 review B1): every HTML answer of the app that sets none of its own
+    // (`/files/` downloads keep theirs).
+    fastify.addHook('onSend', async (req, reply, payload) => {
+      const type = reply.getHeader('content-type');
+      if (
+        typeof type === 'string' &&
+        type.startsWith('text/html') &&
+        !reply.hasHeader('content-security-policy')
+      ) {
+        void reply.header('content-security-policy', webCsp(req.headers.host));
+      }
+      return payload;
+    });
     fastify.setNotFoundHandler((req, reply) => {
       // Single-page app: unknown GET paths load the page; API-shaped paths stay 404, and so do
       // missing build files (P7-01: the service worker must never keep the page as a script).
@@ -136,6 +174,7 @@ export function buildApp(opts: AppOptions): App {
         !req.url.startsWith('/dev/') &&
         !req.url.startsWith('/api/') &&
         !req.url.startsWith('/health') &&
+        !req.url.startsWith('/files/') &&
         !isWebFile(req.url)
       ) {
         return reply.sendFile('index.html');
@@ -154,6 +193,7 @@ export function buildApp(opts: AppOptions): App {
       ...(opts.commands ? { commands: opts.commands } : {}),
       ...(opts.statuses ? { statuses: opts.statuses } : {}),
       ...(opts.runtime ? { runtime: opts.runtime } : {}),
+      ...(opts.harness ? { harness: opts.harness } : {}),
     });
   }
   if (opts.log && opts.runtime) {
@@ -173,15 +213,41 @@ export function buildApp(opts: AppOptions): App {
       ...(opts.runtime ? { runtime: opts.runtime } : {}),
       ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
       ...(opts.settings ? { settings: opts.settings } : {}),
+      ...(opts.opener ? { opener: opts.opener } : {}),
     });
   }
 
   // Backups and the map export (P8-03).
+  if (opts.log && opts.commands) {
+    registerDeliverableRoutes(fastify, config, {
+      log: opts.log,
+      commands: opts.commands,
+      ...(opts.opener ? { opener: opts.opener } : {}),
+      ...(opts.rescanDeliverables ? { rescan: opts.rescanDeliverables } : {}),
+      ...(opts.deliverableCopies ? { copies: opts.deliverableCopies } : {}),
+    });
+  }
+
   if (opts.log) {
     registerBackupRoutes(fastify, config, {
       log: opts.log,
       ...(opts.backups ? { backups: opts.backups } : {}),
     });
+  }
+
+  // Managed runs (P9-08).
+  if (opts.log && opts.runs) {
+    registerRunRoutes(fastify, config, {
+      log: opts.log,
+      runs: opts.runs.service,
+      output: opts.runs.output,
+      ...(opts.runs.peer ? { peer: opts.runs.peer } : {}),
+    });
+  }
+
+  // The deliverables folders' sizes for the settings page (P9-06).
+  if (opts.deliverableCopies) {
+    registerDeliverablesUsageRoute(fastify, config, opts.deliverableCopies);
   }
 
   if (opts.push) {
@@ -196,6 +262,7 @@ export function buildApp(opts: AppOptions): App {
           ...(opts.transcripts ? { transcripts: opts.transcripts } : {}),
           ...(opts.statuses ? { statuses: opts.statuses } : {}),
           ...(opts.storage ? { storage: opts.storage } : {}),
+          ...(opts.runs ? { runOutput: opts.runs.output } : {}),
         })
       : () => {
           throw new Error('buildApp needs either onSession or log');

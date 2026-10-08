@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_PERMISSION_POLICY,
+  type IdeResponse,
   type PreflightResponse,
   type ServerMessage,
   type SettingsPatch,
@@ -105,7 +106,10 @@ function fakeServer(initial: SettingsResponse) {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
   /** What `GET /api/runtimes` lists: the runtimes with an adapter on this server. */
   let runtimes: string[] = ['fake', 'claude-sdk', 'acp'];
+  /** What `GET /api/ide` answers (P9-03); absent: an older server's `{}`. */
+  let ide: IdeResponse | undefined;
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === '/api/ide') return json(ide ?? {});
     if (url === '/api/runtimes') {
       return json({
         runtimes: runtimes.map((name) => ({ name, resumable: true })),
@@ -153,6 +157,7 @@ function fakeServer(initial: SettingsResponse) {
     setRefuse: (fn: typeof refuse) => (refuse = fn),
     setReadGate: (gate: Promise<Refusal | void>) => (readGate = gate),
     setRuntimes: (list: string[]) => (runtimes = list),
+    setIde: (reply: IdeResponse) => (ide = reply),
   };
 }
 
@@ -651,6 +656,99 @@ describe('settings page (P25-08)', () => {
     expect(window.location.href).not.toContain(TOKEN);
     await click(within(access).getByRole('button', { name: 'Hide the phone QR code' }));
     expect(within(access).queryByRole('img')).toBeNull();
+  });
+});
+
+describe('the IDE setting (P9-03; decision 127)', () => {
+  const WEBSTORM = {
+    bundleId: 'com.jetbrains.WebStorm',
+    name: 'WebStorm',
+    path: '/Applications/WebStorm.app',
+  };
+  const VSCODE = {
+    bundleId: 'com.microsoft.VSCode',
+    name: 'Visual Studio Code',
+    path: '/Applications/Visual Studio Code.app',
+  };
+  const withIde = (ide = 'auto', over: Partial<SettingsResponse> = {}): SettingsResponse => {
+    const r: SettingsResponse = {
+      ...freshSettings(),
+      setupCompletedAt: '2026-10-01T00:00:00.000Z',
+      ...over,
+    };
+    r.settings.deliverables = { ide };
+    return r;
+  };
+  const installed = (setting = 'auto'): IdeResponse => ({
+    supported: true,
+    installed: [WEBSTORM, VSCODE],
+    setting,
+    effective: WEBSTORM,
+  });
+
+  it('lists the IDEs installed on the Mac and saves the choice', async () => {
+    await open('/settings', withIde(), undefined, (s) => s.setIde(installed()));
+    const ide = await screen.findByRole('region', { name: 'IDE' });
+    await within(ide).findByRole('radio', { name: /WebStorm — \/Applications\/WebStorm.app/ });
+    expect(
+      within(ide)
+        .getAllByRole('radio')
+        .map((r) => (r as HTMLInputElement).value),
+    ).toEqual(['auto', 'com.jetbrains.WebStorm', 'com.microsoft.VSCode']);
+    const auto = within(ide).getByRole('radio', { name: /Automatic — now WebStorm/ });
+    expect((auto as HTMLInputElement).checked).toBe(true);
+    await click(within(ide).getByRole('radio', { name: /Visual Studio Code/ }));
+    await click(within(ide).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ deliverables: { ide: 'com.microsoft.VSCode' } });
+    await click(within(ide).getByRole('radio', { name: /Automatic/ }));
+    await click(within(ide).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ deliverables: { ide: 'auto' } });
+  });
+
+  it('keeps a chosen IDE that is gone on offer, marked, and shows a refusal', async () => {
+    await open('/settings', withIde('dev.zed.Zed'), undefined, (s) => {
+      s.setIde({ ...installed('dev.zed.Zed'), effective: undefined } as IdeResponse);
+      s.setRefuse(() => ({
+        status: 400,
+        body: {
+          error: 'invalid',
+          message: 'com.microsoft.VSCode is not an IDE installed on this Mac',
+        },
+      }));
+    });
+    const ide = await screen.findByRole('region', { name: 'IDE' });
+    const zed = await within(ide).findByRole('radio', { name: /Zed — not installed any more/ });
+    expect((zed as HTMLInputElement).checked).toBe(true);
+    await click(within(ide).getByRole('radio', { name: /Visual Studio Code/ }));
+    await click(within(ide).getByRole('button', { name: /^Save/ }));
+    expect(within(ide).getByRole('alert').textContent).toMatch(/not an IDE installed/);
+  });
+
+  it('is read-only from a remote client (decision 51)', async () => {
+    await open('/settings', withIde('auto', { writable: 'limited' }), undefined, (s) =>
+      s.setIde(installed()),
+    );
+    const ide = await screen.findByRole('region', { name: 'IDE' });
+    await within(ide).findByRole('radio', { name: /WebStorm —/ });
+    expect(within(ide).getByRole('note').textContent).toMatch(/chosen on the Mac itself/);
+    for (const radio of within(ide).getAllByRole('radio')) {
+      expect(radio.matches(':disabled')).toBe(true); // inside the disabled fieldset
+    }
+  });
+
+  it('says so when Mission Control is not on a Mac, and offers no choice', async () => {
+    await open('/settings', withIde(), undefined, (s) =>
+      s.setIde({ supported: false, installed: [], setting: 'auto' }),
+    );
+    const ide = await screen.findByRole('region', { name: 'IDE' });
+    await within(ide).findByText(/not running on a Mac/);
+    expect(within(ide).queryAllByRole('radio')).toHaveLength(0);
+  });
+
+  it('is left out for a server without the setting', async () => {
+    await open('/settings', { ...freshSettings(), setupCompletedAt: '2026-10-01T00:00:00.000Z' });
+    await screen.findByRole('region', { name: 'Budgets' });
+    expect(screen.queryByRole('region', { name: 'IDE' })).toBeNull();
   });
 });
 

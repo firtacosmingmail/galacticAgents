@@ -16,10 +16,26 @@ export interface LabelEntry {
   /** The element's size in CSS pixels, measured when its content changes. */
   w: number;
   h: number;
+  /**
+   * The deliverables mark's box inside the label (decision 133), in CSS pixels from the label's
+   * top-left, measured with the label; absent when the label shows no mark.
+   */
+  mark?: MarkBox | undefined;
   /** What the projector last wrote (owned by it): position and visibility. */
   written?: { x: number; y: number } | undefined;
   shown?: boolean | undefined;
 }
+
+export interface MarkBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const sameMark = (a: MarkBox | undefined, b: MarkBox | undefined) =>
+  a === b ||
+  (a !== undefined && b !== undefined && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
 
 const entries = new Map<string, LabelEntry>();
 const listeners = new Set<() => void>();
@@ -49,11 +65,24 @@ export function registerLabel(
 }
 
 /** A label's content changed: its priority and measured size. */
-export function updateLabel(bodyId: string, patch: Pick<LabelEntry, 'priority' | 'w' | 'h'>): void {
+export function updateLabel(
+  bodyId: string,
+  patch: Pick<LabelEntry, 'priority' | 'w' | 'h'> & { mark?: MarkBox | undefined },
+): void {
   const entry = entries.get(bodyId);
   if (!entry) return;
-  if (entry.priority === patch.priority && entry.w === patch.w && entry.h === patch.h) return;
-  Object.assign(entry, patch);
+  const mark = patch.mark;
+  if (
+    entry.priority === patch.priority &&
+    entry.w === patch.w &&
+    entry.h === patch.h &&
+    sameMark(entry.mark, mark)
+  )
+    return;
+  entry.priority = patch.priority;
+  entry.w = patch.w;
+  entry.h = patch.h;
+  entry.mark = mark;
   changed();
 }
 
@@ -90,6 +119,17 @@ export function writePosition(entry: LabelEntry, x: number, y: number): void {
  * drawn on top).
  */
 export function labelAt(x: number, y: number): string | undefined {
+  return labelHitAt(x, y)?.bodyId;
+}
+
+/** A shown label under the point, and whether the point is on its deliverables mark. */
+export interface LabelHit {
+  bodyId: string;
+  onMark: boolean;
+}
+
+/** `labelAt`, also telling whether the point is on the label's deliverables mark (decision 133). */
+export function labelHitAt(x: number, y: number): LabelHit | undefined {
   let best: LabelEntry | undefined;
   for (const entry of entries.values()) {
     const at = entry.written;
@@ -98,7 +138,17 @@ export function labelAt(x: number, y: number): string | undefined {
       x >= at.x - entry.w / 2 && x <= at.x + entry.w / 2 && y >= at.y - entry.h && y <= at.y;
     if (inside && (!best || entry.priority > best.priority)) best = entry;
   }
-  return best?.bodyId;
+  if (!best?.written) return undefined;
+  const mark = best.mark;
+  const left = best.written.x - best.w / 2;
+  const top = best.written.y - best.h;
+  const onMark =
+    mark !== undefined &&
+    x >= left + mark.x &&
+    x <= left + mark.x + mark.w &&
+    y >= top + mark.y &&
+    y <= top + mark.y + mark.h;
+  return { bodyId: best.bodyId, onMark };
 }
 
 /** Hides every label (the projector unmounted: the scene hidden, the context lost). */

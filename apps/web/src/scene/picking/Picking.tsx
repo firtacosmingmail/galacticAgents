@@ -15,7 +15,7 @@ import { anchorList, getAnchor } from '../anchors.js';
 import { currentDetailScope, detailMix, inDetailScope, useDetailStore } from '../detail/mode.js';
 import { ownRingFactor } from '../detail/dome.js';
 import { standInFor } from '../detail/stand-ins.js';
-import { labelAt } from '../labels/registry.js';
+import { labelHitAt, type LabelHit } from '../labels/registry.js';
 import { anchorPosition } from '../camera/store.js';
 import { sceneWorld, useAppStore } from '../../state/store.js';
 import { getSatellite, satelliteFrames } from '../satellites/registry.js';
@@ -44,6 +44,7 @@ import { DECOR_LAYER } from '../layers.js';
 import type { Vec3 } from '../camera/flight.js';
 import {
   activateBody,
+  activateMark,
   activateSatellite,
   deselectFromScene,
   hoveredBody,
@@ -385,9 +386,10 @@ export function Picking({ outline }: PickingProps) {
         activateTask(marker, at);
         return;
       }
-      const label = labelUnder(result, at);
+      const hit = labelHitUnder(result, at);
       const choice = result.choice;
-      if (label) activateBody(label, at);
+      if (hit?.onMark) activateMark(hit.bodyId, at);
+      else if (hit) activateBody(hit.bodyId, at);
       else if (choice?.kind === 'satellite') activateSatellite(choice.agentId);
       else if (choice) activateBody(choice.bodyId, at);
       else if (result.candidates.length > 1) {
@@ -576,9 +578,14 @@ export function satellitesDrawn(): boolean {
  * over labels too (P4-08). `undefined`: no label decides it.
  */
 export function labelUnder(result: ScenePick, at: Point): string | undefined {
+  return labelHitUnder(result, at)?.bodyId;
+}
+
+/** `labelUnder`, also telling whether the pointer is on the label's deliverables mark (P9-11). */
+export function labelHitUnder(result: ScenePick, at: Point): LabelHit | undefined {
   if (result.satellites.length > 0) return undefined;
   if (result.bodies.candidates.some((c) => c.hit)) return undefined;
-  return labelAt(at.x, at.y);
+  return labelHitAt(at.x, at.y);
 }
 
 /**

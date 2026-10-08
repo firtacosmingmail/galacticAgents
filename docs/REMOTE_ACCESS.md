@@ -79,8 +79,22 @@ The classification is made per request: on every REST call and on the WebSocket 
 | Spawn a free-form agent (`POST /api/agents`, the ops console's development tool, decision 24); stop a Steward's leftover processes; restart the Harmonizer | yes | 403 `remote_control` (`SPEC.md` decision 90) |
 | Answer questions (permission and clarification), decide cards, chat, pause / resume / recover / stop / cancel work and agents | yes | yes: an explicit user decision, or work already started (decision 90) |
 | `/dev/*` | yes | 403 `remote_dev` |
+| Deliverables: list, view text and images, download, follow a run's state, ports and output, **stop** a run | yes | yes (decision 131) |
+| Deliverables: add, edit, remove, restore by hand, Rescan; the deliverables settings (IDE, runs, declaration limits) | yes | 403 `remote_control` / `remote_settings` |
+| Deliverables: Open, Reveal in Finder, Open in IDE, open an application, **start or restart** a run; add a path from **outside** the project | yes | 403 `remote_control`, **even with `autoApproveRemote`** |
 
-`autoApproveRemote: true` (or `GALACTIC_AUTO_APPROVE_REMOTE=1`) treats remote clients like the local page in every row above. It is off by default. Leave it off unless the phone is the only remote device and you accept that.
+`autoApproveRemote: true` (or `GALACTIC_AUTO_APPROVE_REMOTE=1`) treats remote clients like the local page in every row above except the last one. It is off by default. Leave it off unless the phone is the only remote device and you accept that.
+
+### Deliverables from the phone
+
+What a project or task produced (`SPEC.md` §4.7) is listed on the phone as on the Mac: the project's Deliverables view, the task's section in the Steward view, the history inspector. On the phone you may:
+
+- **view** text, code, Markdown and images in the panel (the same preview limits as on the Mac);
+- **download** a file: the page asks for a one-time link (`POST /api/deliverables/:id/download`), and the browser fetches `/files/<ticket>`. The link works once, for 60 seconds, only for that file as it was when asked (a file changed meanwhile is refused), and carries no token. Files of any size are streamed. The service worker never caches `/files/`;
+- **follow a run**: its state, its output (live) and its ports, shown as text: a dev server is usually unauthenticated and is not forwarded by Serve (`SPEC.md` §8);
+- **stop a run**, after a confirmation, as you may stop an agent (decision 90): stopping only ends what the Mac started.
+
+Never from the phone, whatever `autoApproveRemote` says, because each one runs a program on the Mac: opening a file, revealing it in the Finder, opening the IDE, launching an application, and starting or restarting a run. Adding a file or folder from outside the project is the Mac's alone too: it would be copied into the project's `deliverables/` folder and become downloadable, so a phone could otherwise copy `~/.ssh` in and download it. The phone shows these actions as "on the Mac" instead of offering them. Adding, editing, removing and restoring deliverables inside the project, a Rescan, and the deliverables settings follow the settings rule (decision 51): refused unless `autoApproveRemote`.
 
 ## 4. Optional: Tailscale identity instead of the token
 
@@ -109,6 +123,7 @@ Such a request passes the bearer guard and the WebSocket `hello`, whatever token
 - **What it does not guarantee.** The server cannot tell Serve from any other program on the Mac. Every local process can connect to `127.0.0.1:4321` and send `Host: mymac.tail1234.ts.net` and `Tailscale-User-Login: you@example.com`. That includes processes of other macOS users and **an agent's own shell**.
 - **But identity adds no new local exposure.** The same local processes can already get the token without identity: `GET /health` hands it to a loopback request with a loopback `Host` and no proxy headers, which is what the local page needs on first run. A Steward allowed network access (the `trusting` or `trusted` levels), or another macOS user, can ask `/health` for the token and then answer its own permission questions over the REST API or the WebSocket, with or without identity turned on. **Every process on this Mac is trusted as much as you are, either way.** Identity widens nothing locally; on the tailnet side it is as strong as Serve's guarantee above.
 - **The `/health` speed bump.** `/health` returns the token only when the request carries `Sec-Fetch-Site: same-origin` (the page's own `fetch`) or `none` (a navigation typed in the address bar). Browsers set that header themselves and no page script can change it; `curl`, Node's `fetch` and most scripts do not send it by default. So an agent's casual `curl http://127.0.0.1:4321/health` gets no token. It is **a speed bump, not a boundary**: any local process can add the header (`curl -H 'Sec-Fetch-Site: same-origin' …`). A browser too old to send it (Safari before 16.4) gets no token on first run either: paste the one `galactic start` printed.
+- **The token runs commands.** Whoever holds the token can start any command on the Mac through the runs routes (`POST /api/deliverables/:id/runs`): the Run dialog's confirmation is minted by a preview with the same token, so it guards against a stale dialog, not against a caller. A local process that got the token — past the `/health` speed bump, or by reading `~/.galactic/config.json` — can run any command as you, outside the permission gate. A **speed bump** refuses a start, a restart or an edited line's preview (403 `agent_peer`) when the process on the other end of the connection is an agent's or a run's — it, or a process above it, carries `GALACTIC_AGENT_ID` or `GALACTIC_RUN_ID`, or it runs below Mission Control — found with `lsof`; a process it cannot identify is allowed (and logged). A detached process escapes it. The remote rules are unchanged: a remote client never starts a run (§3). The real boundary is an open question (`SPEC.md` §8, 2026-10-08).
 - **What a browser cannot do.** A web page in a local browser cannot forge `Host` or `Sec-Fetch-Site`, and the server sends no CORS headers, so a website cannot use either path (DNS rebinding included).
 
 The open question (`SPEC.md` §8, 2026-10-05) covers both paths. Mitigations, from cheapest:

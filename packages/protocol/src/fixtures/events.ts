@@ -267,4 +267,45 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     budgetUsd: 5,
     reason: 'budget exceeded',
   },
+  'deliverable.added': { type: 'deliverable.added', deliverable: d.deliverable },
+  'deliverable.updated': {
+    type: 'deliverable.updated',
+    deliverableId: 'd-1',
+    changes: {
+      location: {
+        storage: 'copy',
+        path: '/home/cosmin/work/auth/deliverables/session-middleware/login.png',
+        originalPath: '/home/cosmin/work/auth/.galactic/worktrees/t-1/screenshots/login.png',
+      },
+    },
+    version: 2,
+  },
+  'deliverable.removed': {
+    type: 'deliverable.removed',
+    deliverableId: 'd-1',
+    by: waykeeper,
+    reason: 'a scratch log',
+    version: 3,
+  },
+  'deliverable.restored': {
+    type: 'deliverable.restored',
+    deliverableId: 'd-1',
+    by: user,
+    version: 4,
+  },
+  'deliverable.opened': {
+    type: 'deliverable.opened',
+    deliverableId: 'd-1',
+    action: 'reveal',
+    by: user,
+  },
+  'run.started': { type: 'run.started', run: d.run },
+  'run.ports': { type: 'run.ports', runId: 'r-1', deliverableId: 'd-2', ports: [5173] },
+  'run.ended': {
+    type: 'run.ended',
+    runId: 'r-1',
+    deliverableId: 'd-2',
+    outcome: 'stopped',
+    by: user,
+  },
 };

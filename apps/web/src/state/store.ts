@@ -4,6 +4,7 @@ import {
   type ChatMessage,
   type EventEnvelope,
   type Id,
+  type RunOutputChunk,
   type ServerMessage,
   type StorageHealth,
   type TranscriptChunk,
@@ -30,6 +31,47 @@ export const MAX_LOG = 200;
 export const MAX_TRANSCRIPT = 2_000;
 /** Chat messages kept per agent (oldest dropped). */
 export const MAX_MESSAGES = 500;
+/**
+ * A run's output kept per run (P9-10), in UTF-16 code units (about bytes): the server keeps 2 MiB
+ * per run by default (decision 130); past this the oldest chunks are dropped here too.
+ */
+export const MAX_RUN_OUTPUT = 4 * 1024 * 1024;
+
+/**
+ * Merges a run's output chunks (P9-10): the REST pages and the `run_output` stream in any order,
+ * one chunk per `seq`, in `seq` order, the newest `MAX_RUN_OUTPUT` kept.
+ */
+export function mergeRunOutput(
+  current: RunOutputChunk[],
+  incoming: RunOutputChunk[],
+  cap = MAX_RUN_OUTPUT,
+): RunOutputChunk[] {
+  if (incoming.length === 0) return current;
+  const last = current.at(-1)?.seq ?? 0;
+  let merged: RunOutputChunk[];
+  if (incoming.every((c, i) => c.seq > last && (i === 0 || c.seq > incoming[i - 1]!.seq))) {
+    merged = [...current, ...incoming];
+  } else {
+    const bySeq = new Map<number, RunOutputChunk>();
+    for (const c of current) bySeq.set(c.seq, c);
+    let fresh = false;
+    for (const c of incoming) {
+      if (bySeq.has(c.seq)) continue;
+      bySeq.set(c.seq, c);
+      fresh = true;
+    }
+    if (!fresh) return current;
+    merged = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+  }
+  let size = 0;
+  let i = merged.length;
+  while (i > 0 && size + merged[i - 1]!.chunk.length <= cap) {
+    i -= 1;
+    size += merged[i]!.chunk.length;
+  }
+  if (i === merged.length) i = merged.length - 1; // one chunk alone above the cap
+  return i > 0 ? merged.slice(i) : merged;
+}
 
 /** The offset to the server's clock a `serverTime` gives, as a state patch (none without one). */
 function serverOffset(serverTime: string | undefined): { serverOffsetMs?: number } {
@@ -67,6 +109,11 @@ export interface AppState extends TranscriptViewSlice {
   /** Per-agent transcript chunks in `seq` order, for the agents this page subscribed to. */
   transcripts: Record<Id, TranscriptChunk[]>;
   /**
+   * Managed runs' output (P9-10), per run in `seq` order, for the runs this page shows: the REST
+   * pages and the `run_output` stream merged (`mergeRunOutput`). Not part of `world`.
+   */
+  runOutputs: Record<Id, RunOutputChunk[]>;
+  /**
    * The messages sent to each agent (`message.sent`), for the chat boxes (P2-18). Not part of
    * `world`: the snapshot does not carry them (the inbox is runtime state), so they are kept
    * beside it like the transcripts — folded from the stream, backfilled from the REST history,
@@ -94,6 +141,10 @@ export interface AppState extends TranscriptViewSlice {
   reset: () => void;
   /** Adds an agent's messages read from the REST history. */
   addMessages: (agentId: Id, messages: ChatMessage[]) => void;
+  /** Adds a run's output read from the REST pages (P9-10). */
+  addRunOutput: (runId: Id, chunks: RunOutputChunk[]) => void;
+  /** Forgets a run's output (its view closed). */
+  dropRunOutput: (runId: Id) => void;
   /**
    * The page's route and the panel's selection (P25-02). These are the only fields not derived
    * from the stream: they are the user's navigation, mirrored in the URL (history API) so a deep
@@ -115,6 +166,9 @@ export interface AppState extends TranscriptViewSlice {
   /** Set while a session runs: open / close the transcript stream of an agent. */
   subscribeTranscript?: ((agentId: Id) => void) | undefined;
   unsubscribeTranscript?: ((agentId: Id) => void) | undefined;
+  /** Set while a session runs: open / close a managed run's output stream (P9-10). */
+  subscribeRun?: ((runId: Id) => void) | undefined;
+  unsubscribeRun?: ((runId: Id) => void) | undefined;
 }
 
 /** Client state is derived from the stream only: the store has no other inputs. */
@@ -154,6 +208,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   world: emptyWorld(),
   log: [],
   transcripts: {},
+  runOutputs: {},
   messages: {},
   snapshots: 0,
   status: 'idle',
@@ -172,7 +227,13 @@ export const useAppStore = create<AppState>((set, get) => ({
             storage: message.storage ?? STORAGE_OK,
             ...serverOffset(message.serverTime),
             ...(s.logId !== undefined && s.logId !== message.logId
-              ? { transcripts: {}, messages: {}, transcriptViews: {}, replayWorld: undefined }
+              ? {
+                  transcripts: {},
+                  runOutputs: {},
+                  messages: {},
+                  transcriptViews: {},
+                  replayWorld: undefined,
+                }
               : {}),
           };
         case 'event': {
@@ -233,6 +294,15 @@ export const useAppStore = create<AppState>((set, get) => ({
             : all.slice(-MAX_TRANSCRIPT);
           return { transcripts: { ...s.transcripts, [message.agentId]: merged } };
         }
+        case 'run_output': {
+          // A managed run's output (P9-08) is only sent to a page that subscribed to it (P9-10's
+          // run view); kept beside the world, never folded into it.
+          const current = s.runOutputs[message.runId] ?? [];
+          const merged = mergeRunOutput(current, message.chunks);
+          return merged === current
+            ? {}
+            : { runOutputs: { ...s.runOutputs, [message.runId]: merged } };
+        }
       }
     }),
   addMessages: (agentId, messages) =>
@@ -241,6 +311,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       return merged === s.messages[agentId]
         ? {}
         : { messages: { ...s.messages, [agentId]: merged } };
+    }),
+  addRunOutput: (runId, chunks) =>
+    set((s) => {
+      const current = s.runOutputs[runId] ?? [];
+      const merged = mergeRunOutput(current, chunks);
+      return merged === current ? {} : { runOutputs: { ...s.runOutputs, [runId]: merged } };
+    }),
+  dropRunOutput: (runId) =>
+    set((s) => {
+      if (!(runId in s.runOutputs)) return {};
+      const { [runId]: _gone, ...rest } = s.runOutputs;
+      return { runOutputs: rest };
     }),
   setStatus: (status, detail) =>
     set(
@@ -253,6 +335,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       serverOffsetMs: undefined,
       log: [],
       transcripts: {},
+      runOutputs: {},
       messages: {},
       transcriptViews: {},
       logId: undefined,
