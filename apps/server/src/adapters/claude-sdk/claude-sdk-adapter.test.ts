@@ -282,6 +282,45 @@ describe('ClaudeSdkAdapter — questions', () => {
     expect(events.items.some((e) => e.type === 'agent.tool_call')).toBe(false); // a question is not a tool call
   });
 
+  it('a dismissed AskUserQuestion is refused with what the user did; later questions are not asked (P9-14)', async () => {
+    const { adapter, events } = make(() => [
+      { askUsers: [{ question: 'Which format?' }, { question: 'Which fields?' }] },
+      { text: 'carrying on' },
+    ]);
+    await adapter.spawn(spawnOpts('ask me'));
+    await events.waitFor((e) => questions(e).length === 1);
+    const [q] = questions(events.items);
+    await adapter.dismiss(q!.questionId, 'dismissed by the user');
+    await events.waitFor(has('agent.idle'));
+    expect(questions(events.items)).toHaveLength(1);
+    const result = events.items.find((e) => e.type === 'agent.output' && e.kind === 'tool');
+    expect(result).toMatchObject({
+      text: expect.stringContaining(
+        'The user did not answer this question: it was dismissed by the user. Do not wait',
+      ),
+    });
+    expect(events.items.some((e) => e.type === 'agent.output' && e.text === 'carrying on')).toBe(
+      true,
+    );
+    await expect(adapter.dismiss(q!.questionId, 'again')).rejects.toThrow(/no pending question/);
+  });
+
+  it('a dismissed permission request is denied, never run (P9-14)', async () => {
+    const { adapter, events } = make(() => [
+      { tool: 'Bash', input: { command: 'rm -rf dist' }, result: 'removed' },
+      { text: 'done' },
+    ]);
+    await adapter.spawn(spawnOpts('clean up'));
+    await events.waitFor(has('agent.needs_input'));
+    const q = questions(events.items)[0]!;
+    await adapter.dismiss(q.questionId, 'dismissed by the user');
+    await events.waitFor(has('agent.idle'));
+    expect(events.items.some((e) => e.type === 'agent.tool_call')).toBe(false);
+    expect(events.items.find((e) => e.type === 'agent.output' && e.kind === 'tool')).toMatchObject({
+      text: expect.stringContaining('The user refused: the permission request was dismissed'),
+    });
+  });
+
   it('a question pending when the turn is interrupted is withdrawn', async () => {
     const { adapter, events } = make(() => [
       { tool: 'Bash', input: { command: 'rm x' } },

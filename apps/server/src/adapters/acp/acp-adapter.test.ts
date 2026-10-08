@@ -239,6 +239,15 @@ describe('AcpAdapter', () => {
     await waitFor(() => r.supervisor.runningCount === 0, 'no process');
   });
 
+  it('a dismissed hold is refused like a deny: the agent is stopped (P9-14)', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:unasked', askPush));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'hold');
+    await r.adapter.dismiss(of(r, 'agent.needs_input')[0]!.questionId, 'dismissed by the user');
+    await waitFor(() => of(r, 'agent.failed').length === 1, 'failed');
+    expect(of(r, 'agent.failed')[0]?.error).toMatch(/not allowed.*dismissed by the user/);
+  });
+
   it('an interrupt withdraws a hold: the agent goes idle', async () => {
     const r = rig();
     const h = await r.adapter.spawn(spawnOpts(r, 'scenario:unasked', askPush));
@@ -508,6 +517,31 @@ describe('AcpAdapter', () => {
     expect(texts(r)).toContain('You chose: First option');
     expect(of(r, 'agent.needs_input')).toHaveLength(1);
     expect(r.checks).toEqual([]);
+    expect(of(r, 'agent.tool_call')).toEqual([]);
+  });
+
+  it('a dismissed elicitation is declined; the rest of the form is not asked (P9-14)', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:form'));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+    await r.adapter.dismiss(of(r, 'agent.needs_input')[0]!.questionId, 'dismissed by the user');
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(texts(r)).toContain('form: undefined'); // declined: no content
+    expect(of(r, 'agent.needs_input')).toHaveLength(1);
+  });
+
+  it('a dismissed permission request answers reject_once, never allow (P9-14)', async () => {
+    const r = rig();
+    await r.adapter.spawn(
+      spawnOpts(r, 'scenario:permission', () => ({ decision: 'ask', reasons: ['rm -rf'] })),
+    );
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+    await r.adapter.dismiss(of(r, 'agent.needs_input')[0]!.questionId, 'dismissed by the user');
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(texts(r)).toContain('Skipped: the permission was refused.');
+    expect(texts(r).some((t) => /permission denied for .*dismissed by the user/.test(t))).toBe(
+      true,
+    );
     expect(of(r, 'agent.tool_call')).toEqual([]);
   });
 
