@@ -87,3 +87,18 @@ export const RemoteActionResponse = z.object({
   error: z.literal('remote_refused').optional(),
 });
 export type RemoteActionResponse = z.infer<typeof RemoteActionResponse>;
+
+/** A reason in a few words: the desktop menu bar's "Phone: off — …", the top bar's indicator. */
+export const REMOTE_REASON_SHORT: Record<RemoteReason, string> = {
+  not_installed: 'Tailscale not installed',
+  not_running: 'Tailscale not running',
+  needs_login: 'Tailscale not signed in',
+  no_magicdns: 'no MagicDNS name',
+  remote_host_mismatch: 'remoteHost names another Mac',
+  funnel_on: 'Tailscale Funnel is on',
+  port_443_taken: 'port 443 is taken',
+  serve_off: 'turned off',
+  restart_needed: 'restart needed',
+  not_owned: 'Serve was set up elsewhere',
+  error: 'Tailscale could not be read',
+};

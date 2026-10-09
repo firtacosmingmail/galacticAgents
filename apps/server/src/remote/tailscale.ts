@@ -254,34 +254,6 @@ export function reasonText(
   }
 }
 
-/** The menu bar's and the top bar's short form of a reason. */
-export function reasonShort(reason: RemoteReason): string {
-  switch (reason) {
-    case 'not_installed':
-      return 'Tailscale not installed';
-    case 'not_running':
-      return 'Tailscale not running';
-    case 'needs_login':
-      return 'Tailscale not signed in';
-    case 'no_magicdns':
-      return 'no MagicDNS name';
-    case 'remote_host_mismatch':
-      return 'remoteHost names another Mac';
-    case 'funnel_on':
-      return 'Tailscale Funnel is on';
-    case 'port_443_taken':
-      return 'port 443 is taken';
-    case 'serve_off':
-      return 'Serve is off';
-    case 'restart_needed':
-      return 'restart needed';
-    case 'not_owned':
-      return 'Serve started elsewhere';
-    case 'error':
-      return 'Tailscale could not be read';
-  }
-}
-
 /** Tailscale's own state as a reason (`undefined` when it is connected with a name). */
 export function tailscaleReason(
   tailscale: TailscaleState,
