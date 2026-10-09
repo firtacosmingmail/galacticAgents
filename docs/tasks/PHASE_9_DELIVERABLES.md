@@ -1,7 +1,7 @@
 # Phase 9 — Deliverables
 
 **Current task:** P9-13 (acceptance run with Cosmin on the Mac and the phone) · **Task status:** todo
-**Phase status:** in progress (14/15 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
+**Phase status:** in progress (14/16 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -123,6 +123,11 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 - Cosmin's request: the desktop app's menu bar icon lists the permission requests waiting for the user and lets him answer them there: each request as a submenu (agent, tool and the exact command or path, shortened safely) with "Allow once", "Deny" and "Open in GalacticAgents"; the count stays on the icon. Answers go through the same server route as the panel (local, the user's own action); never "always"; a request that changed or was answered elsewhere is refused cleanly. Optional: clarification questions listed with "Open" only (answers need typing).
 - **Acceptance:** with the desktop app running, a permission request appears in the menu bar menu within a second, Allow and Deny answer it, the panel updates; tests for the menu model and the answer path.
 - Notes: `docs/tasks/notes/P9-15-tray.md` (proposed SPEC decision, verification).
+
+### P9-16 — The desktop app turns on phone access (added 2026-10-09)
+- **Status:** in progress · **Depends on:** P8-06, P7-02, P7-06 (`pnpm remote`) · **Parallel with:** —
+- Cosmin's request: starting the desktop app should also make Mission Control reachable from the phone. When the app starts (or attaches to) Mission Control, it does what `pnpm remote` does: checks Tailscale is connected with a MagicDNS name, makes sure `remoteHost` is set (adds it when missing, stops if it names another machine), and makes sure HTTP-mode Tailscale Serve forwards 443 to the server's port (starts it if missing; refuses if 443 serves something else or Funnel is on — never Funnel, never TCP mode). The menu bar shows "Phone: https://<name>" or "Phone: off — <reason>", with "Turn phone access on/off" (remembered) and "Show the phone QR code" (opens Settings → Access). Shared logic with `scripts/remote-start.mjs` in one module.
+- **Acceptance:** with Tailscale connected, launching the app leaves `tailscale serve status` forwarding to the app's server and the phone opens the app; with Tailscale off the menu says why; turning it off stops Serve only if the app started it; tests for the checks with a fake `tailscale`.
 
 ## Exit criteria (from the plan)
 
