@@ -216,6 +216,10 @@ const ALLOWED_DELETIONS: Record<string, { count: number; why: string }> = {
     count: 2,
     why: "a copy's own `.partial` name (after a failure, or once it is linked into place)",
   },
+  'remote/service.ts': {
+    count: 1,
+    why: 'the phone access ownership record <dataDir>/remote-serve.json (P9-16)',
+  },
   'test/harness.ts': { count: 1, why: "the scene harness's temporary data folder" },
   'workspace/workspaces.ts': {
     count: 3,
