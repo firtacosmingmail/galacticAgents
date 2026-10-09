@@ -51,6 +51,9 @@ function refuse(socket: WebSocket, code: number, error: Omit<ErrorMessage, 'type
 export class WsGateway {
   readonly wss: WebSocketServer;
   readonly path: string;
+  /** The remote sessions open now, and when one was last heard from (P9-16, phone status). */
+  private readonly remoteSockets = new Set<WebSocket>();
+  private remoteSeenAt: number | undefined;
 
   constructor(private readonly opts: GatewayOptions) {
     this.path = opts.path ?? '/ws';
@@ -123,9 +126,32 @@ export class WsGateway {
         this.opts.log?.info(
           `ws remote session (${identity !== undefined ? 'tailscale identity' : 'token'})`,
         );
+        this.trackRemote(socket);
       }
       this.opts.onSession(socket, parsed.data, req);
     });
+  }
+
+  private trackRemote(socket: WebSocket): void {
+    const seen = () => (this.remoteSeenAt = Date.now());
+    seen();
+    this.remoteSockets.add(socket);
+    socket.on('message', seen);
+    socket.on('pong', seen);
+    socket.once('close', () => {
+      seen();
+      this.remoteSockets.delete(socket);
+    });
+  }
+
+  /** How many remote clients are connected, and when one was last heard from (ISO time). */
+  remoteClients(): { connected: number; lastSeenAt?: string } {
+    return {
+      connected: this.remoteSockets.size,
+      ...(this.remoteSeenAt !== undefined
+        ? { lastSeenAt: new Date(this.remoteSeenAt).toISOString() }
+        : {}),
+    };
   }
 
   close(): Promise<void> {
