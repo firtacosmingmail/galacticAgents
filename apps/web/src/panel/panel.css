@@ -1204,3 +1204,40 @@ a.pnl-link:hover {
   flex: 1 1 8em;
   min-width: 0;
 }
+
+/* the phone indicator (P9-16): a dot and "Phone: online / off / restart needed"; opens
+   Settings → Access */
+.pnl-phone {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 12px var(--pnl-mono);
+  color: var(--pnl-muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.pnl-phone:hover,
+.pnl-phone:focus-visible {
+  border-color: var(--pnl-line, currentColor);
+}
+.pnl-phone-compact {
+  min-width: 32px;
+  min-height: 44px;
+  justify-content: center;
+  flex: none;
+}
+.pnl-phone-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pnl-muted);
+}
+.pnl-phone-online .pnl-phone-dot {
+  background: #3fb67a;
+}
+.pnl-phone-restart .pnl-phone-dot {
+  background: #d9a441;
+}

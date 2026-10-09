@@ -16,6 +16,10 @@
 //!   the user (P9-15, `tray_menu.rs`: "Allow once" / "Deny" go to the Node side as an `answer`
 //!   command, which answers through the panel's route; "Open in GalacticAgents" shows the window at
 //!   `/#focus=question:<id>`), open, start, "Start at login", quit.
+//! - **Phone access** (P9-16): the Node side asks Mission Control's `/api/remote/*` routes and
+//!   sends a `phone` line; the menu shows "Phone: https://<name>" (a click copies it) or "Phone:
+//!   off — <reason>", the "Phone Access" switch (`phone:on` / `phone:off` to the Node side) and
+//!   "Show the Phone QR Code" (`/settings#access`).
 //! - **Notifications**: posted from here (Rust) for the Node side's `notify` lines; the page's own
 //!   notifications are off inside the shell (`window.__GALACTIC_DESKTOP__`).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -44,7 +48,10 @@ use tauri_plugin_notification::NotificationExt;
 mod links;
 use links::{navigation_target, new_window_target, LinkTarget, OpenLimiter};
 mod tray_menu;
-use tray_menu::{focus_url, parse_action, sections, Action, Entry, TrayMenu};
+use tray_menu::{
+    focus_url, parse_action, phone_command, phone_menu, phone_url_ok, sections,
+    settings_access_url, Action, Entry, PhoneLine, TrayMenu, PHONE_TOGGLE_ID,
+};
 
 /// Tells the page it runs inside the shell: the page then leaves notifications to the shell
 /// (apps/web/src/desktop-shell.ts). A flag only — it grants nothing.
@@ -61,6 +68,7 @@ enum Line {
     Status { view: TrayView },
     Notify { id: String, title: String, body: Option<String> },
     Menu { menu: TrayMenu },
+    Phone { phone: PhoneLine },
     Exited,
 }
 
@@ -84,6 +92,10 @@ struct TrayView {
 struct Menus {
     status: MenuItem<Wry>,
     server: MenuItem<Wry>,
+    /// The phone section (P9-16): the Phone line, the "Phone Access" switch, the QR code.
+    phone: MenuItem<Wry>,
+    phone_access: CheckMenuItem<Wry>,
+    phone_qr: MenuItem<Wry>,
     open: MenuItem<Wry>,
     start: MenuItem<Wry>,
     autostart: CheckMenuItem<Wry>,
@@ -97,6 +109,8 @@ struct Shell {
     port: Arc<Mutex<Option<u16>>>,
     quitting: AtomicBool,
     may_exit: AtomicBool,
+    /// The address the Phone line copies (only an `https://<host>` one, `tray_menu::phone_url_ok`).
+    phone_url: Mutex<Option<String>>,
 }
 
 fn main() {
@@ -117,6 +131,7 @@ fn main() {
                 port: port.clone(),
                 quitting: AtomicBool::new(false),
                 may_exit: AtomicBool::new(false),
+                phone_url: Mutex::new(None),
             });
 
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
@@ -210,12 +225,16 @@ fn new_window(url: &Url) -> NewWindowResponse<Wry> {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let status = MenuItem::with_id(app, "status", "Starting Mission Control…", false, None::<&str>)?;
     let server = MenuItem::with_id(app, "server", "Mission Control: not running", false, None::<&str>)?;
+    let initial = phone_menu(&PhoneLine { on: true, label: "Phone: waiting for Mission Control".into(), ..PhoneLine::default() }, false);
+    let phone = MenuItem::with_id(app, initial.line.id, initial.line.text, false, None::<&str>)?;
+    let phone_access = CheckMenuItem::with_id(app, PHONE_TOGGLE_ID, initial.toggle_text, true, initial.checked, None::<&str>)?;
+    let phone_qr = MenuItem::with_id(app, initial.qr.id, initial.qr.text, false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open GalacticAgents", true, None::<&str>)?;
     let start = MenuItem::with_id(app, "start", "Start Mission Control", false, None::<&str>)?;
     let at_login = app.autolaunch().is_enabled().unwrap_or(false);
     let autostart = CheckMenuItem::with_id(app, "autostart", "Start at Login", true, at_login, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit GalacticAgents", true, None::<&str>)?;
-    let menus = Menus { status, server, open, start, autostart, quit };
+    let menus = Menus { status, server, phone, phone_access, phone_qr, open, start, autostart, quit };
     let menu = compose_menu(app, &menus, &TrayMenu::default())?;
     app.manage(menus);
     TrayIconBuilder::with_id("galactic")
@@ -234,6 +253,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     send_answer(app, &question_id, version, allow)
                 }
                 Some(Action::Focus { question_id }) => focus_question(app, &question_id),
+                Some(Action::CopyPhoneUrl) => copy_phone_url(app),
+                Some(Action::TogglePhone) => toggle_phone(app),
+                Some(Action::ShowPhoneQr) => show_phone_qr(app),
                 None => {}
             },
         })
@@ -246,6 +268,10 @@ fn compose_menu(app: &AppHandle, menus: &Menus, model: &TrayMenu) -> tauri::Resu
     let menu = Menu::new(app)?;
     menu.append(&menus.status)?;
     menu.append(&menus.server)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&menus.phone)?;
+    menu.append(&menus.phone_access)?;
+    menu.append(&menus.phone_qr)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     for section in sections(model) {
         for entry in section {
@@ -304,6 +330,62 @@ fn focus_question(app: &AppHandle, question_id: &str) {
     let port = *app.state::<Shell>().port.lock().unwrap();
     let (Some(port), Some(window)) = (port, main_window(app)) else { return };
     if let Ok(url) = Url::parse(&focus_url(port, question_id)) {
+        let _ = window.navigate(url);
+    }
+}
+
+/// A `phone` line (P9-16): the Phone line, the switch's state, the address a click copies.
+fn on_phone(app: &AppHandle, phone: PhoneLine) {
+    let shell = app.state::<Shell>();
+    let connected = shell.port.lock().unwrap().is_some();
+    let m = phone_menu(&phone, connected);
+    *shell.phone_url.lock().unwrap() = phone.url.filter(|u| phone_url_ok(u) && m.line.enabled);
+    let menus = app.state::<Menus>();
+    let _ = menus.phone.set_text(&m.line.text);
+    let _ = menus.phone.set_enabled(m.line.enabled);
+    let _ = menus.phone_access.set_checked(m.checked);
+    let _ = menus.phone_qr.set_enabled(m.qr.enabled);
+    if let Some(detail) = phone.detail {
+        eprintln!("[desktop] phone access: {detail}");
+    }
+}
+
+/// The Phone line: the phone's address to the clipboard (`pbcopy`, the address on its stdin).
+fn copy_phone_url(app: &AppHandle) {
+    let Some(url) = app.state::<Shell>().phone_url.lock().unwrap().clone() else { return };
+    let Ok(mut child) = Command::new("/usr/bin/pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(url.as_bytes());
+    }
+    let _ = child.wait();
+    let _ = app
+        .notification()
+        .builder()
+        .title("Phone address copied")
+        .body(url)
+        .show();
+}
+
+/// "Phone Access": the switch has already flipped itself; its new state goes to the Node side,
+/// whose next `phone` line confirms it.
+fn toggle_phone(app: &AppHandle) {
+    let checked = app.state::<Menus>().phone_access.is_checked().unwrap_or(false);
+    send_command(app, phone_command(checked));
+}
+
+/// "Show the Phone QR Code": the window at Settings → Access (the code shows after its own click).
+fn show_phone_qr(app: &AppHandle) {
+    show_window(app);
+    let port = *app.state::<Shell>().port.lock().unwrap();
+    let (Some(port), Some(window)) = (port, main_window(app)) else { return };
+    if let Ok(url) = Url::parse(&settings_access_url(port)) {
         let _ = window.navigate(url);
     }
 }
@@ -572,6 +654,7 @@ fn on_line(app: &AppHandle, line: Line) {
             }
         }
         Line::Menu { menu } => on_menu(app, menu),
+        Line::Phone { phone } => on_phone(app, phone),
         Line::Exited => {}
     }
 }

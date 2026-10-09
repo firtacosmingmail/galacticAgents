@@ -20,6 +20,7 @@ import { COMPACT_TOP_BAR_QUERY, useMediaQuery } from './use-media-query.js';
 import { revealInbox } from './inbox-reveal.js';
 import { SkipLink } from './a11y.js';
 import { NavSheetButton, type NavSheetControl } from './nav-sheet.js';
+import { PhoneIndicator } from './phone/PhoneIndicator.js';
 
 /** The inbox section's id, for the compact bar's "waiting for you" button (P3-12). */
 export { INBOX_ID } from './inbox-reveal.js';
@@ -99,6 +100,7 @@ function WideTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
         <span>{summary.blockedItems} blocked</span>
       </span>
       <span className="pnl-spacer" />
+      <PhoneIndicator />
       <SceneToggle scene={scene} />
       {/* Hiding is the column header's button; the bar brings the section back (P4-09). */}
       {agents && !agents.visible && <ManagedAgentsToggle agents={agents} />}
@@ -223,6 +225,7 @@ function CompactTopBar({ scene, agents, inbox, navSheet, onForget }: TopBarProps
         title={statusText}
       />
       <span className="pnl-spacer" />
+      <PhoneIndicator compact />
       {waiting > 0 && (
         <button
           type="button"
