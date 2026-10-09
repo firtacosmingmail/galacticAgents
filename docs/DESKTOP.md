@@ -23,7 +23,7 @@ To build it and put it in `/Applications` in one step (quit the app first if it 
 pnpm desktop:install
 ```
 
-It replaces `/Applications/GalacticAgents.app` only when the copy there is this app (same bundle identifier), and refuses while the app is running. Run it again after `git pull`: the app runs the repository it was built from.
+It replaces `/Applications/GalacticAgents.app` only when the copy there is this app (same bundle identifier), and refuses while the app is running. Afterwards it removes the copy the build left in `apps/desktop/src-tauri/target/…/bundle/macos/` (and unregisters it from Launch Services), so Spotlight, Launchpad and "Open With" show one GalacticAgents only; `--skip-build` therefore reuses a build once. Run it again after `git pull`: the app runs the repository it was built from.
 
 The bundle is not signed by a developer certificate (ad-hoc only) and not notarized. Run it from where it was built, or copy it to `/Applications` (`pnpm desktop:install`); the first time, macOS may ask you to confirm opening it (right-click → Open). The build needs about 2–4 GB of disk for Cargo's build files (a debug build alone took 2.2 GB) under `apps/desktop/src-tauri/target/` (safe to delete; `cargo clean` there).
 
