@@ -5,7 +5,9 @@
 //   2. refuses while GalacticAgents.app is running (quit it from its menu bar icon first);
 //   3. replaces /Applications/GalacticAgents.app — only when the copy there is this app
 //      (same bundle identifier), never another app of the same name;
-//   4. copies the new bundle with `ditto` (keeps the bundle's attributes and signature).
+//   4. copies the new bundle with `ditto` (keeps the bundle's attributes and signature);
+//   5. removes the build folder's copy (and unregisters it from LaunchServices), so macOS shows
+//      one GalacticAgents only — `--skip-build` therefore works once per build.
 //
 // usage: pnpm desktop:install [--skip-build] [--to <folder>] [--open]
 // The app runs the repository it was built from (docs/DESKTOP.md): after `git pull`, run this again.
@@ -113,6 +115,22 @@ if (existsSync(target)) {
 execFileSync('ditto', [built, target]);
 if (bundleId(target) !== identifier) fail(`the copy at ${target} looks wrong; check it.`);
 console.log(`  installed ${target}`);
+
+// --- one app only: the build output must not show up as a second GalacticAgents ---------
+// Spotlight, Launchpad and "Open With" index every bundle on disk, so the build folder's copy
+// would appear next to the installed one. Unregister it from LaunchServices and remove it (it is
+// build output; `pnpm desktop:build` makes it again), then register the installed copy.
+
+const LSREGISTER =
+  '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
+function lsregister(...lsArgs) {
+  if (existsSync(LSREGISTER)) spawnSync(LSREGISTER, lsArgs, { stdio: 'ignore' });
+}
+lsregister('-u', built);
+execFileSync('rm', ['-rf', built]);
+lsregister('-f', target);
+console.log('  removed the build copy, so only the installed app remains');
+
 console.log(
   `\n✓ Done. Open it from Launchpad or Spotlight ("${conf.productName}"), or: open "${target}".\n` +
     '  It runs this repository (apps/server, apps/web/dist); after git pull, run pnpm desktop:install again.\n' +
