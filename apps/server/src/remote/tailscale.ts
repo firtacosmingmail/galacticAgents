@@ -1,12 +1,7 @@
 import { execFile } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type {
-  RemoteHostState,
-  RemoteReason,
-  ServeState,
-  TailscaleState,
-} from '@galactic/protocol';
+import type { RemoteHostState, RemoteReason, ServeState, TailscaleState } from '@galactic/protocol';
 
 /**
  * Tailscale and Serve for phone access (P7-02 `pnpm remote`, P9-16 the server's
@@ -41,9 +36,10 @@ export const defaultExecFile: ExecFile = (file, args) =>
       { encoding: 'utf8', timeout: 10_000, maxBuffer: 4 * 1024 * 1024, shell: false },
       (error, stdout, stderr) => {
         if (error) {
-          reject(Object.assign(error, { stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }));
-        }
-        else resolve(String(stdout));
+          reject(
+            Object.assign(error, { stdout: String(stdout ?? ''), stderr: String(stderr ?? '') }),
+          );
+        } else resolve(String(stdout));
       },
     );
   });

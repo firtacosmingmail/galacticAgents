@@ -178,9 +178,7 @@ export class Supervisor {
       ...this.opts.server,
       // Phone access: the server adds this Mac's Tailscale name as `remoteHost` before it reads
       // its config, so it needs no restart to accept the phone.
-      env: phoneOn
-        ? { ...this.opts.server.env, GALACTIC_PHONE_ACCESS: '1' }
-        : this.opts.server.env,
+      env: phoneOn ? { ...this.opts.server.env, GALACTIC_PHONE_ACCESS: '1' } : this.opts.server.env,
       log: this.opts.log,
       onExit: (code, signal) => this.onOwnExit(own, code, signal),
     });

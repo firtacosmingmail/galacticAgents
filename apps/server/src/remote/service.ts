@@ -246,7 +246,8 @@ export class RemoteService {
         return this.refuse(status, status.reason ?? 'not_running');
       }
       if (status.serve === 'funnel_on') return this.refuse(status, 'funnel_on');
-      if (status.remoteHost.state === 'mismatch') return this.refuse(status, 'remote_host_mismatch');
+      if (status.remoteHost.state === 'mismatch')
+        return this.refuse(status, 'remote_host_mismatch');
       if (status.serve === 'taken_by_other') return this.refuse(status, 'port_443_taken');
       const port = this.opts.port();
       if (port === undefined || status.serve === 'unknown' || !this.bin) {
@@ -257,7 +258,11 @@ export class RemoteService {
           addRemoteHost(this.opts.configPath, status.name);
           this.opts.log?.(`phone access: added "remoteHost": "${status.name}" to config.json`);
         } catch (error) {
-          return this.refuse(status, 'error', `config.json could not be written: ${errorText(error)}`);
+          return this.refuse(
+            status,
+            'error',
+            `config.json could not be written: ${errorText(error)}`,
+          );
         }
       }
       if (status.serve === 'absent') {
@@ -275,7 +280,9 @@ export class RemoteService {
           name: status.name,
           startedAt: new Date(this.now()).toISOString(),
         });
-        this.opts.log?.(`phone access: Tailscale Serve https://${status.name} → ${serveTarget(port)}`);
+        this.opts.log?.(
+          `phone access: Tailscale Serve https://${status.name} → ${serveTarget(port)}`,
+        );
       }
       const after = await this.status(true);
       return {

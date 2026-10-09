@@ -47,7 +47,9 @@ if (process.env['GALACTIC_PHONE_ACCESS'] === '1') {
     });
     if (added) console.log(added);
   } catch (error) {
-    console.warn(`[remote] remoteHost not added: ${error instanceof Error ? error.message : error}`);
+    console.warn(
+      `[remote] remoteHost not added: ${error instanceof Error ? error.message : error}`,
+    );
   }
 }
 const { config, tokenGenerated, warnings } = loadConfig();
@@ -364,14 +366,14 @@ const restartHarmonizer = harmonizerRestarter(composed, {
 const webDir = process.env['GALACTIC_WEB_DIR'];
 // Phone access (P9-16): the status every client reads, the Mac's start / stop.
 let boundPort: number | undefined;
-let remoteClients: (() => { connected: number; lastSeenAt?: string }) | undefined;
+const gatewayRef: { clients?: () => { connected: number; lastSeenAt?: string } } = {};
 const remote = new RemoteService({
   dataDir: config.dataDir,
   configPath: config.configPath,
   port: () => boundPort,
   remoteHost: config.remoteHost,
   remoteHostFromEnv: Boolean(process.env['GALACTIC_REMOTE_HOST']),
-  remoteClients: () => remoteClients?.() ?? { connected: 0 },
+  remoteClients: () => gatewayRef.clients?.() ?? { connected: 0 },
   log: (line) => console.log(`[remote] ${line}`),
 });
 const app = buildApp({
@@ -436,7 +438,7 @@ const app = buildApp({
 });
 
 server.app = app;
-remoteClients = () => app.gateway.remoteClients();
+gatewayRef.clients = () => app.gateway.remoteClients();
 
 if (tokenGenerated) {
   console.log(`Token generated and stored in ${config.configPath}`);

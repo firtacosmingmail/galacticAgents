@@ -102,7 +102,6 @@ export function usePhoneStatus(): (PhoneState & { api: Api }) | undefined {
   const [state, setState] = useState<PhoneState>(() => (api ? pollerFor(api).state : {}));
   useEffect(() => {
     if (!api) return;
-    setState(pollerFor(api).state);
     return subscribe(api, setState);
   }, [api]);
   return api ? { ...state, api } : undefined;

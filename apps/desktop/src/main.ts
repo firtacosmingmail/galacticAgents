@@ -55,7 +55,8 @@ input.on('line', (line) => {
   const command = parseCommand(line);
   if (command === 'quit') quit();
   else if (command === 'start') supervisor.requestStart();
-  else if (command === 'phone:on' || command === 'phone:off') void phone.setOn(command === 'phone:on');
+  else if (command === 'phone:on' || command === 'phone:off')
+    void phone.setOn(command === 'phone:on');
   else if (command?.type === 'answer') {
     const { type: _type, ...answer } = command;
     void supervisor.answer(answer);

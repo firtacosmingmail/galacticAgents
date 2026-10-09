@@ -85,9 +85,9 @@ describe('classifying Serve on 443', () => {
     expect(classifyServe(forwarding(4321, 'other.tail1234.ts.net'), TS_NAME, 4321)).toBe(
       'taken_by_other',
     );
-    expect(
-      classifyServe({ TCP: { '443': { TCPForward: '127.0.0.1:4321' } } }, TS_NAME, 4321),
-    ).toBe('taken_by_other');
+    expect(classifyServe({ TCP: { '443': { TCPForward: '127.0.0.1:4321' } } }, TS_NAME, 4321)).toBe(
+      'taken_by_other',
+    );
   });
   it('Funnel on anywhere wins over everything', () => {
     expect(

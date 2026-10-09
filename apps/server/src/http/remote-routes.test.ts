@@ -41,21 +41,23 @@ async function start(
     ...opts.config,
   });
   if (opts.file) writeFileSync(config.configPath, JSON.stringify(opts.file));
-  let port: number | undefined;
-  let gateway: { remoteClients(): { connected: number; lastSeenAt?: string } } | undefined;
+  const ref: {
+    port?: number;
+    gateway?: { remoteClients(): { connected: number; lastSeenAt?: string } };
+  } = {};
   const remote = new RemoteService({
     dataDir: config.dataDir,
     configPath: config.configPath,
-    port: () => port,
+    port: () => ref.port,
     remoteHost: config.remoteHost,
-    remoteClients: () => gateway?.remoteClients() ?? { connected: 0 },
+    remoteClients: () => ref.gateway?.remoteClients() ?? { connected: 0 },
     exec: ts.exec,
     exists: ts.exists,
     cacheMs: 0,
   });
   t = await startTestApp({ config, remote, onSession: () => undefined });
-  port = t.port;
-  gateway = t.app.gateway;
+  ref.port = t.port;
+  ref.gateway = t.app.gateway;
   return { ts, config, port: t.port, remote };
 }
 

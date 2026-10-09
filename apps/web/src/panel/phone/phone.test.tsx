@@ -37,7 +37,12 @@ function fakeApi(initial: RemoteStatus) {
       return { ok: true, status: current };
     }),
     remoteStop: vi.fn(async () => {
-      current = remoteStatus({ serve: 'absent', serveOwned: false, ready: false, reason: 'serve_off' });
+      current = remoteStatus({
+        serve: 'absent',
+        serveOwned: false,
+        ready: false,
+        reason: 'serve_off',
+      });
       return { ok: true, status: current };
     }),
   };
@@ -65,7 +70,12 @@ describe('phoneIndicator', () => {
     ).toMatchObject({ kind: 'restart', label: 'Phone: restart needed' });
     expect(
       phoneIndicator(
-        remoteStatus({ ready: false, tailscale: 'stopped', reason: 'not_running', message: 'Open it.' }),
+        remoteStatus({
+          ready: false,
+          tailscale: 'stopped',
+          reason: 'not_running',
+          message: 'Open it.',
+        }),
       ),
     ).toEqual({ kind: 'off', label: 'Phone: off', tooltip: 'Tailscale not running — Open it.' });
   });
@@ -151,7 +161,12 @@ describe('Settings → Access, Phone access, on the Mac (P9-16)', () => {
 
   it('Tailscale not signed in: no button, the next step', async () => {
     const f = fakeApi(
-      remoteStatus({ tailscale: 'needs_login', serve: 'unknown', ready: false, reason: 'needs_login' }),
+      remoteStatus({
+        tailscale: 'needs_login',
+        serve: 'unknown',
+        ready: false,
+        reason: 'needs_login',
+      }),
     );
     renderSection(f.api);
     expect(await screen.findByText(/Off — Tailscale not signed in/)).toBeTruthy();
@@ -168,7 +183,9 @@ describe('Settings → Access, Phone access, on the Mac (P9-16)', () => {
   });
 
   it('a refusal is said with the server’s message', async () => {
-    const f = fakeApi(remoteStatus({ serve: 'absent', serveOwned: false, ready: false, reason: 'serve_off' }));
+    const f = fakeApi(
+      remoteStatus({ serve: 'absent', serveOwned: false, ready: false, reason: 'serve_off' }),
+    );
     f.raw.remoteStart.mockImplementationOnce(async () => {
       throw new ApiError(409, 'Tailscale Funnel is on', 'remote_refused', {
         ok: false,

@@ -185,17 +185,19 @@ describe('PhoneAccess (P9-16)', () => {
     const p = phoneFor(mc);
     p.phone.setServer(OWNED);
     await p.phone.check();
-    expect(mc.state.requests).toEqual([
-      'GET /api/remote/status',
-      'POST /api/remote/start',
-    ]);
+    expect(mc.state.requests).toEqual(['GET /api/remote/status', 'POST /api/remote/start']);
     expect(p.last()).toEqual({ on: true, label: `Phone: https://${NAME}`, url: `https://${NAME}` });
     p.phone.stop();
   });
 
   it('on, attached to a server without remoteHost: started, and the menu asks for a restart', async () => {
     const mc = fakeMissionControl(
-      status({ serve: 'absent', ready: false, reason: 'serve_off', remoteHost: { state: 'missing' } }),
+      status({
+        serve: 'absent',
+        ready: false,
+        reason: 'serve_off',
+        remoteHost: { state: 'missing' },
+      }),
     );
     const p = phoneFor(mc);
     p.phone.setServer(ATTACHED);

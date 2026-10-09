@@ -89,11 +89,7 @@ export type ShellLine =
   | { type: 'exited' };
 
 export type ShellCommand =
-  | 'quit'
-  | 'start'
-  | 'phone:on'
-  | 'phone:off'
-  | ({ type: 'answer' } & TrayAnswer);
+  'quit' | 'start' | 'phone:on' | 'phone:off' | ({ type: 'answer' } & TrayAnswer);
 
 /** The longest command line read (an answer is well under it). */
 const MAX_COMMAND = 4096;
