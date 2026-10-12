@@ -1,7 +1,7 @@
 # Phase 9 — Deliverables
 
-**Current task:** P9-13 (acceptance run with Cosmin on the Mac and the phone) · **Task status:** todo
-**Phase status:** in progress (16/17 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
+**Current task:** — · **Task status:** —
+**Phase status:** done (2026-10-12) — 17/17; planned 2026-10-07 on branch `phase-9`, cut from `main`; merged into `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -109,7 +109,7 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 - **Acceptance:** review notes committed with every finding fixed or recorded as a task or §8 question; `pnpm e2e` green with the new flow; `pnpm build`, `typecheck`, `lint`, `format:check`, `test` green.
 
 ### P9-13 — Acceptance run
-- **Status:** todo · **Depends on:** P9-12 · **Parallel with:** —
+- **Status:** done (2026-10-12) · **Depends on:** P9-12 · **Parallel with:** —
 - With Cosmin, on real Claude on the Mac and the phone over Tailscale: the Phase 9 exit criteria (IMPLEMENTATION_PLAN) one by one — a Steward builds a small web app and a screenshot, declares them; the merge re-points them or copies them into the project's `deliverables/` folder (excluded from git, the next merge still clean); the folder opens in WebStorm and the Finder; `pnpm dev` runs from the panel, its port opens, Stop ends it; closing the project stops a run; a restart shows it stopped with nothing left; the phone lists, views, downloads and stops a run, and is refused every open, launch and start. Record in `docs/tasks/notes/P9-13-acceptance.md`.
 - **Acceptance:** exit criteria met; notes committed; findings become tasks or §8 questions.
 
@@ -140,3 +140,5 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 ## Exit criteria (from the plan)
 
 On the Mac, a Steward on real Claude finishes a task that builds a small web app and a screenshot: the screenshot shows in the Steward view and, after the Waykeeper's merge, still shows from the project's Deliverables (re-pointed into the project's folder, or copied into the project's own `deliverables/` folder — `~/GalacticProjects/<project>/deliverables/<task>/`, excluded from git locally — which Reveal in Finder opens); the project folder opens in WebStorm and in the Finder; `pnpm dev` from `package.json` runs from the panel after a confirmation, its output streams, its port opens in the browser, and Stop ends it and everything it started; closing the project stops a run left running; after a server restart the run shows stopped and nothing is left of it. From the phone the same deliverables are listed, the screenshot and a text file are viewed and a file downloaded, and the running command is stopped (after a confirmation), while every open, launch and start of a run is refused. An agent's attempt to declare a path outside the project (a private key, a symlink out of the worktree) is refused.
+
+**Verified 2026-10-12:** met — Cosmin's acceptance run on the Mac and the phone (`notes/P9-13-acceptance.md`); the refusal of paths outside the project is covered by the P9-12 tests.

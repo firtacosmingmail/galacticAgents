@@ -1,7 +1,7 @@
 # Phase 7 — Remote and mobile access
 
-**Current task:** P7-06 (Cosmin's device run, in parallel with Phase 8; fixes go on a batch branch from `main`) · **Task status:** todo
-**Phase status:** in progress (6/7 done) — merged into `main` on 2026-10-06 at Cosmin's request before the P7-06 device run; the phase closes when P7-06 passes — on branch `phase-7`
+**Current task:** — · **Task status:** —
+**Phase status:** done (2026-10-12) — 7/7; merged into `main` on 2026-10-06 at Cosmin's request before the P7-06 device run, which passed on 2026-10-12 (`notes/P7-06-mobile-run.md`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -64,7 +64,7 @@ Check on the system from the phone while the Mac runs the agents: installable PW
 - **Acceptance:** airplane-mode test: answer queued, reconnect, resolved or rejected correctly.
 
 ### P7-06 — Mobile-data acceptance run
-- **Status:** todo · **Depends on:** P7-01 … P7-05 · **Parallel with:** —
+- **Status:** done (2026-10-12) · **Depends on:** P7-01 … P7-05 · **Parallel with:** —
 - From mobile data (not Wi-Fi): open the app, see the map or the list, read every status, answer a Steward's question and a permission request; record in `docs/tasks/notes/P7-06-mobile-run.md`.
 - Includes the device checklists of P7-01 (`notes/P7-01-pwa.md`: install on iOS and Android, update flow, airplane mode), P7-02 (`notes/P7-02-remote.md`: Tailscale Serve, QR token, remote refusals) P7-03 (`notes/P7-03-touch.md`: gestures, ≥30 fps at the mobile tier, list mode) and P7-04 (`notes/P7-04-push.md`: push on a locked iPhone and Android, lock-screen details, removing a device), P7-05 (`notes/P7-05-offline.md`: airplane-mode answers, stale answer from the Mac, offline card decisions) — their acceptance on real devices is verified here. Needs Tailscale on the Mac and the phone (not installed on 2026-10-05).
 - Fixes found during the run (2026-10-06): `pnpm remote` (`scripts/remote-start.mjs`) starts Serve if needed, prints its status, builds and runs `galactic start --dev`; `docs/REMOTE_ACCESS.md` now says `pnpm dev` cannot serve the phone (the page comes from Vite, not the port Serve forwards to).
@@ -79,3 +79,5 @@ Check on the system from the phone while the Mac runs the agents: installable PW
 ## Exit criteria (from the plan)
 
 From mobile data, you can open the app, see the map or the list, read every status, and answer a Steward's question or permission request.
+
+**Verified 2026-10-12:** met — Cosmin's device run (`notes/P7-06-mobile-run.md`).
