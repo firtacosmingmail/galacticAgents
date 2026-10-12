@@ -1,7 +1,7 @@
 # Phase 9 — Deliverables
 
 **Current task:** P9-13 (acceptance run with Cosmin on the Mac and the phone) · **Task status:** todo
-**Phase status:** in progress (15/16 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
+**Phase status:** in progress (15/17 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -129,6 +129,11 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 - Cosmin's request: starting the desktop app should also make Mission Control reachable from the phone. When the app starts (or attaches to) Mission Control, it does what `pnpm remote` does: checks Tailscale is connected with a MagicDNS name, makes sure `remoteHost` is set (adds it when missing, stops if it names another machine), and makes sure HTTP-mode Tailscale Serve forwards 443 to the server's port (starts it if missing; refuses if 443 serves something else or Funnel is on — never Funnel, never TCP mode). The menu bar shows "Phone: https://<name>" or "Phone: off — <reason>", with "Turn phone access on/off" (remembered) and "Show the phone QR code" (opens Settings → Access). Shared logic with `scripts/remote-start.mjs` in one module.
 - **Extended (Cosmin, 2026-10-09):** "I want to also be able to start the remote from the desktop app, and have a status on the screen about the remote connectivity, if it is online or not." The logic moved into the server (`apps/server/src/remote/`): `GET /api/remote/status` (every client), `POST /api/remote/start|stop` (the Mac only, even with `autoApproveRemote`; Serve stopped only when GalacticAgents started it, recorded in `<dataDir>/remote-serve.json`); the desktop app uses those routes; the panel's top bar shows Phone: online / off / restart needed, and Settings → Access has a "Phone access" part with Turn on / Turn off (Mac only). SPEC decision 137.
 - **Acceptance:** with Tailscale connected, launching the app leaves `tailscale serve status` forwarding to the app's server and the phone opens the app; with Tailscale off the menu says why; turning it off stops Serve only if the app started it; tests for the checks with a fake `tailscale`.
+
+### P9-17 — "Allow similar" for a Waykeeper's work (added 2026-10-12)
+- **Status:** in progress · **Depends on:** P2-21 (policy table), P9-14 · **Parallel with:** —
+- Cosmin's request: when answering a permission request from a Waykeeper or one of its Stewards, he can allow similar actions for that Waykeeper, choosing each time: **this exact command/path**, **this command prefix / folder** (e.g. `npm run …`, "anything under ~/Documents/specs"), or **this whole category** (e.g. network, outside the workspace). The rule is stored on that Waykeeper's project (its own and its Stewards' requests), lasts until the project closes (removed on archive), is listed and removable in the project's permission settings, and is judged by the same permission engine (deterministic, never an LLM). Never offered for push (decision 49 — push always asks), never from the menu bar (decision 136: Allow once only), and from the phone only with `autoApproveRemote` (decisions 37/90: remote clients only tighten).
+- **Acceptance:** the permission card offers the three scopes with a preview of what the rule will match; choosing one answers the request and stores the rule; the next matching request from that Waykeeper's project is allowed without a card (logged as allowed by the rule); other projects still ask; archive removes the rule; tests.
 
 ## Exit criteria (from the plan)
 
