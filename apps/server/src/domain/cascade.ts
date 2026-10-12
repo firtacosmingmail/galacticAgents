@@ -12,6 +12,7 @@ import type { Tables } from '../db/tables.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { archiveProject } from './projects.js';
+import { endProjectRules } from './project-rules.js';
 import { FINISHED_WORK, checkTransition, setProjectState, setTaskState } from './states.js';
 import { archiveTask } from './tasks.js';
 
@@ -187,7 +188,11 @@ export function applyControlState(
         }
       }
       if (project.state === 'proposed') archiveProject(ctx, project.id, by);
-      else setProjectState(ctx, project.id, 'failed', by);
+      else {
+        setProjectState(ctx, project.id, 'failed', by);
+        // A cancelled project's "Allow similar" rules end with it (P9-17, decision 138).
+        endProjectRules(ctx, project.id, 'cancelled');
+      }
       return;
     }
   }

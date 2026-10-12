@@ -12,6 +12,7 @@ import {
   ProposalState,
   QuestionKind,
   QuestionStatus,
+  RequestOrigin,
   TaskPriority,
   WorkBodyKind,
   WorkState,
@@ -100,6 +101,64 @@ export const PermissionPolicy = z.object({
 export type PermissionPolicy = z.infer<typeof PermissionPolicy>;
 
 /**
+ * The scopes of an "Allow similar" rule (P9-17, SPEC decision 138): exactly this call, its command
+ * prefix (a command) or folder (a file tool), or the whole category the table asked about.
+ */
+export const PermissionRuleScope = z.enum(['exact', 'prefix', 'category']);
+export type PermissionRuleScope = z.infer<typeof PermissionRuleScope>;
+
+/**
+ * What a rule matches (P9-17), computed by the server from the request it was made from — never
+ * sent by a client:
+ * - `text`: the exact subject — a shell command as written, a file tool's real path(s) (one per
+ *   line, sorted), a web fetch's address, a search's query, or another tool's input as JSON;
+ * - `words`: a command prefix as the shell's words (`["npm", "run"]`), matched word by word on
+ *   every simple command of the line — never a string prefix;
+ * - `folder`: a real path (symlinks resolved) that a file tool's paths must lie under;
+ * - `categories`: the categories of `PermissionRule.categories`, for any tool.
+ */
+export const PermissionRuleMatch = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('text'), text: z.string() }),
+  z.object({ kind: z.literal('words'), words: z.array(z.string().min(1)).min(1) }),
+  z.object({ kind: z.literal('folder'), folder: z.string().min(1) }),
+  z.object({ kind: z.literal('categories') }),
+]);
+export type PermissionRuleMatch = z.infer<typeof PermissionRuleMatch>;
+
+/**
+ * A lasting "Allow similar" rule of a project (P9-17, SPEC decision 138): made by the user from a
+ * permission card, it allows the matching requests of the project's Waykeeper and Stewards that
+ * the table would have asked about — never one the table denies, never a push, never a write to
+ * agent configuration or the deliverables folder. Kept on the project (`Project.permissionRules`)
+ * until it is removed, or the project is closed, cancelled or archived.
+ */
+export const PermissionRule = z.object({
+  id: Id,
+  projectId: Id,
+  scope: PermissionRuleScope,
+  /** The tool it was made from (`Bash`, `Read`, `WebFetch`, …); `*` for a category rule. */
+  tool: z.string().min(1),
+  match: PermissionRuleMatch,
+  /**
+   * The categories the table asked about when the rule was made: a later call matches only when
+   * everything the table asks about in it is among these (a prefix rule made for the network does
+   * not allow the same prefix outside the workspace).
+   */
+  categories: z.array(PermissionAction),
+  /** Made from a call the engine could not classify (an exact rule only): it may match one again. */
+  unclassified: z.literal(true).optional(),
+  /** One line for the user: "npm run …", "files under ~/Documents/specs", "network". */
+  label: z.string(),
+  createdBy: Actor,
+  createdAt: Timestamp,
+  /** Where the request that made it came from (a remote one needs `autoApproveRemote`). */
+  origin: RequestOrigin,
+  /** The permission request it was made from. */
+  questionId: Id.optional(),
+});
+export type PermissionRule = z.infer<typeof PermissionRule>;
+
+/**
  * A dollar budget (P8-01; SPEC decision 18): a positive amount of US dollars, compared with the
  * cost the runtimes report (an estimate; notional under a subscription login, P1-08).
  */
@@ -122,6 +181,11 @@ export const Project = z.object({
   state: WorkState,
   /** The project's policy table (TECHNOLOGY §6.2); absent = the global default. */
   permissionPolicy: PermissionPolicy.optional(),
+  /**
+   * The project's "Allow similar" rules (P9-17, decision 138), oldest first; absent: none. Changed
+   * only by `permission.rule_added` / `permission.rule_removed`, never by a project update.
+   */
+  permissionRules: z.array(PermissionRule).optional(),
   /** Pinned work is never archived by the retention timer (decision 4, 11b). */
   pinned: z.boolean().optional(),
   /**

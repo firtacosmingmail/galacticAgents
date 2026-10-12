@@ -284,6 +284,10 @@ export function touches(event: Event, m: Members): boolean {
     case 'message.delivered':
     case 'permission.decided':
       return m.agents.has(event.agentId);
+    case 'permission.rule_added':
+      return m.projects.has(event.rule.projectId);
+    case 'permission.rule_removed':
+      return m.projects.has(event.projectId);
     case 'control.stop':
     case 'control.cancel':
     case 'control.pause':

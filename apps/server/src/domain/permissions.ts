@@ -58,6 +58,11 @@ export interface Classification {
    * only what could still be seen (a push mentioned inside an inline script, say).
    */
   unclassified?: true;
+  /**
+   * Set when the call writes agent or git configuration, or the user's deliverables folder
+   * (decisions 22, 122): no "Allow similar" rule ever allows it (P9-17, decision 138).
+   */
+  guarded?: true;
 }
 
 export interface PolicyVerdict extends Classification {
@@ -197,7 +202,7 @@ export function strictest(decisions: readonly unknown[]): PermissionDecision {
 }
 
 /** The decision a policy gives one action; a missing or unknown value is `ask`. */
-function ruleFor(policy: PermissionPolicy, action: PermissionAction): PermissionDecision {
+export function ruleFor(policy: PermissionPolicy, action: PermissionAction): PermissionDecision {
   return asDecision(policy.rules[action]);
 }
 
@@ -237,9 +242,9 @@ export function evaluate(
 // ---------------------------------------------------------------------------
 
 /** Tools that only read the file system; their `path`-like inputs decide inside vs. outside. */
-const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead']);
+export const READ_TOOLS: ReadonlySet<string> = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead']);
 /** Tools that write files. */
-const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+export const EDIT_TOOLS: ReadonlySet<string> = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 /** Tools that reach the network by definition. */
 const NETWORK_TOOLS = new Set(['WebFetch', 'WebSearch']);
 /** Tools with no effect outside the agent's own bookkeeping. */
@@ -258,16 +263,16 @@ const HARMLESS_TOOLS = new Set([
   'ToolSearch',
 ]);
 /** Input fields that carry a path, in the order the Claude Code tools use them. */
-const PATH_FIELDS = ['file_path', 'notebook_path', 'path', 'directory', 'cwd'];
+export const PATH_FIELDS = ['file_path', 'notebook_path', 'path', 'directory', 'cwd'];
 /**
  * Fields that carry a glob, per tool (resolved from the tool's `path`, else the cwd). Grep's
  * `pattern` is a regular expression, not a location.
  */
-const GLOB_FIELDS: Record<string, string[]> = {
+export const GLOB_FIELDS: Record<string, string[]> = {
   Glob: ['pattern'],
   Grep: ['glob'],
 };
-const DEFAULT_GLOB_FIELDS = ['pattern', 'glob'];
+export const DEFAULT_GLOB_FIELDS = ['pattern', 'glob'];
 
 export function classifyToolCall(call: ToolCall, ctx: PolicyContext): Classification {
   const input = isRecord(call.input) ? call.input : {};
@@ -319,12 +324,15 @@ function classifyPaths(
   }
 
   const reasons: string[] = [];
+  let guarded = false;
   for (const p of paths) {
     if (!isInsideWorkspace(p, ctx)) reasons.push(`${tool} on ${p}: outside the workspace`);
     else if (edit && isAgentConfigPath(p, ctx)) {
       reasons.push(`${tool} on ${p}: agent or git configuration, which runs outside the gate`);
+      guarded = true;
     } else if (edit && isUserFolderPath(p, ctx)) {
       reasons.push(`${tool} on ${p}: ${USER_FOLDER_REASON}`);
+      guarded = true;
     }
   }
   const base = typeof input['path'] === 'string' ? input['path'] : undefined;
@@ -342,7 +350,7 @@ function classifyPaths(
     }
   }
   if (reasons.length === 0) return { actions: [inside], reasons: [] };
-  return { actions: ['outside_workspace'], reasons };
+  return { actions: ['outside_workspace'], reasons, ...(guarded ? { guarded: true } : {}) };
 }
 
 function looksLikeLocation(p: string): boolean {
@@ -772,7 +780,7 @@ const WRAPPER_VALUE_OPTS: Record<string, RegExp> = {
 };
 
 /** Index of the command's real name in `words`, past assignments and wrappers. */
-function commandHead(words: string[]): number {
+export function commandHead(words: string[]): number {
   let k = 0;
   while (k < words.length) {
     const w = words[k]!;
@@ -1190,7 +1198,7 @@ const READ_ONLY_COMMANDS = new Set([
 ]);
 const WRITE_REDIRECTS = new Set(['>', '>>', '>|', '&>', '&>>', '<>']);
 /** Devices a redirection or argument may name without leaving the workspace. */
-const HARMLESS_DEVICES = new Set([
+export const HARMLESS_DEVICES: ReadonlySet<string> = new Set([
   '/dev/null',
   '/dev/stdout',
   '/dev/stderr',
@@ -1202,6 +1210,7 @@ const CONFIG_WORD = /(?:^|\/)(?:\.claude|\.husky|\.git)(?:\/|$)|(?:^|\/)\.mcp\.j
 export function classifyCommand(command: string, ctx: PolicyContext): Classification {
   const actions = new Set<PermissionAction>();
   const reasons: string[] = [];
+  let guarded = false;
   const trimmed = command.trim();
   if (trimmed === '') return { actions: [], reasons: ['empty command'], unclassified: true };
 
@@ -1246,10 +1255,12 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       reasons.push(`${p}: cannot tell where it points`);
     }
     for (const p of configTargets(simple, here)) {
+      guarded = true;
       actions.add('outside_workspace');
       reasons.push(`${p}: agent or git configuration, which runs outside the gate`);
     }
     for (const p of userFolderTargets(simple, here)) {
+      guarded = true;
       actions.add('outside_workspace');
       reasons.push(`${p}: ${USER_FOLDER_REASON}`);
     }
@@ -1279,10 +1290,15 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       actions.add('push');
       reasons.push(why);
     }
-    return { actions: [...actions], reasons, unclassified: true };
+    return {
+      actions: [...actions],
+      reasons,
+      unclassified: true,
+      ...(guarded ? { guarded: true as const } : {}),
+    };
   }
   if (actions.size === 0) actions.add('run_workspace');
-  return { actions: [...actions], reasons };
+  return { actions: [...actions], reasons, ...(guarded ? { guarded: true as const } : {}) };
 }
 
 /** `git`, then — anywhere later in the text — `push` as a word (`git-push`, `'git','push'` too). */
@@ -1434,12 +1450,12 @@ function pathToken(raw: string, isTarget: boolean, out: CommandPaths, shown: str
 
 // --- paths ------------------------------------------------------------------
 
-function cwdOf(ctx: PolicyContext): string {
+export function cwdOf(ctx: PolicyContext): string {
   return resolvePath(ctx.cwd ?? ctx.workspace, ctx, ctx.workspace);
 }
 
 /** `p` made absolute: `~` expanded, relative paths resolved from `from`. */
-function resolvePath(p: string, ctx: PolicyContext, from: string): string {
+export function resolvePath(p: string, ctx: PolicyContext, from: string): string {
   return resolve(expandHome(from, ctx), expandHome(p, ctx));
 }
 
@@ -1505,7 +1521,7 @@ export function isUserFolderPath(p: string, ctx: PolicyContext): boolean {
   });
 }
 
-function expandHome(p: string, ctx: PolicyContext): string {
+export function expandHome(p: string, ctx: PolicyContext): string {
   if (p === '~') return ctx.home ?? homedir();
   if (p.startsWith('~/')) return (ctx.home ?? homedir()) + p.slice(1);
   return p;

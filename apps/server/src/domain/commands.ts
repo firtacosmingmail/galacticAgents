@@ -5,6 +5,12 @@ import {
   DISMISSED_BY_USER,
   SUPERSEDED_BY_MESSAGE,
   type DismissQuestionInput,
+  type AllowSimilarInput,
+  type PermissionRule,
+  type Project,
+  type RemovePermissionRuleInput,
+  type RequestOrigin,
+  type SimilarPreviewResponse,
   type Actor,
   type Agent,
   type AgentPlacement,
@@ -68,7 +74,15 @@ import {
   reopenProject,
   updateProject,
 } from './projects.js';
-import { noLooserThan, resolvePolicy, type PolicyWrite } from './permissions.js';
+import {
+  globalDefaultPolicy,
+  noLooserThan,
+  resolvePolicy,
+  type PolicyContext,
+  type PolicyWrite,
+} from './permissions.js';
+import { similarOptions, type RuleDraft, type SimilarOptions } from './permission-rules.js';
+import { addPermissionRule, removePermissionRule, RULES_END_IN } from './project-rules.js';
 import type { ProposalOptions } from './approval.js';
 import { createProposal, decideProposal, proposePlan } from './proposals.js';
 import {
@@ -123,6 +137,13 @@ export interface AgentControl {
   dismiss?(questionId: Id, reason: string, dismissal: Dismissal): Promise<void>;
   /** Agents with a live adapter session: whom a task or project control reaches (P2-14). */
   liveAgents?(): Agent[];
+  /**
+   * Where a live agent's permission requests are judged (P9-17): its project, table and gate
+   * context. Absent or `undefined` (not running here): read from the rows.
+   */
+  permissionContext?(
+    agentId: Id,
+  ): { projectId: Id | undefined; policy: PermissionPolicy; ctx: PolicyContext } | undefined;
 }
 
 export interface CommandsOptions {
@@ -716,6 +737,150 @@ export class Commands implements DomainCommands {
       by,
       ...(input.origin ? { origin: input.origin } : {}),
     });
+  }
+
+  // -- "Allow similar" rules (P9-17; SPEC decision 138) ------------------------------------------
+
+  /**
+   * Where a permission request is judged: the asking agent's project (a Steward's is its task's),
+   * its table and its gate context — the live session's, else the rows' (the workspace, the task's
+   * worktree).
+   */
+  private permissionContextOf(
+    question: Question,
+  ): { projectId: Id | undefined; policy: PermissionPolicy; ctx: PolicyContext } {
+    const live = this.agents?.permissionContext?.(question.originAgentId);
+    if (live) return live;
+    const { tables } = this.log;
+    const agent = tables.agents.get(question.originAgentId);
+    const task = agent?.taskId ? tables.tasks.get(agent.taskId) : undefined;
+    const projectId = agent?.projectId ?? task?.projectId;
+    const project = projectId ? tables.projects.get(projectId) : undefined;
+    const workspace = project?.workspace ?? '/';
+    return {
+      projectId: project?.id,
+      policy: project?.permissionPolicy ?? globalDefaultPolicy(),
+      ctx: { workspace, cwd: task?.worktreePath ?? workspace },
+    };
+  }
+
+  /** The chooser's options for an open permission request, with the project it would go to. */
+  private similarFor(question: Question): SimilarOptions & { project?: Project } {
+    if (question.kind !== 'permission') {
+      return { refused: 'only a permission request can allow similar actions', options: [] };
+    }
+    const call = question.context.toolCall;
+    if (!call) return { refused: 'the request names no tool call', options: [] };
+    const { projectId, policy, ctx } = this.permissionContextOf(question);
+    const project = projectId ? this.log.tables.projects.get(projectId) : undefined;
+    if (!project) {
+      return {
+        refused:
+          "the request belongs to no project (the Harmonizer's or a standalone task's): allow it once",
+        options: [],
+      };
+    }
+    if (RULES_END_IN.has(project.state)) {
+      return { project, refused: `project ${project.name} is ${project.state}`, options: [] };
+    }
+    return { project, ...similarOptions({ call, ctx, policy }) };
+  }
+
+  /** Whether a request from `origin` may make or remove rules: the Mac, or `autoApproveRemote`. */
+  private mayWriteRules(origin: RequestOrigin | undefined): boolean {
+    return origin === 'local' || this.autoApproveRemote;
+  }
+
+  /**
+   * What the card's "Allow similar" chooser offers for an open permission request (P9-17): one
+   * option per scope with its preview, computed here from the request (never by the client).
+   */
+  similarPreview(questionId: Id, write: WriteOptions = {}): SimilarPreviewResponse {
+    const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    const found = this.similarFor(question);
+    return {
+      questionId,
+      ...(found.project ? { projectId: found.project.id, projectName: found.project.name } : {}),
+      ...(found.refused ? { refused: found.refused } : {}),
+      options: found.options.map((o) =>
+        o.available
+          ? { scope: o.scope, available: true, label: o.draft.label, preview: o.draft.preview }
+          : { scope: o.scope, available: false, reason: o.reason },
+      ),
+      allowed: this.mayWriteRules(write.origin) && !found.refused,
+    };
+  }
+
+  /**
+   * The user's "Allow similar" (P9-17, decision 138): the request is answered "allow" (through
+   * its session first when one waits on it, like any answer) and the rule of `scope` the server
+   * drafts from it is stored on the asking agent's project. Refused before anything happens: not
+   * the user (agents never make rules), a remote or unknown origin without `autoApproveRemote`
+   * (decisions 37, 90), a stale `version`, a push, a request outside any project, a scope the
+   * chooser does not offer. The answer and the rule are one command: the rule is stored only once
+   * the answer is recorded.
+   */
+  async allowSimilar(input: AllowSimilarInput): Promise<CommandResult<PermissionRule>> {
+    const { questionId, by } = input;
+    if (by.type !== 'user') {
+      throw new DomainError('invalid', 'only the user makes "Allow similar" rules');
+    }
+    if (!this.mayWriteRules(input.origin)) {
+      throw new DomainError(
+        'remote_control',
+        '"Allow similar" works only from this machine (a remote client may allow once)',
+      );
+    }
+    const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    checkAnswer(question, {
+      questionId,
+      answer: 'allow',
+      answeredBy: by,
+      ...(input.version !== undefined ? { version: input.version } : {}),
+    });
+    const found = this.similarFor(question);
+    if (found.refused || !found.project) {
+      throw new DomainError('invalid', `no rule can be made: ${found.refused ?? 'no project'}`);
+    }
+    const option = found.options.find((o) => o.scope === input.scope);
+    if (!option?.available) {
+      throw new DomainError(
+        'invalid',
+        `no ${input.scope} rule can be made: ${option && !option.available ? option.reason : 'not offered'}`,
+      );
+    }
+    const draft: RuleDraft = option.draft;
+    const projectId = found.project.id;
+    const answered = await this.answerQuestion({
+      questionId,
+      answer: 'allow',
+      by,
+      ...(input.version !== undefined ? { version: input.version } : {}),
+      ...(input.answerId !== undefined ? { answerId: input.answerId } : {}),
+    });
+    const stored = await this.run((ctx) =>
+      addPermissionRule(ctx, projectId, draft, {
+        by,
+        origin: input.origin ?? 'remote',
+        questionId,
+      }),
+    );
+    return { value: stored.value, events: [...answered.events, ...stored.events] };
+  }
+
+  /** The user removes a project's rule (P9-17): remote only with `autoApproveRemote`. */
+  removePermissionRule(input: RemovePermissionRuleInput): Promise<CommandResult<PermissionRule>> {
+    if (input.by.type !== 'user') {
+      return Promise.reject(new DomainError('invalid', 'only the user removes rules'));
+    }
+    if (!this.mayWriteRules(input.origin)) {
+      return Promise.reject(
+        new DomainError('remote_control', 'rules are removed only from this machine'),
+      );
+    }
+    return this.run((ctx) =>
+      removePermissionRule(ctx, input.projectId, input.ruleId, input.by, 'removed by the user'),
+    );
   }
 
   /**

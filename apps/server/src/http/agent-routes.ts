@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
 import {
   AgentRuntime as AgentRuntimeName,
+  AllowSimilarBody,
   AnswerBody,
   DismissBody,
   ControlBody,
@@ -13,6 +14,9 @@ import {
   TerminalInputBody,
   type Actor,
   type AgentCommandsResponse,
+  type AllowSimilarResponse,
+  type RemovePermissionRuleResponse,
+  type SimilarPreviewResponse,
   type AnswerResponse,
   type DismissResponse,
   type ChatMessage,
@@ -36,6 +40,7 @@ import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { policyForWrite } from '../domain/permissions.js';
+import type { PeerCheck } from './peer-guard.js';
 import { bearerGuard, originOf } from './security.js';
 import { sendStorageRefusal } from './storage-refusal.js';
 
@@ -57,6 +62,11 @@ export interface AgentRoutesOptions {
   processes?: StewardProcessControl;
   /** The Harmonizer's restart (P5-06): enables `POST /api/harmonizer/restart`. */
   restartHarmonizer?: () => Promise<RestartHarmonizerResponse>;
+  /**
+   * The agent speed bump (P9-12's `agentPeerGuard`) on the routes that make or remove "Allow
+   * similar" rules (P9-17): refused when the caller is an agent's or a run's process.
+   */
+  rulesPeer?: PeerCheck;
 }
 
 const USER: Actor = { type: 'user' };
@@ -452,6 +462,78 @@ export function registerAgentRoutes(
         return refuse(req, reply, error);
       }
     });
+
+    /** Refuses a request from an agent's or a run's process (P9-12's speed bump; P9-17). */
+    const notFromAnAgent = async (req: FastifyRequest, reply: FastifyReply): Promise<boolean> => {
+      if (!opts.rulesPeer) return true;
+      let verdict;
+      try {
+        verdict = await opts.rulesPeer(req);
+      } catch (error) {
+        req.log.warn({ err: error }, 'rules: the peer could not be identified; allowed');
+        return true;
+      }
+      if (verdict.unknown)
+        req.log.warn(`rules: the peer could not be identified (${verdict.unknown}); allowed`);
+      if (!verdict.refused) return true;
+      void reply.code(403).send({ error: 'agent_peer', message: verdict.refused });
+      return false;
+    };
+
+    /**
+     * "Allow similar" (P9-17, SPEC decision 138). The preview lists what the card's chooser offers
+     * for an open permission request — computed here from the request; `allowed` says whether this
+     * client may make a rule. `allow-similar` answers the request "allow" and stores the rule of
+     * the chosen scope on the asking agent's project, in one command; the Mac only unless
+     * `autoApproveRemote` (403 `remote_control`), never from an agent's or a run's process (403
+     * `agent_peer`). Removing a rule follows the same rules. No brain tool makes or removes one.
+     */
+    if (commands) {
+      app.post('/api/questions/:id/similar-preview', async (req, reply) => {
+        const questionId = (req.params as { id: string }).id;
+        try {
+          return commands.similarPreview(questionId, {
+            origin: originOf(req),
+          }) satisfies SimilarPreviewResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      app.post('/api/questions/:id/allow-similar', async (req, reply) => {
+        const body = parse(AllowSimilarBody, req.body, reply);
+        if (!body) return;
+        if (!(await notFromAnAgent(req, reply))) return reply;
+        const questionId = (req.params as { id: string }).id;
+        try {
+          const { value } = await commands.allowSimilar({
+            questionId,
+            scope: body.scope,
+            by: USER,
+            origin: originOf(req),
+            ...(body.version !== undefined ? { version: body.version } : {}),
+            ...(body.answerId !== undefined ? { answerId: body.answerId } : {}),
+          });
+          return { ok: true, rule: value } satisfies AllowSimilarResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      app.delete('/api/projects/:id/permission-rules/:ruleId', async (req, reply) => {
+        if (!(await notFromAnAgent(req, reply))) return reply;
+        const { id, ruleId } = req.params as { id: string; ruleId: string };
+        try {
+          await commands.removePermissionRule({
+            projectId: id,
+            ruleId,
+            by: USER,
+            origin: originOf(req),
+          });
+          return { ok: true } satisfies RemovePermissionRuleResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+    }
 
     /**
      * Dismisses a question as the user (P9-14, SPEC decision 135): a clarification is withdrawn
