@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** —
-**Phase status:** in progress (15/15 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
+**Current task:** P8-16 · **Task status:** in progress
+**Phase status:** in progress (15/16 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -106,6 +106,11 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Status:** done (2026-10-07) · **Depends on:** P7-03, P4-10 · **Parallel with:** P8-13, P8-14
 - Cosmin's request: on the phone, the left navigation (Harmonizer, projects, asteroids — the agents sheet) becomes a sheet that slides in from the left edge and hides again: a button in the top bar, an edge swipe, tap outside or Esc to close; it closes after a selection; desktop layout unchanged; reduced motion respected; focus trapped while open.
 - **Acceptance:** on a phone-sized viewport the sheet is hidden by default, opens from the button and the edge swipe, closes on selection/outside tap/Esc; e2e or jsdom tests; axe clean.
+
+### P8-16 — Shorter asteroid names in the scene (added 2026-10-12)
+- **Status:** in progress · **Depends on:** P3-07 · **Parallel with:** —
+- Cosmin's request: "make the names of the asteroids smaller, similar to the ones used for the planets and moons." The labels share one font size; an asteroid's label shows its task's title (up to 32 characters) where a planet or moon shows a project's usually short name. An asteroid's label title is cut at 16 characters with "…"; the tooltip keeps the whole title; planets and moons unchanged.
+- **Acceptance:** an asteroid's label title is at most 16 characters; a planet's or moon's still up to 32; tests.
 
 ## Exit criteria
 
