@@ -7,6 +7,7 @@ import type {
   BudgetTarget,
   Host,
   PermissionPolicy,
+  PermissionRuleScope,
   Project,
   ProposedBody,
   Proposal,
@@ -205,6 +206,32 @@ export interface DismissQuestionInput {
   /** The version the user saw; a question answered or moved since is refused as stale. */
   version?: number;
   /** Where the dismissal came from (decision 90), recorded on the event. */
+  origin?: RequestOrigin;
+}
+
+/**
+ * The user's "Allow similar" on a permission card (P9-17, SPEC decision 138): the request is
+ * answered "allow" and a rule of `scope` — drafted by the server from the request, never sent by
+ * the client — is stored on the asking agent's project. Only the user makes rules (no brain tool
+ * does); a remote or unknown `origin` needs `autoApproveRemote`. `version` and `answerId` as for
+ * an answer.
+ */
+export interface AllowSimilarInput {
+  questionId: Id;
+  scope: PermissionRuleScope;
+  /** The preview's digest for `scope` (P9-17 review S1): a rule drafted again must match it. */
+  digest: string;
+  by: Actor;
+  origin?: RequestOrigin;
+  version?: number;
+  answerId?: string;
+}
+
+/** The user removes a project's "Allow similar" rule (P9-17): remote only with `autoApproveRemote`. */
+export interface RemovePermissionRuleInput {
+  projectId: Id;
+  ruleId: Id;
+  by: Actor;
   origin?: RequestOrigin;
 }
 

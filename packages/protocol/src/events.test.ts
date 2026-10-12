@@ -56,6 +56,8 @@ function classify(
     case 'question.cancelled':
       return 'question';
     case 'permission.decided':
+    case 'permission.rule_added':
+    case 'permission.rule_removed':
       return 'permission';
     case 'proposal.created':
     case 'proposal.approved':

@@ -17,6 +17,7 @@ import {
   Cost,
   Host,
   PermissionPolicy,
+  PermissionRule,
   Progress,
   Project,
   PromotionOutcome,
@@ -352,6 +353,29 @@ export const PermissionDecided = z.object({
   /** Why, for a denial (the policy line, a check failure). */
   reason: z.string().optional(),
   decidedBy: Actor,
+  /** The project's "Allow similar" rule that allowed it (P9-17, decision 138): "allowed by rule". */
+  ruleId: Id.optional(),
+});
+
+/**
+ * The user made an "Allow similar" rule for a project from a permission card (P9-17, decision
+ * 138): appended to `Project.permissionRules`, in the command that answered the card "allow".
+ */
+export const PermissionRuleAdded = z.object({
+  type: z.literal('permission.rule_added'),
+  rule: PermissionRule,
+});
+
+/**
+ * A rule is gone (P9-17): removed by the user from the project's permission settings, or by the
+ * system when the project was closed, cancelled or archived. Dropped from `Project.permissionRules`.
+ */
+export const PermissionRuleRemoved = z.object({
+  type: z.literal('permission.rule_removed'),
+  projectId: Id,
+  ruleId: Id,
+  by: Actor,
+  reason: z.string(),
 });
 
 // ---------------------------------------------------------------------------
@@ -464,6 +488,8 @@ export const ProjectChanges = Project.omit({
   createdAt: true,
   updatedAt: true,
   state: true,
+  // Rules change only by their own events (P9-17), never by a project update.
+  permissionRules: true,
 })
   .extend({
     repoPath: z.string().nullable(),
@@ -725,6 +751,8 @@ export const Event = z.discriminatedUnion('type', [
   QuestionReassigned,
   QuestionCancelled,
   PermissionDecided,
+  PermissionRuleAdded,
+  PermissionRuleRemoved,
   ProposalCreated,
   ProposalApproved,
   ProposalEdited,

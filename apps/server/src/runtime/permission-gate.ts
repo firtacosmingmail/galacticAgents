@@ -1,4 +1,3 @@
-import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import {
   type GateCheckOptions,
@@ -7,9 +6,14 @@ import {
   PermissionAction,
   type PermissionGate,
   PermissionPolicy,
+  type PermissionRule,
   type ToolCall,
 } from '@galactic/protocol';
-import { evaluate } from '../domain/permissions.js';
+import { evaluate, type PolicyContext } from '../domain/permissions.js';
+import { aliasesOf, matchingRule, type RealPath } from '../domain/permission-rules.js';
+
+/** The workspace's other spellings: shared with the chooser's offline context (P9-17 review S8). */
+export { aliasesOf };
 import type { CapsEnforcer } from './caps.js';
 
 /**
@@ -53,6 +57,20 @@ export interface GateOptions {
    */
   userFolders?: () => readonly string[];
   caps: CapsEnforcer;
+  /**
+   * The project's "Allow similar" rules (P9-17, decision 138), read on every check like the
+   * policy: a call the table asks about that one of them matches is allowed — never one the table
+   * denies, never a push, never a configuration or deliverables write (`matchingRule`).
+   */
+  rules?: () => readonly PermissionRule[];
+  /** How a folder rule resolves symlinks (tests); default: the file system's. */
+  realPath?: RealPath;
+  /**
+   * Told about every call a rule allowed through `check()` (the adapters' hook), so the runtime
+   * logs it as `permission.decided{allow, ruleId}`. `decide()` callers log it themselves. Must not
+   * throw (a throw is swallowed).
+   */
+  onRuleAllow?: (call: ToolCall, ruleId: Id, action: PermissionAction | undefined) => void;
   /**
    * The server's own tools handed to a brain (`SpawnOptions.tools`, P2-06): their handlers run in
    * the server against `DomainCommands`, which refuses what the brain may not do, so the policy
@@ -129,13 +147,28 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
     const misplaced = misplacedCwd(workspace, opts.cwd);
     if (misplaced) return { verdict: { decision: 'ask', reasons: [misplaced] } };
     const userFolders = opts.userFolders?.() ?? [];
-    const verdict = evaluate(policyNow(), call, {
+    const ctx: PolicyContext = {
       workspace,
       cwd: opts.cwd,
       aliases: aliasesOf(workspace, opts.cwd),
       ...(userFolders.length > 0 ? { userFolders } : {}),
-    });
+    };
+    const policy = policyNow();
+    const verdict = evaluate(policy, call, ctx);
     const action = verdict.dominant ? { action: verdict.dominant } : {};
+    // A rule turns an `ask` into an `allow` (P9-17) — never under a policy that did not parse.
+    if (verdict.decision === 'ask' && !policyNote && opts.rules) {
+      const rules = opts.rules();
+      const rule =
+        rules.length > 0
+          ? matchingRule(
+              rules,
+              { call, ctx, policy, ...(opts.realPath ? { realPath: opts.realPath } : {}) },
+              verdict,
+            )
+          : undefined;
+      if (rule) return { verdict: { decision: 'allow' }, ...action, ruleId: rule.id };
+    }
     switch (verdict.decision) {
       case 'allow':
         return { verdict: { decision: 'allow' }, ...action };
@@ -176,6 +209,13 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
           // Logging a refusal never turns it into something else.
         }
       }
+      if (verdict.decision === 'allow' && decision.ruleId && opts.onRuleAllow) {
+        try {
+          opts.onRuleAllow(call, decision.ruleId, decision.action);
+        } catch {
+          // Logging an allowance never turns it into something else.
+        }
+      }
       return verdict;
     },
     decide(call: ToolCall): Decision {
@@ -191,6 +231,8 @@ export interface Decision {
   action?: PermissionAction;
   /** A refusal for the tool-call cap (logged as the agent's failure, not as a permission). */
   cap?: true;
+  /** The project's "Allow similar" rule that allowed the call (P9-17). */
+  ruleId?: Id;
 }
 
 /**
@@ -215,25 +257,4 @@ function misplacedCwd(workspace: string, cwd: string): string | undefined {
     return `cwd ${cwd} is outside the workspace ${workspace}`;
   }
   return undefined;
-}
-
-/**
- * The resolved spellings of the workspace and the cwd, when they differ from the given ones (a
- * symlink on the way: macOS `/var` → `/private/var`, a symlinked projects folder). Claude Code
- * resolves its cwd, so it names resolved paths; the engine judges them as the given ones. The cwd
- * comes first, so a worktree inside the workspace maps to itself. A path that does not exist (yet)
- * has no other spelling.
- */
-function aliasesOf(workspace: string, cwd: string): { from: string; to: string }[] {
-  const out: { from: string; to: string }[] = [];
-  for (const given of [resolve(cwd), resolve(workspace)]) {
-    let real: string;
-    try {
-      real = realpathSync(given);
-    } catch {
-      continue;
-    }
-    if (real !== given && !out.some((a) => a.from === real)) out.push({ from: real, to: given });
-  }
-  return out;
 }

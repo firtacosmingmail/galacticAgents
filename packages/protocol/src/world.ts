@@ -338,6 +338,30 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
       return next; // the inbox is runtime state; a chat view (Phase 2.5) will fold these
     case 'permission.decided':
       return next; // the policy answered without the user: no question row (P2-04)
+    case 'permission.rule_added': {
+      // "Allow similar" rules (P9-17) live on their project's row; the project's `updatedAt`
+      // stays (a rule is not an edit of the project), as on the server.
+      const project = next.projects[event.rule.projectId];
+      if (!project) return next;
+      const rules = [...(project.permissionRules ?? []), event.rule];
+      return {
+        ...next,
+        projects: { ...next.projects, [project.id]: { ...project, permissionRules: rules } },
+      };
+    }
+    case 'permission.rule_removed': {
+      const project = next.projects[event.projectId];
+      if (!project?.permissionRules) return next;
+      const rules = project.permissionRules.filter((r) => r.id !== event.ruleId);
+      const { permissionRules: _old, ...rest } = project;
+      return {
+        ...next,
+        projects: {
+          ...next.projects,
+          [project.id]: rules.length > 0 ? { ...rest, permissionRules: rules } : rest,
+        },
+      };
+    }
 
     case 'control.stop':
     case 'control.cancel':

@@ -15,6 +15,7 @@ import {
   type Id,
   type PermissionAction,
   type PermissionPolicy,
+  type PermissionRule,
   type RequestOrigin,
   type SlashCommand,
   type SpawnHandle,
@@ -42,7 +43,7 @@ import {
   type QuestionRouting,
 } from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
-import { globalDefaultPolicy } from '../domain/permissions.js';
+import { globalDefaultPolicy, type PolicyContext } from '../domain/permissions.js';
 import { userFoldersOf } from '../deliverables/folder.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import {
@@ -52,7 +53,7 @@ import {
   type CapsConfig,
   type SpawnCheck,
 } from './caps.js';
-import { createPermissionGate, type RuntimeGate } from './permission-gate.js';
+import { aliasesOf, createPermissionGate, type RuntimeGate } from './permission-gate.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
 import { TOOL_RUNTIMES } from './tool-runtimes.js';
@@ -607,6 +608,10 @@ export class AgentRuntime {
       userFolders: () => this.userFoldersOf(agent.id, req),
       cwd: req.cwd,
       caps: this.caps,
+      // The project's "Allow similar" rules (P9-17), read on every check like its table.
+      rules: () => this.rulesOf(agent.id, req),
+      onRuleAllow: (call, ruleId, action) =>
+        this.permissionDecided(live, { toolCall: call, decision: 'allow', action, ruleId }),
       ...(tools ? { serverTools: tools.map((t) => t.name) } : {}),
       onDeny: (call, verdict, action) =>
         this.permissionDecided(live, {
@@ -884,6 +889,31 @@ export class AgentRuntime {
     const live = this.live.get(agentId);
     if (!live?.handle || live.terminal || live.paused || this.disposed) return;
     this.record({ type: 'agent.stalled', agentId, silentForMs: Math.round(silentForMs) });
+  }
+
+  /**
+   * Where a permission request's call is judged (P9-17): the asking agent's project — a Steward's
+   * is its task's — its table, and the context its gate uses (workspace, cwd, aliases, the
+   * deliverables folder). `undefined` for an agent this runtime does not run.
+   */
+  permissionContext(
+    agentId: Id,
+  ): { projectId: Id | undefined; policy: PermissionPolicy; ctx: PolicyContext } | undefined {
+    const live = this.live.get(agentId);
+    if (!live) return undefined;
+    const req = live.spec;
+    const workspace = this.workspaceOf(agentId, req);
+    const userFolders = this.userFoldersOf(agentId, req);
+    return {
+      projectId: this.projectIdOf(agentId, req),
+      policy: this.policyOf(agentId, req),
+      ctx: {
+        workspace,
+        cwd: req.cwd,
+        aliases: aliasesOf(workspace, req.cwd),
+        ...(userFolders.length > 0 ? { userFolders } : {}),
+      },
+    };
   }
 
   /** Whether a live session asked `questionId` and waits for its answer through the adapter. */
@@ -1598,15 +1628,10 @@ export class AgentRuntime {
     return live;
   }
 
-  /**
-   * The policy an agent's permissions are decided under now (decision 22): its project's table
-   * (the global default when the project has none), read on every check so a change applies to
-   * the next tool call; an agent outside any project keeps the policy it was spawned with.
-   */
   /** The agent's project workspace now (a moved workspace applies at once), else the spawn's. */
   private workspaceOf(agentId: Id, req: SpawnRequest): string {
     const { tables } = this.opts.log;
-    const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
+    const projectId = this.projectIdOf(agentId, req);
     const project = projectId ? tables.projects.get(projectId) : undefined;
     return project?.workspace ?? req.workspace ?? req.cwd;
   }
@@ -1655,9 +1680,38 @@ export class AgentRuntime {
     );
   }
 
+  /**
+   * The agent's project now (a Steward's is its task's), else the spawn's: the one resolver for
+   * its table, its workspace and its "Allow similar" rules (P9-17 review S7), so the table and
+   * the rules always come from the same project.
+   */
+  private projectIdOf(agentId: Id, req: SpawnRequest): Id | undefined {
+    const { tables } = this.opts.log;
+    const agent = tables.agents.get(agentId);
+    if (agent?.projectId) return agent.projectId;
+    const taskId = agent?.taskId ?? req.taskId;
+    return (taskId ? tables.tasks.get(taskId)?.projectId : undefined) ?? req.projectId;
+  }
+
+  /**
+   * The "Allow similar" rules of the agent's project (P9-17, decision 138), read on every check:
+   * a rule added or removed applies to the next tool call. None outside a project.
+   */
+  private rulesOf(agentId: Id, req: SpawnRequest): readonly PermissionRule[] {
+    const projectId = this.projectIdOf(agentId, req);
+    return (
+      (projectId ? this.opts.log.tables.projects.get(projectId)?.permissionRules : undefined) ?? []
+    );
+  }
+
+  /**
+   * The policy an agent's permissions are decided under now (decision 22): its project's table
+   * (the global default when the project has none), read on every check so a change applies to
+   * the next tool call; an agent outside any project keeps the policy it was spawned with.
+   */
   private policyOf(agentId: Id, req: SpawnRequest): PermissionPolicy {
     const { tables } = this.opts.log;
-    const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
+    const projectId = this.projectIdOf(agentId, req);
     const project = projectId ? tables.projects.get(projectId) : undefined;
     // No table of its own: the global default as it is now (P25-01: the settings may change it).
     if (project) return project.permissionPolicy ?? globalDefaultPolicy();
@@ -1679,7 +1733,7 @@ export class AgentRuntime {
   ): boolean {
     const call = raw.question.toolCall;
     if (!call) return false;
-    const { verdict, action } = live.gate.decide(call);
+    const { verdict, action, ruleId } = live.gate.decide(call);
     if (verdict.decision === 'ask') {
       // The card shows the category the policy asks about when the adapter did not name one.
       const asked = verdict.action ?? action;
@@ -1693,6 +1747,7 @@ export class AgentRuntime {
         decision: verdict.decision,
         action,
         ...(verdict.decision === 'deny' ? { reason: verdict.reason } : {}),
+        ...(ruleId ? { ruleId } : {}),
       },
       event.questionId,
     );
@@ -1713,6 +1768,8 @@ export class AgentRuntime {
       decision: 'allow' | 'deny';
       action: PermissionAction | undefined;
       reason?: string;
+      /** The "Allow similar" rule that allowed it (P9-17). */
+      ruleId?: Id;
     },
     questionId?: Id,
   ): void {
@@ -1729,6 +1786,7 @@ export class AgentRuntime {
       ...(d.action ? { action: d.action } : {}),
       ...(d.reason ? { reason: redactSecrets(d.reason) } : {}),
       decidedBy: SYSTEM,
+      ...(d.ruleId ? { ruleId: d.ruleId } : {}),
     };
     if (!live.handle) live.decisions.push(event);
     else this.record(event);

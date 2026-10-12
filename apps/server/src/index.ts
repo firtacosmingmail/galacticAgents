@@ -391,6 +391,18 @@ const app = buildApp({
         'Turning phone access on or off from an agent’s or a run’s process is refused: the user does it from the panel or the menu bar on the Mac.',
     }),
   },
+  // Making or removing an "Allow similar" rule from an agent's or a run's process is refused (P9-17).
+  rulesPeer: agentPeerGuard({
+    table: osProcessTable(),
+    refusal:
+      'Making or removing an “Allow similar” rule from an agent’s or a run’s process is refused: the user does it from the panel.',
+  }),
+  // Answering a permission request or dismissing a question from one is refused too (P9-17 S4).
+  answersPeer: agentPeerGuard({
+    table: osProcessTable(),
+    refusal:
+      'Answering a permission request or dismissing a question from an agent’s or a run’s process is refused: the user answers from the panel or the menu bar.',
+  }),
   config,
   log,
   statuses,

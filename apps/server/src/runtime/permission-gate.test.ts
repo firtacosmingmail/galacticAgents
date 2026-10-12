@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_PERMISSION_POLICY } from '@galactic/protocol';
+import { DEFAULT_PERMISSION_POLICY, type PermissionRule } from '@galactic/protocol';
 import { CapsEnforcer } from './caps.js';
 import { createPermissionGate } from './permission-gate.js';
 
@@ -278,5 +278,61 @@ describe('createPermissionGate — live policy and refusals (P2-04)', () => {
     expect(gate.decide(push)).toMatchObject({ verdict: { decision: 'ask' }, action: 'push' });
     expect(told).toBe(0);
     expect(gate.check(read)).toEqual({ decision: 'allow' }); // the one call is still available
+  });
+});
+
+describe('"Allow similar" rules in the gate (P9-17)', () => {
+  const npmRule: PermissionRule = {
+    id: 'r-npm',
+    projectId: 'p-1',
+    scope: 'prefix',
+    tool: 'Bash',
+    match: { kind: 'words', words: ['npm', 'install'] },
+    categories: ['network'],
+    label: 'npm install …',
+    createdBy: { type: 'user' },
+    createdAt: '2026-10-12T10:00:00.000Z',
+    origin: 'local',
+  };
+  const install = { toolName: 'Bash', input: { command: 'npm install zod' } };
+
+  it('allows what a rule matches, read on every check, and tells the runtime which rule', () => {
+    let rules: PermissionRule[] = [];
+    const allowed: [string, string | undefined][] = [];
+    const gate = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+      rules: () => rules,
+      onRuleAllow: (_call, ruleId, action) => allowed.push([ruleId, action]),
+    });
+    expect(gate.check(install)).toMatchObject({ decision: 'ask', action: 'network' });
+    rules = [npmRule];
+    expect(gate.check(install)).toEqual({ decision: 'allow' });
+    expect(allowed).toEqual([['r-npm', 'network']]);
+    expect(gate.decide(install)).toMatchObject({ verdict: { decision: 'allow' }, ruleId: 'r-npm' });
+    expect(allowed).toHaveLength(1); // `decide` callers log it themselves
+    // Never a push, never a compound line.
+    expect(gate.check(push)).toMatchObject({ decision: 'ask' });
+    expect(
+      gate.check({ toolName: 'Bash', input: { command: 'npm install x; rm -rf ~' } }),
+    ).toMatchObject({ decision: 'ask' });
+  });
+
+  it("never overrides the table's deny, nor applies under a policy that does not parse", () => {
+    const denied = createPermissionGate({
+      ...base,
+      policy: { rules: { network: 'deny' } },
+      caps: caps(),
+      rules: () => [npmRule],
+    });
+    expect(denied.check(install)).toMatchObject({ decision: 'deny' });
+    const broken = createPermissionGate({
+      ...base,
+      policy: { rules: 'not a table' },
+      caps: caps(),
+      rules: () => [npmRule],
+    });
+    expect(broken.check(install)).toMatchObject({ decision: 'ask' });
   });
 });

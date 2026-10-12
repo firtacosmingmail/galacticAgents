@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
 import {
   AgentRuntime as AgentRuntimeName,
+  AllowSimilarBody,
   AnswerBody,
   DismissBody,
   ControlBody,
@@ -13,6 +14,9 @@ import {
   TerminalInputBody,
   type Actor,
   type AgentCommandsResponse,
+  type AllowSimilarResponse,
+  type RemovePermissionRuleResponse,
+  type SimilarPreviewResponse,
   type AnswerResponse,
   type DismissResponse,
   type ChatMessage,
@@ -36,6 +40,7 @@ import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { policyForWrite } from '../domain/permissions.js';
+import type { PeerCheck } from './peer-guard.js';
 import { bearerGuard, originOf } from './security.js';
 import { sendStorageRefusal } from './storage-refusal.js';
 
@@ -57,6 +62,17 @@ export interface AgentRoutesOptions {
   processes?: StewardProcessControl;
   /** The Harmonizer's restart (P5-06): enables `POST /api/harmonizer/restart`. */
   restartHarmonizer?: () => Promise<RestartHarmonizerResponse>;
+  /**
+   * The agent speed bump (P9-12's `agentPeerGuard`) on the routes that make or remove "Allow
+   * similar" rules (P9-17): refused when the caller is an agent's or a run's process.
+   */
+  rulesPeer?: PeerCheck;
+  /**
+   * The same speed bump on answering a permission request and on dismissing a question (P9-17
+   * review S4): an agent that holds the token must not allow its own calls. Refused → 403
+   * `agent_peer`; a peer that cannot be identified is allowed and logged, as elsewhere.
+   */
+  answersPeer?: PeerCheck;
 }
 
 const USER: Actor = { type: 'user' };
@@ -421,17 +437,50 @@ export function registerAgentRoutes(
     }
 
     /**
+     * Refuses a request from an agent's or a run's process (P9-12's speed bump; P9-17): `false`
+     * once the 403 `agent_peer` is sent. A peer that cannot be identified is allowed and logged.
+     */
+    const notFromAnAgent = async (
+      check: PeerCheck | undefined,
+      what: string,
+      req: FastifyRequest,
+      reply: FastifyReply,
+    ): Promise<boolean> => {
+      if (!check) return true;
+      let verdict;
+      try {
+        verdict = await check(req);
+      } catch (error) {
+        req.log.warn({ err: error }, `${what}: the peer could not be identified; allowed`);
+        return true;
+      }
+      if (verdict.unknown)
+        req.log.warn(`${what}: the peer could not be identified (${verdict.unknown}); allowed`);
+      if (!verdict.refused) return true;
+      void reply.code(403).send({ error: 'agent_peer', message: verdict.refused });
+      return false;
+    };
+
+    /**
      * Answers a question as the user (SPEC §2.6). With the command surface it is
      * `DomainCommands.answerQuestion`: first answer wins, `version` refuses a stale answer with
      * 409 `stale` ("already answered by …"), and a question no live session waits on (a brain's
      * `ask_user`, a closure question) is answered too (P2-18). Without it, the Phase 1 path.
      * `answerId` (P7-05) makes a retry idempotent: once recorded under it, the same answer is `ok`
-     * with `duplicate: true` (an answer queued offline whose acknowledgement was lost).
+     * with `duplicate: true` (an answer queued offline whose acknowledgement was lost). Answering a
+     * permission request from an agent's or a run's process is refused (403 `agent_peer`, review
+     * S4: the speed bump of `answersPeer`); a clarification may be answered from anywhere.
      */
     app.post('/api/questions/:id/answer', async (req, reply) => {
       const body = parse(AnswerBody, req.body, reply);
       if (!body) return;
       const questionId = (req.params as { id: string }).id;
+      if (
+        log.tables.questions.get(questionId)?.kind === 'permission' &&
+        !(await notFromAnAgent(opts.answersPeer, 'answer', req, reply))
+      ) {
+        return reply;
+      }
       if (!commands) {
         return attempt(reply, () => runtime.answer(questionId, body.answer, USER));
       }
@@ -454,16 +503,78 @@ export function registerAgentRoutes(
     });
 
     /**
+     * "Allow similar" (P9-17, SPEC decision 138). The preview lists what the card's chooser offers
+     * for an open permission request — computed here from the request; `allowed` says whether this
+     * client may make a rule. `allow-similar` answers the request "allow" and stores the rule of
+     * the chosen scope on the asking agent's project, in one command; the Mac only unless
+     * `autoApproveRemote` (403 `remote_control`), never from an agent's or a run's process (403
+     * `agent_peer`). Removing a rule follows the same rules. No brain tool makes or removes one.
+     */
+    if (commands) {
+      app.post('/api/questions/:id/similar-preview', async (req, reply) => {
+        const questionId = (req.params as { id: string }).id;
+        try {
+          return commands.similarPreview(questionId, {
+            origin: originOf(req),
+          }) satisfies SimilarPreviewResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      app.post('/api/questions/:id/allow-similar', async (req, reply) => {
+        const body = parse(AllowSimilarBody, req.body, reply);
+        if (!body) return;
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const questionId = (req.params as { id: string }).id;
+        try {
+          const { value } = await commands.allowSimilar({
+            questionId,
+            scope: body.scope,
+            digest: body.digest,
+            by: USER,
+            origin: originOf(req),
+            ...(body.version !== undefined ? { version: body.version } : {}),
+            ...(body.answerId !== undefined ? { answerId: body.answerId } : {}),
+          });
+          return {
+            ok: true,
+            ...(value.rule ? { rule: value.rule } : {}),
+            ...(value.ruleNotStored ? { ruleNotStored: value.ruleNotStored } : {}),
+          } satisfies AllowSimilarResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      app.delete('/api/projects/:id/permission-rules/:ruleId', async (req, reply) => {
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const { id, ruleId } = req.params as { id: string; ruleId: string };
+        try {
+          await commands.removePermissionRule({
+            projectId: id,
+            ruleId,
+            by: USER,
+            origin: originOf(req),
+          });
+          return { ok: true } satisfies RemovePermissionRuleResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+    }
+
+    /**
      * Dismisses a question as the user (P9-14, SPEC decision 135): a clarification is withdrawn
      * and its agent told "the user dismissed this question"; a permission request is denied,
      * never allowed. `version` refuses a stale dismissal with 409 `stale` like an answer (one
      * answered or withdrawn meanwhile included). Open to remote clients — it is an answer
-     * (decision 90) — and logged with the request's origin. Needs the command surface.
+     * (decision 90) — and logged with the request's origin; refused to an agent's or a run's
+     * process (403 `agent_peer`, review S4). Needs the command surface.
      */
     if (commands) {
       app.post('/api/questions/:id/dismiss', async (req, reply) => {
         const body = parse(DismissBody, req.body ?? {}, reply);
         if (!body) return;
+        if (!(await notFromAnAgent(opts.answersPeer, 'dismiss', req, reply))) return reply;
         const questionId = (req.params as { id: string }).id;
         try {
           await commands.dismissQuestion({

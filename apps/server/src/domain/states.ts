@@ -1,6 +1,7 @@
 import type { Actor, Id, WorkState } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import { endProjectRules } from './project-rules.js';
 
 /**
  * Task and project state transitions (SPEC §4.4, P2-01). The happy path is
@@ -116,7 +117,9 @@ export function setProjectState(ctx: CommandContext, projectId: Id, to: WorkStat
     to,
     ...(by ? { by } : {}),
   });
-  return project;
+  // Its "Allow similar" rules last until the project closes (P9-17, decision 138).
+  if (to === 'completed' || to === 'archived') endProjectRules(ctx, projectId, to);
+  return ctx.tables.projects.get(projectId) ?? project;
 }
 
 /** Sets a task's state; the same state is a no-op without an event. */

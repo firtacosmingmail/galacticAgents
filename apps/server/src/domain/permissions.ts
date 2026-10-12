@@ -58,6 +58,11 @@ export interface Classification {
    * only what could still be seen (a push mentioned inside an inline script, say).
    */
   unclassified?: true;
+  /**
+   * Set when the call writes agent or git configuration, or the user's deliverables folder
+   * (decisions 22, 122): no "Allow similar" rule ever allows it (P9-17, decision 138).
+   */
+  guarded?: true;
 }
 
 export interface PolicyVerdict extends Classification {
@@ -197,7 +202,7 @@ export function strictest(decisions: readonly unknown[]): PermissionDecision {
 }
 
 /** The decision a policy gives one action; a missing or unknown value is `ask`. */
-function ruleFor(policy: PermissionPolicy, action: PermissionAction): PermissionDecision {
+export function ruleFor(policy: PermissionPolicy, action: PermissionAction): PermissionDecision {
   return asDecision(policy.rules[action]);
 }
 
@@ -237,9 +242,20 @@ export function evaluate(
 // ---------------------------------------------------------------------------
 
 /** Tools that only read the file system; their `path`-like inputs decide inside vs. outside. */
-const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead']);
+export const READ_TOOLS: ReadonlySet<string> = new Set([
+  'Read',
+  'Glob',
+  'Grep',
+  'LS',
+  'NotebookRead',
+]);
 /** Tools that write files. */
-const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+export const EDIT_TOOLS: ReadonlySet<string> = new Set([
+  'Write',
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+]);
 /** Tools that reach the network by definition. */
 const NETWORK_TOOLS = new Set(['WebFetch', 'WebSearch']);
 /** Tools with no effect outside the agent's own bookkeeping. */
@@ -258,16 +274,16 @@ const HARMLESS_TOOLS = new Set([
   'ToolSearch',
 ]);
 /** Input fields that carry a path, in the order the Claude Code tools use them. */
-const PATH_FIELDS = ['file_path', 'notebook_path', 'path', 'directory', 'cwd'];
+export const PATH_FIELDS = ['file_path', 'notebook_path', 'path', 'directory', 'cwd'];
 /**
  * Fields that carry a glob, per tool (resolved from the tool's `path`, else the cwd). Grep's
  * `pattern` is a regular expression, not a location.
  */
-const GLOB_FIELDS: Record<string, string[]> = {
+export const GLOB_FIELDS: Record<string, string[]> = {
   Glob: ['pattern'],
   Grep: ['glob'],
 };
-const DEFAULT_GLOB_FIELDS = ['pattern', 'glob'];
+export const DEFAULT_GLOB_FIELDS = ['pattern', 'glob'];
 
 export function classifyToolCall(call: ToolCall, ctx: PolicyContext): Classification {
   const input = isRecord(call.input) ? call.input : {};
@@ -319,13 +335,14 @@ function classifyPaths(
   }
 
   const reasons: string[] = [];
+  let guarded = false;
   for (const p of paths) {
-    if (!isInsideWorkspace(p, ctx)) reasons.push(`${tool} on ${p}: outside the workspace`);
-    else if (edit && isAgentConfigPath(p, ctx)) {
-      reasons.push(`${tool} on ${p}: agent or git configuration, which runs outside the gate`);
-    } else if (edit && isUserFolderPath(p, ctx)) {
-      reasons.push(`${tool} on ${p}: ${USER_FOLDER_REASON}`);
-    }
+    // Guarded wherever the path is — inside the workspace or not (P9-17 review B1).
+    const guard = edit ? guardedWriteReason(p, ctx) : undefined;
+    if (guard) {
+      reasons.push(`${tool} on ${p}: ${guard}`);
+      guarded = true;
+    } else if (!isInsideWorkspace(p, ctx)) reasons.push(`${tool} on ${p}: outside the workspace`);
   }
   const base = typeof input['path'] === 'string' ? input['path'] : undefined;
   const from = base !== undefined ? resolvePath(base, ctx, cwdOf(ctx)) : cwdOf(ctx);
@@ -342,7 +359,7 @@ function classifyPaths(
     }
   }
   if (reasons.length === 0) return { actions: [inside], reasons: [] };
-  return { actions: ['outside_workspace'], reasons };
+  return { actions: ['outside_workspace'], reasons, ...(guarded ? { guarded: true } : {}) };
 }
 
 function looksLikeLocation(p: string): boolean {
@@ -772,7 +789,7 @@ const WRAPPER_VALUE_OPTS: Record<string, RegExp> = {
 };
 
 /** Index of the command's real name in `words`, past assignments and wrappers. */
-function commandHead(words: string[]): number {
+export function commandHead(words: string[]): number {
   let k = 0;
   while (k < words.length) {
     const w = words[k]!;
@@ -1190,18 +1207,18 @@ const READ_ONLY_COMMANDS = new Set([
 ]);
 const WRITE_REDIRECTS = new Set(['>', '>>', '>|', '&>', '&>>', '<>']);
 /** Devices a redirection or argument may name without leaving the workspace. */
-const HARMLESS_DEVICES = new Set([
+export const HARMLESS_DEVICES: ReadonlySet<string> = new Set([
   '/dev/null',
   '/dev/stdout',
   '/dev/stderr',
   '/dev/stdin',
   '/dev/tty',
 ]);
-const CONFIG_WORD = /(?:^|\/)(?:\.claude|\.husky|\.git)(?:\/|$)|(?:^|\/)\.mcp\.json$/;
 
 export function classifyCommand(command: string, ctx: PolicyContext): Classification {
   const actions = new Set<PermissionAction>();
   const reasons: string[] = [];
+  let guarded = false;
   const trimmed = command.trim();
   if (trimmed === '') return { actions: [], reasons: ['empty command'], unclassified: true };
 
@@ -1245,13 +1262,12 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       actions.add('outside_workspace');
       reasons.push(`${p}: cannot tell where it points`);
     }
-    for (const p of configTargets(simple, here)) {
+    // The card names every file curl sends, inside the workspace too (`.env`): P9-17 review S2.
+    for (const f of curlUploads(simple.words)) reasons.push(`curl reads and sends the file ${f}`);
+    for (const g of guardedTargets(simple, here)) {
+      guarded = true;
       actions.add('outside_workspace');
-      reasons.push(`${p}: agent or git configuration, which runs outside the gate`);
-    }
-    for (const p of userFolderTargets(simple, here)) {
-      actions.add('outside_workspace');
-      reasons.push(`${p}: ${USER_FOLDER_REASON}`);
+      reasons.push(`${g.path}: ${g.reason}`);
     }
 
     const h = commandHead(simple.words);
@@ -1279,10 +1295,15 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       actions.add('push');
       reasons.push(why);
     }
-    return { actions: [...actions], reasons, unclassified: true };
+    return {
+      actions: [...actions],
+      reasons,
+      unclassified: true,
+      ...(guarded ? { guarded: true as const } : {}),
+    };
   }
   if (actions.size === 0) actions.add('run_workspace');
-  return { actions: [...actions], reasons };
+  return { actions: [...actions], reasons, ...(guarded ? { guarded: true as const } : {}) };
 }
 
 /** `git`, then — anywhere later in the text — `push` as a word (`git-push`, `'git','push'` too). */
@@ -1310,42 +1331,78 @@ export function mentionsPush(text: string): string[] {
   return out;
 }
 
-/** Agent/git configuration paths `command` may write: write redirections, or any argument of a non-read-only command. */
-function configTargets(command: SimpleCommand, ctx: PolicyContext): string[] {
-  const out: string[] = [];
-  const candidates = command.redirects
-    .filter((r) => WRITE_REDIRECTS.has(r.op))
-    .map((r) => r.target);
-  const h = commandHead(command.words);
-  const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
-  if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
-    for (const w of command.words.slice(h + 1)) {
-      const eq = w.indexOf('=');
-      candidates.push(eq > 0 && w.startsWith('-') ? w.slice(eq + 1) : w);
-    }
-  }
-  for (const c of candidates) {
-    for (const alt of expandBraces(c) ?? [c]) {
-      if (CONFIG_WORD.test(alt) && isInsideWorkspace(alt, ctx) && isAgentConfigPath(alt, ctx)) {
-        out.push(alt);
-        break;
-      }
-    }
-  }
-  return out;
-}
+/** Why a write to agent or git configuration asks (decisions 22, 122). */
+const CONFIG_REASON = 'agent or git configuration, which runs outside the gate';
 
 /** Why a write under a user folder asks (P9-06). */
 const USER_FOLDER_REASON =
   "the project's deliverables folder, which belongs to the user (only the server copies into it)";
 
+/** Why a write to the user's own start-up, login or key files asks (P9-17 review B1). */
+const USER_SETUP_REASON =
+  "the user's shell start-up files, login items, SSH or git configuration, which run outside the gate";
+
 /**
- * What a simple command may write under one of `ctx.userFolders` (P9-06): its write
- * redirections' targets and, unless the command only reads, every argument (an option's value
- * too). Plain words count here (`cp out.pdf deliverables/`): they resolve from the command's cwd.
+ * Files in the home folder whose contents run as the user outside the gate (P9-17 review B1):
+ * shell start-up files, git's and Claude Code's own configuration. Compared case-folded (APFS
+ * is case-insensitive by default).
  */
-function userFolderTargets(command: SimpleCommand, ctx: PolicyContext): string[] {
-  if (!ctx.userFolders || ctx.userFolders.length === 0) return [];
+const HOME_GUARDED_FILES = [
+  '.zshrc',
+  '.zprofile',
+  '.zshenv',
+  '.zlogin',
+  '.zlogout',
+  '.bashrc',
+  '.bash_profile',
+  '.bash_login',
+  '.bash_logout',
+  '.profile',
+  '.gitconfig',
+  '.claude.json',
+];
+/** Folders in the home folder that are guarded with everything below them. */
+const HOME_GUARDED_TREES = ['Library/LaunchAgents', '.ssh', '.config/git'];
+/** Folders of the machine that are guarded with everything below them. */
+const SYSTEM_GUARDED_TREES = ['/Library/LaunchAgents', '/Library/LaunchDaemons'];
+
+/**
+ * Why writing `p` always asks — no "Allow similar" rule may ever allow it (P9-17, decision 138;
+ * review B1) — or `undefined`. Judged wherever `p` is, inside the workspace or not: agent or git
+ * configuration (`isAgentConfigPath`), the project's deliverables folder (`isUserFolderPath`),
+ * the user's shell start-up files, login items (`~/Library/LaunchAgents`, `/Library/Launch*`),
+ * `~/.ssh`, `~/.gitconfig` and `~/.config/git`, and someone else's home (`~user`).
+ */
+export function guardedWriteReason(p: string, ctx: PolicyContext): string | undefined {
+  if (/^~[^/]/.test(p)) return "someone else's home folder";
+  if (isAgentConfigPath(p, ctx)) return CONFIG_REASON;
+  if (isUserFolderPath(p, ctx)) return USER_FOLDER_REASON;
+  const fold = (q: string) => q.normalize('NFC').toLowerCase();
+  const raw = resolvePath(p, ctx, cwdOf(ctx));
+  const targets = [...new Set([raw, unalias(raw, ctx)])].map(fold);
+  const home = fold(resolve(expandHome('~', ctx)));
+  for (const t of targets) {
+    if (HOME_GUARDED_FILES.some((f) => t === join(home, f))) return USER_SETUP_REASON;
+    if (HOME_GUARDED_TREES.some((d) => within(fold(join(home, d)), t))) return USER_SETUP_REASON;
+    if (SYSTEM_GUARDED_TREES.some((d) => within(fold(d), t))) return USER_SETUP_REASON;
+  }
+  return undefined;
+}
+
+/** A word as a path: `$HOME`/`${HOME}` read as `~`, `$PWD` as `.` (as `pathToken` does). */
+function asPathWord(word: string): string {
+  return word.replace(/^\$\{?HOME\}?(?=\/|$)/, '~').replace(/^\$\{?PWD\}?(?=\/|$)/, '.');
+}
+
+/**
+ * What a simple command may write that always asks (`guardedWriteReason`): its write
+ * redirections' targets and, unless the command only reads, every argument (an option's value
+ * too). Plain words count (`cp out.pdf deliverables/`): they resolve from the command's cwd.
+ */
+function guardedTargets(
+  command: SimpleCommand,
+  ctx: PolicyContext,
+): { path: string; reason: string }[] {
   const candidates = command.redirects
     .filter((r) => WRITE_REDIRECTS.has(r.op))
     .map((r) => r.target);
@@ -1357,11 +1414,14 @@ function userFolderTargets(command: SimpleCommand, ctx: PolicyContext): string[]
       candidates.push(eq > 0 && w.startsWith('-') ? w.slice(eq + 1) : w);
     }
   }
-  const out: string[] = [];
+  const out: { path: string; reason: string }[] = [];
   for (const c of candidates) {
     for (const alt of expandBraces(c) ?? [c]) {
-      if (isUserFolderPath(alt, ctx)) {
-        out.push(alt);
+      const word = asPathWord(alt);
+      if (word === '' || /[$`]/.test(word) || HARMLESS_DEVICES.has(word)) continue;
+      const reason = guardedWriteReason(word, ctx);
+      if (reason) {
+        out.push({ path: alt, reason });
         break;
       }
     }
@@ -1398,10 +1458,62 @@ function pathsOf(command: SimpleCommand): CommandPaths {
     for (const alt of expandBraces(word) ?? [word]) pathToken(alt, isTarget, out, word);
   };
   for (const w of command.words) add(w, false);
+  // A file curl reads and sends is a read target, wherever it is (P9-17 review S2).
+  for (const f of curlUploads(command.words)) add(f, true);
   for (const r of command.redirects) {
     if (r.op === '<<' || r.op === '<<-' || r.op === '<<<') continue; // delimiter / string, not a file
     if ((r.op === '>&' || r.op === '<&') && /^(?:\d+-?|-)$/.test(r.target)) continue; // fd dup
     add(r.target, true);
+  }
+  return out;
+}
+
+/** curl options whose value names a file to send when it starts with `@` (`-d @body.json`). */
+const CURL_AT_DATA = new Set(['-d', '--data', '--data-binary', '--data-ascii', '--json']);
+/** curl options whose value is `name@file` or `@file` (`--data-urlencode`). */
+const CURL_URLENCODE = new Set(['--data-urlencode']);
+/** curl options whose value is a form field, `name=@file` or `name=<file` (`-F`). */
+const CURL_FORM = new Set(['-F', '--form']);
+/** curl options whose value is a file it reads (`-T file`, `-K config`). */
+const CURL_FILE = new Set(['-T', '--upload-file', '-K', '--config']);
+const CURL_VALUE_OPTS = [...CURL_AT_DATA, ...CURL_URLENCODE, ...CURL_FORM, ...CURL_FILE];
+
+/**
+ * The files a curl command reads and sends (P9-17 review S2): `-d/--data/--data-binary/
+ * --data-ascii/--json @file`, `--data-urlencode [name]@file`, `-F/--form name=@file` or
+ * `name=<file`, `-T/--upload-file file`, `-K/--config file` — the value glued (`-d@f`,
+ * `--data=@f`) or as the next word. `-` (stdin) is not a file. Other commands: none.
+ */
+export function curlUploads(words: readonly string[]): string[] {
+  const h = commandHead([...words]);
+  if (h >= words.length || baseName(words[h]!) !== 'curl') return [];
+  const out: string[] = [];
+  const take = (opt: string, value: string) => {
+    let file: string | undefined;
+    if (CURL_AT_DATA.has(opt)) file = value.startsWith('@') ? value.slice(1) : undefined;
+    else if (CURL_URLENCODE.has(opt)) {
+      const at = value.indexOf('@');
+      const eq = value.indexOf('=');
+      file = at >= 0 && (eq < 0 || at < eq) ? value.slice(at + 1) : undefined;
+    } else if (CURL_FORM.has(opt)) {
+      const m = /=[@<]([^;]*)/.exec(value);
+      file = m ? m[1] : undefined;
+    } else if (CURL_FILE.has(opt)) file = value;
+    if (file !== undefined && file !== '' && file !== '-' && file !== '.') out.push(file);
+  };
+  for (let k = h + 1; k < words.length; k++) {
+    const w = words[k]!;
+    const eq = w.indexOf('=');
+    const long = w.startsWith('--') && eq > 0 ? w.slice(0, eq) : undefined;
+    if (long !== undefined && CURL_VALUE_OPTS.includes(long)) {
+      take(long, w.slice(eq + 1));
+    } else if (CURL_VALUE_OPTS.includes(w)) {
+      const value = words[k + 1];
+      if (value !== undefined) take(w, value);
+      k++;
+    } else if (/^-[dFTK]./.test(w)) {
+      take(w.slice(0, 2), w.slice(2)); // glued short option: `-d@file`, `-Tfile`
+    }
   }
   return out;
 }
@@ -1434,12 +1546,12 @@ function pathToken(raw: string, isTarget: boolean, out: CommandPaths, shown: str
 
 // --- paths ------------------------------------------------------------------
 
-function cwdOf(ctx: PolicyContext): string {
+export function cwdOf(ctx: PolicyContext): string {
   return resolvePath(ctx.cwd ?? ctx.workspace, ctx, ctx.workspace);
 }
 
 /** `p` made absolute: `~` expanded, relative paths resolved from `from`. */
-function resolvePath(p: string, ctx: PolicyContext, from: string): string {
+export function resolvePath(p: string, ctx: PolicyContext, from: string): string {
   return resolve(expandHome(from, ctx), expandHome(p, ctx));
 }
 
@@ -1470,19 +1582,26 @@ function within(root: string, target: string): boolean {
 
 /**
  * Whether `p` names agent or git configuration that runs outside the gate on a later spawn or
- * git command: anything under `.claude/`, `.git/` or `.husky/`, or a `.mcp.json`. Measured from
- * the agent's cwd when `p` is under it (its worktree), else from the workspace root, so a
- * workspace that itself lives under such a directory is not flagged wholesale.
+ * git command: anything under `.claude/`, `.git/` or `.husky/`, or a `.mcp.json` /
+ * `.claude.json`. Measured from the agent's cwd when `p` is under it (its worktree), else from
+ * the workspace root when under it, so a workspace that itself lives under such a directory is not
+ * flagged wholesale; anywhere else, on the whole path.
  */
 export function isAgentConfigPath(p: string, ctx: PolicyContext): boolean {
   const workspace = resolve(expandHome(ctx.workspace, ctx));
   const cwd = ctx.cwd ? resolve(expandHome(ctx.cwd, ctx)) : workspace;
   const target = unalias(resolvePath(p, ctx, cwd), ctx);
-  const root = within(cwd, target) ? cwd : workspace;
-  const segments = relative(root, target).split(sep);
+  // Below the cwd or the workspace, only the part below them counts; elsewhere the whole path
+  // (P9-17 review B1: `~/.claude/settings.json`, `~/other/.git/hooks/x`). Case-folded (APFS).
+  const root = within(cwd, target) ? cwd : within(workspace, target) ? workspace : sep;
+  const segments = relative(root, target)
+    .split(sep)
+    .map((s) => s.normalize('NFC').toLowerCase());
+  const last = segments[segments.length - 1];
   return (
     segments.some((s) => s === '.claude' || s === '.git' || s === '.husky') ||
-    segments[segments.length - 1] === '.mcp.json'
+    last === '.mcp.json' ||
+    last === '.claude.json'
   );
 }
 
@@ -1505,7 +1624,7 @@ export function isUserFolderPath(p: string, ctx: PolicyContext): boolean {
   });
 }
 
-function expandHome(p: string, ctx: PolicyContext): string {
+export function expandHome(p: string, ctx: PolicyContext): string {
   if (p === '~') return ctx.home ?? homedir();
   if (p.startsWith('~/')) return (ctx.home ?? homedir()) + p.slice(1);
   return p;

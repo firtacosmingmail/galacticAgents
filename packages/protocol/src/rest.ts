@@ -9,10 +9,12 @@ import {
   PERMISSION_POLICY_PRESETS,
   PermissionPolicy,
   type PermissionPolicyPreset,
+  PermissionRule,
+  PermissionRuleScope,
   TrustLevel,
 } from './domain.js';
 import { ControlTarget } from './events.js';
-import { Timestamp } from './primitives.js';
+import { Id, Timestamp } from './primitives.js';
 
 // ---------------------------------------------------------------------------
 // The small REST control surface (TECHNOLOGY §2.2; the ops console of P1-11). Results arrive on
@@ -122,6 +124,66 @@ export type DismissBody = z.infer<typeof DismissBody>;
 /** `POST /api/questions/:id/dismiss`'s reply. */
 export const DismissResponse = z.object({ ok: z.literal(true) });
 export type DismissResponse = z.infer<typeof DismissResponse>;
+
+/**
+ * `POST /api/questions/:id/similar-preview` (P9-17, SPEC decision 138): what the card's "Allow
+ * similar" chooser offers for an open permission request — one option per scope, each with a
+ * label and a preview of exactly what the rule would match, or why it is not offered — computed
+ * by the server from the request. `refused` says why no rule can be made at all (a push, a request
+ * outside any project, a call the table no longer asks about). `allowed`: whether this client may
+ * make one (the Mac, or any client with `autoApproveRemote`).
+ */
+export const SimilarOption = z.object({
+  scope: PermissionRuleScope,
+  available: z.boolean(),
+  label: z.string().optional(),
+  preview: z.string().optional(),
+  /**
+   * What binds this preview to the rule stored (P9-17 review S1): sent back with
+   * `allow-similar`, which refuses (409 `stale`) when the rule it drafts again differs.
+   */
+  digest: z.string().optional(),
+  reason: z.string().optional(),
+});
+export type SimilarOption = z.infer<typeof SimilarOption>;
+
+export const SimilarPreviewResponse = z.object({
+  questionId: Id,
+  projectId: Id.optional(),
+  projectName: z.string().optional(),
+  refused: z.string().optional(),
+  options: z.array(SimilarOption),
+  allowed: z.boolean(),
+});
+export type SimilarPreviewResponse = z.infer<typeof SimilarPreviewResponse>;
+
+/**
+ * `POST /api/questions/:id/allow-similar` (P9-17): answers the request "allow" and stores the rule
+ * of `scope` the preview showed — `digest` is the preview's for that scope, and a rule drafted
+ * again that differs is refused (409 `stale`). `version` and `answerId` as for an answer.
+ */
+export const AllowSimilarBody = z.object({
+  scope: PermissionRuleScope,
+  digest: z.string().min(1).max(128),
+  version: z.number().int().nonnegative().optional(),
+  answerId: z.string().min(1).max(100).optional(),
+});
+export type AllowSimilarBody = z.infer<typeof AllowSimilarBody>;
+
+/**
+ * `rule`: the rule stored. `ruleNotStored`: the request was allowed once, but the rule could not
+ * be stored after it (the project closed meanwhile, say) — said to the user (P9-17 review S6).
+ */
+export const AllowSimilarResponse = z.object({
+  ok: z.literal(true),
+  rule: PermissionRule.optional(),
+  ruleNotStored: z.string().optional(),
+});
+export type AllowSimilarResponse = z.infer<typeof AllowSimilarResponse>;
+
+/** `DELETE /api/projects/:id/permission-rules/:ruleId`'s reply (P9-17). */
+export const RemovePermissionRuleResponse = z.object({ ok: z.literal(true) });
+export type RemovePermissionRuleResponse = z.infer<typeof RemovePermissionRuleResponse>;
 
 /** A refused answer: `stale` when the question was answered or moved since `version`. */
 export const AnswerRefusal = z.object({
