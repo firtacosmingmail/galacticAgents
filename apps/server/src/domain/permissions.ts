@@ -242,9 +242,20 @@ export function evaluate(
 // ---------------------------------------------------------------------------
 
 /** Tools that only read the file system; their `path`-like inputs decide inside vs. outside. */
-export const READ_TOOLS: ReadonlySet<string> = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead']);
+export const READ_TOOLS: ReadonlySet<string> = new Set([
+  'Read',
+  'Glob',
+  'Grep',
+  'LS',
+  'NotebookRead',
+]);
 /** Tools that write files. */
-export const EDIT_TOOLS: ReadonlySet<string> = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+export const EDIT_TOOLS: ReadonlySet<string> = new Set([
+  'Write',
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+]);
 /** Tools that reach the network by definition. */
 const NETWORK_TOOLS = new Set(['WebFetch', 'WebSearch']);
 /** Tools with no effect outside the agent's own bookkeeping. */

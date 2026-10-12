@@ -182,9 +182,9 @@ describe('rule matching (P9-17)', () => {
     expect(
       allows([rule], { toolName: 'Grep', input: { pattern: 'TODO', path: '/home/u/specs' } }),
     ).toBe(rule.id);
-    expect(
-      allows([rule], { toolName: 'Glob', input: { pattern: '/home/u/specs/**/*.md' } }),
-    ).toBe(rule.id);
+    expect(allows([rule], { toolName: 'Glob', input: { pattern: '/home/u/specs/**/*.md' } })).toBe(
+      rule.id,
+    );
     // Out of the folder: by `..`, by a symlink inside it, by a brace alternative, a sibling.
     expect(allows([rule], read('/home/u/specs/../.ssh/id_rsa'))).toBeUndefined();
     expect(allows([rule], read('/home/u/specs/link/passwd'))).toBeUndefined();
@@ -206,8 +206,15 @@ describe('rule matching (P9-17)', () => {
   });
 
   it('category: any tool the table asks about only in those categories', () => {
-    const rule = ruleFrom({ toolName: 'WebFetch', input: { url: 'https://a.dev', prompt: 'x' } }, 'category');
-    expect(rule).toMatchObject({ tool: '*', match: { kind: 'categories' }, categories: ['network'] });
+    const rule = ruleFrom(
+      { toolName: 'WebFetch', input: { url: 'https://a.dev', prompt: 'x' } },
+      'category',
+    );
+    expect(rule).toMatchObject({
+      tool: '*',
+      match: { kind: 'categories' },
+      categories: ['network'],
+    });
     expect(allows([rule], { toolName: 'WebSearch', input: { query: 'zod' } })).toBe(rule.id);
     expect(allows([rule], bash('curl https://b.dev'))).toBe(rule.id);
     expect(allows([rule], bash('npm install zod'))).toBe(rule.id);
@@ -303,11 +310,18 @@ describe('folder rules on the real file system (P9-17)', () => {
 
 describe('the chooser (P9-17)', () => {
   it('offers the three scopes with previews of what each matches', () => {
-    const found = similarOptions({ call: bash('npm install zod'), ctx, policy: DEFAULT, realPath: REAL });
+    const found = similarOptions({
+      call: bash('npm install zod'),
+      ctx,
+      policy: DEFAULT,
+      realPath: REAL,
+    });
     expect(found.refused).toBeUndefined();
     const [exact, prefix, category] = found.options;
     expect(exact).toMatchObject({ scope: 'exact', available: true });
-    expect(exact?.available && exact.draft.preview).toMatch(/Exactly the command `npm install zod`/);
+    expect(exact?.available && exact.draft.preview).toMatch(
+      /Exactly the command `npm install zod`/,
+    );
     expect(prefix?.available && prefix.draft.preview).toMatch(/starts with `npm install`/);
     expect(category?.available && category.draft.preview).toMatch(/only as network access/);
   });

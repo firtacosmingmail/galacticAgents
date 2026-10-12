@@ -186,8 +186,10 @@ function subjectOf(call: ToolCall, ctx: PolicyContext, realPath: RealPath): Subj
       }
     }
     const base = typeof input['path'] === 'string' ? input['path'] : undefined;
-    const from = (base !== undefined ? physicalPath(base, ctx, realPath) : undefined) ??
-      physicalPath(cwdOf(ctx), ctx, realPath) ?? cwdOf(ctx);
+    const from =
+      (base !== undefined ? physicalPath(base, ctx, realPath) : undefined) ??
+      physicalPath(cwdOf(ctx), ctx, realPath) ??
+      cwdOf(ctx);
     for (const f of GLOB_FIELDS[tool] ?? DEFAULT_GLOB_FIELDS) {
       const g = input[f];
       if (typeof g !== 'string') continue;
@@ -375,7 +377,10 @@ export function similarOptions(input: RuleInput): SimilarOptions {
   const subject = subjectOf(call, ctx, realPath);
   const tool = call.toolName;
   const options: ScopeOption[] = [];
-  const asks = asking.categories.length > 0 ? ` (the table asks about it as ${categoryWords(asking.categories)})` : '';
+  const asks =
+    asking.categories.length > 0
+      ? ` (the table asks about it as ${categoryWords(asking.categories)})`
+      : '';
   const only =
     asking.categories.length > 0
       ? ` — only while the table asks about it as ${categoryWords(asking.categories)} and nothing else`
@@ -383,7 +388,11 @@ export function similarOptions(input: RuleInput): SimilarOptions {
 
   // Exactly this.
   const exactText =
-    subject.kind === 'command' ? subject.command : subject.kind === 'paths' ? subject.text : subject.text;
+    subject.kind === 'command'
+      ? subject.command
+      : subject.kind === 'paths'
+        ? subject.text
+        : subject.text;
   const exactLabel =
     subject.kind === 'paths'
       ? `${tool} ${subject.paths.map((p) => tildify(p, ctx)).join(', ') || shorten(subject.text)}`
@@ -438,8 +447,7 @@ export function similarOptions(input: RuleInput): SimilarOptions {
         : {
             scope: 'prefix',
             available: false,
-            reason:
-              'only a single command without redirections, assignments or sudo has a prefix',
+            reason: 'only a single command without redirections, assignments or sudo has a prefix',
           },
     );
   } else if (subject.kind === 'paths') {
@@ -499,11 +507,7 @@ export function similarOptions(input: RuleInput): SimilarOptions {
 
 // --- matching (the gate) --------------------------------------------------------------------
 
-function matchesScope(
-  rule: PermissionRule,
-  call: ToolCall,
-  subject: Subject,
-): boolean {
+function matchesScope(rule: PermissionRule, call: ToolCall, subject: Subject): boolean {
   const { match } = rule;
   switch (match.kind) {
     case 'categories':
@@ -513,7 +517,10 @@ function matchesScope(
       if (subject.kind === 'paths') {
         return groupOf(rule.tool) === subject.group && match.text === subject.text;
       }
-      return rule.tool === call.toolName && match.text === (subject.kind === 'command' ? subject.command : subject.text);
+      return (
+        rule.tool === call.toolName &&
+        match.text === (subject.kind === 'command' ? subject.command : subject.text)
+      );
     case 'words':
       return (
         rule.scope === 'prefix' &&

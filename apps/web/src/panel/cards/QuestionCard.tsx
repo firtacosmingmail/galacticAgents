@@ -147,9 +147,7 @@ export function QuestionCard({
         <span className={`pill kind-${q.kind}`}>{q.kind}</span>
         <span className="muted">held by {actorLabel(q.holder, world)}</span>
         {/* Dismiss (P9-14): not while an answer to it waits in the offline queue. */}
-        {!(queued && isPending(queued)) && (
-          <DismissQuestion question={q} onStale={stale} />
-        )}
+        {!(queued && isPending(queued)) && <DismissQuestion question={q} onStale={stale} />}
       </header>
       <p>{q.context.text}</p>
       <OriginContext question={q} />

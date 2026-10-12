@@ -281,9 +281,9 @@ describe('"Allow similar" (P9-17)', () => {
     const lq = pending(loose.agent.id)!;
     const lp = await call('POST', `/api/questions/${lq}/similar-preview`, {});
     expect(lp.body['refused']).toMatch(/no project/);
-    expect((await call('POST', `/api/questions/${lq}/allow-similar`, { scope: 'exact' })).status).toBe(
-      400,
-    );
+    expect(
+      (await call('POST', `/api/questions/${lq}/allow-similar`, { scope: 'exact' })).status,
+    ).toBe(400);
   });
 
   it('refuses a remote client unless autoApproveRemote, and a stale card', async () => {
@@ -295,7 +295,12 @@ describe('"Allow similar" (P9-17)', () => {
     const preview = await call('POST', `/api/questions/${q}/similar-preview`, {}, REMOTE);
     expect(preview.status).toBe(200);
     expect(preview.body['allowed']).toBe(false);
-    const remote = await call('POST', `/api/questions/${q}/allow-similar`, { scope: 'exact' }, REMOTE);
+    const remote = await call(
+      'POST',
+      `/api/questions/${q}/allow-similar`,
+      { scope: 'exact' },
+      REMOTE,
+    );
     expect(remote.status).toBe(403);
     expect(remote.body['error']).toBe('remote_control');
     const stale = await call('POST', `/api/questions/${q}/allow-similar`, {
@@ -307,9 +312,9 @@ describe('"Allow similar" (P9-17)', () => {
     expect(project(app.id).permissionRules).toBeUndefined();
     expect(composed.log.tables.questions.get(q)?.status).toBe('open');
     // A remote client can still allow once (decision 90).
-    expect((await call('POST', `/api/questions/${q}/answer`, { answer: 'allow' }, REMOTE)).status).toBe(
-      200,
-    );
+    expect(
+      (await call('POST', `/api/questions/${q}/answer`, { answer: 'allow' }, REMOTE)).status,
+    ).toBe(200);
     // And may not remove a rule either.
     const rule = composed.log.runCommand((ctx) =>
       addPermissionRule(
@@ -326,7 +331,12 @@ describe('"Allow similar" (P9-17)', () => {
         { by: { type: 'user' }, origin: 'local' },
       ),
     ).value;
-    const del = await call('DELETE', `/api/projects/${app.id}/permission-rules/${rule.id}`, undefined, REMOTE);
+    const del = await call(
+      'DELETE',
+      `/api/projects/${app.id}/permission-rules/${rule.id}`,
+      undefined,
+      REMOTE,
+    );
     expect(del.status).toBe(403);
     expect(project(app.id).permissionRules).toHaveLength(1);
   });
@@ -337,15 +347,21 @@ describe('"Allow similar" (P9-17)', () => {
     const steward = await spawn(app, 'steward', 'installs');
     await waitFor(() => pending(steward) !== undefined, 'request');
     const q = pending(steward)!;
-    expect((await call('POST', `/api/questions/${q}/similar-preview`, {}, REMOTE)).body['allowed']).toBe(
-      true,
+    expect(
+      (await call('POST', `/api/questions/${q}/similar-preview`, {}, REMOTE)).body['allowed'],
+    ).toBe(true);
+    const made = await call(
+      'POST',
+      `/api/questions/${q}/allow-similar`,
+      { scope: 'category' },
+      REMOTE,
     );
-    const made = await call('POST', `/api/questions/${q}/allow-similar`, { scope: 'category' }, REMOTE);
     expect(made.status).toBe(200);
     expect(made.body['rule']).toMatchObject({ origin: 'remote', scope: 'category' });
     const id = (made.body['rule'] as { id: string }).id;
     expect(
-      (await call('DELETE', `/api/projects/${app.id}/permission-rules/${id}`, undefined, REMOTE)).status,
+      (await call('DELETE', `/api/projects/${app.id}/permission-rules/${id}`, undefined, REMOTE))
+        .status,
     ).toBe(200);
   });
 
@@ -358,9 +374,7 @@ describe('"Allow similar" (P9-17)', () => {
     const made = await call('POST', `/api/questions/${q}/allow-similar`, { scope: 'exact' });
     expect(made).toEqual({ status: 403, body: { error: 'agent_peer', message: 'from an agent' } });
     expect(composed.log.tables.questions.get(q)?.status).toBe('open');
-    expect(
-      (await call('DELETE', `/api/projects/${app.id}/permission-rules/r-x`)).status,
-    ).toBe(403);
+    expect((await call('DELETE', `/api/projects/${app.id}/permission-rules/r-x`)).status).toBe(403);
   });
 });
 
@@ -394,9 +408,14 @@ describe('rules end with their project (P9-17)', () => {
 
     const cancelled = await newProject('cancelled');
     add(cancelled.id);
-    await composed.commands.control({ kind: 'project', id: cancelled.id }, { action: 'cancel' }, user, {
-      origin: 'local',
-    });
+    await composed.commands.control(
+      { kind: 'project', id: cancelled.id },
+      { action: 'cancel' },
+      user,
+      {
+        origin: 'local',
+      },
+    );
     expect(project(cancelled.id).state).toBe('failed');
     expect(project(cancelled.id).permissionRules).toBeUndefined();
 

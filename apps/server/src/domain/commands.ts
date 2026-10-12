@@ -746,9 +746,11 @@ export class Commands implements DomainCommands {
    * its table and its gate context — the live session's, else the rows' (the workspace, the task's
    * worktree).
    */
-  private permissionContextOf(
-    question: Question,
-  ): { projectId: Id | undefined; policy: PermissionPolicy; ctx: PolicyContext } {
+  private permissionContextOf(question: Question): {
+    projectId: Id | undefined;
+    policy: PermissionPolicy;
+    ctx: PolicyContext;
+  } {
     const live = this.agents?.permissionContext?.(question.originAgentId);
     if (live) return live;
     const { tables } = this.log;

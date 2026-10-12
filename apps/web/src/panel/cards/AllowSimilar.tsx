@@ -29,7 +29,8 @@ export function similarProject(
   world: Pick<WorldState, 'agents' | 'tasks' | 'projects'>,
 ): Project | undefined {
   if (q.kind !== 'permission' || q.status !== 'open') return undefined;
-  if (q.context.permissionAction === 'push') return undefined;
+  // A push always asks (decision 49); a request without a tool call has nothing to match.
+  if (q.context.permissionAction === 'push' || !q.context.toolCall) return undefined;
   const agent = world.agents[q.originAgentId];
   const taskId = agent?.taskId ?? q.context.origin?.taskId;
   const projectId =
@@ -84,7 +85,6 @@ export function AllowSimilar({
   useEffect(() => {
     if (!open) return;
     let live = true;
-    setPreview({ status: 'loading' });
     api.similarPreview(q.id).then(
       (data) => {
         if (!live) return;
@@ -138,7 +138,11 @@ export function AllowSimilar({
         disabled={outerBusy || busy}
         aria-expanded={open}
         aria-controls={open ? chooserId : undefined}
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={() => {
+          if (open) return close();
+          setPreview({ status: 'loading' });
+          setOpen(true);
+        }}
       >
         Allow similar for {project.name}…
       </button>
@@ -165,7 +169,10 @@ export function AllowSimilar({
           {preview.status === 'ready' && !preview.data.refused && (
             <>
               {preview.data.options.map((o) => (
-                <label key={o.scope} className={`allow-similar-option${o.available ? '' : ' is-off'}`}>
+                <label
+                  key={o.scope}
+                  className={`allow-similar-option${o.available ? '' : ' is-off'}`}
+                >
                   <input
                     type="radio"
                     name={`${chooserId}-scope`}

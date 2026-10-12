@@ -1700,7 +1700,9 @@ export class AgentRuntime {
    */
   private rulesOf(agentId: Id, req: SpawnRequest): readonly PermissionRule[] {
     const projectId = this.projectIdOf(agentId, req);
-    return (projectId ? this.opts.log.tables.projects.get(projectId)?.permissionRules : undefined) ?? [];
+    return (
+      (projectId ? this.opts.log.tables.projects.get(projectId)?.permissionRules : undefined) ?? []
+    );
   }
 
   private policyOf(agentId: Id, req: SpawnRequest): PermissionPolicy {

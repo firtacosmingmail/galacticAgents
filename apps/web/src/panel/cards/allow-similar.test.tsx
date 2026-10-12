@@ -133,11 +133,17 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
 
     await act(async () => fireEvent.click(opener));
     expect(api.similarPreview).toHaveBeenCalledWith('q-install');
-    const chooser = await screen.findByRole('group', { name: /Allow from now on in Auth refactor/ });
+    const chooser = await screen.findByRole('group', {
+      name: /Allow from now on in Auth refactor/,
+    });
     expect(opener.getAttribute('aria-expanded')).toBe('true');
     const exact = within(chooser).getByRole('radio', { name: /Exactly this/ }) as HTMLInputElement;
-    const prefix = within(chooser).getByRole('radio', { name: /prefix \/ folder/ }) as HTMLInputElement;
-    const category = within(chooser).getByRole('radio', { name: /whole category/ }) as HTMLInputElement;
+    const prefix = within(chooser).getByRole('radio', {
+      name: /prefix \/ folder/,
+    }) as HTMLInputElement;
+    const category = within(chooser).getByRole('radio', {
+      name: /whole category/,
+    }) as HTMLInputElement;
     expect(exact.checked).toBe(true); // the first offered scope
     expect(category.disabled).toBe(true);
     expect(chooser.textContent).toMatch(/Not offered: not today/);
