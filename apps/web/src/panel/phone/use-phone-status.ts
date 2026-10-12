@@ -107,12 +107,22 @@ export function usePhoneStatus(): (PhoneState & { api: Api }) | undefined {
   return api ? { ...state, api } : undefined;
 }
 
-/** The top bar's words: "Phone: online", "Phone: restart needed", "Phone: off". */
+/**
+ * The top bar's words: "Phone: online", "Phone: restart needed", "Phone: off" — or, loudly,
+ * "Funnel ON: public internet" while Tailscale Funnel is on (whatever else is true).
+ */
 export function phoneIndicator(status: RemoteStatus): {
-  kind: 'online' | 'restart' | 'off';
+  kind: 'online' | 'restart' | 'off' | 'warning';
   label: string;
   tooltip: string;
 } {
+  if (status.funnel) {
+    return {
+      kind: 'warning',
+      label: 'Funnel ON: public internet',
+      tooltip: status.message ?? REMOTE_REASON_SHORT.funnel_on,
+    };
+  }
   if (status.ready) {
     const n = status.remoteClients.connected;
     return {

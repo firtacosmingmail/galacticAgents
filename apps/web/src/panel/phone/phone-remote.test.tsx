@@ -16,6 +16,7 @@ const status: RemoteStatus = {
   url: 'https://mymac.tail1234.ts.net',
   remoteHost: { state: 'matches', value: 'mymac.tail1234.ts.net' },
   serve: 'forwarding_to_us',
+  funnel: false,
   serveOwned: true,
   ready: true,
   restartNeeded: false,

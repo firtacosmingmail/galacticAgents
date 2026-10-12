@@ -366,3 +366,7 @@
   gap: 6px;
   margin: 4px 0;
 }
+.set-phone-warning {
+  color: #e5484d;
+  font-weight: 600;
+}

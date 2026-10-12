@@ -19,6 +19,7 @@ export function remoteStatus(over: Partial<RemoteStatus> = {}): RemoteStatus {
     url: `https://${NAME}`,
     remoteHost: { state: 'matches', value: NAME },
     serve: 'forwarding_to_us',
+    funnel: false,
     serveOwned: true,
     ready: true,
     restartNeeded: false,
@@ -192,11 +193,54 @@ describe('Settings → Access, Phone access, on the Mac (P9-16)', () => {
         error: 'remote_refused',
         reason: 'funnel_on',
         message: 'Tailscale Funnel is on: turn it off.',
-        status: remoteStatus({ serve: 'funnel_on', ready: false, reason: 'funnel_on' }),
+        status: remoteStatus({ serve: 'absent', funnel: true, ready: false, reason: 'funnel_on' }),
       });
     });
     renderSection(f.api);
     fireEvent.click(await screen.findByRole('button', { name: 'Turn on phone access' }));
     expect(await screen.findByText('Tailscale Funnel is on: turn it off.')).toBeTruthy();
+  });
+
+  it('turned off outside GalacticAgents: says so, and the user turns it on again', async () => {
+    const f = fakeApi(
+      remoteStatus({
+        serve: 'absent',
+        serveOwned: false,
+        ready: false,
+        reason: 'turned_off_outside',
+        turnedOff: 'outside',
+        message: 'Phone access was turned off outside GalacticAgents.',
+      }),
+    );
+    renderSection(f.api);
+    expect(await screen.findByText(/Off — turned off outside GalacticAgents/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on phone access' }));
+    await screen.findByText(/On: the phone can reach Mission Control/);
+    expect(f.raw.remoteStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('Funnel on with our Serve: a loud warning, and turning it off is offered', async () => {
+    const f = fakeApi(
+      remoteStatus({
+        funnel: true,
+        ready: false,
+        reason: 'funnel_on',
+        message: 'WARNING: Tailscale Funnel is ON …',
+      }),
+    );
+    renderSection(f.api);
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('public internet');
+    expect(screen.queryByRole('button', { name: 'Turn on phone access' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off phone access' }));
+    await waitFor(() => expect(f.raw.remoteStop).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('the indicator with Funnel on (P9-16 review)', () => {
+  it('is a loud warning whatever else is true', () => {
+    expect(
+      phoneIndicator(remoteStatus({ funnel: true, ready: false, reason: 'funnel_on' })),
+    ).toMatchObject({ kind: 'warning', label: 'Funnel ON: public internet' });
   });
 });

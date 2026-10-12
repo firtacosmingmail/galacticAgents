@@ -62,7 +62,10 @@ export function AccessToken({ token, remote }: { token: string; remote?: Setting
   return (
     <section className="set-section" aria-label="Access" id={ACCESS_SECTION_ID}>
       <div className="set-head">
-        <h2 className="set-title">Access</h2>
+        {/* Focusable by script only: the phone indicator moves focus here (revealAccessSection). */}
+        <h2 className="set-title" tabIndex={-1}>
+          Access
+        </h2>
       </div>
       <p className="set-intro">
         This browser connects with the token <code>galactic start</code> printed. Anyone with it can

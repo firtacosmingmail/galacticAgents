@@ -1241,3 +1241,11 @@ a.pnl-link:hover {
 .pnl-phone-restart .pnl-phone-dot {
   background: #d9a441;
 }
+/* Funnel on: the Mac is on the public internet — said loudly */
+.pnl-phone-warning {
+  color: #e5484d;
+  font-weight: 600;
+}
+.pnl-phone-warning .pnl-phone-dot {
+  background: #e5484d;
+}

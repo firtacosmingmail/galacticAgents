@@ -61,9 +61,12 @@ export function PhoneAccessSection() {
   const view = status ? phoneIndicator(status) : undefined;
   const reason = status?.reason;
   const canTurnOff = !!status && status.serve === 'forwarding_to_us' && status.serveOwned;
+  // Also the way back after it was turned off on purpose (here, in the menu, or outside
+  // GalacticAgents): this start is the user's, so the desktop app's automatic start resumes.
   const canTurnOn =
     !!status &&
     !status.ready &&
+    !status.funnel &&
     status.tailscale === 'running' &&
     !!status.name &&
     (status.serve === 'absent' ||
@@ -80,13 +83,18 @@ export function PhoneAccessSection() {
       )}
       {status && view && (
         <>
-          <p className={`set-phone-state set-phone-${view.kind}`} role="status">
+          <p
+            className={`set-phone-state set-phone-${view.kind}`}
+            role={view.kind === 'warning' ? 'alert' : 'status'}
+          >
             <span className="pnl-phone-dot" aria-hidden="true" />{' '}
-            {view.kind === 'online'
-              ? 'On: the phone can reach Mission Control'
-              : view.kind === 'restart'
-                ? 'Almost on: restart needed'
-                : `Off — ${REMOTE_REASON_SHORT[reason ?? 'error']}`}
+            {view.kind === 'warning'
+              ? 'WARNING — Tailscale Funnel is ON: this Mac is published to the public internet'
+              : view.kind === 'online'
+                ? 'On: the phone can reach Mission Control'
+                : view.kind === 'restart'
+                  ? 'Almost on: restart needed'
+                  : `Off — ${REMOTE_REASON_SHORT[reason ?? 'error']}`}
           </p>
           {status.url && (
             <p className="set-muted">
