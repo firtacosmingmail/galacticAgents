@@ -1,7 +1,7 @@
 # Phase 9 — Deliverables
 
 **Current task:** P9-13 (acceptance run with Cosmin on the Mac and the phone) · **Task status:** todo
-**Phase status:** in progress (15/17 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
+**Phase status:** in progress (16/17 done) — planned 2026-10-07 on branch `phase-9`, cut from `main`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -131,9 +131,10 @@ When a project or a task has deliverables, Cosmin reaches them from the app: a f
 - **Acceptance:** with Tailscale connected, launching the app leaves `tailscale serve status` forwarding to the app's server and the phone opens the app; with Tailscale off the menu says why; turning it off stops Serve only if the app started it; tests for the checks with a fake `tailscale`.
 
 ### P9-17 — "Allow similar" for a Waykeeper's work (added 2026-10-12)
-- **Status:** in progress · **Depends on:** P2-21 (policy table), P9-14 · **Parallel with:** —
+- **Status:** done (2026-10-12) · **Depends on:** P2-21 (policy table), P9-14 · **Parallel with:** —
 - Cosmin's request: when answering a permission request from a Waykeeper or one of its Stewards, he can allow similar actions for that Waykeeper, choosing each time: **this exact command/path**, **this command prefix / folder** (e.g. `npm run …`, "anything under ~/Documents/specs"), or **this whole category** (e.g. network, outside the workspace). The rule is stored on that Waykeeper's project (its own and its Stewards' requests), lasts until the project closes (removed on archive), is listed and removable in the project's permission settings, and is judged by the same permission engine (deterministic, never an LLM). Never offered for push (decision 49 — push always asks), never from the menu bar (decision 136: Allow once only), and from the phone only with `autoApproveRemote` (decisions 37/90: remote clients only tighten).
 - **Acceptance:** the permission card offers the three scopes with a preview of what the rule will match; choosing one answers the request and stores the rule; the next matching request from that Waykeeper's project is allowed without a card (logged as allowed by the rule); other projects still ask; archive removes the rule; tests.
+- **Done:** SPEC decision 138 (and §3.6), TECHNOLOGY §8 ("Allow similar" rules), plan corner case 15e. Rules live on the project's row (`Project.permissionRules`, migration 0015) and change only by `permission.rule_added` / `permission.rule_removed`; `domain/permission-rules.ts` drafts the three scopes with previews and matches calls (prefix as the lexer's words on every simple command; folder on the physical path, symlinks and `..` walked as the kernel does; the categories the table asks about must all be the rule's); the gate consults them only on `ask` (never a deny, a push, a configuration or deliverables write, an unreadable call except by its own exact rule) and logs `permission.decided{ruleId}`. Routes `POST /api/questions/:id/similar-preview`, `POST /api/questions/:id/allow-similar`, `DELETE /api/projects/:id/permission-rules/:ruleId` — the Mac, or `autoApproveRemote`; never from an agent's or a run's process (peer guard). The card shows "Allow once" and "Allow similar for <project>…" (not for a push, a request outside any project, a request without a tool call, or a client that may not write settings); the project's status view lists the rules with Remove. Closing, cancelling and archiving remove them. Tests: `permission-rules.test.ts`, `permission-gate.test.ts`, `allow-similar-routes.test.ts`, `allow-similar.test.tsx` (jsdom, axe), `conformance-rules.test.ts`, e2e `04-inbox.spec.ts`.
 
 ## Exit criteria (from the plan)
 
