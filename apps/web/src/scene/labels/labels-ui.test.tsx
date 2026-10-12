@@ -518,7 +518,7 @@ describe('the deliverables mark (P9-11, decision 133)', () => {
     withDeliverables(image, dev('ended'));
     expect(mark('b-jupiter')).toBeNull();
     // The rest of the label is unchanged.
-    expect(label('b-ast-7').textContent).toContain('Fix the date test');
+    expect(label('b-ast-7').textContent).toContain('Fix the date te…');
   });
 
   it("the mark's box is measured with the label and told apart by the hit test", () => {

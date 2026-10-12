@@ -12,6 +12,7 @@ import {
   labelPriority,
   PRIORITY,
   shortTitle,
+  ASTEROID_TITLE_MAX,
   stateText,
   stateTone,
   type LabelWorld,
@@ -93,7 +94,8 @@ describe('world → labels', () => {
   it("a task's asteroid: the task's description and state", () => {
     expect(bodyLabel(labelWorld(), 'b-ast-7')).toMatchObject({
       kind: 'task',
-      title: 'Fix the date test',
+      title: 'Fix the date te…',
+      fullTitle: 'Fix the date test',
       state: 'blocked_on_user',
       stateText: 'blocked on you',
       tone: 'beacon',
@@ -186,10 +188,21 @@ describe('world → labels', () => {
     const long = 'Rewrite the whole date parsing module so that it handles time zones';
     world.tasks['t-ast'] = { ...world.tasks['t-ast']!, description: long };
     const label = bodyLabel(world, 'b-ast-7')!;
-    expect(label.title.length).toBeLessThanOrEqual(32);
-    expect(label.title.endsWith('…')).toBe(true);
+    expect(label.title).toBe('Rewrite the who…');
+    expect(label.title.length).toBeLessThanOrEqual(ASTEROID_TITLE_MAX);
     expect(label.fullTitle).toBe(long);
     expect(shortTitle('  a\n b  ')).toBe('a b');
+  });
+
+  it("an asteroid's name is cut shorter than a planet's (P8-16)", () => {
+    const world = labelWorld();
+    const name = 'Calendar sync for the family planner';
+    world.tasks['t-ast'] = { ...world.tasks['t-ast']!, description: name };
+    world.projects['p-big'] = { ...world.projects['p-big']!, name };
+    expect(bodyLabel(world, 'b-ast-7')!.title).toBe('Calendar sync f…');
+    expect(bodyLabel(world, 'b-jupiter')!.title).toBe('Calendar sync for the family pl…');
+    world.tasks['t-ast'] = { ...world.tasks['t-ast']!, description: 'Fix the login' };
+    expect(bodyLabel(world, 'b-ast-7')!.title).toBe('Fix the login');
   });
 
   it('the selected body is marked and wins every overlap', () => {
