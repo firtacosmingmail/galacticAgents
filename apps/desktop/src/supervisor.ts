@@ -59,7 +59,7 @@ export interface SupervisorOptions {
    * Phone access (P9-16, `phone.ts`): told when the live Mission Control changes and after a
    * reconnect; while it is on, a server this app starts gets `GALACTIC_PHONE_ACCESS=1`.
    */
-  phone?: Pick<PhoneAccess, 'on' | 'setServer' | 'reconnected' | 'stop'>;
+  phone?: Pick<PhoneAccess, 'on' | 'setServer' | 'reconnected' | 'stop' | 'releaseForQuit'>;
 }
 
 export class Supervisor {
@@ -116,6 +116,8 @@ export class Supervisor {
     this.watcher = undefined;
     this.opts.phone?.stop();
     if (this.own?.running) {
+      // Serve first (when Mission Control started it): 443 must not forward to a dead port.
+      await this.opts.phone?.releaseForQuit();
       this.opts.log('stopping the Mission Control this app started');
       await this.own.stop();
     }
@@ -174,11 +176,13 @@ export class Supervisor {
     this.setPhase('starting');
     const make = this.opts.makeOwnServer ?? ((o: OwnServerOptions) => new OwnServer(o));
     const phoneOn = this.opts.phone?.on ?? false;
+    // Never inherited from the app's own environment: only the switch decides.
+    const { GALACTIC_PHONE_ACCESS: _inherited, ...env } = this.opts.server.env;
     const own = make({
       ...this.opts.server,
       // Phone access: the server adds this Mac's Tailscale name as `remoteHost` before it reads
       // its config, so it needs no restart to accept the phone.
-      env: phoneOn ? { ...this.opts.server.env, GALACTIC_PHONE_ACCESS: '1' } : this.opts.server.env,
+      env: phoneOn ? { ...env, GALACTIC_PHONE_ACCESS: '1' } : env,
       log: this.opts.log,
       onExit: (code, signal) => this.onOwnExit(own, code, signal),
     });

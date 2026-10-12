@@ -245,7 +245,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_window(app),
-            "start" => send_command(app, "start"),
+            "start" => {
+                send_command(app, "start");
+            }
             "autostart" => toggle_autostart(app),
             "quit" => begin_quit(app),
             id => match parse_action(id) {
@@ -334,7 +336,11 @@ fn focus_question(app: &AppHandle, question_id: &str) {
     }
 }
 
-/// A `phone` line (P9-16): the Phone line, the switch's state, the address a click copies.
+/// A `phone` line (P9-16): sets the Phone line's text and whether a click copies (only a safe
+/// `https://<host>` address while the phone can reach Mission Control), the "Phone Access" check
+/// mark (the Node side's effective state: off too while phone access was turned off on purpose,
+/// so a click turns it on), and whether "Show the Phone QR Code" is enabled (a live server). The
+/// full reason (`detail`) goes to the log.
 fn on_phone(app: &AppHandle, phone: PhoneLine) {
     let shell = app.state::<Shell>();
     let connected = shell.port.lock().unwrap().is_some();
@@ -374,10 +380,14 @@ fn copy_phone_url(app: &AppHandle) {
 }
 
 /// "Phone Access": the switch has already flipped itself; its new state goes to the Node side,
-/// whose next `phone` line confirms it.
+/// whose next `phone` line confirms it. With the Node side gone nothing would change: the check
+/// mark goes back to what it was.
 fn toggle_phone(app: &AppHandle) {
-    let checked = app.state::<Menus>().phone_access.is_checked().unwrap_or(false);
-    send_command(app, phone_command(checked));
+    let menus = app.state::<Menus>();
+    let checked = menus.phone_access.is_checked().unwrap_or(false);
+    if !send_command(app, phone_command(checked)) {
+        let _ = menus.phone_access.set_checked(!checked);
+    }
 }
 
 /// "Show the Phone QR Code": the window at Settings → Access (the code shows after its own click).
@@ -417,12 +427,13 @@ fn toggle_autostart(app: &AppHandle) {
     let _ = menus.autostart.set_checked(launcher.is_enabled().unwrap_or(false));
 }
 
-fn send_command(app: &AppHandle, command: &str) {
+/// Writes one command line to the Node side; `false` when it is gone (no pipe, or the write failed).
+fn send_command(app: &AppHandle, command: &str) -> bool {
     let shell = app.state::<Shell>();
     let mut stdin = shell.stdin.lock().unwrap();
-    if let Some(pipe) = stdin.as_mut() {
-        let _ = writeln!(pipe, "{command}");
-        let _ = pipe.flush();
+    match stdin.as_mut() {
+        Some(pipe) => writeln!(pipe, "{command}").and_then(|()| pipe.flush()).is_ok(),
+        None => false,
     }
 }
 

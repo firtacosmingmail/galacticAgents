@@ -24,6 +24,7 @@ function status(over: Partial<RemoteStatus> = {}): RemoteStatus {
     url: `https://${NAME}`,
     remoteHost: { state: 'matches', value: NAME },
     serve: 'forwarding_to_us',
+    funnel: false,
     serveOwned: true,
     ready: true,
     restartNeeded: false,
@@ -48,7 +49,13 @@ const settingsFile = () => {
  * Serve on (owned), stop turns an owned one off and refuses someone else's.
  */
 function fakeMissionControl(initial: RemoteStatus) {
-  const state = { status: initial, requests: [] as string[], fail404: false };
+  const state = {
+    status: initial,
+    requests: [] as string[],
+    bodies: [] as string[],
+    fail404: false,
+    hang: false,
+  };
   const json = (code: number, body: unknown) =>
     new Response(JSON.stringify(body), {
       status: code,
@@ -58,11 +65,21 @@ function fakeMissionControl(initial: RemoteStatus) {
     const path = new URL(url).pathname;
     const method = init?.method ?? 'GET';
     state.requests.push(`${method} ${path}`);
+    if (method === 'POST') state.bodies.push(`${path} ${String(init?.body ?? '')}`);
     expect((init?.headers as Record<string, string>)['authorization']).toBe('Bearer tok');
+    if (state.hang) {
+      return new Promise<Response>((_, reject) =>
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))),
+      );
+    }
     if (state.fail404) return json(404, { error: 'not_found' });
     const s = state.status;
+    const body = JSON.parse(String(init?.body ?? '{}')) as { auto?: boolean; by?: string };
     if (path === '/api/remote/status') return json(200, s);
     if (path === '/api/remote/start') {
+      if (body.auto && s.turnedOff) {
+        return json(409, { ok: false, error: 'remote_refused', reason: 'serve_off', status: s });
+      }
       if (s.tailscale !== 'running') {
         return json(409, { ok: false, error: 'remote_refused', reason: 'not_running', status: s });
       }
@@ -83,6 +100,7 @@ function fakeMissionControl(initial: RemoteStatus) {
         serveOwned: false,
         ready: false,
         reason: 'serve_off',
+        ...(body.by === 'app_quit' ? {} : { turnedOff: 'user' as const }),
       });
       return json(200, { ok: true, status: state.status });
     }
@@ -278,5 +296,89 @@ describe('PhoneAccess (P9-16)', () => {
     expect(mc.state.requests).toContain('POST /api/remote/start');
     expect(p.last()?.on).toBe(true);
     p.phone.stop();
+  });
+});
+
+describe('PhoneAccess: never against the user (P9-16 review)', () => {
+  it('the automatic start says so ({auto: true}); the menu’s off says it is the user’s', async () => {
+    const mc = fakeMissionControl(status({ serve: 'absent', ready: false, reason: 'serve_off' }));
+    const p = phoneFor(mc);
+    p.phone.setServer(OWNED);
+    await p.phone.check();
+    expect(mc.state.bodies).toEqual(['/api/remote/start {"auto":true}']);
+    await p.phone.setOn(false);
+    expect(mc.state.bodies.at(-1)).toBe('/api/remote/stop {"by":"user"}');
+    p.phone.stop();
+  });
+
+  it('turned off from the panel: no automatic start; the switch shows off; a click turns it on', async () => {
+    const mc = fakeMissionControl(
+      status({ serve: 'absent', ready: false, reason: 'serve_off', turnedOff: 'user' }),
+    );
+    const p = phoneFor(mc);
+    p.phone.setServer(OWNED);
+    await p.phone.check();
+    await p.phone.check();
+    expect(mc.state.requests.filter((r) => r.startsWith('POST'))).toEqual([]);
+    expect(p.last()).toEqual({ on: false, label: 'Phone: off' });
+    // The setting itself is untouched: the switch's click is the user turning it on.
+    expect(p.phone.on).toBe(true);
+    await p.phone.setOn(true);
+    expect(mc.state.bodies).toEqual(['/api/remote/start ']);
+    expect(p.last()).toEqual({ on: true, label: `Phone: https://${NAME}`, url: `https://${NAME}` });
+    p.phone.stop();
+  });
+
+  it('turned off outside GalacticAgents: said so, not restarted', async () => {
+    const message = 'Phone access was turned off outside GalacticAgents …';
+    const mc = fakeMissionControl(
+      status({
+        serve: 'absent',
+        serveOwned: false,
+        ready: false,
+        reason: 'turned_off_outside',
+        turnedOff: 'outside',
+        message,
+      }),
+    );
+    const p = phoneFor(mc);
+    p.phone.setServer(ATTACHED);
+    await p.phone.check();
+    expect(mc.state.requests.filter((r) => r.startsWith('POST'))).toEqual([]);
+    expect(p.last()).toEqual({
+      on: false,
+      label: 'Phone: off — turned off outside GalacticAgents',
+      detail: message,
+    });
+    p.phone.stop();
+  });
+
+  it('Funnel on is said loudly, whatever the switch', () => {
+    const s = status({ funnel: true, ready: false, reason: 'funnel_on', message: 'WARNING …' });
+    for (const on of [true, false]) {
+      expect(phoneView({ on, server: OWNED, status: s }).label).toBe(
+        'Phone: WARNING — Tailscale Funnel is ON (public internet)',
+      );
+    }
+  });
+
+  it('on quit: asks Mission Control to turn its Serve off (not as the user), bounded, never throws', async () => {
+    const mc = fakeMissionControl(status());
+    const p = phoneFor(mc);
+    p.phone.setServer(OWNED);
+    await p.phone.check();
+    p.phone.stop();
+    await p.phone.releaseForQuit();
+    expect(mc.state.bodies.at(-1)).toBe('/api/remote/stop {"by":"app_quit"}');
+    expect(mc.state.status.turnedOff).toBeUndefined();
+
+    // Someone else's Serve: refused (409), not thrown.
+    mc.state.status = status({ serveOwned: false });
+    await expect(p.phone.releaseForQuit()).resolves.toBeUndefined();
+    // A Mission Control that does not answer: given up after the deadline.
+    mc.state.hang = true;
+    const started = Date.now();
+    await p.phone.releaseForQuit(50);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });

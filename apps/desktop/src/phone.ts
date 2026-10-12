@@ -22,6 +22,12 @@ import type { PhoneLine, ServerInfo, ShellLine } from './lines.js';
  *   before it read its config — `GALACTIC_PHONE_ACCESS=1` — while an attached one needs a
  *   restart, which the menu says).
  * - **Off**: asks Mission Control to stop Serve, which it does only when GalacticAgents started it.
+ * - **Turned off on purpose** (P9-16 review S3): a stop from the panel or the menu, or our Serve
+ *   stopped outside GalacticAgents, is recorded by Mission Control (`status.turnedOff`); the
+ *   automatic start (`{auto: true}`) then leaves it off, the switch shows unchecked, and only the
+ *   user's own start (the switch, the panel's button) turns it on again.
+ * - **Quit**: when the app stops the Mission Control it started, it first asks it to turn off the
+ *   Serve it started (`releaseForQuit`), so 443 never forwards to a dead port.
  * - The switch is remembered in the app's own settings file, not in Mission Control's config.
  */
 
@@ -78,7 +84,10 @@ export function phoneView(input: {
   /** A start or stop refusal to say instead of the status's reason. */
   refusal?: string | undefined;
 }): PhoneLine {
-  const { on, server, status } = input;
+  const { server, status } = input;
+  // Turned off on purpose (the panel, the menu, or outside GalacticAgents) shows as off — the
+  // switch unchecked, so a click on it is the user turning it on again.
+  const on = input.on && !status?.turnedOff;
   const line = (label: string, extra: Partial<PhoneLine> = {}): PhoneLine => ({
     on,
     label,
@@ -87,6 +96,12 @@ export function phoneView(input: {
   if (!server) return line(on ? 'Phone: waiting for Mission Control' : 'Phone: off');
   if (input.error) return line(`Phone: off — ${input.error}`);
   if (!status) return line(on ? 'Phone: checking…' : 'Phone: off');
+  if (status.funnel) {
+    // Loudly, whatever the switch says: this Mac is published to the public internet.
+    return line('Phone: WARNING — Tailscale Funnel is ON (public internet)', {
+      ...(status.message ? { detail: status.message } : {}),
+    });
+  }
   const url = status.url;
   if (status.ready && url) {
     const n = status.remoteClients.connected;
@@ -102,6 +117,11 @@ export function phoneView(input: {
     );
   }
   if (input.refusal) return line(`Phone: off — ${input.refusal}`);
+  if (status.turnedOff === 'outside' && status.serve === 'absent') {
+    return line(`Phone: off — ${REMOTE_REASON_SHORT.turned_off_outside}`, {
+      ...(status.message ? { detail: status.message } : {}),
+    });
+  }
   if (!on) return line('Phone: off');
   const reason = status.reason ?? 'error';
   return line(`Phone: off — ${REMOTE_REASON_SHORT[reason]}`, {
@@ -192,7 +212,8 @@ export class PhoneAccess {
     this.refusal = undefined;
     this.emit();
     if (!this.server) return;
-    if (on) await this.check();
+    // The user's own start: it also ends "turned off on purpose" on Mission Control's side.
+    if (on) await this.serialized(() => this.turnOn(false));
     else await this.serialized(() => this.turnOff());
   }
 
@@ -200,6 +221,27 @@ export class PhoneAccess {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+  }
+
+  /**
+   * The app is quitting and stops the Mission Control it started: asks it first to turn off the
+   * Serve it started (`by: 'app_quit'` — not "turned off by the user", so the next launch turns
+   * phone access on again), so 443 never forwards to a dead port that another process could take.
+   * Mission Control leaves a Serve it did not start alone. At most `timeoutMs`; never throws.
+   */
+  async releaseForQuit(timeoutMs = 3_000): Promise<void> {
+    if (!this.server) return;
+    try {
+      const body = RemoteActionResponse.safeParse(
+        await this.request('POST', '/api/remote/stop', { by: 'app_quit' }, timeoutMs),
+      );
+      this.opts.log(
+        `phone access: on quit, ${body.success && body.data.ok ? 'Serve is off' : 'Serve left as is'}`,
+      );
+    } catch (error) {
+      // 409: not ours (left on) or Tailscale not readable; a timeout: nothing more to do.
+      this.opts.log(`phone access: on quit, Serve left as is (${(error as Error).message})`);
+    }
   }
 
   /** One look (and a start when on and Serve is off); a look already waiting is not doubled. */
@@ -221,18 +263,27 @@ export class PhoneAccess {
     return next;
   }
 
-  private async request(method: 'GET' | 'POST', path: string): Promise<unknown> {
+  private async request(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: Record<string, unknown>,
+    timeoutMs = 20_000,
+  ): Promise<unknown> {
     const server = this.server;
     const token = this.opts.token();
     if (!server || !token) throw new Error('no token');
     const res = await (this.opts.fetch ?? fetch)(`${server.url}${path}`, {
       method,
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(20_000),
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    const body = (await res.json().catch(() => ({}))) as unknown;
-    if (!res.ok) throw new HttpError(res.status, body);
-    return body;
+    const answer = (await res.json().catch(() => ({}))) as unknown;
+    if (!res.ok) throw new HttpError(res.status, answer);
+    return answer;
   }
 
   private async look(): Promise<void> {
@@ -241,7 +292,9 @@ export class PhoneAccess {
       const status = RemoteStatus.parse(await this.request('GET', '/api/remote/status'));
       this.status = status;
       this.error = undefined;
-      if (this.on && this.shouldStart(status)) await this.turnOn();
+      // Never against the user: turned off on purpose (from the panel, the menu, or Serve stopped
+      // outside GalacticAgents) stays off until the user turns it on again.
+      if (this.on && !status.turnedOff && this.shouldStart(status)) await this.turnOn(true);
     } catch (error) {
       this.status = undefined;
       this.error =
@@ -266,13 +319,15 @@ export class PhoneAccess {
     );
   }
 
-  private async turnOn(): Promise<void> {
-    const body = await this.action('start');
+  /** `auto`: the 60 s check's start, which Mission Control refuses while turned off on purpose. */
+  private async turnOn(auto: boolean): Promise<void> {
+    const body = await this.action('start', auto ? { auto: true } : undefined);
     if (body) this.opts.log(`phone access: start ${body.ok ? 'done' : `refused (${body.reason})`}`);
+    this.emit();
   }
 
   private async turnOff(): Promise<void> {
-    const body = await this.action('stop');
+    const body = await this.action('stop', { by: 'user' });
     if (body) {
       this.opts.log(`phone access: stop ${body.ok ? 'done' : `refused (${body.reason})`}`);
       this.refusal =
@@ -281,9 +336,14 @@ export class PhoneAccess {
     this.emit();
   }
 
-  private async action(name: 'start' | 'stop'): Promise<RemoteActionResponse | undefined> {
+  private async action(
+    name: 'start' | 'stop',
+    payload?: Record<string, unknown>,
+  ): Promise<RemoteActionResponse | undefined> {
     try {
-      const body = RemoteActionResponse.parse(await this.request('POST', `/api/remote/${name}`));
+      const body = RemoteActionResponse.parse(
+        await this.request('POST', `/api/remote/${name}`, payload),
+      );
       this.status = body.status;
       return body;
     } catch (error) {

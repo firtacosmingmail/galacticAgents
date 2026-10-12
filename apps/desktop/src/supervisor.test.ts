@@ -40,6 +40,7 @@ function setup(
     result?: StartResult;
     fetch?: typeof fetch;
     phone?: SupervisorOptions['phone'];
+    serverEnv?: NodeJS.ProcessEnv;
   } = {},
 ) {
   const lines: ShellLine[] = [];
@@ -52,7 +53,7 @@ function setup(
     token: () => 'tok',
     emit: (l) => lines.push(l),
     log: () => {},
-    server: { launcher: '/x/galactic.mjs', env: {} },
+    server: { launcher: '/x/galactic.mjs', env: opts.serverEnv ?? {} },
     planDeps: {
       readLock: () => world.lock,
       alive: () => world.alive,
@@ -358,6 +359,7 @@ describe('Supervisor: phone access (P9-16)', () => {
           void calls.push(s ? `server ${s.port} ${s.owned ? 'owned' : 'attached'}` : 'no server'),
         reconnected: () => void calls.push('reconnected'),
         stop: () => void calls.push('stop'),
+        releaseForQuit: async () => void calls.push('release'),
       },
     };
   };
@@ -370,9 +372,32 @@ describe('Supervisor: phone access (P9-16)', () => {
     expect(on.calls).toEqual(['server 4400 owned']);
 
     const off = fakePhone(false);
-    const t2 = setup({ phone: off.phone });
+    const t2 = setup({ phone: off.phone, serverEnv: { GALACTIC_PHONE_ACCESS: '1', KEEP: 'x' } });
     await t2.supervisor.tick();
+    // Not inherited from the app's own environment when the switch is off.
     expect(t2.owns[0]!.opts.env['GALACTIC_PHONE_ACCESS']).toBeUndefined();
+    expect(t2.owns[0]!.opts.env['KEEP']).toBe('x');
+  });
+
+  it('on quit, its own server is asked to turn off its Serve before it is stopped', async () => {
+    const p = fakePhone(true);
+    const t = setup({ phone: p.phone });
+    await t.supervisor.tick();
+    const own = t.owns[0]!;
+    const stop = own.stop.bind(own);
+    own.stop = async () => {
+      p.calls.push('own stopped');
+      await stop();
+    };
+    await t.supervisor.quit();
+    expect(p.calls.slice(-3)).toEqual(['stop', 'release', 'own stopped']);
+
+    // An attached server is not stopped, and its Serve is left to it.
+    const a = fakePhone(true);
+    const t2 = setup({ lock: { pid: 7, role: 'server', port: 4500 }, phone: a.phone });
+    await t2.supervisor.tick();
+    await t2.supervisor.quit();
+    expect(a.calls).not.toContain('release');
   });
 
   it('an attached server is told as attached; a reconnect, a crash and quit are passed on', async () => {
