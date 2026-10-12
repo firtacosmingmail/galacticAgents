@@ -56,14 +56,17 @@ const portText = option('--port') ?? process.env.GALACTIC_PORT ?? String(config.
 const port = Number(portText);
 if (!Number.isInteger(port) || port < 1 || port > 65535) fail(`not a port: ${portText}`);
 
+// The Mac app's CLI first, then Homebrew's, the PATH last — each a trusted absolute path.
 const tailscaleBin =
-  (await ts.findTailscale(exec)) ??
+  (await ts.findTailscale({ exec, log: (line) => console.log(`  ${line}`) })) ??
   fail(
-    'the tailscale command was not found. Install Tailscale (https://tailscale.com/download), ' +
-      'or in the Mac app enable Settings → "Install CLI".',
+    'no usable tailscale command was found (the Mac app, /opt/homebrew/bin, /usr/local/bin, ' +
+      'then the PATH; one writable by others is refused). Install Tailscale ' +
+      '(https://tailscale.com/download), or in the Mac app enable Settings → "Install CLI".',
   );
 
 step('Tailscale');
+console.log(`  ${tailscaleBin}`);
 const self = await ts.readTailscale(tailscaleBin, exec);
 if (self.detail) {
   fail(`could not read "tailscale status" (${self.detail}). Is Tailscale running?`);
@@ -117,12 +120,15 @@ console.log('  free');
 step('Tailscale Serve');
 const target = ts.serveTarget(port);
 let serve;
+let funnel;
 try {
-  serve = ts.classifyServe(await ts.readServe(tailscaleBin, exec), dnsName, port);
+  const json = await ts.readServe(tailscaleBin, exec);
+  serve = ts.classifyServe(json, dnsName, port);
+  funnel = ts.funnelOn(json);
 } catch (e) {
   fail(`could not read "tailscale serve status" (${ts.errorText(e)}).`);
 }
-if (serve === 'funnel_on') {
+if (funnel) {
   fail(
     'Tailscale Funnel is on: it publishes this Mac to the whole internet. Turn it off ' +
       '("tailscale funnel reset"), then run this again. Mission Control must never be behind Funnel.',

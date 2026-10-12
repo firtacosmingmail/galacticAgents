@@ -1,6 +1,16 @@
 import { execFile } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import type { RemoteHostState, RemoteReason, ServeState, TailscaleState } from '@galactic/protocol';
 
 /**
@@ -51,17 +61,89 @@ export function errorText(error: unknown): string {
   return text.trim().split('\n').slice(0, 3).join(' ');
 }
 
-/** `tailscale` on the PATH, else the Mac app's CLI; `undefined` when neither runs. */
-export async function findTailscale(
-  exec: ExecFile = defaultExecFile,
-  exists: (path: string) => boolean = existsSync,
-): Promise<string | undefined> {
+/** Where `tailscale` is looked for first, in this order (P9-16 review S1). */
+export const TAILSCALE_CANDIDATES = [
+  TAILSCALE_APP_CLI,
+  '/opt/homebrew/bin/tailscale',
+  '/usr/local/bin/tailscale',
+] as const;
+
+/** The file-system calls the lookup makes (a fake in tests). */
+export interface LocateFs {
+  exists(path: string): boolean;
+  realpath(path: string): string;
+  stat(path: string): { uid: number; mode: number; isFile(): boolean };
+}
+
+const nodeFs: LocateFs = {
+  exists: existsSync,
+  realpath: (path) => realpathSync(path),
+  stat: (path) => statSync(path),
+};
+
+export interface LocateOptions {
+  exec?: ExecFile;
+  fs?: LocateFs;
+  /** `PATH` comes from here (default `process.env`). */
+  env?: NodeJS.ProcessEnv;
+  /** The user who may own the binary besides root (default `process.getuid()`). */
+  uid?: number;
+  /** Told which binary was found on the `PATH` (the last resort). */
+  log?: (line: string) => void;
+}
+
+/**
+ * The real path of `path` when it is a binary we may run: a file owned by root or this user,
+ * neither it nor its folder writable by the group or others. `undefined` otherwise.
+ */
+export function trustedBinary(path: string, fs: LocateFs, uid: number): string | undefined {
   try {
-    await exec('tailscale', ['version']);
-    return 'tailscale';
+    if (!fs.exists(path)) return undefined;
+    const real = fs.realpath(path);
+    const file = fs.stat(real);
+    if (!file.isFile()) return undefined;
+    for (const st of [file, fs.stat(dirname(real))]) {
+      if (st.uid !== 0 && st.uid !== uid) return undefined;
+      if ((st.mode & 0o022) !== 0) return undefined;
+    }
+    return real;
   } catch {
-    return exists(TAILSCALE_APP_CLI) ? TAILSCALE_APP_CLI : undefined;
+    return undefined;
   }
+}
+
+/**
+ * The `tailscale` CLI as an absolute, trusted path: the Mac app's CLI when it is there, then
+ * Homebrew's (`/opt/homebrew/bin`, `/usr/local/bin`), and only then the `PATH` — resolved here,
+ * once, to an absolute path, and logged. Each must pass `trustedBinary` and answer `version`.
+ * `undefined` when none does. Never a bare name for `execFile` to look up.
+ */
+export async function findTailscale(opts: LocateOptions = {}): Promise<string | undefined> {
+  const exec = opts.exec ?? defaultExecFile;
+  const fs = opts.fs ?? nodeFs;
+  const uid = opts.uid ?? process.getuid?.() ?? -1;
+  const runs = async (bin: string) => {
+    try {
+      await exec(bin, ['version']);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const candidate of TAILSCALE_CANDIDATES) {
+    const real = trustedBinary(candidate, fs, uid);
+    if (real && (await runs(real))) return real;
+  }
+  const PATH = (opts.env ?? process.env)['PATH'] ?? '';
+  for (const dir of PATH.split(delimiter)) {
+    if (!isAbsolute(dir)) continue;
+    const real = trustedBinary(join(dir, 'tailscale'), fs, uid);
+    if (real && (await runs(real))) {
+      opts.log?.(`tailscale: using ${real} (found on the PATH)`);
+      return real;
+    }
+  }
+  return undefined;
 }
 
 export interface TailscaleSelf {
@@ -128,14 +210,20 @@ interface ServeConfig {
   TCP?: Record<string, { HTTPS?: unknown; HTTP?: unknown; TCPForward?: unknown }>;
 }
 
+/** Funnel is on for any name or port in `tailscale serve status --json`. */
+export function funnelOn(json: unknown): boolean {
+  const serve = (json ?? {}) as ServeConfig;
+  return !!serve.AllowFunnel && Object.values(serve.AllowFunnel).some(Boolean);
+}
+
 /**
  * What `tailscale serve status --json` says about port 443 for this Mac's name and this server's
- * port. Funnel on anywhere wins; then "forwards exactly `/` to us"; anything else on 443 (another
- * target, more paths, another name's 443, a TCP forward) is taken.
+ * port: "forwards exactly `/` to us", nothing, or anything else on 443 (another target, more
+ * paths, another name's 443, a TCP forward) is taken. Funnel is a separate question
+ * (`funnelOn`): with Funnel on, a Serve of ours is still ours — and must still be turned off.
  */
 export function classifyServe(json: unknown, name: string, port: number): ServeState {
   const serve = (json ?? {}) as ServeConfig;
-  if (serve.AllowFunnel && Object.values(serve.AllowFunnel).some(Boolean)) return 'funnel_on';
   const web443 = Object.entries(serve.Web ?? {}).filter(([key]) => key.endsWith(':443'));
   const ours = serve.Web?.[`${name}:443`]?.Handlers ?? {};
   const others = web443.filter(([key]) => key !== `${name}:443`);
@@ -210,13 +298,24 @@ export function fileRemoteHost(configPath: string): string | undefined {
   }
 }
 
-/** Adds `"remoteHost": name` to `config.json` (kept 0600), keeping everything else. */
+/**
+ * Adds `"remoteHost": name` to `config.json` (kept 0600), keeping everything else. Written as
+ * the settings are (`SettingsService`): a 0600 temp file renamed over it, so a full disk or a
+ * crash never leaves a truncated config.json.
+ */
 export function addRemoteHost(configPath: string, name: string): void {
   const config = readConfigFile(configPath);
   config['remoteHost'] = name;
   mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(configPath, 0o600);
+  const tmp = `${configPath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, configPath);
+  } catch (error) {
+    rmSync(tmp, { force: true });
+    throw error;
+  }
 }
 
 /** Each reason in words, with what to do. */
@@ -236,11 +335,13 @@ export function reasonText(
     case 'remote_host_mismatch':
       return `remoteHost is "${ctx.remoteHost ?? ''}", but this Mac's Tailscale name is "${ctx.name ?? ''}": the server would refuse the phone. Correct remoteHost in config.json (or GALACTIC_REMOTE_HOST), then restart Mission Control.`;
     case 'funnel_on':
-      return 'Tailscale Funnel is on: it publishes this Mac to the whole internet. Turn it off ("tailscale funnel reset"); Mission Control is never put behind Funnel.';
+      return 'Tailscale Funnel is ON: it publishes this Mac to the public internet. Turn it off now ("tailscale funnel reset"); Mission Control is never put behind Funnel.';
     case 'port_443_taken':
       return 'Tailscale Serve already serves port 443 to something else. Clear it ("tailscale serve --https=443 off") to use it for GalacticAgents.';
     case 'serve_off':
       return 'Phone access is off. Turn it on on the Mac: Settings → Access, or the menu bar app.';
+    case 'turned_off_outside':
+      return 'Phone access was turned off outside GalacticAgents (Tailscale Serve was stopped). It stays off until you turn it on again: Settings → Access, or the menu bar app.';
     case 'restart_needed':
       return 'remoteHost was added after Mission Control started: restart Mission Control to finish turning on phone access.';
     case 'not_owned':
@@ -267,24 +368,49 @@ export function tailscaleReason(
   }
 }
 
+/** How long `prepareRemoteHost` may take in all: a hung Tailscale must not stall startup. */
+export const PREPARE_REMOTE_HOST_MS = 5_000;
+
 /**
  * Before a server the desktop app starts reads its config (`GALACTIC_PHONE_ACCESS=1`): adds this
  * Mac's Tailscale name as `remoteHost` when none is set, so the server starts with it (a running
- * server needs a restart to pick one up). Never changes one that is set. Returns what it did.
+ * server needs a restart to pick one up). Never changes one that is set. Gives up, changing
+ * nothing, after `timeoutMs` (5 s). Returns what it did.
  */
 export async function prepareRemoteHost(opts: {
   configPath: string;
   env: NodeJS.ProcessEnv;
   exec?: ExecFile;
-  exists?: (path: string) => boolean;
+  locate?: Omit<LocateOptions, 'exec'>;
+  timeoutMs?: number;
 }): Promise<string | undefined> {
   if (opts.env['GALACTIC_REMOTE_HOST']) return undefined;
   if (fileRemoteHost(opts.configPath)) return undefined;
   const exec = opts.exec ?? defaultExecFile;
-  const bin = await findTailscale(exec, opts.exists);
-  if (!bin) return undefined;
-  const self = await readTailscale(bin, exec);
-  if (self.state !== 'running' || !self.name) return undefined;
-  addRemoteHost(opts.configPath, self.name);
-  return `Phone access: added "remoteHost": "${self.name}" to ${opts.configPath}`;
+  const timeoutMs = opts.timeoutMs ?? PREPARE_REMOTE_HOST_MS;
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      resolve(undefined);
+    }, timeoutMs);
+  });
+  const lookup = (async () => {
+    const bin = await findTailscale({ ...opts.locate, exec });
+    if (!bin || timedOut) return undefined;
+    const self = await readTailscale(bin, exec);
+    return self.state === 'running' ? self.name : undefined;
+  })();
+  // A lookup that fails after the deadline is not an unhandled rejection.
+  lookup.catch(() => undefined);
+  try {
+    const name = await Promise.race([lookup, deadline]);
+    if (timedOut) throw new Error(`Tailscale did not answer within ${timeoutMs} ms`);
+    if (!name) return undefined;
+    addRemoteHost(opts.configPath, name);
+    return `Phone access: added "remoteHost": "${name}" to ${opts.configPath}`;
+  } finally {
+    clearTimeout(timer);
+  }
 }
