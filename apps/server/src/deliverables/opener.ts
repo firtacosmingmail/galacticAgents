@@ -360,6 +360,12 @@ export class Opener {
    */
   private async trustedApp(candidate: string, bundleId: string): Promise<string | undefined> {
     if (!candidate.startsWith('/') || !candidate.endsWith('.app')) return undefined;
+    // Never touch a path outside the Applications folders, not even to resolve it: a Spotlight hit
+    // in Downloads, on the Desktop or in a cloud drive would make macOS ask the user for that
+    // folder on the app's behalf. Only candidates already under an Applications folder go on.
+    const home = this.opts.home ?? homedir();
+    const lexicalRoots = ['/Applications', join(home, 'Applications')];
+    if (!lexicalRoots.some((root) => isStrictlyInside(candidate, root))) return undefined;
     let real: string;
     try {
       real = await this.fs.realpath(candidate);
