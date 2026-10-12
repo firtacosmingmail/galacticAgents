@@ -361,7 +361,9 @@ describe('the Phase 2 exit run from the hierarchy console (P2-18)', () => {
       const permission = await screen.findByLabelText(/permission question/, {}, LONG);
       expect(permission.textContent).toMatch(/destructive/);
       expect(permission.textContent).toMatch(/rm -rf out/);
-      await click(within(permission).getByText('Allow'));
+      // A project Steward's request: Allow once, beside Allow similar (P9-17).
+      expect(within(permission).getByText(/^Allow similar for /)).toBeTruthy();
+      await click(within(permission).getByText('Allow once'));
 
       // 7. Merged branches, tasks closed, the closure question relayed: the user closes.
       const closure = await screen.findByLabelText(

@@ -15,6 +15,7 @@ import { formatCost, formatDuration } from '../agent-cards-model.js';
 import { useSettingsData } from '../settings/SettingsData.js';
 import { brainView, useDockView, type DockView } from './dock-view.js';
 import { ProjectDeliverables } from '../deliverables/DeliverablesList.js';
+import { PermissionRules } from './PermissionRules.js';
 import { liveRunCount } from '../deliverables/runs-model.js';
 import {
   budgetText,
@@ -537,6 +538,9 @@ export function ProjectStatusView({ projectId }: { projectId: Id }) {
           </ul>
         </Section>
       )}
+      <Section title="Allowed similar actions">
+        <PermissionRules project={project} />
+      </Section>
       <AskNarrative scope={{ kind: 'project', project }} />
     </section>
   );

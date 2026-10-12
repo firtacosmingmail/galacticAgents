@@ -3,10 +3,15 @@ import type {
   RemoteStatus,
   AddDeliverableBody,
   AgentCommandsResponse,
+  AllowSimilarBody,
+  AllowSimilarResponse,
   AnswerBody,
   AnswerResponse,
   DismissBody,
   DismissResponse,
+  PermissionRuleScope,
+  RemovePermissionRuleResponse,
+  SimilarPreviewResponse,
   ControlBody,
   ControlResponse,
   ConversationQuery,
@@ -72,7 +77,7 @@ export class ApiError extends Error {
 
 export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
   const call = async <T>(
-    method: 'GET' | 'POST' | 'PATCH',
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
     body?: unknown,
   ): Promise<T> => {
@@ -149,6 +154,29 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
       call<DismissResponse>('POST', `/api/questions/${encodeURIComponent(questionId)}/dismiss`, {
         ...(version !== undefined ? { version } : {}),
       } satisfies DismissBody),
+    /**
+     * "Allow similar" (P9-17): what the card's chooser offers for a permission request, each scope
+     * with the server's preview of what it would match.
+     */
+    similarPreview: (questionId: string) =>
+      call<SimilarPreviewResponse>(
+        'POST',
+        `/api/questions/${encodeURIComponent(questionId)}/similar-preview`,
+        {},
+      ),
+    /** Answers the request "allow" and stores the rule of `scope` on its project (P9-17). */
+    allowSimilar: (questionId: string, scope: PermissionRuleScope, version?: number) =>
+      call<AllowSimilarResponse>(
+        'POST',
+        `/api/questions/${encodeURIComponent(questionId)}/allow-similar`,
+        { scope, ...(version !== undefined ? { version } : {}) } satisfies AllowSimilarBody,
+      ),
+    /** Removes a project's "Allow similar" rule (P9-17). */
+    removePermissionRule: (projectId: string, ruleId: string) =>
+      call<RemovePermissionRuleResponse>(
+        'DELETE',
+        `/api/projects/${encodeURIComponent(projectId)}/permission-rules/${encodeURIComponent(ruleId)}`,
+      ),
     decide: (proposalId: string, decision: ProposalDecisionBody) =>
       call<DecideResponse>('POST', `/api/proposals/${proposalId}/decide`, decision),
     control: (body: ControlBody) => call<ControlResponse>('POST', '/api/control', body),

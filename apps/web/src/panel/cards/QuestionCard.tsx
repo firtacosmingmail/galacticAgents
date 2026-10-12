@@ -8,12 +8,15 @@ import { AgentRef } from './links.js';
 import { submitAnswer } from '../../client/answer-queue.js';
 import { AnswerNoticeFor, isPending, QueuedAnswerBox, useQueuedAnswer } from './QueuedAnswer.js';
 import { DismissQuestion, withdrawnLabel } from './DismissQuestion.js';
+import { AllowSimilar, useOffersSimilar } from './AllowSimilar.js';
 
 /**
  * Question cards (P2-18, extracted for the panel in P25-06; SPEC §2.6): one open question with its
  * kind, holder and origin context, answered inline with the question's `version`, so a stale
  * answer is refused and the page says who was first ("already answered by …"). Permission cards
- * show the tool call and the action, with Allow / Refuse only (decisions 7, 31). Clarifications a
+ * show the tool call and the action, with Allow / Refuse (decisions 7, 31) — and, for a request of a
+ * project's agent on a client that may write settings, "Allow once" plus "Allow similar for
+ * <project>…" (P9-17, decision 138; `AllowSimilar`). Clarifications a
  * supervisor holds can still be answered by the user (answering anywhere resolves everywhere);
  * the ones a supervisor answered from context are read-only, with an Override that tells that
  * supervisor (decisions 12, 48). Every open card has a × that dismisses it (P9-14, decision 135).
@@ -113,6 +116,9 @@ export function QuestionCard({
   const permission = q.kind === 'permission';
   const call = q.context.toolCall;
   const userHeld = q.holder.type === 'user';
+  const similar = useOffersSimilar(q, world);
+  const stale = (id: Id, message: string) =>
+    onStale ? onStale(id, message) : setOwnStale(message);
   const answer = async (text: string) => {
     let stale: string | undefined;
     const ok = await run(async () => {
@@ -142,10 +148,7 @@ export function QuestionCard({
         <span className="muted">held by {actorLabel(q.holder, world)}</span>
         {/* Dismiss (P9-14): not while an answer to it waits in the offline queue. */}
         {!(queued && isPending(queued)) && (
-          <DismissQuestion
-            question={q}
-            onStale={(id, message) => (onStale ? onStale(id, message) : setOwnStale(message))}
-          />
+          <DismissQuestion question={q} onStale={stale} />
         )}
       </header>
       <p>{q.context.text}</p>
@@ -178,11 +181,12 @@ export function QuestionCard({
       ) : permission ? (
         <div className="controls">
           <button disabled={busy} onClick={() => void answer('allow')}>
-            Allow
+            {similar ? 'Allow once' : 'Allow'}
           </button>
           <button disabled={busy} className="danger" onClick={() => void answer('no')}>
             Refuse
           </button>
+          {similar && <AllowSimilar question={q} project={similar} busy={busy} onStale={stale} />}
         </div>
       ) : (
         <form
