@@ -411,6 +411,30 @@ describe('Opener: IDE detection', () => {
     expect(await opener(fs, exec).ides()).toEqual([]);
   });
 
+  it('never touches a Spotlight hit outside the Applications folders (no macOS folder prompts)', async () => {
+    const outside = [
+      '/Users/me/Downloads/WebStorm.app',
+      '/Users/me/Desktop/WebStorm.app',
+      '/Users/me/Library/CloudStorage/GoogleDrive-me/WebStorm.app',
+    ];
+    const { exec } = fakeExec({ [WEBSTORM]: outside });
+    const base = fakeFs(Object.assign({}, ...outside.map((p) => app(p, WEBSTORM))));
+    const touched: string[] = [];
+    const fs = {
+      ...base,
+      realpath: async (p: string) => (touched.push(p), base.realpath(p)),
+      lstat: async (p: string) => (touched.push(p), base.lstat(p)),
+      readFile: async (p: string) => (touched.push(p), base.readFile(p)),
+      exists: async (p: string) => (touched.push(p), base.exists(p)),
+    };
+    expect(await opener(fs, exec).ides()).toEqual([]);
+    expect(
+      touched.filter(
+        (p) => !p.startsWith('/Applications') && !p.startsWith('/Users/me/Applications'),
+      ),
+    ).toEqual([]);
+  });
+
   it('reads a binary Info.plist through plutil, only when it names a wanted id', async () => {
     const binary = (id: string) => Buffer.concat([Buffer.from('bplist00'), Buffer.from(id)]);
     const fs = fakeFs({
