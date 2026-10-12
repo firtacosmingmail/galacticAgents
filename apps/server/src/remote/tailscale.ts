@@ -38,12 +38,28 @@ export const TAILSCALE_APP_CLI = '/Applications/Tailscale.app/Contents/MacOS/Tai
  */
 export type ExecFile = (file: string, args: readonly string[]) => Promise<string>;
 
+/**
+ * The environment `tailscale` runs with. The Mac app's binary acts as the command-line tool only
+ * when `TERM` is set (as in any terminal); without it — a Mission Control started by the desktop
+ * app or launchd — it tries to start the GUI and prints "The Tailscale GUI failed to start …"
+ * instead of the answer. So `TERM` is always set (`dumb` when the server has none).
+ */
+export function tailscaleEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...env, TERM: env['TERM'] || 'dumb' };
+}
+
 export const defaultExecFile: ExecFile = (file, args) =>
   new Promise((resolve, reject) => {
     execFile(
       file,
       [...args],
-      { encoding: 'utf8', timeout: 10_000, maxBuffer: 4 * 1024 * 1024, shell: false },
+      {
+        encoding: 'utf8',
+        timeout: 10_000,
+        maxBuffer: 4 * 1024 * 1024,
+        shell: false,
+        env: tailscaleEnv(),
+      },
       (error, stdout, stderr) => {
         if (error) {
           reject(
