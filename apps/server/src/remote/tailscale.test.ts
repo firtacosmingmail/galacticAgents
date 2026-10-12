@@ -22,6 +22,7 @@ import {
   remoteHostState,
   startServe,
   TAILSCALE_APP_CLI,
+  tailscaleEnv,
 } from './tailscale.js';
 
 const dirs: string[] = [];
@@ -230,5 +231,13 @@ describe('remoteHost', () => {
     ).rejects.toThrow('did not answer within 50 ms');
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(readFileSync(configPath, 'utf8')).toBe('{}');
+  });
+});
+
+describe('the environment tailscale runs with', () => {
+  it('always sets TERM: the Mac app binary acts as the CLI only with it', () => {
+    expect(tailscaleEnv({ PATH: '/usr/bin' })).toEqual({ PATH: '/usr/bin', TERM: 'dumb' });
+    expect(tailscaleEnv({ PATH: '/usr/bin', TERM: '' })['TERM']).toBe('dumb');
+    expect(tailscaleEnv({ TERM: 'xterm-256color' })['TERM']).toBe('xterm-256color');
   });
 });
