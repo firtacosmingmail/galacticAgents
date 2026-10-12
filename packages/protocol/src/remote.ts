@@ -21,15 +21,10 @@ export type RemoteHostState = z.infer<typeof RemoteHostState>;
 /**
  * Tailscale Serve's port 443: `forwarding_to_us` (HTTP mode, to this server's port and nothing
  * else), `absent` (nothing served on 443), `taken_by_other` (443 serves something else, or in TCP
- * mode), `funnel_on` (Funnel is on: never used), `unknown` (Tailscale is not running).
+ * mode), `unknown` (Tailscale is not running, or Serve could not be read). Funnel is reported
+ * apart (`RemoteStatus.funnel`): a Serve of ours with Funnel on is still ours to turn off.
  */
-export const ServeState = z.enum([
-  'forwarding_to_us',
-  'absent',
-  'taken_by_other',
-  'funnel_on',
-  'unknown',
-]);
+export const ServeState = z.enum(['forwarding_to_us', 'absent', 'taken_by_other', 'unknown']);
 export type ServeState = z.infer<typeof ServeState>;
 
 /** Why the phone cannot reach Mission Control (or why a start / stop was refused). */
@@ -42,6 +37,7 @@ export const RemoteReason = z.enum([
   'funnel_on',
   'port_443_taken',
   'serve_off',
+  'turned_off_outside',
   'restart_needed',
   'not_owned',
   'error',
@@ -56,6 +52,18 @@ export const RemoteStatus = z.object({
   url: z.string().optional(),
   remoteHost: z.object({ state: RemoteHostState, value: z.string().optional() }),
   serve: ServeState,
+  /**
+   * Tailscale Funnel is on (any name or port): this Mac is published to the public internet. Never
+   * ready; the panel and the menu bar say so loudly.
+   */
+  funnel: z.boolean(),
+  /**
+   * Phone access is off on purpose, so the desktop app's automatic start leaves it off until the
+   * user turns it on again (a start from the panel or the menu's toggle): `user` — turned off from
+   * the panel or the menu; `outside` — Serve that GalacticAgents started disappeared without its
+   * stop (turned off by hand or by another program).
+   */
+  turnedOff: z.enum(['user', 'outside']).optional(),
   /** Serve forwards to us and Mission Control (or the desktop app through it) started it. */
   serveOwned: z.boolean(),
   /** The phone can reach Mission Control now. */
@@ -88,6 +96,22 @@ export const RemoteActionResponse = z.object({
 });
 export type RemoteActionResponse = z.infer<typeof RemoteActionResponse>;
 
+/**
+ * `POST /api/remote/start` body (optional): `auto` — the desktop app's automatic start, refused
+ * (409 `turned_off_outside` / `serve_off`) while phone access is turned off on purpose; a start
+ * without it is the user's and clears that.
+ */
+export const RemoteStartBody = z.object({ auto: z.boolean().optional() }).strict();
+export type RemoteStartBody = z.infer<typeof RemoteStartBody>;
+
+/**
+ * `POST /api/remote/stop` body (optional): `by: 'app_quit'` — the desktop app quitting with the
+ * server it owns (Serve goes, but phone access comes back on at the next launch); otherwise the
+ * user turned it off, which the automatic start then respects.
+ */
+export const RemoteStopBody = z.object({ by: z.enum(['user', 'app_quit']).optional() }).strict();
+export type RemoteStopBody = z.infer<typeof RemoteStopBody>;
+
 /** A reason in a few words: the desktop menu bar's "Phone: off — …", the top bar's indicator. */
 export const REMOTE_REASON_SHORT: Record<RemoteReason, string> = {
   not_installed: 'Tailscale not installed',
@@ -98,6 +122,7 @@ export const REMOTE_REASON_SHORT: Record<RemoteReason, string> = {
   funnel_on: 'Tailscale Funnel is on',
   port_443_taken: 'port 443 is taken',
   serve_off: 'turned off',
+  turned_off_outside: 'turned off outside GalacticAgents',
   restart_needed: 'restart needed',
   not_owned: 'Serve was set up elsewhere',
   error: 'Tailscale could not be read',

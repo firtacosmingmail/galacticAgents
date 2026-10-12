@@ -41,6 +41,8 @@ export interface PeerGuardOptions {
   selfPid?: number;
   /** Runs `lsof` with these arguments (stdout, or `undefined` when it cannot run). */
   lsof?: (args: string[]) => Promise<string | undefined>;
+  /** What a refusal says (default: the runs routes' words). */
+  refusal?: string;
 }
 
 const REFUSAL =
@@ -80,6 +82,7 @@ export function peerPidOf(
 export function agentPeerGuard(opts: PeerGuardOptions): PeerCheck {
   const selfPid = opts.selfPid ?? process.pid;
   const lsof = opts.lsof ?? systemLsof;
+  const refusal = opts.refusal ?? REFUSAL;
   return async (req) => {
     const socket = req.raw.socket;
     const clientPort = socket?.remotePort;
@@ -98,14 +101,14 @@ export function agentPeerGuard(opts: PeerGuardOptions): PeerCheck {
     const byPid = new Map(procs.map((p) => [p.pid, p]));
     const chain: ProcEntry[] = [];
     for (let p = byPid.get(pid); p && p.pid > 1 && chain.length < 64; p = byPid.get(p.ppid)) {
-      if (p.pid === selfPid) return { refused: REFUSAL };
+      if (p.pid === selfPid) return { refused: refusal };
       chain.push(p);
     }
     if (chain.length === 0) return { unknown: `process ${pid} is gone` };
     if (!opts.table.environment) return { unknown: 'environments cannot be read here' };
     const env = await opts.table.environment(chain, [AGENT_ID_ENV, RUN_ID_ENV]);
     for (const vars of env.values()) {
-      if (vars.has(AGENT_ID_ENV) || vars.has(RUN_ID_ENV)) return { refused: REFUSAL };
+      if (vars.has(AGENT_ID_ENV) || vars.has(RUN_ID_ENV)) return { refused: refusal };
     }
     return {};
   };

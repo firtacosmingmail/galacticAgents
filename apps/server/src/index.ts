@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataPaths, loadConfig } from './config/config.js';
 import { prepareRemoteHost } from './remote/tailscale.js';
-import { RemoteService } from './remote/service.js';
+import { readTurnedOff, RemoteService } from './remote/service.js';
 import { SettingsService, declarationLimits, runSettings } from './config/settings.js';
 import { Opener } from './deliverables/opener.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
@@ -38,12 +38,17 @@ import { agentPeerGuard } from './http/peer-guard.js';
 import { osProcessTable } from './runtime/process-table.js';
 
 // Phone access asked for by the desktop app (P9-16): this Mac's Tailscale name becomes
-// `remoteHost` before the config is read, so this server starts with it.
-if (process.env['GALACTIC_PHONE_ACCESS'] === '1') {
+// `remoteHost` before the config is read, so this server starts with it — unless the user turned
+// phone access off on purpose (`remote-off.json`). The variable is removed at once: the agents and
+// runs this server starts must not inherit it. A hung Tailscale gives up after 5 s.
+const phoneAccessAsked = process.env['GALACTIC_PHONE_ACCESS'] === '1';
+delete process.env['GALACTIC_PHONE_ACCESS'];
+if (phoneAccessAsked && !readTurnedOff(dataPaths(process.env).dataDir)) {
   try {
     const added = await prepareRemoteHost({
       configPath: dataPaths(process.env).configPath,
       env: process.env,
+      locate: { log: (line) => console.log(`[remote] ${line}`) },
     });
     if (added) console.log(added);
   } catch (error) {
@@ -377,7 +382,15 @@ const remote = new RemoteService({
   log: (line) => console.log(`[remote] ${line}`),
 });
 const app = buildApp({
-  remote,
+  remote: {
+    service: remote,
+    // Turning phone access on or off from an agent's or a run's process is refused (P9-16 review).
+    peer: agentPeerGuard({
+      table: osProcessTable(),
+      refusal:
+        'Turning phone access on or off from an agent’s or a run’s process is refused: the user does it from the panel or the menu bar on the Mac.',
+    }),
+  },
   config,
   log,
   statuses,

@@ -83,7 +83,8 @@ export interface AppOptions {
   /** `peer`: the agent speed bump on starts (P9-12 review S3); `index.ts` passes the OS one. */
   runs?: { service: RunService; output: RunOutput; peer?: PeerCheck };
   /** Phone access (P9-16): enables `GET /api/remote/status`, `POST /api/remote/start|stop`. */
-  remote?: Pick<RemoteService, 'status' | 'start' | 'stop'>;
+  /** `peer`: the agent speed bump on start / stop, as on the runs routes; `index.ts` passes it. */
+  remote?: { service: Pick<RemoteService, 'status' | 'start' | 'stop'>; peer?: PeerCheck };
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
