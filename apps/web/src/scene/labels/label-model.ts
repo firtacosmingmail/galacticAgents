@@ -119,6 +119,11 @@ export function markDescription(mark: DeliverablesMark): string {
 
 /** Longest title a label shows before "…" (the tooltip has it all). */
 export const TITLE_MAX = 32;
+/**
+ * An asteroid's label is shorter (P8-16): it shows a task's title, a sentence where a planet or a
+ * moon shows a project's usually short name.
+ */
+export const ASTEROID_TITLE_MAX = 16;
 
 export function shortTitle(text: string, max = TITLE_MAX): string {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -217,7 +222,7 @@ export function bodyLabel(
     const label: Omit<BodyLabel, 'selected' | 'priority'> = {
       bodyId,
       kind: host.kind,
-      title: shortTitle(name),
+      title: shortTitle(name, body.kind === 'asteroid' ? ASTEROID_TITLE_MAX : TITLE_MAX),
       fullTitle: name,
       state,
       stateText: state ? stateText(state) : 'loading',
