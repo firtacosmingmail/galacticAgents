@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { Actor, Id, PermissionRule, RequestOrigin, WorkState } from '@galactic/protocol';
+import type {
+  Actor,
+  Id,
+  PermissionRule,
+  Project,
+  RequestOrigin,
+  WorkState,
+} from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import type { RuleDraft } from './permission-rules.js';
@@ -20,6 +27,22 @@ const SYSTEM: Actor = { type: 'system' };
  */
 export const RULES_END_IN: ReadonlySet<WorkState> = new Set(['completed', 'archived']);
 
+/**
+ * Throws when `project` takes no rule or `draft` may not be stored: a project that ended, a rule
+ * for a push. Checked before an "Allow similar" answer (review S6) and again when storing.
+ */
+export function checkRuleAllowed(project: Project, draft: RuleDraft): void {
+  if (RULES_END_IN.has(project.state)) {
+    throw new DomainError(
+      'invalid',
+      `project ${project.id} is ${project.state}: it takes no rules`,
+    );
+  }
+  if (draft.categories.includes('push')) {
+    throw new DomainError('invalid', 'a push always asks (decision 49): no rule allows it');
+  }
+}
+
 /** Stores a rule the server drafted (`similarOptions`) for `projectId`; returns it. */
 export function addPermissionRule(
   ctx: CommandContext,
@@ -28,12 +51,7 @@ export function addPermissionRule(
   made: { by: Actor; origin: RequestOrigin; questionId?: Id },
 ): PermissionRule {
   const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
-  if (RULES_END_IN.has(project.state)) {
-    throw new DomainError('invalid', `project ${projectId} is ${project.state}: it takes no rules`);
-  }
-  if (draft.categories.includes('push')) {
-    throw new DomainError('invalid', 'a push always asks (decision 49): no rule allows it');
-  }
+  checkRuleAllowed(project, draft);
   const rule: PermissionRule = {
     id: `r-${randomUUID()}`,
     projectId,

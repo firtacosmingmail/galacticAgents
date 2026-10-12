@@ -59,6 +59,8 @@ export interface AppOptions {
   restartHarmonizer?: AgentRoutesOptions['restartHarmonizer'];
   /** The agent speed bump on making and removing "Allow similar" rules (P9-17). */
   rulesPeer?: PeerCheck;
+  /** The same on answering a permission request and dismissing a question (P9-17 review S4). */
+  answersPeer?: PeerCheck;
   /** The settings service (P25-01): enables `GET`/`PATCH /api/settings`. */
   settings?: SettingsService;
   /** The opener on the Mac (P9-03): enables `GET /api/ide` and the deliverables' opens (P9-07). */
@@ -212,6 +214,7 @@ export function buildApp(opts: AppOptions): App {
       ...(opts.processes ? { processes: opts.processes } : {}),
       ...(opts.restartHarmonizer ? { restartHarmonizer: opts.restartHarmonizer } : {}),
       ...(opts.rulesPeer ? { rulesPeer: opts.rulesPeer } : {}),
+      ...(opts.answersPeer ? { answersPeer: opts.answersPeer } : {}),
     });
   }
   // The side panel's history, settings, preflight and notifications (P25-01).

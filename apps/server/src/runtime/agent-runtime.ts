@@ -1628,15 +1628,10 @@ export class AgentRuntime {
     return live;
   }
 
-  /**
-   * The policy an agent's permissions are decided under now (decision 22): its project's table
-   * (the global default when the project has none), read on every check so a change applies to
-   * the next tool call; an agent outside any project keeps the policy it was spawned with.
-   */
   /** The agent's project workspace now (a moved workspace applies at once), else the spawn's. */
   private workspaceOf(agentId: Id, req: SpawnRequest): string {
     const { tables } = this.opts.log;
-    const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
+    const projectId = this.projectIdOf(agentId, req);
     const project = projectId ? tables.projects.get(projectId) : undefined;
     return project?.workspace ?? req.workspace ?? req.cwd;
   }
@@ -1685,7 +1680,11 @@ export class AgentRuntime {
     );
   }
 
-  /** The agent's project now (a Steward's is its task's), else the spawn's. */
+  /**
+   * The agent's project now (a Steward's is its task's), else the spawn's: the one resolver for
+   * its table, its workspace and its "Allow similar" rules (P9-17 review S7), so the table and
+   * the rules always come from the same project.
+   */
   private projectIdOf(agentId: Id, req: SpawnRequest): Id | undefined {
     const { tables } = this.opts.log;
     const agent = tables.agents.get(agentId);
@@ -1705,9 +1704,14 @@ export class AgentRuntime {
     );
   }
 
+  /**
+   * The policy an agent's permissions are decided under now (decision 22): its project's table
+   * (the global default when the project has none), read on every check so a change applies to
+   * the next tool call; an agent outside any project keeps the policy it was spawned with.
+   */
   private policyOf(agentId: Id, req: SpawnRequest): PermissionPolicy {
     const { tables } = this.opts.log;
-    const projectId = tables.agents.get(agentId)?.projectId ?? req.projectId;
+    const projectId = this.projectIdOf(agentId, req);
     const project = projectId ? tables.projects.get(projectId) : undefined;
     // No table of its own: the global default as it is now (P25-01: the settings may change it).
     if (project) return project.permissionPolicy ?? globalDefaultPolicy();

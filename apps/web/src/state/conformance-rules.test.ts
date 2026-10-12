@@ -95,21 +95,34 @@ describe('replay vs snapshot conformance: "Allow similar" rules (P9-17)', () => 
     await until(() => pending() !== undefined);
     const q1 = pending()!;
 
+    // The preview's digest of a scope, sent back with "Allow and remember" (review S1).
+    const digest = (questionId: string, scope: string) =>
+      commands
+        .similarPreview(questionId, { origin: 'local' })
+        .options.find((o) => o.scope === scope)?.digest ?? 'none';
     const made = await commands.allowSimilar({
       questionId: q1,
       scope: 'prefix',
+      digest: digest(q1, 'prefix'),
       by: USER,
       origin: 'local',
     });
+    const madeRule = made.value.rule!;
     await until(() => pending() !== undefined && pending() !== q1);
     const q2 = pending()!;
     await commands.removePermissionRule({
       projectId: project.id,
-      ruleId: made.value.id,
+      ruleId: madeRule.id,
       by: USER,
       origin: 'local',
     });
-    await commands.allowSimilar({ questionId: q2, scope: 'category', by: USER, origin: 'local' });
+    await commands.allowSimilar({
+      questionId: q2,
+      scope: 'category',
+      digest: digest(q2, 'category'),
+      by: USER,
+      origin: 'local',
+    });
     await until(() => statuses.get(steward)?.state === 'finished');
     await commands.closeProject(project.id, USER);
 
@@ -121,7 +134,7 @@ describe('replay vs snapshot conformance: "Allow similar" rules (P9-17)', () => 
         (e) =>
           e.event.type === 'permission.decided' &&
           e.event.decision === 'allow' &&
-          e.event.ruleId === made.value.id,
+          e.event.ruleId === madeRule.id,
       ),
     ).toBe(true);
 

@@ -164,12 +164,24 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         `/api/questions/${encodeURIComponent(questionId)}/similar-preview`,
         {},
       ),
-    /** Answers the request "allow" and stores the rule of `scope` on its project (P9-17). */
-    allowSimilar: (questionId: string, scope: PermissionRuleScope, version?: number) =>
+    /**
+     * Answers the request "allow" and stores the rule of `scope` on its project (P9-17), bound to
+     * the preview by its `digest` (409 `stale` when the server would store another rule).
+     */
+    allowSimilar: (
+      questionId: string,
+      scope: PermissionRuleScope,
+      digest: string,
+      version?: number,
+    ) =>
       call<AllowSimilarResponse>(
         'POST',
         `/api/questions/${encodeURIComponent(questionId)}/allow-similar`,
-        { scope, ...(version !== undefined ? { version } : {}) } satisfies AllowSimilarBody,
+        {
+          scope,
+          digest,
+          ...(version !== undefined ? { version } : {}),
+        } satisfies AllowSimilarBody,
       ),
     /** Removes a project's "Allow similar" rule (P9-17). */
     removePermissionRule: (projectId: string, ruleId: string) =>

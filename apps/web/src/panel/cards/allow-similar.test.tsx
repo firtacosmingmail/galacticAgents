@@ -51,12 +51,14 @@ const PREVIEW: SimilarPreviewResponse = {
       available: true,
       label: 'npm install zod',
       preview: 'Exactly the command `npm install zod` (the table asks about it as network access).',
+      digest: 'd-exact',
     },
     {
       scope: 'prefix',
       available: true,
-      label: 'npm install …',
-      preview: 'Any command line whose every command starts with `npm install` …',
+      label: 'npm install … (and any further arguments)',
+      preview: 'Any command line in which every command starts with `npm install` …',
+      digest: 'd-prefix',
     },
     { scope: 'category', available: false, reason: 'not today' },
   ],
@@ -155,9 +157,27 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
     await act(async () =>
       fireEvent.click(within(chooser).getByRole('button', { name: 'Allow and remember' })),
     );
-    expect(api.allowSimilar).toHaveBeenCalledWith('q-install', 'prefix', 2);
+    expect(api.allowSimilar).toHaveBeenCalledWith('q-install', 'prefix', 'd-prefix', 2);
     expect(api.answer).not.toHaveBeenCalled();
     expect(screen.queryByRole('group', { name: /Allow from now on/ })).toBeNull();
+  });
+
+  it('says so when the request was allowed once but the rule was not stored (review S6)', async () => {
+    world();
+    api.allowSimilar.mockResolvedValueOnce({
+      ok: true,
+      ruleNotStored: 'allowed once; the rule was not stored: project app is completed',
+    });
+    show(<QuestionCard question={install} />);
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: /^Allow similar for/ })),
+    );
+    const chooser = await screen.findByRole('group', { name: /Allow from now on/ });
+    await act(async () =>
+      fireEvent.click(within(chooser).getByRole('button', { name: 'Allow and remember' })),
+    );
+    expect(api.allowSimilar).toHaveBeenCalledWith('q-install', 'exact', 'd-exact', 2);
+    expect(chooser.textContent).toMatch(/allowed once; the rule was not stored/);
   });
 
   it('Escape and Cancel close the chooser without answering', async () => {

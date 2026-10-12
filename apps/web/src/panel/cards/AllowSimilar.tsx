@@ -111,15 +111,20 @@ export function AllowSimilar({
     requestAnimationFrame(() => opener.current?.focus());
   };
   const allow = async () => {
-    if (!scope) return;
+    if (!scope || preview.status !== 'ready') return;
+    const digest = preview.data.options.find((o) => o.scope === scope)?.digest;
+    if (!digest) return;
     let stale: string | undefined;
     const ok = await run(async () => {
+      let result;
       try {
-        await api.allowSimilar(q.id, scope, q.version);
+        result = await api.allowSimilar(q.id, scope, digest, q.version);
       } catch (e) {
         if (e instanceof ApiError && e.code === 'stale') stale = e.message;
         throw e;
       }
+      // Allowed once, but the rule could not be stored after it (review S6): say so.
+      if (result.ruleNotStored) throw new Error(result.ruleNotStored);
     });
     if (ok) setOpen(false);
     else if (stale !== undefined) {

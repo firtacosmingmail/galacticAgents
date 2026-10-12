@@ -219,6 +219,8 @@ export interface DismissQuestionInput {
 export interface AllowSimilarInput {
   questionId: Id;
   scope: PermissionRuleScope;
+  /** The preview's digest for `scope` (P9-17 review S1): a rule drafted again must match it. */
+  digest: string;
   by: Actor;
   origin?: RequestOrigin;
   version?: number;

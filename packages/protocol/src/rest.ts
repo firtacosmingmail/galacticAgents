@@ -138,6 +138,11 @@ export const SimilarOption = z.object({
   available: z.boolean(),
   label: z.string().optional(),
   preview: z.string().optional(),
+  /**
+   * What binds this preview to the rule stored (P9-17 review S1): sent back with
+   * `allow-similar`, which refuses (409 `stale`) when the rule it drafts again differs.
+   */
+  digest: z.string().optional(),
   reason: z.string().optional(),
 });
 export type SimilarOption = z.infer<typeof SimilarOption>;
@@ -154,16 +159,26 @@ export type SimilarPreviewResponse = z.infer<typeof SimilarPreviewResponse>;
 
 /**
  * `POST /api/questions/:id/allow-similar` (P9-17): answers the request "allow" and stores the rule
- * of `scope` the preview showed. `version` and `answerId` as for an answer.
+ * of `scope` the preview showed — `digest` is the preview's for that scope, and a rule drafted
+ * again that differs is refused (409 `stale`). `version` and `answerId` as for an answer.
  */
 export const AllowSimilarBody = z.object({
   scope: PermissionRuleScope,
+  digest: z.string().min(1).max(128),
   version: z.number().int().nonnegative().optional(),
   answerId: z.string().min(1).max(100).optional(),
 });
 export type AllowSimilarBody = z.infer<typeof AllowSimilarBody>;
 
-export const AllowSimilarResponse = z.object({ ok: z.literal(true), rule: PermissionRule });
+/**
+ * `rule`: the rule stored. `ruleNotStored`: the request was allowed once, but the rule could not
+ * be stored after it (the project closed meanwhile, say) — said to the user (P9-17 review S6).
+ */
+export const AllowSimilarResponse = z.object({
+  ok: z.literal(true),
+  rule: PermissionRule.optional(),
+  ruleNotStored: z.string().optional(),
+});
 export type AllowSimilarResponse = z.infer<typeof AllowSimilarResponse>;
 
 /** `DELETE /api/projects/:id/permission-rules/:ruleId`'s reply (P9-17). */

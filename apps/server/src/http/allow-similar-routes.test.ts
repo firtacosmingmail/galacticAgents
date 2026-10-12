@@ -9,7 +9,7 @@ import { openDatabase } from '../db/database.js';
 import { addPermissionRule } from '../domain/project-rules.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
-import type { PeerCheck } from './peer-guard.js';
+import { agentPeerGuard, type PeerCheck } from './peer-guard.js';
 
 /**
  * P9-17 (SPEC decision 138): "Allow similar" from a permission card — the preview, the answer
@@ -38,6 +38,17 @@ const SCENARIOS: Record<string, FakeScenario> = {
       { kind: 'idle' },
     ],
   },
+  outside: {
+    steps: [
+      {
+        kind: 'permission',
+        toolName: 'Bash',
+        input: { command: 'cat /etc/hosts' },
+        permissionAction: 'outside_workspace',
+      },
+      { kind: 'idle' },
+    ],
+  },
   pushes: {
     steps: [
       {
@@ -57,7 +68,9 @@ let composed: ComposedRuntime;
 let t: Awaited<ReturnType<typeof startTestApp>>;
 let root: string;
 
-async function setup(opts: { autoApproveRemote?: boolean; rulesPeer?: PeerCheck } = {}) {
+async function setup(
+  opts: { autoApproveRemote?: boolean; rulesPeer?: PeerCheck; answersPeer?: PeerCheck } = {},
+) {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-rules-')));
   composed = composeRuntime(openDatabase(':memory:'), {
     adapters: [new FakeAdapter({ speed: 0, scenarios: SCENARIOS })],
@@ -73,6 +86,7 @@ async function setup(opts: { autoApproveRemote?: boolean; rulesPeer?: PeerCheck 
     runtime: composed.runtime,
     commands: composed.commands,
     ...(opts.rulesPeer ? { rulesPeer: opts.rulesPeer } : {}),
+    ...(opts.answersPeer ? { answersPeer: opts.answersPeer } : {}),
   });
 }
 afterEach(async () => {
@@ -114,6 +128,14 @@ const events = <T extends Event['type']>(type: T) =>
     .eventsSince(0)
     .map((e) => e.event)
     .filter((e): e is EventOfType<T> => e.type === type);
+/** The preview's digest of `scope` for question `q` (what the card sends back, review S1). */
+async function digestOf(q: Id, scope: string, headers: Record<string, string> = {}) {
+  const preview = await call('POST', `/api/questions/${q}/similar-preview`, {}, headers);
+  const option = (preview.body['options'] as { scope: string; digest?: string }[]).find(
+    (o) => o.scope === scope,
+  );
+  return option?.digest ?? 'none';
+}
 const pending = (id: Id) => composed.statuses.get(id)?.pendingQuestionId;
 const project = (id: Id) => composed.log.tables.projects.get(id)!;
 const ran = (agentId: Id, command: string) =>
@@ -167,7 +189,11 @@ describe('"Allow similar" (P9-17)', () => {
       allowed: true,
       options: [
         { scope: 'exact', available: true, label: 'npm install left-pad' },
-        { scope: 'prefix', available: true, label: 'npm install …' },
+        {
+          scope: 'prefix',
+          available: true,
+          label: 'npm install … (and any further arguments)',
+        },
         { scope: 'category', available: true, label: 'network access' },
       ],
     });
@@ -175,6 +201,7 @@ describe('"Allow similar" (P9-17)', () => {
 
     const made = await call('POST', `/api/questions/${q1}/allow-similar`, {
       scope: 'prefix',
+      digest: await digestOf(q1, 'prefix'),
       version,
     });
     expect(made.status).toBe(200);
@@ -211,19 +238,20 @@ describe('"Allow similar" (P9-17)', () => {
     expect(composed.log.tables.questions.get(q3)?.context.toolCall?.input).toEqual({
       command: 'npm install x; rm -rf ~',
     });
-    // The compound line has no prefix; "exactly this" and its categories still are offered.
+    // The compound line reaches outside the workspace (`~`): only "exactly this" (review B2).
     const p3 = await call('POST', `/api/questions/${q3}/similar-preview`, {});
     expect(p3.body['options']).toMatchObject([
       { scope: 'exact', available: true },
       { scope: 'prefix', available: false },
-      {
-        scope: 'category',
-        available: true,
-        label: 'destructive actions, outside the workspace and network access',
-      },
+      { scope: 'category', available: false },
     ]);
     expect(
-      (await call('POST', `/api/questions/${q3}/allow-similar`, { scope: 'prefix' })).status,
+      (
+        await call('POST', `/api/questions/${q3}/allow-similar`, {
+          scope: 'prefix',
+          digest: 'x',
+        })
+      ).status,
     ).toBe(400);
 
     // The project's Waykeeper is covered too; another project still asks.
@@ -265,7 +293,10 @@ describe('"Allow similar" (P9-17)', () => {
     const preview = await call('POST', `/api/questions/${q}/similar-preview`, {});
     expect(preview.body).toMatchObject({ allowed: false, options: [] });
     expect(preview.body['refused']).toMatch(/push always asks/);
-    const refused = await call('POST', `/api/questions/${q}/allow-similar`, { scope: 'exact' });
+    const refused = await call('POST', `/api/questions/${q}/allow-similar`, {
+      scope: 'exact',
+      digest: 'x',
+    });
     expect(refused.status).toBe(400);
     expect(composed.log.tables.questions.get(q)?.status).toBe('open');
 
@@ -282,7 +313,8 @@ describe('"Allow similar" (P9-17)', () => {
     const lp = await call('POST', `/api/questions/${lq}/similar-preview`, {});
     expect(lp.body['refused']).toMatch(/no project/);
     expect(
-      (await call('POST', `/api/questions/${lq}/allow-similar`, { scope: 'exact' })).status,
+      (await call('POST', `/api/questions/${lq}/allow-similar`, { scope: 'exact', digest: 'x' }))
+        .status,
     ).toBe(400);
   });
 
@@ -298,13 +330,14 @@ describe('"Allow similar" (P9-17)', () => {
     const remote = await call(
       'POST',
       `/api/questions/${q}/allow-similar`,
-      { scope: 'exact' },
+      { scope: 'exact', digest: await digestOf(q, 'exact') },
       REMOTE,
     );
     expect(remote.status).toBe(403);
     expect(remote.body['error']).toBe('remote_control');
     const stale = await call('POST', `/api/questions/${q}/allow-similar`, {
       scope: 'exact',
+      digest: await digestOf(q, 'exact'),
       version: 99,
     });
     expect(stale.status).toBe(409);
@@ -353,7 +386,7 @@ describe('"Allow similar" (P9-17)', () => {
     const made = await call(
       'POST',
       `/api/questions/${q}/allow-similar`,
-      { scope: 'category' },
+      { scope: 'category', digest: await digestOf(q, 'category', REMOTE) },
       REMOTE,
     );
     expect(made.status).toBe(200);
@@ -371,10 +404,289 @@ describe('"Allow similar" (P9-17)', () => {
     const steward = await spawn(app, 'steward', 'installs');
     await waitFor(() => pending(steward) !== undefined, 'request');
     const q = pending(steward)!;
-    const made = await call('POST', `/api/questions/${q}/allow-similar`, { scope: 'exact' });
+    const made = await call('POST', `/api/questions/${q}/allow-similar`, {
+      scope: 'exact',
+      digest: await digestOf(q, 'exact'),
+    });
     expect(made).toEqual({ status: 403, body: { error: 'agent_peer', message: 'from an agent' } });
     expect(composed.log.tables.questions.get(q)?.status).toBe('open');
     expect((await call('DELETE', `/api/projects/${app.id}/permission-rules/r-x`)).status).toBe(403);
+  });
+});
+
+describe('"Allow similar" after the review (P9-17)', () => {
+  it('refuses a rule that is not the one the preview showed (S1)', async () => {
+    await setup();
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'installs');
+    await waitFor(() => pending(steward) !== undefined, 'request');
+    const q = pending(steward)!;
+    // The digest of another scope, or one from before the table changed: 409 stale.
+    const wrong = await call('POST', `/api/questions/${q}/allow-similar`, {
+      scope: 'prefix',
+      digest: await digestOf(q, 'category'),
+    });
+    expect(wrong.status).toBe(409);
+    expect(wrong.body['error']).toBe('stale');
+    const before = await digestOf(q, 'prefix');
+    await composed.commands.updateProject(
+      app.id,
+      { permissionPolicy: { rules: { network: 'ask', outside_workspace: 'ask' } } },
+      { origin: 'local' },
+    );
+    expect(await digestOf(q, 'prefix')).toBe(before); // same categories: same rule
+    expect(composed.log.tables.questions.get(q)?.status).toBe('open');
+    expect(project(app.id).permissionRules).toBeUndefined();
+    expect(
+      (await call('POST', `/api/questions/${q}/allow-similar`, { scope: 'prefix', digest: before }))
+        .status,
+    ).toBe(200);
+  });
+
+  it('outside the workspace: only exactly this, refused server-side too (B2)', async () => {
+    await setup();
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'outside');
+    await waitFor(() => pending(steward) !== undefined, 'request');
+    const q = pending(steward)!;
+    const preview = await call('POST', `/api/questions/${q}/similar-preview`, {});
+    expect(preview.body['options']).toMatchObject([
+      { scope: 'exact', available: true },
+      { scope: 'prefix', available: false },
+      { scope: 'category', available: false },
+    ]);
+    for (const scope of ['prefix', 'category']) {
+      const refused = await call('POST', `/api/questions/${q}/allow-similar`, {
+        scope,
+        digest: 'x',
+      });
+      expect(refused.status, scope).toBe(400);
+    }
+    expect(composed.log.tables.questions.get(q)?.status).toBe('open');
+    const exact = await call('POST', `/api/questions/${q}/allow-similar`, {
+      scope: 'exact',
+      digest: await digestOf(q, 'exact'),
+    });
+    expect(exact.status).toBe(200);
+    expect(exact.body['rule']).toMatchObject({ scope: 'exact', categories: ['outside_workspace'] });
+  });
+
+  it('checks the project before answering, and answer and rule are one transaction (S6)', async () => {
+    await setup();
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'installs');
+    await waitFor(() => pending(steward) !== undefined, 'request');
+    // A request no session waits on (opened in the log): answer and rule in one command.
+    const opened = await composed.commands.openQuestion({
+      kind: 'permission',
+      originAgentId: steward,
+      context: {
+        text: 'May I?',
+        toolCall: { toolName: 'Bash', input: { command: 'npm install zod' } },
+        permissionAction: 'network',
+      },
+    });
+    const q = opened.value.id;
+    expect(composed.runtime.hasQuestion(q)).toBe(false);
+    const digest = await digestOf(q, 'exact');
+    const since = composed.log.currentSeq();
+    const made = await call('POST', `/api/questions/${q}/allow-similar`, {
+      scope: 'exact',
+      digest,
+    });
+    expect(made.status).toBe(200);
+    const after = composed.log.eventsSince(since).map((e) => e.event.type);
+    expect(after.filter((t) => t === 'question.answered' || t === 'permission.rule_added')).toEqual(
+      ['question.answered', 'permission.rule_added'],
+    );
+
+    // A project that takes no rules any more: refused before anything is answered.
+    const q1 = pending(steward)!;
+    const d1 = await digestOf(q1, 'exact');
+    composed.log.runCommand((ctx) =>
+      ctx.tables.projects.upsert({ ...ctx.tables.projects.get(app.id)!, state: 'completed' }),
+    );
+    const refused = await call('POST', `/api/questions/${q1}/allow-similar`, {
+      scope: 'exact',
+      digest: d1,
+    });
+    expect(refused.status).toBe(400);
+    expect(composed.log.tables.questions.get(q1)?.status).toBe('open');
+  });
+
+  it('says "allowed once; rule not stored" when the rule fails after the session took the answer (S6)', async () => {
+    await setup();
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'installs');
+    await waitFor(() => pending(steward) !== undefined, 'request');
+    const q = pending(steward)!;
+    const digest = await digestOf(q, 'exact');
+    // The project closes while the session takes the answer.
+    const runtime = composed.runtime as unknown as {
+      answer: (...args: unknown[]) => Promise<unknown>;
+    };
+    const original = runtime.answer.bind(runtime);
+    runtime.answer = async (...args: unknown[]) => {
+      composed.log.runCommand((ctx) =>
+        ctx.tables.projects.upsert({ ...ctx.tables.projects.get(app.id)!, state: 'completed' }),
+      );
+      return original(...args);
+    };
+    const made = await call('POST', `/api/questions/${q}/allow-similar`, {
+      scope: 'exact',
+      digest,
+    });
+    expect(made.status).toBe(200);
+    expect(made.body['rule']).toBeUndefined();
+    expect(made.body['ruleNotStored']).toMatch(/allowed once; the rule was not stored/);
+    expect(composed.log.tables.questions.get(q)).toMatchObject({ status: 'answered' });
+    expect(project(app.id).permissionRules).toBeUndefined();
+  });
+
+  it('refuses answering a permission or dismissing from an agent; a clarification may be answered (S4)', async () => {
+    await setup({ answersPeer: async () => ({ refused: 'from an agent' }) });
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'installs');
+    await waitFor(() => pending(steward) !== undefined, 'request');
+    const q = pending(steward)!;
+    const answered = await call('POST', `/api/questions/${q}/answer`, { answer: 'allow' });
+    expect(answered).toEqual({
+      status: 403,
+      body: { error: 'agent_peer', message: 'from an agent' },
+    });
+    const dismissed = await call('POST', `/api/questions/${q}/dismiss`, {});
+    expect(dismissed.status).toBe(403);
+    expect(composed.log.tables.questions.get(q)?.status).toBe('open');
+    const clarification = await composed.commands.openQuestion({
+      kind: 'clarification',
+      originAgentId: steward,
+      context: { text: 'Which colour?' },
+    });
+    const c = clarification.value.id;
+    // Held by its supervisor or the user: answered as the user it is not refused by the guard.
+    const res = await call('POST', `/api/questions/${c}/answer`, { answer: 'blue' });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('lets the panel and the desktop app answer when the peer is not an agent (S4)', async () => {
+    const seen: string[] = [];
+    await setup({
+      answersPeer: async () => {
+        seen.push('checked');
+        return {};
+      },
+    });
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'installs');
+    await waitFor(() => pending(steward) !== undefined, 'request');
+    const q = pending(steward)!;
+    expect((await call('POST', `/api/questions/${q}/answer`, { answer: 'allow' })).status).toBe(
+      200,
+    );
+    expect(seen).toEqual(['checked']);
+  });
+
+  it("the desktop app (the server's parent, no agent marker) passes the guard; an agent does not (S4)", async () => {
+    const SELF = 200;
+    const proc = (pid: number, ppid: number) => ({
+      pid,
+      ppid,
+      pgid: pid,
+      uid: 501,
+      startedAt: 0,
+      command: `p${pid}`,
+    });
+    // launchd (1) → the desktop app (100) → Mission Control (200) → a Steward (300) → curl (301).
+    const table = {
+      list: async () => [
+        proc(100, 1),
+        proc(SELF, 100),
+        proc(300, SELF),
+        proc(301, 300),
+        proc(400, 1),
+      ],
+      environment: async (chain: readonly { pid: number }[]) =>
+        new Map(
+          chain.map((p) => [
+            p.pid,
+            new Map<string, string>(p.pid === 400 ? [['GALACTIC_AGENT_ID', 'a-1']] : []),
+          ]),
+        ),
+    };
+    const guardFor = (peer: number) =>
+      agentPeerGuard({
+        table,
+        selfPid: SELF,
+        lsof: async () => `p${peer}\nn127.0.0.1:5000->127.0.0.1:4000\n`,
+      });
+    const req = {
+      raw: { socket: { remotePort: 5000, localPort: 4000, remoteAddress: '127.0.0.1' } },
+    } as never;
+    expect(await guardFor(100)(req)).toEqual({}); // the desktop app's menu bar
+    expect((await guardFor(301)(req)).refused).toBeDefined(); // below Mission Control
+    expect((await guardFor(400)(req)).refused).toBeDefined(); // carries an agent's marker
+  });
+
+  it('allows and logs when the peer cannot be identified (S4)', async () => {
+    await setup({ answersPeer: async () => ({ unknown: 'lsof is not available' }) });
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'installs');
+    await waitFor(() => pending(steward) !== undefined, 'request');
+    const q = pending(steward)!;
+    expect((await call('POST', `/api/questions/${q}/dismiss`, {})).status).toBe(200);
+  });
+});
+
+describe('one project for the table and the rules (P9-17 review S7, S8)', () => {
+  it("a Steward spawned with only its task is judged by its task's project table and rules", async () => {
+    await setup();
+    const app = await newProject('app');
+    await composed.commands.updateProject(
+      app.id,
+      { permissionPolicy: { rules: { network: 'allow' } } },
+      { origin: 'local' },
+    );
+    const taskId = (await composed.commands.createTask({ projectId: app.id, description: 't' }))
+      .value.id;
+    const result = await composed.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:installs',
+      cwd: app.workspace,
+      taskId,
+    });
+    if (!result.ok) throw new Error(result.reason);
+    const steward = result.agent.id;
+    await waitFor(() => pending(steward) !== undefined, 'the compound request');
+    // The table of the task's project allowed both installs without a card.
+    expect(ran(steward, 'npm install left-pad')).toBe(true);
+    expect(ran(steward, 'npm install right-pad')).toBe(true);
+    expect(composed.log.tables.questions.get(pending(steward)!)?.context.toolCall?.input).toEqual({
+      command: 'npm install x; rm -rf ~',
+    });
+  });
+
+  it('a request whose agent is not running is previewed with the deliverables folder (S8)', async () => {
+    await setup();
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'installs');
+    await waitFor(() => pending(steward) !== undefined, 'request');
+    await composed.runtime.stop(steward, { type: 'user' });
+    expect(composed.runtime.permissionContext(steward)).toBeUndefined();
+    const opened = await composed.commands.openQuestion({
+      kind: 'permission',
+      originAgentId: steward,
+      context: {
+        text: 'May I?',
+        toolCall: {
+          toolName: 'Write',
+          input: { file_path: join(app.workspace, 'deliverables', 'report.pdf'), content: 'x' },
+        },
+        permissionAction: 'outside_workspace',
+      },
+    });
+    const preview = await call('POST', `/api/questions/${opened.value.id}/similar-preview`, {});
+    expect(preview.body['refused']).toMatch(/deliverables folder/);
   });
 });
 

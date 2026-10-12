@@ -81,8 +81,20 @@ import {
   type PolicyContext,
   type PolicyWrite,
 } from './permissions.js';
-import { similarOptions, type RuleDraft, type SimilarOptions } from './permission-rules.js';
-import { addPermissionRule, removePermissionRule, RULES_END_IN } from './project-rules.js';
+import {
+  aliasesOf,
+  draftDigest,
+  similarOptions,
+  type RuleDraft,
+  type SimilarOptions,
+} from './permission-rules.js';
+import { userFoldersOf } from '../deliverables/folder.js';
+import {
+  addPermissionRule,
+  checkRuleAllowed,
+  removePermissionRule,
+  RULES_END_IN,
+} from './project-rules.js';
 import type { ProposalOptions } from './approval.js';
 import { createProposal, decideProposal, proposePlan } from './proposals.js';
 import {
@@ -744,7 +756,8 @@ export class Commands implements DomainCommands {
   /**
    * Where a permission request is judged: the asking agent's project (a Steward's is its task's),
    * its table and its gate context — the live session's, else the rows' (the workspace, the task's
-   * worktree).
+   * worktree, their other spellings and the deliverables folder, as the gate builds them: review
+   * S8, so the preview and the gate judge the same call alike).
    */
   private permissionContextOf(question: Question): {
     projectId: Id | undefined;
@@ -759,10 +772,25 @@ export class Commands implements DomainCommands {
     const projectId = agent?.projectId ?? task?.projectId;
     const project = projectId ? tables.projects.get(projectId) : undefined;
     const workspace = project?.workspace ?? '/';
+    const cwd = task?.worktreePath ?? workspace;
+    const userFolders = userFoldersOf(
+      {
+        project: (id) => tables.projects.get(id),
+        task: (id) => tables.tasks.get(id),
+        projects: () => tables.projects.all(),
+      },
+      { projectId: agent?.projectId, taskId: agent?.taskId },
+      workspace,
+    );
     return {
       projectId: project?.id,
       policy: project?.permissionPolicy ?? globalDefaultPolicy(),
-      ctx: { workspace, cwd: task?.worktreePath ?? workspace },
+      ctx: {
+        workspace,
+        cwd,
+        aliases: aliasesOf(workspace, cwd),
+        ...(userFolders.length > 0 ? { userFolders } : {}),
+      },
     };
   }
 
@@ -806,7 +834,13 @@ export class Commands implements DomainCommands {
       ...(found.refused ? { refused: found.refused } : {}),
       options: found.options.map((o) =>
         o.available
-          ? { scope: o.scope, available: true, label: o.draft.label, preview: o.draft.preview }
+          ? {
+              scope: o.scope,
+              available: true,
+              label: o.draft.label,
+              preview: o.draft.preview,
+              digest: draftDigest(o.draft),
+            }
           : { scope: o.scope, available: false, reason: o.reason },
       ),
       allowed: this.mayWriteRules(write.origin) && !found.refused,
@@ -818,11 +852,16 @@ export class Commands implements DomainCommands {
    * its session first when one waits on it, like any answer) and the rule of `scope` the server
    * drafts from it is stored on the asking agent's project. Refused before anything happens: not
    * the user (agents never make rules), a remote or unknown origin without `autoApproveRemote`
-   * (decisions 37, 90), a stale `version`, a push, a request outside any project, a scope the
-   * chooser does not offer. The answer and the rule are one command: the rule is stored only once
-   * the answer is recorded.
+   * (decisions 37, 90), a stale `version`, a push, a request outside any project or of a project
+   * that takes no rules, a scope the chooser does not offer, and — 409 `stale` — a rule that is not
+   * the one the preview showed (`digest`, review S1). With no session waiting, the answer and the
+   * rule are one transaction; with one, the session gets the answer first and the rule is stored
+   * after it — should that fail (the project closed meanwhile), the request stays allowed once
+   * and `ruleNotStored` says why (review S6).
    */
-  async allowSimilar(input: AllowSimilarInput): Promise<CommandResult<PermissionRule>> {
+  async allowSimilar(
+    input: AllowSimilarInput,
+  ): Promise<CommandResult<{ rule?: PermissionRule; ruleNotStored?: string }>> {
     const { questionId, by } = input;
     if (by.type !== 'user') {
       throw new DomainError('invalid', 'only the user makes "Allow similar" rules');
@@ -834,12 +873,14 @@ export class Commands implements DomainCommands {
       );
     }
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
-    checkAnswer(question, {
+    const answer = {
       questionId,
       answer: 'allow',
       answeredBy: by,
       ...(input.version !== undefined ? { version: input.version } : {}),
-    });
+      ...(input.answerId !== undefined ? { answerId: input.answerId } : {}),
+    };
+    checkAnswer(question, answer);
     const found = this.similarFor(question);
     if (found.refused || !found.project) {
       throw new DomainError('invalid', `no rule can be made: ${found.refused ?? 'no project'}`);
@@ -852,7 +893,24 @@ export class Commands implements DomainCommands {
       );
     }
     const draft: RuleDraft = option.draft;
+    if (draftDigest(draft) !== input.digest) {
+      throw new DomainError(
+        'stale',
+        'the rule is not the one the preview showed any more (the request or the table changed): look at the preview again',
+      );
+    }
     const projectId = found.project.id;
+    // The rule's checks before the answer (review S6): nothing is answered for a rule refused.
+    checkRuleAllowed(found.project, draft);
+    const made = { by, origin: input.origin ?? ('remote' as const), questionId };
+    if (!this.agents?.hasQuestion(questionId)) {
+      // No session waits: the answer and the rule in one transaction.
+      const result = await this.run((ctx) => {
+        answerQuestion(ctx, { ...answer, holders: holdersNow(ctx, questionId, this.questions) });
+        return addPermissionRule(ctx, projectId, draft, made);
+      });
+      return { value: { rule: result.value }, events: result.events };
+    }
     const answered = await this.answerQuestion({
       questionId,
       answer: 'allow',
@@ -860,14 +918,16 @@ export class Commands implements DomainCommands {
       ...(input.version !== undefined ? { version: input.version } : {}),
       ...(input.answerId !== undefined ? { answerId: input.answerId } : {}),
     });
-    const stored = await this.run((ctx) =>
-      addPermissionRule(ctx, projectId, draft, {
-        by,
-        origin: input.origin ?? 'remote',
-        questionId,
-      }),
-    );
-    return { value: stored.value, events: [...answered.events, ...stored.events] };
+    try {
+      const stored = await this.run((ctx) => addPermissionRule(ctx, projectId, draft, made));
+      return { value: { rule: stored.value }, events: [...answered.events, ...stored.events] };
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+      return {
+        value: { ruleNotStored: `allowed once; the rule was not stored: ${error.message}` },
+        events: answered.events,
+      };
+    }
   }
 
   /** The user removes a project's rule (P9-17): remote only with `autoApproveRemote`. */
