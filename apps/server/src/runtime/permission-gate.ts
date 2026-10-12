@@ -1,4 +1,3 @@
-import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import {
   type GateCheckOptions,
@@ -11,7 +10,10 @@ import {
   type ToolCall,
 } from '@galactic/protocol';
 import { evaluate, type PolicyContext } from '../domain/permissions.js';
-import { matchingRule, type RealPath } from '../domain/permission-rules.js';
+import { aliasesOf, matchingRule, type RealPath } from '../domain/permission-rules.js';
+
+/** The workspace's other spellings: shared with the chooser's offline context (P9-17 review S8). */
+export { aliasesOf };
 import type { CapsEnforcer } from './caps.js';
 
 /**
@@ -255,25 +257,4 @@ function misplacedCwd(workspace: string, cwd: string): string | undefined {
     return `cwd ${cwd} is outside the workspace ${workspace}`;
   }
   return undefined;
-}
-
-/**
- * The resolved spellings of the workspace and the cwd, when they differ from the given ones (a
- * symlink on the way: macOS `/var` → `/private/var`, a symlinked projects folder). Claude Code
- * resolves its cwd, so it names resolved paths; the engine judges them as the given ones. The cwd
- * comes first, so a worktree inside the workspace maps to itself. A path that does not exist (yet)
- * has no other spelling.
- */
-export function aliasesOf(workspace: string, cwd: string): { from: string; to: string }[] {
-  const out: { from: string; to: string }[] = [];
-  for (const given of [resolve(cwd), resolve(workspace)]) {
-    let real: string;
-    try {
-      real = realpathSync(given);
-    } catch {
-      continue;
-    }
-    if (real !== given && !out.some((a) => a.from === real)) out.push({ from: real, to: given });
-  }
-  return out;
 }
