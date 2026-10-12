@@ -351,3 +351,22 @@
 .set-section code {
   overflow-wrap: anywhere;
 }
+
+/* Settings → Access, "Phone access" (P9-16) */
+.set-phone {
+  margin: 8px 0 12px;
+}
+.set-subtitle {
+  font-size: 14px;
+  margin: 8px 0 4px;
+}
+.set-phone-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+.set-phone-warning {
+  color: #e5484d;
+  font-weight: 600;
+}

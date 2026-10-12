@@ -12,7 +12,7 @@ import type { TrayMenu } from './tray-menu.js';
  *
  * Node → Rust: one JSON object per stdout line (`ShellLine`). Nothing else is ever written to
  * stdout; logs go to stderr. Rust → Node: one line per command (`ShellCommand`): a word (`quit`,
- * `start`) or, for an answer from the menu (P9-15), a JSON object
+ * `start`, `phone:on`, `phone:off` — the "Phone Access" switch, P9-16) or, for an answer from the menu (P9-15), a JSON object
  * `{"type":"answer","questionId":…,"version":…,"decision":"allow"|"deny"}`; stdin closing (the
  * shell died) counts as `quit`. Anything else is ignored.
  *
@@ -55,6 +55,19 @@ export interface TrayView {
   canStart: boolean;
 }
 
+/**
+ * The menu's Phone line (P9-16, `phone.ts`): the label ("Phone: https://<name>",
+ * "Phone: off — Tailscale not running", …), the "Phone Access" switch, and the address a click on
+ * the line copies (only when the phone can reach Mission Control at it).
+ */
+export interface PhoneLine {
+  on: boolean;
+  label: string;
+  url?: string;
+  /** The reason in full, with what to do (the log and the tooltip). */
+  detail?: string;
+}
+
 export type ShellLine =
   | { type: 'server'; server: ServerInfo }
   | {
@@ -71,16 +84,21 @@ export type ShellLine =
    * the status socket is not live (nothing can be answered then).
    */
   | { type: 'menu'; menu: TrayMenu }
+  /** The Phone line and the "Phone Access" switch (P9-16): sent when they change. */
+  | { type: 'phone'; phone: PhoneLine }
   | { type: 'exited' };
 
-export type ShellCommand = 'quit' | 'start' | ({ type: 'answer' } & TrayAnswer);
+export type ShellCommand =
+  'quit' | 'start' | 'phone:on' | 'phone:off' | ({ type: 'answer' } & TrayAnswer);
 
 /** The longest command line read (an answer is well under it). */
 const MAX_COMMAND = 4096;
 
 export function parseCommand(line: string): ShellCommand | undefined {
   const text = line.trim();
-  if (text === 'quit' || text === 'start') return text;
+  if (text === 'quit' || text === 'start' || text === 'phone:on' || text === 'phone:off') {
+    return text;
+  }
   if (!text.startsWith('{') || text.length > MAX_COMMAND) return undefined;
   let data: unknown;
   try {

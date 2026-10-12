@@ -1,4 +1,6 @@
+import { useEffect } from 'react';
 import { useAppStore } from '../../state/store.js';
+import { revealAccessSection } from '../phone/PhoneIndicator.js';
 import { NavLink } from '../Navigation.js';
 import { NotificationSettings } from '../notifications/NotificationSettings.js';
 import { PushSettings } from '../../pwa/PushSettings.js';
@@ -27,6 +29,15 @@ import './settings.css';
 export function SettingsPage({ token }: { token: string }) {
   const data = useSettingsData();
   const selection = useAppStore((s) => s.selection);
+  // `/settings#access` (the desktop app's "Show the Phone QR Code", P9-16): Access in view.
+  useEffect(() => {
+    const go = () => {
+      if (window.location.hash === '#access') revealAccessSection();
+    };
+    go();
+    window.addEventListener('hashchange', go);
+    return () => window.removeEventListener('hashchange', go);
+  }, []);
   return (
     <main className="set-page" aria-label="settings">
       <div className="set-page-head">

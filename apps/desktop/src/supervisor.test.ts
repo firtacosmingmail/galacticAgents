@@ -8,7 +8,7 @@ import {
   type OwnServerOptions,
   type StartResult,
 } from './lifecycle.js';
-import { Supervisor } from './supervisor.js';
+import { Supervisor, type SupervisorOptions } from './supervisor.js';
 import type { WatcherOptions } from './watcher.js';
 import { trayView } from './tray-view.js';
 
@@ -34,7 +34,14 @@ class FakeOwn {
 }
 
 function setup(
-  opts: { lock?: LockHolder; healthy?: boolean; result?: StartResult; fetch?: typeof fetch } = {},
+  opts: {
+    lock?: LockHolder;
+    healthy?: boolean;
+    result?: StartResult;
+    fetch?: typeof fetch;
+    phone?: SupervisorOptions['phone'];
+    serverEnv?: NodeJS.ProcessEnv;
+  } = {},
 ) {
   const lines: ShellLine[] = [];
   const owns: FakeOwn[] = [];
@@ -46,7 +53,7 @@ function setup(
     token: () => 'tok',
     emit: (l) => lines.push(l),
     log: () => {},
-    server: { launcher: '/x/galactic.mjs', env: {} },
+    server: { launcher: '/x/galactic.mjs', env: opts.serverEnv ?? {} },
     planDeps: {
       readLock: () => world.lock,
       alive: () => world.alive,
@@ -63,6 +70,7 @@ function setup(
     },
     now: () => clock,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
+    ...(opts.phone ? { phone: opts.phone } : {}),
   });
   const servers = () => lines.flatMap((l) => (l.type === 'server' ? [l.server] : []));
   const lastStatus = () => [...lines].reverse().find((l) => l.type === 'status');
@@ -337,5 +345,77 @@ describe("Supervisor: the menu bar's permission requests (P9-15)", () => {
     await t.supervisor.answer({ questionId: 'q-7', version: 4, decision: 'allow' });
     expect(called).toBe(0);
     expect(t.notes().at(-1)?.title).toBe('Could not answer the permission request');
+  });
+});
+
+describe('Supervisor: phone access (P9-16)', () => {
+  const fakePhone = (on: boolean) => {
+    const calls: string[] = [];
+    return {
+      calls,
+      phone: {
+        on,
+        setServer: (s: { port: number; owned: boolean } | undefined) =>
+          void calls.push(s ? `server ${s.port} ${s.owned ? 'owned' : 'attached'}` : 'no server'),
+        reconnected: () => void calls.push('reconnected'),
+        stop: () => void calls.push('stop'),
+        releaseForQuit: async () => void calls.push('release'),
+      },
+    };
+  };
+
+  it('a server it starts gets GALACTIC_PHONE_ACCESS=1 while phone access is on', async () => {
+    const on = fakePhone(true);
+    const t = setup({ phone: on.phone });
+    await t.supervisor.tick();
+    expect(t.owns[0]!.opts.env['GALACTIC_PHONE_ACCESS']).toBe('1');
+    expect(on.calls).toEqual(['server 4400 owned']);
+
+    const off = fakePhone(false);
+    const t2 = setup({ phone: off.phone, serverEnv: { GALACTIC_PHONE_ACCESS: '1', KEEP: 'x' } });
+    await t2.supervisor.tick();
+    // Not inherited from the app's own environment when the switch is off.
+    expect(t2.owns[0]!.opts.env['GALACTIC_PHONE_ACCESS']).toBeUndefined();
+    expect(t2.owns[0]!.opts.env['KEEP']).toBe('x');
+  });
+
+  it('on quit, its own server is asked to turn off its Serve before it is stopped', async () => {
+    const p = fakePhone(true);
+    const t = setup({ phone: p.phone });
+    await t.supervisor.tick();
+    const own = t.owns[0]!;
+    const stop = own.stop.bind(own);
+    own.stop = async () => {
+      p.calls.push('own stopped');
+      await stop();
+    };
+    await t.supervisor.quit();
+    expect(p.calls.slice(-3)).toEqual(['stop', 'release', 'own stopped']);
+
+    // An attached server is not stopped, and its Serve is left to it.
+    const a = fakePhone(true);
+    const t2 = setup({ lock: { pid: 7, role: 'server', port: 4500 }, phone: a.phone });
+    await t2.supervisor.tick();
+    await t2.supervisor.quit();
+    expect(a.calls).not.toContain('release');
+  });
+
+  it('an attached server is told as attached; a reconnect, a crash and quit are passed on', async () => {
+    const p = fakePhone(true);
+    const t = setup({ lock: { pid: 7, role: 'server', port: 4500 }, phone: p.phone });
+    await t.supervisor.tick();
+    expect(t.owns).toHaveLength(0);
+    const w = t.watchers[0]!;
+    w.onState({ connection: 'live', waiting: 0, storage: 'ok' });
+    w.onState({ connection: 'disconnected', waiting: 0, storage: 'ok' });
+    w.onState({ connection: 'live', waiting: 0, storage: 'ok' });
+    expect(p.calls).toEqual(['server 4500 attached', 'reconnected']);
+    t.world.lock = undefined;
+    w.onState({ connection: 'disconnected', waiting: 0, storage: 'ok' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await t.supervisor.tick();
+    expect(p.calls.at(-1)).toBe('no server');
+    await t.supervisor.quit();
+    expect(p.calls.at(-1)).toBe('stop');
   });
 });

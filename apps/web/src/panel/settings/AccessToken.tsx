@@ -2,6 +2,8 @@ import { useState } from 'react';
 import type { SettingsResponse } from '@galactic/protocol';
 import { IDENTITY_TOKEN } from '../../client/session.js';
 import { QrCode } from './QrCode.js';
+import { ACCESS_SECTION_ID } from '../phone/PhoneIndicator.js';
+import { PhoneAccessSection } from '../phone/PhoneAccessSection.js';
 
 type SettingsRemote = NonNullable<SettingsResponse['remote']>;
 
@@ -42,9 +44,11 @@ export function AccessToken({ token, remote }: { token: string; remote?: Setting
   };
   if (token === IDENTITY_TOKEN) {
     return (
-      <section className="set-section" aria-label="Access">
+      <section className="set-section" aria-label="Access" id={ACCESS_SECTION_ID}>
         <div className="set-head">
-          <h2 className="set-title">Access</h2>
+          <h2 className="set-title" tabIndex={-1}>
+            Access
+          </h2>
         </div>
         <p className="set-intro">
           This device is signed in by its Tailscale identity: Mission Control accepts it through
@@ -56,9 +60,12 @@ export function AccessToken({ token, remote }: { token: string; remote?: Setting
   }
   const host = remote?.host;
   return (
-    <section className="set-section" aria-label="Access">
+    <section className="set-section" aria-label="Access" id={ACCESS_SECTION_ID}>
       <div className="set-head">
-        <h2 className="set-title">Access</h2>
+        {/* Focusable by script only: the phone indicator moves focus here (revealAccessSection). */}
+        <h2 className="set-title" tabIndex={-1}>
+          Access
+        </h2>
       </div>
       <p className="set-intro">
         This browser connects with the token <code>galactic start</code> printed. Anyone with it can
@@ -85,6 +92,8 @@ export function AccessToken({ token, remote }: { token: string; remote?: Setting
           </span>
         )}
       </div>
+      {/* P9-16: whether the phone can reach Mission Control, and the Mac's switch. */}
+      <PhoneAccessSection />
       {host ? (
         <div className="set-qr">
           <p className="set-muted">

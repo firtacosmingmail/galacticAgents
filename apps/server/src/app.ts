@@ -32,6 +32,8 @@ import type { TranscriptPipeline } from './runtime/transcripts.js';
 import { SERVER_VERSION } from './version.js';
 import { sendStorageRefusal } from './http/storage-refusal.js';
 import type { StorageMonitor } from './runtime/storage-health.js';
+import { registerRemoteRoutes } from './http/remote-routes.js';
+import type { RemoteService } from './remote/service.js';
 
 export interface AppOptions {
   config: ServerConfig;
@@ -80,6 +82,9 @@ export interface AppOptions {
   harness?: DevRoutesOptions['harness'];
   /** `peer`: the agent speed bump on starts (P9-12 review S3); `index.ts` passes the OS one. */
   runs?: { service: RunService; output: RunOutput; peer?: PeerCheck };
+  /** Phone access (P9-16): enables `GET /api/remote/status`, `POST /api/remote/start|stop`. */
+  /** `peer`: the agent speed bump on start / stop, as on the runs routes; `index.ts` passes it. */
+  remote?: { service: Pick<RemoteService, 'status' | 'start' | 'stop'>; peer?: PeerCheck };
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -248,6 +253,10 @@ export function buildApp(opts: AppOptions): App {
   // The deliverables folders' sizes for the settings page (P9-06).
   if (opts.deliverableCopies) {
     registerDeliverablesUsageRoute(fastify, config, opts.deliverableCopies);
+  }
+
+  if (opts.remote) {
+    registerRemoteRoutes(fastify, config, opts.remote);
   }
 
   if (opts.push) {

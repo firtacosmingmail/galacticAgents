@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline';
 import { dataPaths, readToken } from './lifecycle.js';
 import { parseCommand, type ShellLine } from './lines.js';
 import { Supervisor } from './supervisor.js';
+import { desktopSettingsPath, PhoneAccess } from './phone.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const launcher = resolve(here, '../../server/bin/galactic.mjs');
@@ -25,11 +26,20 @@ if (!existsSync(launcher)) {
 const portEnv = env['GALACTIC_PORT'];
 const port = portEnv !== undefined && /^\d+$/.test(portEnv) ? Number(portEnv) : undefined;
 
+// Phone access (P9-16): through Mission Control's own routes; the switch is the app's setting.
+const phone = new PhoneAccess({
+  settingsPath: desktopSettingsPath(env),
+  token: () => readToken(env, paths),
+  emit,
+  log,
+});
+
 const supervisor = new Supervisor({
   paths,
   token: () => readToken(env, paths),
   emit,
   log,
+  phone,
   server: { launcher, env: { ...env }, ...(port !== undefined ? { port } : {}) },
 });
 
@@ -45,6 +55,8 @@ input.on('line', (line) => {
   const command = parseCommand(line);
   if (command === 'quit') quit();
   else if (command === 'start') supervisor.requestStart();
+  else if (command === 'phone:on' || command === 'phone:off')
+    void phone.setOn(command === 'phone:on');
   else if (command?.type === 'answer') {
     const { type: _type, ...answer } = command;
     void supervisor.answer(answer);
@@ -55,4 +67,5 @@ input.on('close', quit);
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, quit);
 
 log(`data in ${paths.dataDir}`);
+phone.setServer(undefined); // the switch's state, for the menu
 supervisor.run();

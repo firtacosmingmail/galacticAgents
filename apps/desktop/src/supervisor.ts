@@ -11,6 +11,7 @@ import {
   type PlanDeps,
   type StartResult,
 } from './lifecycle.js';
+import type { PhoneAccess } from './phone.js';
 import { emptyTrayMenu, trayMenu } from './tray-menu.js';
 import { trayView } from './tray-view.js';
 import { StatusWatcher, type WatcherOptions, type WatcherState } from './watcher.js';
@@ -54,6 +55,11 @@ export interface SupervisorOptions {
   tickMs?: number;
   /** The menu's answers go through it (a fake server in tests). */
   fetch?: typeof fetch;
+  /**
+   * Phone access (P9-16, `phone.ts`): told when the live Mission Control changes and after a
+   * reconnect; while it is on, a server this app starts gets `GALACTIC_PHONE_ACCESS=1`.
+   */
+  phone?: Pick<PhoneAccess, 'on' | 'setServer' | 'reconnected' | 'stop' | 'releaseForQuit'>;
 }
 
 export class Supervisor {
@@ -77,6 +83,8 @@ export class Supervisor {
   private readonly sending = new Set<string>();
   private lastMenu: string | undefined;
   private answers = 0;
+  /** The current server's status socket was live at least once (a later live is a reconnect). */
+  private liveOnce = false;
 
   constructor(private readonly opts: SupervisorOptions) {}
 
@@ -106,7 +114,10 @@ export class Supervisor {
     if (this.interval) clearInterval(this.interval);
     this.watcher?.stop();
     this.watcher = undefined;
+    this.opts.phone?.stop();
     if (this.own?.running) {
+      // Serve first (when Mission Control started it): 443 must not forward to a dead port.
+      await this.opts.phone?.releaseForQuit();
       this.opts.log('stopping the Mission Control this app started');
       await this.own.stop();
     }
@@ -164,8 +175,14 @@ export class Supervisor {
   private async tryStart(): Promise<void> {
     this.setPhase('starting');
     const make = this.opts.makeOwnServer ?? ((o: OwnServerOptions) => new OwnServer(o));
+    const phoneOn = this.opts.phone?.on ?? false;
+    // Never inherited from the app's own environment: only the switch decides.
+    const { GALACTIC_PHONE_ACCESS: _inherited, ...env } = this.opts.server.env;
     const own = make({
       ...this.opts.server,
+      // Phone access: the server adds this Mac's Tailscale name as `remoteHost` before it reads
+      // its config, so it needs no restart to accept the phone.
+      env: phoneOn ? { ...env, GALACTIC_PHONE_ACCESS: '1' } : env,
       log: this.opts.log,
       onExit: (code, signal) => this.onOwnExit(own, code, signal),
     });
@@ -227,18 +244,26 @@ export class Supervisor {
     this.watcher?.stop();
     this.server = info;
     this.watched = undefined;
+    this.liveOnce = false;
     this.world = undefined;
     this.sending.clear();
     this.phase = 'connected';
     this.detail = undefined;
     this.opts.emit({ type: 'server', server: info });
+    this.opts.phone?.setServer(info);
     const make = this.opts.makeWatcher ?? ((o: WatcherOptions) => new StatusWatcher(o));
     const watcher = make({
       url: `ws://127.0.0.1:${info.port}/ws`,
       token: this.opts.token,
       onState: (state) => {
         if (this.watcher !== watcher) return;
+        const wasLive = this.watched?.connection === 'live';
+        const everLive = this.liveOnce;
         this.watched = state;
+        if (state.connection === 'live') {
+          this.liveOnce = true;
+          if (!wasLive && everLive) this.opts.phone?.reconnected();
+        }
         this.emitStatus();
         if (state.connection !== 'live') void this.tick();
       },
@@ -264,6 +289,7 @@ export class Supervisor {
     this.server = undefined;
     this.world = undefined;
     this.sending.clear();
+    this.opts.phone?.setServer(undefined);
     this.emitMenu();
   }
 

@@ -1,4 +1,6 @@
 import type {
+  RemoteActionResponse,
+  RemoteStatus,
   AddDeliverableBody,
   AgentCommandsResponse,
   AnswerBody,
@@ -263,6 +265,13 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
       ),
     /** Each `deliverables/` folder's size on disk (decision 122). */
     deliverablesUsage: () => call<DeliverablesUsageResponse>('GET', '/api/deliverables/usage'),
+
+    // -- phone access (P9-16; decision 137) ------------------------------------------------------
+    /** Whether the phone can reach Mission Control (every client may read it). */
+    remoteStatus: () => call<RemoteStatus>('GET', '/api/remote/status'),
+    /** Turn phone access on / off (the Mac only; a refusal is 409 `remote_refused`). */
+    remoteStart: () => call<RemoteActionResponse>('POST', '/api/remote/start'),
+    remoteStop: () => call<RemoteActionResponse>('POST', '/api/remote/stop'),
 
     // -- managed runs (P9-08 routes, P9-10 panel; TECHNOLOGY §9.8) ------------------------------
     /**

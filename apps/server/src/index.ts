@@ -1,6 +1,8 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig } from './config/config.js';
+import { dataPaths, loadConfig } from './config/config.js';
+import { prepareRemoteHost } from './remote/tailscale.js';
+import { readTurnedOff, RemoteService } from './remote/service.js';
 import { SettingsService, declarationLimits, runSettings } from './config/settings.js';
 import { Opener } from './deliverables/opener.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
@@ -35,6 +37,26 @@ import { Workspaces } from './workspace/workspaces.js';
 import { agentPeerGuard } from './http/peer-guard.js';
 import { osProcessTable } from './runtime/process-table.js';
 
+// Phone access asked for by the desktop app (P9-16): this Mac's Tailscale name becomes
+// `remoteHost` before the config is read, so this server starts with it — unless the user turned
+// phone access off on purpose (`remote-off.json`). The variable is removed at once: the agents and
+// runs this server starts must not inherit it. A hung Tailscale gives up after 5 s.
+const phoneAccessAsked = process.env['GALACTIC_PHONE_ACCESS'] === '1';
+delete process.env['GALACTIC_PHONE_ACCESS'];
+if (phoneAccessAsked && !readTurnedOff(dataPaths(process.env).dataDir)) {
+  try {
+    const added = await prepareRemoteHost({
+      configPath: dataPaths(process.env).configPath,
+      env: process.env,
+      locate: { log: (line) => console.log(`[remote] ${line}`) },
+    });
+    if (added) console.log(added);
+  } catch (error) {
+    console.warn(
+      `[remote] remoteHost not added: ${error instanceof Error ? error.message : error}`,
+    );
+  }
+}
 const { config, tokenGenerated, warnings } = loadConfig();
 // Remote-access settings that work but deserve a word (P7-02): wildcards, identity headers.
 for (const warning of warnings) console.warn(`[config] ${warning}`);
@@ -347,7 +369,28 @@ const restartHarmonizer = harmonizerRestarter(composed, {
   onError,
 });
 const webDir = process.env['GALACTIC_WEB_DIR'];
+// Phone access (P9-16): the status every client reads, the Mac's start / stop.
+let boundPort: number | undefined;
+const gatewayRef: { clients?: () => { connected: number; lastSeenAt?: string } } = {};
+const remote = new RemoteService({
+  dataDir: config.dataDir,
+  configPath: config.configPath,
+  port: () => boundPort,
+  remoteHost: config.remoteHost,
+  remoteHostFromEnv: Boolean(process.env['GALACTIC_REMOTE_HOST']),
+  remoteClients: () => gatewayRef.clients?.() ?? { connected: 0 },
+  log: (line) => console.log(`[remote] ${line}`),
+});
 const app = buildApp({
+  remote: {
+    service: remote,
+    // Turning phone access on or off from an agent's or a run's process is refused (P9-16 review).
+    peer: agentPeerGuard({
+      table: osProcessTable(),
+      refusal:
+        'Turning phone access on or off from an agent’s or a run’s process is refused: the user does it from the panel or the menu bar on the Mac.',
+    }),
+  },
   config,
   log,
   statuses,
@@ -408,12 +451,14 @@ const app = buildApp({
 });
 
 server.app = app;
+gatewayRef.clients = () => app.gateway.remoteClients();
 
 if (tokenGenerated) {
   console.log(`Token generated and stored in ${config.configPath}`);
 }
 try {
   const port = await app.listen();
+  boundPort = port;
   dataLock.update({ port, host: config.host });
   // The first check waits for the server to be up; a backup already due runs once the log is quiet.
   backups.start(BACKUP_CHECK_INTERVAL_MS);
