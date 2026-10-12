@@ -1,15 +1,16 @@
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
-import type {
+import {
   PermissionAction,
-  PermissionPolicy,
-  PermissionRule,
-  PermissionRuleMatch,
-  PermissionRuleScope,
-  ToolCall,
+  type PermissionPolicy,
+  type PermissionRule,
+  type PermissionRuleMatch,
+  type PermissionRuleScope,
+  type ToolCall,
 } from '@galactic/protocol';
 import {
+  classifyCommand,
   commandHead,
   cwdOf,
   decide,
@@ -74,7 +75,10 @@ export interface Asking {
 
 export function askingOf(policy: PermissionPolicy, c: Classification): Asking {
   const merged = resolvePolicy(policy);
-  const categories = [...new Set(c.actions.filter((a) => ruleFor(merged, a) === 'ask'))];
+  // In the table's order, so a rule's categories and label read the same whatever the call.
+  const categories = PermissionAction.options.filter(
+    (a) => c.actions.includes(a) && ruleFor(merged, a) === 'ask',
+  );
   const unreadable = c.unclassified === true || c.actions.length === 0;
   return { categories, unclassified: unreadable && decide(policy, [], true) === 'ask' };
 }
@@ -212,6 +216,15 @@ function subjectOf(call: ToolCall, ctx: PolicyContext, realPath: RealPath): Subj
 
 // --- command prefixes -----------------------------------------------------------------------
 
+/**
+ * Whether the engine cannot read `command` (a shell `-c`, an inline script, an interpreter fed
+ * from stdin, `eval`, …): such a line has no prefix and matches none. Opaqueness does not depend
+ * on where the command runs.
+ */
+function opaque(command: string): boolean {
+  return classifyCommand(command, { workspace: '/nowhere', cwd: '/nowhere' }).unclassified === true;
+}
+
 /** A redirection that writes or reads no file: an fd duplication, or a harmless device. */
 function harmlessRedirect(r: Redirect): boolean {
   if ((r.op === '>&' || r.op === '<&') && /^(?:\d+-?|-)$/.test(r.target)) return true;
@@ -227,7 +240,7 @@ function harmlessRedirect(r: Redirect): boolean {
 export function commandMatchesPrefix(command: string, words: readonly string[]): boolean {
   if (words.length === 0) return false;
   const lexed = lexCommand(command.trim());
-  if (lexed.opaque.length > 0 || lexed.commands.length === 0) return false;
+  if (lexed.opaque.length > 0 || lexed.commands.length === 0 || opaque(command)) return false;
   return lexed.commands.every(
     (c) =>
       !c.heredoc &&
@@ -248,7 +261,7 @@ const SUBCOMMAND = /^[A-Za-z][A-Za-z0-9:_-]*$/;
  */
 export function proposePrefix(command: string): string[] | undefined {
   const lexed = lexCommand(command.trim());
-  if (lexed.opaque.length > 0 || lexed.commands.length !== 1) return undefined;
+  if (lexed.opaque.length > 0 || lexed.commands.length !== 1 || opaque(command)) return undefined;
   const c = lexed.commands[0]!;
   if (c.heredoc || !c.redirects.every(harmlessRedirect)) return undefined;
   const w = c.words;
@@ -272,8 +285,13 @@ export const CATEGORY_WORDS: Record<PermissionAction, string> = {
   push: 'push',
 };
 
-const categoryWords = (cs: readonly PermissionAction[]) =>
-  cs.map((c) => CATEGORY_WORDS[c]).join(' and ');
+/** "network access", "destructive actions and network access", "a, b and c". */
+function categoryWords(cs: readonly PermissionAction[]): string {
+  const words = cs.map((c) => CATEGORY_WORDS[c]);
+  return words.length <= 1
+    ? (words[0] ?? '')
+    : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
 
 /** A rule as the server would make it from a request (no id, author or time yet). */
 export interface RuleDraft {
