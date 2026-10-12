@@ -46,7 +46,7 @@ describe('finding and reading Tailscale (P9-16)', () => {
     const logged: string[] = [];
     expect(await find((l) => logged.push(l))).toBe('/Users/me/bin/tailscale');
     expect(logged).toEqual(['tailscale: using /Users/me/bin/tailscale (found on the PATH)']);
-    ts.state.pathDir = undefined;
+    delete ts.state.pathDir;
     expect(await find()).toBeUndefined();
     // Never a bare name for execFile to look up.
     expect(ts.calls.some(([file]) => file === 'tailscale')).toBe(false);
