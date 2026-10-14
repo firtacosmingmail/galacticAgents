@@ -25,6 +25,7 @@ import {
   type DecideResponse,
   type MessagesResponse,
   type ProposalDecision,
+  type ReplyQuote,
   type RestartHarmonizerResponse,
   type RuntimesInfo,
   type SendResponse,
@@ -38,6 +39,7 @@ import type { Commands } from '../domain/commands.js';
 import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
+import { resolveReplyTarget } from '../runtime/reply-target.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { policyForWrite } from '../domain/permissions.js';
 import type { PeerCheck } from './peer-guard.js';
@@ -136,6 +138,30 @@ export function registerAgentRoutes(
       }
     };
 
+    const refuse = (req: FastifyRequest, reply: FastifyReply, error: unknown) => {
+      // The storage refused it (P8-09): 507 `storage_full` / 503, nothing done.
+      if (sendStorageRefusal(reply, error)) return reply;
+      if (!(error instanceof DomainError)) {
+        req.log.error(error);
+        return reply.code(500).send({ error: 'internal' });
+      }
+      if (error.code === 'not_found') {
+        return reply.code(404).send({ error: 'not_found', message: redactSecrets(error.message) });
+      }
+      if (error.code === 'invalid') {
+        return reply.code(400).send({ error: 'invalid', message: redactSecrets(error.message) });
+      }
+      if (error.code === 'stale') {
+        return reply.code(409).send({ error: 'stale', message: redactSecrets(error.message) });
+      }
+      if (error.code === 'remote_control') {
+        return reply
+          .code(403)
+          .send({ error: 'remote_control', message: redactSecrets(error.message) });
+      }
+      return reply.code(409).send(refusal('rejected', error.message));
+    };
+
     /** What the spawn form can offer. */
     app.get('/api/runtimes', async (): Promise<RuntimesInfo> => ({
       // Every runtime with an adapter registered here (ACP only when `acp` is configured).
@@ -177,22 +203,69 @@ export function registerAgentRoutes(
       return reply.code(201).send({ agentId: result.agent.id } satisfies SpawnResponse);
     });
 
+    /**
+     * The user's chat line (P2-18). With `replyTo` (P8-17, SPEC decision 139) it quotes a line or a
+     * card of this chat, resolved from the log (`resolveReplyTarget`: 400 `reply_target` for an
+     * unknown or foreign target, 409 `reply_target_gone` for a reply retention removed). A reply
+     * to an open clarification answers it first, as its card's answer button would (`version`,
+     * `answerId`): refused (409 `stale`…) → nothing is sent; answered → the message is logged
+     * with `replyTo.answered`, and the answer names this chat (`repliedIn`) so its brain hears it
+     * once. A reply to a permission request never decides it (decision 7): only its buttons do.
+     */
     app.post('/api/agents/:id/send', async (req, reply) => {
       const body = parse(SendBody, req.body, reply);
       if (!body) return;
+      const id = agentId(req);
+      let replyTo: ReplyQuote | undefined;
+      if (body.replyTo) {
+        if (body.text.trimStart().startsWith('/')) {
+          return reply.code(400).send({
+            error: 'reply_target',
+            message: 'A slash command cannot be a reply: send it without the quote.',
+          });
+        }
+        const target = resolveReplyTarget(log.db, log.tables, id, body.replyTo);
+        if (!target.ok) {
+          return reply.code(target.status).send({ error: target.error, message: target.message });
+        }
+        replyTo = target.quote;
+        const question = target.question;
+        // A clarification still open — or one the client saw open (it sent the card's version):
+        // answered first, or refused as the answer button would be ("already answered by …").
+        if (
+          commands &&
+          question?.kind === 'clarification' &&
+          (question.status === 'open' || body.replyTo.version !== undefined)
+        ) {
+          try {
+            await commands.answerQuestion({
+              questionId: question.id,
+              answer: body.text,
+              by: USER,
+              repliedIn: id,
+              ...(body.replyTo.version !== undefined ? { version: body.replyTo.version } : {}),
+              ...(body.replyTo.answerId !== undefined ? { answerId: body.replyTo.answerId } : {}),
+            });
+          } catch (error) {
+            return refuse(req, reply, error);
+          }
+          replyTo = { ...replyTo, answered: true };
+        }
+      }
       return attempt(reply, async () => {
         // The origin rides on `message.sent`: a brain acting on it writes policies as this
         // request would (P2-21).
-        const message = runtime.send(agentId(req), body.text, {
+        const message = runtime.send(id, body.text, {
           sender: USER,
           origin: originOf(req),
           ...(body.interrupt ? { interrupt: true } : {}),
+          ...(replyTo ? { replyTo } : {}),
         });
         // The user wrote to the agent directly: its open clarifications are superseded (P9-14,
         // SPEC decision 135) — not by a slash command, which is no reply. Never fails the send.
         if (commands && !body.text.trimStart().startsWith('/')) {
           await commands
-            .supersedeQuestions(agentId(req), (questionId, error) => {
+            .supersedeQuestions(id, (questionId, error) => {
               req.log.error({ err: error, questionId }, 'superseding a question failed');
             })
             .catch((error: unknown) => {
@@ -297,29 +370,6 @@ export function registerAgentRoutes(
      * when the storage refused it (P8-09), 500 for anything that is not a refusal (a bug or a
      * runtime failure, never reported as a conflict).
      */
-    const refuse = (req: FastifyRequest, reply: FastifyReply, error: unknown) => {
-      // The storage refused it (P8-09): 507 `storage_full` / 503, nothing done.
-      if (sendStorageRefusal(reply, error)) return reply;
-      if (!(error instanceof DomainError)) {
-        req.log.error(error);
-        return reply.code(500).send({ error: 'internal' });
-      }
-      if (error.code === 'not_found') {
-        return reply.code(404).send({ error: 'not_found', message: redactSecrets(error.message) });
-      }
-      if (error.code === 'invalid') {
-        return reply.code(400).send({ error: 'invalid', message: redactSecrets(error.message) });
-      }
-      if (error.code === 'stale') {
-        return reply.code(409).send({ error: 'stale', message: redactSecrets(error.message) });
-      }
-      if (error.code === 'remote_control') {
-        return reply
-          .code(403)
-          .send({ error: 'remote_control', message: redactSecrets(error.message) });
-      }
-      return reply.code(409).send(refusal('rejected', error.message));
-    };
     if (commands) {
       app.post('/api/control', async (req, reply) => {
         const body = parse(ControlBody, req.body, reply);
@@ -386,6 +436,7 @@ export function registerAgentRoutes(
           at,
           sender: event.sender,
           text: event.text,
+          ...(event.replyTo ? { replyTo: event.replyTo } : {}),
         });
       }
       return { messages } satisfies MessagesResponse;

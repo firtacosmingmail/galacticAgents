@@ -154,6 +154,29 @@ describe('event schemas', () => {
     expect(Event.safeParse({ ...sent, origin: 'lan' }).success).toBe(false);
   });
 
+  it('carries a reply’s quote on message.sent and the reply’s chat on question.answered (P8-17)', () => {
+    const sent = {
+      ...events['message.sent'],
+      sender: { type: 'user' as const },
+      replyTo: {
+        kind: 'question' as const,
+        id: 'q-1',
+        sender: { type: 'agent' as const, id: 'a-steward-1' },
+        text: 'Which licence?',
+        answered: true as const,
+      },
+    };
+    expect(Event.parse(sent)).toEqual(sent);
+    expect(Event.safeParse({ ...sent, replyTo: { ...sent.replyTo, kind: 'card' } }).success).toBe(
+      false,
+    );
+    expect(
+      Event.safeParse({ ...sent, replyTo: { ...sent.replyTo, text: 'x'.repeat(2_001) } }).success,
+    ).toBe(false);
+    const answered = { ...events['question.answered'], repliedIn: 'a-harmonizer-1' };
+    expect(Event.parse(answered)).toEqual(answered);
+  });
+
   it('refuses an agent.updated that changes nothing', () => {
     expect(Event.safeParse({ type: 'agent.updated', agentId: 'a', changes: {} }).success).toBe(
       false,

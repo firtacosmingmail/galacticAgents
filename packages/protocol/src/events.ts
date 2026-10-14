@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
+import { ReplyQuote } from './reply.js';
 import {
   AgentRole,
   AgentRuntime,
@@ -250,6 +251,13 @@ export const MessageSent = z.object({
    * 54): the panel's chat and `GET /api/agents/:id/conversation` leave it out.
    */
   turn: z.literal(true).optional(),
+  /**
+   * The user's message replies to a line of the chat (P8-17, SPEC decision 139): the quote the
+   * server resolved from the log when it was sent. No sub-thread; the brain's turn prompt carries
+   * the quote. `answered`: the reply answered that open clarification (logged after its
+   * `question.answered`).
+   */
+  replyTo: ReplyQuote.optional(),
 });
 
 /**
@@ -291,6 +299,11 @@ export const QuestionAnswered = z.object({
    * Folded into the row as `meta.answerId`. Absent for answers without one.
    */
   answerId: z.string().min(1).max(100).optional(),
+  /**
+   * The user answered by replying to the question in this brain's chat (P8-17): that brain learns
+   * it from the reply's own `message.sent` line, so the answer does not wake it a second time.
+   */
+  repliedIn: Id.optional(),
 });
 /**
  * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an

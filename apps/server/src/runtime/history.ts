@@ -132,6 +132,7 @@ export class History {
           text: event.text,
           messageId: event.messageId,
           seq: row.id,
+          ...(event.replyTo ? { replyTo: event.replyTo } : {}),
           cursor: encode(key),
         },
       ]);

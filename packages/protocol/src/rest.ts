@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { AgentRole, AgentRuntime, TaskPriority, WorkBodyKind } from './enums.js';
 import type { ControlAction as ControlActionType } from './commands.js';
+import { ReplyQuote, ReplyRef } from './reply.js';
 import {
   Actor,
   AgentCaps,
@@ -54,7 +55,17 @@ export const RestartHarmonizerResponse = z.object({
 export type RestartHarmonizerResponse = z.infer<typeof RestartHarmonizerResponse>;
 
 /** `POST /api/agents/:id/send`. */
-export const SendBody = z.object({ text: z.string().min(1), interrupt: z.boolean().optional() });
+export const SendBody = z.object({
+  text: z.string().min(1),
+  interrupt: z.boolean().optional(),
+  /**
+   * The line this message replies to (P8-17, SPEC decision 139): resolved by the server, which
+   * refuses an unknown target or one that is not in this agent's chat (400 `reply_target`) and a
+   * reply chunk retention removed (409 `reply_target_gone`). A reply to an open clarification
+   * answers it first (409 `stale` when it was answered meanwhile, and nothing is sent).
+   */
+  replyTo: ReplyRef.optional(),
+});
 export type SendBody = z.infer<typeof SendBody>;
 
 export const SendResponse = z.object({ messageId: z.string().min(1) });
@@ -240,6 +251,8 @@ export const ChatMessage = z.object({
   text: z.string(),
   /** A brain's turn prompt (`message.sent.turn`, P25-03): not a conversation line. */
   turn: z.literal(true).optional(),
+  /** What the message quotes (`message.sent.replyTo`, P8-17). */
+  replyTo: ReplyQuote.optional(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 

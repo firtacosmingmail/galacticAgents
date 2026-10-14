@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   BRAIN_SLASH_COMMANDS,
   brainSlashCommands,
+  excerpt,
   isHarnessMeta,
   slashCommandIs,
   type Actor,
@@ -17,6 +18,7 @@ import {
   type PermissionPolicy,
   type PermissionRule,
   type RequestOrigin,
+  type ReplyQuote,
   type SlashCommand,
   type SpawnHandle,
   type SpawnOptions,
@@ -362,6 +364,15 @@ class AgentHistory {
 }
 /** How many ended agent ids are remembered so a straggling event is told apart from a stranger. */
 const ENDED_MEMORY = 1_000;
+
+/** How much of a quote a reply's delivered text repeats (P8-17). */
+const QUOTE_IN_TEXT = 1_000;
+
+/** A reply's text as an agent without a mailbox receives it: the quote first (P8-17). */
+export function withQuote(text: string, quote: ReplyQuote): string {
+  const from = quote.sender.type === 'agent' ? `agent ${quote.sender.id}` : quote.sender.type;
+  return `(replying to ${from}: ${JSON.stringify(excerpt(quote.text, QUOTE_IN_TEXT))})\n${text}`;
+}
 
 export class AgentRuntime {
   private readonly adapters = new Map<RuntimeName, AgentAdapter>();
@@ -739,7 +750,14 @@ export class AgentRuntime {
   send(
     agentId: Id,
     text: string,
-    opts: { sender: Actor; interrupt?: boolean; turn?: boolean; origin?: RequestOrigin },
+    opts: {
+      sender: Actor;
+      interrupt?: boolean;
+      turn?: boolean;
+      origin?: RequestOrigin;
+      /** The quote the user's message replies to (P8-17), resolved by the caller from the log. */
+      replyTo?: ReplyQuote;
+    },
   ): InboxMessage {
     const live = this.must(agentId);
     if (live.capStop || live.stopRequested || live.inbox.currentState === 'ended') {
@@ -756,6 +774,7 @@ export class AgentRuntime {
       interrupt: opts.interrupt ?? false,
       ...(opts.origin ? { origin: opts.origin } : {}),
       ...(opts.turn ? { turn: true as const } : {}),
+      ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
     });
     if (live.mailbox && !opts.turn) {
       // Logged only: the brain's mailbox picks it up from the log and folds it into a turn.
@@ -768,7 +787,9 @@ export class AgentRuntime {
         queuedAt: this.now(),
       };
     }
-    return live.inbox.enqueue(text, {
+    // An agent without a mailbox gets the text as typed: a reply carries its quote in front of it
+    // (a brain's turn prompt renders it instead, `wake.ts`).
+    return live.inbox.enqueue(opts.replyTo ? withQuote(text, opts.replyTo) : text, {
       sender: opts.sender,
       interrupt: opts.interrupt ?? false,
       id: messageId,
@@ -921,7 +942,13 @@ export class AgentRuntime {
     return this.byQuestion.has(questionId);
   }
 
-  async answer(questionId: Id, answer: string, by: Actor, answerId?: string): Promise<void> {
+  async answer(
+    questionId: Id,
+    answer: string,
+    by: Actor,
+    answerId?: string,
+    repliedIn?: Id,
+  ): Promise<void> {
     const agentId = this.byQuestion.get(questionId);
     if (!agentId) throw new Error(`no open question ${questionId}`);
     const live = this.must(agentId);
@@ -955,6 +982,7 @@ export class AgentRuntime {
         holders: holdersNow(ctx, questionId, this.questions),
         delivered: true,
         ...(answerId !== undefined ? { answerId } : {}),
+        ...(repliedIn !== undefined ? { repliedIn } : {}),
       }),
     );
   }
