@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** —
-**Phase status:** in progress (16/16 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
+**Current task:** P8-17 · **Task status:** in progress
+**Phase status:** in progress (16/17 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -112,6 +112,13 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - Cosmin's request: "make the names of the asteroids smaller, similar to the ones used for the planets and moons." The labels share one font size; an asteroid's label shows its task's title (up to 32 characters) where a planet or moon shows a project's usually short name. An asteroid's label title is cut at 16 characters with "…"; the tooltip keeps the whole title; planets and moons unchanged.
 - **Acceptance:** an asteroid's label title is at most 16 characters; a planet's or moon's still up to 32; tests.
 - **Done:** `ASTEROID_TITLE_MAX` in `scene/labels/label-model.ts`; tests in `label-model.test.ts` and `labels-ui.test.tsx`; `notes/P3-07-labels.md` updated.
+
+### P8-17 — Reply to a message in the chat (added 2026-10-14)
+- **Status:** in progress · **Depends on:** P25-01, P2-18, P9-14 · **Parallel with:** —
+- Cosmin's request: "In the chat with the harmonizer, I want to be able to reply to questions or messages from the history. When replying, do not create a new subchat, but just mark in the UI that the message is a response to another message, by displaying a part of it above my message, similar to how WhatsApp manages this feature. When I click the replied message, it should scroll to the original message. When replying I want the message to carry the context of the message I replied to."
+- Cosmin's answers (2026-10-14): a reply to an **open clarification question** answers it (the normal answer path, the asking agent gets it at once) and shows in the chat as his message quoting the question; a reply to a **permission request** is only a message to the Harmonizer quoting it — the card's buttons alone decide it (never an LLM, decision 7).
+- Every line of the chat (the user's messages, the agent's replies, reports and notices, question and proposal cards) offers **Reply**; the composer shows the quoted line (who, an excerpt, ×; Esc cancels); the sent message shows the quote above it; clicking the quote scrolls to the original (paging back as needed) and highlights it, or says it is no longer in the history. No sub-thread. The server resolves what was quoted from the log (never trusts a client's text), stores it on `message.sent.replyTo`, and the brain's turn prompt carries the quoted context.
+- **Acceptance:** reply to a message, to an agent's reply, to a clarification (answers it) and to a permission card (does not decide it); the quote shows above the sent message on the Mac and the phone; clicking it scrolls to the original; the Harmonizer's turn prompt carries the quoted text; a stale or foreign target is refused; tests (protocol, routes, wake prompt, jsdom + axe, e2e).
 
 ## Exit criteria
 
