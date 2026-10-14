@@ -202,6 +202,45 @@ describe('restart recovery', () => {
     ]);
   });
 
+  it('a queued reply keeps its quote when it is delivered after a restart (P8-17 review)', async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const first = boot(db, sessions);
+    const spawned = await first.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:full',
+      cwd: '/tmp/w',
+    });
+    if (!spawned.ok) throw new Error(spawned.reason);
+    const id = spawned.agent.id;
+    await waitFor(() => first.statuses.get(id)?.state === 'waiting_for_input', 'question');
+    const replyTo = {
+      kind: 'message' as const,
+      id: 'm-earlier',
+      sender: USER,
+      text: 'use ISO dates',
+    };
+    first.runtime.send(id, 'and the tests', { sender: USER, replyTo });
+    expect(
+      first.runtime
+        .inbox(id)!
+        .pending()
+        .map((m) => m.text),
+    ).toEqual(['(replying to user: "use ISO dates")\nand the tests']);
+    await first.shutdown();
+
+    const second = boot(db, sessions);
+    expect((await second.recover()).resumed).toEqual([id]);
+    expect(
+      second.runtime
+        .inbox(id)!
+        .pending()
+        .map((m) => m.text),
+    ).toEqual(['(replying to user: "use ISO dates")\nand the tests']);
+  });
+
   it('a delivered message is not delivered again after a crash (P1-33)', async () => {
     const db = openDatabase(':memory:');
     dbs.push(db);

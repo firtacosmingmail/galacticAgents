@@ -132,3 +132,24 @@ export function resolveReplyTarget(
     }
   }
 }
+
+/**
+ * The message of `agentId`'s chat that answered `questionId` by replying to it (P8-17 review): a
+ * clarification is answered once, so at most one `message.sent` carries `replyTo.answered` for
+ * it. A retry of a reply whose answer was recorded under its `answerId` returns this message
+ * instead of logging the same line again; none (the first send failed after the answer) → the
+ * retry sends it.
+ */
+export function answeredReplyOf(db: Database, agentId: Id, questionId: Id): Id | undefined {
+  const row = db
+    .prepare(
+      `SELECT json_extract(payload, '$.messageId') AS messageId FROM events
+        WHERE type = 'message.sent' AND json_extract(payload, '$.agentId') = ?
+          AND json_extract(payload, '$.replyTo.kind') = 'question'
+          AND json_extract(payload, '$.replyTo.id') = ?
+          AND json_extract(payload, '$.replyTo.answered') = 1
+        LIMIT 1`,
+    )
+    .get(agentId, questionId) as { messageId: string } | undefined;
+  return row?.messageId;
+}

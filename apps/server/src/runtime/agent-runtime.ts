@@ -341,7 +341,12 @@ const SYSTEM: Actor = { type: 'system' };
 class AgentHistory {
   /** A `control.stop` after the agent's last (re)spawn that no terminal event answered. */
   stopRequested: Actor | undefined;
-  readonly sent: { messageId: Id; text: string; sender: Actor }[] = [];
+  readonly sent: {
+    messageId: Id;
+    text: string;
+    sender: Actor;
+    replyTo?: ReplyQuote | undefined;
+  }[] = [];
   readonly delivered = new Set<Id>();
   /** The log has its `agent.created`, its `agent.spawned`, its end (P8-04). */
   created = false;
@@ -358,7 +363,12 @@ class AgentHistory {
     return this.created && !this.spawned && !this.ended;
   }
   /** Messages the agent never received, in send order. */
-  undelivered(): { messageId: Id; text: string; sender: Actor }[] {
+  undelivered(): {
+    messageId: Id;
+    text: string;
+    sender: Actor;
+    replyTo?: ReplyQuote | undefined;
+  }[] {
     return this.sent.filter((m) => !this.delivered.has(m.messageId));
   }
 }
@@ -744,6 +754,20 @@ export class AgentRuntime {
   }
 
   /**
+   * Why `send` would refuse a message to this agent now (not running, stopping or ended), or
+   * `undefined`. A reply that answers a clarification asks first (P8-17 review), so the answer
+   * is not recorded for a message that cannot be sent.
+   */
+  sendRefusal(agentId: Id): string | undefined {
+    const live = this.live.get(agentId);
+    if (!live) return `agent ${agentId} is not running`;
+    if (live.capStop || live.stopRequested || live.inbox.currentState === 'ended') {
+      return `agent ${agentId} is stopping`;
+    }
+    return undefined;
+  }
+
+  /**
    * Queues a message; delivered when the agent is idle, or now with `interrupt`. Logged as
    * `message.sent` (P1-22) before it is queued, so a restart knows what was still pending.
    */
@@ -759,10 +783,9 @@ export class AgentRuntime {
       replyTo?: ReplyQuote;
     },
   ): InboxMessage {
+    const refusal = this.sendRefusal(agentId);
+    if (refusal) throw new Error(refusal);
     const live = this.must(agentId);
-    if (live.capStop || live.stopRequested || live.inbox.currentState === 'ended') {
-      throw new Error(`agent ${agentId} is stopping`);
-    }
     const messageId = `m-${randomUUID()}`;
     // The user's line is refused whole on a full disk (SPEC decision 99); an agent's is held.
     this.recordAs(opts.sender, {
@@ -1496,7 +1519,9 @@ export class AgentRuntime {
     if (!mailbox) {
       const live = this.live.get(agentId);
       for (const m of historyOf()?.undelivered() ?? []) {
-        live?.inbox.enqueue(m.text, { sender: m.sender, id: m.messageId, interrupt: false });
+        // A reply carries its quote again, as `send` delivered it (P8-17 review).
+        const text = m.replyTo ? withQuote(m.text, m.replyTo) : m.text;
+        live?.inbox.enqueue(text, { sender: m.sender, id: m.messageId, interrupt: false });
       }
     }
     return { ...result, mode };

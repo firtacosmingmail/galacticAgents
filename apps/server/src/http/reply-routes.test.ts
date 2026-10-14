@@ -314,6 +314,56 @@ describe('replying in a chat (P8-17)', () => {
     expect(lastSent().replyTo?.answered).toBe(true);
   });
 
+  it('a retry with the same answerId returns the same message, logged once (review)', async () => {
+    const h = await harmonizer();
+    const asked = (
+      await composed.commands.openQuestion({
+        kind: 'clarification',
+        originAgentId: h,
+        context: { text: 'Which licence?' },
+        toUser: true,
+      })
+    ).value;
+    const body = {
+      text: 'MIT',
+      replyTo: { kind: 'question', id: asked.id, version: asked.version, answerId: 'ans-r' },
+    };
+    const first = await send(h, body);
+    expect(first.status).toBe(200);
+    const sentBefore = events('message.sent').length;
+    // The acknowledgement was lost: the client sends the same reply again.
+    const again = await send(h, body);
+    expect(again.status).toBe(200);
+    expect(again.body['messageId']).toBe(first.body['messageId']);
+    expect(events('message.sent')).toHaveLength(sentBefore);
+    expect(events('question.answered').filter((e) => e.questionId === asked.id)).toHaveLength(1);
+  });
+
+  it('a reply to a clarification in the chat of an agent that cannot take it answers nothing (review)', async () => {
+    const h = await harmonizer();
+    const other = (
+      await call('/api/agents', { runtime: 'fake', prompt: 'scenario:echo', cwd: '/tmp' })
+    ).body['agentId'] as string;
+    await waitFor(() => state(other) === 'idle', 'other idle');
+    const asked = (
+      await composed.commands.openQuestion({
+        kind: 'clarification',
+        originAgentId: other,
+        context: { text: 'Which licence?' },
+        toUser: true,
+      })
+    ).value;
+    await composed.runtime.stop(h, { type: 'user' });
+    const before = events('message.sent').length;
+    const res = await send(h, {
+      text: 'MIT',
+      replyTo: { kind: 'question', id: asked.id, version: asked.version, answerId: 'ans-s' },
+    });
+    expect(res.status).toBe(409);
+    expect(composed.log.tables.questions.get(asked.id)?.status).toBe('open');
+    expect(events('message.sent')).toHaveLength(before);
+  });
+
   it('an agent without a mailbox receives the quote in front of the text', async () => {
     const id = (
       await call('/api/agents', { runtime: 'fake', prompt: 'scenario:echo', cwd: '/tmp' })

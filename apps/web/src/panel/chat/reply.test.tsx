@@ -299,6 +299,63 @@ describe('replying in the chat (P8-17)', () => {
     expect(await screen.findByText('The original is no longer in the history.')).toBeTruthy();
   });
 
+  it('a history page that fails ends the jump after one request, without calling it gone (review)', async () => {
+    const quote: ReplyQuote = {
+      kind: 'message',
+      id: 'msg-1',
+      sender: { type: 'user' },
+      text: 'you said 1',
+    };
+    const f = fakeApi((q) => {
+      if (q.before) throw new Error('offline');
+      return {
+        entries: [message(20, { replyTo: quote, text: 'and also' })],
+        hasMore: true,
+        lastSeq: 0,
+      };
+    });
+    show(f.api);
+    fireEvent.click(await screen.findByRole('button', { name: /^Quoted You: you said 1/ }));
+    await screen.findByText(/History: offline/);
+    await act(() => new Promise((r) => setTimeout(r, 150)));
+    expect(f.calls.filter((c) => c.before !== undefined)).toHaveLength(1);
+    expect(screen.queryByText('The original is no longer in the history.')).toBeNull();
+  });
+
+  it('a retry of a reply whose answer was recorded sends it as the same answer (review)', async () => {
+    let refusal: Error | undefined = new ApiError(409, 'agent is stopping', 'rejected');
+    const f = fakeApi(
+      () => ({ entries: [reply(9)], hasMore: false, lastSeq: 9 }),
+      () => refusal,
+    );
+    show(f.api);
+    await screen.findByText('brain said 9');
+    fireEvent.click(
+      within(thread()).getByRole('button', {
+        name: 'Reply to the question: Which licence should it use?',
+      }),
+    );
+    fireEvent.change(box(), { target: { value: 'MIT' } });
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await screen.findByText(/agent is stopping/);
+    // The answer had been recorded under the draft's key before the message failed.
+    const answerId = useConversationStore.getState().replies[H]!.answerId;
+    act(() =>
+      event({
+        type: 'question.answered',
+        questionId: 'q-clar',
+        answer: 'MIT',
+        answeredBy: { type: 'user' },
+        version: 4,
+        answerId,
+      }),
+    );
+    refusal = undefined;
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    await waitFor(() => expect(f.sent).toHaveLength(1));
+    expect(f.sent[0]!.replyTo).toEqual({ kind: 'question', id: 'q-clar', version: 4, answerId });
+  });
+
   it('keeps ↑ history and slash completion working with a quote open', async () => {
     const f = fakeApi(() => ({ entries: [message(1), reply(2)], hasMore: false, lastSeq: 2 }));
     show(f.api);

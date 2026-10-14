@@ -227,19 +227,41 @@ export function Conversation({ agentId }: { agentId: Id }) {
     field.current?.focus();
   };
   const [missing, setMissing] = useState<Record<string, true>>({});
+  // A jump outlives neither the chat nor its highlight timer (P8-17 review).
+  const mounted = useRef(true);
+  const highlight = useRef<{ el: HTMLElement; timer: ReturnType<typeof setTimeout> }>(undefined);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (highlight.current) clearTimeout(highlight.current.timer);
+      highlight.current = undefined;
+    };
+  }, []);
   const jump = async (from: string, target: Pick<ReplyQuote, 'kind' | 'id'>) => {
     let el = locate(scroller.current, target);
+    let failed = false;
     for (let page = 0; !el && page < MAX_JUMP_PAGES;) {
       const t = useConversationStore.getState().threads[agentId];
-      if (!t?.hasOlder) break;
+      if (!mounted.current || !t?.hasOlder || t.oldestCursor === undefined) break;
       if (t.loadingOlder) await pause(50);
       else {
         page++;
         await older();
         await pause(0);
+        // A page that failed, or that moved nothing (the cursor stayed), ends the search: never
+        // a burst of requests against a failing server.
+        const after = useConversationStore.getState().threads[agentId];
+        if (!after || after.oldestCursor === t.oldestCursor) {
+          el = locate(scroller.current, target);
+          failed = !el && after?.hasOlder === true;
+          break;
+        }
       }
       el = locate(scroller.current, target);
     }
+    // A history that could not be read says so itself; the original is not called gone.
+    if (!mounted.current || failed) return;
     setMissing((m) => {
       if (Boolean(m[from]) === !el) return m;
       const { [from]: _was, ...rest } = m;
@@ -249,8 +271,19 @@ export function Conversation({ agentId }: { agentId: Id }) {
     atBottom.current = false;
     el.scrollIntoView?.({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'center' });
     el.focus({ preventScroll: true });
+    if (highlight.current) {
+      clearTimeout(highlight.current.timer);
+      highlight.current.el.classList.remove('is-highlighted');
+    }
     el.classList.add('is-highlighted');
-    setTimeout(() => el.classList.remove('is-highlighted'), HIGHLIGHT_MS);
+    const lit = el;
+    highlight.current = {
+      el: lit,
+      timer: setTimeout(() => {
+        lit.classList.remove('is-highlighted');
+        highlight.current = undefined;
+      }, HIGHLIGHT_MS),
+    };
   };
   const onScroll = () => {
     const el = scroller.current;

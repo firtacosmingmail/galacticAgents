@@ -86,12 +86,18 @@ export function draftOfCard(card: ThreadCardItem, agentId: Id): ReplyDraft {
 /**
  * What the send carries: the target, and for a clarification still open the card's version and
  * the draft's idempotency key — the reply answers it, as the card's answer button would (P7-05).
+ * A clarification this very draft answered already (its `answerId` is on the row: an earlier try
+ * whose message was not acknowledged) is sent the same way, so the server returns that message or
+ * completes it rather than logging a plain reply (P8-17 review).
  */
 export function replyRef(draft: ReplyDraft, world: Pick<WorldState, 'questions'>): ReplyRef {
   const ref: ReplyRef = { kind: draft.kind, id: draft.id };
   if (draft.kind !== 'question') return ref;
   const q = world.questions[draft.id];
-  if (q?.kind === 'clarification' && q.status === 'open') {
+  if (
+    q?.kind === 'clarification' &&
+    (q.status === 'open' || (q.status === 'answered' && q.meta?.['answerId'] === draft.answerId))
+  ) {
     ref.version = q.version;
     ref.answerId = draft.answerId;
   }

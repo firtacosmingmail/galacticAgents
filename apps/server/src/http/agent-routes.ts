@@ -39,7 +39,7 @@ import type { Commands } from '../domain/commands.js';
 import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { redactSecrets } from '../runtime/redact.js';
-import { resolveReplyTarget } from '../runtime/reply-target.js';
+import { answeredReplyOf, resolveReplyTarget } from '../runtime/reply-target.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { policyForWrite } from '../domain/permissions.js';
 import type { PeerCheck } from './peer-guard.js';
@@ -237,8 +237,13 @@ export function registerAgentRoutes(
           question?.kind === 'clarification' &&
           (question.status === 'open' || body.replyTo.version !== undefined)
         ) {
+          // The message must be sendable before the answer is recorded (P8-17 review): an agent
+          // stopping or gone refuses the reply whole, nothing answered.
+          const cannot = runtime.sendRefusal(id);
+          if (cannot) return reply.code(409).send(refusal('rejected', cannot));
+          let duplicate: boolean;
           try {
-            await commands.answerQuestion({
+            const { events } = await commands.answerQuestion({
               questionId: question.id,
               answer: body.text,
               by: USER,
@@ -246,9 +251,14 @@ export function registerAgentRoutes(
               ...(body.replyTo.version !== undefined ? { version: body.replyTo.version } : {}),
               ...(body.replyTo.answerId !== undefined ? { answerId: body.replyTo.answerId } : {}),
             });
+            // Recorded already under this `answerId` (P7-05): the retry of a reply.
+            duplicate = body.replyTo.answerId !== undefined && events.length === 0;
           } catch (error) {
             return refuse(req, reply, error);
           }
+          // Its message logged too: the same line, not a second one (idempotent on `answerId`).
+          const sent = duplicate ? answeredReplyOf(log.db, id, question.id) : undefined;
+          if (sent) return { messageId: sent } satisfies SendResponse;
           replyTo = { ...replyTo, answered: true };
         }
       }
