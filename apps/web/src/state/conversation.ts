@@ -1,8 +1,10 @@
 import { create } from 'zustand';
 import {
   ConversationResponse,
-  proposalPlan,
-  proposalPromotion,
+  questionOwner as ownerOf,
+  threadShowsProposal,
+  threadShowsQuestion,
+  type Actor,
   type Agent,
   type ChatMessage,
   type ConversationEntry,
@@ -11,6 +13,9 @@ import {
   type TranscriptCompaction,
   type Proposal,
   type Question,
+  type QuestionOwner,
+  type ReplyTargetKind,
+  type ThreadLookup,
   type TranscriptChunk,
 } from '@galactic/protocol';
 import type { WorldState } from './reduce.js';
@@ -59,6 +64,19 @@ export interface Thread {
    */
   compacted?: TranscriptCompaction | undefined;
   error?: string | undefined;
+}
+
+/**
+ * What the composer replies to (P8-17): the line or card the user chose, as the chat showed it
+ * (`sender`, `text` for the quote bar; the server resolves the real quote). `answerId` is the
+ * idempotency key a reply to an open clarification answers it under (P7-05), one per reply.
+ */
+export interface ReplyDraft {
+  kind: ReplyTargetKind;
+  id: Id;
+  sender: Actor;
+  text: string;
+  answerId: string;
 }
 
 export type ConversationFetch = (agentId: Id, query: ConversationQuery) => Promise<unknown>;
@@ -120,6 +138,7 @@ export function liveEntries(
         text: m.text,
         messageId: m.messageId,
         seq: m.seq,
+        ...(m.replyTo ? { replyTo: m.replyTo } : {}),
       })),
     ...chunks
       .filter((c) => c.kind === 'text' && c.text.trim() !== '')
@@ -140,72 +159,43 @@ export type ThreadCardItem =
   | { kind: 'proposal'; id: Id; at: string; proposal: Proposal }
   | { kind: 'question'; id: Id; at: string; question: Question };
 
-/**
- * Whose thread a question belongs to, by role and project (never by `supervisorId`, so a
- * replacement Waykeeper inherits its predecessor's Stewards' questions, decision 32 — the same
- * rule as the plan cards and the managed-agents cards): the project's Waykeeper for a question
- * asked on a project (by its Waykeeper or by a Steward of one of its tasks), the Harmonizer for
- * its own and for a standalone task's Steward.
- */
-export type QuestionOwner = { role: 'harmonizer' } | { role: 'waykeeper'; projectId: Id };
+/** The world as the protocol's thread rules read it (`ThreadLookup`). */
+const lookupOf = (world: Pick<WorldState, 'agents' | 'tasks'>): ThreadLookup => ({
+  agent: (id) => world.agents[id],
+  task: (id) => world.tasks[id],
+});
 
+/**
+ * Whose thread a question belongs to (`questionOwner` of the protocol, P8-17 moved it there so
+ * the server's reply check shares it): the project's Waykeeper, or the Harmonizer.
+ */
 export function questionOwner(
   world: Pick<WorldState, 'agents' | 'tasks'>,
   q: Question,
 ): QuestionOwner | undefined {
-  const origin = world.agents[q.originAgentId];
-  if (!origin) return undefined;
-  if (origin.role === 'harmonizer') return { role: 'harmonizer' };
-  if (origin.role === 'waykeeper')
-    return origin.projectId ? { role: 'waykeeper', projectId: origin.projectId } : undefined;
-  const taskId = origin.taskId ?? q.context.origin?.taskId;
-  const task = taskId ? world.tasks[taskId] : undefined;
-  const projectId = task ? task.projectId : q.context.origin?.projectId;
-  return projectId ? { role: 'waykeeper', projectId } : { role: 'harmonizer' };
+  return ownerOf(lookupOf(world), q);
 }
 
 /**
- * A project's clarification that reached the user — held by them now, or answered by them. It
- * shows in the Harmonizer's thread as well as its project's (decision 55): the Harmonizer is the
- * user's single contact, so what it passed on is visible there; it is the same card in both, so
- * an answer in one resolves the other. Permission questions go to the user directly and stay in
- * the inbox and the project's thread.
- */
-function reachedUser(q: Question): boolean {
-  return q.kind === 'clarification' && (q.holder.type === 'user' || q.answeredBy?.type === 'user');
-}
-
-/**
- * The cards of a brain's thread: for a Waykeeper, its project's plan cards and promotion
- * requests (a successor on the same project owns them too); for the Harmonizer, every other card.
- * Questions go by project the same way (`questionOwner`): a project's questions to its Waykeeper,
- * the rest to the Harmonizer — which also shows a project's clarifications that reached the user.
+ * The cards of a brain's thread (the protocol's `threadShowsProposal` / `threadShowsQuestion`,
+ * which the server's reply check shares): for a Waykeeper, its project's plan cards and promotion
+ * requests and its project's questions; for the Harmonizer, every other card — and a project's
+ * clarifications that reached the user (decision 55).
  */
 export function threadCards(
   world: Pick<WorldState, 'agents' | 'tasks' | 'proposals' | 'questions'>,
   agent: Agent | undefined,
 ): ThreadCardItem[] {
   if (!agent || agent.role === 'steward') return [];
-  const ownerProject = (p: Proposal): Id | undefined =>
-    proposalPlan(p)?.projectId ?? proposalPromotion(p)?.fromProjectId;
+  const look = lookupOf(world);
   const cards: ThreadCardItem[] = [];
   for (const p of Object.values(world.proposals)) {
-    const project = ownerProject(p);
-    const mine =
-      agent.role === 'waykeeper'
-        ? project !== undefined && project === agent.projectId
-        : project === undefined;
-    if (mine) cards.push({ kind: 'proposal', id: p.id, at: p.createdAt, proposal: p });
+    if (threadShowsProposal(agent, p))
+      cards.push({ kind: 'proposal', id: p.id, at: p.createdAt, proposal: p });
   }
   for (const q of Object.values(world.questions)) {
-    const owner = questionOwner(world, q);
-    if (!owner) continue;
-    const mine =
-      owner.role === 'harmonizer'
-        ? agent.role === 'harmonizer'
-        : (agent.role === 'waykeeper' && agent.projectId === owner.projectId) ||
-          (agent.role === 'harmonizer' && reachedUser(q));
-    if (mine) cards.push({ kind: 'question', id: q.id, at: q.createdAt, question: q });
+    if (threadShowsQuestion(look, agent, q))
+      cards.push({ kind: 'question', id: q.id, at: q.createdAt, question: q });
   }
   return cards.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
 }
@@ -271,6 +261,9 @@ export interface ConversationState {
    */
   drafts: Record<Id, string>;
   setDraft: (agentId: Id, text: string) => void;
+  /** The line each composer replies to (P8-17), kept like the drafts; cleared when sent. */
+  replies: Record<Id, ReplyDraft>;
+  setReply: (agentId: Id, reply: ReplyDraft | undefined) => void;
   reset: () => void;
 }
 
@@ -342,6 +335,7 @@ export const useConversationStore = create<ConversationState>((set, get) => {
   return {
     threads: {},
     drafts: {},
+    replies: {},
     forLog: (logId) => {
       const current = get().logId;
       if (logId === undefined || logId === current) return;
@@ -395,7 +389,14 @@ export const useConversationStore = create<ConversationState>((set, get) => {
         const { [agentId]: _sent, ...rest } = s.drafts;
         return { drafts: rest };
       }),
-    reset: () => set({ threads: {}, drafts: {}, logId: undefined }),
+    setReply: (agentId, reply) =>
+      set((s) => {
+        if (reply) return { replies: { ...s.replies, [agentId]: reply } };
+        if (!(agentId in s.replies)) return {};
+        const { [agentId]: _sent, ...rest } = s.replies;
+        return { replies: rest };
+      }),
+    reset: () => set({ threads: {}, drafts: {}, replies: {}, logId: undefined }),
   };
 });
 

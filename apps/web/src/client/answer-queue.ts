@@ -191,7 +191,8 @@ function announce(text: string): void {
 
 const quote = (text: string, n = 60) => `“${text.length > n ? `${text.slice(0, n - 1)}…` : text}”`;
 
-function newAnswerId(): string {
+/** A fresh idempotency key for one composed answer (P7-05; a chat reply's too, P8-17). */
+export function newAnswerId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
       return crypto.randomUUID();

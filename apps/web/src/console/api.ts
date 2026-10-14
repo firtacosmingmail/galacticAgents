@@ -38,6 +38,7 @@ import type {
   ProposalDecisionBody,
   RestartHarmonizerResponse,
   RevealFolderBody,
+  ReplyRef,
   RunOutputResponse,
   RunPreviewResponse,
   RunsResponse,
@@ -116,10 +117,12 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
       );
     },
     spawn: (input: SpawnBody) => call<SpawnResponse>('POST', '/api/agents', input),
-    send: (agentId: string, text: string, interrupt: boolean) =>
+    /** `replyTo` (P8-17): the chat line or card this message replies to. */
+    send: (agentId: string, text: string, interrupt: boolean, replyTo?: ReplyRef) =>
       call<SendResponse>('POST', `/api/agents/${agentId}/send`, {
         text,
         interrupt,
+        ...(replyTo ? { replyTo } : {}),
       } satisfies SendBody),
     pause: (agentId: string) => call('POST', `/api/agents/${agentId}/pause`),
     resume: (agentId: string) => call('POST', `/api/agents/${agentId}/resume`),
