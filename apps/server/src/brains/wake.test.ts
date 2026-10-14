@@ -432,3 +432,124 @@ describe('a brain’s own blocked questions stay with its adapter (wave-3 review
     }
   });
 });
+
+describe('a reply carries its quote into the turn prompt (P8-17, decision 139)', () => {
+  const clarification: Question = {
+    ...d.question,
+    id: 'q-clar',
+    kind: 'clarification',
+    originAgentId: 'a-steward-1',
+    holder: { type: 'user' },
+    context: { text: 'Which licence?' },
+  };
+  const permission: Question = { ...clarification, id: 'q-perm', kind: 'permission' };
+  const byId = new Map([clarification, permission].map((q) => [q.id, q]));
+  const s = scope({ supervises: (id) => id === 'a-steward-1', question: (id) => byId.get(id) });
+  const reply = (replyTo: Extract<Event, { type: 'message.sent' }>['replyTo']): Event => ({
+    type: 'message.sent',
+    messageId: 'm-2',
+    agentId: BRAIN,
+    sender: { type: 'user' },
+    text: 'MIT',
+    interrupt: false,
+    ...(replyTo ? { replyTo } : {}),
+  });
+
+  it('quotes the line the user replied to, from the brain’s side', () => {
+    expect(
+      wakeLine(
+        reply({
+          kind: 'reply',
+          id: `r:${BRAIN}:4`,
+          sender: { type: 'agent', id: BRAIN },
+          text: 'Done: the CSV parser.',
+        }),
+        s,
+      ),
+    ).toBe('the user said (replying to your reply: "Done: the CSV parser."): "MIT"');
+    expect(
+      wakeLine(
+        reply({ kind: 'message', id: 'm-1', sender: { type: 'user' }, text: 'build it' }),
+        s,
+      ),
+    ).toBe('the user said (replying to their own earlier message: "build it"): "MIT"');
+    expect(
+      wakeLine(
+        reply({
+          kind: 'message',
+          id: 'm-0',
+          sender: { type: 'agent', id: 'a-steward-1' },
+          text: 'Blocked.',
+        }),
+        s,
+      ),
+    ).toBe('the user said (replying to agent a-steward-1\'s message: "Blocked."): "MIT"');
+    expect(
+      wakeLine(
+        reply({
+          kind: 'proposal',
+          id: 'pr-1',
+          sender: { type: 'agent', id: BRAIN },
+          text: 'A CSV tool',
+        }),
+        s,
+      ),
+    ).toBe('the user said (replying to your proposal pr-1: "A CSV tool"): "MIT"');
+  });
+
+  it('shortens a long quote for the prompt', () => {
+    const long = 'x'.repeat(1_500);
+    const line = wakeLine(
+      reply({ kind: 'message', id: 'm-1', sender: { type: 'user' }, text: long }),
+      s,
+    )!;
+    expect(line).toContain(`${'x'.repeat(999)}…`);
+    expect(line).not.toContain('x'.repeat(1_000));
+  });
+
+  it('an answered clarification is one line: the reply says it answered, the answer stays quiet', () => {
+    const line = wakeLine(
+      reply({
+        kind: 'question',
+        id: 'q-clar',
+        sender: { type: 'agent', id: 'a-steward-1' },
+        text: 'Which licence?',
+        answered: true,
+      }),
+      s,
+    );
+    expect(line).toBe(
+      'the user answered q-clar (agent a-steward-1\'s question q-clar: "Which licence?") by replying: "MIT"',
+    );
+    const answered: Event = {
+      type: 'question.answered',
+      questionId: 'q-clar',
+      answer: 'MIT',
+      answeredBy: { type: 'user' },
+      version: 2,
+      holders: [BRAIN],
+    };
+    // Answered by a reply in this brain's chat: not a second line; in another chat (or by the
+    // card's button) it wakes the brain as before.
+    expect(wakeLine({ ...answered, repliedIn: BRAIN }, s)).toBeUndefined();
+    expect(wakeLine({ ...answered, repliedIn: 'a-harmonizer-1' }, s)).toBeDefined();
+    expect(wakeLine(answered, s)).toBeDefined();
+  });
+
+  it('a reply to a permission request says it does not decide it', () => {
+    expect(
+      wakeLine(
+        reply({
+          kind: 'question',
+          id: 'q-perm',
+          sender: { type: 'agent', id: 'a-steward-1' },
+          text: 'Run git push?',
+        }),
+        s,
+      ),
+    ).toBe(
+      'the user said (replying to agent a-steward-1\'s permission request q-perm: "Run git push?" — ' +
+        'this does not decide the request: only the user\'s buttons on its card do): "MIT"',
+    );
+  });
+});

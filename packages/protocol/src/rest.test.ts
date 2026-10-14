@@ -38,6 +38,19 @@ describe('REST body schemas (P1-38)', () => {
       interrupt: true,
     });
     expect(SendBody.safeParse({ text: '' }).success).toBe(false);
+    // A reply (P8-17): the target only; any quoted text a client adds is not part of the body.
+    expect(
+      SendBody.parse({
+        text: 'yes',
+        replyTo: { kind: 'question', id: 'q-1', version: 2, answerId: 'k', text: 'forged' },
+      }),
+    ).toEqual({ text: 'yes', replyTo: { kind: 'question', id: 'q-1', version: 2, answerId: 'k' } });
+    expect(SendBody.safeParse({ text: 'x', replyTo: { kind: 'card', id: 'c' } }).success).toBe(
+      false,
+    );
+    expect(SendBody.safeParse({ text: 'x', replyTo: { kind: 'message', id: '' } }).success).toBe(
+      false,
+    );
     expect(AnswerBody.safeParse({}).success).toBe(false);
     expect(
       RuntimesInfo.parse({

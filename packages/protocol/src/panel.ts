@@ -12,6 +12,7 @@ import {
 } from './domain.js';
 import type { EventEnvelope } from './events.js';
 import { deliverablesPhrase } from './deliverables.js';
+import { ReplyQuote } from './reply.js';
 
 // ---------------------------------------------------------------------------
 // The side panel's REST surface (P25-01; SPEC §4.2–4.6, TECHNOLOGY §2.2 "a small REST surface
@@ -50,6 +51,8 @@ export const ConversationEntry = z.object({
   seq: z.number().int().positive().optional(),
   /** A reply's transcript `seq` (as the `transcript` stream numbers it). */
   chunkSeq: z.number().int().positive().optional(),
+  /** What a message quotes (`message.sent.replyTo`, P8-17). */
+  replyTo: ReplyQuote.optional(),
   cursor: z.string().min(1),
 });
 export type ConversationEntry = z.infer<typeof ConversationEntry>;

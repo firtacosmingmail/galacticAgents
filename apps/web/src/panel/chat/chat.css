@@ -129,3 +129,168 @@
     max-width: 100%;
   }
 }
+
+/*
+ * Replies (P8-17): a line's Reply action sits beside its bubble — revealed on hover or keyboard
+ * focus with a fine pointer, always shown (finger-sized) on touch screens. A quoted line sits
+ * inside the bubble above the text, behind a "here"-blue side bar; the line jumped to is
+ * highlighted for a moment.
+ */
+.pnl-line-body {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+}
+.pnl-line-user .pnl-line-body {
+  flex-direction: row-reverse;
+}
+.pnl-line-report .pnl-line-body,
+.pnl-line-report .pnl-line-body .pnl-bubble {
+  flex: 1;
+}
+.pnl-reply {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--pnl-muted);
+  border: 1px solid var(--pnl-line);
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+.pnl-line:hover .pnl-reply,
+.pnl-line:focus-within .pnl-reply,
+.thread-card:hover > .pnl-reply,
+.thread-card:focus-within > .pnl-reply,
+.pnl-reply:focus-visible {
+  opacity: 1;
+}
+.thread-card > .pnl-reply {
+  margin-top: 4px;
+  float: right;
+}
+.pnl-reply-label {
+  font-size: 12px;
+}
+@media (pointer: coarse), (hover: none) {
+  .pnl-reply {
+    opacity: 1;
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0 10px;
+  }
+  .pnl-line-body .pnl-reply .pnl-reply-label {
+    display: none;
+  }
+}
+.pnl-bubble-quoted {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.pnl-bubble-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pnl-quote {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  margin: 0;
+  padding: 4px 8px;
+  min-width: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: var(--pnl-ink);
+  background: var(--pnl-bg);
+  border: 0;
+  border-left: 3px solid var(--pnl-here);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.pnl-quote-who {
+  font-weight: 600;
+  color: var(--pnl-here);
+}
+.pnl-quote-answered {
+  font-weight: 400;
+  color: var(--pnl-muted);
+}
+.pnl-quote-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pnl-quote-missing {
+  font-size: 11px;
+}
+.pnl-line.is-highlighted,
+.thread-card.is-highlighted {
+  outline: 2px solid var(--pnl-here);
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+.pnl-line:focus:not(:focus-visible),
+.thread-card:focus:not(:focus-visible) {
+  outline: none;
+}
+.pnl-line.is-highlighted:focus,
+.thread-card.is-highlighted:focus {
+  outline: 2px solid var(--pnl-here);
+}
+.pnl-replying {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--pnl-here);
+  border-radius: 6px;
+  background: var(--pnl-raised);
+  min-width: 0;
+}
+.pnl-replying-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+.pnl-replying .pnl-quote-text {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.pnl-replying-note {
+  font-size: 11px;
+}
+.pnl-replying-cancel {
+  flex: none;
+  padding: 0 8px;
+  line-height: 1.6;
+}
+@media (pointer: coarse), (max-width: 760px) {
+  .pnl-replying-cancel {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pnl-reply {
+    transition: none;
+  }
+}

@@ -255,6 +255,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                         sender: event.sender,
                         text: event.text,
                         ...(event.turn ? { turn: true as const } : {}),
+                        ...(event.replyTo ? { replyTo: event.replyTo } : {}),
                       },
                     ]),
                   },

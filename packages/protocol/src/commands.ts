@@ -193,6 +193,11 @@ export interface AnswerQuestionInput {
    * handed to the agent waits for it.
    */
   answerId?: string;
+  /**
+   * The user answered by replying to the question in this brain's chat (P8-17): carried on
+   * `question.answered.repliedIn`, so that brain learns it once, from the reply's message.
+   */
+  repliedIn?: Id;
 }
 
 /**

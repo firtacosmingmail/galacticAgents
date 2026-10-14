@@ -7,8 +7,15 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type RefObject,
 } from 'react';
-import { ENDED_STATES, type ChatMessage, type Id, type TranscriptChunk } from '@galactic/protocol';
+import {
+  ENDED_STATES,
+  type ChatMessage,
+  type Id,
+  type ReplyQuote,
+  type TranscriptChunk,
+} from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import {
   liveEntries,
@@ -19,7 +26,9 @@ import {
   useConversationStore,
   type ChatEntry,
   type ConversationFetch,
+  type ReplyDraft,
   type Thread,
+  type ThreadCardItem,
 } from '../../state/conversation.js';
 import { HARMONIZER } from '../../state/selection.js';
 import {
@@ -35,6 +44,16 @@ import { compactionNote } from '../compaction.js';
 import { ThreadCard } from './InlineCards.js';
 import { useComposerAssist } from '../composer/ComposerAssist.js';
 import { composing, type HistoryEntry } from '../composer/assist-model.js';
+import {
+  draftOfCard,
+  draftOfEntry,
+  locate,
+  QuoteBlock,
+  quoteTitle,
+  ReplyBar,
+  ReplyButton,
+  replyRef,
+} from './Reply.js';
 import './chat.css';
 
 /**
@@ -52,12 +71,25 @@ const NO_MESSAGES: ChatMessage[] = [];
 const EMPTY_THREAD: Thread = { entries: [], hasOlder: false, loaded: false, loadingOlder: false };
 /** How close to an edge (px) counts as "at" it. */
 const EDGE = 48;
+/** The most pages a jump to a quoted line reads back before it gives up (P8-17). */
+const MAX_JUMP_PAGES = 40;
+/** How long a line jumped to stays highlighted (ms). */
+const HIGHLIGHT_MS = 2_000;
+
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const reducedMotion = () =>
+  typeof window !== 'undefined' &&
+  window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
 
 /**
  * Opens an agent's thread while mounted: reads the history, then the live transcript from where
  * it ended; catches up after a snapshot; absorbs live lines; closes on unmount.
  */
-function useThread(agentId: Id): { thread: Thread; entries: ChatEntry[]; loadOlder: () => void } {
+function useThread(agentId: Id): {
+  thread: Thread;
+  entries: ChatEntry[];
+  loadOlder: () => Promise<void>;
+} {
   const api = useApi();
   const fetchPage: ConversationFetch = useCallback(
     (id, query) => api.conversation(id, query),
@@ -123,7 +155,7 @@ function useThread(agentId: Id): { thread: Thread; entries: ChatEntry[]; loadOld
 
   const entries = useMemo(() => mergeEntries(thread.entries, live), [thread.entries, live]);
   const loadOlder = useCallback(
-    () => void conv().loadOlder(agentId, fetchPage),
+    () => conv().loadOlder(agentId, fetchPage),
     [conv, agentId, fetchPage],
   );
   return { thread, entries, loadOlder };
@@ -140,7 +172,9 @@ export function Conversation({ agentId }: { agentId: Id }) {
     () => threadItems(entries, cards, thread.hasOlder),
     [entries, cards, thread.hasOlder],
   );
-  const [pending, setPending] = useState<{ messageId: Id; text: string }[]>([]);
+  const [pending, setPending] = useState<
+    { messageId: Id; text: string; replyTo?: ReplyQuote | undefined }[]
+  >([]);
   const known = useMemo(() => new Set(entries.map((e) => e.id)), [entries]);
   const waiting = pending.filter((p) => !known.has(messageEntryId(p.messageId)));
 
@@ -181,7 +215,75 @@ export function Conversation({ agentId }: { agentId: Id }) {
   const older = () => {
     const el = scroller.current;
     if (el) restore.current = { height: el.scrollHeight, top: el.scrollTop };
-    loadOlder();
+    return loadOlder();
+  };
+
+  // Replies (P8-17): the Reply action of a line or card fills the composer's quote bar; a sent
+  // reply's quote jumps back to the original, paging back until it is in the thread.
+  const field = useRef<HTMLTextAreaElement>(null);
+  const setReply = useConversationStore((s) => s.setReply);
+  const replyWith = (draft: ReplyDraft) => {
+    setReply(agentId, draft);
+    field.current?.focus();
+  };
+  const [missing, setMissing] = useState<Record<string, true>>({});
+  // A jump outlives neither the chat nor its highlight timer (P8-17 review).
+  const mounted = useRef(true);
+  const highlight = useRef<{ el: HTMLElement; timer: ReturnType<typeof setTimeout> }>(undefined);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (highlight.current) clearTimeout(highlight.current.timer);
+      highlight.current = undefined;
+    };
+  }, []);
+  const jump = async (from: string, target: Pick<ReplyQuote, 'kind' | 'id'>) => {
+    let el = locate(scroller.current, target);
+    let failed = false;
+    for (let page = 0; !el && page < MAX_JUMP_PAGES;) {
+      const t = useConversationStore.getState().threads[agentId];
+      if (!mounted.current || !t?.hasOlder || t.oldestCursor === undefined) break;
+      if (t.loadingOlder) await pause(50);
+      else {
+        page++;
+        await older();
+        await pause(0);
+        // A page that failed, or that moved nothing (the cursor stayed), ends the search: never
+        // a burst of requests against a failing server.
+        const after = useConversationStore.getState().threads[agentId];
+        if (!after || after.oldestCursor === t.oldestCursor) {
+          el = locate(scroller.current, target);
+          failed = !el && after?.hasOlder === true;
+          break;
+        }
+      }
+      el = locate(scroller.current, target);
+    }
+    // A history that could not be read says so itself; the original is not called gone.
+    if (!mounted.current || failed) return;
+    setMissing((m) => {
+      if (Boolean(m[from]) === !el) return m;
+      const { [from]: _was, ...rest } = m;
+      return el ? rest : { ...m, [from]: true };
+    });
+    if (!el) return;
+    atBottom.current = false;
+    el.scrollIntoView?.({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'center' });
+    el.focus({ preventScroll: true });
+    if (highlight.current) {
+      clearTimeout(highlight.current.timer);
+      highlight.current.el.classList.remove('is-highlighted');
+    }
+    el.classList.add('is-highlighted');
+    const lit = el;
+    highlight.current = {
+      el: lit,
+      timer: setTimeout(() => {
+        lit.classList.remove('is-highlighted');
+        highlight.current = undefined;
+      }, HIGHLIGHT_MS),
+    };
   };
   const onScroll = () => {
     const el = scroller.current;
@@ -244,14 +346,34 @@ export function Conversation({ agentId }: { agentId: Id }) {
         )}
         {items.map((item) =>
           item.kind === 'card' ? (
-            <ThreadCard key={item.key} kind={item.card.kind} id={item.card.id} />
+            <ThreadCard
+              key={item.key}
+              kind={item.card.kind}
+              id={item.card.id}
+              onReply={() => replyWith(draftOfCard(item.card, agentId))}
+              replyLabel={cardLabel(item.card)}
+            />
           ) : (
-            <Line key={item.key} entry={item.entry} agentId={agentId} name={name} />
+            <Line
+              key={item.key}
+              entry={item.entry}
+              agentId={agentId}
+              name={name}
+              onReply={() => replyWith(draftOfEntry(item.entry))}
+              missing={missing[item.entry.id] === true}
+              onJump={(target) => void jump(item.entry.id, target)}
+            />
           ),
         )}
         {waiting.map((p) => (
           <div key={p.messageId} className="pnl-line pnl-line-user is-pending">
-            <p className="pnl-bubble">{p.text}</p>
+            <Bubble
+              text={p.text}
+              quote={p.replyTo}
+              agentId={agentId}
+              name={name}
+              onJump={() => p.replyTo && void jump(messageEntryId(p.messageId), p.replyTo)}
+            />
             <span className="pnl-meta muted">sending…</span>
           </div>
         ))}
@@ -267,7 +389,10 @@ export function Conversation({ agentId }: { agentId: Id }) {
         name={name}
         ended={ended}
         history={sentByUser}
-        onSent={(messageId, text) => setPending((all) => [...all, { messageId, text }])}
+        field={field}
+        onSent={(messageId, text, replyTo) =>
+          setPending((all) => [...all, { messageId, text, replyTo }])
+        }
       />
     </section>
   );
@@ -280,24 +405,90 @@ const time = (at: string) => {
     : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
-function Line({ entry: e, agentId, name }: { entry: ChatEntry; agentId: Id; name: string }) {
+/** The label a card's Reply action names. */
+const cardLabel = (card: ThreadCardItem) =>
+  card.kind === 'question'
+    ? `the question: ${card.question.context.text}`
+    : `the proposal: ${card.proposal.requestText}`;
+
+/** A line's bubble; with a quote (P8-17) the quote sits above the text, inside it. */
+function Bubble({
+  text,
+  quote,
+  agentId,
+  name,
+  missing,
+  onJump,
+}: {
+  text: string;
+  quote?: Pick<ReplyQuote, 'kind' | 'id' | 'sender' | 'text' | 'answered'> | undefined;
+  agentId: Id;
+  name: string;
+  missing?: boolean;
+  onJump?: () => void;
+}) {
   const world = useAppStore((s) => s.world);
+  if (!quote) return <p className="pnl-bubble">{text}</p>;
+  return (
+    <div className="pnl-bubble pnl-bubble-quoted">
+      <QuoteBlock
+        quote={quote}
+        title={quoteTitle(quote, agentId, name, world)}
+        missing={missing ?? false}
+        {...(onJump ? { onJump } : {})}
+      />
+      <p className="pnl-bubble-text">{text}</p>
+    </div>
+  );
+}
+
+function Line({
+  entry: e,
+  agentId,
+  name,
+  onReply,
+  missing,
+  onJump,
+}: {
+  entry: ChatEntry;
+  agentId: Id;
+  name: string;
+  onReply: () => void;
+  missing: boolean;
+  onJump: (target: Pick<ReplyQuote, 'kind' | 'id'>) => void;
+}) {
+  const world = useAppStore((s) => s.world);
+  const excerptOf = e.text.length > 60 ? `${e.text.slice(0, 59)}…` : e.text;
   if (e.kind === 'reply') {
     return (
-      <div className="pnl-line pnl-line-brain" data-entry={e.id}>
+      <div className="pnl-line pnl-line-brain" data-entry={e.id} tabIndex={-1}>
         <span className="pnl-meta muted">
           {name} · {time(e.at)}
         </span>
-        <p className="pnl-bubble">{e.text}</p>
+        <div className="pnl-line-body">
+          <p className="pnl-bubble">{e.text}</p>
+          <ReplyButton label={`${name}: ${excerptOf}`} onReply={onReply} />
+        </div>
       </div>
     );
   }
   const s = e.sender;
   if (s.type === 'user') {
+    const quote = e.replyTo;
     return (
-      <div className="pnl-line pnl-line-user" data-entry={e.id}>
+      <div className="pnl-line pnl-line-user" data-entry={e.id} tabIndex={-1}>
         <span className="pnl-meta muted">you · {time(e.at)}</span>
-        <p className="pnl-bubble">{e.text}</p>
+        <div className="pnl-line-body">
+          <Bubble
+            text={e.text}
+            quote={quote}
+            agentId={agentId}
+            name={name}
+            missing={missing}
+            {...(quote ? { onJump: () => onJump(quote) } : {})}
+          />
+          <ReplyButton label={`your message: ${excerptOf}`} onReply={onReply} />
+        </div>
       </div>
     );
   }
@@ -308,6 +499,7 @@ function Line({ entry: e, agentId, name }: { entry: ChatEntry; agentId: Id; name
       <div
         className="pnl-line pnl-line-report"
         data-entry={e.id}
+        tabIndex={-1}
         role="group"
         aria-label="status report"
       >
@@ -328,15 +520,21 @@ function Line({ entry: e, agentId, name }: { entry: ChatEntry; agentId: Id; name
           )}{' '}
           · {time(e.at)}
         </span>
-        <p className="pnl-bubble">{e.text}</p>
+        <div className="pnl-line-body">
+          <p className="pnl-bubble">{e.text}</p>
+          <ReplyButton label={`the report: ${excerptOf}`} onReply={onReply} />
+        </div>
       </div>
     );
   }
   return (
-    <div className="pnl-line pnl-line-notice" data-entry={e.id}>
-      <p className="pnl-bubble">
-        <span className="muted">{actorLabel(s, world)}:</span> {e.text}
-      </p>
+    <div className="pnl-line pnl-line-notice" data-entry={e.id} tabIndex={-1}>
+      <div className="pnl-line-body">
+        <p className="pnl-bubble">
+          <span className="muted">{actorLabel(s, world)}:</span> {e.text}
+        </p>
+        <ReplyButton label={`the notice: ${excerptOf}`} onReply={onReply} />
+      </div>
     </div>
   );
 }
@@ -346,6 +544,7 @@ function Composer({
   name,
   ended,
   history,
+  field,
   onSent,
 }: {
   agentId: Id;
@@ -353,9 +552,16 @@ function Composer({
   ended: boolean;
   /** The user's earlier messages to this agent, oldest first (↑ recalls them, P8-14). */
   history: readonly HistoryEntry[];
-  onSent: (messageId: Id, text: string) => void;
+  /** The text box (the thread's Reply actions focus it). */
+  field: RefObject<HTMLTextAreaElement | null>;
+  onSent: (messageId: Id, text: string, replyTo?: ReplyQuote) => void;
 }) {
   const api = useApi();
+  const world = useAppStore((s) => s.world);
+  // What this message replies to (P8-17), kept with the draft in the conversation store.
+  const reply = useConversationStore((s) => s.replies[agentId]);
+  const setReply = useConversationStore((s) => s.setReply);
+  const cancelReply = () => setReply(agentId, undefined);
   const { run, error, busy } = useAction();
   // The draft lives in the conversation store (P4-10): a remount (another agent and back, the
   // stacked layout's breakpoint) finds it again.
@@ -363,7 +569,6 @@ function Composer({
   const setDraft = useConversationStore((s) => s.setDraft);
   const setText = (t: string) => setDraft(agentId, t);
   const [interrupt, setInterrupt] = useState(false);
-  const field = useRef<HTMLTextAreaElement>(null);
   // Slash commands (P8-13) and ↑ history (P8-14). A message that starts with `/name` goes to the
   // agent as typed: its runtime runs the command (a brain takes it as a turn of its own).
   const assist = useComposerAssist({
@@ -380,11 +585,27 @@ function Composer({
     const t = text.trim();
     if (!t || busy || ended) return;
     let messageId: Id | undefined;
+    const draft = reply;
+    const ref = draft ? replyRef(draft, world) : undefined;
     const ok = await run(async () => {
-      messageId = (await api.send(agentId, t, interrupt)).messageId;
+      messageId = (await api.send(agentId, t, interrupt, ref)).messageId;
     });
     if (ok) {
-      if (messageId) onSent(messageId, t);
+      // The pending line shows the quote as the bar did, until the logged message replaces it.
+      if (messageId) {
+        onSent(
+          messageId,
+          t,
+          draft && {
+            kind: draft.kind,
+            id: draft.id,
+            sender: draft.sender,
+            text: draft.text,
+            ...(ref?.version !== undefined ? { answered: true as const } : {}),
+          },
+        );
+      }
+      if (draft) cancelReply();
       setText('');
       setInterrupt(false);
       assist.reset();
@@ -392,6 +613,11 @@ function Composer({
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (assist.onKeyDown(e)) return;
+    if (e.key === 'Escape' && reply) {
+      e.preventDefault();
+      cancelReply();
+      return;
+    }
     // WebKit's composition-ending Enter has `isComposing` false and keyCode 229 (review S5).
     if (e.key === 'Enter' && !e.shiftKey && !composing(e)) {
       e.preventDefault();
@@ -400,6 +626,17 @@ function Composer({
   };
   return (
     <form className="pnl-composer" onSubmit={send}>
+      {reply && (
+        <ReplyBar
+          draft={reply}
+          title={quoteTitle(reply, agentId, name, world)}
+          note={replyNote(reply, world)}
+          onCancel={() => {
+            cancelReply();
+            field.current?.focus();
+          }}
+        />
+      )}
       <div className="cmp-field">
         <textarea
           ref={field}
@@ -435,4 +672,18 @@ function Composer({
       <ErrorLine error={error} />
     </form>
   );
+}
+
+/** What the quote bar adds for a question (P8-17): a clarification is answered by the reply. */
+function replyNote(
+  draft: ReplyDraft,
+  world: { questions: Record<Id, { kind: string; status: string }> },
+): string | undefined {
+  if (draft.kind !== 'question') return undefined;
+  const q = world.questions[draft.id];
+  if (q?.kind === 'clarification' && q.status === 'open')
+    return 'Your reply answers this question.';
+  if (q?.kind === 'permission' && q.status === 'open')
+    return "A reply does not decide it: use the card's buttons.";
+  return undefined;
 }

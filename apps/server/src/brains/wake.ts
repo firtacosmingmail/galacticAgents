@@ -1,4 +1,4 @@
-import { formatUsd, SUPERSEDED_BY_MESSAGE } from '@galactic/protocol';
+import { excerpt, formatUsd, SUPERSEDED_BY_MESSAGE } from '@galactic/protocol';
 import type {
   Actor,
   AgentRole,
@@ -9,6 +9,7 @@ import type {
   EventType,
   Id,
   Question,
+  ReplyQuote,
 } from '@galactic/protocol';
 import { COMMAND_SOURCE } from '../domain/questions.js';
 
@@ -127,6 +128,31 @@ const proposal = <T extends DecisionType>(text: (e: EventOfType<T>) => string): 
 
 const quote = (text: string) => JSON.stringify(text);
 
+/** How much of a quoted line a reply's turn-prompt line repeats (P8-17). */
+export const QUOTE_IN_PROMPT = 1_000;
+
+/** What a reply quotes, from the brain's side: "your reply", "agent w-1's question q-3"… */
+function replied(r: ReplyQuote, s: WakeScope): string {
+  const own = r.sender.type === 'agent' && r.sender.id === s.brainId;
+  const whose =
+    r.sender.type === 'agent'
+      ? own
+        ? 'your'
+        : `agent ${r.sender.id}'s`
+      : `the ${r.sender.type}'s`;
+  switch (r.kind) {
+    case 'message':
+      if (r.sender.type === 'user') return 'their own earlier message';
+      return r.sender.type === 'system' ? 'a system notice' : `${whose} message`;
+    case 'reply':
+      return `${whose} reply`;
+    case 'question':
+      return `${whose} ${s.question(r.id)?.kind === 'permission' ? 'permission request' : 'question'} ${r.id}`;
+    case 'proposal':
+      return `${whose} proposal ${r.id}`;
+  }
+}
+
 /**
  * A budget notice concerns the brain that runs the work (P8-01): the Waykeeper of the project (or
  * of the task's project), or the Harmonizer for an asteroid task it supervises. The Harmonizer is
@@ -156,10 +182,19 @@ export const WAKE_RULES: WakeRules = {
       (e.sender.type === 'user' ||
         (e.sender.type === 'agent' &&
           (s.supervises(e.sender.id) || (s.below?.(e.sender.id) ?? false)))),
-    describe: (e, s) =>
-      e.sender.type === 'user'
-        ? `the user said: ${quote(e.text)}`
-        : `${who(e.sender, s)} reported: ${quote(e.text)}`,
+    describe: (e, s) => {
+      if (e.sender.type !== 'user') return `${who(e.sender, s)} reported: ${quote(e.text)}`;
+      const r = e.replyTo;
+      if (!r) return `the user said: ${quote(e.text)}`;
+      // A reply (P8-17, decision 139): the quoted line rides along, so the brain has its context.
+      const quoted = `${replied(r, s)}: ${quote(excerpt(r.text, QUOTE_IN_PROMPT))}`;
+      if (r.answered) return `the user answered ${r.id} (${quoted}) by replying: ${quote(e.text)}`;
+      const permission =
+        r.kind === 'question' && s.question(r.id)?.kind === 'permission'
+          ? " — this does not decide the request: only the user's buttons on its card do"
+          : '';
+      return `the user said (replying to ${quoted}${permission}): ${quote(e.text)}`;
+    },
   },
   'question.opened': {
     wakes: (e, s) => concerns(e.question, s),
@@ -170,8 +205,11 @@ export const WAKE_RULES: WakeRules = {
   // Every agent that ever held the question learns it was resolved (SPEC decision 26), so no
   // level keeps waiting; permission questions never had an agent holder.
   'question.answered': {
+    // Not the brain in whose chat the user replied to answer it (P8-17): the reply's own
+    // `message.sent` tells it, once, with the question quoted.
     wakes: (e, s) =>
-      heldBefore(e.holders, s, s.question(e.questionId)) || concerns(s.question(e.questionId), s),
+      e.repliedIn !== s.brainId &&
+      (heldBefore(e.holders, s, s.question(e.questionId)) || concerns(s.question(e.questionId), s)),
     describe: (e, s) => `${who(e.answeredBy, s)} answered ${e.questionId}: ${quote(e.answer)}`,
   },
   'question.cancelled': {

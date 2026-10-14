@@ -139,7 +139,13 @@ export interface AgentControl {
   pause(agentId: Id, by: Actor): Promise<void>;
   resumeAgent(agentId: Id, by: Actor): Promise<void>;
   /** `answerId`: the answerer's idempotency key (P7-05), recorded with the answer. */
-  answer(questionId: Id, answer: string, by: Actor, answerId?: string): Promise<void>;
+  answer(
+    questionId: Id,
+    answer: string,
+    by: Actor,
+    answerId?: string,
+    repliedIn?: Id,
+  ): Promise<void>;
   /** Whether a live session asked the question and takes its answer through the adapter. */
   hasQuestion(questionId: Id): boolean;
   /**
@@ -677,6 +683,7 @@ export class Commands implements DomainCommands {
       answeredBy: input.by,
       ...(input.version !== undefined ? { version: input.version } : {}),
       ...(answerId !== undefined ? { answerId } : {}),
+      ...(input.repliedIn !== undefined ? { repliedIn: input.repliedIn } : {}),
     };
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
     // Recorded already under this key: the retry of an answer whose acknowledgement was lost.
@@ -701,7 +708,7 @@ export class Commands implements DomainCommands {
   private async answerThroughAdapter(input: AnswerQuestionInput): Promise<CommandResult<Question>> {
     const { questionId } = input;
     const since = this.log.currentSeq();
-    await this.agents!.answer(questionId, input.answer, input.by, input.answerId);
+    await this.agents!.answer(questionId, input.answer, input.by, input.answerId, input.repliedIn);
     const after = must(this.log.tables.questions.get(questionId), 'question', questionId);
     const events = this.log
       .eventsSince(since, Number.MAX_SAFE_INTEGER)

@@ -152,6 +152,8 @@ export interface AnswerInput {
   delivered?: boolean;
   /** The answerer's idempotency key (P7-05), kept on the row as `meta.answerId`. */
   answerId?: string;
+  /** The brain in whose chat the user replied to answer it (P8-17), carried on the event. */
+  repliedIn?: Id;
 }
 
 /** `meta.answerId`: the idempotency key of the answer that closed the question (P7-05). */
@@ -201,6 +203,7 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
     version: question.version,
     ...(input.holders?.length ? { holders: input.holders } : {}),
     ...(input.answerId ? { answerId: input.answerId } : {}),
+    ...(input.repliedIn ? { repliedIn: input.repliedIn } : {}),
   });
   return question;
 }
