@@ -289,3 +289,8 @@
     min-height: 44px;
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  .pnl-reply {
+    transition: none;
+  }
+}
