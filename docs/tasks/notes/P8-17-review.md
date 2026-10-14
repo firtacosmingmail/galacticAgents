@@ -73,3 +73,7 @@ paragraph updated.
 - A retry of a reply that answered a clarification, after its message failed (the chat agent
   stopped), sends the message once the agent runs again — or returns 409 again while it does not.
   The question stays answered either way (the asking agent got it). Acceptable?
+
+## Confirmed by Cosmin (2026-10-14)
+
+A reply that answered a clarification while the chat agent was stopping keeps the question answered; the chat line is added by a retry once the agent runs again (409 meanwhile). Accepted as is.
