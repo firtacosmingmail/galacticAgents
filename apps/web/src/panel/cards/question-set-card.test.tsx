@@ -236,6 +236,35 @@ describe('the question-set card (P8-21)', () => {
     expect(button('Clerk').getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('a saved row is no longer this device’s edit: another device’s later draft wins (final review)', async () => {
+    vi.useFakeTimers();
+    world();
+    show();
+    await type('maybe');
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(api.draftQuestion).toHaveBeenCalledTimes(1);
+    // The server echoes this save, then the phone saves a newer draft of the same row.
+    await stream({
+      type: 'question.drafted',
+      questionId: 'q-s1',
+      draft: { choices: [], text: 'maybe' },
+      by: { type: 'user' },
+    });
+    await stream({
+      type: 'question.drafted',
+      questionId: 'q-s1',
+      draft: { choices: [], text: 'later' },
+      by: { type: 'user' },
+    });
+    // Still on row 1, with no new edit here: the phone's draft shows and Next saves nothing.
+    const box = within(card()).getByRole('textbox', { name: /write your own answer/i });
+    expect((box as HTMLTextAreaElement).value).toBe('later');
+    await click(button(/Next/));
+    expect(api.draftQuestion).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a row a supervisor answered read-only on the review page', async () => {
     world(withSupervisorAnswer());
     show();

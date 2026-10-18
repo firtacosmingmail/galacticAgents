@@ -144,10 +144,22 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
     if (key === (last && last.server === server ? last.key : server)) return;
     const mine = { key, server };
     sent.current[rowId] = mine;
-    api.draftQuestion(rowId, isAnswered(value) ? forDraft(value) : null).catch(() => {
-      // Not kept: the next change (or navigation) tries again.
-      if (sent.current[rowId] === mine) delete sent.current[rowId];
-    });
+    api.draftQuestion(rowId, isAnswered(value) ? forDraft(value) : null).then(
+      () => {
+        // Saved: unless it was changed again since, the row is no longer this device's edit, so
+        // another device's later draft replaces it and navigating away re-saves nothing.
+        if (draftKey(latest.current.drafts[rowId]) !== key) return;
+        setDirty((d) => {
+          if (!d[rowId]) return d;
+          const { [rowId]: _saved, ...rest } = d;
+          return rest;
+        });
+      },
+      () => {
+        // Not kept: the next change (or navigation) tries again.
+        if (sent.current[rowId] === mine) delete sent.current[rowId];
+      },
+    );
   };
   const wasOffline = useRef(offline);
   useEffect(() => {

@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
 **Current task:** P8-18 (branch `p8-18-phone-single-screen`) · **Task status:** P8-18 in progress, P8-19 done, P8-20 done, P8-21 done, P8-22 todo
-**Phase status:** in progress (20/22 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
+**Phase status:** in progress (20/22 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 in progress on its own branch (`p8-18-phone-single-screen`), P8-22 todo
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
