@@ -137,7 +137,7 @@ describe('list mode on a slow connection (P7-03)', () => {
     expect(document.querySelector('.pnl-scene')).toBeNull();
     expect(within(top()).getByRole('button', { name: 'Show scene' })).toBeTruthy();
     // The one-tap row is the phone's: the wide bar already has the toggle.
-    expect(screen.queryByRole('group', { name: 'solar system' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'solar system' })).toBeNull();
   });
 });
 
@@ -216,14 +216,14 @@ describe('the compact top bar (P3-12)', () => {
   it('starts in list mode with no choice made and offers the scene with one tap (P7-03)', async () => {
     await open();
     expect(document.querySelector('.pnl-scene')).toBeNull();
-    const offer = screen.getByRole('group', { name: 'solar system' });
+    const offer = screen.getByRole('region', { name: 'solar system' });
     expect(offer.textContent).toContain('List mode, for a small screen.');
     // Nothing remembered until the user chooses.
     expect(localStorage.getItem('galactic.scene.visible')).toBeNull();
     fireEvent.click(within(offer).getByRole('button', { name: 'Show scene' }));
     expect(localStorage.getItem('galactic.scene.visible')).toBe('1');
     // Shown (jsdom has no WebGL, so the menu says the scene is unavailable instead of a canvas).
-    expect(screen.queryByRole('group', { name: 'solar system' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'solar system' })).toBeNull();
     openMenu();
     expect(within(menu()).getByRole('note').textContent).toBe('3D scene unavailable — list mode');
   });
@@ -231,14 +231,14 @@ describe('the compact top bar (P3-12)', () => {
   it('keeps the one-tap offer in list mode chosen from the menu, without a reason', async () => {
     localStorage.setItem('galactic.scene.visible', '0');
     await open();
-    const offer = screen.getByRole('group', { name: 'solar system' });
+    const offer = screen.getByRole('region', { name: 'solar system' });
     expect(offer.textContent).toBe('List mode.Show scene');
   });
 
   it('shows the scene on a phone that chose it, with no offer', async () => {
     localStorage.setItem('galactic.scene.visible', '1');
     await open();
-    expect(screen.queryByRole('group', { name: 'solar system' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'solar system' })).toBeNull();
   });
 
   it('closes on the button, on Escape and on an outside tap, returning focus as it should', async () => {

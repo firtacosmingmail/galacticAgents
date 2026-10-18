@@ -41,7 +41,8 @@ import { useDockPrefs, type DockControl } from './dock-state.js';
 import { COMPACT_TOP_BAR_QUERY, STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
 import { SceneOffer } from './SceneOffer.js';
 import { NavSheet, useEdgeSwipe, useNavSheet } from './nav-sheet.js';
-import { usePhoneView } from './phone-view.js';
+import { closePhoneViewThen, usePhoneView } from './phone-view.js';
+import { PhoneFullView } from './PhoneFullView.js';
 import { BrainDock, DockViewToggle, SystemStatusView } from './status/StatusViews.js';
 import { useDockView } from './status/dock-view.js';
 import {
@@ -107,13 +108,32 @@ export function Panel({
   // P8-15: on a phone the navigation is a sheet that slides in from the left, not a block of the
   // stack; the top bar's "Agents" button and a swipe from the left edge open it.
   const sheeted = compact && route === 'panel';
-  const navSheet = useNavSheet(sheeted);
-  useEdgeSwipe(navSheet, sheeted);
+  const rawSheet = useNavSheet(sheeted);
   // P8-18: on a phone, one main screen at a time — the chat, the inbox or the managed agents.
-  usePhoneView(sheeted);
+  const phoneView = usePhoneView(sheeted);
+  const fullView = phoneView.view === 'chat' ? undefined : phoneView.view;
+  // The sheet and a full view exclude each other: the view (and its history entry) goes first.
+  const navSheet = useMemo(
+    () => ({
+      open: rawSheet.open,
+      setOpen: (next: boolean) =>
+        next ? closePhoneViewThen(() => rawSheet.setOpen(true)) : rawSheet.setOpen(false),
+    }),
+    [rawSheet],
+  );
+  useEdgeSwipe(navSheet, sheeted);
+  // A full view opened while the sheet is open (a beacon, a notification): the sheet closes.
+  const closeSheet = rawSheet.setOpen;
+  const sheetOpen = rawSheet.open;
+  useEffect(() => {
+    if (fullView && sheetOpen) closeSheet(false);
+  }, [fullView, sheetOpen, closeSheet]);
   const dock = useDockPrefs();
+  // P8-18: a phone in list mode gives the chat the whole screen (the inbox and the managed agents
+  // open full screen from the top bar): nothing shares it, so it neither resizes nor minimises.
+  const phoneList = sheeted && !showScene;
   // Minimising makes sense where something else shares the space: the scene, or the stack.
-  const collapsible = stacked || showScene;
+  const collapsible = (stacked || showScene) && !phoneList;
   const open = !collapsible || dock.open;
   const centre = useRef<HTMLDivElement>(null);
   const gridClass = [
@@ -124,8 +144,8 @@ export function Panel({
     !side && 'pnl-grid-no-side',
     stacked && 'pnl-grid-stacked',
     sheeted && 'pnl-grid-nav-sheet',
-    // A phone in list mode with the side column hidden has nothing above the dock: it fills.
-    sheeted && !showScene && !side && 'pnl-grid-dock-fills',
+    // A phone in list mode has nothing above the dock but the scene offer: it fills (P8-18).
+    phoneList && 'pnl-grid-dock-fills',
     collapsible && (open ? 'pnl-grid-dock-open' : 'pnl-grid-dock-min'),
   ]
     .filter(Boolean)
@@ -160,21 +180,35 @@ export function Panel({
                 <FirstRunGate>
                   {stacked ? (
                     // Narrow: one scrolling stack, the dock under it.
-                    <div className={gridClass} ref={centre}>
-                      <div className="pnl-stack">
-                        {showScene && <SceneAreaMemo onFailure={scene.fail} />}
-                        {offerScene && <SceneOffer scene={scene} />}
-                        {!sheeted && <NavigationMemo />}
-                        {side && <SideColumn agents={agents} inbox={inbox} />}
+                    <>
+                      <div
+                        className={gridClass}
+                        ref={centre}
+                        // A full view on a phone covers the chat; it stays mounted, unreachable.
+                        inert={fullView !== undefined}
+                        {...(fullView ? { 'aria-hidden': true } : {})}
+                      >
+                        <div className="pnl-stack">
+                          {showScene && <SceneAreaMemo onFailure={scene.fail} />}
+                          {offerScene && <SceneOffer scene={scene} />}
+                          {!sheeted && <NavigationMemo />}
+                          {/* P8-18: on a phone the side column's sections open full screen. */}
+                          {side && !sheeted && <SideColumn agents={agents} inbox={inbox} />}
+                        </div>
+                        <ReplayBar sceneShown={showScene} />
+                        {main}
+                        {sheeted && (
+                          <NavSheet control={navSheet}>
+                            <NavigationMemo />
+                          </NavSheet>
+                        )}
                       </div>
-                      <ReplayBar sceneShown={showScene} />
-                      {main}
-                      {sheeted && (
-                        <NavSheet control={navSheet}>
-                          <NavigationMemo />
-                        </NavSheet>
+                      {sheeted && fullView && (
+                        <PhoneFullView view={fullView} onClose={phoneView.close}>
+                          {fullView === 'inbox' ? <InboxSection /> : <ManagedAgentsSection />}
+                        </PhoneFullView>
                       )}
-                    </div>
+                    </>
                   ) : (
                     <div className={gridClass}>
                       <NavigationMemo />
@@ -466,18 +500,6 @@ const SideColumn = memo(function SideColumn({
   agents: ManagedAgentsControl;
   inbox: InboxControl;
 }) {
-  const world = useAppStore((s) => s.world);
-  const selection = useAppStore((s) => s.selection);
-  const agent = selectedAgent(world, selection);
-  const supervisor: Id | undefined = agent?.role === 'steward' ? agent.supervisorId : undefined;
-  // P5-04: arrow keys between the cards, and the focus kept in the list when a card goes away.
-  const agentsRef = useRef<HTMLElement>(null);
-  const inboxRef = useRef<HTMLElement>(null);
-  useFocusRescue(agentsRef, {
-    items: AGENT_CARD,
-    fallback: (s) => s.querySelector<HTMLElement>('h2'),
-  });
-  useFocusRescue(inboxRef, { items: INBOX_CARD, fallback: (s) => s });
   return (
     <aside
       className="pnl-side"
@@ -490,49 +512,78 @@ const SideColumn = memo(function SideColumn({
       }
     >
       {agents.visible && (
-        <section aria-label="managed agents" ref={agentsRef} onKeyDown={listKeys(AGENT_CARD)}>
-          <div className="pnl-side-head">
-            <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
-            <button
-              type="button"
-              className="pnl-side-hide"
-              aria-label="Hide managed agents"
-              title="Hide managed agents (bring them back from the top bar)"
-              onClick={() => {
-                agents.setVisible(false);
-                focusAfterRemoval('.pnl-agents-toggle', '.pnl-menu-button', '.pnl-inbox');
-              }}
-            >
-              Hide
-            </button>
-          </div>
-          {supervisor ? (
-            <AgentLinks ids={[supervisor]} />
-          ) : (
-            <ManagedAgentCards supervisor={agent} />
-          )}
-        </section>
+        <ManagedAgentsSection
+          onHide={() => {
+            agents.setVisible(false);
+            focusAfterRemoval('.pnl-agents-toggle', '.pnl-menu-button', '.pnl-inbox');
+          }}
+        />
       )}
       {inbox.visible && (
-        <section
-          className="pnl-inbox"
-          aria-label="inbox"
-          id={INBOX_ID}
-          tabIndex={-1}
-          ref={inboxRef}
-          onKeyDown={listKeys(INBOX_CARD)}
-        >
-          <Inbox
-            onHide={() => {
-              inbox.setVisible(false);
-              focusAfterRemoval('.pnl-inbox-toggle', '.pnl-menu-button', '.pnl-nav-hq');
-            }}
-          />
-        </section>
+        <InboxSection
+          onHide={() => {
+            inbox.setVisible(false);
+            focusAfterRemoval('.pnl-inbox-toggle', '.pnl-menu-button', '.pnl-nav-hq');
+          }}
+        />
       )}
     </aside>
   );
 });
+
+/**
+ * The managed agents (P25-04): in the side column with its "Hide" (P4-09), or the phone's full
+ * view (P8-18) without one — the view's header names it.
+ */
+function ManagedAgentsSection({ onHide }: { onHide?: () => void }) {
+  const world = useAppStore((s) => s.world);
+  const selection = useAppStore((s) => s.selection);
+  const agent = selectedAgent(world, selection);
+  const supervisor: Id | undefined = agent?.role === 'steward' ? agent.supervisorId : undefined;
+  // P5-04: arrow keys between the cards, and the focus kept in the list when a card goes away.
+  const ref = useRef<HTMLElement>(null);
+  useFocusRescue(ref, {
+    items: AGENT_CARD,
+    fallback: (s) => s.querySelector<HTMLElement>('h2') ?? s,
+  });
+  return (
+    <section aria-label="managed agents" ref={ref} onKeyDown={listKeys(AGENT_CARD)}>
+      {onHide && (
+        <div className="pnl-side-head">
+          <h2 className="pnl-eyebrow">{supervisor ? 'Reports to' : 'Managed agents'}</h2>
+          <button
+            type="button"
+            className="pnl-side-hide"
+            aria-label="Hide managed agents"
+            title="Hide managed agents (bring them back from the top bar)"
+            onClick={onHide}
+          >
+            Hide
+          </button>
+        </div>
+      )}
+      {supervisor ? <AgentLinks ids={[supervisor]} /> : <ManagedAgentCards supervisor={agent} />}
+    </section>
+  );
+}
+
+/** The inbox (P25-06): in the side column, or the phone's full view (P8-18) without its head. */
+function InboxSection({ onHide }: { onHide?: () => void }) {
+  const ref = useRef<HTMLElement>(null);
+  useFocusRescue(ref, { items: INBOX_CARD, fallback: (s) => s });
+  return (
+    <section
+      className="pnl-inbox"
+      aria-label="inbox"
+      id={INBOX_ID}
+      tabIndex={-1}
+      ref={ref}
+      onKeyDown={listKeys(INBOX_CARD)}
+    >
+      <Inbox {...(onHide ? { onHide } : { withHead: false })} />
+    </section>
+  );
+}
 
 /** The items the arrow keys move between (P5-04): the managed agents' cards, the inbox's cards. */
 const AGENT_CARD = 'article.agc, .pnl-agents > li > a';

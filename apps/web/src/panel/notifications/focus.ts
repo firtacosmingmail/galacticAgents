@@ -6,6 +6,8 @@ import { agentsFor } from '../../console/hierarchy/shared.js';
 import { primaryAgent } from '../nav-model.js';
 import { selectionFor } from '../cards/links.js';
 import { useAppStore } from '../../state/store.js';
+import { phoneViewActive } from '../phone-view.js';
+import { revealInbox } from '../inbox-reveal.js';
 
 /** Where a notification's click lands: a selection, and whether to bring the inbox into view. */
 export interface Focus {
@@ -69,7 +71,10 @@ export function focusTarget(target: NotificationTarget | undefined): void {
   const store = useAppStore.getState();
   const focus = target ? focusFor(store.world, target) : { selection: HARMONIZER, inbox: true };
   store.navigate({ route: 'panel', selection: focus.selection });
-  if (focus.inbox) scrollInboxIntoView();
+  // P8-18: on a phone a question or a card is answered in the inbox, which opens full screen.
+  if (phoneViewActive() && (!target || target.kind === 'question' || target.kind === 'proposal'))
+    revealInbox();
+  else if (focus.inbox) scrollInboxIntoView();
 }
 
 const nextFrame = (fn: () => void) => {

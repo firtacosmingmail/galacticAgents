@@ -1310,3 +1310,52 @@ a.pnl-link:hover {
 .pnl-phone-warning .pnl-phone-dot {
   background: #e5484d;
 }
+
+/* P8-18: a phone's full view — the inbox or the managed agents over the chat, under the top bar.
+   The chat stays laid out beneath it (inert), so its scroll and the composer's draft survive. */
+.pnl-phone-view {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--pnl-surface);
+}
+.pnl-phone-view-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--pnl-line);
+}
+.pnl-phone-view-title {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.pnl-phone-view-title:focus {
+  outline: none;
+}
+.pnl-phone-view-close {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  background: var(--pnl-raised);
+  color: var(--pnl-ink);
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+.pnl-phone-view-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 12px max(12px, env(safe-area-inset-bottom));
+}

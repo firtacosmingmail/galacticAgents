@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useEffect } from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -16,8 +17,11 @@ import {
 
 let control: PhoneViewControl;
 function Probe({ active }: { active: boolean }) {
-  control = usePhoneView(active);
-  return <p data-testid="view">{control.view}</p>;
+  const current = usePhoneView(active);
+  useEffect(() => {
+    control = current;
+  });
+  return <p data-testid="view">{current.view}</p>;
 }
 
 /** jsdom runs a history traversal (`back()`) as a task, then fires `popstate`. */

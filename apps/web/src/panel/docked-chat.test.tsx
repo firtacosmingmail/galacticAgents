@@ -524,10 +524,12 @@ describe('layouts (P4-10)', () => {
     narrow(true);
     await open('/', { scene: false });
     expect(screen.getByRole('button', { name: 'Menu' })).toBeTruthy();
-    fireEvent.click(minimise());
-    expect(main().classList.contains('is-minimised')).toBe(true);
-    // The inbox is in the stack; the "waiting for you" button still reaches it.
-    expect(screen.getByRole('region', { name: 'inbox' }).closest('.pnl-stack')).toBeTruthy();
+    // P8-18: in list mode the chat has the whole screen — nothing to minimise it for, no inbox in
+    // the stack (the top bar's Inbox button opens it full screen).
+    expect(screen.queryByRole('button', { name: 'Minimise the conversation' })).toBeNull();
+    expect(main().classList.contains('is-open')).toBe(true);
+    expect(document.getElementById('pnl-inbox')).toBeNull();
+    expect(screen.getByRole('button', { name: /^Inbox/ })).toBeTruthy();
   });
 });
 

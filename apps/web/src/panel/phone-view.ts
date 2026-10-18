@@ -34,6 +34,8 @@ let view: PhoneView = 'chat';
 let active = 0;
 /** A `history.back()` of ours whose `popstate` has not arrived yet. */
 let backPending = false;
+/** What waits for that `popstate` (`closePhoneViewThen`). */
+let afterBack: (() => void) | undefined;
 const listeners = new Set<() => void>();
 
 const onViewEntry = (): boolean =>
@@ -63,6 +65,9 @@ function onPop(): void {
     // Our own `back()`: the view is already closed — unless it was opened again meanwhile.
     backPending = false;
     if (view !== 'chat') enterEntry();
+    const next = afterBack;
+    afterBack = undefined;
+    next?.();
     return;
   }
   // Back (or the system's back gesture) while open: its entry is gone; close it.
@@ -131,6 +136,18 @@ export function closePhoneView(): void {
   if (view === 'chat') return;
   leaveEntry();
   set('chat');
+}
+
+/**
+ * Back to the chat, then `next` once the view's history entry is gone — for something that pushes
+ * an entry of its own (the navigation sheet), which a pending `back()` would otherwise pop.
+ */
+export function closePhoneViewThen(next: () => void): void {
+  if (view === 'chat') return next();
+  leaveEntry();
+  set('chat');
+  if (backPending) afterBack = next;
+  else next();
 }
 
 /** The panel's phone view; `active` is the phone layout (compact width, the panel route). */
