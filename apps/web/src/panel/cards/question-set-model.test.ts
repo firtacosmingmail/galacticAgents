@@ -3,9 +3,13 @@ import type { Question } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import {
   canSend,
+  draftKey,
+  forDraft,
+  groupBySet,
   pagesOf,
   resumeIndex,
   sendCount,
+  skipped,
   toAnswers,
   toggleChoice,
   viaAgentIds,
@@ -104,5 +108,23 @@ describe('question-set model (P8-21)', () => {
       q.status === 'open' ? { ...q, version: 0 } : q,
     );
     expect(viaAgentIds(answered, agents)).toEqual([fx.harmonizer.id]);
+  });
+
+  it('keeps a skipped row’s typed answer in the saved draft; the skip wins on send', () => {
+    const d = skipped({ choices: ['Yes'], text: ' later ' });
+    expect(forDraft(d)).toEqual({ choices: ['Yes'], text: 'later', skipped: true });
+    expect(draftKey(d)).not.toBe(draftKey(skipped(undefined)));
+    expect(toAnswers([routesRow], { 'q-s1': d })[0]!.answer).toEqual({
+      choices: [],
+      skipped: true,
+    });
+  });
+
+  it('groups a set’s rows into one entry at its first row', () => {
+    const single = { ...fx.question, id: 'q-x' };
+    expect(groupBySet([routesRow, single, authRow, browsersRow])).toEqual([
+      { kind: 'set', setId: 'qs-1' },
+      { kind: 'question', question: single },
+    ]);
   });
 });

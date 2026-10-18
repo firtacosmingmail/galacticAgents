@@ -10,6 +10,7 @@ import { useAppStore } from '../../state/store.js';
 import { CardLinksContext } from '../cards/index.js';
 import { Inbox } from '../Inbox.js';
 import { Conversation } from './Conversation.js';
+import { SET_TITLE, setRows } from '../cards/question-set-fixtures.js';
 
 /**
  * The chat and the inbox together (P25-03 + P25-06): a Steward's clarification shows in the
@@ -140,6 +141,33 @@ describe('a Steward’s clarification in the chat and the inbox', () => {
     ).toBeTruthy();
     expect(
       within(inbox()).getByRole('article', { name: `clarification question ${TEXT}` }),
+    ).toBeTruthy();
+  });
+});
+
+describe('a question set in the chat (P8-21)', () => {
+  it('is one card in the asking Waykeeper’s thread, with no Reply action', async () => {
+    act(() =>
+      useAppStore.getState().apply({
+        ...snapshot,
+        seq: 200,
+        questions: [clarification, ...setRows.map((q) => ({ ...q, originAgentId: waykeeper.id }))],
+      } as ServerMessage),
+    );
+    show(waykeeper.id);
+    const set = await within(thread()).findByRole('article', {
+      name: `question set ${SET_TITLE}, 3 questions`,
+    });
+    const wrapper = set.closest<HTMLElement>('.thread-card')!;
+    expect(within(wrapper).queryByRole('button', { name: /^Reply to/ })).toBeNull();
+    // The single clarification beside it keeps its Reply.
+    const single = within(thread()).getByRole('article', {
+      name: `clarification question ${TEXT}`,
+    });
+    expect(
+      within(single.closest<HTMLElement>('.thread-card')!).getByRole('button', {
+        name: /^Reply to/,
+      }),
     ).toBeTruthy();
   });
 });

@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import { ENDED_STATES, type ControlBody, type Id } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { QuestionCard } from './QuestionInbox.js';
+import { QuestionSetCard } from '../../panel/cards/index.js';
+import { groupBySet } from '../../panel/cards/question-set-model.js';
 import { useTranscript } from './ChatBox.js';
 import { actorLabel, agentLabel, ErrorLine, StatePill, useAction, useApi } from './shared.js';
 
@@ -94,9 +96,13 @@ export function StewardView({ agentId }: { agentId: Id }) {
         )}
       </div>
       <ErrorLine error={error} />
-      {open.map((q) => (
-        <QuestionCard key={q.id} question={q} />
-      ))}
+      {groupBySet(open).map((item) =>
+        item.kind === 'set' ? (
+          <QuestionSetCard key={item.setId} setId={item.setId} />
+        ) : (
+          <QuestionCard key={item.question.id} question={item.question} />
+        ),
+      )}
       {!clarification && (
         <p className="muted">
           Read-only: Stewards take no messages (their supervisor speaks for you).

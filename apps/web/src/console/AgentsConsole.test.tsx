@@ -181,6 +181,36 @@ describe('ops console', () => {
     expect(bodyOf(calls.at(-1)!)).toEqual({ answer: 'allow' });
   });
 
+  it('shows a question-set row read-only: it is answered in the inbox (P8-21)', () => {
+    const row = {
+      ...fx.question,
+      context: {
+        ...fx.question.context,
+        set: { id: 'qs-1', index: 0, total: 2, title: 'Plan questions' },
+      },
+    };
+    useAppStore.setState((s) => ({
+      world: {
+        ...s.world,
+        agents: { [fx.agent.id]: fx.agent },
+        statuses: {
+          [fx.agent.id]: {
+            ...fx.status,
+            state: 'waiting_for_input' as const,
+            pendingQuestionId: 'q-1',
+          },
+        },
+        questions: { 'q-1': row },
+      },
+    }));
+    render(<AgentsConsole token="tok" />);
+    expect(screen.getByText('Keep the legacy cookie name?')).toBeTruthy();
+    expect(
+      screen.getByText(/Part of the question set “Plan questions”: answer it in the inbox/),
+    ).toBeTruthy();
+    expect(screen.queryByText('yes')).toBeNull();
+  });
+
   it('offers to resume an interrupted session and nothing else', () => {
     useAppStore.setState((s) => ({
       world: {

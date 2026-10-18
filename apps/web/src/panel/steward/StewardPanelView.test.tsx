@@ -12,6 +12,7 @@ import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../../App.js';
 import { FakeWebSocket } from '../../client/fake-socket.js';
 import { useAppStore } from '../../state/store.js';
+import { SET_TITLE, setRows } from '../cards/question-set-fixtures.js';
 
 const waykeeper: Agent = {
   ...fx.harmonizer,
@@ -354,5 +355,18 @@ describe('the Steward view (P25-05)', () => {
         action: { action: 'stop' },
       }),
     );
+  });
+});
+
+describe('a Steward’s question set in its view (P8-21)', () => {
+  it('shows one set card, not one card per row, and no composer for it', async () => {
+    await open(setRows.map((q) => ({ ...q, originAgentId: 'a-steward-1' })));
+    const region = within(view()).getByRole('region', { name: 'open question' });
+    expect(
+      within(region).getByRole('article', { name: `question set ${SET_TITLE}, 3 questions` }),
+    ).toBeTruthy();
+    expect(within(region).queryByRole('article', { name: /^clarification question/ })).toBeNull();
+    expect(composer()).toBeNull();
+    expect(within(region).getByRole('button', { name: 'Yes' })).toBeTruthy();
   });
 });

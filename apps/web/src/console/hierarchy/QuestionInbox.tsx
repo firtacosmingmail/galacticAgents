@@ -1,7 +1,14 @@
 import { useState } from 'react';
 import type { Id } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
-import { AnsweredQuestionCard, QuestionCard, StaleBanner } from '../../panel/cards/index.js';
+import type { Question } from '@galactic/protocol';
+import {
+  AnsweredQuestionCard,
+  QuestionCard,
+  QuestionSetCard,
+  StaleBanner,
+} from '../../panel/cards/index.js';
+import { groupBySet } from '../../panel/cards/question-set-model.js';
 
 // The cards moved to `panel/cards` (P25-06); re-exported for the console's other pieces.
 export { OriginContext, QuestionCard } from '../../panel/cards/index.js';
@@ -23,8 +30,9 @@ export function QuestionInbox() {
   const [refusals, setRefusals] = useState<Refusal[]>([]);
   const all = Object.values(world.questions).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const open = all.filter((q) => q.status === 'open');
-  const mine = open.filter((q) => q.holder.type === 'user');
-  const theirs = open.filter((q) => q.holder.type !== 'user');
+  // A question set's rows are one card (P8-21).
+  const mine = groupBySet(open.filter((q) => q.holder.type === 'user'));
+  const theirs = groupBySet(open.filter((q) => q.holder.type !== 'user'));
   const bySupervisors = all
     .filter((q) => q.status === 'answered' && q.answeredBy?.type === 'agent')
     .slice(-10);
@@ -43,14 +51,22 @@ export function QuestionInbox() {
         />
       ))}
       {mine.length === 0 && <p className="muted">Nothing waits for you.</p>}
-      {mine.map((q) => (
-        <QuestionCard key={q.id} question={q} onStale={onStale} />
+      {mine.map((item) => (
+        <Item
+          key={item.kind === 'set' ? item.setId : item.question.id}
+          item={item}
+          onStale={onStale}
+        />
       ))}
       {theirs.length > 0 && (
         <>
           <h4>Held by supervisors ({theirs.length})</h4>
-          {theirs.map((q) => (
-            <QuestionCard key={q.id} question={q} onStale={onStale} />
+          {theirs.map((item) => (
+            <Item
+              key={item.kind === 'set' ? item.setId : item.question.id}
+              item={item}
+              onStale={onStale}
+            />
           ))}
         </>
       )}
@@ -63,5 +79,19 @@ export function QuestionInbox() {
         </>
       )}
     </section>
+  );
+}
+
+function Item({
+  item,
+  onStale,
+}: {
+  item: { kind: 'set'; setId: Id } | { kind: 'question'; question: Question };
+  onStale: (questionId: Id, message: string) => void;
+}) {
+  return item.kind === 'set' ? (
+    <QuestionSetCard setId={item.setId} />
+  ) : (
+    <QuestionCard question={item.question} onStale={onStale} />
   );
 }

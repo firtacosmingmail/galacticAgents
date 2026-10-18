@@ -21,13 +21,14 @@ import {
 import {
   canSend,
   draftKey,
+  forDraft,
   isAnswered,
   isValid,
-  normalised,
   pagesOf,
   resumeIndex,
   sendCount,
   serverDrafts,
+  skipped,
   toAnswers,
   toggleChoice,
   viaAgentIds,
@@ -79,6 +80,9 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
     return pagesOf(rows).asking[i]?.id ?? REVIEW;
   });
   const [stale, setStale] = useState<{ questionId: Id; message: string } | undefined>();
+  /** Rows the user changed here: only those are saved (viewing a row overwrites nothing). */
+  const [dirty, setDirty] = useState<Record<Id, true>>({});
+  const [confirming, setConfirming] = useState(false);
   const { run, error, busy, clear } = useAction();
   const dismissal = useAction();
   const queued = useQueuedAnswer(setId);
@@ -95,7 +99,7 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
   const current: Question | undefined = asking[index];
 
   // Another device saved a draft (the stream brings `meta.draft`): it replaces the local value,
-  // except on the row being edited. Adjusted while rendering, as the rows change.
+  // except on the row being edited here right now. Adjusted while rendering, as the rows change.
   const [seenRows, setSeenRows] = useState(rows);
   const [seen, setSeen] = useState<Record<Id, string>>(() => keysOf(rows));
   if (rows !== seenRows) {
@@ -108,17 +112,25 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
       const key = draftKey(server[q.id]);
       if (seen[q.id] === key) continue;
       nextSeen[q.id] = key;
-      if (q.id !== current?.id) updates[q.id] = server[q.id];
+      if (!(q.id === current?.id && dirty[q.id])) updates[q.id] = server[q.id];
     }
     setSeen(nextSeen);
-    if (Object.keys(updates).length > 0) setDrafts((d) => ({ ...d, ...updates }));
+    const replaced = Object.keys(updates);
+    if (replaced.length > 0) {
+      setDrafts((d) => ({ ...d, ...updates }));
+      // Taken from the server: no longer this device's edit to save.
+      setDirty((d) =>
+        Object.fromEntries(Object.entries(d).filter(([id]) => !replaced.includes(id))),
+      );
+    }
   }
 
-  // Saving drafts: never offline (the queued send carries them), only rows the user holds, and
-  // only a value the server does not have yet (nor was just sent).
-  const latest = useRef({ rows, offline, api });
+  // Saving drafts: only rows the user edited here and holds, and only a value the server does
+  // not have yet (nor was just sent). Offline nothing is saved; when the stream is back, every
+  // edited row the server does not have is saved (answers typed offline outlive the tab).
+  const latest = useRef({ rows, offline, api, drafts, dirty });
   useLayoutEffect(() => {
-    latest.current = { rows, offline, api };
+    latest.current = { rows, offline, api, drafts, dirty };
   });
   const sent = useRef<Record<Id, { key: string; server: string }>>({});
   const save = (rowId: Id, value: SetAnswer | undefined) => {
@@ -132,11 +144,19 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
     if (key === (last && last.server === server ? last.key : server)) return;
     const mine = { key, server };
     sent.current[rowId] = mine;
-    api.draftQuestion(rowId, isAnswered(value) ? normalised(value) : null).catch(() => {
+    api.draftQuestion(rowId, isAnswered(value) ? forDraft(value) : null).catch(() => {
       // Not kept: the next change (or navigation) tries again.
       if (sent.current[rowId] === mine) delete sent.current[rowId];
     });
   };
+  const wasOffline = useRef(offline);
+  useEffect(() => {
+    const back = wasOffline.current && !offline;
+    wasOffline.current = offline;
+    if (!back) return;
+    const { rows, drafts, dirty } = latest.current;
+    for (const q of rows) if (dirty[q.id]) save(q.id, drafts[q.id]);
+  }, [offline]);
   const timer = useRef<{ rowId: Id; value: SetAnswer; t: ReturnType<typeof setTimeout> }>(
     undefined,
   );
@@ -156,12 +176,13 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
 
   const change = (q: Question, value: SetAnswer) => {
     setDrafts((d) => ({ ...d, [q.id]: value }));
+    setDirty((d) => ({ ...d, [q.id]: true }));
     cancelTimer();
     timer.current = { rowId: q.id, value, t: setTimeout(() => save(q.id, value), DRAFT_SAVE_MS) };
   };
   const go = (to: Page, from?: Question, value?: SetAnswer) => {
     cancelTimer();
-    if (from) save(from.id, value ?? drafts[from.id]);
+    if (from && (value !== undefined || dirty[from.id])) save(from.id, value ?? drafts[from.id]);
     setPage(to);
     requestAnimationFrame(() =>
       (to === REVIEW
@@ -190,7 +211,16 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
       if (row) setStale({ questionId: row.id, message: refused });
     }
   };
-  const dismiss = () => void dismissal.run(() => api.dismissSet(setId));
+  const dismiss = () => {
+    setConfirming(false);
+    void dismissal.run(() => api.dismissSet(setId));
+  };
+  const askDismiss = () => {
+    setConfirming(true);
+    requestAnimationFrame(() =>
+      article.current?.querySelector<HTMLElement>('.qset-confirm button')?.focus(),
+    );
+  };
 
   const first = rows[0];
   if (!first) return null;
@@ -234,7 +264,7 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
                 : 'Dismiss every question of the set: the agent is told you will not answer'
             }
             disabled={dismissal.busy || offline}
-            onClick={dismiss}
+            onClick={askDismiss}
           >
             <span aria-hidden="true">×</span>
           </button>
@@ -245,6 +275,20 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
           </span>
         )}
       </header>
+      {confirming && !done && (
+        // Up to ten rows and their saved drafts go: one confirmation (P8-21 review).
+        <div className="qset-confirm" role="group" aria-label="confirm dismissal">
+          <p>Dismiss these {asking.length} questions? Your answers so far are discarded.</p>
+          <div className="qset-nav">
+            <button type="button" className="danger" disabled={offline} onClick={dismiss}>
+              Dismiss {asking.length} questions
+            </button>
+            <button type="button" className="secondary" onClick={() => setConfirming(false)}>
+              Keep them
+            </button>
+          </div>
+        </div>
+      )}
       {supervisorHeld && (
         <p className="muted">
           Its supervisor may answer these from context; you can answer them yourself instead.
@@ -271,15 +315,14 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
           busy={busy}
           pageRef={pageRef}
           onChoose={(o) => change(current, toggleChoice(current, drafts[current.id], o))}
-          onWrite={(text) => {
-            const d = drafts[current.id];
-            change(current, { choices: d?.skipped ? [] : (d?.choices ?? []), text });
-          }}
+          onWrite={(text) => change(current, { choices: drafts[current.id]?.choices ?? [], text })}
           onBack={() => go(asking[index - 1]!.id, current)}
           onSkip={() => {
-            const skipped: SetAnswer = { choices: [], skipped: true };
-            setDrafts((d) => ({ ...d, [current.id]: skipped }));
-            go(pageAfter(index), current, skipped);
+            // The typed answer stays in the draft, marked skipped: the skip wins on send.
+            const value = skipped(drafts[current.id]);
+            setDrafts((d) => ({ ...d, [current.id]: value }));
+            setDirty((d) => ({ ...d, [current.id]: true }));
+            go(pageAfter(index), current, value);
           }}
           onNext={() => go(pageAfter(index), current)}
         />

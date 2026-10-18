@@ -253,11 +253,89 @@ describe('the question-set card (P8-21)', () => {
     expect(api.answerSet.mock.calls[0]![1]).toHaveLength(2);
   });
 
-  it('× dismisses the whole set', async () => {
+  it('× asks once, then dismisses the whole set', async () => {
     world();
     show();
     await click(button(/Dismiss the question set/));
+    expect(api.dismissSet).not.toHaveBeenCalled();
+    const confirm = within(card()).getByRole('group', { name: 'confirm dismissal' });
+    expect(confirm.textContent).toContain(
+      'Dismiss these 3 questions? Your answers so far are discarded.',
+    );
+    await click(within(confirm).getByRole('button', { name: 'Keep them' }));
+    expect(within(card()).queryByRole('group', { name: 'confirm dismissal' })).toBeNull();
+    expect(api.dismissSet).not.toHaveBeenCalled();
+    await click(button(/Dismiss the question set/));
+    await click(button('Dismiss 3 questions'));
     expect(api.dismissSet).toHaveBeenCalledWith(SET_ID);
+  });
+
+  it('keeps answers given offline and saves them as drafts when the stream is back', async () => {
+    world();
+    useAppStore.setState({ status: 'disconnected' });
+    show();
+    await click(button('Yes'));
+    await click(button(/Next/));
+    await click(button('Clerk'));
+    await click(button(/Next/));
+    expect(api.draftQuestion).not.toHaveBeenCalled();
+    await act(async () => {
+      useAppStore.setState({ status: 'live' });
+    });
+    expect(api.draftQuestion.mock.calls).toEqual([
+      ['q-s1', { choices: ['Yes'] }],
+      ['q-s2', { choices: ['Clerk'] }],
+    ]);
+  });
+
+  it('saves only a row edited here: viewing a row and pressing Next overwrites nothing', async () => {
+    world(
+      setRows.map((q) => (q.id === 'q-s1' ? { ...q, meta: { draft: { choices: ['Yes'] } } } : q)),
+    );
+    show();
+    expect(pill()).toBe('2 of 3');
+    await click(button(/Back/));
+    // Another device changes row 1 while it is shown here, unedited: it is taken.
+    await stream({
+      type: 'question.drafted',
+      questionId: 'q-s1',
+      draft: { choices: ['No, remove them'] },
+      by: { type: 'user' },
+    });
+    expect(button('No, remove them').getAttribute('aria-pressed')).toBe('true');
+    await click(button(/Next/));
+    await click(button('Skip'));
+    expect(api.draftQuestion.mock.calls.map((c) => c[0])).toEqual(['q-s2']);
+  });
+
+  it('Skip keeps a typed answer in the draft, marked skipped; Back shows it again', async () => {
+    world();
+    show();
+    await type('maybe later');
+    await click(button('Skip'));
+    expect(dots()[0]).toBe('is-skipped');
+    expect(api.draftQuestion).toHaveBeenCalledWith('q-s1', {
+      choices: [],
+      text: 'maybe later',
+      skipped: true,
+    });
+    await click(button(/Back/));
+    expect(
+      (within(card()).getByRole('textbox', { name: /write your own answer/i }) as HTMLInputElement)
+        .value,
+    ).toBe('maybe later');
+    await click(button('Skip'));
+    await click(button('Skip'));
+    await click(button('Skip'));
+    expect(within(card()).getByRole('list', { name: 'your answers' }).textContent).toMatch(
+      /Keep the old REST routes\?.*skipped/,
+    );
+    await click(button('Send (every question skipped)'));
+    expect(api.answerSet.mock.calls[0]![1][0]).toEqual({
+      questionId: 'q-s1',
+      version: 1,
+      answer: { choices: [], skipped: true },
+    });
   });
 
   it('says who answered first when the send is refused stale, and keeps the other drafts', async () => {

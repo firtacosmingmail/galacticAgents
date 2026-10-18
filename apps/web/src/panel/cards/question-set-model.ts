@@ -60,7 +60,7 @@ export function sendCount(asking: Question[], drafts: SetDrafts): number {
   return asking.filter((q) => isAnswered(drafts[q.id]) && !drafts[q.id]!.skipped).length;
 }
 
-/** A draft as it is sent or saved: a skip is only a skip; written text trimmed, empty dropped. */
+/** A draft as it is sent: a skip is only a skip; written text trimmed, empty dropped. */
 export function normalised(d: SetAnswer): SetAnswer {
   if (d.skipped) return { choices: [], skipped: true };
   const text = d.text?.trim() ?? '';
@@ -100,7 +100,40 @@ export function serverDrafts(rows: Question[]): SetDrafts {
 
 /** A stable key of a draft, to compare two of them. */
 export const draftKey = (d: SetAnswer | undefined): string =>
-  isAnswered(d) ? JSON.stringify(normalised(d)) : '';
+  isAnswered(d) ? JSON.stringify(forDraft(d)) : '';
+
+/**
+ * A draft as it is saved: what the user chose and wrote is kept even on a skipped row (the skip
+ * wins on send, `normalised`), so Back shows it again — on this device or another.
+ */
+export function forDraft(d: SetAnswer): SetAnswer {
+  const text = d.text?.trim() ?? '';
+  return { choices: d.choices, ...(text ? { text } : {}), ...(d.skipped ? { skipped: true } : {}) };
+}
+
+/** The row skipped, keeping what was chosen and written. */
+export const skipped = (d: SetAnswer | undefined): SetAnswer => ({
+  ...d,
+  choices: d?.choices ?? [],
+  skipped: true,
+});
+
+/** Open questions in order, each set's rows as one entry at its first row (P8-21). */
+export type QuestionOrSet = { kind: 'question'; question: Question } | { kind: 'set'; setId: Id };
+
+export function groupBySet(questions: Question[]): QuestionOrSet[] {
+  const seen = new Set<Id>();
+  const out: QuestionOrSet[] = [];
+  for (const question of questions) {
+    const set = question.context.set;
+    if (!set) out.push({ kind: 'question', question });
+    else if (!seen.has(set.id)) {
+      seen.add(set.id);
+      out.push({ kind: 'set', setId: set.id });
+    }
+  }
+  return out;
+}
 
 /**
  * Who the set came to the user through ("via …"). The store does not keep a row's holder
