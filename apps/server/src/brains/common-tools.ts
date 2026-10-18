@@ -1,4 +1,13 @@
-import { ENDED_STATES, type Agent, type Id, type StatusRecord } from '@galactic/protocol';
+import {
+  ENDED_STATES,
+  QUESTION_SET_LIMITS,
+  type Actor,
+  type Agent,
+  type Id,
+  type Question,
+  type SetQuestionInput,
+  type StatusRecord,
+} from '@galactic/protocol';
 import { DomainError } from '../domain/errors.js';
 import type { BrainQueries, BrainTool, BrainToolContext } from './definition.js';
 
@@ -19,6 +28,12 @@ import type { BrainQueries, BrainTool, BrainToolContext } from './definition.js'
  *   report_status                            {text}               a line to the caller's supervisor
  *                                            (the Harmonizer, having none, tells the user in its
  *                                            reply)
+ *   ask_questions                            {title, questions[]} 2–10 related clarifications as one
+ *                                            set (P8-19, decision 141); held like one question of
+ *                                            the caller's; ends the turn
+ *   answer_question_set                      {setId, answers[]}   the rows of a set the caller holds
+ *                                            that it can answer; the rest it holds go one level up
+ *                                            in the same transaction
  */
 
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
@@ -165,6 +180,7 @@ export const answerQuestionTool: BrainTool = {
     const version = optNumber(input, 'version');
     const question = ctx.queries.question(questionId);
     if (!question) throw new DomainError('not_found', `no question ${questionId}`);
+    refuseSetRow(question);
     if (question.kind === 'permission') {
       throw new DomainError(
         'invalid',
@@ -185,6 +201,147 @@ export const answerQuestionTool: BrainTool = {
       ...(version !== undefined ? { version } : {}),
     });
     return { questionId, status: value.status, answeredBy: value.answeredBy };
+  },
+};
+
+/**
+ * A row of a question set is never answered or escalated alone (P8-19): the brain answers the set
+ * with `answer_question_set`, which also passes up what it does not answer.
+ */
+export function refuseSetRow(question: Pick<Question, 'id' | 'context'>): void {
+  const set = question.context.set;
+  if (!set) return;
+  throw new DomainError(
+    'invalid',
+    `${question.id} is part of set ${set.id}: answer it with answer_question_set (the rows you ` +
+      'do not answer pass up on their own)',
+  );
+}
+
+const MAX_QUESTIONS = QUESTION_SET_LIMITS.maxQuestions;
+
+function setQuestions(input: unknown): SetQuestionInput[] {
+  const raw = (input as Record<string, unknown> | null)?.['questions'];
+  if (!Array.isArray(raw)) throw new DomainError('invalid', 'questions must be a list');
+  return raw.map((q: unknown, i) => {
+    const item = (q ?? {}) as Record<string, unknown>;
+    const text = item['text'];
+    if (typeof text !== 'string' || text.trim() === '') {
+      throw new DomainError('invalid', `question ${i + 1} needs a text`);
+    }
+    const options = item['options'];
+    if (
+      options !== undefined &&
+      (!Array.isArray(options) || options.some((o) => typeof o !== 'string'))
+    ) {
+      throw new DomainError('invalid', `question ${i + 1}: options must be strings`);
+    }
+    return {
+      text,
+      ...(Array.isArray(options) && options.length > 0 ? { options: options as string[] } : {}),
+      ...(item['multiSelect'] === true ? { multiSelect: true } : {}),
+    };
+  });
+}
+
+export const askQuestionsTool: BrainTool = {
+  name: 'ask_questions',
+  description:
+    `Asks 2–${MAX_QUESTIONS} related clarification questions at once, as one set (e.g. the ` +
+    'clarifications a plan needs): the user answers them one after the other on one card and you ' +
+    'get every answer together. Each question may offer options (multiSelect: several may be ' +
+    'chosen); the user can always write an answer instead or skip a question. For one question, ' +
+    'use ask_user (Harmonizer) or escalate (Waykeeper). Ends your turn; the answers arrive later.',
+  inputSchema: obj(
+    {
+      title: { type: 'string', description: 'What the set is about, in a few words (≤120).' },
+      questions: {
+        type: 'array',
+        minItems: QUESTION_SET_LIMITS.minQuestions,
+        maxItems: MAX_QUESTIONS,
+        items: obj(
+          {
+            text: { type: 'string', description: 'The question, self-contained.' },
+            options: {
+              type: 'array',
+              items: { type: 'string' },
+              maxItems: QUESTION_SET_LIMITS.maxOptions,
+              description: 'Suggested answers.',
+            },
+            multiSelect: { type: 'boolean', description: 'Several options may be chosen.' },
+          },
+          ['text'],
+        ),
+      },
+    },
+    ['title', 'questions'],
+  ),
+  endsTurn: true,
+  handler: async (input, ctx) => {
+    const { value } = await ctx.commands.openQuestionSet({
+      originAgentId: ctx.brainId,
+      title: str(input, 'title'),
+      questions: setQuestions(input),
+    });
+    return {
+      setId: value[0]!.context.set!.id,
+      questionIds: value.map((q) => q.id),
+      holder: value[0]!.holder,
+    };
+  },
+};
+
+export const answerQuestionSetTool: BrainTool = {
+  name: 'answer_question_set',
+  description:
+    'Answers the questions of a set you hold that the approved plan or the project context ' +
+    'already settles (decision 12); every other question of the set you hold goes one level up ' +
+    'in the same call (answers: [] passes them all up). Never reword, merge or drop a question, ' +
+    'and never re-ask a set with ask_user or escalate: what you do not answer goes up as it was ' +
+    'asked. Your answers are logged as yours; the asker learns who gave each one.',
+  inputSchema: obj(
+    {
+      setId: { type: 'string', description: 'The set id (qs-…).' },
+      answers: {
+        type: 'array',
+        items: obj({ questionId: { type: 'string' }, answer: { type: 'string' } }, [
+          'questionId',
+          'answer',
+        ]),
+      },
+    },
+    ['setId', 'answers'],
+  ),
+  handler: async (input, ctx) => {
+    const setId = str(input, 'setId');
+    const raw = (input as Record<string, unknown> | null)?.['answers'];
+    if (!Array.isArray(raw)) throw new DomainError('invalid', 'answers must be a list');
+    const answers = raw.map((a: unknown) => ({
+      questionId: str(a, 'questionId'),
+      answer: { choices: [], text: str(a, 'answer') },
+    }));
+    const listed = new Set(answers.map((a) => a.questionId));
+    // The open rows it holds and does not answer: the command passes them one level up.
+    const passing = ctx.queries
+      .allOpenQuestions()
+      .filter(
+        (q) =>
+          q.context.set?.id === setId &&
+          q.holder.type === 'agent' &&
+          q.holder.id === ctx.brainId &&
+          !listed.has(q.id),
+      )
+      .map((q) => q.id);
+    const { value } = await ctx.commands.answerQuestionSet({ setId, by: ctx.actor, answers });
+    const after = new Map(value.map((q) => [q.id, q]));
+    const passedUpTo: Actor | null =
+      passing.length > 0 ? (after.get(passing[0]!)?.holder ?? null) : null;
+    return {
+      answered: answers
+        .map((a) => a.questionId)
+        .filter((id) => after.get(id)?.status === 'answered'),
+      passedUpTo,
+    };
   },
 };
 
@@ -224,6 +381,8 @@ export const COMMON_TOOLS: readonly BrainTool[] = [
   listSupervisedAgentsTool,
   answerQuestionTool,
   reportStatusTool,
+  askQuestionsTool,
+  answerQuestionSetTool,
 ];
 
 export type CommonToolName = (typeof COMMON_TOOLS)[number]['name'];

@@ -553,3 +553,46 @@ describe('a reply carries its quote into the turn prompt (P8-17, decision 139)',
     );
   });
 });
+
+describe('question sets (P8-19)', () => {
+  const set = { id: 'qs-1', index: 1, total: 3, title: 'Export details' };
+  const row: Question = {
+    ...d.question,
+    id: 'q-2',
+    kind: 'clarification',
+    originAgentId: 'a-steward-1',
+    holder: { type: 'agent', id: BRAIN },
+    context: { text: 'Which delimiter?', options: [',', ';'], set },
+  };
+
+  it('names the row, its place in the set and the set title when a set row is opened', () => {
+    const s = scope({ supervises: (id) => id === 'a-steward-1' });
+    expect(wakeLine({ type: 'question.opened', question: row }, s)).toBe(
+      'agent a-steward-1 asked q-2 (question 2 of 3 in set qs-1 "Export details", held by you): ' +
+        '"Which delimiter?"',
+    );
+    // A plain question keeps today's line.
+    const plain = { ...row, context: { text: 'Which delimiter?' } };
+    expect(wakeLine({ type: 'question.opened', question: plain }, s)).toBe(
+      'agent a-steward-1 asked q-2 (held by you): "Which delimiter?"',
+    );
+  });
+
+  it('names the row and its place in the set when a set row is answered', () => {
+    const s = scope({ supervises: () => false, question: () => row });
+    const answered: Event = {
+      type: 'question.answered',
+      questionId: 'q-2',
+      answer: ';',
+      answeredBy: { type: 'user' },
+      version: 1,
+      holders: [BRAIN],
+    };
+    expect(wakeLine(answered, s)).toBe('user answered q-2 (question 2 of 3 in set qs-1): ";"');
+    const plain = scope({
+      supervises: () => false,
+      question: () => ({ ...row, context: { text: 'Which delimiter?' } }),
+    });
+    expect(wakeLine(answered, plain)).toBe('user answered q-2: ";"');
+  });
+});

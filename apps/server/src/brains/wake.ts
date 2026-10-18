@@ -1,4 +1,4 @@
-import { excerpt, formatUsd, SUPERSEDED_BY_MESSAGE } from '@galactic/protocol';
+import { excerpt, formatUsd, setOf, SUPERSEDED_BY_MESSAGE } from '@galactic/protocol';
 import type {
   Actor,
   AgentRole,
@@ -128,6 +128,12 @@ const proposal = <T extends DecisionType>(text: (e: EventOfType<T>) => string): 
 
 const quote = (text: string) => JSON.stringify(text);
 
+/** "question 2 of 3 in set qs-1" for a row of a question set (P8-19). */
+function inSet(q: Pick<Question, 'context'>): string {
+  const set = setOf(q)!;
+  return `question ${set.index + 1} of ${set.total} in set ${set.id}`;
+}
+
 /** How much of a quoted line a reply's turn-prompt line repeats (P8-17). */
 export const QUOTE_IN_PROMPT = 1_000;
 
@@ -198,9 +204,15 @@ export const WAKE_RULES: WakeRules = {
   },
   'question.opened': {
     wakes: (e, s) => concerns(e.question, s),
-    describe: (e, s) =>
-      `${who({ type: 'agent', id: e.question.originAgentId }, s)} asked ${e.question.id} ` +
-      `(held by ${who(e.question.holder, s)}): ${quote(e.question.context.text)}`,
+    // A question-set row (P8-19) says where it sits, so N lines with one set id read as one set.
+    describe: (e, s) => {
+      const set = setOf(e.question);
+      const place = set ? `${inSet(e.question)} ${quote(set.title)}, ` : '';
+      return (
+        `${who({ type: 'agent', id: e.question.originAgentId }, s)} asked ${e.question.id} ` +
+        `(${place}held by ${who(e.question.holder, s)}): ${quote(e.question.context.text)}`
+      );
+    },
   },
   // Every agent that ever held the question learns it was resolved (SPEC decision 26), so no
   // level keeps waiting; permission questions never had an agent holder.
@@ -210,7 +222,11 @@ export const WAKE_RULES: WakeRules = {
     wakes: (e, s) =>
       e.repliedIn !== s.brainId &&
       (heldBefore(e.holders, s, s.question(e.questionId)) || concerns(s.question(e.questionId), s)),
-    describe: (e, s) => `${who(e.answeredBy, s)} answered ${e.questionId}: ${quote(e.answer)}`,
+    describe: (e, s) => {
+      const q = s.question(e.questionId);
+      const place = q && setOf(q) ? ` (${inSet(q)})` : '';
+      return `${who(e.answeredBy, s)} answered ${e.questionId}${place}: ${quote(e.answer)}`;
+    },
   },
   'question.cancelled': {
     wakes: (e, s) =>

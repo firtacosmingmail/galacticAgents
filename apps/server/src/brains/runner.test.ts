@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Actor, Id } from '@galactic/protocol';
+import { askQuestionsTool } from './common-tools.js';
 import type { BrainTool } from './definition.js';
 import type { SessionResetPolicy } from './runner.js';
 import {
@@ -348,6 +349,53 @@ describe('BrainRunner', () => {
     await rig.brain.waitForTurns(2);
     expect(rig.brain.runner.turns[1]!).toMatchObject({ kind: 'first', session: 2 });
     expect(rig.brain.prompts()[1]!).toContain('computed summary');
+    await rig.h.done();
+  });
+
+  it("folds the user's answers to a whole question set into one turn (P8-19)", async () => {
+    let setId = '';
+    let rows: Id[] = [];
+    const rig = await boot(
+      (s) =>
+        s
+          .once('ask them', async (t) => {
+            const out = await t.call<{ setId: Id; questionIds: Id[] }>('ask_questions', {
+              title: 'Export details',
+              questions: [
+                { text: 'Which encoding?' },
+                { text: 'Which delimiter?', options: [',', ';'] },
+                { text: 'Which columns?', options: ['id', 'name'], multiSelect: true },
+              ],
+            });
+            setId = out.setId;
+            rows = out.questionIds;
+          })
+          .once(/question 1 of 3[\s\S]*question 2 of 3[\s\S]*question 3 of 3/, () => {}),
+      [askQuestionsTool],
+    );
+    rig.brain.tell('ask them');
+    await rig.brain.waitForTurns(2);
+    await rig.brain.settled();
+    await rig.h.commands.answerQuestionSet({
+      setId,
+      by: USER,
+      answers: [
+        { questionId: rows[0]!, answer: { choices: [], text: 'UTF-8' } },
+        { questionId: rows[1]!, answer: { choices: [';'] } },
+        { questionId: rows[2]!, answer: { choices: ['id', 'name'], text: 'in that order' } },
+      ],
+    });
+    await rig.brain.waitForTurns(3);
+    await rig.brain.settled();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(rig.brain.prompts()).toHaveLength(3);
+    const prompt = rig.brain.prompts()[2]!;
+    expect(prompt).toContain(`user answered ${rows[0]} (question 1 of 3 in set ${setId}): "UTF-8"`);
+    expect(prompt).toContain(`user answered ${rows[1]} (question 2 of 3 in set ${setId}): ";"`);
+    expect(prompt).toContain(
+      `user answered ${rows[2]} (question 3 of 3 in set ${setId}): "id, name — in that order"`,
+    );
+    expect(rig.brain.runner.turns[2]!.items).toHaveLength(3);
     await rig.h.done();
   });
 
