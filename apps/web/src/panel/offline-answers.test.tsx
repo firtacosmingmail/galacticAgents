@@ -8,6 +8,7 @@ import { FakeWebSocket } from '../client/fake-socket.js';
 import { QUEUE_KEY, useAnswerQueue } from '../client/answer-queue.js';
 import { useAppStore } from '../state/store.js';
 import { axeFindings, blocking } from '../a11y/a11y-fixtures.js';
+import { SET_ID, SET_TITLE, setRows } from './cards/question-set-fixtures.js';
 
 /**
  * P7-05: the panel's offline answers — queued state on the card, cancel with focus, the send after
@@ -341,5 +342,65 @@ describe('offline answers in the panel (P7-05)', () => {
     expect(answers().map((c) => c.body)).toEqual([
       { answer: 'yes', version: 3, answerId: 'ans-stored' },
     ]);
+  });
+});
+
+describe('a question set sent offline (P8-21)', () => {
+  const setCard = () =>
+    within(inbox()).getByRole('article', { name: `question set ${SET_TITLE}, 3 questions` });
+  const press = (name: string | RegExp) => click(within(setCard()).getByRole('button', { name }));
+  async function answerAll() {
+    await press('Yes');
+    await press(/Next/);
+    await press('Skip');
+    await press('Chrome');
+    await press(/Next/);
+    await press('Send 2 answers');
+  }
+  const setSends = () => answers().filter((c) => c.url === `/api/question-sets/${SET_ID}/answer`);
+
+  it('queues the send while the stream is down and sends it once after the catch-up', async () => {
+    await open(setRows);
+    await drop();
+    await answerAll();
+    expect(answers()).toHaveLength(0);
+    // Drafts are not saved while offline: the queued send carries every answer.
+    expect(calls.filter((c) => c.url.endsWith('/draft'))).toHaveLength(0);
+    const box = within(setCard()).getByRole('group', { name: 'queued answers' });
+    expect(box.textContent).toMatch(/Your 2 answers will send when reconnected/);
+    expect(localStorage.getItem(QUEUE_KEY)).toContain(SET_ID);
+    const queued = useAnswerQueue.getState().entries[SET_ID]!;
+    await reconnect();
+    expect(setSends()).toHaveLength(1);
+    expect(setSends()[0]!.body).toEqual({
+      answers: [
+        { questionId: 'q-s1', version: 1, answer: { choices: ['Yes'] } },
+        { questionId: 'q-s2', version: 1, answer: { choices: [], skipped: true } },
+        { questionId: 'q-s3', version: 1, answer: { choices: ['Chrome'] } },
+      ],
+      answerId: queued.answerId,
+    });
+    expect(useAnswerQueue.getState().entries[SET_ID]?.state).toBe('sent');
+    expect(liveRegionText()).toMatch(/queued answers to “Clarifications on the plan” were sent/);
+  });
+
+  it('a duplicate reply (the send landed before the drop) counts as sent', async () => {
+    answerReply = () => new Response(JSON.stringify({ ok: true, duplicate: true }));
+    await open(setRows);
+    await drop();
+    await answerAll();
+    await reconnect();
+    expect(setSends()).toHaveLength(1);
+    expect(useAnswerQueue.getState().entries[SET_ID]?.state).toBe('sent');
+    expect(setCard().textContent).toMatch(/Sent: your 2 answers to “Clarifications on the plan”/);
+  });
+
+  it('cancelling the queued send gives the review back', async () => {
+    await open(setRows);
+    await drop();
+    await answerAll();
+    await press('Cancel queued answers');
+    expect(useAnswerQueue.getState().entries[SET_ID]).toBeUndefined();
+    expect(within(setCard()).getByRole('button', { name: 'Send 2 answers' })).toBeTruthy();
   });
 });

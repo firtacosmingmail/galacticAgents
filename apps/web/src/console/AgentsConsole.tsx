@@ -350,6 +350,17 @@ function QuestionCard({
   const [value, setValue] = useState('');
   const permission = question.kind === 'permission';
   const call = question.context.toolCall;
+  const set = question.context.set;
+  if (set) {
+    // A question set's row (P8-21): answered on the set's card in the panel, never one by one.
+    return (
+      <div className="question question-clarification">
+        <strong>Question</strong>
+        <p>{question.context.text}</p>
+        <p className="muted">Part of the question set “{set.title}”: answer it in the inbox.</p>
+      </div>
+    );
+  }
   return (
     <div className={`question question-${question.kind}`}>
       <strong>{permission ? 'Permission request' : 'Question'}</strong>

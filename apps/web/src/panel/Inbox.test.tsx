@@ -17,6 +17,7 @@ import { createApi } from '../console/api.js';
 import { ApiContext } from '../console/hierarchy/shared.js';
 import { useAppStore } from '../state/store.js';
 import { CardLinksContext, ProposalView, QuestionView } from './cards/index.js';
+import { SET_TITLE, setRows } from './cards/question-set-fixtures.js';
 
 /** P25-06: the panel's inbox and the shared cards, over the fake socket and a mocked `/api`. */
 
@@ -451,5 +452,44 @@ describe('proposal and plan cards (P25-06)', () => {
     const approved = within(thread()).getByLabelText('plan Two steps');
     expect(approved.textContent).toMatch(/approved.*Plan for Auth refactor.*1 tasks/);
     expect(within(approved).queryByRole('button')).toBeNull();
+  });
+});
+
+describe('question sets in the inbox (P8-21)', () => {
+  it('lists a set the user holds as one waiting item, "3 questions", counted once', async () => {
+    await open([...setRows, clarification]);
+    const cards = Array.from(waiting().querySelectorAll('article')).map((a) =>
+      a.getAttribute('aria-label'),
+    );
+    expect(cards).toEqual([
+      'clarification question Keep the legacy cookie name?',
+      `question set ${SET_TITLE}, 3 questions`,
+    ]);
+    expect(within(inbox()).getByText('2 waiting for you')).toBeTruthy();
+    expect(within(waiting()).getByRole('heading', { name: 'Waiting for you (2)' })).toBeTruthy();
+    expect(within(waiting()).getByText('3 questions')).toBeTruthy();
+  });
+
+  it('a set a supervisor still holds is one card under "Held by supervisors"', async () => {
+    await open(setRows.map((q) => ({ ...q, holder: { type: 'agent', id: 'a-harmonizer' } })));
+    expect(within(inbox()).queryByText(/waiting for you/)).toBeNull();
+    const held = within(inbox()).getByRole('region', { name: 'Held by supervisors' });
+    expect(held.querySelectorAll('article')).toHaveLength(1);
+    expect(within(held).getByRole('heading', { name: 'Held by supervisors (1)' })).toBeTruthy();
+  });
+
+  it('leaves the inbox once the stream says the set was answered', async () => {
+    await open(setRows);
+    for (const [i, q] of setRows.entries()) {
+      await stream({
+        type: 'question.answered',
+        questionId: q.id,
+        answer: 'Yes',
+        answeredBy: { type: 'user' },
+        version: 2 + i,
+      });
+    }
+    expect(within(inbox()).queryByLabelText(/question set/)).toBeNull();
+    expect(within(inbox()).getByText('Nothing waits for you.')).toBeTruthy();
   });
 });

@@ -333,4 +333,26 @@ describe('thread cards (P25-03)', () => {
     expect(threadItems([reply(3)], cards, true).map((i) => i.key)).toEqual(['r:a-h:3']);
     expect(threadItems([], cards, false).map((i) => i.key)).toEqual(['card-pr-work']);
   });
+
+  it('shows a question set as one card in the asking Waykeeper’s thread', () => {
+    const rows: Question[] = [0, 1, 2].map((index) => ({
+      ...q1,
+      id: `q-set-${index}`,
+      originAgentId: waykeeper.id,
+      holder: { type: 'user' },
+      createdAt: at(7),
+      context: {
+        ...q1.context,
+        text: `question ${index}`,
+        set: { id: 'qs-1', index, total: 3, title: 'Plan questions' },
+      },
+    }));
+    const withSet = {
+      ...world,
+      questions: { ...world.questions, ...Object.fromEntries(rows.map((q) => [q.id, q])) },
+    };
+    const sets = threadCards(withSet, waykeeper).filter((c) => c.kind === 'questionSet');
+    expect(sets).toEqual([{ kind: 'questionSet', id: 'qs-1', at: at(7), setId: 'qs-1' }]);
+    expect(threadCards(withSet, waykeeper).map((c) => c.id)).not.toContain('q-set-0');
+  });
 });

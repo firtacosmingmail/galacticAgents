@@ -11,7 +11,8 @@ import {
 import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
 import { HARMONIZER, type Selection } from '../../state/selection.js';
-import { OriginContext, QuestionCard, StaleBanner } from '../cards/index.js';
+import { OriginContext, QuestionCard, QuestionSetCard, StaleBanner } from '../cards/index.js';
+import { groupBySet } from '../cards/question-set-model.js';
 import {
   actorLabel,
   agentLabel,
@@ -52,7 +53,9 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
   const status = world.statuses[agentId];
   const name = agentLabel(agent, world);
   const open = openQuestionsOf(world, agentId);
-  const clarification = open.find((q) => q.kind === 'clarification');
+  // A question set (P8-21) is answered on its own card, never through the composer.
+  const clarification = open.find((q) => q.kind === 'clarification' && !q.context.set);
+  const hasSet = open.some((q) => q.context.set);
   const permissions = open.filter((q) => q.kind === 'permission');
   const blocked = blockedOnUser(world, agentId, open);
   const task = agent?.taskId ? world.tasks[agent.taskId] : undefined;
@@ -87,11 +90,13 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
           {permissions.map((q) => (
             <QuestionCard key={q.id} question={q} />
           ))}
-          {open
-            .filter((q) => q.kind === 'clarification')
-            .map((q) => (
-              <ClarificationSummary key={q.id} question={q} />
-            ))}
+          {groupBySet(open.filter((q) => q.kind === 'clarification')).map((item) =>
+            item.kind === 'set' ? (
+              <QuestionSetCard key={item.setId} setId={item.setId} />
+            ) : (
+              <ClarificationSummary key={item.question.id} question={item.question} />
+            ),
+          )}
         </section>
       )}
       {/* Answers to its questions given offline, once the question is no longer open (P7-05). */}
@@ -125,7 +130,8 @@ export function StewardPanelView({ agentId }: { agentId: Id }) {
           onSent={() => setRefusal(undefined)}
         />
       ) : (
-        !terminal && (
+        !terminal &&
+        !hasSet && (
           <p className="muted stw-readonly">
             Read-only: Stewards take no messages; their supervisor speaks for you. A message box
             appears here only while it asks a clarification question.

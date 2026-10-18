@@ -15,6 +15,7 @@ import { PERMISSION_POLICY_PRESETS } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { useAppStore } from '../../state/store.js';
 import { HierarchyConsole } from './HierarchyConsole.js';
+import { SET_TITLE, setRows } from '../../panel/cards/question-set-fixtures.js';
 
 /** P2-18: each part of the hierarchy console against a mocked `/api` and a hand-fed store. */
 
@@ -721,5 +722,31 @@ describe('Steward view (P2-18, decision 13)', () => {
       version: 2,
       answerId: expect.any(String),
     });
+  });
+});
+
+describe('question sets in the ops console (P8-21)', () => {
+  const stewardSet = setRows.map((q) => ({ ...q, originAgentId: 'a-steward-1' }));
+  const setName = `question set ${SET_TITLE}, 3 questions`;
+
+  it('shows a set as one card in the question inbox', async () => {
+    seed({ questions: stewardSet });
+    ui();
+    await flush();
+    const inbox = screen.getByLabelText('question inbox');
+    expect(within(inbox).getAllByRole('article', { name: setName })).toHaveLength(1);
+    expect(within(inbox).queryByRole('article', { name: /^clarification question/ })).toBeNull();
+    expect(within(inbox).getByText('Questions for you (1)')).toBeTruthy();
+  });
+
+  it('shows a set as one card in the Steward view', async () => {
+    seed({ questions: stewardSet });
+    ui();
+    await flush();
+    await click(screen.getByRole('button', { name: /Steward · Replace the session middleware/ }));
+    await flush();
+    const view = screen.getByLabelText('view of Steward · Replace the session middleware');
+    expect(within(view).getAllByRole('article', { name: setName })).toHaveLength(1);
+    expect(within(view).queryByRole('article', { name: /^clarification question/ })).toBeNull();
   });
 });
