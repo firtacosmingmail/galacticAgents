@@ -130,3 +130,43 @@ before Task 7 (this note, the end-to-end test, the docs and the board). No block
   top bar and the status counts count it once): follow-up **P8-22**.
 - Product calls Cosmin may overrule (decision 141, Claude's calls): the × confirmation, "via"
   inferred, Skip keeping the typed text, offline drafts saved on reconnect, the limits and formats.
+
+## Final review (whole branch, P8-19–P8-21, 2026-10-18)
+
+Range `45920fb..57ce6bd`; full review in `.superpowers/sdd/2026-10-18-question-sets/final-review.md`.
+Verdict: ready to merge with fixes. Fixed on the batch branch:
+
+- **C1 (critical): a chat message to a Waykeeper withdrew its whole open set, drafts included.**
+  `supersedeQuestions` filtered on `kind` and `toUser` only, so a Waykeeper's set rows (not
+  `toUser`) were cancelled by any message, also by a Reply quoting a row. Fix: rows with
+  `context.set` are never superseded (`commands.ts`); a single clarification is still superseded.
+  Test: `dismiss-routes.test.ts` "never withdraws a Waykeeper's question set or its drafts" — a
+  Waykeeper-asked set the Harmonizer passed up, a plain message and a reply quoting a row; every
+  row stays open with its draft. SPEC decisions 135 and 141, TECHNOLOGY §5.3.
+- **I1: SPEC 141 promised drafts survive "a restart", which a Steward's set does not** (its rows
+  are adapter-opened, cancelled on interrupt and re-asked under a new set id). Ruling: document,
+  do not carry drafts over. SPEC 141 now says drafts survive reloads, device switches and
+  reconnects, and a restart for a set asked by the Harmonizer or a Waykeeper; a Steward's set is
+  asked again empty (Claude's call); TECHNOLOGY §5.3 says why; SPEC §8 has the open question
+  about inheriting drafts. Test: `recovery.test.ts` "a Waykeeper's set and the user's drafts
+  survive a restart" (shutdown, second boot, recover; checked to fail when `endAgentQuestions`
+  stops keeping tool-asked rows).
+- **I2: the Phase 8 status line said both "20/22 done" and "every task done".** Now: open as the
+  ongoing backlog, P8-18 in progress on its own branch, P8-22 todo.
+- **Minor 2 (fixed): a row's dirty flag was never cleared after a save**, so a device still
+  showing a row it had edited re-saved its older value over another device's later draft on
+  Next. The flag is now cleared when the save succeeds and the row was not changed since (it was
+  already cleared when another device's draft was taken for a row not being edited). Test:
+  `question-set-card.test.tsx` "a saved row is no longer this device's edit".
+- **Minor 1 (docs): SPEC 141 said "Reply on a set card opens the card"**; set cards have no
+  Reply. SPEC 141 now says so, and that a chat message never answers or withdraws a set.
+
+Deferred minors (none affects the paths users take):
+
+- ACP parsing splits a choice label containing ", " or " — " wrongly (`acp-adapter.ts`).
+- No size caps on `SetAnswer.text` / `choices`, `AnswerSetBody.answers`, nor on draft events
+  (each debounced save is a permanent `question.drafted`).
+- `withoutDraft` sits between `patch`'s doc comment and `patch` in `packages/protocol/src/world.ts`.
+
+Gates after the fixes: build, typecheck, lint, format:check, test (protocol 147, desktop 79,
+server 1922 + 8 skipped, web 1909) and Playwright (23) all green.
