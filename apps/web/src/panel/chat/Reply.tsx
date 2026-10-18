@@ -64,7 +64,10 @@ export function draftOfEntry(e: ChatEntry): ReplyDraft {
 }
 
 /** The reply draft for a card of the thread. */
-export function draftOfCard(card: ThreadCardItem, agentId: Id): ReplyDraft {
+export function draftOfCard(
+  card: Exclude<ThreadCardItem, { kind: 'questionSet' }>,
+  agentId: Id,
+): ReplyDraft {
   if (card.kind === 'question') {
     return {
       kind: 'question',

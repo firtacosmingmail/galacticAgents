@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Id, Meta, Timestamp } from './primitives.js';
+import { QuestionSetRef } from './question-set.js';
 import {
   ActorType,
   AgentRole,
@@ -486,6 +487,10 @@ export const QuestionContext = z.object({
   options: z.array(z.string()).optional(),
   toolCall: ToolCall.optional(),
   permissionAction: PermissionAction.optional(),
+  /** Several options may be chosen (question sets, P8-19). */
+  multiSelect: z.boolean().optional(),
+  /** Present when the question is one row of a question set (P8-19, SPEC decision 141). */
+  set: QuestionSetRef.optional(),
   /** Set by the server on `question.opened`; adapters leave it out. */
   origin: QuestionOrigin.optional(),
 });

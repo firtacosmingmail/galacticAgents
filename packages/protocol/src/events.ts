@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
+import { SetAnswer } from './question-set.js';
 import { ReplyQuote } from './reply.js';
 import {
   AgentRole,
@@ -304,6 +305,18 @@ export const QuestionAnswered = z.object({
    * it from the reply's own `message.sent` line, so the answer does not wake it a second time.
    */
   repliedIn: Id.optional(),
+  /** The structured answer of a question-set row (P8-19); folded into `meta.answerDetail`. */
+  detail: SetAnswer.optional(),
+});
+/**
+ * The user saved or cleared an unsent draft answer on an open question-set row (P8-19). Folded
+ * into `meta.draft` (`null` clears it); wakes no one and does not bump `version`.
+ */
+export const QuestionDrafted = z.object({
+  type: z.literal('question.drafted'),
+  questionId: Id,
+  draft: SetAnswer.nullable(),
+  by: Actor,
 });
 /**
  * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an
@@ -761,6 +774,7 @@ export const Event = z.discriminatedUnion('type', [
   QuestionOpened,
   QuestionEscalated,
   QuestionAnswered,
+  QuestionDrafted,
   QuestionReassigned,
   QuestionCancelled,
   PermissionDecided,

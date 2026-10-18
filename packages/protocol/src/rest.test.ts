@@ -3,6 +3,9 @@ import { PERMISSION_POLICY_PRESETS } from './domain.js';
 import { ENDED_STATES } from './enums.js';
 import {
   AnswerBody,
+  AnswerSetBody,
+  DismissSetBody,
+  DraftBody,
   ControlBody,
   MessagesResponse,
   PermissionPolicyPresetName,
@@ -163,5 +166,30 @@ describe('ControlBody project policy edit (P2-21)', () => {
       expect(r.success).toBe(false);
       expect(r.error?.issues[0]?.message).toMatch(/control characters/);
     }
+  });
+});
+
+describe('question-set bodies (P8-19)', () => {
+  it('AnswerSetBody takes per-question answers and an optional answerId', () => {
+    const body = {
+      answers: [{ questionId: 'q1', version: 0, answer: { choices: ['A'] } }],
+      answerId: 'k',
+    };
+    expect(AnswerSetBody.parse(body)).toEqual(body);
+    expect(
+      AnswerSetBody.parse({ answers: [{ questionId: 'q1', answer: { skipped: true } }] }).answers[0]
+        ?.answer.choices,
+    ).toEqual([]);
+    expect(AnswerSetBody.safeParse({}).success).toBe(false);
+  });
+
+  it('DraftBody takes a draft or null', () => {
+    expect(DraftBody.safeParse({ draft: null }).success).toBe(true);
+    expect(DraftBody.safeParse({ draft: { choices: ['A'], text: 'x' } }).success).toBe(true);
+    expect(DraftBody.safeParse({}).success).toBe(false);
+  });
+
+  it('DismissSetBody is an empty object', () => {
+    expect(DismissSetBody.parse({})).toEqual({});
   });
 });

@@ -29,6 +29,7 @@ import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
 import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { composeRuntime } from './runtime/compose.js';
+import { harnessBrains } from './runtime/harness-brains.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { runIdOfKey } from './runtime/process-attribution.js';
@@ -442,6 +443,15 @@ const app = buildApp({
   // The scene harness's real folders and Stewards' declarations (development only, P9-12).
   harness: {
     workspaces,
+    // Real brains on the fake runtime that a test drives (P8-21, `/dev/harness/brains/*`).
+    brains: harnessBrains({
+      log,
+      commands: composed.commands,
+      workspaces,
+      liveAgents: () => composed.runtime.liveAgents(),
+      startWaykeeper,
+      runnerOf: (id) => composed.runnerOf(id),
+    }),
     ...(composed.deliverables
       ? {
           deliverables: {

@@ -35,6 +35,7 @@ import type {
   DeliverableSource,
 } from './deliverables.js';
 import type { Id, Meta } from './primitives.js';
+import type { SetAnswer, SetQuestionInput } from './question-set.js';
 
 // ---------------------------------------------------------------------------
 // Command inputs. Ids and timestamps are assigned by the server, never by the caller.
@@ -211,6 +212,39 @@ export interface DismissQuestionInput {
   /** The version the user saw; a question answered or moved since is refused as stale. */
   version?: number;
   /** Where the dismissal came from (decision 90), recorded on the event. */
+  origin?: RequestOrigin;
+}
+
+/** A set of related clarifications asked at once (P8-19, SPEC decision 141). */
+export interface OpenQuestionSetInput {
+  originAgentId: Id;
+  title: string;
+  questions: SetQuestionInput[];
+  /** Skip the supervisor chain and ask the user directly. */
+  toUser?: boolean;
+}
+
+/** The user's (or a supervisor's) answers for a set, recorded in one transaction. */
+export interface AnswerQuestionSetInput {
+  setId: Id;
+  by: Actor;
+  answers: { questionId: Id; version?: number; answer: SetAnswer }[];
+  /** Idempotency key as on `AnswerQuestionInput`. */
+  answerId?: string;
+  origin?: RequestOrigin;
+}
+
+/** Saves (or with `null` clears) the user's unsent draft on an open set row. */
+export interface DraftQuestionInput {
+  questionId: Id;
+  draft: SetAnswer | null;
+  by: Actor;
+}
+
+/** Dismisses every open row of a set in one transaction. */
+export interface DismissQuestionSetInput {
+  setId: Id;
+  by: Actor;
   origin?: RequestOrigin;
 }
 
@@ -415,6 +449,12 @@ export interface DomainCommands {
    * denied); a stale `version` is refused like a stale answer.
    */
   dismissQuestion(input: DismissQuestionInput): Promise<CommandResult<Question>>;
+
+  // question sets (P8-19, SPEC decision 141)
+  openQuestionSet(input: OpenQuestionSetInput): Promise<CommandResult<Question[]>>;
+  answerQuestionSet(input: AnswerQuestionSetInput): Promise<CommandResult<Question[]>>;
+  draftQuestion(input: DraftQuestionInput): Promise<CommandResult<Question>>;
+  dismissQuestionSet(input: DismissQuestionSetInput): Promise<CommandResult<Question[]>>;
 
   // budgets (P8-01; SPEC decision 18)
   /**

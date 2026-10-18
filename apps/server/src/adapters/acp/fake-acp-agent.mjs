@@ -317,7 +317,7 @@ async function askToRun(ctx, toolCallId, call) {
 }
 
 /** A form elicitation; resolves with the accepted content, or `undefined`. */
-async function elicit(ctx, message, properties, required, toolCallId) {
+async function elicit(ctx, message, properties, required, toolCallId, title) {
   const response = await ctx.client.request(
     acp.methods.client.elicitation.create,
     {
@@ -325,7 +325,12 @@ async function elicit(ctx, message, properties, required, toolCallId) {
       mode: 'form',
       ...(toolCallId ? { toolCallId } : {}),
       message,
-      requestedSchema: { type: 'object', properties, ...(required ? { required } : {}) },
+      requestedSchema: {
+        type: 'object',
+        ...(title ? { title } : {}),
+        properties,
+        ...(required ? { required } : {}),
+      },
     },
     { signal: ctx.signal },
   );
@@ -368,6 +373,27 @@ const SCENARIOS = {
       ['choice'],
     );
     await ctx.stream(content ? `You chose: ${content.choice}` : 'No answer; carrying on.');
+  },
+  /** Three related questions in one titled form: a question set (P8-20). */
+  'asks-set': async (ctx) => {
+    await ctx.stream('A few details before I start.');
+    const content = await elicit(
+      ctx,
+      'Before I start the export:',
+      {
+        format: { type: 'string', title: 'Date format', enum: ['ISO 8601', 'US', 'EU'] },
+        columns: {
+          type: 'array',
+          title: 'Columns',
+          items: { type: 'string', enum: ['date', 'amount', 'note'] },
+        },
+        note: { type: 'string', title: 'Anything else?' },
+      },
+      ['format', 'columns', 'note'],
+      undefined,
+      'Export details',
+    );
+    await ctx.stream(`set: ${JSON.stringify(content)}`);
   },
   /**
    * `claude-agent-acp`'s question (real trace, P8-07): an `AskUserQuestion` tool call (kind

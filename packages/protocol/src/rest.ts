@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { AgentRole, AgentRuntime, TaskPriority, WorkBodyKind } from './enums.js';
 import type { ControlAction as ControlActionType } from './commands.js';
+import { SetAnswer } from './question-set.js';
 import { ReplyQuote, ReplyRef } from './reply.js';
 import {
   Actor,
@@ -119,6 +120,31 @@ export type AnswerBody = z.infer<typeof AnswerBody>;
 /** `POST /api/questions/:id/answer`'s reply; `duplicate` when `answerId` was already recorded. */
 export const AnswerResponse = z.object({ ok: z.literal(true), duplicate: z.boolean().optional() });
 export type AnswerResponse = z.infer<typeof AnswerResponse>;
+
+/**
+ * `POST /api/question-sets/:id/answer` (P8-19, SPEC decision 141): the user's one send for a
+ * whole set. It must cover every open row of the set the user holds (each answered or skipped).
+ * `version` per row as for an answer; `answerId` makes the send idempotent. Reply: `AnswerResponse`.
+ */
+export const AnswerSetBody = z.object({
+  answers: z.array(
+    z.object({
+      questionId: Id,
+      version: z.number().int().nonnegative().optional(),
+      answer: SetAnswer,
+    }),
+  ),
+  answerId: z.string().min(1).max(100).optional(),
+});
+export type AnswerSetBody = z.infer<typeof AnswerSetBody>;
+
+/** `POST /api/questions/:id/draft`: save (or, with `null`, clear) the user's unsent draft. */
+export const DraftBody = z.object({ draft: SetAnswer.nullable() });
+export type DraftBody = z.infer<typeof DraftBody>;
+
+/** `POST /api/question-sets/:id/dismiss`: dismisses every open row of the set. Reply: `DismissResponse`. */
+export const DismissSetBody = z.object({});
+export type DismissSetBody = z.infer<typeof DismissSetBody>;
 
 /**
  * `POST /api/questions/:id/dismiss` (P9-14, SPEC decision 135): the user withdraws a question

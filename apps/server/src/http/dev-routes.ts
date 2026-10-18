@@ -5,6 +5,8 @@ import {
   HarnessActivityBody,
   HarnessAgentBody,
   HarnessAnswerBody,
+  HarnessBrainToolBody,
+  HarnessBrainWaykeeperBody,
   HarnessDeclareBody,
   HarnessMoveBody,
   HarnessQuestionBody,
@@ -19,6 +21,7 @@ import type { ServerConfig } from '../config/config.js';
 import type { StatusStore } from '../runtime/status-store.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
 import { clearDemoProjects } from '../runtime/demo-clear.js';
+import type { HarnessBrains } from '../runtime/harness-brains.js';
 import {
   NotHarnessError,
   SceneHarness,
@@ -34,7 +37,10 @@ export interface DevRoutesOptions {
   /** The runtime: the harness never fakes an ending for an agent with a live session. */
   runtime?: Pick<AgentRuntime, 'liveAgents'>;
   /** P9-12: prepared harness folders and agents' declarations (`SceneHarnessOptions`). */
-  harness?: Pick<SceneHarnessOptions, 'workspaces' | 'deliverables'>;
+  harness?: Pick<SceneHarnessOptions, 'workspaces' | 'deliverables'> & {
+    /** P8-21: real brains on the fake runtime (`/dev/harness/brains/*`, `harness-brains.ts`). */
+    brains?: HarnessBrains;
+  };
 }
 
 /**
@@ -128,6 +134,7 @@ export function registerDevRoutes(
           ...(opts.harness?.workspaces ? { workspaces: opts.harness.workspaces } : {}),
           ...(opts.harness?.deliverables ? { deliverables: opts.harness.deliverables } : {}),
         }),
+        opts.harness?.brains,
       );
     }
   });
@@ -136,7 +143,11 @@ export function registerDevRoutes(
 type Params = { id: string };
 
 /** The scene harness's routes (P4-06); bodies are the protocol's (`packages/protocol/src/dev.ts`). */
-function registerHarness(app: FastifyInstance, harness: SceneHarness): void {
+function registerHarness(
+  app: FastifyInstance,
+  harness: SceneHarness,
+  brains: HarnessBrains | undefined,
+): void {
   /** Runs a harness action; a refused command is 404 / 400 / 409 like the panel's routes. */
   const act = async <T>(reply: FastifyReply, req: FastifyRequest, fn: () => Promise<T>) => {
     try {
@@ -221,4 +232,21 @@ function registerHarness(app: FastifyInstance, harness: SceneHarness): void {
   app.post<{ Params: Params }>('/dev/harness/projects/:id/close', async (req, reply) =>
     act(reply, req, () => harness.closeProject(req.params.id)),
   );
+
+  if (brains) {
+    /** P8-21: a new project with a real Waykeeper brain on the fake runtime. */
+    app.post('/dev/harness/brains/waykeeper', async (req, reply) => {
+      const body = parse(HarnessBrainWaykeeperBody, req.body, reply);
+      if (body) return act(reply, req, () => brains.startWaykeeper(body));
+    });
+
+    /** P8-21: a fake-runtime brain calls one of its tools; its result as the model reads it. */
+    app.post<{ Params: Params }>('/dev/harness/brains/:id/tool', async (req, reply) => {
+      const body = parse(HarnessBrainToolBody, req.body, reply);
+      if (!body) return;
+      return act(reply, req, async () => ({
+        result: await brains.callTool(req.params.id, body.name, body.input),
+      }));
+    });
+  }
 }

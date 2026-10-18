@@ -15,6 +15,15 @@ export type FakeStep =
   /** A clarification question; the answer is echoed as output and the turn continues. */
   | { kind: 'ask'; text: string; options?: string[] }
   /**
+   * Several clarifications as one question set (P8-20): every row opens at once and the turn
+   * waits for all; the answers are echoed as one output line (`answers: <text> <answer>; …`).
+   */
+  | {
+      kind: 'ask_set';
+      title?: string;
+      questions: { text: string; options?: string[]; multiSelect?: boolean }[];
+    }
+  /**
    * A tool call the scenario expects the gate to question (a destructive command, a push, …).
    * Same path as `tool_call` — the gate decides — with the question text and the action the
    * permission card shows when the gate has no better ones. An answer of `allow`/`yes`/`y`
@@ -133,6 +142,23 @@ export const SCENARIOS: Record<string, FakeScenario> = {
       },
       { kind: 'output', text: 'Thanks, going with that.' },
       { kind: 'finish', result: 'Export format applied.', cost: COST },
+    ],
+  },
+
+  /** Asks three related clarifications as one question set, then finishes (P8-20). */
+  'asks-set': {
+    steps: [
+      { kind: 'output', text: 'A few details before I start.' },
+      {
+        kind: 'ask_set',
+        questions: [
+          { text: 'Which date format should the export use?', options: ['ISO 8601', 'US', 'EU'] },
+          { text: 'Which columns?', options: ['date', 'amount', 'note'], multiSelect: true },
+          { text: 'Anything else I should know?' },
+        ],
+      },
+      { kind: 'output', text: 'Thanks, going with that.' },
+      { kind: 'finish', result: 'Export configured.', cost: COST },
     ],
   },
 

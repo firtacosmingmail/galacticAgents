@@ -259,6 +259,18 @@ export class BrainRunner {
     this.schedule();
   }
 
+  /**
+   * Runs one of the brain's tools as if its model had called it (P8-21: the scene harness's
+   * `/dev/harness/brains/:id/tool`, development only, for a brain on the fake runtime, which never
+   * chooses a tool itself): the same handler, context and turn rules, and the same answer — a
+   * refusal comes back as `{ error, message }`, a turn-ending tool's value wrapped.
+   */
+  async callTool(name: string, input: unknown): Promise<unknown> {
+    const tool = this.toolDefinitions().find((t) => t.name === name);
+    if (!tool) return { error: 'not_found', message: `the brain has no tool ${name}` };
+    return tool.handler(input);
+  }
+
   // ---------------------------------------------------------------------------------------------
 
   private async spawn(): Promise<void> {

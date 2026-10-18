@@ -20,6 +20,7 @@ import type {
 import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import { dismissedClarification, isDismissed, type Dismissed } from '../dismissal.js';
+import { AGENT_SET_TITLE } from '../question-set.js';
 import {
   echo,
   FakeTurnCancelled,
@@ -117,7 +118,8 @@ class FakeSession {
   turn: { cancelled: boolean } | undefined;
   paused = false;
   ended: Ended | undefined;
-  pending: PendingQuestion | undefined;
+  /** Questions the turn waits on: one, or every row of a question set (P8-20). */
+  readonly pending = new Map<Id, PendingQuestion>();
   /** Resolves when the current turn loop has exited. */
   turnDone: Promise<void> = Promise.resolve();
   /** Set by the first `stop()`; later calls share it. */
@@ -298,14 +300,7 @@ export class FakeAdapter implements AgentAdapter {
   }
 
   async answer(questionId: Id, answer: string): Promise<void> {
-    const session = this.byQuestion.get(questionId);
-    if (!session || session.pending?.id !== questionId) {
-      throw new Error(`no pending question ${questionId}`);
-    }
-    const pending = session.pending;
-    session.pending = undefined;
-    this.byQuestion.delete(questionId);
-    pending.resolve(answer);
+    this.settle(questionId, answer);
   }
 
   /**
@@ -313,14 +308,16 @@ export class FakeAdapter implements AgentAdapter {
    * (`dismissed: …`) and the turn goes on; a permission request is skipped as refused.
    */
   async dismiss(questionId: Id, reason: string): Promise<void> {
+    this.settle(questionId, { dismissed: reason });
+  }
+
+  private settle(questionId: Id, answer: string | Dismissed): void {
     const session = this.byQuestion.get(questionId);
-    if (!session || session.pending?.id !== questionId) {
-      throw new Error(`no pending question ${questionId}`);
-    }
-    const pending = session.pending;
-    session.pending = undefined;
+    const pending = session?.pending.get(questionId);
+    if (!session || !pending) throw new Error(`no pending question ${questionId}`);
+    session.pending.delete(questionId);
     this.byQuestion.delete(questionId);
-    pending.resolve({ dismissed: reason });
+    pending.resolve(answer);
   }
 
   async interrupt(sessionId: string): Promise<void> {
@@ -401,9 +398,8 @@ export class FakeAdapter implements AgentAdapter {
 
   private cancelTurn(session: FakeSession): void {
     if (session.turn) session.turn.cancelled = true;
-    if (session.pending) {
-      const pending = session.pending;
-      session.pending = undefined;
+    for (const pending of [...session.pending.values()]) {
+      session.pending.delete(pending.id);
       this.byQuestion.delete(pending.id);
       pending.resolve(undefined);
     }
@@ -535,6 +531,34 @@ export class FakeAdapter implements AgentAdapter {
           text: isDismissed(answer)
             ? `dismissed: ${dismissedClarification(answer.dismissed)}`
             : `answer: ${answer}`,
+        });
+        return 'next';
+      }
+      case 'ask_set': {
+        // One question set (P8-20): every row at once, the turn held until each is resolved.
+        const setId = `qs-${randomUUID()}`;
+        const total = step.questions.length;
+        const replies = await Promise.all(
+          step.questions.map((q, index) =>
+            this.askQuestion(session, 'clarification', {
+              text: q.text,
+              ...(q.options ? { options: q.options } : {}),
+              ...(q.multiSelect ? { multiSelect: true } : {}),
+              set: { id: setId, index, total, title: step.title ?? AGENT_SET_TITLE },
+            }),
+          ),
+        );
+        if (replies.some((r) => r === undefined)) return 'cancelled';
+        await this.holdWhilePaused(session, turn);
+        if (turn.cancelled) return 'cancelled';
+        const dismissed = replies.find(isDismissed);
+        this.emit({
+          type: 'agent.output',
+          agentId,
+          kind: 'text',
+          text: dismissed
+            ? `dismissed: ${dismissedClarification(dismissed.dismissed)}`
+            : `answers: ${step.questions.map((q, i) => `${q.text} ${replies[i] as string}`).join('; ')}`,
         });
         return 'next';
       }
@@ -696,7 +720,7 @@ export class FakeAdapter implements AgentAdapter {
   ): Promise<string | Dismissed | undefined> {
     const id = `q-${randomUUID()}`;
     return new Promise((resolve) => {
-      session.pending = { id, resolve };
+      session.pending.set(id, { id, resolve });
       this.byQuestion.set(id, session);
       this.emit({
         type: 'agent.needs_input',

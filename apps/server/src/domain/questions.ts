@@ -1,10 +1,12 @@
 import type {
   Actor,
   Id,
+  Meta,
   Question,
   QuestionContext,
   QuestionKind,
   RequestOrigin,
+  SetAnswer,
 } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
@@ -73,6 +75,36 @@ export function describeActor(actor: Actor): string {
 }
 
 const sameActor = (a: Actor, b: Actor): boolean => a.type === b.type && a.id === b.id;
+
+/**
+ * `question` with `meta` replaced by `meta` minus its draft (P8-19), the key dropped when nothing
+ * is left: an answer and a cancellation clear the user's unsent draft. Exactly the world fold's
+ * `withoutDraft`, so the row and the folded log stay equal (`conformance.test.ts`).
+ */
+function withMetaSansDraft(question: Question, meta: Meta | undefined): Question {
+  const { meta: _meta, ...row } = question;
+  const { draft: _draft, ...rest } = meta ?? {};
+  return Object.keys(rest).length > 0 ? { ...row, meta: rest } : row;
+}
+
+/**
+ * A question-set answer as it is checked and recorded (P8-19): a skip wins (its choices and text
+ * dropped), a choice given twice counts once, blank text is no text.
+ */
+export function normaliseSetAnswer(answer: SetAnswer): SetAnswer {
+  if (answer.skipped) return { choices: [], skipped: true };
+  const text = answer.text?.trim();
+  return { choices: [...new Set(answer.choices)], ...(text ? { text } : {}) };
+}
+
+/**
+ * A row of a question set is answered, passed up and dismissed with its set (P8-19, decision
+ * 141): the single-question tools and routes refuse it.
+ */
+export function refuseSetRow(question: Pick<Question, 'context'>): void {
+  const set = question.context.set;
+  if (set) throw new DomainError('invalid', `part of set ${set.id}: answer or dismiss the set`);
+}
 
 /**
  * Refuses a question that is no longer open, saying who answered it first, or that it was
@@ -154,6 +186,8 @@ export interface AnswerInput {
   answerId?: string;
   /** The brain in whose chat the user replied to answer it (P8-17), carried on the event. */
   repliedIn?: Id;
+  /** A question-set row's structured answer (P8-19): on the event and as `meta.answerDetail`. */
+  detail?: SetAnswer;
 }
 
 /** `meta.answerId`: the idempotency key of the answer that closed the question (P7-05). */
@@ -185,15 +219,21 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
   // A retry of an answer already recorded under its key: nothing to do (P7-05).
   if (isRecordedAnswer(current, input.answerId)) return current;
   checkAnswer(current, input);
-  const question: Question = {
-    ...current,
-    status: 'answered',
-    answer: input.answer,
-    answeredBy: input.answeredBy,
-    version: current.version + 1,
-    updatedAt: ctx.now,
-    ...(input.answerId ? { meta: { ...current.meta, [ANSWER_ID]: input.answerId } } : {}),
-  };
+  const question = withMetaSansDraft(
+    {
+      ...current,
+      status: 'answered',
+      answer: input.answer,
+      answeredBy: input.answeredBy,
+      version: current.version + 1,
+      updatedAt: ctx.now,
+    },
+    {
+      ...current.meta,
+      ...(input.answerId ? { [ANSWER_ID]: input.answerId } : {}),
+      ...(input.detail ? { answerDetail: input.detail } : {}),
+    },
+  );
   ctx.tables.questions.upsert(question);
   ctx.emit({
     type: 'question.answered',
@@ -204,7 +244,40 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
     ...(input.holders?.length ? { holders: input.holders } : {}),
     ...(input.answerId ? { answerId: input.answerId } : {}),
     ...(input.repliedIn ? { repliedIn: input.repliedIn } : {}),
+    ...(input.detail ? { detail: input.detail } : {}),
   });
+  return question;
+}
+
+/**
+ * Saves (or with `null` clears) the user's unsent draft on an open question-set row (P8-19) and
+ * emits `question.drafted`. Only the user, only on a row the user holds; no version bump and no
+ * `updatedAt` change (a draft is not a move: an answer against the version still passes).
+ */
+export function draftQuestion(
+  ctx: CommandContext,
+  questionId: Id,
+  draft: SetAnswer | null,
+  by: Actor,
+): Question {
+  if (by.type !== 'user') {
+    throw new DomainError('invalid', 'only the user drafts an answer');
+  }
+  const current = mustOpen(ctx, questionId);
+  if (!current.context.set) {
+    throw new DomainError('invalid', `question ${questionId} is not part of a set`);
+  }
+  if (current.holder.type !== 'user') {
+    throw new DomainError(
+      'conflict',
+      `question ${questionId} is held by ${describeActor(current.holder)}, not the user`,
+    );
+  }
+  const question = draft
+    ? { ...current, meta: { ...current.meta, draft } }
+    : withMetaSansDraft(current, current.meta);
+  ctx.tables.questions.upsert(question);
+  ctx.emit({ type: 'question.drafted', questionId, draft, by });
   return question;
 }
 
@@ -358,16 +431,14 @@ export function cancelQuestion(
 ): Question | undefined {
   const current = ctx.tables.questions.get(questionId);
   if (!current || current.status !== 'open') return undefined;
-  const question: Question = {
-    ...current,
-    status: 'cancelled',
-    version: current.version + 1,
-    updatedAt: ctx.now,
-    // A dismissal says who and why on the row (P9-14), as the world fold does.
-    ...(dismissal
-      ? { meta: { ...current.meta, cancelledBy: dismissal.by, cancelReason: reason } }
-      : {}),
-  };
+  // A dismissal says who and why on the row (P9-14), and a draft goes (P8-19), as the world fold.
+  const question = withMetaSansDraft(
+    { ...current, status: 'cancelled', version: current.version + 1, updatedAt: ctx.now },
+    {
+      ...current.meta,
+      ...(dismissal ? { cancelledBy: dismissal.by, cancelReason: reason } : {}),
+    },
+  );
   ctx.tables.questions.upsert(question);
   ctx.emit({
     type: 'question.cancelled',

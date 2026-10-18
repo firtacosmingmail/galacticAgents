@@ -23,6 +23,7 @@ import {
   isDismissed,
   type Dismissed,
 } from '../dismissal.js';
+import { AGENT_SET_TITLE, fitsQuestionSet } from '../question-set.js';
 import type {
   ManagedProcess,
   ProcessOutcome,
@@ -74,9 +75,11 @@ import {
  * stopped or interrupted. The CLI's own timers (tool timeouts, API request timeouts) keep
  * counting while it is frozen, so a long pause can end the frozen tool call in a timeout.
  *
- * `AskUserQuestion` with several questions asks them one after another (one
- * `agent.needs_input` each); a `multiSelect` question takes the answer text as given — the user
- * types one or more labels separated by commas.
+ * `AskUserQuestion` with several questions is one question set (P8-20, SPEC decision 141): every
+ * question opens at once as an `agent.needs_input` sharing `question.set` (id `qs-<uuid>`, title
+ * "Questions from the Steward"), `multiSelect` carried natively, and the call waits until every
+ * row is resolved; a single question is asked alone. A `multiSelect` answer arrives as the card
+ * renders it: the chosen labels joined with ", ".
  */
 
 export interface ClaudeSdkAdapterOptions {
@@ -796,9 +799,12 @@ export class ClaudeSdkAdapter implements AgentAdapter {
   }
 
   /**
-   * One `agent.needs_input(clarification)` per question, in order; the answers are keyed by the
-   * question text as the tool expects. A `multiSelect` answer is passed as typed (labels
-   * separated by commas).
+   * The questions of an `AskUserQuestion` call, answered back keyed by the question text as the
+   * tool expects. One question is asked alone (a `multiSelect` one says how to answer); several
+   * are one question set (P8-20): all opened at once, the call held until every row is resolved.
+   * Any row dismissed refuses the whole call; an interrupt withdraws them all. The call waits for
+   * every row even after a dismissal: that relies on `dismissQuestionSet` dismissing every open row
+   * of the set (no path dismisses a single set row), so the Steward is never held by the rest.
    */
   private async askUserQuestion(
     session: Session,
@@ -820,9 +826,37 @@ export class ClaudeSdkAdapter implements AgentAdapter {
       if (isDismissed(answer)) return dismissedQuestion(answer);
       return { behavior: 'allow', updatedInput: { ...input, answers: {} } };
     }
+    const labelsOf = (q: (typeof questions)[number]) => q.options?.map((o) => o.label) ?? [];
     const answers: Record<string, string> = {};
+    if (fitsQuestionSet(questions.map((q) => labelsOf(q).length))) {
+      const id = `qs-${randomUUID()}`;
+      const total = questions.length;
+      const replies = await Promise.all(
+        questions.map((q, index) => {
+          const labels = labelsOf(q);
+          return this.ask(
+            session,
+            'clarification',
+            {
+              text: q.question,
+              ...(labels.length ? { options: labels } : {}),
+              ...(q.multiSelect ? { multiSelect: true } : {}),
+              set: { id, index, total, title: AGENT_SET_TITLE },
+            },
+            options.signal,
+          );
+        }),
+      );
+      if (replies.some((r) => r === undefined)) return interruptedBeforeAnswer();
+      // Dismissed (P9-14): the whole tool call is refused with what the user did.
+      const dismissed = replies.find(isDismissed);
+      if (dismissed) return dismissedQuestion(dismissed);
+      questions.forEach((q, i) => (answers[q.question] = replies[i] as string));
+      return { behavior: 'allow', updatedInput: { ...input, answers } };
+    }
+    // One question (or a call too large for a set): asked in turn, as before.
     for (const q of questions) {
-      const labels = q.options?.map((o) => o.label) ?? [];
+      const labels = labelsOf(q);
       const text = q.multiSelect
         ? `${q.question} (one or more: separate the labels with commas)`
         : q.question;
@@ -833,8 +867,6 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         options.signal,
       );
       if (answer === undefined) return interruptedBeforeAnswer();
-      // Dismissed (P9-14): the whole tool call is refused with what the user did; the questions
-      // after it are not asked.
       if (isDismissed(answer)) return dismissedQuestion(answer);
       answers[q.question] = answer;
     }

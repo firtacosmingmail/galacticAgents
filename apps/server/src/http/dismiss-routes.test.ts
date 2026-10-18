@@ -239,6 +239,59 @@ describe('a direct message supersedes the agent’s open clarifications (P9-14)'
     expect(log.tables.questions.get(harmonizers)?.status).toBe('open');
   });
 
+  it("never withdraws a Waykeeper's question set or its drafts (P8-19 final review)", async () => {
+    const { commands, log } = composed;
+    const project = (await commands.createProject({ name: 'CSV', workspace: '/tmp' })).value;
+    const { harmonizer, waykeeper } = await projectHierarchy(commands, project.id);
+    const rows = (
+      await commands.openQuestionSet({
+        originAgentId: waykeeper.id,
+        title: 'CSV import',
+        questions: [{ text: 'Which formats?', options: ['csv', 'tsv'] }, { text: 'Header row?' }],
+      })
+    ).value;
+    // The Harmonizer passes the whole set up: the user holds every row, and drafts two answers.
+    await commands.answerQuestionSet({
+      setId: rows[0]!.context.set!.id,
+      by: { type: 'agent', id: harmonizer.id },
+      answers: [],
+    });
+    const drafts = [{ choices: ['csv'] }, { choices: [], text: 'yes' }];
+    for (const [i, q] of rows.entries()) {
+      await commands.draftQuestion({ questionId: q.id, draft: drafts[i]!, by: { type: 'user' } });
+    }
+    // A single clarification asked alongside is still superseded, as before.
+    const single = (
+      await commands.openQuestion({
+        kind: 'clarification',
+        originAgentId: waykeeper.id,
+        context: { text: 'Dark mode too?' },
+      })
+    ).value.id;
+
+    const plain = await call(`/api/agents/${waykeeper.id}/send`, {
+      text: 'what do you mean by question 2?',
+    });
+    expect(plain.status).toBe(200);
+    const quoting = await call(`/api/agents/${waykeeper.id}/send`, {
+      text: 'tsv, actually',
+      replyTo: {
+        kind: 'question',
+        id: rows[1]!.id,
+        version: log.tables.questions.get(rows[1]!.id)!.version,
+      },
+    });
+    expect(quoting.status).toBe(200);
+
+    expect(log.tables.questions.get(single)?.status).toBe('cancelled');
+    for (const [i, q] of rows.entries()) {
+      const row = log.tables.questions.get(q.id)!;
+      expect(row.status).toBe('open');
+      expect(row.meta?.['draft']).toEqual(drafts[i]);
+      expect(cancelled(q.id)).toBeUndefined();
+    }
+  });
+
   it('tells a live session through its adapter and leaves its permission request open', async () => {
     const id = await spawn('scenario:full');
     await waitFor(() => state(id) === 'waiting_for_input', 'clarification');

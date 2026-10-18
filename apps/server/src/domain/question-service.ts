@@ -12,6 +12,7 @@ import type {
   QuestionOrigin,
   QuestionRecentEvent,
 } from '@galactic/protocol';
+import { QUESTION_SET_LIMITS, QuestionSetRef } from '@galactic/protocol';
 import { must } from './errors.js';
 import type { CommandContext, EventLog } from './event-log.js';
 import {
@@ -214,21 +215,50 @@ export function openRouted(
   });
 }
 
-/** `agent.needs_input` → its question, in the same command as the event. */
+/**
+ * `agent.needs_input` → its question, in the same command as the event. A row of a question set
+ * (P8-20: a Steward's multi-question ask, one event per row sharing `question.set`) opens with its
+ * set and the normal routing; a row whose siblings are already open joins their holder, so the set
+ * stays together. A set ref outside the limits (or on a permission request) is dropped: the row
+ * opens as a plain question rather than as a broken set.
+ */
 export function openFromNeedsInput(
   ctx: CommandContext,
   event: Extract<AgentEvent, { type: 'agent.needs_input' }>,
   routing: QuestionRouting,
 ): Question {
+  const { set, ...rest } = event.question;
+  const valid = set !== undefined && validSetRow(event.kind, event.question);
+  const sibling = valid
+    ? ctx.tables.questions
+        .all()
+        .find(
+          (q) =>
+            q.status === 'open' &&
+            q.originAgentId === event.agentId &&
+            q.context.set?.id === set.id,
+        )
+    : undefined;
   return openRouted(
     ctx,
     {
       id: event.questionId,
       kind: event.kind,
       originAgentId: event.agentId,
-      context: event.question,
+      context: valid ? event.question : rest,
     },
     routing,
+    sibling?.holder,
+  );
+}
+
+function validSetRow(kind: QuestionKind, question: QuestionContext): boolean {
+  const set = question.set;
+  return (
+    kind === 'clarification' &&
+    QuestionSetRef.safeParse(set).success &&
+    set!.index < set!.total &&
+    (question.options?.length ?? 0) <= QUESTION_SET_LIMITS.maxOptions
   );
 }
 

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { isStorageErrorCode, type Id, type Question } from '@galactic/protocol';
+import { isStorageErrorCode, type AnswerSetBody, type Id, type Question } from '@galactic/protocol';
 import { ApiError, type Api } from '../console/api.js';
 import type { ConnectionStatus } from './client.js';
 import { useAppStore } from '../state/store.js';
@@ -22,7 +22,8 @@ import { actorLabel, agentLabel } from '../console/hierarchy/shared.js';
  *
  * What is stored: the answer text, the question's id, version and text, and a fingerprint of the
  * token (FNV-1a, not the token): a session with another token clears the queue when it goes live,
- * and so does forgetting the token. Every storage access is in try/catch; without storage the
+ * and so does forgetting the token. A question set's send (P8-21) is one entry too, keyed by the
+ * set's id: its answers go together, as one `POST /api/question-sets/:id/answer`, or not at all. Every storage access is in try/catch; without storage the
  * queue lives for the page.
  */
 
@@ -61,6 +62,20 @@ export interface QueuedAnswer {
   reason?: NotSentReason;
   /** The server's refusal, as it said it. */
   message?: string;
+  /**
+   * A question set's send (P8-21): every row's answer, sent together under `answerId`. The entry
+   * is keyed by the set: `questionId` holds the set's id, `text` its title, `answer` a summary.
+   */
+  setAnswers?: AnswerSetBody['answers'];
+}
+
+/** Whether an entry is a question set's send (keyed by the set's id). */
+export const isSetEntry = (e: QueuedAnswer): boolean => e.setAnswers !== undefined;
+
+/** "2 answers" — what a set's send carries, skips not counted. */
+export function setSendSummary(answers: AnswerSetBody['answers']): string {
+  const n = answers.filter((a) => !a.answer.skipped).length;
+  return n === 0 ? 'every question skipped' : `${n} answer${n === 1 ? '' : 's'}`;
 }
 
 interface QueueStore {
@@ -112,7 +127,8 @@ function isEntry(e: unknown): e is QueuedAnswer {
     typeof x['version'] === 'number' &&
     typeof x['text'] === 'string' &&
     typeof x['queuedAt'] === 'string' &&
-    typeof x['state'] === 'string'
+    typeof x['state'] === 'string' &&
+    (x['setAnswers'] === undefined || Array.isArray(x['setAnswers']))
   );
 }
 
@@ -278,12 +294,60 @@ export async function submitAnswer(
   return 'sent';
 }
 
+/**
+ * Sends a question set's answers as the user (P8-21), like `submitAnswer`: now when online (a
+ * refusal is thrown, the card shows it — a `stale` one names the row someone answered first),
+ * queued when offline or when the send fails on the network, retried with the same `answerId`.
+ */
+export async function submitSetAnswer(
+  api: Api,
+  setId: Id,
+  title: string,
+  answers: AnswerSetBody['answers'],
+  answerId: string = newAnswerId(),
+): Promise<SubmitOutcome> {
+  const entry: QueuedAnswer = {
+    answerId,
+    questionId: setId,
+    answer: setSendSummary(answers),
+    version: 0,
+    text: title,
+    queuedAt: new Date().toISOString(),
+    state: 'sending',
+    setAnswers: answers,
+  };
+  if (isOffline()) {
+    put({ ...entry, state: 'queued', wasQueued: true });
+    announce(`Answers queued: they will be sent when the connection is back.`);
+    return 'queued';
+  }
+  put(entry);
+  try {
+    await api.answerSet(setId, answers, answerId);
+  } catch (e) {
+    if (isRefusal(e)) {
+      remove(setId, answerId);
+      throw e;
+    }
+    update(setId, answerId, { state: 'queued', wasQueued: true });
+    announce(
+      e instanceof ApiError
+        ? `The server could not take the answers just now: they are queued and will be sent again shortly.`
+        : `No connection: the answers are queued and will be sent when the connection is back.`,
+    );
+    scheduleRetry();
+    return 'queued';
+  }
+  remove(setId, answerId);
+  return 'sent';
+}
+
 /** Cancels a queued answer (not one being sent: that one is already on its way). */
 export function cancelQueuedAnswer(questionId: Id): boolean {
   const entry = useAnswerQueue.getState().entries[questionId];
   if (!entry || entry.state !== 'queued') return false;
   remove(questionId, entry.answerId);
-  announce(`Queued answer cancelled.`);
+  announce(isSetEntry(entry) ? `Queued answers cancelled.` : `Queued answer cancelled.`);
   return true;
 }
 
@@ -424,7 +488,11 @@ async function flushOnce(): Promise<void> {
     if (useAnswerQueue.getState().entries[entry.questionId]?.answerId !== entry.answerId) continue;
     update(entry.questionId, entry.answerId, { state: 'sending', wasQueued: true });
     try {
-      await session.api.answer(entry.questionId, entry.answer, entry.version, entry.answerId);
+      if (entry.setAnswers) {
+        await session.api.answerSet(entry.questionId, entry.setAnswers, entry.answerId);
+      } else {
+        await session.api.answer(entry.questionId, entry.answer, entry.version, entry.answerId);
+      }
     } catch (e) {
       if (!isRefusal(e)) {
         // No reply, or a passing 5xx/408/429: try again later (the same answerId), not in a
@@ -450,13 +518,20 @@ async function flushOnce(): Promise<void> {
             : 'refused';
       update(entry.questionId, entry.answerId, { state: 'not_sent', reason, message: e.message });
       const world = useAppStore.getState().world;
+      const why = notSentLine(world, { ...entry, state: 'not_sent', reason, message: e.message });
       announce(
-        `Your queued answer ${quote(entry.answer)} was not sent: ${notSentLine(world, { ...entry, state: 'not_sent', reason, message: e.message })}.`,
+        isSetEntry(entry)
+          ? `Your queued answers to ${quote(entry.text)} were not sent: ${why}.`
+          : `Your queued answer ${quote(entry.answer)} was not sent: ${why}.`,
       );
       continue;
     }
     update(entry.questionId, entry.answerId, { state: 'sent' });
-    announce(`Your queued answer ${quote(entry.answer)} to ${quote(entry.text)} was sent.`);
+    announce(
+      isSetEntry(entry)
+        ? `Your queued answers to ${quote(entry.text)} were sent.`
+        : `Your queued answer ${quote(entry.answer)} to ${quote(entry.text)} was sent.`,
+    );
     const timer = setTimeout(() => {
       session?.sentTimers.delete(timer);
       const now = useAnswerQueue.getState().entries[entry.questionId];
@@ -491,6 +566,7 @@ export function answeredByLine(world: WorldView, q: Question, entry?: QueuedAnsw
 
 /** Why a queued answer was not sent, from the folded world when it knows more than the refusal. */
 export function notSentLine(world: WorldView, entry: QueuedAnswer): string {
+  if (isSetEntry(entry)) return setNotSentLine(world, entry);
   const q = world.questions[entry.questionId];
   if (q?.status === 'answered') return answeredByLine(world, q, entry);
   if (q?.status === 'cancelled' || entry.reason === 'withdrawn')
@@ -509,6 +585,24 @@ export function notSentLine(world: WorldView, entry: QueuedAnswer): string {
     if (/already answered by agent/.test(m)) return 'already answered by a supervisor';
     if (/already answered by the system/.test(m)) return 'already answered by the system';
     return 'the question changed while you were offline';
+  }
+  return entry.message ?? 'the server refused it';
+}
+
+/**
+ * Why a set's queued send was not sent (P8-21): the row the refusal names ("question q-2 was
+ * already answered by …"), worded from the folded world as for a single answer; else the refusal.
+ */
+function setNotSentLine(world: WorldView, entry: QueuedAnswer): string {
+  const ids = entry.setAnswers?.map((a) => a.questionId) ?? [];
+  const named = ids.find((id) => entry.message?.includes(id));
+  const q = named ? world.questions[named] : undefined;
+  if (q?.status === 'answered') return `“${q.context.text}” was ${answeredByLine(world, q)}`;
+  if (q?.status === 'cancelled' || entry.reason === 'withdrawn')
+    return 'the questions were withdrawn';
+  if (entry.reason === 'gone') return 'the questions no longer exist';
+  if (entry.reason === 'stale') {
+    return 'the questions changed while you were offline; answer them again if they still apply';
   }
   return entry.message ?? 'the server refused it';
 }

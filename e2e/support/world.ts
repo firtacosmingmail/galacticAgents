@@ -1,5 +1,7 @@
 import type {
   HarnessActionResponse,
+  HarnessBrainToolResponse,
+  HarnessBrainWaykeeperResponse,
   HarnessScenarioBody,
   HarnessScenarioResponse,
   HistoryQuestionsResponse,
@@ -37,6 +39,35 @@ export async function askUser(
   });
   if (!res.questionId) throw new Error(`no question id: ${JSON.stringify(res)}`);
   return res.questionId;
+}
+
+/** A new project with a real Waykeeper brain on the fake runtime, under the Harmonizer (P8-21). */
+export function startBrainWaykeeper(
+  api: Api,
+  name: string,
+): Promise<HarnessBrainWaykeeperResponse> {
+  return api.post<HarnessBrainWaykeeperResponse>('/dev/harness/brains/waykeeper', { name });
+}
+
+/** A fake-runtime brain calls one of its tools as its model would; a refusal throws here. */
+export async function callBrainTool(
+  api: Api,
+  agentId: string,
+  name: string,
+  input: Record<string, unknown>,
+): Promise<unknown> {
+  const { result } = await api.post<HarnessBrainToolResponse>(
+    `/dev/harness/brains/${agentId}/tool`,
+    { name, input },
+  );
+  if (result && typeof result === 'object' && 'error' in result) {
+    throw new Error(`${name} refused: ${JSON.stringify(result)}`);
+  }
+  // A turn-ending tool's value comes wrapped (`{ result, turnEnded }`), as the model reads it.
+  if (result && typeof result === 'object' && 'turnEnded' in result) {
+    return (result as unknown as { result: unknown }).result;
+  }
+  return result;
 }
 
 /** The question as the server's history has it (the source of truth, not the page). */

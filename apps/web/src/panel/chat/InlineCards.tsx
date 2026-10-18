@@ -1,5 +1,5 @@
 import type { Id } from '@galactic/protocol';
-import { ProposalView, QuestionView } from '../cards/index.js';
+import { ProposalView, QuestionSetCard, QuestionView } from '../cards/index.js';
 import { ReplyButton } from './Reply.js';
 
 /**
@@ -14,15 +14,24 @@ export function ThreadCard({
   onReply,
   replyLabel,
 }: {
-  kind: 'proposal' | 'question';
+  kind: 'proposal' | 'question' | 'questionSet';
   id: Id;
-  /** The card's Reply action (P8-17): the composer quotes it. */
+  /**
+   * The card's Reply action (P8-17): the composer quotes it. A question set has none (P8-21): a
+   * chat reply never answers a set, the card is the way — its `data-card` wrapper takes the focus.
+   */
   onReply?: () => void;
   replyLabel?: string;
 }) {
   return (
     <div className="thread-card" data-card={id} tabIndex={-1}>
-      {kind === 'proposal' ? <ProposalView proposalId={id} /> : <QuestionView questionId={id} />}
+      {kind === 'proposal' ? (
+        <ProposalView proposalId={id} />
+      ) : kind === 'questionSet' ? (
+        <QuestionSetCard setId={id} />
+      ) : (
+        <QuestionView questionId={id} />
+      )}
       {onReply && <ReplyButton label={replyLabel ?? `the ${kind}`} onReply={onReply} />}
     </div>
   );

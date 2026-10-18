@@ -21,6 +21,7 @@ export {
   TRUST_HINTS,
   WorkCard,
 } from './ProposalCard.js';
+export { QuestionSetCard } from './QuestionSetCard.js';
 export { AgentRef, CardLinksContext, selectionFor } from './links.js';
 export {
   AnswerNotice,

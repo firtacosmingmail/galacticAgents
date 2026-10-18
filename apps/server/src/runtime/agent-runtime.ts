@@ -14,6 +14,7 @@ import {
   type AgentRuntime as RuntimeName,
   type Event,
   type Id,
+  type SetAnswer,
   type PermissionAction,
   type PermissionPolicy,
   type PermissionRule,
@@ -971,6 +972,7 @@ export class AgentRuntime {
     by: Actor,
     answerId?: string,
     repliedIn?: Id,
+    detail?: SetAnswer,
   ): Promise<void> {
     const agentId = this.byQuestion.get(questionId);
     if (!agentId) throw new Error(`no open question ${questionId}`);
@@ -1006,6 +1008,7 @@ export class AgentRuntime {
         delivered: true,
         ...(answerId !== undefined ? { answerId } : {}),
         ...(repliedIn !== undefined ? { repliedIn } : {}),
+        ...(detail !== undefined ? { detail } : {}),
       }),
     );
   }

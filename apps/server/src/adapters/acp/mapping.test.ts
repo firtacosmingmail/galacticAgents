@@ -238,7 +238,7 @@ describe('mapping helpers', () => {
       ['name'],
     );
     expect(fields.map((f) => f.key)).toEqual(['name', 'tags']); // required first
-    expect(fields[1]!.text).toBe('Q — Tags (one or more: separate them with commas)');
+    expect(fields[1]).toMatchObject({ text: 'Q — Tags', multiSelect: true });
     expect(fields[1]!.parse('a, b')).toEqual({ tags: ['a', 'b'] });
   });
 

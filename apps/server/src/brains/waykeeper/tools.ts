@@ -16,7 +16,7 @@ import {
   workspaceMeta,
   type MergeConflict,
 } from '../../workspace/workspaces.js';
-import { isLive } from '../common-tools.js';
+import { isLive, refuseSetRow } from '../common-tools.js';
 import type { BrainTool, BrainToolContext } from '../definition.js';
 import {
   EXTERNAL_CONFLICT_OPTIONS,
@@ -661,7 +661,9 @@ export const escalateTool: BrainTool = {
   name: 'escalate',
   description:
     'Passes a clarification question you hold (questionId) up to the Harmonizer, or asks one of ' +
-    'your own (text). Ends your turn; the answer arrives in a later turn.',
+    'your own (text). A question of a set is answered with answer_question_set instead; several ' +
+    'related questions of your own go in one ask_questions. Ends your turn; the answer arrives ' +
+    'in a later turn.',
   inputSchema: obj({
     questionId: { type: 'string', description: 'A question you hold.' },
     text: { type: 'string', description: 'Your own question.' },
@@ -677,6 +679,7 @@ export const escalateTool: BrainTool = {
     }
     if (questionId) {
       const q = ctx.queries.question(questionId);
+      if (q) refuseSetRow(q);
       if (q?.kind === 'permission') {
         throw new DomainError('invalid', `${questionId} is a permission question; it is not yours`);
       }

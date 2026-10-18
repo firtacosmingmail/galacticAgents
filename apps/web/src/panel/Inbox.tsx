@@ -1,7 +1,13 @@
 import { useState, type ReactNode } from 'react';
 import type { Id } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
-import { AnsweredQuestionCard, ProposalCard, QuestionCard, StaleBanner } from './cards/index.js';
+import {
+  AnsweredQuestionCard,
+  ProposalCard,
+  QuestionCard,
+  QuestionSetCard,
+  StaleBanner,
+} from './cards/index.js';
 import { inboxModel, waitingForUserCount, type InboxItem } from './inbox-model.js';
 import { Beacon } from './Navigation.js';
 import { OfflineAnswers } from './cards/QueuedAnswer.js';
@@ -81,10 +87,16 @@ export function Inbox({
           ))}
         </Group>
       )}
-      {model.heldBySupervisors.length > 0 && (
-        <Group label="Held by supervisors" items={model.heldBySupervisors.length}>
+      {model.heldBySupervisors.length + model.setsHeldBySupervisors.length > 0 && (
+        <Group
+          label="Held by supervisors"
+          items={model.heldBySupervisors.length + model.setsHeldBySupervisors.length}
+        >
           {model.heldBySupervisors.map((q) => (
             <QuestionCard key={q.id} question={q} onStale={onStale} />
+          ))}
+          {model.setsHeldBySupervisors.map((setId) => (
+            <QuestionSetCard key={setId} setId={setId} />
           ))}
         </Group>
       )}
@@ -108,7 +120,11 @@ export function Inbox({
 }
 
 const itemKey = (item: InboxItem) =>
-  item.kind === 'question' ? `q:${item.question.id}` : `p:${item.proposal.id}`;
+  item.kind === 'question'
+    ? `q:${item.question.id}`
+    : item.kind === 'questionSet'
+      ? `s:${item.setId}`
+      : `p:${item.proposal.id}`;
 
 function Item({
   item,
@@ -117,6 +133,7 @@ function Item({
   item: InboxItem;
   onStale: (questionId: Id, message: string) => void;
 }) {
+  if (item.kind === 'questionSet') return <QuestionSetCard setId={item.setId} />;
   return item.kind === 'question' ? (
     <QuestionCard question={item.question} onStale={onStale} />
   ) : (
