@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** —
-**Phase status:** in progress (17/17 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
+**Current task:** — (next: P8-18 and P8-19, independent) · **Task status:** P8-18 todo, P8-19 todo, P8-20 todo, P8-21 todo
+**Phase status:** in progress (17/21 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -120,6 +120,28 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - Every line of the chat (the user's messages, the agent's replies, reports and notices, question and proposal cards) offers **Reply**; the composer shows the quoted line (who, an excerpt, ×; Esc cancels); the sent message shows the quote above it; clicking the quote scrolls to the original (paging back as needed) and highlights it, or says it is no longer in the history. No sub-thread. The server resolves what was quoted from the log (never trusts a client's text), stores it on `message.sent.replyTo`, and the brain's turn prompt carries the quoted context.
 - **Acceptance:** reply to a message, to an agent's reply, to a clarification (answers it) and to a permission card (does not decide it); the quote shows above the sent message on the Mac and the phone; clicking it scrolls to the original; the Harmonizer's turn prompt carries the quoted text; a stale or foreign target is refused; tests (protocol, routes, wake prompt, jsdom + axe, e2e).
 - **Done:** SPEC decision 139. Protocol `reply.ts` (`ReplyRef`, `ReplyQuote`, `REPLY_QUOTE_MAX`, the thread-card rules `threadShowsQuestion` / `threadShowsProposal` / `questionOwner`, now shared by the panel and the server); `SendBody.replyTo`, `message.sent.replyTo` (also on `ChatMessage`, `ConversationEntry`), `question.answered.repliedIn` — no migration. Server: `runtime/reply-target.ts` resolves the target for `POST /api/agents/:id/send` (400 `reply_target`, 409 `reply_target_gone`); an open clarification is answered first (409 `stale` → nothing sent), a permission never; `wake.ts` renders `the user said (replying to …: "…"): "…"` / `the user answered q-… (…) by replying: "…"` and skips the `question.answered` line for the chat's own brain (`repliedIn`). Web: `panel/chat/Reply.tsx` (Reply action, quote bar, quote block), `Conversation.tsx` (jump with paging back, highlight, "no longer in the history"). Tests: `protocol/src/reply.test.ts`, `events.test.ts`, `rest.test.ts`; `server/src/http/reply-routes.test.ts`, `brains/wake.test.ts`; `web/src/panel/chat/reply.test.tsx` (axe); `e2e/tests/10-chat-replies.spec.ts`. Review: `notes/P8-17-review.md` (answer only when the message can be sent, idempotent retry on `answerId`, the jump's paging bounded on failure and on unmount, a redelivered reply keeps its quote).
+
+### P8-18 — One screen at a time on phones (added 2026-10-18)
+- **Status:** todo · **Depends on:** P8-15, P7-03, P4-10 · **Parallel with:** P8-19, P8-20, P8-21
+- Cosmin's request: "I want the design on mobile to have only one screen on … either the chat box with the selected agent, harmoniser, or a way keeper, or the inbox." At phone width (≤760px) the chat fills the screen; an Inbox button with a dot and a Managed-agents button in the top bar open full-screen views closed with ✕ or Back; the composer draft survives; with the scene shown the docked chat stays as today; desktop and tablet unchanged.
+- **Design / plan:** `docs/superpowers/specs/2026-10-18-question-sets-and-phone-single-screen-design.md` (Part 2), `docs/superpowers/plans/2026-10-18-phone-single-screen.md`.
+- **Acceptance:** the plan's tests and e2e; SPEC decision 140; axe clean.
+
+### P8-19 — Question sets: protocol, domain, routes, brain tools (added 2026-10-18)
+- **Status:** todo · **Depends on:** P2-03, P2-18, P7-05, P9-14, P8-17 · **Parallel with:** P8-18
+- Cosmin's request: when a Waykeeper or the Harmonizer needs several answers at once (clarifications on a plan), they arrive as one set answered step by step — options, a write-in answer, skip, review, send all at once; drafts kept on the server. Supervisors answer what they can from context and pass the rest up (option B, 2026-10-18). Sets are question rows sharing `context.set`; no migration.
+- **Design / plan:** spec Part 1, `docs/superpowers/plans/2026-10-18-question-sets.md` Tasks 1–4.
+- **Acceptance:** the plan's tests; one wake per delivery; SPEC decision 141; TECHNOLOGY §5.3.
+
+### P8-20 — Steward multi-question asks as one set (added 2026-10-18)
+- **Status:** todo · **Depends on:** P8-19 · **Parallel with:** P8-21
+- A Steward's `AskUserQuestion` (Agent SDK) or ACP form with several questions opens one set instead of separate questions asked one after another; multi-select is native; the Steward is held until every question is resolved.
+- **Plan:** Task 5. **Acceptance:** adapter tests and conformance.
+
+### P8-21 — The question-set card (added 2026-10-18)
+- **Status:** todo · **Depends on:** P8-19 · **Parallel with:** P8-20
+- The step-through card in the inbox and the asker's chat: progress, options (multi-select), write-in, Back / Skip / Next, review page, "Send N answers", drafts synced across devices, supervisor answers read-only, one inbox item per set, offline queue.
+- **Plan:** Tasks 6–7. **Acceptance:** jsdom + axe tests, e2e at desktop and phone size.
 
 ## Exit criteria
 
