@@ -1,6 +1,6 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (next: P8-18 and P8-19, independent) · **Task status:** P8-18 todo, P8-19 todo, P8-20 todo, P8-21 todo
+**Current task:** P8-19 (branch `p8-19-question-sets`), P8-18 (branch `p8-18-phone-single-screen`) · **Task status:** P8-18 in progress, P8-19 in progress, P8-20 todo, P8-21 todo
 **Phase status:** in progress (17/21 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -128,7 +128,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** the plan's tests and e2e; SPEC decision 140; axe clean.
 
 ### P8-19 — Question sets: protocol, domain, routes, brain tools (added 2026-10-18)
-- **Status:** todo · **Depends on:** P2-03, P2-18, P7-05, P9-14, P8-17 · **Parallel with:** P8-18
+- **Status:** in progress · **Depends on:** P2-03, P2-18, P7-05, P9-14, P8-17 · **Parallel with:** P8-18
 - Cosmin's request: when a Waykeeper or the Harmonizer needs several answers at once (clarifications on a plan), they arrive as one set answered step by step — options, a write-in answer, skip, review, send all at once; drafts kept on the server. Supervisors answer what they can from context and pass the rest up (option B, 2026-10-18). Sets are question rows sharing `context.set`; no migration.
 - **Design / plan:** spec Part 1, `docs/superpowers/plans/2026-10-18-question-sets.md` Tasks 1–4.
 - **Acceptance:** the plan's tests; one wake per delivery; SPEC decision 141; TECHNOLOGY §5.3.
