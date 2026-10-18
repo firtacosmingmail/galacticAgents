@@ -41,6 +41,7 @@ import { useDockPrefs, type DockControl } from './dock-state.js';
 import { COMPACT_TOP_BAR_QUERY, STACKED_LAYOUT_QUERY, useMediaQuery } from './use-media-query.js';
 import { SceneOffer } from './SceneOffer.js';
 import { NavSheet, useEdgeSwipe, useNavSheet } from './nav-sheet.js';
+import { usePhoneView } from './phone-view.js';
 import { BrainDock, DockViewToggle, SystemStatusView } from './status/StatusViews.js';
 import { useDockView } from './status/dock-view.js';
 import {
@@ -108,6 +109,8 @@ export function Panel({
   const sheeted = compact && route === 'panel';
   const navSheet = useNavSheet(sheeted);
   useEdgeSwipe(navSheet, sheeted);
+  // P8-18: on a phone, one main screen at a time — the chat, the inbox or the managed agents.
+  usePhoneView(sheeted);
   const dock = useDockPrefs();
   // Minimising makes sense where something else shares the space: the scene, or the stack.
   const collapsible = stacked || showScene;

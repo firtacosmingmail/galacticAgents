@@ -146,7 +146,7 @@ describe('the compact top bar (P3-12)', () => {
     stubWidth(true);
   });
 
-  it('shows only the essentials in one row: brand, connection, waiting count, menu button', async () => {
+  it('shows only the essentials in one row: brand, connection, agents, inbox, menu button', async () => {
     await open('/steward/a-steward-1');
     const bar = top();
     expect(bar.classList.contains('pnl-top-compact')).toBe(true);
@@ -154,7 +154,10 @@ describe('the compact top bar (P3-12)', () => {
       '/',
     );
     expect(within(bar).getByRole('img', { name: 'connection: live' })).toBeTruthy();
-    expect(within(bar).getByRole('button', { name: '2 waiting for you' })).toBeTruthy();
+    // P8-18: the inbox and the managed agents are full screens on a phone, one tap away.
+    expect(within(bar).getByRole('button', { name: 'Inbox, 2 waiting' })).toBeTruthy();
+    expect(within(bar).getByRole('button', { name: 'Managed agents' })).toBeTruthy();
+    expect(within(bar).queryByRole('button', { name: '2 waiting for you' })).toBeNull();
     const button = menuButton();
     expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(menu().hidden).toBe(true);
@@ -180,9 +183,8 @@ describe('the compact top bar (P3-12)', () => {
     const items = Array.from(m.querySelectorAll('a, button')).map((el) => el.textContent);
     // jsdom has no WebGL: the scene control is the "unavailable" note (no Retry there).
     expect(within(m).getByRole('note').textContent).toBe('3D scene unavailable — list mode');
+    // P8-18: no Hide / Show inbox or managed agents — the bar's buttons open them full screen.
     expect(items).toEqual([
-      'Hide managed agents', // P4-09: after the scene control
-      'Hide inbox', // P4-12
       'Notifications: unavailable', // jsdom has no Notification API
       'History',
       'Settings',
@@ -191,7 +193,7 @@ describe('the compact top bar (P3-12)', () => {
     ]);
     expect(within(m).getByLabelText('summary').textContent).toBe('live2 open questions1 blocked');
     expect(document.activeElement).toBe(
-      within(m).getByRole('button', { name: 'Hide managed agents' }),
+      within(m).getByRole('button', { name: 'Notifications: unavailable' }),
     );
   });
 
@@ -316,21 +318,53 @@ describe('the compact top bar (P3-12)', () => {
     expect(localStorage.getItem('galactic.token')).toBeNull();
   });
 
-  it('takes the waiting count to the inbox, from the panel and from another page', async () => {
+  it('the Inbox button opens the inbox view and closes it again (P8-18)', async () => {
     await open();
-    fireEvent.click(within(top()).getByRole('button', { name: '2 waiting for you' }));
-    await vi.waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('region', { name: 'inbox' })),
-    );
+    const inbox = () => within(top()).getByRole('button', { name: /^Inbox/ });
+    expect(inbox().getAttribute('aria-pressed')).toBe('false');
+    expect(inbox().querySelector('.pnl-phone-dot')).not.toBeNull();
+    fireEvent.click(inbox());
+    expect(inbox().getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(inbox());
+    expect(inbox().getAttribute('aria-pressed')).toBe('false');
+  });
 
+  it('the managed-agents button opens its view; it is not the navigation sheet button', async () => {
+    await open();
+    const agents = within(top()).getByRole('button', { name: 'Managed agents' });
+    expect(agents.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(agents);
+    expect(agents.getAttribute('aria-pressed')).toBe('true');
+    // The sheet's button keeps its own name.
+    expect(within(top()).getByRole('button', { name: /^Agents/ })).not.toBe(agents);
+  });
+
+  it('lights no dot for questions a supervisor holds', async () => {
+    window.history.replaceState(null, '', '/');
+    render(<App />);
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      socket.serverOpens();
+      socket.serverSends({ ...snapshot, questions: [{ ...fx.question }], proposals: [] });
+    });
+    const inbox = within(top()).getByRole('button', { name: 'Inbox' });
+    expect(inbox.querySelector('.pnl-phone-dot')).toBeNull();
+  });
+
+  it('from another page the Inbox button comes back to the panel with the inbox open', async () => {
+    await open();
     act(() =>
       useAppStore.getState().navigate({ route: 'settings', selection: { kind: 'harmonizer' } }),
     );
-    expect(screen.queryByRole('region', { name: 'inbox' })).toBeNull();
-    fireEvent.click(within(top()).getByRole('button', { name: '2 waiting for you' }));
+    fireEvent.click(within(top()).getByRole('button', { name: /^Inbox/ }));
     expect(useAppStore.getState().route).toBe('panel');
     await vi.waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('region', { name: 'inbox' })),
+      expect(
+        within(top())
+          .getByRole('button', { name: /^Inbox/ })
+          .getAttribute('aria-pressed'),
+      ).toBe('true'),
     );
   });
 });

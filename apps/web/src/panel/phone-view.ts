@@ -102,6 +102,30 @@ export function openPhoneView(next: FullPhoneView): boolean {
   return true;
 }
 
+const nextFrame = (fn: () => void) => {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => fn());
+  else setTimeout(fn, 16);
+};
+
+/**
+ * Opens a full view once the phone panel is mounted: from the settings or history page the panel
+ * first navigates back to the main view, which mounts over the next frames (as `revealInbox`
+ * waits for the inbox). Gives up after about a second.
+ */
+export function openPhoneViewWhenReady(next: FullPhoneView, triesLeft = 60): void {
+  if (openPhoneView(next) || triesLeft <= 0) return;
+  nextFrame(() => openPhoneViewWhenReady(next, triesLeft - 1));
+}
+
+/** The open view as the top bar shows it (pressed buttons), without activating anything. */
+export function useCurrentPhoneView(): PhoneView {
+  return useSyncExternalStore(
+    subscribe,
+    () => (active > 0 ? view : 'chat'),
+    () => 'chat' as const,
+  );
+}
+
 /** Back to the chat. */
 export function closePhoneView(): void {
   if (view === 'chat') return;

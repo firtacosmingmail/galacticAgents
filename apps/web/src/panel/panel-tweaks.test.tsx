@@ -7,7 +7,7 @@ import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
 import { useAppStore } from '../state/store.js';
 import { emptyWorld, type WorldState } from '../state/reduce.js';
-import { COMPACT_TOP_BAR_QUERY } from './use-media-query.js';
+import { COMPACT_TOP_BAR_QUERY, STACKED_LAYOUT_QUERY } from './use-media-query.js';
 import { MANAGED_AGENTS_VISIBLE_KEY } from './managed-agents-visibility.js';
 import { buildNav, stewardCount } from './nav-model.js';
 
@@ -185,9 +185,9 @@ describe('hidable managed agents (P4-09)', () => {
     expect(managed()).toBeTruthy();
   });
 
-  it('can be hidden and shown again from the phone menu', async () => {
+  it('is not hidden or shown from the phone menu: the bar opens it full screen (P8-18)', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
-      matches: query === COMPACT_TOP_BAR_QUERY,
+      matches: query === COMPACT_TOP_BAR_QUERY || query === STACKED_LAYOUT_QUERY,
       media: query,
       addEventListener: () => {},
       removeEventListener: () => {},
@@ -195,17 +195,9 @@ describe('hidable managed agents (P4-09)', () => {
     await open('/');
     const menuButton = () => screen.getByRole('button', { name: 'Menu' });
     const menu = () => document.getElementById('pnl-top-menu')!;
-
     fireEvent.click(menuButton());
-    fireEvent.click(within(menu()).getByRole('button', { name: 'Hide managed agents' }));
-    expect(managed()).toBeNull();
-    expect(menu().hidden).toBe(true); // the menu closes, as after the scene toggle
-    expect(document.activeElement).toBe(menuButton());
-    expect(inbox()).toBeTruthy();
-
-    fireEvent.click(menuButton());
-    fireEvent.click(within(menu()).getByRole('button', { name: 'Show managed agents' }));
-    expect(managed()).toBeTruthy();
+    expect(within(menu()).queryByRole('button', { name: /managed agents/i })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Managed agents' })).toBeTruthy();
   });
 
   it('survives a browser without storage', async () => {

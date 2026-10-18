@@ -7,7 +7,7 @@ import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
 import { useAppStore } from '../state/store.js';
 import { emptyWorld, type WorldState } from '../state/reduce.js';
-import { COMPACT_TOP_BAR_QUERY } from './use-media-query.js';
+import { COMPACT_TOP_BAR_QUERY, STACKED_LAYOUT_QUERY } from './use-media-query.js';
 import { MANAGED_AGENTS_VISIBLE_KEY } from './managed-agents-visibility.js';
 import { INBOX_VISIBLE_KEY } from './inbox-visibility.js';
 import { revealQuestion, REVEALED_CLASS } from './inbox-reveal.js';
@@ -218,9 +218,9 @@ describe('hidable inbox (P4-12)', () => {
     });
   });
 
-  it('hides and shows from the phone menu', async () => {
+  it('is not hidden or shown from the phone menu: the bar opens it full screen (P8-18)', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
-      matches: query === COMPACT_TOP_BAR_QUERY,
+      matches: query === COMPACT_TOP_BAR_QUERY || query === STACKED_LAYOUT_QUERY,
       media: query,
       addEventListener: () => {},
       removeEventListener: () => {},
@@ -229,15 +229,8 @@ describe('hidable inbox (P4-12)', () => {
     const menuButton = () => screen.getByRole('button', { name: 'Menu' });
     const menu = () => document.getElementById('pnl-top-menu')!;
     fireEvent.click(menuButton());
-    fireEvent.click(within(menu()).getByRole('button', { name: 'Hide inbox' }));
-    expect(inbox()).toBeNull();
-    expect(menu().hidden).toBe(true);
-    expect(document.activeElement).toBe(menuButton());
-    // The compact bar's count brings it back too.
-    fireEvent.click(within(top()).getByRole('button', { name: '1 waiting for you' }));
-    expect(inbox()).toBeTruthy();
-    fireEvent.click(menuButton());
-    expect(within(menu()).getByRole('button', { name: 'Hide inbox' })).toBeTruthy();
+    expect(within(menu()).queryByRole('button', { name: /inbox/i })).toBeNull();
+    expect(within(top()).getByRole('button', { name: 'Inbox, 1 waiting' })).toBeTruthy();
   });
 
   it('survives a browser without storage', async () => {

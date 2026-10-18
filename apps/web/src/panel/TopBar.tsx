@@ -21,6 +21,12 @@ import { revealInbox } from './inbox-reveal.js';
 import { SkipLink } from './a11y.js';
 import { NavSheetButton, type NavSheetControl } from './nav-sheet.js';
 import { PhoneIndicator } from './phone/PhoneIndicator.js';
+import {
+  closePhoneView,
+  openPhoneViewWhenReady,
+  useCurrentPhoneView,
+  type FullPhoneView,
+} from './phone-view.js';
 
 /** The inbox section's id, for the compact bar's "waiting for you" button (P3-12). */
 export { INBOX_ID } from './inbox-reveal.js';
@@ -59,6 +65,22 @@ function useOpenInbox(): () => void {
   return () => {
     if (route !== 'panel') navigate({ route: 'panel', selection });
     revealInbox();
+  };
+}
+
+/**
+ * The phone's full-view buttons (P8-18): the inbox or the managed agents full screen, a second
+ * press back to the chat. From another page the panel comes back first, with the view open.
+ */
+function useTogglePhoneView(): (view: FullPhoneView) => void {
+  const route = useAppStore((s) => s.route);
+  const selection = useAppStore((s) => s.selection);
+  const navigate = useAppStore((s) => s.navigate);
+  const current = useCurrentPhoneView();
+  return (view) => {
+    if (route === 'panel' && current === view) return closePhoneView();
+    if (route !== 'panel') navigate({ route: 'panel', selection });
+    openPhoneViewWhenReady(view);
   };
 }
 
@@ -132,14 +154,15 @@ function WideTopBar({ scene, agents, inbox, onForget }: TopBarProps) {
   );
 }
 
-function CompactTopBar({ scene, agents, inbox, navSheet, onForget }: TopBarProps) {
+function CompactTopBar({ scene, navSheet, onForget }: TopBarProps) {
   const status = useAppStore((s) => s.status);
   const route = useAppStore((s) => s.route);
   const selection = useAppStore((s) => s.selection);
   const world = useAppStore((s) => s.world);
   const summary = summaryOf(world);
   const waiting = waitingForUserCount(world);
-  const reveal = useOpenInbox();
+  const phoneView = useCurrentPhoneView();
+  const togglePhoneView = useTogglePhoneView();
   const statusText = status.replace(/_/g, ' ');
 
   const [open, setOpen] = useState(false);
@@ -206,9 +229,9 @@ function CompactTopBar({ scene, agents, inbox, navSheet, onForget }: TopBarProps
     if (item.hasAttribute('data-closes-menu') || item.tagName === 'A') close(true);
   };
 
-  const openInbox = () => {
+  const toggleView = (view: FullPhoneView) => {
     setOpen(false);
-    reveal();
+    togglePhoneView(view);
   };
 
   return (
@@ -226,21 +249,31 @@ function CompactTopBar({ scene, agents, inbox, navSheet, onForget }: TopBarProps
       />
       <span className="pnl-spacer" />
       <PhoneIndicator compact />
-      {waiting > 0 && (
-        <button
-          type="button"
-          className="pnl-top-waiting"
-          aria-label={`${waiting} waiting for you`}
-          title="Open the inbox"
-          onClick={openInbox}
-        >
-          <Beacon>
-            <span>
-              {waiting} waiting<span className="pnl-top-waiting-tail"> for you</span>
-            </span>
-          </Beacon>
-        </button>
-      )}
+      <button
+        type="button"
+        className="pnl-phone-button pnl-phone-agents"
+        aria-label="Managed agents"
+        aria-pressed={phoneView === 'agents'}
+        title="Managed agents"
+        onClick={() => toggleView('agents')}
+      >
+        <span className="pnl-phone-icon pnl-phone-icon-agents" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="pnl-phone-button pnl-phone-inbox"
+        aria-label={waiting > 0 ? `Inbox, ${waiting} waiting` : 'Inbox'}
+        aria-pressed={phoneView === 'inbox'}
+        title="Inbox"
+        onClick={() => toggleView('inbox')}
+      >
+        <span className="pnl-phone-icon pnl-phone-icon-inbox" aria-hidden="true" />
+        {waiting > 0 && (
+          <span className="pnl-phone-dot" aria-hidden="true">
+            {waiting}
+          </span>
+        )}
+      </button>
       <button
         ref={buttonRef}
         type="button"
@@ -272,8 +305,7 @@ function CompactTopBar({ scene, agents, inbox, navSheet, onForget }: TopBarProps
               <span>{summary.blockedItems} blocked</span>
             </p>
             <SceneToggle scene={scene} />
-            {agents && <ManagedAgentsToggle agents={agents} />}
-            {inbox && <InboxToggle inbox={inbox} />}
+            {/* P8-18: no Show / Hide inbox or managed agents here — the bar opens them full screen. */}
             <NotificationsDisclosure />
             <NavLink
               to={{ route: 'history', selection }}
