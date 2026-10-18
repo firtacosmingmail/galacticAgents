@@ -3,7 +3,12 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import {
   AgentEvent,
   DISMISSED_BY_USER,
+  QUESTION_SET_LIMITS,
+  SetAnswer,
+  SetQuestionInput,
   SUPERSEDED_BY_MESSAGE,
+  checkSetAnswer,
+  renderSetAnswer,
   type AnswerQuestionSetInput,
   type DismissQuestionInput,
   type DismissQuestionSetInput,
@@ -56,7 +61,7 @@ import { agentEffect, agentsOf } from './cascade.js';
 import { EARTH_ID, chooseBody, freeMoons, freePlanets, type ChooseOptions } from './catalogue.js';
 import { recordControl } from './control.js';
 import { checkSpawnBudget, setBudget } from './budgets.js';
-import { DomainError, must } from './errors.js';
+import { DomainError, must, notFound } from './errors.js';
 import {
   addDeliverable,
   recordOpened,
@@ -103,6 +108,7 @@ import type { ProposalOptions } from './approval.js';
 import { createProposal, decideProposal, proposePlan } from './proposals.js';
 import {
   endAgentQuestions,
+  holderFor,
   holdersNow,
   logRouting,
   openFromNeedsInput,
@@ -116,9 +122,12 @@ import {
   checkDismiss,
   type Dismissal,
   consumeConfirmation,
+  draftQuestion as draftRow,
   isRecordedAnswer,
   escalateQuestion,
+  normaliseSetAnswer,
   reassignQuestion,
+  refuseSetRow,
   COMMAND_SOURCE,
 } from './questions.js';
 import { setProjectState, setTaskState } from './states.js';
@@ -142,13 +151,17 @@ export interface AgentControl {
   stop(agentId: Id, by: Actor): Promise<void>;
   pause(agentId: Id, by: Actor): Promise<void>;
   resumeAgent(agentId: Id, by: Actor): Promise<void>;
-  /** `answerId`: the answerer's idempotency key (P7-05), recorded with the answer. */
+  /**
+   * `answerId`: the answerer's idempotency key (P7-05), recorded with the answer; `detail`: a
+   * question-set row's structured answer (P8-19), recorded beside the answer string.
+   */
   answer(
     questionId: Id,
     answer: string,
     by: Actor,
     answerId?: string,
     repliedIn?: Id,
+    detail?: SetAnswer,
   ): Promise<void>;
   /** Whether a live session asked the question and takes its answer through the adapter. */
   hasQuestion(questionId: Id): boolean;
@@ -236,6 +249,8 @@ export class Commands implements DomainCommands {
    * refused as "already being answered".
    */
   private readonly answering = new Map<string, Promise<CommandResult<Question>>>();
+  /** Set answers being recorded, by `<setId> <answerId>` (P8-19): a retry waits for the first. */
+  private readonly answeringSets = new Map<string, Promise<CommandResult<Question[]>>>();
 
   constructor(opts: CommandsOptions) {
     this.log = opts.log;
@@ -690,6 +705,7 @@ export class Commands implements DomainCommands {
       ...(input.repliedIn !== undefined ? { repliedIn: input.repliedIn } : {}),
     };
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    refuseSetRow(question);
     // Recorded already under this key: the retry of an answer whose acknowledgement was lost.
     if (isRecordedAnswer(question, answerId)) return { value: question, events: [] };
     checkAnswer(question, answer);
@@ -709,10 +725,19 @@ export class Commands implements DomainCommands {
   }
 
   /** The answer to a question a live session waits on: the adapter first, then the log. */
-  private async answerThroughAdapter(input: AnswerQuestionInput): Promise<CommandResult<Question>> {
+  private async answerThroughAdapter(
+    input: AnswerQuestionInput & { detail?: SetAnswer },
+  ): Promise<CommandResult<Question>> {
     const { questionId } = input;
     const since = this.log.currentSeq();
-    await this.agents!.answer(questionId, input.answer, input.by, input.answerId, input.repliedIn);
+    await this.agents!.answer(
+      questionId,
+      input.answer,
+      input.by,
+      input.answerId,
+      input.repliedIn,
+      input.detail,
+    );
     const after = must(this.log.tables.questions.get(questionId), 'question', questionId);
     const events = this.log
       .eventsSince(since, Number.MAX_SAFE_INTEGER)
@@ -720,8 +745,13 @@ export class Commands implements DomainCommands {
       .filter((e) => e.type === 'question.answered' && e.questionId === questionId);
     return { value: after, events };
   }
+  /** An agent passes a set row up with `answerQuestionSet` (P8-19), never alone. */
   escalateQuestion(questionId: Id, by: Actor) {
-    return this.run((ctx) => escalateQuestion(ctx, questionId, by, this.questions.isLiving));
+    return this.run((ctx) => {
+      const question = ctx.tables.questions.get(questionId);
+      if (question && by.type === 'agent') refuseSetRow(question);
+      return escalateQuestion(ctx, questionId, by, this.questions.isLiving);
+    });
   }
   reassignQuestion(questionId: Id, to: Actor, reason: string) {
     return this.run((ctx) => reassignQuestion(ctx, questionId, to, reason));
@@ -745,21 +775,254 @@ export class Commands implements DomainCommands {
     );
   }
 
-  // Question sets (P8-19): the protocol is in place; the domain commands land with Task 2.
-  async openQuestionSet(_input: OpenQuestionSetInput): Promise<CommandResult<Question[]>> {
-    throw new DomainError('invalid', 'question sets are not implemented yet');
+  // -- question sets (P8-19; SPEC decision 141) ----------------------------------------------
+
+  /** Every row of a set, in the order the asker wrote them; refused when there is none. */
+  private setRows(setId: Id): Question[] {
+    const rows = this.log.tables.questions
+      .all()
+      .filter((q) => q.context.set?.id === setId)
+      .sort((a, b) => (a.context.set?.index ?? 0) - (b.context.set?.index ?? 0));
+    if (rows.length === 0) throw notFound('question set', setId);
+    return rows;
   }
 
-  async answerQuestionSet(_input: AnswerQuestionSetInput): Promise<CommandResult<Question[]>> {
-    throw new DomainError('invalid', 'question sets are not implemented yet');
+  /**
+   * Several related clarifications asked at once: one `question.opened` per row, in the asker's
+   * order, in one transaction. Every row shares `context.set` and one holder (`holderFor` once, or
+   * the user with `toUser`), so routing, escalation and orphan moves keep the rows together.
+   * Refused: a permission question, fewer than 2 or more than 10 questions (one question is asked
+   * alone), more than 8 options, a title that is blank or over 120 characters.
+   */
+  openQuestionSet(input: OpenQuestionSetInput): Promise<CommandResult<Question[]>> {
+    const { originAgentId, toUser } = input;
+    const { minQuestions, maxQuestions, maxOptions, maxTitle } = QUESTION_SET_LIMITS;
+    const refuse = (message: string) => Promise.reject(new DomainError('invalid', message));
+    const isPermission = (o: unknown) => {
+      const kind = (o as { kind?: unknown } | undefined)?.kind;
+      return kind !== undefined && kind !== 'clarification';
+    };
+    if (isPermission(input) || (input.questions ?? []).some(isPermission)) {
+      return refuse('a question set holds clarifications only');
+    }
+    const count = input.questions?.length ?? 0;
+    if (count < minQuestions || count > maxQuestions) {
+      return refuse(
+        `a question set has ${minQuestions}–${maxQuestions} questions, not ${count} (one question: ask it alone)`,
+      );
+    }
+    const title = input.title?.trim() ?? '';
+    if (title.length === 0 || title.length > maxTitle) {
+      return refuse(`a question set's title is 1–${maxTitle} characters`);
+    }
+    const questions: SetQuestionInput[] = [];
+    for (const [i, raw] of input.questions.entries()) {
+      if ((raw.options?.length ?? 0) > maxOptions) {
+        return refuse(`question ${i + 1} has more than ${maxOptions} options`);
+      }
+      const parsed = SetQuestionInput.safeParse(raw);
+      if (!parsed.success) {
+        return refuse(`question ${i + 1}: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
+      }
+      questions.push(parsed.data);
+    }
+    return this.run((ctx) => {
+      const holder: Actor = toUser
+        ? { type: 'user' }
+        : holderFor(ctx, originAgentId, 'clarification', this.questions);
+      const id = `qs-${randomUUID()}`;
+      const total = questions.length;
+      return questions.map((q, index) =>
+        openRouted(
+          ctx,
+          {
+            id: `q-${randomUUID()}`,
+            kind: 'clarification',
+            originAgentId,
+            context: {
+              text: q.text,
+              ...(q.options?.length ? { options: q.options } : {}),
+              ...(q.multiSelect ? { multiSelect: true } : {}),
+              set: { id, index, total, title },
+            },
+            meta: { source: COMMAND_SOURCE, ...(toUser ? { toUser: true } : {}) },
+          },
+          this.questions,
+          holder,
+        ),
+      );
+    });
   }
 
-  async draftQuestion(_input: DraftQuestionInput): Promise<CommandResult<Question>> {
-    throw new DomainError('invalid', 'question sets are not implemented yet');
+  /**
+   * Answers for a set, recorded together. The **user** must resolve every open row they hold
+   * (answered or skipped; a partial send is refused) and the asker gets them in one transaction —
+   * one wake. A **supervisor** answers the rows it chooses; the other open rows it holds move one
+   * living level up in the same transaction (`answers: []` passes everything up). Every listed
+   * answer is checked first — normalised (a skip wins, a repeated choice counts once), fitted to its
+   * question, its `version` fresh, its holder the answering agent — so a refusal records nothing.
+   * A row a live session waits on goes through its adapter first, like a single answer. Row `i`'s
+   * idempotency key is `<answerId>:<i>`: a retry of a recorded send changes nothing.
+   */
+  async answerQuestionSet(input: AnswerQuestionSetInput): Promise<CommandResult<Question[]>> {
+    const key = input.answerId !== undefined ? `${input.setId} ${input.answerId}` : undefined;
+    const pending = key !== undefined ? this.answeringSets.get(key) : undefined;
+    if (pending) return pending;
+    const result = this.answerSet(input);
+    if (key === undefined) return result;
+    this.answeringSets.set(key, result);
+    try {
+      return await result;
+    } finally {
+      this.answeringSets.delete(key);
+    }
   }
 
-  async dismissQuestionSet(_input: DismissQuestionSetInput): Promise<CommandResult<Question[]>> {
-    throw new DomainError('invalid', 'question sets are not implemented yet');
+  private async answerSet(input: AnswerQuestionSetInput): Promise<CommandResult<Question[]>> {
+    const { setId, by, answerId } = input;
+    if (by.type === 'system') {
+      throw new DomainError('invalid', 'a question set is answered by the user or a supervisor');
+    }
+    const rows = this.setRows(setId);
+    const byId = new Map(rows.map((q) => [q.id, q]));
+    const listed = new Set<Id>();
+    const answers = input.answers.map((a) => {
+      const row = byId.get(a.questionId);
+      if (!row) throw new DomainError('invalid', `${a.questionId} is not part of set ${setId}`);
+      if (listed.has(row.id)) throw new DomainError('invalid', `${row.id} is answered twice`);
+      listed.add(row.id);
+      const parsed = SetAnswer.safeParse(a.answer);
+      if (!parsed.success) throw new DomainError('invalid', `the answer to ${row.id} is malformed`);
+      const detail = normaliseSetAnswer(parsed.data);
+      return {
+        row,
+        detail,
+        answer: renderSetAnswer(detail),
+        ...(a.version !== undefined ? { version: a.version } : {}),
+        ...(answerId !== undefined ? { answerId: `${answerId}:${row.context.set!.index}` } : {}),
+      };
+    });
+    // A retry of a send whose acknowledgement was lost: recorded already, nothing to do.
+    const todo = answers.filter((a) => !isRecordedAnswer(a.row, a.answerId));
+    if (answerId !== undefined && answers.length > 0 && todo.length === 0) {
+      return { value: rows, events: [] };
+    }
+    // A row someone answered first refuses the send with who did ("already answered by …").
+    const closedFirst = [...todo].sort(
+      (x, y) => Number(x.row.status === 'open') - Number(y.row.status === 'open'),
+    );
+    for (const a of closedFirst) {
+      checkAnswer(a.row, {
+        questionId: a.row.id,
+        answer: a.answer,
+        answeredBy: by,
+        ...(a.version !== undefined ? { version: a.version } : {}),
+      });
+      const problem = checkSetAnswer(a.row, a.detail);
+      if (problem) throw new DomainError('invalid', `question ${a.row.id}: ${problem}`);
+    }
+    const open = rows.filter((q) => q.status === 'open' && !listed.has(q.id));
+    const heldBy = (q: Question) => q.holder.type === by.type && q.holder.id === by.id;
+    const passUp = by.type === 'agent' ? open.filter(heldBy) : [];
+    if (by.type === 'user') {
+      const missing = open.filter(heldBy).map((q) => q.id);
+      if (missing.length > 0) {
+        throw new DomainError(
+          'invalid',
+          `a send answers or skips every question of set ${setId} you hold: missing ${missing.join(', ')}`,
+        );
+      }
+    } else if (todo.length === 0 && passUp.length === 0) {
+      throw new DomainError(
+        'conflict',
+        `set ${setId} has no open question held by ${by.id ? `agent ${by.id}` : 'you'}`,
+      );
+    }
+    const events: Event[] = [];
+    const live = todo.filter((a) => this.agents?.hasQuestion(a.row.id));
+    for (const a of live) {
+      const delivered = await this.answerThroughAdapter({
+        questionId: a.row.id,
+        answer: a.answer,
+        by,
+        detail: a.detail,
+        ...(a.answerId !== undefined ? { answerId: a.answerId } : {}),
+      });
+      events.push(...delivered.events);
+    }
+    const logged = todo.filter((a) => !live.includes(a));
+    if (logged.length > 0 || passUp.length > 0) {
+      const out = await this.run((ctx) => {
+        for (const a of logged) {
+          answerQuestion(ctx, {
+            questionId: a.row.id,
+            answer: a.answer,
+            answeredBy: by,
+            detail: a.detail,
+            holders: holdersNow(ctx, a.row.id, this.questions),
+            ...(a.version !== undefined ? { version: a.version } : {}),
+            ...(a.answerId !== undefined ? { answerId: a.answerId } : {}),
+          });
+        }
+        for (const q of passUp) escalateQuestion(ctx, q.id, by, this.questions.isLiving);
+      });
+      events.push(...out.events);
+    }
+    return { value: this.setRows(setId), events };
+  }
+
+  /**
+   * The user's unsent draft on an open set row they hold (`null` clears it): `meta.draft`, last
+   * save wins. Wakes no one and leaves `version` alone, so the send still matches the card.
+   */
+  draftQuestion(input: DraftQuestionInput): Promise<CommandResult<Question>> {
+    let draft: SetAnswer | null = null;
+    if (input.draft !== null) {
+      const parsed = SetAnswer.safeParse(input.draft);
+      if (!parsed.success) {
+        return Promise.reject(new DomainError('invalid', 'the draft is malformed'));
+      }
+      draft = parsed.data;
+    }
+    return this.run((ctx) => draftRow(ctx, input.questionId, draft, input.by));
+  }
+
+  /**
+   * The user dismisses a set: every open row, whoever holds it, as a single dismissal does (a row
+   * a live session waits on through its adapter first; the others cancelled together in one
+   * transaction), each with "dismissed by the user" so the asker is told once per row.
+   */
+  async dismissQuestionSet(input: DismissQuestionSetInput): Promise<CommandResult<Question[]>> {
+    const { setId, by } = input;
+    const open = this.setRows(setId).filter((q) => q.status === 'open');
+    if (open.length === 0) {
+      throw new DomainError('stale', `set ${setId} has no open question left to dismiss`);
+    }
+    for (const q of open) checkDismiss(q, by);
+    const dismissal: Dismissal = { by, ...(input.origin ? { origin: input.origin } : {}) };
+    const events: Event[] = [];
+    const live = open.filter((q) => this.agents?.hasQuestion(q.id));
+    for (const q of live) {
+      events.push(...(await this.dismissWith(q, DISMISSED_BY_USER, dismissal)).events);
+    }
+    const logged = open.filter((q) => !live.includes(q));
+    if (logged.length > 0) {
+      const out = await this.run((ctx) => {
+        for (const q of logged) {
+          const current = must(ctx.tables.questions.get(q.id), 'question', q.id);
+          checkDismiss(current, by);
+          cancelQuestion(
+            ctx,
+            q.id,
+            DISMISSED_BY_USER,
+            holdersNow(ctx, q.id, this.questions),
+            dismissal,
+          );
+        }
+      });
+      events.push(...out.events);
+    }
+    return { value: this.setRows(setId), events };
   }
 
   /**
@@ -772,6 +1035,7 @@ export class Commands implements DomainCommands {
   async dismissQuestion(input: DismissQuestionInput): Promise<CommandResult<Question>> {
     const { questionId, by } = input;
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    refuseSetRow(question);
     checkDismiss(question, by, input.version);
     return this.dismissWith(question, DISMISSED_BY_USER, {
       by,
