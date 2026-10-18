@@ -519,7 +519,7 @@ describe('AcpAdapter', () => {
     expect(texts(r)).toContain('set: {"format":"EU","columns":["date","note"],"note":"no"}');
   });
 
-  it('an untitled form set is "Questions from the Steward"; an unreadable answer is asked again alone', async () => {
+  it('an untitled form set is "Questions from the Steward"; a skipped row is left out of the content, never re-asked', async () => {
     const r = rig();
     await r.adapter.spawn(spawnOpts(r, 'scenario:form'));
     await waitFor(() => of(r, 'agent.needs_input').length === 2, 'both rows');
@@ -530,18 +530,28 @@ describe('AcpAdapter', () => {
       set: { index: 0, total: 2, title: 'Questions from the Steward' },
     });
     expect(q2!.question).toMatchObject({ options: ['yes', 'no'], set: { index: 1, total: 2 } });
-    await r.adapter.answer(q1!.questionId, 'lots');
-    await r.adapter.answer(q2!.questionId, 'yes');
-    await waitFor(() => of(r, 'agent.needs_input').length === 3, 'the re-ask');
-    const again = of(r, 'agent.needs_input')[2]!;
-    expect(again.question.text).toMatch(/How many builds\? \(could not read "lots"/);
-    expect(again.question.set).toBeUndefined();
-    await r.adapter.answer(again.questionId, '3');
+    await r.adapter.answer(q1!.questionId, '3');
+    await r.adapter.answer(q2!.questionId, '(skipped by the user)');
     await waitFor(() => idles(r) === 1, 'idle');
-    expect(texts(r)).toContain('form: {"count":3,"ship":true}');
-    await expect(r.adapter.answer(again.questionId, 'again')).rejects.toThrow(
-      /no pending question/,
+    expect(texts(r)).toContain('form: {"count":3}');
+    expect(of(r, 'agent.needs_input')).toHaveLength(2); // no one-by-one re-ask
+  });
+
+  it('a set answer with a note reads by its choice; an unreadable one is left out and said, never re-asked', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:form'));
+    await waitFor(() => of(r, 'agent.needs_input').length === 2, 'both rows');
+    const [q1, q2] = of(r, 'agent.needs_input');
+    // A supervisor's (or the card's) "choice — text" answer on a yes/no field: the choice reads.
+    await r.adapter.answer(q2!.questionId, 'yes — ship it on Friday');
+    // A free answer a number field cannot read: left out, and the transcript says so.
+    await r.adapter.answer(q1!.questionId, 'lots');
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(texts(r)).toContain('form: {"ship":true}');
+    expect(texts(r)).toContain(
+      'left out of the form: could not read "lots" for "Tell me about the release. — How many builds?"',
     );
+    expect(of(r, 'agent.needs_input')).toHaveLength(2);
   });
 
   it("claude-agent-acp's question tool: one clarification, the answer matched to its choice, no hold", async () => {

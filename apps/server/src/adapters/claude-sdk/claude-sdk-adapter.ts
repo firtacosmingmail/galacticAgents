@@ -802,7 +802,9 @@ export class ClaudeSdkAdapter implements AgentAdapter {
    * The questions of an `AskUserQuestion` call, answered back keyed by the question text as the
    * tool expects. One question is asked alone (a `multiSelect` one says how to answer); several
    * are one question set (P8-20): all opened at once, the call held until every row is resolved.
-   * Any row dismissed refuses the whole call; an interrupt withdraws them all.
+   * Any row dismissed refuses the whole call; an interrupt withdraws them all. The call waits for
+   * every row even after a dismissal: that relies on `dismissQuestionSet` dismissing every open row
+   * of the set (no path dismisses a single set row), so the Steward is never held by the rest.
    */
   private async askUserQuestion(
     session: Session,

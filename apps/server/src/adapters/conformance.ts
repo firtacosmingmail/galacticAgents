@@ -374,17 +374,22 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       'an interrupt while a question set is open cancels every row (P8-20)',
       async (prompt) => {
         const agent = await spawn(prompt);
-        const asked = await waitForSet(agent.id);
+        const [first, ...rest] = await waitForSet(agent.id);
+        // One row answered first: the agent still gets no half result — the rest are cancelled.
+        await rig.composed.runtime.answer(first!.questionId, 'the first answer', USER);
         await rig.composed.runtime.interrupt(agent.id);
         await waitState(agent.id, 'idle');
-        for (const e of asked) {
+        expect(rig.composed.log.tables.questions.get(first!.questionId)?.status).toBe('answered');
+        for (const e of rest) {
           await waitFor(
             () => rig.composed.log.tables.questions.get(e.questionId)?.status === 'cancelled',
             `row ${e.questionId} cancelled`,
           );
         }
         expect(typesOf(agent.id)).not.toContain('agent.finished');
-        expect(rig.events.map((e) => e.event.type)).not.toContain('question.answered');
+        expect(rig.events.filter((e) => e.event.type === 'question.answered')).toHaveLength(1);
+        // The answered row never reached the agent as part of a result.
+        expect(transcriptText(agent.id)).not.toContain('the first answer');
       },
     );
 
