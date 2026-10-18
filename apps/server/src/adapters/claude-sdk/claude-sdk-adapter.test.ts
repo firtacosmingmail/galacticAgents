@@ -282,9 +282,9 @@ describe('ClaudeSdkAdapter — questions', () => {
     expect(events.items.some((e) => e.type === 'agent.tool_call')).toBe(false); // a question is not a tool call
   });
 
-  it('a dismissed AskUserQuestion is refused with what the user did; later questions are not asked (P9-14)', async () => {
+  it('a dismissed AskUserQuestion is refused with what the user did (P9-14)', async () => {
     const { adapter, events } = make(() => [
-      { askUsers: [{ question: 'Which format?' }, { question: 'Which fields?' }] },
+      { askUser: { question: 'Which format?' } },
       { text: 'carrying on' },
     ]);
     await adapter.spawn(spawnOpts('ask me'));
@@ -747,38 +747,98 @@ describe('ClaudeSdkAdapter — the query loop ends with the CLI alive (P1-32)', 
 });
 
 describe('ClaudeSdkAdapter — mapping gaps (P1-36)', () => {
-  it('AskUserQuestion with several questions asks each in turn and collects every answer', async () => {
+  it('AskUserQuestion with several questions is one question set: every row at once, one result after the last answer (P8-20)', async () => {
     const { adapter, events } = make(() => [
       {
         askUsers: [
           { question: 'Which format?', options: ['ISO', 'US'] },
           { question: 'Which fields?', options: ['date', 'time', 'zone'], multiSelect: true },
+          { question: 'Anything else?' },
         ],
       },
       { text: 'ok' },
     ]);
     await adapter.spawn(spawnOpts('ask me'));
-    await events.waitFor((e) => questions(e).length === 1);
-    const [q1] = questions(events.items);
+    await events.waitFor((e) => questions(e).length === 3);
+    const [q1, q2, q3] = questions(events.items);
+    const setId = q1!.question.set?.id;
+    expect(setId).toMatch(/^qs-/);
     expect(q1).toMatchObject({
       kind: 'clarification',
-      question: { text: 'Which format?', options: ['ISO', 'US'] },
+      question: {
+        text: 'Which format?',
+        options: ['ISO', 'US'],
+        set: { id: setId, index: 0, total: 3, title: 'Questions from the Steward' },
+      },
     });
-    await adapter.answer(q1!.questionId, 'US');
-    await events.waitFor((e) => questions(e).length === 2);
-    const q2 = questions(events.items)[1]!;
-    expect(q2.question).toEqual({
-      text: 'Which fields? (one or more: separate the labels with commas)',
+    expect(q1!.question.multiSelect).toBeUndefined();
+    // Multi-select is native on the card: no "(separate the labels with commas)" suffix.
+    expect(q2!.question).toEqual({
+      text: 'Which fields?',
       options: ['date', 'time', 'zone'],
+      multiSelect: true,
+      set: { id: setId, index: 1, total: 3, title: 'Questions from the Steward' },
     });
-    await adapter.answer(q2.questionId, 'date, zone');
+    expect(q3!.question).toEqual({
+      text: 'Anything else?',
+      set: { id: setId, index: 2, total: 3, title: 'Questions from the Steward' },
+    });
+    const toolResult = () =>
+      events.items.find((e) => e.type === 'agent.output' && e.kind === 'tool');
+    // Answered out of order; the tool result waits for every row.
+    await adapter.answer(q2!.questionId, 'date, zone');
+    await adapter.answer(q1!.questionId, 'US');
+    await sleep(50);
+    expect(toolResult()).toBeUndefined();
+    await adapter.answer(q3!.questionId, '(skipped by the user)');
+    await events.waitFor(has('agent.idle'));
+    expect(toolResult()).toMatchObject({
+      text: expect.stringContaining(
+        JSON.stringify({
+          'Which format?': 'US',
+          'Which fields?': 'date, zone',
+          'Anything else?': '(skipped by the user)',
+        }),
+      ),
+    });
+    expect(questions(events.items)).toHaveLength(3);
+  });
+
+  it('one dismissed row of a question set refuses the whole AskUserQuestion call (P8-20)', async () => {
+    const { adapter, events } = make(() => [
+      { askUsers: [{ question: 'Which format?' }, { question: 'Which fields?' }] },
+      { text: 'carrying on' },
+    ]);
+    await adapter.spawn(spawnOpts('ask me'));
+    await events.waitFor((e) => questions(e).length === 2);
+    const [q1, q2] = questions(events.items);
+    await adapter.dismiss(q1!.questionId, 'dismissed by the user');
+    await adapter.answer(q2!.questionId, 'all of them');
     await events.waitFor(has('agent.idle'));
     const result = events.items.find((e) => e.type === 'agent.output' && e.kind === 'tool');
     expect(result).toMatchObject({
       text: expect.stringContaining(
-        JSON.stringify({ 'Which format?': 'US', 'Which fields?': 'date, zone' }),
+        'The user did not answer this question: it was dismissed by the user. Do not wait',
       ),
     });
+    expect(questions(events.items)).toHaveLength(2);
+  });
+
+  it('an interrupt while a question set is open withdraws every row and ends the turn (P8-20)', async () => {
+    const { adapter, events } = make(() => [
+      { askUsers: [{ question: 'A?' }, { question: 'B?' }, { question: 'C?' }] },
+      { text: 'never' },
+    ]);
+    const h = await adapter.spawn(spawnOpts('ask me'));
+    await events.waitFor((e) => questions(e).length === 3);
+    const [q1, q2, q3] = questions(events.items);
+    await adapter.answer(q1!.questionId, 'yes');
+    await adapter.interrupt(h.sessionId);
+    await events.waitFor(has('agent.idle'));
+    expect(events.items.some((e) => e.type === 'agent.output' && e.kind === 'tool')).toBe(false);
+    expect(events.items.some((e) => e.type === 'agent.output' && e.text === 'never')).toBe(false);
+    await expect(adapter.answer(q2!.questionId, 'late')).rejects.toThrow(/no pending question/);
+    await expect(adapter.answer(q3!.questionId, 'late')).rejects.toThrow(/no pending question/);
   });
 
   it('interrupt() while paused thaws the CLI first (agent.resumed), then ends the turn', async () => {

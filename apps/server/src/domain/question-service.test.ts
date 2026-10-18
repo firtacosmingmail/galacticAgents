@@ -7,7 +7,7 @@ import { world } from '../test/world.js';
 import { createAgent } from './agents.js';
 import { Commands } from './commands.js';
 import { DomainError } from './errors.js';
-import { RECENT_EVENTS } from './question-service.js';
+import { logRouting, openFromNeedsInput, RECENT_EVENTS } from './question-service.js';
 
 /**
  * The question service (P2-03) over a real runtime with the fake adapter: clarifications go up
@@ -420,6 +420,72 @@ describe('question service — over the log alone (no runtime)', () => {
       }),
     );
   });
+
+  it('rows of an adapter-opened question set keep together: a later row joins its siblings (P8-20)', async () => {
+    const { commands, tables, waykeeper, steward } = await logOnly();
+    const set = (index: number) => ({
+      id: 'qs-1',
+      index,
+      total: 2,
+      title: 'Questions from the Steward',
+    });
+    await commands.recordAgentEvent({
+      type: 'agent.needs_input',
+      agentId: steward.id,
+      questionId: 'q-1',
+      kind: 'clarification',
+      question: { text: 'Which separator?', set: set(0) },
+    });
+    expect(tables.questions.get('q-1')).toMatchObject({
+      holder: as(waykeeper),
+      context: { set: set(0) },
+    });
+    // The first row moved on before the second arrived: the second follows it.
+    await commands.reassignQuestion('q-1', USER, 'moved for the test');
+    await commands.recordAgentEvent({
+      type: 'agent.needs_input',
+      agentId: steward.id,
+      questionId: 'q-2',
+      kind: 'clarification',
+      question: { text: 'Which encoding?', set: set(1) },
+    });
+    expect(tables.questions.get('q-2')).toMatchObject({ holder: USER, context: { set: set(1) } });
+  });
+
+  it('a set ref outside the limits opens a plain question, never a broken set (P8-20)', async () => {
+    const { run, log, tables, waykeeper, steward } = await logOnly();
+    const routing = logRouting(log);
+    const open = (questionId: string, kind: 'clarification' | 'permission', question: object) =>
+      run((ctx) =>
+        openFromNeedsInput(
+          ctx,
+          {
+            type: 'agent.needs_input',
+            agentId: steward.id,
+            questionId,
+            kind,
+            question: { text: 'Q?', ...question },
+          } as Parameters<typeof openFromNeedsInput>[1],
+          routing,
+        ),
+      );
+    const title = 'Questions from the Steward';
+    open('q-total', 'clarification', { set: { id: 'qs-a', index: 0, total: 1, title } });
+    open('q-index', 'clarification', { set: { id: 'qs-b', index: 2, total: 2, title } });
+    open('q-title', 'clarification', {
+      set: { id: 'qs-c', index: 0, total: 2, title: 'x'.repeat(121) },
+    });
+    open('q-options', 'clarification', {
+      options: ['1', '2', '3', '4', '5', '6', '7', '8', '9'],
+      set: { id: 'qs-d', index: 0, total: 2, title },
+    });
+    open('q-perm', 'permission', { set: { id: 'qs-e', index: 0, total: 2, title } });
+    for (const id of ['q-total', 'q-index', 'q-title', 'q-options', 'q-perm']) {
+      expect(tables.questions.get(id)?.status).toBe('open');
+      expect(tables.questions.get(id)?.context.set).toBeUndefined();
+    }
+    expect(tables.questions.get('q-total')?.holder).toEqual(as(waykeeper));
+  });
 });
 
 describe('question service — wave-2 review fixes', () => {
@@ -436,5 +502,54 @@ describe('question service — wave-2 review fixes', () => {
     });
     expect(allEvents(h).some((e) => e.type === 'question.reassigned')).toBe(false);
     expect(h.log.tables.tasks.get(h.task.id)?.state).not.toBe('blocked_on_user');
+  });
+});
+
+describe("question service — a Steward's question set (P8-20)", () => {
+  it("opens every row of a project Steward's multi-question ask with its Waykeeper; its answers reach the Steward", async () => {
+    const h = await hierarchy();
+    const steward = await h.steward('scenario:asks-set');
+    await until(
+      () => h.log.tables.questions.all().filter((q) => q.originAgentId === steward.id).length === 3,
+    );
+    const rows = h.log.tables.questions
+      .all()
+      .filter((q) => q.originAgentId === steward.id)
+      .sort((a, b) => a.context.set!.index - b.context.set!.index);
+    const setId = rows[0]!.context.set!.id;
+    for (const [i, row] of rows.entries()) {
+      expect(row).toMatchObject({
+        status: 'open',
+        kind: 'clarification',
+        holder: as(h.waykeeper),
+        context: { set: { id: setId, index: i, total: 3, title: 'Questions from the Steward' } },
+      });
+    }
+    expect(rows[1]!.context.multiSelect).toBe(true);
+    // The Waykeeper settles the format; the rest go up to the Harmonizer, as asked.
+    await h.commands.answerQuestionSet({
+      setId,
+      by: as(h.waykeeper),
+      answers: [{ questionId: rows[0]!.id, answer: { choices: ['EU'] } }],
+    });
+    expect(h.log.tables.questions.get(rows[1]!.id)?.holder).toEqual(as(h.harmonizer));
+    expect(h.runtime.liveAgents().some((a) => a.id === steward.id)).toBe(true);
+    await h.commands.answerQuestionSet({
+      setId,
+      by: as(h.harmonizer),
+      answers: [
+        { questionId: rows[1]!.id, answer: { choices: ['date', 'note'] } },
+        { questionId: rows[2]!.id, answer: { choices: [], skipped: true } },
+      ],
+    });
+    await until(() => h.statuses.get(steward.id)?.state === 'finished');
+    h.transcripts.flush();
+    const said = h.transcripts
+      .read(steward.id)
+      .map((c) => c.text)
+      .join('\n');
+    expect(said).toContain(
+      'answers: Which date format should the export use? EU; Which columns? date, note; Anything else I should know? (skipped by the user)',
+    );
   });
 });

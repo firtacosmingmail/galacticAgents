@@ -61,6 +61,12 @@ export interface ConformanceTarget {
     finish: string;
     /** Asks exactly one clarification question, then finishes. */
     ask: string;
+    /**
+     * Asks several clarification questions in one ask (2–10: `AskUserQuestion` with several
+     * questions, a form of several fields), then finishes (P8-20). Without it the question-set
+     * cases are skipped.
+     */
+    askSet?: string;
     /** Requests exactly one permission for a tool call, then finishes; `allow` runs the tool. */
     permission: string;
     /** Works for a while with several progress/tool events; must survive pause and interrupt. */
@@ -310,6 +316,77 @@ export function describeAdapterConformance(target: ConformanceTarget): void {
       expect(rig.events.map((e) => e.event.type)).toContain('question.answered');
       expect(rig.composed.log.tables.questions.get(questionId)?.status).toBe('answered');
     });
+
+    /** Every `agent.needs_input` of one question set, once all `total` rows have arrived. */
+    const waitForSet = async (agentId: string) => {
+      const rows = () =>
+        eventsOf(agentId, 'agent.needs_input').filter((e) => e.question.set !== undefined);
+      await waitFor(() => {
+        const r = rows();
+        return r.length > 0 && r.length === r[0]!.question.set!.total;
+      }, 'every row of a question set');
+      return rows();
+    };
+    const setCase = (title: string, fn: (prompt: string) => Promise<void>) => {
+      const prompt = target.prompts.askSet;
+      if (!prompt) it.skip(`${title} — skipped for ${target.name}: no askSet prompt`, () => {});
+      else it(title, () => fn(prompt));
+    };
+
+    setCase(
+      'a multi-question ask is one question set, answered on one send (P8-20)',
+      async (prompt) => {
+        const agent = await spawn(prompt);
+        const asked = await waitForSet(agent.id);
+        const setId = asked[0]!.question.set!.id;
+        expect(asked.length).toBeGreaterThanOrEqual(2);
+        expect(asked.every((e) => e.kind === 'clarification')).toBe(true);
+        expect(asked.every((e) => e.question.set?.id === setId)).toBe(true);
+        expect(asked.map((e) => e.question.set!.index).sort()).toEqual(asked.map((_, i) => i));
+        // One row per question, opened with the event and routed like any clarification (no
+        // supervisor here: the user holds them all).
+        const rows = asked.map((e) => rig.composed.log.tables.questions.get(e.questionId)!);
+        for (const row of rows) {
+          expect(row).toMatchObject({ status: 'open', kind: 'clarification' });
+          expect(row.context.set?.id).toBe(setId);
+          expect(row.holder).toEqual(USER);
+        }
+        await new Promise((r) => setTimeout(r, 50));
+        expect(typesOf(agent.id)).not.toContain(JOB_END); // held until every question is resolved
+        await rig.composed.commands.answerQuestionSet({
+          setId,
+          by: USER,
+          answers: rows.map((row) => ({
+            questionId: row.id,
+            answer: row.context.options?.length
+              ? { choices: [row.context.options[0]!] }
+              : { choices: [], text: 'no preference' },
+          })),
+        });
+        await waitFor(() => typesOf(agent.id).includes(JOB_END), 'job end after the set send');
+        for (const row of rows) {
+          expect(rig.composed.log.tables.questions.get(row.id)?.status).toBe('answered');
+        }
+      },
+    );
+
+    setCase(
+      'an interrupt while a question set is open cancels every row (P8-20)',
+      async (prompt) => {
+        const agent = await spawn(prompt);
+        const asked = await waitForSet(agent.id);
+        await rig.composed.runtime.interrupt(agent.id);
+        await waitState(agent.id, 'idle');
+        for (const e of asked) {
+          await waitFor(
+            () => rig.composed.log.tables.questions.get(e.questionId)?.status === 'cancelled',
+            `row ${e.questionId} cancelled`,
+          );
+        }
+        expect(typesOf(agent.id)).not.toContain('agent.finished');
+        expect(rig.events.map((e) => e.event.type)).not.toContain('question.answered');
+      },
+    );
 
     it('requests a permission with the tool call attached; allow runs it', async () => {
       const agent = await spawn(target.prompts.permission);

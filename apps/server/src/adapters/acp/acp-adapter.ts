@@ -30,6 +30,7 @@ import type {
 import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import { isDismissed, type Dismissed } from '../dismissal.js';
+import { fitsQuestionSet, setTitle } from '../question-set.js';
 import type {
   ManagedProcess,
   ProcessOutcome,
@@ -44,6 +45,7 @@ import {
   describeTool,
   findMode,
   formFields,
+  type FormField,
   type FormValue,
   gateCall,
   isPermissiveMode,
@@ -99,7 +101,10 @@ import { traceFromEnv, type AcpTrace } from './trace.js';
  *
  * **Questions.** `elicitation/create` in form mode → one `agent.needs_input(kind: clarification)`
  * per field (`formFields`), answered back as `accept` with the typed values; an interrupted or
- * stopped question is answered `cancel`, a URL elicitation `decline`.
+ * stopped question is answered `cancel`, a URL elicitation `decline`. A form of several fields is
+ * one question set (P8-20): every field opens at once sharing `question.set` (the form's title, or
+ * "Questions from the Steward"), a multi-select field with `multiSelect`, and the elicitation is
+ * answered once every row is; a field whose answer does not read is then asked again alone.
  *
  * **Resume.** `sessionRef` is `acp:<the agent's session id>`. `resumeSession` starts a new process
  * and calls `session/load` when the agent advertises `loadSession`; the conversation the agent
@@ -1160,6 +1165,7 @@ export class AcpAdapter implements AgentAdapter {
       session.questionTools.add(params.toolCallId);
     }
     const schema = params.requestedSchema as {
+      title?: unknown;
       properties?: Record<string, ElicitationPropertySchema>;
       required?: string[] | null;
     };
@@ -1171,26 +1177,72 @@ export class AcpAdapter implements AgentAdapter {
       return isDismissed(answer) ? { action: 'decline' } : { action: 'accept', content: {} };
     }
     const content: Record<string, FormValue> = {};
-    for (const field of fields) {
-      let value: Record<string, FormValue> | undefined;
-      let text = field.text;
-      // A typed field asks again until the answer reads (a number, yes/no).
-      for (let attempt = 0; value === undefined && attempt < 3; attempt++) {
-        const answer = await this.ask(
-          session,
-          'clarification',
-          { text, ...(field.options ? { options: field.options } : {}) },
-          signal,
-        );
-        if (answer === undefined) return { action: 'cancel' };
-        if (isDismissed(answer)) return { action: 'decline' };
-        value = field.parse(answer);
-        text = `${field.text} (could not read "${answer}"; please answer again)`;
+    if (fitsQuestionSet(fields.map((f) => f.options?.length ?? 0))) {
+      // One question set (P8-20): every field at once, answered when every row is.
+      const id = `qs-${randomUUID()}`;
+      const title = setTitle(schema.title);
+      const replies = await Promise.all(
+        fields.map((field, index) =>
+          this.ask(
+            session,
+            'clarification',
+            {
+              text: field.text,
+              ...(field.options ? { options: field.options } : {}),
+              ...(field.multiSelect ? { multiSelect: true } : {}),
+              set: { id, index, total: fields.length, title },
+            },
+            signal,
+          ),
+        ),
+      );
+      if (replies.some((r) => r === undefined)) return { action: 'cancel' };
+      if (replies.some(isDismissed)) return { action: 'decline' };
+      for (const [i, field] of fields.entries()) {
+        const answer = replies[i] as string;
+        // An answer that does not read (a number, yes/no) is asked again alone.
+        const value = field.parse(answer) ?? (await this.askField(session, field, signal, answer));
+        if (value === 'cancel' || value === 'decline') return { action: value };
+        Object.assign(content, value);
       }
-      if (value === undefined) return { action: 'decline' };
+      return { action: 'accept', content };
+    }
+    for (const field of fields) {
+      const value = await this.askField(session, field, signal);
+      if (value === 'cancel' || value === 'decline') return { action: value };
       Object.assign(content, value);
     }
     return { action: 'accept', content };
+  }
+
+  /**
+   * One form field asked alone, again until the answer reads (a number, yes/no): three tries in
+   * all, counting `unread`, an answer already given that did not read.
+   */
+  private async askField(
+    session: Session,
+    field: FormField,
+    signal: AbortSignal,
+    unread?: string,
+  ): Promise<Record<string, FormValue> | 'cancel' | 'decline'> {
+    const multi = field.multiSelect ? ' (one or more: separate them with commas)' : '';
+    const again = (answer: string) =>
+      `${field.text} (could not read "${answer}"; please answer again)`;
+    let text = unread === undefined ? `${field.text}${multi}` : again(unread);
+    for (let attempt = unread === undefined ? 0 : 1; attempt < 3; attempt++) {
+      const answer = await this.ask(
+        session,
+        'clarification',
+        { text, ...(field.options ? { options: field.options } : {}) },
+        signal,
+      );
+      if (answer === undefined) return 'cancel';
+      if (isDismissed(answer)) return 'decline';
+      const value = field.parse(answer);
+      if (value !== undefined) return value;
+      text = again(answer);
+    }
+    return 'decline';
   }
 
   private ask(
