@@ -533,3 +533,56 @@ describe('the resume message (dev-machine run, 2026-10-02)', () => {
     }
   });
 });
+
+describe('question sets across a restart (P8-19 final review, SPEC decision 141)', () => {
+  it("a Waykeeper's set and the user's drafts survive a restart and the Waykeeper's resume", async () => {
+    const db = openDatabase(':memory:');
+    dbs.push(db);
+    const sessions = new Map<string, number>();
+    const first = boot(db, sessions, 1);
+    const project = (await first.commands.createProject({ name: 'CSV', workspace: '/tmp/w' }))
+      .value;
+    const harmonizer = (
+      await first.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        prompt: 'scenario:long',
+        cwd: '/hq',
+      })
+    ).value;
+    const waykeeper = (
+      await first.commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        projectId: project.id,
+        supervisorId: harmonizer.id,
+        prompt: 'scenario:long',
+      })
+    ).value;
+    // A brain-asked set (`ask_questions` opens it through the command surface).
+    const rows = (
+      await first.commands.openQuestionSet({
+        originAgentId: waykeeper.id,
+        title: 'CSV import',
+        toUser: true,
+        questions: [{ text: 'Which formats?', options: ['csv', 'tsv'] }, { text: 'Header row?' }],
+      })
+    ).value;
+    const drafts = [{ choices: ['tsv'] }, { choices: [], text: 'yes' }];
+    for (const [i, q] of rows.entries()) {
+      await first.commands.draftQuestion({ questionId: q.id, draft: drafts[i]!, by: USER });
+    }
+    await first.shutdown();
+    expect(first.statuses.get(waykeeper.id)?.state).toBe('interrupted');
+
+    const second = boot(db, sessions, 1);
+    const report = await second.recover();
+    expect(report.resumed).toContain(waykeeper.id);
+    for (const [i, q] of rows.entries()) {
+      const row = second.log.tables.questions.get(q.id)!;
+      expect(row.status).toBe('open');
+      expect(row.context.set?.id).toBe(rows[0]!.context.set!.id);
+      expect(row.meta?.['draft']).toEqual(drafts[i]);
+    }
+  });
+});
