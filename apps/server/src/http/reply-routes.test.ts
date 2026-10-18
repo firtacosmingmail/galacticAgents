@@ -291,6 +291,29 @@ describe('replying in a chat (P8-17)', () => {
     expect(lastSent().replyTo?.answered).toBeUndefined();
   });
 
+  it('replying to a set row sends the message and leaves the row open (P8-19)', async () => {
+    const h = await harmonizer();
+    const rows = (
+      await composed.commands.openQuestionSet({
+        originAgentId: h,
+        title: 'Setup',
+        toUser: true,
+        questions: [{ text: 'Which licence?' }, { text: 'Which name?' }],
+      })
+    ).value;
+    const before = events('message.sent').length;
+    const res = await send(h, {
+      text: 'MIT',
+      replyTo: { kind: 'question', id: rows[0]!.id, version: rows[0]!.version },
+    });
+    expect(res.status).toBe(200);
+    expect(events('message.sent')).toHaveLength(before + 1);
+    expect(lastSent().replyTo).toMatchObject({ kind: 'question', id: rows[0]!.id });
+    expect(lastSent().replyTo?.answered).toBeUndefined();
+    expect(composed.log.tables.questions.get(rows[0]!.id)?.status).toBe('open');
+    expect(events('question.answered')).toHaveLength(0);
+  });
+
   it('answers a log-only clarification and names the chat it was answered in', async () => {
     const h = await harmonizer();
     const asked = (

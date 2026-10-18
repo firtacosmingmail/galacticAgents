@@ -138,7 +138,7 @@ export const AnswerSetBody = z.object({
 });
 export type AnswerSetBody = z.infer<typeof AnswerSetBody>;
 
-/** `PUT /api/questions/:id/draft`: save (or, with `null`, clear) the user's unsent draft. */
+/** `POST /api/questions/:id/draft`: save (or, with `null`, clear) the user's unsent draft. */
 export const DraftBody = z.object({ draft: SetAnswer.nullable() });
 export type DraftBody = z.infer<typeof DraftBody>;
 

@@ -7,6 +7,10 @@ import type {
   AllowSimilarResponse,
   AnswerBody,
   AnswerResponse,
+  AnswerSetBody,
+  DismissSetBody,
+  DraftBody,
+  SetAnswer,
   DismissBody,
   DismissResponse,
   PermissionRuleScope,
@@ -157,6 +161,27 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
       call<DismissResponse>('POST', `/api/questions/${encodeURIComponent(questionId)}/dismiss`, {
         ...(version !== undefined ? { version } : {}),
       } satisfies DismissBody),
+    /**
+     * Answers every row of a question set in one send (P8-19). `answerId`: the idempotency key,
+     * the same on every retry; each answer's `version` may refuse a stale one.
+     */
+    answerSet: (setId: string, answers: AnswerSetBody['answers'], answerId?: string) =>
+      call<AnswerResponse>('POST', `/api/question-sets/${encodeURIComponent(setId)}/answer`, {
+        answers,
+        ...(answerId !== undefined ? { answerId } : {}),
+      } satisfies AnswerSetBody),
+    /** Saves (or with `null` clears) the unsent draft of one set row (P8-19); wakes no one. */
+    draftQuestion: (questionId: string, draft: SetAnswer | null) =>
+      call<{ ok: true }>('POST', `/api/questions/${encodeURIComponent(questionId)}/draft`, {
+        draft,
+      } satisfies DraftBody),
+    /** Dismisses every open row of a question set (P8-19). Never queued. */
+    dismissSet: (setId: string) =>
+      call<DismissResponse>(
+        'POST',
+        `/api/question-sets/${encodeURIComponent(setId)}/dismiss`,
+        {} satisfies DismissSetBody,
+      ),
     /**
      * "Allow similar" (P9-17): what the card's chooser offers for a permission request, each scope
      * with the server's preview of what it would match.

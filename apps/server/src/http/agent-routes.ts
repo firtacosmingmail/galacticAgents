@@ -1,6 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z } from 'zod';
 import {
+  AnswerSetBody,
+  DismissSetBody,
+  DraftBody,
   AgentRuntime as AgentRuntimeName,
   AllowSimilarBody,
   AnswerBody,
@@ -235,6 +238,8 @@ export function registerAgentRoutes(
         if (
           commands &&
           question?.kind === 'clarification' &&
+          // A set row is quoted, never answered: the card answers the set (P8-19).
+          !question.context.set &&
           (question.status === 'open' || body.replyTo.version !== undefined)
         ) {
           // The message must be sendable before the answer is recorded (P8-17 review): an agent
@@ -562,6 +567,67 @@ export function registerAgentRoutes(
         return refuse(req, reply, error);
       }
     });
+
+    /**
+     * Question sets (P8-19, SPEC decision 141): clarifications only, so no peer guard on an
+     * answer (like a single clarification). The send resolves every row the user holds — a partial
+     * one is 400 `invalid`, a stale `version` 409 `stale`; `answerId` makes a retry `duplicate`.
+     */
+    if (commands) {
+      app.post('/api/question-sets/:id/answer', async (req, reply) => {
+        const body = parse(AnswerSetBody, req.body, reply);
+        if (!body) return;
+        const setId = (req.params as { id: string }).id;
+        try {
+          const { events } = await commands.answerQuestionSet({
+            setId,
+            by: USER,
+            answers: body.answers.map(({ version, ...rest }) => ({
+              ...rest,
+              ...(version !== undefined ? { version } : {}),
+            })),
+            origin: originOf(req),
+            ...(body.answerId !== undefined ? { answerId: body.answerId } : {}),
+          });
+          const duplicate = body.answerId !== undefined && events.length === 0;
+          return { ok: true, ...(duplicate ? { duplicate } : {}) } satisfies AnswerResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+
+      /** Saves or clears (`null`) the user's unsent draft on a set row; wakes no one. */
+      app.post('/api/questions/:id/draft', async (req, reply) => {
+        const body = parse(DraftBody, req.body, reply);
+        if (!body) return;
+        const questionId = (req.params as { id: string }).id;
+        try {
+          await commands.draftQuestion({ questionId, draft: body.draft, by: USER });
+          return { ok: true as const };
+        } catch (error) {
+          // A row an agent holds cannot be drafted by the user: a bad request, not a race.
+          if (error instanceof DomainError && error.code === 'conflict') {
+            return reply
+              .code(400)
+              .send({ error: 'invalid', message: redactSecrets(error.message) });
+          }
+          return refuse(req, reply, error);
+        }
+      });
+
+      app.post('/api/question-sets/:id/dismiss', async (req, reply) => {
+        const body = parse(DismissSetBody, req.body ?? {}, reply);
+        if (!body) return;
+        if (!(await notFromAnAgent(opts.answersPeer, 'dismiss', req, reply))) return reply;
+        const setId = (req.params as { id: string }).id;
+        try {
+          await commands.dismissQuestionSet({ setId, by: USER, origin: originOf(req) });
+          return { ok: true } satisfies DismissResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+    }
 
     /**
      * "Allow similar" (P9-17, SPEC decision 138). The preview lists what the card's chooser offers
