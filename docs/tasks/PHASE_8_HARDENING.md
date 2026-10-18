@@ -1,6 +1,6 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (next: P8-18 and P8-19, independent) · **Task status:** P8-18 todo, P8-19 todo, P8-20 todo, P8-21 todo
+**Current task:** P8-18 (branch `p8-18-phone-single-screen`), P8-19 (branch `p8-19-question-sets`) · **Task status:** P8-18 in progress, P8-19 in progress, P8-20 todo, P8-21 todo
 **Phase status:** in progress (17/21 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -122,7 +122,7 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Done:** SPEC decision 139. Protocol `reply.ts` (`ReplyRef`, `ReplyQuote`, `REPLY_QUOTE_MAX`, the thread-card rules `threadShowsQuestion` / `threadShowsProposal` / `questionOwner`, now shared by the panel and the server); `SendBody.replyTo`, `message.sent.replyTo` (also on `ChatMessage`, `ConversationEntry`), `question.answered.repliedIn` — no migration. Server: `runtime/reply-target.ts` resolves the target for `POST /api/agents/:id/send` (400 `reply_target`, 409 `reply_target_gone`); an open clarification is answered first (409 `stale` → nothing sent), a permission never; `wake.ts` renders `the user said (replying to …: "…"): "…"` / `the user answered q-… (…) by replying: "…"` and skips the `question.answered` line for the chat's own brain (`repliedIn`). Web: `panel/chat/Reply.tsx` (Reply action, quote bar, quote block), `Conversation.tsx` (jump with paging back, highlight, "no longer in the history"). Tests: `protocol/src/reply.test.ts`, `events.test.ts`, `rest.test.ts`; `server/src/http/reply-routes.test.ts`, `brains/wake.test.ts`; `web/src/panel/chat/reply.test.tsx` (axe); `e2e/tests/10-chat-replies.spec.ts`. Review: `notes/P8-17-review.md` (answer only when the message can be sent, idempotent retry on `answerId`, the jump's paging bounded on failure and on unmount, a redelivered reply keeps its quote).
 
 ### P8-18 — One screen at a time on phones (added 2026-10-18)
-- **Status:** todo · **Depends on:** P8-15, P7-03, P4-10 · **Parallel with:** P8-19, P8-20, P8-21
+- **Status:** in progress · **Depends on:** P8-15, P7-03, P4-10 · **Parallel with:** P8-19, P8-20, P8-21
 - Cosmin's request: "I want the design on mobile to have only one screen on … either the chat box with the selected agent, harmoniser, or a way keeper, or the inbox." At phone width (≤760px) the chat fills the screen; an Inbox button with a dot and a Managed-agents button in the top bar open full-screen views closed with ✕ or Back; the composer draft survives; with the scene shown the docked chat stays as today; desktop and tablet unchanged.
 - **Design / plan:** `docs/superpowers/specs/2026-10-18-question-sets-and-phone-single-screen-design.md` (Part 2), `docs/superpowers/plans/2026-10-18-phone-single-screen.md`.
 - **Acceptance:** the plan's tests and e2e; SPEC decision 140; axe clean.
