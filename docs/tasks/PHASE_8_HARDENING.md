@@ -1,6 +1,6 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-20, P8-21 (both eligible now that P8-19 is done), P8-18 (branch `p8-18-phone-single-screen`) · **Task status:** P8-18 in progress, P8-19 done, P8-20 todo, P8-21 todo
+**Current task:** P8-20, P8-21 (worktrees from `p8-19-question-sets`), P8-18 (branch `p8-18-phone-single-screen`) · **Task status:** P8-18 in progress, P8-19 done, P8-20 in progress, P8-21 in progress
 **Phase status:** in progress (18/21 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -135,12 +135,12 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Done:** SPEC decision 141 and a §2.6 paragraph; TECHNOLOGY §5.3 (sets as grouped rows, drafts in `meta.draft`, why no migration, one transaction per send, supervisor partial answer + pass-up); IMPLEMENTATION_PLAN Phase 8. Protocol `question-set.ts` (`QUESTION_SET_LIMITS`, `QuestionSetRef`, `SetAnswer`, `SetQuestionInput`, `renderSetAnswer`, `checkSetAnswer`, `setOf`, `questionSetRows`, `draftOf`, `answerDetailOf`, `SKIPPED_ANSWER`), `QuestionContext.set` / `multiSelect`, `question.answered.detail`, `question.drafted`, the four command inputs and REST bodies — no migration. Server: `Commands.openQuestionSet`, `answerQuestionSet` (the user's send resolves every row they hold in one transaction; an agent answers what it holds and escalates the rest it holds one level up in the same transaction), `draftQuestion`, `dismissQuestionSet`; single-question paths refuse set rows; routes `POST /api/question-sets/:id/answer`, `/dismiss`, `POST /api/questions/:id/draft` (web client in `console/api.ts`); brain tools `ask_questions` and `answer_question_set` (`brains/common-tools.ts`, both brains), `answer_question` / `escalate` refusals naming `answer_question_set`, wake lines with "question i of n in set …", both prompts. Tests: `protocol/src/question-set.test.ts`, `events.test.ts`, `rest.test.ts`, `interfaces.test.ts`; `server/src/domain/question-sets.test.ts`, `http/question-set-routes.test.ts`, `http/reply-routes.test.ts`, `brains/common-tools.test.ts`, `brains/wake.test.ts`, `brains/runner.test.ts` (one turn per delivery).
 
 ### P8-20 — Steward multi-question asks as one set (added 2026-10-18)
-- **Status:** todo · **Depends on:** P8-19 · **Parallel with:** P8-21
+- **Status:** in progress · **Depends on:** P8-19 · **Parallel with:** P8-21
 - A Steward's `AskUserQuestion` (Agent SDK) or ACP form with several questions opens one set instead of separate questions asked one after another; multi-select is native; the Steward is held until every question is resolved.
 - **Plan:** Task 5. **Acceptance:** adapter tests and conformance.
 
 ### P8-21 — The question-set card (added 2026-10-18)
-- **Status:** todo · **Depends on:** P8-19 · **Parallel with:** P8-20
+- **Status:** in progress · **Depends on:** P8-19 · **Parallel with:** P8-20
 - The step-through card in the inbox and the asker's chat: progress, options (multi-select), write-in, Back / Skip / Next, review page, "Send N answers", drafts synced across devices, supervisor answers read-only, one inbox item per set, offline queue.
 - **Plan:** Tasks 6–7. **Acceptance:** jsdom + axe tests, e2e at desktop and phone size.
 
