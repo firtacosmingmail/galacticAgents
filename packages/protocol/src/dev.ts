@@ -142,6 +142,39 @@ export type HarnessAnswerBody = z.infer<typeof HarnessAnswerBody>;
 export const HarnessMoveBody = z.object({ projectId: Id });
 export type HarnessMoveBody = z.infer<typeof HarnessMoveBody>;
 
+/**
+ * `POST /dev/harness/brains/waykeeper` (P8-21): a new project with a **real Waykeeper brain** on
+ * the fake runtime, under the running Harmonizer — unlike a harness agent, it has a session, a
+ * mailbox and turns (the fake runtime echoes each turn's prompt into its transcript).
+ */
+export const HarnessBrainWaykeeperBody = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+});
+export type HarnessBrainWaykeeperBody = z.infer<typeof HarnessBrainWaykeeperBody>;
+
+export interface HarnessBrainWaykeeperResponse {
+  seq: number;
+  projectId: Id;
+  waykeeperId: Id;
+  harmonizerId: Id;
+}
+
+/**
+ * `POST /dev/harness/brains/:id/tool` (P8-21): a running brain on the fake runtime calls one of
+ * its tools as its model would — the same handler, context and turn rules. The fake runtime never
+ * chooses a tool itself; this is how a test makes a brain act.
+ */
+export const HarnessBrainToolBody = z.object({
+  name: z.string().trim().min(1).max(64),
+  input: z.record(z.string(), z.unknown()).default({}),
+});
+export type HarnessBrainToolBody = z.input<typeof HarnessBrainToolBody>;
+
+/** The tool's own result (a refusal is `{ error, message }`, as the model would read it). */
+export interface HarnessBrainToolResponse {
+  result: unknown;
+}
+
 /** What a harness action did: the last event's `seq` (0 when nothing was logged). */
 export interface HarnessActionResponse {
   seq: number;
