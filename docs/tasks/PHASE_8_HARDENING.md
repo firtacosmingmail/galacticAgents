@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-19 (branch `p8-19-question-sets`), P8-18 (branch `p8-18-phone-single-screen`) · **Task status:** P8-18 in progress, P8-19 in progress, P8-20 todo, P8-21 todo
-**Phase status:** in progress (17/21 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
+**Current task:** P8-20, P8-21 (both eligible now that P8-19 is done), P8-18 (branch `p8-18-phone-single-screen`) · **Task status:** P8-18 in progress, P8-19 done, P8-20 todo, P8-21 todo
+**Phase status:** in progress (18/21 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; every task done, the phase stays open as the ongoing backlog
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -128,10 +128,11 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Acceptance:** the plan's tests and e2e; SPEC decision 140; axe clean.
 
 ### P8-19 — Question sets: protocol, domain, routes, brain tools (added 2026-10-18)
-- **Status:** in progress · **Depends on:** P2-03, P2-18, P7-05, P9-14, P8-17 · **Parallel with:** P8-18
+- **Status:** done (2026-10-18) · **Depends on:** P2-03, P2-18, P7-05, P9-14, P8-17 · **Parallel with:** P8-18
 - Cosmin's request: when a Waykeeper or the Harmonizer needs several answers at once (clarifications on a plan), they arrive as one set answered step by step — options, a write-in answer, skip, review, send all at once; drafts kept on the server. Supervisors answer what they can from context and pass the rest up (option B, 2026-10-18). Sets are question rows sharing `context.set`; no migration.
 - **Design / plan:** spec Part 1, `docs/superpowers/plans/2026-10-18-question-sets.md` Tasks 1–4.
 - **Acceptance:** the plan's tests; one wake per delivery; SPEC decision 141; TECHNOLOGY §5.3.
+- **Done:** SPEC decision 141 and a §2.6 paragraph; TECHNOLOGY §5.3 (sets as grouped rows, drafts in `meta.draft`, why no migration, one transaction per send, supervisor partial answer + pass-up); IMPLEMENTATION_PLAN Phase 8. Protocol `question-set.ts` (`QUESTION_SET_LIMITS`, `QuestionSetRef`, `SetAnswer`, `SetQuestionInput`, `renderSetAnswer`, `checkSetAnswer`, `setOf`, `questionSetRows`, `draftOf`, `answerDetailOf`, `SKIPPED_ANSWER`), `QuestionContext.set` / `multiSelect`, `question.answered.detail`, `question.drafted`, the four command inputs and REST bodies — no migration. Server: `Commands.openQuestionSet`, `answerQuestionSet` (the user's send resolves every row they hold in one transaction; an agent answers what it holds and escalates the rest it holds one level up in the same transaction), `draftQuestion`, `dismissQuestionSet`; single-question paths refuse set rows; routes `POST /api/question-sets/:id/answer`, `/dismiss`, `POST /api/questions/:id/draft` (web client in `console/api.ts`); brain tools `ask_questions` and `answer_question_set` (`brains/common-tools.ts`, both brains), `answer_question` / `escalate` refusals naming `answer_question_set`, wake lines with "question i of n in set …", both prompts. Tests: `protocol/src/question-set.test.ts`, `events.test.ts`, `rest.test.ts`, `interfaces.test.ts`; `server/src/domain/question-sets.test.ts`, `http/question-set-routes.test.ts`, `http/reply-routes.test.ts`, `brains/common-tools.test.ts`, `brains/wake.test.ts`, `brains/runner.test.ts` (one turn per delivery).
 
 ### P8-20 — Steward multi-question asks as one set (added 2026-10-18)
 - **Status:** todo · **Depends on:** P8-19 · **Parallel with:** P8-21

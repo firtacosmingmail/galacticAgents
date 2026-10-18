@@ -162,6 +162,7 @@ Each phase ends with something you can run. Estimates assume one developer worki
 - Tauri 2 desktop shell (tray icon, auto-start) if you want the "real app" feel — P8-06, `docs/DESKTOP.md`.
 - ACP adapter for the second runtime (Codex / Gemini CLI), PTY adapter for arbitrary CLIs.
 - Chat polish from daily use: slash commands and ↑ history in the composer (P8-13, P8-14), the phone's navigation sheet (P8-15), and replies to a line or card of a brain's chat — a quote resolved from the log, a reply to an open clarification answering it, never a permission (P8-17, SPEC decision 139).
+- Question sets (P8-19–P8-21, SPEC decision 141): 2–10 related clarifications asked as one set (`ask_questions`) of question rows sharing `context.set`, routed supervisor first (`answer_question_set` answers some and passes the rest up in one transaction), answered by the user on one step-through card with server-side drafts, and delivered to the asker in one turn per answerer; no migration.
 
 ---
 
