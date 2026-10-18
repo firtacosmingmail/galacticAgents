@@ -333,7 +333,7 @@
     0 0 0 3px var(--pnl-here-soft),
     0 0 0 5px currentColor;
 }
-.pnl-phone-dot {
+.pnl-inbox-count {
   position: absolute;
   top: -5px;
   right: -5px;

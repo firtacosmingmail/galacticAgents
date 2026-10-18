@@ -322,7 +322,9 @@ describe('the compact top bar (P3-12)', () => {
     await open();
     const inbox = () => within(top()).getByRole('button', { name: /^Inbox/ });
     expect(inbox().getAttribute('aria-pressed')).toBe('false');
-    expect(inbox().querySelector('.pnl-phone-dot')).not.toBeNull();
+    expect(inbox().querySelector('.pnl-inbox-count')?.textContent).toBe('2');
+    // Not the phone-access indicator's dot (P9-16), which keeps its own class and rule.
+    expect(inbox().querySelector('.pnl-phone-dot')).toBeNull();
     fireEvent.click(inbox());
     expect(inbox().getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(inbox());
@@ -349,7 +351,7 @@ describe('the compact top bar (P3-12)', () => {
       socket.serverSends({ ...snapshot, questions: [{ ...fx.question }], proposals: [] });
     });
     const inbox = within(top()).getByRole('button', { name: 'Inbox' });
-    expect(inbox.querySelector('.pnl-phone-dot')).toBeNull();
+    expect(inbox.querySelector('.pnl-inbox-count')).toBeNull();
   });
 
   it('from another page the Inbox button comes back to the panel with the inbox open', async () => {

@@ -122,6 +122,16 @@ export function Panel({
     [rawSheet],
   );
   useEdgeSwipe(navSheet, sheeted);
+  // A link inside a full view (an agent's card, a card's "open agent") or a page from the menu
+  // changes the location: the view closes, and `navigate` has already taken its history entry.
+  const selected = useAppStore((s) => selectionKey(s.selection));
+  const location = `${route}|${selected}`;
+  const lastLocation = useRef(location);
+  useEffect(() => {
+    if (lastLocation.current === location) return;
+    lastLocation.current = location;
+    phoneView.close();
+  }, [location, phoneView]);
   // A full view opened while the sheet is open (a beacon, a notification): the sheet closes.
   const closeSheet = rawSheet.setOpen;
   const sheetOpen = rawSheet.open;

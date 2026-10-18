@@ -52,7 +52,6 @@ export function PhoneFullView({
       aria-modal="true"
       aria-labelledby={titleId}
       className={`pnl-phone-view pnl-phone-view-${view}`}
-      data-escape-layer=""
       onKeyDown={onKeyDown}
     >
       <div className="pnl-phone-view-head">

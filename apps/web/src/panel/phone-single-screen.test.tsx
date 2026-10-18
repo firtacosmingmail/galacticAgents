@@ -113,16 +113,7 @@ describe('one screen at a time on a phone (P8-18)', () => {
     expect(view()).toBeNull();
   });
 
-  it('keeps what was typed in the chat across the inbox, Back and a rotation', async () => {
-    const width = { phone: true };
-    vi.stubGlobal('matchMedia', (query: string) => ({
-      get matches() {
-        return width.phone && PHONE.includes(query);
-      },
-      media: query,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    }));
+  it('keeps what was typed in the chat across the inbox and Back', async () => {
     await openApp('/');
     fireEvent.change(composer(), { target: { value: 'Also make sure the tests' } });
     await click(inboxButton());
@@ -130,6 +121,88 @@ describe('one screen at a time on a phone (P8-18)', () => {
     expect(view()).toBeNull();
     expect(composer().value).toBe('Also make sure the tests');
     expect(window.location.pathname).toBe('/');
+  });
+
+  it('a rotation to a wide screen drops the view and its entry, and keeps the draft', async () => {
+    const width = { phone: true };
+    const listeners = new Set<() => void>();
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      get matches() {
+        return width.phone ? PHONE.includes(query) : false;
+      },
+      media: query,
+      addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+      removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
+    }));
+    const rotate = async (phone: boolean) => {
+      width.phone = phone;
+      await act(async () => listeners.forEach((fn) => fn()));
+      await settle();
+    };
+    await openApp('/');
+    fireEvent.change(composer(), { target: { value: 'Also make sure the tests' } });
+    await click(inboxButton());
+    expect(view()).not.toBeNull();
+    await rotate(false);
+    expect(view()).toBeNull();
+    expect((window.history.state as { phoneView?: boolean } | null)?.phoneView).not.toBe(true);
+    // Wide: the inbox is back in the side column.
+    expect(document.querySelector('aside.pnl-side #pnl-inbox')).not.toBeNull();
+    expect(composer().value).toBe('Also make sure the tests');
+    await rotate(true);
+    expect(view()).toBeNull();
+    expect(document.getElementById('pnl-inbox')).toBeNull();
+    expect(composer().value).toBe('Also make sure the tests');
+  });
+
+  it('a link inside the view closes it and takes its history entry', async () => {
+    await openApp('/');
+    await click(agentsButton());
+    const link = within(view()!).getAllByRole('link')[0]!;
+    await click(link);
+    expect(view()).toBeNull();
+    expect(useAppStore.getState().selection).not.toEqual({ kind: 'harmonizer' });
+    expect((window.history.state as { phoneView?: boolean } | null)?.phoneView).not.toBe(true);
+  });
+
+  it('a page opened from the menu over a view: Back comes back to the panel', async () => {
+    await openApp('/');
+    const before = window.history.length;
+    await click(inboxButton());
+    await click(within(top()).getByRole('button', { name: 'Menu' }));
+    await click(
+      within(document.getElementById('pnl-top-menu')!).getByRole('link', { name: 'History' }),
+    );
+    expect(useAppStore.getState().route).toBe('history');
+    expect(view()).toBeNull();
+    // The page took the view's entry: one entry more than before the view, not two.
+    expect(window.history.length).toBe(before + 1);
+    await back();
+    expect(useAppStore.getState().route).toBe('panel');
+    expect(window.location.pathname).toBe('/');
+    // No dangling "view open" entry under the page.
+    expect((window.history.state as { phoneView?: boolean } | null)?.phoneView).not.toBe(true);
+  });
+
+  it('the arrow keys move between the inbox cards inside the view', async () => {
+    await openApp('/');
+    await click(inboxButton());
+    const cards = within(view()!).getAllByRole('article');
+    expect(cards.length).toBeGreaterThan(1);
+    act(() => cards[0]!.focus());
+    await act(async () => {
+      fireEvent.keyDown(cards[0]!, { key: 'ArrowDown' });
+    });
+    expect(document.activeElement).toBe(cards[1]);
+  });
+
+  it("a notification's click from another page opens the inbox view", async () => {
+    await openApp('/history');
+    act(() => focusTarget({ kind: 'question', id: clarification.id }));
+    await settle();
+    await settle();
+    expect(useAppStore.getState().route).toBe('panel');
+    expect(view()).not.toBeNull();
   });
 
   it('answering the last question in the inbox view keeps the focus in the view', async () => {

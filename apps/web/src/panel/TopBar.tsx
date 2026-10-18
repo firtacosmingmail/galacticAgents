@@ -269,7 +269,7 @@ function CompactTopBar({ scene, navSheet, onForget }: TopBarProps) {
       >
         <span className="pnl-phone-icon pnl-phone-icon-inbox" aria-hidden="true" />
         {waiting > 0 && (
-          <span className="pnl-phone-dot" aria-hidden="true">
+          <span className="pnl-inbox-count" aria-hidden="true">
             {waiting}
           </span>
         )}

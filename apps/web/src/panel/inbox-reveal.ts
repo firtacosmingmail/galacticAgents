@@ -1,5 +1,6 @@
 import { showInbox } from './inbox-visibility.js';
 import { openPhoneView } from './phone-view.js';
+import { COMPACT_TOP_BAR_QUERY } from './use-media-query.js';
 import { prefersReducedMotion } from '../scene/motion.js';
 
 /**
@@ -21,7 +22,19 @@ export const REVEALED_CLASS = 'is-revealed';
  * wide-screen "hidden" choice alone; elsewhere a hidden inbox is shown (P4-12).
  */
 function bringInbox(): void {
-  if (!openPhoneView('inbox')) showInbox();
+  if (openPhoneView('inbox') || isPhone()) return; // a phone panel still mounting: try again
+  showInbox();
+}
+
+/** A phone's width (`COMPACT_TOP_BAR_QUERY`), where the inbox is a full view (P8-18). */
+export function isPhone(): boolean {
+  try {
+    return (
+      typeof window.matchMedia === 'function' && window.matchMedia(COMPACT_TOP_BAR_QUERY).matches
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Smooth scrolling, unless the user asked for reduced motion (P5-04): then it jumps. */

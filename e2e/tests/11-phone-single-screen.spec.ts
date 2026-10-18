@@ -25,11 +25,11 @@ test.describe('on a phone', () => {
     // The chat has the screen: no inbox under it.
     await expect(composer(page)).toBeVisible();
     await expect(page.locator('#pnl-inbox')).toHaveCount(0);
-    await expect(inboxButton(page).locator('.pnl-phone-dot')).toHaveCount(0);
+    await expect(inboxButton(page).locator('.pnl-inbox-count')).toHaveCount(0);
 
     const question = `Which font for the docs ${stamp()}?`;
     await askUser(api, world.stewardIds[0]!, 'clarification', question);
-    await expect(inboxButton(page).locator('.pnl-phone-dot')).toBeVisible();
+    await expect(inboxButton(page).locator('.pnl-inbox-count')).toBeVisible();
 
     await composer(page).fill('Also make sure the tests run');
     await inboxButton(page).tap();
@@ -39,7 +39,7 @@ test.describe('on a phone', () => {
     await card.getByLabel('answer').fill('Inter');
     await card.getByRole('button', { name: 'Answer' }).tap();
     await expect.poll(async () => (await questionOnServer(api, question))?.status).toBe('answered');
-    await expect(inboxButton(page).locator('.pnl-phone-dot')).toHaveCount(0);
+    await expect(inboxButton(page).locator('.pnl-inbox-count')).toHaveCount(0);
 
     await page.goBack();
     await expect(view).toHaveCount(0);
