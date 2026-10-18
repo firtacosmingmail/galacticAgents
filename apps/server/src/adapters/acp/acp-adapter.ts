@@ -27,9 +27,10 @@ import type {
   SpawnOptions,
   StopOptions,
 } from '@galactic/protocol';
-import { normalizeSlashCommands } from '@galactic/protocol';
+import { normalizeSlashCommands, SKIPPED_ANSWER } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import { isDismissed, type Dismissed } from '../dismissal.js';
+import { fitsQuestionSet, setTitle } from '../question-set.js';
 import type {
   ManagedProcess,
   ProcessOutcome,
@@ -44,6 +45,7 @@ import {
   describeTool,
   findMode,
   formFields,
+  type FormField,
   type FormValue,
   gateCall,
   isPermissiveMode,
@@ -99,7 +101,12 @@ import { traceFromEnv, type AcpTrace } from './trace.js';
  *
  * **Questions.** `elicitation/create` in form mode → one `agent.needs_input(kind: clarification)`
  * per field (`formFields`), answered back as `accept` with the typed values; an interrupted or
- * stopped question is answered `cancel`, a URL elicitation `decline`.
+ * stopped question is answered `cancel`, a URL elicitation `decline`. A form of several fields is
+ * one question set (P8-20): every field opens at once sharing `question.set` (the form's title, or
+ * "Questions from the Steward"), a multi-select field with `multiSelect`, and the elicitation is
+ * answered once every row is: a skipped row is left out of the content, a "choice — text" answer
+ * reads by its choice, and an answer that still does not read is left out with a transcript line
+ * (never re-asked one by one).
  *
  * **Resume.** `sessionRef` is `acp:<the agent's session id>`. `resumeSession` starts a new process
  * and calls `session/load` when the agent advertises `loadSession`; the conversation the agent
@@ -1160,6 +1167,7 @@ export class AcpAdapter implements AgentAdapter {
       session.questionTools.add(params.toolCallId);
     }
     const schema = params.requestedSchema as {
+      title?: unknown;
       properties?: Record<string, ElicitationPropertySchema>;
       required?: string[] | null;
     };
@@ -1171,26 +1179,79 @@ export class AcpAdapter implements AgentAdapter {
       return isDismissed(answer) ? { action: 'decline' } : { action: 'accept', content: {} };
     }
     const content: Record<string, FormValue> = {};
-    for (const field of fields) {
-      let value: Record<string, FormValue> | undefined;
-      let text = field.text;
-      // A typed field asks again until the answer reads (a number, yes/no).
-      for (let attempt = 0; value === undefined && attempt < 3; attempt++) {
-        const answer = await this.ask(
-          session,
-          'clarification',
-          { text, ...(field.options ? { options: field.options } : {}) },
-          signal,
-        );
-        if (answer === undefined) return { action: 'cancel' };
-        if (isDismissed(answer)) return { action: 'decline' };
-        value = field.parse(answer);
-        text = `${field.text} (could not read "${answer}"; please answer again)`;
+    if (fitsQuestionSet(fields.map((f) => f.options?.length ?? 0))) {
+      // One question set (P8-20): every field at once, answered when every row is.
+      const id = `qs-${randomUUID()}`;
+      const title = setTitle(schema.title);
+      const replies = await Promise.all(
+        fields.map((field, index) =>
+          this.ask(
+            session,
+            'clarification',
+            {
+              text: field.text,
+              ...(field.options ? { options: field.options } : {}),
+              ...(field.multiSelect ? { multiSelect: true } : {}),
+              set: { id, index, total: fields.length, title },
+            },
+            signal,
+          ),
+        ),
+      );
+      if (replies.some((r) => r === undefined)) return { action: 'cancel' };
+      if (replies.some(isDismissed)) return { action: 'decline' };
+      for (const [i, field] of fields.entries()) {
+        const answer = (replies[i] as string).trim();
+        // A skipped question is left out of the content: the agent sees it unanswered.
+        if (answer === SKIPPED_ANSWER) continue;
+        // "choice — text" (the card's choice with a note, or a supervisor's) reads by its choice.
+        const value = field.parse(answer) ?? field.parse(answer.split(' — ')[0] ?? '');
+        if (value === undefined) {
+          // Never re-asked one by one after the set: the field is left out and the transcript
+          // says so (the user's other answers still reach the agent).
+          this.output(
+            session,
+            'text',
+            `left out of the form: could not read "${answer}" for "${field.text}"`,
+          );
+          continue;
+        }
+        Object.assign(content, value);
       }
-      if (value === undefined) return { action: 'decline' };
+      return { action: 'accept', content };
+    }
+    for (const field of fields) {
+      const value = await this.askField(session, field, signal);
+      if (value === 'cancel' || value === 'decline') return { action: value };
       Object.assign(content, value);
     }
     return { action: 'accept', content };
+  }
+
+  /** One form field asked alone, again until the answer reads (a number, yes/no): three tries. */
+  private async askField(
+    session: Session,
+    field: FormField,
+    signal: AbortSignal,
+  ): Promise<Record<string, FormValue> | 'cancel' | 'decline'> {
+    const multi = field.multiSelect ? ' (one or more: separate them with commas)' : '';
+    const again = (answer: string) =>
+      `${field.text} (could not read "${answer}"; please answer again)`;
+    let text = `${field.text}${multi}`;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const answer = await this.ask(
+        session,
+        'clarification',
+        { text, ...(field.options ? { options: field.options } : {}) },
+        signal,
+      );
+      if (answer === undefined) return 'cancel';
+      if (isDismissed(answer)) return 'decline';
+      const value = field.parse(answer);
+      if (value !== undefined) return value;
+      text = again(answer);
+    }
+    return 'decline';
   }
 
   private ask(

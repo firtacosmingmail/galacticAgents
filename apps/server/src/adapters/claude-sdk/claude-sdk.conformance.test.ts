@@ -57,6 +57,8 @@ if (!enabled) {
       finish:
         'Read README.md in the current directory with the Read tool, then reply with exactly: done',
       ask: 'Before doing anything, use the AskUserQuestion tool to ask me which option I prefer (options: first option, second option). Then reply with exactly the option I chose.',
+      askSet:
+        'Before doing anything, use the AskUserQuestion tool ONCE with two questions in the same call: which color I prefer (options: red, blue) and which size I prefer (options: small, large). Then reply with exactly the two choices.',
       permission: `Run the shell command \`rm -rf ${join(cwd, 'scratch-dir')}\` with the Bash tool (it may not exist, that is fine), then reply with exactly: cleaned`,
       long: 'Run the shell command `for i in 1 2 3 4 5 6 7 8 9 10; do echo step $i; sleep 3; done` with the Bash tool, then reply with exactly: finished',
       echo: 'Reply with exactly: ready',

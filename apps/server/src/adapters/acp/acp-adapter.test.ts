@@ -110,6 +110,7 @@ const of = <T extends AgentEvent['type']>(r: Rig, type: T) =>
   r.events.filter((e) => e.type === type) as Extract<AgentEvent, { type: T }>[];
 const texts = (r: Rig) => of(r, 'agent.output').map((e) => e.text);
 const idles = (r: Rig) => of(r, 'agent.idle').length;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe('AcpAdapter', () => {
   it('advertises form elicitation only: no fs/*, no terminal/*', () => {
@@ -485,26 +486,72 @@ describe('AcpAdapter', () => {
     void supervisor.dispose();
   });
 
-  it('asks one clarification per form field, re-asks an unreadable answer, sends typed values', async () => {
+  it('a form of several fields is one question set: every row at once, typed values once all are answered (P8-20)', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:asks-set'));
+    await waitFor(() => of(r, 'agent.needs_input').length === 3, 'every row');
+    const [q1, q2, q3] = of(r, 'agent.needs_input');
+    const setId = q1!.question.set?.id;
+    expect(setId).toMatch(/^qs-/);
+    const set = (index: number) => ({ id: setId, index, total: 3, title: 'Export details' });
+    expect(q1!.question).toEqual({
+      text: 'Before I start the export: — Date format',
+      options: ['ISO 8601', 'US', 'EU'],
+      set: set(0),
+    });
+    // Multi-select is native on the card: no "(one or more: …)" suffix.
+    expect(q2!.question).toEqual({
+      text: 'Before I start the export: — Columns',
+      options: ['date', 'amount', 'note'],
+      multiSelect: true,
+      set: set(1),
+    });
+    expect(q3!.question).toEqual({
+      text: 'Before I start the export: — Anything else?',
+      set: set(2),
+    });
+    await r.adapter.answer(q2!.questionId, 'date, note');
+    await r.adapter.answer(q1!.questionId, 'EU');
+    await sleep(50);
+    expect(texts(r).some((t) => t.startsWith('set:'))).toBe(false);
+    await r.adapter.answer(q3!.questionId, 'no');
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(texts(r)).toContain('set: {"format":"EU","columns":["date","note"],"note":"no"}');
+  });
+
+  it('an untitled form set is "Questions from the Steward"; a skipped row is left out of the content, never re-asked', async () => {
     const r = rig();
     await r.adapter.spawn(spawnOpts(r, 'scenario:form'));
-    const question = async (n: number) => {
-      await waitFor(() => of(r, 'agent.needs_input').length >= n, `question ${n}`);
-      return of(r, 'agent.needs_input')[n - 1]!;
-    };
-    const q1 = await question(1);
-    expect(q1.kind).toBe('clarification');
-    expect(q1.question.text).toBe('Tell me about the release. — How many builds?');
-    await r.adapter.answer(q1.questionId, 'lots');
-    const q2 = await question(2);
-    expect(q2.question.text).toMatch(/How many builds\? \(could not read "lots"/);
-    await r.adapter.answer(q2.questionId, '3');
-    const q3 = await question(3);
-    expect(q3.question).toMatchObject({ options: ['yes', 'no'] });
-    await r.adapter.answer(q3.questionId, 'yes');
+    await waitFor(() => of(r, 'agent.needs_input').length === 2, 'both rows');
+    const [q1, q2] = of(r, 'agent.needs_input');
+    expect(q1!.kind).toBe('clarification');
+    expect(q1!.question).toMatchObject({
+      text: 'Tell me about the release. — How many builds?',
+      set: { index: 0, total: 2, title: 'Questions from the Steward' },
+    });
+    expect(q2!.question).toMatchObject({ options: ['yes', 'no'], set: { index: 1, total: 2 } });
+    await r.adapter.answer(q1!.questionId, '3');
+    await r.adapter.answer(q2!.questionId, '(skipped by the user)');
     await waitFor(() => idles(r) === 1, 'idle');
-    expect(texts(r)).toContain('form: {"count":3,"ship":true}');
-    await expect(r.adapter.answer(q3.questionId, 'again')).rejects.toThrow(/no pending question/);
+    expect(texts(r)).toContain('form: {"count":3}');
+    expect(of(r, 'agent.needs_input')).toHaveLength(2); // no one-by-one re-ask
+  });
+
+  it('a set answer with a note reads by its choice; an unreadable one is left out and said, never re-asked', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:form'));
+    await waitFor(() => of(r, 'agent.needs_input').length === 2, 'both rows');
+    const [q1, q2] = of(r, 'agent.needs_input');
+    // A supervisor's (or the card's) "choice — text" answer on a yes/no field: the choice reads.
+    await r.adapter.answer(q2!.questionId, 'yes — ship it on Friday');
+    // A free answer a number field cannot read: left out, and the transcript says so.
+    await r.adapter.answer(q1!.questionId, 'lots');
+    await waitFor(() => idles(r) === 1, 'idle');
+    expect(texts(r)).toContain('form: {"ship":true}');
+    expect(texts(r)).toContain(
+      'left out of the form: could not read "lots" for "Tell me about the release. — How many builds?"',
+    );
+    expect(of(r, 'agent.needs_input')).toHaveLength(2);
   });
 
   it("claude-agent-acp's question tool: one clarification, the answer matched to its choice, no hold", async () => {
@@ -529,14 +576,16 @@ describe('AcpAdapter', () => {
     expect(of(r, 'agent.tool_call')).toEqual([]);
   });
 
-  it('a dismissed elicitation is declined; the rest of the form is not asked (P9-14)', async () => {
+  it('a dismissed row of a form set declines the whole elicitation (P9-14, P8-20)', async () => {
     const r = rig();
     await r.adapter.spawn(spawnOpts(r, 'scenario:form'));
-    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
-    await r.adapter.dismiss(of(r, 'agent.needs_input')[0]!.questionId, 'dismissed by the user');
+    await waitFor(() => of(r, 'agent.needs_input').length === 2, 'both rows');
+    const [q1, q2] = of(r, 'agent.needs_input');
+    await r.adapter.dismiss(q1!.questionId, 'dismissed by the user');
+    await r.adapter.answer(q2!.questionId, 'yes');
     await waitFor(() => idles(r) === 1, 'idle');
     expect(texts(r)).toContain('form: undefined'); // declined: no content
-    expect(of(r, 'agent.needs_input')).toHaveLength(1);
+    expect(of(r, 'agent.needs_input')).toHaveLength(2);
   });
 
   it('a dismissed permission request answers reject_once, never allow (P9-14)', async () => {

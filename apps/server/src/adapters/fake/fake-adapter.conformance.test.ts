@@ -20,6 +20,7 @@ describeAdapterConformance({
   prompts: {
     finish: 'scenario:happy',
     ask: 'scenario:asks',
+    askSet: 'scenario:asks-set',
     permission: 'scenario:permission',
     long: 'scenario:long',
     echo: 'scenario:echo',

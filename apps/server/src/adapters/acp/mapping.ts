@@ -341,6 +341,8 @@ export interface FormField {
   key: string;
   text: string;
   options?: string[];
+  /** A multi-select field (an array): the answer names one or more options, comma-separated. */
+  multiSelect?: boolean;
   /**
    * The free-text field that goes with a choice field (its "Other" box: an optional plain string
    * right after it, as `claude-agent-acp`'s `question_<n>_custom`): not asked on its own; an answer
@@ -366,8 +368,8 @@ const isFreeText = (p: Prop): boolean =>
  * the question, its enum the options"): the message is the question, a field's title is added
  * when there are several, an enum (or `oneOf`) gives the options and the answer is matched back to
  * the value (by title or value, or the one choice the answer names: "the first option" → "First
- * option"), a boolean asks yes/no, a number must parse, a multi-select takes labels separated by
- * commas. An optional free-text field right after a choice field is that choice's "Other" box
+ * option"), a boolean asks yes/no, a number must parse, a multi-select (`multiSelect`) takes labels
+ * separated by commas. An optional free-text field right after a choice field is that choice's "Other" box
  * (`otherKey`): it is not asked, and an answer that names no choice goes there — the choice left
  * out unless it is required.
  */
@@ -427,7 +429,8 @@ export function formFields(
         const choices = enumChoices(items['enum'], items['anyOf']);
         return {
           key,
-          text: `${text} (one or more: separate them with commas)`,
+          text,
+          multiSelect: true,
           ...(choices.length ? { options: choices.map((c) => c.title) } : {}),
           ...(otherKey ? { otherKey } : {}),
           parse: (a) => {
