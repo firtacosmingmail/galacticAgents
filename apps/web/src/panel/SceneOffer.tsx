@@ -15,7 +15,8 @@ export function SceneOffer({ scene }: { scene: SceneControl }) {
         ? 'List mode, for a small screen.'
         : 'List mode.';
   return (
-    <div className="pnl-scene-offer" role="group" aria-label="solar system">
+    // A landmark (P8-18): on a phone in list mode it is all the stack holds above the chat.
+    <section className="pnl-scene-offer" aria-label="solar system">
       <span className="pnl-scene-offer-text">{why}</span>
       <button
         type="button"
@@ -24,6 +25,6 @@ export function SceneOffer({ scene }: { scene: SceneControl }) {
       >
         Show scene
       </button>
-    </div>
+    </section>
   );
 }

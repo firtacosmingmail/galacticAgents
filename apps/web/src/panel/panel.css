@@ -289,6 +289,67 @@
     0 -6px 0 currentColor,
     0 6px 0 currentColor;
 }
+/* P8-18: the phone's full-view buttons — managed agents and the inbox — sized like the menu button */
+.pnl-phone-button {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  background: var(--pnl-raised);
+  color: var(--pnl-ink);
+  cursor: pointer;
+}
+.pnl-phone-button[aria-pressed='true'] {
+  background: var(--pnl-here-soft);
+  border-color: var(--pnl-here);
+}
+/* a tray: three sides of a box with a notch in its top edge */
+.pnl-phone-icon-inbox {
+  width: 18px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-width: 0;
+  border-radius: 0 0 3px 3px;
+  box-shadow: inset 0 -5px 0 -3px currentColor;
+}
+/* a satellite: a body with a ring around it */
+.pnl-phone-icon-agents {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    0 0 0 3px var(--pnl-raised),
+    0 0 0 5px currentColor;
+}
+.pnl-phone-button[aria-pressed='true'] .pnl-phone-icon-agents {
+  box-shadow:
+    0 0 0 3px var(--pnl-here-soft),
+    0 0 0 5px currentColor;
+}
+.pnl-inbox-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  background: var(--pnl-beacon);
+  color: var(--pnl-surface);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--pnl-surface);
+}
 .pnl-menu {
   position: absolute;
   top: 100%;
@@ -1248,4 +1309,53 @@ a.pnl-link:hover {
 }
 .pnl-phone-warning .pnl-phone-dot {
   background: #e5484d;
+}
+
+/* P8-18: a phone's full view — the inbox or the managed agents over the chat, under the top bar.
+   The chat stays laid out beneath it (inert), so its scroll and the composer's draft survive. */
+.pnl-phone-view {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--pnl-surface);
+}
+.pnl-phone-view-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--pnl-line);
+}
+.pnl-phone-view-title {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.pnl-phone-view-title:focus {
+  outline: none;
+}
+.pnl-phone-view-close {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  background: var(--pnl-raised);
+  color: var(--pnl-ink);
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+.pnl-phone-view-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 12px max(12px, env(safe-area-inset-bottom));
 }

@@ -21,7 +21,14 @@ interface Refusal {
   message: string;
 }
 
-export function Inbox({ onHide }: { onHide?: () => void } = {}) {
+export function Inbox({
+  onHide,
+  withHead = true,
+}: {
+  onHide?: () => void;
+  /** Off in the phone's full view (P8-18), whose own header names it. */
+  withHead?: boolean;
+} = {}) {
   const world = useAppStore((s) => s.world);
   const [refusals, setRefusals] = useState<Refusal[]>([]);
   const model = inboxModel(world);
@@ -31,23 +38,25 @@ export function Inbox({ onHide }: { onHide?: () => void } = {}) {
 
   return (
     <section className="pnl-inbox-list" aria-label="question inbox">
-      <div className="pnl-side-head">
-        <h2 className="pnl-eyebrow pnl-inbox-head">
-          Inbox {count > 0 ? <Beacon>{count} waiting for you</Beacon> : null}
-        </h2>
-        {onHide && (
-          // P4-12: hidden per browser; the top bar's "Show inbox" or "N waiting" brings it back.
-          <button
-            type="button"
-            className="pnl-side-hide"
-            aria-label="Hide inbox"
-            title="Hide the inbox (bring it back from the top bar)"
-            onClick={onHide}
-          >
-            Hide
-          </button>
-        )}
-      </div>
+      {withHead && (
+        <div className="pnl-side-head">
+          <h2 className="pnl-eyebrow pnl-inbox-head">
+            Inbox {count > 0 ? <Beacon>{count} waiting for you</Beacon> : null}
+          </h2>
+          {onHide && (
+            // P4-12: hidden per browser; the top bar's "Show inbox" or "N waiting" brings it back.
+            <button
+              type="button"
+              className="pnl-side-hide"
+              aria-label="Hide inbox"
+              title="Hide the inbox (bring it back from the top bar)"
+              onClick={onHide}
+            >
+              Hide
+            </button>
+          )}
+        </div>
+      )}
       {/* Answers given offline whose card is gone or not loaded yet (P7-05). */}
       <OfflineAnswers />
       {refusals.map((r) => (

@@ -194,7 +194,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         // An overlay's own entry on top (the phone's navigation sheet pushes one so that Back
         // closes it, P8-15): the navigation that dismisses it takes its place, so Back then goes
         // to the previous page rather than to a dangling "sheet open" entry.
-        const overlay = (window.history.state as { navSheet?: unknown } | null)?.navSheet === true;
+        // The phone's full views (P8-18) push one too.
+        const state = window.history.state as { navSheet?: unknown; phoneView?: unknown } | null;
+        const overlay = state?.navSheet === true || state?.phoneView === true;
         if (overlay) window.history.replaceState(null, '', path);
         else window.history.pushState(null, '', path);
       }

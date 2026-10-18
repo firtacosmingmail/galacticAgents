@@ -116,9 +116,9 @@ describe('the phone navigation sheet (P8-15)', () => {
     expect(button().hasAttribute('aria-controls')).toBe(false);
     expect(dialog().getAttribute('role')).toBe('dialog');
     expect(dialog().getAttribute('aria-label')).toBe('Agents');
-    // The dock and the inbox are there as before.
+    // The dock is there as before; the inbox opens full screen from the top bar (P8-18).
     expect(screen.getByRole('main')).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'question inbox' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'question inbox' })).toBeNull();
   });
 
   it('names the waiting count on the button, with a dot', async () => {
