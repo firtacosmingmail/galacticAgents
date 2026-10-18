@@ -1243,7 +1243,8 @@ export class Commands implements DomainCommands {
    * user's message" (`by: system`) and the agent told, so it reads the message instead. Never a
    * permission request, never a question opened for the user alone (decision 30: a merge
    * conflict), never the Harmonizer's (the user's single contact talks with them open, and its
-   * closure and confirmation questions are answered only by the user's choice). A question
+   * closure and confirmation questions are answered only by the user's choice), never a row of a
+   * question set (SPEC decision 141: the card is the only way to answer one). A question
    * answered or withdrawn meanwhile is skipped. A question whose session could not be told (an
    * adapter error) is reported to `onError` and the others are still withdrawn. Returns the ids
    * withdrawn.
@@ -1258,15 +1259,15 @@ export class Commands implements DomainCommands {
   ): Promise<Id[]> {
     const agent = this.log.tables.agents.get(agentId);
     if (!agent || agent.role === 'harmonizer') return [];
-    const open = this.log.tables.questions
-      .all()
-      .filter(
-        (q) =>
-          q.originAgentId === agentId &&
-          q.status === 'open' &&
-          q.kind === 'clarification' &&
-          q.meta?.['toUser'] !== true,
-      );
+    const open = this.log.tables.questions.all().filter(
+      (q) =>
+        q.originAgentId === agentId &&
+        q.status === 'open' &&
+        q.kind === 'clarification' &&
+        q.meta?.['toUser'] !== true &&
+        // A set row is answered only on its card: a message never withdraws it or its drafts.
+        q.context.set === undefined,
+    );
     const withdrawn: Id[] = [];
     for (const q of open) {
       try {
