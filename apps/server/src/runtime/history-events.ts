@@ -253,6 +253,7 @@ export function touches(event: Event, m: Members): boolean {
     case 'question.escalated':
     case 'question.answered':
     case 'question.cancelled':
+    case 'question.drafted':
     case 'question.reassigned':
       return m.questions.has(event.questionId);
     case 'proposal.created':

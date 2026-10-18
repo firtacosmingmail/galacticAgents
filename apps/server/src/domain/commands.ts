@@ -4,7 +4,11 @@ import {
   AgentEvent,
   DISMISSED_BY_USER,
   SUPERSEDED_BY_MESSAGE,
+  type AnswerQuestionSetInput,
   type DismissQuestionInput,
+  type DismissQuestionSetInput,
+  type DraftQuestionInput,
+  type OpenQuestionSetInput,
   type AllowSimilarInput,
   type PermissionRule,
   type Project,
@@ -739,6 +743,23 @@ export class Commands implements DomainCommands {
         cancelQuestion(ctx, questionId, reason, holdersNow(ctx, questionId, this.questions)) ??
         question,
     );
+  }
+
+  // Question sets (P8-19): the protocol is in place; the domain commands land with Task 2.
+  async openQuestionSet(_input: OpenQuestionSetInput): Promise<CommandResult<Question[]>> {
+    throw new DomainError('invalid', 'question sets are not implemented yet');
+  }
+
+  async answerQuestionSet(_input: AnswerQuestionSetInput): Promise<CommandResult<Question[]>> {
+    throw new DomainError('invalid', 'question sets are not implemented yet');
+  }
+
+  async draftQuestion(_input: DraftQuestionInput): Promise<CommandResult<Question>> {
+    throw new DomainError('invalid', 'question sets are not implemented yet');
+  }
+
+  async dismissQuestionSet(_input: DismissQuestionSetInput): Promise<CommandResult<Question[]>> {
+    throw new DomainError('invalid', 'question sets are not implemented yet');
   }
 
   /**

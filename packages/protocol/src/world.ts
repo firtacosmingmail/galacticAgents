@@ -4,7 +4,7 @@ import type { Deliverable, RunSummary } from './deliverables.js';
 import type { Agent, Body, Project, Proposal, Question, StatusRecord, Task } from './domain.js';
 import { foldProposalMeta, type ProposalMetaChanges } from './domain.js';
 import { applyChanges, type EventEnvelope } from './events.js';
-import type { Id } from './primitives.js';
+import type { Id, Meta } from './primitives.js';
 import { summarize, type SystemSummary } from './summary.js';
 import type { Snapshot } from './ws.js';
 
@@ -96,6 +96,13 @@ function decide(
  * `undefined` value means "unchanged", an explicit `null` (a clearable field of `project.updated`
  * or `task.updated`) means "cleared".
  */
+/** `meta` without its draft; `null` (nothing left) so `patch` removes the key. */
+function withoutDraft(meta: Meta | undefined): Meta | null {
+  if (!meta) return null;
+  const { draft: _draft, ...rest } = meta;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
 function patch<T extends object>(
   map: Record<Id, T>,
   id: Id,
@@ -194,9 +201,20 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
           status: 'cancelled',
           version: event.version,
           updatedAt: at,
-          ...(event.by
-            ? { meta: { ...prior, cancelledBy: event.by, cancelReason: event.reason } }
-            : {}),
+          meta: withoutDraft({
+            ...prior,
+            ...(event.by ? { cancelledBy: event.by, cancelReason: event.reason } : {}),
+          }),
+        }),
+      };
+    }
+    case 'question.drafted': {
+      // A draft is folded as the server keeps it: `meta.draft`, no version bump (P8-19).
+      const prior = next.questions[event.questionId]?.meta;
+      return {
+        ...next,
+        questions: patch(next.questions, event.questionId, {
+          meta: event.draft ? { ...prior, draft: event.draft } : withoutDraft(prior),
         }),
       };
     }
@@ -211,7 +229,11 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
           answeredBy: event.answeredBy,
           version: event.version,
           updatedAt: at,
-          ...(event.answerId ? { meta: { ...prior, answerId: event.answerId } } : {}),
+          meta: withoutDraft({
+            ...prior,
+            ...(event.answerId ? { answerId: event.answerId } : {}),
+            ...(event.detail ? { answerDetail: event.detail } : {}),
+          }),
         }),
       };
     }
