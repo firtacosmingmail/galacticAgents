@@ -157,7 +157,9 @@ export function liveEntries(
 /** A card shown in a thread (decision 52: placed by the time it was created). */
 export type ThreadCardItem =
   | { kind: 'proposal'; id: Id; at: string; proposal: Proposal }
-  | { kind: 'question'; id: Id; at: string; question: Question };
+  | { kind: 'question'; id: Id; at: string; question: Question }
+  /** A question set (P8-21): one card for its rows, `id` the set's id. */
+  | { kind: 'questionSet'; id: Id; at: string; setId: Id };
 
 /** The world as the protocol's thread rules read it (`ThreadLookup`). */
 const lookupOf = (world: Pick<WorldState, 'agents' | 'tasks'>): ThreadLookup => ({
@@ -180,7 +182,7 @@ export function questionOwner(
  * The cards of a brain's thread (the protocol's `threadShowsProposal` / `threadShowsQuestion`,
  * which the server's reply check shares): for a Waykeeper, its project's plan cards and promotion
  * requests and its project's questions; for the Harmonizer, every other card — and a project's
- * clarifications that reached the user (decision 55).
+ * clarifications that reached the user (decision 55). A question set's rows are one card.
  */
 export function threadCards(
   world: Pick<WorldState, 'agents' | 'tasks' | 'proposals' | 'questions'>,
@@ -193,10 +195,21 @@ export function threadCards(
     if (threadShowsProposal(agent, p))
       cards.push({ kind: 'proposal', id: p.id, at: p.createdAt, proposal: p });
   }
+  const sets = new Map<Id, ThreadCardItem & { kind: 'questionSet' }>();
   for (const q of Object.values(world.questions)) {
-    if (threadShowsQuestion(look, agent, q))
+    if (!threadShowsQuestion(look, agent, q)) continue;
+    const set = q.context.set;
+    if (!set) {
       cards.push({ kind: 'question', id: q.id, at: q.createdAt, question: q });
+      continue;
+    }
+    // A set is one card (P8-21), shown when the thread shows any of its rows, at its first row.
+    const card = sets.get(set.id);
+    if (!card)
+      sets.set(set.id, { kind: 'questionSet', id: set.id, at: q.createdAt, setId: set.id });
+    else if (q.createdAt < card.at) card.at = q.createdAt;
   }
+  cards.push(...sets.values());
   return cards.sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
 }
 

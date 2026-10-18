@@ -226,6 +226,15 @@ export function Conversation({ agentId }: { agentId: Id }) {
     setReply(agentId, draft);
     field.current?.focus();
   };
+  /** A card's Reply action (P8-17); a question set has none: its card answers it (P8-21). */
+  const replyProps = (card: ThreadCardItem) => {
+    if (card.kind === 'questionSet') return {};
+    const target = card;
+    return {
+      onReply: () => replyWith(draftOfCard(target, agentId)),
+      replyLabel: cardLabel(target),
+    };
+  };
   const [missing, setMissing] = useState<Record<string, true>>({});
   // A jump outlives neither the chat nor its highlight timer (P8-17 review).
   const mounted = useRef(true);
@@ -350,8 +359,7 @@ export function Conversation({ agentId }: { agentId: Id }) {
               key={item.key}
               kind={item.card.kind}
               id={item.card.id}
-              onReply={() => replyWith(draftOfCard(item.card, agentId))}
-              replyLabel={cardLabel(item.card)}
+              {...replyProps(item.card)}
             />
           ) : (
             <Line
@@ -406,7 +414,7 @@ const time = (at: string) => {
 };
 
 /** The label a card's Reply action names. */
-const cardLabel = (card: ThreadCardItem) =>
+const cardLabel = (card: Exclude<ThreadCardItem, { kind: 'questionSet' }>) =>
   card.kind === 'question'
     ? `the question: ${card.question.context.text}`
     : `the proposal: ${card.proposal.requestText}`;

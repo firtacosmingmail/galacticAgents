@@ -3,6 +3,7 @@ import { useAppStore } from '../../state/store.js';
 import {
   cancelQueuedAnswer,
   dismissAnswerNotice,
+  isSetEntry,
   notSentLine,
   streamDown,
   submitAnswer,
@@ -40,6 +41,28 @@ export function QueuedAnswerBox({
   onCancelled?: () => void;
 }) {
   const sending = entry.state === 'sending';
+  if (isSetEntry(entry)) {
+    // A question set's send (P8-21): its answers go together.
+    return (
+      <div className="queued-answer" role="group" aria-label="queued answers">
+        <p>
+          <span className="pill queued-pill">{sending ? 'sending' : 'queued'}</span> Your{' '}
+          {entry.answer} {sending ? <>are being sent…</> : <>will send when reconnected.</>}
+        </p>
+        {!sending && (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (cancelQueuedAnswer(entry.questionId)) onCancelled?.();
+            }}
+          >
+            Cancel queued answers
+          </button>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="queued-answer" role="group" aria-label="queued answer">
       <p>
@@ -71,10 +94,21 @@ export function AnswerNotice({ entry }: { entry: QueuedAnswer }) {
   const api = useApi();
   const { run, error, busy } = useAction();
   const question: Question | undefined = world.questions[entry.questionId];
+  const set = isSetEntry(entry);
+  // A set's send names what it carried and the set's title ("your 2 answers to “…”").
+  const what = set ? (
+    <>
+      your {entry.answer} to “{entry.text}”
+    </>
+  ) : (
+    <>
+      your answer “{entry.answer}” to “{entry.text}”
+    </>
+  );
   if (entry.state === 'sent') {
     return (
       <p className="answer-notice is-sent">
-        Sent: your answer “{entry.answer}” to “{entry.text}”.{' '}
+        Sent: {what}.{' '}
         <button
           type="button"
           className="secondary"
@@ -86,11 +120,12 @@ export function AnswerNotice({ entry }: { entry: QueuedAnswer }) {
     );
   }
   if (entry.state !== 'not_sent') return null;
-  const open = question?.status === 'open';
+  // A set's card stays to send it again; a single question's notice offers it here.
+  const open = !set && question?.status === 'open';
   return (
     <div className="answer-notice is-not-sent">
       <p className="error">
-        Not sent: your answer “{entry.answer}” to “{entry.text}” — {notSentLine(world, entry)}.
+        Not sent: {what} — {notSentLine(world, entry)}.
       </p>
       <div className="controls">
         {open && (
@@ -100,7 +135,7 @@ export function AnswerNotice({ entry }: { entry: QueuedAnswer }) {
             onClick={() =>
               void run(async () => {
                 dismissAnswerNotice(entry.questionId);
-                await submitAnswer(api, question, entry.answer);
+                if (question) await submitAnswer(api, question, entry.answer);
               })
             }
           >
@@ -134,8 +169,16 @@ export function AnswerNoticeFor({ questionId }: { questionId: Id }) {
 export function OfflineAnswers({ filter }: { filter?: (e: QueuedAnswer) => boolean }) {
   const entries = useAnswerQueue((s) => s.entries);
   const questions = useAppStore((s) => s.world.questions);
+  // A set's entry (keyed by the set) is the card's while a row of the set is open (P8-21).
+  const openSets = new Set(
+    Object.values(questions)
+      .filter((q) => q.status === 'open' && q.context.set)
+      .map((q) => q.context.set!.id),
+  );
   const shown = Object.values(entries)
-    .filter((e) => questions[e.questionId]?.status !== 'open')
+    .filter((e) =>
+      isSetEntry(e) ? !openSets.has(e.questionId) : questions[e.questionId]?.status !== 'open',
+    )
     .filter((e) => e.state !== 'sending' || e.wasQueued)
     .filter((e) => !filter || filter(e))
     .sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));

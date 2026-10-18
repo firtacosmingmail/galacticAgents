@@ -440,6 +440,106 @@ button.danger {
   margin: 4px 0;
 }
 
+/* The question-set card (P8-21): one question per page, progress dots, a review list. Static
+   (nothing animates), so reduced motion needs nothing more. */
+.question-set .qset-asker {
+  font-weight: 600;
+}
+.qset-pill {
+  margin-left: auto;
+}
+.question-set header .qset-pill + button.card-dismiss {
+  margin-left: 0;
+}
+.qset-dots {
+  display: flex;
+  gap: 5px;
+  list-style: none;
+  margin: 8px 0 10px;
+  padding: 0;
+}
+.qset-dot {
+  width: 22px;
+  height: 6px;
+  border-radius: 3px;
+  background: #2f3650;
+}
+.qset-dot.is-answered {
+  background: #3f9f63;
+}
+.qset-dot.is-skipped {
+  background: #d9a441;
+}
+.qset-dot.is-current {
+  background: #4a90e2;
+}
+.qset-page:focus,
+.qset-review:focus {
+  outline: none;
+}
+.qset-text {
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+.qset-hint {
+  margin: -4px 0 8px;
+  font-size: 0.85rem;
+}
+.qset-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.qset-option {
+  text-align: left;
+  min-height: 36px;
+}
+.qset-option[aria-pressed='true'] {
+  border-color: #4a90e2;
+  background: rgba(74, 144, 226, 0.18);
+}
+.qset-write {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+}
+.qset-nav {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.qset-review {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.qset-review-row {
+  border-bottom: 1px solid #252b3d;
+  padding: 6px 0;
+}
+.qset-review-jump {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 2px 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.qset-review-a {
+  display: block;
+  margin-top: 2px;
+  color: #b8c0d6;
+}
+.qset-skipped {
+  color: #d9a441;
+}
+
 /* "Allow similar" chooser on a permission card (P9-17): a full row under the card's buttons. */
 .allow-similar {
   flex-basis: 100%;
