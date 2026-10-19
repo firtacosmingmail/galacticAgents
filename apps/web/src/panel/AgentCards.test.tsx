@@ -470,6 +470,21 @@ describe('managed-agents cards: what they show (P25-04)', () => {
     expect(c.queryByText('blocked on you')).toBeNull();
   });
 
+  it('counts a question set once on the card (P8-22)', () => {
+    const row = (id: string, index: number) => ({
+      ...fx.question,
+      id,
+      originAgentId: 'a-st',
+      holder: { type: 'user' as const },
+      context: { text: id, set: { id: 'qs-1', index, total: 3, title: 'Plan questions' } },
+    });
+    load({ questions: [row('q-s0', 0), row('q-s1', 1), row('q-s2', 2)] });
+    show();
+    expect(card(STEWARD).querySelector('.agc-qbadge')?.textContent).toBe(
+      '1 question set · 3 questions',
+    );
+  });
+
   it('puts “blocked on you” first and loudest', () => {
     load({
       task: { state: 'in_progress' },

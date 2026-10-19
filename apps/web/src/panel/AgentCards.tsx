@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { openQuestionsLabel, questionItems } from './question-count.js';
 import { wallClockLimit, type Agent } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { HARMONIZER } from '../state/selection.js';
@@ -83,18 +84,15 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
     : undefined;
   const wall = status ? wallClockUsed(status, now) : undefined;
   const wallLimit = status ? wallClockLimit(status.caps.wallClockMs) : undefined;
-  const questions = openQuestions.length;
+  // A question set counts once (P8-22).
+  const questions = openQuestionsLabel(questionItems(openQuestions));
 
   return (
     <article className={`agc${blocked ? ' is-blocked' : ''}`} aria-label={`card of ${name}`}>
       <header className="agc-head">
         <StatePill state={status?.state} />
         {blocked && <Beacon>blocked on you</Beacon>}
-        {questions > 0 && (
-          <span className="agc-qbadge">
-            {questions} open question{questions === 1 ? '' : 's'}
-          </span>
-        )}
+        {questions && <span className="agc-qbadge">{questions}</span>}
         {to ? (
           <NavLink to={{ route: 'panel', selection: to }} className="agc-name">
             <span className="pnl-nav-name">{name}</span>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Event } from '@galactic/protocol';
+import type { Event, Question } from '@galactic/protocol';
 import { applyEvent, type WorldState } from '../../state/reduce.js';
 import {
   beaconCard,
@@ -229,5 +229,52 @@ describe('beaconCard', () => {
     const card = beaconCard(worldWith(question('q', 'a-st', { text })), 'q');
     expect(card?.text.length).toBeLessThanOrEqual(80);
     expect(card?.text.endsWith('…')).toBe(true);
+  });
+});
+
+describe('question sets (P8-22): one beacon per set', () => {
+  const inSet = (id: string, index: number, holder: Question['holder'] = { type: 'user' }) => {
+    const q = question(id, 'a-wk-old', { holder });
+    q.context = { ...q.context, set: { id: 'qs-1', index, total: 3, title: 'Plan questions' } };
+    return q;
+  };
+
+  it('lights one beacon for a three-question set, keyed by its first row the user holds', () => {
+    const w = worldWith(
+      inSet('q-s0', 0),
+      inSet('q-s1', 1),
+      inSet('q-s2', 2),
+      question('q-1', 'a-h'),
+    );
+    const list = beaconList(w);
+    expect(list.filter((b) => b.bodyId === 'b-jupiter')).toEqual([
+      expect.objectContaining({ questionId: 'q-s0', setId: 'qs-1', setSize: 3, slots: 1 }),
+    ]);
+    // A single question still lights its own.
+    expect(list.filter((b) => b.bodyId === 'b-earth').map((b) => b.questionId)).toEqual(['q-1']);
+  });
+
+  it('counts only the rows the user holds: the rest are still with a supervisor', () => {
+    const w = worldWith(
+      inSet('q-s0', 0, { type: 'agent', id: 'a-h' }),
+      inSet('q-s1', 1),
+      inSet('q-s2', 2),
+    );
+    expect(beaconList(w)).toEqual([
+      expect.objectContaining({ questionId: 'q-s1', setId: 'qs-1', setSize: 2 }),
+    ]);
+  });
+
+  it("the set's hover card names the set and its number of questions", () => {
+    const w = worldWith(inSet('q-s0', 0), inSet('q-s1', 1), inSet('q-s2', 2));
+    expect(beaconCard(w, 'q-s0')).toEqual(
+      expect.objectContaining({
+        heading: 'Questions',
+        text: 'Plan questions',
+        count: '3 questions',
+      }),
+    );
+    // A row without a beacon of its own has no card.
+    expect(beaconCard(w, 'q-s1')).toBeUndefined();
   });
 });

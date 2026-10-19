@@ -60,6 +60,8 @@ export const BeaconHoverCard = memo(function BeaconHoverCard({
       <span className="beacon-card-head">
         <strong className="beacon-card-kind">{card.heading}:</strong> {card.text}
       </span>
+      {/* A question set's beacon (P8-22): how many of its questions wait. */}
+      {card.count && <span className="beacon-card-count">{card.count}</span>}
       <span className="beacon-card-asker">{card.asker}</span>
       <span className="beacon-card-hint">
         {card.more > 0 ? `+${card.more} more on ${card.where} · ` : ''}click to go there and open it

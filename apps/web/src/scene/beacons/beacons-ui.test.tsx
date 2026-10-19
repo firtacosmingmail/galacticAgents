@@ -204,3 +204,41 @@ describe('the beacon hover card', () => {
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
 });
+
+describe('a question set (P8-22)', () => {
+  const inSet = (id: string, index: number) => {
+    const q = question(id, 'a-st-in');
+    q.context = { ...q.context, set: { id: 'qs-1', index, total: 3, title: 'Plan questions' } };
+    return q;
+  };
+  beforeEach(() => {
+    useAppStore.setState({
+      world: worldWith(inSet('q-s0', 0), inSet('q-s1', 1), inSet('q-s2', 2)),
+    });
+  });
+
+  it('its one beacon’s hover card names the set and how many questions wait', () => {
+    render(<PickingOverlay />);
+    act(() =>
+      usePickingStore
+        .getState()
+        .setHover({ kind: 'beacon', questionId: 'q-s0', bodyId: 'b-jupiter' }),
+    );
+    const card = screen.getByRole('tooltip');
+    expect(card.textContent).toContain('Questions:');
+    expect(card.textContent).toContain('Plan questions');
+    expect(card.textContent).toContain('3 questions');
+  });
+
+  it('clicking it reveals the set’s card in the inbox', () => {
+    const section = document.createElement('section');
+    section.id = INBOX_ID;
+    const card = document.createElement('article');
+    card.dataset['setId'] = 'qs-1';
+    card.dataset['questionIds'] = 'q-s0 q-s1 q-s2';
+    section.append(card);
+    document.body.append(section);
+    expect(activateBeacon('q-s0')).toBe('q-s0');
+    expect(document.activeElement).toBe(card);
+  });
+});
