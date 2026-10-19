@@ -42,6 +42,8 @@ describe('openQuestionsLabel', () => {
   });
   it('names a set with its number of questions', () => {
     expect(openQuestionsLabel({ singles: 0, sets: [3] })).toBe('1 question set · 3 questions');
+    // The user holds one row of a split set.
+    expect(openQuestionsLabel({ singles: 0, sets: [1] })).toBe('1 question set · 1 question');
     expect(openQuestionsLabel({ singles: 0, sets: [3, 2] })).toBe('2 question sets');
     expect(openQuestionsLabel({ singles: 1, sets: [3] })).toBe('1 open question + 1 question set');
     expect(openQuestionsLabel({ singles: 0, sets: [] })).toBe('');

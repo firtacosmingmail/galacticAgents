@@ -35,7 +35,8 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 export function openQuestionsLabel({ singles, sets }: QuestionItems): string {
   const single = singles > 0 ? plural(singles, 'open question', 'open questions') : '';
   if (sets.length === 0) return single;
-  if (singles === 0 && sets.length === 1) return `1 question set · ${sets[0]} questions`;
+  if (singles === 0 && sets.length === 1)
+    return `1 question set · ${plural(sets[0]!, 'question', 'questions')}`;
   const set = plural(sets.length, 'question set', 'question sets');
   return single ? `${single} + ${set}` : set;
 }
