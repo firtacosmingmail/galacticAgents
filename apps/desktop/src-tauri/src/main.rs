@@ -593,6 +593,9 @@ fn log_file(app: &AppHandle) -> Option<File> {
 
 fn spawn_node_side(app: &AppHandle) -> Result<(), String> {
     let repo = repo_dir();
+    // P8-23: macOS guards ~/Documents per app; a refused prompt gets its own message — checked
+    // first, since a refused folder also makes the build check below fail ("not built").
+    access::check_readable(&repo)?;
     let entry = repo.join("apps/desktop/dist/main.js");
     if !entry.is_file() {
         return Err(format!(
@@ -601,8 +604,6 @@ fn spawn_node_side(app: &AppHandle) -> Result<(), String> {
             repo.display()
         ));
     }
-    // P8-23: macOS guards ~/Documents per app; a refused prompt gets its own message.
-    access::check_readable(&repo)?;
     let (node, login_path) = find_node();
     if app.state::<Shell>().quitting.load(Ordering::SeqCst) {
         return Ok(()); // quit while the login shell was asked: start nothing

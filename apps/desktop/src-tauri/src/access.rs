@@ -37,15 +37,27 @@ pub fn check_readable(repo: &Path) -> Result<(), String> {
     }
 }
 
-/// When the helper stopped: whether its log says a read was refused (Node prints
-/// "operation not permitted", `EPERM`, or `EACCES`), and then the message to show.
+/// When the helper stopped: whether its log has a line where a read inside the project was
+/// refused (Node prints "operation not permitted", `EPERM`, `EACCES` or "permission denied" with
+/// the path), and then the message to show. The project's path is matched as given and as its real
+/// path (`/private/...`, a symlinked `GALACTIC_REPO`).
 pub fn failure_from_log(log: &str, repo: &Path) -> Option<String> {
-    let refused = log.contains("operation not permitted")
-        || log.contains("EPERM")
-        || log.contains("EACCES")
-        || log.contains("permission denied");
-    let ours = log.contains(&*repo.to_string_lossy());
-    (refused && ours).then(|| refused_message(repo))
+    let mut paths = vec![repo.to_string_lossy().into_owned()];
+    if let Ok(real) = fs::canonicalize(repo) {
+        let real = real.to_string_lossy().into_owned();
+        if !paths.contains(&real) {
+            paths.push(real);
+        }
+    }
+    let refused = |line: &str| {
+        line.contains("operation not permitted")
+            || line.contains("EPERM")
+            || line.contains("EACCES")
+            || line.contains("permission denied")
+    };
+    log.lines()
+        .any(|line| refused(line) && paths.iter().any(|p| line.contains(p.as_str())))
+        .then(|| refused_message(repo))
 }
 
 #[cfg(test)]
@@ -88,6 +100,24 @@ mod tests {
             failure_from_log("EPERM: operation not permitted, open '/Volumes/x/y'", &repo()),
             None
         );
+    }
+
+    #[test]
+    fn the_refusal_and_the_project_path_must_be_on_one_line() {
+        // A permissions error elsewhere, with the project named on another line, is not a refusal.
+        let log = "Error: EACCES: permission denied, open '/Volumes/x/db.sqlite'\n\
+                   at /Users/me/Documents/work/GalacticAgents/apps/server/dist/index.js:1";
+        assert_eq!(failure_from_log(log, &repo()), None);
+    }
+
+    #[test]
+    fn the_projects_real_path_counts_too() {
+        let dir = std::env::temp_dir().join(format!("galactic-access-real-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let real = fs::canonicalize(&dir).unwrap();
+        let log = format!("Error: EPERM: operation not permitted, open '{}/package.json'", real.display());
+        assert!(failure_from_log(&log, &dir).is_some());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
