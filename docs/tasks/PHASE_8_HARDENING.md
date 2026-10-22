@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** P8-22 done
-**Phase status:** in progress (22/22 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
+**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** P8-23 done
+**Phase status:** in progress (23/23 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -152,6 +152,12 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - Found in the P8-21 review: the inbox, the top bar and the status counts take a set as one waiting item (`waitingForUserCount`), but the scene's question beacons and the managed-agents cards' "open questions" number still count each row of a set, so a three-question set lights as three questions there. Count a set once in both (a set's rows share `context.set.id`), with its "<n> questions" label where a count is shown.
 - **Acceptance:** web unit tests for the beacon and agent-card models (a 3-row set counts once, a single question still counts once, a set split between the user and a supervisor counts once per holder side as the inbox does); the scene probe or a scene test shows one beacon for a set; SPEC decision 141 notes it.
 - **Done:** SPEC decision 141 extended. Web: `panel/question-count.ts` (`questionItems` — a set once per holder side — and `openQuestionsLabel`), used by `AgentCards.tsx`'s badge; `scene/beacons/beacon-model.ts` collapses a set's user-held rows into one beacon (`setId`, `setSize` on `BeaconSpec`; the hover card's "Questions:" heading, the set's title and "N questions"); `inbox-reveal.ts` `inboxCard` finds a set's card by its rows' ids (`data-question-ids` on `QuestionSetCard`), so clicking the beacon opens it. Tests: `question-count.test.ts`, `beacon-model.test.ts`, `beacons-ui.test.tsx`, `Beacons.test.tsx`, `AgentCards.test.tsx`.
+
+### P8-23 — Say so when macOS refuses the desktop app its project folder (added 2026-10-22)
+- **Status:** done (2026-10-22) · **Depends on:** P8-06 · **Parallel with:** —
+- Cosmin's report: "It asked me for storage access and I refused them. It crashed after that. Display an error if that is the problem." The repository lives under `~/Documents`, a folder macOS guards per app; refusing the prompt makes the app's Node side die reading the project's `package.json` ("operation not permitted"), and the window only said "The shell's helper stopped". The shell now checks it can read the project before starting its helper, and reads the helper's log when it stops: a refusal shows its own message — what happened, where to allow it (System Settings → Privacy & Security → Files and Folders → GalacticAgents → Documents Folder) and to open the app again — in the window and the menu bar.
+- **Acceptance:** Rust unit tests for the message and the log check; the window and the menu show the message after a refusal; DESKTOP.md documents it.
+- **Done:** `apps/desktop/src-tauri/src/access.rs` (`check_readable` before the helper starts — the read that also asks macOS the first time; `failure_from_log` when the helper stops; `refused_message`), wired in `main.rs` (`log_path`); shown with the existing `show_failure` (window, menu status line, "!" in the menu bar). Tests: 5 Rust unit tests in `access.rs`, added to `pnpm --filter @galactic/desktop test:rust`; checked by running the built shell against a folder it cannot read at all (review fix: the refusal check now runs before the "not built" check, which a refused folder also fails) and one whose `package.json` cannot be read; the helper's log must show the refusal and the project's path (as given or its real path) on one line. `docs/DESKTOP.md` lifecycle bullet (incl. `tccutil reset`).
 
 ## Exit criteria
 
