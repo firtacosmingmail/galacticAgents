@@ -45,6 +45,7 @@ use tauri::{
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tauri_plugin_notification::NotificationExt;
 
+mod access;
 mod links;
 use links::{navigation_target, new_window_target, LinkTarget, OpenLimiter};
 mod tray_menu;
@@ -575,11 +576,15 @@ fn cli_overrides() -> Vec<(&'static str, String)> {
     env
 }
 
+fn log_path(app: &AppHandle) -> Option<PathBuf> {
+    match std::env::var_os("GALACTIC_DESKTOP_LOG") {
+        Some(p) => Some(PathBuf::from(p)),
+        None => Some(app.path().app_log_dir().ok()?.join("desktop.log")),
+    }
+}
+
 fn log_file(app: &AppHandle) -> Option<File> {
-    let path = match std::env::var_os("GALACTIC_DESKTOP_LOG") {
-        Some(p) => PathBuf::from(p),
-        None => app.path().app_log_dir().ok()?.join("desktop.log"),
-    };
+    let path = log_path(app)?;
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }
@@ -596,6 +601,8 @@ fn spawn_node_side(app: &AppHandle) -> Result<(), String> {
             repo.display()
         ));
     }
+    // P8-23: macOS guards ~/Documents per app; a refused prompt gets its own message.
+    access::check_readable(&repo)?;
     let (node, login_path) = find_node();
     if app.state::<Shell>().quitting.load(Ordering::SeqCst) {
         return Ok(()); // quit while the login shell was asked: start nothing
@@ -645,7 +652,12 @@ fn spawn_node_side(app: &AppHandle) -> Result<(), String> {
         if shell.quitting.load(Ordering::SeqCst) {
             allow_exit(&handle);
         } else {
-            show_failure(&handle, "The shell's helper stopped. Quit and open GalacticAgents again.");
+            // A refused folder (P8-23) says so; anything else keeps the usual message.
+            let log = log_path(&handle).and_then(|p| fs::read_to_string(p).ok()).unwrap_or_default();
+            let message = access::failure_from_log(&log, &repo_dir()).unwrap_or_else(|| {
+                "The shell's helper stopped. Quit and open GalacticAgents again.".to_string()
+            });
+            show_failure(&handle, &message);
         }
     });
     Ok(())
