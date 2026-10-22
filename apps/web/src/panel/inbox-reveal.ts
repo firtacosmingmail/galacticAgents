@@ -69,6 +69,10 @@ export function inboxCard(questionId: string): HTMLElement | null {
   for (const el of inbox.querySelectorAll<HTMLElement>('[data-question-id]')) {
     if (el.dataset['questionId'] === questionId) return el;
   }
+  // A question set's card (P8-22) lists its rows' ids.
+  for (const el of inbox.querySelectorAll<HTMLElement>('[data-question-ids]')) {
+    if (el.dataset['questionIds']?.split(' ').includes(questionId)) return el;
+  }
   return null;
 }
 

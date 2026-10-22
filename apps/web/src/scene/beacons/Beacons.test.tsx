@@ -127,6 +127,20 @@ describe('Beacons', () => {
     expect(beaconFrames().map((f) => f.bodyId)).toEqual(['b-ast-7', 'b-jupiter']);
   });
 
+  it('draws one beacon for a question set (P8-22)', () => {
+    const inSet = (id: string, index: number) => {
+      const q = question(id, 'a-st-in');
+      q.context = { ...q.context, set: { id: 'qs-1', index, total: 3, title: 'Plan' } };
+      return q;
+    };
+    useAppStore.setState({
+      world: worldWith(inSet('q-s0', 0), inSet('q-s1', 1), inSet('q-s2', 2)),
+    });
+    const { container } = render(<Beacons />);
+    const groups = [...container.querySelectorAll('group')].map((g) => g.getAttribute('name'));
+    expect(groups).toEqual(['beacon:q-s0']);
+  });
+
   it("places the glyph above its body's anchor, screen-sized; hidden without an anchor", () => {
     reducedMotion(true);
     render(<Beacons />);

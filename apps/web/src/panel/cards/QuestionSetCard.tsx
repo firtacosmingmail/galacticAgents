@@ -257,6 +257,8 @@ export function QuestionSetCard({ setId }: { setId: Id }) {
       className="card question question-set"
       aria-label={`question set ${title}, ${count} questions`}
       data-set-id={setId}
+      // Its rows' ids, so a beacon of the set finds this card (P8-22, `inboxCard`).
+      data-question-ids={rows.map((r) => r.id).join(' ')}
     >
       <header>
         <span className="qset-asker">

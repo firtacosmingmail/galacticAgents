@@ -15,7 +15,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 5 — Panel polish and scene integration | `PHASE_5_PANEL_POLISH.md` | done (2026-10-04) | 7/7 | — |
 | 6 — Planet zoom and structure | `PHASE_6_PLANET_ZOOM.md` | done (2026-10-05) | 7/7 | — |
 | 7 — Remote and mobile access | `PHASE_7_REMOTE_MOBILE.md` | done (2026-10-12) | 7/7 | — |
-| 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | in progress (branch `phase-8`, merged into `main` 2026-10-07) | 21/22 | P8-22 (todo) |
+| 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | in progress (branch `phase-8`, merged into `main` 2026-10-07) | 22/22 | — (ongoing backlog) |
 | 9 — Deliverables | `PHASE_9_DELIVERABLES.md` | done (2026-10-12) | 17/17 | — |
 
 Phases run in order 0 → 1 → 2 → 2.5 → 3 → 4 → 5 → 6 → 7 → 9; Phase 8 tasks are picked whenever their dependencies are met. Phase 7 depends on Phase 5, not on Phase 6. Phase 9 (deliverables) needs Phase 5 and the Phase 8 tasks P8-02, P8-03, P8-06 and P8-11; it does not wait for P7-06.

@@ -1,4 +1,4 @@
-import type { Id, Question, QuestionKind } from '@galactic/protocol';
+import { setOf, type Id, type Question, type QuestionKind } from '@galactic/protocol';
 import type { WorldState } from '../../state/reduce.js';
 import { agentLabel } from '../../console/hierarchy/shared.js';
 import { bodyName, headquartersBody } from '../picking/body-action.js';
@@ -17,6 +17,9 @@ import { oneLine } from '../picking/satellite-card.js';
  *   (a project task lives on its project's planet, decision 9), a Waykeeper's project's body, the
  *   Harmonizer's headquarters (Earth). Falls back to the agent's own `bodyId`, then to the
  *   question's recorded origin (task, project, body) when the agent is not loaded.
+ * - **A question set is one beacon** (P8-22, SPEC decision 141): the rows of a set the user holds
+ *   light a single beacon, keyed by the first of them (by index), carrying the set's id and how
+ *   many of its questions wait — as the inbox shows one card for them.
  * - **One beacon per question** (P4-13, Cosmin's answer to P4-05's "one per body"): each has its
  *   own glyph and its own lifecycle, keyed by the question's id. Several on one body stand side by
  *   side in a row above it (`slot` of `slots`, laid out by `beacon-look.ts`), in the inbox's order:
@@ -34,6 +37,32 @@ export interface BeaconSpec {
   slots: number;
   /** Questions on its body without a beacon of their own (only on the last beacon of a full row). */
   more: number;
+  /** A question set's beacon (P8-22): the set's id, and how many of its questions the user holds. */
+  setId?: Id;
+  setSize?: number;
+}
+
+/** The rows of the same set the user holds stand behind one beacon: the first one by index. */
+function collapseSets(questions: Question[]): { q: Question; setSize?: number }[] {
+  const firsts = new Map<string, { q: Question; setSize: number }>();
+  const out: { q: Question; setSize?: number }[] = [];
+  for (const q of questions) {
+    const set = setOf(q);
+    if (!set) {
+      out.push({ q });
+      continue;
+    }
+    const seen = firsts.get(set.id);
+    if (!seen) {
+      const entry = { q, setSize: 1 };
+      firsts.set(set.id, entry);
+      out.push(entry);
+      continue;
+    }
+    seen.setSize++;
+    if (set.index < setOf(seen.q)!.index) seen.q = q;
+  }
+  return out;
 }
 
 /** The most beacons one body carries side by side; further questions show as "+n" on the last. */
@@ -110,16 +139,17 @@ export function beaconList(world: BeaconWorld): BeaconSpec[] {
     else byBody.set(bodyId, [q]);
   }
   return [...byBody.keys()].sort().flatMap((bodyId) => {
-    const questions = byBody.get(bodyId)!.sort(inboxOrder);
-    const shown = questions.slice(0, MAX_BEACONS_PER_BODY);
-    const more = questions.length - shown.length;
-    return shown.map<BeaconSpec>((q, slot) => ({
+    const items = collapseSets(byBody.get(bodyId)!).sort((a, b) => inboxOrder(a.q, b.q));
+    const shown = items.slice(0, MAX_BEACONS_PER_BODY);
+    const more = items.length - shown.length;
+    return shown.map<BeaconSpec>(({ q, setSize }, slot) => ({
       questionId: q.id,
       bodyId,
       kind: q.kind,
       slot,
       slots: shown.length,
       more: slot === shown.length - 1 ? more : 0,
+      ...(setSize !== undefined ? { setId: setOf(q)!.id, setSize } : {}),
     }));
   });
 }
@@ -140,7 +170,8 @@ export function sameBeacons(a: readonly BeaconSpec[], b: readonly BeaconSpec[]):
       x.kind === y.kind &&
       x.slot === y.slot &&
       x.slots === y.slots &&
-      x.more === y.more
+      x.more === y.more &&
+      x.setSize === y.setSize
     );
   });
 }
@@ -160,6 +191,8 @@ export interface BeaconCard {
   /** Questions on this body without a beacon of their own (the "+n" badge). */
   more: number;
   questionId: Id;
+  /** A question set's beacon (P8-22): "3 questions". */
+  count?: string;
 }
 
 /** The question text's length on the hover card before it is cut. */
@@ -170,12 +203,14 @@ export function beaconCard(world: BeaconWorld, questionId: Id): BeaconCard | und
   const beacon = beaconFor(world, questionId);
   const q = world.questions[questionId];
   if (!beacon || !q) return undefined;
+  const set = beacon.setSize !== undefined ? setOf(q) : undefined;
   return {
     bodyId: beacon.bodyId,
     where: bodyName(world, beacon.bodyId),
-    heading: q.kind === 'permission' ? 'Permission' : 'Question',
+    heading: set ? 'Questions' : q.kind === 'permission' ? 'Permission' : 'Question',
     kind: q.kind,
-    text: oneLine(q.context.text, CARD_TEXT_CHARS),
+    text: oneLine(set ? set.title : q.context.text, CARD_TEXT_CHARS),
+    ...(set ? { count: `${beacon.setSize} question${beacon.setSize === 1 ? '' : 's'}` } : {}),
     asker: agentLabel(world.agents[q.originAgentId], world),
     more: beacon.more,
     questionId: q.id,
