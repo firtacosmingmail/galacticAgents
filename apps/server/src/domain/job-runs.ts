@@ -203,8 +203,10 @@ const reasonText = (reason: string): string => reason.trim().replace(/[.\s]+$/, 
 /**
  * What a failed run changes on its job: paused with the reason, and one failure question — unless
  * one is already open, which stays the one. The question's asker (`originAgentId`, a foreign key)
- * is the run's Steward, or the project's Waykeeper when the run never got one; with neither, the
- * job still pauses and its `pausedReason` says the user could not be asked.
+ * is the run's Steward, or the project's Waykeeper when the run never got one, else the Harmonizer;
+ * with no agent row at all, the job still pauses and its `pausedReason` says the user could not be
+ * asked. The question is the user's alone (`meta.toUser`, decision 30), so no supervisor of the
+ * asker is woken by it.
  */
 function failureChanges(
   ctx: CommandContext,
@@ -218,7 +220,7 @@ function failureChanges(
   if (open?.status === 'open') return changes;
   const asker = askerOf(ctx, job, run);
   if (!asker) {
-    changes.pausedReason = `${reason} (the failure question could not be asked: the project has no Waykeeper)`;
+    changes.pausedReason = `${reason} (the failure question could not be asked: there is no agent to ask it through)`;
     return changes;
   }
   const question = openQuestion(ctx, {
@@ -233,23 +235,26 @@ function failureChanges(
       // Where it comes from (role, task, project, body); a job's notice carries no recent events.
       origin: originOf(ctx, asker.id, { recentEvents: () => [] }),
     },
-    meta: { jobOwned: true },
+    meta: { jobOwned: true, toUser: true },
   });
   changes.failureQuestionId = question.id;
   return changes;
 }
 
-/** The run's Steward, else the project's latest Waykeeper row, else none. */
+/** The run's Steward, else the project's latest Waykeeper row, else the latest Harmonizer row. */
 function askerOf(ctx: Reader, job: Job, run: JobRun): Agent | undefined {
   const steward = run.agentId ? ctx.tables.agents.get(run.agentId) : undefined;
   if (steward) return steward;
-  return ctx.tables.agents
-    .all()
-    .filter((a) => a.role === 'waykeeper' && a.projectId === job.projectId)
-    .reduce<Agent | undefined>(
-      (latest, a) => (!latest || a.createdAt >= latest.createdAt ? a : latest),
+  const agents = ctx.tables.agents.all();
+  const latest = (rows: Agent[]) =>
+    rows.reduce<Agent | undefined>(
+      (best, a) => (!best || a.createdAt >= best.createdAt ? a : best),
       undefined,
     );
+  return (
+    latest(agents.filter((a) => a.role === 'waykeeper' && a.projectId === job.projectId)) ??
+    latest(agents.filter((a) => a.role === 'harmonizer'))
+  );
 }
 
 /** "2026-10-01": a timestamp's day on the Mac's clock (schedules are local too). */

@@ -45,7 +45,7 @@ const DRAFT: JobDraft = {
   unattendedRules: [],
 };
 
-function setup(opts: { waykeeper?: boolean } = {}) {
+function setup(opts: { waykeeper?: boolean; harmonizer?: boolean } = {}) {
   const w = world();
   const start: Snapshot = { ...w.log.snapshot(), statuses: [] };
   const recorded: EventEnvelope[] = [];
@@ -72,9 +72,12 @@ function setup(opts: { waykeeper?: boolean } = {}) {
     createJob(ctx, { projectId: project.id, area: { name: 'Feedback' }, draft: DRAFT, by: USER }),
   );
   const agents = cmd((ctx) => {
-    const hq = createAgent(ctx, { role: 'harmonizer', runtime: 'fake', caps: CAPS });
+    const hq =
+      opts.harmonizer === false
+        ? undefined
+        : createAgent(ctx, { role: 'harmonizer', runtime: 'fake', caps: CAPS });
     const wk =
-      opts.waykeeper === false
+      opts.waykeeper === false || !hq
         ? undefined
         : createAgent(ctx, {
             role: 'waykeeper',
@@ -94,7 +97,7 @@ function setup(opts: { waykeeper?: boolean } = {}) {
         caps: CAPS,
         taskId: job.taskId,
         projectId: project.id,
-        supervisorId: agents.wk?.id ?? agents.hq.id,
+        ...((agents.wk ?? agents.hq) ? { supervisorId: (agents.wk ?? agents.hq)!.id } : {}),
       }),
     );
   const start1 = (dueAt = '2026-10-01T09:00:00.000Z') =>
@@ -237,6 +240,7 @@ describe('startJobRun / endJobRun', () => {
     expect(jobRuns(s, s.job.id, 500)).toHaveLength(200);
     expect(jobRuns(s, s.job.id)).toHaveLength(20);
     expect(jobRuns(s, s.job.id)[0]!.id).toBe(ids.at(-1));
+    s.conforms();
   });
 });
 
@@ -260,7 +264,7 @@ describe('a failed run', () => {
       kind: 'clarification',
       holder: USER,
       originAgentId: stew.id,
-      meta: { jobOwned: true },
+      meta: { jobOwned: true, toUser: true },
     });
     expect(q.context.text).toBe('Read the feedback failed: no network. Tell me when it is fixed.');
     expect(q.context.options).toEqual([...FAILURE_ACTIONS]);
@@ -316,8 +320,24 @@ describe('a failed run', () => {
     expect(q.holder).toEqual(USER);
   });
 
-  it('without any agent to ask through, still pauses and says so', () => {
+  it('without a Waykeeper, asks through the Harmonizer', () => {
     const s = setup({ waykeeper: false });
+    const run = s.start1();
+    s.cmd((ctx) =>
+      endJobRun(ctx, { runId: run.id, outcome: 'failed', failureReason: 'no Waykeeper' }),
+    );
+    const job = jobOf(s, s.job.id);
+    expect(job.state).toBe('paused');
+    expect(job.pausedReason).toBe('no Waykeeper');
+    const q = s.tables.questions.get(job.failureQuestionId!)!;
+    expect(q.originAgentId).toBe(s.agents.hq!.id);
+    expect(q.holder).toEqual(USER);
+    expect(q.meta).toEqual({ jobOwned: true, toUser: true });
+    s.conforms();
+  });
+
+  it('without any agent row at all, still pauses and says so', () => {
+    const s = setup({ harmonizer: false });
     const run = s.start1();
     s.cmd((ctx) =>
       endJobRun(ctx, { runId: run.id, outcome: 'failed', failureReason: 'no Waykeeper' }),
