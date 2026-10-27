@@ -1,6 +1,6 @@
 # Phase 10 — Long-term projects, area moons and recurring jobs
 
-**Current task:** P10-06 · **Task status:** P10-01, P10-02, P10-03, P10-04, P10-05 done; P10-06 next
+**Current task:** P10-06 · **Task status:** P10-01, P10-02, P10-03, P10-04, P10-05 done; P10-06 in progress
 **Phase status:** in progress (5/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -75,7 +75,7 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 - **Acceptance:** every action and refusal (closed project, stopped job; Drop always works); an edited reply queues its text; spend refused to agents, sets, "Allow similar" rules and remote answers without auto-approve; only "Implement it" wakes the Waykeeper, once; tool scopes per Steward kind, 20 findings per run, `report_run('failed')` pauses the job.
 
 ### P10-06 — Brain tools and cards
-- **Status:** todo · **Depends on:** P10-05 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P10-05 · **Parallel with:** —
 - Plan Task 10: Waykeeper `propose_job`, `propose_job_change`, `propose_job_stop`, `list_jobs`, `read_job_runs` and its long-term prompt; Harmonizer `propose` with `longTerm` and `propose_long_term`; job cards decided in one transaction.
 - **Acceptance:** one card per `propose_job`; approval creates area, task and job in one transaction and wakes the Waykeeper once; rejection creates nothing; refusals before any card; `list_jobs` shows `scheduleText`; long-term proposals create or convert.
 
