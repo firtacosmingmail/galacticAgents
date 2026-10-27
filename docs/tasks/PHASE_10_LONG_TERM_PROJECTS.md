@@ -1,7 +1,7 @@
 # Phase 10 — Long-term projects, area moons and recurring jobs
 
-**Current task:** P10-01 · **Task status:** P10-01 in progress
-**Phase status:** in progress (0/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
+**Current task:** P10-02 · **Task status:** P10-01 done; P10-02 todo
+**Phase status:** in progress (1/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -50,7 +50,7 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 ## Tasks
 
 ### P10-01 — Protocol and storage
-- **Status:** in progress · **Depends on:** — · **Parallel with:** —
+- **Status:** done (2026-10-27) · **Depends on:** — · **Parallel with:** —
 - Plan Tasks 1–3: `long-term.ts` (types, limits, `Schedule`, job-owned question helpers, proposal-meta readers), `HostKind` `areas`, `QuestionKind` `spend`, `Project.longTerm/purpose/goals`, the `area.*` / `job.*` / `job_run.*` events, the world fold and snapshot fields, the command interfaces; `schedule.ts` (`nextOccurrence`, `missedSince`, `scheduleText`); migration 0016 (project columns, `areas`, `jobs`, `job_runs`, widened `bodies` / `questions` CHECKs), tables and snapshot.
 - **Acceptance:** `Schedule` refuses empty, repeated and out-of-range days, `24:00` and `9:00`; `Job` defaults `provider` `claude` and `followUps` `[]` and refuses 11 rules; `isJobOwned` / `isJobTask` as specified; every new event round-trips; `job.created` → `job.updated` folds and `job_run.*` changes nothing; a snapshot with and without `areas`/`jobs` applies. Schedules: one occurrence per local day across a whole year in any zone (DST), monthly 31st clamps to the month's end, weekly across a year end, tests pass under `TZ=America/New_York` and `TZ=Europe/Bucharest`. Storage: round-trips of an area, a job, a run, a spend question, an `areas` body host and a long-term project; a database at 0015 migrates with every row intact; `snapshot()` carries `areas` and `jobs`.
 
