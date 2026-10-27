@@ -116,6 +116,8 @@ export class JobScheduler {
   private chain: Promise<unknown> = Promise.resolve();
   private disposed = false;
   private readonly unsubscribe: (() => void)[] = [];
+  /** Job-run Stewards a user's `control.stop` named (the adapter's own stop may say `system`). */
+  private readonly userStopped = new Set<Id>();
 
   constructor(private readonly opts: JobSchedulerOptions) {
     this.timers = opts.timers ?? NODE_TIMERS;
@@ -197,7 +199,9 @@ export class JobScheduler {
       const steward = run.agentId && live.has(run.agentId) ? run.agentId : undefined;
       if (steward && job.state === 'active') continue;
       if (steward) await this.opts.runtime.stop(steward, SYSTEM);
-      if (this.interrupt(run.id)) report.interrupted.push(run.id);
+      // A Steward the user stopped ends its run without making the job due again (ruling R9).
+      const byUser = !steward && run.agentId !== undefined && this.stoppedByUser(run.agentId);
+      if (this.interrupt(run.id, { byUser })) report.interrupted.push(run.id);
     }
   }
 
@@ -210,7 +214,11 @@ export class JobScheduler {
     const last = job.lastRun;
     if (last?.outcome === 'interrupted' && last.purpose !== 'follow_up') {
       const cutShort = this.opts.log.tables.jobRuns.get(last.runId);
-      if (cutShort && Date.parse(cutShort.dueAt) < due.getTime()) due = new Date(cutShort.dueAt);
+      // A run the user stopped kept its schedule (ruling R9): nothing to run again.
+      const kept = cutShort?.meta?.['keptSchedule'] === true;
+      if (cutShort && !kept && Date.parse(cutShort.dueAt) < due.getTime()) {
+        due = new Date(cutShort.dueAt);
+      }
     }
     return due;
   }
@@ -322,7 +330,21 @@ export class JobScheduler {
       }
       return;
     }
-    await commands.attachJobRunAgent({ runId: run.id, agentId: agent.id });
+    try {
+      await commands.attachJobRunAgent({ runId: run.id, agentId: agent.id });
+    } catch (error) {
+      // No orphan: a Steward its run does not know about is stopped, the run tried again.
+      this.opts.onError(error);
+      await runtime.stop(agent.id, SYSTEM);
+      if (this.interrupt(run.id)) report.interrupted.push(run.id);
+    }
+  }
+
+  /** The user stopped this Steward (its own stop, or its task's), not the system. */
+  private stoppedByUser(agentId: Id): boolean {
+    if (this.userStopped.has(agentId)) return true;
+    const [stopped] = this.opts.log.latestOf('agent.stopped', agentId, 1);
+    return stopped?.event.type === 'agent.stopped' && stopped.event.by.type === 'user';
   }
 
   // -- a run's end -------------------------------------------------------------------------------
@@ -338,6 +360,15 @@ export class JobScheduler {
     const run = job?.runningRunId ? tables.jobRuns.get(job.runningRunId) : undefined;
     if (!run || run.outcome !== 'running') return undefined;
     return run.agentId === undefined || run.agentId === agentId ? run : undefined;
+  }
+
+  /** The Steward of the run going on for the job whose hidden task this is. */
+  private runningAgentOfTask(taskId: Id): Id | undefined {
+    const { tables } = this.opts.log;
+    const task = tables.tasks.get(taskId);
+    const jobId = task ? jobIdOfTask(task) : undefined;
+    const job = jobId ? tables.jobs.get(jobId) : undefined;
+    return job?.runningRunId ? tables.jobRuns.get(job.runningRunId)?.agentId : undefined;
   }
 
   private isJobSteward(agent: Agent): boolean {
@@ -387,6 +418,33 @@ export class JobScheduler {
               run.id,
               unanswered ? `it needed permission to ${unanswered} and nobody answered` : error,
             );
+          },
+          () => undefined,
+        );
+        return;
+      }
+      case 'control.stop': {
+        if (event.by.type !== 'user') return;
+        const { target } = event;
+        const runAgent =
+          target.kind === 'agent'
+            ? target.id
+            : target.kind === 'task'
+              ? this.runningAgentOfTask(target.id)
+              : undefined;
+        if (runAgent && this.runOf(runAgent)) this.userStopped.add(runAgent);
+        return;
+      }
+      case 'agent.stopped': {
+        // The user stopped a run: it ends now and keeps the job's schedule (ruling R9).
+        const agentId = event.agentId;
+        if (!this.runOf(agentId)) return;
+        if (event.by.type !== 'user' && !this.userStopped.has(agentId)) return;
+        void this.enqueue(
+          async () => {
+            const run = this.runOf(agentId);
+            if (run) this.interrupt(run.id, { byUser: true });
+            this.userStopped.delete(agentId);
           },
           () => undefined,
         );
@@ -480,17 +538,19 @@ export class JobScheduler {
   }
 
   /**
-   * Records the run `interrupted` (its job due again at once, unless it was stopped): a follow-up
-   * it carried goes back on the job's queue and a retry note back on the job, so the next run
-   * does them. Returns whether the run was still going.
+   * Records the run `interrupted`. A missed run (a restart, a cap race, a stop by the system)
+   * makes its job due again at once — a follow-up run leaves the schedule alone — and a follow-up
+   * it carried goes back on the job's queue and a retry note back on the job, so the next run does
+   * them. A run the user stopped (`byUser`, ruling R9) keeps the job's schedule and is not done
+   * again. Returns whether the run was still going.
    */
-  private interrupt(runId: Id): boolean {
+  private interrupt(runId: Id, { byUser = false }: { byUser?: boolean } = {}): boolean {
     const run = this.opts.log.tables.jobRuns.get(runId);
     if (!run || run.outcome !== 'running') return false;
     this.opts.log.runCommand((ctx) => {
-      endJobRun(ctx, { runId, outcome: 'interrupted' });
+      endJobRun(ctx, { runId, outcome: 'interrupted', ...(byUser ? { keepSchedule: true } : {}) });
       const job = jobOf(ctx, run.jobId);
-      if (job.state === 'stopped') return;
+      if (job.state === 'stopped' || byUser) return;
       const changes: JobChanges = {};
       const followUp = run.followUp;
       if (followUp && !job.followUps.some((f) => f.questionId === followUp.questionId)) {

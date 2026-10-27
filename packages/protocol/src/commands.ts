@@ -435,6 +435,11 @@ export interface EndJobRunInput {
   numbers?: Record<string, number>;
   /** For `failed`: the reason the failure question gives. */
   failureReason?: string;
+  /**
+   * For `interrupted`: the job keeps its scheduled `nextRunAt` instead of becoming due now (the
+   * user stopped the run's Steward, ledger ruling R9). Recorded on the run as `meta.keptSchedule`.
+   */
+  keepSchedule?: boolean;
 }
 
 /** A job run's finding, brought to the user as a job-owned question. */

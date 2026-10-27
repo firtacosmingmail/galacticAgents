@@ -67,6 +67,21 @@ export function jobRuns(ctx: Reader, jobId: Id, limit = DEFAULT_RUNS): JobRun[] 
 }
 
 /**
+ * Where a new run's window starts: the previous run's start — but a run cut short (`interrupted`)
+ * is a missed run, not a previous one, so its own `coversFrom` carries forward — else the job's
+ * creation.
+ */
+function coversFromOf(ctx: Reader, job: Job): string {
+  const last = job.lastRun;
+  if (!last) return job.createdAt;
+  if (last.outcome === 'interrupted') {
+    const cutShort = ctx.tables.jobRuns.get(last.runId);
+    if (cutShort?.coversFrom) return cutShort.coversFrom;
+  }
+  return last.startedAt;
+}
+
+/**
  * Starts a run of an active job: one at a time (`conflict` while one runs), none while the job is
  * paused or stopped (follow-ups wait while paused). The run covers from the previous run's start,
  * or the job's creation. A `follow_up` run carries one of the job's queued follow-ups and takes it
@@ -103,7 +118,7 @@ export function startJobRun(ctx: CommandContext, input: StartJobRunInput): JobRu
     jobId: job.id,
     purpose: input.purpose,
     dueAt: input.dueAt,
-    coversFrom: job.lastRun?.startedAt ?? job.createdAt,
+    coversFrom: coversFromOf(ctx, job),
     startedAt: ctx.now,
     outcome: 'running',
     ...(input.followUp ? { followUp: input.followUp } : {}),
@@ -143,7 +158,8 @@ const cut = (text: string, max: number): string => (text.length > max ? text.sli
  * Ends a running run with its outcome: the run row, `job_run.ended`, and the job's `lastRun`
  * (summary cut to 500 characters) with `runningRunId` cleared; then only the job's last 200 runs
  * are kept. `failed` pauses the job and opens its one failure question (`openFailure`);
- * `interrupted` (a missed run) makes the job due now. A job stopped meanwhile stays stopped.
+ * `interrupted` (a missed run) makes the job due now, unless `keepSchedule` (the user stopped it)
+ * or the run was a follow-up. A job stopped meanwhile stays stopped.
  */
 export function endJobRun(ctx: CommandContext, input: EndJobRunInput): JobRun {
   const current = runOf(ctx, input.runId);
@@ -153,12 +169,14 @@ export function endJobRun(ctx: CommandContext, input: EndJobRunInput): JobRun {
       `job run ${current.id} already ended (${current.outcome})`,
     );
   }
+  const keptSchedule = input.outcome === 'interrupted' && input.keepSchedule === true;
   const run = ctx.tables.jobRuns.upsert({
     ...current,
     outcome: input.outcome,
     endedAt: ctx.now,
     ...(input.summary !== undefined ? { summary: input.summary } : {}),
     ...(input.numbers !== undefined ? { numbers: input.numbers } : {}),
+    ...(keptSchedule ? { meta: { ...(current.meta ?? {}), keptSchedule: true } } : {}),
   });
   ctx.emit({
     type: 'job_run.ended',
@@ -182,7 +200,11 @@ export function endJobRun(ctx: CommandContext, input: EndJobRunInput): JobRun {
   const changes: JobChanges = { lastRun };
   if (job.runningRunId === run.id) changes.runningRunId = null;
   if (job.state !== 'stopped') {
-    if (input.outcome === 'interrupted') changes.nextRunAt = ctx.now;
+    // A missed run is due again at once — unless the user stopped it (it keeps its schedule,
+    // ruling R9) or it was a follow-up (it never moved the schedule; its follow-up is re-queued).
+    if (input.outcome === 'interrupted' && !keptSchedule && run.purpose !== 'follow_up') {
+      changes.nextRunAt = ctx.now;
+    }
     if (input.outcome === 'failed') Object.assign(changes, failureChanges(ctx, job, run, input));
   }
   writeJob(ctx, job, changes);

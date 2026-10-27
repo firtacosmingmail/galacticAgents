@@ -12,6 +12,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { brainDefinition, brainHarness, type BrainHarness } from '../brains/testing/index.js';
 import { openDatabase, type Database } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
+import { jobOf, writeJob } from '../domain/jobs.js';
 import { tickingClock } from '../test/world.js';
 import type { Timers } from './archival.js';
 import type { CapsConfig } from './caps.js';
@@ -247,7 +248,8 @@ describe('job scheduler (P10-04)', () => {
     expect(runs[1]).toMatchObject({
       purpose: 'catch_up',
       dueAt: oct(1, 9).toISOString(),
-      coversFrom: run!.startedAt,
+      // The cut-short run was missed, not run: the catch-up covers what it was to cover.
+      coversFrom: run!.coversFrom,
     });
     expect(stewardsOf(second.c, job.taskId)).toHaveLength(2);
     lives.push(first.c);
@@ -278,6 +280,105 @@ describe('job scheduler (P10-04)', () => {
     expect([...recovery.resumed, ...recovery.needAttention]).not.toContain(stewardId);
     expect(second.c.statuses.get(stewardId)?.state).toBe('stopped');
     expect((await second.c.jobs.tick()).interrupted).toHaveLength(1);
+  });
+
+  it('a run the user stops ends without becoming due again: the schedule stays (ruling R9)', async () => {
+    const { c, clock } = boot({ scenario: () => ASKS });
+    const { job } = await longTermJob(c);
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    const stewardId = runsOf(c, job.id)[0]!.agentId!;
+    await until(() => c.statuses.get(stewardId)?.state === 'waiting_for_input', 'the question');
+    await c.commands.stopAgent(stewardId, USER);
+    await until(ended(c, job.id), 'the run to end');
+    expect(jobNow(c, job.id)).toMatchObject({
+      state: 'active',
+      nextRunAt: oct(2, 9).toISOString(),
+      lastRun: { outcome: 'interrupted' },
+    });
+    clock.advance(60_000);
+    expect(await c.jobs.tick()).toEqual({ started: [], waited: [], interrupted: [], ended: [] });
+    expect(runsOf(c, job.id)).toHaveLength(1);
+    // On its next occurrence it runs on time, as a scheduled run.
+    setTo(clock, oct(2, 9));
+    expect((await c.jobs.tick()).started).toHaveLength(1);
+    expect(runsOf(c, job.id)[1]).toMatchObject({
+      purpose: 'scheduled',
+      dueAt: oct(2, 9).toISOString(),
+    });
+  });
+
+  it('a catch-up cut short by a restart is caught up again, still covering from the last real run', async () => {
+    const db = openDatabase(':memory:');
+    const sessions = new Map<string, number>();
+    const clock = tickingClock(oct(20, 8).getTime());
+    let spawns = 0;
+    const first = boot({ db, clock, sessions, scenario: () => (spawns++ === 0 ? ECHO : ASKS) });
+    const { job } = await longTermJob(first.c);
+    setTo(clock, oct(20, 9));
+    await first.c.jobs.tick();
+    await until(ended(first.c, job.id), 'the first run to end');
+    const [real] = runsOf(first.c, job.id);
+    setTo(clock, oct(23, 12));
+    await first.c.jobs.tick();
+    const cut = runsOf(first.c, job.id)[1]!;
+    expect(cut).toMatchObject({ purpose: 'catch_up', coversFrom: real!.startedAt });
+    await until(
+      () => first.c.statuses.get(cut.agentId!)?.state === 'waiting_for_input',
+      'the question',
+    );
+    lives.splice(lives.indexOf(first.c), 1); // kill -9
+
+    clock.advance(10 * 60_000);
+    const second = boot({ db, clock, sessions });
+    await second.c.recover();
+    const report = await second.c.jobs.tick();
+    expect(report.interrupted).toEqual([cut.id]);
+    const again = runsOf(second.c, job.id)[2]!;
+    expect(again).toMatchObject({ purpose: 'catch_up', coversFrom: real!.startedAt });
+    expect(jobNow(second.c, job.id).nextRunAt).toBe(oct(24, 9).toISOString());
+    lives.push(first.c);
+  });
+
+  it('a follow-up cut short by a restart runs again; the schedule is untouched, no extra run', async () => {
+    const db = openDatabase(':memory:');
+    const sessions = new Map<string, number>();
+    const clock = tickingClock(oct(1, 8).getTime());
+    const first = boot({ db, clock, sessions, scenario: () => ASKS });
+    const { job } = await longTermJob(first.c);
+    const followUp = {
+      questionId: 'q-reply',
+      kind: 'send' as const,
+      text: 'Thanks for the review!',
+    };
+    first.c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp] }));
+    setTo(clock, oct(1, 8, 30));
+    await first.c.jobs.tick();
+    const cut = runsOf(first.c, job.id)[0]!;
+    expect(cut).toMatchObject({ purpose: 'follow_up', followUp });
+    expect(jobNow(first.c, job.id).nextRunAt).toBe(oct(1, 9).toISOString());
+    await until(
+      () => first.c.statuses.get(cut.agentId!)?.state === 'waiting_for_input',
+      'the question',
+    );
+    lives.splice(lives.indexOf(first.c), 1); // kill -9
+
+    setTo(clock, oct(1, 8, 40));
+    const second = boot({ db, clock, sessions });
+    await second.c.recover();
+    const report = await second.c.jobs.tick();
+    expect(report.interrupted).toEqual([cut.id]);
+    const runs = runsOf(second.c, job.id);
+    expect(runs).toHaveLength(2);
+    expect(runs[1]).toMatchObject({ purpose: 'follow_up', followUp });
+    expect(jobNow(second.c, job.id)).toMatchObject({
+      nextRunAt: oct(1, 9).toISOString(),
+      followUps: [],
+    });
+    setTo(clock, oct(1, 8, 41));
+    expect((await second.c.jobs.tick()).started).toEqual([]);
+    expect(runsOf(second.c, job.id)).toHaveLength(2);
+    lives.push(first.c);
   });
 
   it('one run at a time: a run still going at the next due time waits, then runs after it', async () => {
