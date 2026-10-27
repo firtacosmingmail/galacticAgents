@@ -1,4 +1,5 @@
 import {
+  isLongTerm,
   proposalPlan,
   type Agent,
   type Id,
@@ -640,12 +641,14 @@ export const closeTaskTool: BrainTool = {
     // A conflict question nobody needs to answer any more is withdrawn (closed unmerged).
     const withdrawn = await withdrawConflictQuestion(ctx, task, 'the task was closed');
     if (task.meta?.['mergeConflict']) await saveMergeMeta(ctx, task.id, null);
-    const open = ctx.queries.projectTasks(projectOf(ctx).id).filter((t) => !TASK_DONE.has(t.state));
+    const project = projectOf(ctx);
+    const open = ctx.queries.projectTasks(project.id).filter((t) => !TASK_DONE.has(t.state));
     return {
       ...brief(value),
       ...(withdrawn ? { withdrawnQuestion: withdrawn } : {}),
       openTasks: open.map(brief),
-      ...(open.length === 0
+      // A long-term project stays open (P10-02): no closure hint, only the user closes it.
+      ...(open.length === 0 && !isLongTerm(project)
         ? {
             allTasksClosed: true,
             next: 'Every task is closed: call request_project_closure when nothing is left to do.',
@@ -773,13 +776,17 @@ export const requestProjectClosureTool: BrainTool = {
   description:
     'Tells the Harmonizer that every task of the project is closed, with a summary of what was ' +
     "delivered; it asks the user whether anything else is needed. Closing is the user's " +
-    'decision; stay available until then. Ends your turn.',
+    'decision; stay available until then. Never for a long-term project, which only the user ' +
+    'closes. Ends your turn.',
   inputSchema: obj({ summary: { type: 'string' } }, ['summary']),
   endsTurn: true,
   handler: async (raw, ctx) => {
     const input = asInput(raw);
     const summary = str(input, 'summary');
     const project = projectOf(ctx);
+    if (isLongTerm(project)) {
+      throw new DomainError('invalid', 'long-term projects are closed by the user only');
+    }
     const tasks = ctx.queries.projectTasks(project.id);
     const open = tasks.filter((t) => !TASK_DONE.has(t.state));
     if (tasks.every((t) => t.state !== 'completed') || open.length > 0) {

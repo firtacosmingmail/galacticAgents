@@ -93,6 +93,7 @@ import {
   createProject,
   pinProject,
   reopenProject,
+  setLongTerm,
   updateProject,
 } from './projects.js';
 import {
@@ -1365,8 +1366,8 @@ export class Commands implements DomainCommands {
 
   // -- long-term projects, areas and jobs (P10-01 interfaces; implemented in P10-02…P10-05) ------
 
-  setLongTerm(_input: SetLongTermInput): Promise<CommandResult<Project>> {
-    return notYet('setLongTerm', 'P10-02');
+  setLongTerm(input: SetLongTermInput): Promise<CommandResult<Project>> {
+    return this.run((ctx) => setLongTerm(ctx, input));
   }
   createJob(_input: CreateJobInput): Promise<CommandResult<{ job: Job; area: Area }>> {
     return notYet('createJob', 'P10-03');

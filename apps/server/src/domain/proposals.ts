@@ -255,7 +255,7 @@ export function decideProposal(
       // What the card asks for is created in the approval's transaction (P2-09, `approval.ts`).
       const made = plan
         ? undefined
-        : carryOut(ctx, proposal, room?.ok ? room.body : undefined, workspace, opts);
+        : carryOut(ctx, proposal, room?.ok ? room.body : undefined, workspace, opts, by);
       // The budget the user gave the card (P8-01): the new project's or task's, a plan's project's.
       const budget = proposalBudget(proposal);
       const target = plan

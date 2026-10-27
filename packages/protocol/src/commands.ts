@@ -112,19 +112,23 @@ export type AgentPlacement = Partial<
 
 /**
  * What a new project needs a body for (P2-02, decision 10): a planet, or a moon — of its parent
- * project's planet for a sub-project, else preferably of a planet without a Waykeeper.
+ * project's planet for a sub-project, else preferably of a planet without a Waykeeper. A
+ * long-term project's planet (`longTerm`, P10-02) is a big planet, else a planet with moons.
  */
-export type BodyRequest = { kind: 'planet' } | { kind: 'moon'; parentProjectId?: Id };
+export type BodyRequest =
+  { kind: 'planet'; longTerm?: true } | { kind: 'moon'; parentProjectId?: Id };
 
 /**
  * The catalogue's answer to a `BodyRequest`: a free body, or why there is none. "No free planet"
  * lists every occupied planet and its occupant (decision 16: the refusal offers downsizing or
  * closing a completed project early, and the proposal is parked). "No free moon" for a
- * sub-project means it stays a task on the planet (SPEC §3.2).
+ * sub-project means it stays a task on the planet (SPEC §3.2). "No planet with moons" refuses a
+ * long-term project: no free planet has a moon for its areas (P10-02).
  */
 export type BodyChoice =
   | { ok: true; body: Body }
   | { ok: false; reason: 'no_free_planet'; occupied: BodyOccupancy[] }
+  | { ok: false; reason: 'no_planet_with_moons'; occupied: BodyOccupancy[] }
   | { ok: false; reason: 'no_free_moon'; planetId?: Id; occupied: BodyOccupancy[] };
 
 /** Reopening finished work (decision 11b): the old body if it is still free, else `bodyId`. */

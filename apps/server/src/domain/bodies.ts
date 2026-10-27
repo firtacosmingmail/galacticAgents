@@ -232,7 +232,8 @@ export function place(ctx: CommandContext, bodyId: Id, host: Host): Body {
 /**
  * Moves a hosted project or standalone task to another free body (SPEC §3.4): `body.moved`, the
  * row's `bodyId`, and the agents orbiting the old body with it. The old body shows the "moved to
- * …" marker until `sweepMarkers` frees it after the retention period (decision 15).
+ * …" marker until `sweepMarkers` frees it after the retention period (decision 15). A long-term
+ * project with areas never moves (P10-02).
  */
 export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
   const to = must(ctx.tables.bodies.get(toBodyId), 'body', toBodyId);
@@ -240,6 +241,10 @@ export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
   const from = bodyOf(ctx, host);
   if (!from) throw new DomainError('invalid', `${host.kind} ${host.id} has no body to move from`);
   if (from.id === to.id) return to;
+  // Its areas live on its planet's moons (P10-02): the project cannot leave them behind.
+  if (host.kind === 'project' && ctx.tables.areas.all().some((a) => a.projectId === host.id)) {
+    throw new DomainError('invalid', 'a long-term project with areas stays on its planet');
+  }
   checkAssignable(to, host);
   checkSubProjectBody(to, parentBodyOf(ctx, host));
   markMoved(ctx, from, host, toBodyId);
