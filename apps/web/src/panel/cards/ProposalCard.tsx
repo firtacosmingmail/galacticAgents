@@ -3,6 +3,8 @@ import {
   formatUsd,
   isCatalogued,
   proposalBudget,
+  proposalJobOf,
+  proposalLongTermOf,
   proposalParking,
   proposalPlan,
   proposalPromotion,
@@ -14,6 +16,7 @@ import {
   type ParkOffer,
   type Proposal,
   type ProposalDecisionBody,
+  type ProposalLongTerm,
   type ProposedBody,
 } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
@@ -22,6 +25,7 @@ import { budgetInput, Controls } from '../../console/hierarchy/WorkTree.js';
 import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy/shared.js';
 import { OfflineDecisionNote, useStreamDown } from './QueuedAnswer.js';
 import { AgentRef } from './links.js';
+import { JOB_CARD_TITLES, JobCard } from './JobCard.js';
 
 /**
  * Proposal cards (P2-18, extracted for the panel in P25-06; SPEC §3.3): the one card a work
@@ -30,7 +34,9 @@ import { AgentRef } from './links.js';
  * card shows the occupied bodies and the offers (decisions 16, 38) — and a Waykeeper's plan card,
  * approved or rejected as a whole and edited through its tasks (decision 35). An approved card is
  * read-only, with its outcome. The cards read the store only, so a decision taken anywhere shows
- * everywhere once the stream brings it.
+ * everywhere once the stream brings it. A Waykeeper's job card (`meta.job`) is a `JobCard`; a
+ * long-term card (`meta.longTerm`, P10-07) is a work card with the purpose and goals — a new
+ * long-term project is never downsized, a conversion is approved or rejected as it is.
  */
 
 /** What each trust level lets the project's Stewards do without a card (decision 49). */
@@ -63,11 +69,13 @@ export function carriedOutLine(p: Proposal): string {
 }
 
 /**
- * A proposal's card, whichever kind it is: a plan card (`meta.plan`), a work card, or — once
- * approved — a read-only line with its outcome.
+ * A proposal's card, whichever kind it is: a plan card (`meta.plan`), a job card (`meta.job`), a
+ * work card, or — once approved — a read-only line with its outcome.
  */
 export function ProposalCard({ proposal }: { proposal: Proposal }) {
   if (proposal.state === 'approved') return <ApprovedCard proposal={proposal} />;
+  const job = proposalJobOf(proposal);
+  if (job) return <JobCard proposal={proposal} job={job} />;
   return proposalPlan(proposal) ? (
     <PlanCard proposal={proposal} />
   ) : (
@@ -84,6 +92,8 @@ export function ProposalView({ proposalId }: { proposalId: Id }) {
 function ApprovedCard({ proposal: p }: { proposal: Proposal }) {
   const world = useAppStore((s) => s.world);
   const plan = proposalPlan(p);
+  const job = proposalJobOf(p);
+  const jobName = job?.draft?.name ?? job?.before?.draft.name;
   return (
     <article
       className={`card ${plan ? 'plan' : 'proposal'} proposal-approved`}
@@ -94,10 +104,16 @@ function ApprovedCard({ proposal: p }: { proposal: Proposal }) {
         <strong>
           {plan
             ? `Plan for ${world.projects[plan.projectId]?.name ?? plan.projectId}`
-            : p.requestText}
+            : job
+              ? `${JOB_CARD_TITLES[job.action]}${jobName ? `: ${jobName}` : ''}`
+              : p.requestText}
         </strong>
         <span className="muted">
-          {plan ? `${plan.taskIds.length} tasks` : `${p.kind} · ${p.proposedBody.name}`}
+          {plan
+            ? `${plan.taskIds.length} tasks`
+            : job
+              ? (world.projects[job.projectId]?.name ?? job.projectId)
+              : `${p.kind} · ${p.proposedBody.name}`}
           {carriedOutLine(p)}
         </span>
       </header>
@@ -105,7 +121,7 @@ function ApprovedCard({ proposal: p }: { proposal: Proposal }) {
   );
 }
 
-function RejectForm({
+export function RejectForm({
   onReject,
   busy,
 }: {
@@ -134,6 +150,61 @@ function RejectForm({
   );
 }
 
+/**
+ * A long-term card's purpose and goals (P10-07), and — for a conversion — where the approval puts
+ * the project: "Moves to Jupiter" when it moves, "Stays on Mars" when not.
+ */
+function LongTermFacts({
+  proposal: p,
+  longTerm,
+}: {
+  proposal: Proposal;
+  longTerm: ProposalLongTerm;
+}) {
+  const world = useAppStore((s) => s.world);
+  const project = longTerm.projectId ? world.projects[longTerm.projectId] : undefined;
+  const target = p.proposedBody.bodyId;
+  const moves = project !== undefined && target !== undefined && target !== project.bodyId;
+  const here = project ? world.bodies[project.bodyId]?.name : undefined;
+  return (
+    <dl className="facts long-term">
+      {longTerm.projectId && (
+        <div className="wide">
+          <dt>project</dt>
+          <dd>
+            {project?.name ?? longTerm.projectId}
+            {moves ? null : here ? <span className="muted"> · stays on {here}</span> : null}
+          </dd>
+        </div>
+      )}
+      {moves && (
+        <div className="wide">
+          <dt>moves</dt>
+          <dd>Moves to {p.proposedBody.name}</dd>
+        </div>
+      )}
+      <div className="wide">
+        <dt>purpose</dt>
+        <dd>{longTerm.purpose}</dd>
+      </div>
+      <div className="wide">
+        <dt>goals</dt>
+        <dd>
+          {longTerm.goals.length > 0 ? (
+            <ul className="items" aria-label="goals">
+              {longTerm.goals.map((g, i) => (
+                <li key={i}>{g}</li>
+              ))}
+            </ul>
+          ) : (
+            <span className="muted">none yet</span>
+          )}
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
 function requestType(p: Proposal): string | undefined {
   const r = p.meta?.['request'] as { type?: string } | undefined;
   return r?.type?.replace(/_/g, ' ');
@@ -154,6 +225,9 @@ export function WorkCard({ proposal: p }: { proposal: Proposal }) {
   const initGit = p.meta?.['initGit'] === true;
   const trust = proposalTrust(p);
   const budget = proposalBudget(p);
+  const longTerm = proposalLongTermOf(p);
+  // A conversion (P10-07) takes the project as it is: approved or rejected, never edited.
+  const conversion = longTerm?.projectId !== undefined;
   return (
     <article
       className={`card proposal proposal-${p.state}`}
@@ -162,60 +236,79 @@ export function WorkCard({ proposal: p }: { proposal: Proposal }) {
       <header>
         <StatePill state={p.state} />
         <strong>{p.requestText}</strong>
-        <span className="muted">{requestType(p) ?? 'work card'}</span>
+        <span className="muted">
+          {longTerm
+            ? conversion
+              ? 'make it long-term'
+              : 'new long-term project'
+            : (requestType(p) ?? 'work card')}
+        </span>
       </header>
-      <dl className="facts">
-        <div>
-          <dt>size</dt>
-          <dd>{p.kind}</dd>
-        </div>
-        <div>
-          <dt>body</dt>
-          <dd>
-            {p.proposedBody.name}
-            {body ? ` (${body.kind})` : p.proposedBody.bodyId ? '' : ' (server picks a free one)'}
-          </dd>
-        </div>
-        <div className="wide">
-          <dt>workspace</dt>
-          <dd>
-            <code>{p.workspace}</code>
-            {initGit ? ' · git init agreed' : ''}
-          </dd>
-        </div>
-        {p.kind !== 'asteroid' && (
-          <div className="wide">
-            <dt>trust level</dt>
-            <dd role="definition" aria-label="trust level">
-              {trust} <span className="muted">— {TRUST_HINTS[trust]}</span>
-            </dd>
+      {longTerm && <LongTermFacts proposal={p} longTerm={longTerm} />}
+      {!conversion && (
+        <dl className="facts">
+          <div>
+            <dt>size</dt>
+            <dd>{p.kind}</dd>
           </div>
-        )}
-        <div>
-          <dt>budget</dt>
-          <dd role="definition" aria-label="budget">
-            {budget !== undefined ? formatUsd(budget) : 'none'}
-          </dd>
-        </div>
-        {promotion && (
-          <div className="wide">
-            <dt>moves</dt>
+          <div>
+            <dt>body</dt>
             <dd>
-              {promotion.target.kind} {promotion.target.id}
-              {promotion.toProjectId
-                ? ` into ${world.projects[promotion.toProjectId]?.name ?? promotion.toProjectId}`
-                : ''}
+              {p.proposedBody.name}
+              {body ? ` (${body.kind})` : p.proposedBody.bodyId ? '' : ' (server picks a free one)'}
             </dd>
           </div>
-        )}
-        {p.rationale && (
           <div className="wide">
-            <dt>why</dt>
-            <dd>{p.rationale}</dd>
+            <dt>workspace</dt>
+            <dd>
+              <code>{p.workspace}</code>
+              {initGit ? ' · git init agreed' : ''}
+            </dd>
           </div>
-        )}
-      </dl>
-      {parking && <Parked parking={parking} proposal={p} decide={decide} busy={busy} />}
+          {p.kind !== 'asteroid' && (
+            <div className="wide">
+              <dt>trust level</dt>
+              <dd role="definition" aria-label="trust level">
+                {trust} <span className="muted">— {TRUST_HINTS[trust]}</span>
+              </dd>
+            </div>
+          )}
+          <div>
+            <dt>budget</dt>
+            <dd role="definition" aria-label="budget">
+              {budget !== undefined ? formatUsd(budget) : 'none'}
+            </dd>
+          </div>
+          {promotion && (
+            <div className="wide">
+              <dt>moves</dt>
+              <dd>
+                {promotion.target.kind} {promotion.target.id}
+                {promotion.toProjectId
+                  ? ` into ${world.projects[promotion.toProjectId]?.name ?? promotion.toProjectId}`
+                  : ''}
+              </dd>
+            </div>
+          )}
+          {p.rationale && (
+            <div className="wide">
+              <dt>why</dt>
+              <dd>{p.rationale}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+      {conversion && p.rationale && <p className="muted">{p.rationale}</p>}
+      {parking && (
+        <Parked
+          parking={parking}
+          proposal={p}
+          decide={decide}
+          busy={busy}
+          // A long-term project lives on a planet with moons: never downsized (P10-07).
+          downsize={!longTerm}
+        />
+      )}
       {offline && <OfflineDecisionNote />}
       <div className="controls">
         {p.state !== 'rejected' && (
@@ -223,20 +316,23 @@ export function WorkCard({ proposal: p }: { proposal: Proposal }) {
             Approve
           </button>
         )}
-        <button
-          disabled={busy}
-          className="secondary"
-          aria-expanded={editing}
-          onClick={() => setEditing((e) => !e)}
-        >
-          Edit
-        </button>
+        {!conversion && (
+          <button
+            disabled={busy}
+            className="secondary"
+            aria-expanded={editing}
+            onClick={() => setEditing((e) => !e)}
+          >
+            Edit
+          </button>
+        )}
       </div>
-      {editing && (
+      {editing && !conversion && (
         <EditCard
           proposal={p}
           world={world}
           busy={busy}
+          planetOnly={longTerm !== undefined}
           onSave={async (changes) => {
             if (await decide({ decision: 'edit', changes })) setEditing(false);
           }}
@@ -258,14 +354,19 @@ function Parked({
   proposal,
   decide,
   busy,
+  downsize,
 }: {
   parking: NonNullable<ReturnType<typeof proposalParking>>;
   proposal: Proposal;
   decide: (d: ProposalDecisionBody) => Promise<boolean>;
   busy: boolean;
+  /** Whether the downsize offers may show (never on a long-term card). */
+  downsize: boolean;
 }) {
   const world = useAppStore((s) => s.world);
   const name = proposal.proposedBody.name;
+  const isDownsize = (o: ParkOffer) => o === 'downsize_moon' || o === 'downsize_asteroid';
+  const offers = (parking.offers ?? []).filter((o) => downsize || !isDownsize(o));
   return (
     <div className="parked">
       <p>
@@ -288,10 +389,10 @@ function Parked({
           })}
         </ul>
       )}
-      {parking.offers && parking.offers.length > 0 && (
+      {offers.length > 0 && (
         <div className="controls" role="group" aria-label="offers">
-          {parking.offers.map((offer) =>
-            offer === 'downsize_moon' || offer === 'downsize_asteroid' ? (
+          {offers.map((offer) =>
+            isDownsize(offer) ? (
               <button
                 key={offer}
                 disabled={busy}
@@ -340,11 +441,14 @@ function EditCard({
   proposal: p,
   world,
   busy,
+  planetOnly = false,
   onSave,
 }: {
   proposal: Proposal;
   world: WorldState;
   busy: boolean;
+  /** A long-term card: the size stays a planet (P10-07). */
+  planetOnly?: boolean;
   onSave: (changes: Extract<ProposalDecisionBody, { decision: 'edit' }>['changes']) => void;
 }) {
   const [kind, setKind] = useState<Proposal['kind']>(p.kind);
@@ -387,7 +491,7 @@ function EditCard({
   };
   return (
     <form className="edit" onSubmit={submit} aria-label="edit card" ref={form}>
-      <label>
+      <label hidden={planetOnly}>
         size
         <select
           value={kind}

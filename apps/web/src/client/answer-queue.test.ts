@@ -182,6 +182,25 @@ describe('answering offline (P7-05)', () => {
     expect(answer).toHaveBeenCalledWith('q-1', 'yes', 3, answerId);
   });
 
+  it('keeps a queued answer’s detail across a reload and sends it (P10-07)', async () => {
+    stop = startAnswerQueue(TOKEN, api);
+    snapshot([userHeld]);
+    status('live');
+    status('disconnected');
+    const detail = { choices: ['Send'], text: 'Hi Anna, it ships Tuesday!' };
+    expect(await submitAnswer(api, userHeld, 'Send', detail)).toBe('queued');
+    const { answerId } = entries()['q-1']!;
+    stop();
+    useAppStore.getState().reset();
+    useAnswerQueue.setState({ scope: undefined, entries: {} });
+    stop = startAnswerQueue(TOKEN, api);
+    expect(entries()['q-1']).toMatchObject({ answerId, detail });
+    snapshot([userHeld]);
+    status('live');
+    await flushAnswerQueue();
+    expect(answer).toHaveBeenCalledWith('q-1', 'Send', 3, answerId, detail);
+  });
+
   it('an entry caught mid-send by a reload is queued again with the same answerId', async () => {
     const entry: QueuedAnswer = {
       answerId: 'ans-1',

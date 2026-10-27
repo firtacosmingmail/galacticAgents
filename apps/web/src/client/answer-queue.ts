@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import { isStorageErrorCode, type AnswerSetBody, type Id, type Question } from '@galactic/protocol';
+import {
+  isStorageErrorCode,
+  type AnswerSetBody,
+  type Id,
+  type Question,
+  type SetAnswer,
+} from '@galactic/protocol';
 import { ApiError, type Api } from '../console/api.js';
 import type { ConnectionStatus } from './client.js';
 import { useAppStore } from '../state/store.js';
@@ -67,6 +73,8 @@ export interface QueuedAnswer {
    * is keyed by the set: `questionId` holds the set's id, `text` its title, `answer` a summary.
    */
   setAnswers?: AnswerSetBody['answers'];
+  /** A structured answer sent with `answer` (P10-07: a reply finding's edited text). */
+  detail?: SetAnswer;
 }
 
 /** Whether an entry is a question set's send (keyed by the set's id). */
@@ -128,7 +136,8 @@ function isEntry(e: unknown): e is QueuedAnswer {
     typeof x['text'] === 'string' &&
     typeof x['queuedAt'] === 'string' &&
     typeof x['state'] === 'string' &&
-    (x['setAnswers'] === undefined || Array.isArray(x['setAnswers']))
+    (x['setAnswers'] === undefined || Array.isArray(x['setAnswers'])) &&
+    (x['detail'] === undefined || (typeof x['detail'] === 'object' && x['detail'] !== null))
   );
 }
 
@@ -253,11 +262,13 @@ export type SubmitOutcome = 'sent' | 'queued';
 /**
  * Answers `question` as the user: sent now when online (a refusal is thrown as before, an
  * `ApiError`, so the card shows it), queued when offline or when the send fails on the network.
+ * `detail` travels with the answer, queued or not (a reply finding's edited text, P10-07).
  */
 export async function submitAnswer(
   api: Api,
   question: Question,
   text: string,
+  detail?: SetAnswer,
 ): Promise<SubmitOutcome> {
   const entry: QueuedAnswer = {
     answerId: newAnswerId(),
@@ -267,6 +278,7 @@ export async function submitAnswer(
     text: question.context.text,
     queuedAt: new Date().toISOString(),
     state: 'sending',
+    ...(detail !== undefined ? { detail } : {}),
   };
   if (isOffline()) {
     put({ ...entry, state: 'queued', wasQueued: true });
@@ -275,7 +287,10 @@ export async function submitAnswer(
   }
   put(entry);
   try {
-    await api.answer(question.id, text, question.version, entry.answerId);
+    // The detail only when there is one: the answer's call is otherwise what it always was.
+    await (detail !== undefined
+      ? api.answer(question.id, text, question.version, entry.answerId, detail)
+      : api.answer(question.id, text, question.version, entry.answerId));
   } catch (e) {
     if (isRefusal(e)) {
       remove(question.id, entry.answerId);
@@ -491,7 +506,10 @@ async function flushOnce(): Promise<void> {
       if (entry.setAnswers) {
         await session.api.answerSet(entry.questionId, entry.setAnswers, entry.answerId);
       } else {
-        await session.api.answer(entry.questionId, entry.answer, entry.version, entry.answerId);
+        const { questionId, answer, version, answerId, detail } = entry;
+        await (detail !== undefined
+          ? session.api.answer(questionId, answer, version, answerId, detail)
+          : session.api.answer(questionId, answer, version, answerId));
       }
     } catch (e) {
       if (!isRefusal(e)) {

@@ -145,13 +145,21 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     restartHarmonizer: () => call<RestartHarmonizerResponse>('POST', '/api/harmonizer/restart'),
     /**
      * `version`: the question's version as the page saw it (a stale answer is refused);
-     * `answerId`: the idempotency key of this answer, the same on every retry (P7-05).
+     * `answerId`: the idempotency key of this answer, the same on every retry (P7-05);
+     * `detail`: a structured answer (P10-07: a reply finding's `Send` with the edited reply).
      */
-    answer: (questionId: string, answer: string, version?: number, answerId?: string) =>
+    answer: (
+      questionId: string,
+      answer: string,
+      version?: number,
+      answerId?: string,
+      detail?: SetAnswer,
+    ) =>
       call<AnswerResponse>('POST', `/api/questions/${encodeURIComponent(questionId)}/answer`, {
         answer,
         ...(version !== undefined ? { version } : {}),
         ...(answerId !== undefined ? { answerId } : {}),
+        ...(detail !== undefined ? { detail } : {}),
       } satisfies AnswerBody),
     /**
      * Dismisses a question without answering it (P9-14): a clarification is withdrawn, a
