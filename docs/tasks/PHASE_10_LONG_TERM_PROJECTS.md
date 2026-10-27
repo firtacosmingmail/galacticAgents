@@ -1,6 +1,6 @@
 # Phase 10 — Long-term projects, area moons and recurring jobs
 
-**Current task:** P10-04 · **Task status:** P10-01, P10-02, P10-03 done; P10-04 todo
+**Current task:** P10-04 · **Task status:** P10-01, P10-02, P10-03 done; P10-04 in progress
 **Phase status:** in progress (3/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -65,7 +65,7 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 - **Acceptance:** five areas on Saturn take five moons, a third area on Mars shares the moon with fewest; a moon hosting other work is never chosen; refusals for a non-long-term project, the 11th job, a `push` rule and a key in the instructions; `area.created` + `task.created` + `job.created` in one command; stopping cancels the failure question and empties follow-ups; `archiveProject` frees every area moon.
 
 ### P10-04 — Runs and the scheduler
-- **Status:** todo · **Depends on:** P10-03 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P10-03 · **Parallel with:** —
 - Plan Tasks 6 and 8: `startJobRun` / `endJobRun` (pause on failure with one failure question, keep the last 200 runs, run memory), `runPurpose`; `JobScheduler` (tick every `JOB_TICK_MS`, reconcile, due runs, catch-up, one run per job, serialised `retryNow`), `jobRunPrompt`, recovery that never resumes a job-run Steward, unattended rules in the permission gate, no turn-end reports or wakes for job-run Stewards.
 - **Acceptance:** the plan's Task 6 and Task 8 tests: on-time and catch-up runs, restart mid-run → `interrupted` then one catch-up, a run still going → `waited`, retry racing the tick → one spawn, a full concurrency cap → `waited` / `interrupted` (never `failed`), budget refusal → failed + paused + one question, unattended rules apply only to the job's Stewards, `dispose()` stops the timer.
 
