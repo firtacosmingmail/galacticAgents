@@ -440,6 +440,15 @@ describe('the spend card (P10-07)', () => {
     expect(blocking(await axeFindings(card))).toEqual([]);
   });
 
+  it('its × reads as a refusal, like a permission, not as "no reply"', () => {
+    world({ questions: [spend] });
+    show(<QuestionCard question={spend} />);
+    const x = within(screen.getByRole('article')).getByRole('button', { name: /^Dismiss / });
+    expect(x.getAttribute('aria-label')).toMatch(/^Dismiss the spend approval \(refuse it\): /);
+    expect(x.getAttribute('title')).toBe('Dismiss (refuse): no approval, nothing is spent');
+    expect(x.getAttribute('aria-label')).not.toMatch(/no reply/);
+  });
+
   it('ranks with permissions in the inbox, before clarifications', () => {
     const early = question(
       'q-clar',

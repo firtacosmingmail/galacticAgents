@@ -392,3 +392,41 @@ describe('sameSatellites', () => {
     expect(sameSatellites(a, a.slice(1))).toBe(false);
   });
 });
+
+describe("a job run's Steward (P10-07, ledger ruling R2)", () => {
+  // The job's hidden task lives on its area's moon; every run is a Steward on that task.
+  const jobTask = {
+    ...fx.task,
+    id: fx.job.taskId,
+    projectId: fx.project.id,
+    bodyId: fx.area.bodyId,
+    state: 'approved' as const,
+    meta: { jobId: fx.job.id },
+  };
+  const runSteward: Agent = {
+    ...fx.agent,
+    id: 'a-run-1',
+    taskId: jobTask.id,
+    bodyId: fx.project.bodyId,
+  };
+  const jobWorld = (state: AgentState) => {
+    const w = world(allWorking);
+    w.tasks = { ...w.tasks, [jobTask.id]: jobTask };
+    w.agents = { ...w.agents, [runSteward.id]: runSteward };
+    w.statuses[runSteward.id] = status(runSteward.id, state);
+    return w;
+  };
+
+  it('a live run is a satellite on the area moon (the job task body)', () => {
+    expect(workBody(jobWorld('working'), runSteward.id)).toBe(fx.area.bodyId);
+    const spec = satelliteList(jobWorld('working')).find((s) => s.agentId === runSteward.id);
+    expect(spec).toMatchObject({ bodyId: 'b-titan', role: 'steward', landed: false });
+  });
+
+  it('no satellite once the run is over (its task never completes, so it never lands)', () => {
+    for (const state of ['finished', 'stopped', 'interrupted'] as const) {
+      const list = satelliteList(jobWorld(state), SCENE_SATELLITES);
+      expect(list.map((s) => s.agentId)).not.toContain(runSteward.id);
+    }
+  });
+});

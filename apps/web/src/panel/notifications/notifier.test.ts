@@ -16,6 +16,7 @@ import {
   createNotifier,
   BACKFILL_MAX_SHOWN,
   liveNotificationCount,
+  notificationImportance,
   type Notifier,
 } from './notifier.js';
 import { clearLedgerMemory, LEDGER_KEY, readLedger } from './ledger.js';
@@ -564,5 +565,30 @@ describe('focusFor', () => {
     expect(focusFor(world(), { kind: 'project', id: 'p-unknown' }).selection).toEqual({
       kind: 'harmonizer',
     });
+  });
+});
+
+describe('notificationImportance (the backfill order)', () => {
+  const n = (kind: PanelNotification['kind'], questionKind?: Question['kind']) =>
+    ({
+      id: 'x',
+      kind,
+      seq: 1,
+      at: fx.NOW,
+      title: 't',
+      target: { kind: 'question', id: 'q' },
+      ...(questionKind ? { questionKind } : {}),
+    }) as PanelNotification;
+
+  it('a spend approval (P10-07, decision 145) ranks with permissions, ahead of questions', () => {
+    expect(notificationImportance(n('question', 'spend'))).toBe(
+      notificationImportance(n('permission', 'permission')),
+    );
+    expect(notificationImportance(n('question', 'spend'))).toBeLessThan(
+      notificationImportance(n('question', 'clarification')),
+    );
+    expect(notificationImportance(n('question', 'clarification'))).toBeLessThan(
+      notificationImportance(n('task_completed')),
+    );
   });
 });

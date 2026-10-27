@@ -118,9 +118,12 @@ export function questionBody(
   return project?.bodyId ?? origin.bodyId;
 }
 
-/** The inbox's order (decision 58): permissions first, then clarifications; each oldest first. */
+/**
+ * The inbox's order (decision 58): permissions and spend approvals (P10-07) first, then
+ * clarifications; each oldest first.
+ */
 function inboxOrder(a: Question, b: Question): number {
-  const rank = (q: Question) => (q.kind === 'permission' ? 0 : 1);
+  const rank = (q: Question) => (q.kind === 'permission' || q.kind === 'spend' ? 0 : 1);
   return rank(a) - rank(b) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 }
 
@@ -195,6 +198,12 @@ export interface BeaconCard {
   count?: string;
 }
 
+const HEADINGS: Record<Question['kind'], string> = {
+  permission: 'Permission',
+  clarification: 'Question',
+  spend: 'Spend approval',
+};
+
 /** The question text's length on the hover card before it is cut. */
 export const CARD_TEXT_CHARS = 80;
 
@@ -207,7 +216,7 @@ export function beaconCard(world: BeaconWorld, questionId: Id): BeaconCard | und
   return {
     bodyId: beacon.bodyId,
     where: bodyName(world, beacon.bodyId),
-    heading: set ? 'Questions' : q.kind === 'permission' ? 'Permission' : 'Question',
+    heading: set ? 'Questions' : HEADINGS[q.kind],
     kind: q.kind,
     text: oneLine(set ? set.title : q.context.text, CARD_TEXT_CHARS),
     ...(set ? { count: `${beacon.setSize} question${beacon.setSize === 1 ? '' : 's'}` } : {}),
