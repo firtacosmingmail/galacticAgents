@@ -591,6 +591,26 @@ describe('job scheduler (P10-04)', () => {
     expect((await c.jobs.tick()).started).toEqual([]);
   });
 
+  it('a job imported mid-run (its run row missing) is cleared and due at once, not stuck (I5)', async () => {
+    const { c, clock } = boot();
+    const { job } = await longTermJob(c);
+    // An export carries the job's runningRunId but not its job_runs.
+    c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { runningRunId: 'jr-gone' }));
+    setTo(clock, oct(1, 8, 30));
+    const report = await c.jobs.tick();
+    const runs = runsOf(c, job.id);
+    expect(runs).toHaveLength(1);
+    expect(report.started).toEqual([runs[0]!.id]);
+    expect(report.waited).toEqual([]);
+    expect(jobNow(c, job.id).runningRunId).toBe(runs[0]!.id);
+    expect(
+      events(c).some(
+        (e) =>
+          e.type === 'job.updated' && e.jobId === job.id && e.changes.runningRunId === null,
+      ),
+    ).toBe(true);
+  });
+
   it('a cap stop while a permission question waited fails the run with what it needed', async () => {
     const { c, clock } = boot({
       scenario: () => ({

@@ -37,7 +37,8 @@ export { JOB_TICK_MS };
  *   1. **reconcile** — a run whose Steward is not live (Mission Control restarted, the Steward was
  *      stopped) is recorded `interrupted` (its job is due again at once); a run of a job that is no
  *      longer active (paused, stopped, its project closed) has its Steward stopped and is recorded
- *      `interrupted` too, which never pauses the job nor asks anything;
+ *      `interrupted` too, which never pauses the job nor asks anything; a job whose run row is
+ *      gone (an import taken mid-run) has `runningRunId` cleared and, active, is due at once;
  *   2. **due** — each active job of a live project (none of a finished one; a paused project's
  *      jobs wait) without a run, with a queued follow-up or `nextRunAt <= now`,
  *      starts one run (a follow-up first), unless the concurrency caps leave no slot (`waited`:
@@ -197,7 +198,10 @@ export class JobScheduler {
     for (const job of tables.jobs.all()) {
       if (!job.runningRunId) continue;
       const run = tables.jobRuns.get(job.runningRunId);
-      if (!run || run.outcome !== 'running') continue;
+      if (!run || run.outcome !== 'running') {
+        this.clearDangling(job, run === undefined);
+        continue;
+      }
       const steward = run.agentId && live.has(run.agentId) ? run.agentId : undefined;
       if (steward && job.state === 'active') continue;
       if (steward) await this.opts.runtime.stop(steward, SYSTEM);
@@ -205,6 +209,20 @@ export class JobScheduler {
       const byUser = !steward && run.agentId !== undefined && this.stoppedByUser(run.agentId);
       if (this.interrupt(run.id, { byUser })) report.interrupted.push(run.id);
     }
+  }
+
+  /**
+   * A job pointing at a run that is gone (an import taken mid-run: exports carry no `job_runs`)
+   * or already ended: `runningRunId` is cleared, else the job would wait on it for ever. A missing
+   * run counts as cut short — an active job is due at once, like any interrupted run.
+   */
+  private clearDangling(job: Job, missing: boolean): void {
+    this.opts.log.runCommand((ctx) => {
+      const current = jobOf(ctx, job.id);
+      const changes: JobChanges = { runningRunId: null };
+      if (missing && current.state === 'active') changes.nextRunAt = ctx.now;
+      writeJob(ctx, current, changes);
+    });
   }
 
   /** The time the job's next run is for, or `undefined` when none is planned. */
