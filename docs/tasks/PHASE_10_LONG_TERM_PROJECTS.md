@@ -1,7 +1,7 @@
 # Phase 10 — Long-term projects, area moons and recurring jobs
 
-**Current task:** P10-03 · **Task status:** P10-01, P10-02 done; P10-03 in progress
-**Phase status:** in progress (2/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
+**Current task:** P10-04 · **Task status:** P10-01, P10-02, P10-03 done; P10-04 todo
+**Phase status:** in progress (3/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -60,7 +60,7 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 - **Acceptance:** a long-term project lands on Jupiter on an empty catalogue, on Mars when the big planets are taken, never on Mercury/Venus, refused when no moon-bearing planet is free; conversion moves to Saturn with its satellites in one transaction, stays when nothing is free, refuses a sub-project; closure refused "long-term projects are closed by the user only".
 
 ### P10-03 — Areas and jobs
-- **Status:** in progress · **Depends on:** P10-02 · **Parallel with:** —
+- **Status:** done (2026-10-27) · **Depends on:** P10-02 · **Parallel with:** —
 - Plan Task 5: `createArea` (free moon first, else the project's `areas` moon with fewest areas), `createJob` (with its hidden task and `nextRunAt`), `updateJob`, `setJobState`; jobs only on long-term projects; limits; `push` rules and secrets refused; archiving or closing stops jobs and frees area moons; job tasks never derive `completed`/`failed`.
 - **Acceptance:** five areas on Saturn take five moons, a third area on Mars shares the moon with fewest; a moon hosting other work is never chosen; refusals for a non-long-term project, the 11th job, a `push` rule and a key in the instructions; `area.created` + `task.created` + `job.created` in one command; stopping cancels the failure question and empties follow-ups; `archiveProject` frees every area moon.
 
