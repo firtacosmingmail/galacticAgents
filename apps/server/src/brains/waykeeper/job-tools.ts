@@ -82,11 +82,15 @@ const RULES_SCHEMA = {
   type: 'array',
   maxItems: 10,
   description:
-    'What every run may do without asking, on top of the project’s rules (shown on the card). ' +
-    'Never a push, never a spend.',
+    'What every run may do without asking, on top of the project’s rules. Shaped like an ' +
+    '"Allow similar" rule: exact {scope:"exact", match:{kind:"text"}}; a command prefix ' +
+    '{scope:"prefix", tool:"Bash", match:{kind:"words"}} (never a shell or interpreter); a ' +
+    'folder {scope:"prefix", tool:"Read" or "Write", match:{kind:"folder"}} (an absolute path, ' +
+    'never / or the home folder); whole categories {scope:"category", tool:"*"}. Never a push, ' +
+    'never a spend, never a prefix or category outside the workspace. The card shows each rule ' +
+    'in the server’s words, computed from what it matches.',
   items: obj(
     {
-      label: { type: 'string', description: 'One line for Cosmin: "may call api.myapp.com".' },
       tool: {
         type: 'string',
         description: 'The tool (Bash, WebFetch, Read, …), or * for categories.',
@@ -100,7 +104,7 @@ const RULES_SCHEMA = {
       },
       categories: { type: 'array', items: { enum: PermissionAction.options } },
     },
-    ['label', 'tool', 'scope', 'match', 'categories'],
+    ['tool', 'scope', 'match', 'categories'],
   ),
 };
 

@@ -48,6 +48,7 @@ import {
   type QuestionRouting,
 } from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
+import { unattendedPermissionRules } from '../domain/jobs.js';
 import { globalDefaultPolicy, type PolicyContext } from '../domain/permissions.js';
 import { userFoldersOf } from '../deliverables/folder.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
@@ -1773,16 +1774,7 @@ export class AgentRuntime {
     if (!job || !projectId || job.unattendedRules.length === 0) return rules;
     // A job's run Steward also works under the job's unattended rules (P10-04, decision 144):
     // rule-shaped, so the gate never lets one override a deny or allow a push.
-    return [
-      ...rules,
-      ...job.unattendedRules.map((r): PermissionRule => ({
-        ...r,
-        projectId,
-        createdBy: { type: 'user' },
-        createdAt: job.createdAt,
-        origin: 'local',
-      })),
-    ];
+    return [...rules, ...unattendedPermissionRules(job, projectId)];
   }
 
   /** The job whose run this Steward is (its task is the job's hidden task), if any. */

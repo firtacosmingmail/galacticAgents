@@ -14,7 +14,9 @@ import {
   type Job,
   type JobChanges,
   type JobRule,
+  type PermissionRule,
   type Project,
+  type RequestOrigin,
   type SetJobStateInput,
   type Task,
   type UpdateJobInput,
@@ -24,6 +26,7 @@ import { checkAssignable, moveAgents, occupy, release } from './bodies.js';
 import { bodiesWhere, freeMoons, type Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import { unattendedRuleLabel, unattendedRuleRefusal } from './permission-rules.js';
 import { cancelQuestion } from './questions.js';
 import { FINISHED_WORK } from './states.js';
 
@@ -162,7 +165,11 @@ export function createArea(ctx: CommandContext, projectId: Id, name: string): Ar
 }
 
 /** The text of a rule a person or a brain wrote (what the secret check reads). */
-function ruleTexts(rule: Pick<JobRule, 'label' | 'match' | 'tool'>): string[] {
+function ruleTexts(rule: {
+  match: JobRule['match'];
+  tool: string;
+  label?: string | undefined;
+}): string[] {
   const m = rule.match;
   const subject =
     m.kind === 'text'
@@ -172,12 +179,14 @@ function ruleTexts(rule: Pick<JobRule, 'label' | 'match' | 'tool'>): string[] {
         : m.kind === 'folder'
           ? m.folder
           : '';
-  return [rule.label, rule.tool, subject];
+  return [rule.label ?? '', rule.tool, subject];
 }
 
 /**
- * A job draft within the schema and its limits, with no push rule and nothing that looks like a
- * secret (Global Constraints: credentials are never stored in a job). Rules without an id get one.
+ * A job draft within the schema and its limits, with nothing that looks like a secret (Global
+ * Constraints: credentials are never stored in a job) and only rule shapes "Allow similar" makes
+ * (`unattendedRuleRefusal`: no push, no root or home folder, no prefix or category outside the
+ * workspace, …), each rule labelled by the server from what it matches (`unattendedRuleLabel`).
  */
 function checkedDraft(draft: unknown): JobDraft {
   const parsed = JobDraft.safeParse(draft);
@@ -187,9 +196,10 @@ function checkedDraft(draft: unknown): JobDraft {
   const job = parsed.data;
   if (!job.name.trim()) throw new DomainError('invalid', 'a job needs a name');
   if (!job.instructions.trim()) throw new DomainError('invalid', 'a job needs instructions');
-  if (job.unattendedRules.some((r) => r.categories.includes('push'))) {
-    throw new DomainError('invalid', 'a job never pushes unattended: drop the push rule');
-  }
+  job.unattendedRules.forEach((rule, i) => {
+    const refusal = unattendedRuleRefusal(rule);
+    if (refusal) throw new DomainError('invalid', `unattended rule ${i + 1}: ${refusal}`);
+  });
   const texts = [job.name, job.instructions, ...job.unattendedRules.flatMap(ruleTexts)];
   if (texts.some((t) => containsSecret(t))) {
     throw new DomainError(
@@ -197,11 +207,62 @@ function checkedDraft(draft: unknown): JobDraft {
       'the job contains what looks like a secret: a job never stores credentials — keep them in the environment or a file the job reads',
     );
   }
-  return job;
+  // The card shows what each rule allows in the server's words, never the proposer's (I2).
+  return {
+    ...job,
+    unattendedRules: job.unattendedRules.map((r) => ({ ...r, label: unattendedRuleLabel(r) })),
+  };
 }
 
-const withRuleIds = (rules: JobDraft['unattendedRules']): JobRule[] =>
-  rules.map((r) => ({ ...r, id: r.id ?? `r-${randomUUID()}` }));
+/** The part of a rule that says what it allows: two rules alike in it are the same grant. */
+const ruleShape = (r: Pick<JobRule, 'scope' | 'tool' | 'match' | 'categories'>) =>
+  JSON.stringify([r.scope, r.tool, r.match, [...r.categories].sort()]);
+
+/**
+ * A draft's rules as the job stores them (labelled by `checkedDraft`). A rule alike in what it
+ * allows to one the job has (`kept`) is that rule — its id and origin stay; any other is a new
+ * grant, with a new id (unless the draft names one the job does not have) and the approval's
+ * `origin`.
+ */
+function storedRules(
+  drafts: JobDraft['unattendedRules'],
+  kept: readonly JobRule[] = [],
+  origin?: RequestOrigin,
+): JobRule[] {
+  const free = [...kept];
+  return drafts.map((d) => {
+    const at = free.findIndex((k) => ruleShape(k) === ruleShape(d));
+    const same = at >= 0 ? free.splice(at, 1)[0] : undefined;
+    const { id: _id, label, ...shape } = d;
+    const id = same?.id ?? (d.id && !kept.some((k) => k.id === d.id) ? d.id : `r-${randomUUID()}`);
+    const from = same ? same.origin : origin;
+    return { ...shape, id, label: label ?? '', ...(from ? { origin: from } : {}) };
+  });
+}
+
+/** Whether `drafts` grant anything `current` does not: a new rule, or one widened or changed. */
+export function grantsNewRules(
+  drafts: JobDraft['unattendedRules'],
+  current: readonly JobRule[] = [],
+): boolean {
+  const have = new Set(current.map(ruleShape));
+  return drafts.some((d) => !have.has(ruleShape(d)));
+}
+
+/**
+ * A job's unattended rules as the permission gate takes them (P10-04, decision 144): rule-shaped,
+ * so the gate never lets one override a deny or allow a push; each with the origin of the approval
+ * that granted it (a rule granted before origins were kept reads as local, as it did).
+ */
+export function unattendedPermissionRules(job: Job, projectId: Id): PermissionRule[] {
+  return job.unattendedRules.map(({ origin, ...r }) => ({
+    ...r,
+    projectId,
+    createdBy: { type: 'user' },
+    createdAt: job.createdAt,
+    origin: origin ?? 'local',
+  }));
+}
 
 const taskDescription = (name: string) => `Recurring job: ${name}`;
 
@@ -301,7 +362,7 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
     instructions: draft.instructions,
     schedule: draft.schedule,
     provider: draft.provider,
-    unattendedRules: withRuleIds(draft.unattendedRules),
+    unattendedRules: storedRules(draft.unattendedRules, [], input.origin),
     state: 'active',
     nextRunAt: nextRunAfter(draft, ctx.now),
     followUps: [],
@@ -367,7 +428,7 @@ export function draftOf(job: Job): JobDraft {
  */
 export function planJobUpdate(
   ctx: Pick<CommandContext, 'tables' | 'now'>,
-  input: Pick<UpdateJobInput, 'jobId' | 'changes'>,
+  input: Pick<UpdateJobInput, 'jobId' | 'changes' | 'origin'>,
 ): { current: Job; merged: JobDraft; changes: JobChanges; area?: Area } {
   const current = jobOf(ctx, input.jobId);
   longTermProject(ctx, current.projectId, 'jobs');
@@ -385,7 +446,7 @@ export function planJobUpdate(
     if (current.state !== 'stopped') changes.nextRunAt = nextRunAfter(merged, ctx.now);
   }
   if (draftChanges.unattendedRules !== undefined) {
-    const rules = withRuleIds(merged.unattendedRules);
+    const rules = storedRules(merged.unattendedRules, current.unattendedRules, input.origin);
     if (!same(rules, current.unattendedRules)) changes.unattendedRules = rules;
   }
   let area: Area | undefined;

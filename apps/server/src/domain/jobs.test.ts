@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
   applyEvent,
@@ -273,6 +274,176 @@ describe('createJob', () => {
     // Nothing of a refused job was written: no Sales area, no stray task.
     expect(tables.areas.all().map((a) => a.name)).toEqual(['Feedback']);
     expect(tables.tasks.all()).toHaveLength(10);
+  });
+});
+
+describe('unattended rules (final review I2)', () => {
+  type DraftRule = JobDraft['unattendedRules'][number];
+  const rule = (r: Omit<DraftRule, 'label'>, label = 'may read the weather'): DraftRule => ({
+    ...r,
+    label,
+  });
+
+  it('labels each rule from what it matches, never with the proposer’s words', () => {
+    const { cmd, longTerm } = setup();
+    const p = longTerm('b-saturn');
+    const { job } = cmd((ctx) =>
+      createJob(ctx, {
+        projectId: p.id,
+        area: { name: 'Feedback' },
+        draft: {
+          ...DRAFT,
+          unattendedRules: [
+            rule({
+              scope: 'prefix',
+              tool: 'Bash',
+              match: { kind: 'words', words: ['gh', 'issue', 'list'] },
+              categories: ['run_workspace', 'network'],
+            }),
+            rule({
+              scope: 'exact',
+              tool: 'Bash',
+              match: { kind: 'text', text: 'npm run report' },
+              categories: ['run_workspace'],
+            }),
+            rule({
+              scope: 'exact',
+              tool: 'WebFetch',
+              match: { kind: 'text', text: 'https://api.myapp.com/reviews' },
+              categories: ['network'],
+            }),
+            rule({
+              scope: 'prefix',
+              tool: 'Write',
+              match: { kind: 'folder', folder: `${homedir()}/reports` },
+              categories: ['edit_workspace', 'outside_workspace'],
+            }),
+            rule({
+              scope: 'category',
+              tool: '*',
+              match: { kind: 'categories' },
+              categories: ['network'],
+            }),
+          ],
+        },
+        by: USER,
+      }),
+    );
+    expect(job.unattendedRules.map((r) => r.label)).toEqual([
+      'gh issue list … (and any further arguments) — only as running commands in the workspace and network access',
+      'exactly: npm run report — only as running commands in the workspace',
+      'WebFetch exactly: https://api.myapp.com/reviews — only as network access',
+      'writing and editing under ~/reports/… — only as editing in the workspace and outside the workspace',
+      'any call the table asks about only as network access',
+    ]);
+  });
+
+  it('refuses shapes "Allow similar" never makes', () => {
+    const { cmd, longTerm, err } = setup();
+    const p = longTerm('b-saturn');
+    const refused = (r: DraftRule) =>
+      err(() =>
+        cmd((ctx) =>
+          createJob(ctx, {
+            projectId: p.id,
+            area: { name: 'Feedback' },
+            draft: { ...DRAFT, unattendedRules: [r] },
+            by: USER,
+          }),
+        ),
+      );
+    const cases: [string, Omit<DraftRule, 'label'>, RegExp][] = [
+      [
+        'the root folder',
+        {
+          scope: 'prefix',
+          tool: 'Write',
+          match: { kind: 'folder', folder: '/' },
+          categories: ['edit_workspace', 'outside_workspace'],
+        },
+        /too broad/,
+      ],
+      [
+        'the home folder',
+        {
+          scope: 'prefix',
+          tool: 'Read',
+          match: { kind: 'folder', folder: homedir() },
+          categories: ['read_workspace', 'outside_workspace'],
+        },
+        /too broad/,
+      ],
+      [
+        'a relative folder',
+        {
+          scope: 'prefix',
+          tool: 'Read',
+          match: { kind: 'folder', folder: 'reports' },
+          categories: ['read_workspace'],
+        },
+        /absolute/,
+      ],
+      [
+        'a folder rule on a tool that reads or writes no file',
+        {
+          scope: 'prefix',
+          tool: 'Bash',
+          match: { kind: 'folder', folder: '/w/Shop/x' },
+          categories: ['run_workspace'],
+        },
+        /files/,
+      ],
+      [
+        'an interpreter prefix',
+        {
+          scope: 'prefix',
+          tool: 'Bash',
+          match: { kind: 'words', words: ['python3'] },
+          categories: ['run_workspace'],
+        },
+        /runs whatever code/,
+      ],
+      [
+        'a prefix outside the workspace',
+        {
+          scope: 'prefix',
+          tool: 'Bash',
+          match: { kind: 'words', words: ['ls'] },
+          categories: ['outside_workspace'],
+        },
+        /outside the workspace/,
+      ],
+      [
+        'a whole category outside the workspace',
+        {
+          scope: 'category',
+          tool: '*',
+          match: { kind: 'categories' },
+          categories: ['network', 'outside_workspace'],
+        },
+        /outside the workspace/,
+      ],
+      [
+        'a prefix scope with an exact match',
+        {
+          scope: 'prefix',
+          tool: 'WebFetch',
+          match: { kind: 'text', text: 'https://x/' },
+          categories: ['network'],
+        },
+        /matches/,
+      ],
+      [
+        'no category',
+        { scope: 'exact', tool: 'Bash', match: { kind: 'text', text: 'ls' }, categories: [] },
+        /category/,
+      ],
+    ];
+    for (const [name, r, message] of cases) {
+      const e = refused(rule(r));
+      expect(e.code, name).toBe('invalid');
+      expect(e.message, name).toMatch(message);
+    }
   });
 });
 

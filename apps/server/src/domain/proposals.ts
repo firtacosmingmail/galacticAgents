@@ -18,6 +18,7 @@ import {
   type ProposalState,
   type ProposeJobInput,
   type ProposePlanInput,
+  type RequestOrigin,
   type Task,
   type UpdateJobInput,
 } from '@galactic/protocol';
@@ -29,6 +30,7 @@ import type { CommandContext } from './event-log.js';
 import {
   checkJobCreate,
   createJob,
+  grantsNewRules,
   draftOf,
   jobOf,
   planJobUpdate,
@@ -46,6 +48,7 @@ import {
   unparkWaiting,
 } from './parking.js';
 import { checkPurposeAndGoals, checkSetLongTerm } from './projects.js';
+import type { PolicyWrite } from './permissions.js';
 import { setTaskState } from './states.js';
 import { createTask } from './tasks.js';
 
@@ -399,11 +402,23 @@ const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.str
  * another field stands — or stop the job. A refusal (the area filled up meanwhile, the project is
  * no longer open) undoes the approval with it.
  */
-function carryOutJobCard(ctx: CommandContext, card: ProposalJob, by: Actor): void {
+function carryOutJobCard(
+  ctx: CommandContext,
+  card: ProposalJob,
+  by: Actor,
+  origin: RequestOrigin | undefined,
+): void {
+  const from = origin ? { origin } : {};
   switch (card.action) {
     case 'create':
       if (!card.draft || !card.area) throw new DomainError('invalid', 'a new job card needs a job');
-      createJob(ctx, { projectId: card.projectId, area: card.area, draft: card.draft, by });
+      createJob(ctx, {
+        projectId: card.projectId,
+        area: card.area,
+        draft: card.draft,
+        by,
+        ...from,
+      });
       return;
     case 'change': {
       if (!card.jobId || !card.draft || !card.before) {
@@ -418,7 +433,7 @@ function carryOutJobCard(ctx: CommandContext, card: ProposalJob, by: Actor): voi
       if (card.area && 'areaId' in card.area && card.area.areaId !== card.before.areaId) {
         changes.areaId = card.area.areaId;
       }
-      updateJob(ctx, { jobId: card.jobId, changes, by });
+      updateJob(ctx, { jobId: card.jobId, changes, by, ...from });
       return;
     }
     case 'stop':
@@ -426,6 +441,24 @@ function carryOutJobCard(ctx: CommandContext, card: ProposalJob, by: Actor): voi
       setJobState(ctx, { jobId: card.jobId, state: 'stopped', by });
       return;
   }
+}
+
+/**
+ * A job card whose approval would add or widen unattended rules is a lasting permission grant, so
+ * it follows decision 138's "Allow similar" rule: from this machine, or a remote client only with
+ * `autoApproveRemote` (an unknown origin counts as remote). A card that grants nothing new — no
+ * rule, rules the job already has, fewer rules, a stop — may be approved from anywhere.
+ */
+function checkRemoteGrant(ctx: Reader, card: ProposalJob, write: PolicyWrite | undefined): void {
+  if (write?.origin === 'local' || write?.autoApproveRemote) return;
+  if (card.action === 'stop' || !card.draft) return;
+  const current =
+    card.action === 'change' && card.jobId ? ctx.tables.jobs.get(card.jobId)?.unattendedRules : [];
+  if (!grantsNewRules(card.draft.unattendedRules, current)) return;
+  throw new DomainError(
+    'remote_control',
+    'approve this job on the Mac: it grants what its runs may do unattended (a remote client may reject it)',
+  );
 }
 
 export function decideProposal(
@@ -485,6 +518,7 @@ export function decideProposal(
       );
     }
   }
+  if (jobCard && decision.decision === 'approve') checkRemoteGrant(ctx, jobCard, opts.policyWrite);
   if (!ALLOWED[decision.decision].includes(current.state)) {
     throw new DomainError(
       'invalid_transition',
@@ -526,7 +560,9 @@ export function decideProposal(
         }
       }
       // A job card's job is created, changed or stopped with the approval (P10-06).
-      if (jobCard) carryOutJobCard(ctx, jobCard, by ?? { type: 'system' });
+      if (jobCard) {
+        carryOutJobCard(ctx, jobCard, by ?? { type: 'system' }, opts.policyWrite?.origin);
+      }
       // What the card asks for is created in the approval's transaction (P2-09, `approval.ts`).
       const made =
         plan || jobCard

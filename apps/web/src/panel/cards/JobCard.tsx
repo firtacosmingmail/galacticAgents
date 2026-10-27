@@ -10,6 +10,7 @@ import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
 import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy/shared.js';
 import { OfflineDecisionNote, useStreamDown } from './QueuedAnswer.js';
+import { useClientRules } from '../deliverables/use-deliverables.js';
 import { AgentRef } from './links.js';
 import { RejectForm } from './ProposalCard.js';
 
@@ -18,7 +19,8 @@ import { RejectForm } from './ProposalCard.js';
  * change to one or its stop — the job's name, the moon it lives on, its schedule, provider,
  * instructions and what its runs may do without asking. The user decides it as the Waykeeper made
  * it: Approve or Reject with a reason, never Edit (the server refuses an edit). A change card lists
- * the changed fields as before → after.
+ * the changed fields as before → after. A card that grants new unattended rules is approved only
+ * from a client that may write settings (the Mac, or any under `autoApproveRemote`).
  */
 
 export const JOB_CARD_TITLES: Record<ProposalJob['action'], string> = {
@@ -52,6 +54,24 @@ export function jobAreaLine(world: JobWorld, job: ProposalJob): string {
 
 const rulesText = (d: JobDraft) =>
   d.unattendedRules.length > 0 ? d.unattendedRules.map((r) => r.label).join(', ') : 'none';
+
+type RuleShape = Pick<
+  JobDraft['unattendedRules'][number],
+  'scope' | 'tool' | 'match' | 'categories'
+>;
+const ruleShape = (r: RuleShape) =>
+  JSON.stringify([r.scope, r.tool, r.match, [...r.categories].sort()]);
+
+/**
+ * Whether approving the card grants a rule its job does not have yet — a new or a widened one —
+ * which only the Mac (or a phone under `autoApproveRemote`) may approve (decision 138, as the
+ * server checks). A stop, no rules, or rules the job already has grant nothing.
+ */
+export function jobGrantsNewRules(job: ProposalJob): boolean {
+  if (job.action === 'stop' || !job.draft) return false;
+  const have = new Set((job.before?.draft.unattendedRules ?? []).map(ruleShape));
+  return job.draft.unattendedRules.some((r) => !have.has(ruleShape(r)));
+}
 
 /** A change card's changed fields: `[field, before, after]`. */
 export function jobChanges(world: JobWorld, job: ProposalJob): [string, string, string][] {
@@ -111,6 +131,8 @@ export function JobCard({ proposal: p, job }: { proposal: Proposal; job: Proposa
   const shown = job.draft ?? job.before?.draft;
   const changes = jobChanges(world, job);
   const project = world.projects[job.projectId];
+  // Unattended rules are a lasting grant: like "Allow similar", the Mac's (decision 138).
+  const macOnly = !useClientRules().edit && jobGrantsNewRules(job);
   return (
     <article
       className={`card proposal job-card proposal-${p.state}`}
@@ -175,10 +197,16 @@ export function JobCard({ proposal: p, job }: { proposal: Proposal; job: Proposa
       {offline && <OfflineDecisionNote />}
       {p.state !== 'rejected' && (
         <div className="controls">
-          <button disabled={busy} onClick={() => decide({ decision: 'approve' })}>
+          <button disabled={busy || macOnly} onClick={() => decide({ decision: 'approve' })}>
             Approve
           </button>
         </div>
+      )}
+      {p.state !== 'rejected' && macOnly && (
+        <p className="muted">
+          Only the Mac (or a phone when remote auto-approval is on) can approve a job that grants
+          what its runs may do unattended. You can reject it here.
+        </p>
       )}
       {p.state !== 'rejected' && (
         <RejectForm

@@ -18,6 +18,7 @@ import { domain as fx } from '@galactic/protocol/fixtures';
 import type { Api } from '../../console/api.js';
 import { ApiContext } from '../../console/hierarchy/shared.js';
 import { useAppStore } from '../../state/store.js';
+import { RulesContext } from '../deliverables/use-deliverables.js';
 import { axeFindings, blocking } from '../../a11y/a11y-fixtures.js';
 import { inboxModel } from '../inbox-model.js';
 import { QuestionCard } from './QuestionCard.js';
@@ -226,6 +227,43 @@ describe('the job card (P10-07)', () => {
     expect(api.decide).toHaveBeenCalledWith(created.id, { decision: 'approve' });
     within(card).getByRole('button', { name: 'Reject' });
     expect(blocking(await axeFindings(card))).toEqual([]);
+  });
+
+  it('on a phone without remote auto-approval, a card granting rules cannot be approved; one granting none can (I3)', async () => {
+    const PHONE = { local: false, download: false, edit: false, addOutside: false };
+    const none = jobCard(
+      {
+        projectId: 'p-shop',
+        waykeeperId: 'a-wk-shop',
+        action: 'create',
+        draft: { ...draft, unattendedRules: [] },
+        area: { areaId: 'ar-1' },
+      },
+      { id: 'pr-job-none' },
+    );
+    world({ proposals: [created, none] });
+    render(
+      <ApiContext.Provider value={api as unknown as Api}>
+        <RulesContext.Provider value={PHONE}>
+          <ProposalCard proposal={created} />
+          <ProposalCard proposal={none} />
+        </RulesContext.Provider>
+      </ApiContext.Provider>,
+    );
+    const [granting, plainCard] = screen.getAllByRole('article');
+    const approve = within(granting!).getByRole('button', { name: 'Approve' });
+    expect((approve as HTMLButtonElement).disabled).toBe(true);
+    within(granting!).getByText(
+      'Only the Mac (or a phone when remote auto-approval is on) can approve a job that grants what its runs may do unattended. You can reject it here.',
+    );
+    expect(
+      (within(granting!).getByRole('button', { name: 'Reject' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    const ok = within(plainCard!).getByRole('button', { name: 'Approve' });
+    expect((ok as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => fireEvent.click(ok));
+    expect(api.decide).toHaveBeenCalledWith(none.id, { decision: 'approve' });
+    expect(blocking(await axeFindings(granting!))).toEqual([]);
   });
 
   it('says it asks for everything when there are no rules, and names an existing area', () => {

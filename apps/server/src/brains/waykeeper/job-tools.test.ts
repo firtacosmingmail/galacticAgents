@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { proposalJobOf, type Id, type JobDraft, type Project } from '@galactic/protocol';
+import {
+  proposalJobOf,
+  type Id,
+  type JobDraft,
+  type Project,
+  type RequestOrigin,
+} from '@galactic/protocol';
+import { createAgent } from '../../domain/agents.js';
+import { unattendedPermissionRules } from '../../domain/jobs.js';
 import { brainHarness, type BrainHarness, type ToolOutcome } from '../testing/index.js';
 import { WAYKEEPER_SYSTEM_PROMPT, waykeeperDefinition } from './index.js';
 
@@ -65,8 +73,8 @@ describe('propose_job (P10-06)', () => {
         {
           label: 'may call api.myapp.com',
           tool: 'WebFetch',
-          scope: 'prefix',
-          match: { kind: 'text', text: 'https://api.myapp.com/' },
+          scope: 'exact',
+          match: { kind: 'text', text: 'https://api.myapp.com/reviews' },
           categories: ['network'],
         },
       ],
@@ -88,13 +96,18 @@ describe('propose_job (P10-06)', () => {
       draft: {
         ...DRAFT,
         provider: 'claude',
-        unattendedRules: [{ label: 'may call api.myapp.com' }],
+        // The card says what the rule allows in the server's words, not the Waykeeper's.
+        unattendedRules: [
+          { label: 'WebFetch exactly: https://api.myapp.com/reviews — only as network access' },
+        ],
       },
     });
     expect(h.log.tables.jobs.all()).toHaveLength(0);
     const turnsBefore = wk.turns.length;
 
-    const { events } = await h.commands.decideProposal(card.id, { decision: 'approve' }, USER);
+    const { events } = await h.commands.decideProposal(card.id, { decision: 'approve' }, USER, {
+      origin: 'local',
+    });
     expect(events.map((e) => e.type)).toEqual([
       'proposal.approved',
       'area.created',
@@ -371,5 +384,117 @@ describe('the Waykeeper prompt (P10-06)', () => {
     ]) {
       expect(WAYKEEPER_SYSTEM_PROMPT).toContain(line);
     }
+  });
+});
+
+describe('approving a job card from a remote client (final review I3)', () => {
+  const CURL: JobDraft['unattendedRules'][number] = {
+    scope: 'prefix',
+    tool: 'Bash',
+    match: { kind: 'words', words: ['curl', 'api.myapp.com'] },
+    categories: ['network'],
+  };
+  const GH: JobDraft['unattendedRules'][number] = {
+    scope: 'prefix',
+    tool: 'Bash',
+    match: { kind: 'words', words: ['gh', 'issue', 'list'] },
+    categories: ['run_workspace'],
+  };
+  const waykeeperOf = (project: Project): Id =>
+    h.log.runCommand((ctx) =>
+      createAgent(ctx, {
+        role: 'waykeeper',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+        projectId: project.id,
+      }),
+    ).value.id;
+  const createCard = async (project: Project, rules: JobDraft['unattendedRules']) =>
+    (
+      await h.commands.proposeJob({
+        projectId: project.id,
+        waykeeperId: waykeeperOf(project),
+        action: 'create',
+        area: { name: 'Feedback' },
+        draft: { ...DRAFT, provider: 'claude', unattendedRules: rules },
+      })
+    ).value;
+  const approve = (id: Id, origin: RequestOrigin) =>
+    h.commands.decideProposal(id, { decision: 'approve' }, USER, { origin });
+
+  it('a remote approval of a card granting unattended rules is refused (403 remote_control); the card stays', async () => {
+    const project = await longTermProject();
+    const card = await createCard(project, [CURL]);
+    const refused = await approve(card.id, 'remote').catch((e: { code?: string }) => e);
+    expect(refused).toMatchObject({ code: 'remote_control' });
+    expect(String(refused)).toMatch(/on the Mac/);
+    expect(h.log.tables.proposals.get(card.id)?.state).toBe('pending');
+    expect(h.log.tables.jobs.all()).toHaveLength(0);
+    await approve(card.id, 'local');
+    expect(h.log.tables.jobs.all()[0]!.unattendedRules.map((r) => r.origin)).toEqual(['local']);
+  });
+
+  it('a card with no unattended rule, a narrowing change and a stop may be approved remotely', async () => {
+    const project = await longTermProject();
+    await approve((await createCard(project, [])).id, 'remote');
+    const job = await existingJob(project, { name: 'Sales', unattendedRules: [CURL, GH] });
+    const wk = waykeeperOf(project);
+    const narrow = (
+      await h.commands.proposeJob({
+        projectId: project.id,
+        waykeeperId: wk,
+        action: 'change',
+        jobId: job.id,
+        changes: { unattendedRules: [GH] },
+      })
+    ).value;
+    await approve(narrow.id, 'remote');
+    const after = h.log.tables.jobs.get(job.id)!;
+    expect(after.unattendedRules.map((r) => r.match)).toEqual([GH.match]);
+    // The rule kept is the same rule: its id stays.
+    expect(after.unattendedRules[0]!.id).toBe(job.unattendedRules[1]!.id);
+    const stop = (
+      await h.commands.proposeJob({
+        projectId: project.id,
+        waykeeperId: wk,
+        action: 'stop',
+        jobId: job.id,
+      })
+    ).value;
+    await approve(stop.id, 'remote');
+    expect(h.log.tables.jobs.get(job.id)?.state).toBe('stopped');
+  });
+
+  it('a remote change that adds or widens a rule is refused', async () => {
+    const project = await longTermProject();
+    const job = await existingJob(project, { unattendedRules: [GH] });
+    const wk = waykeeperOf(project);
+    const widen = (
+      await h.commands.proposeJob({
+        projectId: project.id,
+        waykeeperId: wk,
+        action: 'change',
+        jobId: job.id,
+        changes: { unattendedRules: [{ ...GH, categories: ['run_workspace', 'network'] }] },
+      })
+    ).value;
+    await expect(approve(widen.id, 'remote')).rejects.toMatchObject({ code: 'remote_control' });
+  });
+
+  it('with autoApproveRemote a remote approval grants the rules, recorded as remote', async () => {
+    await h.dispose();
+    h = brainHarness({ compose: { autoApproveRemote: true } });
+    const project = await longTermProject();
+    const card = await createCard(project, [CURL]);
+    await approve(card.id, 'remote');
+    const [job] = h.log.tables.jobs.all();
+    expect(job!.unattendedRules.map((r) => r.origin)).toEqual(['remote']);
+    // The gate sees the rule with the origin of its approval (a rule granted before origins
+    // were kept reads as local, as it did).
+    expect(unattendedPermissionRules(job!, project.id).map((r) => r.origin)).toEqual(['remote']);
+    const { origin: _o, ...legacy } = job!.unattendedRules[0]!;
+    expect(
+      unattendedPermissionRules({ ...job!, unattendedRules: [legacy] }, project.id)[0]!.origin,
+    ).toBe('local');
   });
 });

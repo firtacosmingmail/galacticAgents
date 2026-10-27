@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Project, Proposal, Question, Task } from './domain.js';
 import { PermissionRule } from './domain.js';
+import { RequestOrigin } from './enums.js';
 import { LONG_TERM_LIMITS } from './long-term-questions.js';
 import { Id, Meta, Timestamp } from './primitives.js';
 
@@ -55,7 +56,9 @@ export type JobState = z.infer<typeof JobState>;
 /**
  * An unattended rule: what a job's run Stewards may do without asking, on top of the project's
  * policy and rules — shaped like an "Allow similar" rule, scoped to the one job. Never a push,
- * never over a `deny`, never a spend.
+ * never over a `deny`, never a spend. Its `label` is computed by the server from what it matches
+ * (never the proposer's words), and `origin` is where the approval that granted it came from (a
+ * remote one needs `autoApproveRemote`, decision 138; absent on rules granted before it was kept).
  */
 export const JobRule = PermissionRule.pick({
   id: true,
@@ -64,7 +67,7 @@ export const JobRule = PermissionRule.pick({
   match: true,
   categories: true,
   label: true,
-});
+}).extend({ origin: RequestOrigin.optional() });
 export type JobRule = z.infer<typeof JobRule>;
 
 /** `running` until the run ends; `interrupted` when Mission Control stopped mid-run. */
@@ -169,7 +172,8 @@ export type JobRun = z.infer<typeof JobRun>;
 
 /**
  * What a job card proposes and `createJob` / `updateJob` take. The rules' `id`s are assigned on
- * approval, so a draft's rules may come without one.
+ * approval, so a draft's rules may come without one; a rule's `label` is the server's (a given one
+ * is replaced) and its `origin` is never taken from a draft.
  */
 export const JobDraft = Job.pick({
   name: true,
@@ -178,7 +182,9 @@ export const JobDraft = Job.pick({
   provider: true,
 }).extend({
   unattendedRules: z
-    .array(JobRule.extend({ id: Id.optional() }))
+    .array(
+      JobRule.omit({ origin: true }).extend({ id: Id.optional(), label: z.string().optional() }),
+    )
     .max(LONG_TERM_LIMITS.maxUnattendedRules)
     .default([]),
 });

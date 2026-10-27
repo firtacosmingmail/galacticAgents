@@ -397,6 +397,8 @@ export interface CreateJobInput {
   area: { areaId: Id } | { name: string };
   draft: JobDraft;
   by: Actor;
+  /** Where the approval granting the job's unattended rules came from (kept on each rule). */
+  origin?: RequestOrigin;
 }
 
 export interface UpdateJobInput {
@@ -404,6 +406,8 @@ export interface UpdateJobInput {
   /** `areaId` moves the job (and its task) to another area of the project. */
   changes: Partial<JobDraft> & { areaId?: Id };
   by: Actor;
+  /** Where the approval came from: kept on each rule it adds or changes. */
+  origin?: RequestOrigin;
 }
 
 /**
