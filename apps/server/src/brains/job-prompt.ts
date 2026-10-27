@@ -6,7 +6,7 @@ import type { Area, FollowUp, Job, JobRun, Project } from '@galactic/protocol';
  * carries the project's purpose and goals, the job's instructions, what the run covers, the job's
  * memory (the last runs, `jobMemory`), the approved follow-up or the user's retry note, and the
  * rules of an unattended run: read and draft only, findings through `report_finding`, money only
- * after `request_spend`, and the run's end through `report_run`.
+ * after `request_spend` (a follow-up spend run is told its spend is already approved), and the run's end through `report_run`.
  *
  * Pure text: no SDK, no database.
  */
@@ -86,7 +86,14 @@ export function jobRunPrompt(brief: JobPromptBrief): string {
   if (declares) {
     lines.push(
       '- Report each finding (a feature worth building, a reply worth sending) with `report_finding`; Cosmin decides what happens to it.',
-      '- Before anything that costs real money, call `request_spend` and stop: a later run does it once Cosmin approves.',
+      ...(followUp?.kind === 'spend'
+        ? [
+            `- The spending above is already approved, for exactly ${money(followUp.amount, followUp.currency)} and ${followUp.purpose ?? 'the purpose you asked for'}: do not call \`request_spend\` for it.`,
+            '- Any other spending still needs `request_spend` first: call it and stop; a later run does it once Cosmin approves.',
+          ]
+        : [
+            '- Before anything that costs real money, call `request_spend` and stop: a later run does it once Cosmin approves.',
+          ]),
       '- End the run with `report_run`: its outcome, a short summary, and any numbers worth keeping.',
     );
   } else {

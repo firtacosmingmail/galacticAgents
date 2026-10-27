@@ -67,16 +67,24 @@ export function stewardJobTools(
   tables: Tables,
   agent: Pick<Agent, 'id' | 'taskId'>,
 ): ToolDefinition[] {
-  const jobRun = runningJobOf(tables, agent) !== undefined;
+  const running = runningJobOf(tables, agent);
+  const jobRun = running !== undefined;
+  // A follow-up run that carries out an approved spend must not ask for it again (final review I4).
+  const approvedSpend =
+    running?.runningRunId !== undefined &&
+    tables.jobRuns.get(running.runningRunId)?.followUp?.kind === 'spend';
   const spend: ToolDefinition = {
     name: SPEND_TOOL_NAME,
     description:
       'Asks Cosmin to approve spending real money (a paid API, a purchase, an ad, a ' +
       'subscription). Call it before anything that costs money and then end your turn: never ' +
       'spend without an approval. Only Cosmin answers it (Approve or Refuse). ' +
-      (jobRun
-        ? 'A later run carries out an approved spend; this run does not spend.'
-        : 'The answer comes to you as a message.'),
+      (approvedSpend
+        ? 'The spend this run was started for is already approved: never ask for it again. Use ' +
+          'this only for any other spend, which a later run carries out once approved.'
+        : jobRun
+          ? 'A later run carries out an approved spend; this run does not spend.'
+          : 'The answer comes to you as a message.'),
     inputSchema: {
       type: 'object',
       properties: {

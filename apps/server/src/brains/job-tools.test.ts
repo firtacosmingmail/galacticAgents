@@ -125,6 +125,9 @@ async function jobRun(b: ReturnType<typeof boot>) {
   return { project, job, run, stewardId: run.agentId!, tools: spawn.tools };
 }
 
+const tools = (b: ReturnType<typeof boot>, id: string, taskId: string) =>
+  stewardJobTools(b.c.commands, b.c.log.tables, { id, taskId });
+
 /** A project task's Steward, spawned on the fake runtime. */
 async function taskSteward(b: ReturnType<typeof boot>) {
   const { c } = b;
@@ -163,6 +166,30 @@ describe('Steward job and spend tools (P10-05)', () => {
     const b = boot(() => ASKS);
     const { tools } = await jobRun(b);
     expect(names(tools)).toEqual(['request_spend', ...JOB_TOOL_NAMES]);
+  });
+
+  it('request_spend in a follow-up spend run: the approved spend is not asked again (final review I4)', async () => {
+    const b = boot(() => ASKS);
+    const { run, stewardId, job } = await jobRun(b);
+    const { tables } = b.c.log;
+    const plain = tool(tools(b, stewardId, job.taskId), 'request_spend').description;
+    expect(plain).toContain('this run does not spend');
+    tables.jobRuns.upsert({
+      ...run,
+      purpose: 'follow_up',
+      followUp: {
+        questionId: 'q-1',
+        kind: 'spend',
+        amount: 20,
+        currency: 'USD',
+        purpose: 'the ad',
+      },
+    });
+    const desc = tool(tools(b, stewardId, job.taskId), 'request_spend').description;
+    expect(desc).toContain(
+      'The spend this run was started for is already approved: never ask for it again. Use this only for any other spend, which a later run carries out once approved.',
+    );
+    expect(desc).not.toContain('this run does not spend');
   });
 
   it('report_finding opens a user-held, job-owned question with the fixed actions and the draft', async () => {
