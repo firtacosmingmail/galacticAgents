@@ -1,6 +1,6 @@
 # Phase 10 — Long-term projects, area moons and recurring jobs
 
-**Current task:** P10-02 · **Task status:** P10-01 done; P10-02 todo
+**Current task:** P10-02 · **Task status:** P10-01 done; P10-02 in progress
 **Phase status:** in progress (1/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -55,7 +55,7 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 - **Acceptance:** `Schedule` refuses empty, repeated and out-of-range days, `24:00` and `9:00`; `Job` defaults `provider` `claude` and `followUps` `[]` and refuses 11 rules; `isJobOwned` / `isJobTask` as specified; every new event round-trips; `job.created` → `job.updated` folds and `job_run.*` changes nothing; a snapshot with and without `areas`/`jobs` applies. Schedules: one occurrence per local day across a whole year in any zone (DST), monthly 31st clamps to the month's end, weekly across a year end, tests pass under `TZ=America/New_York` and `TZ=Europe/Bucharest`. Storage: round-trips of an area, a job, a run, a spend question, an `areas` body host and a long-term project; a database at 0015 migrates with every row intact; `snapshot()` carries `areas` and `jobs`.
 
 ### P10-02 — Long-term projects
-- **Status:** todo · **Depends on:** P10-01 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P10-01 · **Parallel with:** —
 - Plan Task 4: a long-term request takes the first free big planet (≥ `BIG_PLANET_MIN_MOONS` catalogued moons), else a free planet with moons, else refuses `no_planet_with_moons`; `setLongTerm` converts a project (moving it when needed); `moveHost` refuses a project with areas; `request_project_closure` refuses a long-term project and `close_task` omits the closure hint; approving a `meta.longTerm` proposal creates or converts.
 - **Acceptance:** a long-term project lands on Jupiter on an empty catalogue, on Mars when the big planets are taken, never on Mercury/Venus, refused when no moon-bearing planet is free; conversion moves to Saturn with its satellites in one transaction, stays when nothing is free, refuses a sub-project; closure refused "long-term projects are closed by the user only".
 
