@@ -1,4 +1,4 @@
-import { isJobOwned } from '@galactic/protocol';
+import { FINDING_ACTIONS, SPEND_ACTIONS, isJobOwned } from '@galactic/protocol';
 import type {
   Actor,
   Id,
@@ -11,6 +11,7 @@ import type {
 } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import { applyJobAnswer } from './findings.js';
 
 /**
  * Question commands (P1-23, P2-01; SPEC §2.6, TECHNOLOGY §5.3). The server owns questions: an
@@ -133,11 +134,21 @@ function mustOpen(ctx: CommandContext, questionId: Id): Question {
   return current;
 }
 
-/** A permission question is the policy's or the user's, never an agent's (decision 7, 12). */
+/**
+ * A permission question is the policy's or the user's, never an agent's (decision 7, 12); a
+ * `spend` approval is the user's alone (decision 145): no agent ever holds it, so no supervisor
+ * can answer or relay it.
+ */
 function checkHolder(ctx: CommandContext, question: Question, holder: Actor): void {
   if (holder.type === 'agent') {
     if (question.kind === 'permission') {
       throw new DomainError('invalid', `permission question ${question.id} is held by the user`);
+    }
+    if (question.kind === 'spend') {
+      throw new DomainError(
+        'invalid',
+        `spend question ${question.id} is held by the user: the user answers spend approvals`,
+      );
     }
     must(ctx.tables.agents.get(holder.id ?? ''), 'agent', holder.id ?? '(no id)');
   }
@@ -247,6 +258,8 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
     ...(input.repliedIn ? { repliedIn: input.repliedIn } : {}),
     ...(input.detail ? { detail: input.detail } : {}),
   });
+  // A finding, failure notice or job spend: its action in this same transaction (P10-05).
+  applyJobAnswer(ctx, question);
   return question;
 }
 
@@ -295,6 +308,7 @@ export function checkAnswer(current: Question, input: AnswerInput): void {
       `question ${current.id} changed since version ${input.version} (now held by ${describeActor(current.holder)})`,
     );
   }
+  checkFixedAnswer(current, input.answer, input.answeredBy);
   if (input.answeredBy.type === 'agent') {
     if (current.kind === 'permission') {
       throw new DomainError(
@@ -308,6 +322,37 @@ export function checkAnswer(current: Question, input: AnswerInput): void {
         `question ${current.id} is held by ${describeActor(current.holder)}, not ${describeActor(input.answeredBy)}`,
       );
     }
+  }
+}
+
+/**
+ * The checks of an answer to a question with fixed actions (P10-05): a `spend` is answered by the
+ * user alone — never an agent, a supervisor or the system — with exactly `Approve` or `Refuse`
+ * (free text is no approval); a finding with one of its actions. A failure question takes any
+ * text: anything but "Stop the job" retries, the text passed on as a note.
+ */
+function checkFixedAnswer(question: Question, answer: string, by: Actor): void {
+  if (question.kind === 'spend') {
+    if (by.type !== 'user') {
+      throw new DomainError(
+        'invalid',
+        `spend question ${question.id} is answered by the user only: the user answers spend approvals`,
+      );
+    }
+    if (!(SPEND_ACTIONS as readonly string[]).includes(answer)) {
+      throw new DomainError(
+        'invalid',
+        `a spend is answered ${SPEND_ACTIONS.join(' or ')}, not "${answer}"`,
+      );
+    }
+    return;
+  }
+  const finding = question.context.finding;
+  if (finding && !(FINDING_ACTIONS[finding.kind] as readonly string[]).includes(answer)) {
+    throw new DomainError(
+      'invalid',
+      `answer finding ${question.id} with one of: ${FINDING_ACTIONS[finding.kind].join(', ')}`,
+    );
   }
 }
 

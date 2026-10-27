@@ -260,6 +260,11 @@ export const MessageSent = z.object({
    * `question.answered`).
    */
   replyTo: ReplyQuote.optional(),
+  /**
+   * The finding question whose "Implement it" answer this system message carries to the
+   * project's Waykeeper (P10-05, SPEC decision 144): the one system message that wakes a brain.
+   */
+  fromFinding: Id.optional(),
 });
 
 /**

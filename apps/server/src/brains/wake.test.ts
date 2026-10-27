@@ -145,6 +145,101 @@ describe('WAKE_RULES', () => {
     ).toBeUndefined();
   });
 
+  it('never wakes on a job-owned question or a spend, whoever asked or held it (P10-05)', () => {
+    const questions = new Map<string, Question>();
+    const s = scope({
+      supervises: (id) => id === 'a-steward-1',
+      question: (id) => questions.get(id),
+    });
+    const finding = {
+      jobId: 'j-1',
+      runId: 'jr-1',
+      kind: 'suggestion' as const,
+      title: 'Dark mode',
+    };
+    const cases: Partial<Question>[] = [
+      // A finding without the `toUser` mark still wakes nobody: being job-owned is enough.
+      { id: 'q-f', kind: 'clarification', context: { text: 'x', finding } },
+      {
+        id: 'q-fail',
+        kind: 'clarification',
+        context: { text: 'x', jobFailure: { jobId: 'j-1', runId: 'jr-1', reason: 'no net' } },
+      },
+      {
+        id: 'q-js',
+        kind: 'spend',
+        context: { text: 'x', spend: { amount: 5, currency: 'USD', purpose: 'p', jobId: 'j-1' } },
+      },
+      // A task Steward's spend is not job-owned, and still wakes no brain.
+      {
+        id: 'q-ts',
+        kind: 'spend',
+        context: { text: 'x', spend: { amount: 5, currency: 'USD', purpose: 'p' } },
+      },
+    ];
+    for (const over of cases) {
+      const q: Question = {
+        ...d.question,
+        originAgentId: 'a-steward-1',
+        holder: { type: 'user' },
+        ...over,
+      } as Question;
+      questions.set(q.id, q);
+      const held = { holders: [BRAIN] };
+      const events: Event[] = [
+        { type: 'question.opened', question: q },
+        { type: 'question.opened', question: { ...q, holder: { type: 'agent', id: BRAIN } } },
+        {
+          type: 'question.answered',
+          questionId: q.id,
+          answer: 'Drop',
+          answeredBy: { type: 'user' },
+          version: 1,
+          ...held,
+        },
+        {
+          type: 'question.cancelled',
+          questionId: q.id,
+          agentId: q.originAgentId,
+          reason: 'r',
+          version: 1,
+          ...held,
+        },
+        {
+          type: 'question.reassigned',
+          questionId: q.id,
+          from: { type: 'user' },
+          to: { type: 'user' },
+          reason: 'r',
+          version: 1,
+        },
+      ];
+      for (const e of events) expect(wakeLine(e, s), `${q.id} ${e.type}`).toBeUndefined();
+      // Its own job-owned question (a brain asked it through a tool) does not wake it either.
+      questions.set(q.id, { ...q, originAgentId: BRAIN, meta: { source: 'command' } });
+      expect(wakeLine(events[2]!, s), `${q.id} own`).toBeUndefined();
+    }
+  });
+
+  it('wakes on a system message only when it carries a finding’s "Implement it" (P10-05)', () => {
+    const s = scope();
+    const sent = (over: Partial<Extract<Event, { type: 'message.sent' }>>): Event => ({
+      type: 'message.sent',
+      messageId: 'm-1',
+      agentId: BRAIN,
+      sender: { type: 'system' },
+      text: 'Cosmin wants this implemented (from Feedback): Dark mode — asked thrice.',
+      interrupt: false,
+      ...over,
+    });
+    expect(wakeLine(sent({ fromFinding: 'q-1' }), s)).toBe(
+      'the system said (the user answered finding q-1): "Cosmin wants this implemented (from Feedback): Dark mode — asked thrice."',
+    );
+    expect(wakeLine(sent({}), s)).toBeUndefined();
+    expect(wakeLine(sent({ fromFinding: 'q-1', turn: true }), s)).toBeUndefined();
+    expect(wakeLine(sent({ fromFinding: 'q-1', agentId: 'a-other' }), s)).toBeUndefined();
+  });
+
   it('wakes the brain that runs budgeted work on its budget notices (P8-01)', () => {
     const exceeded: Event = {
       type: 'budget.exceeded',

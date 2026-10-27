@@ -1,4 +1,4 @@
-import { excerpt, formatUsd, setOf, SUPERSEDED_BY_MESSAGE } from '@galactic/protocol';
+import { excerpt, formatUsd, isJobOwned, setOf, SUPERSEDED_BY_MESSAGE } from '@galactic/protocol';
 import type {
   Actor,
   AgentRole,
@@ -21,7 +21,10 @@ import { COMMAND_SOURCE } from '../domain/questions.js';
  *
  * Never in the table: `agent.output` and `agent.tool_call` (transcript traffic), the brain's own
  * `agent.*` lifecycle, and permission questions (decision 7: the policy or the user resolves them,
- * never an LLM, so they do not enter any brain's mailbox).
+ * never an LLM, so they do not enter any brain's mailbox). Likewise `spend` approvals (decision
+ * 145: the user's alone) and job-owned questions — findings, failure notices, job spends (P10-05):
+ * they belong to a job, not to the agents above its run. The one exception is a finding's
+ * "Implement it", which reaches the project's Waykeeper as a system message (`fromFinding`).
  */
 
 /** What a wake rule may ask about the brain's place in the hierarchy (read from the tables). */
@@ -74,7 +77,8 @@ const who = (actor: Actor, scope: WakeScope): string =>
  * none is woken by it.
  */
 function concerns(q: Question | undefined, scope: WakeScope): q is Question {
-  if (!q || q.kind !== 'clarification') return false;
+  // Never a permission or a spend (decisions 7, 145), never a job-owned question (P10-05).
+  if (!q || q.kind !== 'clarification' || isJobOwned(q)) return false;
   if (isBrain(q.holder, scope)) return true;
   return q.meta?.['toUser'] !== true && scope.supervises(q.originAgentId);
 }
@@ -85,7 +89,8 @@ function concerns(q: Question | undefined, scope: WakeScope): q is Question {
  * waits for the answer like any holder.
  */
 function heldBefore(holders: readonly Id[] | undefined, scope: WakeScope, q: Question | undefined) {
-  if (q !== undefined && q.kind !== 'clarification') return false; // decision 7: never a brain's
+  // Decisions 7 and 145: a permission or a spend is never a brain's; nor a job-owned question.
+  if (q !== undefined && (q.kind !== 'clarification' || isJobOwned(q))) return false;
   // Its own question only when it asked through a tool: one its session is blocked on is answered
   // through the adapter, and a mailbox line would deliver it twice.
   if (q?.originAgentId === scope.brainId) return q.meta?.['source'] === COMMAND_SOURCE;
@@ -183,12 +188,18 @@ export const WAKE_RULES: WakeRules = {
     // A user's chat line to the brain, or a report from an agent below it (a direct report, or a
     // sub-project's Waykeeper asking the Harmonizer for closure). The brain's own turn messages
     // are sent by the system and never wake it.
+    // A finding's "Implement it" (P10-05) is the one system message that wakes a brain: the
+    // project's Waykeeper learns what the user wants planned.
     wakes: (e, s) =>
       e.agentId === s.brainId &&
       (e.sender.type === 'user' ||
+        (e.sender.type === 'system' && e.fromFinding !== undefined && !e.turn) ||
         (e.sender.type === 'agent' &&
           (s.supervises(e.sender.id) || (s.below?.(e.sender.id) ?? false)))),
     describe: (e, s) => {
+      if (e.sender.type === 'system') {
+        return `the system said (the user answered finding ${e.fromFinding ?? '?'}): ${quote(e.text)}`;
+      }
       if (e.sender.type !== 'user') return `${who(e.sender, s)} reported: ${quote(e.text)}`;
       const r = e.replyTo;
       if (!r) return `the user said: ${quote(e.text)}`;

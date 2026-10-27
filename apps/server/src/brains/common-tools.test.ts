@@ -267,6 +267,44 @@ describe('common tools', () => {
     expect(h.log.tables.questions.all().every((q) => q.holder.type === 'user')).toBe(true);
   });
 
+  it('answer_question refuses a spend approval: the user answers it (P10-05)', async () => {
+    const { h, hq, project } = await setup();
+    const wk = await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: project.id, supervisorId: hq.agentId },
+      {
+        script: (s) =>
+          s
+            // Its task was added by the test: that wakes it (P2-08 review).
+            .on(/was added to your project/, () => {})
+            .once('check', async (t) => {
+              const [q] = h.log.tables.questions.all();
+              expect(q).toMatchObject({ kind: 'spend', holder: { type: 'user' } });
+              const refused = await t.try('answer_question', {
+                questionId: q!.id,
+                answer: 'Approve',
+              });
+              expect(refused).toMatchObject({ ok: false, error: 'invalid' });
+              expect(refused.message).toMatch(/the user answers spend approvals/);
+            }),
+      },
+    );
+    const stewardId = await steward(h, project.id, wk.agentId, 'echo');
+    await h.commands.requestSpend({
+      originAgentId: stewardId,
+      amount: 20,
+      purpose: 'One week of ads',
+    });
+    await h.settle();
+    // The spend never woke the Waykeeper (strict script: no unexpected turn).
+    const spendId = h.log.tables.questions.all().find((q) => q.kind === 'spend')!.id;
+    const lines = wk.runner.turns.flatMap((x) => x.items);
+    expect(lines.filter((i) => JSON.stringify(i.event).includes(spendId))).toEqual([]);
+    wk.tell('check');
+    await h.done();
+    expect(h.log.tables.questions.get(spendId)?.status).toBe('open');
+  });
+
   it('both prompts say when to ask a set and that a held set is answered with answer_question_set', () => {
     for (const prompt of [HARMONIZER_SYSTEM_PROMPT, WAYKEEPER_SYSTEM_PROMPT]) {
       expect(prompt).toMatch(/ask_questions/);

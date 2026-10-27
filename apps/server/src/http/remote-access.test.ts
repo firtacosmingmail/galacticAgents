@@ -4,6 +4,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { SettingsService } from '../config/settings.js';
 import type { ServerConfig } from '../config/config.js';
 import { openDatabase } from '../db/database.js';
+import { createAgent } from '../domain/agents.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { connectWs, startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
@@ -56,6 +57,7 @@ async function start(overrides: Partial<ServerConfig> = {}) {
   composed = composeRuntime(openDatabase(':memory:'), {
     adapters: [new FakeAdapter({ speed: 1 })],
     flushMs: 10,
+    ...(overrides.autoApproveRemote ? { autoApproveRemote: true } : {}),
   });
   const config = testConfig({
     allowedHosts: ['localhost', '127.0.0.1', '[::1]', TS_HOST],
@@ -364,6 +366,52 @@ describe("a remote client's permission requests are never auto-approved (P7-02 a
       'the rm -rf ran',
     );
     expect(composed!.log.tables.questions.all().filter((q) => q.originAgentId === id)).toEqual([]);
+  });
+});
+
+describe('a spend approval from a remote client follows the permission rule (P10-05)', () => {
+  /** A `spend` question asked by an agent row (no session waits on it). */
+  const askSpend = async () => {
+    const agent = composed!.log.runCommand((ctx) =>
+      createAgent(ctx, {
+        role: 'harmonizer',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+      }),
+    ).value;
+    const { value } = await composed!.commands.requestSpend({
+      originAgentId: agent.id,
+      amount: 20,
+      purpose: 'One week of ads',
+    });
+    return value;
+  };
+  const answer = (id: string, headers: Record<string, string>, text = 'Approve') =>
+    inject('POST', `/api/questions/${id}/answer`, headers, { answer: text });
+
+  it('the phone cannot approve or refuse it; the Mac can', async () => {
+    await start(WITH_IDENTITY);
+    const q = await askSpend();
+    for (const headers of [IDENTITY, { ...SERVE, ...BEARER }]) {
+      for (const text of ['Approve', 'Refuse']) {
+        const res = await answer(q.id, headers, text);
+        expect(res.statusCode).toBe(403);
+        expect(res.json()).toMatchObject({ error: 'remote_control' });
+      }
+    }
+    expect(composed!.log.tables.questions.get(q.id)?.status).toBe('open');
+    expect((await answer(q.id, BEARER)).statusCode).toBe(200);
+    expect(composed!.log.tables.questions.get(q.id)).toMatchObject({
+      status: 'answered',
+      answer: 'Approve',
+    });
+  });
+
+  it('with autoApproveRemote the phone may answer it', async () => {
+    await start({ ...WITH_IDENTITY, autoApproveRemote: true });
+    const q = await askSpend();
+    expect((await answer(q.id, IDENTITY)).statusCode).toBe(200);
+    expect(composed!.log.tables.questions.get(q.id)?.status).toBe('answered');
   });
 });
 

@@ -156,4 +156,20 @@ describe('requeue (P2-16)', () => {
       ]),
     ).toEqual(['task.created recovery noise', 'task.created after']);
   });
+
+  it('a finding’s "Implement it" is a system message for the brain, not a turn prompt (P10-05)', () => {
+    const implement = {
+      ...sent('m-implement', SYSTEM, 'Cosmin wants this implemented'),
+      fromFinding: 'q-1',
+    } as Event;
+    expect(
+      lines([
+        created,
+        sent('turn-1', SYSTEM),
+        delivered('turn-1'),
+        { type: 'agent.idle', agentId: B } as Event,
+        implement,
+      ]),
+    ).toEqual(['said Cosmin wants this implemented']);
+  });
 });

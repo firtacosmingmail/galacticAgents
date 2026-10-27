@@ -90,6 +90,7 @@ import {
 import type { CommandContext, EventLog } from './event-log.js';
 import { createJob, setJobState, updateJob } from './jobs.js';
 import { attachJobRunAgent, endJobRun, startJobRun } from './job-runs.js';
+import { openFinding, requestSpend } from './findings.js';
 import {
   archiveProject,
   closeProject,
@@ -719,9 +720,22 @@ export class Commands implements DomainCommands {
       ...(input.version !== undefined ? { version: input.version } : {}),
       ...(answerId !== undefined ? { answerId } : {}),
       ...(input.repliedIn !== undefined ? { repliedIn: input.repliedIn } : {}),
+      ...(input.detail !== undefined ? { detail: input.detail } : {}),
     };
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
     refuseSetRow(question);
+    // A spend approval follows the permission rule for remote clients (decision 90, P10-05): from
+    // this machine, or a remote client only with `autoApproveRemote`. Unknown counts as remote.
+    if (
+      question.kind === 'spend' &&
+      input.by.type === 'user' &&
+      !this.mayWriteRules(input.origin)
+    ) {
+      throw new DomainError(
+        'remote_control',
+        'a spend is approved or refused only from this machine (not from a remote client)',
+      );
+    }
     // Recorded already under this key: the retry of an answer whose acknowledgement was lost.
     if (isRecordedAnswer(question, answerId)) return { value: question, events: [] };
     checkAnswer(question, answer);
@@ -776,7 +790,10 @@ export class Commands implements DomainCommands {
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
     if (question.status !== 'open') return { value: question, events: [] };
     if (question.kind !== 'clarification') {
-      throw new DomainError('invalid', `${questionId} is a permission question: the user decides`);
+      throw new DomainError(
+        'invalid',
+        `${questionId} is a ${question.kind} question: the user decides`,
+      );
     }
     if (by.type === 'agent' && by.id !== question.originAgentId) {
       throw new DomainError('conflict', `${questionId} is not your question`);
@@ -1392,11 +1409,13 @@ export class Commands implements DomainCommands {
   endJobRun(input: EndJobRunInput): Promise<CommandResult<JobRun>> {
     return this.run((ctx) => endJobRun(ctx, input));
   }
-  openFinding(_input: OpenFindingInput): Promise<CommandResult<Question>> {
-    return notYet('openFinding', 'P10-05');
+  /** A job run's finding as a job-owned question held by the user (P10-05). */
+  openFinding(input: OpenFindingInput): Promise<CommandResult<Question>> {
+    return this.run((ctx) => openFinding(ctx, input, this.questions));
   }
-  requestSpend(_input: RequestSpendInput): Promise<CommandResult<Question>> {
-    return notYet('requestSpend', 'P10-05');
+  /** A `spend` approval, held by the user whatever the asker's supervisors (P10-05). */
+  requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>> {
+    return this.run((ctx) => requestSpend(ctx, input, this.questions));
   }
   /** The audit of an open on the Mac (decision 127); the opener (P9-03/P9-07) calls it. */
   recordDeliverableOpened(deliverableId: Id, action: OpenAction, by: Actor) {
@@ -1520,9 +1539,4 @@ function relatedPolicy(
     (policy, p) => noLooserThan(p.permissionPolicy ?? policy, policy),
     resolvePolicy(),
   );
-}
-
-/** A Phase 10 command whose interface exists before its implementation (P10-01). */
-function notYet(name: string, task: string): Promise<never> {
-  return Promise.reject(new DomainError('invalid', `${name} is not available yet (${task})`));
 }

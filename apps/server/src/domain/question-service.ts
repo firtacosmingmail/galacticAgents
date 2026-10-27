@@ -146,6 +146,8 @@ export function holderFor(
   // Decision 7: permission questions are the policy's or the user's, never a brain's. The
   // runtime's gate decides first (P2-04, `AgentRuntime.rulePermission`): only `ask` gets here.
   if (kind === 'permission') return { type: 'user' };
+  // Decision 145: real money is always the user's explicit approval — never a supervisor's.
+  if (kind === 'spend') return { type: 'user' };
   return livingAbove(ctx, originAgentId, routing.isLiving);
 }
 

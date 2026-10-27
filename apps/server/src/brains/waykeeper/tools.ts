@@ -690,8 +690,8 @@ export const escalateTool: BrainTool = {
     if (questionId) {
       const q = ctx.queries.question(questionId);
       if (q) refuseSetRow(q);
-      if (q?.kind === 'permission') {
-        throw new DomainError('invalid', `${questionId} is a permission question; it is not yours`);
+      if (q?.kind === 'permission' || q?.kind === 'spend') {
+        throw new DomainError('invalid', `${questionId} is a ${q.kind} question; it is not yours`);
       }
       const { value } = await ctx.commands.escalateQuestion(questionId, ctx.actor);
       return { questionId, holder: value.holder };
