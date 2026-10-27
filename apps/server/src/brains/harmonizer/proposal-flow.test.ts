@@ -344,7 +344,7 @@ describe('long-term proposals (P10-06)', () => {
       await h.commands.createProject({ name, workspace: join(root, name), bodyId });
     }
     let sized: { rationale?: string; body?: { reason?: string } } | undefined;
-    let proposed: { state?: string } | undefined;
+    let proposed: { state?: string; parked?: { offers?: string[] } } | undefined;
     const hq = await h.startHarmonizer({
       definition,
       script: (s) =>
@@ -370,6 +370,8 @@ describe('long-term proposals (P10-06)', () => {
     expect(sized?.body?.reason).toBe('no_planet_with_moons');
     expect(sized?.rationale).toContain('no planet with moons is free for a long-term project');
     expect(proposed?.state).toBe('parked');
+    // A long-term card is never downsized: closing a project early is the only offer.
+    expect(proposed?.parked?.offers).toEqual(['close_early']);
     const [card] = h.log.tables.proposals.all();
     await expect(
       h.commands.decideProposal(

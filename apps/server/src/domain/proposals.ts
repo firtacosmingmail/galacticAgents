@@ -32,6 +32,7 @@ import {
   draftOf,
   jobOf,
   planJobUpdate,
+  previewJobArea,
   setJobState,
   updateJob,
 } from './jobs.js';
@@ -273,6 +274,10 @@ function waykeeperOf(ctx: Reader, project: Project, waykeeperId: Id) {
   return waykeeper;
 }
 
+/** The moon a job's area lives on. */
+const areaMoonOf = (ctx: Reader, job: Job): Id =>
+  must(ctx.tables.areas.get(job.areaId), 'area', job.areaId).bodyId;
+
 /** Job-card states that still wait for the user. */
 const WAITING: readonly ProposalState[] = ['pending', 'edited', 'parked'];
 
@@ -312,9 +317,16 @@ export function proposeJob(ctx: CommandContext, input: ProposeJobInput): Proposa
   let name: string;
   switch (input.action) {
     case 'create': {
-      const area = 'areaId' in input.area ? input.area : { name: input.area.name.trim() };
+      const { area, moonId } = previewJobArea(ctx, project.id, input.area);
       const draft = checkJobCreate(ctx, { projectId: project.id, area, draft: input.draft });
-      card = { projectId: project.id, waykeeperId: waykeeper.id, action: 'create', draft, area };
+      card = {
+        projectId: project.id,
+        waykeeperId: waykeeper.id,
+        action: 'create',
+        draft,
+        area,
+        moonId,
+      };
       name = draft.name;
       break;
     }
@@ -322,7 +334,10 @@ export function proposeJob(ctx: CommandContext, input: ProposeJobInput): Proposa
       const job = proposableJob(ctx, project, input.jobId);
       const given = Object.entries(input.changes).filter(([, v]) => v !== undefined);
       if (given.length === 0) throw new DomainError('invalid', 'a job change changes something');
-      const { merged, changes } = planJobUpdate(ctx, { jobId: job.id, changes: input.changes });
+      const { merged, changes, area } = planJobUpdate(ctx, {
+        jobId: job.id,
+        changes: input.changes,
+      });
       if (Object.keys(changes).length === 0) {
         throw new DomainError('invalid', `the change leaves job ${job.name} as it is`);
       }
@@ -333,6 +348,7 @@ export function proposeJob(ctx: CommandContext, input: ProposeJobInput): Proposa
         jobId: job.id,
         draft: merged,
         ...(changes.areaId ? { area: { areaId: changes.areaId } } : {}),
+        moonId: area?.bodyId ?? areaMoonOf(ctx, job),
         before: { draft: draftOf(job), areaId: job.areaId },
       };
       name = job.name;
@@ -348,6 +364,7 @@ export function proposeJob(ctx: CommandContext, input: ProposeJobInput): Proposa
         waykeeperId: waykeeper.id,
         action: 'stop',
         jobId: job.id,
+        moonId: areaMoonOf(ctx, job),
         before: { draft: draftOf(job), areaId: job.areaId },
       };
       name = job.name;

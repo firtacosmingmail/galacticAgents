@@ -177,7 +177,10 @@ export function parkingFor(
 ): ProposalParking {
   const offers: ParkOffer[] =
     request.kind === 'planet'
-      ? ['downsize_moon', 'downsize_asteroid', 'close_early']
+      ? // A long-term project is never downsized (P10-06): only a planet with moons will do.
+        'longTerm' in request && request.longTerm
+        ? ['close_early']
+        : ['downsize_moon', 'downsize_asteroid', 'close_early']
       : 'parentProjectId' in request && request.parentProjectId
         ? ['task_on_planet', 'close_early']
         : ['downsize_asteroid', 'close_early'];

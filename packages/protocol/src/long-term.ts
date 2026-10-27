@@ -234,6 +234,12 @@ export const ProposalJob = z.object({
   draft: JobDraft.optional(),
   /** `create`: the area it goes to; `change`: the area it moves to, when it moves. */
   area: z.union([z.object({ areaId: Id }), z.object({ name: z.string().min(1) })]).optional(),
+  /**
+   * The moon (body id) the job lives on once the card is carried out: an existing area's moon, or
+   * — for a new area — the moon one would take when the card was made (a preview: the approval
+   * chooses again and may differ if the planet's moons changed meanwhile).
+   */
+  moonId: Id.optional(),
   /** `change` and `stop`: the job as it was when proposed, so the card shows before → after. */
   before: z.object({ draft: JobDraft, areaId: Id }).optional(),
 });

@@ -225,6 +225,27 @@ function areaOf(ctx: Reader, projectId: Id, areaId: Id): Area {
 }
 
 /**
+ * Where a new job of the project would go, without writing (a job card's moon line, P10-06): an
+ * area given by id, or by the name of an existing area (case-insensitively), is that area on its
+ * moon; a new name gets the moon `areaMoonFor` picks now. Refused like `createArea`.
+ */
+export function previewJobArea(
+  ctx: Reader,
+  projectId: Id,
+  area: { areaId: Id } | { name: string },
+): { area: { areaId: Id } | { name: string }; moonId: Id } {
+  longTermProject(ctx, projectId, 'jobs');
+  if ('areaId' in area) {
+    const found = areaOf(ctx, projectId, area.areaId);
+    return { area: { areaId: found.id }, moonId: found.bodyId };
+  }
+  const found = areaByName(ctx, projectId, area.name);
+  return found.existing
+    ? { area: { areaId: found.existing.id }, moonId: found.existing.bodyId }
+    : { area: { name: found.trimmed }, moonId: found.moon.id };
+}
+
+/**
  * Every check `createJob` makes, without writing (a job card is checked before it exists, P10-06):
  * a long-term project, a valid draft (no push rule, no secret), and an area with room — an
  * existing one, or a new name within the limits with a moon to take. Returns the parsed draft.

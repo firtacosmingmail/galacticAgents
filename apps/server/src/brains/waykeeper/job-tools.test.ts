@@ -109,6 +109,8 @@ describe('propose_job (P10-06)', () => {
     expect(job).toMatchObject({ areaId: area!.id, name: 'Read reviews', state: 'active' });
     expect(job!.unattendedRules[0]!.id).toBeTruthy();
     expect(h.log.tables.tasks.get(job!.taskId)).toMatchObject({ bodyId: area!.bodyId });
+    // The card's moon line previewed the moon the new area took.
+    expect(proposalJobOf(card)?.moonId).toBe(area!.bodyId);
     // One turn, about the decision; the job's hidden task does not wake it as new work.
     const later = wk.turns.slice(turnsBefore);
     expect(later).toHaveLength(1);
@@ -116,6 +118,24 @@ describe('propose_job (P10-06)', () => {
       `proposal ${card.id} was approved: the recurring job "Read reviews" was created with the approval`,
     );
     expect(later[0]!.prompt).not.toContain('was added to your project');
+  });
+
+  it('an existing area named in another case is that area, on its moon', async () => {
+    const project = await longTermProject();
+    const job = await existingJob(project);
+    const area = h.log.tables.areas.get(job.areaId)!;
+    const { out } = await waykeeperCalling(project, 'propose_job', {
+      area: '  feedBACK ',
+      ...DRAFT,
+      name: 'Read tickets',
+    });
+    expect(out.result).toMatchObject({ ok: true });
+    expect(proposalJobOf(theCard())).toMatchObject({
+      action: 'create',
+      area: { areaId: area.id },
+      moonId: area.bodyId,
+    });
+    await h.done();
   });
 
   it('a rejected card creates nothing', async () => {
@@ -280,7 +300,11 @@ describe('propose_job_change and propose_job_stop (P10-06)', () => {
     const { out } = await waykeeperCalling(project, 'propose_job_stop', { jobId: job.id });
     expect(out.result).toMatchObject({ ok: true, value: { before: { name: 'Read reviews' } } });
     const card = theCard()!;
-    expect(proposalJobOf(card)).toMatchObject({ action: 'stop', jobId: job.id });
+    expect(proposalJobOf(card)).toMatchObject({
+      action: 'stop',
+      jobId: job.id,
+      moonId: h.log.tables.areas.get(job.areaId)!.bodyId,
+    });
     expect(card.requestText).toBe('Stop job: Read reviews');
     await h.commands.decideProposal(card.id, { decision: 'approve' }, USER);
     await h.done();
