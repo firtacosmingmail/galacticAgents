@@ -28,6 +28,7 @@ import { openDatabase } from './db/database.js';
 import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
 import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
+import { JOB_TICK_MS } from './domain/job-runs.js';
 import { composeRuntime } from './runtime/compose.js';
 import { harnessBrains } from './runtime/harness-brains.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
@@ -201,6 +202,14 @@ const composed = composeRuntime(db, {
   autoApproveRemote: config.autoApproveRemote,
   // Spawn caps (decision 18, P2-17): concurrency, Stewards per Waykeeper, spawns per hour.
   caps: config.caps,
+  // Job runs (P10-04): on the Steward runtime, else the Harmonizer's; the timer starts below,
+  // after recovery and the Harmonizer.
+  jobs: {
+    stewardRuntime: () =>
+      config.stewardRuntime ??
+      harmonizerRuntime(process.env['GALACTIC_HARMONIZER']) ??
+      (config.dev ? 'fake' : 'claude-sdk'),
+  },
   // Finished work past decision 4's retention period is archived hourly (P2-13).
   archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
   // Transcript chunks past the transcript retention policy are removed hourly (P8-02).
@@ -273,6 +282,7 @@ function shutdown(code: number): void {
   deadline.unref();
   // The promotion flow stops with the runtime: no card is carried out while agents are stopping.
   promotions?.stop();
+  composed.jobs.stop();
   push.service.stop();
   backups.stop();
   // A backup being taken finishes (or fails) before the process exits, so no half copy is left.
@@ -536,4 +546,7 @@ if (!shuttingDown) {
     startWaykeeper,
     onError,
   }).start();
+  // Recurring jobs (P10-04): after recovery (a run cut short by the restart is recorded
+  // interrupted, its Steward not resumed) and the Harmonizer; the first tick catches up at once.
+  composed.jobs.start(JOB_TICK_MS);
 }

@@ -121,6 +121,12 @@ export function createWakeScope(
       return brain.role === 'harmonizer';
     },
     question: (id) => tables.questions.get(id),
+    jobRun: (id) => {
+      const agent = id !== undefined ? tables.agents.get(id) : undefined;
+      const task =
+        agent?.role === 'steward' && agent.taskId ? tables.tasks.get(agent.taskId) : undefined;
+      return task !== undefined && isJobTask(task);
+    },
     concerned: (event) =>
       concernedSupervisors(tables, event, opts.isLive ? { isLive: opts.isLive } : {}).includes(
         brain.brainId,

@@ -5,6 +5,7 @@ import { world } from '../test/world.js';
 import { createAgent } from '../domain/agents.js';
 import { createProject } from '../domain/projects.js';
 import { createTask } from '../domain/tasks.js';
+import { createJob } from '../domain/jobs.js';
 import { createWakeScope } from './seed.js';
 import { WAKE_RULES, wakeLine, type WakeScope } from './wake.js';
 
@@ -331,6 +332,69 @@ describe('WAKE_RULES', () => {
     const s = scope({ supervises: (id) => id === 'a-steward-1' });
     expect(wakeLine(fixtures['agent.finished'], s)).toMatch(/^agent a-steward-1 finished/);
     expect(wakeLine({ ...fixtures['agent.finished'], agentId: 'a-other' }, s)).toBeUndefined();
+  });
+
+  it("never wakes on a job run Steward's end, stall or system stop (P10-04)", () => {
+    const s = scope({
+      supervises: (id) => id === 'a-steward-1',
+      jobRun: (id) => id === 'a-steward-1',
+    });
+    expect(wakeLine(fixtures['agent.finished'], s)).toBeUndefined();
+    expect(wakeLine({ ...fixtures['agent.failed'], agentId: 'a-steward-1' }, s)).toBeUndefined();
+    expect(wakeLine({ ...fixtures['agent.stalled'], agentId: 'a-steward-1' }, s)).toBeUndefined();
+    const stop = {
+      type: 'control.stop',
+      target: { kind: 'agent', id: 'a-steward-1' },
+      by: { type: 'system' },
+    } as const;
+    expect(wakeLine(stop, s)).toBeUndefined();
+    // The user stopping it is still news; a task Steward's end still wakes its supervisor.
+    expect(wakeLine({ ...stop, by: { type: 'user' } }, s)).toMatch(/stopped agent a-steward-1/);
+    expect(wakeLine(fixtures['agent.finished'], scope({ supervises: () => true }))).toMatch(
+      /finished/,
+    );
+  });
+
+  it('knows a job run Steward from its task (P10-04)', () => {
+    const w = world();
+    const project = w.run((ctx) =>
+      createProject(ctx, {
+        name: 'Shop',
+        workspace: '/w/shop',
+        bodyId: 'b-saturn',
+        longTerm: { purpose: 'Run the shop', goals: [] },
+      }),
+    ).value;
+    const job = w.run((ctx) =>
+      createJob(ctx, {
+        projectId: project.id,
+        area: { name: 'Feedback' },
+        draft: {
+          name: 'Read the feedback',
+          instructions: 'Read new reviews.',
+          schedule: { kind: 'daily', at: '09:00' },
+          provider: 'claude',
+          unattendedRules: [],
+        },
+        by: { type: 'user' },
+      }),
+    ).value.job;
+    const plain = w.run((ctx) =>
+      createTask(ctx, { description: 'a task', projectId: project.id }),
+    ).value;
+    const steward = (taskId: string) =>
+      w.run((ctx) =>
+        createAgent(ctx, {
+          role: 'steward',
+          runtime: 'fake',
+          taskId,
+          projectId: project.id,
+          caps: d.agent.caps,
+        }),
+      ).value;
+    const s = createWakeScope(w.tables, { brainId: 'a-wk', role: 'waykeeper' });
+    expect(s.jobRun?.(steward(job.taskId).id)).toBe(true);
+    expect(s.jobRun?.(steward(plain.id).id)).toBe(false);
   });
 
   it('wakes on control actions on the brain, its agents, its tasks and its projects', () => {

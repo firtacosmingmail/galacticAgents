@@ -55,6 +55,11 @@ export interface WakeScope {
    * budget.
    */
   unattended?(target: BudgetTarget): boolean;
+  /**
+   * The agent is a job run's Steward (P10-04): its end, its stall and the scheduler's stop of it
+   * wake no one — the scheduler records the run, and a finished run never wakes the Waykeeper.
+   */
+  jobRun?(agentId: Id | undefined): boolean;
 }
 
 export interface WakeRule<T extends EventType> {
@@ -109,8 +114,14 @@ function targets(target: ControlTarget, scope: WakeScope): boolean {
 }
 
 const control = <T extends EventType & `control.${string}`>(verb: string): WakeRule<T> => ({
-  wakes: (e, s) =>
-    targets((e as { target: ControlTarget }).target, s) || (s.concerned?.(e as Event) ?? false),
+  wakes: (e, s) => {
+    const { target, by } = e as unknown as { target: ControlTarget; by: Actor };
+    // The scheduler stopping a job run's Steward is no supervisor's news (P10-04).
+    if (by.type === 'system' && target.kind === 'agent' && (s.jobRun?.(target.id) ?? false)) {
+      return false;
+    }
+    return targets(target, s) || (s.concerned?.(e as Event) ?? false);
+  },
   describe: (e, s) => {
     const { target, by } = e as unknown as { target: ControlTarget; by: Actor };
     const what =
@@ -121,7 +132,10 @@ const control = <T extends EventType & `control.${string}`>(verb: string): WakeR
 
 type EndedType = 'agent.finished' | 'agent.failed' | 'agent.stalled';
 const ended = <T extends EndedType>(text: (e: EventOfType<T>) => string): WakeRule<T> => ({
-  wakes: (e, s) => s.supervises((e as EventOfType<EndedType>).agentId),
+  wakes: (e, s) => {
+    const { agentId } = e as EventOfType<EndedType>;
+    return s.supervises(agentId) && !(s.jobRun?.(agentId) ?? false);
+  },
   describe: (e) => `agent ${(e as EventOfType<EndedType>).agentId} ${text(e)}`,
 });
 

@@ -4,6 +4,7 @@ import {
   brainSlashCommands,
   excerpt,
   isHarnessMeta,
+  jobIdOfTask,
   slashCommandIs,
   type Actor,
   type Agent,
@@ -14,6 +15,7 @@ import {
   type AgentRuntime as RuntimeName,
   type Event,
   type Id,
+  type Job,
   type SetAnswer,
   type PermissionAction,
   type PermissionPolicy,
@@ -1158,13 +1160,11 @@ export class AgentRuntime {
     for (const live of deepestFirst) {
       if (live.terminal) continue;
       const agentId = live.agent.id;
+      // A job run's Steward ends stopped (P10-04): it is never resumed, the job runs again.
+      const stopBy = live.stopRequested ?? (this.isJobRunSteward(agentId) ? SYSTEM : undefined);
       if (live.capStop) this.failForCap(live);
-      else if (live.stopRequested) {
-        this.recordEnd(
-          live,
-          { type: 'agent.stopped', agentId, by: live.stopRequested },
-          'agent.stopped',
-        );
+      else if (stopBy) {
+        this.recordEnd(live, { type: 'agent.stopped', agentId, by: stopBy }, 'agent.stopped');
       } else {
         const pending = live.inbox.pending().map((m) => m.id);
         this.recordEnd(
@@ -1217,7 +1217,10 @@ export class AgentRuntime {
       if (this.live.has(agent.id) || isHarnessMeta(agent.meta)) continue;
       const history = histories.get(agent.id);
       if (!history?.neverStarted()) continue;
-      const stoppedBy = history.stopRequested;
+      // A job run's Steward is never started again (P10-04): the scheduler records the run
+      // interrupted and runs the job once more.
+      const stoppedBy =
+        history.stopRequested ?? (this.isJobRunSteward(agent.id) ? SYSTEM : undefined);
       this.command(({ emit }) =>
         emit(
           stoppedBy
@@ -1241,7 +1244,8 @@ export class AgentRuntime {
       const fake = isHarnessMeta(this.opts.log.tables.agents.get(record.agentId)?.meta);
       const stoppedBy: Actor | undefined = fake
         ? { type: 'system' }
-        : histories.get(record.agentId)?.stopRequested;
+        : (histories.get(record.agentId)?.stopRequested ??
+          (this.isJobRunSteward(record.agentId) ? SYSTEM : undefined));
       this.command((ctx) => {
         ctx.emit(
           stoppedBy
@@ -1273,9 +1277,11 @@ export class AgentRuntime {
     const passedOver = new Set(harmonizers.slice(1).map((a) => a.id));
     // Supervisors before their Stewards (P2-16, P2-03): a resumed Steward re-asks its questions,
     // and they must find its Waykeeper (or the Harmonizer) running, not climb to the user.
+    // A job run's Steward left interrupted is not resumed, nor reported (P10-04): its run is
+    // recorded interrupted and the job runs again from the scheduler.
     const interrupted = this.opts.statuses
       .all()
-      .filter((r) => r.state === 'interrupted')
+      .filter((r) => r.state === 'interrupted' && !this.isJobRunSteward(r.agentId))
       .sort((a, b) => this.depth(a.agentId) - this.depth(b.agentId));
     // On their way back (P2-16): a brain resumed before its Stewards must not replace them.
     for (const r of interrupted) if (!passedOver.has(r.agentId)) this.reserved.add(r.agentId);
@@ -1383,6 +1389,12 @@ export class AgentRuntime {
     }
     const agent = this.opts.log.tables.agents.get(agentId);
     if (!agent) return { ok: false, reason: `no agent ${agentId}` };
+    if (this.isJobRunSteward(agentId)) {
+      return {
+        ok: false,
+        reason: `agent ${agentId} ran a job: it is not resumed, the job runs again on its schedule`,
+      };
+    }
     const running = (same: (other: Agent) => boolean) =>
       [...this.live.values()].find(
         (l) => l.agent.id !== agentId && l.agent.role === agent.role && same(l.agent),
@@ -1755,9 +1767,42 @@ export class AgentRuntime {
    */
   private rulesOf(agentId: Id, req: SpawnRequest): readonly PermissionRule[] {
     const projectId = this.projectIdOf(agentId, req);
-    return (
-      (projectId ? this.opts.log.tables.projects.get(projectId)?.permissionRules : undefined) ?? []
-    );
+    const rules =
+      (projectId ? this.opts.log.tables.projects.get(projectId)?.permissionRules : undefined) ?? [];
+    const job = this.jobOfRun(agentId, req);
+    if (!job || !projectId || job.unattendedRules.length === 0) return rules;
+    // A job's run Steward also works under the job's unattended rules (P10-04, decision 144):
+    // rule-shaped, so the gate never lets one override a deny or allow a push.
+    return [
+      ...rules,
+      ...job.unattendedRules.map((r): PermissionRule => ({
+        ...r,
+        projectId,
+        createdBy: { type: 'user' },
+        createdAt: job.createdAt,
+        origin: 'local',
+      })),
+    ];
+  }
+
+  /** The job whose run this Steward is (its task is the job's hidden task), if any. */
+  private jobOfRun(agentId: Id, req?: SpawnRequest): Job | undefined {
+    const { tables } = this.opts.log;
+    const agent = tables.agents.get(agentId);
+    if ((agent?.role ?? req?.role) !== 'steward') return undefined;
+    const taskId = agent?.taskId ?? req?.taskId;
+    const task = taskId ? tables.tasks.get(taskId) : undefined;
+    const jobId = task ? jobIdOfTask(task) : undefined;
+    return jobId ? tables.jobs.get(jobId) : undefined;
+  }
+
+  /** A job run's Steward (P10-04): never resumed after a restart; the scheduler runs the job again. */
+  isJobRunSteward(agentId: Id): boolean {
+    const { tables } = this.opts.log;
+    const agent = tables.agents.get(agentId);
+    if (agent?.role !== 'steward' || !agent.taskId) return false;
+    const task = tables.tasks.get(agent.taskId);
+    return task !== undefined && jobIdOfTask(task) !== undefined;
   }
 
   /**
