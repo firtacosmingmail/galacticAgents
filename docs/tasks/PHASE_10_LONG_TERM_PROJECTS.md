@@ -1,6 +1,6 @@
 # Phase 10 — Long-term projects, area moons and recurring jobs
 
-**Current task:** P10-08 · **Task status:** P10-01, P10-02, P10-03, P10-04, P10-05, P10-06, P10-07 done; P10-08 todo
+**Current task:** P10-08 · **Task status:** P10-01, P10-02, P10-03, P10-04, P10-05, P10-06, P10-07 done; P10-08 in progress
 **Phase status:** in progress (7/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -85,7 +85,7 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 - **Acceptance:** each card's fixed actions, edited reply sent in `detail.text`, `$1,250.00` in `en-US`, no Allow similar on spend, spend ranked before clarifications; `jobsModel` puts paused jobs first and counts findings, route newest first and refuses `limit=500`; area moon labels and picking; axe clean; phone width without horizontal scroll.
 
 ### P10-08 — Docs and end-to-end
-- **Status:** todo · **Depends on:** P10-07 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P10-07 · **Parallel with:** —
 - Plan Task 14: SPEC decisions 142–145 and two §8 questions, TECHNOLOGY sections, IMPLEMENTATION_PLAN Phase 10, `e2e/tests/13-recurring-jobs.spec.ts`, review notes, exit criteria.
 - **Acceptance:** the e2e flow (long-term project on Jupiter → job on a new Feedback area → run → finding → edited Send → follow-up run → spend card → Jobs tab history) passes; the full gates are green.
 
