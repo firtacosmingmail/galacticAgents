@@ -35,12 +35,11 @@ import { createTask } from './tasks.js';
  * transaction (a proposed ticket, a message to the Waykeeper, a queued follow-up, a retry or a
  * stop), refused with a clear message when the project closed or the job stopped meanwhile —
  * except "Drop" and "Refuse", which always work. A `spend` is the user's alone: never an agent's
- * or the system's, never part of a set, never touched by an "Allow similar" rule, and answered
- * remotely only with `autoApproveRemote` (decision 90's permission rule).
+ * or the system's, never part of a set, never touched by an "Allow similar" rule; a remote client
+ * answers it as it answers a permission request (decision 90, Ruling R7: `remote-access.test.ts`).
  */
 
 const USER: Actor = { type: 'user' };
-const LOCAL = { origin: 'local' as const };
 const CAPS = { maxWallClockMs: 1000, maxToolCalls: 10 };
 const DRAFT: JobDraft = {
   name: 'Read the feedback',
@@ -50,18 +49,14 @@ const DRAFT: JobDraft = {
   unattendedRules: [],
 };
 
-function setup(opts: { autoApproveRemote?: boolean } = {}) {
+function setup() {
   const w = world();
   const start: Snapshot = { ...w.log.snapshot(), statuses: [] };
   const recorded: EventEnvelope[] = [];
   w.log.subscribe((e) => recorded.push(e));
   const living = new Set<Id>();
   const routing = logRouting(w.log, (id) => living.has(id));
-  const commands = new Commands({
-    log: w.log,
-    questions: routing,
-    ...(opts.autoApproveRemote ? { autoApproveRemote: true } : {}),
-  });
+  const commands = new Commands({ log: w.log, questions: routing });
   const cmd = <T>(fn: Parameters<typeof w.log.runCommand<T>>[0]): T => w.log.runCommand(fn).value;
   const project = cmd((ctx) =>
     createProject(ctx, {
@@ -134,7 +129,7 @@ function setup(opts: { autoApproveRemote?: boolean } = {}) {
       })
     ).value;
   const answer = (q: Question, answer: string, extra: object = {}) =>
-    commands.answerQuestion({ questionId: q.id, answer, by: USER, ...LOCAL, ...extra });
+    commands.answerQuestion({ questionId: q.id, answer, by: USER, ...extra });
   const refusal = async (p: Promise<unknown>): Promise<DomainError> => {
     try {
       await p;
@@ -301,6 +296,28 @@ describe('answering a suggestion', () => {
     expect(woken).toHaveLength(1);
     expect(woken[0]).toMatchObject({ brain: s.wk.id, type: 'message.sent' });
     s.conforms();
+  });
+
+  it('"Implement it" prefers the living Waykeeper over a newer ended row', async () => {
+    const s = setup();
+    const ended = s.cmd((ctx) =>
+      createAgent(ctx, {
+        role: 'waykeeper',
+        runtime: 'fake',
+        caps: CAPS,
+        projectId: s.project.id,
+        supervisorId: s.hq.id,
+      }),
+    );
+    expect(s.living.has(ended.id)).toBe(false);
+    const q = await s.suggestion();
+    const out = await s.answer(q, 'Implement it');
+    expect(out.events[1]).toMatchObject({ type: 'message.sent', agentId: s.wk.id });
+    // With no living Waykeeper, the latest row gets it.
+    s.living.delete(s.wk.id);
+    const r = await s.suggestion('Export to CSV');
+    const later = await s.answer(r, 'Implement it');
+    expect(later.events[1]).toMatchObject({ type: 'message.sent', agentId: ended.id });
   });
 
   it('"Drop" records the answer and does nothing else', async () => {
@@ -573,7 +590,7 @@ describe('answering a spend', () => {
       { type: 'system' as const },
     ]) {
       const e = await s.refusal(
-        s.commands.answerQuestion({ questionId: q.id, answer: 'Approve', by, ...LOCAL }),
+        s.commands.answerQuestion({ questionId: q.id, answer: 'Approve', by }),
       );
       expect(e.code).toBe('invalid');
       expect(e.message).toMatch(/spend/);
@@ -581,9 +598,9 @@ describe('answering a spend', () => {
     expect(() =>
       s.cmd((ctx) => reassignQuestion(ctx, q.id, { type: 'agent', id: s.wk.id }, 'relay')),
     ).toThrow(/spend/);
-    await expect(
-      s.commands.escalateQuestion(q.id, { type: 'agent', id: s.wk.id }),
-    ).rejects.toThrow();
+    await expect(s.commands.escalateQuestion(q.id, { type: 'agent', id: s.wk.id })).rejects.toThrow(
+      /spend/,
+    );
     expect(s.row(q.id)).toMatchObject({ status: 'open', holder: USER });
   });
 
@@ -646,33 +663,5 @@ describe('answering a spend', () => {
     );
     expect(e.code).toBe('invalid');
     expect(s.row(out.value.id).status).toBe('open');
-  });
-
-  it('a remote or unknown-origin answer is refused unless autoApproveRemote', async () => {
-    const s = setup();
-    const q = await s.jobSpend();
-    for (const origin of ['remote' as const, undefined]) {
-      const e = await s.refusal(
-        s.commands.answerQuestion({
-          questionId: q.id,
-          answer: 'Approve',
-          by: USER,
-          ...(origin ? { origin } : {}),
-        }),
-      );
-      expect(e.code).toBe('remote_control');
-    }
-    expect(s.row(q.id).status).toBe('open');
-    // A refusal is not an approval: a remote "Refuse" is refused alike (the same rule).
-    expect((await s.refusal(s.answer(q, 'Refuse', { origin: 'remote' }))).code).toBe(
-      'remote_control',
-    );
-    await s.answer(q, 'Approve');
-    expect(s.row(q.id).status).toBe('answered');
-
-    const trusted = setup({ autoApproveRemote: true });
-    const r = await trusted.jobSpend();
-    await trusted.answer(r, 'Approve', { origin: 'remote' });
-    expect(trusted.row(r.id).status).toBe('answered');
   });
 });

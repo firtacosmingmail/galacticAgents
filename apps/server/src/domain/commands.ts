@@ -724,24 +724,16 @@ export class Commands implements DomainCommands {
     };
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
     refuseSetRow(question);
-    // A spend approval follows the permission rule for remote clients (decision 90, P10-05): from
-    // this machine, or a remote client only with `autoApproveRemote`. Unknown counts as remote.
-    if (
-      question.kind === 'spend' &&
-      input.by.type === 'user' &&
-      !this.mayWriteRules(input.origin)
-    ) {
-      throw new DomainError(
-        'remote_control',
-        'a spend is approved or refused only from this machine (not from a remote client)',
-      );
-    }
     // Recorded already under this key: the retry of an answer whose acknowledgement was lost.
     if (isRecordedAnswer(question, answerId)) return { value: question, events: [] };
     checkAnswer(question, answer);
     if (!this.agents?.hasQuestion(questionId)) {
       return this.run((ctx) =>
-        answerQuestion(ctx, { ...answer, holders: holdersNow(ctx, questionId, this.questions) }),
+        answerQuestion(ctx, {
+          ...answer,
+          holders: holdersNow(ctx, questionId, this.questions),
+          isLiving: this.questions.isLiving,
+        }),
       );
     }
     if (key === undefined) return this.answerThroughAdapter(input);

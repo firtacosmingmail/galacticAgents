@@ -200,6 +200,8 @@ export interface AnswerInput {
   repliedIn?: Id;
   /** A question-set row's structured answer (P8-19): on the event and as `meta.answerDetail`. */
   detail?: SetAnswer;
+  /** Whether an agent still runs: a job-owned answer's action prefers living agents (P10-05). */
+  isLiving?: (agentId: Id) => boolean;
 }
 
 /** `meta.answerId`: the idempotency key of the answer that closed the question (P7-05). */
@@ -259,7 +261,7 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
     ...(input.detail ? { detail: input.detail } : {}),
   });
   // A finding, failure notice or job spend: its action in this same transaction (P10-05).
-  applyJobAnswer(ctx, question);
+  applyJobAnswer(ctx, question, { isLiving: input.isLiving });
   return question;
 }
 
@@ -387,6 +389,12 @@ export function escalateQuestion(
   isLiving?: (agentId: Id) => boolean,
 ): Question {
   const current = mustOpen(ctx, questionId);
+  if (current.kind === 'spend') {
+    throw new DomainError(
+      'invalid',
+      `spend question ${questionId} is held by the user: the user answers spend approvals`,
+    );
+  }
   const from = current.holder;
   if (from.type !== 'agent') {
     throw new DomainError('invalid_transition', `question ${questionId} is already with the user`);

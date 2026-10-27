@@ -230,15 +230,24 @@ function openProjectOf(ctx: Reader, job: Job) {
   return project;
 }
 
-/** The latest Waykeeper row of the project: the one "Implement it" writes to. */
-function waykeeperOf(ctx: Reader, projectId: Id): Agent | undefined {
-  return ctx.tables.agents
-    .all()
-    .filter((a) => a.role === 'waykeeper' && a.projectId === projectId)
-    .reduce<Agent | undefined>(
+/**
+ * The Waykeeper "Implement it" writes to: the project's living Waykeeper when `isLiving` knows one,
+ * else its latest row (an ended brain reads the message when it is resumed or respawned).
+ */
+function waykeeperOf(
+  ctx: Reader,
+  projectId: Id,
+  isLiving?: (agentId: Id) => boolean,
+): Agent | undefined {
+  const latest = (rows: Agent[]) =>
+    rows.reduce<Agent | undefined>(
       (best, a) => (!best || a.createdAt >= best.createdAt ? a : best),
       undefined,
     );
+  const rows = ctx.tables.agents
+    .all()
+    .filter((a) => a.role === 'waykeeper' && a.projectId === projectId);
+  return latest(isLiving ? rows.filter((a) => isLiving(a.id)) : []) ?? latest(rows);
 }
 
 function queueFollowUp(ctx: CommandContext, job: Job, followUp: FollowUp): void {
@@ -246,7 +255,7 @@ function queueFollowUp(ctx: CommandContext, job: Job, followUp: FollowUp): void 
 }
 
 /** A finding's action: a proposed ticket, a message to the Waykeeper, a queued reply, or nothing. */
-function applyFinding(ctx: CommandContext, q: Question): void {
+function applyFinding(ctx: CommandContext, q: Question, opts: JobAnswerOptions): void {
   const finding = q.context.finding!;
   const job = jobOf(ctx, finding.jobId);
   switch (q.answer) {
@@ -262,7 +271,7 @@ function applyFinding(ctx: CommandContext, q: Question): void {
     }
     case 'Implement it': {
       const project = openProjectOf(ctx, job);
-      const waykeeper = waykeeperOf(ctx, project.id);
+      const waykeeper = waykeeperOf(ctx, project.id, opts.isLiving);
       if (!waykeeper) {
         throw new DomainError(
           'invalid',
@@ -341,9 +350,18 @@ function applyFailure(ctx: CommandContext, q: Question): void {
  * (a refusal rolls the answer back with it). A task Steward's spend is not job-owned: its answer
  * is recorded only.
  */
-export function applyJobAnswer(ctx: CommandContext, q: Question): void {
+export interface JobAnswerOptions {
+  /** Whether an agent still runs (the question routing's): "Implement it" prefers a living Waykeeper. */
+  isLiving?: ((agentId: Id) => boolean) | undefined;
+}
+
+export function applyJobAnswer(
+  ctx: CommandContext,
+  q: Question,
+  opts: JobAnswerOptions = {},
+): void {
   if (!isJobOwned(q) || q.status !== 'answered') return;
-  if (q.context.finding) applyFinding(ctx, q);
+  if (q.context.finding) applyFinding(ctx, q, opts);
   else if (q.context.jobFailure) applyFailure(ctx, q);
   else if (q.kind === 'spend') applySpend(ctx, q);
 }

@@ -223,12 +223,6 @@ export interface AnswerQuestionInput {
    * reply finding's edited text travels as `detail.text`.
    */
   detail?: SetAnswer;
-  /**
-   * Where the answer came from (decision 90): a `spend` approval is answered only from this
-   * machine, or from a remote client when the server sets `autoApproveRemote` (P10-05). Unknown
-   * counts as remote.
-   */
-  origin?: RequestOrigin;
 }
 
 /**

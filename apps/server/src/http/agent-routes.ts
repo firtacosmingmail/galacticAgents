@@ -536,9 +536,9 @@ export function registerAgentRoutes(
      * with `duplicate: true` (an answer queued offline whose acknowledgement was lost). Answering a
      * permission request from an agent's or a run's process is refused (403 `agent_peer`, review
      * S4: the speed bump of `answersPeer`); a clarification may be answered from anywhere. A
-     * `spend` approval (P10-05, decision 145) gets the same speed bump, and is answered only from
-     * this machine unless `autoApproveRemote` (403 `remote_control`, the domain's refusal). `detail`
-     * carries a structured answer (a reply finding's edited text).
+     * `spend` approval (P10-05, decision 145) follows the permission rule exactly: the same speed
+     * bump, and a remote client may answer it (decision 90). `detail` carries a structured answer
+     * (a reply finding's edited text).
      */
     app.post('/api/questions/:id/answer', async (req, reply) => {
       const body = parse(AnswerBody, req.body, reply);
@@ -562,7 +562,6 @@ export function registerAgentRoutes(
           ...(body.version !== undefined ? { version: body.version } : {}),
           ...(body.answerId !== undefined ? { answerId: body.answerId } : {}),
           ...(body.detail !== undefined ? { detail: body.detail } : {}),
-          origin: originOf(req),
         });
         // A retry of an answer already recorded under its `answerId` changes nothing (P7-05).
         const duplicate = body.answerId !== undefined && events.length === 0;

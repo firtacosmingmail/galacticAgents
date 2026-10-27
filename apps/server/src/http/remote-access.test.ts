@@ -5,6 +5,7 @@ import { SettingsService } from '../config/settings.js';
 import type { ServerConfig } from '../config/config.js';
 import { openDatabase } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
+import type { PeerCheck } from './peer-guard.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { connectWs, startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
@@ -50,7 +51,10 @@ const processes: StewardProcessControl = {
  * A server configured for remote access as `docs/REMOTE_ACCESS.md` says: the exact Serve name, no
  * wildcard, and identity headers only when a test opts in.
  */
-async function start(overrides: Partial<ServerConfig> = {}) {
+async function start(
+  overrides: Partial<ServerConfig> = {},
+  peers: { answersPeer?: PeerCheck } = {},
+) {
   stops.length = 0;
   restarts.mockClear();
   logged = '';
@@ -73,6 +77,7 @@ async function start(overrides: Partial<ServerConfig> = {}) {
     commands: composed.commands,
     processes,
     restartHarmonizer: restarts,
+    ...(peers.answersPeer ? { answersPeer: peers.answersPeer } : {}),
     settings: new SettingsService({
       config,
       caps: composed.runtime.caps,
@@ -389,29 +394,28 @@ describe('a spend approval from a remote client follows the permission rule (P10
   const answer = (id: string, headers: Record<string, string>, text = 'Approve') =>
     inject('POST', `/api/questions/${id}/answer`, headers, { answer: text });
 
-  it('the phone cannot approve or refuse it; the Mac can', async () => {
+  it('the phone may approve or refuse it, as it answers permission questions (decision 90)', async () => {
     await start(WITH_IDENTITY);
-    const q = await askSpend();
-    for (const headers of [IDENTITY, { ...SERVE, ...BEARER }]) {
+    for (const headers of [IDENTITY, { ...SERVE, ...BEARER }, BEARER]) {
       for (const text of ['Approve', 'Refuse']) {
+        const q = await askSpend();
         const res = await answer(q.id, headers, text);
-        expect(res.statusCode).toBe(403);
-        expect(res.json()).toMatchObject({ error: 'remote_control' });
+        expect(res.statusCode).toBe(200);
+        expect(composed!.log.tables.questions.get(q.id)).toMatchObject({
+          status: 'answered',
+          answer: text,
+        });
       }
     }
-    expect(composed!.log.tables.questions.get(q.id)?.status).toBe('open');
-    expect((await answer(q.id, BEARER)).statusCode).toBe(200);
-    expect(composed!.log.tables.questions.get(q.id)).toMatchObject({
-      status: 'answered',
-      answer: 'Approve',
-    });
   });
 
-  it('with autoApproveRemote the phone may answer it', async () => {
-    await start({ ...WITH_IDENTITY, autoApproveRemote: true });
+  it("an agent's or a run's process cannot answer it (the permission speed bump)", async () => {
+    await start({}, { answersPeer: async () => ({ refused: 'from an agent' }) });
     const q = await askSpend();
-    expect((await answer(q.id, IDENTITY)).statusCode).toBe(200);
-    expect(composed!.log.tables.questions.get(q.id)?.status).toBe('answered');
+    const res = await answer(q.id, BEARER);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'agent_peer' });
+    expect(composed!.log.tables.questions.get(q.id)?.status).toBe('open');
   });
 });
 
