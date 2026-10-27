@@ -440,7 +440,7 @@ export function setJobState(ctx: CommandContext, input: SetJobStateInput): Job {
 }
 
 /**
- * A long-term project closes or is archived (SPEC decision 143): every job stops and every area
+ * A long-term project closes, is cancelled or is archived (SPEC decision 143): every job stops and every area
  * moon is freed (`body.freed`). Its area rows stay, as the history of where they lived.
  */
 export function endProjectAreas(
@@ -461,7 +461,8 @@ export function endProjectAreas(
 
 /**
  * A long-term project reopens (P10-03 review): every area whose moon it no longer holds takes one
- * again by `areaMoonFor` on the project's (possibly new) planet — `area.updated {bodyId}` and
+ * again by `areaMoonFor` on the project's (possibly new) planet (one still held on a moon of
+ * another planet is freed first) — `area.updated {bodyId}` and
  * `body.assigned` — and its jobs' hidden tasks (and any Steward on them) follow, in the caller's
  * transaction. Areas are taken in creation order; nothing left for one refuses the reopen.
  */
@@ -474,7 +475,12 @@ export function retakeAreaMoons(ctx: CommandContext, projectId: Id): void {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   for (const area of areas) {
     const held = ctx.tables.bodies.get(area.bodyId);
-    if (held?.host?.kind === 'areas' && held.host.id === projectId) continue;
+    if (held?.host?.kind === 'areas' && held.host.id === projectId) {
+      if (held.parentId === project.bodyId) continue;
+      // Still held on a moon of a planet the project left (a project cancelled before cancel
+      // freed its areas): the moon is freed and the area takes one of its planet's.
+      release(ctx, held, false);
+    }
     const moon = areaMoonFor(ctx, project.bodyId);
     checkAssignable(moon, host);
     ctx.tables.areas.upsert({ ...area, bodyId: moon.id, updatedAt: ctx.now });

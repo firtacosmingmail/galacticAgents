@@ -19,6 +19,7 @@ import type { EventLog } from '../domain/event-log.js';
 import { RETRY_NOTE } from '../domain/findings.js';
 import { JOB_TICK_MS, endJobRun, jobMemory, runPurpose, startJobRun } from '../domain/job-runs.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
+import { FINISHED_WORK } from '../domain/states.js';
 import type { AgentRuntime, TurnEnd } from './agent-runtime.js';
 import type { Timers } from './archival.js';
 import { stewardDeclares } from './tool-runtimes.js';
@@ -37,7 +38,8 @@ export { JOB_TICK_MS };
  *      stopped) is recorded `interrupted` (its job is due again at once); a run of a job that is no
  *      longer active (paused, stopped, its project closed) has its Steward stopped and is recorded
  *      `interrupted` too, which never pauses the job nor asks anything;
- *   2. **due** — each active job without a run, with a queued follow-up or `nextRunAt <= now`,
+ *   2. **due** — each active job of a live project (none of a finished one; a paused project's
+ *      jobs wait) without a run, with a queued follow-up or `nextRunAt <= now`,
  *      starts one run (a follow-up first), unless the concurrency caps leave no slot (`waited`:
  *      no run row, the next tick tries again). A spawn the caps still refuse records the run
  *      `interrupted`; a spawn refused for anything else (a budget, no Waykeeper row) `failed`.
@@ -243,6 +245,14 @@ export class JobScheduler {
     const followUp = job.followUps[0];
     const due = followUp ? now : this.dueOf(job);
     if (!due || due.getTime() > now.getTime()) return;
+    // A finished project (closed, cancelled, archived) runs nothing; a paused one waits, like a
+    // full cap: no run row, the next tick after its resume starts the run.
+    const owner = tables.projects.get(job.projectId);
+    if (!owner || FINISHED_WORK.has(owner.state)) return;
+    if (owner.state === 'paused') {
+      report.waited.push(job.id);
+      return;
+    }
     // One run per job at a time: a due run waits while one runs.
     if (job.runningRunId) {
       report.waited.push(job.id);

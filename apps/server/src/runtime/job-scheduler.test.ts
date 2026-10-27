@@ -543,6 +543,54 @@ describe('job scheduler (P10-04)', () => {
     expect(c.log.tables.questions.all().filter((q) => q.context.jobFailure)).toEqual([]);
   });
 
+  it('a paused project starts no run of its active job: it waits; resumed, the run starts (I1)', async () => {
+    const { c, clock } = boot();
+    const { job, project } = await longTermJob(c);
+    await c.commands.control({ kind: 'project', id: project.id }, { action: 'pause' }, USER);
+    expect(jobNow(c, job.id).state).toBe('active');
+    setTo(clock, oct(1, 9));
+    const report = await c.jobs.tick();
+    expect(report).toMatchObject({ started: [], waited: [job.id] });
+    expect(runsOf(c, job.id)).toEqual([]);
+    await c.commands.control({ kind: 'project', id: project.id }, { action: 'resume' }, USER);
+    expect((await c.jobs.tick()).started).toHaveLength(1);
+  });
+
+  it('a finished project starts no run, even of a job left active (I1)', async () => {
+    const { c, clock } = boot();
+    const { job, project } = await longTermJob(c);
+    // As a cancel used to leave it: the project failed, its job still active.
+    c.log.runCommand((ctx) => {
+      ctx.tables.projects.upsert({ ...ctx.tables.projects.get(project.id)!, state: 'failed' });
+      ctx.emit({
+        type: 'project.state_changed',
+        projectId: project.id,
+        from: 'approved',
+        to: 'failed',
+        by: USER,
+      });
+    });
+    expect(jobNow(c, job.id).state).toBe('active');
+    setTo(clock, oct(1, 9));
+    expect((await c.jobs.tick()).started).toEqual([]);
+    expect(runsOf(c, job.id)).toEqual([]);
+  });
+
+  it('cancelling the project stops its job and its running run (I1)', async () => {
+    const { c, clock } = boot({ scenario: () => ASKS });
+    const { job, project } = await longTermJob(c);
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    const stewardId = runsOf(c, job.id)[0]!.agentId!;
+    await until(() => c.statuses.get(stewardId)?.state === 'waiting_for_input', 'the question');
+    await c.commands.control({ kind: 'project', id: project.id }, { action: 'cancel' }, USER);
+    await c.jobs.tick();
+    await until(ended(c, job.id), 'the run to end');
+    expect(jobNow(c, job.id).state).toBe('stopped');
+    setTo(clock, oct(2, 9));
+    expect((await c.jobs.tick()).started).toEqual([]);
+  });
+
   it('a cap stop while a permission question waited fails the run with what it needed', async () => {
     const { c, clock } = boot({
       scenario: () => ({

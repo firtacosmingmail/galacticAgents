@@ -11,6 +11,7 @@ import {
 } from '@galactic/protocol';
 import { world } from '../test/world.js';
 import { checkPlacement, createAgent } from './agents.js';
+import { applyControlState } from './cascade.js';
 import { freeBody } from './bodies.js';
 import { DomainError } from './errors.js';
 import type { CommandContext } from './event-log.js';
@@ -458,6 +459,62 @@ describe('closing and archiving a long-term project', () => {
     expect(out.events.map((e) => e.event.type)).toContain('body.freed');
     expect(tables.bodies.get('b-mimas')?.host).toBeUndefined();
     expect(tables.jobs.all().every((j) => j.state === 'stopped')).toBe(true);
+  });
+});
+
+describe('cancelling a long-term project (final review I1)', () => {
+  it('stops every job and frees every area moon, like close and archive', () => {
+    const { cmd, longTerm, tables, conforms } = setup();
+    const p = longTerm('b-saturn');
+    const { job } = cmd((ctx) =>
+      createJob(ctx, { projectId: p.id, area: { name: 'Feedback' }, draft: DRAFT, by: USER }),
+    );
+    cmd((ctx) => applyControlState(ctx, { kind: 'project', id: p.id }, 'cancel', USER));
+    expect(tables.projects.get(p.id)?.state).toBe('failed');
+    expect(tables.jobs.get(job.id)).toMatchObject({ state: 'stopped' });
+    expect(tables.jobs.get(job.id)?.nextRunAt).toBeUndefined();
+    expect(tables.bodies.get('b-mimas')?.host).toBeUndefined();
+    // The hidden task never finishes (as on close): a reopen and a resumed job can run on it.
+    expect(tables.tasks.get(job.taskId)?.state).toBe('approved');
+    conforms();
+  });
+
+  it('a cancelled project reopened on another planet takes that planet’s moons; the old ones stay free', () => {
+    const { cmd, longTerm, tables, conforms } = setup();
+    const p = longTerm('b-mars');
+    const { job } = cmd((ctx) =>
+      createJob(ctx, { projectId: p.id, area: { name: 'Feedback' }, draft: DRAFT, by: USER }),
+    );
+    cmd((ctx) => applyControlState(ctx, { kind: 'project', id: p.id }, 'cancel', USER));
+    cmd((ctx) => reopenProject(ctx, p.id, USER, { bodyId: 'b-saturn' }));
+    expect(tables.areas.all().map((a) => a.bodyId)).toEqual(['b-mimas']);
+    expect(tables.tasks.get(job.taskId)?.bodyId).toBe('b-mimas');
+    for (const id of ['b-phobos', 'b-deimos']) expect(tables.bodies.get(id)?.host).toBeUndefined();
+    conforms();
+  });
+
+  it('reopen moves an area still on a moon of the old planet (a project failed before the fix)', () => {
+    const { cmd, longTerm, tables, conforms } = setup();
+    const p = longTerm('b-mars');
+    const { job } = cmd((ctx) =>
+      createJob(ctx, { projectId: p.id, area: { name: 'Feedback' }, draft: DRAFT, by: USER }),
+    );
+    // As a cancel used to leave it: failed, its area still holding Phobos.
+    cmd((ctx) => {
+      ctx.tables.projects.upsert({ ...ctx.tables.projects.get(p.id)!, state: 'failed' });
+      ctx.emit({
+        type: 'project.state_changed',
+        projectId: p.id,
+        from: 'approved',
+        to: 'failed',
+        by: USER,
+      });
+    });
+    cmd((ctx) => reopenProject(ctx, p.id, USER, { bodyId: 'b-saturn' }));
+    expect(tables.areas.all().map((a) => a.bodyId)).toEqual(['b-mimas']);
+    expect(tables.tasks.get(job.taskId)?.bodyId).toBe('b-mimas');
+    expect(tables.bodies.get('b-phobos')?.host).toBeUndefined();
+    conforms();
   });
 });
 
