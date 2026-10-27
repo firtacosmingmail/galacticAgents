@@ -261,7 +261,7 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /** Writes the job's changes (`job.updated`); nothing changed is a no-op. */
-function writeJob(ctx: CommandContext, current: Job, changes: JobChanges): Job {
+export function writeJob(ctx: CommandContext, current: Job, changes: JobChanges): Job {
   if (Object.keys(changes).length === 0) return current;
   const job = ctx.tables.jobs.upsert({ ...applyChanges(current, changes), updatedAt: ctx.now });
   ctx.emit({ type: 'job.updated', jobId: current.id, changes });

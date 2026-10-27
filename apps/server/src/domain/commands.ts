@@ -8,6 +8,7 @@ import {
   SetQuestionInput,
   SUPERSEDED_BY_MESSAGE,
   checkSetAnswer,
+  isJobOwned,
   renderSetAnswer,
   type AnswerQuestionSetInput,
   type DismissQuestionInput,
@@ -88,6 +89,7 @@ import {
 } from './deliverables.js';
 import type { CommandContext, EventLog } from './event-log.js';
 import { createJob, setJobState, updateJob } from './jobs.js';
+import { attachJobRunAgent, endJobRun, startJobRun } from './job-runs.js';
 import {
   archiveProject,
   closeProject,
@@ -1279,6 +1281,8 @@ export class Commands implements DomainCommands {
         q.status === 'open' &&
         q.kind === 'clarification' &&
         q.meta?.['toUser'] !== true &&
+        // A job's finding, failure notice or spend is the job's, not the agent's (P10-04).
+        !isJobOwned(q) &&
         // A set row is answered only on its card: a message never withdraws it or its drafts.
         q.context.set === undefined,
     );
@@ -1379,14 +1383,14 @@ export class Commands implements DomainCommands {
   setJobState(input: SetJobStateInput): Promise<CommandResult<Job>> {
     return this.run((ctx) => setJobState(ctx, input));
   }
-  startJobRun(_input: StartJobRunInput): Promise<CommandResult<JobRun>> {
-    return notYet('startJobRun', 'P10-04');
+  startJobRun(input: StartJobRunInput): Promise<CommandResult<JobRun>> {
+    return this.run((ctx) => startJobRun(ctx, input));
   }
-  attachJobRunAgent(_input: AttachJobRunAgentInput): Promise<CommandResult<JobRun>> {
-    return notYet('attachJobRunAgent', 'P10-04');
+  attachJobRunAgent(input: AttachJobRunAgentInput): Promise<CommandResult<JobRun>> {
+    return this.run((ctx) => attachJobRunAgent(ctx, input));
   }
-  endJobRun(_input: EndJobRunInput): Promise<CommandResult<JobRun>> {
-    return notYet('endJobRun', 'P10-04');
+  endJobRun(input: EndJobRunInput): Promise<CommandResult<JobRun>> {
+    return this.run((ctx) => endJobRun(ctx, input));
   }
   openFinding(_input: OpenFindingInput): Promise<CommandResult<Question>> {
     return notYet('openFinding', 'P10-05');

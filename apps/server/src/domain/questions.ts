@@ -1,3 +1,4 @@
+import { isJobOwned } from '@galactic/protocol';
 import type {
   Actor,
   Id,
@@ -462,7 +463,11 @@ export interface Dismissal {
   stillWaiting?: boolean | undefined;
 }
 
-/** Cancels every open question of an agent (it ended or was interrupted). */
+/**
+ * Cancels every open question of an agent (it ended or was interrupted). A job-owned question (a
+ * finding, a failure notice, a job's spend: `isJobOwned`, P10-04) belongs to its job, not to the
+ * run's Steward, and stays open.
+ */
 export function cancelQuestionsOf(
   ctx: CommandContext,
   agentId: Id,
@@ -471,7 +476,7 @@ export function cancelQuestionsOf(
   keep?: (q: Question) => boolean,
 ): Id[] {
   return openQuestionsOf(ctx, agentId)
-    .filter((q) => !keep?.(q))
+    .filter((q) => !isJobOwned(q) && !keep?.(q))
     .map((q) => cancelQuestion(ctx, q.id, reason, holdersOf?.(q.id))?.id)
     .filter((id): id is Id => id !== undefined);
 }
