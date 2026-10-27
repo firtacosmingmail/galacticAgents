@@ -61,6 +61,7 @@ import {
   type Job,
   type JobRun,
   type OpenFindingInput,
+  type ReportJobRunInput,
   type RequestSpendInput,
   type SetJobStateInput,
   type SetLongTermInput,
@@ -90,7 +91,7 @@ import {
 import type { CommandContext, EventLog } from './event-log.js';
 import { createJob, setJobState, updateJob } from './jobs.js';
 import { attachJobRunAgent, endJobRun, startJobRun } from './job-runs.js';
-import { openFinding, requestSpend } from './findings.js';
+import { openFinding, reportJobRun, requestSpend } from './findings.js';
 import {
   archiveProject,
   closeProject,
@@ -1404,6 +1405,10 @@ export class Commands implements DomainCommands {
   /** A job run's finding as a job-owned question held by the user (P10-05). */
   openFinding(input: OpenFindingInput): Promise<CommandResult<Question>> {
     return this.run((ctx) => openFinding(ctx, input, this.questions));
+  }
+  /** What a job run's Steward reported (`report_run`), kept on the run for its end (P10-05). */
+  reportJobRun(input: ReportJobRunInput): Promise<CommandResult<JobRun>> {
+    return this.run((ctx) => reportJobRun(ctx, input));
   }
   /** A `spend` approval, held by the user whatever the asker's supervisors (P10-05). */
   requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>> {

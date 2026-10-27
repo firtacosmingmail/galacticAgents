@@ -95,6 +95,7 @@ const commands: DomainCommands = {
   attachJobRunAgent: notImplemented,
   endJobRun: notImplemented,
   openFinding: notImplemented,
+  reportJobRun: notImplemented,
   requestSpend: notImplemented,
 };
 

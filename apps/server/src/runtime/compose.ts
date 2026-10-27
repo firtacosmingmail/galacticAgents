@@ -14,6 +14,7 @@ import { RunOutput } from '../deliverables/run-output.js';
 import { RunService, type RunServiceOptions, type RunSupervisor } from '../deliverables/runs.js';
 import { DeliverableService } from '../deliverables/service.js';
 import { stewardDeliverableTools } from '../brains/deliverable-tools.js';
+import { SpendRelay, stewardJobTools } from '../brains/job-tools.js';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
@@ -545,10 +546,19 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       : undefined;
   runs?.watch();
 
-  // A Steward on a runtime that serves the server's tools declares its own deliverables (P9-04).
-  if (deliverables) {
-    runtime.setStewardTools((agent) => stewardDeliverableTools(deliverables, agent));
-  }
+  // A Steward on a runtime that serves the server's tools declares its own deliverables (P9-04),
+  // asks before spending and, on a job run, reports findings and the run (P10-05).
+  runtime.setStewardTools((agent) => [
+    ...(deliverables ? stewardDeliverableTools(deliverables, agent) : []),
+    ...stewardJobTools(commands, log.tables, agent),
+  ]);
+  // A task Steward hears its spend answer as one message (P10-05).
+  const spendRelay = new SpendRelay({
+    log,
+    runtime,
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
+  spendRelay.start();
 
   const runners = new Map<Id, BrainRunner>();
   const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
@@ -701,6 +711,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       processes?.dispose();
       detection?.dispose();
       budgets.stop();
+      spendRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       jobs.dispose();
       archival.stop();
@@ -722,6 +733,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       processes?.dispose();
       detection?.dispose();
       budgets.stop();
+      spendRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       jobs.dispose();
       archival.stop();

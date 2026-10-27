@@ -3,6 +3,7 @@ import {
   FAILURE_ACTIONS,
   FINDING_ACTIONS,
   FindingContext,
+  LONG_TERM_LIMITS,
   SPEND_ACTIONS,
   SpendContext,
   answerDetailOf,
@@ -16,6 +17,7 @@ import {
   type OpenFindingInput,
   type Question,
   type QuestionContext,
+  type ReportJobRunInput,
   type RequestSpendInput,
 } from '@galactic/protocol';
 import type { Reader } from './catalogue.js';
@@ -105,6 +107,12 @@ export function openFinding(
   if (input.kind === 'suggestion' && input.draft !== undefined) {
     throw new DomainError('invalid', 'only a reply finding carries a draft');
   }
+  if (findingsOf(ctx, run.id) >= LONG_TERM_LIMITS.maxFindingsPerRun) {
+    throw new DomainError(
+      'invalid',
+      `a run reports at most ${LONG_TERM_LIMITS.maxFindingsPerRun} findings; keep the most useful ones`,
+    );
+  }
   const finding = FindingContext.safeParse({
     jobId: job.id,
     runId: run.id,
@@ -158,7 +166,7 @@ function spendRun(ctx: Reader, agent: Agent, runId: Id | undefined): JobRun | un
 }
 
 /** "$20.00" / "€5.00": the amount as the card shows it. */
-function formatAmount(amount: number, currency: string): string {
+export function formatAmount(amount: number, currency: string): string {
   try {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
   } catch {
@@ -219,6 +227,89 @@ export function requestSpend(
       ...(run ? { jobOwned: true } : {}),
     },
   });
+}
+
+/** How many findings the run reported (every one, whatever became of it). */
+function findingsOf(ctx: Reader, runId: Id): number {
+  return ctx.tables.questions.all().filter((q) => q.context.finding?.runId === runId).length;
+}
+
+/**
+ * Keeps what the run's Steward reported (`report_run`) on its running run as `meta.report`
+ * (ledger ruling R3): the scheduler's turn-end handler ends the run with it. A later report
+ * replaces an earlier one. A run row is REST-only history, so this writes no event (as
+ * `attachJobRunAgent`). Refused: a run that ended, an agent that is not its Steward, an outcome
+ * `findings` with no finding reported, a blank or long summary, `numbers` beyond 30 keys or with a
+ * key outside 1–60 characters or a value that is not a finite number, a failure reason on an
+ * outcome other than `failed`.
+ */
+export function reportJobRun(ctx: CommandContext, input: ReportJobRunInput): JobRun {
+  const run = runOf(ctx, input.runId);
+  if (run.outcome !== 'running') {
+    throw new DomainError('invalid_transition', `job run ${run.id} already ended (${run.outcome})`);
+  }
+  const agent = must(ctx.tables.agents.get(input.agentId), 'agent', input.agentId);
+  if (!isRunSteward(agent, run, jobOf(ctx, run.jobId))) {
+    throw new DomainError('invalid', `agent ${agent.id} is not the Steward of job run ${run.id}`);
+  }
+  const { outcome, numbers } = input.report;
+  if (outcome !== 'quiet' && outcome !== 'findings' && outcome !== 'failed') {
+    throw new DomainError('invalid', 'the outcome is quiet, findings or failed');
+  }
+  if (outcome === 'findings' && findingsOf(ctx, run.id) === 0) {
+    throw new DomainError(
+      'invalid',
+      'outcome findings needs at least one finding reported with report_finding first',
+    );
+  }
+  const summary = typeof input.report.summary === 'string' ? input.report.summary.trim() : '';
+  if (!summary) throw new DomainError('invalid', 'a run report needs a summary');
+  if (summary.length > LONG_TERM_LIMITS.maxRunSummary) {
+    throw new DomainError(
+      'invalid',
+      `the summary is longer than ${LONG_TERM_LIMITS.maxRunSummary} characters`,
+    );
+  }
+  const failureReason = input.report.failureReason?.trim();
+  if (failureReason && outcome !== 'failed') {
+    throw new DomainError('invalid', 'only a failed run carries a failure reason');
+  }
+  if (failureReason && failureReason.length > LONG_TERM_LIMITS.maxRunFailureReason) {
+    throw new DomainError(
+      'invalid',
+      `the failure reason is longer than ${LONG_TERM_LIMITS.maxRunFailureReason} characters`,
+    );
+  }
+  if (numbers !== undefined) {
+    if (!numbers || typeof numbers !== 'object' || Array.isArray(numbers)) {
+      throw new DomainError('invalid', 'numbers maps names to numbers');
+    }
+    const entries = Object.entries(numbers);
+    if (entries.length > LONG_TERM_LIMITS.maxRunNumbers) {
+      throw new DomainError(
+        'invalid',
+        `a run reports at most ${LONG_TERM_LIMITS.maxRunNumbers} numbers`,
+      );
+    }
+    for (const [key, value] of entries) {
+      if (key.length < 1 || key.length > LONG_TERM_LIMITS.maxRunNumberKey) {
+        throw new DomainError(
+          'invalid',
+          `a number's name is 1–${LONG_TERM_LIMITS.maxRunNumberKey} characters ("${key.slice(0, 80)}")`,
+        );
+      }
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new DomainError('invalid', `number "${key}" is not a finite number`);
+      }
+    }
+  }
+  const report = {
+    outcome,
+    summary,
+    ...(numbers !== undefined ? { numbers: { ...numbers } } : {}),
+    ...(failureReason ? { failureReason } : {}),
+  };
+  return ctx.tables.jobRuns.upsert({ ...run, meta: { ...(run.meta ?? {}), report } });
 }
 
 /** The project of the finding's job, refused when it was closed (completed, failed, archived). */

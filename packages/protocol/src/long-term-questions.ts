@@ -21,6 +21,14 @@ export const LONG_TERM_LIMITS = {
   maxUnattendedRules: 10,
   /** Runs kept per job; older rows are deleted when a run is recorded. */
   runsKept: 200,
+  /** Findings one run may report (`report_finding`). */
+  maxFindingsPerRun: 20,
+  /** A run report's `numbers`: at most this many keys, each 1–60 characters. */
+  maxRunNumbers: 30,
+  maxRunNumberKey: 60,
+  /** A run report's summary and failure reason. */
+  maxRunSummary: 2000,
+  maxRunFailureReason: 500,
 } as const;
 
 /** A job run's finding brought to the user: a suggested feature or improvement, or a drafted reply. */

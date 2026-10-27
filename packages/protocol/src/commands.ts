@@ -453,6 +453,25 @@ export interface OpenFindingInput {
   draft?: string;
 }
 
+/**
+ * What a job run's Steward reports about its run (`report_run`, ledger ruling R3): kept on the run
+ * as `meta.report` until the turn-end handler ends the run with it.
+ */
+export interface JobRunReport {
+  outcome: 'quiet' | 'findings' | 'failed';
+  summary: string;
+  numbers?: Record<string, number>;
+  /** For `failed`: why. */
+  failureReason?: string;
+}
+
+export interface ReportJobRunInput {
+  runId: Id;
+  /** The run's Steward. */
+  agentId: Id;
+  report: JobRunReport;
+}
+
 /** A `spend` question; job-owned when `runId` names a job run. */
 export interface RequestSpendInput {
   originAgentId: Id;
@@ -625,6 +644,8 @@ export interface DomainCommands {
   /** Records a run's end; a failure pauses the job and opens its one failure question. */
   endJobRun(input: EndJobRunInput): Promise<CommandResult<JobRun>>;
   openFinding(input: OpenFindingInput): Promise<CommandResult<Question>>;
+  /** Keeps the Steward's report on its running run (`meta.report`); no event (REST-only rows). */
+  reportJobRun(input: ReportJobRunInput): Promise<CommandResult<JobRun>>;
   requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>>;
 
   // panel actions (SPEC decision 11b)
