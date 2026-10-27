@@ -182,27 +182,55 @@ async function orbitUntilVisible(page: Page, target: Locator): Promise<void> {
   await expect(target).toBeVisible();
 }
 
+/** The element's box once it stops moving (the camera may still glide after a drag or a flight). */
+async function restingBox(
+  target: Locator,
+): Promise<{ x: number; y: number; w: number; h: number }> {
+  let last = '';
+  let box: { x: number; y: number; w: number; h: number } | undefined;
+  await expect
+    .poll(
+      async () => {
+        const b = (await target.boundingBox())!;
+        box = {
+          x: Math.round(b.x),
+          y: Math.round(b.y),
+          w: Math.round(b.width),
+          h: Math.round(b.height),
+        };
+        const now = JSON.stringify(box);
+        const still = now === last;
+        last = now;
+        return still;
+      },
+      { intervals: [150] },
+    )
+    .toBe(true);
+  return box!;
+}
+
 /**
  * Taps a scene label (labels are pick targets, not DOM targets) at its corners, then its centre,
- * until `opened` shows: the planet the label sits over may take a tap on part of it.
+ * until `opened` shows: the planet or a satellite near the label may take a tap on part of it.
  */
 async function tapLabelUntil(page: Page, target: Locator, opened: Locator): Promise<void> {
-  const box = (await target.boundingBox())!;
-  const inset = 3;
+  const inset = 4;
   const points = [
-    [box.x + inset, box.y + inset],
-    [box.x + inset, box.y + box.height - inset],
-    [box.x + box.width - inset, box.y + inset],
-    [box.x + box.width - inset, box.y + box.height - inset],
-    [box.x + box.width / 2, box.y + box.height / 2],
-  ] as const;
-  for (const [x, y] of points) {
+    (b: { x: number; y: number; w: number; h: number }) => [b.x + inset, b.y + inset],
+    (b: { x: number; y: number; w: number; h: number }) => [b.x + b.w - inset, b.y + inset],
+    (b: { x: number; y: number; w: number; h: number }) => [b.x + inset, b.y + b.h - inset],
+    (b: { x: number; y: number; w: number; h: number }) => [b.x + b.w - inset, b.y + b.h - inset],
+    (b: { x: number; y: number; w: number; h: number }) => [b.x + b.w / 2, b.y + b.h / 2],
+  ];
+  for (const point of points) {
+    await expect(target).toBeVisible();
+    const [x, y] = point(await restingBox(target)) as [number, number];
     await page.touchscreen.tap(x, y);
     try {
       await expect(opened).toBeVisible({ timeout: 3_000 });
       return;
     } catch {
-      // That part of the label was under the planet: the next one.
+      // That part of the label was under the planet or a satellite: the next one.
     }
   }
   await expect(opened).toBeVisible();

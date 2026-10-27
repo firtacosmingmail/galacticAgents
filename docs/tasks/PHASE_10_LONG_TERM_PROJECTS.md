@@ -1,7 +1,7 @@
 # Phase 10 — Long-term projects, area moons and recurring jobs
 
-**Current task:** P10-08 · **Task status:** P10-01, P10-02, P10-03, P10-04, P10-05, P10-06, P10-07 done; P10-08 in progress
-**Phase status:** in progress (7/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
+**Current task:** — · **Task status:** P10-01 – P10-08 done
+**Phase status:** done (2026-10-27) (8/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`); waiting for Cosmin's merge into `phase-10`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -85,7 +85,7 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 - **Acceptance:** each card's fixed actions, edited reply sent in `detail.text`, `$1,250.00` in `en-US`, no Allow similar on spend, spend ranked before clarifications; `jobsModel` puts paused jobs first and counts findings, route newest first and refuses `limit=500`; area moon labels and picking; axe clean; phone width without horizontal scroll.
 
 ### P10-08 — Docs and end-to-end
-- **Status:** in progress · **Depends on:** P10-07 · **Parallel with:** —
+- **Status:** done (2026-10-27) · **Depends on:** P10-07 · **Parallel with:** —
 - Plan Task 14: SPEC decisions 142–145 and two §8 questions, TECHNOLOGY sections, IMPLEMENTATION_PLAN Phase 10, `e2e/tests/13-recurring-jobs.spec.ts`, review notes, exit criteria.
 - **Acceptance:** the e2e flow (long-term project on Jupiter → job on a new Feedback area → run → finding → edited Send → follow-up run → spend card → Jobs tab history) passes; the full gates are green.
 
@@ -94,3 +94,16 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 - Every task done; the full gates (`pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`, `pnpm e2e`) green on the batch branch.
 - The plan's Review Focus items (calendar edges, asleep then restarted mid-run, retry racing the tick, a finding answered late, spend through the back doors) each covered by a test.
 - SPEC, TECHNOLOGY and IMPLEMENTATION_PLAN consistent with what was built.
+
+## Exit criteria — verified 2026-10-27
+
+- **Every task done:** P10-01 – P10-08, 8/8. The full gates on `p10-1-long-term-projects`: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check` green; `pnpm test` green (protocol 183, desktop 79, server 2086 + 8 skipped, web 1996); `pnpm e2e` 28/28 (three full runs), including `e2e/tests/13-recurring-jobs.spec.ts` (the whole flow on the Mac's width, and the phone checks at 390 px).
+- **The review focus, each covered by a test:**
+  - calendar edges — `packages/protocol/src/schedule.test.ts` (one occurrence per day across a whole year with DST, monthly clamped to the month's end, weekly across a year end; passing under `TZ=America/New_York` and `TZ=Europe/Bucharest`, re-run 2026-10-27);
+  - asleep, then restarted mid-run — `apps/server/src/runtime/job-scheduler.test.ts` ("a Mac asleep through three occurrences runs once…", "a restart mid-run: the Steward is stopped, not resumed; the run is interrupted and caught up once", "a catch-up cut short by a restart…");
+  - retry racing the tick — `job-scheduler.test.ts` ("a retry and a tick together start one run…");
+  - a finding answered late — `apps/server/src/domain/findings.test.ts` (closed project: "Create a ticket" / "Implement it" refused, "Drop" works; stopped job: "Send" and "Approve" refused, "Drop" / "Refuse" work);
+  - spend through the back doors — `findings.test.ts` (never answered or held by an agent or the system, never in a set, an "Allow similar" rule never touches it, free text refused), `apps/server/src/brains/common-tools.test.ts` (`answer_question` refuses it), `apps/server/src/http/remote-access.test.ts` (remote answers as for permissions, an agent's process refused).
+- **Docs consistent with what was built:** SPEC decisions 142–145 (decision 10 amended by 143), §2.6, §2.7, §3.1, §3.2, §3.7, the glossary and three §8 questions; TECHNOLOGY §10 and the §5 tool table; IMPLEMENTATION_PLAN Phase 10 and corner cases 45–52; review notes in `docs/tasks/notes/P10-review.md`.
+
+**Phase 10: done (2026-10-27).** The batch branch waits for Cosmin's merge into `phase-10` (CLAUDE.md, phase branch flow).

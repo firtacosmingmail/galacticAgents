@@ -57,4 +57,4 @@ coordinator's, after P10-08.
 harness (`/dev/harness/brains/harmonizer`, `/dev/harness/jobs/:id/run`, `/dev/harness/jobs/tick`),
 plus the phone checks at 390 px. On a phone an area moon may start behind its planet or out of
 the small scene, and a ringed planet takes taps near it, so the test turns the camera until the
-moon's label shows and taps the label away from the planet.
+moon's label shows, waits for it to rest, and taps the label away from the planet.
