@@ -365,17 +365,22 @@ test.describe('on a phone', () => {
       `Conversation with Waykeeper · ${project.name}`,
     );
 
-    // The four-option toggle fits, without a horizontal scroll.
+    // The four-option toggle fits, without a horizontal scroll, from 390 px down to 320 px.
     const toggle = page.getByRole('group', {
       name: 'show the chat, the status, the deliverables or the jobs',
     });
     await expect(toggle.getByRole('button')).toHaveCount(4);
-    await expectNoHorizontalScroll(page, toggle);
-    for (const button of await toggle.getByRole('button').all()) {
-      const box = (await button.boundingBox())!;
-      expect(box.x).toBeGreaterThanOrEqual(0);
-      expect(box.x + box.width).toBeLessThanOrEqual(390);
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
+      await expectNoHorizontalScroll(page, toggle);
+      for (const button of await toggle.getByRole('button').all()) {
+        const box = (await button.boundingBox())!;
+        expect(box.x, `${width} px`).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width, `${width} px`).toBeLessThanOrEqual(width);
+      }
     }
+    await page.setViewportSize({ width: 390, height: 844 });
 
     // The Jobs pane: no horizontal scroll either.
     await toggle.getByRole('button', { name: /^Jobs/ }).tap();

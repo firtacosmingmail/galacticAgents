@@ -9,6 +9,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
 import { tickingClock } from '../test/world.js';
+import type { CapsConfig } from './caps.js';
 import { composeRuntime, type ComposedRuntime } from './compose.js';
 import { HarnessJobScripts, harnessJobs } from './harness-jobs.js';
 
@@ -33,7 +34,7 @@ afterEach(async () => {
   for (const c of lives.splice(0)) await c.dispose().catch(() => {});
 });
 
-function boot() {
+function boot(caps?: CapsConfig) {
   const scripts = new HarnessJobScripts();
   const adapter = new FakeAdapter({
     speed: 0,
@@ -43,6 +44,7 @@ function boot() {
     adapters: [adapter],
     log: { now: tickingClock(new Date(2026, 9, 1, 8).getTime()) },
     flushMs: 10,
+    ...(caps ? { caps } : {}),
     jobs: { stewardRuntime: () => 'fake' },
   });
   lives.push(c);
@@ -162,5 +164,23 @@ describe('harness jobs (P10-08)', () => {
     const tick = await jobs.tick();
     expect(tick).toMatchObject({ started: [], waited: [], interrupted: [], ended: [] });
     expect(tick.seq).toBe(c.log.currentSeq());
+  });
+
+  it('drops the script when no run could start (a full cap): no later Steward of the job takes it', async () => {
+    const { c, jobs, scripts } = boot({ maxConcurrentAgents: 1 });
+    const job = await longTermJob(c);
+    const blocker = await c.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'scenario:asks',
+      cwd: '/w/other',
+    });
+    expect(blocker.ok).toBe(true);
+    await expect(jobs.run(job.id, HarnessJobRunBody.parse({ summary: 'x' }))).rejects.toMatchObject(
+      {
+        code: 'conflict',
+      },
+    );
+    expect(scripts.has(job.taskId)).toBe(false);
   });
 });

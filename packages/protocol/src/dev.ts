@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Id } from './primitives.js';
 import { QuestionKind } from './enums.js';
 import { isRetiredBody, type Body, type Project } from './domain.js';
+import { LONG_TERM_LIMITS } from './long-term-questions.js';
 
 /**
  * The scene harness (P4-06): development-only routes under `/dev/harness/*` (registered only with
@@ -201,7 +202,7 @@ export const HarnessJobRunBody = z.object({
         draft: z.string().trim().min(1).max(4000).optional(),
       }),
     )
-    .max(20)
+    .max(LONG_TERM_LIMITS.maxFindingsPerRun)
     .default([]),
   spend: z
     .object({
@@ -210,7 +211,7 @@ export const HarnessJobRunBody = z.object({
       purpose: z.string().trim().min(1).max(500),
     })
     .optional(),
-  summary: z.string().trim().min(1).max(2000).optional(),
+  summary: z.string().trim().min(1).max(LONG_TERM_LIMITS.maxRunSummary).optional(),
 });
 export type HarnessJobRunBody = z.input<typeof HarnessJobRunBody>;
 

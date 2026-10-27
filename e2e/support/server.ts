@@ -75,8 +75,9 @@ export async function startServer(): Promise<E2eServer> {
     GALACTIC_PORT: '0',
     GALACTIC_DEV: '1',
     GALACTIC_HARMONIZER: 'fake',
-    // Stewards too (P10-08): a recurring job's runs are Stewards the scheduler spawns on the
-    // Steward runtime, which would otherwise be Claude's.
+    // Stewards too (P10-08), belt and braces: a recurring job's runs are Stewards the scheduler
+    // spawns on the Steward runtime, which already falls back to the Harmonizer's (fake) runtime;
+    // this keeps every new Steward on the fake runtime whatever that fallback becomes.
     GALACTIC_STEWARD_RUNTIME: 'fake',
     GALACTIC_WEB_DIR: WEB_DIR,
     GALACTIC_LOG: 'silent',

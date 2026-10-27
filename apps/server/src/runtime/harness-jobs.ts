@@ -47,6 +47,10 @@ export class HarnessJobScripts {
     this.scripts.set(taskId, scenario);
   }
 
+  has(taskId: Id): boolean {
+    return this.scripts.has(taskId);
+  }
+
   delete(taskId: Id): void {
     this.scripts.delete(taskId);
   }
@@ -114,10 +118,13 @@ export function harnessJobs(opts: {
         writeJob(ctx, jobOf(ctx, jobId), { nextRunAt: new Date(log.clock()).toISOString() }),
       );
       await scheduler.tick();
+      // The spawn happened inside the tick: a Steward took the script then. Any script left (no
+      // run, or a run the caps cut short before its Steward) is dropped, so a later catch-up
+      // Steward of the job never picks it up.
+      scripts.delete(job.taskId);
       const after = log.tables.jobs.get(jobId);
       const runId = after?.runningRunId ?? after?.lastRun?.runId;
       if (!runId || runId === before) {
-        scripts.delete(job.taskId);
         throw new DomainError('conflict', `job ${job.name} did not start a run (a cap is full?)`);
       }
       return { seq: log.currentSeq(), runId };

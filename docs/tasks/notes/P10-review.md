@@ -47,6 +47,8 @@ coordinator's, after P10-08.
   choice.
 - The Jobs view's "needs you" dot recomputes the model on every world change; a stopped job's
   0.6 opacity has not been checked for contrast.
+- On a phone, an area moon's label over a ringed planet (Saturn) is only partly tappable: the
+  planet's rings, or a satellite near the label, take taps on part of it (seen in e2e 13).
 - A DST fall-back test depends on the machine's zone (verified by hand in Europe/Berlin).
 - The ESM import cycle `questions.ts` ↔ `findings.ts` (function-level use only).
 - Several tasks wrote the implementation before the tests and showed RED by reverting it.
