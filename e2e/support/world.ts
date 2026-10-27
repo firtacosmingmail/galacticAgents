@@ -2,6 +2,10 @@ import type {
   HarnessActionResponse,
   HarnessBrainToolResponse,
   HarnessBrainWaykeeperResponse,
+  HarnessHarmonizerResponse,
+  HarnessJobRunBody,
+  HarnessJobRunResponse,
+  HarnessJobTickResponse,
   HarnessScenarioBody,
   HarnessScenarioResponse,
   HistoryQuestionsResponse,
@@ -68,6 +72,28 @@ export async function callBrainTool(
     return (result as unknown as { result: unknown }).result;
   }
   return result;
+}
+
+/** The running Harmonizer (P10-08), to make it call its tools from the first card on. */
+export async function harmonizerId(api: Api): Promise<string> {
+  return (await api.get<HarnessHarmonizerResponse>('/dev/harness/brains/harmonizer')).harmonizerId;
+}
+
+/**
+ * A recurring job's next run starts now (P10-08), its Steward on the fake runtime reporting what
+ * `script` says (findings, a spend, then the run's report) before the run ends.
+ */
+export function runJobNow(
+  api: Api,
+  jobId: string,
+  script: HarnessJobRunBody = {},
+): Promise<HarnessJobRunResponse> {
+  return api.post<HarnessJobRunResponse>(`/dev/harness/jobs/${jobId}/run`, script);
+}
+
+/** One job-scheduler tick now (a queued follow-up run starts on it). */
+export function tickJobs(api: Api): Promise<HarnessJobTickResponse> {
+  return api.post<HarnessJobTickResponse>('/dev/harness/jobs/tick');
 }
 
 /** The question as the server's history has it (the source of truth, not the page). */

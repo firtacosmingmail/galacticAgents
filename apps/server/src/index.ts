@@ -31,6 +31,7 @@ import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { JOB_TICK_MS } from './domain/job-runs.js';
 import { composeRuntime } from './runtime/compose.js';
 import { harnessBrains } from './runtime/harness-brains.js';
+import { HarnessJobScripts, harnessJobs } from './runtime/harness-jobs.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { runIdOfKey } from './runtime/process-attribution.js';
@@ -116,7 +117,12 @@ for (const take of launches.taken) {
 // ACP one for any ACP agent when `acp.command` is configured (P8-07), the PTY one for a
 // command-line agent when `pty.command` is (P8-08; node-pty loads at its first spawn).
 // The fake one's sessions report a few slash commands, so the composer's list can be tried (P8-13).
-const fake = new FakeAdapter({ commands: DEV_FAKE_COMMANDS });
+// In development mode a job run's Steward may follow a test's script (P10-08, `/dev/harness/jobs`).
+const jobScripts = config.dev ? new HarnessJobScripts() : undefined;
+const fake = new FakeAdapter({
+  commands: DEV_FAKE_COMMANDS,
+  ...(jobScripts ? { scenarioFor: (opts) => jobScripts.scenarioFor(opts) } : {}),
+});
 const adapters: AgentAdapter[] = [
   fake,
   new ClaudeSdkAdapter({
@@ -232,6 +238,7 @@ const composed = composeRuntime(db, {
   runs: { supervisor, settings: () => runSettings(config) },
 });
 const { log, statuses, transcripts } = composed;
+jobScripts?.attach(log.tables);
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
 const push = createPush(db, config, {
   log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
@@ -462,6 +469,10 @@ const app = buildApp({
       startWaykeeper,
       runnerOf: (id) => composed.runnerOf(id),
     }),
+    // A job's run now, its Steward following a test's script, and a scheduler tick (P10-08).
+    ...(jobScripts
+      ? { jobs: harnessJobs({ log, scheduler: composed.jobs, scripts: jobScripts }) }
+      : {}),
     ...(composed.deliverables
       ? {
           deliverables: {

@@ -59,7 +59,13 @@ describe('harness brains (P8-21)', () => {
   it('refuses without a running Harmonizer', async () => {
     const { brains, createProject } = setup({ liveAgents: () => [] });
     await expect(brains.startWaykeeper({})).rejects.toMatchObject({ code: 'conflict' });
+    expect(() => brains.harmonizer()).toThrow(/no Harmonizer is running/);
     expect(createProject).not.toHaveBeenCalled();
+  });
+
+  it('names the running Harmonizer (P10-08)', () => {
+    const { brains } = setup();
+    expect(brains.harmonizer()).toEqual({ seq: 42, harmonizerId: 'a-hq' });
   });
 
   it('calls a running fake-runtime brain’s tool and returns what the model would read', async () => {

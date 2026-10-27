@@ -8,6 +8,7 @@ import {
   HarnessBrainToolBody,
   HarnessBrainWaykeeperBody,
   HarnessDeclareBody,
+  HarnessJobRunBody,
   HarnessMoveBody,
   HarnessQuestionBody,
   HarnessScenarioBody,
@@ -22,6 +23,7 @@ import type { StatusStore } from '../runtime/status-store.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
 import { clearDemoProjects } from '../runtime/demo-clear.js';
 import type { HarnessBrains } from '../runtime/harness-brains.js';
+import type { HarnessJobs } from '../runtime/harness-jobs.js';
 import {
   NotHarnessError,
   SceneHarness,
@@ -40,6 +42,8 @@ export interface DevRoutesOptions {
   harness?: Pick<SceneHarnessOptions, 'workspaces' | 'deliverables'> & {
     /** P8-21: real brains on the fake runtime (`/dev/harness/brains/*`, `harness-brains.ts`). */
     brains?: HarnessBrains;
+    /** P10-08: a job's run now, with a scripted Steward, and a scheduler tick (`harness-jobs.ts`). */
+    jobs?: HarnessJobs;
   };
 }
 
@@ -135,6 +139,7 @@ export function registerDevRoutes(
           ...(opts.harness?.deliverables ? { deliverables: opts.harness.deliverables } : {}),
         }),
         opts.harness?.brains,
+        opts.harness?.jobs,
       );
     }
   });
@@ -147,6 +152,7 @@ function registerHarness(
   app: FastifyInstance,
   harness: SceneHarness,
   brains: HarnessBrains | undefined,
+  jobs: HarnessJobs | undefined,
 ): void {
   /** Runs a harness action; a refused command is 404 / 400 / 409 like the panel's routes. */
   const act = async <T>(reply: FastifyReply, req: FastifyRequest, fn: () => Promise<T>) => {
@@ -234,6 +240,11 @@ function registerHarness(
   );
 
   if (brains) {
+    /** P10-08: the running Harmonizer, for a test that makes it call its tools. */
+    app.get('/dev/harness/brains/harmonizer', async (req, reply) =>
+      act(reply, req, async () => brains.harmonizer()),
+    );
+
     /** P8-21: a new project with a real Waykeeper brain on the fake runtime. */
     app.post('/dev/harness/brains/waykeeper', async (req, reply) => {
       const body = parse(HarnessBrainWaykeeperBody, req.body, reply);
@@ -248,5 +259,16 @@ function registerHarness(
         result: await brains.callTool(req.params.id, body.name, body.input),
       }));
     });
+  }
+
+  if (jobs) {
+    /** P10-08: the job's next run starts now, its Steward on the fake runtime following a script. */
+    app.post<{ Params: Params }>('/dev/harness/jobs/:id/run', async (req, reply) => {
+      const body = parse(HarnessJobRunBody, req.body, reply);
+      if (body) return act(reply, req, () => jobs.run(req.params.id, body));
+    });
+
+    /** P10-08: one job-scheduler tick now (a queued follow-up run starts on it). */
+    app.post('/dev/harness/jobs/tick', async (req, reply) => act(reply, req, () => jobs.tick()));
   }
 }
