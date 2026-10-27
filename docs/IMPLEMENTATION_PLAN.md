@@ -1,6 +1,6 @@
 # GalacticAgents — Implementation Plan
 
-**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3; Phase 9 — deliverables, decisions 118–134 — added 2026-10-07) · **Date:** 2026-09-30
+**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3; Phase 9 — deliverables, decisions 118–134 — added 2026-10-07; Phase 10 — long-term projects and recurring jobs, decisions 142–145 — added 2026-10-27) · **Date:** 2026-09-30
 
 Companion to `SPEC.md` (what) and `TECHNOLOGY.md` (with what). The plan is ordered so that **the agent runtime is proven before the 3D scene is built**: the space interface is the product's soul, but if agents cannot be spawned, observed and answered reliably, the scene has nothing true to show. Following decision 19, a **minimal usable side panel (Phase 2.5)** now comes before the scene, so the product is usable daily long before it is beautiful.
 
@@ -183,6 +183,22 @@ Each phase ends with something you can run. Estimates assume one developer worki
 
 ---
 
+## Phase 10 — Long-term projects, area moons and recurring jobs (≈ 2–3 weeks)
+
+**Goal:** a project Cosmin looks after over months — a purpose and goals, a big planet whose moons are its business areas, each area with recurring jobs Mission Control runs on schedule, every finding and every real-money spend brought to him as an inbox question (SPEC §3.7, decisions 142–145; TECHNOLOGY §10; tasks in `docs/tasks/PHASE_10_LONG_TERM_PROJECTS.md`). Leaves room for providers per job (project 2) and a dashboard fed by the numbers runs report (project 3), and builds neither.
+
+- **Vocabulary and storage:** `long-term.ts` in `packages/protocol` (areas, jobs, runs, schedules, limits, job-owned question helpers, card readers), `HostKind` `areas`, `QuestionKind` `spend`; migration 0016 (project columns, `areas`, `jobs`, `job_runs`, widened CHECKs); `area.*`, `job.*` and `job_run.*` events, the first two folded into the world and covered by the conformance test; schedules in the Mac's local time with DST-safe occurrences.
+- **Long-term projects:** a long-term card takes the first free big planet (four or more catalogued moons), else a planet with moons, else parks; a conversion card moves the project to a big planet with its satellites; the "anything else?" flow never starts for one.
+- **Areas and jobs:** an area takes a free moon of the planet, else shares the project's area moon with the fewest areas; a job gets one hidden task on its area's moon; limits, `push` rules and secrets refused; close and archive stop the jobs and free the moons, a reopen takes moons again.
+- **Runs and the scheduler:** a minute tick, one serialised queue, one run per job, catch-up as one run, a run cut short by a restart recorded and caught up (its Steward never resumed), a full cap makes a run wait, a failed run pauses its job with one failure question, a user's stop keeps the schedule; the job's unattended rules in the permission gate for its own Stewards only.
+- **Findings and spends:** job-owned questions with fixed actions that outlive the run and wake no brain; "Implement it" messages the Waykeeper, "Send" and an approved spend become a follow-up run; the `spend` kind held and answered by the user only (remote answers as for permissions); Steward tools `request_spend`, `report_finding`, `report_run`.
+- **Brains and cards:** the Waykeeper's job tools (one card per job, user-decided, not editable), the Harmonizer's long-term proposals and relay to a Waykeeper; finished runs never wake the Waykeeper.
+- **Panel and scene:** the job, long-term, finding and spend cards; the Waykeeper's Jobs view with run history; area moons labelled with their areas, a violet ring, a click opening the Jobs view filtered to the moon; a green "$" beacon; all within the phone's one screen.
+
+**Exit criteria:** the end-to-end test `e2e/tests/13-recurring-jobs.spec.ts` passes on the fake runtime — a long-term project approved onto a big planet, a daily job on a new "Feedback" area approved from its card (the moon labelled), a run reporting a drafted reply and a spend, the reply edited and sent through a follow-up run, the "$" card, the Jobs tab with the run history, and at phone width the four-option toggle and the Jobs pane without horizontal scroll and an area moon opening the filtered view; the plan's review focus — calendar edges, asleep then restarted mid-run, a retry racing the tick, a finding answered late, a spend through the back doors — each covered by a test; the full gates green.
+
+---
+
 ## High-level corner cases and risks
 
 Grouped by area. Each has a suggested handling so it can become a ticket later. Items marked *Decided* reference SPEC.md §7.
@@ -259,6 +275,17 @@ Grouped by area. Each has a suggested handling so it can become a ticket later. 
 42. **The phone as a remote control for the Mac's programs.** *Decided (131):* open, launch, start and restart routes refuse remote clients even with `autoApproveRemote`; viewing, downloads (one-time tickets, never the token in an address) and stopping a run stay open.
 43. **Copies fill the disk.** *Decided (122):* no size limit on files (Cosmin): a copy that would leave less than the backups' free-space reserve is refused with how much it needs and how much is free; the settings page shows each project's `deliverables/` size; the folder is the user's and is never cleaned up by the app.
 44. **Detected scripts are noise** (a project with forty npm scripts, a Makefile of internal targets). *Decided (119):* the common scripts first, at most 50 listed, removal by hand remembered across scans.
+
+### Long-term projects and recurring jobs (Phase 10)
+
+45. **A broken job keeps running and failing, or floods the inbox.** *Decided (144):* a failed run pauses its job and opens one failure question; a second failure while it is open only updates the reason; no run starts while paused.
+46. **After downtime, a daily job fires a burst of runs.** *Decided (144):* several missed occurrences make exactly one catch-up run, and the next run is due at the first occurrence after now; a run cut short by a restart is recorded and caught up once.
+47. **A retry races the tick into two runs.** *Decided (144):* the scheduler's work goes through one serialised queue and a job has at most one running run.
+48. **A finding is answered after its job stopped or its project closed.** *Decided (144):* the answer is refused with a clear message ("the job is stopped; the reply was not sent"), never a crash; "Drop" always works.
+49. **Real money is spent through a back door** (an agent's answer, a supervisor's relay, an "Allow similar" rule, a job's unattended rule). *Decided (145):* a spend is a question held and answered by the user only; every other path refuses it; remote answers follow the permission rule (decision 90).
+50. **A calendar edge double-runs or skips** (the 31st in February, a DST night, a year end). *Decided (144):* occurrences are computed in local time, one per day across DST, a monthly day past the month's end runs on its last day; tested across a year in two time zones.
+51. **A long-term Waykeeper's session grows with every run for months.** *Decided (144):* finished runs never wake it and send no report; it reads runs through `read_job_runs` when asked.
+52. **A user's stop on a follow-up run drops an approved send or spend.** Open (SPEC §8): today it is dropped silently.
 
 ---
 
