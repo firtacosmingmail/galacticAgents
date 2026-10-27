@@ -1,6 +1,6 @@
 # Phase 10 — Long-term projects, area moons and recurring jobs
 
-**Current task:** P10-07 · **Task status:** P10-01, P10-02, P10-03, P10-04, P10-05, P10-06 done; P10-07 next
+**Current task:** P10-07 · **Task status:** P10-01, P10-02, P10-03, P10-04, P10-05, P10-06 done; P10-07 in progress
 **Phase status:** in progress (6/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -80,7 +80,7 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 - **Acceptance:** one card per `propose_job`; approval creates area, task and job in one transaction and wakes the Waykeeper once; rejection creates nothing; refusals before any card; `list_jobs` shows `scheduleText`; long-term proposals create or convert.
 
 ### P10-07 — Web: Jobs tab, cards, scene
-- **Status:** todo · **Depends on:** P10-06 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P10-06 · **Parallel with:** —
 - Plan Tasks 11–13: JobCard, FindingCard, SpendCard (`question-spend`, `$` badge, Intl currency); the Jobs tab with run history (`GET /api/jobs/:id/runs`); area moons in the scene (labels, ring colour, click → Jobs filtered to the moon).
 - **Acceptance:** each card's fixed actions, edited reply sent in `detail.text`, `$1,250.00` in `en-US`, no Allow similar on spend, spend ranked before clarifications; `jobsModel` puts paused jobs first and counts findings, route newest first and refuses `limit=500`; area moon labels and picking; axe clean; phone width without horizontal scroll.
 
