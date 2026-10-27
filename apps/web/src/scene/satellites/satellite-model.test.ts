@@ -429,4 +429,18 @@ describe("a job run's Steward (P10-07, ledger ruling R2)", () => {
       expect(list.map((s) => s.agentId)).not.toContain(runSteward.id);
     }
   });
+
+  it('a failed run keeps its satellite on the moon (keepFailed) until the next run replaces it', () => {
+    const failed = satelliteList(jobWorld('failed'), SCENE_SATELLITES).find(
+      (s) => s.agentId === runSteward.id,
+    );
+    expect(failed).toMatchObject({ bodyId: 'b-titan', state: 'failed', landed: false });
+    const w = jobWorld('failed');
+    const next: Agent = { ...runSteward, id: 'a-run-2', createdAt: '2026-10-02T09:00:00.000Z' };
+    w.agents[next.id] = next;
+    w.statuses[next.id] = status(next.id, 'working');
+    const ids = satelliteList(w, SCENE_SATELLITES).map((s) => s.agentId);
+    expect(ids).toContain('a-run-2');
+    expect(ids).not.toContain(runSteward.id);
+  });
 });

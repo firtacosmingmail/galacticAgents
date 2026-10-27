@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { notificationOf } from '@galactic/protocol';
+import { notificationOf, spendAmountText } from '@galactic/protocol';
 import type {
   Agent,
   Event,
@@ -186,6 +186,23 @@ describe('desktop notifications (P25-07)', () => {
     expect(question!.title).toBe('A question for you');
     expect(permission!.title).toBe('Permission needed');
     expect(task!.options.body).toBe(fx.task.description);
+  });
+
+  it('a spend approval (P10-07) has its own title, and its body names amount and purpose', () => {
+    const feedPage = openPage();
+    const spend = userQuestion({
+      id: 'q-s',
+      kind: 'spend',
+      context: {
+        text: 'May I boost the post?',
+        spend: { amount: 1250, currency: 'USD', purpose: 'Boost the newsletter post' },
+      },
+    });
+    feedPage(snapshot(10), event(11, { type: 'question.opened', question: spend }));
+    const [n] = FakeNotification.instances;
+    expect(n!.tag).toBe('question:q-s');
+    expect(n!.title).toBe('Spend approval needed');
+    expect(n!.options.body).toBe(`${spendAmountText(1250, 'USD')} — Boost the newsletter post`);
   });
 
   it('a finished task or project names how many deliverables it left (decision 134)', () => {

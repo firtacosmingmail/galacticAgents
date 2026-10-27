@@ -13,6 +13,7 @@ import {
 import type { EventEnvelope } from './events.js';
 import { deliverablesPhrase } from './deliverables.js';
 import { ReplyQuote } from './reply.js';
+import type { SpendContext } from './long-term-questions.js';
 
 // ---------------------------------------------------------------------------
 // The side panel's REST surface (P25-01; SPEC §4.2–4.6, TECHNOLOGY §2.2 "a small REST surface
@@ -588,6 +589,31 @@ export const NOTIFYING_EVENT_TYPES = [
   'proposal.parked',
 ] as const;
 
+const QUESTION_TITLES: Record<QuestionKind, string> = {
+  permission: 'Permission needed',
+  clarification: 'A question for you',
+  spend: 'Spend approval needed',
+};
+
+/**
+ * A spend's amount as currency ("$1,250.00", P10-07): the runtime's locale; an unknown currency
+ * code falls back to "1250 XYZ". Pure: the page's spend card and every notification use it.
+ */
+export function spendAmountText(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
+  } catch {
+    return `${amount} ${currency}`;
+  }
+}
+
+/** A spend notification's body: "$1,250.00 — Boost the newsletter post". */
+export function spendNotificationBody(
+  spend: Pick<SpendContext, 'amount' | 'currency' | 'purpose'>,
+): string {
+  return `${spendAmountText(spend.amount, spend.currency)} — ${spend.purpose}`;
+}
+
 const clip = (text: string, n = 140) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 
 /**
@@ -610,12 +636,16 @@ export function notificationOf(
       const id = question?.id ?? (event as { questionId: Id }).questionId;
       const known = question ?? lookup.question?.(id);
       const kind = known?.kind ?? 'clarification';
+      const spend = kind === 'spend' ? known?.context.spend : undefined;
+      const body = spend ? spendNotificationBody(spend) : known?.context.text;
       return {
         ...base,
         id: `question:${id}`,
-        kind: kind === 'permission' ? 'permission' : 'question',
-        title: kind === 'permission' ? 'Permission needed' : 'A question for you',
-        ...(known?.context.text ? { body: clip(known.context.text) } : {}),
+        // A spend is gated and ranked like a permission (decision 145, ruling R7): the same
+        // notification switch and push kind; `questionKind` still tells them apart.
+        kind: kind === 'permission' || kind === 'spend' ? 'permission' : 'question',
+        title: QUESTION_TITLES[kind],
+        ...(body ? { body: clip(body) } : {}),
         target: { kind: 'question', id },
         questionKind: kind,
       };

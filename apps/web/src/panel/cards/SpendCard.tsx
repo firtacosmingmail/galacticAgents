@@ -1,4 +1,4 @@
-import { SPEND_ACTIONS, type Question } from '@galactic/protocol';
+import { SPEND_ACTIONS, spendAmountText, type Question } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { AgentRef } from './links.js';
 
@@ -9,15 +9,6 @@ import { AgentRef } from './links.js';
  * free answer. `QuestionCard` gives it its shell (class `question-spend`, the × and the offline
  * queue); on a remote client it is gated exactly like a permission card (ruling R7).
  */
-
-/** "$1,250.00" — the amount in the page's locale; an unknown currency code falls back to "1250 XYZ". */
-export function spendAmountText(amount: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
-  } catch {
-    return `${amount} ${currency}`;
-  }
-}
 
 /** The `$` badge, the amount, the purpose and who asks. */
 export function SpendDetails({ question: q }: { question: Question }) {

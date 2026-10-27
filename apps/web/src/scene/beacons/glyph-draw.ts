@@ -4,10 +4,11 @@ import { BEACON_COLOR, BEACON_INK, type GlyphSpec } from './beacon-look.js';
  * The beacon's sprites, drawn at runtime on a 2D canvas (no image assets). No three.js: the
  * renderer wraps the canvases in textures.
  *
- * - The glyph (`drawGlyph`, square): an amber diamond with a dark padlock (permission) or an amber
- *   disc with a dark "?" (clarification), a green disc with a dark "$" (spend, P10-07), a dark rim so it reads over a bright planet, and a "+n"
- *   badge in the top-right corner (dark disc, amber rim and figure) on the last beacon of a full
- *   row, for the questions on that body past it (P4-13).
+ * - The glyph (`drawGlyph`, square): an amber diamond with a dark padlock (permission), an amber
+ *   disc with a dark "?" (clarification) or a green disc with a dark "$" (spend, P10-07); a dark
+ *   rim so it reads over a bright planet, and a "+n" badge in the top-right corner (dark disc,
+ *   amber rim and figure) on the last beacon of a full row, for the questions on that body past
+ *   it (P4-13).
  * - The pillar (`drawPillar`, tall and thin): amber light, soft at the sides, brightest at the top
  *   (under the glyph) and fading towards the body.
  */
