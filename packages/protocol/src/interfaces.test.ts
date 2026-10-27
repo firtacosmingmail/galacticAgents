@@ -87,6 +87,15 @@ const commands: DomainCommands = {
   updateDeliverable: notImplemented,
   removeDeliverable: notImplemented,
   restoreDeliverable: notImplemented,
+  setLongTerm: notImplemented,
+  createJob: notImplemented,
+  updateJob: notImplemented,
+  setJobState: notImplemented,
+  startJobRun: notImplemented,
+  attachJobRunAgent: notImplemented,
+  endJobRun: notImplemented,
+  openFinding: notImplemented,
+  requestSpend: notImplemented,
 };
 
 describe('interfaces', () => {

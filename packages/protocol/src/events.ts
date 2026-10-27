@@ -40,6 +40,7 @@ import {
   Port,
   RunOutcome,
 } from './deliverables.js';
+import { Area, FollowUp, Job, JobRun, JobRunOutcome } from './long-term.js';
 
 // ---------------------------------------------------------------------------
 // agent.* — emitted by adapters, normalised (TECHNOLOGY §3.4)
@@ -750,6 +751,80 @@ export const RunEnded = z.object({
   by: Actor.optional(),
 });
 
+// ---------------------------------------------------------------------------
+// area.*, job.* and job_run.* (Phase 10; SPEC decisions 143, 144)
+// ---------------------------------------------------------------------------
+
+/** What `area.updated` may change: its name or its moon. */
+export const AreaChanges = Area.pick({ name: true, bodyId: true, meta: true }).partial();
+export type AreaChanges = z.infer<typeof AreaChanges>;
+
+/**
+ * What `job.updated` may change; an absent key is unchanged, `null` clears a field of
+ * `CLEARABLE_JOB_FIELDS`. The defaulted fields are re-declared without their default so that a
+ * change never fills in a field it did not carry.
+ */
+export const JobChanges = Job.omit({
+  id: true,
+  projectId: true,
+  taskId: true,
+  createdAt: true,
+  updatedAt: true,
+})
+  .extend({
+    provider: z.string(),
+    followUps: z.array(FollowUp),
+    pausedReason: z.string().nullable(),
+    failureQuestionId: Id.nullable(),
+    nextRunAt: Timestamp.nullable(),
+    runningRunId: Id.nullable(),
+  })
+  .partial();
+export type JobChanges = z.infer<typeof JobChanges>;
+
+/** The job fields an explicit `null` clears. */
+export const CLEARABLE_JOB_FIELDS = [
+  'pausedReason',
+  'failureQuestionId',
+  'nextRunAt',
+  'runningRunId',
+] as const;
+
+const changesSomething = { message: 'an update changes something' };
+
+/** An area was made on a moon of its project's planet: the whole row. */
+export const AreaCreated = z.object({ type: z.literal('area.created'), area: Area });
+export const AreaUpdated = z.object({
+  type: z.literal('area.updated'),
+  areaId: Id,
+  changes: AreaChanges.refine((c) => Object.keys(c).length > 0, changesSomething),
+});
+
+/** A job was made (its area and hidden task in the same command): the whole row. */
+export const JobCreated = z.object({ type: z.literal('job.created'), job: Job });
+/** A job changed: edited, paused, stopped, or its `lastRun` / `runningRunId` / follow-ups moved. */
+export const JobUpdated = z.object({
+  type: z.literal('job.updated'),
+  jobId: Id,
+  changes: JobChanges.refine((c) => Object.keys(c).length > 0, changesSomething),
+});
+
+/**
+ * A job run started: the run as it starts. Folds to nothing (run history is REST); the job's
+ * `runningRunId` changes through a `job.updated` in the same command.
+ */
+export const JobRunStarted = z.object({ type: z.literal('job_run.started'), run: JobRun });
+/** A job run ended. Folds to nothing; the job's `lastRun` changes through `job.updated`. */
+export const JobRunEnded = z.object({
+  type: z.literal('job_run.ended'),
+  runId: Id,
+  jobId: Id,
+  outcome: JobRunOutcome.exclude(['running']),
+  endedAt: Timestamp,
+  summary: z.string().optional(),
+  numbers: z.record(z.string(), z.number()).optional(),
+});
+
 /** Every event that can appear in the `events` log and on the WebSocket stream. */
 export const Event = z.discriminatedUnion('type', [
   AgentCreated,
@@ -819,6 +894,12 @@ export const Event = z.discriminatedUnion('type', [
   RunStarted,
   RunPorts,
   RunEnded,
+  AreaCreated,
+  AreaUpdated,
+  JobCreated,
+  JobUpdated,
+  JobRunStarted,
+  JobRunEnded,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event['type'];

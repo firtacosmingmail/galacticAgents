@@ -36,6 +36,16 @@ import type {
 } from './deliverables.js';
 import type { Id, Meta } from './primitives.js';
 import type { SetAnswer, SetQuestionInput } from './question-set.js';
+import type {
+  Area,
+  FollowUp,
+  Job,
+  JobDraft,
+  JobRun,
+  JobRunOutcome,
+  JobRunPurpose,
+  JobState,
+} from './long-term.js';
 
 // ---------------------------------------------------------------------------
 // Command inputs. Ids and timestamps are assigned by the server, never by the caller.
@@ -54,6 +64,11 @@ export interface CreateProjectInput {
   state?: Extract<WorkState, 'proposed' | 'approved'>;
   /** Stored as the row's `meta` (e.g. the Harmonizer's `proposalId`, P2-08). */
   meta?: Meta;
+  /**
+   * A long-term project (P10-01; SPEC decision 142): placed on a big planet (else a planet with
+   * moons) and stored with its purpose and goals.
+   */
+  longTerm?: { purpose: string; goals: string[] };
 }
 
 export interface CreateTaskInput {
@@ -199,6 +214,11 @@ export interface AnswerQuestionInput {
    * `question.answered.repliedIn`, so that brain learns it once, from the reply's message.
    */
   repliedIn?: Id;
+  /**
+   * The structured answer behind `answer` (P10-01), stored in `meta.answerDetail` as sets do: a
+   * reply finding's edited text travels as `detail.text`.
+   */
+  detail?: SetAnswer;
 }
 
 /**
@@ -357,6 +377,83 @@ export interface CommandResult<T> {
  * is refused (unknown id, invalid transition, stale answer, …) rejects with a `DomainError`
  * and writes nothing.
  */
+// Long-term projects, areas and jobs (P10-01; SPEC decisions 142–145).
+
+/** Makes a project long-term, or changes a long-term project's purpose and goals. */
+export interface SetLongTermInput {
+  projectId: Id;
+  purpose: string;
+  goals: string[];
+  by: Actor;
+}
+
+/** A job in an existing area (`areaId`) or a new one made by `name` (an existing name is reused). */
+export interface CreateJobInput {
+  projectId: Id;
+  area: { areaId: Id } | { name: string };
+  draft: JobDraft;
+  by: Actor;
+}
+
+export interface UpdateJobInput {
+  jobId: Id;
+  /** `areaId` moves the job (and its task) to another area of the project. */
+  changes: Partial<JobDraft> & { areaId?: Id };
+  by: Actor;
+}
+
+export interface SetJobStateInput {
+  jobId: Id;
+  state: JobState;
+  by: Actor;
+  /** Why it was paused or stopped. */
+  reason?: string;
+}
+
+export interface StartJobRunInput {
+  jobId: Id;
+  purpose: JobRunPurpose;
+  /** The occurrence the run is for (ISO timestamp). */
+  dueAt: string;
+  followUp?: FollowUp;
+  note?: string;
+}
+
+export interface AttachJobRunAgentInput {
+  runId: Id;
+  agentId: Id;
+}
+
+export interface EndJobRunInput {
+  runId: Id;
+  outcome: Exclude<JobRunOutcome, 'running'>;
+  summary?: string;
+  numbers?: Record<string, number>;
+  /** For `failed`: the reason the failure question gives. */
+  failureReason?: string;
+}
+
+/** A job run's finding, brought to the user as a job-owned question. */
+export interface OpenFindingInput {
+  runId: Id;
+  originAgentId: Id;
+  kind: 'suggestion' | 'reply';
+  title: string;
+  text: string;
+  /** A reply's draft. */
+  draft?: string;
+}
+
+/** A `spend` question; job-owned when `runId` names a job run. */
+export interface RequestSpendInput {
+  originAgentId: Id;
+  amount: number;
+  /** ISO 4217; default `USD`. */
+  currency?: string;
+  purpose: string;
+  runId?: Id;
+}
+
 /**
  * What `updateProject` / `updateTask` take: the row changes without the budget, which only
  * `setBudget` changes (its own `budget.set` event and loosening rule, P8-01). The events'
@@ -368,6 +465,7 @@ export type TaskEdit = Omit<TaskChanges, 'budgetUsd'>;
 export interface DomainCommands {
   // projects and tasks
   /** A `permissionPolicy` is floored unless `write.origin` is `local` (P2-21). */
+  /** `input.longTerm` makes a long-term project (P10-01). */
   createProject(input: CreateProjectInput, write?: WriteOptions): Promise<CommandResult<Project>>;
   /**
    * `null` clears a clearable field (`ProjectChanges`, P2-20); a `permissionPolicy` is floored
@@ -504,6 +602,21 @@ export interface DomainCommands {
     by: Actor,
     write?: DeliverableWriteOptions,
   ): Promise<CommandResult<Deliverable>>;
+
+  // long-term projects, areas and jobs (P10-01; SPEC decisions 142–145)
+  /** Makes a project long-term (moving it to a planet with moons when needed), or edits it. */
+  setLongTerm(input: SetLongTermInput): Promise<CommandResult<Project>>;
+  /** A job, its hidden task and, for a new area name, the area on a moon — in one transaction. */
+  createJob(input: CreateJobInput): Promise<CommandResult<{ job: Job; area: Area }>>;
+  updateJob(input: UpdateJobInput): Promise<CommandResult<Job>>;
+  setJobState(input: SetJobStateInput): Promise<CommandResult<Job>>;
+  /** Records a run's start; refused while the job has a run going or is not active. */
+  startJobRun(input: StartJobRunInput): Promise<CommandResult<JobRun>>;
+  attachJobRunAgent(input: AttachJobRunAgentInput): Promise<CommandResult<JobRun>>;
+  /** Records a run's end; a failure pauses the job and opens its one failure question. */
+  endJobRun(input: EndJobRunInput): Promise<CommandResult<JobRun>>;
+  openFinding(input: OpenFindingInput): Promise<CommandResult<Question>>;
+  requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>>;
 
   // panel actions (SPEC decision 11b)
   /**

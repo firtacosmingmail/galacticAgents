@@ -189,14 +189,15 @@ export function moonRole(world: LabelWorld, body: Body): MoonRole | undefined {
   return project.parentProjectId !== undefined ? 'sub-project' : 'independent';
 }
 
+/** An area moon's host names its project (P10-01): until area labels, it reads as the project. */
+const isProjectHost = (host: Host): boolean => host.kind === 'project' || host.kind === 'areas';
+
 function workName(world: LabelWorld, host: Host): string | undefined {
-  return host.kind === 'project'
-    ? world.projects[host.id]?.name
-    : world.tasks[host.id]?.description;
+  return isProjectHost(host) ? world.projects[host.id]?.name : world.tasks[host.id]?.description;
 }
 
 function workState(world: LabelWorld, host: Host): WorkState | undefined {
-  return host.kind === 'project' ? world.projects[host.id]?.state : world.tasks[host.id]?.state;
+  return isProjectHost(host) ? world.projects[host.id]?.state : world.tasks[host.id]?.state;
 }
 
 /** The label of one body, or `undefined` for a body that shows none (free, reserved, unknown). */
@@ -221,7 +222,7 @@ export function bodyLabel(
     const state = workState(world, host);
     const label: Omit<BodyLabel, 'selected' | 'priority'> = {
       bodyId,
-      kind: host.kind,
+      kind: host.kind === 'areas' ? 'project' : host.kind,
       title: shortTitle(name, body.kind === 'asteroid' ? ASTEROID_TITLE_MAX : TITLE_MAX),
       fullTitle: name,
       state,

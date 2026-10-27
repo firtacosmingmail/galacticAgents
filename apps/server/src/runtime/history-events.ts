@@ -317,5 +317,14 @@ export function touches(event: Event, m: Members): boolean {
       return m.deliverables.has(event.deliverableId);
     case 'run.started':
       return m.deliverables.has(event.run.deliverableId);
+    case 'area.created':
+      return m.projects.has(event.area.projectId);
+    case 'job.created':
+      return m.projects.has(event.job.projectId);
+    case 'area.updated':
+    case 'job.updated':
+    case 'job_run.started':
+    case 'job_run.ended':
+      return false; // areas and jobs are not tracked as members yet (P10-01)
   }
 }

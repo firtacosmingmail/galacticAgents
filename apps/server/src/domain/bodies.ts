@@ -31,14 +31,22 @@ export function bodyOf(ctx: CommandContext, host: Host): Body | undefined {
   return ctx.tables.bodies.all().find((b) => sameHost(b.host, host));
 }
 
-/** Projects go on planets and moons, standalone tasks on asteroids (SPEC §3.1). */
+/**
+ * Projects go on planets and moons, standalone tasks on asteroids (SPEC §3.1), a long-term
+ * project's areas on moons (P10-01).
+ */
 const KINDS: Record<Host['kind'], readonly BodyKind[]> = {
   project: ['planet', 'moon'],
   task: ['asteroid'],
+  areas: ['moon'],
 };
 
 /** The current state of what a host points at; refuses unknown hosts and project tasks. */
 function hostEntity(ctx: CommandContext, host: Host): { bodyId: Id; state: string } {
+  if (host.kind === 'areas') {
+    // Area moons are taken and released with their areas (P10-03), never by the body commands.
+    throw new DomainError('invalid', 'an area moon is assigned with its areas');
+  }
   if (host.kind === 'project') return must(ctx.tables.projects.get(host.id), 'project', host.id);
   const task = must(ctx.tables.tasks.get(host.id), 'task', host.id);
   if (task.projectId) {

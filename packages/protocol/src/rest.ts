@@ -114,6 +114,11 @@ export const AnswerBody = z.object({
    * `duplicate: true` once the first copy was recorded, instead of 409 `stale`.
    */
   answerId: z.string().min(1).max(100).optional(),
+  /**
+   * The structured answer behind `answer` (P10-01), kept as the row's `meta.answerDetail`: e.g. a
+   * reply finding's `Send` with the edited reply in `detail.text`.
+   */
+  detail: SetAnswer.optional(),
 });
 export type AnswerBody = z.infer<typeof AnswerBody>;
 

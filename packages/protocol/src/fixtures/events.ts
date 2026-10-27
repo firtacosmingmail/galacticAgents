@@ -337,4 +337,22 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     outcome: 'stopped',
     by: user,
   },
+  'area.created': { type: 'area.created', area: d.area },
+  'area.updated': { type: 'area.updated', areaId: 'ar-1', changes: { name: 'Customer feedback' } },
+  'job.created': { type: 'job.created', job: d.job },
+  'job.updated': {
+    type: 'job.updated',
+    jobId: 'j-1',
+    changes: { runningRunId: 'jr-2', nextRunAt: '2026-10-02T09:00:00.000Z' },
+  },
+  'job_run.started': { type: 'job_run.started', run: d.jobRun },
+  'job_run.ended': {
+    type: 'job_run.ended',
+    runId: 'jr-2',
+    jobId: 'j-1',
+    outcome: 'findings',
+    endedAt: '2026-10-01T09:10:00.000Z',
+    summary: 'Two suggestions.',
+    numbers: { messages: 14 },
+  },
 };

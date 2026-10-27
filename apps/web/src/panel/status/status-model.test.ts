@@ -191,7 +191,7 @@ describe('systemStatus', () => {
   it('counts open questions by kind and holder, and the waiting number of the top bar', () => {
     expect(s.questions).toEqual({
       open: 3,
-      byKind: { permission: 1, clarification: 2 },
+      byKind: { permission: 1, clarification: 2, spend: 0 },
       forUser: 2,
       bySupervisors: 1,
     });
@@ -324,7 +324,7 @@ describe('projectStatus', () => {
     expect(p.stewards).toEqual({ active: 2, total: 3 });
     expect(p.questions).toEqual({
       open: 3,
-      byKind: { permission: 2, clarification: 1 },
+      byKind: { permission: 2, clarification: 1, spend: 0 },
       forUser: 2,
       bySupervisors: 1,
     });

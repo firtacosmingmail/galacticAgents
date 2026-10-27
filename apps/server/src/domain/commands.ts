@@ -53,6 +53,18 @@ import {
   type DeliverableEdit,
   type DeliverableWriteOptions,
   type OpenAction,
+  type Area,
+  type AttachJobRunAgentInput,
+  type CreateJobInput,
+  type EndJobRunInput,
+  type Job,
+  type JobRun,
+  type OpenFindingInput,
+  type RequestSpendInput,
+  type SetJobStateInput,
+  type SetLongTermInput,
+  type StartJobRunInput,
+  type UpdateJobInput,
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
@@ -1350,6 +1362,36 @@ export class Commands implements DomainCommands {
       restoreDeliverable(ctx, deliverableId, by, this.deliverableWrite(write)),
     );
   }
+
+  // -- long-term projects, areas and jobs (P10-01 interfaces; implemented in P10-02…P10-05) ------
+
+  setLongTerm(_input: SetLongTermInput): Promise<CommandResult<Project>> {
+    return notYet('setLongTerm', 'P10-02');
+  }
+  createJob(_input: CreateJobInput): Promise<CommandResult<{ job: Job; area: Area }>> {
+    return notYet('createJob', 'P10-03');
+  }
+  updateJob(_input: UpdateJobInput): Promise<CommandResult<Job>> {
+    return notYet('updateJob', 'P10-03');
+  }
+  setJobState(_input: SetJobStateInput): Promise<CommandResult<Job>> {
+    return notYet('setJobState', 'P10-03');
+  }
+  startJobRun(_input: StartJobRunInput): Promise<CommandResult<JobRun>> {
+    return notYet('startJobRun', 'P10-04');
+  }
+  attachJobRunAgent(_input: AttachJobRunAgentInput): Promise<CommandResult<JobRun>> {
+    return notYet('attachJobRunAgent', 'P10-04');
+  }
+  endJobRun(_input: EndJobRunInput): Promise<CommandResult<JobRun>> {
+    return notYet('endJobRun', 'P10-04');
+  }
+  openFinding(_input: OpenFindingInput): Promise<CommandResult<Question>> {
+    return notYet('openFinding', 'P10-05');
+  }
+  requestSpend(_input: RequestSpendInput): Promise<CommandResult<Question>> {
+    return notYet('requestSpend', 'P10-05');
+  }
   /** The audit of an open on the Mac (decision 127); the opener (P9-03/P9-07) calls it. */
   recordDeliverableOpened(deliverableId: Id, action: OpenAction, by: Actor) {
     return this.run((ctx) => recordOpened(ctx, deliverableId, action, by));
@@ -1472,4 +1514,9 @@ function relatedPolicy(
     (policy, p) => noLooserThan(p.permissionPolicy ?? policy, policy),
     resolvePolicy(),
   );
+}
+
+/** A Phase 10 command whose interface exists before its implementation (P10-01). */
+function notYet(name: string, task: string): Promise<never> {
+  return Promise.reject(new DomainError('invalid', `${name} is not available yet (${task})`));
 }

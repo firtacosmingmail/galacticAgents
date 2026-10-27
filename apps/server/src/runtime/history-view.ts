@@ -311,9 +311,10 @@ export class HistoryView {
   }
 
   private workOf(kind: HostKind, id: Id): Work | undefined {
-    if (kind === 'project') {
+    // An area moon's host names its project (P10-01): its history is the project's.
+    if (kind === 'project' || kind === 'areas') {
       const item = this.tables.projects.get(id);
-      return item ? { kind, item } : undefined;
+      return item ? { kind: 'project', item } : undefined;
     }
     const item = this.tables.tasks.get(id);
     return item ? { kind, item } : undefined;
