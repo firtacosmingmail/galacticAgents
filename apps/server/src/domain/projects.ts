@@ -39,7 +39,7 @@ import {
   type ChooseOptions,
 } from './catalogue.js';
 import { withdrawClosureQuestion } from './closure.js';
-import { endProjectAreas } from './jobs.js';
+import { endProjectAreas, retakeAreaMoons } from './jobs.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, checkTransition, setProjectState } from './states.js';
@@ -299,7 +299,10 @@ export function pinProject(ctx: CommandContext, projectId: Id, pinned: boolean):
 function reopenBody(ctx: CommandContext, project: Project, old: Body, opts: ChooseOptions) {
   const choice = project.parentProjectId
     ? chooseBody(ctx, { kind: 'moon', parentProjectId: project.parentProjectId }, opts)
-    : chooseBody(ctx, { kind: old.kind === 'moon' ? 'moon' : 'planet' }, opts);
+    : isLongTerm(project)
+      ? // A long-term project needs a planet with moons for its areas (P10-03 review).
+        chooseBody(ctx, { kind: 'planet', longTerm: true }, opts)
+      : chooseBody(ctx, { kind: old.kind === 'moon' ? 'moon' : 'planet' }, opts);
   if (!choice.ok) {
     throw new DomainError(
       'conflict',
@@ -313,7 +316,8 @@ function reopenBody(ctx: CommandContext, project: Project, old: Body, opts: Choo
  * Reopens finished work (decision 11b) as `approved`: on its old body if that still hosts it or
  * is free, otherwise on `input.bodyId` or — without one — the catalogue's choice for its kind (a
  * sub-project: a moon of its parent's planet), P2-13. A project that changes body keeps the link
- * in `meta.previousBodyIds` (and the history in the events).
+ * in `meta.previousBodyIds` (and the history in the events). A long-term project's areas take
+ * moons of its planet again (`retakeAreaMoons`), their jobs' tasks with them (P10-03).
  */
 export function reopenProject(
   ctx: CommandContext,
@@ -337,6 +341,7 @@ export function reopenProject(
     ((!old.host && !old.movedTo) || (old.host?.kind === 'project' && old.host.id === projectId));
   if (oldIsFree && (!input.bodyId || input.bodyId === old.id)) {
     occupy(ctx, old, host);
+    retakeAreaMoons(ctx, projectId);
   } else {
     const body = input.bodyId
       ? must(ctx.tables.bodies.get(input.bodyId), 'body', input.bodyId)
@@ -352,6 +357,8 @@ export function reopenProject(
     updateProject(ctx, projectId, {
       meta: { ...ctx.tables.projects.get(projectId)!.meta, previousBodyIds: [...ids, old.id] },
     });
+    // Its areas take moons of the new planet before any card is offered one (P10-03 review).
+    retakeAreaMoons(ctx, projectId);
     if (freesOld) unparkWaiting(ctx, { ...ctx.choose, ...opts });
   }
   return setProjectState(ctx, projectId, 'approved', by);

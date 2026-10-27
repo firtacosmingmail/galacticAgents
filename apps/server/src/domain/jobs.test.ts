@@ -15,7 +15,7 @@ import { freeBody } from './bodies.js';
 import { DomainError } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { areaMoonFor, createArea, createJob, jobOf, setJobState, updateJob } from './jobs.js';
-import { archiveProject, closeProject, createProject } from './projects.js';
+import { archiveProject, closeProject, createProject, reopenProject } from './projects.js';
 import { transferTask } from './promotion.js';
 import { openQuestion } from './questions.js';
 
@@ -458,5 +458,76 @@ describe('closing and archiving a long-term project', () => {
     expect(out.events.map((e) => e.event.type)).toContain('body.freed');
     expect(tables.bodies.get('b-mimas')?.host).toBeUndefined();
     expect(tables.jobs.all().every((j) => j.state === 'stopped')).toBe(true);
+  });
+});
+
+describe('reopening a long-term project (P10-03 review)', () => {
+  function closedShop() {
+    const s = setup();
+    const p = s.longTerm('b-mars');
+    const jobs = ['Feedback', 'Sales'].map(
+      (area, i) =>
+        s.cmd((ctx) =>
+          createJob(ctx, {
+            projectId: p.id,
+            area: { name: area },
+            draft: { ...DRAFT, name: `Job ${i}` },
+            by: USER,
+          }),
+        ).job,
+    );
+    s.cmd((ctx) => closeProject(ctx, p.id, USER));
+    return { ...s, p, jobs };
+  }
+
+  it('re-takes a moon for each area; one taken meanwhile is replaced and the job tasks follow', () => {
+    const { cmd, p, jobs, tables, conforms } = closedShop();
+    // Phobos (Feedback's moon) goes to other work while the shop is closed.
+    cmd((ctx) => createProject(ctx, { name: 'Tiny', workspace: '/w/tiny', bodyId: 'b-phobos' }));
+    cmd((ctx) => reopenProject(ctx, p.id, USER));
+    const areas = tables.areas.all();
+    expect(areas.map((a) => a.bodyId)).toEqual(['b-deimos', 'b-deimos']);
+    expect(tables.bodies.get('b-deimos')?.host).toEqual({ kind: 'areas', id: p.id });
+    expect(tables.bodies.get('b-phobos')?.host?.kind).toBe('project');
+    for (const j of jobs) expect(tables.tasks.get(j.taskId)?.bodyId).toBe('b-deimos');
+    conforms();
+  });
+
+  it('a project reopened on another planet takes that planet’s moons for its areas', () => {
+    const { cmd, p, jobs, tables, conforms } = closedShop();
+    cmd((ctx) => reopenProject(ctx, p.id, USER, { bodyId: 'b-saturn' }));
+    expect(tables.areas.all().map((a) => a.bodyId)).toEqual(['b-mimas', 'b-enceladus']);
+    expect(tables.tasks.get(jobs[0]!.taskId)?.bodyId).toBe('b-mimas');
+    expect(tables.tasks.get(jobs[1]!.taskId)?.bodyId).toBe('b-enceladus');
+    for (const id of ['b-phobos', 'b-deimos']) expect(tables.bodies.get(id)?.host).toBeUndefined();
+    conforms();
+  });
+
+  it('refuses a stale area — one whose moon its project no longer holds', () => {
+    const { cmd, p, jobs, tables, err } = closedShop();
+    // As if the project were back without its moons (a state the reopen now prevents).
+    cmd((ctx) => {
+      ctx.tables.projects.upsert({ ...ctx.tables.projects.get(p.id)!, state: 'approved' });
+      ctx.emit({
+        type: 'project.state_changed',
+        projectId: p.id,
+        from: 'completed',
+        to: 'approved',
+        by: USER,
+      });
+    });
+    const area = tables.areas.all()[0]!;
+    expect(err(() => cmd((ctx) => createArea(ctx, p.id, 'feedback'))).code).toBe('invalid');
+    expect(
+      err(() =>
+        cmd((ctx) =>
+          createJob(ctx, { projectId: p.id, area: { areaId: area.id }, draft: DRAFT, by: USER }),
+        ),
+      ).code,
+    ).toBe('invalid');
+    expect(
+      err(() => cmd((ctx) => setJobState(ctx, { jobId: jobs[0]!.id, state: 'active', by: USER })))
+        .code,
+    ).toBe('invalid');
   });
 });

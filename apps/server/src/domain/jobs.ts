@@ -38,6 +38,21 @@ import { FINISHED_WORK } from './states.js';
 
 const areasHost = (projectId: Id): Host => ({ kind: 'areas', id: projectId });
 
+/**
+ * Refuses an area whose moon its project no longer holds (closing freed it, P10-03 review): its
+ * jobs would run on a moon that may host other work.
+ */
+function checkAreaHeld(ctx: Reader, area: Area): Area {
+  const host = ctx.tables.bodies.get(area.bodyId)?.host;
+  if (host?.kind !== 'areas' || host.id !== area.projectId) {
+    throw new DomainError(
+      'invalid',
+      `area ${area.name} has no moon of its project any more; reopen the project to give it one`,
+    );
+  }
+  return area;
+}
+
 const sameName = (a: string, b: string): boolean =>
   a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
 
@@ -107,7 +122,7 @@ export function createArea(ctx: CommandContext, projectId: Id, name: string): Ar
   }
   const areas = ctx.tables.areas.all().filter((a) => a.projectId === projectId);
   const existing = areas.find((a) => sameName(a.name, trimmed));
-  if (existing) return existing;
+  if (existing) return checkAreaHeld(ctx, existing);
   if (areas.length >= LONG_TERM_LIMITS.maxAreasPerProject) {
     throw new DomainError(
       'invalid',
@@ -191,7 +206,7 @@ function areaOf(ctx: Reader, projectId: Id, areaId: Id): Area {
   if (area.projectId !== projectId) {
     throw new DomainError('invalid', `area ${areaId} is not an area of project ${projectId}`);
   }
-  return area;
+  return checkAreaHeld(ctx, area);
 }
 
 /**
@@ -315,7 +330,10 @@ export function updateJob(ctx: CommandContext, input: UpdateJobInput): Job {
 export function setJobState(ctx: CommandContext, input: SetJobStateInput): Job {
   const current = jobOf(ctx, input.jobId);
   if (current.state === input.state) return current;
-  if (input.state === 'active') longTermProject(ctx, current.projectId, 'jobs');
+  if (input.state === 'active') {
+    longTermProject(ctx, current.projectId, 'jobs');
+    checkAreaHeld(ctx, must(ctx.tables.areas.get(current.areaId), 'area', current.areaId));
+  }
   const changes: JobChanges = { state: input.state };
   const dropFailureQuestion = () => {
     if (!current.failureQuestionId) return;
@@ -363,5 +381,32 @@ export function endProjectAreas(
   }
   for (const body of ctx.tables.bodies.all()) {
     if (body.host?.kind === 'areas' && body.host.id === projectId) release(ctx, body);
+  }
+}
+
+/**
+ * A long-term project reopens (P10-03 review): every area whose moon it no longer holds takes one
+ * again by `areaMoonFor` on the project's (possibly new) planet — `area.updated {bodyId}` and
+ * `body.assigned` — and its jobs' hidden tasks (and any Steward on them) follow, in the caller's
+ * transaction. Areas are taken in creation order; nothing left for one refuses the reopen.
+ */
+export function retakeAreaMoons(ctx: CommandContext, projectId: Id): void {
+  const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
+  const host = areasHost(projectId);
+  const areas = ctx.tables.areas
+    .all()
+    .filter((a) => a.projectId === projectId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  for (const area of areas) {
+    const held = ctx.tables.bodies.get(area.bodyId);
+    if (held?.host?.kind === 'areas' && held.host.id === projectId) continue;
+    const moon = areaMoonFor(ctx, project.bodyId);
+    checkAssignable(moon, host);
+    ctx.tables.areas.upsert({ ...area, bodyId: moon.id, updatedAt: ctx.now });
+    ctx.emit({ type: 'area.updated', areaId: area.id, changes: { bodyId: moon.id } });
+    occupy(ctx, moon, host);
+    for (const job of ctx.tables.jobs.all()) {
+      if (job.areaId === area.id) updateJobTask(ctx, job, moon.id, job.name);
+    }
   }
 }
