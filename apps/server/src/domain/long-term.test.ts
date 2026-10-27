@@ -3,10 +3,11 @@ import { proposalParking, type Actor, type CreateProposalInput, type Id } from '
 import { world } from '../test/world.js';
 import { createAgent } from './agents.js';
 import { moveHost } from './bodies.js';
-import { chooseBody, freeBigPlanets, isBigPlanet } from './catalogue.js';
+import { EARTH_ID, chooseBody, freeBigPlanets, isBigPlanet } from './catalogue.js';
 import { DomainError } from './errors.js';
 import { archiveProject, closeProject, createProject, setLongTerm } from './projects.js';
 import { createProposal, decideProposal } from './proposals.js';
+import { openQuestion } from './questions.js';
 import { createTask } from './tasks.js';
 
 /**
@@ -234,6 +235,36 @@ describe('setLongTerm (converting a project)', () => {
     const out = s.run((ctx) => setLongTerm(ctx, { projectId: parent.id, ...LONG_TERM, by: USER }));
     expect(out.value.bodyId).toBe('b-mars');
     expect(out.types).toEqual(['project.updated']);
+  });
+
+  it('ends a closure flow under way: the open question withdrawn, the request dropped', () => {
+    const s = setup();
+    for (const id of ['b-jupiter', 'b-saturn', 'b-uranus']) s.make(id, id);
+    const p = s.make('Shop', 'b-mars', { meta: { proposalId: 'pr-1' } });
+    const hq = s.run((ctx) =>
+      createAgent(ctx, { role: 'harmonizer', runtime: 'fake', caps: CAPS, bodyId: EARTH_ID }),
+    ).value;
+    s.run((ctx) =>
+      openQuestion(ctx, {
+        id: 'q-closure',
+        kind: 'clarification',
+        originAgentId: hq.id,
+        context: { text: 'Anything else on Shop?', options: ['Close Shop', 'Something else: …'] },
+      }),
+    );
+    const request = { by: 'a-wk', summary: 'done', tasks: 1, questionId: 'q-closure' };
+    s.run((ctx) => {
+      const row = ctx.tables.projects.get(p.id)!;
+      ctx.tables.projects.upsert({ ...row, meta: { ...row.meta, closureRequest: request } });
+    });
+    const out = s.run((ctx) => setLongTerm(ctx, { projectId: p.id, ...LONG_TERM, by: USER }));
+    expect(s.tables.questions.get('q-closure')?.status).toBe('cancelled');
+    expect(out.events).toContainEqual({
+      type: 'project.updated',
+      projectId: p.id,
+      changes: { longTerm: true, ...LONG_TERM, meta: { proposalId: 'pr-1' } },
+    });
+    expect(s.tables.projects.get(p.id)?.meta).toEqual({ proposalId: 'pr-1' });
   });
 
   it('only edits the purpose and goals of an already long-term project', () => {

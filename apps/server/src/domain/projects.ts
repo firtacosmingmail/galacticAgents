@@ -373,7 +373,8 @@ function longTermMove(ctx: CommandContext, project: Project): Body | undefined {
 /**
  * Makes a project long-term, or edits a long-term project's purpose and goals (P10-02; SPEC
  * decision 142). Refused for a sub-project (it is part of its parent) and for finished work. The
- * three fields are set by one `project.updated`; a project not on a big planet moves (`moveHost`:
+ * three fields are set by one `project.updated` (which also drops a pending closure request, its
+ * open "Anything else?" question withdrawn first); a project not on a big planet moves (`moveHost`:
  * its tasks and satellites follow) by `longTermMove`'s rule, all in the caller's transaction. An
  * already long-term project only gets its purpose and goals.
  */
@@ -394,11 +395,17 @@ export function setLongTerm(ctx: CommandContext, input: SetLongTermInput): Proje
   }
   checkPurposeAndGoals(input.purpose, input.goals);
   const to = isLongTerm(current) ? undefined : longTermMove(ctx, current);
+  // A long-term project never starts the "anything else?" flow: one already under way ends here
+  // (its open question withdrawn, the Waykeeper's recorded request dropped), in this transaction.
+  const converting = !isLongTerm(current);
+  if (converting) withdrawClosureQuestion(ctx, current.id, 'the project became long-term');
+  const { closureRequest, ...restMeta } = current.meta ?? {};
   // Never `longTerm: false` (a stored 0 reads back as absent): converting only ever sets true.
   const changes = {
-    ...(isLongTerm(current) ? {} : { longTerm: true as const }),
+    ...(converting ? { longTerm: true as const } : {}),
     purpose: input.purpose,
     goals: [...input.goals],
+    ...(converting && closureRequest !== undefined ? { meta: restMeta } : {}),
   } satisfies ProjectChanges;
   const project = ctx.tables.projects.upsert({ ...current, ...changes, updatedAt: ctx.now });
   ctx.emit({ type: 'project.updated', projectId: current.id, changes });
