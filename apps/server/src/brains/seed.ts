@@ -1,6 +1,7 @@
 import {
   ENDED_STATES,
   isJobTask,
+  proposalJobOf,
   proposalPlan,
   type AgentRole,
   type Id,
@@ -10,6 +11,7 @@ import {
 import type { Tables } from '../db/tables.js';
 import type { BrainQueries } from './definition.js';
 import { concernedSupervisors } from '../domain/cascade.js';
+import { jobRuns } from '../domain/job-runs.js';
 import type { WakeScope } from './wake.js';
 
 /**
@@ -56,6 +58,17 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
     proposals: () => tables.proposals.all().sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     question: (id) => tables.questions.get(id),
     allOpenQuestions: () => tables.questions.all().filter((q) => q.status === 'open'),
+    jobs: (projectId) =>
+      tables.jobs
+        .all()
+        .filter((j) => j.projectId === projectId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    areas: (projectId) =>
+      tables.areas
+        .all()
+        .filter((a) => a.projectId === projectId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    jobRuns: (jobId, limit) => jobRuns({ tables }, jobId, limit),
   };
   return queries;
 }
@@ -88,6 +101,7 @@ export function createWakeScope(
   return {
     ...brain,
     supervises,
+    supervisedBy: (id) => id !== undefined && tables.agents.get(brain.brainId)?.supervisorId === id,
     below: (id) => {
       const seen = new Set<Id>();
       for (let at = id; at !== undefined && !seen.has(at);) {
@@ -107,11 +121,12 @@ export function createWakeScope(
       projectId === brain.projectId || supervised().some((a) => a.projectId === projectId),
     // The Harmonizer proposes (SPEC §3.3); a plan card belongs to its project's Waykeeper —
     // whichever agent runs the project now, so a replacement Waykeeper learns the decision (P2-10).
+    // A job card (P10-06) is its project's Waykeeper's in the same way.
     // A Waykeeper's promotion request (`meta.promotion`) is its project's Waykeeper's too: only
     // that brain hears the decision (P2-12 does the move), never the Harmonizer as well.
     ownsProposal: (proposalId) => {
       const proposal = tables.proposals.get(proposalId);
-      const plan = proposalPlan(proposal);
+      const plan = proposalPlan(proposal) ?? proposalJobOf(proposal);
       if (plan) return brain.role === 'waykeeper' && plan.projectId === brain.projectId;
       const promotion = proposal?.meta?.['promotion'] as
         { fromProjectId?: unknown; requestedBy?: unknown } | undefined;
@@ -120,6 +135,7 @@ export function createWakeScope(
       }
       return brain.role === 'harmonizer';
     },
+    proposal: (id) => tables.proposals.get(id),
     question: (id) => tables.questions.get(id),
     jobRun: (id) => {
       const agent = id !== undefined ? tables.agents.get(id) : undefined;

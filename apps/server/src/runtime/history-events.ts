@@ -19,7 +19,7 @@ import {
  * the pages of one read agree): the
  * project and its sub-projects (by `parentProjectId`, transitively), their tasks, every agent
  * working on one of them, the questions those agents asked, and the Waykeeper's plan cards
- * (`meta.plan.projectId`). Bodies are those the project, its tasks or its agents live on, plus every
+ * (`meta.plan.projectId`, a job card's `meta.job.projectId`). Bodies are those the project, its tasks or its agents live on, plus every
  * body the log ever assigned to or moved one of them from or to (a task's asteroid before it joined
  * the project, a promotion's old body), found by `type` (indexed) — moves and assignments are rare.
  * An event is returned when it is about one of those (see `touches`), unless its type changes
@@ -194,8 +194,10 @@ export class HistoryEvents {
     for (const q of questionRows) if (agents.has(q.agentId)) questions.add(q.id);
     const proposals = new Set<Id>();
     const planRows = this.stmt(
-      `SELECT id, json_extract(meta, '$.plan.projectId') AS projectId FROM proposals
-        WHERE json_extract(meta, '$.plan.projectId') IS NOT NULL`,
+      `SELECT id, COALESCE(json_extract(meta, '$.plan.projectId'),
+          json_extract(meta, '$.job.projectId')) AS projectId FROM proposals
+        WHERE COALESCE(json_extract(meta, '$.plan.projectId'),
+          json_extract(meta, '$.job.projectId')) IS NOT NULL`,
     ).all() as { id: Id; projectId: Id }[];
     for (const p of planRows) if (projects.has(p.projectId)) proposals.add(p.id);
     // Every body the log put this work on or moved it from (indexed by `type`).

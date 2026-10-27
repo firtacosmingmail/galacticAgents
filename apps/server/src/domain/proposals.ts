@@ -3,30 +3,48 @@ import {
   BudgetUsd,
   foldProposalMeta,
   proposalBudget,
+  proposalJobOf,
+  proposalLongTermOf,
   proposalPlan,
   TrustLevel,
   type Actor,
   type CreateProposalInput,
   type Id,
+  type Job,
+  type Project,
   type Proposal,
   type ProposalDecision,
+  type ProposalJob,
   type ProposalState,
+  type ProposeJobInput,
   type ProposePlanInput,
   type Task,
+  type UpdateJobInput,
 } from '@galactic/protocol';
 import { carryOut, type ProposalOptions } from './approval.js';
 import { setBudget } from './budgets.js';
-import { describeRefusal } from './catalogue.js';
+import { describeRefusal, hasMoons, type Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import {
+  checkJobCreate,
+  createJob,
+  draftOf,
+  jobOf,
+  planJobUpdate,
+  setJobState,
+  updateJob,
+} from './jobs.js';
 import {
   bodyRequestOf,
   park,
   parkIfNoRoom,
   parkingFor,
+  requestOf,
   roomFor,
   unparkWaiting,
 } from './parking.js';
+import { checkPurposeAndGoals, checkSetLongTerm } from './projects.js';
 import { setTaskState } from './states.js';
 import { createTask } from './tasks.js';
 
@@ -71,11 +89,70 @@ function checkShape(ctx: CommandContext, p: Pick<Proposal, 'kind' | 'proposedBod
   }
 }
 
+/**
+ * A long-term card (`meta.longTerm`, P10-06) checked before it exists. A new long-term project is
+ * an independent planet project, on a planet with moons when the card names one. A conversion card
+ * (`projectId`) is checked like `setLongTerm` — refused when no planet with moons is free for a
+ * project that must move — and proposes where the approval puts the project.
+ */
+function checkLongTermCard(ctx: Reader, input: CreateProposalInput): CreateProposalInput {
+  if (input.meta?.['longTerm'] === undefined) return input;
+  const raw = input.meta['longTerm'] as { purpose?: unknown; goals?: unknown } | null;
+  if (
+    typeof raw?.purpose !== 'string' ||
+    !Array.isArray(raw.goals) ||
+    raw.goals.some((g) => typeof g !== 'string')
+  ) {
+    throw new DomainError('invalid', 'a long-term card needs a purpose and a list of goals');
+  }
+  checkPurposeAndGoals(raw.purpose, raw.goals as string[]);
+  const longTerm = proposalLongTermOf(input);
+  if (!longTerm) throw new DomainError('invalid', 'invalid long-term card');
+  if (longTerm.projectId) {
+    if (input.meta['request'] !== undefined) {
+      throw new DomainError('invalid', 'a conversion card asks for nothing else');
+    }
+    const { project, to } = checkSetLongTerm(ctx, { ...longTerm, projectId: longTerm.projectId });
+    const body = to ?? must(ctx.tables.bodies.get(project.bodyId), 'body', project.bodyId);
+    return {
+      ...input,
+      kind: 'planet',
+      proposedBody: { kind: 'planet', bodyId: body.id, name: body.name },
+      workspace: project.workspace,
+    };
+  }
+  const request = requestOf(input);
+  if (request?.type !== 'new_project' || request.parentProjectId || input.kind !== 'planet') {
+    throw new DomainError('invalid', 'a long-term project is a new project on a planet of its own');
+  }
+  checkLongTermBody(ctx, input.proposedBody.bodyId);
+  return input;
+}
+
+/** A long-term project's named planet has moons (its areas live on them). */
+function checkLongTermBody(ctx: Reader, bodyId: Id | undefined): void {
+  if (!bodyId) return;
+  const body = must(ctx.tables.bodies.get(bodyId), 'body', bodyId);
+  if (!hasMoons(ctx, body)) {
+    throw new DomainError(
+      'invalid',
+      `a long-term project lives on a planet with moons; ${body.name} has none`,
+    );
+  }
+}
+
 export function createProposal(
   ctx: CommandContext,
-  input: CreateProposalInput,
+  given: CreateProposalInput,
   opts: ProposalOptions = {},
 ): Proposal {
+  if (given.meta?.['job'] !== undefined) {
+    throw new DomainError(
+      'invalid',
+      "a job card is made by proposeJob, from the project's Waykeeper",
+    );
+  }
+  const input = checkLongTermCard(ctx, given);
   checkShape(ctx, input);
   // A card's trust level is the user's alone (decision 49): whoever proposes cannot preset it.
   const { trust: _trust, ...meta } = input.meta ?? {};
@@ -187,6 +264,153 @@ export function proposePlan(
   return { proposal, tasks };
 }
 
+/** The project's Waykeeper `waykeeperId`, or the refusal. */
+function waykeeperOf(ctx: Reader, project: Project, waykeeperId: Id) {
+  const waykeeper = must(ctx.tables.agents.get(waykeeperId), 'agent', waykeeperId);
+  if (waykeeper.role !== 'waykeeper' || waykeeper.projectId !== project.id) {
+    throw new DomainError('invalid', `${waykeeper.id} is not the Waykeeper of ${project.id}`);
+  }
+  return waykeeper;
+}
+
+/** Job-card states that still wait for the user. */
+const WAITING: readonly ProposalState[] = ['pending', 'edited', 'parked'];
+
+/** A job of the project with no other card waiting about it, or the refusal. */
+function proposableJob(ctx: Reader, project: Project, jobId: Id): Job {
+  const job = jobOf(ctx, jobId);
+  if (job.projectId !== project.id) {
+    throw new DomainError('invalid', `job ${jobId} is not a job of project ${project.id}`);
+  }
+  const waiting = ctx.tables.proposals
+    .all()
+    .find((p) => WAITING.includes(p.state) && proposalJobOf(p)?.jobId === jobId);
+  if (waiting) {
+    throw new DomainError(
+      'conflict',
+      `card ${waiting.id} about job ${job.name} is waiting for the user`,
+    );
+  }
+  return job;
+}
+
+const JOB_CARD_TITLE = { create: 'New recurring job', change: 'Change job', stop: 'Stop job' };
+
+/**
+ * A Waykeeper's job card (P10-06; SPEC decision 144): one card to create, change or stop a
+ * recurring job of its long-term project, checked by the same rules as the command its approval
+ * runs (`checkJobCreate`, `planJobUpdate`) before it exists — a push rule, a secret, a full area
+ * or a short-term project is refused here, not at approval. A change or stop card keeps the job as
+ * it was (`before`) and the job as it will be (`draft`), so it shows before → after; one card per
+ * job waits at a time. Like a plan card, it lives on the project's body and the Waykeeper that
+ * proposed (or its successor) is told the decision.
+ */
+export function proposeJob(ctx: CommandContext, input: ProposeJobInput): Proposal {
+  const project = must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
+  const waykeeper = waykeeperOf(ctx, project, input.waykeeperId);
+  let card: ProposalJob;
+  let name: string;
+  switch (input.action) {
+    case 'create': {
+      const area = 'areaId' in input.area ? input.area : { name: input.area.name.trim() };
+      const draft = checkJobCreate(ctx, { projectId: project.id, area, draft: input.draft });
+      card = { projectId: project.id, waykeeperId: waykeeper.id, action: 'create', draft, area };
+      name = draft.name;
+      break;
+    }
+    case 'change': {
+      const job = proposableJob(ctx, project, input.jobId);
+      const given = Object.entries(input.changes).filter(([, v]) => v !== undefined);
+      if (given.length === 0) throw new DomainError('invalid', 'a job change changes something');
+      const { merged, changes } = planJobUpdate(ctx, { jobId: job.id, changes: input.changes });
+      if (Object.keys(changes).length === 0) {
+        throw new DomainError('invalid', `the change leaves job ${job.name} as it is`);
+      }
+      card = {
+        projectId: project.id,
+        waykeeperId: waykeeper.id,
+        action: 'change',
+        jobId: job.id,
+        draft: merged,
+        ...(changes.areaId ? { area: { areaId: changes.areaId } } : {}),
+        before: { draft: draftOf(job), areaId: job.areaId },
+      };
+      name = job.name;
+      break;
+    }
+    case 'stop': {
+      const job = proposableJob(ctx, project, input.jobId);
+      if (job.state === 'stopped') {
+        throw new DomainError('invalid_transition', `job ${job.name} is already stopped`);
+      }
+      card = {
+        projectId: project.id,
+        waykeeperId: waykeeper.id,
+        action: 'stop',
+        jobId: job.id,
+        before: { draft: draftOf(job), areaId: job.areaId },
+      };
+      name = job.name;
+      break;
+    }
+  }
+  const body = must(ctx.tables.bodies.get(project.bodyId), 'body', project.bodyId);
+  const kind = body.kind === 'moon' ? 'moon' : 'planet';
+  const proposal: Proposal = {
+    id: `pr-${randomUUID()}`,
+    requestText: `${JOB_CARD_TITLE[card.action]}: ${name}`,
+    kind,
+    proposedBody: { kind, bodyId: body.id, name: body.name },
+    workspace: project.workspace,
+    rationale: input.rationale ?? '',
+    state: 'pending',
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    meta: { job: card },
+  };
+  ctx.tables.proposals.insert(proposal);
+  ctx.emit({ type: 'proposal.created', proposal });
+  return proposal;
+}
+
+const DRAFT_FIELDS = ['name', 'instructions', 'schedule', 'provider', 'unattendedRules'] as const;
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * What an approved job card does, in the approval's transaction: create the job (and a new area),
+ * apply the fields the change card changed — to the job as it is now, so an edit made meanwhile to
+ * another field stands — or stop the job. A refusal (the area filled up meanwhile, the project is
+ * no longer open) undoes the approval with it.
+ */
+function carryOutJobCard(ctx: CommandContext, card: ProposalJob, by: Actor): void {
+  switch (card.action) {
+    case 'create':
+      if (!card.draft || !card.area) throw new DomainError('invalid', 'a new job card needs a job');
+      createJob(ctx, { projectId: card.projectId, area: card.area, draft: card.draft, by });
+      return;
+    case 'change': {
+      if (!card.jobId || !card.draft || !card.before) {
+        throw new DomainError('invalid', 'a job change card needs the job and its change');
+      }
+      const changes: UpdateJobInput['changes'] = {};
+      for (const field of DRAFT_FIELDS) {
+        if (!same(card.draft[field], card.before.draft[field])) {
+          (changes as Record<string, unknown>)[field] = card.draft[field];
+        }
+      }
+      if (card.area && 'areaId' in card.area && card.area.areaId !== card.before.areaId) {
+        changes.areaId = card.area.areaId;
+      }
+      updateJob(ctx, { jobId: card.jobId, changes, by });
+      return;
+    }
+    case 'stop':
+      if (!card.jobId) throw new DomainError('invalid', 'a job stop card needs the job');
+      setJobState(ctx, { jobId: card.jobId, state: 'stopped', by });
+      return;
+  }
+}
+
 export function decideProposal(
   ctx: CommandContext,
   proposalId: Id,
@@ -196,6 +420,37 @@ export function decideProposal(
 ): Proposal {
   const current = must(ctx.tables.proposals.get(proposalId), 'proposal', proposalId);
   const plan = proposalPlan(current);
+  const jobCard = proposalJobOf(current);
+  const longTerm = proposalLongTermOf(current);
+  if (jobCard) {
+    // A job card is the user's (decision 144), approved or rejected as the Waykeeper made it.
+    if (by?.type === 'agent') {
+      throw new DomainError('invalid', `job card ${proposalId} is the user's to decide`);
+    }
+    if (decision.decision === 'edit' || decision.decision === 'park') {
+      throw new DomainError(
+        'invalid',
+        `job card ${proposalId} is not ${DONE[decision.decision]}: reject it with a reason and the Waykeeper proposes another`,
+      );
+    }
+  }
+  if (longTerm?.projectId && (decision.decision === 'edit' || decision.decision === 'park')) {
+    throw new DomainError(
+      'invalid',
+      `long-term card ${proposalId} is not ${DONE[decision.decision]}: approve or reject it as it is`,
+    );
+  }
+  if (longTerm && !longTerm.projectId && decision.decision === 'edit') {
+    // A long-term project lives on a planet with moons (P10-02): it is never downsized on its card.
+    const kind = decision.changes.kind ?? decision.changes.proposedBody?.kind;
+    if (kind !== undefined && kind !== 'planet') {
+      throw new DomainError(
+        'invalid',
+        `a long-term project lives on a planet with moons, not on a ${kind}: reject the card and ask for an ordinary project instead`,
+      );
+    }
+    checkLongTermBody(ctx, decision.changes.proposedBody?.bodyId);
+  }
   if (plan) {
     // The user decides on a plan (decision 3), as one; it is edited through its tasks.
     if (by?.type === 'agent') {
@@ -233,7 +488,7 @@ export function decideProposal(
   switch (decision.decision) {
     case 'approve': {
       // A work card needs its body now (P2-09): without one it is parked instead (decision 16).
-      const request = plan ? undefined : bodyRequestOf(ctx, current);
+      const request = plan || jobCard ? undefined : bodyRequestOf(ctx, current);
       const room = request ? roomFor(ctx, current, opts) : undefined;
       if (request && room && !room.ok) {
         if (current.state === 'parked') {
@@ -241,9 +496,10 @@ export function decideProposal(
         }
         return park(ctx, current, parkingFor(request, room));
       }
-      const workspace = plan
-        ? current.workspace
-        : (opts.checkWorkspace?.(current.workspace) ?? current.workspace);
+      const workspace =
+        plan || jobCard
+          ? current.workspace
+          : (opts.checkWorkspace?.(current.workspace) ?? current.workspace);
       const proposal = save({ state: 'approved' });
       ctx.emit({ type: 'proposal.approved', proposalId });
       // A plan's tasks are approved with it (the ones the user archived meanwhile stay archived).
@@ -252,10 +508,13 @@ export function decideProposal(
           setTaskState(ctx, taskId, 'approved', by);
         }
       }
+      // A job card's job is created, changed or stopped with the approval (P10-06).
+      if (jobCard) carryOutJobCard(ctx, jobCard, by ?? { type: 'system' });
       // What the card asks for is created in the approval's transaction (P2-09, `approval.ts`).
-      const made = plan
-        ? undefined
-        : carryOut(ctx, proposal, room?.ok ? room.body : undefined, workspace, opts, by);
+      const made =
+        plan || jobCard
+          ? undefined
+          : carryOut(ctx, proposal, room?.ok ? room.body : undefined, workspace, opts, by);
       // The budget the user gave the card (P8-01): the new project's or task's, a plan's project's.
       const budget = proposalBudget(proposal);
       const target = plan
@@ -331,7 +590,7 @@ export function decideProposal(
         proposalId,
         ...(decision.reason ? { reason: decision.reason } : {}),
       });
-      if (!plan) unparkWaiting(ctx, opts);
+      if (!plan && !jobCard) unparkWaiting(ctx, opts);
       return proposal;
     }
     case 'park':

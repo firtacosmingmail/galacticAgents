@@ -37,6 +37,7 @@ import {
   isBigPlanet,
   longTermPlanet,
   type ChooseOptions,
+  type Reader,
 } from './catalogue.js';
 import { withdrawClosureQuestion } from './closure.js';
 import { endProjectAreas, retakeAreaMoons } from './jobs.js';
@@ -132,7 +133,7 @@ function pickBody(ctx: CommandContext, input: CreateProjectInput, opts: ChooseOp
 }
 
 /** A purpose and goals within `LONG_TERM_LIMITS` (Global Constraints), or `invalid`. */
-function checkPurposeAndGoals(purpose: string, goals: readonly string[]): void {
+export function checkPurposeAndGoals(purpose: string, goals: readonly string[]): void {
   const L = LONG_TERM_LIMITS;
   if (purpose.trim().length === 0 || purpose.length > L.maxPurpose) {
     throw new DomainError('invalid', `a purpose is 1–${L.maxPurpose} characters`);
@@ -371,7 +372,7 @@ export function reopenProject(
  * planet with moons, and with none it is refused. A planet whose moons host the project's
  * sub-projects keeps it (they live on its moons, SPEC §3.2).
  */
-function longTermMove(ctx: CommandContext, project: Project): Body | undefined {
+function longTermMove(ctx: Reader, project: Project): Body | undefined {
   const body = must(ctx.tables.bodies.get(project.bodyId), 'body', project.bodyId);
   if (isBigPlanet(ctx, body)) return undefined;
   const onPlanetWithMoons = body.kind === 'planet' && hasMoons(ctx, body);
@@ -391,6 +392,34 @@ function longTermMove(ctx: CommandContext, project: Project): Body | undefined {
 }
 
 /**
+ * Every check `setLongTerm` makes, without writing (a conversion card is checked before it exists,
+ * P10-06): not a sub-project, not finished, the limits, and somewhere to go. Returns the project
+ * and the planet it moves to (none: it stays where it is).
+ */
+export function checkSetLongTerm(
+  ctx: Reader,
+  input: Pick<SetLongTermInput, 'projectId' | 'purpose' | 'goals'>,
+): { project: Project; to?: Body } {
+  const project = must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
+  if (project.parentProjectId) {
+    const parent = ctx.tables.projects.get(project.parentProjectId);
+    throw new DomainError(
+      'invalid',
+      `a part of ${parent?.name ?? project.parentProjectId} cannot become long-term on its own`,
+    );
+  }
+  if (FINISHED_WORK.has(project.state)) {
+    throw new DomainError(
+      'invalid_transition',
+      `project ${project.id} is ${project.state}; reopen it first`,
+    );
+  }
+  checkPurposeAndGoals(input.purpose, input.goals);
+  const to = isLongTerm(project) ? undefined : longTermMove(ctx, project);
+  return { project, ...(to ? { to } : {}) };
+}
+
+/**
  * Makes a project long-term, or edits a long-term project's purpose and goals (P10-02; SPEC
  * decision 142). Refused for a sub-project (it is part of its parent) and for finished work. The
  * three fields are set by one `project.updated` (which also drops a pending closure request, its
@@ -399,22 +428,7 @@ function longTermMove(ctx: CommandContext, project: Project): Body | undefined {
  * already long-term project only gets its purpose and goals.
  */
 export function setLongTerm(ctx: CommandContext, input: SetLongTermInput): Project {
-  const current = must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
-  if (current.parentProjectId) {
-    const parent = ctx.tables.projects.get(current.parentProjectId);
-    throw new DomainError(
-      'invalid',
-      `a part of ${parent?.name ?? current.parentProjectId} cannot become long-term on its own`,
-    );
-  }
-  if (FINISHED_WORK.has(current.state)) {
-    throw new DomainError(
-      'invalid_transition',
-      `project ${current.id} is ${current.state}; reopen it first`,
-    );
-  }
-  checkPurposeAndGoals(input.purpose, input.goals);
-  const to = isLongTerm(current) ? undefined : longTermMove(ctx, current);
+  const { project: current, to } = checkSetLongTerm(ctx, input);
   // A long-term project never starts the "anything else?" flow: one already under way ends here
   // (its open question withdrawn, the Waykeeper's recorded request dropped), in this transaction.
   const converting = !isLongTerm(current);

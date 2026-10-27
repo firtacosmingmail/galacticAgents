@@ -3,12 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { proposalParking, type Id } from '@galactic/protocol';
+import { proposalLongTermOf, proposalParking, type Id } from '@galactic/protocol';
 import { gitRunner } from '../../workspace/git.js';
 import { workspaceMeta } from '../../workspace/workspaces.js';
 import { brainHarness, type BrainHarness } from '../testing/index.js';
 import { waykeeperDefinition } from '../waykeeper/index.js';
-import { harmonizerBrain } from './index.js';
+import { HARMONIZER_SYSTEM_PROMPT, harmonizerBrain } from './index.js';
 
 /**
  * P2-09 through the P2-07 harness: the Harmonizer's side of the proposal flow. A card parked for
@@ -183,5 +183,261 @@ describe('Harmonizer and the proposal flow (P2-09)', () => {
     expect(existsSync(join(folders.declined, '.git'))).toBe(false);
     expect(hq.calls('spawn_waykeeper')).toHaveLength(2);
     expect(hq.calls('spawn_waykeeper').every((c) => c.ok)).toBe(true);
+  });
+});
+
+describe('long-term proposals (P10-06)', () => {
+  const LONG_TERM = { purpose: 'Grow the app for years', goals: ['1000 users', 'break even'] };
+
+  it('propose with longTerm → approved → a long-term project on a big planet', async () => {
+    const { h, root, definition } = setup();
+    let proposed: Record<string, unknown> | undefined;
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('a product', async (t) => {
+            proposed = await t.call('propose', {
+              type: 'new_project',
+              requestText: 'Start my SaaS, a product I will run for years',
+              name: 'SaaS',
+              kind: 'planet',
+              rationale: 'a product looked after over months',
+              workspace: join(root, 'saas'),
+              longTerm: LONG_TERM,
+            });
+          })
+          .once(approvedLine, async (t) => {
+            const proposalId = approvedLine.exec(t.prompt)![1]!;
+            const project = await t.call<{ projectId: Id }>('create_project', { proposalId });
+            await t.call('spawn_waykeeper', { projectId: project.projectId });
+          }),
+    });
+    hq.tell('Start my SaaS, a product I will run for years');
+    await h.settle();
+    expect(proposed).toMatchObject({ state: 'pending', longTerm: true });
+    const [card] = h.log.tables.proposals.all();
+    expect(card!.proposedBody.bodyId).toBe('b-jupiter');
+    expect(proposalLongTermOf(card)).toEqual(LONG_TERM);
+    await h.commands.decideProposal(card!.id, { decision: 'approve' }, USER);
+    await h.done();
+    const saas = h.log.tables.projects.all().find((p) => p.name === 'SaaS')!;
+    expect(saas).toMatchObject({ bodyId: 'b-jupiter', longTerm: true, ...LONG_TERM });
+    hq.assertCalls(['propose', 'create_project', 'spawn_waykeeper']);
+  });
+
+  it('propose_long_term → approved → the project is converted and moved; the Harmonizer creates nothing', async () => {
+    const { h, root, definition } = setup();
+    const app = (await h.commands.createProject({ name: 'App', workspace: join(root, 'app') }))
+      .value;
+    expect(app.bodyId).not.toBe('b-jupiter');
+    let proposed: Record<string, unknown> | undefined;
+    const said: string[] = [];
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('long-term', async (t) => {
+            proposed = await t.call('propose_long_term', { projectId: app.id, ...LONG_TERM });
+          })
+          .once(approvedLine, (t) => {
+            said.push(t.prompt);
+          }),
+    });
+    hq.tell('Make App long-term');
+    await h.settle();
+    expect(proposed).toMatchObject({
+      state: 'pending',
+      movesTo: { bodyId: 'b-jupiter', name: 'Jupiter' },
+    });
+    const [card] = h.log.tables.proposals.all();
+    expect(card).toMatchObject({
+      requestText: 'Make App long-term',
+      kind: 'planet',
+      proposedBody: { kind: 'planet', bodyId: 'b-jupiter' },
+    });
+    // A conversion card is approved or rejected as it is.
+    await expect(
+      h.commands.decideProposal(
+        card!.id,
+        { decision: 'edit', changes: { workspace: join(root, 'other') } },
+        USER,
+      ),
+    ).rejects.toThrow(/approve or reject it as it is/);
+    await h.commands.decideProposal(card!.id, { decision: 'approve' }, USER);
+    await h.done();
+    expect(h.log.tables.projects.get(app.id)).toMatchObject({
+      bodyId: 'b-jupiter',
+      longTerm: true,
+      ...LONG_TERM,
+    });
+    expect(h.log.tables.projects.all()).toHaveLength(1);
+    expect(said[0]).toContain(
+      `proposal ${card!.id} was approved: project ${app.id} is now long-term`,
+    );
+    expect(said[0]).toContain('nothing to create or spawn');
+    hq.assertCalls(['propose_long_term']);
+  });
+
+  it('refuses a conversion before any card: a sub-project, or no planet with moons to move to', async () => {
+    const { h, root, definition } = setup();
+    const parent = (
+      await h.commands.createProject({ name: 'Parent', workspace: join(root, 'parent') })
+    ).value;
+    const part = (
+      await h.commands.createProject({
+        name: 'Part',
+        workspace: join(root, 'part'),
+        kind: 'moon',
+        parentProjectId: parent.id,
+      })
+    ).value;
+    for (const [name, bodyId] of [
+      ['J', 'b-jupiter'],
+      ['S', 'b-saturn'],
+      ['U', 'b-uranus'],
+      ['N', 'b-neptune'],
+    ] as const) {
+      await h.commands.createProject({ name, workspace: join(root, name), bodyId });
+    }
+    const venus = (
+      await h.commands.createProject({ name: 'V', workspace: join(root, 'v'), bodyId: 'b-venus' })
+    ).value;
+    const outcomes: unknown[] = [];
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s.once('go', async (t) => {
+          outcomes.push(await t.try('propose_long_term', { projectId: part.id, ...LONG_TERM }));
+          outcomes.push(await t.try('propose_long_term', { projectId: venus.id, ...LONG_TERM }));
+          outcomes.push(
+            await t.try('propose_long_term', { projectId: parent.id, purpose: '', goals: [] }),
+          );
+        }),
+    });
+    hq.tell('go');
+    await h.done();
+    expect(outcomes[0]).toMatchObject({
+      ok: false,
+      error: 'invalid',
+      message: 'a part of Parent cannot become long-term on its own',
+    });
+    // Parent sits on Mars (moons): Venus has none, and Mars is taken.
+    expect(outcomes[1]).toMatchObject({
+      ok: false,
+      error: 'conflict',
+      message: 'No planet with moons is free; V stays as it is until one is.',
+    });
+    expect(outcomes[2]).toMatchObject({ ok: false, error: 'invalid' });
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+  });
+
+  it('a long-term card is never downsized; with no planet with moons it is parked, and size_request says why', async () => {
+    const { h, root, definition } = setup();
+    for (const [name, bodyId] of [
+      ['J', 'b-jupiter'],
+      ['S', 'b-saturn'],
+      ['U', 'b-uranus'],
+      ['N', 'b-neptune'],
+      ['M', 'b-mars'],
+    ] as const) {
+      await h.commands.createProject({ name, workspace: join(root, name), bodyId });
+    }
+    let sized: { rationale?: string; body?: { reason?: string } } | undefined;
+    let proposed: { state?: string } | undefined;
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s.once('go', async (t) => {
+          sized = await t.call('size_request', {
+            request: 'a product I will run for years',
+            kind: 'planet',
+            longTerm: true,
+          });
+          proposed = await t.call('propose', {
+            type: 'new_project',
+            requestText: 'a product I will run for years',
+            name: 'Product',
+            kind: 'planet',
+            rationale: 'long-term',
+            workspace: join(root, 'product'),
+            longTerm: LONG_TERM,
+          });
+        }),
+    });
+    hq.tell('go');
+    await h.done();
+    expect(sized?.body?.reason).toBe('no_planet_with_moons');
+    expect(sized?.rationale).toContain('no planet with moons is free for a long-term project');
+    expect(proposed?.state).toBe('parked');
+    const [card] = h.log.tables.proposals.all();
+    await expect(
+      h.commands.decideProposal(
+        card!.id,
+        { decision: 'edit', changes: { kind: 'moon', proposedBody: { kind: 'moon', name: 'P' } } },
+        USER,
+      ),
+    ).rejects.toThrow(/lives on a planet with moons, not on a moon/);
+    await expect(
+      h.commands.decideProposal(
+        card!.id,
+        {
+          decision: 'edit',
+          changes: { proposedBody: { kind: 'planet', name: 'P', bodyId: 'b-mercury' } },
+        },
+        USER,
+      ),
+    ).rejects.toThrow(/Mercury has none/);
+    expect(h.log.tables.proposals.get(card!.id)?.state).toBe('parked');
+  });
+
+  it('relay_to_waykeeper passes a recurring-job request to the project’s Waykeeper', async () => {
+    const { h, root, definition } = setup();
+    const app = (
+      await h.commands.createProject({
+        name: 'App',
+        workspace: join(root, 'app'),
+        longTerm: LONG_TERM,
+      })
+    ).value;
+    const heard: string[] = [];
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s.once('recurring', async (t) => {
+          await t.call('relay_to_waykeeper', {
+            projectId: app.id,
+            text: 'Cosmin wants a daily job reading the app reviews.',
+          });
+        }),
+    });
+    await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: app.id, supervisorId: hq.agentId },
+      { script: (s) => s.once(/daily job reading/, (t) => void heard.push(t.prompt)) },
+    );
+    hq.tell('I need a recurring job on App');
+    await h.done();
+    expect(heard).toHaveLength(1);
+    expect(heard[0]).toMatch(
+      /your supervisor agent \S+ passed on: "Cosmin wants a daily job reading the app reviews\."/i,
+    );
+  });
+});
+
+describe('the Harmonizer prompt (P10-06)', () => {
+  it('covers long-term proposals, job relays and money', () => {
+    for (const line of [
+      'propose it as a planet with longTerm {purpose, goals}',
+      '"Make <project> long-term"',
+      'propose_long_term',
+      '"I need a recurring job on <project>"',
+      'relay_to_waykeeper',
+      'A conversion card ("is now long-term") changes the existing project only: nothing to create or spawn',
+      'You never spend real money yourself',
+      'request_spend',
+    ]) {
+      expect(HARMONIZER_SYSTEM_PROMPT).toContain(line);
+    }
   });
 });

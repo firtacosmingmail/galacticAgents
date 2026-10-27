@@ -186,7 +186,7 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     ctx: BrainToolContext,
     kind: WorkBodyKind,
     name: string,
-    opts: { bodyId?: Id; parentProjectId?: Id },
+    opts: { bodyId?: Id; parentProjectId?: Id; longTerm?: boolean },
   ): Promise<{ proposedBody: ProposedBody; choice?: BodyChoice }> => {
     if (kind === 'asteroid') return { proposedBody: { kind, name } };
     if (opts.bodyId) {
@@ -208,7 +208,9 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     }
     const request: BodyRequest =
       kind === 'planet'
-        ? { kind }
+        ? opts.longTerm
+          ? { kind, longTerm: true }
+          : { kind }
         : { kind, ...(opts.parentProjectId ? { parentProjectId: opts.parentProjectId } : {}) };
     const choice = await ctx.commands.chooseBody(request);
     if (!choice.ok) return { proposedBody: { kind, name }, choice };
@@ -261,6 +263,10 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         projectId: S.str('For project_task: the project the work belongs to.'),
         parentProjectId: S.str('For a sub-project moon: the planet project.'),
         relatedProjectId: S.str('For an asteroid: the project whose workspace it uses.'),
+        longTerm: {
+          type: 'boolean',
+          description: 'For a planet: a long-term project (it needs a planet with moons).',
+        },
       },
       ['request'],
     ),
@@ -309,6 +315,7 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       if (parentProjectId) must(ctx.queries.project(parentProjectId), 'project', parentProjectId);
       const { proposedBody, choice } = await proposedBodyFor(ctx, kind, suggestedName, {
         ...(parentProjectId ? { parentProjectId } : {}),
+        ...(kind === 'planet' && input['longTerm'] === true ? { longTerm: true } : {}),
       });
       return {
         ...base,
@@ -350,8 +357,10 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     name: 'propose',
     description:
       'Creates the one proposal card of a work request (decision 3): a new project (planet or ' +
-      'moon), a standalone task (asteroid), or a task added to an existing project. Ends your ' +
-      'turn; the user’s decision arrives as a later event. Never for a conversational request.',
+      'moon), a standalone task (asteroid), or a task added to an existing project. A project ' +
+      'looked after over months is a planet with longTerm {purpose, goals}: it goes to a planet ' +
+      'with moons. Ends your turn; the user’s decision arrives as a later event. Never for a ' +
+      'conversational request.',
     inputSchema: S.obj(
       {
         type: S.enum(REQUEST_TYPES, 'What the card asks for.'),
@@ -369,6 +378,18 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         projectId: S.str('project_task only: the project the task joins.'),
         relatedProjectId: S.str('standalone_task only: the project whose workspace it uses.'),
         description: S.str('Tasks only: the task description (default: the request).'),
+        longTerm: S.obj(
+          {
+            purpose: S.str('What the project is for, in a sentence or two (1–2000 characters).'),
+            goals: {
+              type: 'array',
+              maxItems: 10,
+              items: { type: 'string' },
+              description: 'Up to 10 short goals (each 1–300 characters).',
+            },
+          },
+          ['purpose', 'goals'],
+        ),
       },
       ['type', 'requestText', 'name', 'rationale'],
     ),
@@ -380,6 +401,10 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       const name = str(input, 'name');
       const rationale = str(input, 'rationale');
       const description = str(input, 'description', true) ?? requestText;
+      const longTerm = longTermOf(input['longTerm']);
+      if (longTerm && (type !== 'new_project' || input['kind'] !== 'planet')) {
+        throw new DomainError('invalid', 'a long-term project is a new_project of kind planet');
+      }
       let kind: WorkBodyKind;
       let workspace: string;
       let request: HarmonizerRequest;
@@ -397,6 +422,7 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           ({ proposedBody, choice } = await proposedBodyFor(ctx, kind, name, {
             ...(bodyId ? { bodyId } : {}),
             ...(parentProjectId ? { parentProjectId } : {}),
+            ...(longTerm ? { longTerm: true } : {}),
           }));
           workspace = checkPath(str(input, 'workspace', true) ?? suggest(ctx.queries, root, name));
           request = { type, name, ...(parentProjectId ? { parentProjectId } : {}) };
@@ -441,6 +467,7 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           request,
           // P2-09 parks the card from this when no planet or moon is free (decision 16).
           ...(choice && !choice.ok ? { bodyChoice: choice } : {}),
+          ...(longTerm ? { longTerm } : {}),
         },
       });
       return {
@@ -448,11 +475,94 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         kind: value.kind,
         proposedBody: value.proposedBody,
         workspace: value.workspace,
+        ...(longTerm ? { longTerm: true } : {}),
         // P2-09: no room → the server parked the card (decision 16); tell the user why.
         state: value.state,
         ...(proposalParking(value) ? { parked: proposalParking(value) } : {}),
         ...(choice ? { body: describeChoice(choice) } : {}),
       };
+    },
+  };
+
+  const proposeLongTerm: BrainTool = {
+    name: 'propose_long_term',
+    description:
+      'Makes an existing project long-term (or gives a long-term one a new purpose and goals) ' +
+      'through ONE card: on approval it moves to a big planet if it is not on one (its ' +
+      'satellites fly) and never closes by itself. Refused for a sub-project, finished work, or ' +
+      'when no planet with moons is free for a project that must move. Ends your turn.',
+    inputSchema: S.obj(
+      {
+        projectId: S.str('The project.'),
+        purpose: S.str('What the project is for, in a sentence or two (1–2000 characters).'),
+        goals: {
+          type: 'array',
+          maxItems: 10,
+          items: { type: 'string' },
+          description: 'Up to 10 short goals (each 1–300 characters).',
+        },
+        requestText: S.str('The user’s request, verbatim.'),
+        rationale: S.str('Why, in a sentence.'),
+      },
+      ['projectId', 'purpose', 'goals'],
+    ),
+    endsTurn: true,
+    async handler(raw, ctx) {
+      const input = asInput(raw);
+      const project = openProject(ctx.queries, str(input, 'projectId'));
+      const longTerm = longTermOf({ purpose: input['purpose'], goals: input['goals'] })!;
+      const body = must(ctx.queries.body(project.bodyId), 'body', project.bodyId);
+      const kind = bodyKind(ctx.queries, project);
+      // The server puts the card on the planet the approval moves the project to.
+      const { value } = await ctx.commands.createProposal({
+        requestText: str(input, 'requestText', true) ?? `Make ${project.name} long-term`,
+        kind,
+        proposedBody: { kind, bodyId: body.id, name: body.name },
+        workspace: project.workspace,
+        rationale: str(input, 'rationale', true) ?? '',
+        meta: { longTerm: { projectId: project.id, ...longTerm } },
+      });
+      const to = value.proposedBody;
+      return {
+        proposalId: value.id,
+        state: value.state,
+        ...(to.bodyId && to.bodyId !== project.bodyId
+          ? { movesTo: { bodyId: to.bodyId, name: to.name } }
+          : { staysOn: { bodyId: body.id, name: body.name } }),
+      };
+    },
+  };
+
+  const relayToWaykeeper: BrainTool = {
+    name: 'relay_to_waykeeper',
+    description:
+      'Passes a request on to the running Waykeeper of a project as a message (a recurring job ' +
+      'Cosmin wants on a long-term project, say): it starts the Waykeeper’s next turn, and the ' +
+      'Waykeeper asks what is missing and proposes the card itself.',
+    inputSchema: S.obj(
+      {
+        projectId: S.str('The project.'),
+        text: S.str('The request, in the user’s words, with what you already know.'),
+      },
+      ['projectId', 'text'],
+    ),
+    async handler(raw, ctx) {
+      const input = asInput(raw);
+      const project = openProject(ctx.queries, str(input, 'projectId'));
+      const waykeeper = ctx.queries
+        .agents()
+        .find(
+          (a) =>
+            a.role === 'waykeeper' && a.projectId === project.id && isLiving(ctx.queries, a.id),
+        );
+      if (!waykeeper) {
+        throw new DomainError(
+          'invalid_transition',
+          `project ${project.id} has no running Waykeeper: spawn_waykeeper ${project.id} first`,
+        );
+      }
+      const { messageId } = ctx.send(waykeeper.id, str(input, 'text'));
+      return { waykeeperId: waykeeper.id, messageId };
     },
   };
 
@@ -924,11 +1034,20 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     spawnWaykeeper,
     spawnSteward,
     proposePromotion,
+    proposeLongTerm,
+    relayToWaykeeper,
     closeTask,
     askUser,
     freePlanets,
     freeMoons,
   ];
+}
+
+/** A card's `longTerm {purpose, goals}` as the model gave it (the server checks the limits). */
+function longTermOf(raw: unknown): { purpose: string; goals: string[] } | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const input = asInput(raw);
+  return { purpose: str(input, 'purpose'), goals: strings(input, 'goals') ?? [] };
 }
 
 function bodyKind(queries: BrainQueries, project: Project): WorkBodyKind {
@@ -961,6 +1080,9 @@ function rationaleFor(kind: 'planet' | 'moon', choice: BodyChoice | undefined, p
     return parent
       ? `a sub-project on ${choice.body.name}, a moon of its parent's planet`
       : `a ${kind} project on ${choice.body.name}, the catalogue's first choice`;
+  }
+  if (choice.reason === 'no_planet_with_moons') {
+    return 'no planet with moons is free for a long-term project: offer closing a completed project on one early; the card is parked until one frees';
   }
   return choice.reason === 'no_free_planet'
     ? 'no planet is free: offer a moon or asteroids, or closing a completed project early; the card is parked'

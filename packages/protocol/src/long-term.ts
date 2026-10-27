@@ -230,8 +230,12 @@ export const ProposalJob = z.object({
   action: z.enum(['create', 'change', 'stop']),
   /** The job a change or stop is about. */
   jobId: Id.optional(),
+  /** A new job (`create`), or the job as the change leaves it (`change`). */
   draft: JobDraft.optional(),
+  /** `create`: the area it goes to; `change`: the area it moves to, when it moves. */
   area: z.union([z.object({ areaId: Id }), z.object({ name: z.string().min(1) })]).optional(),
+  /** `change` and `stop`: the job as it was when proposed, so the card shows before → after. */
+  before: z.object({ draft: JobDraft, areaId: Id }).optional(),
 });
 export type ProposalJob = z.infer<typeof ProposalJob>;
 

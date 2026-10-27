@@ -65,6 +65,7 @@ import {
   type RequestSpendInput,
   type SetJobStateInput,
   type SetLongTermInput,
+  type ProposeJobInput,
   type StartJobRunInput,
   type UpdateJobInput,
 } from '@galactic/protocol';
@@ -123,7 +124,7 @@ import {
   RULES_END_IN,
 } from './project-rules.js';
 import type { ProposalOptions } from './approval.js';
-import { createProposal, decideProposal, proposePlan } from './proposals.js';
+import { createProposal, decideProposal, proposeJob, proposePlan } from './proposals.js';
 import {
   endAgentQuestions,
   holderFor,
@@ -665,6 +666,9 @@ export class Commands implements DomainCommands {
   }
   proposePlan(input: ProposePlanInput) {
     return this.run((ctx) => proposePlan(ctx, input));
+  }
+  proposeJob(input: ProposeJobInput) {
+    return this.run((ctx) => proposeJob(ctx, input));
   }
   /** The trust level an approval gives its project is floored unless `write.origin` is local. */
   decideProposal(proposalId: Id, decision: ProposalDecision, by: Actor, write?: WriteOptions) {

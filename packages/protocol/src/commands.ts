@@ -406,6 +406,21 @@ export interface UpdateJobInput {
   by: Actor;
 }
 
+/**
+ * A Waykeeper's job card (P10-06): create a job, change one or stop one. The card (a proposal
+ * carrying `meta.job`) is checked like the command its approval runs, before it exists.
+ */
+export type ProposeJobInput = {
+  projectId: Id;
+  /** The Waykeeper proposing; it owns the card like a plan card. */
+  waykeeperId: Id;
+  rationale?: string;
+} & (
+  | { action: 'create'; area: { areaId: Id } | { name: string }; draft: JobDraft }
+  | { action: 'change'; jobId: Id; changes: Partial<JobDraft> & { areaId?: Id } }
+  | { action: 'stop'; jobId: Id }
+);
+
 export interface SetJobStateInput {
   jobId: Id;
   state: JobState;
@@ -637,6 +652,11 @@ export interface DomainCommands {
   /** A job, its hidden task and, for a new area name, the area on a moon — in one transaction. */
   createJob(input: CreateJobInput): Promise<CommandResult<{ job: Job; area: Area }>>;
   updateJob(input: UpdateJobInput): Promise<CommandResult<Job>>;
+  /**
+   * A Waykeeper's job card (`meta.job`); its approval runs `createJob` / `updateJob` /
+   * `setJobState('stopped')` in the deciding transaction, a rejection changes nothing.
+   */
+  proposeJob(input: ProposeJobInput): Promise<CommandResult<Proposal>>;
   setJobState(input: SetJobStateInput): Promise<CommandResult<Job>>;
   /** Records a run's start; refused while the job has a run going or is not active. */
   startJobRun(input: StartJobRunInput): Promise<CommandResult<JobRun>>;

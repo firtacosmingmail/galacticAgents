@@ -107,11 +107,15 @@ export function areaMoonFor(ctx: Reader, planetId: Id): Body {
 }
 
 /**
- * Makes an area of a long-term project, or returns the one already named so (names are unique per
- * project, case-insensitively). The area takes `areaMoonFor`'s moon, whose host becomes the
- * project's areas (`body.assigned`).
+ * The area of the project named `name` (case-insensitively), or — when there is none — what a new
+ * one would take: its trimmed name and `areaMoonFor`'s moon. Refuses a bad name, a project at its
+ * area limit, a moon-less planet and an existing area whose moon the project no longer holds.
  */
-export function createArea(ctx: CommandContext, projectId: Id, name: string): Area {
+function areaByName(
+  ctx: Reader,
+  projectId: Id,
+  name: string,
+): { existing: Area } | { existing?: undefined; moon: Body; trimmed: string } {
   const project = longTermProject(ctx, projectId, 'areas');
   const trimmed = name.trim();
   if (trimmed.length === 0 || trimmed.length > LONG_TERM_LIMITS.maxAreaName) {
@@ -122,14 +126,25 @@ export function createArea(ctx: CommandContext, projectId: Id, name: string): Ar
   }
   const areas = ctx.tables.areas.all().filter((a) => a.projectId === projectId);
   const existing = areas.find((a) => sameName(a.name, trimmed));
-  if (existing) return checkAreaHeld(ctx, existing);
+  if (existing) return { existing: checkAreaHeld(ctx, existing) };
   if (areas.length >= LONG_TERM_LIMITS.maxAreasPerProject) {
     throw new DomainError(
       'invalid',
       `a long-term project has at most ${LONG_TERM_LIMITS.maxAreasPerProject} areas`,
     );
   }
-  const moon = areaMoonFor(ctx, project.bodyId);
+  return { moon: areaMoonFor(ctx, project.bodyId), trimmed };
+}
+
+/**
+ * Makes an area of a long-term project, or returns the one already named so (names are unique per
+ * project, case-insensitively). The area takes `areaMoonFor`'s moon, whose host becomes the
+ * project's areas (`body.assigned`).
+ */
+export function createArea(ctx: CommandContext, projectId: Id, name: string): Area {
+  const found = areaByName(ctx, projectId, name);
+  if (found.existing) return found.existing;
+  const { moon, trimmed } = found;
   const host = areasHost(projectId);
   checkAssignable(moon, host);
   const area: Area = {
@@ -210,18 +225,37 @@ function areaOf(ctx: Reader, projectId: Id, areaId: Id): Area {
 }
 
 /**
+ * Every check `createJob` makes, without writing (a job card is checked before it exists, P10-06):
+ * a long-term project, a valid draft (no push rule, no secret), and an area with room — an
+ * existing one, or a new name within the limits with a moon to take. Returns the parsed draft.
+ */
+export function checkJobCreate(
+  ctx: Reader,
+  input: Pick<CreateJobInput, 'projectId' | 'area' | 'draft'>,
+): JobDraft {
+  const project = longTermProject(ctx, input.projectId, 'jobs');
+  const draft = checkedDraft(input.draft);
+  if ('areaId' in input.area) {
+    checkRoomIn(ctx, areaOf(ctx, project.id, input.area.areaId).id);
+  } else {
+    const found = areaByName(ctx, project.id, input.area.name);
+    if (found.existing) checkRoomIn(ctx, found.existing.id);
+  }
+  return draft;
+}
+
+/**
  * Makes a recurring job of a long-term project in an existing area or a new one made by name (an
  * existing name is reused), with its hidden task on the area's moon (`approved`, `meta.jobId`).
  * Its first run is due at the schedule's next occurrence after now.
  */
 export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Job; area: Area } {
+  const draft = checkJobCreate(ctx, input);
   const project = longTermProject(ctx, input.projectId, 'jobs');
-  const draft = checkedDraft(input.draft);
   const area =
     'areaId' in input.area
       ? areaOf(ctx, project.id, input.area.areaId)
       : createArea(ctx, project.id, input.area.name);
-  checkRoomIn(ctx, area.id);
   const jobId = `j-${randomUUID()}`;
   const task: Task = {
     id: `t-${randomUUID()}`,
@@ -287,15 +321,38 @@ function updateJobTask(ctx: CommandContext, job: Job, bodyId: Id, name: string):
  * the next run unless the job is stopped.
  */
 export function updateJob(ctx: CommandContext, input: UpdateJobInput): Job {
+  const { current, changes, area } = planJobUpdate(ctx, input);
+  const job = writeJob(ctx, current, changes);
+  const bodyId = area?.bodyId ?? must(ctx.tables.tasks.get(job.taskId), 'task', job.taskId).bodyId;
+  updateJobTask(ctx, job, bodyId, job.name);
+  return job;
+}
+
+/** A job's editable fields, as a draft (what a change card shows as "before"). */
+export function draftOf(job: Job): JobDraft {
+  return {
+    name: job.name,
+    instructions: job.instructions,
+    schedule: job.schedule,
+    provider: job.provider,
+    unattendedRules: job.unattendedRules,
+  };
+}
+
+/**
+ * What `updateJob` would write, without writing (also how a change card is checked, P10-06): the
+ * job, the job as the change leaves it (`merged`, checked like a new job), the changed fields and
+ * the area it moves to.
+ */
+export function planJobUpdate(
+  ctx: Pick<CommandContext, 'tables' | 'now'>,
+  input: Pick<UpdateJobInput, 'jobId' | 'changes'>,
+): { current: Job; merged: JobDraft; changes: JobChanges; area?: Area } {
   const current = jobOf(ctx, input.jobId);
   longTermProject(ctx, current.projectId, 'jobs');
   const { areaId, ...draftChanges } = input.changes;
   const merged = checkedDraft({
-    name: current.name,
-    instructions: current.instructions,
-    schedule: current.schedule,
-    provider: current.provider,
-    unattendedRules: current.unattendedRules,
+    ...draftOf(current),
     ...Object.fromEntries(Object.entries(draftChanges).filter(([, v]) => v !== undefined)),
   });
   const changes: JobChanges = {};
@@ -316,10 +373,7 @@ export function updateJob(ctx: CommandContext, input: UpdateJobInput): Job {
     checkRoomIn(ctx, area.id);
     changes.areaId = area.id;
   }
-  const job = writeJob(ctx, current, changes);
-  const bodyId = area?.bodyId ?? must(ctx.tables.tasks.get(job.taskId), 'task', job.taskId).bodyId;
-  updateJobTask(ctx, job, bodyId, job.name);
-  return job;
+  return { current, merged, changes, ...(area ? { area } : {}) };
 }
 
 /**

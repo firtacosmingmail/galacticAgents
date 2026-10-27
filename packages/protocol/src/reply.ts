@@ -9,6 +9,7 @@ import {
   type Question,
   type Task,
 } from './domain.js';
+import { proposalJobOf } from './long-term.js';
 
 // ---------------------------------------------------------------------------
 // Replies in a chat (P8-17; SPEC decision 139): the user's message may quote one line of the
@@ -120,12 +121,15 @@ export function threadShowsQuestion(look: ThreadLookup, agent: Agent, q: Questio
 }
 
 /**
- * The proposal's card shows in `agent`'s chat: a Waykeeper's project's plan cards and promotion
- * requests (a successor on the same project owns them too); every other card is the Harmonizer's.
+ * The proposal's card shows in `agent`'s chat: a Waykeeper's project's plan cards, job cards and
+ * promotion requests (a successor on the same project owns them too); every other card is the Harmonizer's.
  */
 export function threadShowsProposal(agent: Agent, p: Proposal): boolean {
   if (agent.role === 'steward') return false;
-  const project = proposalPlan(p)?.projectId ?? proposalPromotion(p)?.fromProjectId;
+  const project =
+    proposalPlan(p)?.projectId ??
+    proposalJobOf(p)?.projectId ??
+    proposalPromotion(p)?.fromProjectId;
   return agent.role === 'waykeeper'
     ? project !== undefined && project === agent.projectId
     : project === undefined;

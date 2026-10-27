@@ -1,5 +1,6 @@
 import {
   excerpt,
+  proposalJobOf,
   proposalPlan,
   type Actor,
   type Id,
@@ -80,7 +81,13 @@ export function draftOfCard(
   return {
     kind: 'proposal',
     id: card.id,
-    sender: { type: 'agent', id: proposalPlan(card.proposal)?.waykeeperId ?? agentId },
+    sender: {
+      type: 'agent',
+      id:
+        proposalPlan(card.proposal)?.waykeeperId ??
+        proposalJobOf(card.proposal)?.waykeeperId ??
+        agentId,
+    },
     text: card.proposal.requestText,
     answerId: newAnswerId(),
   };

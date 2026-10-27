@@ -1,6 +1,7 @@
 import {
   foldProposalMeta,
   proposalParking,
+  proposalJobOf,
   proposalLongTermOf,
   proposalPlan,
   proposalPromotion,
@@ -93,7 +94,8 @@ export function promotionBodyRequest(ctx: Reader, p: Proposal): BodyRequest | un
  * no new body from the card — `setLongTerm` decides whether it moves.
  */
 export function bodyRequestOf(ctx: Reader, p: Proposal): BodyRequest | undefined {
-  if (proposalPlan(p) || p.kind === 'asteroid') return undefined;
+  // A plan or job card is the Waykeeper's, on its project's body: it never parks (decision 35).
+  if (proposalPlan(p) || proposalJobOf(p) || p.kind === 'asteroid') return undefined;
   const longTerm = proposalLongTermOf(p);
   if (longTerm?.projectId) return undefined;
   // A promotion card of either shape (the Harmonizer's `meta.request`, a Waykeeper's

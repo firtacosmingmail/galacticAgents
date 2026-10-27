@@ -1,4 +1,13 @@
-import { excerpt, formatUsd, isJobOwned, setOf, SUPERSEDED_BY_MESSAGE } from '@galactic/protocol';
+import {
+  excerpt,
+  formatUsd,
+  isJobOwned,
+  isJobTask,
+  proposalJobOf,
+  proposalLongTermOf,
+  setOf,
+  SUPERSEDED_BY_MESSAGE,
+} from '@galactic/protocol';
 import type {
   Actor,
   AgentRole,
@@ -8,6 +17,7 @@ import type {
   EventOfType,
   EventType,
   Id,
+  Proposal,
   Question,
   ReplyQuote,
 } from '@galactic/protocol';
@@ -35,6 +45,8 @@ export interface WakeScope {
   projectId?: Id;
   /** `agentId` is directly supervised by the brain. */
   supervises(agentId: Id | undefined): boolean;
+  /** `agentId` is the brain's own supervisor (P10-06: the Harmonizer relaying to a Waykeeper). */
+  supervisedBy?(agentId: Id | undefined): boolean;
   /** `agentId` is anywhere below the brain in the `supervisorId` chain (direct reports too). */
   below?(agentId: Id | undefined): boolean;
   /** The brain runs the task: a task of its project, or the task of an agent it supervises. */
@@ -43,6 +55,8 @@ export interface WakeScope {
   runsProject(projectId: Id): boolean;
   /** The brain decides on the proposal (the Harmonizer proposes; P2-10 adds plan cards). */
   ownsProposal(proposalId: Id): boolean;
+  /** A proposal, to say what its approval did (P10-06: job and long-term cards). */
+  proposal?(proposalId: Id): Proposal | undefined;
   question(questionId: Id): Question | undefined;
   /**
    * The control action concerns the brain as a supervisor (P2-14's `concernedSupervisors`): a
@@ -140,10 +154,33 @@ const ended = <T extends EndedType>(text: (e: EventOfType<T>) => string): WakeRu
 });
 
 type DecisionType = `proposal.${'approved' | 'edited' | 'rejected' | 'parked' | 'unparked'}`;
-const proposal = <T extends DecisionType>(text: (e: EventOfType<T>) => string): WakeRule<T> => ({
+const proposal = <T extends DecisionType>(
+  text: (e: EventOfType<T>, s: WakeScope) => string,
+): WakeRule<T> => ({
   wakes: (e, s) => s.ownsProposal((e as EventOfType<DecisionType>).proposalId),
-  describe: (e) => `proposal ${(e as EventOfType<DecisionType>).proposalId} ${text(e)}`,
+  describe: (e, s) => `proposal ${(e as EventOfType<DecisionType>).proposalId} ${text(e, s)}`,
 });
+
+/**
+ * What an approval already did, for the cards whose approval is the whole of it (P10-06): a job
+ * card's job was created, changed or stopped; a conversion card made its project long-term. There
+ * is nothing left to create or spawn.
+ */
+function approvedNote(p: Proposal | undefined): string {
+  const job = proposalJobOf(p);
+  if (job) {
+    const what =
+      job.action === 'create'
+        ? `the recurring job ${quote(job.draft?.name ?? '')} was created`
+        : `job ${job.jobId} was ${job.action === 'stop' ? 'stopped' : 'changed'}`;
+    return `: ${what} with the approval`;
+  }
+  const longTerm = proposalLongTermOf(p);
+  if (longTerm?.projectId) {
+    return `: project ${longTerm.projectId} is now long-term (moved to a planet with moons if it had to); nothing to create or spawn`;
+  }
+  return '';
+}
 
 const quote = (text: string) => JSON.stringify(text);
 
@@ -203,16 +240,22 @@ export const WAKE_RULES: WakeRules = {
     // sub-project's Waykeeper asking the Harmonizer for closure). The brain's own turn messages
     // are sent by the system and never wake it.
     // A finding's "Implement it" (P10-05) is the one system message that wakes a brain: the
-    // project's Waykeeper learns what the user wants planned.
+    // project's Waykeeper learns what the user wants planned. The brain's supervisor may pass a
+    // request on to it (P10-06: the Harmonizer's `relay_to_waykeeper`).
     wakes: (e, s) =>
       e.agentId === s.brainId &&
       (e.sender.type === 'user' ||
         (e.sender.type === 'system' && e.fromFinding !== undefined && !e.turn) ||
         (e.sender.type === 'agent' &&
-          (s.supervises(e.sender.id) || (s.below?.(e.sender.id) ?? false)))),
+          (s.supervises(e.sender.id) ||
+            (s.below?.(e.sender.id) ?? false) ||
+            (s.supervisedBy?.(e.sender.id) ?? false)))),
     describe: (e, s) => {
       if (e.sender.type === 'system') {
         return `the system said (the user answered finding ${e.fromFinding ?? '?'}): ${quote(e.text)}`;
+      }
+      if (e.sender.type === 'agent' && s.supervisedBy?.(e.sender.id)) {
+        return `your supervisor ${who(e.sender, s)} passed on: ${quote(e.text)}`;
       }
       if (e.sender.type !== 'user') return `${who(e.sender, s)} reported: ${quote(e.text)}`;
       const r = e.replyTo;
@@ -294,13 +337,17 @@ export const WAKE_RULES: WakeRules = {
   'task.created': {
     wakes: (e, s) =>
       s.role === 'waykeeper' &&
+      // A recurring job's hidden task (P10-03) is Mission Control's: it comes with its job card.
+      !isJobTask(e.task) &&
       e.task.projectId !== undefined &&
       e.task.projectId === s.projectId &&
       e.task.state !== 'proposed',
     describe: (e) =>
       `task ${e.task.id} was added to your project (${e.task.state}, ${e.task.priority}): ${quote(e.task.description)}`,
   },
-  'proposal.approved': proposal(() => 'was approved'),
+  'proposal.approved': proposal(
+    (e, s) => `was approved${approvedNote(s.proposal?.(e.proposalId))}`,
+  ),
   'proposal.edited': proposal((e) => `was edited: ${JSON.stringify(e.changes)}`),
   'proposal.rejected': proposal((e) => `was rejected${e.reason ? `: ${e.reason}` : ''}`),
   'proposal.parked': proposal((e) => `was parked: ${e.reason}`),

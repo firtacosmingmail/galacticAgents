@@ -88,6 +88,7 @@ const commands: DomainCommands = {
   removeDeliverable: notImplemented,
   restoreDeliverable: notImplemented,
   setLongTerm: notImplemented,
+  proposeJob: notImplemented,
   createJob: notImplemented,
   updateJob: notImplemented,
   setJobState: notImplemented,
