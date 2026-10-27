@@ -46,6 +46,7 @@ import type {
   RunOutputResponse,
   RunPreviewResponse,
   RunsResponse,
+  JobRunsResponse,
   RuntimesInfo,
   StartRunBody,
   StartRunResponse,
@@ -374,6 +375,12 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     /** A command's runs, newest first (at most 50). */
     runs: (id: string) =>
       call<RunsResponse>('GET', `/api/deliverables/${encodeURIComponent(id)}/runs`),
+    /** A job's runs, newest first (`limit` 1–200, default 20; P10-07). */
+    jobRuns: (jobId: string, limit?: number) =>
+      call<JobRunsResponse>(
+        'GET',
+        `/api/jobs/${encodeURIComponent(jobId)}/runs${queryString({ limit })}`,
+      ),
     /** A run's output after `after` (a `seq`), oldest first, `limit` chunks at most. */
     runOutput: (runId: string, query: { after?: number; limit?: number } = {}) =>
       call<RunOutputResponse>(

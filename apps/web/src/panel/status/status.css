@@ -33,6 +33,7 @@
 @media (max-width: 760px) {
   .pnl .sts-toggle-option {
     min-height: 44px;
+    padding: 2px 8px;
   }
 }
 

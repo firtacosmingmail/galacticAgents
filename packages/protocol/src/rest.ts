@@ -16,6 +16,7 @@ import {
   TrustLevel,
 } from './domain.js';
 import { ControlTarget } from './events.js';
+import { JobRun, LONG_TERM_LIMITS } from './long-term.js';
 import { Id, Timestamp } from './primitives.js';
 
 // ---------------------------------------------------------------------------
@@ -422,3 +423,12 @@ export const StopProcessesResponse = z.object({
   skipped: z.array(z.number().int().positive()).optional(),
 });
 export type StopProcessesResponse = z.infer<typeof StopProcessesResponse>;
+
+/** `GET /api/jobs/:id/runs?limit=` (P10-07): a job's runs, newest first; 20 by default, at most 200. */
+export const JobRunsQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(LONG_TERM_LIMITS.runsKept).default(20),
+});
+export type JobRunsQuery = z.input<typeof JobRunsQuery>;
+
+export const JobRunsResponse = z.object({ runs: z.array(JobRun) });
+export type JobRunsResponse = z.infer<typeof JobRunsResponse>;

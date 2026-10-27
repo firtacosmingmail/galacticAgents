@@ -14,6 +14,7 @@ import { registerDevRoutes, type DevRoutesOptions } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
 import { registerBackupRoutes } from './http/backup-routes.js';
+import { registerJobRoutes } from './http/job-routes.js';
 import { registerDeliverableRoutes } from './http/deliverable-routes.js';
 import type { BackupService } from './db/backup.js';
 import type { DeliverableCopies } from './deliverables/copies.js';
@@ -244,6 +245,11 @@ export function buildApp(opts: AppOptions): App {
       log: opts.log,
       ...(opts.backups ? { backups: opts.backups } : {}),
     });
+  }
+
+  // Jobs' run history (P10-07).
+  if (opts.log) {
+    registerJobRoutes(fastify, config, { log: opts.log });
   }
 
   // Managed runs (P9-08).

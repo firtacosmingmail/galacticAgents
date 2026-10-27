@@ -1,0 +1,136 @@
+/*
+ * The Jobs tab (P10-07): a long-term project's jobs over the panel's tokens. Nothing has a fixed
+ * width and long names wrap, so a phone never scrolls sideways (decision 140). Amber stays the
+ * "waits for you" colour: only "Needs you" and the toggle's dot use it.
+ */
+
+.jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 0 8px;
+  overflow-wrap: anywhere;
+}
+.jobs-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.jobs-filter-title {
+  margin: 0;
+  font-size: 1rem;
+}
+.jobs-section .pnl-eyebrow {
+  margin: 0 0 4px;
+}
+.jobs-shared,
+.jobs-empty {
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+.jobs-list,
+.jobs-runs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.jobs-job {
+  min-width: 0;
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 10px;
+  background: var(--pnl-surface);
+}
+.jobs-job.is-stopped {
+  opacity: 0.6;
+}
+.jobs-needs .jobs-job {
+  border-color: var(--pnl-beacon);
+}
+.jobs-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+.jobs-name {
+  font-weight: 600;
+  min-width: 0;
+}
+.jobs-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.pnl .jobs-open {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.pnl .jobs-link {
+  padding: 1px 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.jobs-pill {
+  padding: 0 7px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 999px;
+  font-size: 11px;
+}
+.jobs-line {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+.jobs-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+.jobs-last.tone-bad,
+.jobs-mark,
+.jobs-runs .tone-failed {
+  color: var(--pnl-failed);
+}
+.jobs-last.tone-catchup,
+.jobs-runs .tone-interrupted {
+  color: var(--pnl-interrupted);
+}
+.jobs-runs {
+  margin-top: 4px;
+}
+.jobs-runs li {
+  padding: 4px 0;
+  border-top: 1px dashed var(--pnl-line);
+  font-size: 12px;
+}
+
+/* the toggle's dot: something of the project's jobs waits for Cosmin */
+.jobs-dot {
+  color: var(--pnl-beacon);
+}
+
+@media (max-width: 760px) {
+  .pnl .jobs-link,
+  .pnl .jobs-open {
+    min-height: 44px;
+  }
+}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ENDED_STATES,
+  isLongTerm,
   type Agent,
   type BudgetUsage,
   type Id,
@@ -17,6 +18,8 @@ import { brainView, useDockView, type DockView } from './dock-view.js';
 import { ProjectDeliverables } from '../deliverables/DeliverablesList.js';
 import { PermissionRules } from './PermissionRules.js';
 import { liveRunCount } from '../deliverables/runs-model.js';
+import { JobsPane } from '../jobs/JobsPane.js';
+import { jobsNeedingYou } from '../jobs/jobs-model.js';
 import {
   budgetText,
   COST_CAVEAT,
@@ -89,7 +92,8 @@ export function BudgetFact({ label, budget }: { label: string; budget: BudgetUsa
 /**
  * The dock bar's "Chat | Status" switch (Harmonizer and Waykeepers), remembered per browser; a
  * Waykeeper's has a third view, its project's Deliverables (P9-09: "Chat | Status |
- * Deliverables").
+ * Deliverables"), and a long-term project's Waykeeper a fourth, its Jobs (P10-07), with a dot
+ * while one of its jobs needs the user.
  */
 export function DockViewToggle({
   role = 'harmonizer',
@@ -99,13 +103,21 @@ export function DockViewToggle({
   /** The Waykeeper's project: its Deliverables button shows "▶" while one of its runs lives. */
   projectId?: Id | undefined;
 }) {
+  const longTerm = useAppStore((s) => {
+    const project = role === 'waykeeper' && projectId ? s.world.projects[projectId] : undefined;
+    return project !== undefined && isLongTerm(project);
+  });
   const view = brainView(
     useDockView((s) => s.view),
     role,
+    longTerm,
   );
   const setView = useDockView((s) => s.setView);
   const running = useAppStore((s) =>
     role === 'waykeeper' && projectId ? liveRunCount(s.world, projectId) : 0,
+  );
+  const needYou = useAppStore((s) =>
+    longTerm && projectId ? jobsNeedingYou(s.world, projectId) : 0,
   );
   const option = (value: DockView, label: string, extra?: ReactNode) => (
     <button
@@ -123,9 +135,11 @@ export function DockViewToggle({
       className="sts-toggle"
       role="group"
       aria-label={
-        role === 'waykeeper'
-          ? 'show the chat, the status or the deliverables'
-          : 'show the chat or the status'
+        longTerm
+          ? 'show the chat, the status, the deliverables or the jobs'
+          : role === 'waykeeper'
+            ? 'show the chat, the status or the deliverables'
+            : 'show the chat or the status'
       }
     >
       {option('chat', 'Chat')}
@@ -144,6 +158,17 @@ export function DockViewToggle({
             </span>
           ) : undefined,
         )}
+      {longTerm &&
+        option(
+          'jobs',
+          'Jobs',
+          needYou > 0 ? (
+            <span className="jobs-dot" title={`${needYou} need you`}>
+              <span aria-hidden="true"> ●</span>
+              <span className="pnl-visually-hidden"> ({needYou} need you)</span>
+            </span>
+          ) : undefined,
+        )}
     </span>
   );
 }
@@ -154,12 +179,17 @@ export function DockViewToggle({
  * while the dock is minimised: its scroll position, its live thread and the draft survive.
  */
 export function BrainDock({ agent, children }: { agent: Agent; children: ReactNode }) {
+  const projectId = agent.role === 'waykeeper' ? agent.projectId : undefined;
+  const longTerm = useAppStore((s) => {
+    const project = projectId ? s.world.projects[projectId] : undefined;
+    return project !== undefined && isLongTerm(project);
+  });
   const view = brainView(
     useDockView((s) => s.view),
     agent.role === 'waykeeper' ? 'waykeeper' : 'harmonizer',
+    longTerm,
   );
   const hidden = view !== 'chat';
-  const projectId = agent.role === 'waykeeper' ? agent.projectId : undefined;
   return (
     <>
       <div
@@ -177,6 +207,11 @@ export function BrainDock({ agent, children }: { agent: Agent; children: ReactNo
       {view === 'deliverables' && projectId && (
         <div className="sts-pane sts-pane-status sts-pane-deliverables">
           <ProjectDeliverables projectId={projectId} />
+        </div>
+      )}
+      {view === 'jobs' && projectId && (
+        <div className="sts-pane sts-pane-status sts-pane-jobs">
+          <JobsPane projectId={projectId} />
         </div>
       )}
     </>
