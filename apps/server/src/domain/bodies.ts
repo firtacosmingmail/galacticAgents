@@ -262,11 +262,12 @@ export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
 export function freeBody(ctx: CommandContext, bodyId: Id): Body {
   const body = must(ctx.tables.bodies.get(bodyId), 'body', bodyId);
   if (!body.host) return release(ctx, body);
+  // An area moon (P10-03) is held by its long-term project: freed once that is finished.
   const occupant =
-    body.host.kind === 'project'
-      ? ctx.tables.projects.get(body.host.id)
-      : ctx.tables.tasks.get(body.host.id);
-  if (!occupant) throw notFound(body.host.kind, body.host.id);
+    body.host.kind === 'task'
+      ? ctx.tables.tasks.get(body.host.id)
+      : ctx.tables.projects.get(body.host.id);
+  if (!occupant) throw notFound(body.host.kind === 'task' ? 'task' : 'project', body.host.id);
   if (!FINISHED_WORK.has(occupant.state)) {
     throw new DomainError(
       'conflict',

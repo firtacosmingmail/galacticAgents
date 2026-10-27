@@ -8,6 +8,7 @@ import {
   isDemoBody,
   isRetiredBody,
   type Actor,
+  isJobTask,
   type Body,
   type CreateProjectInput,
   type Host,
@@ -38,6 +39,7 @@ import {
   type ChooseOptions,
 } from './catalogue.js';
 import { withdrawClosureQuestion } from './closure.js';
+import { endProjectAreas } from './jobs.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { FINISHED_WORK, checkTransition, setProjectState } from './states.js';
@@ -79,7 +81,10 @@ function checkParent(ctx: CommandContext, projectId: Id | undefined, parentId: I
   return parent;
 }
 
-/** Refuses closing or archiving while a sub-project (or, for archive, a task) still runs. */
+/**
+ * Refuses closing or archiving while a sub-project (or, for archive, a task) still runs. A job's
+ * hidden task is never finished (P10-03): its job stops with the project instead.
+ */
 function checkNothingActive(ctx: CommandContext, projectId: Id, tasks: boolean): void {
   const subs = ctx.tables.projects
     .all()
@@ -94,7 +99,11 @@ function checkNothingActive(ctx: CommandContext, projectId: Id, tasks: boolean):
   const running = ctx.tables.tasks
     .all()
     .filter(
-      (t) => t.projectId === projectId && !FINISHED_WORK.has(t.state) && t.state !== 'proposed',
+      (t) =>
+        t.projectId === projectId &&
+        !FINISHED_WORK.has(t.state) &&
+        t.state !== 'proposed' &&
+        !isJobTask(t),
     );
   if (running.length > 0) {
     throw new DomainError(
@@ -243,7 +252,8 @@ export function updateProject(
  * The user closes a project (decision 11): `completed`, the body stays occupied for the retention
  * period (its clock starts now, `retention.ts`; `control.close` also stops the Waykeeper). A
  * planet with an active sub-project moon cannot be closed (SPEC §3.2). An open "anything else?"
- * question of the closure relay is withdrawn (P2-13).
+ * question of the closure relay is withdrawn (P2-13). A long-term project's jobs stop and its area
+ * moons are freed (P10-03).
  */
 export function closeProject(ctx: CommandContext, projectId: Id, by: Actor): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
@@ -254,12 +264,14 @@ export function closeProject(ctx: CommandContext, projectId: Id, by: Actor): Pro
   checkNothingActive(ctx, projectId, false);
   const project = setProjectState(ctx, projectId, 'completed', by);
   withdrawClosureQuestion(ctx, projectId, 'the project was closed');
+  endProjectAreas(ctx, projectId, by, 'the project was closed');
   return project;
 }
 
 /**
- * Archives a finished project now (decision 4, 11b) and frees its body. Only finished work is
- * archived, and never while a sub-project or a task still runs (their agents orbit the body).
+ * Archives a finished project now (decision 4, 11b) and frees its body (and a long-term
+ * project's area moons, its jobs stopped: P10-03). Only finished work is archived, and never while
+ * a sub-project or a task still runs (their agents orbit the body).
  */
 export function archiveProject(ctx: CommandContext, projectId: Id, by: Actor): Project {
   const current = must(ctx.tables.projects.get(projectId), 'project', projectId);
@@ -269,6 +281,7 @@ export function archiveProject(ctx: CommandContext, projectId: Id, by: Actor): P
   checkTransition('project', projectId, current.state, 'archived');
   checkNothingActive(ctx, projectId, true);
   const project = setProjectState(ctx, projectId, 'archived', by);
+  endProjectAreas(ctx, projectId, by, 'the project was archived');
   const body = bodyOf(ctx, hostOf(projectId));
   if (body) {
     const freed = release(ctx, body);

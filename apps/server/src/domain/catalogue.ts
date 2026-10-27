@@ -132,10 +132,11 @@ export function occupancyOf(ctx: Reader, body: Body): BodyOccupancy {
   if (body.movedTo) out.movedTo = body.movedTo;
   if (!body.host) return out;
   out.host = body.host;
+  // An area moon (P10-03) names its long-term project.
   const row: Project | Task | undefined =
-    body.host.kind === 'project'
-      ? ctx.tables.projects.get(body.host.id)
-      : ctx.tables.tasks.get(body.host.id);
+    body.host.kind === 'task'
+      ? ctx.tables.tasks.get(body.host.id)
+      : ctx.tables.projects.get(body.host.id);
   if (row) {
     out.occupant = 'name' in row ? row.name : row.description;
     out.state = row.state;

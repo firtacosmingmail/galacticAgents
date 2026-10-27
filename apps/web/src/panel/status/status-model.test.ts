@@ -157,6 +157,13 @@ describe('systemStatus', () => {
     ]);
   });
 
+  it('leaves a recurring job’s hidden task out of the task counts (P10-03)', () => {
+    const w = system();
+    w.tasks['t-job'] = task('t-job', { state: 'approved', meta: { jobId: 'j-1' } });
+    const counted = systemStatus(w, { now: NOW, caps: CAPS }).tasks;
+    expect(counted.map((c) => c.state)).not.toContain('approved');
+  });
+
   it('counts the agents with a status record by state, waiting for input first', () => {
     expect(s.agents[0]).toEqual({ state: 'waiting_for_input', count: 1 });
     expect(s.agents.reduce((n, c) => n + c.count, 0)).toBe(6);

@@ -35,7 +35,7 @@ export interface BrainQueries {
   project(projectId: Id): Project | undefined;
   /** Any task, by id (P2-10). */
   task(taskId: Id): Task | undefined;
-  /** The tasks of a project, in creation order. */
+  /** The tasks of a project, in creation order; recurring jobs' hidden tasks are left out. */
   projectTasks(projectId: Id): Task[];
   /** Open clarification questions the brain holds or one of its agents asked. */
   openQuestions(brainId: Id): Question[];

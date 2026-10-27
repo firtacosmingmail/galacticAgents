@@ -1,4 +1,5 @@
 import {
+  isJobTask,
   isLongTerm,
   proposalPlan,
   type Agent,
@@ -88,6 +89,12 @@ export function taskOf(ctx: BrainToolContext, taskId: Id): Task {
   if (!task) throw new DomainError('not_found', `no task ${taskId}`);
   if (task.projectId !== project.id) {
     throw new DomainError('invalid', `task ${taskId} is not a task of your project ${project.id}`);
+  }
+  if (isJobTask(task)) {
+    throw new DomainError(
+      'invalid',
+      `task ${taskId} belongs to a recurring job: Mission Control runs it on its schedule`,
+    );
   }
   return task;
 }

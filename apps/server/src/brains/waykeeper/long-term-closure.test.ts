@@ -55,6 +55,46 @@ describe('closing work of a long-term project (P10-02)', () => {
     expect(h.log.tables.projects.get(project.id)?.meta?.['closureRequest']).toBeUndefined();
   });
 
+  it('a recurring job’s hidden task is not one of the Waykeeper’s tasks (P10-03)', async () => {
+    const project = (
+      await h.commands.createProject({ name: 'App', workspace: '/tmp/app', longTerm: LONG_TERM })
+    ).value;
+    const { job } = (
+      await h.commands.createJob({
+        projectId: project.id,
+        area: { name: 'Feedback' },
+        draft: {
+          name: 'Read reviews',
+          instructions: 'Read the new reviews.',
+          schedule: { kind: 'daily', at: '09:00' },
+          provider: 'claude',
+          unattendedRules: [],
+        },
+        by: { type: 'user' },
+      })
+    ).value;
+    const last = (await h.commands.createTask({ projectId: project.id, description: 'one' })).value;
+    let closed: Record<string, unknown> | undefined;
+    let refusal: ToolOutcome | undefined;
+    const hq = await h.startHarmonizer();
+    const wk = await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: project.id, supervisorId: hq.agentId },
+      {
+        script: (s) =>
+          s.once('wrap up', async (t) => {
+            refusal = await t.try('close_task', { taskId: job.taskId });
+            closed = await t.call<Record<string, unknown>>('close_task', { taskId: last.id });
+          }),
+      },
+    );
+    wk.tell('wrap up');
+    await h.done();
+    expect(refusal).toMatchObject({ ok: false, error: 'invalid' });
+    expect(closed).toMatchObject({ openTasks: [] });
+    expect(h.log.tables.tasks.get(job.taskId)?.state).toBe('approved');
+  });
+
   it('an ordinary project still gets the closure hint', async () => {
     const project = (await h.commands.createProject({ name: 'Tool', workspace: '/tmp/tool' }))
       .value;

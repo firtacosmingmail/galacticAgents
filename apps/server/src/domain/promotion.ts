@@ -1,4 +1,5 @@
 import {
+  isJobTask,
   proposalPromotion,
   type Body,
   type BodyChoice,
@@ -51,6 +52,10 @@ export function transferTask(
     throw new DomainError('invalid', `task ${taskId} is a standalone task: move it instead`);
   }
   if (current.projectId === toProjectId) return current;
+  if (isJobTask(current)) {
+    // Its job's runs live on its area's moon (P10-03): the job moves areas, its task follows.
+    throw new DomainError('invalid', `task ${taskId} belongs to a recurring job and stays with it`);
+  }
   if (FINISHED_WORK.has(current.state)) {
     throw new DomainError('invalid_transition', `task ${taskId} is ${current.state}`);
   }

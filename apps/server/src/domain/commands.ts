@@ -87,6 +87,7 @@ import {
   type RunStartInput,
 } from './deliverables.js';
 import type { CommandContext, EventLog } from './event-log.js';
+import { createJob, setJobState, updateJob } from './jobs.js';
 import {
   archiveProject,
   closeProject,
@@ -1369,14 +1370,14 @@ export class Commands implements DomainCommands {
   setLongTerm(input: SetLongTermInput): Promise<CommandResult<Project>> {
     return this.run((ctx) => setLongTerm(ctx, input));
   }
-  createJob(_input: CreateJobInput): Promise<CommandResult<{ job: Job; area: Area }>> {
-    return notYet('createJob', 'P10-03');
+  createJob(input: CreateJobInput): Promise<CommandResult<{ job: Job; area: Area }>> {
+    return this.run((ctx) => createJob(ctx, input));
   }
-  updateJob(_input: UpdateJobInput): Promise<CommandResult<Job>> {
-    return notYet('updateJob', 'P10-03');
+  updateJob(input: UpdateJobInput): Promise<CommandResult<Job>> {
+    return this.run((ctx) => updateJob(ctx, input));
   }
-  setJobState(_input: SetJobStateInput): Promise<CommandResult<Job>> {
-    return notYet('setJobState', 'P10-03');
+  setJobState(input: SetJobStateInput): Promise<CommandResult<Job>> {
+    return this.run((ctx) => setJobState(ctx, input));
   }
   startJobRun(_input: StartJobRunInput): Promise<CommandResult<JobRun>> {
     return notYet('startJobRun', 'P10-04');

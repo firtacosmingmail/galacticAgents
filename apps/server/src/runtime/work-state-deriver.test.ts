@@ -334,4 +334,44 @@ describe('work state derivation through the runtime', () => {
     expect(second.log.tables.tasks.get(task.id)!.state).toBe('in_progress');
     expect(second.log.tables.projects.get(project.id)!.state).toBe('in_progress');
   });
+
+  it('a recurring job’s hidden task goes back to approved when its run’s Steward finishes (P10-03)', async () => {
+    const c = boot(freshDb());
+    const project = (
+      await c.commands.createProject({
+        name: 'Shop',
+        workspace: '/w/shop',
+        bodyId: 'b-saturn',
+        longTerm: { purpose: 'Run the shop', goals: [] },
+      })
+    ).value;
+    const { job } = (
+      await c.commands.createJob({
+        projectId: project.id,
+        area: { name: 'Feedback' },
+        draft: {
+          name: 'Read reviews',
+          instructions: 'Read the new reviews.',
+          schedule: { kind: 'daily', at: '09:00' },
+          provider: 'claude',
+          unattendedRules: [],
+        },
+        by: USER,
+      })
+    ).value;
+    const { waykeeper } = await projectHierarchy(c.commands, project.id);
+    const steward = (
+      await c.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: job.taskId,
+        supervisorId: waykeeper.id,
+        prompt: 'scenario:happy',
+      })
+    ).value;
+    await until(() => c.statuses.get(steward.id)?.state === 'finished', 'the run ends');
+    await until(() => c.log.tables.tasks.get(job.taskId)!.state === 'approved', 'back to approved');
+    expect(trail(c.log, 'task', job.taskId)).toEqual(['in_progress', 'approved']);
+    expect(c.errors).toEqual([]);
+  });
 });

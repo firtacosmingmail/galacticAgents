@@ -1,4 +1,4 @@
-import type { EventEnvelope, Id, WorkState } from '@galactic/protocol';
+import { isJobTask, type EventEnvelope, type Id, type WorkState } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 import { canTransition, setProjectState, setTaskState } from '../domain/states.js';
 import {
@@ -272,6 +272,7 @@ export class WorkStateDeriver {
       held: this.isHeld('task', taskId, started),
       userQuestions: this.userQuestions(ids),
       agents,
+      ...(isJobTask(task) ? { job: true } : {}),
     };
     this.write('task', taskId, task.state, deriveTaskState(facts));
   }

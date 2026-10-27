@@ -1,5 +1,6 @@
 import {
   ENDED_STATES,
+  isJobTask,
   proposalPlan,
   type AgentRole,
   type Id,
@@ -38,7 +39,8 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
     projectTasks: (projectId) =>
       tables.tasks
         .all()
-        .filter((t) => t.projectId === projectId)
+        // A recurring job's hidden task (P10-03) is Mission Control's, not the plan's.
+        .filter((t) => t.projectId === projectId && !isJobTask(t))
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     openQuestions: (brainId) =>
       tables.questions.all().filter((q) => {

@@ -3,6 +3,7 @@ import {
   ENDED_STATES,
   formatUsd,
   isHarnessMeta,
+  isJobTask,
   type Agent,
   type BudgetTarget,
   type BudgetUsage,
@@ -459,8 +460,9 @@ export function systemStatus(
       projects.map((p) => p.state),
       WORK_STATE_ORDER,
     ),
+    // A recurring job's hidden task (P10-03) is not a task the user counts.
     tasks: countBy(
-      tasks.map((t) => t.state),
+      tasks.filter((t) => !isJobTask(t)).map((t) => t.state),
       WORK_STATE_ORDER,
     ),
     agents: countBy(
@@ -702,8 +704,9 @@ export function projectStatus(
     project,
     parent: project.parentProjectId ? world.projects[project.parentProjectId] : undefined,
     waykeeper,
+    // A recurring job's hidden task (P10-03) is not a task the user counts.
     tasks: countBy(
-      tasks.map((t) => t.state),
+      tasks.filter((t) => !isJobTask(t)).map((t) => t.state),
       WORK_STATE_ORDER,
     ),
     rows,
