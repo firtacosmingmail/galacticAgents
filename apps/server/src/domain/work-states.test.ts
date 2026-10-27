@@ -144,7 +144,11 @@ describe('a recurring job’s hidden task (P10-03)', () => {
     ],
     ['a finding left open', { agents: [ag('finished', 3)], userQuestions: 1 }, 'approved'],
     ['a new run after old ones', { agents: [ag('finished', 1), ag('running')] }, 'in_progress'],
-    ['closed with its project', { current: 'completed', agents: [ag('running')] }, 'completed'],
+    [
+      'a finished state written explicitly is kept',
+      { current: 'completed', agents: [ag('running')] },
+      'completed',
+    ],
   ];
   it.each(rows)('%s', (_name, over, expected) => {
     expect(deriveTaskState(job(over))).toBe(expected);

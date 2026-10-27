@@ -116,7 +116,10 @@ export const TASK_RULES: readonly Rule[] = [
  * A job's hidden task (P10-03; SPEC decision 144) never finishes: `in_progress` while a run's
  * Steward is live, `approved` (idle, waiting for its next run) otherwise — never `completed`,
  * `failed` or `awaiting_closure` from its Stewards, and a run's questions (job-owned, they outlive
- * the run) never block it. Only an explicit change (the project's closing) moves it elsewhere.
+ * the run) never block it. Nothing in the product moves it elsewhere: closing, cancelling or
+ * archiving the project stops its jobs and leaves the task as it is (`endProjectAreas`), so a
+ * reopened project's jobs run on it again. `sticky` only keeps a finished state an explicit
+ * `setTaskState` might write.
  */
 export const JOB_TASK_RULES: readonly Rule[] = [
   sticky,

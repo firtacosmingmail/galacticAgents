@@ -434,6 +434,8 @@ describe('closing and archiving a long-term project', () => {
     }
     for (const id of ['b-mimas', 'b-enceladus'])
       expect(tables.bodies.get(id)?.host).toBeUndefined();
+    // Closing leaves the hidden tasks as they are (they stay on their freed moons, approved).
+    for (const j of jobs) expect(tables.tasks.get(j.taskId)?.state).toBe('approved');
     // The hidden tasks never finish, and never hold the archive up.
     cmd((ctx) => archiveProject(ctx, p.id, USER));
     expect(tables.projects.get(p.id)?.state).toBe('archived');

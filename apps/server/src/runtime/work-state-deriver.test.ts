@@ -4,6 +4,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase, type Database } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
 import { EventLog } from '../domain/event-log.js';
+import { openQuestion } from '../domain/questions.js';
 import { setTaskState } from '../domain/states.js';
 import { projectHierarchy, spawnHarmonizer } from '../test/hierarchy.js';
 import { DEFAULT_CAPS } from './caps.js';
@@ -372,6 +373,71 @@ describe('work state derivation through the runtime', () => {
     await until(() => c.statuses.get(steward.id)?.state === 'finished', 'the run ends');
     await until(() => c.log.tables.tasks.get(job.taskId)!.state === 'approved', 'back to approved');
     expect(trail(c.log, 'task', job.taskId)).toEqual(['in_progress', 'approved']);
+    expect(c.errors).toEqual([]);
+  });
+  it('a job-owned question (a finding, a failure) never makes the long-term project blocked on the user (ruling R12)', async () => {
+    const c = boot(freshDb());
+    const project = (
+      await c.commands.createProject({
+        name: 'Shop',
+        workspace: '/w/shop',
+        bodyId: 'b-saturn',
+        longTerm: { purpose: 'Run the shop', goals: [] },
+      })
+    ).value;
+    const { job } = (
+      await c.commands.createJob({
+        projectId: project.id,
+        area: { name: 'Feedback' },
+        draft: {
+          name: 'Read reviews',
+          instructions: 'Read the new reviews.',
+          schedule: { kind: 'daily', at: '09:00' },
+          provider: 'claude',
+          unattendedRules: [],
+        },
+        by: USER,
+      })
+    ).value;
+    const { waykeeper } = await projectHierarchy(c.commands, project.id);
+    const steward = (
+      await c.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        taskId: job.taskId,
+        supervisorId: waykeeper.id,
+        prompt: 'scenario:happy',
+      })
+    ).value;
+    await until(() => c.statuses.get(steward.id)?.state === 'finished', 'the run ends');
+    await until(() => c.log.tables.tasks.get(job.taskId)!.state === 'approved', 'back to approved');
+    const before = c.log.tables.projects.get(project.id)!.state;
+    c.log.runCommand((ctx) => {
+      openQuestion(ctx, {
+        id: 'q-finding',
+        kind: 'clarification',
+        originAgentId: steward.id,
+        context: {
+          text: 'Users ask for dark mode',
+          options: ['Create a ticket', 'Implement it', 'Drop'],
+          finding: { jobId: job.id, runId: 'jr-1', kind: 'suggestion', title: 'Dark mode' },
+        },
+      });
+      openQuestion(ctx, {
+        id: 'q-failure',
+        kind: 'clarification',
+        originAgentId: waykeeper.id,
+        context: {
+          text: 'Read reviews failed: no network. Tell me when it is fixed.',
+          options: ['Fixed — retry now', 'Stop the job'],
+          jobFailure: { jobId: job.id, runId: 'jr-1', reason: 'no network' },
+        },
+      });
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(c.log.tables.projects.get(project.id)!.state).toBe(before);
+    expect(c.log.tables.projects.get(project.id)!.state).not.toBe('blocked_on_user');
+    expect(c.log.tables.tasks.get(job.taskId)!.state).toBe('approved');
     expect(c.errors).toEqual([]);
   });
 });
