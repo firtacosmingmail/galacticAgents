@@ -605,8 +605,7 @@ describe('job scheduler (P10-04)', () => {
     expect(jobNow(c, job.id).runningRunId).toBe(runs[0]!.id);
     expect(
       events(c).some(
-        (e) =>
-          e.type === 'job.updated' && e.jobId === job.id && e.changes.runningRunId === null,
+        (e) => e.type === 'job.updated' && e.jobId === job.id && e.changes.runningRunId === null,
       ),
     ).toBe(true);
   });

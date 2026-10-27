@@ -1,4 +1,10 @@
-import { isJobOwned, isJobTask, type EventEnvelope, type Id, type WorkState } from '@galactic/protocol';
+import {
+  isJobOwned,
+  isJobTask,
+  type EventEnvelope,
+  type Id,
+  type WorkState,
+} from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 import { canTransition, setProjectState, setTaskState } from '../domain/states.js';
 import {
