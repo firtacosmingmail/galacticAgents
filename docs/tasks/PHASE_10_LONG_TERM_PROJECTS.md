@@ -1,7 +1,7 @@
 # Phase 10 — Long-term projects, area moons and recurring jobs
 
-**Current task:** P10-05 · **Task status:** P10-01, P10-02, P10-03, P10-04 done; P10-05 in progress
-**Phase status:** in progress (4/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
+**Current task:** P10-06 · **Task status:** P10-01, P10-02, P10-03, P10-04, P10-05 done; P10-06 next
+**Phase status:** in progress (5/8 done) — on batch branch `p10-1-long-term-projects`, cut from `phase-10` (cut from `main`)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -70,7 +70,7 @@ All eight run in one batch branch, `p10-1-long-term-projects`, in this order.
 - **Acceptance:** the plan's Task 6 and Task 8 tests: on-time and catch-up runs, restart mid-run → `interrupted` then one catch-up, a run still going → `waited`, retry racing the tick → one spawn, a full concurrency cap → `waited` / `interrupted` (never `failed`), budget refusal → failed + paused + one question, unattended rules apply only to the job's Stewards, `dispose()` stops the timer.
 
 ### P10-05 — Findings and spend approvals
-- **Status:** in progress · **Depends on:** P10-04 · **Parallel with:** —
+- **Status:** done (2026-10-27) · **Depends on:** P10-04 · **Parallel with:** —
 - Plan Tasks 7 and 9: `openFinding`, `requestSpend`, `applyJobAnswer` (Create a ticket / Implement it / Drop; Send / Drop; Approve / Refuse; Fixed — retry now / Stop the job); spend held and answered by the user only; job-owned questions wake no brain; Steward tools `request_spend`, `report_finding`, `report_run`; the task-spend relay.
 - **Acceptance:** every action and refusal (closed project, stopped job; Drop always works); an edited reply queues its text; spend refused to agents, sets, "Allow similar" rules and remote answers without auto-approve; only "Implement it" wakes the Waykeeper, once; tool scopes per Steward kind, 20 findings per run, `report_run('failed')` pauses the job.
 
