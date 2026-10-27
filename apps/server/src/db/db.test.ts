@@ -29,8 +29,11 @@ describe('migrations', () => {
     expect(names).toEqual(
       expect.arrayContaining([
         'agents',
+        'areas',
         'bodies',
         'events',
+        'job_runs',
+        'jobs',
         'projects',
         'proposals',
         'questions',

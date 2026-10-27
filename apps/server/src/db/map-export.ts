@@ -20,7 +20,9 @@ import { tables } from './tables.js';
  *
  * Never exported (they are secrets, device configuration or runtime bookkeeping): the token,
  * `config.json`, the VAPID keys, push subscriptions, the process table, the settings table, and
- * agents' runtime sessions (those live in each CLI's own store, not in the database).
+ * agents' runtime sessions (those live in each CLI's own store, not in the database). Nor the
+ * jobs' run history (`job_runs`, P10-01): bounded run data the world fold does not carry; an
+ * import starts each job's history afresh (the job keeps its `lastRun`).
  */
 
 export class ExportError extends Error {
@@ -122,6 +124,8 @@ export function exportMap(db: Database, opts: ExportOptions = {}): MapExport {
         questions: t.questions.all(),
         proposals: t.proposals.all(),
         deliverables: t.deliverables.all(),
+        areas: t.areas.all(),
+        jobs: t.jobs.all(),
       },
     };
     if (opts.transcripts) {
@@ -214,6 +218,8 @@ export async function* exportMapText(
         questions: t.questions.all(),
         proposals: t.proposals.all(),
         deliverables: t.deliverables.all(),
+        areas: t.areas.all(),
+        jobs: t.jobs.all(),
       },
     };
     yield `${JSON.stringify(head).slice(0, -1)},"events":[`;

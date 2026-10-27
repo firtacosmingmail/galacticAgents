@@ -410,6 +410,8 @@ export class EventLog {
       proposals: this.tables.proposals.all(),
       spend: this.tables.spend.all(),
       deliverables: this.tables.deliverables.all(),
+      areas: this.tables.areas.all(),
+      jobs: this.tables.jobs.all(),
     }))();
   }
 }

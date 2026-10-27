@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Agent, Body, Project, Proposal, Question, Task } from './domain.js';
 import { Id, Timestamp } from './primitives.js';
 import { Deliverable } from './deliverables.js';
+import { Area, Job } from './long-term.js';
 
 // --- backups (P8-03; TECHNOLOGY §6.4, docs/BACKUP_RESTORE.md) -----------------------------------
 
@@ -110,6 +111,13 @@ export const ExportedRows = z.object({
    * build before Phase 9 has none, and its import checks nothing for them.
    */
   deliverables: z.array(Deliverable).optional(),
+  /**
+   * The long-term projects' areas and jobs (P10-01). Optional: an export from a build before
+   * Phase 10 has none, and its import checks nothing for them. A job's run history (`job_runs`)
+   * is not exported: it is bounded run data the world fold does not carry, like the transcripts.
+   */
+  areas: z.array(Area).optional(),
+  jobs: z.array(Job).optional(),
 });
 export type ExportedRows = z.infer<typeof ExportedRows>;
 
