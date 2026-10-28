@@ -10,6 +10,7 @@ import { agentLabel } from '../../console/hierarchy/shared.js';
 import { requestDockOpen, revealChat } from '../../panel/dock-state.js';
 import { useDockView } from '../../panel/status/dock-view.js';
 import { useDeliverablesFocus } from '../../panel/deliverables/use-deliverables.js';
+import { useJobsFilter } from '../../panel/jobs/jobs-model.js';
 import { useCameraStore } from '../camera/store.js';
 import { getSatellite } from '../satellites/registry.js';
 import type { SatelliteMode } from '../satellites/machine.js';
@@ -248,6 +249,12 @@ export function activateBody(bodyId: string, at: Point, opts: { fly?: boolean } 
   if (action.kind === 'select') {
     picking.closePopover();
     selectFromScene(action.selection);
+    // P10-07: an area moon opens its project's Jobs view, filtered to that moon.
+    if (action.jobsOf !== undefined) {
+      useJobsFilter.getState().set(action.jobsOf);
+      useDockView.getState().setView('jobs');
+      requestDockOpen();
+    }
   } else {
     usePickingStore.setState({ popover: { kind: 'info', ...at, action } });
   }

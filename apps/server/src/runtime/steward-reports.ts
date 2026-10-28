@@ -1,3 +1,4 @@
+import { isJobTask } from '@galactic/protocol';
 import type { Actor, Agent, AgentState, EventEnvelope, Id, Task } from '@galactic/protocol';
 import { parseReportBlock, reportBlockText } from '../deliverables/report-block.js';
 import type { TurnEnd } from './agent-runtime.js';
@@ -18,6 +19,9 @@ import { stewardDeclares } from './tool-runtimes.js';
  *   - only to a supervisor with a brain mailbox (a live Harmonizer or Waykeeper). Without one the
  *     report is not sent: the task's derived state (`awaiting_closure`) and the supervisor's seed
  *     still show the idle Steward when a supervisor comes back.
+ *
+ * A job run's Steward (its task is a job's hidden task, P10-04) never reports: the job scheduler
+ * records its run, and a finished run never wakes the Waykeeper.
  *
  * A Steward that *finishes* (its process exits) is reported by `agent.finished`, which already
  * wakes its supervisor; the runtime fills a missing `result` with the turn's last text.
@@ -156,6 +160,8 @@ export function stewardReports(
     const supervisorId = agent.supervisorId;
     if (!supervisorId || !runtime.hasMailbox(supervisorId)) return false;
     const task = agent.taskId ? tables.tasks.get(agent.taskId) : undefined;
+    // A job run's Steward reports to no one (P10-04): the scheduler records its run.
+    if (task && isJobTask(task)) return false;
     const body = reportText(task, text, agent);
     try {
       const { id } = runtime.send(

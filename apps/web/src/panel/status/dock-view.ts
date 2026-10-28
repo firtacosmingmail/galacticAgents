@@ -13,17 +13,18 @@ import { create } from 'zustand';
  */
 export const DOCK_VIEW_KEY = 'galactic.panel.dock.view';
 
-export type DockView = 'chat' | 'status' | 'deliverables';
+export type DockView = 'chat' | 'status' | 'deliverables' | 'jobs';
 
 /**
  * The stored choice. `deliverables` (P9-09) is a project's third view ("Chat | Status |
  * Deliverables"); the Harmonizer has no Deliverables view and shows its chat meanwhile
- * (`brainView`).
+ * (`brainView`). `jobs` (P10-07) is a long-term project's fourth view; a brain without it shows
+ * its chat while the stored choice stays `jobs`.
  */
 export function readDockView(): DockView {
   try {
     const v = localStorage.getItem(DOCK_VIEW_KEY);
-    return v === 'status' || v === 'deliverables' ? v : 'chat';
+    return v === 'status' || v === 'deliverables' || v === 'jobs' ? v : 'chat';
   } catch {
     return 'chat';
   }
@@ -37,9 +38,18 @@ function writeDockView(view: DockView): void {
   }
 }
 
-/** What a brain's dock shows for `view`: only a Waykeeper has the Deliverables view. */
-export function brainView(view: DockView, role: 'harmonizer' | 'waykeeper'): DockView {
-  return view === 'deliverables' && role !== 'waykeeper' ? 'chat' : view;
+/**
+ * What a brain's dock shows for `view`: only a Waykeeper has the Deliverables view, and only the
+ * Waykeeper of a long-term project (`longTerm`) has the Jobs view (P10-07).
+ */
+export function brainView(
+  view: DockView,
+  role: 'harmonizer' | 'waykeeper',
+  longTerm = false,
+): DockView {
+  if (view === 'deliverables' && role !== 'waykeeper') return 'chat';
+  if (view === 'jobs' && !(role === 'waykeeper' && longTerm)) return 'chat';
+  return view;
 }
 
 interface DockViewState {

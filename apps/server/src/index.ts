@@ -28,8 +28,10 @@ import { openDatabase } from './db/database.js';
 import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
 import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
+import { JOB_TICK_MS } from './domain/job-runs.js';
 import { composeRuntime } from './runtime/compose.js';
 import { harnessBrains } from './runtime/harness-brains.js';
+import { HarnessJobScripts, harnessJobs } from './runtime/harness-jobs.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { runIdOfKey } from './runtime/process-attribution.js';
@@ -115,7 +117,12 @@ for (const take of launches.taken) {
 // ACP one for any ACP agent when `acp.command` is configured (P8-07), the PTY one for a
 // command-line agent when `pty.command` is (P8-08; node-pty loads at its first spawn).
 // The fake one's sessions report a few slash commands, so the composer's list can be tried (P8-13).
-const fake = new FakeAdapter({ commands: DEV_FAKE_COMMANDS });
+// In development mode a job run's Steward may follow a test's script (P10-08, `/dev/harness/jobs`).
+const jobScripts = config.dev ? new HarnessJobScripts() : undefined;
+const fake = new FakeAdapter({
+  commands: DEV_FAKE_COMMANDS,
+  ...(jobScripts ? { scenarioFor: (opts) => jobScripts.scenarioFor(opts) } : {}),
+});
 const adapters: AgentAdapter[] = [
   fake,
   new ClaudeSdkAdapter({
@@ -201,6 +208,14 @@ const composed = composeRuntime(db, {
   autoApproveRemote: config.autoApproveRemote,
   // Spawn caps (decision 18, P2-17): concurrency, Stewards per Waykeeper, spawns per hour.
   caps: config.caps,
+  // Job runs (P10-04): on the Steward runtime, else the Harmonizer's; the timer starts below,
+  // after recovery and the Harmonizer.
+  jobs: {
+    stewardRuntime: () =>
+      config.stewardRuntime ??
+      harmonizerRuntime(process.env['GALACTIC_HARMONIZER']) ??
+      (config.dev ? 'fake' : 'claude-sdk'),
+  },
   // Finished work past decision 4's retention period is archived hourly (P2-13).
   archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
   // Transcript chunks past the transcript retention policy are removed hourly (P8-02).
@@ -223,6 +238,7 @@ const composed = composeRuntime(db, {
   runs: { supervisor, settings: () => runSettings(config) },
 });
 const { log, statuses, transcripts } = composed;
+jobScripts?.attach(log.tables);
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
 const push = createPush(db, config, {
   log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
@@ -273,6 +289,7 @@ function shutdown(code: number): void {
   deadline.unref();
   // The promotion flow stops with the runtime: no card is carried out while agents are stopping.
   promotions?.stop();
+  composed.jobs.stop();
   push.service.stop();
   backups.stop();
   // A backup being taken finishes (or fails) before the process exits, so no half copy is left.
@@ -452,6 +469,10 @@ const app = buildApp({
       startWaykeeper,
       runnerOf: (id) => composed.runnerOf(id),
     }),
+    // A job's run now, its Steward following a test's script, and a scheduler tick (P10-08).
+    ...(jobScripts
+      ? { jobs: harnessJobs({ log, scheduler: composed.jobs, scripts: jobScripts }) }
+      : {}),
     ...(composed.deliverables
       ? {
           deliverables: {
@@ -536,4 +557,7 @@ if (!shuttingDown) {
     startWaykeeper,
     onError,
   }).start();
+  // Recurring jobs (P10-04): after recovery (a run cut short by the restart is recorded
+  // interrupted, its Steward not resumed) and the Harmonizer; the first tick catches up at once.
+  composed.jobs.start(JOB_TICK_MS);
 }

@@ -129,6 +129,43 @@ describe('task state derivation', () => {
   });
 });
 
+describe('a recurring job’s hidden task (P10-03)', () => {
+  const job = (over: Partial<WorkFacts>) => facts({ job: true, ...over });
+  const rows: Row[] = [
+    ['idle between runs', { current: 'approved' }, 'approved'],
+    ['a run is live', { current: 'approved', agents: [ag('running')] }, 'in_progress'],
+    ['its Steward finished', { agents: [ag('finished', 3)] }, 'approved'],
+    ['its Steward failed', { agents: [ag('failed', 3)] }, 'approved'],
+    ['its Steward ended its turn', { agents: [ag('idle')] }, 'approved'],
+    [
+      'interrupted by a restart',
+      { current: 'interrupted', agents: [ag('interrupted', 2)] },
+      'approved',
+    ],
+    ['a finding left open', { agents: [ag('finished', 3)], userQuestions: 1 }, 'approved'],
+    ['a new run after old ones', { agents: [ag('finished', 1), ag('running')] }, 'in_progress'],
+    [
+      'a finished state written explicitly is kept',
+      { current: 'completed', agents: [ag('running')] },
+      'completed',
+    ],
+  ];
+  it.each(rows)('%s', (_name, over, expected) => {
+    expect(deriveTaskState(job(over))).toBe(expected);
+  });
+
+  it('never derives completed, failed or awaiting closure, and every change is allowed', () => {
+    const phases: AgentPhase[] = ['running', 'idle', 'paused', 'finished', 'failed', 'stopped'];
+    for (const current of ['approved', 'in_progress', 'blocked_on_user', 'interrupted'] as const) {
+      for (const phase of phases) {
+        const to = deriveTaskState(job({ current, agents: [ag(phase, 1)], userQuestions: 1 }));
+        expect(['approved', 'in_progress']).toContain(to);
+        if (to !== current) expect(canTransition(current, to), `${current} → ${to}`).toBe(true);
+      }
+    }
+  });
+});
+
 describe('project state derivation', () => {
   const rows: Row[] = [
     ['approved, nothing yet', { current: 'approved' }, 'approved'],

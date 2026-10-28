@@ -1,4 +1,13 @@
-import { excerpt, formatUsd, setOf, SUPERSEDED_BY_MESSAGE } from '@galactic/protocol';
+import {
+  excerpt,
+  formatUsd,
+  isJobOwned,
+  isJobTask,
+  proposalJobOf,
+  proposalLongTermOf,
+  setOf,
+  SUPERSEDED_BY_MESSAGE,
+} from '@galactic/protocol';
 import type {
   Actor,
   AgentRole,
@@ -8,6 +17,7 @@ import type {
   EventOfType,
   EventType,
   Id,
+  Proposal,
   Question,
   ReplyQuote,
 } from '@galactic/protocol';
@@ -21,7 +31,10 @@ import { COMMAND_SOURCE } from '../domain/questions.js';
  *
  * Never in the table: `agent.output` and `agent.tool_call` (transcript traffic), the brain's own
  * `agent.*` lifecycle, and permission questions (decision 7: the policy or the user resolves them,
- * never an LLM, so they do not enter any brain's mailbox).
+ * never an LLM, so they do not enter any brain's mailbox). Likewise `spend` approvals (decision
+ * 145: the user's alone) and job-owned questions — findings, failure notices, job spends (P10-05):
+ * they belong to a job, not to the agents above its run. The one exception is a finding's
+ * "Implement it", which reaches the project's Waykeeper as a system message (`fromFinding`).
  */
 
 /** What a wake rule may ask about the brain's place in the hierarchy (read from the tables). */
@@ -32,6 +45,8 @@ export interface WakeScope {
   projectId?: Id;
   /** `agentId` is directly supervised by the brain. */
   supervises(agentId: Id | undefined): boolean;
+  /** `agentId` is the brain's own supervisor (P10-06: the Harmonizer relaying to a Waykeeper). */
+  supervisedBy?(agentId: Id | undefined): boolean;
   /** `agentId` is anywhere below the brain in the `supervisorId` chain (direct reports too). */
   below?(agentId: Id | undefined): boolean;
   /** The brain runs the task: a task of its project, or the task of an agent it supervises. */
@@ -40,6 +55,8 @@ export interface WakeScope {
   runsProject(projectId: Id): boolean;
   /** The brain decides on the proposal (the Harmonizer proposes; P2-10 adds plan cards). */
   ownsProposal(proposalId: Id): boolean;
+  /** A proposal, to say what its approval did (P10-06: job and long-term cards). */
+  proposal?(proposalId: Id): Proposal | undefined;
   question(questionId: Id): Question | undefined;
   /**
    * The control action concerns the brain as a supervisor (P2-14's `concernedSupervisors`): a
@@ -52,6 +69,11 @@ export interface WakeScope {
    * budget.
    */
   unattended?(target: BudgetTarget): boolean;
+  /**
+   * The agent is a job run's Steward (P10-04): its end, its stall and the scheduler's stop of it
+   * wake no one — the scheduler records the run, and a finished run never wakes the Waykeeper.
+   */
+  jobRun?(agentId: Id | undefined): boolean;
 }
 
 export interface WakeRule<T extends EventType> {
@@ -74,7 +96,8 @@ const who = (actor: Actor, scope: WakeScope): string =>
  * none is woken by it.
  */
 function concerns(q: Question | undefined, scope: WakeScope): q is Question {
-  if (!q || q.kind !== 'clarification') return false;
+  // Never a permission or a spend (decisions 7, 145), never a job-owned question (P10-05).
+  if (!q || q.kind !== 'clarification' || isJobOwned(q)) return false;
   if (isBrain(q.holder, scope)) return true;
   return q.meta?.['toUser'] !== true && scope.supervises(q.originAgentId);
 }
@@ -85,7 +108,8 @@ function concerns(q: Question | undefined, scope: WakeScope): q is Question {
  * waits for the answer like any holder.
  */
 function heldBefore(holders: readonly Id[] | undefined, scope: WakeScope, q: Question | undefined) {
-  if (q !== undefined && q.kind !== 'clarification') return false; // decision 7: never a brain's
+  // Decisions 7 and 145: a permission or a spend is never a brain's; nor a job-owned question.
+  if (q !== undefined && (q.kind !== 'clarification' || isJobOwned(q))) return false;
   // Its own question only when it asked through a tool: one its session is blocked on is answered
   // through the adapter, and a mailbox line would deliver it twice.
   if (q?.originAgentId === scope.brainId) return q.meta?.['source'] === COMMAND_SOURCE;
@@ -104,8 +128,14 @@ function targets(target: ControlTarget, scope: WakeScope): boolean {
 }
 
 const control = <T extends EventType & `control.${string}`>(verb: string): WakeRule<T> => ({
-  wakes: (e, s) =>
-    targets((e as { target: ControlTarget }).target, s) || (s.concerned?.(e as Event) ?? false),
+  wakes: (e, s) => {
+    const { target, by } = e as unknown as { target: ControlTarget; by: Actor };
+    // The scheduler stopping a job run's Steward is no supervisor's news (P10-04).
+    if (by.type === 'system' && target.kind === 'agent' && (s.jobRun?.(target.id) ?? false)) {
+      return false;
+    }
+    return targets(target, s) || (s.concerned?.(e as Event) ?? false);
+  },
   describe: (e, s) => {
     const { target, by } = e as unknown as { target: ControlTarget; by: Actor };
     const what =
@@ -116,15 +146,41 @@ const control = <T extends EventType & `control.${string}`>(verb: string): WakeR
 
 type EndedType = 'agent.finished' | 'agent.failed' | 'agent.stalled';
 const ended = <T extends EndedType>(text: (e: EventOfType<T>) => string): WakeRule<T> => ({
-  wakes: (e, s) => s.supervises((e as EventOfType<EndedType>).agentId),
+  wakes: (e, s) => {
+    const { agentId } = e as EventOfType<EndedType>;
+    return s.supervises(agentId) && !(s.jobRun?.(agentId) ?? false);
+  },
   describe: (e) => `agent ${(e as EventOfType<EndedType>).agentId} ${text(e)}`,
 });
 
 type DecisionType = `proposal.${'approved' | 'edited' | 'rejected' | 'parked' | 'unparked'}`;
-const proposal = <T extends DecisionType>(text: (e: EventOfType<T>) => string): WakeRule<T> => ({
+const proposal = <T extends DecisionType>(
+  text: (e: EventOfType<T>, s: WakeScope) => string,
+): WakeRule<T> => ({
   wakes: (e, s) => s.ownsProposal((e as EventOfType<DecisionType>).proposalId),
-  describe: (e) => `proposal ${(e as EventOfType<DecisionType>).proposalId} ${text(e)}`,
+  describe: (e, s) => `proposal ${(e as EventOfType<DecisionType>).proposalId} ${text(e, s)}`,
 });
+
+/**
+ * What an approval already did, for the cards whose approval is the whole of it (P10-06): a job
+ * card's job was created, changed or stopped; a conversion card made its project long-term. There
+ * is nothing left to create or spawn.
+ */
+function approvedNote(p: Proposal | undefined): string {
+  const job = proposalJobOf(p);
+  if (job) {
+    const what =
+      job.action === 'create'
+        ? `the recurring job ${quote(job.draft?.name ?? '')} was created`
+        : `job ${job.jobId} was ${job.action === 'stop' ? 'stopped' : 'changed'}`;
+    return `: ${what} with the approval`;
+  }
+  const longTerm = proposalLongTermOf(p);
+  if (longTerm?.projectId) {
+    return `: project ${longTerm.projectId} is now long-term (moved to a planet with moons if it had to); nothing to create or spawn`;
+  }
+  return '';
+}
 
 const quote = (text: string) => JSON.stringify(text);
 
@@ -183,12 +239,24 @@ export const WAKE_RULES: WakeRules = {
     // A user's chat line to the brain, or a report from an agent below it (a direct report, or a
     // sub-project's Waykeeper asking the Harmonizer for closure). The brain's own turn messages
     // are sent by the system and never wake it.
+    // A finding's "Implement it" (P10-05) is the one system message that wakes a brain: the
+    // project's Waykeeper learns what the user wants planned. The brain's supervisor may pass a
+    // request on to it (P10-06: the Harmonizer's `relay_to_waykeeper`).
     wakes: (e, s) =>
       e.agentId === s.brainId &&
       (e.sender.type === 'user' ||
+        (e.sender.type === 'system' && e.fromFinding !== undefined && !e.turn) ||
         (e.sender.type === 'agent' &&
-          (s.supervises(e.sender.id) || (s.below?.(e.sender.id) ?? false)))),
+          (s.supervises(e.sender.id) ||
+            (s.below?.(e.sender.id) ?? false) ||
+            (s.supervisedBy?.(e.sender.id) ?? false)))),
     describe: (e, s) => {
+      if (e.sender.type === 'system') {
+        return `the system said (the user answered finding ${e.fromFinding ?? '?'}): ${quote(e.text)}`;
+      }
+      if (e.sender.type === 'agent' && s.supervisedBy?.(e.sender.id)) {
+        return `your supervisor ${who(e.sender, s)} passed on: ${quote(e.text)}`;
+      }
       if (e.sender.type !== 'user') return `${who(e.sender, s)} reported: ${quote(e.text)}`;
       const r = e.replyTo;
       if (!r) return `the user said: ${quote(e.text)}`;
@@ -269,13 +337,17 @@ export const WAKE_RULES: WakeRules = {
   'task.created': {
     wakes: (e, s) =>
       s.role === 'waykeeper' &&
+      // A recurring job's hidden task (P10-03) is Mission Control's: it comes with its job card.
+      !isJobTask(e.task) &&
       e.task.projectId !== undefined &&
       e.task.projectId === s.projectId &&
       e.task.state !== 'proposed',
     describe: (e) =>
       `task ${e.task.id} was added to your project (${e.task.state}, ${e.task.priority}): ${quote(e.task.description)}`,
   },
-  'proposal.approved': proposal(() => 'was approved'),
+  'proposal.approved': proposal(
+    (e, s) => `was approved${approvedNote(s.proposal?.(e.proposalId))}`,
+  ),
   'proposal.edited': proposal((e) => `was edited: ${JSON.stringify(e.changes)}`),
   'proposal.rejected': proposal((e) => `was rejected${e.reason ? `: ${e.reason}` : ''}`),
   'proposal.parked': proposal((e) => `was parked: ${e.reason}`),

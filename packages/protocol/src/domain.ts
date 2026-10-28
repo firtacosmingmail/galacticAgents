@@ -2,6 +2,12 @@ import { z } from 'zod';
 import { Id, Meta, Timestamp } from './primitives.js';
 import { QuestionSetRef } from './question-set.js';
 import {
+  FindingContext,
+  JobFailureContext,
+  LONG_TERM_LIMITS,
+  SpendContext,
+} from './long-term-questions.js';
+import {
   ActorType,
   AgentRole,
   AgentRuntime,
@@ -194,6 +200,18 @@ export const Project = z.object({
    * cost together. Absent: no budget. Set through `setBudget` (logged as `budget.set`).
    */
   budgetUsd: BudgetUsd.optional(),
+  /**
+   * A long-term project (P10-01; SPEC decision 142): it never starts the "anything else?" flow and
+   * only the user closes it; it lives on a planet with moons, whose moons host its areas.
+   */
+  longTerm: z.boolean().optional(),
+  /** A long-term project's purpose, in the user's words (1–2000 characters). */
+  purpose: z.string().min(1).max(LONG_TERM_LIMITS.maxPurpose).optional(),
+  /** A long-term project's goals (at most 10, each 1–300 characters). */
+  goals: z
+    .array(z.string().min(1).max(LONG_TERM_LIMITS.maxGoal))
+    .max(LONG_TERM_LIMITS.maxGoals)
+    .optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -491,6 +509,12 @@ export const QuestionContext = z.object({
   multiSelect: z.boolean().optional(),
   /** Present when the question is one row of a question set (P8-19, SPEC decision 141). */
   set: QuestionSetRef.optional(),
+  /** A job run's finding (P10-01): the question is job-owned (`isJobOwned`). */
+  finding: FindingContext.optional(),
+  /** A paused job's failure notice (P10-01): job-owned. */
+  jobFailure: JobFailureContext.optional(),
+  /** What a `spend` question asks to spend (P10-01); job-owned when it names a job. */
+  spend: SpendContext.optional(),
   /** Set by the server on `question.opened`; adapters leave it out. */
   origin: QuestionOrigin.optional(),
 });

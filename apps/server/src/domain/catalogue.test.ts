@@ -14,8 +14,11 @@ import {
   SUN_ID,
   asteroidSpec,
   chooseBody,
+  describeRefusal,
+  freeBigPlanets,
   freeMoons,
   freePlanets,
+  isBigPlanet,
   isReserved,
 } from './catalogue.js';
 import { archiveProject, closeProject, createProject } from './projects.js';
@@ -143,6 +146,45 @@ describe('freePlanets / freeMoons', () => {
     ]);
     expect(ids(freeMoons(log, 'b-jupiter'))).toEqual(['b-europa', 'b-ganymede', 'b-callisto']);
     expect(freePlanets(log)).toEqual(freePlanets(log));
+  });
+});
+
+describe('chooseBody for a long-term project (P10-02)', () => {
+  it('takes the first free big planet even when its moons are taken (areas may share them)', () => {
+    const { log, run } = world();
+    for (const moon of ['b-io', 'b-europa', 'b-ganymede', 'b-callisto']) {
+      run((ctx) => createProject(ctx, { name: moon, workspace: '/w', bodyId: moon }));
+    }
+    expect(isBigPlanet(log, log.tables.bodies.get('b-jupiter')!)).toBe(true);
+    expect(chooseBody(log, { kind: 'planet', longTerm: true })).toMatchObject({
+      body: { id: 'b-jupiter' },
+    });
+    // an ordinary planet request still prefers a planet with free moons
+    expect(chooseBody(log, { kind: 'planet' })).toMatchObject({ body: { id: 'b-mars' } });
+  });
+
+  it('never counts Neptune (three moons), Mars or a moonless planet as big', () => {
+    const { log } = world();
+    const big = (id: string) => isBigPlanet(log, log.tables.bodies.get(id)!);
+    expect(['b-mercury', 'b-venus', 'b-earth', 'b-mars', 'b-neptune'].map(big)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(freeBigPlanets(log).map((b) => b.id)).toEqual(['b-jupiter', 'b-saturn', 'b-uranus']);
+  });
+
+  it('refuses no_planet_with_moons in its own words', () => {
+    const { log, run } = world();
+    for (const id of ['b-mars', 'b-jupiter', 'b-saturn', 'b-uranus', 'b-neptune']) {
+      run((ctx) => createProject(ctx, { name: id, workspace: '/w', bodyId: id }));
+    }
+    const choice = chooseBody(log, { kind: 'planet', longTerm: true });
+    if (choice.ok) throw new Error('expected a refusal');
+    expect(choice.reason).toBe('no_planet_with_moons');
+    expect(describeRefusal(choice)).toMatch(/^no free planet with moons — occupied: Mars: b-mars/);
   });
 });
 

@@ -36,6 +36,16 @@ import type {
 } from './deliverables.js';
 import type { Id, Meta } from './primitives.js';
 import type { SetAnswer, SetQuestionInput } from './question-set.js';
+import type {
+  Area,
+  FollowUp,
+  Job,
+  JobDraft,
+  JobRun,
+  JobRunOutcome,
+  JobRunPurpose,
+  JobState,
+} from './long-term.js';
 
 // ---------------------------------------------------------------------------
 // Command inputs. Ids and timestamps are assigned by the server, never by the caller.
@@ -54,6 +64,11 @@ export interface CreateProjectInput {
   state?: Extract<WorkState, 'proposed' | 'approved'>;
   /** Stored as the row's `meta` (e.g. the Harmonizer's `proposalId`, P2-08). */
   meta?: Meta;
+  /**
+   * A long-term project (P10-01; SPEC decision 142): placed on a big planet (else a planet with
+   * moons) and stored with its purpose and goals.
+   */
+  longTerm?: { purpose: string; goals: string[] };
 }
 
 export interface CreateTaskInput {
@@ -97,19 +112,23 @@ export type AgentPlacement = Partial<
 
 /**
  * What a new project needs a body for (P2-02, decision 10): a planet, or a moon — of its parent
- * project's planet for a sub-project, else preferably of a planet without a Waykeeper.
+ * project's planet for a sub-project, else preferably of a planet without a Waykeeper. A
+ * long-term project's planet (`longTerm`, P10-02) is a big planet, else a planet with moons.
  */
-export type BodyRequest = { kind: 'planet' } | { kind: 'moon'; parentProjectId?: Id };
+export type BodyRequest =
+  { kind: 'planet'; longTerm?: true } | { kind: 'moon'; parentProjectId?: Id };
 
 /**
  * The catalogue's answer to a `BodyRequest`: a free body, or why there is none. "No free planet"
  * lists every occupied planet and its occupant (decision 16: the refusal offers downsizing or
  * closing a completed project early, and the proposal is parked). "No free moon" for a
- * sub-project means it stays a task on the planet (SPEC §3.2).
+ * sub-project means it stays a task on the planet (SPEC §3.2). "No planet with moons" refuses a
+ * long-term project: no free planet has a moon for its areas (P10-02).
  */
 export type BodyChoice =
   | { ok: true; body: Body }
   | { ok: false; reason: 'no_free_planet'; occupied: BodyOccupancy[] }
+  | { ok: false; reason: 'no_planet_with_moons'; occupied: BodyOccupancy[] }
   | { ok: false; reason: 'no_free_moon'; planetId?: Id; occupied: BodyOccupancy[] };
 
 /** Reopening finished work (decision 11b): the old body if it is still free, else `bodyId`. */
@@ -199,6 +218,11 @@ export interface AnswerQuestionInput {
    * `question.answered.repliedIn`, so that brain learns it once, from the reply's message.
    */
   repliedIn?: Id;
+  /**
+   * The structured answer behind `answer` (P10-01), stored in `meta.answerDetail` as sets do: a
+   * reply finding's edited text travels as `detail.text`.
+   */
+  detail?: SetAnswer;
 }
 
 /**
@@ -357,6 +381,126 @@ export interface CommandResult<T> {
  * is refused (unknown id, invalid transition, stale answer, …) rejects with a `DomainError`
  * and writes nothing.
  */
+// Long-term projects, areas and jobs (P10-01; SPEC decisions 142–145).
+
+/** Makes a project long-term, or changes a long-term project's purpose and goals. */
+export interface SetLongTermInput {
+  projectId: Id;
+  purpose: string;
+  goals: string[];
+  by: Actor;
+}
+
+/** A job in an existing area (`areaId`) or a new one made by `name` (an existing name is reused). */
+export interface CreateJobInput {
+  projectId: Id;
+  area: { areaId: Id } | { name: string };
+  draft: JobDraft;
+  by: Actor;
+  /** Where the approval granting the job's unattended rules came from (kept on each rule). */
+  origin?: RequestOrigin;
+}
+
+export interface UpdateJobInput {
+  jobId: Id;
+  /** `areaId` moves the job (and its task) to another area of the project. */
+  changes: Partial<JobDraft> & { areaId?: Id };
+  by: Actor;
+  /** Where the approval came from: kept on each rule it adds or changes. */
+  origin?: RequestOrigin;
+}
+
+/**
+ * A Waykeeper's job card (P10-06): create a job, change one or stop one. The card (a proposal
+ * carrying `meta.job`) is checked like the command its approval runs, before it exists.
+ */
+export type ProposeJobInput = {
+  projectId: Id;
+  /** The Waykeeper proposing; it owns the card like a plan card. */
+  waykeeperId: Id;
+  rationale?: string;
+} & (
+  | { action: 'create'; area: { areaId: Id } | { name: string }; draft: JobDraft }
+  | { action: 'change'; jobId: Id; changes: Partial<JobDraft> & { areaId?: Id } }
+  | { action: 'stop'; jobId: Id }
+);
+
+export interface SetJobStateInput {
+  jobId: Id;
+  state: JobState;
+  by: Actor;
+  /** Why it was paused or stopped. */
+  reason?: string;
+}
+
+export interface StartJobRunInput {
+  jobId: Id;
+  purpose: JobRunPurpose;
+  /** The occurrence the run is for (ISO timestamp). */
+  dueAt: string;
+  followUp?: FollowUp;
+  note?: string;
+}
+
+export interface AttachJobRunAgentInput {
+  runId: Id;
+  agentId: Id;
+}
+
+export interface EndJobRunInput {
+  runId: Id;
+  outcome: Exclude<JobRunOutcome, 'running'>;
+  summary?: string;
+  numbers?: Record<string, number>;
+  /** For `failed`: the reason the failure question gives. */
+  failureReason?: string;
+  /**
+   * For `interrupted`: the job keeps its scheduled `nextRunAt` instead of becoming due now (the
+   * user stopped the run's Steward, ledger ruling R9). Recorded on the run as `meta.keptSchedule`.
+   */
+  keepSchedule?: boolean;
+}
+
+/** A job run's finding, brought to the user as a job-owned question. */
+export interface OpenFindingInput {
+  runId: Id;
+  originAgentId: Id;
+  kind: 'suggestion' | 'reply';
+  title: string;
+  text: string;
+  /** A reply's draft. */
+  draft?: string;
+}
+
+/**
+ * What a job run's Steward reports about its run (`report_run`, ledger ruling R3): kept on the run
+ * as `meta.report` until the turn-end handler ends the run with it.
+ */
+export interface JobRunReport {
+  outcome: 'quiet' | 'findings' | 'failed';
+  summary: string;
+  numbers?: Record<string, number>;
+  /** For `failed`: why. */
+  failureReason?: string;
+}
+
+export interface ReportJobRunInput {
+  runId: Id;
+  /** The run's Steward. */
+  agentId: Id;
+  report: JobRunReport;
+}
+
+/** A `spend` question; job-owned when `runId` names a job run. */
+export interface RequestSpendInput {
+  originAgentId: Id;
+  amount: number;
+  /** ISO 4217; default `USD`. */
+  currency?: string;
+  purpose: string;
+  runId?: Id;
+}
+
 /**
  * What `updateProject` / `updateTask` take: the row changes without the budget, which only
  * `setBudget` changes (its own `budget.set` event and loosening rule, P8-01). The events'
@@ -368,6 +512,7 @@ export type TaskEdit = Omit<TaskChanges, 'budgetUsd'>;
 export interface DomainCommands {
   // projects and tasks
   /** A `permissionPolicy` is floored unless `write.origin` is `local` (P2-21). */
+  /** `input.longTerm` makes a long-term project (P10-01). */
   createProject(input: CreateProjectInput, write?: WriteOptions): Promise<CommandResult<Project>>;
   /**
    * `null` clears a clearable field (`ProjectChanges`, P2-20); a `permissionPolicy` is floored
@@ -504,6 +649,28 @@ export interface DomainCommands {
     by: Actor,
     write?: DeliverableWriteOptions,
   ): Promise<CommandResult<Deliverable>>;
+
+  // long-term projects, areas and jobs (P10-01; SPEC decisions 142–145)
+  /** Makes a project long-term (moving it to a planet with moons when needed), or edits it. */
+  setLongTerm(input: SetLongTermInput): Promise<CommandResult<Project>>;
+  /** A job, its hidden task and, for a new area name, the area on a moon — in one transaction. */
+  createJob(input: CreateJobInput): Promise<CommandResult<{ job: Job; area: Area }>>;
+  updateJob(input: UpdateJobInput): Promise<CommandResult<Job>>;
+  /**
+   * A Waykeeper's job card (`meta.job`); its approval runs `createJob` / `updateJob` /
+   * `setJobState('stopped')` in the deciding transaction, a rejection changes nothing.
+   */
+  proposeJob(input: ProposeJobInput): Promise<CommandResult<Proposal>>;
+  setJobState(input: SetJobStateInput): Promise<CommandResult<Job>>;
+  /** Records a run's start; refused while the job has a run going or is not active. */
+  startJobRun(input: StartJobRunInput): Promise<CommandResult<JobRun>>;
+  attachJobRunAgent(input: AttachJobRunAgentInput): Promise<CommandResult<JobRun>>;
+  /** Records a run's end; a failure pauses the job and opens its one failure question. */
+  endJobRun(input: EndJobRunInput): Promise<CommandResult<JobRun>>;
+  openFinding(input: OpenFindingInput): Promise<CommandResult<Question>>;
+  /** Keeps the Steward's report on its running run (`meta.report`); no event (REST-only rows). */
+  reportJobRun(input: ReportJobRunInput): Promise<CommandResult<JobRun>>;
+  requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>>;
 
   // panel actions (SPEC decision 11b)
   /**

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Id } from './primitives.js';
 import { QuestionKind } from './enums.js';
 import { isRetiredBody, type Body, type Project } from './domain.js';
+import { LONG_TERM_LIMITS } from './long-term-questions.js';
 
 /**
  * The scene harness (P4-06): development-only routes under `/dev/harness/*` (registered only with
@@ -173,6 +174,60 @@ export type HarnessBrainToolBody = z.input<typeof HarnessBrainToolBody>;
 /** The tool's own result (a refusal is `{ error, message }`, as the model would read it). */
 export interface HarnessBrainToolResponse {
   result: unknown;
+}
+
+/**
+ * `GET /dev/harness/brains/harmonizer` (P10-08): the running Harmonizer, so a test can make it
+ * call its tools (`/dev/harness/brains/:id/tool`) without first starting a project.
+ */
+export interface HarnessHarmonizerResponse {
+  seq: number;
+  harmonizerId: Id;
+}
+
+/**
+ * `POST /dev/harness/jobs/:id/run` (P10-08): the job's next run starts now, through the job
+ * scheduler, its Steward on the fake runtime following this script in its one turn — each finding
+ * through `report_finding`, the spend through `request_spend`, then `report_run` (`findings` when
+ * it reported any, else `quiet`) — and the run ends as a real one does. Without a script the
+ * Steward echoes its prompt and the run ends `quiet`.
+ */
+export const HarnessJobRunBody = z.object({
+  findings: z
+    .array(
+      z.object({
+        kind: z.enum(['suggestion', 'reply']),
+        title: z.string().trim().min(1).max(200),
+        text: z.string().trim().min(1).max(2000),
+        draft: z.string().trim().min(1).max(4000).optional(),
+      }),
+    )
+    .max(LONG_TERM_LIMITS.maxFindingsPerRun)
+    .default([]),
+  spend: z
+    .object({
+      amount: z.number().positive(),
+      currency: z.string().length(3).optional(),
+      purpose: z.string().trim().min(1).max(500),
+    })
+    .optional(),
+  summary: z.string().trim().min(1).max(LONG_TERM_LIMITS.maxRunSummary).optional(),
+});
+export type HarnessJobRunBody = z.input<typeof HarnessJobRunBody>;
+
+/** The run the harness started (its Steward attached once the spawn went through). */
+export interface HarnessJobRunResponse {
+  seq: number;
+  runId: Id;
+}
+
+/** `POST /dev/harness/jobs/tick` (P10-08): one scheduler tick now; run ids (`waited`: job ids). */
+export interface HarnessJobTickResponse {
+  seq: number;
+  started: Id[];
+  waited: Id[];
+  interrupted: Id[];
+  ended: Id[];
 }
 
 /** What a harness action did: the last event's `seq` (0 when nothing was logged). */

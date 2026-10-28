@@ -31,14 +31,22 @@ export function bodyOf(ctx: CommandContext, host: Host): Body | undefined {
   return ctx.tables.bodies.all().find((b) => sameHost(b.host, host));
 }
 
-/** Projects go on planets and moons, standalone tasks on asteroids (SPEC §3.1). */
+/**
+ * Projects go on planets and moons, standalone tasks on asteroids (SPEC §3.1), a long-term
+ * project's areas on moons (P10-01).
+ */
 const KINDS: Record<Host['kind'], readonly BodyKind[]> = {
   project: ['planet', 'moon'],
   task: ['asteroid'],
+  areas: ['moon'],
 };
 
 /** The current state of what a host points at; refuses unknown hosts and project tasks. */
 function hostEntity(ctx: CommandContext, host: Host): { bodyId: Id; state: string } {
+  if (host.kind === 'areas') {
+    // Area moons are taken and released with their areas (P10-03), never by the body commands.
+    throw new DomainError('invalid', 'an area moon is assigned with its areas');
+  }
   if (host.kind === 'project') return must(ctx.tables.projects.get(host.id), 'project', host.id);
   const task = must(ctx.tables.tasks.get(host.id), 'task', host.id);
   if (task.projectId) {
@@ -224,7 +232,8 @@ export function place(ctx: CommandContext, bodyId: Id, host: Host): Body {
 /**
  * Moves a hosted project or standalone task to another free body (SPEC §3.4): `body.moved`, the
  * row's `bodyId`, and the agents orbiting the old body with it. The old body shows the "moved to
- * …" marker until `sweepMarkers` frees it after the retention period (decision 15).
+ * …" marker until `sweepMarkers` frees it after the retention period (decision 15). A long-term
+ * project with areas never moves (P10-02).
  */
 export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
   const to = must(ctx.tables.bodies.get(toBodyId), 'body', toBodyId);
@@ -232,6 +241,10 @@ export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
   const from = bodyOf(ctx, host);
   if (!from) throw new DomainError('invalid', `${host.kind} ${host.id} has no body to move from`);
   if (from.id === to.id) return to;
+  // Its areas live on its planet's moons (P10-02): the project cannot leave them behind.
+  if (host.kind === 'project' && ctx.tables.areas.all().some((a) => a.projectId === host.id)) {
+    throw new DomainError('invalid', 'a long-term project with areas stays on its planet');
+  }
   checkAssignable(to, host);
   checkSubProjectBody(to, parentBodyOf(ctx, host));
   markMoved(ctx, from, host, toBodyId);
@@ -249,11 +262,12 @@ export function moveHost(ctx: CommandContext, host: Host, toBodyId: Id): Body {
 export function freeBody(ctx: CommandContext, bodyId: Id): Body {
   const body = must(ctx.tables.bodies.get(bodyId), 'body', bodyId);
   if (!body.host) return release(ctx, body);
+  // An area moon (P10-03) is held by its long-term project: freed once that is finished.
   const occupant =
-    body.host.kind === 'project'
-      ? ctx.tables.projects.get(body.host.id)
-      : ctx.tables.tasks.get(body.host.id);
-  if (!occupant) throw notFound(body.host.kind, body.host.id);
+    body.host.kind === 'task'
+      ? ctx.tables.tasks.get(body.host.id)
+      : ctx.tables.projects.get(body.host.id);
+  if (!occupant) throw notFound(body.host.kind === 'task' ? 'task' : 'project', body.host.id);
   if (!FINISHED_WORK.has(occupant.state)) {
     throw new DomainError(
       'conflict',

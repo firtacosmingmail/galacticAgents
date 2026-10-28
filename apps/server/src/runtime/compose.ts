@@ -14,6 +14,7 @@ import { RunOutput } from '../deliverables/run-output.js';
 import { RunService, type RunServiceOptions, type RunSupervisor } from '../deliverables/runs.js';
 import { DeliverableService } from '../deliverables/service.js';
 import { stewardDeliverableTools } from '../brains/deliverable-tools.js';
+import { SpendRelay, stewardJobTools } from '../brains/job-tools.js';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
@@ -31,6 +32,7 @@ import { AgentRuntime, type RecoveryReport } from './agent-runtime.js';
 import { Archival, type Timers } from './archival.js';
 import { BudgetWatcher } from './budgets.js';
 import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
+import { JobScheduler } from './job-scheduler.js';
 import { StorageMonitor } from './storage-health.js';
 import { StatusStore } from './status-store.js';
 import { StewardProcesses, type StewardProcessesOptions } from './steward-processes.js';
@@ -88,6 +90,12 @@ export interface ComposeOptions {
    * and call `archival.sweep()` under an injected clock).
    */
   archival?: { retentionMs?: number; intervalMs?: number; timers?: Timers };
+  /**
+   * The job scheduler (P10-04): the timer runs only with an `intervalMs` (tests call
+   * `jobs.tick()`; `index.ts` starts it itself after recovery and the Harmonizer). Job-run
+   * Stewards run on `stewardRuntime` (default: the `stewardRuntime` setting, else `claude-sdk`).
+   */
+  jobs?: { intervalMs?: number; timers?: Timers; stewardRuntime?: () => RuntimeName };
   /**
    * Transcript retention (P8-02): `policy` from the settings (default
    * `DEFAULT_TRANSCRIPT_RETENTION`); the timer runs only with an `intervalMs`, like archival
@@ -180,6 +188,8 @@ export interface ComposedRuntime {
   archival: Archival;
   /** Transcript retention and compaction (P8-02); its timer runs when composed with an interval. */
   transcriptRetention: TranscriptRetention;
+  /** The job scheduler (P10-04); its timer runs when composed with an interval or started. */
+  jobs: JobScheduler;
   /** A Steward's processes: list, stop, sweep (P4-14), when composed with `processes`. */
   processes?: StewardProcesses;
   /** Budget notices and the Harmonizer's chat lines about them (P8-01). */
@@ -459,6 +469,15 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'transcript retention') } : {}),
   });
   if (tr?.intervalMs) transcriptRetention.start(tr.intervalMs);
+  const jobs = new JobScheduler({
+    log,
+    commands,
+    runtime,
+    stewardRuntime: opts.jobs?.stewardRuntime ?? (() => opts.stewardRuntime?.() ?? 'claude-sdk'),
+    ...(opts.jobs?.timers ? { timers: opts.jobs.timers } : {}),
+    onError: (e: unknown) => opts.onError?.(e, 'job scheduler'),
+  });
+  if (opts.jobs?.intervalMs) jobs.start(opts.jobs.intervalMs);
   const processes: StewardProcesses | undefined = opts.processes
     ? new StewardProcesses({
         ...opts.processes,
@@ -527,10 +546,19 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       : undefined;
   runs?.watch();
 
-  // A Steward on a runtime that serves the server's tools declares its own deliverables (P9-04).
-  if (deliverables) {
-    runtime.setStewardTools((agent) => stewardDeliverableTools(deliverables, agent));
-  }
+  // A Steward on a runtime that serves the server's tools declares its own deliverables (P9-04),
+  // asks before spending and, on a job run, reports findings and the run (P10-05).
+  runtime.setStewardTools((agent) => [
+    ...(deliverables ? stewardDeliverableTools(deliverables, agent) : []),
+    ...stewardJobTools(commands, log.tables, agent),
+  ]);
+  // A task Steward hears its spend answer as one message (P10-05).
+  const spendRelay = new SpendRelay({
+    log,
+    runtime,
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
+  spendRelay.start();
 
   const runners = new Map<Id, BrainRunner>();
   const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
@@ -587,6 +615,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(detection ? { detection } : {}),
     archival,
     transcriptRetention,
+    jobs,
     ...(processes ? { processes } : {}),
     budgets,
     ...(deliverables ? { deliverables } : {}),
@@ -682,7 +711,9 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       processes?.dispose();
       detection?.dispose();
       budgets.stop();
+      spendRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
+      jobs.dispose();
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();
@@ -702,7 +733,9 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       processes?.dispose();
       detection?.dispose();
       budgets.stop();
+      spendRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
+      jobs.dispose();
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();

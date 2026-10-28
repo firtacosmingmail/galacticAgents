@@ -3,9 +3,12 @@ import type {
   Agent,
   AgentRole,
   AgentRuntime,
+  Area,
   Body,
   DomainCommands,
   Id,
+  Job,
+  JobRun,
   Project,
   Proposal,
   Question,
@@ -35,7 +38,7 @@ export interface BrainQueries {
   project(projectId: Id): Project | undefined;
   /** Any task, by id (P2-10). */
   task(taskId: Id): Task | undefined;
-  /** The tasks of a project, in creation order. */
+  /** The tasks of a project, in creation order; recurring jobs' hidden tasks are left out. */
   projectTasks(projectId: Id): Task[];
   /** Open clarification questions the brain holds or one of its agents asked. */
   openQuestions(brainId: Id): Question[];
@@ -51,6 +54,13 @@ export interface BrainQueries {
   question(questionId: Id): Question | undefined;
   /** Every open question, of any kind and holder. */
   allOpenQuestions(): Question[];
+  // Long-term projects (P10-06): the Waykeeper's jobs and their history.
+  /** The project's recurring jobs, in creation order. */
+  jobs(projectId: Id): Job[];
+  /** The project's areas, in creation order. */
+  areas(projectId: Id): Area[];
+  /** A job's runs, newest first: `limit` of them (1–200). */
+  jobRuns(jobId: Id, limit: number): JobRun[];
 }
 
 /** What a tool handler gets besides its input. */

@@ -282,6 +282,8 @@ describe('EventLog readers', () => {
       proposals: [],
       spend: [],
       deliverables: [],
+      areas: [],
+      jobs: [],
     });
     log.runCommand(({ tables, emit }) => {
       tables.bodies.insert(fx.body);

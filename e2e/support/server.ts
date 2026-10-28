@@ -15,10 +15,10 @@ import { fileURLToPath } from 'node:url';
 /**
  * The real Mission Control server for the smoke tests (P8-05): the production build
  * (`apps/server/dist`, serving `apps/web/dist`), in development mode for the scene harness's fake
- * agents (`/dev/harness/*`, decision 79), the Harmonizer on the fake adapter, a fresh data
+ * agents (`/dev/harness/*`, decision 79), the Harmonizer and new Stewards on the fake adapter, a fresh data
  * directory and projects root under the system's temp directory, and a free port the OS picks
  * (`GALACTIC_PORT=0`, never 4321 or 5173). No real Claude: nothing here can start one — the
- * Harmonizer is `fake` and the harness's agents have no process.
+ * Harmonizer and the Steward runtime are `fake` and the harness's agents have no process.
  *
  * The token is the one the server generates on its first start and writes to the temp
  * `config.json` (read back here). The config is seeded with the first-run setup done (so the
@@ -75,6 +75,10 @@ export async function startServer(): Promise<E2eServer> {
     GALACTIC_PORT: '0',
     GALACTIC_DEV: '1',
     GALACTIC_HARMONIZER: 'fake',
+    // Stewards too (P10-08), belt and braces: a recurring job's runs are Stewards the scheduler
+    // spawns on the Steward runtime, which already falls back to the Harmonizer's (fake) runtime;
+    // this keeps every new Steward on the fake runtime whatever that fallback becomes.
+    GALACTIC_STEWARD_RUNTIME: 'fake',
     GALACTIC_WEB_DIR: WEB_DIR,
     GALACTIC_LOG: 'silent',
     // A name that resolves to this machine only inside the remote test's own browser (P9-12): the

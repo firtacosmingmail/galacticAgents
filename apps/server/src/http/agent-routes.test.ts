@@ -200,6 +200,23 @@ describe('/api agent routes (P1-11)', () => {
     );
   });
 
+  it('passes an answer’s detail through to the domain (P10-07: an edited reply’s Send)', async () => {
+    const spy = vi
+      .spyOn(composed.commands, 'answerQuestion')
+      .mockResolvedValue({ events: [] } as unknown as Awaited<
+        ReturnType<typeof composed.commands.answerQuestion>
+      >);
+    const detail = { choices: ['Send'], text: 'Hi Anna, it ships Tuesday!' };
+    const res = await call('/api/questions/q-reply/answer', { answer: 'Send', version: 2, detail });
+    expect(res.status).toBe(200);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ questionId: 'q-reply', answer: 'Send', version: 2, detail }),
+    );
+    // Without one, no detail key.
+    await call('/api/questions/q-other/answer', { answer: 'Drop' });
+    expect(spy.mock.calls[1]![0]).not.toHaveProperty('detail');
+  });
+
   it('recovers an interrupted agent on demand', async () => {
     const a = await call('/api/agents', { runtime: 'fake', prompt: 'scenario:asks', cwd: '/tmp' });
     const id = a.body['agentId'] as string;

@@ -8,6 +8,7 @@ import {
   SetQuestionInput,
   SUPERSEDED_BY_MESSAGE,
   checkSetAnswer,
+  isJobOwned,
   renderSetAnswer,
   type AnswerQuestionSetInput,
   type DismissQuestionInput,
@@ -53,6 +54,20 @@ import {
   type DeliverableEdit,
   type DeliverableWriteOptions,
   type OpenAction,
+  type Area,
+  type AttachJobRunAgentInput,
+  type CreateJobInput,
+  type EndJobRunInput,
+  type Job,
+  type JobRun,
+  type OpenFindingInput,
+  type ReportJobRunInput,
+  type RequestSpendInput,
+  type SetJobStateInput,
+  type SetLongTermInput,
+  type ProposeJobInput,
+  type StartJobRunInput,
+  type UpdateJobInput,
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
@@ -75,12 +90,16 @@ import {
   type RunStartInput,
 } from './deliverables.js';
 import type { CommandContext, EventLog } from './event-log.js';
+import { createJob, setJobState, updateJob } from './jobs.js';
+import { attachJobRunAgent, endJobRun, startJobRun } from './job-runs.js';
+import { openFinding, reportJobRun, requestSpend } from './findings.js';
 import {
   archiveProject,
   closeProject,
   createProject,
   pinProject,
   reopenProject,
+  setLongTerm,
   updateProject,
 } from './projects.js';
 import {
@@ -105,7 +124,7 @@ import {
   RULES_END_IN,
 } from './project-rules.js';
 import type { ProposalOptions } from './approval.js';
-import { createProposal, decideProposal, proposePlan } from './proposals.js';
+import { createProposal, decideProposal, proposeJob, proposePlan } from './proposals.js';
 import {
   endAgentQuestions,
   holderFor,
@@ -648,6 +667,9 @@ export class Commands implements DomainCommands {
   proposePlan(input: ProposePlanInput) {
     return this.run((ctx) => proposePlan(ctx, input));
   }
+  proposeJob(input: ProposeJobInput) {
+    return this.run((ctx) => proposeJob(ctx, input));
+  }
   /** The trust level an approval gives its project is floored unless `write.origin` is local. */
   decideProposal(proposalId: Id, decision: ProposalDecision, by: Actor, write?: WriteOptions) {
     return this.run((ctx) =>
@@ -703,6 +725,7 @@ export class Commands implements DomainCommands {
       ...(input.version !== undefined ? { version: input.version } : {}),
       ...(answerId !== undefined ? { answerId } : {}),
       ...(input.repliedIn !== undefined ? { repliedIn: input.repliedIn } : {}),
+      ...(input.detail !== undefined ? { detail: input.detail } : {}),
     };
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
     refuseSetRow(question);
@@ -711,7 +734,11 @@ export class Commands implements DomainCommands {
     checkAnswer(question, answer);
     if (!this.agents?.hasQuestion(questionId)) {
       return this.run((ctx) =>
-        answerQuestion(ctx, { ...answer, holders: holdersNow(ctx, questionId, this.questions) }),
+        answerQuestion(ctx, {
+          ...answer,
+          holders: holdersNow(ctx, questionId, this.questions),
+          isLiving: this.questions.isLiving,
+        }),
       );
     }
     if (key === undefined) return this.answerThroughAdapter(input);
@@ -760,7 +787,10 @@ export class Commands implements DomainCommands {
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
     if (question.status !== 'open') return { value: question, events: [] };
     if (question.kind !== 'clarification') {
-      throw new DomainError('invalid', `${questionId} is a permission question: the user decides`);
+      throw new DomainError(
+        'invalid',
+        `${questionId} is a ${question.kind} question: the user decides`,
+      );
     }
     if (by.type === 'agent' && by.id !== question.originAgentId) {
       throw new DomainError('conflict', `${questionId} is not your question`);
@@ -1265,6 +1295,8 @@ export class Commands implements DomainCommands {
         q.status === 'open' &&
         q.kind === 'clarification' &&
         q.meta?.['toUser'] !== true &&
+        // A job's finding, failure notice or spend is the job's, not the agent's (P10-04).
+        !isJobOwned(q) &&
         // A set row is answered only on its card: a message never withdraws it or its drafts.
         q.context.set === undefined,
     );
@@ -1349,6 +1381,42 @@ export class Commands implements DomainCommands {
     return this.run((ctx) =>
       restoreDeliverable(ctx, deliverableId, by, this.deliverableWrite(write)),
     );
+  }
+
+  // -- long-term projects, areas and jobs (P10-01 interfaces; implemented in P10-02…P10-05) ------
+
+  setLongTerm(input: SetLongTermInput): Promise<CommandResult<Project>> {
+    return this.run((ctx) => setLongTerm(ctx, input));
+  }
+  createJob(input: CreateJobInput): Promise<CommandResult<{ job: Job; area: Area }>> {
+    return this.run((ctx) => createJob(ctx, input));
+  }
+  updateJob(input: UpdateJobInput): Promise<CommandResult<Job>> {
+    return this.run((ctx) => updateJob(ctx, input));
+  }
+  setJobState(input: SetJobStateInput): Promise<CommandResult<Job>> {
+    return this.run((ctx) => setJobState(ctx, input));
+  }
+  startJobRun(input: StartJobRunInput): Promise<CommandResult<JobRun>> {
+    return this.run((ctx) => startJobRun(ctx, input));
+  }
+  attachJobRunAgent(input: AttachJobRunAgentInput): Promise<CommandResult<JobRun>> {
+    return this.run((ctx) => attachJobRunAgent(ctx, input));
+  }
+  endJobRun(input: EndJobRunInput): Promise<CommandResult<JobRun>> {
+    return this.run((ctx) => endJobRun(ctx, input));
+  }
+  /** A job run's finding as a job-owned question held by the user (P10-05). */
+  openFinding(input: OpenFindingInput): Promise<CommandResult<Question>> {
+    return this.run((ctx) => openFinding(ctx, input, this.questions));
+  }
+  /** What a job run's Steward reported (`report_run`), kept on the run for its end (P10-05). */
+  reportJobRun(input: ReportJobRunInput): Promise<CommandResult<JobRun>> {
+    return this.run((ctx) => reportJobRun(ctx, input));
+  }
+  /** A `spend` approval, held by the user whatever the asker's supervisors (P10-05). */
+  requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>> {
+    return this.run((ctx) => requestSpend(ctx, input, this.questions));
   }
   /** The audit of an open on the Mac (decision 127); the opener (P9-03/P9-07) calls it. */
   recordDeliverableOpened(deliverableId: Id, action: OpenAction, by: Actor) {

@@ -11,13 +11,22 @@ import { SUN_ANCHOR_ID } from '../anchors.js';
  * - a planet or moon hosting a project selects the project's Waykeeper, an asteroid hosting a task
  *   selects the task's Steward — the newest live one, else the newest (the panel's navigation
  *   rule, `primaryAgent`);
+ * - an area moon (P10-07, decision 143) selects its long-term project's Waykeeper too, and asks
+ *   for its Jobs view filtered to that moon (`jobsOf`, applied by `activateBody`);
  * - Earth, the headquarters, selects the Harmonizer (§4.2: "deselect, or click Earth");
  * - anything else — a free body, the Sun or the Moon (reserved), a body that only shows a "moved
  *   to …" marker, work no agent has started on yet — selects nothing: the scene shows what it is.
  * In every case the camera flies there; the camera never changes the selection (decision 64).
  */
 export type BodyAction =
-  | { kind: 'select'; bodyId: string; name: string; selection: Selection }
+  | {
+      kind: 'select';
+      bodyId: string;
+      name: string;
+      selection: Selection;
+      /** An area moon: the Waykeeper's Jobs view, filtered to this moon (P10-07). */
+      jobsOf?: string;
+    }
   | { kind: 'info'; bodyId: string; name: string; detail: string };
 
 type World = Pick<WorldState, 'bodies' | 'projects' | 'tasks' | 'agents' | 'statuses'>;
@@ -46,11 +55,15 @@ export function bodyAction(world: World, bodyId: string): BodyAction {
   }
   if (!body) return info(bodyId === SUN_ANCHOR_ID ? 'reserved — the Sun' : 'not in the catalogue');
   const host = body.host;
-  if (host?.kind === 'project') {
+  if (host?.kind === 'project' || host?.kind === 'areas') {
     const project = world.projects[host.id];
     const agent = primaryAgent(world, agentsFor(world, { projectId: host.id }));
-    if (agent)
-      return { kind: 'select', bodyId, name, selection: { kind: 'waykeeper', id: agent.id } };
+    if (agent) {
+      const selection: Selection = { kind: 'waykeeper', id: agent.id };
+      return host.kind === 'areas'
+        ? { kind: 'select', bodyId, name, selection, jobsOf: bodyId }
+        : { kind: 'select', bodyId, name, selection };
+    }
     return info(
       project
         ? `${project.name} · ${stateText(project.state)} · no agent yet`

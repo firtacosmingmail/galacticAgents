@@ -12,7 +12,7 @@ import type {
   QuestionOrigin,
   QuestionRecentEvent,
 } from '@galactic/protocol';
-import { QUESTION_SET_LIMITS, QuestionSetRef } from '@galactic/protocol';
+import { QUESTION_SET_LIMITS, QuestionSetRef, isJobOwned } from '@galactic/protocol';
 import { must } from './errors.js';
 import type { CommandContext, EventLog } from './event-log.js';
 import {
@@ -146,6 +146,8 @@ export function holderFor(
   // Decision 7: permission questions are the policy's or the user's, never a brain's. The
   // runtime's gate decides first (P2-04, `AgentRuntime.rulePermission`): only `ask` gets here.
   if (kind === 'permission') return { type: 'user' };
+  // Decision 145: real money is always the user's explicit approval — never a supervisor's.
+  if (kind === 'spend') return { type: 'user' };
   return livingAbove(ctx, originAgentId, routing.isLiving);
 }
 
@@ -275,16 +277,19 @@ export function rerouteHeldBy(
   keep?: (q: Question) => boolean,
 ): Question[] {
   const isLiving = (id: Id) => id !== agentId && routing.isLiving(id);
-  return ctx.tables.questions
-    .all()
-    .filter((q) => q.status === 'open' && q.holder.type === 'agent' && q.holder.id === agentId)
-    .filter((q) => !keep?.(q))
-    .map((q) => {
-      let to = livingAbove(ctx, agentId, isLiving);
-      // A re-parented chain must never hand a question to the agent that asked it.
-      if (to.type === 'agent' && to.id === q.originAgentId) to = { type: 'user' };
-      return reassignQuestion(ctx, q.id, to, reason);
-    });
+  return (
+    ctx.tables.questions
+      .all()
+      .filter((q) => q.status === 'open' && q.holder.type === 'agent' && q.holder.id === agentId)
+      // A job-owned question is the user's from the start (P10-04): nothing to move.
+      .filter((q) => !isJobOwned(q) && !keep?.(q))
+      .map((q) => {
+        let to = livingAbove(ctx, agentId, isLiving);
+        // A re-parented chain must never hand a question to the agent that asked it.
+        if (to.type === 'agent' && to.id === q.originAgentId) to = { type: 'user' };
+        return reassignQuestion(ctx, q.id, to, reason);
+      })
+  );
 }
 
 /**

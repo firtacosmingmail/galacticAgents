@@ -22,6 +22,9 @@ export {
   WorkCard,
 } from './ProposalCard.js';
 export { QuestionSetCard } from './QuestionSetCard.js';
+export { JOB_CARD_TITLES, JobCard, jobAreaLine, jobChanges } from './JobCard.js';
+export { FindingActions, FindingDetails } from './FindingCard.js';
+export { SpendActions, SpendDetails } from './SpendCard.js';
 export { AgentRef, CardLinksContext, selectionFor } from './links.js';
 export {
   AnswerNotice,

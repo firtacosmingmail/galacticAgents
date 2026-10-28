@@ -26,11 +26,14 @@ import { bodyName } from '../picking/body-action.js';
  *
  * A moon hosting a project says which of the two occupants of decision 10 it is: a sub-project
  * reads as part of its parent ("↳ part of <parent>"), an independent small project carries an
- * "own project" badge (and a ring in the scene, `MoonMarkers.tsx`).
+ * "own project" badge (and a ring in the scene, `MoonMarkers.tsx`). An area moon (P10-07, decision
+ * 143: the third occupant, `host.kind === 'areas'`) is named by its areas ("Feedback, Sales"),
+ * reads as part of its long-term project, says "· n jobs" in its tooltip, carries an "n areas"
+ * badge when several areas share it, and gets its own ring.
  */
 export type LabelTone = 'beacon' | 'active' | 'waiting' | 'warn' | 'fail' | 'done';
 
-export type MoonRole = 'sub-project' | 'independent';
+export type MoonRole = 'sub-project' | 'independent' | 'area';
 
 export interface BodyLabel {
   bodyId: string;
@@ -46,8 +49,10 @@ export interface BodyLabel {
   tone: LabelTone;
   /** For a moon hosting a project: a sub-project of its planet's project, or a project of its own. */
   moon?: MoonRole;
-  /** For a sub-project: the parent project's name. */
+  /** For a sub-project: the parent project's name; for an area moon, its project's name. */
   partOf?: string;
+  /** For an area moon shared by several areas: how many (the "2 areas" badge). */
+  areas?: number;
   /** For a "moved to …" marker: the body the work went to. */
   movedTo?: { bodyId: string; name: string };
   /** The deliverables mark (decision 133): absent when the work has none and runs nothing. */
@@ -61,6 +66,9 @@ export interface BodyLabel {
 export type LabelWorld = Pick<WorldState, 'bodies' | 'projects' | 'tasks'> & {
   /** Absent from a replayed world or an older server's snapshot: no marks. */
   deliverables?: WorldState['deliverables'] | undefined;
+  /** Absent from a replayed world or an older server's snapshot: area moons read as the project. */
+  areas?: WorldState['areas'] | undefined;
+  jobs?: WorldState['jobs'] | undefined;
 };
 
 /**
@@ -181,22 +189,42 @@ export function isReserved(body: Body): boolean {
   return body.kind === 'star' || body.meta?.['reserved'] === true;
 }
 
-/** A moon hosting a project: a sub-project (it has a parent project) or an independent one. */
+/**
+ * A moon hosting a project: a sub-project (it has a parent project) or an independent one; or an
+ * area moon (P10-07), hosting areas of its planet's long-term project.
+ */
 export function moonRole(world: LabelWorld, body: Body): MoonRole | undefined {
-  if (body.kind !== 'moon' || body.host?.kind !== 'project') return undefined;
+  if (body.kind !== 'moon') return undefined;
+  if (body.host?.kind === 'areas') return 'area';
+  if (body.host?.kind !== 'project') return undefined;
   const project = world.projects[body.host.id];
   if (!project) return undefined;
   return project.parentProjectId !== undefined ? 'sub-project' : 'independent';
 }
 
+/** An area moon's host names its project (P10-01): its state is the project's. */
+const isProjectHost = (host: Host): boolean => host.kind === 'project' || host.kind === 'areas';
+
+/** The areas of `projectId` on an area moon, by name (an older world has none). */
+function areasOn(world: LabelWorld, bodyId: string, projectId: string) {
+  return Object.values(world.areas ?? {})
+    .filter((a) => a.bodyId === bodyId && a.projectId === projectId)
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
+/** How many jobs the areas have. */
+function jobCount(world: LabelWorld, areaIds: ReadonlySet<string>): number {
+  let n = 0;
+  for (const job of Object.values(world.jobs ?? {})) if (areaIds.has(job.areaId)) n++;
+  return n;
+}
+
 function workName(world: LabelWorld, host: Host): string | undefined {
-  return host.kind === 'project'
-    ? world.projects[host.id]?.name
-    : world.tasks[host.id]?.description;
+  return isProjectHost(host) ? world.projects[host.id]?.name : world.tasks[host.id]?.description;
 }
 
 function workState(world: LabelWorld, host: Host): WorkState | undefined {
-  return host.kind === 'project' ? world.projects[host.id]?.state : world.tasks[host.id]?.state;
+  return isProjectHost(host) ? world.projects[host.id]?.state : world.tasks[host.id]?.state;
 }
 
 /** The label of one body, or `undefined` for a body that shows none (free, reserved, unknown). */
@@ -221,7 +249,7 @@ export function bodyLabel(
     const state = workState(world, host);
     const label: Omit<BodyLabel, 'selected' | 'priority'> = {
       bodyId,
-      kind: host.kind,
+      kind: host.kind === 'areas' ? 'project' : host.kind,
       title: shortTitle(name, body.kind === 'asteroid' ? ASTEROID_TITLE_MAX : TITLE_MAX),
       fullTitle: name,
       state,
@@ -232,6 +260,18 @@ export function bodyLabel(
     if (mark) label.mark = mark;
     const moon = moonRole(world, body);
     if (moon) label.moon = moon;
+    if (moon === 'area') {
+      const project = world.projects[host.id];
+      if (project) label.partOf = shortTitle(project.name, 24);
+      const areas = areasOn(world, bodyId, host.id);
+      if (areas.length > 0) {
+        const names = areas.map((a) => a.name).join(', ');
+        const jobs = jobCount(world, new Set(areas.map((a) => a.id)));
+        label.title = shortTitle(names);
+        label.fullTitle = `${names} · ${jobs} ${jobs === 1 ? 'job' : 'jobs'}`;
+        if (areas.length > 1) label.areas = areas.length;
+      }
+    }
     if (moon === 'sub-project' && host.kind === 'project') {
       const parentId = world.projects[host.id]?.parentProjectId;
       const parent = parentId ? world.projects[parentId] : undefined;
@@ -274,6 +314,14 @@ export function bodyLabels(world: LabelWorld, selectedBodyId?: string): BodyLabe
 export function independentMoons(world: LabelWorld): string[] {
   return Object.values(world.bodies)
     .filter((b) => moonRole(world, b) === 'independent')
+    .map((b) => b.id)
+    .sort();
+}
+
+/** Area moons (P10-07, decision 143): the scene rings them in their own colour (`MoonMarkers`). */
+export function areaMoons(world: LabelWorld): string[] {
+  return Object.values(world.bodies)
+    .filter((b) => moonRole(world, b) === 'area')
     .map((b) => b.id)
     .sort();
 }

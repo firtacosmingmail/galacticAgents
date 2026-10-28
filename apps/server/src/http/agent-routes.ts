@@ -535,14 +535,18 @@ export function registerAgentRoutes(
      * `answerId` (P7-05) makes a retry idempotent: once recorded under it, the same answer is `ok`
      * with `duplicate: true` (an answer queued offline whose acknowledgement was lost). Answering a
      * permission request from an agent's or a run's process is refused (403 `agent_peer`, review
-     * S4: the speed bump of `answersPeer`); a clarification may be answered from anywhere.
+     * S4: the speed bump of `answersPeer`); a clarification may be answered from anywhere. A
+     * `spend` approval (P10-05, decision 145) follows the permission rule exactly: the same speed
+     * bump, and a remote client may answer it (decision 90). `detail` carries a structured answer
+     * (a reply finding's edited text).
      */
     app.post('/api/questions/:id/answer', async (req, reply) => {
       const body = parse(AnswerBody, req.body, reply);
       if (!body) return;
       const questionId = (req.params as { id: string }).id;
+      const kind = log.tables.questions.get(questionId)?.kind;
       if (
-        log.tables.questions.get(questionId)?.kind === 'permission' &&
+        (kind === 'permission' || kind === 'spend') &&
         !(await notFromAnAgent(opts.answersPeer, 'answer', req, reply))
       ) {
         return reply;
@@ -557,6 +561,7 @@ export function registerAgentRoutes(
           by: USER,
           ...(body.version !== undefined ? { version: body.version } : {}),
           ...(body.answerId !== undefined ? { answerId: body.answerId } : {}),
+          ...(body.detail !== undefined ? { detail: body.detail } : {}),
         });
         // A retry of an answer already recorded under its `answerId` changes nothing (P7-05).
         const duplicate = body.answerId !== undefined && events.length === 0;

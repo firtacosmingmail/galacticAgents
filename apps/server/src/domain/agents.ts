@@ -103,6 +103,8 @@ function prescribedSupervisor(
  * - a Waykeeper or Steward always has a supervisor, and it is the one the hierarchy prescribes:
  *   matched by role and project (any Harmonizer; the Waykeeper of that project), not by liveness —
  *   an orphan's questions go to the next living supervisor (P2-03), its row keeps its supervisor.
+ *   So a recurring job's run Steward (on the job's hidden task, P10-03) answers to its project's
+ *   Waykeeper row whether that Waykeeper runs, sleeps or was stopped.
  */
 export function checkPlacement(ctx: Reader, agent: Placed): void {
   const who = agent.id ? `agent ${agent.id}` : `the new ${agent.role}`;

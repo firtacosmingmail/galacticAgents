@@ -2,14 +2,18 @@ import type { Database, Statement } from 'better-sqlite3';
 import {
   Agent,
   AgentSpend,
+  Area,
   Body,
   Deliverable,
   DeliverableRun,
+  Job,
+  JobRun,
   Project,
   Proposal,
   Question,
   Task,
   type BudgetTarget,
+  type Host,
   type Id,
 } from '@galactic/protocol';
 import type { ZodType } from 'zod';
@@ -129,7 +133,7 @@ const bodies: Mapper<Body> = {
     parentId: opt<Id>(r['parent_id']),
     name: r['name'] as string,
     host: r['host_kind']
-      ? { kind: r['host_kind'] as 'project' | 'task', id: r['host_id'] as Id }
+      ? { kind: r['host_kind'] as Host['kind'], id: r['host_id'] as Id }
       : undefined,
     movedTo: parse(r['moved_to']),
     meta: parse(r['meta']),
@@ -151,6 +155,10 @@ const projects: Mapper<Project> = {
     permission_rules: p.permissionRules?.length ? json(p.permissionRules) : null,
     pinned: flag(p.pinned),
     budget_usd: p.budgetUsd ?? null,
+    // NOT NULL DEFAULT 0 (0016): an ordinary project is 0 and reads back without the field.
+    long_term: p.longTerm ? 1 : 0,
+    purpose: p.purpose ?? null,
+    goals: json(p.goals),
     created_at: p.createdAt,
     updated_at: p.updatedAt,
     meta: json(p.meta),
@@ -167,6 +175,9 @@ const projects: Mapper<Project> = {
     permissionRules: parse<Project['permissionRules']>(r['permission_rules']),
     pinned: unflag(r['pinned']),
     budgetUsd: opt<number>(r['budget_usd']),
+    longTerm: r['long_term'] === 1 ? true : undefined,
+    purpose: opt<string>(r['purpose']),
+    goals: parse<string[]>(r['goals']),
     createdAt: r['created_at'] as string,
     updatedAt: r['updated_at'] as string,
     meta: parse(r['meta']),
@@ -393,6 +404,113 @@ const deliverableRuns: Mapper<DeliverableRun> = {
   }),
 };
 
+const areas: Mapper<Area> = {
+  table: 'areas',
+  schema: Area,
+  toRow: (a) => ({
+    id: a.id,
+    project_id: a.projectId,
+    name: a.name,
+    body_id: a.bodyId,
+    created_at: a.createdAt,
+    updated_at: a.updatedAt,
+    meta: json(a.meta),
+  }),
+  fromRow: (r) => ({
+    id: r['id'] as Id,
+    projectId: r['project_id'] as Id,
+    name: r['name'] as string,
+    bodyId: r['body_id'] as Id,
+    createdAt: r['created_at'] as string,
+    updatedAt: r['updated_at'] as string,
+    meta: parse(r['meta']),
+  }),
+};
+
+const jobs: Mapper<Job> = {
+  table: 'jobs',
+  schema: Job,
+  toRow: (j) => ({
+    id: j.id,
+    project_id: j.projectId,
+    area_id: j.areaId,
+    task_id: j.taskId,
+    name: j.name,
+    instructions: j.instructions,
+    schedule: JSON.stringify(j.schedule),
+    provider: j.provider,
+    unattended_rules: JSON.stringify(j.unattendedRules),
+    state: j.state,
+    paused_reason: j.pausedReason ?? null,
+    failure_question_id: j.failureQuestionId ?? null,
+    next_run_at: j.nextRunAt ?? null,
+    last_run: json(j.lastRun),
+    running_run_id: j.runningRunId ?? null,
+    follow_ups: JSON.stringify(j.followUps),
+    created_at: j.createdAt,
+    updated_at: j.updatedAt,
+    meta: json(j.meta),
+  }),
+  fromRow: (r) => ({
+    id: r['id'] as Id,
+    projectId: r['project_id'] as Id,
+    areaId: r['area_id'] as Id,
+    taskId: r['task_id'] as Id,
+    name: r['name'] as string,
+    instructions: r['instructions'] as string,
+    schedule: parse<Job['schedule']>(r['schedule'])!,
+    provider: r['provider'] as string,
+    unattendedRules: parse<Job['unattendedRules']>(r['unattended_rules']) ?? [],
+    state: r['state'] as Job['state'],
+    pausedReason: opt<string>(r['paused_reason']),
+    failureQuestionId: opt<Id>(r['failure_question_id']),
+    nextRunAt: opt<string>(r['next_run_at']),
+    lastRun: parse(r['last_run']),
+    runningRunId: opt<Id>(r['running_run_id']),
+    followUps: parse<Job['followUps']>(r['follow_ups']) ?? [],
+    createdAt: r['created_at'] as string,
+    updatedAt: r['updated_at'] as string,
+    meta: parse(r['meta']),
+  }),
+};
+
+const jobRuns: Mapper<JobRun> = {
+  table: 'job_runs',
+  schema: JobRun,
+  toRow: (r) => ({
+    id: r.id,
+    job_id: r.jobId,
+    agent_id: r.agentId ?? null,
+    purpose: r.purpose,
+    due_at: r.dueAt,
+    covers_from: r.coversFrom ?? null,
+    started_at: r.startedAt,
+    ended_at: r.endedAt ?? null,
+    outcome: r.outcome,
+    summary: r.summary ?? null,
+    numbers: json(r.numbers),
+    follow_up: json(r.followUp),
+    note: r.note ?? null,
+    meta: json(r.meta),
+  }),
+  fromRow: (r) => ({
+    id: r['id'] as Id,
+    jobId: r['job_id'] as Id,
+    agentId: opt<Id>(r['agent_id']),
+    purpose: r['purpose'] as JobRun['purpose'],
+    dueAt: r['due_at'] as string,
+    coversFrom: opt<string>(r['covers_from']),
+    startedAt: r['started_at'] as string,
+    endedAt: opt<string>(r['ended_at']),
+    outcome: r['outcome'] as JobRun['outcome'],
+    summary: opt<string>(r['summary']),
+    numbers: parse(r['numbers']),
+    followUp: parse(r['follow_up']),
+    note: opt<string>(r['note']),
+    meta: parse(r['meta']),
+  }),
+};
+
 /** All domain tables of one database, ready to use. */
 export interface Tables {
   bodies: Table<Body>;
@@ -416,6 +534,12 @@ export interface Tables {
     /** A deliverable's runs, newest first. */
     of(deliverableId: Id, limit?: number): DeliverableRun[];
   };
+  /** A long-term project's areas (P10-01; migration 0016), on its planet's moons. */
+  areas: Table<Area>;
+  /** Recurring jobs of the areas (P10-01). */
+  jobs: Table<Job>;
+  /** Every run of a job (P10-01): the last 200 per job are kept. */
+  jobRuns: Table<JobRun>;
   settings: {
     get<T = unknown>(key: string): T | undefined;
     set(key: string, value: unknown): void;
@@ -600,6 +724,9 @@ export function tables(db: Database): Tables {
       'permission_rules',
       'pinned',
       'budget_usd',
+      'long_term',
+      'purpose',
+      'goals',
       'created_at',
       'updated_at',
       'meta',
@@ -658,6 +785,52 @@ export function tables(db: Database): Tables {
       'version',
       'created_at',
       'updated_at',
+      'meta',
+    ]),
+    areas: new Table(db, areas, [
+      'id',
+      'project_id',
+      'name',
+      'body_id',
+      'created_at',
+      'updated_at',
+      'meta',
+    ]),
+    jobs: new Table(db, jobs, [
+      'id',
+      'project_id',
+      'area_id',
+      'task_id',
+      'name',
+      'instructions',
+      'schedule',
+      'provider',
+      'unattended_rules',
+      'state',
+      'paused_reason',
+      'failure_question_id',
+      'next_run_at',
+      'last_run',
+      'running_run_id',
+      'follow_ups',
+      'created_at',
+      'updated_at',
+      'meta',
+    ]),
+    jobRuns: new Table(db, jobRuns, [
+      'id',
+      'job_id',
+      'agent_id',
+      'purpose',
+      'due_at',
+      'covers_from',
+      'started_at',
+      'ended_at',
+      'outcome',
+      'summary',
+      'numbers',
+      'follow_up',
+      'note',
       'meta',
     ]),
     settings: {

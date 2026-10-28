@@ -1,6 +1,8 @@
 import {
   foldProposalMeta,
   proposalParking,
+  proposalJobOf,
+  proposalLongTermOf,
   proposalPlan,
   proposalPromotion,
   type Body,
@@ -17,6 +19,7 @@ import type { Tables } from '../db/tables.js';
 import {
   chooseBody,
   describeRefusal,
+  hasMoons,
   isCatalogued,
   isFree,
   type ChooseOptions,
@@ -85,16 +88,24 @@ export function promotionBodyRequest(ctx: Reader, p: Proposal): BodyRequest | un
   return parentProjectId ? { kind: 'moon', parentProjectId } : { kind: 'moon' };
 }
 
-/** The body a card needs from the catalogue, or `undefined` when it needs none. */
+/**
+ * The body a card needs from the catalogue, or `undefined` when it needs none. A long-term card
+ * for a new project asks for a long-term planet (P10-02); one converting an existing project needs
+ * no new body from the card — `setLongTerm` decides whether it moves.
+ */
 export function bodyRequestOf(ctx: Reader, p: Proposal): BodyRequest | undefined {
-  if (proposalPlan(p) || p.kind === 'asteroid') return undefined;
+  // A plan or job card is the Waykeeper's, on its project's body: it never parks (decision 35).
+  if (proposalPlan(p) || proposalJobOf(p) || p.kind === 'asteroid') return undefined;
+  const longTerm = proposalLongTermOf(p);
+  if (longTerm?.projectId) return undefined;
   // A promotion card of either shape (the Harmonizer's `meta.request`, a Waykeeper's
   // `meta.promotion`): the same request the promotion flow places it with.
   if (proposalPromotion(p)) return promotionBodyRequest(ctx, p);
   const request = requestOf(p);
   if (!request) return undefined;
   if (request.type === 'project_task' || request.type === 'promotion') return undefined;
-  if (p.kind === 'planet') return { kind: 'planet' };
+  if (p.kind === 'planet')
+    return longTerm ? { kind: 'planet', longTerm: true } : { kind: 'planet' };
   return request.type === 'new_project' && request.parentProjectId
     ? { kind: 'moon', parentProjectId: request.parentProjectId }
     : { kind: 'moon' };
@@ -135,7 +146,14 @@ export function roomFor(
   if (!request) return undefined;
   const reader = claimedReader(ctx, claimed);
   const named = p.proposedBody.bodyId ? reader.tables.bodies.get(p.proposedBody.bodyId) : undefined;
-  if (named && named.kind === request.kind && isFree(named) && isCatalogued(named)) {
+  const fits =
+    named !== undefined &&
+    named.kind === request.kind &&
+    isFree(named) &&
+    isCatalogued(named) &&
+    // A long-term project's planet needs moons for its areas (P10-02).
+    (request.kind !== 'planet' || !request.longTerm || hasMoons(ctx, named));
+  if (named && fits) {
     const parentPlanet =
       request.kind === 'moon' && request.parentProjectId
         ? ctx.tables.projects.get(request.parentProjectId)?.bodyId
@@ -159,7 +177,10 @@ export function parkingFor(
 ): ProposalParking {
   const offers: ParkOffer[] =
     request.kind === 'planet'
-      ? ['downsize_moon', 'downsize_asteroid', 'close_early']
+      ? // A long-term project is never downsized (P10-06): only a planet with moons will do.
+        'longTerm' in request && request.longTerm
+        ? ['close_early']
+        : ['downsize_moon', 'downsize_asteroid', 'close_early']
       : 'parentProjectId' in request && request.parentProjectId
         ? ['task_on_planet', 'close_early']
         : ['downsize_asteroid', 'close_early'];

@@ -5,7 +5,7 @@ import { Object3D } from 'three';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { registerAnchor, type BodyAnchor } from '../anchors.js';
 import { useCameraStore } from '../camera/store.js';
-import { onSceneKey } from '../SceneArea.js';
+import { enterChangesNothing, onSceneKey } from '../SceneArea.js';
 import { useAppStore } from '../../state/store.js';
 import { HARMONIZER, selectionKey } from '../../state/selection.js';
 import { publishSatellites } from '../satellites/registry.js';
@@ -21,6 +21,8 @@ import {
   type SatelliteHover,
 } from './store.js';
 import { setDeepLinkForTest, useSelectionSync } from './sync.js';
+import { useDockView } from '../../panel/status/dock-view.js';
+import { useJobsFilter } from '../../panel/jobs/jobs-model.js';
 
 const AT = { x: 120, y: 80 };
 let unregister: (() => void)[] = [];
@@ -89,6 +91,47 @@ describe('activateBody (a click on a body)', () => {
       'New project · approved · no agent yet',
     );
     expect(selected()).toBe('harmonizer');
+  });
+});
+
+describe('activateBody on an area moon (P10-07, decision 143)', () => {
+  beforeEach(() => {
+    const world = pickingWorld();
+    world.bodies['b-callisto'] = {
+      id: 'b-callisto',
+      kind: 'moon',
+      parentId: 'b-jupiter',
+      name: 'Callisto',
+      host: { kind: 'areas', id: 'p-big' },
+    };
+    useAppStore.setState({ world });
+    useDockView.getState().setView('chat');
+    useJobsFilter.getState().set(undefined);
+    anchor('b-callisto', 'moon');
+  });
+
+  it("selects the project's Waykeeper with its Jobs view filtered to the moon", () => {
+    act(() => void activateBody('b-callisto', AT));
+    expect(selected()).toBe('waykeeper:a-wk-old');
+    expect(camera().focusedId).toBe('b-callisto');
+    expect(useDockView.getState().view).toBe('jobs');
+    expect(useJobsFilter.getState().bodyId).toBe('b-callisto');
+  });
+
+  it('a project body leaves the dock view and the filter alone', () => {
+    useJobsFilter.getState().set('b-callisto');
+    act(() => void activateBody('b-jupiter', AT));
+    expect(useDockView.getState().view).toBe('chat');
+    expect(useJobsFilter.getState().bodyId).toBe('b-callisto');
+  });
+
+  it('Enter changes something while the Jobs view is not on that moon', () => {
+    act(() => void activateBody('b-jupiter', AT));
+    expect(enterChangesNothing('b-callisto')).toBe(false);
+    act(() => void activateBody('b-callisto', AT));
+    expect(enterChangesNothing('b-callisto')).toBe(true);
+    act(() => useJobsFilter.getState().set(undefined));
+    expect(enterChangesNothing('b-callisto')).toBe(false);
   });
 });
 

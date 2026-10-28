@@ -1,5 +1,5 @@
 import type { KeyboardEvent } from 'react';
-import type { Id, Project, WorkState } from '@galactic/protocol';
+import { isJobTask, type Id, type Project, type WorkState } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import type { WorldState } from '../state/reduce.js';
 import { workActions, type CardWork } from './agent-cards-model.js';
@@ -121,7 +121,8 @@ const DONE: ReadonlySet<WorkState> = new Set<WorkState>([
  */
 export function openTasksNote(world: Pick<WorldState, 'tasks'>, project: Project) {
   const open = Object.values(world.tasks).filter(
-    (t) => t.projectId === project.id && !DONE.has(t.state),
+    // A recurring job's hidden task (P10-03) never finishes and never holds an archive up.
+    (t) => t.projectId === project.id && !DONE.has(t.state) && !isJobTask(t),
   ).length;
   if (open === 0 || project.state === 'archived') return undefined;
   const tasks = open === 1 ? '1 unfinished task' : `${open} unfinished tasks`;

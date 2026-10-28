@@ -12,7 +12,8 @@ import { endProjectRules } from './project-rules.js';
  * (`work-states.ts`), and the derivation goes through this table like the explicit commands do:
  * it added the moves an agent can cause on its own — a Steward that ends its turn or finishes
  * from `approved`, `paused` or `interrupted` (awaiting closure), one interrupted while awaiting
- * closure, and a failed task picked up again by a new Steward (any running state).
+ * closure, and a failed task picked up again by a new Steward (any running state). A recurring
+ * job's hidden task goes back to `approved` when its run ends (P10-03, `JOB_TASK_RULES`).
  */
 export const TRANSITIONS: Readonly<Record<WorkState, readonly WorkState[]>> = {
   proposed: ['approved', 'archived'],
@@ -27,6 +28,7 @@ export const TRANSITIONS: Readonly<Record<WorkState, readonly WorkState[]>> = {
     'completed',
   ],
   in_progress: [
+    'approved',
     'blocked_on_user',
     'awaiting_closure',
     'paused',
@@ -36,6 +38,7 @@ export const TRANSITIONS: Readonly<Record<WorkState, readonly WorkState[]>> = {
     'completed',
   ],
   blocked_on_user: [
+    'approved',
     'in_progress',
     'awaiting_closure',
     'paused',
@@ -45,6 +48,7 @@ export const TRANSITIONS: Readonly<Record<WorkState, readonly WorkState[]>> = {
     'completed',
   ],
   awaiting_closure: [
+    'approved',
     'in_progress',
     'blocked_on_user',
     'paused',
@@ -64,6 +68,7 @@ export const TRANSITIONS: Readonly<Record<WorkState, readonly WorkState[]>> = {
     'completed',
   ],
   interrupted: [
+    'approved',
     'in_progress',
     'blocked_on_user',
     'awaiting_closure',

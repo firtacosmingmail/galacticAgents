@@ -1,4 +1,7 @@
 :root {
+  /* Real-money approvals (P10-07, decision 145): their own colour, apart from permissions. */
+  --spend: #2f9e6b;
+  --spend-bg: #0f1d17;
   color-scheme: dark;
   font-family: system-ui, sans-serif;
   background: #0b0e17;
@@ -237,6 +240,41 @@ button.danger {
 .question-permission {
   border-color: #7a2a2a;
   background: #1d1010;
+}
+.question-spend {
+  border-color: var(--spend);
+  background: var(--spend-bg);
+}
+.spend-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 999px;
+  background: var(--spend);
+  color: #04110b;
+  font-weight: 700;
+}
+.spend-amount {
+  font-size: 1.15rem;
+  margin: 4px 0;
+}
+.job-instructions {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0 0 4px;
+  font: inherit;
+}
+.finding-reply label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.finding-reply textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
 }
 .transcript {
   background: #0b0e17;

@@ -157,6 +157,13 @@ describe('systemStatus', () => {
     ]);
   });
 
+  it('leaves a recurring job’s hidden task out of the task counts (P10-03)', () => {
+    const w = system();
+    w.tasks['t-job'] = task('t-job', { state: 'approved', meta: { jobId: 'j-1' } });
+    const counted = systemStatus(w, { now: NOW, caps: CAPS }).tasks;
+    expect(counted.map((c) => c.state)).not.toContain('approved');
+  });
+
   it('counts the agents with a status record by state, waiting for input first', () => {
     expect(s.agents[0]).toEqual({ state: 'waiting_for_input', count: 1 });
     expect(s.agents.reduce((n, c) => n + c.count, 0)).toBe(6);
@@ -191,7 +198,7 @@ describe('systemStatus', () => {
   it('counts open questions by kind and holder, and the waiting number of the top bar', () => {
     expect(s.questions).toEqual({
       open: 3,
-      byKind: { permission: 1, clarification: 2 },
+      byKind: { permission: 1, clarification: 2, spend: 0 },
       forUser: 2,
       bySupervisors: 1,
     });
@@ -324,7 +331,7 @@ describe('projectStatus', () => {
     expect(p.stewards).toEqual({ active: 2, total: 3 });
     expect(p.questions).toEqual({
       open: 3,
-      byKind: { permission: 2, clarification: 1 },
+      byKind: { permission: 2, clarification: 1, spend: 0 },
       forUser: 2,
       bySupervisors: 1,
     });

@@ -2,6 +2,7 @@ import type { Database } from 'better-sqlite3';
 import {
   excerpt,
   parseReplyEntryId,
+  proposalJobOf,
   proposalPlan,
   REPLY_QUOTE_MAX,
   threadShowsProposal,
@@ -126,8 +127,9 @@ export function resolveReplyTarget(
       if (!proposal || !threadShowsProposal(agent, proposal)) {
         return refused(`Proposal ${ref.id} is not in this chat.`);
       }
-      // A plan card is its Waykeeper's; any other card was proposed by the chat's brain.
-      const by = proposalPlan(proposal)?.waykeeperId ?? agentId;
+      // A plan or job card is its Waykeeper's; any other card was proposed by the chat's brain.
+      const by =
+        proposalPlan(proposal)?.waykeeperId ?? proposalJobOf(proposal)?.waykeeperId ?? agentId;
       return { ok: true, quote: quote({ type: 'agent', id: by }, proposal.requestText) };
     }
   }

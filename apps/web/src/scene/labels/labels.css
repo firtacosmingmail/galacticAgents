@@ -62,6 +62,7 @@
   background: rgba(138, 145, 166, 0.2);
 }
 .scene-label-own,
+.scene-label-areas,
 .scene-label-part {
   font-size: 10px;
   line-height: 12px;
@@ -74,6 +75,13 @@
 }
 .scene-label-part {
   color: #8a91a6;
+}
+/* P10-07: an area moon shared by several areas (the ring's violet, `AREA_RING`) */
+.scene-label-areas {
+  padding: 0 5px;
+  border: 1px solid #a58cff;
+  border-radius: 3px;
+  color: #c7b8ff;
 }
 
 /* states */

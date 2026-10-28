@@ -9,6 +9,7 @@ import type {
   Task,
 } from '../domain.js';
 import type { Deliverable, DeliverableRun } from '../deliverables.js';
+import type { Area, Job, JobRun } from '../long-term.js';
 
 export const NOW = '2026-09-30T10:00:00.000Z';
 
@@ -198,4 +199,60 @@ export const run: DeliverableRun = {
   startedAt: NOW,
   ports: [],
   startedBy: { type: 'user' },
+};
+
+/** A business area of a long-term project (P10-01), on Saturn's moon Titan. */
+export const area: Area = {
+  id: 'ar-1',
+  projectId: 'p-1',
+  name: 'Feedback',
+  bodyId: 'b-titan',
+  createdAt: NOW,
+  updatedAt: NOW,
+};
+
+/** A daily job of that area, with one unattended rule and its last run. */
+export const job: Job = {
+  id: 'j-1',
+  projectId: 'p-1',
+  areaId: 'ar-1',
+  taskId: 't-job-1',
+  name: 'Read feedback',
+  instructions: 'Read the feedback that came in since the last run and suggest improvements.',
+  schedule: { kind: 'daily', at: '09:00' },
+  provider: 'claude',
+  unattendedRules: [
+    {
+      id: 'r-1',
+      scope: 'prefix',
+      tool: 'Bash',
+      match: { kind: 'words', words: ['curl', 'api.myapp.com'] },
+      categories: ['network'],
+      label: 'curl api.myapp.com …',
+    },
+  ],
+  state: 'active',
+  nextRunAt: '2026-10-01T09:00:00.000Z',
+  lastRun: {
+    runId: 'jr-1',
+    outcome: 'quiet',
+    purpose: 'scheduled',
+    startedAt: NOW,
+    endedAt: NOW,
+    summary: 'Nothing new.',
+  },
+  followUps: [],
+  createdAt: NOW,
+  updatedAt: NOW,
+};
+
+export const jobRun: JobRun = {
+  id: 'jr-2',
+  jobId: 'j-1',
+  agentId: 'a-steward-2',
+  purpose: 'catch_up',
+  dueAt: '2026-10-01T09:00:00.000Z',
+  coversFrom: NOW,
+  startedAt: '2026-10-01T09:04:00.000Z',
+  outcome: 'running',
 };

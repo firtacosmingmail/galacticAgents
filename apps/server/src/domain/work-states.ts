@@ -44,6 +44,8 @@ export interface WorkFacts {
   agents: readonly AgentFact[];
   /** A project only: the states of its tasks. */
   tasks?: readonly WorkState[];
+  /** A task only: it is a recurring job's hidden task (`JOB_TASK_RULES`, P10-03). */
+  job?: boolean;
 }
 
 export type Derived = WorkState | 'keep';
@@ -110,6 +112,21 @@ export const TASK_RULES: readonly Rule[] = [
   { name: 'latest ended agent', when: () => true, then: latestEnded },
 ];
 
+/**
+ * A job's hidden task (P10-03; SPEC decision 144) never finishes: `in_progress` while a run's
+ * Steward is live, `approved` (idle, waiting for its next run) otherwise — never `completed`,
+ * `failed` or `awaiting_closure` from its Stewards, and a run's questions (job-owned, they outlive
+ * the run) never block it. Nothing in the product moves it elsewhere: closing, cancelling or
+ * archiving the project stops its jobs and leaves the task as it is (`endProjectAreas`), so a
+ * reopened project's jobs run on it again. `sticky` only keeps a finished state an explicit
+ * `setTaskState` might write.
+ */
+export const JOB_TASK_RULES: readonly Rule[] = [
+  sticky,
+  { name: 'running job run', when: (f) => any(f, 'running'), then: 'in_progress' },
+  { name: 'job between runs', when: () => true, then: 'approved' },
+];
+
 const TASK_DONE: ReadonlySet<WorkState> = new Set<WorkState>(['completed', 'archived', 'moved']);
 
 /** Project rules, in precedence order. */
@@ -156,5 +173,6 @@ export function derive(
   return { state: facts.current, rule: 'none' };
 }
 
-export const deriveTaskState = (facts: WorkFacts) => derive(TASK_RULES, facts).state;
+export const deriveTaskState = (facts: WorkFacts) =>
+  derive(facts.job ? JOB_TASK_RULES : TASK_RULES, facts).state;
 export const deriveProjectState = (facts: WorkFacts) => derive(PROJECT_RULES, facts).state;

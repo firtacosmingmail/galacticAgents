@@ -15,6 +15,8 @@ import {
   SettingsPatch,
   TranscriptQuery,
   notificationOf,
+  spendAmountText,
+  spendNotificationBody,
 } from './panel.js';
 import { DEFAULT_PERMISSION_POLICY, type Question } from './domain.js';
 import { countDeliverables } from './deliverables.js';
@@ -175,6 +177,54 @@ describe('notificationOf (P25-01; SPEC §4.5)', () => {
       { question: () => ({ kind: 'clarification', context: { text: 'Escalated?' } }) },
     );
     expect(escalated).toMatchObject({ id: 'question:q3', body: 'Escalated?' });
+  });
+
+  it('a spend (P10-07, decision 145) has its own title and names the amount and purpose', () => {
+    const spend = question({
+      id: 'q-s',
+      kind: 'spend',
+      context: {
+        text: 'May I boost the post?',
+        spend: { amount: 1250, currency: 'USD', purpose: 'Boost the newsletter post' },
+      },
+    });
+    const n = notificationOf(env(11, { type: 'question.opened', question: spend }));
+    expect(n).toMatchObject({
+      id: 'question:q-s',
+      // Gated and ranked like a permission (ruling R7): the permission switch, push kind, rank.
+      kind: 'permission',
+      questionKind: 'spend',
+      title: 'Spend approval needed',
+      body: `${spendAmountText(1250, 'USD')} — Boost the newsletter post`,
+    });
+    // Escalated or reassigned later: the lookup's question gives the same text.
+    const later = notificationOf(
+      env(12, {
+        type: 'question.reassigned',
+        questionId: 'q-s',
+        from: { type: 'agent', id: 'w1' },
+        to: { type: 'user' },
+        reason: 'r',
+        version: 1,
+      }),
+      { question: () => spend },
+    );
+    expect(later).toMatchObject({ title: 'Spend approval needed', body: n!.body });
+    // No spend context (an older row): the question text.
+    const bare = notificationOf(
+      env(13, { type: 'question.opened', question: { ...spend, context: { text: 'Pay?' } } }),
+    );
+    expect(bare).toMatchObject({ title: 'Spend approval needed', body: 'Pay?' });
+  });
+
+  it('formats a spend amount as currency, falling back to "<amount> <currency>"', () => {
+    expect(spendAmountText(1250, 'USD')).toBe(
+      new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(1250),
+    );
+    expect(spendAmountText(12, 'X$1')).toBe('12 X$1');
+    expect(spendNotificationBody({ amount: 5, currency: 'X$1', purpose: 'A domain name' })).toBe(
+      '5 X$1 — A domain name',
+    );
   });
 
   it('notifies finished and failed work, with names from the lookup', () => {

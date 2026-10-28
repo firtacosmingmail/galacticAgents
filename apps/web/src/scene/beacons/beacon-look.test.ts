@@ -6,6 +6,8 @@ import {
   glyphInView,
   glyphKey,
   glyphSpec,
+  BEACON_COLOR,
+  SPEND_BEACON_COLOR,
   HALO_MAX_PX,
   rowOffsetPx,
   STEADY_PULSE,
@@ -71,6 +73,7 @@ describe('glyphSpec', () => {
       kind: 'permission',
       shape: 'diamond',
       symbol: 'lock',
+      color: BEACON_COLOR,
       badge: undefined,
     });
     expect(glyphSpec('clarification', 0).badge).toBeUndefined();
@@ -82,6 +85,18 @@ describe('glyphSpec', () => {
     expect(glyphSpec('clarification', 140).badge).toBe('+99');
     expect(glyphKey(glyphSpec('permission', 3))).toBe('permission:+3');
     expect(glyphKey(glyphSpec('permission'))).not.toBe(glyphKey(glyphSpec('clarification')));
+  });
+
+  it('a spend (P10-07, decision 145) has its own "$" disc in the inbox\'s spend green', () => {
+    expect(glyphSpec('spend')).toEqual({
+      kind: 'spend',
+      shape: 'disc',
+      symbol: '$',
+      color: SPEND_BEACON_COLOR,
+      badge: undefined,
+    });
+    expect(SPEND_BEACON_COLOR).not.toBe(BEACON_COLOR);
+    expect(glyphKey(glyphSpec('spend'))).not.toBe(glyphKey(glyphSpec('clarification')));
   });
 });
 
@@ -156,6 +171,17 @@ describe('glyph sprites (drawn at runtime)', () => {
     expect(calls).toContain('text:?');
     expect(calls).toContain('text:+3');
     expect(calls).not.toContain('lineTo');
+  });
+
+  it('a spend draws "$" on a green disc', () => {
+    const { ctx, calls } = recorder();
+    const fills: unknown[] = [];
+    const c = ctx as unknown as { fill: () => void; fillStyle: unknown };
+    c.fill = () => void fills.push(c.fillStyle);
+    drawGlyph(ctx, glyphSpec('spend'));
+    expect(calls).toContain('text:$');
+    expect(calls).not.toContain('text:?');
+    expect(fills[0]).toBe(SPEND_BEACON_COLOR);
   });
 
   it('the pillar fills every column', () => {

@@ -410,9 +410,12 @@ export interface SimilarOptions {
 
 const shorten = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-function tildify(p: string, ctx: PolicyContext): string {
-  const home = ctx.home ?? homedir();
+function tildeOf(p: string, home: string): string {
   return within(home, p) && p !== home ? `~/${relative(home, p)}` : p;
+}
+
+function tildify(p: string, ctx: PolicyContext): string {
+  return tildeOf(p, ctx.home ?? homedir());
 }
 
 const GROUP_TOOLS: Record<Group, string> = {
@@ -677,4 +680,89 @@ export function matchingRule(
     if (matchesScope(rule, input.call, subject, input.ctx)) return rule;
   }
   return undefined;
+}
+
+// --- a job's unattended rules (P10, final review I2) -----------------------------------------
+
+/** What a job's unattended rule is made of (`JobRule` without its id, label and origin). */
+export type UnattendedRuleShape = Pick<PermissionRule, 'scope' | 'tool' | 'match' | 'categories'>;
+
+/**
+ * Why a job's unattended rule has a shape the "Allow similar" chooser never makes (SPEC decisions
+ * 138, 144), or `undefined`. A job card is written by a Waykeeper, so the server holds its rules to
+ * what a permission card could have offered: an exact rule matches a text; a prefix rule a
+ * command's words (never a shell or interpreter, never outside the workspace) or an absolute
+ * folder of a file tool (never the root, the home folder or above it); a category rule (tool `*`)
+ * whole categories, never outside the workspace; always at least one category, never a push.
+ */
+export function unattendedRuleRefusal(
+  rule: UnattendedRuleShape,
+  opts: { home?: string } = {},
+): string | undefined {
+  const { scope, tool, match, categories } = rule;
+  if (categories.includes('push')) return 'a job never pushes unattended: drop the push rule';
+  if (categories.length === 0) return 'a rule needs at least one category';
+  const outside = categories.includes('outside_workspace');
+  const pairs: Record<PermissionRuleScope, readonly PermissionRuleMatch['kind'][]> = {
+    exact: ['text'],
+    prefix: ['words', 'folder'],
+    category: ['categories'],
+  };
+  if (!pairs[scope].includes(match.kind)) {
+    return `a ${scope} rule never matches ${match.kind === 'categories' ? 'whole categories' : `a ${match.kind}`}`;
+  }
+  switch (match.kind) {
+    case 'text':
+      return match.text.trim() ? undefined : 'an exact rule needs what it matches';
+    case 'words': {
+      if (tool !== 'Bash') return 'a command prefix is a Bash rule';
+      if (outside) {
+        return 'a command prefix outside the workspace would cover the whole computer: allow exactly one command, or a folder';
+      }
+      return prefixRefusal(match.words);
+    }
+    case 'folder': {
+      if (!groupOf(tool))
+        return `a folder rule is for a tool that reads or writes files, not ${tool}`;
+      if (!isAbsolute(match.folder)) return 'a folder rule needs an absolute folder';
+      const folder = resolve(match.folder);
+      const home = opts.home ?? homedir();
+      if (dirname(folder) === folder || within(folder, home)) {
+        return `${tildeOf(folder, home)} is too broad (the root or the home folder)`;
+      }
+      return undefined;
+    }
+    case 'categories':
+      if (tool !== '*') return 'a category rule covers every tool (`*`)';
+      if (outside) {
+        return 'outside the workspace as a whole category would cover the whole computer: allow exactly one call, or a folder';
+      }
+      return undefined;
+  }
+}
+
+/**
+ * A job's unattended rule in words, computed from what it matches — the job card's line, never
+ * the proposer's label. The "Allow similar" wording, plus the categories it is limited to.
+ */
+export function unattendedRuleLabel(
+  rule: UnattendedRuleShape,
+  opts: { home?: string } = {},
+): string {
+  const { tool, match, categories } = rule;
+  const only = ` — only as ${categoryWords(categories)}`;
+  switch (match.kind) {
+    case 'text':
+      return tool === 'Bash'
+        ? `exactly: ${shorten(match.text)}${only}`
+        : `${tool} exactly: ${shorten(match.text)}${only}`;
+    case 'words':
+      return `${match.words.join(' ')} … (and any further arguments)${only}`;
+    case 'folder': {
+      const doing = groupOf(tool) === 'read' ? 'reading' : 'writing and editing';
+      return `${doing} under ${tildeOf(resolve(match.folder), opts.home ?? homedir())}/…${only}`;
+    }
+    case 'categories':
+      return `any call the table asks about only as ${categoryWords(categories)}`;
+  }
 }

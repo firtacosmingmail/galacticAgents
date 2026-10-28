@@ -46,6 +46,7 @@ import type {
   RunOutputResponse,
   RunPreviewResponse,
   RunsResponse,
+  JobRunsResponse,
   RuntimesInfo,
   StartRunBody,
   StartRunResponse,
@@ -145,13 +146,21 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     restartHarmonizer: () => call<RestartHarmonizerResponse>('POST', '/api/harmonizer/restart'),
     /**
      * `version`: the question's version as the page saw it (a stale answer is refused);
-     * `answerId`: the idempotency key of this answer, the same on every retry (P7-05).
+     * `answerId`: the idempotency key of this answer, the same on every retry (P7-05);
+     * `detail`: a structured answer (P10-07: a reply finding's `Send` with the edited reply).
      */
-    answer: (questionId: string, answer: string, version?: number, answerId?: string) =>
+    answer: (
+      questionId: string,
+      answer: string,
+      version?: number,
+      answerId?: string,
+      detail?: SetAnswer,
+    ) =>
       call<AnswerResponse>('POST', `/api/questions/${encodeURIComponent(questionId)}/answer`, {
         answer,
         ...(version !== undefined ? { version } : {}),
         ...(answerId !== undefined ? { answerId } : {}),
+        ...(detail !== undefined ? { detail } : {}),
       } satisfies AnswerBody),
     /**
      * Dismisses a question without answering it (P9-14): a clarification is withdrawn, a
@@ -366,6 +375,12 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     /** A command's runs, newest first (at most 50). */
     runs: (id: string) =>
       call<RunsResponse>('GET', `/api/deliverables/${encodeURIComponent(id)}/runs`),
+    /** A job's runs, newest first (`limit` 1–200, default 20; P10-07). */
+    jobRuns: (jobId: string, limit?: number) =>
+      call<JobRunsResponse>(
+        'GET',
+        `/api/jobs/${encodeURIComponent(jobId)}/runs${queryString({ limit })}`,
+      ),
     /** A run's output after `after` (a `seq`), oldest first, `limit` chunks at most. */
     runOutput: (runId: string, query: { after?: number; limit?: number } = {}) =>
       call<RunOutputResponse>(

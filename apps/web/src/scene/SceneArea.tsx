@@ -22,6 +22,8 @@ import { LabelLayer } from './labels/LabelLayer.js';
 import { SatelliteLegend } from './legend/Legend.js';
 import { SceneProbe } from './probe.js';
 import { activateBody, deselectFromScene, usePickingStore } from './picking/store.js';
+import { useDockView } from '../panel/status/dock-view.js';
+import { useJobsFilter } from '../panel/jobs/jobs-model.js';
 import { useSelectionSync } from './picking/sync.js';
 import { bodyAction } from './picking/body-action.js';
 import { useDetailStore } from './detail/mode.js';
@@ -179,8 +181,14 @@ function pickingKey(event: KeyboardEvent<HTMLElement>): boolean {
 export function enterChangesNothing(bodyId: string): boolean {
   const app = useAppStore.getState();
   const action = bodyAction(sceneWorld(app), bodyId);
-  if (action.kind === 'select')
-    return selectionKey(action.selection) === selectionKey(app.selection);
+  if (action.kind === 'select') {
+    if (selectionKey(action.selection) !== selectionKey(app.selection)) return false;
+    // P10-07: an area moon also shows the Jobs view filtered to it.
+    if (action.jobsOf === undefined) return true;
+    return (
+      useDockView.getState().view === 'jobs' && useJobsFilter.getState().bodyId === action.jobsOf
+    );
+  }
   const popover = usePickingStore.getState().popover;
   return popover?.kind === 'info' && popover.action.bodyId === bodyId;
 }
