@@ -341,7 +341,7 @@ export const Settings = z.object({
   /** The AI provider new Stewards use when nothing names one (P11-02); absent: `claude`. */
   defaultProvider: Provider.optional(),
   /** Per-provider settings (P11-02): the default model of each provider's Stewards. */
-  providers: z.record(Provider, z.object({ model: z.string().optional() })).optional(),
+  providers: z.partialRecord(Provider, z.object({ model: z.string().optional() })).optional(),
   /**
    * The deliverables settings (Phase 9): the IDE Open in IDE uses (P9-03, decision 127). Optional
    * so a page reading an older server still parses; this server always sends it.
@@ -390,7 +390,7 @@ export const SettingsPatch = z
     defaultProvider: Provider.nullable().optional(),
     /** Merged provider by provider; `model: null` clears that provider's default model. */
     providers: z
-      .record(
+      .partialRecord(
         Provider,
         z.object({ model: z.string().min(1).max(100).nullable().optional() }).strict(),
       )

@@ -109,6 +109,17 @@ describe('settings schemas (P25-01)', () => {
     expect(Settings.parse({ ...valid, stewardRuntime: 'acp' }).stewardRuntime).toBe('acp');
     expect(SettingsPatch.parse({ stewardRuntime: null })).toEqual({ stewardRuntime: null });
     expect(SettingsPatch.safeParse({ stewardRuntime: 'cursor' }).success).toBe(false);
+    // Per-provider settings are a partial map (P11-02).
+    expect(SettingsPatch.parse({ providers: { chatgpt: { model: 'gpt-5.6-terra' } } })).toEqual({
+      providers: { chatgpt: { model: 'gpt-5.6-terra' } },
+    });
+    expect(SettingsPatch.parse({ providers: { gemini: { model: null } } })).toEqual({
+      providers: { gemini: { model: null } },
+    });
+    expect(SettingsPatch.safeParse({ providers: { cursor: { model: 'x' } } }).success).toBe(false);
+    expect(Settings.safeParse({ ...valid, providers: { claude: { model: 'opus' } } }).success).toBe(
+      true,
+    );
   });
 
   it('takes the IDE as auto or a bundle id, never a path or an option (P9-03)', () => {
