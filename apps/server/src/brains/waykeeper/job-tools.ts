@@ -190,7 +190,8 @@ export const proposeJobTool: BrainTool = {
         name: str(input, 'name'),
         instructions: str(input, 'instructions'),
         schedule: input['schedule'] as JobDraft['schedule'],
-        provider: provider ?? 'claude',
+        // Narrowed to the provider list by P11-03; until then an unknown name stays a cast.
+        provider: (provider ?? 'claude') as JobDraft['provider'],
         unattendedRules: (input['unattendedRules'] ?? []) as JobDraft['unattendedRules'],
       },
       ...rationaleOf(input),

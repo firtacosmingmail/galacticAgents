@@ -2,6 +2,7 @@ import type { AgentCaps, ToolCall } from './domain.js';
 import type { AgentRole, AgentRuntime, PermissionAction } from './enums.js';
 import type { AgentEvent } from './events.js';
 import type { RuntimePreflight } from './panel.js';
+import type { ModelInfo, ProviderUsage } from './providers.js';
 import type { Id } from './primitives.js';
 import type { SlashCommand } from './slash.js';
 
@@ -71,6 +72,8 @@ export interface SpawnOptions {
   caps: AgentCaps;
   /** Opt-in per spawn only (SPEC decision 17): skips repository context and subscription login. */
   bare?: boolean;
+  /** The exact model to run; absent: the runtime's default (P11-02). */
+  model?: string;
 }
 
 export interface SpawnHandle {
@@ -159,4 +162,10 @@ export interface AgentAdapter {
    * with fixable messages. Never throws: a failed check is a problem in the result.
    */
   preflight?(): Promise<RuntimePreflight>;
+  /** The models the runtime's CLI lists (P11-02). Never throws. */
+  models?(): Promise<ModelInfo[]>;
+  /** The subscription's remaining quota, when the CLI reports it (P11-02). Never throws. */
+  usage?(): Promise<ProviderUsage | undefined>;
+  /** Whether this runtime may be given a publishing step (P11-02); absent = false. */
+  readonly canPublish?: boolean;
 }

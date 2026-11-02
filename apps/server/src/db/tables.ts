@@ -459,7 +459,7 @@ const jobs: Mapper<Job> = {
     name: r['name'] as string,
     instructions: r['instructions'] as string,
     schedule: parse<Job['schedule']>(r['schedule'])!,
-    provider: r['provider'] as string,
+    provider: r['provider'] as Job['provider'],
     unattendedRules: parse<Job['unattendedRules']>(r['unattended_rules']) ?? [],
     state: r['state'] as Job['state'],
     pausedReason: opt<string>(r['paused_reason']),

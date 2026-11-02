@@ -62,7 +62,9 @@ import {
   type JobRun,
   type OpenFindingInput,
   type ReportJobRunInput,
+  type RequestPublishInput,
   type RequestSpendInput,
+  type SetProjectProviderInput,
   type SetJobStateInput,
   type SetLongTermInput,
   type ProposeJobInput,
@@ -1417,6 +1419,18 @@ export class Commands implements DomainCommands {
   /** A `spend` approval, held by the user whatever the asker's supervisors (P10-05). */
   requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>> {
     return this.run((ctx) => requestSpend(ctx, input, this.questions));
+  }
+  /** Placeholder until P11-08 builds publish approvals; refuses. */
+  requestPublish(_input: RequestPublishInput): Promise<CommandResult<{ questionId: Id }>> {
+    return this.run(() => {
+      throw new DomainError('invalid', 'publish approvals are not available yet');
+    });
+  }
+  /** Placeholder until P11-04 builds the project provider; refuses. */
+  setProjectProvider(_input: SetProjectProviderInput): Promise<CommandResult<Project>> {
+    return this.run(() => {
+      throw new DomainError('invalid', 'a project provider is not available yet');
+    });
   }
   /** The audit of an open on the Mac (decision 127); the opener (P9-03/P9-07) calls it. */
   recordDeliverableOpened(deliverableId: Id, action: OpenAction, by: Actor) {

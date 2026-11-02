@@ -2,7 +2,8 @@ import { z } from 'zod';
 import type { Project, Proposal, Question, Task } from './domain.js';
 import { PermissionRule } from './domain.js';
 import { RequestOrigin } from './enums.js';
-import { LONG_TERM_LIMITS } from './long-term-questions.js';
+import { LONG_TERM_LIMITS, PublishContext } from './long-term-questions.js';
+import { Provider } from './providers.js';
 import { Id, Meta, Timestamp } from './primitives.js';
 
 /**
@@ -17,6 +18,10 @@ export {
   FindingContext,
   JobFailureContext,
   LONG_TERM_LIMITS,
+  PublishContext,
+  PublishFile,
+  PUBLISH_ACTIONS,
+  publishFingerprint,
   SpendContext,
 } from './long-term-questions.js';
 
@@ -71,7 +76,14 @@ export const JobRule = PermissionRule.pick({
 export type JobRule = z.infer<typeof JobRule>;
 
 /** `running` until the run ends; `interrupted` when Mission Control stopped mid-run. */
-export const JobRunOutcome = z.enum(['running', 'quiet', 'findings', 'failed', 'interrupted']);
+export const JobRunOutcome = z.enum([
+  'running',
+  'quiet',
+  'findings',
+  'failed',
+  'interrupted',
+  'limited',
+]);
 export type JobRunOutcome = z.infer<typeof JobRunOutcome>;
 
 /**
@@ -85,12 +97,14 @@ export type JobRunPurpose = z.infer<typeof JobRunPurpose>;
 export const FollowUp = z.object({
   /** The finding or spend question it was approved on. */
   questionId: Id,
-  kind: z.enum(['send', 'spend']),
+  kind: z.enum(['send', 'spend', 'publish']),
   /** A send's reply text (as the user edited it). */
   text: z.string().optional(),
   amount: z.number().positive().optional(),
   currency: z.string().length(3).optional(),
   purpose: z.string().optional(),
+  /** A publish's approved request (P11-02). */
+  publish: PublishContext.optional(),
 });
 export type FollowUp = z.infer<typeof FollowUp>;
 
@@ -127,8 +141,15 @@ export const Job = z.object({
   name: z.string().min(1).max(LONG_TERM_LIMITS.maxJobName),
   instructions: z.string().min(1).max(LONG_TERM_LIMITS.maxInstructions),
   schedule: Schedule,
-  /** The AI provider the job asks for; jobs run on the Steward runtime until project 2. */
-  provider: z.string().default('claude'),
+  /** The AI provider the job's runs use. */
+  provider: Provider.default('claude'),
+  /** The exact model asked for; absent: the provider's default model. */
+  model: z.string().optional(),
+  /** The provider for approved follow-up runs (sends, spends, publishes); absent: `provider`. */
+  followUpProvider: Provider.optional(),
+  followUpModel: z.string().optional(),
+  /** The open usage-limit question of a job whose run hit its limit. */
+  limitQuestionId: Id.optional(),
   unattendedRules: z.array(JobRule).max(LONG_TERM_LIMITS.maxUnattendedRules),
   state: JobState,
   pausedReason: z.string().optional(),
@@ -180,6 +201,10 @@ export const JobDraft = Job.pick({
   instructions: true,
   schedule: true,
   provider: true,
+  model: true,
+  followUpProvider: true,
+  followUpModel: true,
+  limitQuestionId: true,
 }).extend({
   unattendedRules: z
     .array(
@@ -207,6 +232,8 @@ export const SPEND_ACTIONS = ['Approve', 'Refuse'] as const;
  */
 export function isJobOwned(q: Pick<Question, 'kind' | 'context'>): boolean {
   if (q.context.finding || q.context.jobFailure) return true;
+  if (q.context.usageLimit?.jobId !== undefined) return true;
+  if (q.kind === 'publish' && q.context.publish?.jobId) return true;
   return q.kind === 'spend' && q.context.spend?.jobId !== undefined;
 }
 

@@ -179,6 +179,21 @@ describe('notificationOf (P25-01; SPEC §4.5)', () => {
     expect(escalated).toMatchObject({ id: 'question:q3', body: 'Escalated?' });
   });
 
+  it('a publish approval is notified like a permission with its own title', () => {
+    const publish = question({
+      id: 'q-p',
+      kind: 'publish',
+      context: { text: 'Publish the post?' },
+    });
+    const n = notificationOf(env(10, { type: 'question.opened', question: publish }));
+    expect(n).toMatchObject({
+      id: 'question:q-p',
+      kind: 'permission',
+      questionKind: 'publish',
+      title: 'Publish approval needed',
+    });
+  });
+
   it('a spend (P10-07, decision 145) has its own title and names the amount and purpose', () => {
     const spend = question({
       id: 'q-s',

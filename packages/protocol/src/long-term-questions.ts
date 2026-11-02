@@ -61,3 +61,44 @@ export const SpendContext = z.object({
   runId: Id.optional(),
 });
 export type SpendContext = z.infer<typeof SpendContext>;
+
+/** One file of a publish request: a workspace path and the hash of its content. */
+export const PublishFile = z.object({
+  path: z.string().min(1).max(500),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type PublishFile = z.infer<typeof PublishFile>;
+
+/** What a `publish` question asks to publish: where, what text, which files, and its fingerprint. */
+export const PublishContext = z.object({
+  platform: z.string().min(1).max(80),
+  account: z.string().min(1).max(120),
+  text: z.string().max(8000),
+  files: z.array(PublishFile).max(10),
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  jobId: Id.optional(),
+  runId: Id.optional(),
+  taskId: Id.optional(),
+});
+export type PublishContext = z.infer<typeof PublishContext>;
+
+/** The fixed answers of a `publish` question. */
+export const PUBLISH_ACTIONS = ['Approve', 'Refuse'] as const;
+
+/**
+ * The fingerprint of a publish request: the hasher applied to its platform, account, text and file
+ * hashes. The server passes `node:crypto`'s sha256; the web never computes it.
+ */
+export function publishFingerprint(
+  input: { platform: string; account: string; text: string; files: PublishFile[] },
+  sha256: (s: string) => string,
+): string {
+  return sha256(
+    JSON.stringify([
+      input.platform,
+      input.account,
+      input.text,
+      input.files.map((f) => [f.path, f.sha256]),
+    ]),
+  );
+}

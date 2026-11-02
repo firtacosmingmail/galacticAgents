@@ -24,7 +24,7 @@ export const AgentRole = z.enum(['harmonizer', 'waykeeper', 'steward']);
 export type AgentRole = z.infer<typeof AgentRole>;
 
 /** Runtimes behind the AgentAdapter interface (TECHNOLOGY §3). Only claude-sdk and fake exist in v1. */
-export const AgentRuntime = z.enum(['claude-sdk', 'fake', 'acp', 'pty']);
+export const AgentRuntime = z.enum(['claude-sdk', 'fake', 'acp', 'pty', 'codex', 'agy']);
 export type AgentRuntime = z.infer<typeof AgentRuntime>;
 
 /** Agent process states (TECHNOLOGY §4). */
@@ -76,7 +76,7 @@ export type WorkState = z.infer<typeof WorkState>;
  * to spend real money — always held and answered by the user, never by an agent, a supervisor, the
  * project policy or an "Allow similar" rule.
  */
-export const QuestionKind = z.enum(['clarification', 'permission', 'spend']);
+export const QuestionKind = z.enum(['clarification', 'permission', 'spend', 'publish']);
 export type QuestionKind = z.infer<typeof QuestionKind>;
 
 export const QuestionStatus = z.enum(['open', 'answered', 'cancelled']);

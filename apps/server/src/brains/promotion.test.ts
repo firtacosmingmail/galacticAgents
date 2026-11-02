@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Id, Proposal } from '@galactic/protocol';
+import type { AgentRuntime, Id, Proposal } from '@galactic/protocol';
 import { carriedOut } from '../domain/promotion.js';
 import { tickingClock } from '../test/world.js';
 import { harmonizerBrain } from './harmonizer/index.js';
@@ -41,7 +41,7 @@ function setup() {
   const startWaykeeper = async (input: {
     projectId: Id;
     supervisorId: Id;
-    runtime: 'fake' | 'claude-sdk' | 'acp' | 'pty';
+    runtime: AgentRuntime;
   }) => {
     const wk = await h.startBrain(waykeeperDefinition(), input);
     waykeepers.push(wk.agentId);

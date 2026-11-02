@@ -67,6 +67,7 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     ...steward,
     error: 'tool-call cap reached',
     reason: 'cap',
+    resetsAt: '2026-10-02T14:00:00.000Z',
   },
   'agent.interrupted': { type: 'agent.interrupted', ...steward, reason: 'server shutdown' },
   'recovery.needs_attention': {
@@ -228,7 +229,11 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
   'body.retired': { type: 'body.retired', bodyId: 'b-demo-1' },
 
   'project.created': { type: 'project.created', project: d.project },
-  'project.updated': { type: 'project.updated', projectId: 'p-1', changes: { name: 'Auth v2' } },
+  'project.updated': {
+    type: 'project.updated',
+    projectId: 'p-1',
+    changes: { name: 'Auth v2', defaultProvider: 'chatgpt' },
+  },
   'project.state_changed': {
     type: 'project.state_changed',
     projectId: 'p-1',
@@ -238,7 +243,11 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
   },
 
   'task.created': { type: 'task.created', task: d.task },
-  'task.updated': { type: 'task.updated', taskId: 't-1', changes: { priority: 'urgent' } },
+  'task.updated': {
+    type: 'task.updated',
+    taskId: 't-1',
+    changes: { priority: 'urgent', provider: 'gemini', model: 'gemini-3.8-flash' },
+  },
   'task.state_changed': {
     type: 'task.state_changed',
     taskId: 't-1',
@@ -343,7 +352,12 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
   'job.updated': {
     type: 'job.updated',
     jobId: 'j-1',
-    changes: { runningRunId: 'jr-2', nextRunAt: '2026-10-02T09:00:00.000Z' },
+    changes: {
+      runningRunId: 'jr-2',
+      nextRunAt: '2026-10-02T09:00:00.000Z',
+      provider: 'chatgpt',
+      model: 'gpt-5.6-terra',
+    },
   },
   'job_run.started': { type: 'job_run.started', run: d.jobRun },
   'job_run.ended': {

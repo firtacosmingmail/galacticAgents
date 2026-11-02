@@ -57,6 +57,9 @@ export const STALL_THRESHOLDS_MS: Record<RuntimeName, number> = {
   'claude-sdk': 5 * 60_000,
   acp: 5 * 60_000,
   pty: 2 * 60_000,
+  // Codex and Antigravity runs go quiet during builds and tests like Claude's (P11-02).
+  codex: 5 * 60_000,
+  agy: 5 * 60_000,
 };
 
 export interface ComposeOptions {

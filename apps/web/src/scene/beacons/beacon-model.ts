@@ -202,6 +202,7 @@ const HEADINGS: Record<Question['kind'], string> = {
   permission: 'Permission',
   clarification: 'Question',
   spend: 'Spend approval',
+  publish: 'Publish approval',
 };
 
 /** The question text's length on the hover card before it is cut. */
