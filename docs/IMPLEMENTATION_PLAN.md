@@ -199,6 +199,22 @@ Each phase ends with something you can run. Estimates assume one developer worki
 
 ---
 
+## Phase 11 — More AI providers (≈ 2–3 weeks)
+
+**Goal:** Stewards run on Claude Code, OpenAI's Codex CLI or Google's Antigravity CLI, chosen per task or job in plain words; usage limits become one "switch or wait" question; nothing is published without an approval of that exact content.
+
+Spec: `docs/superpowers/specs/2026-10-31-more-ai-providers-design.md`; plan: `docs/superpowers/plans/2026-10-31-more-ai-providers.md`; tasks P11-01 – P11-10 in `docs/tasks/PHASE_11_AI_PROVIDERS.md`.
+
+1. Spikes of both real CLIs, recorded as notes and sanitized fixtures (P11-01).
+2. Protocol, migration 0017, model resolution and catalogue (P11-02, P11-03).
+3. The Codex adapter over `app-server` and the Antigravity adapter with a fail-closed hook bridge (P11-04, P11-05).
+4. Publish approvals, usage-limit questions, brain tools (P11-06 – P11-08).
+5. Web: Settings providers, publish and limit cards, provider chips; end-to-end (P11-09, P11-10).
+
+**Exit criteria:** every task done; full gates green; the plan's Review Focus items each covered by a test; SPEC and TECHNOLOGY consistent.
+
+---
+
 ## High-level corner cases and risks
 
 Grouped by area. Each has a suggested handling so it can become a ticket later. Items marked *Decided* reference SPEC.md §7.
