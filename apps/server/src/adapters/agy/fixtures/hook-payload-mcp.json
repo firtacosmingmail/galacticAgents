@@ -1,0 +1,19 @@
+{
+  "artifactDirectoryPath": "/Users/example/.gemini/antigravity-cli/brain/25a61674-1c2e-4b29-864d-b1fe7c797581",
+  "conversationId": "25a61674-1c2e-4b29-864d-b1fe7c797581",
+  "lastUserInput": "Call the request_publish tool from the galactic MCP server once with text hello, and tell me exactly what it returned.",
+  "modelName": "gemini-3.8-flash-high",
+  "stepIdx": 4,
+  "toolCall": {
+    "args": {
+      "Arguments": {
+        "text": "hello"
+      },
+      "ServerName": "galactic",
+      "ToolName": "request_publish"
+    },
+    "name": "call_mcp_tool"
+  },
+  "transcriptPath": "/Users/example/.gemini/antigravity-cli/brain/25a61674-1c2e-4b29-864d-b1fe7c797581/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": ["/tmp/work"]
+}

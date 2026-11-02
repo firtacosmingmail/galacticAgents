@@ -1,7 +1,7 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-01 · **Task status:** P11-01 in progress
-**Phase status:** in progress (0/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
+**Current task:** P11-02 · **Task status:** P11-01 done (2026-11-02)
+**Phase status:** in progress (1/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -53,7 +53,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 ## Tasks
 
 ### P11-01 — Phase file and provider spikes
-- **Status:** in progress · **Depends on:** — · **Parallel with:** —
+- **Status:** done (2026-11-02) · **Depends on:** — · **Parallel with:** —
 - Plan Task 1: this file; real-CLI spikes of Codex (`app-server` message shapes, dynamic tools, late approval, sandbox network) and agy (hook delivery, fail mode, tool coverage, subagents, MCP, image, `/usage`); sanitized fixtures; the notes file with a **Ruling** line.
 - **Acceptance:** `docs/tasks/notes/P11-01-provider-spikes.md` answers every question in the brief, each with its evidence or a recorded reason it was impossible; fixtures under `apps/server/src/adapters/{codex,agy}/fixtures/` contain no account ids, emails or tokens; `scripts/spikes/agy-hook-probe.mjs` re-runs the hook probes; the Ruling line is present.
 
