@@ -18,7 +18,11 @@ import { ApiError } from '../../console/api.js';
  */
 
 /** Saved now, applied at the next start (decision 51). */
-export const RESTART_FIELDS: readonly SettingName[] = ['projectsRoot', 'stewardsLoadUserSettings'];
+export const RESTART_FIELDS: readonly SettingName[] = [
+  'projectsRoot',
+  'stewardsLoadUserSettings',
+  'brainUserMcp',
+];
 
 /** The variables that fix a setting at startup (P25-01's `envOverrides`). */
 export const ENV_VARIABLES: Partial<Record<SettingName, string>> = {

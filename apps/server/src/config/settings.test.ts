@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -157,6 +165,23 @@ describe('SettingsService (P25-01)', () => {
     expect(() => loadConfig({ ...env, GALACTIC_BUDGET_WARN_PERCENT: '0' })).toThrow(
       /budget warning threshold/,
     );
+  });
+
+  it("brains' MCP servers: default waykeepers, saved locally only, applied at the next start", () => {
+    const { env, config, settings, file } = setup();
+    expect(settings.current().brainUserMcp).toBe('waykeepers');
+    expect(settings.response().restartRequired).toEqual([]);
+    expect(refusal(() => settings.update({ brainUserMcp: 'all' }, {}))?.code).toBe(
+      'remote_settings',
+    );
+    const res = settings.update({ brainUserMcp: 'all' }, local);
+    expect(res.settings.brainUserMcp).toBe('all');
+    expect(res.restartRequired).toEqual(['brainUserMcp']); // the adapter reads it at start
+    expect(file()['brainUserMcp']).toBe('all');
+    expect(loadConfig(env).config.brainUserMcp).toBe('all'); // the restart keeps it
+    expect(settings.update({ brainUserMcp: 'waykeepers' }, local).restartRequired).toEqual([]);
+    writeFileSync(config.configPath, JSON.stringify({ ...file(), brainUserMcp: 'everyone' }));
+    expect(() => loadConfig(env)).toThrow();
   });
 
   it('reports a hand-edited first-run marker as a timestamp, still done (P25-08)', () => {

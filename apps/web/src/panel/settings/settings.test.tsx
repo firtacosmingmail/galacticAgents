@@ -549,6 +549,17 @@ describe('settings page (P25-08)', () => {
     expect(server.patches.at(-1)).toEqual({ budgets: { warnAtPercent: 65 } });
   });
 
+  it('chooses which brains get the user’s MCP servers: Waykeepers by default (decision 149)', async () => {
+    await open('/settings', done());
+    const section = await screen.findByRole('region', { name: 'Brains’ MCP servers' });
+    const radios = within(section).getAllByRole('radio') as HTMLInputElement[];
+    expect(radios.map((r) => r.value)).toEqual(['none', 'waykeepers', 'all']);
+    expect(radios.find((r) => r.checked)?.value).toBe('waykeepers');
+    await click(within(section).getByRole('radio', { name: /Waykeepers and the Harmonizer/ }));
+    await click(within(section).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ brainUserMcp: 'all' });
+  });
+
   it('sets the runtime of new Stewards, and back to the brain’s own (P8-07)', async () => {
     await open('/settings', done());
     const section = await screen.findByRole('region', { name: 'Steward runtime' });

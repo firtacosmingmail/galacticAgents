@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   AgentEvent,
@@ -9,7 +11,7 @@ import type {
 } from '@galactic/protocol';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
 import { collect } from '../../test/collect.js';
-import { ClaudeSdkAdapter } from './claude-sdk-adapter.js';
+import { ClaudeSdkAdapter, sessionSettings, type BrainUserMcp } from './claude-sdk-adapter.js';
 import { FakeSdk, type FakeScript, type FakeSdkOptions } from './fake-sdk.js';
 import { jsonSchemaToZodShape } from './json-schema-to-zod.js';
 import type { ZodTypeAny } from 'zod';
@@ -53,6 +55,7 @@ function make(
     env?: Record<string, string | undefined>;
     fake?: Omit<FakeSdkOptions, 'script' | 'spawnChild'>;
     stewardSettingSources?: ('user' | 'project' | 'local')[];
+    brainUserMcp?: BrainUserMcp;
   } = {},
 ) {
   const sdk = new FakeSdk({
@@ -70,6 +73,7 @@ function make(
     onError: (error, context) => errors.push({ error, context }),
     ...(opts.env ? { env: opts.env } : {}),
     ...(opts.stewardSettingSources ? { stewardSettingSources: opts.stewardSettingSources } : {}),
+    ...(opts.brainUserMcp ? { brainUserMcp: opts.brainUserMcp } : {}),
   });
   const events = collect<AgentEvent>(adapter.events);
   rigs.push({ adapter, supervisor });
@@ -546,6 +550,105 @@ describe('ClaudeSdkAdapter — brains, bare, tools', () => {
     await brain.adapter.spawn(spawnOpts('x', { role: 'harmonizer', tools: [tool] }));
     await brain.events.waitFor(has('agent.idle'));
     expect(brain.sdk.calls[0]!.options.strictMcpConfig).toBe(true);
+  });
+
+  it("brainUserMcp gives the chosen brains the user's MCP servers, without hooks or skills", async () => {
+    const tool = {
+      name: 'declare_deliverable',
+      description: 'Declare',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'ok',
+    };
+    const seen: ToolCall[] = [];
+    const wk = make(
+      () => [
+        // A claude.ai connector's tool: the CLI reports its own provenance; the gate decides.
+        {
+          tool: 'mcp__claude_ai_Atlassian__getJiraIssue',
+          input: { issueIdOrKey: 'GA-1' },
+          mcpServer: { name: 'claude.ai Atlassian', source: 'claudeai' },
+        },
+        { text: 'read it' },
+      ],
+      { brainUserMcp: 'waykeepers' },
+    );
+    await wk.adapter.spawn(
+      spawnOpts('plan', {
+        role: 'waykeeper',
+        systemPrompt: 'You are the Waykeeper.',
+        tools: [tool],
+        gate: gate({}, seen),
+      }),
+    );
+    const asked = await wk.events.waitFor((es) => questions(es).length > 0);
+    const options = wk.sdk.calls[0]!.options;
+    expect(options.settingSources).toEqual(['user']);
+    expect(options.strictMcpConfig).toBeUndefined();
+    expect(options.settings).toMatchObject({ disableAllHooks: true });
+    expect((options.settings as { claudeMdExcludes: string[] }).claudeMdExcludes).toContain(
+      join(process.env['CLAUDE_CONFIG_DIR'] ?? join(homedir(), '.claude'), 'CLAUDE.md'),
+    );
+    expect(options.skills).toEqual([]);
+    expect(options.systemPrompt).toBe('You are the Waykeeper.');
+    // Only the host's own tools are pre-allowed; the connector's call went to the gate and asks.
+    expect(options.allowedTools).toEqual(['mcp__galactic__declare_deliverable']);
+    expect(seen[0]).toMatchObject({
+      toolName: 'mcp__claude_ai_Atlassian__getJiraIssue',
+      mcpServer: { name: 'claude.ai Atlassian', source: 'claudeai' },
+    });
+    const q = questions(asked)[0]!;
+    expect(q.kind).toBe('permission');
+    await wk.adapter.answer(q.questionId, 'allow');
+    await wk.events.waitFor(has('agent.idle'));
+
+    // `waykeepers` leaves the Harmonizer isolated; `all` opens it too.
+    const h = make(() => [{ text: 'ok' }], { brainUserMcp: 'waykeepers' });
+    await h.adapter.spawn(spawnOpts('x', { role: 'harmonizer', tools: [tool] }));
+    await h.events.waitFor(has('agent.idle'));
+    expect(h.sdk.calls[0]!.options).toMatchObject({ settingSources: [], strictMcpConfig: true });
+    expect(h.sdk.calls[0]!.options.settings).toBeUndefined();
+    const all = make(() => [{ text: 'ok' }], { brainUserMcp: 'all' });
+    await all.adapter.spawn(spawnOpts('x', { role: 'harmonizer', tools: [tool] }));
+    await all.events.waitFor(has('agent.idle'));
+    expect(all.sdk.calls[0]!.options.settingSources).toEqual(['user']);
+    expect(all.sdk.calls[0]!.options.strictMcpConfig).toBeUndefined();
+  });
+
+  it('sessionSettings: Stewards load the repository, brains are isolated unless chosen', () => {
+    // A Steward: user + project + local by default (CLAUDE.md, AGENTS.md, .claude/, .mcp.json).
+    expect(sessionSettings('steward')).toEqual({ settingSources: ['user', 'project', 'local'] });
+    expect(sessionSettings('steward', { stewardSources: ['project', 'local'] })).toEqual({
+      settingSources: ['project', 'local'],
+    });
+    // brainUserMcp never changes a Steward.
+    expect(sessionSettings('steward', { brainUserMcp: 'all' })).toEqual({
+      settingSources: ['user', 'project', 'local'],
+    });
+    const isolated = { settingSources: [], strictMcpConfig: true };
+    const userMcp = {
+      settingSources: ['user'],
+      settings: {
+        disableAllHooks: true,
+        claudeMdExcludes: ['/cfg/CLAUDE.md', '/cfg/AGENTS.md', '/cfg/rules/**'],
+      },
+      skills: [],
+    };
+    expect(sessionSettings('harmonizer')).toEqual(isolated);
+    expect(sessionSettings('waykeeper')).toEqual(isolated);
+    for (const [mode, harmonizer, waykeeper] of [
+      ['none', isolated, isolated],
+      ['waykeepers', isolated, userMcp],
+      ['all', userMcp, userMcp],
+    ] as const) {
+      const o = { brainUserMcp: mode, claudeConfigDir: '/cfg' };
+      expect(sessionSettings('harmonizer', o)).toEqual(harmonizer);
+      expect(sessionSettings('waykeeper', o)).toEqual(waykeeper);
+    }
+    // A brain never gets the repository's own settings, whatever the mode.
+    for (const mode of ['none', 'waykeepers', 'all'] as const)
+      expect(sessionSettings('waykeeper', { brainUserMcp: mode }).settingSources).not.toContain(
+        'project',
+      );
   });
 
   it('a steward with a system prompt appends it to the Claude Code preset', async () => {

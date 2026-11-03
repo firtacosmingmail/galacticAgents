@@ -9,6 +9,7 @@ import {
 } from 'react';
 import type {
   AgentRuntime,
+  BrainUserMcp,
   PermissionDecision,
   PermissionPolicy,
   QualityTier,
@@ -552,6 +553,42 @@ function StewardSourcesEditor({ id, draft, setDraft, disabled }: EditorProps<boo
   );
 }
 
+const BRAIN_MCP: { value: BrainUserMcp; label: string; hint: string }[] = [
+  {
+    value: 'none',
+    label: 'None',
+    hint: 'the Harmonizer and Waykeepers use only GalacticAgents’ tools',
+  },
+  {
+    value: 'waykeepers',
+    label: 'Waykeepers',
+    hint: 'Waykeepers can read Jira, Confluence and the like while they plan',
+  },
+  { value: 'all', label: 'Waykeepers and the Harmonizer', hint: 'the Harmonizer too' },
+];
+
+function BrainMcpEditor({ id, draft, setDraft, disabled }: EditorProps<BrainUserMcp>) {
+  return (
+    <fieldset className="set-field set-radios" disabled={disabled}>
+      <legend className="set-visually-hidden">Brains’ MCP servers</legend>
+      {BRAIN_MCP.map((t) => (
+        <label key={t.value} className="set-radio">
+          <input
+            type="radio"
+            name={id}
+            value={t.value}
+            checked={draft === t.value}
+            onChange={() => setDraft(t.value)}
+          />
+          <span>
+            <strong>{t.label}</strong> <span className="set-muted">— {t.hint}</span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 function BudgetWarnEditor({ id, draft, setDraft, disabled }: EditorProps<string>) {
   return (
     <div className="set-field set-inline">
@@ -642,11 +679,26 @@ export const STEWARD_SOURCES: SectionSpec<boolean> = {
   field: 'stewardsLoadUserSettings',
   title: 'Stewards’ settings sources',
   intro:
-    'Stewards always load the repository’s own Claude Code settings. They can also load yours; the Harmonizer and Waykeepers never do.',
+    'Stewards always load the repository’s own Claude Code settings. They can also load yours; the Harmonizer and Waykeepers never do (see “Brains’ MCP servers” for your MCP servers alone).',
   fromSettings: (s) => s.stewardsLoadUserSettings,
   validate: () => undefined,
   toPatch: (d) => ({ stewardsLoadUserSettings: d }),
   Editor: StewardSourcesEditor,
+};
+
+/**
+ * Which brains get the user's MCP servers (`brainUserMcp`). On the settings page only; an older
+ * server without the setting shows its default.
+ */
+export const BRAIN_MCP_SECTION: SectionSpec<BrainUserMcp> = {
+  field: 'brainUserMcp',
+  title: 'Brains’ MCP servers',
+  intro:
+    'Your own MCP servers — claude.ai connectors such as Atlassian, Linear or Slack, and the servers of your enabled Claude Code plugins — for the Harmonizer and Waykeepers. Only the servers: your hooks, skills and CLAUDE.md stay out, and every call still goes through the permission table. Stewards get them when they load your settings.',
+  fromSettings: (s) => s.brainUserMcp ?? 'waykeepers',
+  validate: () => undefined,
+  toPatch: (d) => ({ brainUserMcp: d }),
+  Editor: BrainMcpEditor,
 };
 
 /**
@@ -698,7 +750,11 @@ export type AnySectionSpec = SectionSpec<any>;
  * The settings page's sections after the wizard's (P8-01): set later, when a budget is in use,
  * so they are not first-run steps.
  */
-export const LATER_SECTIONS: readonly AnySectionSpec[] = [BUDGETS, STEWARD_RUNTIME];
+export const LATER_SECTIONS: readonly AnySectionSpec[] = [
+  BUDGETS,
+  STEWARD_RUNTIME,
+  BRAIN_MCP_SECTION,
+];
 
 /** Every section, in the order the page and the wizard show them. */
 export const SECTIONS: readonly AnySectionSpec[] = [
