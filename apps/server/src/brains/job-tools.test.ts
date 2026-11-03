@@ -495,8 +495,13 @@ describe('publish approvals for a task Steward (P11-06)', () => {
       createAgent(ctx, { role: 'waykeeper', runtime: 'fake', caps: CAPS, projectId: project.id }),
     ).value;
     const spawnOn = async (runtime: 'codex' | 'agy') => {
+      // A publishing step never starts on Gemini (final review I3): the agy Steward's task is not one.
       const task = c.log.runCommand((ctx) =>
-        createTask(ctx, { projectId: project.id, description: 'Post it', publishes: true }),
+        createTask(ctx, {
+          projectId: project.id,
+          description: 'Post it',
+          ...(runtime === 'codex' ? { publishes: true } : {}),
+        }),
       ).value;
       const steward = (
         await c.commands.spawnAgent({

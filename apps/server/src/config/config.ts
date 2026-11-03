@@ -273,7 +273,7 @@ export interface ServerConfig {
    * and Antigravity adapters. Only the e2e server sets it; `--dev`, `pnpm dev` and `pnpm remote`
    * never do, so ChatGPT and Gemini Stewards are real there.
    */
-  fakeProviders: boolean;
+  fakeProviders?: boolean;
   /** `~/.galactic` (or `$GALACTIC_HOME`): config, database, logs. */
   dataDir: string;
   configPath: string;

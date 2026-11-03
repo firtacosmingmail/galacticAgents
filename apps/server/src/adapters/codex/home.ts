@@ -91,6 +91,7 @@ export function prepareCodexHome(dir: string, authSource: string): PreparedHome 
         throw new Error(
           `the managed Codex home holds a newer auth.json that could not be moved to ${authSource} ` +
             `(${(error as NodeJS.ErrnoException).code ?? 'error'}): move it there yourself, then start again`,
+          { cause: error },
         );
       }
       replacedLink = true;

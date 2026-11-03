@@ -839,6 +839,7 @@ describe('job scheduler (P10-04)', () => {
               match: { kind: 'words', words: ['curl', 'api.myapp.com'] },
               categories: ['network'],
               label: 'curl api.myapp.com …',
+              preview: 'curl api.myapp.com …',
             },
             { by: USER, origin: 'local' },
           ),

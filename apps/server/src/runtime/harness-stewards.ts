@@ -167,12 +167,12 @@ export function devProviderFakes(scenarioFor: FakeAdapterOptions['scenarioFor'])
  * itself (`--dev`, `pnpm dev`, `pnpm remote`) keeps the real adapters. Returns whether it did.
  */
 export function installProviderFakes(
-  config: { dev: boolean; fakeProviders: boolean },
+  config: { dev: boolean; fakeProviders?: boolean },
   adapters: AgentAdapter[],
   scenarioFor: FakeAdapterOptions['scenarioFor'],
   log: (message: string) => void,
 ): boolean {
-  if (!config.dev || !config.fakeProviders) return false;
+  if (!config.dev || config.fakeProviders !== true) return false;
   replaceAdapters(adapters, devProviderFakes(scenarioFor), log);
   return true;
 }
