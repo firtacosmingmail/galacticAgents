@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type {
   Actor,
   AgentAdapter,
@@ -142,7 +144,7 @@ export type SessionSettings = Pick<
  *   in-process `galactic` server (when it has tools).
  * - **Brain with user MCP** (`brainUserMcp`): the `user` source only, the CLI's one way to reach
  *   the claude.ai connectors and the enabled plugins' servers. The rest of what that source
- *   brings is held back: no hooks (`disableAllHooks`: the user's hooks would run commands and
+ *   brings is held back: no user `CLAUDE.md` or rules (`claudeMdExcludes`), no hooks (`disableAllHooks`: the user's hooks would run commands and
  *   inject context into a brain; the adapter's own `PreToolUse` callback is not a settings hook
  *   and still runs), no skills listed (`skills: []`), and no project source (no repository
  *   `CLAUDE.md`, settings or `.mcp.json`). Not strict, so the configured servers load beside
@@ -151,14 +153,28 @@ export type SessionSettings = Pick<
  */
 export function sessionSettings(
   role: SpawnOptions['role'],
-  opts: { brainUserMcp?: BrainUserMcp; stewardSources?: ('user' | 'project' | 'local')[] } = {},
+  opts: {
+    brainUserMcp?: BrainUserMcp;
+    stewardSources?: ('user' | 'project' | 'local')[];
+    /** The CLI's config folder (`CLAUDE_CONFIG_DIR`, default `~/.claude`). */
+    claudeConfigDir?: string;
+  } = {},
 ): SessionSettings {
   if (role === 'steward')
     return { settingSources: opts.stewardSources ?? ['user', 'project', 'local'] };
   const mode = opts.brainUserMcp ?? 'none';
   const userMcp = mode === 'all' || (mode === 'waykeepers' && role === 'waykeeper');
   if (!userMcp) return { settingSources: [], strictMcpConfig: true };
-  return { settingSources: ['user'], settings: { disableAllHooks: true }, skills: [] };
+  const configDir = opts.claudeConfigDir ?? join(homedir(), '.claude');
+  return {
+    settingSources: ['user'],
+    settings: {
+      disableAllHooks: true,
+      // The user's own instructions are for the user's sessions, not for a brain.
+      claudeMdExcludes: [join(configDir, 'CLAUDE.md'), join(configDir, 'rules', '**')],
+    },
+    skills: [],
+  };
 }
 
 /** Credentials and routing the CLI needs that the supervisor's allow-list does not carry. */
@@ -392,6 +408,9 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         ...(this.opts.brainUserMcp ? { brainUserMcp: this.opts.brainUserMcp } : {}),
         ...(this.opts.stewardSettingSources
           ? { stewardSources: this.opts.stewardSettingSources }
+          : {}),
+        ...(process.env['CLAUDE_CONFIG_DIR']
+          ? { claudeConfigDir: process.env['CLAUDE_CONFIG_DIR'] }
           : {}),
       }),
       ...(opts.systemPrompt
