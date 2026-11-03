@@ -13,6 +13,7 @@ import type { DeliverableService } from '../deliverables/service.js';
 import type { EventLog } from '../domain/event-log.js';
 import { originOfMessages } from '../domain/permissions.js';
 import type { ReopenOptions, ReopenResult, SpawnResult } from '../runtime/agent-runtime.js';
+import type { ProviderCatalog } from '../runtime/provider-catalog.js';
 import type { ChooseSteward } from '../runtime/steward-choice.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import type { Workspaces } from '../workspace/workspaces.js';
@@ -103,6 +104,8 @@ export interface BrainRunnerOptions {
   processes?: StewardProcessControl;
   /** Handed to the brain's tools as `ctx.chooseSteward` (P11-03). */
   chooseSteward?: ChooseSteward;
+  /** Handed to the brain's tools as `ctx.catalog` (P11-08). */
+  catalog?: Pick<ProviderCatalog, 'check'>;
   /** Handed to the brain's tools as `ctx.deliverables` (P9-04). */
   deliverables?: DeliverableService;
   onError?: (error: unknown, context: string) => void;
@@ -775,6 +778,7 @@ export class BrainRunner {
       ...(this.opts.workspaces ? { workspaces: this.opts.workspaces } : {}),
       ...(this.opts.processes ? { processes: this.opts.processes } : {}),
       ...(this.opts.chooseSteward ? { chooseSteward: this.opts.chooseSteward } : {}),
+      ...(this.opts.catalog ? { catalog: this.opts.catalog } : {}),
       ...(this.opts.deliverables ? { deliverables: this.opts.deliverables } : {}),
     };
   }

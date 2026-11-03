@@ -362,6 +362,9 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
     instructions: draft.instructions,
     schedule: draft.schedule,
     provider: draft.provider,
+    ...(draft.model ? { model: draft.model } : {}),
+    ...(draft.followUpProvider ? { followUpProvider: draft.followUpProvider } : {}),
+    ...(draft.followUpModel ? { followUpModel: draft.followUpModel } : {}),
     unattendedRules: storedRules(draft.unattendedRules, [], input.origin),
     state: 'active',
     nextRunAt: nextRunAfter(draft, ctx.now),
@@ -417,6 +420,9 @@ export function draftOf(job: Job): JobDraft {
     instructions: job.instructions,
     schedule: job.schedule,
     provider: job.provider,
+    ...(job.model !== undefined ? { model: job.model } : {}),
+    ...(job.followUpProvider !== undefined ? { followUpProvider: job.followUpProvider } : {}),
+    ...(job.followUpModel !== undefined ? { followUpModel: job.followUpModel } : {}),
     unattendedRules: job.unattendedRules,
   };
 }
@@ -433,14 +439,32 @@ export function planJobUpdate(
   const current = jobOf(ctx, input.jobId);
   longTermProject(ctx, current.projectId, 'jobs');
   const { areaId, ...draftChanges } = input.changes;
+  const base = draftOf(current);
+  // A model belongs to its provider: another provider without a new model leaves the default.
+  if (draftChanges.provider !== undefined && draftChanges.provider !== current.provider) {
+    if (draftChanges.model === undefined) delete base.model;
+  }
+  if (
+    draftChanges.followUpProvider !== undefined &&
+    draftChanges.followUpProvider !== (current.followUpProvider ?? current.provider)
+  ) {
+    if (draftChanges.followUpModel === undefined) delete base.followUpModel;
+  }
   const merged = checkedDraft({
-    ...draftOf(current),
+    ...base,
     ...Object.fromEntries(Object.entries(draftChanges).filter(([, v]) => v !== undefined)),
   });
   const changes: JobChanges = {};
   if (merged.name !== current.name) changes.name = merged.name;
   if (merged.instructions !== current.instructions) changes.instructions = merged.instructions;
   if (merged.provider !== current.provider) changes.provider = merged.provider;
+  if (merged.model !== current.model) changes.model = merged.model ?? null;
+  if (merged.followUpProvider !== current.followUpProvider) {
+    changes.followUpProvider = merged.followUpProvider ?? null;
+  }
+  if (merged.followUpModel !== current.followUpModel) {
+    changes.followUpModel = merged.followUpModel ?? null;
+  }
   if (!same(merged.schedule, current.schedule)) {
     changes.schedule = merged.schedule;
     if (current.state !== 'stopped') changes.nextRunAt = nextRunAfter(merged, ctx.now);

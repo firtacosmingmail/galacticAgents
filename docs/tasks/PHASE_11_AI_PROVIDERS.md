@@ -1,7 +1,7 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-08 · **Task status:** P11-08 in progress; P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
-**Phase status:** in progress (7/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
+**Current task:** P11-09 · **Task status:** P11-09 todo; P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
+**Phase status:** in progress (8/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -88,7 +88,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Acceptance:** a restart while waiting still retries at the reset time; nothing switches without the user.
 
 ### P11-08 — Brain tools and prompts
-- **Status:** in progress · **Depends on:** P11-07 · **Parallel with:** —
+- **Status:** done (2026-11-03) · **Depends on:** P11-07 · **Parallel with:** —
 - Plan Task 9: `providerNote`, `check_model`, `set_project_provider`, prompts and relays that carry providers.
 - **Acceptance:** an unavailable provider or model is refused with the list before any card is made.
 

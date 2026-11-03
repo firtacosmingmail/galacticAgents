@@ -20,6 +20,7 @@ import {
   type MergeConflict,
 } from '../../workspace/workspaces.js';
 import { isLive, refuseSetRow } from '../common-tools.js';
+import { checkChoice, modelInput, providerInput } from '../provider-input.js';
 import type { BrainTool, BrainToolContext } from '../definition.js';
 import {
   EXTERNAL_CONFLICT_OPTIONS,
@@ -131,6 +132,52 @@ const brief = (t: Task) => ({ taskId: t.id, description: t.description, state: t
 const plansOf = (ctx: BrainToolContext, projectId: Id) =>
   ctx.queries.proposals().filter((p) => proposalPlan(p)?.projectId === projectId);
 
+/** The provider, model and flags a task of a plan names (P11-08); each name is typed. */
+const PROVIDER_PROPERTIES = {
+  provider: {
+    enum: ['claude', 'chatgpt', 'gemini'],
+    description: 'The AI provider of its Steward; absent: the project default.',
+  },
+  model: {
+    type: 'string',
+    description: 'An exact model the user named; absent: the provider’s default. Needs provider.',
+  },
+  makesImages: { type: 'boolean', description: 'The task makes images.' },
+  publishes: {
+    type: 'boolean',
+    description: 'The task publishes (posts, uploads, deploys). Never on Gemini.',
+  },
+};
+
+/**
+ * The provider fields of one task as the model gave them, checked against the catalogue before
+ * anything is created: a refusal (an unknown model, a Gemini step that publishes, an image task
+ * on a text model) names the task and says why.
+ */
+async function providerOfTask(
+  ctx: BrainToolContext,
+  task: Input,
+  project: Project,
+  where: string,
+): Promise<Pick<PlanTaskInput, 'provider' | 'model' | 'makesImages' | 'publishes'>> {
+  const provider = providerInput(task, 'provider');
+  const model = modelInput(task, 'model');
+  const makesImages = task['makesImages'] === true;
+  const publishes = task['publishes'] === true;
+  const listed = await checkChoice(
+    ctx,
+    { provider: provider ?? (model === undefined ? project.defaultProvider : undefined), model },
+    { images: makesImages, publishes },
+    where,
+  );
+  return {
+    ...(provider ? { provider } : {}),
+    ...(listed ? { model: listed } : {}),
+    ...(makesImages ? { makesImages: true } : {}),
+    ...(publishes ? { publishes: true } : {}),
+  };
+}
+
 // -- plan_tasks ------------------------------------------------------------------------------------
 
 export const planTasksTool: BrainTool = {
@@ -155,6 +202,7 @@ export const planTasksTool: BrainTool = {
               items: { type: 'integer', minimum: 0 },
               description: 'Positions (0-based) of earlier tasks of this plan it must wait for.',
             },
+            ...PROVIDER_PROPERTIES,
           },
           ['description'],
         ),
@@ -170,21 +218,23 @@ export const planTasksTool: BrainTool = {
     if (!Array.isArray(tasks) || tasks.length === 0) {
       throw new DomainError('invalid', 'tasks must be a non-empty list');
     }
-    const planned: PlanTaskInput[] = tasks.map((t, i) => {
+    const planned: PlanTaskInput[] = [];
+    for (const [i, t] of tasks.entries()) {
       const task = asInput(t);
       const blockedBy = task['blockedBy'];
       if (blockedBy !== undefined && !Array.isArray(blockedBy)) {
         throw new DomainError('invalid', `tasks[${i}].blockedBy must be a list of positions`);
       }
       const priority = optPriority(task);
-      return {
+      planned.push({
         description: str(task, 'description'),
         ...(priority ? { priority } : {}),
         ...(Array.isArray(blockedBy) && blockedBy.length > 0
           ? { blockedBy: blockedBy as number[] }
           : {}),
-      };
-    });
+        ...(await providerOfTask(ctx, task, project, `task ${i + 1} of the plan: `)),
+      });
+    }
     const rationale = optStr(input, 'rationale');
     const { value } = await ctx.commands.proposePlan({
       projectId: project.id,
@@ -217,6 +267,7 @@ export const createTaskTool: BrainTool = {
         items: { type: 'string' },
         description: 'Task ids it waits for.',
       },
+      ...PROVIDER_PROPERTIES,
     },
     ['description'],
   ),
@@ -243,10 +294,12 @@ export const createTaskTool: BrainTool = {
     }
     for (const id of (blockedBy ?? []) as Id[]) taskOf(ctx, id);
     const priority = optPriority(input);
+    const providers = await providerOfTask(ctx, input, project, '');
     const { value } = await ctx.commands.createTask({
       description: str(input, 'description'),
       projectId: project.id,
       ...(priority ? { priority } : {}),
+      ...providers,
       ...(Array.isArray(blockedBy) && blockedBy.length > 0 ? { blockedBy: blockedBy as Id[] } : {}),
     });
     return { ...brief(value), blockedBy: value.blockedBy };

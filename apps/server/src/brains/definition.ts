@@ -16,6 +16,7 @@ import type {
   Task,
 } from '@galactic/protocol';
 import type { DeliverableService } from '../deliverables/service.js';
+import type { ProviderCatalog } from '../runtime/provider-catalog.js';
 import type { ChooseSteward } from '../runtime/steward-choice.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import type { Workspaces } from '../workspace/workspaces.js';
@@ -104,6 +105,11 @@ export interface BrainToolContext {
    * the live Settings). Absent: the resolver without Settings. Called at every Steward spawn.
    */
   chooseSteward?: ChooseSteward;
+  /**
+   * The provider catalogue (P11-08): `check_model` and every plan or job card check a provider
+   * choice against it before the card exists. Absent: no check.
+   */
+  catalog?: Pick<ProviderCatalog, 'check'>;
   /**
    * Agents' declarations (P9-04): the deliverable tools declare, remove and list through it.
    * Present when the server was composed with a data folder; absent, those tools refuse.

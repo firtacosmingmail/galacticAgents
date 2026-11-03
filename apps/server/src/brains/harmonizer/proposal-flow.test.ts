@@ -7,6 +7,7 @@ import { proposalLongTermOf, proposalParking, type Id } from '@galactic/protocol
 import { gitRunner } from '../../workspace/git.js';
 import { workspaceMeta } from '../../workspace/workspaces.js';
 import { brainHarness, type BrainHarness } from '../testing/index.js';
+import { providerFakes } from '../testing/provider-fakes.js';
 import { waykeeperDefinition } from '../waykeeper/index.js';
 import { HARMONIZER_SYSTEM_PROMPT, harmonizerBrain } from './index.js';
 
@@ -23,7 +24,9 @@ const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, { cwd, env: { ...process.env, ...GIT_ENV }, encoding: 'utf8' }).trim();
 
 const lives: { h: BrainHarness; tmp: string }[] = [];
+const fakeSets: ReturnType<typeof providerFakes>[] = [];
 afterEach(async () => {
+  for (const f of fakeSets.splice(0)) await f.dispose();
   for (const { h, tmp } of lives.splice(0)) {
     await h.dispose().catch(() => {});
     rmSync(tmp, { recursive: true, force: true });
@@ -31,11 +34,15 @@ afterEach(async () => {
 });
 
 function setup() {
+  const fakes = providerFakes();
+  fakeSets.push(fakes);
   const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-flow-')));
   for (const d of ['home', 'data', 'projects']) mkdirSync(join(tmp, d));
   const root = join(tmp, 'projects');
   const h = brainHarness({
+    adapters: fakes.adapters,
     compose: {
+      catalog: fakes.catalog,
       workspaces: {
         projectsRoot: root,
         dataDir: join(tmp, 'data'),
@@ -441,5 +448,176 @@ describe('the Harmonizer prompt (P10-06)', () => {
     ]) {
       expect(HARMONIZER_SYSTEM_PROMPT).toContain(line);
     }
+  });
+});
+
+describe('the Harmonizer carries providers (P11-08)', () => {
+  it('provider note travels to the Waykeeper', async () => {
+    const { h, definition } = setup();
+    const note = 'Gemini for the images, ChatGPT publishes';
+    const heard: string[] = [];
+    let proposed: { providerNote?: string } | undefined;
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('a shop', async (t) => {
+            proposed = await t.call('propose', {
+              type: 'new_project',
+              requestText: 'A shop, Gemini for the images, ChatGPT publishes',
+              name: 'Shop',
+              kind: 'planet',
+              rationale: 'a new application',
+              providerNote: note,
+            });
+          })
+          .once(approvedLine, async (t) => {
+            const proposalId = approvedLine.exec(t.prompt)![1]!;
+            const project = await t.call<{ projectId: Id }>('create_project', { proposalId });
+            await t.call('spawn_waykeeper', { projectId: project.projectId });
+          }),
+    });
+    hq.tell('a shop');
+    await h.settle();
+    expect(proposed?.providerNote).toBe(note);
+    const [card] = h.log.tables.proposals.all();
+    expect(card!.meta).toMatchObject({ providerNote: note });
+
+    // The Waykeeper is started by the Harmonizer; it hears the note as its first message.
+    h.script({ role: 'waykeeper' }).once(/Provider note on the approved request/, (t) => {
+      heard.push(t.prompt);
+    });
+    await h.commands.decideProposal(card!.id, { decision: 'approve' }, USER);
+    await h.done();
+    expect(heard).toHaveLength(1);
+    expect(heard[0]).toContain(note);
+  });
+
+  it('a provider note over 500 characters is refused before any card', async () => {
+    const { h, definition } = setup();
+    let refused: { ok: boolean } | undefined;
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s.once('a shop', async (t) => {
+          refused = await t.try('propose', {
+            type: 'new_project',
+            requestText: 'x',
+            name: 'Shop',
+            kind: 'planet',
+            rationale: 'r',
+            providerNote: 'x'.repeat(501),
+          });
+        }),
+    });
+    hq.tell('a shop');
+    await h.settle();
+    expect(refused).toMatchObject({ ok: false, error: 'invalid' });
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+  });
+
+  it('check_model reports a refusal', async () => {
+    const { h, definition } = setup();
+    const out: Record<string, unknown> = {};
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s.once('which', async (t) => {
+          out['loose'] = await t.call('check_model', {
+            provider: 'chatgpt',
+            model: 'GPT 5.6 terra',
+          });
+          out['unknown'] = await t.call('check_model', { provider: 'chatgpt', model: 'gpt-9' });
+          out['gemini'] = await t.call('check_model', { provider: 'gemini', publishes: true });
+          out['images'] = await t.call('check_model', { provider: 'claude', images: true });
+        }),
+    });
+    hq.tell('which');
+    await h.settle();
+    expect(out['loose']).toMatchObject({ ok: true, provider: 'chatgpt', model: 'gpt-5.6-terra' });
+    expect(out['unknown']).toMatchObject({ ok: false });
+    expect((out['unknown'] as { reason: string }).reason).toContain(
+      'ChatGPT has no model "gpt-9". Available: gpt-6-luna, gpt-5.6-terra',
+    );
+    expect((out['gemini'] as { reason: string }).reason).toContain('cannot publish');
+    expect((out['images'] as { reason: string }).reason).toContain('cannot make images');
+  });
+
+  it('set_project_provider changes the default', async () => {
+    const { h, root, definition } = setup();
+    const app = (await h.commands.createProject({ name: 'App', workspace: join(root, 'app') }))
+      .value;
+    let bad: { ok: boolean } | undefined;
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('chatgpt', async (t) => {
+            await t.call('set_project_provider', { projectId: app.id, provider: 'chatgpt' });
+          })
+          .once('nobody', async (t) => {
+            bad = await t.try('set_project_provider', { projectId: app.id, provider: 'bard' });
+          })
+          .once('clear', async (t) => {
+            await t.call('set_project_provider', { projectId: app.id, provider: null });
+          }),
+    });
+    hq.tell('chatgpt');
+    await h.settle();
+    expect(h.log.tables.projects.get(app.id)?.defaultProvider).toBe('chatgpt');
+    hq.tell('nobody');
+    await h.settle();
+    expect(bad).toMatchObject({ ok: false });
+    expect(h.log.tables.projects.get(app.id)?.defaultProvider).toBe('chatgpt');
+    hq.tell('clear');
+    await h.settle();
+    expect(h.log.tables.projects.get(app.id)?.defaultProvider).toBeUndefined();
+  });
+
+  it('relay_to_waykeeper adds the approved request’s provider note', async () => {
+    const { h, root, definition } = setup();
+    const app = (
+      await h.commands.createProject({
+        name: 'App',
+        workspace: join(root, 'app'),
+        meta: { proposalId: 'pr-note' },
+      })
+    ).value;
+    h.log.tables.proposals.insert({
+      id: 'pr-note',
+      requestText: 'App',
+      kind: 'planet',
+      proposedBody: { kind: 'planet', bodyId: app.bodyId, name: 'App' },
+      workspace: app.workspace,
+      rationale: '',
+      state: 'approved',
+      createdAt: app.createdAt,
+      updatedAt: app.createdAt,
+      meta: { providerNote: 'Gemini for the images' },
+    });
+    const heard: string[] = [];
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s.once('recurring', async (t) => {
+          await t.call('relay_to_waykeeper', { projectId: app.id, text: 'A daily job please.' });
+        }),
+    });
+    await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: app.id, supervisorId: hq.agentId },
+      { script: (s) => s.once(/daily job please/, (t) => void heard.push(t.prompt)) },
+    );
+    hq.tell('recurring');
+    await h.done();
+    expect(heard[0]).toContain('Provider note on the approved request: Gemini for the images');
+  });
+});
+
+describe('the Harmonizer prompt (P11-08)', () => {
+  it('says how to carry providers', () => {
+    expect(HARMONIZER_SYSTEM_PROMPT).toContain(
+      'When the user names an AI for part of the work ("use Gemini for the images", "ChatGPT publishes"), call check_model for each, tell the user at once if one is refused, and put what they said in providerNote. Gemini (Antigravity) never publishes. "Opus", "Sonnet", "Haiku" are Claude; GPT models are ChatGPT; Antigravity\'s Claude or GPT models only when the user says "through Antigravity".',
+    );
   });
 });

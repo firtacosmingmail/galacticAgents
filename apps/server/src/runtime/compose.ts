@@ -636,6 +636,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(workspaces ? { workspaces } : {}),
     ...(processes ? { processes } : {}),
     chooseSteward,
+    catalog,
     ...(deliverables ? { deliverables } : {}),
     ...extra,
     ...(opts.onError ? { onError: opts.onError } : {}),
