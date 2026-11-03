@@ -85,6 +85,8 @@ interface BootOptions {
   scenario?: (spawn: SpawnOptions) => FakeScenario;
   timers?: Timers;
   intervalMs?: number;
+  /** Fake adapters registered as the providers' runtimes (no Steward runtime override then). */
+  providers?: FakeAdapter[];
 }
 
 function boot(o: BootOptions = {}) {
@@ -97,11 +99,11 @@ function boot(o: BootOptions = {}) {
     scenarioFor: (spawn) => ({ name: 'job', scenario: o.scenario?.(spawn) ?? ECHO }),
   });
   const c = composeRuntime(db, {
-    adapters: [adapter],
+    adapters: [adapter, ...(o.providers ?? [])],
     log: { now: clock },
     flushMs: 10,
     ...(o.caps ? { caps: o.caps } : {}),
-    stewardRuntimeOverride: () => 'fake',
+    ...(o.providers ? {} : { stewardRuntimeOverride: () => 'fake' as const }),
     jobs: {
       ...(o.timers ? { timers: o.timers } : {}),
       ...(o.intervalMs ? { intervalMs: o.intervalMs } : {}),
@@ -721,6 +723,100 @@ describe('job scheduler (P10-04)', () => {
     );
     expect(decided).toMatchObject({ decision: 'deny' });
     expect(decided?.ruleId).toBeUndefined();
+  });
+
+  it('publish follow-up runs on the follow-up provider without unattended rules', async () => {
+    const curl = {
+      kind: 'tool_call',
+      toolName: 'Bash',
+      input: { command: 'curl api.myapp.com' },
+    } as const;
+    const spawned: SpawnOptions[] = [];
+    const codex = new FakeAdapter({
+      speed: 0,
+      runtime: 'codex',
+      canPublish: true,
+      scenarioFor: (spawn) => {
+        spawned.push(spawn);
+        return { name: 'publish', scenario: { steps: [curl, curl, ...ASKS.steps] } };
+      },
+    });
+    const agy = new FakeAdapter({ speed: 0, runtime: 'agy', canPublish: false });
+    const { c, clock } = boot({ providers: [codex, agy] });
+    const { job } = await longTermJob(c, {
+      provider: 'gemini',
+      unattendedRules: [
+        {
+          scope: 'prefix',
+          tool: 'Bash',
+          match: { kind: 'words', words: ['curl', 'api.myapp.com'] },
+          categories: ['network'],
+          label: 'curl api.myapp.com …',
+        },
+      ],
+    });
+    const base = { platform: 'X', account: '@shop', text: 'We launched!', files: [] };
+    const followUp = {
+      questionId: 'q-publish',
+      kind: 'publish' as const,
+      publish: { ...base, fingerprint: 'a'.repeat(64), jobId: job.id },
+    };
+    // The job's follow-up provider (the job card sets it; written here directly).
+    c.log.runCommand((ctx) =>
+      writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp], followUpProvider: 'chatgpt' }),
+    );
+    setTo(clock, oct(1, 8, 30));
+    await c.jobs.tick();
+    const run = runsOf(c, job.id)[0]!;
+    expect(run).toMatchObject({ purpose: 'follow_up', followUp });
+    expect(stewardsOf(c, job.taskId)[0]?.runtime).toBe('codex');
+    expect(spawned).toHaveLength(1);
+    const stewardId = run.agentId!;
+    // The approved publish lets one network call through; the next one asks: the job's
+    // unattended rule (which would allow every such call) is not applied to a publishing run.
+    await until(
+      () =>
+        c.log.tables.questions
+          .all()
+          .some((q) => q.kind === 'permission' && q.originAgentId === stewardId),
+      'the second call to ask',
+    );
+    const decided = events(c).filter(
+      (e): e is Extract<Event, { type: 'permission.decided' }> =>
+        e.type === 'permission.decided' && e.agentId === stewardId,
+    );
+    expect(decided).toHaveLength(1);
+    expect(decided[0]).toMatchObject({ decision: 'allow' });
+    expect(decided[0]!.ruleId).toBeUndefined();
+  });
+
+  it('publish follow-up refused on Gemini', async () => {
+    const agy = new FakeAdapter({ speed: 0, runtime: 'agy', canPublish: false });
+    const { c, clock } = boot({ providers: [agy] });
+    const { job } = await longTermJob(c, { provider: 'gemini' });
+    const base = { platform: 'X', account: '@shop', text: 'We launched!', files: [] };
+    const followUp = {
+      questionId: 'q-publish',
+      kind: 'publish' as const,
+      publish: { ...base, fingerprint: 'a'.repeat(64), jobId: job.id },
+    };
+    c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp] }));
+    setTo(clock, oct(1, 8, 30));
+    const report = await c.jobs.tick();
+    const run = runsOf(c, job.id)[0]!;
+    expect(report).toMatchObject({ started: [run.id], ended: [run.id] });
+    expect(run).toMatchObject({ outcome: 'failed', purpose: 'follow_up' });
+    expect(stewardsOf(c, job.taskId)).toEqual([]);
+    const paused = jobNow(c, job.id);
+    expect(paused.state).toBe('paused');
+    expect(paused.pausedReason).toBe('Gemini cannot publish');
+    const failures = c.log.tables.questions
+      .all()
+      .filter((q) => q.context.jobFailure?.jobId === job.id);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]!.context.jobFailure!.reason).toBe('Gemini cannot publish');
+    // The approved publish waits on the job for the retry, on a provider that can publish.
+    expect(paused.followUps).toEqual([followUp]);
   });
 
   it('dispose() stops the timer', async () => {

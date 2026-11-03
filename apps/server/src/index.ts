@@ -127,6 +127,8 @@ for (const take of launches.taken) {
 const jobScripts = config.dev ? new HarnessJobScripts() : undefined;
 const fake = new FakeAdapter({
   commands: DEV_FAKE_COMMANDS,
+  // The fake runtime stands in for Claude Code in development: it may carry a publish (P11-06).
+  canPublish: true,
   ...(jobScripts ? { scenarioFor: (opts) => jobScripts.scenarioFor(opts) } : {}),
 });
 // The port the server listens on (known after `listen()`; recovery may start an agy turn before:
@@ -505,7 +507,14 @@ const app = buildApp({
     }),
     // A job's run now, its Steward following a test's script, and a scheduler tick (P10-08).
     ...(jobScripts
-      ? { jobs: harnessJobs({ log, scheduler: composed.jobs, scripts: jobScripts }) }
+      ? {
+          jobs: harnessJobs({
+            log,
+            scheduler: composed.jobs,
+            scripts: jobScripts,
+            commands: composed.commands,
+          }),
+        }
       : {}),
     ...(composed.deliverables
       ? {

@@ -3,6 +3,8 @@ import { DEFAULT_PERMISSION_POLICY, RuntimesInfo, type Event } from '@galactic/p
 import { originOfMessages } from '../domain/permissions.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { openDatabase } from '../db/database.js';
+import { createAgent } from '../domain/agents.js';
+import { createTask } from '../domain/tasks.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { startTestApp, TEST_TOKEN } from '../test/harness.js';
 import { projectHierarchy } from '../test/hierarchy.js';
@@ -414,5 +416,53 @@ describe('the remote floor on every policy write (P2-21)', () => {
     await commands.updateProject(project.id, { permissionPolicy: null }, { origin: 'local' });
     await brainWrite(sent());
     expect(policyOf(project.id)).toEqual(DEFAULT_PERMISSION_POLICY);
+  });
+});
+
+describe('publish approvals over HTTP (P11-06)', () => {
+  it('agent process cannot answer publish', async () => {
+    const guarded = await startTestApp({
+      log: composed.log,
+      statuses: composed.statuses,
+      transcripts: composed.transcripts,
+      runtime: composed.runtime,
+      commands: composed.commands,
+      answersPeer: async () => ({ refused: 'from an agent' }),
+    });
+    try {
+      const project = (await composed.commands.createProject({ name: 'App', workspace: '/w/app' }))
+        .value;
+      const steward = composed.log.runCommand((ctx) => {
+        const task = createTask(ctx, {
+          projectId: project.id,
+          description: 'Post it',
+          publishes: true,
+        });
+        return createAgent(ctx, {
+          role: 'steward',
+          runtime: 'fake',
+          caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+          taskId: task.id,
+        });
+      }).value;
+      const { questionId } = (
+        await composed.commands.requestPublish({
+          originAgentId: steward.id,
+          platform: 'X',
+          account: '@app',
+          text: 'Hello',
+        })
+      ).value;
+      const res = await fetch(`${guarded.baseUrl}/api/questions/${questionId}/answer`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TEST_TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ answer: 'Approve' }),
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ error: 'agent_peer' });
+      expect(composed.log.tables.questions.get(questionId)?.status).toBe('open');
+    } finally {
+      await guarded.stop();
+    }
   });
 });

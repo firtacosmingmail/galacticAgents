@@ -164,8 +164,8 @@ export const answerQuestionTool: BrainTool = {
   description:
     'Answers a clarification question you hold, when the approved plan or the project context ' +
     'already contains the answer (decision 12). The answer is logged as yours and the user sees ' +
-    'it. Never for permission questions or spend approvals: those belong to the policy or the ' +
-    'user (a spend to the user alone). Pass the version ' +
+    'it. Never for permission questions or spend or publish approvals: those belong to the ' +
+    'policy or the user (a spend or a publish to the user alone). Pass the version ' +
     'you saw; if someone answered first you are told who.',
   inputSchema: obj(
     {
@@ -192,6 +192,12 @@ export const answerQuestionTool: BrainTool = {
       throw new DomainError(
         'invalid',
         `${questionId} is a spend approval: the user answers spend approvals (decision 145)`,
+      );
+    }
+    if (question.kind === 'publish') {
+      throw new DomainError(
+        'invalid',
+        `${questionId} is a publish approval: the user answers publish approvals (decision 147)`,
       );
     }
     const holdsIt = question.holder.type === 'agent' && question.holder.id === ctx.brainId;

@@ -14,10 +14,11 @@ import { RunOutput } from '../deliverables/run-output.js';
 import { RunService, type RunServiceOptions, type RunSupervisor } from '../deliverables/runs.js';
 import { DeliverableService } from '../deliverables/service.js';
 import { stewardDeliverableTools } from '../brains/deliverable-tools.js';
-import { SpendRelay, stewardJobTools } from '../brains/job-tools.js';
+import { PublishRelay, SpendRelay, stewardJobTools } from '../brains/job-tools.js';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
+import { folderOfAgent } from '../domain/publish.js';
 import { livingFromStatuses, logRouting } from '../domain/question-service.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import {
@@ -34,6 +35,7 @@ import { BudgetWatcher } from './budgets.js';
 import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
 import { JobScheduler } from './job-scheduler.js';
 import { ProviderCatalog } from './provider-catalog.js';
+import { PublishAllowanceStore } from './publish-allowance.js';
 import { stewardChooser } from './steward-choice.js';
 import { StorageMonitor } from './storage-health.js';
 import { StatusStore } from './status-store.js';
@@ -202,6 +204,8 @@ export interface ComposedRuntime {
   transcriptRetention: TranscriptRetention;
   /** The job scheduler (P10-04); its timer runs when composed with an interval or started. */
   jobs: JobScheduler;
+  /** The one-shot allowances approved publishes arm (P11-06). */
+  publishAllowances: PublishAllowanceStore;
   /** A Steward's processes: list, stop, sweep (P4-14), when composed with `processes`. */
   processes?: StewardProcesses;
   /** Budget notices and the Harmonizer's chat lines about them (P8-01). */
@@ -355,12 +359,15 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     defaults: () => catalog.defaults(),
     ...(opts.stewardRuntimeOverride ? { override: opts.stewardRuntimeOverride } : {}),
   });
+  // The one-shot allowances approved publishes arm (P11-06): every gate consults them.
+  const publishAllowances = new PublishAllowanceStore();
   const runtime: AgentRuntime = new AgentRuntime({
     log,
     questions,
     adapters,
     transcripts,
     statuses,
+    publishAllowances,
     caps: { ...(opts.caps ?? {}), defaults: defaultCaps },
     ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
     ...(opts.now ? { now: opts.now } : {}),
@@ -581,6 +588,16 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
   spendRelay.start();
+  // A task Steward hears its publish answer as one message; an approval arms its allowance (P11-06).
+  const publishRelay = new PublishRelay({
+    log,
+    runtime,
+    allowances: publishAllowances,
+    worktreeOf: (agentId) =>
+      runtime.permissionContext(agentId)?.ctx.cwd ?? folderOfAgent(log, agentId),
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
+  publishRelay.start();
 
   const runners = new Map<Id, BrainRunner>();
   const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
@@ -639,6 +656,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     archival,
     transcriptRetention,
     jobs,
+    publishAllowances,
     ...(processes ? { processes } : {}),
     budgets,
     ...(deliverables ? { deliverables } : {}),
@@ -735,6 +753,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       detection?.dispose();
       budgets.stop();
       spendRelay.stop();
+      publishRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       jobs.dispose();
       archival.stop();
@@ -757,6 +776,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       detection?.dispose();
       budgets.stop();
       spendRelay.stop();
+      publishRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       jobs.dispose();
       archival.stop();

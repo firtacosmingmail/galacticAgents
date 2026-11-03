@@ -24,6 +24,7 @@ import type { Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { jobOf, setJobState, writeJob } from './jobs.js';
+import { applyPublish } from './publish.js';
 import { originOf, type QuestionRouting } from './question-service.js';
 import { COMMAND_SOURCE, openQuestion } from './questions.js';
 import { FINISHED_WORK } from './states.js';
@@ -66,7 +67,7 @@ function isRunSteward(agent: Agent, run: JobRun, job: Job): boolean {
 }
 
 /** The job, refused when it was stopped: a stopped job's run brings nothing more to the user. */
-function unstoppedJob(ctx: Reader, jobId: Id, what: string): Job {
+export function unstoppedJob(ctx: Reader, jobId: Id, what: string): Job {
   const job = jobOf(ctx, jobId);
   if (job.state === 'stopped') {
     throw new DomainError('invalid', `job ${job.name} is stopped; ${what}`);
@@ -142,11 +143,11 @@ export function openFinding(
 }
 
 /**
- * The job run a spend belongs to: the one `runId` names (its Steward must be the asker), else the
- * running run of the job whose hidden task the asker works on — a job-run Steward's spend is
- * always job-owned. `undefined` for any other agent (a task Steward's spend).
+ * The job run a spend (or a publish, P11-06) belongs to: the one `runId` names (its Steward must
+ * be the asker), else the running run of the job whose hidden task the asker works on — a job-run
+ * Steward's spend is always job-owned. `undefined` for any other agent (a task Steward's spend).
  */
-function spendRun(ctx: Reader, agent: Agent, runId: Id | undefined): JobRun | undefined {
+export function askerRun(ctx: Reader, agent: Agent, runId: Id | undefined): JobRun | undefined {
   if (runId !== undefined) {
     const run = runOf(ctx, runId);
     if (!isRunSteward(agent, run, jobOf(ctx, run.jobId))) {
@@ -194,7 +195,7 @@ export function requestSpend(
   if (!/^[A-Z]{3}$/.test(currency)) {
     throw new DomainError('invalid', `"${input.currency}" is not a three-letter currency code`);
   }
-  const run = spendRun(ctx, agent, input.runId);
+  const run = askerRun(ctx, agent, input.runId);
   if (run) unstoppedJob(ctx, run.jobId, 'it spends nothing more');
   const spend = SpendContext.safeParse({
     amount: input.amount,
@@ -438,8 +439,9 @@ function applyFailure(ctx: CommandContext, q: Question): void {
 
 /**
  * Carries out the action of a job-owned question `q` just answered, in the answer's transaction
- * (a refusal rolls the answer back with it). A task Steward's spend is not job-owned: its answer
- * is recorded only.
+ * (a refusal rolls the answer back with it): a finding's, a failure notice's, a job spend's or a
+ * job publish's (P11-06). A task Steward's spend or publish is not job-owned: its answer is
+ * recorded only (its Steward hears it through `SpendRelay` / `PublishRelay`).
  */
 export interface JobAnswerOptions {
   /** Whether an agent still runs (the question routing's): "Implement it" prefers a living Waykeeper. */
@@ -455,4 +457,5 @@ export function applyJobAnswer(
   if (q.context.finding) applyFinding(ctx, q, opts);
   else if (q.context.jobFailure) applyFailure(ctx, q);
   else if (q.kind === 'spend') applySpend(ctx, q);
+  else if (q.kind === 'publish') applyPublish(ctx, q);
 }

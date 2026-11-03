@@ -537,8 +537,9 @@ export function registerAgentRoutes(
      * permission request from an agent's or a run's process is refused (403 `agent_peer`, review
      * S4: the speed bump of `answersPeer`); a clarification may be answered from anywhere. A
      * `spend` approval (P10-05, decision 145) follows the permission rule exactly: the same speed
-     * bump, and a remote client may answer it (decision 90). `detail` carries a structured answer
-     * (a reply finding's edited text).
+     * bump, and a remote client may answer it (decision 90); a `publish` approval (P11-06,
+     * decision 147) likewise. `detail` carries a structured answer (a reply finding's or a
+     * publish's edited text).
      */
     app.post('/api/questions/:id/answer', async (req, reply) => {
       const body = parse(AnswerBody, req.body, reply);
@@ -546,7 +547,7 @@ export function registerAgentRoutes(
       const questionId = (req.params as { id: string }).id;
       const kind = log.tables.questions.get(questionId)?.kind;
       if (
-        (kind === 'permission' || kind === 'spend') &&
+        (kind === 'permission' || kind === 'spend' || kind === 'publish') &&
         !(await notFromAnAgent(opts.answersPeer, 'answer', req, reply))
       ) {
         return reply;

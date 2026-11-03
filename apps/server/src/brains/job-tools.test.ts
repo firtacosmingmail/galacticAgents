@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   FINDING_ACTIONS,
+  PUBLISH_ACTIONS,
   SPEND_ACTIONS,
   isJobOwned,
   type Actor,
@@ -17,7 +18,7 @@ import { createTask } from '../domain/tasks.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { tickingClock } from '../test/world.js';
 import { JOB_TOOL_NAMES, SpendRelay, stewardJobTools } from './job-tools.js';
-import { spendEtiquette, stewardEtiquette } from './steward-prompt.js';
+import { publishEtiquette, spendEtiquette, stewardEtiquette } from './steward-prompt.js';
 
 /**
  * P10-05 (plan Task 9) — the Steward's job and spend tools with the fake runtime (which serves the
@@ -129,14 +130,18 @@ const tools = (b: ReturnType<typeof boot>, id: string, taskId: string) =>
   stewardJobTools(b.c.commands, b.c.log.tables, { id, taskId });
 
 /** A project task's Steward, spawned on the fake runtime. */
-async function taskSteward(b: ReturnType<typeof boot>) {
+async function taskSteward(b: ReturnType<typeof boot>, opts: { publishes?: boolean } = {}) {
   const { c } = b;
   const project = (await c.commands.createProject({ name: 'App', workspace: '/w/app' })).value;
   const wk = c.log.runCommand((ctx) =>
     createAgent(ctx, { role: 'waykeeper', runtime: 'fake', caps: CAPS, projectId: project.id }),
   ).value;
   const task = c.log.runCommand((ctx) =>
-    createTask(ctx, { projectId: project.id, description: 'Launch the ad' }),
+    createTask(ctx, {
+      projectId: project.id,
+      description: 'Launch the ad',
+      ...(opts.publishes ? { publishes: true } : {}),
+    }),
   ).value;
   const steward = (
     await c.commands.spawnAgent({
@@ -153,19 +158,20 @@ async function taskSteward(b: ReturnType<typeof boot>) {
 }
 
 describe('Steward job and spend tools (P10-05)', () => {
-  it('a task Steward gets request_spend only, beside its deliverable tools', async () => {
+  it('a task Steward gets request_spend and request_publish, beside its deliverable tools', async () => {
     const b = boot();
     const { steward, tools } = await taskSteward(b);
-    expect(names(tools)).toEqual(['request_spend']);
+    expect(names(tools)).toEqual(['request_spend', 'request_publish']);
     expect(names(stewardJobTools(b.c.commands, b.c.log.tables, steward))).toEqual([
       'request_spend',
+      'request_publish',
     ]);
   });
 
-  it('a job-run Steward gets request_spend, report_finding and report_run', async () => {
+  it('a job-run Steward gets request_spend, request_publish, report_finding and report_run', async () => {
     const b = boot(() => ASKS);
     const { tools } = await jobRun(b);
-    expect(names(tools)).toEqual(['request_spend', ...JOB_TOOL_NAMES]);
+    expect(names(tools)).toEqual(['request_spend', 'request_publish', ...JOB_TOOL_NAMES]);
   });
 
   it('request_spend in a follow-up spend run: the approved spend is not asked again (final review I4)', async () => {
@@ -192,14 +198,13 @@ describe('Steward job and spend tools (P10-05)', () => {
     expect(desc).not.toContain('this run does not spend');
   });
 
-  it('report_finding opens a user-held, job-owned question with the fixed actions and the draft', async () => {
+  it('report_finding opens a user-held, job-owned question with the fixed actions', async () => {
     const b = boot(() => ASKS);
     const { job, run, stewardId, tools } = await jobRun(b);
     const out = (await tool(tools, 'report_finding').handler({
-      kind: 'reply',
-      title: 'Answer the refund review',
-      text: 'A customer asks about refunds.',
-      draft: 'Hi! Refunds take three days.',
+      kind: 'suggestion',
+      title: 'Add refunds to the FAQ',
+      text: 'Three customers asked about refunds.',
     })) as { questionId: string };
     const q = b.c.log.tables.questions.get(out.questionId)!;
     expect(q).toMatchObject({
@@ -209,18 +214,44 @@ describe('Steward job and spend tools (P10-05)', () => {
       holder: USER,
     });
     expect(isJobOwned(q)).toBe(true);
-    expect(q.context.options).toEqual([...FINDING_ACTIONS.reply]);
+    expect(q.context.options).toEqual([...FINDING_ACTIONS.suggestion]);
     expect(q.context.finding).toMatchObject({
       jobId: job.id,
       runId: run.id,
-      kind: 'reply',
-      title: 'Answer the refund review',
-      draft: 'Hi! Refunds take three days.',
+      kind: 'suggestion',
+      title: 'Add refunds to the FAQ',
     });
     // A refusal is the tool's result, never a crash.
     expect(
-      await tool(tools, 'report_finding').handler({ kind: 'reply', title: 'x', text: 'y' }),
+      await tool(tools, 'report_finding').handler({ kind: 'idea', title: 'x', text: 'y' }),
     ).toMatchObject({ error: 'invalid' });
+  });
+
+  it('report_finding no longer offers a reply: a reply is a publish approval (P11-06)', async () => {
+    const b = boot(() => ASKS);
+    const { job, run, stewardId, tools } = await jobRun(b);
+    const finding = tool(tools, 'report_finding');
+    expect(
+      (finding.inputSchema as { properties: { kind: { enum: string[] } } }).properties.kind.enum,
+    ).toEqual(['suggestion']);
+    const refused = await finding.handler({
+      kind: 'reply',
+      title: 'Answer the refund review',
+      text: 'A customer asks about refunds.',
+      draft: 'Hi! Refunds take three days.',
+    });
+    expect(refused).toMatchObject({ error: 'invalid' });
+    expect((refused as { message: string }).message).toContain('request_publish');
+    const out = (await tool(tools, 'request_publish').handler({
+      platform: 'App Store',
+      account: 'My Shop',
+      text: 'Hi! Refunds take three days.',
+    })) as { questionId: string; note: string };
+    expect(out.note).toMatch(/^Asked Cosmin\. End your turn now; a later run publishes it/);
+    const q = b.c.log.tables.questions.get(out.questionId)!;
+    expect(q).toMatchObject({ kind: 'publish', holder: USER, originAgentId: stewardId });
+    expect(q.context.publish).toMatchObject({ jobId: job.id, runId: run.id });
+    expect(q.context.options).toEqual([...PUBLISH_ACTIONS]);
   });
 
   it('refuses the 21st finding of a run', async () => {
@@ -385,6 +416,81 @@ describe('Steward job and spend tools (P10-05)', () => {
     await b.c.commands.answerQuestion({ questionId: q.id, answer: 'Approve', by: USER });
     expect(messages(b.c).slice(mark)).toEqual([]);
     expect(b.c.log.tables.jobs.get(job.id)?.followUps).toHaveLength(1);
+  });
+});
+
+describe('publish approvals for a task Steward (P11-06)', () => {
+  it('its publish answer reaches it as one system message, and an approval arms the allowance', async () => {
+    const b = boot();
+    const { steward, tools } = await taskSteward(b, { publishes: true });
+    await until(() => b.c.statuses.get(steward.id)?.state === 'idle', 'the Steward to idle');
+    const out = (await tool(tools, 'request_publish').handler({
+      platform: 'Instagram',
+      account: '@myshop',
+      text: 'We launched!',
+    })) as { questionId: string; note: string };
+    expect(out.note).toMatch(/^Asked Cosmin\. End your turn now; his answer comes to you/);
+    const before = messages(b.c).length;
+    await b.c.commands.answerQuestion({ questionId: out.questionId, answer: 'Approve', by: USER });
+    expect(
+      messages(b.c)
+        .slice(before)
+        .map((m) => [m.agentId, m.sender, m.text]),
+    ).toEqual([[steward.id, { type: 'system' }, 'Publish approval for Instagram: approved']]);
+    expect(b.c.publishAllowances.isArmed(steward.id)).toBe(true);
+
+    const second = (await tool(tools, 'request_publish').handler({
+      platform: 'X',
+      account: '@myshop',
+      text: 'Draft',
+    })) as { questionId: string };
+    const mark = messages(b.c).length;
+    await b.c.commands.answerQuestion({
+      questionId: second.questionId,
+      answer: 'Approve',
+      by: USER,
+      detail: { choices: ['Approve'], text: 'Final words' },
+    });
+    expect(
+      messages(b.c)
+        .slice(mark)
+        .map((m) => m.text),
+    ).toEqual(['Publish approval for X: approved. Publish exactly this text:\nFinal words']);
+
+    const third = (await tool(tools, 'request_publish').handler({
+      platform: 'X',
+      account: '@myshop',
+      text: 'Another',
+    })) as { questionId: string };
+    const last = messages(b.c).length;
+    await b.c.commands.answerQuestion({ questionId: third.questionId, answer: 'Refuse', by: USER });
+    expect(
+      messages(b.c)
+        .slice(last)
+        .map((m) => m.text),
+    ).toEqual(['Publish approval for X: refused']);
+    // Its end disarms it.
+    await b.c.runtime.stop(steward.id, USER);
+    expect(b.c.publishAllowances.isArmed(steward.id)).toBe(false);
+    expect(b.errors).toEqual([]);
+  });
+
+  it('a task that is not a publishing step is refused, as the tool result', async () => {
+    const b = boot();
+    const { tools } = await taskSteward(b);
+    expect(
+      await tool(tools, 'request_publish').handler({ platform: 'X', account: '@a', text: 'Hi' }),
+    ).toMatchObject({
+      error: 'invalid',
+      message: 'this task is not a publishing step; ask your Waykeeper',
+    });
+  });
+
+  it('the Steward prompt names request_publish; one without server tools never publishes', () => {
+    expect(stewardEtiquette({ supervisor: 'waykeeper' }).join('\n')).toContain('request_publish');
+    const cannot = stewardEtiquette({ supervisor: 'harmonizer', declares: false }).join('\n');
+    expect(cannot).not.toContain('request_publish');
+    expect(publishEtiquette(false).join('\n')).toContain('never publish');
   });
 });
 

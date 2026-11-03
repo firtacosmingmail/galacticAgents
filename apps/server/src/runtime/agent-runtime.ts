@@ -20,6 +20,7 @@ import {
   type PermissionAction,
   type PermissionPolicy,
   type PermissionRule,
+  type PublishContext,
   type RequestOrigin,
   type ReplyQuote,
   type SlashCommand,
@@ -60,6 +61,7 @@ import {
   type SpawnCheck,
 } from './caps.js';
 import { aliasesOf, createPermissionGate, type RuntimeGate } from './permission-gate.js';
+import type { PublishAllowanceStore } from './publish-allowance.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
 import { providerOf } from './steward-choice.js';
@@ -131,6 +133,12 @@ export interface AgentRuntimeOptions {
   caps?: CapsConfig;
   /** Delivered messages kept per inbox for inspection; the log has the full history. */
   inboxHistory?: number;
+  /**
+   * The one-shot allowances approved publishes arm (P11-06): every gate consults it where its
+   * table asks; a publish follow-up run's Steward is armed at its start, any agent disarmed at
+   * its end. Absent: no allowance.
+   */
+  publishAllowances?: PublishAllowanceStore;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
   /** Question routing (P2-03); default: the log, with liveness from `statuses`. */
@@ -191,6 +199,9 @@ function isPermanentStorageFailure(error: unknown): boolean {
     PERMANENT_STORAGE.some((c) => code === c || code.startsWith(`${c}_`))
   );
 }
+
+/** `permission.decided.reason` of the one call an approved publish let through (P11-06). */
+const APPROVED_PUBLISH = 'allowed once: the publish Cosmin approved';
 
 const TERMINAL = new Set<AgentEvent['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
 type Terminal = 'agent.finished' | 'agent.failed' | 'agent.stopped' | 'agent.interrupted';
@@ -631,6 +642,10 @@ export class AgentRuntime {
   ): Promise<SpawnResult> {
     const caps = agent.caps;
     const tools = this.toolsOf(agent, req);
+    const allowances = this.opts.publishAllowances;
+    // A follow-up run that publishes what the user approved: its one call is let through (P11-06).
+    const approved = this.publishFollowUpOf(agent.id, req);
+    if (allowances && approved) allowances.arm(agent.id, approved, req.cwd);
     // Registered before the adapter runs: whatever it emits before the handle comes back is
     // buffered and routed after `agent.spawned`, and counts against the caps from the start.
     // The project's table as of each check (P2-04): a changed policy applies to the next call.
@@ -646,6 +661,24 @@ export class AgentRuntime {
       rules: () => this.rulesOf(agent.id, req),
       onRuleAllow: (call, ruleId, action) =>
         this.permissionDecided(live, { toolCall: call, decision: 'allow', action, ruleId }),
+      ...(allowances
+        ? {
+            allowOnce: (call, verdict, categories) =>
+              allowances.check(
+                agent.id,
+                call,
+                categories ??
+                  (verdict.decision === 'ask' && verdict.action ? [verdict.action] : []),
+              ) === 'allow',
+            onAllowOnce: (call, action) =>
+              this.permissionDecided(live, {
+                toolCall: call,
+                decision: 'allow',
+                action,
+                reason: APPROVED_PUBLISH,
+              }),
+          }
+        : {}),
       ...(tools ? { serverTools: tools.map((t) => t.name) } : {}),
       onDeny: (call, verdict, action) =>
         this.permissionDecided(live, {
@@ -1783,11 +1816,38 @@ export class AgentRuntime {
     const projectId = this.projectIdOf(agentId, req);
     const rules =
       (projectId ? this.opts.log.tables.projects.get(projectId)?.permissionRules : undefined) ?? [];
+    // A publishing run asks for every outward call (P11-06, decision 147): no unattended rules.
+    if (this.isPublishingRun(agentId, req)) return rules;
     const job = this.jobOfRun(agentId, req);
     if (!job || !projectId || job.unattendedRules.length === 0) return rules;
     // A job's run Steward also works under the job's unattended rules (P10-04, decision 144):
     // rule-shaped, so the gate never lets one override a deny or allow a push.
     return [...rules, ...unattendedPermissionRules(job, projectId)];
+  }
+
+  /**
+   * The approved publish a job's follow-up run carries out (P11-06), when this Steward is that
+   * run's: its job's running run is a `publish` follow-up.
+   */
+  private publishFollowUpOf(agentId: Id, req?: SpawnRequest): PublishContext | undefined {
+    const job = this.jobOfRun(agentId, req);
+    const run = job?.runningRunId ? this.opts.log.tables.jobRuns.get(job.runningRunId) : undefined;
+    return run?.followUp?.kind === 'publish' ? run.followUp.publish : undefined;
+  }
+
+  /**
+   * A publishing run (P11-06): a job's follow-up run that publishes, or the Steward of a task
+   * that is a publishing step (`task.publishes`).
+   */
+  private isPublishingRun(agentId: Id, req?: SpawnRequest): boolean {
+    const { tables } = this.opts.log;
+    const agent = tables.agents.get(agentId);
+    if ((agent?.role ?? req?.role) !== 'steward') return false;
+    const taskId = agent?.taskId ?? req?.taskId;
+    if (taskId && tables.tasks.get(taskId)?.publishes) return true;
+    const job = this.jobOfRun(agentId, req);
+    const run = job?.runningRunId ? tables.jobRuns.get(job.runningRunId) : undefined;
+    return run?.followUp?.kind === 'publish';
   }
 
   /** The job whose run this Steward is (its task is the job's hidden task), if any. */
@@ -1839,7 +1899,7 @@ export class AgentRuntime {
   ): boolean {
     const call = raw.question.toolCall;
     if (!call) return false;
-    const { verdict, action, ruleId } = live.gate.decide(call);
+    const { verdict, action, ruleId, allowedOnce } = live.gate.decide(call);
     if (verdict.decision === 'ask') {
       // The card shows the category the policy asks about when the adapter did not name one.
       const asked = verdict.action ?? action;
@@ -1853,6 +1913,7 @@ export class AgentRuntime {
         decision: verdict.decision,
         action,
         ...(verdict.decision === 'deny' ? { reason: verdict.reason } : {}),
+        ...(allowedOnce ? { reason: APPROVED_PUBLISH } : {}),
         ...(ruleId ? { ruleId } : {}),
       },
       event.questionId,
@@ -2399,6 +2460,7 @@ export class AgentRuntime {
     for (const q of live.questions) this.byQuestion.delete(q);
     live.questions.clear();
     this.caps.release(live.agent.id);
+    this.opts.publishAllowances?.disarm(live.agent.id);
     // The log and the status store keep the history; the runtime forgets the session.
     this.live.delete(live.agent.id);
     this.folderCandidates.delete(live.agent.id);

@@ -1,0 +1,112 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  DEFAULT_PERMISSION_POLICY,
+  publishFingerprint,
+  type PublishContext,
+  type ToolCall,
+} from '@galactic/protocol';
+import { sha256 } from '../domain/publish.js';
+import { CapsEnforcer } from './caps.js';
+import { createPermissionGate } from './permission-gate.js';
+import { PUBLISH_ALLOWANCE_TTL_MS, PublishAllowanceStore } from './publish-allowance.js';
+
+/**
+ * P11-06 (plan Task 7) — the one-shot allowance an approved publish arms: the run's next call the
+ * policy asks about for the network goes through once, as long as every approved file is still
+ * the file that was approved; it expires after 30 minutes and never turns a deny into an allow.
+ */
+
+const folders: string[] = [];
+const enforcers: CapsEnforcer[] = [];
+afterEach(() => {
+  for (const f of folders.splice(0)) rmSync(f, { recursive: true, force: true });
+  for (const c of enforcers.splice(0)) c.dispose();
+});
+
+const CURL: ToolCall = { toolName: 'Bash', input: { command: 'curl -X POST https://api.x.com' } };
+
+function setup(policy = DEFAULT_PERMISSION_POLICY) {
+  const worktree = mkdtempSync(join(tmpdir(), 'galactic-allowance-'));
+  folders.push(worktree);
+  writeFileSync(join(worktree, 'post.png'), 'png bytes');
+  let now = 1_000_000;
+  const store = new PublishAllowanceStore({ now: () => now });
+  const files = [{ path: 'post.png', sha256: sha256('png bytes') }];
+  const base = { platform: 'X', account: '@shop', text: 'Hi', files };
+  const publish: PublishContext = { ...base, fingerprint: publishFingerprint(base, sha256) };
+  const caps = new CapsEnforcer({
+    maxConcurrentAgents: 4,
+    defaults: { maxWallClockMs: 60_000, maxToolCalls: 100 },
+    onCapHit: () => undefined,
+  });
+  caps.track('a-1', caps.resolve());
+  enforcers.push(caps);
+  const gate = createPermissionGate({
+    agentId: 'a-1',
+    policy,
+    workspace: worktree,
+    cwd: worktree,
+    caps,
+    allowOnce: (call, verdict, categories) =>
+      store.check(
+        'a-1',
+        call,
+        categories ?? (verdict.decision === 'ask' && verdict.action ? [verdict.action] : []),
+      ) === 'allow',
+  });
+  return {
+    worktree,
+    store,
+    publish,
+    gate,
+    advance: (ms: number) => void (now += ms),
+  };
+}
+
+describe('PublishAllowanceStore', () => {
+  it('allows exactly one network ask after approval', () => {
+    const s = setup();
+    expect(s.gate.check(CURL).decision).toBe('ask');
+    s.store.arm('a-1', s.publish, s.worktree);
+    // A call that is not a network ask leaves the allowance armed.
+    expect(s.store.check('a-1', CURL, ['edit_workspace'])).toBe('none');
+    expect(s.gate.check(CURL).decision).toBe('allow');
+    expect(s.gate.check(CURL).decision).toBe('ask');
+    expect(s.store.check('a-1', CURL, ['network'])).toBe('none');
+  });
+
+  it('allowance refused when a file changed', () => {
+    const s = setup();
+    s.store.arm('a-1', s.publish, s.worktree);
+    writeFileSync(join(s.worktree, 'post.png'), 'other bytes');
+    expect(s.store.check('a-1', CURL, ['network'])).toBe('none');
+    // Disarmed: the original file back does not bring it back.
+    writeFileSync(join(s.worktree, 'post.png'), 'png bytes');
+    expect(s.store.check('a-1', CURL, ['network'])).toBe('none');
+    expect(s.gate.check(CURL).decision).toBe('ask');
+  });
+
+  it('expires after 30 minutes', () => {
+    const s = setup();
+    s.store.arm('a-1', s.publish, s.worktree);
+    s.advance(PUBLISH_ALLOWANCE_TTL_MS + 1);
+    expect(s.store.check('a-1', CURL, ['network'])).toBe('none');
+    s.store.arm('a-1', s.publish, s.worktree);
+    s.store.disarm('a-1');
+    expect(s.store.check('a-1', CURL, ['network'])).toBe('none');
+  });
+
+  it('never turns a deny into allow', () => {
+    const s = setup({
+      ...DEFAULT_PERMISSION_POLICY,
+      rules: { ...DEFAULT_PERMISSION_POLICY.rules, network: 'deny' },
+    });
+    s.store.arm('a-1', s.publish, s.worktree);
+    expect(s.gate.check(CURL).decision).toBe('deny');
+    // Still armed: a denial does not use it up.
+    expect(s.store.check('a-1', CURL, ['network'])).toBe('allow');
+  });
+});

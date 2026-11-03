@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import {
   AgentEvent,
@@ -97,6 +98,7 @@ import type { CommandContext, EventLog } from './event-log.js';
 import { createJob, setJobState, updateJob } from './jobs.js';
 import { attachJobRunAgent, endJobRun, startJobRun } from './job-runs.js';
 import { openFinding, reportJobRun, requestSpend } from './findings.js';
+import { folderOfAgent, requestPublish, type PublishDeps } from './publish.js';
 import {
   archiveProject,
   closeProject,
@@ -232,6 +234,11 @@ export interface CommandsOptions {
    * project and the Settings name, when it runs on that provider's runtime.
    */
   chooseSteward?: ChooseSteward;
+  /**
+   * How a publish request's files are read (P11-06): default the file system, from the asker's
+   * folder — its live session's working directory, else its task's worktree or project workspace.
+   */
+  publish?: Partial<PublishDeps>;
 }
 
 /**
@@ -267,6 +274,7 @@ export class Commands implements DomainCommands {
   private readonly proposalOptions: ProposalOptions;
   private readonly catalog: CommandsOptions['catalog'];
   private readonly chooseSteward: CommandsOptions['chooseSteward'];
+  private readonly publishDeps: PublishDeps;
   /**
    * Spawns under way, by slot (`harmonizer`, `waykeeper:<project>`, `steward:<task>`): a slot is
    * taken synchronously, before the spawn's session reports, so two concurrent spawns can never
@@ -296,6 +304,13 @@ export class Commands implements DomainCommands {
     this.autoApproveRemote = opts.autoApproveRemote ?? false;
     this.catalog = opts.catalog;
     this.chooseSteward = opts.chooseSteward;
+    this.publishDeps = {
+      readFile: opts.publish?.readFile ?? ((abs) => readFileSync(abs)),
+      worktreeOf:
+        opts.publish?.worktreeOf ??
+        ((agentId) =>
+          this.agents?.permissionContext?.(agentId)?.ctx.cwd ?? folderOfAgent(this.log, agentId)),
+    };
     this.proposalOptions = {
       ...this.choose,
       // A promotion moved in the approval hands its agents over to living supervisors (P2-12).
@@ -1476,11 +1491,11 @@ export class Commands implements DomainCommands {
   requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>> {
     return this.run((ctx) => requestSpend(ctx, input, this.questions));
   }
-  /** Placeholder until P11-08 builds publish approvals; refuses. */
-  requestPublish(_input: RequestPublishInput): Promise<CommandResult<{ questionId: Id }>> {
-    return this.run(() => {
-      throw new DomainError('invalid', 'publish approvals are not available yet');
-    });
+  /** A `publish` approval of that exact content, held by the user alone (P11-06, decision 147). */
+  requestPublish(input: RequestPublishInput): Promise<CommandResult<{ questionId: Id }>> {
+    return this.run((ctx) => ({
+      questionId: requestPublish(ctx, input, this.questions, this.publishDeps).id,
+    }));
   }
   /** A project's default AI provider for new Stewards; `null` clears it (P11-03). */
   setProjectProvider(input: SetProjectProviderInput): Promise<CommandResult<Project>> {

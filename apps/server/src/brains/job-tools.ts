@@ -1,4 +1,5 @@
 import {
+  answerDetailOf,
   jobIdOfTask,
   type Agent,
   type DomainCommands,
@@ -11,6 +12,7 @@ import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { formatAmount } from '../domain/findings.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
+import type { PublishAllowanceStore } from '../runtime/publish-allowance.js';
 import { guarded } from './deliverable-tools.js';
 
 /**
@@ -26,12 +28,20 @@ import { guarded } from './deliverable-tools.js';
  *   (kept on the run as `meta.report`, which the scheduler's turn-end handler ends the run with,
  *   ledger ruling R3).
  *
+ * - every Steward: `request_publish` (P11-06, decision 147) — nothing goes out without the user's
+ *   approval of that exact content. A task Steward asks only on a publishing step and hears the
+ *   answer as one system message (`PublishRelay`, which also arms its one-shot allowance); a
+ *   job-run Steward's publish is job-owned and a later run carries it out once approved. Phase
+ *   10's reply findings are publish requests now: `report_finding` offers suggestions only.
+ *
  * The brains never get `request_spend`: `requestSpend` accepts any agent, so this scoping is the
- * guard. Every refusal is the tool's result (`{error, message}`), never a crash.
+ * guard (`requestPublish` refuses any asker but a Steward). Every refusal is the tool's result
+ * (`{error, message}`), never a crash.
  */
 
 export const JOB_TOOL_NAMES = ['report_finding', 'report_run'] as const;
 export const SPEND_TOOL_NAME = 'request_spend';
+export const PUBLISH_TOOL_NAME = 'request_publish';
 
 const asInput = (raw: unknown): Record<string, unknown> =>
   raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
@@ -120,21 +130,81 @@ export function stewardJobTools(
         };
       }),
   };
-  if (!jobRun) return [spend];
+  // A follow-up run that publishes an approved request must not ask for it again.
+  const approvedPublish =
+    running?.runningRunId !== undefined &&
+    tables.jobRuns.get(running.runningRunId)?.followUp?.kind === 'publish';
+  const publish: ToolDefinition = {
+    name: PUBLISH_TOOL_NAME,
+    description:
+      'Asks Cosmin to approve publishing something in his name: a post, a reply, a review answer, ' +
+      'a message, an upload — anything that goes out to a platform. Give the platform, the account ' +
+      'and the exact text, and the files (paths in your working directory) that go with it. Call ' +
+      'it before publishing and then end your turn: never publish without an approval. Only ' +
+      'Cosmin answers it (Approve, possibly after editing the text, or Refuse); the approval is ' +
+      'for exactly that content. ' +
+      (approvedPublish
+        ? 'The publish this run was started for is already approved: never ask for it again.'
+        : jobRun
+          ? 'A later run publishes an approved request; this run publishes nothing.'
+          : 'The answer comes to you as a message; then publish exactly what was approved.'),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        platform: { type: 'string', description: 'Where it goes, e.g. "Instagram", "App Store".' },
+        account: { type: 'string', description: 'The account it goes out as, e.g. "@myshop".' },
+        text: { type: 'string', description: 'The exact text to publish.' },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: 10,
+          description: 'Files that go with it (images…), as paths in your working directory.',
+        },
+      },
+      required: ['platform', 'account', 'text'],
+      additionalProperties: false,
+    },
+    handler: (raw) =>
+      guarded(async () => {
+        const input = asInput(raw);
+        const files = input['files'];
+        if (
+          files !== undefined &&
+          (!Array.isArray(files) || files.some((f) => typeof f !== 'string'))
+        ) {
+          throw new DomainError('invalid', 'files is a list of paths');
+        }
+        const { questionId } = (
+          await commands.requestPublish({
+            originAgentId: agent.id,
+            platform: optString(input, 'platform') ?? '',
+            account: optString(input, 'account') ?? '',
+            text: optString(input, 'text') ?? '',
+            ...(files !== undefined ? { files: files as string[] } : {}),
+          })
+        ).value;
+        return {
+          questionId,
+          note: jobRun
+            ? 'Asked Cosmin. End your turn now; a later run publishes it if he approves. Do not publish it in this run.'
+            : 'Asked Cosmin. End your turn now; his answer comes to you as a message. Do not publish before he approves.',
+        };
+      }),
+  };
+  if (!jobRun) return [spend, publish];
 
   const reportFinding: ToolDefinition = {
     name: 'report_finding',
     description:
       'Reports one finding of this run to Cosmin: a suggestion (a feature or improvement worth ' +
-      'building) or a reply (a drafted answer worth sending, with the draft). He decides what ' +
-      'happens to it; nothing is sent or built by reporting it. At most 20 per run.',
+      'building). He decides what happens to it; nothing is built by reporting it. A reply worth ' +
+      'sending is not a finding: ask with request_publish. At most 20 per run.',
     inputSchema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['suggestion', 'reply'] },
+        kind: { type: 'string', enum: ['suggestion'] },
         title: { type: 'string', description: 'A short name for it (at most 200 characters).' },
         text: { type: 'string', description: 'What you found and why it matters (plain text).' },
-        draft: { type: 'string', description: 'For a reply: the drafted reply, exactly.' },
       },
       required: ['kind', 'title', 'text'],
       additionalProperties: false,
@@ -143,10 +213,14 @@ export function stewardJobTools(
       guarded(async () => {
         const input = asInput(raw);
         const kind = input['kind'];
-        if (kind !== 'suggestion' && kind !== 'reply') {
-          throw new DomainError('invalid', 'kind is suggestion or reply');
+        // Phase 10's reply findings became publish approvals (P11-06, decision 147).
+        if (kind === 'reply') {
+          throw new DomainError(
+            'invalid',
+            'a reply is not a finding: ask to publish it with request_publish (platform, account, text)',
+          );
         }
-        const draft = optString(input, 'draft');
+        if (kind !== 'suggestion') throw new DomainError('invalid', 'kind is suggestion');
         const question = (
           await commands.openFinding({
             runId: currentRunId(tables, agent),
@@ -154,7 +228,6 @@ export function stewardJobTools(
             kind,
             title: optString(input, 'title') ?? '',
             text: optString(input, 'text') ?? '',
-            ...(draft !== undefined ? { draft } : {}),
           })
         ).value;
         return { questionId: question.id };
@@ -215,7 +288,7 @@ export function stewardJobTools(
       }),
   };
 
-  return [spend, reportFinding, reportRun];
+  return [spend, publish, reportFinding, reportRun];
 }
 
 /** What `SpendRelay` needs of the runtime. */
@@ -266,6 +339,70 @@ export class SpendRelay {
     runtime.send(
       q.originAgentId,
       `Spend approval for ${formatAmount(spend.amount, spend.currency)} (${spend.purpose}): ${verdict}`,
+      { sender: { type: 'system' } },
+    );
+  }
+}
+
+/** What `PublishRelay` needs of the runtime. */
+export type PublishRelayRuntime = Pick<AgentRuntime, 'send' | 'liveAgents'>;
+
+/**
+ * Sends a task Steward the answer to its publish request (P11-06, SPEC decision 147): on
+ * `question.answered` for a `publish` question that is not a job's, one system message to the
+ * asker — "Publish approval for <platform>: approved" (followed by the approved text when the
+ * answer carried one: Cosmin may have edited it) or "…: refused" — and, on "Approve", arms the asker's one-shot allowance first, so its next
+ * network call goes through once while the approved files are unchanged. A job publish sends
+ * nothing (a later run carries an approved one out); a Steward that has ended is skipped silently.
+ */
+export class PublishRelay {
+  private unsubscribe: (() => void) | undefined;
+
+  constructor(
+    private readonly opts: {
+      log: Pick<EventLog, 'subscribe' | 'tables'>;
+      runtime: PublishRelayRuntime;
+      allowances: Pick<PublishAllowanceStore, 'arm'>;
+      /** The asker's folder, which the approved files are read from. */
+      worktreeOf: (agentId: Id) => string;
+      onError?: (e: unknown, context: string) => void;
+    },
+  ) {}
+
+  start(): void {
+    if (this.unsubscribe) return;
+    this.unsubscribe = this.opts.log.subscribe(({ event }) => {
+      if (event.type !== 'question.answered') return;
+      try {
+        this.relay(event.questionId);
+      } catch (error) {
+        this.opts.onError?.(error, 'publish relay');
+      }
+    });
+  }
+
+  stop(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+  }
+
+  private relay(questionId: Id): void {
+    const q = this.opts.log.tables.questions.get(questionId);
+    const publish = q?.context.publish;
+    if (!q || q.kind !== 'publish' || !publish || publish.jobId !== undefined) return;
+    if (q.status !== 'answered') return;
+    const { runtime } = this.opts;
+    if (!runtime.liveAgents().some((a) => a.id === q.originAgentId)) return;
+    const approved = q.answer === 'Approve';
+    if (approved) {
+      this.opts.allowances.arm(q.originAgentId, publish, this.opts.worktreeOf(q.originAgentId));
+    }
+    // Approved through the card's text box (possibly edited): the text to publish, verbatim.
+    const withText = approved && answerDetailOf(q)?.text !== undefined;
+    runtime.send(
+      q.originAgentId,
+      `Publish approval for ${publish.platform}: ${approved ? 'approved' : 'refused'}` +
+        (withText ? `. Publish exactly this text:\n${publish.text}` : ''),
       { sender: { type: 'system' } },
     );
   }

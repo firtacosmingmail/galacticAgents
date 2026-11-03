@@ -1,4 +1,5 @@
 import {
+  PROVIDER_LABEL,
   isJobTask,
   jobIdOfTask,
   nextOccurrence,
@@ -334,6 +335,14 @@ export class JobScheduler {
       ...(project ? { project } : {}),
       supervisorRuntime: supervisor.runtime,
     });
+    // A follow-up that publishes runs only where every action can be held back (P11-06): the
+    // run fails (the job pauses with one failure question) and the approved publish waits on
+    // the job for the retry, once a provider that can publish is set.
+    if (followUp?.kind === 'publish' && runtime.adapter(choice.runtime)?.canPublish !== true) {
+      this.failPublish(run.id, `${PROVIDER_LABEL[choice.provider]} cannot publish`);
+      report.ended.push(run.id);
+      return;
+    }
     let agent: Agent;
     try {
       if (!project || !area) throw new Error(`job ${job.name} has no project or area any more`);
@@ -572,6 +581,18 @@ export class JobScheduler {
     this.opts.log.runCommand((ctx) =>
       endJobRun(ctx, { runId, outcome: 'failed', failureReason: reason }),
     );
+  }
+
+  /** Fails a publish follow-up run that could not start, putting its follow-up back on the job. */
+  private failPublish(runId: Id, reason: string): void {
+    this.opts.log.runCommand((ctx) => {
+      const run = endJobRun(ctx, { runId, outcome: 'failed', failureReason: reason });
+      const job = jobOf(ctx, run.jobId);
+      const followUp = run.followUp;
+      if (!followUp || job.state === 'stopped') return;
+      if (job.followUps.some((f) => f.questionId === followUp.questionId)) return;
+      writeJob(ctx, job, { followUps: [followUp, ...job.followUps] });
+    });
   }
 
   /**

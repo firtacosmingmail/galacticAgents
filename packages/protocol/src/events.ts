@@ -41,7 +41,7 @@ import {
   Port,
   RunOutcome,
 } from './deliverables.js';
-import { Area, FollowUp, Job, JobRun, JobRunOutcome } from './long-term.js';
+import { Area, FollowUp, Job, JobRun, JobRunOutcome, PublishContext } from './long-term.js';
 
 // ---------------------------------------------------------------------------
 // agent.* — emitted by adapters, normalised (TECHNOLOGY §3.4)
@@ -316,6 +316,11 @@ export const QuestionAnswered = z.object({
   repliedIn: Id.optional(),
   /** The structured answer of a question-set row (P8-19); folded into `meta.answerDetail`. */
   detail: SetAnswer.optional(),
+  /**
+   * A publish approved with edited text (P11-06): the request as approved — the edited text and
+   * its recomputed fingerprint — folded into the row as `context.publish`.
+   */
+  publish: PublishContext.optional(),
 });
 /**
  * The user saved or cleared an unsent draft answer on an open question-set row (P8-19). Folded

@@ -1,4 +1,4 @@
-import { FINDING_ACTIONS, SPEND_ACTIONS, isJobOwned } from '@galactic/protocol';
+import { FINDING_ACTIONS, PUBLISH_ACTIONS, SPEND_ACTIONS, isJobOwned } from '@galactic/protocol';
 import type {
   Actor,
   Id,
@@ -12,6 +12,7 @@ import type {
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { applyJobAnswer } from './findings.js';
+import { approvedPublish } from './publish.js';
 
 /**
  * Question commands (P1-23, P2-01; SPEC §2.6, TECHNOLOGY §5.3). The server owns questions: an
@@ -136,18 +137,18 @@ function mustOpen(ctx: CommandContext, questionId: Id): Question {
 
 /**
  * A permission question is the policy's or the user's, never an agent's (decision 7, 12); a
- * `spend` approval is the user's alone (decision 145): no agent ever holds it, so no supervisor
- * can answer or relay it.
+ * `spend` or `publish` approval is the user's alone (decisions 145, 147): no agent ever holds it,
+ * so no supervisor can answer or relay it.
  */
 function checkHolder(ctx: CommandContext, question: Question, holder: Actor): void {
   if (holder.type === 'agent') {
     if (question.kind === 'permission') {
       throw new DomainError('invalid', `permission question ${question.id} is held by the user`);
     }
-    if (question.kind === 'spend') {
+    if (question.kind === 'spend' || question.kind === 'publish') {
       throw new DomainError(
         'invalid',
-        `spend question ${question.id} is held by the user: the user answers spend approvals`,
+        `${question.kind} question ${question.id} is held by the user: the user answers ${question.kind} approvals`,
       );
     }
     must(ctx.tables.agents.get(holder.id ?? ''), 'agent', holder.id ?? '(no id)');
@@ -233,9 +234,12 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
   // A retry of an answer already recorded under its key: nothing to do (P7-05).
   if (isRecordedAnswer(current, input.answerId)) return current;
   checkAnswer(current, input);
+  // A publish approved with an edited text: the approved request, with its own fingerprint.
+  const publish = approvedPublish(current, input.answer, input.detail);
   const question = withMetaSansDraft(
     {
       ...current,
+      ...(publish ? { context: { ...current.context, publish } } : {}),
       status: 'answered',
       answer: input.answer,
       answeredBy: input.answeredBy,
@@ -259,8 +263,9 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
     ...(input.answerId ? { answerId: input.answerId } : {}),
     ...(input.repliedIn ? { repliedIn: input.repliedIn } : {}),
     ...(input.detail ? { detail: input.detail } : {}),
+    ...(publish ? { publish } : {}),
   });
-  // A finding, failure notice or job spend: its action in this same transaction (P10-05).
+  // A finding, failure notice, job spend or job publish: its action in this same transaction.
   applyJobAnswer(ctx, question, { isLiving: input.isLiving });
   return question;
 }
@@ -328,23 +333,25 @@ export function checkAnswer(current: Question, input: AnswerInput): void {
 }
 
 /**
- * The checks of an answer to a question with fixed actions (P10-05): a `spend` is answered by the
- * user alone — never an agent, a supervisor or the system — with exactly `Approve` or `Refuse`
+ * The checks of an answer to a question with fixed actions (P10-05): a `spend` (and a `publish`,
+ * P11-06) is answered by the user alone — never an agent, a supervisor or the system — with exactly `Approve` or `Refuse`
  * (free text is no approval); a finding with one of its actions. A failure question takes any
  * text: anything but "Stop the job" retries, the text passed on as a note.
  */
 function checkFixedAnswer(question: Question, answer: string, by: Actor): void {
-  if (question.kind === 'spend') {
+  if (question.kind === 'spend' || question.kind === 'publish') {
+    const kind = question.kind;
+    const actions: readonly string[] = kind === 'spend' ? SPEND_ACTIONS : PUBLISH_ACTIONS;
     if (by.type !== 'user') {
       throw new DomainError(
         'invalid',
-        `spend question ${question.id} is answered by the user only: the user answers spend approvals`,
+        `${kind} question ${question.id} is answered by the user only: the user answers ${kind} approvals`,
       );
     }
-    if (!(SPEND_ACTIONS as readonly string[]).includes(answer)) {
+    if (!actions.includes(answer)) {
       throw new DomainError(
         'invalid',
-        `a spend is answered ${SPEND_ACTIONS.join(' or ')}, not "${answer}"`,
+        `a ${kind} is answered ${actions.join(' or ')}, not "${answer}"`,
       );
     }
     return;
@@ -389,10 +396,10 @@ export function escalateQuestion(
   isLiving?: (agentId: Id) => boolean,
 ): Question {
   const current = mustOpen(ctx, questionId);
-  if (current.kind === 'spend') {
+  if (current.kind === 'spend' || current.kind === 'publish') {
     throw new DomainError(
       'invalid',
-      `spend question ${questionId} is held by the user: the user answers spend approvals`,
+      `${current.kind} question ${questionId} is held by the user: the user answers ${current.kind} approvals`,
     );
   }
   const from = current.holder;

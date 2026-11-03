@@ -49,7 +49,11 @@ function boot(caps?: CapsConfig) {
   });
   lives.push(c);
   scripts.attach(c.log.tables);
-  return { c, scripts, jobs: harnessJobs({ log: c.log, scheduler: c.jobs, scripts }) };
+  return {
+    c,
+    scripts,
+    jobs: harnessJobs({ log: c.log, scheduler: c.jobs, scripts, commands: c.commands }),
+  };
 }
 
 async function longTermJob(c: ComposedRuntime) {

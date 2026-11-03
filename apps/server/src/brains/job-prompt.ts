@@ -6,7 +6,9 @@ import type { Area, FollowUp, Job, JobRun, Project } from '@galactic/protocol';
  * carries the project's purpose and goals, the job's instructions, what the run covers, the job's
  * memory (the last runs, `jobMemory`), the approved follow-up or the user's retry note, and the
  * rules of an unattended run: read and draft only, findings through `report_finding`, money only
- * after `request_spend` (a follow-up spend run is told its spend is already approved), and the run's end through `report_run`.
+ * after `request_spend` (a follow-up spend run is told its spend is already approved), anything
+ * published only after `request_publish` (P11-06; a publish follow-up run is given the approved
+ * content verbatim), and the run's end through `report_run`.
  *
  * Pure text: no SDK, no database.
  */
@@ -18,7 +20,7 @@ export interface JobPromptBrief {
   run: JobRun;
   /** The job's memory lines, newest first. */
   memory: string[];
-  /** The approved send or spend this run carries out (a `follow_up` run). */
+  /** The approved send, spend or publish this run carries out (a `follow_up` run). */
   followUp?: FollowUp;
   /** What the user wrote when answering the failure question (a retry run). */
   note?: string;
@@ -48,6 +50,16 @@ function money(amount: number | undefined, currency: string | undefined): string
 function followUpText(followUp: FollowUp): string {
   if (followUp.kind === 'send') {
     return `Send exactly this reply: ${followUp.text ?? ''}`;
+  }
+  if (followUp.kind === 'publish') {
+    const p = followUp.publish;
+    if (!p) return 'Cosmin approved a publish, but its content is missing: publish nothing.';
+    const files =
+      p.files.length > 0 ? ` with these files: ${p.files.map((f) => f.path).join(', ')}` : '';
+    return (
+      `Cosmin approved publishing to ${p.platform} as ${p.account}${files}. Publish exactly this ` +
+      `text, nothing more, nothing changed:\n${p.text}`
+    );
   }
   return (
     `Cosmin approved spending ${money(followUp.amount, followUp.currency)} for ` +
@@ -81,11 +93,20 @@ export function jobRunPrompt(brief: JobPromptBrief): string {
       ? '- Read and draft only, except the approved reply above: send exactly that, nothing else.'
       : followUp?.kind === 'spend'
         ? '- Read and draft only, except the approved spending above: do exactly that, nothing else.'
-        : '- Read and draft only: never send, post or spend anything.',
+        : followUp?.kind === 'publish'
+          ? '- Read and draft only, except the approved publish above: publish exactly that, once, nothing else. If the files changed since, publishing asks again: do not work around it.'
+          : '- Read and draft only: never send, post or spend anything.',
   );
   if (declares) {
     lines.push(
-      '- Report each finding (a feature worth building, a reply worth sending) with `report_finding`; Cosmin decides what happens to it.',
+      '- Report each finding (a feature worth building) with `report_finding`; Cosmin decides what happens to it.',
+      ...(followUp?.kind === 'publish'
+        ? [
+            '- The publish above is already approved: do not call `request_publish` for it. Anything else to publish still needs `request_publish` first.',
+          ]
+        : [
+            '- A reply worth sending (or anything else worth posting) is asked with `request_publish` — the platform, the account and the exact text — and stops there: a later run publishes it once Cosmin approves.',
+          ]),
       ...(followUp?.kind === 'spend'
         ? [
             `- The spending above is already approved, for exactly ${money(followUp.amount, followUp.currency)} and ${followUp.purpose ?? 'the purpose you asked for'}: do not call \`request_spend\` for it.`,

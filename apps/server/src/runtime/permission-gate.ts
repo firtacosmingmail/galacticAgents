@@ -63,6 +63,18 @@ export interface GateOptions {
    * denies, never a push, never a configuration or deliverables write (`matchingRule`).
    */
   rules?: () => readonly PermissionRule[];
+  /**
+   * A one-shot allowance (P11-06, decision 147: an approved publish), consulted only when the
+   * policy table asks — after it, before the rules — with the ask verdict and every category the
+   * call was classified under: `true` lets that one call through. Never consulted for a call the
+   * table allows or denies, nor under a policy that did not parse; a throw counts as `false`.
+   */
+  allowOnce?: (call: ToolCall, verdict: GateVerdict, categories?: PermissionAction[]) => boolean;
+  /**
+   * Told about every call `allowOnce` let through `check()` (the adapters' hook), so the runtime
+   * logs it as `permission.decided{allow}`. `decide()` callers log it themselves. Must not throw.
+   */
+  onAllowOnce?: (call: ToolCall, action: PermissionAction | undefined) => void;
   /** How a folder rule resolves symlinks (tests); default: the file system's. */
   realPath?: RealPath;
   /**
@@ -156,6 +168,17 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
     const policy = policyNow();
     const verdict = evaluate(policy, call, ctx);
     const action = verdict.dominant ? { action: verdict.dominant } : {};
+    // An approved publish lets its one call through (P11-06) — only where the table asks.
+    if (verdict.decision === 'ask' && !policyNote && opts.allowOnce) {
+      const ask: GateVerdict = { decision: 'ask', ...action, reasons: verdict.reasons };
+      let once: boolean;
+      try {
+        once = opts.allowOnce(call, ask, [...verdict.actions]) === true;
+      } catch {
+        once = false;
+      }
+      if (once) return { verdict: { decision: 'allow' }, ...action, allowedOnce: true };
+    }
     // A rule turns an `ask` into an `allow` (P9-17) — never under a policy that did not parse.
     if (verdict.decision === 'ask' && !policyNote && opts.rules) {
       const rules = opts.rules();
@@ -209,6 +232,13 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
           // Logging a refusal never turns it into something else.
         }
       }
+      if (verdict.decision === 'allow' && decision.allowedOnce && opts.onAllowOnce) {
+        try {
+          opts.onAllowOnce(call, decision.action);
+        } catch {
+          // Logging an allowance never turns it into something else.
+        }
+      }
       if (verdict.decision === 'allow' && decision.ruleId && opts.onRuleAllow) {
         try {
           opts.onRuleAllow(call, decision.ruleId, decision.action);
@@ -233,6 +263,8 @@ export interface Decision {
   cap?: true;
   /** The project's "Allow similar" rule that allowed the call (P9-17). */
   ruleId?: Id;
+  /** The one call an approved publish let through (P11-06). */
+  allowedOnce?: true;
 }
 
 /**
