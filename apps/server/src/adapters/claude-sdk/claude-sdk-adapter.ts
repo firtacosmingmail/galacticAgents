@@ -1208,10 +1208,14 @@ export const CLAUDE_LIMIT_ERROR = 'Claude usage limit reached';
 
 /**
  * An error result in the subscription limit's words: "Claude AI usage limit reached|<unix s>",
- * "You've hit your limit · resets 3pm", "5-hour limit reached".
+ * "You've hit your limit · resets 3pm", "5-hour limit reached", "Weekly limit reached" — never
+ * another limit ("Context limit reached", a tool-call limit). The primary signal is the
+ * `rate_limit_event` with `status: 'rejected'`.
  */
 export function isUsageLimitText(text: string): boolean {
-  return /usage limit|hit your limit|limit reached/i.test(text);
+  return /usage limit|hit your (?:usage )?limit|\b(?:\d+-hour|weekly|opus|sonnet|session) limit reached/i.test(
+    text,
+  );
 }
 
 /** The reset time an error result carries after a `|` ("…limit reached|1793000000"). */

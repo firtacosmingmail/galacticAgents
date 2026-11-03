@@ -105,8 +105,8 @@ export interface ComposeOptions {
    */
   jobs?: { intervalMs?: number; timers?: Timers };
   /**
-   * Usage limits (P11-07): how often answered waits are checked (default 60 s; `0`: no timer,
-   * tests call `usageLimits.tick()`).
+   * Usage limits (P11-07): how often answered waits are checked once `usageLimits.start()` is
+   * called — `index.ts` does after recovery (default 60 s; `0`: no timer, tests call `tick()`).
    */
   usageLimits?: { tickMs?: number; timers?: Timers };
   /**
@@ -513,6 +513,14 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     catalog,
     chooseSteward,
     resume: (agentId, prompt) => runtime.resumeAfterLimit(agentId, prompt),
+    // A Steward of the task that runs or comes back (interrupted: recovery reopens it).
+    stewardOnTask: (taskId) =>
+      log.tables.agents.all().find((a) => {
+        if (a.role !== 'steward' || a.taskId !== taskId) return false;
+        const state = statuses.get(a.id)?.state;
+        return state !== undefined && (state === 'interrupted' || !ENDED_STATES.has(state));
+      })?.id,
+    notify: (agentId, text) => void runtime.send(agentId, text, { sender: { type: 'system' } }),
     ...(opts.usageLimits?.tickMs !== undefined ? { tickMs: opts.usageLimits.tickMs } : {}),
     ...(opts.usageLimits?.timers ? { timers: opts.usageLimits.timers } : {}),
     ...(opts.onError ? { onError: opts.onError } : {}),

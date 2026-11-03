@@ -13,7 +13,8 @@ import { writeJob } from './jobs.js';
  *     next run alone uses it (`JobScheduler.startIfDue`);
  *   - `retryAt` — when a wait retries (`Wait until it resets`): the reported reset time, else an
  *     hour after the answer;
- *   - `switchedAt` / `retriedAt` — when the switch or the retry was carried out (once only).
+ *   - `switchedAt` / `retriedAt` — when the switch or the retry was carried out (once only);
+ *   - `limitRestartFailed` — why no Steward could be restarted (the task failed, ruling R18).
  */
 
 /** How long a wait waits when the CLI reported no reset time. */
@@ -24,6 +25,8 @@ export const LIMIT_META = {
   retryAt: 'retryAt',
   switchedAt: 'switchedAt',
   retriedAt: 'retriedAt',
+  /** Why the Steward could not be restarted (on the question and the task, ruling R18). */
+  restartFailed: 'limitRestartFailed',
 } as const;
 
 /** The model a `Switch to …` answer chose: the option's position in `switchTo`. */

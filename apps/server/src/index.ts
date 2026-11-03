@@ -603,4 +603,7 @@ if (!shuttingDown) {
   // Recurring jobs (P10-04): after recovery (a run cut short by the restart is recorded
   // interrupted, its Steward not resumed) and the Harmonizer; the first tick catches up at once.
   composed.jobs.start(JOB_TICK_MS);
+  // Usage limits (P11-07): after recovery too, so a wait whose reset passed while Mission Control
+  // was down restarts its Steward after the supervisors are back and the interrupted ones known.
+  composed.usageLimits.start();
 }

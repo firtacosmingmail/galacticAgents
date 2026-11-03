@@ -9,7 +9,7 @@ import type {
 } from '@galactic/protocol';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
 import { collect } from '../../test/collect.js';
-import { ClaudeSdkAdapter } from './claude-sdk-adapter.js';
+import { ClaudeSdkAdapter, isUsageLimitText } from './claude-sdk-adapter.js';
 import { FakeSdk, type FakeScript, type FakeSdkOptions } from './fake-sdk.js';
 import { jsonSchemaToZodShape } from './json-schema-to-zod.js';
 import type { ZodTypeAny } from 'zod';
@@ -991,6 +991,18 @@ describe('ClaudeSdkAdapter — mapping gaps (P1-36)', () => {
       resetsAt: '2026-10-26T07:33:20.000Z',
     });
     expect(types(events.items)).not.toContain('agent.idle');
+  });
+
+  it('a context-limit error is not a usage limit', async () => {
+    const { adapter, events } = make(() => [{ resultIsError: 'Context limit reached' }]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(types(events.items)).not.toContain('agent.failed');
+    expect(isUsageLimitText('Context limit reached')).toBe(false);
+    expect(isUsageLimitText('Tool call limit reached')).toBe(false);
+    expect(isUsageLimitText("You've hit your limit · resets 3pm")).toBe(true);
+    expect(isUsageLimitText('5-hour limit reached ∙ resets 3pm')).toBe(true);
+    expect(isUsageLimitText('Weekly limit reached')).toBe(true);
   });
 
   it('an idle stop closes the input: the CLI exits on stdin EOF, no SIGTERM', async () => {

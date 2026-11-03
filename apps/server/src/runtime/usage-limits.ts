@@ -5,6 +5,7 @@ import {
   jobIdOfTask,
   limitSwitchOption,
   modelChoiceLabel,
+  normalizeModelName,
   type Agent,
   type Event,
   type EventEnvelope,
@@ -13,6 +14,7 @@ import {
   type ModelChoice,
   type ModelInfo,
   type Provider,
+  type ProviderUsage,
   type Question,
   type Task,
   type UsageLimitContext,
@@ -23,6 +25,8 @@ import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
 import { originOf } from '../domain/question-service.js';
 import { openQuestion } from '../domain/questions.js';
+import { setTaskState } from '../domain/states.js';
+import { updateTask } from '../domain/tasks.js';
 import { LIMIT_META, LIMIT_RETRY_MS, storedSwitchOf } from '../domain/usage-limits.js';
 import type { Timers } from './archival.js';
 import type { RunLimits } from './job-scheduler.js';
@@ -41,8 +45,8 @@ import { stewardDeclares } from './tool-runtimes.js';
  *     job-owned for a job run): "<label> usage limit reached — resets <time>. Switch to another
  *     model or wait?", `context.usageLimit` with the models it may switch to — from every
  *     available provider, each passing `ProviderCatalog.check` for the step's `makesImages` and
- *     `publishes`, none of a provider whose `usage()` shows a window at 0, never the model that
- *     stopped, at most 12 — and the options `Switch to <label>` per model, then `Wait until it
+ *     `publishes`, none out of limit, none of the provider that hit its limit (except
+ *     Antigravity's other-family models with room, ruling R17), at most 12 — and the options `Switch to <label>` per model, then `Wait until it
  *     resets`. A second limit on the same task or job while one is open opens nothing.
  *   - **Switch**: a task gets `task.updated{provider, model}` and a new Steward on the task under
  *     the stopped Steward's supervisor, its prompt the task's Steward prompt led by a handover; a
@@ -52,7 +56,9 @@ import { stewardDeclares } from './tool-runtimes.js';
  *     the same model; a job's `limitQuestionId` is cleared and the job is due now.
  *
  * Every choice and its progress live on the question row (`domain/usage-limits.ts`), so `tick()`
- * — every `tickMs` and once at start — carries out what a restart interrupted, never twice.
+ * — once `start()`ed after recovery, then every `tickMs` — carries out what a restart
+ * interrupted, never twice: a Steward already on the task (`stewardOnTask`) counts as done. A
+ * refused restart is not retried: the task fails with the reason (ruling R18).
  * Brains never answer the question (`answer_question` refuses it, `checkLimitAnswer`).
  */
 
@@ -67,9 +73,17 @@ export interface UsageLimitsOptions {
   resume?: (agentId: Id, prompt: string) => Promise<{ ok: boolean }>;
   /** The runtime and model a new Steward runs (dev override, a fake brain); default the resolver. */
   chooseSteward?: ChooseSteward;
+  /**
+   * A Steward of the task that runs or is coming back (live, starting, idle, paused, interrupted):
+   * one there means the restart already happened (a crash before its done mark) or someone put a
+   * Steward back — nothing is started. Absent: not checked (the spawn's own guard still applies).
+   */
+  stewardOnTask?: (taskId: Id) => Id | undefined;
+  /** Tells an agent (the stopped Steward's supervisor) something, as the system. */
+  notify?: (agentId: Id, text: string) => void;
   /** Default: the log's clock, in ms. */
   now?: () => number;
-  /** How often waits are checked (default 60 s); `0`: no timer (tests call `tick()`). */
+  /** How often waits are checked once `start()`ed (default 60 s); `0`: no timer. */
   tickMs?: number;
   timers?: Timers;
   onError?: (error: unknown, context: string) => void;
@@ -98,11 +112,42 @@ type AgentFailedEvent = Extract<Event, { type: 'agent.failed' }>;
 const sameChoice = (a: ModelChoice, b: ModelChoice) =>
   a.provider === b.provider && a.model === b.model;
 
+/** The family of a choice's model (matched loosely, as the catalogue does); Gemini's own else. */
+function familyOf(choice: ModelChoice, models: ModelInfo[]): ModelInfo['family'] | undefined {
+  if (choice.model === undefined) return choice.provider === 'gemini' ? 'gemini' : undefined;
+  const wanted = normalizeModelName(choice.model);
+  const info = models.find(
+    (m) => normalizeModelName(m.id) === wanted || normalizeModelName(m.label) === wanted,
+  );
+  return info?.family ?? (choice.provider === 'gemini' ? 'gemini' : undefined);
+}
+
+/**
+ * Whether the provider's usage shows room for a model: `true` (a window with room), `false` (a
+ * window at 0), `undefined` (nothing reported). On Antigravity, the window of the model's family
+ * group ("Gemini Models", "Claude and GPT models"); elsewhere any window at 0 means none.
+ */
+function roomFor(
+  provider: Provider,
+  family: ModelInfo['family'] | undefined,
+  usage: ProviderUsage | undefined,
+): boolean | undefined {
+  if (!usage || usage.windows.length === 0) return undefined;
+  if (provider === 'gemini') {
+    const group = family === 'claude' || family === 'gpt' ? /claude|gpt/i : /gemini/i;
+    const windows = usage.windows.filter((w) => group.test(w.label));
+    if (windows.length === 0) return undefined;
+    return windows.every((w) => w.remainingFraction > 0);
+  }
+  return usage.windows.every((w) => w.remainingFraction > 0);
+}
+
 export class UsageLimits implements RunLimits {
   private readonly now: () => number;
   private readonly choose: ChooseSteward;
   private readonly unsubscribe: () => void;
-  private readonly handle: unknown;
+  private handle: unknown;
+  private started = false;
   private readonly timers: Timers;
   private chain: Promise<unknown> = Promise.resolve();
   private disposed = false;
@@ -114,12 +159,24 @@ export class UsageLimits implements RunLimits {
     this.unsubscribe = opts.log.subscribe((envelope: EventEnvelope) =>
       this.onEvent(envelope.event),
     );
-    const tickMs = opts.tickMs ?? 60_000;
-    this.handle =
-      tickMs > 0
-        ? this.timers.setInterval(() => void this.tick().catch(this.report('tick')), tickMs)
-        : undefined;
-    // Once at start: a wait whose reset passed while Mission Control was down is retried now.
+  }
+
+  /**
+   * Starts the checks: one tick now — a wait whose reset passed while Mission Control was down
+   * is retried — then every `tickMs` (default 60 s; `0`: no timer). Called after startup recovery
+   * (`index.ts`, as the job scheduler is), so supervisors are back first (decision 8) and a
+   * Steward the restart interrupted is known before anything is restarted.
+   */
+  start(): void {
+    if (this.started || this.disposed) return;
+    this.started = true;
+    const tickMs = this.opts.tickMs ?? 60_000;
+    if (tickMs > 0) {
+      this.handle = this.timers.setInterval(
+        () => void this.tick().catch(this.report('tick')),
+        tickMs,
+      );
+    }
     void this.tick().catch(this.report('tick'));
   }
 
@@ -266,9 +323,13 @@ export class UsageLimits implements RunLimits {
   }
 
   /**
-   * The models the step may switch to: each listed model of every available provider (the
-   * provider's default when it lists none) that passes the catalogue's check for the step, from
-   * no provider out of limit, never the stopped one; at most `MAX_SWITCH`.
+   * The models the step may switch to (ruling R17): each listed model (the provider alone when it
+   * lists none) of every available provider that passes the catalogue's check for the step and is
+   * not out of limit; at most `MAX_SWITCH`. The provider that hit its limit is one subscription:
+   * none of its models — except, on Antigravity, a model of another family (its Claude and GPT
+   * models have their own quota) whose bucket `usage()` reports with room left. On another
+   * provider, a model is out of limit when its window is at 0 (on Antigravity its family's
+   * bucket; elsewhere any window).
    */
   private async eligible(
     stopped: ModelChoice,
@@ -276,18 +337,23 @@ export class UsageLimits implements RunLimits {
     modelsOf: (p: Provider) => Promise<ModelInfo[]>,
   ): Promise<ModelChoice[]> {
     const out: ModelChoice[] = [];
+    const stoppedFamily = familyOf(stopped, await modelsOf(stopped.provider));
     for (const provider of PROVIDERS) {
       if (out.length >= MAX_SWITCH) break;
       if (!this.opts.catalog.available(provider)) continue;
+      const own = provider === stopped.provider;
+      if (own && provider !== 'gemini') continue;
       const usage = await this.opts.catalog.usage(provider);
-      if (usage?.windows.some((w) => w.remainingFraction <= 0)) continue;
       const models = await modelsOf(provider);
-      const candidates: ModelChoice[] =
-        models.length > 0 ? models.map((m) => ({ provider, model: m.id })) : [{ provider }];
-      for (const candidate of candidates) {
+      const candidates: { choice: ModelChoice; family: ModelInfo['family'] | undefined }[] =
+        models.length > 0
+          ? models.map((m) => ({ choice: { provider, model: m.id }, family: m.family }))
+          : [{ choice: { provider }, family: undefined }];
+      for (const { choice, family } of candidates) {
         if (out.length >= MAX_SWITCH) break;
-        if (sameChoice(candidate, stopped)) continue;
-        const checked = await this.opts.catalog.check(candidate, need);
+        const room = roomFor(provider, family, usage);
+        if (own ? family === stoppedFamily || room !== true : room === false) continue;
+        const checked = await this.opts.catalog.check(choice, need);
         if (checked.ok && !out.some((c) => sameChoice(c, checked.choice))) out.push(checked.choice);
       }
     }
@@ -305,6 +371,7 @@ export class UsageLimits implements RunLimits {
     if (switchTo) {
       // A job's switch is read by the scheduler when it starts the next run.
       if (limit.jobId || q.meta?.[LIMIT_META.switchedAt] !== undefined) return;
+      if (this.alreadyBack(q, LIMIT_META.switchedAt)) return;
       await this.restart(q, switchTo, true);
       return;
     }
@@ -328,6 +395,7 @@ export class UsageLimits implements RunLimits {
       });
       return;
     }
+    if (this.alreadyBack(q, LIMIT_META.retriedAt)) return;
     const resumed = await this.opts.resume?.(q.originAgentId, RESUME_AFTER_LIMIT_PROMPT);
     if (resumed?.ok) {
       this.markDone(questionId, LIMIT_META.retriedAt);
@@ -341,9 +409,21 @@ export class UsageLimits implements RunLimits {
   }
 
   /**
+   * A Steward already runs on the task, or is coming back (a restart after a crash between the
+   * spawn and its done mark; a Steward someone else put back): the choice counts as carried out.
+   */
+  private alreadyBack(q: Question, doneKey: string): boolean {
+    const taskId = q.context.usageLimit?.taskId;
+    if (!taskId || this.opts.stewardOnTask?.(taskId) === undefined) return false;
+    this.markDone(q.id, doneKey);
+    return true;
+  }
+
+  /**
    * A new Steward on the task, on `choice`, under the stopped Steward's supervisor, with the
    * task's Steward prompt led by the handover. A switch first records the task's new provider.
-   * Marked done once spawned; a refusal (a cap, a budget) is tried again at the next tick.
+   * Marked done once spawned. A refused spawn (a budget, a cap, the placement) is not tried again
+   * (ruling R18): the task fails with the reason, and the supervisor is told.
    */
   private async restart(q: Question, choice: ModelChoice, switched: boolean): Promise<void> {
     const { tables } = this.opts.log;
@@ -411,10 +491,46 @@ export class UsageLimits implements RunLimits {
         this.markDone(q.id, doneKey);
         return;
       }
-      this.report(`steward after the limit of ${task.id}`)(error);
+      this.refused(q.id, doneKey, task.id, previous.supervisorId, (error as Error).message);
       return;
     }
     this.markDone(q.id, doneKey);
+  }
+
+  /**
+   * The task could not get a Steward back after its limit (ruling R18): in one command the task
+   * records why (`task.updated` with `meta.limitRestartFailed`) and fails (`task.state_changed`,
+   * by the system), and the question is marked done with the reason; then the stopped Steward's
+   * supervisor hears it.
+   */
+  private refused(
+    questionId: Id,
+    doneKey: string,
+    taskId: Id,
+    supervisorId: Id | undefined,
+    message: string,
+  ): void {
+    const reason = `could not restart after the usage limit: ${message}`;
+    this.opts.log.runCommand((ctx) => {
+      const q = ctx.tables.questions.get(questionId);
+      if (q) {
+        ctx.tables.questions.upsert({
+          ...q,
+          meta: { ...q.meta, [doneKey]: ctx.now, [LIMIT_META.restartFailed]: reason },
+        });
+      }
+      const task = ctx.tables.tasks.get(taskId);
+      if (!task || DONE_TASK.has(task.state)) return;
+      updateTask(ctx, taskId, { meta: { ...task.meta, [LIMIT_META.restartFailed]: reason } });
+      setTaskState(ctx, taskId, 'failed', { type: 'system' });
+    });
+    if (supervisorId) {
+      try {
+        this.opts.notify?.(supervisorId, `Task ${taskId} ${reason}. It is marked failed.`);
+      } catch (error) {
+        this.report(`notify ${supervisorId}`)(error);
+      }
+    }
   }
 
   private markDone(questionId: Id, key: string): void {

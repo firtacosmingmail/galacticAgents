@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   LIMIT_WAIT,
+  type Provider,
+  type ProviderUsage,
   type Actor,
   type AgentRuntime as RuntimeName,
   type Id,
@@ -12,6 +14,7 @@ import type { FakeScenario } from '../adapters/fake/scenario.js';
 import { openDatabase } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
 import { tickingClock } from '../test/world.js';
+import type { CapsConfig } from './caps.js';
 import { composeRuntime, type ComposedRuntime } from './compose.js';
 import { UsageLimits } from './usage-limits.js';
 
@@ -62,6 +65,7 @@ const limited = (resetsAt?: string): FakeScenario => ({
     { kind: 'output', text: 'carried on after the reset' },
   ],
 });
+const TEXT_ON_GEMINI: Step = { provider: 'gemini', runtime: 'agy', model: 'gemini-3-flash' };
 const CARRY_ON: FakeScenario = { steps: [{ kind: 'output', text: 'carried on' }] };
 
 const lives: ComposedRuntime[] = [];
@@ -71,7 +75,9 @@ afterEach(async () => {
   for (const c of lives.splice(0)) await c.dispose().catch(() => {});
 });
 
-function boot(opts: { resetsAt?: string | null } = {}) {
+function boot(
+  opts: { resetsAt?: string | null; agyUsage?: ProviderUsage; caps?: CapsConfig } = {},
+) {
   const clock = tickingClock(START);
   const resetsAt = opts.resetsAt === null ? undefined : (opts.resetsAt ?? RESETS);
   // A first spawn hits the limit; a Steward given the handover carries on.
@@ -79,25 +85,46 @@ function boot(opts: { resetsAt?: string | null } = {}) {
     spawn.prompt.includes('stopped at its usage limit')
       ? { name: 'carry', scenario: CARRY_ON }
       : { name: 'limited', scenario: limited(resetsAt) };
-  const provider = (runtime: RuntimeName, models: ModelInfo[]) =>
-    new FakeAdapter({ speed: 0, runtime, models, scenarioFor, canPublish: runtime !== 'agy' });
+  const provider = (runtime: RuntimeName, models: ModelInfo[], usage?: ProviderUsage) =>
+    new FakeAdapter({
+      speed: 0,
+      runtime,
+      models,
+      scenarioFor,
+      canPublish: runtime !== 'agy',
+      ...(usage ? { usage } : {}),
+    });
   const c = composeRuntime(openDatabase(':memory:'), {
     adapters: [
       new FakeAdapter({ speed: 0 }),
       provider('claude-sdk', CLAUDE_MODELS),
       provider('codex', GPT_MODELS),
-      provider('agy', GEMINI_MODELS),
+      provider('agy', GEMINI_MODELS, opts.agyUsage),
     ],
     log: { now: clock },
     flushMs: 10,
+    ...(opts.caps ? { caps: opts.caps } : {}),
     usageLimits: { tickMs: 0 },
   });
   lives.push(c);
   return { c, clock };
 }
 
-/** A project with a Waykeeper row (not running) and an approved image task on Gemini. */
-async function imageTask(c: ComposedRuntime) {
+interface Step {
+  provider: Provider;
+  runtime: RuntimeName;
+  model: string;
+  makesImages?: boolean;
+}
+const IMAGES: Step = {
+  provider: 'gemini',
+  runtime: 'agy',
+  model: 'gemini-3-pro-image',
+  makesImages: true,
+};
+
+/** A project with a Waykeeper row (not running) and an approved task (default: images on Gemini). */
+async function stepTask(c: ComposedRuntime, step: Step = IMAGES) {
   const project = (await c.commands.createProject({ name: 'Shop', workspace: '/w/shop' })).value;
   const wk = c.log.runCommand((ctx) =>
     createAgent(ctx, { role: 'waykeeper', runtime: 'fake', caps: CAPS, projectId: project.id }),
@@ -106,16 +133,16 @@ async function imageTask(c: ComposedRuntime) {
     await c.commands.createTask({
       projectId: project.id,
       description: 'Make the four campaign images',
-      provider: 'gemini',
-      model: 'gemini-3-pro-image',
-      makesImages: true,
+      provider: step.provider,
+      model: step.model,
+      ...(step.makesImages ? { makesImages: true } : {}),
     })
   ).value;
   const steward = (
     await c.commands.spawnAgent({
       role: 'steward',
-      runtime: 'agy',
-      model: 'gemini-3-pro-image',
+      runtime: step.runtime,
+      model: step.model,
       taskId: task.id,
       supervisorId: wk.id,
       prompt: 'Make the four campaign images.',
@@ -141,8 +168,8 @@ const spawnsOf = (c: ComposedRuntime, agentId: Id) =>
     .eventsSince(0, Number.MAX_SAFE_INTEGER)
     .filter((e) => e.event.type === 'agent.spawned' && e.event.agentId === agentId).length;
 
-async function limitedTask(c: ComposedRuntime) {
-  const made = await imageTask(c);
+async function limitedTask(c: ComposedRuntime, step?: Step) {
+  const made = await stepTask(c, step);
   await until(() => limitQuestions(c, made.task.id).length === 1, 'the limit question');
   return { ...made, question: limitQuestions(c, made.task.id)[0]! };
 }
@@ -167,12 +194,11 @@ describe('usage limits (P11-07)', () => {
       resetsAt: RESETS,
       taskId: task.id,
     });
-    // An image step: only another Gemini image model; no ChatGPT or Claude model makes images.
-    expect(question.context.usageLimit?.switchTo).toEqual([
-      { provider: 'gemini', model: 'gemini-3-flash-image' },
-    ]);
+    // An image step: no ChatGPT or Claude model makes images, and Gemini's other image model
+    // shares the used-up subscription (ruling R17): only the wait is left.
+    expect(question.context.usageLimit?.switchTo).toEqual([]);
     const options = question.context.options ?? [];
-    expect(options).toEqual(['Switch to Gemini · Gemini 3 Flash Image', LIMIT_WAIT]);
+    expect(options).toEqual([LIMIT_WAIT]);
     expect(options.some((o) => o.includes('ChatGPT') || o.includes('GPT'))).toBe(false);
     expect(options.at(-1)).toBe(LIMIT_WAIT);
     // The step is paused, not failed.
@@ -200,32 +226,156 @@ describe('usage limits (P11-07)', () => {
 
   it('switch updates the task and starts a Steward with the handover', async () => {
     const { c } = boot();
-    const { task, wk, steward, question } = await limitedTask(c);
+    const { task, wk, steward, question } = await limitedTask(c, TEXT_ON_GEMINI);
     await c.commands.answerQuestion({
       questionId: question.id,
-      answer: 'Switch to Gemini · Gemini 3 Flash Image',
+      answer: 'Switch to ChatGPT · GPT-5.6',
       by: USER,
     });
     await until(() => stewardsOf(c, task.id).length === 2, 'the new Steward');
     await c.usageLimits.settled();
     expect(c.log.tables.tasks.get(task.id)).toMatchObject({
-      provider: 'gemini',
-      model: 'gemini-3-flash-image',
+      provider: 'chatgpt',
+      model: 'gpt-5.6',
     });
     const fresh = stewardsOf(c, task.id).find((a) => a.id !== steward.id)!;
-    expect(fresh).toMatchObject({ runtime: 'agy', supervisorId: wk.id });
-    expect(fresh.meta).toMatchObject({ model: 'gemini-3-flash-image' });
+    expect(fresh).toMatchObject({ runtime: 'codex', supervisorId: wk.id });
+    expect(fresh.meta).toMatchObject({ model: 'gpt-5.6' });
     const prompt = (fresh.meta as { prompt: string }).prompt;
     expect(prompt).toContain(
-      'An earlier attempt on Gemini · Gemini 3 Pro Image stopped at its usage limit. Its work so far is in this folder; its last report: drew two of the four images. Continue from there.',
+      'An earlier attempt on Gemini · Gemini 3 Flash stopped at its usage limit. Its work so far is in this folder; its last report: drew two of the four images. Continue from there.',
     );
     expect(prompt).toContain('Make the four campaign images');
     expect(c.log.tables.questions.get(question.id)?.meta).toMatchObject({
-      switchTo: { provider: 'gemini', model: 'gemini-3-flash-image' },
+      switchTo: { provider: 'chatgpt', model: 'gpt-5.6' },
     });
     // A switch is carried out once: a tick finds nothing left to do.
     await c.usageLimits.tick();
     expect(stewardsOf(c, task.id)).toHaveLength(2);
+  });
+
+  it('a Claude limit offers no Claude model', async () => {
+    const { c } = boot();
+    const { question } = await limitedTask(c, {
+      provider: 'claude',
+      runtime: 'claude-sdk',
+      model: 'opus',
+    });
+    expect(question.context.options).toEqual([
+      'Switch to ChatGPT · GPT-5.6',
+      'Switch to Gemini · Gemini 3 Pro Image',
+      'Switch to Gemini · Gemini 3 Flash Image',
+      'Switch to Gemini · Gemini 3 Flash',
+      'Switch to Opus through Antigravity',
+      LIMIT_WAIT,
+    ]);
+    expect(question.context.options!.some((o) => o.startsWith('Switch to Claude'))).toBe(false);
+  });
+
+  it('a ChatGPT limit offers no ChatGPT model', async () => {
+    const { c } = boot();
+    const { question } = await limitedTask(c, {
+      provider: 'chatgpt',
+      runtime: 'codex',
+      model: 'gpt-5.6',
+    });
+    const options = question.context.options ?? [];
+    expect(options.some((o) => o.startsWith('Switch to ChatGPT'))).toBe(false);
+    expect(options).toContain('Switch to Claude · Sonnet');
+    expect(options.at(-1)).toBe(LIMIT_WAIT);
+  });
+
+  it('agy Gemini limit may offer agy Claude when its bucket has room', async () => {
+    const usage = (claudeRoom: number): ProviderUsage => ({
+      windows: [
+        { label: 'Gemini Models · weekly', remainingFraction: 0 },
+        { label: 'Claude and GPT models · weekly', remainingFraction: claudeRoom },
+      ],
+    });
+    const roomy = boot({ agyUsage: usage(0.6) });
+    const { question } = await limitedTask(roomy.c, TEXT_ON_GEMINI);
+    const options = question.context.options ?? [];
+    expect(options).toContain('Switch to Opus through Antigravity');
+    expect(options.some((o) => o.startsWith('Switch to Gemini'))).toBe(false);
+
+    const spent = boot({ agyUsage: usage(0) });
+    const other = await limitedTask(spent.c, TEXT_ON_GEMINI);
+    expect(other.question.context.options).not.toContain('Switch to Opus through Antigravity');
+  });
+
+  it('nothing restarts before start(); start() ticks once', async () => {
+    const { c, clock } = boot();
+    const { steward, question } = await limitedTask(c);
+    await c.commands.answerQuestion({ questionId: question.id, answer: LIMIT_WAIT, by: USER });
+    c.usageLimits.dispose();
+    clock.advance(Date.parse(RESETS) - START + 60_000);
+    // A new server: built before recovery, it restarts nothing on its own.
+    const after = new UsageLimits({
+      log: c.log,
+      commands: c.commands,
+      catalog: c.catalog,
+      resume: (agentId, prompt) => c.runtime.resumeAfterLimit(agentId, prompt),
+      tickMs: 0,
+    });
+    extra.push(after);
+    await after.settled();
+    expect(spawnsOf(c, steward.id)).toBe(1);
+    after.start();
+    await after.settled();
+    await until(() => spawnsOf(c, steward.id) === 2, 'the retried Steward');
+  });
+
+  it('a Steward already back on the task is not started twice', async () => {
+    const { c, clock } = boot();
+    const { task, wk, steward, question } = await limitedTask(c, TEXT_ON_GEMINI);
+    await c.commands.answerQuestion({ questionId: question.id, answer: LIMIT_WAIT, by: USER });
+    clock.advance(Date.parse(RESETS) - START + 60_000);
+    // As after a crash between the restart's spawn and its done mark: a Steward is on the task.
+    await c.commands.spawnAgent({
+      role: 'steward',
+      runtime: 'agy',
+      model: 'gemini-3-flash',
+      taskId: task.id,
+      supervisorId: wk.id,
+      prompt: 'An earlier attempt stopped at its usage limit. Continue.',
+    });
+    await c.usageLimits.tick();
+    expect(spawnsOf(c, steward.id)).toBe(1);
+    expect(stewardsOf(c, task.id)).toHaveLength(2);
+    expect(c.log.tables.questions.get(question.id)?.meta?.['retriedAt']).toBeDefined();
+  });
+
+  it('a refused restart fails the task with the reason, once', async () => {
+    // One spawn per brain per hour: the Waykeeper's first Steward used it.
+    const { c } = boot({ caps: { maxSpawnsPerHourPerBrain: 1 } });
+    const { task, question } = await limitedTask(c, TEXT_ON_GEMINI);
+    await c.commands.answerQuestion({
+      questionId: question.id,
+      answer: 'Switch to ChatGPT · GPT-5.6',
+      by: USER,
+    });
+    await c.usageLimits.settled();
+    const failed = c.log.tables.tasks.get(task.id)!;
+    expect(failed.state).toBe('failed');
+    const reason = failed.meta?.['limitRestartFailed'] as string;
+    expect(reason).toMatch(/^could not restart after the usage limit: .*cap/);
+    const logged = c.log
+      .eventsSince(0, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter(
+        (e) =>
+          (e.type === 'task.state_changed' && e.taskId === task.id && e.to === 'failed') ||
+          (e.type === 'task.updated' &&
+            e.taskId === task.id &&
+            e.changes.meta?.['limitRestartFailed'] === reason),
+      );
+    expect(logged).toHaveLength(2);
+    expect(c.log.tables.questions.get(question.id)?.meta).toMatchObject({
+      limitRestartFailed: reason,
+    });
+    // Not retried.
+    await c.usageLimits.tick();
+    expect(stewardsOf(c, task.id)).toHaveLength(1);
   });
 
   it('only the user answers, with one of the options', async () => {
