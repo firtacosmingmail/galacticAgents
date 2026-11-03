@@ -295,3 +295,23 @@ export function isSettingsResponse(value: unknown): value is SettingsResponse {
     Array.isArray(v.restartRequired)
   );
 }
+
+/** "in 2 h 5 min", "in 3 days", "now": how long until `iso`, from `now`. */
+export function resetsIn(iso: string, now = Date.now()): string {
+  const minutes = Math.round((Date.parse(iso) - now) / 60_000);
+  if (!Number.isFinite(minutes) || minutes <= 0) return 'now';
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 === 0 ? `in ${hours} h` : `in ${hours} h ${minutes % 60} min`;
+  const days = Math.round(minutes / 1440);
+  return `in ${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
+/** One quota window: "5 hours: 42% left · resets in 2 h 5 min" (P11-09). */
+export function usageWindowText(
+  window: { label: string; remainingFraction: number; resetsAt?: string | undefined },
+  now = Date.now(),
+): string {
+  const left = `${window.label}: ${Math.round(window.remainingFraction * 100)}% left`;
+  return window.resetsAt ? `${left} · resets ${resetsIn(window.resetsAt, now)}` : left;
+}

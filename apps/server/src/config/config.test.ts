@@ -27,14 +27,14 @@ describe('loadConfig', () => {
       args: ['--acp'],
       passEnv: ['GEMINI_API_KEY'],
     });
-    expect(fromFile.envOverrides).not.toContain('stewardRuntime');
+    expect(fromFile.envOverrides).not.toContain('stewardRuntime' as never);
     const fromEnv = loadConfig({
       GALACTIC_HOME: home,
       GALACTIC_STEWARD_RUNTIME: 'claude-sdk',
       GALACTIC_ACP_COMMAND: ' codex-acp  --verbose ',
     }).config;
     expect(fromEnv.stewardRuntimeOverride).toBe('claude-sdk');
-    expect(fromEnv.envOverrides).toContain('stewardRuntime');
+    expect(fromEnv.envOverrides).not.toContain('stewardRuntime' as never);
     expect(fromEnv.acp).toEqual({
       command: 'codex-acp',
       args: ['--verbose'],

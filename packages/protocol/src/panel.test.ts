@@ -105,10 +105,12 @@ describe('settings schemas (P25-01)', () => {
     });
   });
 
-  it('takes the Steward runtime as a runtime name, `null` to clear it (P8-07)', () => {
-    expect(Settings.parse({ ...valid, stewardRuntime: 'acp' }).stewardRuntime).toBe('acp');
-    expect(SettingsPatch.parse({ stewardRuntime: null })).toEqual({ stewardRuntime: null });
-    expect(SettingsPatch.safeParse({ stewardRuntime: 'cursor' }).success).toBe(false);
+  it('has no Steward runtime any more, and takes per-provider settings (P11-09)', () => {
+    expect(Settings.parse({ ...valid, stewardRuntime: 'acp' })).not.toHaveProperty(
+      'stewardRuntime',
+    );
+    expect(SettingsPatch.safeParse({ stewardRuntime: null }).success).toBe(false);
+    expect(SettingsPatch.safeParse({ stewardRuntime: 'acp' }).success).toBe(false);
     // Per-provider settings are a partial map (P11-02).
     expect(SettingsPatch.parse({ providers: { chatgpt: { model: 'gpt-5.6-terra' } } })).toEqual({
       providers: { chatgpt: { model: 'gpt-5.6-terra' } },

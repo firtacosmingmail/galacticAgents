@@ -292,7 +292,7 @@ describe('transcript retention settings (P8-02)', () => {
     ).toEqual({ chatgpt: { model: 'gpt-6-luna' } });
   });
 
-  it('upgrades a stored stewardRuntime and ignores a patch of it (P11-03)', () => {
+  it('upgrades a stored stewardRuntime and drops the key at the next write (P11-03)', () => {
     const home = temp('galactic-home-');
     const dataDir = join(home, '.galactic');
     const env = { GALACTIC_HOME: dataDir } as NodeJS.ProcessEnv;
@@ -303,21 +303,13 @@ describe('transcript retention settings (P8-02)', () => {
     const loaded = loadConfig(env);
     expect(loaded.config.defaultProvider).toBe('chatgpt');
     expect(loaded.config).not.toHaveProperty('stewardRuntime');
-    const warnings: string[] = [];
-    const settings = new SettingsService({
-      config: loaded.config,
-      home,
-      warn: (m) => warnings.push(m),
-    });
+    const settings = new SettingsService({ config: loaded.config, home });
     expect(settings.current().defaultProvider).toBe('chatgpt');
-    expect(settings.current().stewardRuntime).toBeUndefined();
-    // The deprecated field (the old settings page still sends it) changes nothing.
-    const after = settings.update({ stewardRuntime: 'acp', qualityTier: 'mobile' }, local);
-    expect(after.settings.stewardRuntime).toBeUndefined();
+    expect(settings.current()).not.toHaveProperty('stewardRuntime');
+    // The protocol no longer knows the key: a patch of it fails validation (P11-09).
+    expect(SettingsPatch.safeParse({ stewardRuntime: 'acp' }).success).toBe(false);
+    const after = settings.update({ qualityTier: 'mobile' }, local);
     expect(after.settings.defaultProvider).toBe('chatgpt');
-    expect(warnings).toEqual([
-      'stewardRuntime is no longer a setting (ignored): Stewards use the project provider',
-    ]);
     // The next write drops the old key and keeps what it became.
     const file = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
     expect(file).not.toHaveProperty('stewardRuntime');

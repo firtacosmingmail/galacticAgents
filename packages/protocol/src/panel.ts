@@ -333,11 +333,6 @@ export const Settings = z.object({
   transcriptRetention: TranscriptRetention.optional(),
   /** Budget warnings (P8-01); the server always reports it, older servers leave it out. */
   budgets: SettingsBudgets.optional(),
-  /**
-   * @deprecated The runtime new Stewards run on (P8-07). Replaced by `defaultProvider` (P11-02);
-   * the server stops reading it in P11-03 and the field is removed in P11-10.
-   */
-  stewardRuntime: AgentRuntime.optional(),
   /** The AI provider new Stewards use when nothing names one (P11-02); absent: `claude`. */
   defaultProvider: Provider.optional(),
   /** Per-provider settings (P11-02): the default model of each provider's Stewards. */
@@ -360,7 +355,6 @@ export const SettingName = z.enum([
   'stewardsLoadUserSettings',
   'transcriptRetention',
   'budgets',
-  'stewardRuntime',
   'defaultProvider',
   'providers',
   'deliverables',
@@ -383,9 +377,6 @@ export const SettingsPatch = z
     /** Transcript retention (P8-02), merged key by key; local requests only (decision 51, 90). */
     transcriptRetention: TranscriptRetention.partial().strict().optional(),
     budgets: SettingsBudgets.partial().strict().optional(),
-    /** The runtime of new Stewards (P8-07); `null` = the spawning brain's own again. */
-    /** @deprecated Replaced by `defaultProvider` (P11-02); removed in P11-10. */
-    stewardRuntime: AgentRuntime.nullable().optional(),
     /** The default AI provider (P11-02); `null` = `claude` again. */
     defaultProvider: Provider.nullable().optional(),
     /** Merged provider by provider; `model: null` clears that provider's default model. */

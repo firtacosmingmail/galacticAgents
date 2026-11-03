@@ -689,6 +689,37 @@ describe('GET /api/preflight (P25-01)', () => {
   });
 });
 
+describe('GET /api/preflight lists models and limits (P11-09)', () => {
+  it('adds the provider, its models and its usage to a ready runtime', async () => {
+    const codex = new FakeAdapter({
+      runtime: 'codex',
+      models: [
+        {
+          id: 'gpt-5.6-terra',
+          label: 'GPT-5.6 Terra',
+          isDefault: true,
+          capabilities: ['text'],
+          family: 'gpt',
+        },
+      ],
+      usage: { plan: 'plus', windows: [{ label: '5 hours', remainingFraction: 0.42 }] },
+    });
+    const composed = composeRuntime(openDatabase(':memory:'), {
+      adapters: [new FakeAdapter(), codex],
+    });
+    const t = await startTestApp({ log: composed.log, runtime: composed.runtime });
+    cleanups.push(
+      () => t.stop(),
+      () => composed.dispose(),
+    );
+    const res = PreflightResponse.parse((await get(t, '/api/preflight')).body);
+    const row = res.runtimes.find((r) => r.runtime === 'codex')!;
+    expect(row.provider).toBe('chatgpt');
+    expect(row.models?.map((m) => m.id)).toEqual(['gpt-5.6-terra']);
+    expect(row.usage?.windows[0]?.remainingFraction).toBe(0.42);
+  });
+});
+
 describe('GET /api/agents/:id/conversation leaves out turn prompts (P25-03)', () => {
   it('a brain turn prompt (`message.sent.turn`) is not a conversation line', async () => {
     const { t, log, message, output } = await historyApp();

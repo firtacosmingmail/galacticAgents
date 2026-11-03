@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PreflightResponse, RuntimePreflight } from '@galactic/protocol';
 import { useApi } from '../../console/hierarchy/shared.js';
+import { usageWindowText } from './settings-model.js';
 
 const RUNTIME_NAMES: Record<string, string> = {
   'claude-sdk': 'Claude Code (Agent SDK)',
+  codex: 'Codex (ChatGPT)',
+  agy: 'Antigravity (Gemini)',
   fake: 'Fake runtime (development)',
 };
 
@@ -77,8 +80,8 @@ export function PreflightCheck({
         )}
       </div>
       <p className="set-intro">
-        Agents run through Claude Code with your subscription login. Mission Control checks that it
-        is installed and logged in.
+        Agents run through the AI tools you have set up (Claude Code, Codex, Antigravity) with your
+        subscription logins. Mission Control checks that each is installed and logged in.
       </p>
       {checking && !result && <p className="set-muted">Checking…</p>}
       {error && (
@@ -112,7 +115,8 @@ function RuntimeRow({ runtime: r }: { runtime: RuntimePreflight }) {
     ['logged in', r.loggedIn === undefined ? undefined : r.loggedIn ? 'yes' : 'no'],
     ['login', [r.authMethod, r.subscriptionType].filter(Boolean).join(' · ') || undefined],
     ['provider', r.apiProvider],
-    ['Claude Code', r.version],
+    ['plan', r.usage?.plan],
+    [r.runtime === 'claude-sdk' ? 'Claude Code' : 'version', r.version],
     ['Agent SDK', r.sdkVersion],
   ];
   return (
@@ -133,6 +137,13 @@ function RuntimeRow({ runtime: r }: { runtime: RuntimePreflight }) {
             </div>
           ))}
       </dl>
+      {r.usage && r.usage.windows.length > 0 && (
+        <ul className="set-usage" aria-label={`${RUNTIME_NAMES[r.runtime] ?? r.runtime} limits`}>
+          {r.usage.windows.map((w) => (
+            <li key={w.label}>{usageWindowText(w)}</li>
+          ))}
+        </ul>
+      )}
       {r.problems.length > 0 && (
         <ul className="set-problems">
           {r.problems.map((p) => (

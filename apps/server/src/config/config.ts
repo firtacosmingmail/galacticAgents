@@ -564,7 +564,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       ? { ...file.pty, command: ptyEnv[0]!, args: ptyEnv.slice(1) }
       : file.pty;
   const envOverrides: SettingName[] = [];
-  if (runtimeEnv !== undefined) envOverrides.push('stewardRuntime');
   if (warnEnv !== undefined) envOverrides.push('budgets');
   if (env['GALACTIC_PROJECTS_ROOT'] !== undefined) envOverrides.push('projectsRoot');
   if (retentionEnv !== undefined) envOverrides.push('retentionDays');

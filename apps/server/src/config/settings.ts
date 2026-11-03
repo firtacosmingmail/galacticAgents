@@ -61,9 +61,8 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
  *
- * `stewardRuntime` is no longer a setting (P11-03): a patch of it (the settings page before P11-10
- * still sends it) is ignored with a warning, and the next write removes the key from the file after
- * `loadConfig` upgraded it to `defaultProvider`.
+ * `stewardRuntime` is no longer a setting (P11-03, removed from the protocol in P11-09): the next
+ * write removes the key from the file after `loadConfig` upgraded it to `defaultProvider`.
  *
  * Besides the settings, a patch may mark the panel's first-run setup as done (`setupCompleted`,
  * P25-08): `setupCompletedAt` is stamped once in `config.json` and reported by `response()`.
@@ -184,7 +183,7 @@ export class SettingsService {
    * `SettingsError` before anything is written when a field is env-decided or invalid.
    */
   update(given: SettingsPatch, write: PolicyWrite = {}): SettingsResponse {
-    const patch = this.withoutStewardRuntime(given);
+    const patch = given;
     const remote = writableFor(write) === 'limited';
     const refused = (Object.keys(patch) as SettingName[]).filter(
       (k) => patch[k] !== undefined && !REMOTE_WRITABLE.includes(k),
@@ -300,16 +299,6 @@ export class SettingsService {
     if (setupCompletedAt) this.config.setupCompletedAt = setupCompletedAt;
     this.saved = next;
     return this.response(patch.defaultPermissionPolicy !== undefined ? { floored } : {});
-  }
-
-  /** The patch without the deprecated `stewardRuntime` (P11-03): ignored, with a warning. */
-  private withoutStewardRuntime(patch: SettingsPatch): SettingsPatch {
-    if (patch.stewardRuntime === undefined) return patch;
-    (this.opts.warn ?? console.warn)(
-      'stewardRuntime is no longer a setting (ignored): Stewards use the project provider',
-    );
-    const { stewardRuntime: _ignored, ...rest } = patch;
-    return rest;
   }
 
   /** A provider whose runtime this server has an adapter for (P11-03). */

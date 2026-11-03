@@ -8,6 +8,7 @@ import {
   HistoryWorkParams,
   HistoryWorkQuery,
   NotificationsQuery,
+  PROVIDER_RUNTIME,
   SettingsPatch,
   TranscriptQuery,
   type ConversationResponse,
@@ -18,6 +19,7 @@ import {
   type IdeResponse,
   type NotificationsResponse,
   type PreflightResponse,
+  type Provider,
   type RuntimePreflight,
   type SettingsResponse,
   type TranscriptResponse,
@@ -245,7 +247,22 @@ export function registerPanelRoutes(
             continue;
           }
           try {
-            runtimes.push(await adapter.preflight());
+            const found = await adapter.preflight();
+            // P11-09: the page shows each provider's models and limits next to its login.
+            const provider =
+              found.provider ??
+              (Object.keys(PROVIDER_RUNTIME) as Provider[]).find(
+                (p) => PROVIDER_RUNTIME[p] === name,
+              );
+            const models = found.models ?? (await listed(() => adapter.models?.()));
+            const usage =
+              found.usage ?? (found.ok ? await listed(() => adapter.usage?.()) : undefined);
+            runtimes.push({
+              ...found,
+              ...(provider ? { provider } : {}),
+              ...(models && models.length > 0 ? { models } : {}),
+              ...(usage ? { usage } : {}),
+            });
           } catch (error) {
             runtimes.push({
               runtime: name,
@@ -282,4 +299,13 @@ export function registerPanelRoutes(
       });
     }
   });
+}
+
+/** An optional adapter listing (`models()`, `usage()`); a failure leaves it out. */
+async function listed<T>(read: () => Promise<T> | undefined): Promise<T | undefined> {
+  try {
+    return await read();
+  } catch {
+    return undefined;
+  }
 }
