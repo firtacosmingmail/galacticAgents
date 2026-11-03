@@ -54,7 +54,10 @@ afterEach(async () => {
   for (const c of lives.splice(0)) await c.dispose().catch(() => {});
 });
 
-function boot(scenario: (spawn: SpawnOptions) => FakeScenario = () => ECHO) {
+function boot(
+  scenario: (spawn: SpawnOptions) => FakeScenario = () => ECHO,
+  providers: FakeAdapter[] = [],
+) {
   const clock = tickingClock(oct(1, 8).getTime());
   const spawns: SpawnOptions[] = [];
   const errors: string[] = [];
@@ -67,8 +70,15 @@ function boot(scenario: (spawn: SpawnOptions) => FakeScenario = () => ECHO) {
     spawns.push(opts);
     return spawn(opts);
   };
+  for (const p of providers) {
+    const spawnP = p.spawn.bind(p);
+    p.spawn = (opts) => {
+      spawns.push(opts);
+      return spawnP(opts);
+    };
+  }
   const c = composeRuntime(openDatabase(':memory:'), {
-    adapters: [adapter],
+    adapters: [adapter, ...providers],
     log: { now: clock },
     flushMs: 10,
     stewardRuntimeOverride: () => 'fake',
@@ -473,6 +483,56 @@ describe('publish approvals for a task Steward (P11-06)', () => {
     await b.c.runtime.stop(steward.id, USER);
     expect(b.c.publishAllowances.isArmed(steward.id)).toBe(false);
     expect(b.errors).toEqual([]);
+  });
+
+  it('request_publish served to Codex and agy sessions is bound to the calling Steward', async () => {
+    const codex = new FakeAdapter({ speed: 0, runtime: 'codex', canPublish: true });
+    const agy = new FakeAdapter({ speed: 0, runtime: 'agy', canPublish: false });
+    const b = boot(() => ECHO, [codex, agy]);
+    const { c } = b;
+    const project = (await c.commands.createProject({ name: 'App', workspace: '/w/app' })).value;
+    const wk = c.log.runCommand((ctx) =>
+      createAgent(ctx, { role: 'waykeeper', runtime: 'fake', caps: CAPS, projectId: project.id }),
+    ).value;
+    const spawnOn = async (runtime: 'codex' | 'agy') => {
+      const task = c.log.runCommand((ctx) =>
+        createTask(ctx, { projectId: project.id, description: 'Post it', publishes: true }),
+      ).value;
+      const steward = (
+        await c.commands.spawnAgent({
+          role: 'steward',
+          runtime,
+          taskId: task.id,
+          projectId: project.id,
+          supervisorId: wk.id,
+          prompt: 'Post it.',
+        })
+      ).value;
+      return { steward, tools: b.spawns.find((o) => o.agentId === steward.id)!.tools };
+    };
+    const onCodex = await spawnOn('codex');
+    const onAgy = await spawnOn('agy');
+    // Each session gets its own tool set (the adapters serve `SpawnOptions.tools` per session).
+    expect(names(onCodex.tools)).toContain('request_publish');
+    expect(names(onAgy.tools)).toContain('request_publish');
+    const out = (await tool(onCodex.tools, 'request_publish').handler({
+      platform: 'X',
+      account: '@app',
+      text: 'Hello',
+    })) as { questionId: string };
+    expect(c.log.tables.questions.get(out.questionId)!.originAgentId).toBe(onCodex.steward.id);
+    await until(() => c.statuses.get(onCodex.steward.id) !== undefined, 'the status');
+    await c.commands.answerQuestion({ questionId: out.questionId, answer: 'Approve', by: USER });
+    expect(c.publishAllowances.isArmed(onCodex.steward.id)).toBe(true);
+    expect(c.publishAllowances.isArmed(onAgy.steward.id)).toBe(false);
+    // The agy Steward's own tool asks as itself, and is refused (Gemini cannot publish).
+    expect(
+      await tool(onAgy.tools, 'request_publish').handler({
+        platform: 'X',
+        account: '@app',
+        text: 'Hello',
+      }),
+    ).toMatchObject({ error: 'invalid', message: 'Gemini cannot publish' });
   });
 
   it('a task that is not a publishing step is refused, as the tool result', async () => {

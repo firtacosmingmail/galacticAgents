@@ -310,6 +310,64 @@ describe('answering a publish', () => {
     s.conforms();
   });
 
+  it('a cleared text box is refused without files, and publishes the files alone with them (R14)', async () => {
+    const s = setup();
+    const steward = s.runSteward();
+    const ask = async (files?: string[]) =>
+      (
+        await s.commands.requestPublish({
+          originAgentId: steward.id,
+          platform: 'X',
+          account: '@shop',
+          text: 'Original words',
+          ...(files ? { files } : {}),
+        })
+      ).value.questionId;
+    const textOnly = await ask();
+    const e = await s.refusal(
+      s.commands.answerQuestion({
+        questionId: textOnly,
+        answer: 'Approve',
+        by: USER,
+        detail: { choices: ['Approve'], text: '   ' },
+      }),
+    );
+    expect(e.message).toBe('the text is empty');
+    expect(s.tables.questions.get(textOnly)!.status).toBe('open');
+    expect(jobOf(s, s.job.id).followUps).toEqual([]);
+
+    const withFile = await ask(['post.png']);
+    await s.commands.answerQuestion({
+      questionId: withFile,
+      answer: 'Approve',
+      by: USER,
+      detail: { choices: ['Approve'], text: '' },
+    });
+    const files = [{ path: 'post.png', sha256: sha256('png bytes') }];
+    const [followUp] = jobOf(s, s.job.id).followUps;
+    expect(followUp!.publish).toMatchObject({ text: '', files });
+    expect(followUp!.publish!.fingerprint).toBe(
+      publishFingerprint({ platform: 'X', account: '@shop', text: '', files }, sha256),
+    );
+    s.conforms();
+  });
+
+  it('Approve without a text in the answer publishes the request as asked (R14)', async () => {
+    const s = setup();
+    const steward = s.runSteward();
+    const { questionId } = (
+      await s.commands.requestPublish({
+        originAgentId: steward.id,
+        platform: 'X',
+        account: '@shop',
+        text: 'Original words',
+      })
+    ).value;
+    const asked = s.tables.questions.get(questionId)!.context.publish!;
+    await s.commands.answerQuestion({ questionId, answer: 'Approve', by: USER });
+    expect(jobOf(s, s.job.id).followUps[0]!.publish).toEqual(asked);
+  });
+
   it('refuse queues nothing', async () => {
     const s = setup();
     const steward = s.runSteward();

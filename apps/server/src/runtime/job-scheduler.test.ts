@@ -87,6 +87,8 @@ interface BootOptions {
   intervalMs?: number;
   /** Fake adapters registered as the providers' runtimes (no Steward runtime override then). */
   providers?: FakeAdapter[];
+  /** The fake runtime may carry a publish (P11-06). */
+  canPublish?: boolean;
 }
 
 function boot(o: BootOptions = {}) {
@@ -95,6 +97,7 @@ function boot(o: BootOptions = {}) {
   const errors: string[] = [];
   const adapter = new FakeAdapter({
     speed: 0,
+    ...(o.canPublish ? { canPublish: true } : {}),
     ...(o.sessions ? { sessionStore: o.sessions } : {}),
     scenarioFor: (spawn) => ({ name: 'job', scenario: o.scenario?.(spawn) ?? ECHO }),
   });
@@ -726,10 +729,11 @@ describe('job scheduler (P10-04)', () => {
   });
 
   it('publish follow-up runs on the follow-up provider without unattended rules', async () => {
+    // The call carries the approved text, so the allowance lets it through once (R15).
     const curl = {
       kind: 'tool_call',
       toolName: 'Bash',
-      input: { command: 'curl api.myapp.com' },
+      input: { command: 'curl api.myapp.com -d "status=We launched!"' },
     } as const;
     const spawned: SpawnOptions[] = [];
     const codex = new FakeAdapter({
@@ -788,6 +792,57 @@ describe('job scheduler (P10-04)', () => {
     expect(decided).toHaveLength(1);
     expect(decided[0]).toMatchObject({ decision: 'allow' });
     expect(decided[0]!.ruleId).toBeUndefined();
+  });
+
+  it('an interrupted publish follow-up is never run again on its approval: it asks again (R13)', async () => {
+    const db = openDatabase(':memory:');
+    const sessions = new Map<string, number>();
+    const clock = tickingClock(oct(1, 8).getTime());
+    const first = boot({ db, clock, sessions, canPublish: true, scenario: () => ASKS });
+    const { job } = await longTermJob(first.c);
+    const base = { platform: 'X', account: '@shop', text: 'We launched!', files: [] };
+    const publish = { ...base, fingerprint: 'a'.repeat(64), jobId: job.id };
+    const followUp = { questionId: 'q-publish', kind: 'publish' as const, publish };
+    first.c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp] }));
+    setTo(clock, oct(1, 8, 30));
+    await first.c.jobs.tick();
+    const cut = runsOf(first.c, job.id)[0]!;
+    expect(cut).toMatchObject({ purpose: 'follow_up', followUp });
+    await until(
+      () => first.c.statuses.get(cut.agentId!)?.state === 'waiting_for_input',
+      'the question',
+    );
+    lives.splice(lives.indexOf(first.c), 1); // kill -9
+
+    setTo(clock, oct(1, 8, 40));
+    const second = boot({ db, clock, sessions, canPublish: true });
+    await second.c.recover();
+    const report = await second.c.jobs.tick();
+    expect(report.interrupted).toEqual([cut.id]);
+    // No second run on the old approval: the queue is empty and a fresh card asks.
+    expect(runsOf(second.c, job.id)).toHaveLength(1);
+    expect(jobNow(second.c, job.id).followUps).toEqual([]);
+    const again = second.c.log.tables.questions
+      .all()
+      .filter((q) => q.kind === 'publish' && q.status === 'open');
+    expect(again).toHaveLength(1);
+    expect(again[0]!.context.publish).toEqual(publish);
+    expect(again[0]!.context.text).toBe(
+      'Publish to X (@shop): the earlier attempt was interrupted and may already have posted. Publish again?',
+    );
+    expect(again[0]).toMatchObject({ holder: USER, meta: { jobOwned: true } });
+    setTo(clock, oct(1, 8, 41));
+    expect((await second.c.jobs.tick()).started).toEqual([]);
+    // Approving it queues a new follow-up, which runs.
+    await second.c.commands.answerQuestion({
+      questionId: again[0]!.id,
+      answer: 'Approve',
+      by: USER,
+    });
+    expect(jobNow(second.c, job.id).followUps).toEqual([
+      { questionId: again[0]!.id, kind: 'publish', publish },
+    ]);
+    lives.push(first.c);
   });
 
   it('publish follow-up refused on Gemini', async () => {

@@ -5,6 +5,7 @@ import {
   PUBLISH_ACTIONS,
   PublishContext,
   publishFingerprint,
+  type FollowUp,
   type Id,
   type PublishFile,
   type Question,
@@ -166,9 +167,11 @@ export function requestPublish(
 }
 
 /**
- * The request as approved: on "Approve" with an edited text (`detail.text`, trimmed, not blank)
- * that differs from the asked one, the request with that text and its recomputed fingerprint;
- * `undefined` otherwise (the request stands as asked). A text over 8000 characters is refused.
+ * The request as approved (ruling R14). No `detail.text` given: the request stands as asked
+ * (`undefined`). A `detail.text` given is authoritative — Cosmin may have edited or cleared the
+ * box: trimmed, it replaces the text and the fingerprint is recomputed (`undefined` when it equals
+ * the asked text). A blank text is refused ("the text is empty") unless the publish has files,
+ * which then go out with no text. A text over 8000 characters is refused.
  */
 export function approvedPublish(
   question: Question,
@@ -177,17 +180,53 @@ export function approvedPublish(
 ): PublishContext | undefined {
   const publish = question.context.publish;
   if (question.kind !== 'publish' || !publish || answer !== APPROVE) return undefined;
-  const edited = detail?.text?.trim();
-  if (!edited || edited === publish.text) return undefined;
-  const approved = PublishContext.safeParse({
+  if (detail?.text === undefined) return undefined;
+  const edited = detail.text.trim();
+  if (edited === '' && publish.files.length === 0) {
+    throw new DomainError('invalid', 'the text is empty');
+  }
+  if (edited === publish.text) return undefined;
+  if (edited.length > 8000) {
+    throw new DomainError('invalid', 'the edited text is longer than 8000 characters');
+  }
+  return PublishContext.parse({
     ...publish,
     text: edited,
     fingerprint: publishFingerprint({ ...publish, text: edited }, sha256),
   });
-  if (!approved.success) {
-    throw new DomainError('invalid', 'the edited text is longer than 8000 characters');
-  }
-  return approved.data;
+}
+
+/**
+ * An interrupted publish follow-up (ruling R13): never run again on its old approval — the run
+ * may already have posted. A fresh job-owned publish question with the same content asks Cosmin
+ * whether to publish again; its Approve queues a new follow-up.
+ */
+export function reaskInterruptedPublish(
+  ctx: CommandContext,
+  followUp: FollowUp,
+  runAgentId: Id | undefined,
+): Question | undefined {
+  const publish = followUp.publish;
+  if (followUp.kind !== 'publish' || !publish) return undefined;
+  const asker = [ctx.tables.questions.get(followUp.questionId)?.originAgentId, runAgentId].find(
+    (id): id is Id => id !== undefined && ctx.tables.agents.get(id) !== undefined,
+  );
+  if (!asker) return undefined;
+  return openQuestion(ctx, {
+    id: `q-${randomUUID()}`,
+    kind: 'publish',
+    originAgentId: asker,
+    holder: USER,
+    context: {
+      text:
+        `Publish to ${publish.platform} (${publish.account}): the earlier attempt was ` +
+        'interrupted and may already have posted. Publish again?',
+      options: [...PUBLISH_ACTIONS],
+      publish,
+      origin: originOf(ctx, asker, { recentEvents: () => [] }),
+    },
+    meta: { source: COMMAND_SOURCE, toUser: true, jobOwned: true, reaskOf: followUp.questionId },
+  });
 }
 
 /** A job publish's answer: "Approve" queues the follow-up that publishes it; "Refuse" nothing. */

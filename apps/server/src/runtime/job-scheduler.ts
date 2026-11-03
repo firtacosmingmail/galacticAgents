@@ -19,6 +19,7 @@ import type { EventLog } from '../domain/event-log.js';
 import { RETRY_NOTE } from '../domain/findings.js';
 import { JOB_TICK_MS, endJobRun, jobMemory, runPurpose, startJobRun } from '../domain/job-runs.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
+import { reaskInterruptedPublish } from '../domain/publish.js';
 import { FINISHED_WORK } from '../domain/states.js';
 import type { AgentRuntime, TurnEnd } from './agent-runtime.js';
 import type { Timers } from './archival.js';
@@ -599,8 +600,9 @@ export class JobScheduler {
    * Records the run `interrupted`. A missed run (a restart, a cap race, a stop by the system)
    * makes its job due again at once — a follow-up run leaves the schedule alone — and a follow-up
    * it carried goes back on the job's queue and a retry note back on the job, so the next run does
-   * them. A run the user stopped (`byUser`, ruling R9) keeps the job's schedule and is not done
-   * again. Returns whether the run was still going.
+   * them — except a publish, which may already have gone out: a fresh publish question asks
+   * again instead (ruling R13). A run the user stopped (`byUser`, ruling R9) keeps the job's
+   * schedule and is not done again. Returns whether the run was still going.
    */
   private interrupt(runId: Id, { byUser = false }: { byUser?: boolean } = {}): boolean {
     const run = this.opts.log.tables.jobRuns.get(runId);
@@ -611,7 +613,10 @@ export class JobScheduler {
       if (job.state === 'stopped' || byUser) return;
       const changes: JobChanges = {};
       const followUp = run.followUp;
-      if (followUp && !job.followUps.some((f) => f.questionId === followUp.questionId)) {
+      if (followUp?.kind === 'publish') {
+        // Never re-run on the old approval: it may already have posted (ruling R13).
+        reaskInterruptedPublish(ctx, followUp, run.agentId);
+      } else if (followUp && !job.followUps.some((f) => f.questionId === followUp.questionId)) {
         changes.followUps = [followUp, ...job.followUps];
       }
       if (run.note && job.meta?.[RETRY_NOTE] === undefined) {

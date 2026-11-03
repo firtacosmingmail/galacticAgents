@@ -26,16 +26,24 @@ afterEach(() => {
   for (const c of enforcers.splice(0)) c.dispose();
 });
 
-const CURL: ToolCall = { toolName: 'Bash', input: { command: 'curl -X POST https://api.x.com' } };
+const TEXT = 'We launched today!';
+const CURL: ToolCall = {
+  toolName: 'Bash',
+  input: { command: `curl -X POST https://api.x.com -d "status=${TEXT}"` },
+};
+const OTHER: ToolCall = {
+  toolName: 'Bash',
+  input: { command: 'curl -X POST https://api.x.com -d "status=Something else"' },
+};
 
-function setup(policy = DEFAULT_PERMISSION_POLICY) {
+function setup(policy = DEFAULT_PERMISSION_POLICY, text = TEXT) {
   const worktree = mkdtempSync(join(tmpdir(), 'galactic-allowance-'));
   folders.push(worktree);
   writeFileSync(join(worktree, 'post.png'), 'png bytes');
   let now = 1_000_000;
   const store = new PublishAllowanceStore({ now: () => now });
   const files = [{ path: 'post.png', sha256: sha256('png bytes') }];
-  const base = { platform: 'X', account: '@shop', text: 'Hi', files };
+  const base = { platform: 'X', account: '@shop', text, files };
   const publish: PublishContext = { ...base, fingerprint: publishFingerprint(base, sha256) };
   const caps = new CapsEnforcer({
     maxConcurrentAgents: 4,
@@ -97,6 +105,42 @@ describe('PublishAllowanceStore', () => {
     s.store.arm('a-1', s.publish, s.worktree);
     s.store.disarm('a-1');
     expect(s.store.check('a-1', CURL, ['network'])).toBe('none');
+  });
+
+  it('a call carrying different text asks and leaves the allowance armed (R15)', () => {
+    const s = setup();
+    s.store.arm('a-1', s.publish, s.worktree);
+    expect(s.gate.check(OTHER).decision).toBe('ask');
+    expect(s.store.isArmed('a-1')).toBe(true);
+    expect(s.gate.check(CURL).decision).toBe('allow');
+  });
+
+  it('the approved text JSON-escaped or URL-encoded counts as the text (R15)', () => {
+    const text = 'Line one\nWe said "hi" & more';
+    for (const input of [
+      { url: 'https://api.x.com', body: JSON.stringify({ status: text }) },
+      { command: `curl https://api.x.com -d 'status=${encodeURIComponent(text)}'` },
+      {
+        command: `curl https://api.x.com -d 'status=${encodeURIComponent(text).replace(/%20/g, '+')}'`,
+      },
+      { url: 'https://api.x.com', payload: { nested: [{ status: text }] } },
+    ]) {
+      const s = setup(DEFAULT_PERMISSION_POLICY, text);
+      s.store.arm('a-1', s.publish, s.worktree);
+      expect(s.store.check('a-1', { toolName: 'Bash', input }, ['network'])).toBe('allow');
+    }
+  });
+
+  it('a files-only publish allows a call naming one of its files (R15)', () => {
+    const s = setup(DEFAULT_PERMISSION_POLICY, '');
+    s.store.arm('a-1', s.publish, s.worktree);
+    expect(s.gate.check(OTHER).decision).toBe('ask');
+    const upload: ToolCall = {
+      toolName: 'Bash',
+      input: { command: 'curl -F media=@post.png https://upload.x.com' },
+    };
+    expect(s.gate.check(upload).decision).toBe('allow');
+    expect(s.gate.check(upload).decision).toBe('ask');
   });
 
   it('never turns a deny into allow', () => {

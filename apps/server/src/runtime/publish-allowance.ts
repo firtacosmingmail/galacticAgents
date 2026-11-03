@@ -7,7 +7,8 @@ import { sha256 } from '../domain/publish.js';
  * The one-shot allowance an approved publish arms (P11-06, plan Task 7; SPEC decision 147). A
  * publishing run works without a job's unattended rules, so every outward call asks; the user's
  * "Approve" on the publish card lets that agent's next call the policy table asks about for the
- * network through once — as long as every approved file still has the hash that was approved (a
+ * network, carrying the approved text (or, with no text, naming an approved file — ruling R15),
+ * through once — as long as every approved file still has the hash that was approved (a
  * changed file disarms it: the call asks, and a fresh publish request brings a fresh card). An
  * allowance lasts 30 minutes and ends with its agent. The gate consults it (`allowOnce`) only
  * where the table says `ask`, so it never turns a deny into an allow.
@@ -46,10 +47,13 @@ export class PublishAllowanceStore {
 
   /**
    * `allow` exactly once: for the first call the table asks about whose every category is
-   * `network`, while the allowance is armed and fresh and every file still matches its approved
-   * hash. A mismatch (or a file gone) disarms it; any other call leaves it armed. `none` otherwise.
+   * `network` and that carries the approved content (ruling R15: its input holds the approved
+   * text — verbatim, JSON-escaped or URL-encoded — or, for a publish with no text, one of the
+   * approved files' paths), while the allowance is armed and fresh and every file still matches
+   * its approved hash. A mismatch (or a file gone) disarms it; any other call leaves it armed and
+   * asks as usual. `none` otherwise.
    */
-  check(agentId: Id, _call: ToolCall, categories: PermissionAction[]): 'allow' | 'none' {
+  check(agentId: Id, call: ToolCall, categories: PermissionAction[]): 'allow' | 'none' {
     const entry = this.armed.get(agentId);
     if (!entry) return 'none';
     if (this.now() - entry.at > PUBLISH_ALLOWANCE_TTL_MS) {
@@ -57,6 +61,7 @@ export class PublishAllowanceStore {
       return 'none';
     }
     if (categories.length === 0 || !categories.every((c) => c === 'network')) return 'none';
+    if (!carriesContent(call, entry)) return 'none';
     this.armed.delete(agentId);
     return this.filesMatch(entry) ? 'allow' : 'none';
   }
@@ -80,4 +85,43 @@ export class PublishAllowanceStore {
       }
     });
   }
+}
+
+/** Every string inside a tool call's input (recursively), plus the serialized input. */
+function stringsOf(input: unknown): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 20) return;
+    if (typeof v === 'string') out.push(v);
+    else if (Array.isArray(v)) for (const x of v) walk(x, depth + 1);
+    else if (v !== null && typeof v === 'object') {
+      for (const x of Object.values(v as Record<string, unknown>)) walk(x, depth + 1);
+    }
+  };
+  walk(input, 0);
+  try {
+    out.push(JSON.stringify(input) ?? '');
+  } catch {
+    // An input that does not serialise is judged by its strings alone.
+  }
+  return out;
+}
+
+/** The forms the approved text may take in a call: verbatim, JSON-escaped, URL-encoded. */
+function textForms(text: string): string[] {
+  const uri = encodeURIComponent(text);
+  return [...new Set([text, JSON.stringify(text).slice(1, -1), uri, uri.replace(/%20/g, '+')])];
+}
+
+/**
+ * Whether the call carries the approved content (ruling R15): the approved text in one of its
+ * forms, or — for a publish with no text — one of the approved files (its path, as given or
+ * resolved in the worktree).
+ */
+function carriesContent(call: ToolCall, entry: Armed): boolean {
+  const haystacks = stringsOf(call.input);
+  const has = (needle: string) => needle !== '' && haystacks.some((h) => h.includes(needle));
+  const { text, files } = entry.publish;
+  if (text.trim() !== '') return textForms(text).some(has);
+  return files.some((f) => has(f.path) || has(resolve(entry.worktree, f.path)));
 }

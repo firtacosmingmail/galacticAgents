@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { registerAgyHookRoutes } from '../../http/agy-hook-routes.js';
-import { HookBridge, SECRET_ENV, URL_ENV, type HookDecide } from './hook-bridge.js';
+import { HookBridge, SECRET_ENV, URL_ENV, mcpText, type HookDecide } from './hook-bridge.js';
 
 /**
  * The hook bridge (P11-05; TECHNOLOGY §3.7): the server side keyed by a session's secret, and
@@ -110,6 +110,24 @@ describe('HookBridge', () => {
     const thrown = await bridge.handle('s', PAYLOAD);
     expect(thrown.decision).toBe('deny');
     expect(thrown.reason).toContain('boom');
+  });
+
+  it("a tools/call reaches only the calling session's own tools (P11-06: request_publish)", async () => {
+    const bridge = new HookBridge();
+    const calls: string[] = [];
+    const toolsOf = (who: string) => ({
+      list: () => [{ name: 'request_publish', description: who, inputSchema: { type: 'object' } }],
+      call: async (name: string) => {
+        calls.push(`${who}:${name}`);
+        return mcpText(who);
+      },
+    });
+    bridge.register('secret-a', async () => 'deny' as const, toolsOf('steward-a'));
+    bridge.register('secret-b', async () => 'deny' as const, toolsOf('steward-b'));
+    expect(await bridge.callTool('secret-a', 'request_publish', {})).toEqual(mcpText('steward-a'));
+    expect(await bridge.callTool('secret-b', 'request_publish', {})).toEqual(mcpText('steward-b'));
+    expect((await bridge.callTool('secret-c', 'request_publish', {})).isError).toBe(true);
+    expect(calls).toEqual(['steward-a:request_publish', 'steward-b:request_publish']);
   });
 });
 
