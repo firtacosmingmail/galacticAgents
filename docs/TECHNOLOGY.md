@@ -322,6 +322,7 @@ Stewards of the `gemini` provider run on Google's Antigravity CLI (`agy` 1.4.12)
 - **agy's MCP deadline**: agy cuts an MCP `tools/call` off after 3 minutes (measured).
   - So `ask_user` holds at most 150 s, then returns "not answered yet, end your turn".
   - The question and the turn stay open (no `agent.idle`), and the answer starts a new agy run in the conversation (ruling R12; verified with the real CLI).
+  - One question at a time (final review): a second `ask_user` while one holds or waits deferred is refused with an error result (`ASK_WAITING_NOTE`: "A question is already waiting… end your turn now"), so it never replaces the waiting question's deferred answer.
 - **Several hooks**: with a user hook answering `auto_approve` before or after Mission Control's, Mission Control's `deny` still won (real probe). A user's hooks cannot approve what the gate refused.
 - **Residual**: the user's own MCP servers in the global `mcp_config.json` still start in Steward runs (starting a server is not gated), though every call to them is denied.
 - **Images**: the image generator saves into `~/.gemini/antigravity-cli/brain/<conversationId>/` (subagents' images too); before a turn's end is reported, the image files new since its `init` are copied into `<cwd>/generated-images/` (never overwriting).

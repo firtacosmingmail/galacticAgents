@@ -148,6 +148,10 @@ const DEFERRED = Symbol('deferred');
 export const DEFERRED_NOTE =
   'The user has not answered yet. Their answer will reach you as your next message: end your ' +
   'turn now, without guessing the answer or asking again.';
+/** What a second `ask_user` gets while one question waits (it never replaces the first). */
+export const ASK_WAITING_NOTE =
+  'A question is already waiting for the user: do not ask another. Its answer will reach you as ' +
+  'your next message: end your turn now.';
 const ENDED_MEMORY = 256;
 const SESSION_REF = /^agy:([\w-]{1,128})$/;
 const ALLOW = /^(allow|yes|y|ok|approve|approved)$/i;
@@ -206,6 +210,8 @@ class Session {
    */
   deferred:
     { id: Id; question: string; answer: Promise<string | Dismissed | undefined> } | undefined;
+  /** An `ask_user` call is holding for its answer right now (one question at a time). */
+  asking = false;
   readonly unpauseWaiters: (() => void)[] = [];
   readonly ready: Promise<void>;
   markReady!: () => void;
@@ -856,6 +862,9 @@ export class AgyAdapter implements AgentAdapter {
     const args = asRecord(raw);
     const text = typeof args['question'] === 'string' ? args['question'].trim() : '';
     if (!text) return mcpText('ask_user needs a question', true);
+    // One question at a time (final review): a second one would replace the waiting one's
+    // deferred answer, leaving its card stale and its answer lost.
+    if (session.asking || session.deferred) return mcpText(ASK_WAITING_NOTE, true);
     const options = (Array.isArray(args['options']) ? args['options'] : [])
       .filter((o): o is string => typeof o === 'string' && o.trim().length > 0)
       .slice(0, 8);
@@ -866,11 +875,19 @@ export class AgyAdapter implements AgentAdapter {
     // agy gives up on an MCP call after 3 minutes (measured, P11-05): wait less, then let the
     // question outlive the call — the answer comes back as the Steward's next message.
     let timer: NodeJS.Timeout | undefined;
-    const held = await Promise.race([
-      pending,
-      new Promise<typeof DEFERRED>((r) => (timer = setTimeout(() => r(DEFERRED), this.askHoldMs))),
-    ]);
-    clearTimeout(timer);
+    session.asking = true;
+    let held: Awaited<typeof pending> | typeof DEFERRED;
+    try {
+      held = await Promise.race([
+        pending,
+        new Promise<typeof DEFERRED>(
+          (r) => (timer = setTimeout(() => r(DEFERRED), this.askHoldMs)),
+        ),
+      ]);
+    } finally {
+      session.asking = false;
+      clearTimeout(timer);
+    }
     if (held === DEFERRED) {
       session.deferred = { id: id!, question: text, answer: pending };
       return mcpText(DEFERRED_NOTE);

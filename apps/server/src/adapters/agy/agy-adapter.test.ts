@@ -372,6 +372,23 @@ describe('AgyAdapter', () => {
     );
   });
 
+  it('a second ask_user while one is waiting is refused; the first keeps its card and answer', async () => {
+    const r = await rig({}, undefined, { askHoldMs: 200 });
+    const opts = spawnOpts(r, 'scenario:asks-twice');
+    await r.adapter.spawn(opts);
+    await waitFor(() => text(r, opts.agentId).includes('second: '), 'the second ask');
+    expect(text(r, opts.agentId)).toContain('first: The user has not answered yet');
+    expect(text(r, opts.agentId)).toContain('second: A question is already waiting');
+    const asked = of(r, opts.agentId, 'agent.needs_input');
+    expect(asked).toHaveLength(1);
+    // The first question's answer still reaches the agent, as its next run.
+    await r.adapter.answer(asked[0]!.questionId, 'first option');
+    await waitFor(() => idles(r, opts.agentId) === 1, 'idle');
+    expect(text(r, opts.agentId)).toContain(
+      'The user answered your question ("Which option do you prefer?"): first option',
+    );
+  });
+
   it('a deferred question withdrawn by an interrupt ends the turn idle', async () => {
     const r = await rig({}, undefined, { askHoldMs: 200 });
     const opts = spawnOpts(r, 'scenario:asks');

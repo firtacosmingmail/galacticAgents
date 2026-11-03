@@ -364,6 +364,13 @@ const SCENARIOS = {
     });
     await text(answer ? `You chose: ${answer}` : 'No answer; carrying on.');
   },
+  // A second ask_user while the first is still waiting (final review: refused, never replacing it).
+  'asks-twice': async () => {
+    const first = await callMcp('ask_user', { question: 'Which option do you prefer?' });
+    await text(`first: ${first}`);
+    const second = await callMcp('ask_user', { question: 'And which colour?' });
+    await text(`second: ${second}`);
+  },
   permission: async () => {
     await text('Cleaning the build directory.');
     const r = await command(`rm -r ${join(cwd, 'build')}`, 'deleted build');
