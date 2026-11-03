@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import { dataPaths, loadConfig } from './config/config.js';
 import { prepareRemoteHost } from './remote/tailscale.js';
 import { readTurnedOff, RemoteService } from './remote/service.js';
-import { SettingsService, declarationLimits, runSettings } from './config/settings.js';
+import {
+  DEFAULT_BRAIN_USER_MCP,
+  SettingsService,
+  declarationLimits,
+  runSettings,
+} from './config/settings.js';
 import { Opener } from './deliverables/opener.js';
 import { setGlobalDefaultPolicy } from './domain/permissions.js';
 import { buildApp } from './app.js';
@@ -132,6 +137,9 @@ const adapters: AgentAdapter[] = [
     ...(config.stewardsLoadUserSettings === false
       ? { stewardSettingSources: ['project', 'local'] as ('project' | 'local')[] }
       : {}),
+    // Which brains get the user's MCP servers (claude.ai connectors, plugins' servers): the
+    // Waykeepers unless the settings say otherwise (TECHNOLOGY §3.1).
+    brainUserMcp: config.brainUserMcp ?? DEFAULT_BRAIN_USER_MCP,
     onError,
   }),
   ...(config.acp

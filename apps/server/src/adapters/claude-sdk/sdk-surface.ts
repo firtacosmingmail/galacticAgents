@@ -165,6 +165,10 @@ export interface SdkQueryOptions {
   mcpServers?: Record<string, unknown>;
   /** Only the servers in `mcpServers`: no `.mcp.json`, user or plugin servers. */
   strictMcpConfig?: boolean;
+  /** Settings layered over the loaded sources (`--settings`), e.g. `{disableAllHooks: true}`. */
+  settings?: Record<string, unknown>;
+  /** Skills listed to the model: `[]` hides every skill (a context filter, not a sandbox). */
+  skills?: string[] | 'all';
   allowedTools?: string[];
   extraArgs?: Record<string, string | null>;
   env?: Record<string, string | undefined>;
