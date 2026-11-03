@@ -12,6 +12,7 @@ import {
 } from './domain.js';
 import type { EventEnvelope } from './events.js';
 import { deliverablesPhrase } from './deliverables.js';
+import { ModelInfo, Provider, ProviderUsage } from './providers.js';
 import { ReplyQuote } from './reply.js';
 import type { SpendContext } from './long-term-questions.js';
 
@@ -332,12 +333,10 @@ export const Settings = z.object({
   transcriptRetention: TranscriptRetention.optional(),
   /** Budget warnings (P8-01); the server always reports it, older servers leave it out. */
   budgets: SettingsBudgets.optional(),
-  /**
-   * The runtime new Stewards run on (P8-07), whichever brain spawns them; absent = the spawning
-   * brain's own runtime (the behaviour before P8-07). Only a runtime the server has an adapter
-   * for can be chosen. The Harmonizer and Waykeepers stay on their own runtime.
-   */
-  stewardRuntime: AgentRuntime.optional(),
+  /** The AI provider new Stewards use when nothing names one (P11-02); absent: `claude`. */
+  defaultProvider: Provider.optional(),
+  /** Per-provider settings (P11-02): the default model of each provider's Stewards. */
+  providers: z.partialRecord(Provider, z.object({ model: z.string().optional() })).optional(),
   /**
    * The deliverables settings (Phase 9): the IDE Open in IDE uses (P9-03, decision 127). Optional
    * so a page reading an older server still parses; this server always sends it.
@@ -356,7 +355,8 @@ export const SettingName = z.enum([
   'stewardsLoadUserSettings',
   'transcriptRetention',
   'budgets',
-  'stewardRuntime',
+  'defaultProvider',
+  'providers',
   'deliverables',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
@@ -377,8 +377,15 @@ export const SettingsPatch = z
     /** Transcript retention (P8-02), merged key by key; local requests only (decision 51, 90). */
     transcriptRetention: TranscriptRetention.partial().strict().optional(),
     budgets: SettingsBudgets.partial().strict().optional(),
-    /** The runtime of new Stewards (P8-07); `null` = the spawning brain's own again. */
-    stewardRuntime: AgentRuntime.nullable().optional(),
+    /** The default AI provider (P11-02); `null` = `claude` again. */
+    defaultProvider: Provider.nullable().optional(),
+    /** Merged provider by provider; `model: null` clears that provider's default model. */
+    providers: z
+      .partialRecord(
+        Provider,
+        z.object({ model: z.string().min(1).max(100).nullable().optional() }).strict(),
+      )
+      .optional(),
     /**
      * The deliverables settings (Phase 9), merged key by key; local requests only unless
      * `autoApproveRemote` (decisions 51, 131). `ide` must be `auto` or an installed IDE.
@@ -485,6 +492,12 @@ export const RuntimePreflight = z.object({
   /** `pro`, `max`, `team`, … for a subscription login. */
   subscriptionType: z.string().optional(),
   apiProvider: z.string().optional(),
+  /** The AI provider this runtime serves (P11-02). */
+  provider: Provider.optional(),
+  /** The models the runtime's CLI lists (P11-02). */
+  models: z.array(ModelInfo).optional(),
+  /** The subscription's remaining quota, when the CLI reports it (P11-02). */
+  usage: ProviderUsage.optional(),
   problems: z.array(PreflightProblem),
 });
 export type RuntimePreflight = z.infer<typeof RuntimePreflight>;
@@ -593,6 +606,7 @@ const QUESTION_TITLES: Record<QuestionKind, string> = {
   permission: 'Permission needed',
   clarification: 'A question for you',
   spend: 'Spend approval needed',
+  publish: 'Publish approval needed',
 };
 
 /**
@@ -643,7 +657,10 @@ export function notificationOf(
         id: `question:${id}`,
         // A spend is gated and ranked like a permission (decision 145, ruling R7): the same
         // notification switch and push kind; `questionKind` still tells them apart.
-        kind: kind === 'permission' || kind === 'spend' ? 'permission' : 'question',
+        kind:
+          kind === 'permission' || kind === 'spend' || kind === 'publish'
+            ? 'permission'
+            : 'question',
         title: QUESTION_TITLES[kind],
         ...(body ? { body: clip(body) } : {}),
         target: { kind: 'question', id },

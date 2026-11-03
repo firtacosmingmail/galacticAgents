@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import {
   Event,
   HarnessActivityBody,
+  HarnessAdvanceBody,
   HarnessAgentBody,
   HarnessAnswerBody,
   HarnessBrainToolBody,
@@ -13,6 +14,7 @@ import {
   HarnessQuestionBody,
   HarnessScenarioBody,
   HarnessStateBody,
+  HarnessStewardScriptBody,
 } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 import type { Commands } from '../domain/commands.js';
@@ -24,6 +26,7 @@ import type { AgentRuntime } from '../runtime/agent-runtime.js';
 import { clearDemoProjects } from '../runtime/demo-clear.js';
 import type { HarnessBrains } from '../runtime/harness-brains.js';
 import type { HarnessJobs } from '../runtime/harness-jobs.js';
+import type { HarnessStewards } from '../runtime/harness-stewards.js';
 import {
   NotHarnessError,
   SceneHarness,
@@ -44,6 +47,8 @@ export interface DevRoutesOptions {
     brains?: HarnessBrains;
     /** P10-08: a job's run now, with a scripted Steward, and a scheduler tick (`harness-jobs.ts`). */
     jobs?: HarnessJobs;
+    /** P11-10: a Steward's script (a publish, a usage limit) and the usage-limit clock. */
+    stewards?: HarnessStewards;
   };
 }
 
@@ -140,6 +145,7 @@ export function registerDevRoutes(
         }),
         opts.harness?.brains,
         opts.harness?.jobs,
+        opts.harness?.stewards,
       );
     }
   });
@@ -153,6 +159,7 @@ function registerHarness(
   harness: SceneHarness,
   brains: HarnessBrains | undefined,
   jobs: HarnessJobs | undefined,
+  stewards: HarnessStewards | undefined,
 ): void {
   /** Runs a harness action; a refused command is 404 / 400 / 409 like the panel's routes. */
   const act = async <T>(reply: FastifyReply, req: FastifyRequest, fn: () => Promise<T>) => {
@@ -270,5 +277,19 @@ function registerHarness(
 
     /** P10-08: one job-scheduler tick now (a queued follow-up run starts on it). */
     app.post('/dev/harness/jobs/tick', async (req, reply) => act(reply, req, () => jobs.tick()));
+  }
+
+  if (stewards) {
+    /** P11-10: the task's next Steward follows a script: a publish request or a usage limit. */
+    app.post<{ Params: Params }>('/dev/harness/tasks/:id/steward-script', async (req, reply) => {
+      const body = parse(HarnessStewardScriptBody, req.body, reply);
+      if (body) return act(reply, req, async () => stewards.script(req.params.id, body));
+    });
+
+    /** P11-10: the usage-limit clock moves forward, then the waits are checked once. */
+    app.post('/dev/harness/usage-limits/advance', async (req, reply) => {
+      const body = parse(HarnessAdvanceBody, req.body, reply);
+      if (body) return act(reply, req, () => stewards.advanceLimits(body.ms));
+    });
   }
 }

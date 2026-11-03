@@ -2,19 +2,18 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { AgentRuntime, Id } from '@galactic/protocol';
-import { AcpAdapter } from '../adapters/acp/acp-adapter.js';
-import { FAKE_ACP_AGENT } from '../adapters/acp/fake-agent.js';
-import { ProcessSupervisor } from '../runtime/supervisor.js';
+import type { Id, Provider } from '@galactic/protocol';
+import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
+import { ProviderCatalog } from '../runtime/provider-catalog.js';
 import { gitRunner } from '../workspace/git.js';
 import { harmonizerBrain } from './harmonizer/index.js';
 import { brainHarness, type BrainHarness } from './testing/index.js';
 
 /**
- * The `stewardRuntime` setting (P8-07): a brain on one runtime spawns its Stewards on the runtime
- * the setting names, read at every spawn — here a scripted Harmonizer on the fake runtime starts
- * an asteroid Steward that runs as a real ACP agent process (the fake ACP agent), reports by
- * ending its turn, and is closed.
+ * A Steward's provider (P11-03, replacing P8-07's `stewardRuntime` setting): a brain spawns its
+ * Stewards on the provider the task, project or Settings name, read at every spawn — here a
+ * scripted Harmonizer on the fake runtime starts an asteroid Steward on the Settings' default
+ * provider (a fake adapter registered as `codex`), which reports by ending its turn and is closed.
  */
 
 const GIT_ENV = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
@@ -22,26 +21,18 @@ const USER = { type: 'user' } as const;
 
 let tmp: string;
 let h: BrainHarness;
-let supervisor: ProcessSupervisor;
-let acp: AcpAdapter;
-let stewardRuntime: AgentRuntime | undefined;
+let codex: FakeAdapter;
+let settings: { defaultProvider?: Provider; providers?: { chatgpt?: { model: string } } };
 
 beforeEach(() => {
   tmp = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-sr-')));
-  for (const d of ['home', 'data', 'projects', 'acp-state']) mkdirSync(join(tmp, d));
-  supervisor = new ProcessSupervisor({ defaults: { graceMs: 2_000, termMs: 1_000 } });
-  acp = new AcpAdapter({
-    supervisor,
-    agent: {
-      command: process.execPath,
-      args: [FAKE_ACP_AGENT, '--state', join(tmp, 'acp-state')],
-    },
-    graceMs: 2_000,
-  });
+  for (const d of ['home', 'data', 'projects']) mkdirSync(join(tmp, d));
+  settings = {};
+  codex = new FakeAdapter({ speed: 0, runtime: 'codex' });
   h = brainHarness({
-    adapters: [acp],
+    adapters: [codex],
     compose: {
-      stewardRuntime: () => stewardRuntime,
+      catalog: new ProviderCatalog({ adapters: () => [codex], settings: () => settings }),
       workspaces: {
         projectsRoot: join(tmp, 'projects'),
         dataDir: join(tmp, 'data'),
@@ -53,8 +44,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await h.dispose().catch(() => {});
-  await acp.dispose();
-  await supervisor.dispose();
+  await codex.dispose();
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -97,17 +87,17 @@ async function asteroidRun(): Promise<{ taskId: () => Id; hqId: Id }> {
 
 const steward = () => h.log.tables.agents.all().find((a) => a.role === 'steward')!;
 
-describe('stewardRuntime (P8-07)', () => {
-  it('a fake-runtime Harmonizer spawns its Steward on the ACP runtime the setting names', async () => {
-    stewardRuntime = 'acp';
+describe("a Steward's provider (P11-03)", () => {
+  it('a fake-runtime Harmonizer spawns its Steward on the provider the Settings name, with its model', async () => {
+    settings = { defaultProvider: 'chatgpt', providers: { chatgpt: { model: 'gpt-5.6-terra' } } };
     const { hqId } = await asteroidRun();
-    expect(steward().runtime).toBe('acp');
-    expect(steward().sessionRef).toMatch(/^acp:/);
+    expect(steward().runtime).toBe('codex');
+    expect(steward().meta).toMatchObject({ provider: 'chatgpt', model: 'gpt-5.6-terra' });
     expect(h.log.tables.agents.get(hqId)?.runtime).toBe('fake');
   });
 
-  it('unset, the Steward runs on its brain’s runtime', async () => {
-    stewardRuntime = undefined;
+  it('nothing named, the Steward of a fake brain runs on the fake runtime (Claude in production)', async () => {
+    settings = {};
     await asteroidRun();
     expect(steward().runtime).toBe('fake');
   });

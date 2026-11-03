@@ -15,13 +15,22 @@ import type { WorkState } from '@galactic/protocol';
  * wait blocks on the user is the question's holder, not the agent's state).
  */
 export type AgentPhase =
-  'running' | 'idle' | 'paused' | 'finished' | 'failed' | 'stopped' | 'interrupted';
+  | 'running'
+  | 'idle'
+  | 'paused'
+  | 'finished'
+  | 'failed'
+  | 'stopped'
+  | 'interrupted'
+  /** Ended by its provider's usage limit (`agent.failed{reason: 'limit'}`, P11-07). */
+  | 'limited';
 
 export const ENDED_PHASES: ReadonlySet<AgentPhase> = new Set<AgentPhase>([
   'finished',
   'failed',
   'stopped',
   'interrupted',
+  'limited',
 ]);
 
 export interface AgentFact {
@@ -80,6 +89,9 @@ function latestEnded(f: WorkFacts): Derived {
       return 'awaiting_closure';
     case 'failed':
       return 'failed';
+    // A usage limit pauses the step until the user switches or it resets (decision 148).
+    case 'limited':
+      return 'paused';
     case 'interrupted':
       return 'interrupted';
     default:

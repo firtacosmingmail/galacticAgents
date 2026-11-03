@@ -8,6 +8,7 @@ import {
   HistoryWorkParams,
   HistoryWorkQuery,
   NotificationsQuery,
+  PROVIDER_RUNTIME,
   SettingsPatch,
   TranscriptQuery,
   type ConversationResponse,
@@ -18,6 +19,7 @@ import {
   type IdeResponse,
   type NotificationsResponse,
   type PreflightResponse,
+  type Provider,
   type RuntimePreflight,
   type SettingsResponse,
   type TranscriptResponse,
@@ -236,33 +238,55 @@ export function registerPanelRoutes(
       let cached: { at: number; value: PreflightResponse } | undefined;
       let running: Promise<PreflightResponse> | undefined;
       const check = async (): Promise<PreflightResponse> => {
-        const runtimes: RuntimePreflight[] = [];
-        for (const name of RuntimeName.options) {
-          const adapter = runtime.adapter(name);
-          if (!adapter) continue;
-          if (!adapter.preflight) {
-            runtimes.push({ runtime: name, ok: true, installed: true, problems: [] });
-            continue;
-          }
-          try {
-            runtimes.push(await adapter.preflight());
-          } catch (error) {
-            runtimes.push({
-              runtime: name,
-              ok: false,
-              installed: false,
-              problems: [
-                {
-                  code: 'check_failed',
-                  severity: 'error',
-                  message: redactSecrets(`the ${name} check failed: ${(error as Error).message}`),
-                },
-              ],
-            });
-          }
-        }
+        // Concurrent: a slow CLI (`agy models`) must not hold the others up.
+        const checked = await Promise.all(
+          RuntimeName.options.map(async (name): Promise<RuntimePreflight | undefined> => {
+            const adapter = runtime.adapter(name);
+            if (!adapter) return undefined;
+            if (!adapter.preflight)
+              return { runtime: name, ok: true, installed: true, problems: [] };
+            try {
+              const found = await adapter.preflight();
+              // P11-09: the page shows each provider's models and limits next to its login; a
+              // runtime that is not ready is never asked (it would spawn its CLI for nothing).
+              const provider =
+                found.provider ??
+                (Object.keys(PROVIDER_RUNTIME) as Provider[]).find(
+                  (p) => PROVIDER_RUNTIME[p] === name,
+                );
+              const models = found.ok
+                ? (found.models ?? (await listed(() => adapter.models?.())))
+                : found.models;
+              const usage = found.ok
+                ? (found.usage ?? (await listed(() => adapter.usage?.())))
+                : found.usage;
+              return {
+                ...found,
+                ...(provider ? { provider } : {}),
+                ...(models && models.length > 0 ? { models } : {}),
+                ...(usage ? { usage } : {}),
+              };
+            } catch (error) {
+              return {
+                runtime: name,
+                ok: false,
+                installed: false,
+                problems: [
+                  {
+                    code: 'check_failed',
+                    severity: 'error',
+                    message: redactSecrets(`the ${name} check failed: ${(error as Error).message}`),
+                  },
+                ],
+              };
+            }
+          }),
+        );
+        const runtimes = checked.filter((r): r is RuntimePreflight => r !== undefined);
         return {
-          ok: runtimes.every((r) => r.ok),
+          // R23: only the brains' runtime (and the dev fake) decide; Codex and Antigravity are
+          // optional providers whose problems show on their own rows.
+          ok: runtimes.filter((r) => !OPTIONAL_RUNTIMES.has(r.runtime)).every((r) => r.ok),
           runtimes,
           checkedAt: new Date().toISOString(),
         };
@@ -283,3 +307,15 @@ export function registerPanelRoutes(
     }
   });
 }
+
+/** An optional adapter listing (`models()`, `usage()`); a failure leaves it out. */
+async function listed<T>(read: () => Promise<T> | undefined): Promise<T | undefined> {
+  try {
+    return await read();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Providers a user may leave unset: their state never makes the overall check fail. */
+const OPTIONAL_RUNTIMES: ReadonlySet<string> = new Set(['codex', 'agy']);

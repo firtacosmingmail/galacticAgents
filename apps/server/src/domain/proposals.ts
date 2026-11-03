@@ -244,6 +244,10 @@ export function proposePlan(
         state: 'proposed',
         ...(t.priority ? { priority: t.priority } : {}),
         ...(blockedBy.length > 0 ? { blockedBy } : {}),
+        ...(t.provider ? { provider: t.provider } : {}),
+        ...(t.model ? { model: t.model } : {}),
+        ...(t.publishes ? { publishes: true } : {}),
+        ...(t.makesImages ? { makesImages: true } : {}),
       }),
     );
   });
@@ -393,7 +397,16 @@ export function proposeJob(ctx: CommandContext, input: ProposeJobInput): Proposa
   return proposal;
 }
 
-const DRAFT_FIELDS = ['name', 'instructions', 'schedule', 'provider', 'unattendedRules'] as const;
+const DRAFT_FIELDS = [
+  'name',
+  'instructions',
+  'schedule',
+  'provider',
+  'model',
+  'followUpProvider',
+  'followUpModel',
+  'unattendedRules',
+] as const;
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /**

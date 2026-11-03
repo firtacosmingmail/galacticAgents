@@ -232,9 +232,12 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
     case 'question.answered': {
       // The answer's idempotency key goes on the row as the server keeps it (P7-05).
       const prior = next.questions[event.questionId]?.meta;
+      const context = next.questions[event.questionId]?.context;
       return {
         ...next,
         questions: patch(next.questions, event.questionId, {
+          // A publish approved with edited text carries the approved request (P11-06).
+          ...(event.publish && context ? { context: { ...context, publish: event.publish } } : {}),
           status: 'answered',
           answer: event.answer,
           answeredBy: event.answeredBy,

@@ -444,3 +444,25 @@ describe("a job run's Steward (P10-07, ledger ruling R2)", () => {
     expect(ids).not.toContain(runSteward.id);
   });
 });
+
+describe('the provider of a satellite (P11-09)', () => {
+  it('carries its provider: runtime codex is chatgpt, meta.provider wins, claude by default', () => {
+    const w = world(allWorking);
+    w.agents[steward.id] = { ...steward, runtime: 'codex' };
+    w.agents[asteroidSteward.id] = {
+      ...asteroidSteward,
+      meta: { provider: 'gemini', model: 'gemini-3.8-flash' },
+    };
+    const byAgent = Object.fromEntries(satelliteList(w).map((s) => [s.agentId, s.provider]));
+    expect(byAgent[steward.id]).toBe('chatgpt');
+    expect(byAgent[asteroidSteward.id]).toBe('gemini');
+    expect(byAgent[noTask.id]).toBe('claude');
+  });
+
+  it('the equality check sees a provider change', () => {
+    const w = world(allWorking);
+    const a = satelliteList(w);
+    const b = a.map((s) => ({ ...s, provider: 'gemini' as const }));
+    expect(sameSatellites(a, b)).toBe(false);
+  });
+});

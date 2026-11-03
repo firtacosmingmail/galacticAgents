@@ -13,6 +13,7 @@ import { currentHarmonizer } from '../../console/hierarchy/HierarchyConsole.js';
 import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy/shared.js';
 import { Beacon, NavLink } from '../Navigation.js';
 import { formatCost, formatDuration } from '../agent-cards-model.js';
+import { agentModel, agentProvider, choiceText } from '../providers.js';
 import { useSettingsData } from '../settings/SettingsData.js';
 import { brainView, useDockView, type DockView } from './dock-view.js';
 import { ProjectDeliverables } from '../deliverables/DeliverablesList.js';
@@ -601,6 +602,8 @@ export function TaskStatusFacts({ agentId }: { agentId: Id }) {
   const t = taskId ? taskStatus(world, taskId, { now, agentId, warnAtPercent }) : undefined;
   if (!t) return null;
   const since = Date.parse(t.since);
+  const agent = world.agents[agentId];
+  const runningAi = agent ? choiceText(agentProvider(agent), agentModel(agent)) : undefined;
   return (
     <dl className="sts-facts sts-task-facts" aria-label="task status">
       <Fact label="task state">{stateWords(t.task.state)}</Fact>
@@ -608,6 +611,7 @@ export function TaskStatusFacts({ agentId }: { agentId: Id }) {
         <Fact label="task last changed">{formatDuration(Math.max(0, now - since))} ago</Fact>
       )}
       <Fact label="priority">{t.task.priority}</Fact>
+      {runningAi && <Fact label="model">{runningAi}</Fact>}
       <Fact label="Stewards on it">
         {t.stewards}
         {t.stewards > 1 && <span className="muted"> (respawned)</span>}

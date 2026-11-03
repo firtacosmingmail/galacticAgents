@@ -350,6 +350,8 @@ function QuestionHistory({ search }: { search: string }) {
           <option value="">any kind</option>
           <option value="clarification">clarifications</option>
           <option value="permission">permissions</option>
+          <option value="spend">spend approvals</option>
+          <option value="publish">publish approvals</option>
         </Select>
         <Select label="Question status" value={status} onChange={setStatus}>
           <option value="">answered, withdrawn or ended</option>

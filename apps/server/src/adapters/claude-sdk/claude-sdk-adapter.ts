@@ -14,6 +14,7 @@ import type {
   SpawnOptions,
   StopOptions,
   ToolCall,
+  ModelInfo,
 } from '@galactic/protocol';
 import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
@@ -86,7 +87,7 @@ export interface ClaudeSdkAdapterOptions {
   supervisor: ProcessSupervisor;
   /** Injected in tests (`FakeSdk`); the real SDK is loaded lazily otherwise. */
   sdk?: SdkSurface | (() => Promise<SdkSurface>);
-  /** Model for every spawn; the CLI's default when absent. */
+  /** Model of a spawn that names none (`SpawnOptions.model` wins); the CLI's default when absent. */
   model?: string;
   /**
    * Which Claude Code settings a Steward session loads (decision 17: a normal session with the
@@ -208,6 +209,8 @@ class Session {
   }
   lastCost: Cost | undefined;
   lastResult: string | undefined;
+  /** The reset time (unix seconds) the last `rate_limit_event` reported. */
+  limitResetsAt: number | undefined;
   /**
    * The open turn put text in the transcript (the model's words, a local command's output):
    * a successful result's text is then not repeated (P8-13 review S4).
@@ -233,6 +236,8 @@ class Session {
     readonly gate: PermissionGate,
     /** Opened with `resume` (the CLI must report this same session id). */
     readonly resumed: boolean,
+    /** A Steward's session ends on its subscription's usage limit (P11-07); a brain's does not. */
+    readonly endsOnLimit: boolean = false,
   ) {}
 
   turnEnd(): Promise<void> {
@@ -249,12 +254,24 @@ class Session {
   }
 }
 
+/**
+ * The Claude models a Steward may name (P11-03): Claude Code takes these aliases for its current
+ * models. None is the default: Claude Code's own default applies when no model is named.
+ */
+export const CLAUDE_MODELS: readonly ModelInfo[] = [
+  { id: 'opus', label: 'Opus', family: 'claude', capabilities: ['text'], isDefault: false },
+  { id: 'sonnet', label: 'Sonnet', family: 'claude', capabilities: ['text'], isDefault: false },
+  { id: 'haiku', label: 'Haiku', family: 'claude', capabilities: ['text'], isDefault: false },
+];
+
 const SYSTEM: Actor = { type: 'system' };
 /** How many ended sessions are remembered for "session … has stopped" errors. */
 const ENDED_MEMORY = 256;
 
 export class ClaudeSdkAdapter implements AgentAdapter {
   readonly runtime = 'claude-sdk' as const;
+  /** A Claude Steward's actions pass the gate before they run, so it may publish (P11-03). */
+  readonly canPublish = true;
   readonly events = new EventQueue<AgentEvent>();
   private readonly sessions = new Map<string, Session>();
   private readonly byAgent = new Map<Id, Session>();
@@ -289,6 +306,11 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     return this.open(opts, undefined);
   }
 
+  /** The static Claude list (P11-03): the CLI has no command that lists models. */
+  models(): Promise<ModelInfo[]> {
+    return Promise.resolve(CLAUDE_MODELS.map((m) => ({ ...m, capabilities: [...m.capabilities] })));
+  }
+
   /** Installed, logged in, versions (P25-01): `claude --version` and `claude auth status`. */
   preflight(): Promise<RuntimePreflight> {
     return (this.opts.preflight ?? (() => claudePreflight()))();
@@ -307,7 +329,13 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     }
     const sdk = await this.sdk();
     const sessionId = resume ?? randomUUID();
-    const session = new Session(sessionId, opts.agentId, opts.gate, resume !== undefined);
+    const session = new Session(
+      sessionId,
+      opts.agentId,
+      opts.gate,
+      resume !== undefined,
+      opts.role === 'steward',
+    );
     this.ended.delete(sessionId);
     this.sessions.set(sessionId, session);
     this.byAgent.set(opts.agentId, session);
@@ -335,7 +363,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     const options: SdkQueryOptions = {
       cwd: opts.cwd,
       ...(resume ? { resume } : { sessionId: session.sessionId }),
-      ...(this.opts.model ? { model: this.opts.model } : {}),
+      ...((opts.model ?? this.opts.model) ? { model: opts.model ?? this.opts.model } : {}),
       permissionMode: 'default',
       includePartialMessages: false,
       persistSession: true,
@@ -606,6 +634,15 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         return;
       }
       case 'rate_limit_event': {
+        const info = (message as SdkRateLimitEvent).rate_limit_info;
+        if (info?.resetsAt !== undefined) session.limitResetsAt = info.resetsAt;
+        // Only a refusal with no extra usage to fall back on (final review I4): with overage
+        // allowed or in use the request goes ahead, and a real refusal still ends the turn
+        // with a usage-limit error result, which the result path below catches.
+        if (info && isRefusedLimit(info) && session.endsOnLimit) {
+          this.endOnLimit(session, info.resetsAt);
+          return;
+        }
         const summary = rateLimitSummary(message as SdkRateLimitEvent);
         // Only inside a turn: a progress event marks the agent working.
         if (summary && session.turnOpen)
@@ -628,6 +665,10 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         } else if (!session.interrupting && !session.stopping) {
           const what = m.subtype === 'success' ? 'an error' : m.subtype;
           const detail = m.errors?.length ? m.errors.join('; ') : (m.result ?? '');
+          if (session.endsOnLimit && isUsageLimitText(detail)) {
+            this.endOnLimit(session, limitResetOf(detail) ?? session.limitResetsAt);
+            return;
+          }
           this.emit(session, {
             type: 'agent.output',
             agentId,
@@ -1073,6 +1114,28 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     this.events.push(event);
   }
 
+  /**
+   * A Steward's subscription limit (P11-07; TECHNOLOGY §3.5): the session's one terminal event is
+   * `agent.failed{reason: 'limit', resetsAt}`, then the CLI is stopped — the runtime asks the user
+   * to switch or wait, and a wait resumes this session.
+   */
+  private endOnLimit(session: Session, resetsAt: number | undefined): void {
+    if (session.terminal || session.stopping) return;
+    this.terminal(session, {
+      type: 'agent.failed',
+      agentId: session.agentId,
+      error: CLAUDE_LIMIT_ERROR,
+      reason: 'limit',
+      ...(resetsAt !== undefined ? { resetsAt: new Date(resetsAt * 1000).toISOString() } : {}),
+      ...(session.lastCost ? { cost: session.lastCost } : {}),
+    });
+    session.stopping = true;
+    if (!session.process) return;
+    void this.opts.supervisor
+      .stop(session.agentId, { graceMs: this.opts.graceMs ?? 10_000, by: SYSTEM })
+      .catch((error: unknown) => this.onError(error, `stop ${session.agentId}`));
+  }
+
   private terminal(
     session: Session,
     event: Extract<AgentEvent, { type: 'agent.finished' | 'agent.failed' | 'agent.stopped' }>,
@@ -1143,6 +1206,39 @@ function interruptedBeforeAnswer(): SdkPermissionResult {
   };
 }
 
+/** The error of a Steward stopped by its usage limit (P11-07). */
+export const CLAUDE_LIMIT_ERROR = 'Claude usage limit reached';
+
+/**
+ * Whether a `rate_limit_event` says the request was refused outright (final review I4): the plan's
+ * window is `rejected` and no extra usage carries it — overage neither in use nor `allowed` /
+ * `allowed_warning`. With extra usage enabled the window may be rejected while the request goes
+ * ahead on overage: that is not a usage limit, and the Steward keeps working.
+ */
+export function isRefusedLimit(info: SdkRateLimitEvent['rate_limit_info']): boolean {
+  if (info.status !== 'rejected') return false;
+  if (info.isUsingOverage === true || info.overageInUse === true) return false;
+  return info.overageStatus !== 'allowed' && info.overageStatus !== 'allowed_warning';
+}
+
+/**
+ * An error result in the subscription limit's words: "Claude AI usage limit reached|<unix s>",
+ * "You've hit your limit · resets 3pm", "5-hour limit reached", "Weekly limit reached" — never
+ * another limit ("Context limit reached", a tool-call limit). The primary signal is a
+ * `rate_limit_event` refusing the request (`isRefusedLimit`).
+ */
+export function isUsageLimitText(text: string): boolean {
+  return /usage limit|hit your (?:usage )?limit|\b(?:\d+-hour|weekly|opus|sonnet|session) limit reached/i.test(
+    text,
+  );
+}
+
+/** The reset time an error result carries after a `|` ("…limit reached|1793000000"). */
+function limitResetOf(text: string): number | undefined {
+  const m = /\|(\d{9,11})\b/.exec(text);
+  return m ? Number(m[1]) : undefined;
+}
+
 /** A readable progress line for a subscription rate-limit event; none while all is well. */
 function rateLimitSummary(m: SdkRateLimitEvent): string | undefined {
   const info = m.rate_limit_info;
@@ -1152,7 +1248,11 @@ function rateLimitSummary(m: SdkRateLimitEvent): string | undefined {
     info.resetsAt !== undefined
       ? ` until ${new Date(info.resetsAt * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')}`
       : '';
-  if (info.status === 'rejected') return `waiting on the ${which}rate limit${until}`;
+  if (info.status === 'rejected') {
+    return isRefusedLimit(info)
+      ? `waiting on the ${which}rate limit${until}`
+      : `past the ${which}rate limit${until}: working on extra usage`;
+  }
   const used =
     info.utilization !== undefined ? ` (${Math.round(info.utilization * 100)}% used)` : '';
   return `close to the ${which}rate limit${used}`;

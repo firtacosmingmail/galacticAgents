@@ -312,7 +312,7 @@ async function buildMap(dbPath: string): Promise<void> {
     name: 'Read reviews',
     instructions: 'Read the new reviews.',
     schedule: { kind: 'daily' as const, at: '09:00' },
-    provider: 'claude',
+    provider: 'claude' as const,
     unattendedRules: [],
   };
   const reviews = (

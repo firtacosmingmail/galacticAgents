@@ -8,6 +8,7 @@ import {
   isLongTerm,
   Job,
   JobDraft,
+  JobRunOutcome,
   jobIdOfTask,
   LONG_TERM_LIMITS,
   proposalJobOf,
@@ -104,6 +105,34 @@ describe('job-owned questions', () => {
     ).toBe(true);
     const spend = SpendContext.parse({ amount: 20, purpose: 'an ad', jobId: 'j-1' });
     expect(isJobOwned({ kind: 'spend', context: { text: 'Spend?', spend } })).toBe(true);
+  });
+
+  it('owns a job publish, a job usage-limit question, and parses the limited outcome', () => {
+    const publish = {
+      platform: 'LinkedIn',
+      account: '@app',
+      text: 'Hi',
+      files: [],
+      fingerprint: 'a'.repeat(64),
+      jobId: 'j-1',
+    };
+    expect(isJobOwned({ kind: 'publish', context: { text: 'Publish?', publish } })).toBe(true);
+    expect(
+      isJobOwned({
+        kind: 'publish',
+        context: { text: 'Publish?', publish: { ...publish, jobId: undefined } },
+      }),
+    ).toBe(false);
+    expect(
+      isJobOwned({
+        kind: 'clarification',
+        context: {
+          text: 'Limit',
+          usageLimit: { provider: 'claude', jobId: 'j-1', switchTo: [{ provider: 'chatgpt' }] },
+        },
+      }),
+    ).toBe(true);
+    expect(JobRunOutcome.parse('limited')).toBe('limited');
   });
 
   it('does not own a task spend or a plain clarification', () => {

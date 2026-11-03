@@ -1,5 +1,6 @@
 import type {
   HarnessActionResponse,
+  HarnessAdvanceResponse,
   HarnessBrainToolResponse,
   HarnessBrainWaykeeperResponse,
   HarnessHarmonizerResponse,
@@ -8,6 +9,7 @@ import type {
   HarnessJobTickResponse,
   HarnessScenarioBody,
   HarnessScenarioResponse,
+  HarnessStewardScriptBody,
   HistoryQuestionsResponse,
   Question,
 } from '@galactic/protocol';
@@ -94,6 +96,23 @@ export function runJobNow(
 /** One job-scheduler tick now (a queued follow-up run starts on it). */
 export function tickJobs(api: Api): Promise<HarnessJobTickResponse> {
   return api.post<HarnessJobTickResponse>('/dev/harness/jobs/tick');
+}
+
+/**
+ * The next Steward spawned for the task follows `script` (P11-10): a publish request, or a stop at
+ * its provider's usage limit. Set before the Waykeeper's `spawn_steward`.
+ */
+export async function scriptSteward(
+  api: Api,
+  taskId: string,
+  script: HarnessStewardScriptBody,
+): Promise<void> {
+  await api.post(`/dev/harness/tasks/${taskId}/steward-script`, script);
+}
+
+/** Moves the clock usage-limit waits are checked against forward, then checks them once. */
+export function advanceUsageLimits(api: Api, ms: number): Promise<HarnessAdvanceResponse> {
+  return api.post<HarnessAdvanceResponse>('/dev/harness/usage-limits/advance', { ms });
 }
 
 /** The question as the server's history has it (the source of truth, not the page). */

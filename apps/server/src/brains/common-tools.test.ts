@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Actor, Id } from '@galactic/protocol';
+import { openQuestion } from '../domain/questions.js';
 import { brainHarness, type BrainHarness } from './testing/index.js';
 import { HARMONIZER_SYSTEM_PROMPT, harmonizerBrain } from './harmonizer/index.js';
 import { WAYKEEPER_SYSTEM_PROMPT, waykeeperDefinition } from './waykeeper/index.js';
@@ -303,6 +304,47 @@ describe('common tools', () => {
     wk.tell('check');
     await h.done();
     expect(h.log.tables.questions.get(spendId)?.status).toBe('open');
+  });
+
+  it('answer_question refuses a usage limit: the user chooses (P11-07)', async () => {
+    const { h, hq, project } = await setup();
+    const wk = await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: project.id, supervisorId: hq.agentId },
+      {
+        script: (s) =>
+          s
+            .on(/was added to your project/, () => {})
+            .once('check', async (t) => {
+              const q = h.log.tables.questions.all().find((x) => x.context.usageLimit)!;
+              const refused = await t.try('answer_question', {
+                questionId: q.id,
+                answer: 'Wait until it resets',
+              });
+              expect(refused).toMatchObject({ ok: false, error: 'invalid' });
+              expect(refused.message).toMatch(/the user chooses whether to switch model or wait/);
+            }),
+      },
+    );
+    const stewardId = await steward(h, project.id, wk.agentId, 'echo');
+    const limitId = h.log.runCommand((ctx) =>
+      openQuestion(ctx, {
+        id: 'q-limit',
+        kind: 'clarification',
+        originAgentId: stewardId,
+        holder: { type: 'user' },
+        context: {
+          text: 'Claude usage limit reached. Switch to another model or wait?',
+          options: ['Wait until it resets'],
+          usageLimit: { provider: 'claude', switchTo: [] },
+        },
+        meta: { toUser: true, jobOwned: false },
+      }),
+    ).value.id;
+    await h.settle();
+    wk.tell('check');
+    await h.done();
+    expect(h.log.tables.questions.get(limitId)?.status).toBe('open');
   });
 
   it('both prompts say when to ask a set and that a held set is answered with answer_question_set', () => {

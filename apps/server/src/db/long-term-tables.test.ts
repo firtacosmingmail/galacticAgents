@@ -127,7 +127,12 @@ describe('long-term tables (P10-01)', () => {
        VALUES ('p-1', 'Auth refactor', '/w', '/w', 'b-luna', 'in_progress', ?, ?, NULL, 25)`,
     ).run(fx.NOW, fx.NOW);
     t.bodies.upsert({ ...fx.moon, host: { kind: 'project', id: 'p-1' } });
-    t.tasks.insert(fx.task);
+    // The 0015 tasks table has no provider columns: written by hand.
+    db.prepare(
+      `INSERT INTO tasks (id, project_id, body_id, description, priority, blocked_by, state,
+         created_at, updated_at)
+       VALUES (?, 'p-1', 'b-luna', ?, ?, '[]', ?, ?, ?)`,
+    ).run(fx.task.id, fx.task.description, fx.task.priority, fx.task.state, fx.NOW, fx.NOW);
     t.agents.insert({ ...fx.agent, supervisorId: undefined });
     t.questions.insert(fx.question);
     t.questions.insert({ ...fx.permissionQuestion, status: 'answered', answer: 'yes' });
@@ -138,7 +143,7 @@ describe('long-term tables (P10-01)', () => {
       agents: t.agents.all(),
     };
 
-    expect(migrate(db, all).applied).toEqual([16]);
+    expect(migrate(db, all).applied).toEqual([16, 17]);
     const after = tables(db);
     expect(after.bodies.all()).toEqual(before.bodies);
     expect(after.questions.all()).toEqual(before.questions);

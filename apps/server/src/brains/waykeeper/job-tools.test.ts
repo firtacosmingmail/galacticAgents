@@ -9,6 +9,7 @@ import {
 import { createAgent } from '../../domain/agents.js';
 import { unattendedPermissionRules } from '../../domain/jobs.js';
 import { brainHarness, type BrainHarness, type ToolOutcome } from '../testing/index.js';
+import { providerFakes } from '../testing/provider-fakes.js';
 import { WAYKEEPER_SYSTEM_PROMPT, waykeeperDefinition } from './index.js';
 
 /**
@@ -496,5 +497,145 @@ describe('approving a job card from a remote client (final review I3)', () => {
     expect(
       unattendedPermissionRules({ ...job!, unattendedRules: [legacy] }, project.id)[0]!.origin,
     ).toBe('local');
+  });
+});
+
+describe('job cards carry providers and models (P11-08)', () => {
+  let fakes: ReturnType<typeof providerFakes>;
+  beforeEach(async () => {
+    await h.dispose().catch(() => {});
+    fakes = providerFakes();
+    h = brainHarness({ adapters: fakes.adapters, compose: { catalog: fakes.catalog } });
+  });
+  afterEach(async () => {
+    await fakes.dispose();
+  });
+
+  it('job card carries follow-up provider', async () => {
+    const project = await longTermProject();
+    const { out } = await waykeeperCalling(project, 'propose_job', {
+      area: 'Feedback',
+      ...DRAFT,
+      provider: 'gemini',
+      model: 'Gemini 3.8 Flash High',
+      followUpProvider: 'chatgpt',
+      followUpModel: 'GPT 5.6 terra',
+    });
+    expect(out.result).toMatchObject({
+      ok: true,
+      value: {
+        after: {
+          provider: 'gemini',
+          model: 'gemini-3.8-flash-high',
+          followUpProvider: 'chatgpt',
+          followUpModel: 'gpt-5.6-terra',
+        },
+      },
+    });
+    const card = theCard()!;
+    expect(proposalJobOf(card)?.draft).toMatchObject({
+      provider: 'gemini',
+      model: 'gemini-3.8-flash-high',
+      followUpProvider: 'chatgpt',
+      followUpModel: 'gpt-5.6-terra',
+    });
+    await h.commands.decideProposal(card.id, { decision: 'approve' }, USER, { origin: 'local' });
+    await h.done();
+    expect(h.log.tables.jobs.all()[0]).toMatchObject({
+      provider: 'gemini',
+      model: 'gemini-3.8-flash-high',
+      followUpProvider: 'chatgpt',
+      followUpModel: 'gpt-5.6-terra',
+    });
+  });
+
+  it('follow-up on Gemini is refused', async () => {
+    const project = await longTermProject();
+    const { out } = await waykeeperCalling(project, 'propose_job', {
+      area: 'Feedback',
+      ...DRAFT,
+      followUpProvider: 'gemini',
+    });
+    expect(out.result).toMatchObject({ ok: false, error: 'invalid' });
+    expect((out.result as { message?: string }).message).toContain('follow-up runs: ');
+    expect((out.result as { message?: string }).message).toContain('cannot publish');
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+  });
+
+  it.each([[{ provider: 'gemini', followUpModel: 'opus' }], [{ followUpModel: 'opus' }]])(
+    'a follow-up model without a follow-up provider is refused (%j)',
+    async (extra) => {
+      const project = await longTermProject();
+      const { out } = await waykeeperCalling(project, 'propose_job', {
+        area: 'Feedback',
+        ...DRAFT,
+        ...extra,
+      });
+      expect(out.result).toMatchObject({ ok: false, error: 'invalid' });
+      expect((out.result as { message?: string }).message).toContain(
+        'followUpModel needs followUpProvider',
+      );
+      expect(h.log.tables.proposals.all()).toHaveLength(0);
+    },
+  );
+
+  it('a change card refuses a follow-up model without a follow-up provider', async () => {
+    const project = await longTermProject();
+    const job = await existingJob(project, { followUpProvider: 'chatgpt' });
+    const { out } = await waykeeperCalling(project, 'propose_job_change', {
+      jobId: job.id,
+      changes: { followUpModel: 'gpt-6-luna' },
+    });
+    expect((out.result as { message?: string }).message).toContain(
+      'followUpModel needs followUpProvider',
+    );
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+  });
+
+  it('a job model the provider does not list is refused before any card', async () => {
+    const project = await longTermProject();
+    const { out } = await waykeeperCalling(project, 'propose_job', {
+      area: 'Feedback',
+      ...DRAFT,
+      provider: 'chatgpt',
+      model: 'gpt-9',
+    });
+    expect((out.result as { message?: string }).message).toContain('ChatGPT has no model "gpt-9"');
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+  });
+
+  it('a change card sets the model and follow-up; a new provider drops the old model', async () => {
+    const project = await longTermProject();
+    const job = await existingJob(project, { provider: 'chatgpt', model: 'gpt-6-luna' });
+    const { out } = await waykeeperCalling(project, 'propose_job_change', {
+      jobId: job.id,
+      changes: { followUpProvider: 'claude', followUpModel: 'opus' },
+    });
+    expect(out.result).toMatchObject({
+      ok: true,
+      value: { after: { model: 'gpt-6-luna', followUpProvider: 'claude', followUpModel: 'opus' } },
+    });
+    await h.commands.decideProposal(theCard()!.id, { decision: 'approve' }, USER);
+    await h.done();
+    expect(h.log.tables.jobs.get(job.id)).toMatchObject({
+      provider: 'chatgpt',
+      model: 'gpt-6-luna',
+      followUpProvider: 'claude',
+      followUpModel: 'opus',
+    });
+
+    const changed = await h.commands.proposeJob({
+      projectId: project.id,
+      waykeeperId: proposalJobOf(theCard()!)!.waykeeperId,
+      action: 'change',
+      jobId: job.id,
+      changes: { provider: 'claude' },
+    });
+    const draft = proposalJobOf(changed.value)!.draft!;
+    expect(draft.provider).toBe('claude');
+    expect(draft.model).toBeUndefined();
+    await h.commands.decideProposal(changed.value.id, { decision: 'approve' }, USER);
+    expect(h.log.tables.jobs.get(job.id)).toMatchObject({ provider: 'claude' });
+    expect(h.log.tables.jobs.get(job.id)?.model).toBeUndefined();
   });
 });

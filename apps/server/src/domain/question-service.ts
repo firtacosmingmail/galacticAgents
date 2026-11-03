@@ -148,6 +148,8 @@ export function holderFor(
   if (kind === 'permission') return { type: 'user' };
   // Decision 145: real money is always the user's explicit approval — never a supervisor's.
   if (kind === 'spend') return { type: 'user' };
+  // Decision 147: what goes out in Cosmin's name is his explicit approval, of that exact content.
+  if (kind === 'publish') return { type: 'user' };
   return livingAbove(ctx, originAgentId, routing.isLiving);
 }
 

@@ -5,8 +5,10 @@ import {
   FindingContext,
   JobFailureContext,
   LONG_TERM_LIMITS,
+  PublishContext,
   SpendContext,
 } from './long-term-questions.js';
+import { Provider, UsageLimitContext } from './providers.js';
 import {
   ActorType,
   AgentRole,
@@ -205,6 +207,8 @@ export const Project = z.object({
    * only the user closes it; it lives on a planet with moons, whose moons host its areas.
    */
   longTerm: z.boolean().optional(),
+  /** The project's AI provider for new Stewards (P11-02); absent: the global default. */
+  defaultProvider: Provider.optional(),
   /** A long-term project's purpose, in the user's words (1–2000 characters). */
   purpose: z.string().min(1).max(LONG_TERM_LIMITS.maxPurpose).optional(),
   /** A long-term project's goals (at most 10, each 1–300 characters). */
@@ -232,6 +236,14 @@ export const Task = z.object({
   pinned: z.boolean().optional(),
   /** The task's dollar budget (P8-01): its Stewards' reported cost together. Absent: none. */
   budgetUsd: BudgetUsd.optional(),
+  /** The AI provider the task's Steward runs on (P11-02); absent: the project's or global default. */
+  provider: Provider.optional(),
+  /** The exact model asked for; absent: the provider's default model. */
+  model: z.string().optional(),
+  /** The task includes a publishing step (P11-02). */
+  publishes: z.boolean().optional(),
+  /** The task makes images (P11-02). */
+  makesImages: z.boolean().optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -254,6 +266,7 @@ export const Agent = z.object({
   caps: AgentCaps,
   createdAt: Timestamp,
   updatedAt: Timestamp,
+  /** Documented keys: `model?: string`, `provider?: Provider` (P11-02). */
   meta: Meta.optional(),
 });
 export type Agent = z.infer<typeof Agent>;
@@ -515,6 +528,10 @@ export const QuestionContext = z.object({
   jobFailure: JobFailureContext.optional(),
   /** What a `spend` question asks to spend (P10-01); job-owned when it names a job. */
   spend: SpendContext.optional(),
+  /** What a `publish` question asks to publish (P11-02); job-owned when it names a job. */
+  publish: PublishContext.optional(),
+  /** A usage-limit question (P11-02): who hit the limit and what it could switch to. */
+  usageLimit: UsageLimitContext.optional(),
   /** Set by the server on `question.opened`; adapters leave it out. */
   origin: QuestionOrigin.optional(),
 });

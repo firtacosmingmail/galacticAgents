@@ -23,6 +23,7 @@ import { axeFindings, blocking } from '../../a11y/a11y-fixtures.js';
 import { inboxModel } from '../inbox-model.js';
 import { QuestionCard } from './QuestionCard.js';
 import { ProposalCard } from './ProposalCard.js';
+import { jobChanges } from './JobCard.js';
 
 /**
  * P10-07 (SPEC decisions 142–145): the job card (new / change / stop), the long-term card, the
@@ -217,7 +218,7 @@ describe('the job card (P10-07)', () => {
     within(card).getByText('Reviews digest');
     within(card).getByText(/Feedback moon · new area/);
     within(card).getByText('weekdays 9:00');
-    within(card).getByText('claude');
+    within(card).getAllByText('Claude');
     within(card).getByText(/Read the new reviews/);
     within(card).getByText('May do without asking:');
     within(card).getByText('curl …');
@@ -446,6 +447,57 @@ describe('the finding card (P10-07)', () => {
     show(<QuestionCard question={reply} />);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Drop' })));
     expect(api.answer).toHaveBeenCalledWith('q-reply', 'Drop', 4, expect.any(String));
+  });
+});
+
+describe('the job card providers (P11-09)', () => {
+  it('shows the follow-up provider and who publishes', () => {
+    const job = jobCard({
+      projectId: 'p-shop',
+      waykeeperId: 'a-wk-shop',
+      action: 'create',
+      draft: {
+        ...draft,
+        provider: 'gemini',
+        followUpProvider: 'chatgpt',
+        followUpModel: 'gpt-5.6',
+      },
+      area: { areaId: 'ar-1' },
+    });
+    world({ proposals: [job] });
+    show(<ProposalCard proposal={job} />);
+    const card = screen.getByRole('article');
+    within(card).getByText('Gemini');
+    within(card).getByText('follow-up provider');
+    expect(within(card).getAllByText('ChatGPT · gpt-5.6').length).toBe(2);
+  });
+
+  it('a Gemini job with no follow-up provider says plainly that nobody publishes (R22)', () => {
+    const job = jobCard({
+      projectId: 'p-shop',
+      waykeeperId: 'a-wk-shop',
+      action: 'create',
+      draft: { ...draft, provider: 'gemini' },
+      area: { areaId: 'ar-1' },
+    });
+    world({ proposals: [job] });
+    show(<ProposalCard proposal={job} />);
+    within(screen.getByRole('article')).getByText('nobody — Gemini cannot publish');
+  });
+
+  it('a change card lists a changed provider and follow-up provider', () => {
+    const before = { ...draft };
+    const job: ProposalJob = {
+      projectId: 'p-shop',
+      waykeeperId: 'a-wk-shop',
+      action: 'change',
+      jobId: 'j-1',
+      draft: { ...draft, provider: 'chatgpt', followUpProvider: 'claude' },
+      before: { areaId: 'ar-1', draft: before },
+    } as ProposalJob;
+    const changes = jobChanges({ areas: { 'ar-1': marketing }, bodies: {} }, job);
+    expect(changes).toContainEqual(['provider', 'Claude', 'ChatGPT']);
+    expect(changes).toContainEqual(['follow-up provider', 'same as the job', 'Claude']);
   });
 });
 

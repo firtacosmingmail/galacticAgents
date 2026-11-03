@@ -76,6 +76,11 @@ export interface SdkRateLimitEvent {
     rateLimitType?: string;
     /** 0..1. */
     utilization?: number;
+    /** Extra usage past the plan (`SDKRateLimitInfo`): a request may go ahead on it. */
+    overageStatus?: 'allowed' | 'allowed_warning' | 'rejected';
+    overageDisabledReason?: string;
+    isUsingOverage?: boolean;
+    overageInUse?: boolean;
   };
   session_id?: string;
 }

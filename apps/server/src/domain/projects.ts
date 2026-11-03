@@ -17,6 +17,7 @@ import {
   type ProjectChanges,
   type ReopenInput,
   type SetLongTermInput,
+  type SetProjectProviderInput,
 } from '@galactic/protocol';
 import {
   bodyOf,
@@ -446,4 +447,19 @@ export function setLongTerm(ctx: CommandContext, input: SetLongTermInput): Proje
   if (!to) return project;
   moveHost(ctx, hostOf(current.id), to.id);
   return ctx.tables.projects.get(current.id)!;
+}
+
+/**
+ * A project's default AI provider for its new Stewards (P11-03, decision 146); `null` clears it
+ * (the Settings' default applies again). Running Stewards keep theirs. Refused for finished work.
+ */
+export function setProjectProvider(ctx: CommandContext, input: SetProjectProviderInput): Project {
+  const current = must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
+  if (FINISHED_WORK.has(current.state)) {
+    throw new DomainError(
+      'invalid_transition',
+      `project ${current.id} is ${current.state}: its provider no longer matters`,
+    );
+  }
+  return updateProject(ctx, current.id, { defaultProvider: input.provider });
 }

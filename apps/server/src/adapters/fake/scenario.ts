@@ -48,7 +48,14 @@ export type FakeStep =
    */
   | { kind: 'cost'; cost: Cost }
   | { kind: 'finish'; result?: string; cost?: Cost; delayMs?: number }
-  | { kind: 'fail'; error: string; reason: 'cap' | 'crash' | 'runtime' | 'unknown'; cost?: Cost }
+  | {
+      kind: 'fail';
+      error: string;
+      reason: 'cap' | 'crash' | 'runtime' | 'limit' | 'unknown';
+      /** For `reason: 'limit'`: when the subscription's limit resets (ISO time). */
+      resetsAt?: string;
+      cost?: Cost;
+    }
   /**
    * A scripted stretch of the turn (P2-07): `run` performs tool calls and output through `io`,
    * in order, and reads each tool's result before deciding the next call — what a model does

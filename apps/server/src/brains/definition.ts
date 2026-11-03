@@ -2,7 +2,6 @@ import type {
   Actor,
   Agent,
   AgentRole,
-  AgentRuntime,
   Area,
   Body,
   DomainCommands,
@@ -17,6 +16,8 @@ import type {
   Task,
 } from '@galactic/protocol';
 import type { DeliverableService } from '../deliverables/service.js';
+import type { ProviderCatalog } from '../runtime/provider-catalog.js';
+import type { ChooseSteward } from '../runtime/steward-choice.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import type { Workspaces } from '../workspace/workspaces.js';
 import type { WakeRules } from './wake.js';
@@ -100,10 +101,15 @@ export interface BrainToolContext {
    */
   processes?: StewardProcessControl;
   /**
-   * The runtime new Stewards run on, as the settings say now (P8-07: `stewardRuntime`);
-   * `undefined` (or absent) = the brain's own runtime. Read at every Steward spawn.
+   * Which provider, runtime and model a new Steward runs on (P11-03, `resolveStewardChoice` over
+   * the live Settings). Absent: the resolver without Settings. Called at every Steward spawn.
    */
-  stewardRuntime?: () => AgentRuntime | undefined;
+  chooseSteward?: ChooseSteward;
+  /**
+   * The provider catalogue (P11-08): `check_model` and every plan or job card check a provider
+   * choice against it before the card exists. Absent: no check.
+   */
+  catalog?: Pick<ProviderCatalog, 'check' | 'defaults'>;
   /**
    * Agents' declarations (P9-04): the deliverable tools declare, remove and list through it.
    * Present when the server was composed with a data folder; absent, those tools refuse.
@@ -148,6 +154,8 @@ export interface BrainStartContext {
   /** Absent for a brain being spawned for the first time (its id is not known yet). */
   brainId?: Id;
   role: AgentRole;
+  /** The brain's project (a Waykeeper's). */
+  projectId?: Id;
   /** The brain comes back after a restart (or the panel's resume), not a first spawn. */
   resumed: boolean;
   commands: DomainCommands;

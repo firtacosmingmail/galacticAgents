@@ -12,6 +12,7 @@ import {
   DeclarationLimits,
   IdeSetting,
   PermissionPolicy,
+  Provider,
   RunOutputRetention,
   RunSettings,
   QualityTier,
@@ -122,10 +123,17 @@ export const ConfigFile = z.object({
     .extend({ reserveMiB: z.number().int().nonnegative().optional() })
     .optional(),
   /**
-   * The runtime new Stewards run on (P8-07; also `GALACTIC_STEWARD_RUNTIME`); absent = the
-   * spawning brain's own runtime. Settable from the panel.
+   * @deprecated Read only to upgrade it (P11-03): `claude-sdk`, `codex` and `agy` become
+   * `defaultProvider` `claude`, `chatgpt` and `gemini`; any other runtime is dropped with a
+   * warning. The settings service removes the key at its next write.
    */
   stewardRuntime: AgentRuntime.optional(),
+  /** The AI provider new Stewards use when nothing names one (P11-03); absent = `claude`. */
+  defaultProvider: Provider.optional(),
+  /** Per provider (P11-03): the default model of its Stewards; absent = the CLI's own default. */
+  providers: z
+    .partialRecord(Provider, z.object({ model: z.string().min(1).max(100).optional() }))
+    .optional(),
   /**
    * The deliverables settings (Phase 9): `ide` is the IDE Open in IDE uses (P9-03, decision 127),
    * `auto` (default: the first installed of WebStorm, IntelliJ IDEA, Cursor, VS Code, Zed) or a
@@ -146,6 +154,16 @@ export const ConfigFile = z.object({
         .optional(),
     })
     .optional(),
+  /**
+   * The Codex CLI the `codex` runtime runs Stewards with (P11-04; TECHNOLOGY §3.6). Absent: `codex`
+   * on the PATH, when there is one (no `codex` runtime otherwise).
+   */
+  codex: z.object({ command: z.string().min(1).optional() }).optional(),
+  /**
+   * The Antigravity CLI the `agy` runtime runs Stewards with (P11-05; TECHNOLOGY §3.7). Absent:
+   * `agy` on the PATH, when there is one (no `agy` runtime otherwise).
+   */
+  agy: z.object({ command: z.string().min(1).optional() }).optional(),
   /**
    * The ACP agent the `acp` runtime starts for every session (P8-07; TECHNOLOGY §3.2), e.g.
    * `{"command": "claude-agent-acp"}`, `{"command": "gemini", "args": ["--acp"]}` or
@@ -250,6 +268,12 @@ export interface ServerConfig {
   tailscaleIdentityLogins?: string[];
   /** `GALACTIC_DEV=1`: enables the `/dev/*` routes (`pnpm dev` sets it; `galactic start --dev` opts in). */
   dev: boolean;
+  /**
+   * `GALACTIC_FAKE_PROVIDERS=1` with `GALACTIC_DEV` (ruling R25): scripted fakes replace the Codex
+   * and Antigravity adapters. Only the e2e server sets it; `--dev`, `pnpm dev` and `pnpm remote`
+   * never do, so ChatGPT and Gemini Stewards are real there.
+   */
+  fakeProviders?: boolean;
   /** `~/.galactic` (or `$GALACTIC_HOME`): config, database, logs. */
   dataDir: string;
   configPath: string;
@@ -296,8 +320,15 @@ export interface ServerConfig {
   budgets?: { warnAtPercent: number };
   /** Backups (P8-03): the rotation and the free space a backup leaves; absent = the defaults. */
   backups?: Partial<BackupSchedule> & { reserveBytes?: number };
-  /** The runtime new Stewards run on (P8-07); absent = the spawning brain's own. */
-  stewardRuntime?: AgentRuntime;
+  /**
+   * Development and tests only (`GALACTIC_STEWARD_RUNTIME`, P11-03): the runtime of every new
+   * Steward whatever its provider, usually `fake`. Absent: the provider's runtime.
+   */
+  stewardRuntimeOverride?: AgentRuntime;
+  /** The AI provider new Stewards use when nothing names one (P11-03); absent = `claude`. */
+  defaultProvider?: Provider;
+  /** Per provider (P11-03): the default model of its Stewards. */
+  providers?: Partial<Record<Provider, { model?: string | undefined }>>;
   /**
    * The deliverables settings (Phase 9): the IDE (P9-03; absent = `auto`) and the agents'
    * declaration limits (P9-04; absent keys = `DEFAULT_DECLARATION_LIMITS`).
@@ -311,6 +342,10 @@ export interface ServerConfig {
       output?: { [K in keyof RunOutputRetention]?: RunOutputRetention[K] | undefined } | undefined;
     };
   };
+  /** The Codex CLI (P11-04); absent = `codex` on the PATH, if any. */
+  codex?: { command?: string | undefined };
+  /** The Antigravity CLI (P11-05); absent = `agy` on the PATH, if any. */
+  agy?: { command?: string | undefined };
   /** The ACP agent command (P8-07); absent = no `acp` runtime registered. */
   acp?: {
     command: string;
@@ -493,21 +528,41 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       `Invalid budget warning threshold (1–100 %): ${warnEnv ?? file.budgets?.warnAtPercent}`,
     );
   }
+  const dev = env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true';
+  const fakeProvidersEnv =
+    env['GALACTIC_FAKE_PROVIDERS'] === '1' || env['GALACTIC_FAKE_PROVIDERS'] === 'true';
+  if (fakeProvidersEnv && !dev) {
+    warnings.push(
+      `GALACTIC_FAKE_PROVIDERS is for the development harness only (GALACTIC_DEV): ` +
+        `the real Codex and Antigravity adapters are used.`,
+    );
+  }
+  const fakeProviders = fakeProvidersEnv && dev;
+  // The Steward runtime is no longer a setting (P11-03): a stored one becomes the default provider.
+  let defaultProvider = file.defaultProvider;
+  if (file.stewardRuntime !== undefined) {
+    const upgraded = UPGRADED_PROVIDER[file.stewardRuntime];
+    if (upgraded) defaultProvider ??= upgraded;
+    else {
+      warnings.push(
+        `stewardRuntime "${file.stewardRuntime}" is no longer a setting; Stewards use the project's provider`,
+      );
+    }
+  }
   const runtimeEnv = env['GALACTIC_STEWARD_RUNTIME'];
-  let stewardRuntime = file.stewardRuntime;
+  let stewardRuntimeOverride: AgentRuntime | undefined;
   if (runtimeEnv !== undefined) {
     const parsed = AgentRuntime.safeParse(runtimeEnv.trim());
     if (!parsed.success) throw new Error(`Invalid Steward runtime: ${runtimeEnv}`);
-    stewardRuntime = parsed.data;
+    stewardRuntimeOverride = parsed.data;
   }
-  const dev = env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true';
-  if (stewardRuntime === 'fake' && !dev) {
+  if (stewardRuntimeOverride === 'fake' && !dev) {
     // The scripted fake adapter is for development and tests only (P8 wave 3 review).
     warnings.push(
-      `stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
-        `new Stewards run on their brain's runtime.`,
+      `GALACTIC_STEWARD_RUNTIME is fake, which is for development only (GALACTIC_DEV): ` +
+        `new Stewards run on their provider's runtime.`,
     );
-    stewardRuntime = undefined;
+    stewardRuntimeOverride = undefined;
   }
   const acpEnv = parseAcpCommand(env['GALACTIC_ACP_COMMAND']);
   const acp =
@@ -524,7 +579,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       ? { ...file.pty, command: ptyEnv[0]!, args: ptyEnv.slice(1) }
       : file.pty;
   const envOverrides: SettingName[] = [];
-  if (runtimeEnv !== undefined) envOverrides.push('stewardRuntime');
   if (warnEnv !== undefined) envOverrides.push('budgets');
   if (env['GALACTIC_PROJECTS_ROOT'] !== undefined) envOverrides.push('projectsRoot');
   if (retentionEnv !== undefined) envOverrides.push('retentionDays');
@@ -539,6 +593,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       ...(remoteHost ? { remoteHost } : {}),
       ...(tailscaleIdentityLogins ? { tailscaleIdentityLogins } : {}),
       dev,
+      fakeProviders,
       dataDir,
       configPath,
       dbPath,
@@ -571,7 +626,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       budgets: { warnAtPercent },
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
       ...backupsOf(file.backups, env['GALACTIC_BACKUPS']),
-      ...(stewardRuntime ? { stewardRuntime } : {}),
+      ...(stewardRuntimeOverride ? { stewardRuntimeOverride } : {}),
+      ...(defaultProvider ? { defaultProvider } : {}),
+      ...(file.providers ? { providers: providersOf(file.providers) } : {}),
       ...(file.deliverables?.ide || file.deliverables?.declarations || file.deliverables?.runs
         ? {
             deliverables: {
@@ -592,12 +649,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
             },
           }
         : {}),
+      ...(file.codex ? { codex: { ...file.codex } } : {}),
+      ...(file.agy ? { agy: { ...file.agy } } : {}),
       ...(acp ? { acp } : {}),
       ...(pty ? { pty } : {}),
     },
     tokenGenerated,
     warnings,
   };
+}
+
+/** What a stored `stewardRuntime` becomes (P11-03); the others are dropped with a warning. */
+const UPGRADED_PROVIDER: Partial<Record<AgentRuntime, Provider>> = {
+  'claude-sdk': 'claude',
+  codex: 'chatgpt',
+  agy: 'gemini',
+};
+
+/** The providers' settings as stored, without empty entries. */
+function providersOf(
+  stored: Partial<Record<Provider, { model?: string | undefined }>>,
+): Partial<Record<Provider, { model?: string }>> {
+  const out: Partial<Record<Provider, { model?: string }>> = {};
+  for (const [provider, entry] of Object.entries(stored) as [Provider, { model?: string }][]) {
+    if (entry?.model) out[provider] = { model: entry.model };
+  }
+  return out;
 }
 
 /** The backups setting (P8-03): the file's values, the environment's on/off over them. */

@@ -16,6 +16,7 @@ import type {
   Task,
   TrustLevel,
 } from './domain.js';
+import type { Provider } from './providers.js';
 import type {
   AgentRole,
   AgentRuntime,
@@ -83,6 +84,11 @@ export interface CreateTaskInput {
   state?: Extract<WorkState, 'proposed' | 'approved'>;
   /** Stored as the row's `meta` (e.g. the Harmonizer's `proposalId` and a standalone task's workspace, P2-08). */
   meta?: Meta;
+  /** The AI provider, exact model and flags of the task (P11-02). */
+  provider?: Provider;
+  model?: string;
+  publishes?: boolean;
+  makesImages?: boolean;
 }
 
 export interface SpawnAgentInput {
@@ -94,6 +100,8 @@ export interface SpawnAgentInput {
   prompt: string;
   caps?: Partial<AgentCaps>;
   bare?: boolean;
+  /** The exact model to run (P11-02); absent: the runtime's default. */
+  model?: string;
   /** Brains: their tools and system prompt (TECHNOLOGY §5.1). */
   tools?: ToolDefinition[];
   systemPrompt?: string;
@@ -152,6 +160,11 @@ export interface PlanTaskInput {
   priority?: TaskPriority;
   /** Earlier tasks of the same plan (0-based positions) or existing task ids. */
   blockedBy?: (number | Id)[];
+  /** The AI provider, exact model and flags of the task (P11-02). */
+  provider?: Provider;
+  model?: string;
+  publishes?: boolean;
+  makesImages?: boolean;
 }
 
 /**
@@ -501,6 +514,24 @@ export interface RequestSpendInput {
   runId?: Id;
 }
 
+/** A `publish` question (P11-02); job-owned when `runId` names a job run. */
+export interface RequestPublishInput {
+  originAgentId: Id;
+  platform: string;
+  account: string;
+  text: string;
+  /** Workspace paths of the files to publish; the server hashes them. */
+  files?: string[];
+  runId?: Id;
+}
+
+/** Sets (`null`: clears) a project's default AI provider (P11-02). */
+export interface SetProjectProviderInput {
+  projectId: Id;
+  provider: Provider | null;
+  by: Actor;
+}
+
 /**
  * What `updateProject` / `updateTask` take: the row changes without the budget, which only
  * `setBudget` changes (its own `budget.set` event and loosening rule, P8-01). The events'
@@ -671,6 +702,8 @@ export interface DomainCommands {
   /** Keeps the Steward's report on its running run (`meta.report`); no event (REST-only rows). */
   reportJobRun(input: ReportJobRunInput): Promise<CommandResult<JobRun>>;
   requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>>;
+  requestPublish(input: RequestPublishInput): Promise<CommandResult<{ questionId: Id }>>;
+  setProjectProvider(input: SetProjectProviderInput): Promise<CommandResult<Project>>;
 
   // panel actions (SPEC decision 11b)
   /**

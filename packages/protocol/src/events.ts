@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
 import { SetAnswer } from './question-set.js';
+import { Provider } from './providers.js';
 import { ReplyQuote } from './reply.js';
 import {
   AgentRole,
@@ -40,7 +41,7 @@ import {
   Port,
   RunOutcome,
 } from './deliverables.js';
-import { Area, FollowUp, Job, JobRun, JobRunOutcome } from './long-term.js';
+import { Area, FollowUp, Job, JobRun, JobRunOutcome, PublishContext } from './long-term.js';
 
 // ---------------------------------------------------------------------------
 // agent.* — emitted by adapters, normalised (TECHNOLOGY §3.4)
@@ -153,7 +154,9 @@ export const AgentFailed = z.object({
   type: z.literal('agent.failed'),
   ...agentBase,
   error: z.string(),
-  reason: z.enum(['cap', 'crash', 'runtime', 'unknown']),
+  reason: z.enum(['cap', 'crash', 'runtime', 'limit', 'unknown']),
+  /** For `reason: 'limit'`: when the subscription's limit resets (P11-02). */
+  resetsAt: z.string().datetime().optional(),
   cost: Cost.optional(),
 });
 
@@ -313,6 +316,11 @@ export const QuestionAnswered = z.object({
   repliedIn: Id.optional(),
   /** The structured answer of a question-set row (P8-19); folded into `meta.answerDetail`. */
   detail: SetAnswer.optional(),
+  /**
+   * A publish approved with edited text (P11-06): the request as approved — the edited text and
+   * its recomputed fingerprint — folded into the row as `context.publish`.
+   */
+  publish: PublishContext.optional(),
 });
 /**
  * The user saved or cleared an unsent draft answer on an open question-set row (P8-19). Folded
@@ -528,6 +536,7 @@ export const ProjectChanges = Project.omit({
     parentProjectId: Id.nullable(),
     permissionPolicy: PermissionPolicy.nullable(),
     budgetUsd: BudgetUsd.nullable(),
+    defaultProvider: Provider.nullable(),
   })
   .partial();
 export type ProjectChanges = z.infer<typeof ProjectChanges>;
@@ -537,6 +546,8 @@ export const TaskChanges = Task.omit({ id: true, createdAt: true, updatedAt: tru
     worktreePath: z.string().nullable(),
     branch: z.string().nullable(),
     budgetUsd: BudgetUsd.nullable(),
+    provider: Provider.nullable(),
+    model: z.string().nullable(),
   })
   .partial();
 export type TaskChanges = z.infer<typeof TaskChanges>;
@@ -547,8 +558,15 @@ export const CLEARABLE_PROJECT_FIELDS = [
   'parentProjectId',
   'permissionPolicy',
   'budgetUsd',
+  'defaultProvider',
 ] as const;
-export const CLEARABLE_TASK_FIELDS = ['worktreePath', 'branch', 'budgetUsd'] as const;
+export const CLEARABLE_TASK_FIELDS = [
+  'worktreePath',
+  'branch',
+  'budgetUsd',
+  'provider',
+  'model',
+] as const;
 
 /**
  * Folds `changes` into `current` (P2-20): `undefined` leaves a field unchanged, `null` removes it,
@@ -777,8 +795,12 @@ export const JobChanges = Job.omit({
   updatedAt: true,
 })
   .extend({
-    provider: z.string(),
+    provider: Provider,
     followUps: z.array(FollowUp),
+    model: z.string().nullable(),
+    followUpProvider: Provider.nullable(),
+    followUpModel: z.string().nullable(),
+    limitQuestionId: Id.nullable(),
     pausedReason: z.string().nullable(),
     failureQuestionId: Id.nullable(),
     nextRunAt: Timestamp.nullable(),
@@ -793,6 +815,10 @@ export const CLEARABLE_JOB_FIELDS = [
   'failureQuestionId',
   'nextRunAt',
   'runningRunId',
+  'model',
+  'followUpProvider',
+  'followUpModel',
+  'limitQuestionId',
 ] as const;
 
 const changesSomething = { message: 'an update changes something' };

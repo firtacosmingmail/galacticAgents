@@ -15,11 +15,14 @@ import {
   DEFAULT_PERMISSION_POLICY,
   DEFAULT_RUN_SETTINGS,
   DEFAULT_TRANSCRIPT_RETENTION,
+  PROVIDER_LABEL,
+  PROVIDER_RUNTIME,
   Timestamp,
   type RunSettings,
   type AgentRuntime,
   type DeclarationLimits,
   type PermissionPolicy,
+  type Provider,
   type Settings,
   type SettingName,
   type SettingsPatch,
@@ -50,12 +53,16 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `caps` | live: the next spawn and the next agent's caps; running agents keep theirs |
  * | `qualityTier` | live (stored for the renderer, Phase 3) |
  * | `budgets` | live: every budgeted project and task is judged against the new threshold (P8-01) |
- * | `stewardRuntime` | live: the next Steward a brain spawns (P8-07); only a registered runtime |
+ * | `defaultProvider` | live: the next Steward spawned without a provider of its own (P11-03); only a registered provider |
+ * | `providers` | live: the next Steward of that provider spawned without a model (P11-03); merged provider by provider, `model: null` clears |
  * | `deliverables.ide` | live: the next Open in IDE (P9-03); `auto` or an installed IDE's bundle id |
  * | `deliverables.declarations` | live: the next agent declaration (P9-04, decision 120) |
  * | `deliverables.runs` | live: the next run's start (`maxConcurrent`), the run's own output cap at its next write, retention's next run (P9-08, decision 130) |
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
+ *
+ * `stewardRuntime` is no longer a setting (P11-03, removed from the protocol in P11-09): the next
+ * write removes the key from the file after `loadConfig` upgraded it to `defaultProvider`.
  *
  * Besides the settings, a patch may mark the panel's first-run setup as done (`setupCompleted`,
  * P25-08): `setupCompletedAt` is stamped once in `config.json` and reported by `response()`.
@@ -98,15 +105,12 @@ export interface SettingsServiceOptions {
   /** The home directory the projects root may not be (default `os.homedir()`; tests). */
   home?: string;
   /**
-   * The runtimes the server has adapters for (P8-07): `stewardRuntime` may name only one of
-   * them. Absent: any runtime is accepted (tests).
+   * The runtimes the server has adapters for: `defaultProvider` may name only a provider whose
+   * runtime is one of them (P11-03). Absent: any provider is accepted (tests).
    */
   runtimes?: () => readonly AgentRuntime[];
-  /**
-   * Whether `stewardRuntime` may be `fake` (the scripted fake adapter): only in dev mode
-   * (`GALACTIC_DEV`). Default `config.dev`; tests may pass it explicitly.
-   */
-  allowFakeRuntime?: boolean;
+  /** Where an ignored deprecated field is reported (default `console.warn`). */
+  warn?: (message: string) => void;
   /**
    * The IDEs the opener found (P9-03): `deliverables.ide` may name only one of them. The caller
    * runs a detection before a patch that sets it (`Opener.ides()`); `undefined` (none yet, or no
@@ -178,7 +182,8 @@ export class SettingsService {
    * Validates, persists and applies `patch` (already shape-checked by `SettingsPatch`). Throws
    * `SettingsError` before anything is written when a field is env-decided or invalid.
    */
-  update(patch: SettingsPatch, write: PolicyWrite = {}): SettingsResponse {
+  update(given: SettingsPatch, write: PolicyWrite = {}): SettingsResponse {
+    const patch = given;
     const remote = writableFor(write) === 'limited';
     const refused = (Object.keys(patch) as SettingName[]).filter(
       (k) => patch[k] !== undefined && !REMOTE_WRITABLE.includes(k),
@@ -242,25 +247,21 @@ export class SettingsService {
     if (patch.budgets?.warnAtPercent !== undefined) {
       next.budgets = { ...next.budgets, warnAtPercent: patch.budgets.warnAtPercent };
     }
-    if (patch.stewardRuntime === null) delete next.stewardRuntime;
-    else if (patch.stewardRuntime !== undefined) {
-      if (
-        patch.stewardRuntime === 'fake' &&
-        !(this.opts.allowFakeRuntime ?? this.opts.config.dev)
-      ) {
-        throw new SettingsError(
-          'invalid',
-          'the fake runtime is for development only (GALACTIC_DEV): choose a real runtime',
-        );
+    if (patch.defaultProvider === null) delete next.defaultProvider;
+    else if (patch.defaultProvider !== undefined) {
+      next.defaultProvider = this.checkProvider(patch.defaultProvider);
+    }
+    if (patch.providers) {
+      const providers = { ...next.providers };
+      for (const [provider, entry] of Object.entries(patch.providers) as [
+        Provider,
+        { model?: string | null },
+      ][]) {
+        if (entry.model === null) delete providers[provider];
+        else if (entry.model !== undefined) providers[provider] = { model: entry.model };
       }
-      const known = this.opts.runtimes?.();
-      if (known && !known.includes(patch.stewardRuntime)) {
-        throw new SettingsError(
-          'invalid',
-          `no ${patch.stewardRuntime} runtime is set up on this server (available: ${known.join(', ')})`,
-        );
-      }
-      next.stewardRuntime = patch.stewardRuntime;
+      if (Object.keys(providers).length > 0) next.providers = providers;
+      else delete next.providers;
     }
     if (patch.deliverables?.ide !== undefined) {
       next.deliverables = { ...next.deliverables, ide: this.checkIde(patch.deliverables.ide) };
@@ -298,6 +299,21 @@ export class SettingsService {
     if (setupCompletedAt) this.config.setupCompletedAt = setupCompletedAt;
     this.saved = next;
     return this.response(patch.defaultPermissionPolicy !== undefined ? { floored } : {});
+  }
+
+  /** A provider whose runtime this server has an adapter for (P11-03). */
+  private checkProvider(provider: Provider): Provider {
+    const known = this.opts.runtimes?.();
+    if (known && !known.includes(PROVIDER_RUNTIME[provider])) {
+      const available = (Object.keys(PROVIDER_RUNTIME) as Provider[])
+        .filter((p) => known.includes(PROVIDER_RUNTIME[p]))
+        .map((p) => PROVIDER_LABEL[p]);
+      throw new SettingsError(
+        'invalid',
+        `${PROVIDER_LABEL[provider]} is not set up on this server (available: ${available.join(', ') || 'none'})`,
+      );
+    }
+    return provider;
   }
 
   /** `auto`, or the bundle id of an IDE the last detection found (decision 127). */
@@ -343,7 +359,10 @@ export class SettingsService {
       stewardsLoadUserSettings: c.stewardsLoadUserSettings ?? true,
       transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
       budgets: { warnAtPercent: c.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT },
-      ...(c.stewardRuntime ? { stewardRuntime: c.stewardRuntime } : {}),
+      ...(c.defaultProvider ? { defaultProvider: c.defaultProvider } : {}),
+      ...(c.providers && Object.keys(c.providers).length > 0
+        ? { providers: structuredClone(c.providers) }
+        : {}),
       deliverables: {
         ide: c.deliverables?.ide ?? 'auto',
         declarations: declarationLimits(c),
@@ -375,8 +394,19 @@ export class SettingsService {
     if (patch.budgets?.warnAtPercent !== undefined) {
       raw['budgets'] = { ...((raw['budgets'] as object | undefined) ?? {}), ...next.budgets };
     }
-    if (patch.stewardRuntime === null) delete raw['stewardRuntime'];
-    else if (patch.stewardRuntime !== undefined) raw['stewardRuntime'] = next.stewardRuntime;
+    if (patch.defaultProvider === null) delete raw['defaultProvider'];
+    else if (patch.defaultProvider !== undefined) raw['defaultProvider'] = next.defaultProvider;
+    if (patch.providers) {
+      if (next.providers) raw['providers'] = next.providers;
+      else delete raw['providers'];
+    }
+    // The upgraded Steward runtime (P11-03): the old key goes, what it became is kept.
+    if ('stewardRuntime' in raw) {
+      delete raw['stewardRuntime'];
+      if (raw['defaultProvider'] === undefined && next.defaultProvider) {
+        raw['defaultProvider'] = next.defaultProvider;
+      }
+    }
     if (patch.deliverables?.ide !== undefined) {
       raw['deliverables'] = {
         ...((raw['deliverables'] as object | undefined) ?? {}),
@@ -441,10 +471,14 @@ export class SettingsService {
       this.config.budgets = { warnAtPercent: next.budgets.warnAtPercent };
       if (this.opts.budgets) this.opts.budgets.warnAtPercent = next.budgets.warnAtPercent;
     }
-    // Read by the brains' Steward spawns at every spawn (`index.ts` hands them this config).
-    if (patch.stewardRuntime !== undefined) {
-      if (next.stewardRuntime) this.config.stewardRuntime = next.stewardRuntime;
-      else delete this.config.stewardRuntime;
+    // Read at every Steward spawn (`index.ts` hands the provider catalogue this config).
+    if (patch.defaultProvider !== undefined) {
+      if (next.defaultProvider) this.config.defaultProvider = next.defaultProvider;
+      else delete this.config.defaultProvider;
+    }
+    if (patch.providers) {
+      if (next.providers) this.config.providers = structuredClone(next.providers);
+      else delete this.config.providers;
     }
     if (patch.deliverables?.ide !== undefined && next.deliverables) {
       this.config.deliverables = { ...this.config.deliverables, ide: next.deliverables.ide };

@@ -16,7 +16,9 @@ import type { Id, Project, Task, WorkState } from '@galactic/protocol';
  *     `declare_deliverable` on a runtime that serves the server's tools, else as a "Deliverables:"
  *     list in the "Done:" report (`deliverables/report-block.ts` reads it for the supervisor);
  *   - **never spend unasked** (P10-05, decision 145): `request_spend` and end the turn, or (no
- *     server tools) never spend and report "Not done: needs approval to spend …".
+ *     server tools) never spend and report "Not done: needs approval to spend …";
+ *   - **never publish unasked** (P11-06, decision 147): `request_publish` with the exact content
+ *     and end the turn, or (no server tools) never publish.
  *
  * Pure text: no SDK, no database. Callers pass what they read from the queries.
  */
@@ -75,6 +77,7 @@ export function stewardEtiquette(
       : []),
     ...deliverableEtiquette(brief.declares ?? true),
     ...spendEtiquette(brief.declares ?? true),
+    ...publishEtiquette(brief.declares ?? true),
     `- Report when you stop. End your turn with a final message that is your report to ${boss}: begin it with "Done:" when the task is complete (what you changed, how you checked it — tests, build — and anything left over or risky), or "Not done:" with what stops you. That last message is delivered as your report; ${boss} decides whether the task is closed or gives you more to do. Every end of your turn counts as a report, so do not stop half-way unless you are blocked.`,
   ];
 }
@@ -103,6 +106,20 @@ export function spendEtiquette(canAsk: boolean): string[] {
       ]
     : [
         "- Money. You cannot ask for a spending approval, so never spend money; report 'Not done: needs approval to spend …' with the amount and what for.",
+      ];
+}
+
+/**
+ * The line about publishing (P11-06, decision 147): ask first with `request_publish` — the exact
+ * content — on a runtime that serves the server's tools, else never publish and say so.
+ */
+export function publishEtiquette(canAsk: boolean): string[] {
+  return canAsk
+    ? [
+        '- Publishing. Before anything goes out in Cosmin’s name (a post, a reply, a review answer, a message, an upload), call `request_publish` with the platform, the account, the exact text and the files, and end your turn; publish only after he approves, exactly what he approved. A publish request is refused unless your task is a publishing step.',
+      ]
+    : [
+        "- Publishing. You cannot ask for a publish approval, so never publish anything (no posts, replies or uploads); report 'Not done: needs approval to publish …' with what and where.",
       ];
 }
 

@@ -7,6 +7,7 @@ import {
   proposalLongTermOf,
   proposalParking,
   proposalPlan,
+  Provider,
   proposalPromotion,
   proposalTrust,
   TrustLevel,
@@ -25,6 +26,7 @@ import { budgetInput, Controls } from '../../console/hierarchy/WorkTree.js';
 import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy/shared.js';
 import { OfflineDecisionNote, useStreamDown } from './QueuedAnswer.js';
 import { AgentRef } from './links.js';
+import { choiceText } from '../providers.js';
 import { JOB_CARD_TITLES, JobCard } from './JobCard.js';
 
 /**
@@ -205,6 +207,17 @@ function LongTermFacts({
   );
 }
 
+/** What the card says about which AI does what: a standalone card's own, a project's note. */
+function providerLine(p: Proposal): string | undefined {
+  const r = p.meta?.['request'] as { provider?: unknown; model?: unknown } | undefined;
+  const provider = Provider.safeParse(r?.provider);
+  if (provider.success) {
+    return choiceText(provider.data, typeof r?.model === 'string' ? r.model : undefined);
+  }
+  const note = p.meta?.['providerNote'];
+  return typeof note === 'string' && note ? note : undefined;
+}
+
 function requestType(p: Proposal): string | undefined {
   const r = p.meta?.['request'] as { type?: string } | undefined;
   return r?.type?.replace(/_/g, ' ');
@@ -288,6 +301,12 @@ export function WorkCard({ proposal: p }: { proposal: Proposal }) {
                   ? ` into ${world.projects[promotion.toProjectId]?.name ?? promotion.toProjectId}`
                   : ''}
               </dd>
+            </div>
+          )}
+          {providerLine(p) && (
+            <div className="wide">
+              <dt>AI</dt>
+              <dd>{providerLine(p)}</dd>
             </div>
           )}
           {p.rationale && (
@@ -655,6 +674,24 @@ export function PlanCard({ proposal: p }: { proposal: Proposal }) {
             <li key={id}>
               <StatePill state={task.state} /> {task.description}
               {task.priority !== 'normal' ? ` (${task.priority})` : ''}
+              {task.provider && (
+                <>
+                  {' '}
+                  <span className="provider-chip">{choiceText(task.provider, task.model)}</span>
+                </>
+              )}
+              {task.makesImages && (
+                <>
+                  {' '}
+                  <span className="provider-tag">images</span>
+                </>
+              )}
+              {task.publishes && (
+                <>
+                  {' '}
+                  <span className="provider-tag">publishes</span>
+                </>
+              )}
               {task.state === 'proposed' && p.state !== 'approved' && (
                 <Controls target={{ kind: 'task', id }} item={task} />
               )}

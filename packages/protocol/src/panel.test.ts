@@ -105,10 +105,23 @@ describe('settings schemas (P25-01)', () => {
     });
   });
 
-  it('takes the Steward runtime as a runtime name, `null` to clear it (P8-07)', () => {
-    expect(Settings.parse({ ...valid, stewardRuntime: 'acp' }).stewardRuntime).toBe('acp');
-    expect(SettingsPatch.parse({ stewardRuntime: null })).toEqual({ stewardRuntime: null });
-    expect(SettingsPatch.safeParse({ stewardRuntime: 'cursor' }).success).toBe(false);
+  it('has no Steward runtime any more, and takes per-provider settings (P11-09)', () => {
+    expect(Settings.parse({ ...valid, stewardRuntime: 'acp' })).not.toHaveProperty(
+      'stewardRuntime',
+    );
+    expect(SettingsPatch.safeParse({ stewardRuntime: null }).success).toBe(false);
+    expect(SettingsPatch.safeParse({ stewardRuntime: 'acp' }).success).toBe(false);
+    // Per-provider settings are a partial map (P11-02).
+    expect(SettingsPatch.parse({ providers: { chatgpt: { model: 'gpt-5.6-terra' } } })).toEqual({
+      providers: { chatgpt: { model: 'gpt-5.6-terra' } },
+    });
+    expect(SettingsPatch.parse({ providers: { gemini: { model: null } } })).toEqual({
+      providers: { gemini: { model: null } },
+    });
+    expect(SettingsPatch.safeParse({ providers: { cursor: { model: 'x' } } }).success).toBe(false);
+    expect(Settings.safeParse({ ...valid, providers: { claude: { model: 'opus' } } }).success).toBe(
+      true,
+    );
   });
 
   it('takes the IDE as auto or a bundle id, never a path or an option (P9-03)', () => {
@@ -177,6 +190,21 @@ describe('notificationOf (P25-01; SPEC §4.5)', () => {
       { question: () => ({ kind: 'clarification', context: { text: 'Escalated?' } }) },
     );
     expect(escalated).toMatchObject({ id: 'question:q3', body: 'Escalated?' });
+  });
+
+  it('a publish approval is notified like a permission with its own title', () => {
+    const publish = question({
+      id: 'q-p',
+      kind: 'publish',
+      context: { text: 'Publish the post?' },
+    });
+    const n = notificationOf(env(10, { type: 'question.opened', question: publish }));
+    expect(n).toMatchObject({
+      id: 'question:q-p',
+      kind: 'permission',
+      questionKind: 'publish',
+      title: 'Publish approval needed',
+    });
   });
 
   it('a spend (P10-07, decision 145) has its own title and names the amount and purpose', () => {

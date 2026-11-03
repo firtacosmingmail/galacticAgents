@@ -8,6 +8,7 @@ import {
   createProject,
   pinProject,
   reopenProject,
+  setProjectProvider,
   updateProject,
 } from './projects.js';
 import { setProjectState } from './states.js';
@@ -127,6 +128,29 @@ describe('updateProject', () => {
       run((ctx) => updateProject(ctx, p.id, { permissionPolicy: { rules: 'all' } as never })),
     ).toThrow(/policy/);
     expect(() => run((ctx) => updateProject(ctx, 'p-x', { name: 'x' }))).toThrow(/no project/);
+  });
+});
+
+describe('setProjectProvider (P11-03)', () => {
+  it('sets and clears the default provider with one project.updated; refused for finished work', () => {
+    const { run, tables } = world();
+    const p = run((ctx) => createProject(ctx, input)).value;
+    const set = run((ctx) =>
+      setProjectProvider(ctx, { projectId: p.id, provider: 'gemini', by: USER }),
+    );
+    expect(set.value.defaultProvider).toBe('gemini');
+    expect(set.events).toEqual([
+      { type: 'project.updated', projectId: p.id, changes: { defaultProvider: 'gemini' } },
+    ]);
+    run((ctx) => setProjectProvider(ctx, { projectId: p.id, provider: null, by: USER }));
+    expect(tables.projects.get(p.id)?.defaultProvider).toBeUndefined();
+    run((ctx) => closeProject(ctx, p.id, USER));
+    expect(() =>
+      run((ctx) => setProjectProvider(ctx, { projectId: p.id, provider: 'claude', by: USER })),
+    ).toThrow(/completed/);
+    expect(() =>
+      run((ctx) => setProjectProvider(ctx, { projectId: 'p-x', provider: 'claude', by: USER })),
+    ).toThrow(/no project/);
   });
 });
 

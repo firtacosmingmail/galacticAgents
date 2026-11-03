@@ -98,6 +98,8 @@ const commands: DomainCommands = {
   openFinding: notImplemented,
   reportJobRun: notImplemented,
   requestSpend: notImplemented,
+  requestPublish: notImplemented,
+  setProjectProvider: notImplemented,
 };
 
 describe('interfaces', () => {

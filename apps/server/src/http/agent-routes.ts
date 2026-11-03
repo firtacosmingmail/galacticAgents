@@ -48,6 +48,8 @@ import { policyForWrite } from '../domain/permissions.js';
 import type { PeerCheck } from './peer-guard.js';
 import { bearerGuard, originOf } from './security.js';
 import { sendStorageRefusal } from './storage-refusal.js';
+import { readPublishFile } from './publish-files.js';
+import { folderOfAgent } from '../domain/publish.js';
 
 /**
  * The agent control surface the ops console uses (P1-11; TECHNOLOGY §2.2 "a small REST
@@ -537,16 +539,50 @@ export function registerAgentRoutes(
      * permission request from an agent's or a run's process is refused (403 `agent_peer`, review
      * S4: the speed bump of `answersPeer`); a clarification may be answered from anywhere. A
      * `spend` approval (P10-05, decision 145) follows the permission rule exactly: the same speed
-     * bump, and a remote client may answer it (decision 90). `detail` carries a structured answer
-     * (a reply finding's edited text).
+     * bump, and a remote client may answer it (decision 90); a `publish` approval (P11-06,
+     * decision 147) likewise. `detail` carries a structured answer (a reply finding's or a
+     * publish's edited text).
      */
+    /**
+     * A listed file of a publish approval, for the card's thumbnail (P11-09, ruling R24): see
+     * `readPublishFile`. Read-only, behind the bearer guard, open to a remote client like any
+     * view of a question; 404 for anything that is not a listed image of that question, 409 when
+     * the file changed since it was listed.
+     */
+    app.get(
+      '/api/questions/:id/publish-files/:index',
+      { exposeHeadRoute: false },
+      async (req, reply) => {
+        const { id, index } = req.params as { id: string; index: string };
+        const question = log.tables.questions.get(id);
+        let root: string | undefined;
+        if (question?.kind === 'publish') {
+          try {
+            root =
+              runtime.permissionContext?.(question.originAgentId)?.ctx.cwd ??
+              folderOfAgent(log, question.originAgentId);
+          } catch {
+            root = undefined;
+          }
+        }
+        const result = readPublishFile(question, index, root);
+        if (result.status !== 200) return reply.code(result.status).send({ error: result.error });
+        return reply
+          .header('content-type', result.contentType)
+          .header('content-length', result.bytes.length)
+          .header('x-content-type-options', 'nosniff')
+          .header('cache-control', 'private, no-store')
+          .send(result.bytes);
+      },
+    );
+
     app.post('/api/questions/:id/answer', async (req, reply) => {
       const body = parse(AnswerBody, req.body, reply);
       if (!body) return;
       const questionId = (req.params as { id: string }).id;
       const kind = log.tables.questions.get(questionId)?.kind;
       if (
-        (kind === 'permission' || kind === 'spend') &&
+        (kind === 'permission' || kind === 'spend' || kind === 'publish') &&
         !(await notFromAnAgent(opts.answersPeer, 'answer', req, reply))
       ) {
         return reply;

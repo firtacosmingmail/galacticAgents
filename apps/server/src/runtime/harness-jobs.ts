@@ -1,5 +1,7 @@
 import type { z } from 'zod';
 import type {
+  Agent,
+  DomainCommands,
   HarnessJobRunBody,
   HarnessJobRunResponse,
   HarnessJobTickResponse,
@@ -66,8 +68,19 @@ export class HarnessJobScripts {
   }
 }
 
-/** The run Steward's one turn: each finding, the spend, then the run's report. */
-export function jobRunScript(body: JobRunScript): FakeScenario {
+/** A reply finding of a script (Phase 10's kind, which `report_finding` no longer offers). */
+type ReplyFinding = JobRunScript['findings'][number];
+
+/**
+ * The run Steward's one turn: each finding, the spend, then the run's report. A `reply` finding is
+ * Phase 10's kind, which `report_finding` no longer offers (P11-06: replies are publish requests);
+ * the harness still opens one through `openReply` — a "Send" finding already waiting, which the
+ * user answers the old way — or, without it, reports it like any finding (and is refused).
+ */
+export function jobRunScript(
+  body: JobRunScript,
+  openReply?: (finding: ReplyFinding) => Promise<void>,
+): FakeScenario {
   const findings = body.findings;
   const summary =
     body.summary ??
@@ -83,7 +96,10 @@ export function jobRunScript(body: JobRunScript): FakeScenario {
       {
         kind: 'script',
         run: async (io) => {
-          for (const finding of findings) await call(io, 'report_finding', finding);
+          for (const finding of findings) {
+            if (finding.kind === 'reply' && openReply) await openReply(finding);
+            else await call(io, 'report_finding', finding);
+          }
           if (body.spend) await call(io, 'request_spend', body.spend);
           await call(io, 'report_run', {
             outcome: findings.length > 0 ? 'findings' : 'quiet',
@@ -100,8 +116,29 @@ export function harnessJobs(opts: {
   log: EventLog;
   scheduler: JobScheduler;
   scripts: HarnessJobScripts;
+  /** Opens a script's legacy reply findings (P11-06); absent: they go through `report_finding`. */
+  commands?: Pick<DomainCommands, 'openFinding'>;
 }): HarnessJobs {
-  const { log, scheduler, scripts } = opts;
+  const { log, scheduler, scripts, commands } = opts;
+  /** A legacy reply finding of the job's running run, from its Steward (the newest on its task). */
+  const openReply =
+    (jobId: Id) =>
+    async (finding: ReplyFinding): Promise<void> => {
+      const job = must(log.tables.jobs.get(jobId), 'job', jobId);
+      const steward = log.tables.agents
+        .all()
+        .filter((a) => a.role === 'steward' && a.taskId === job.taskId)
+        .reduce<Agent | undefined>((b, a) => (!b || a.createdAt >= b.createdAt ? a : b), undefined);
+      if (!commands || !job.runningRunId || !steward) return;
+      await commands.openFinding({
+        runId: job.runningRunId,
+        originAgentId: steward.id,
+        kind: 'reply',
+        title: finding.title,
+        text: finding.text,
+        ...(finding.draft !== undefined ? { draft: finding.draft } : {}),
+      });
+    };
   return {
     async run(jobId, body) {
       const job = must(log.tables.jobs.get(jobId), 'job', jobId);
@@ -112,7 +149,7 @@ export function harnessJobs(opts: {
         throw new DomainError('conflict', `job ${job.name} has a run going on`);
       }
       const before = job.lastRun?.runId;
-      scripts.set(job.taskId, jobRunScript(body));
+      scripts.set(job.taskId, jobRunScript(body, commands ? openReply(jobId) : undefined));
       // Due now: the scheduler starts it as it would a run whose time has come.
       log.runCommand((ctx) =>
         writeJob(ctx, jobOf(ctx, jobId), { nextRunAt: new Date(log.clock()).toISOString() }),

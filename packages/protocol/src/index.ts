@@ -30,5 +30,6 @@ export * from './deliverables.js';
 export * from './remote.js';
 export * from './reply.js';
 export * from './question-set.js';
+export * from './providers.js';
 export * from './long-term.js';
 export * from './schedule.js';

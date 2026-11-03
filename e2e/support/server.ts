@@ -77,8 +77,12 @@ export async function startServer(): Promise<E2eServer> {
     GALACTIC_HARMONIZER: 'fake',
     // Stewards too (P10-08), belt and braces: a recurring job's runs are Stewards the scheduler
     // spawns on the Steward runtime, which already falls back to the Harmonizer's (fake) runtime;
-    // this keeps every new Steward on the fake runtime whatever that fallback becomes.
+    // this keeps every new Steward on the fake runtime whatever that fallback becomes — except one
+    // on ChatGPT or Gemini, which runs on the fake adapters GALACTIC_FAKE_PROVIDERS registers as
+    // `codex` and `agy` (P11-10), so no real CLI is ever started.
     GALACTIC_STEWARD_RUNTIME: 'fake',
+    // The e2e server alone sets this (ruling R25): `--dev` and `pnpm remote` keep the real CLIs.
+    GALACTIC_FAKE_PROVIDERS: '1',
     GALACTIC_WEB_DIR: WEB_DIR,
     GALACTIC_LOG: 'silent',
     // A name that resolves to this machine only inside the remote test's own browser (P9-12): the

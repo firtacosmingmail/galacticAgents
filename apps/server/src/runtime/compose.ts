@@ -14,10 +14,11 @@ import { RunOutput } from '../deliverables/run-output.js';
 import { RunService, type RunServiceOptions, type RunSupervisor } from '../deliverables/runs.js';
 import { DeliverableService } from '../deliverables/service.js';
 import { stewardDeliverableTools } from '../brains/deliverable-tools.js';
-import { SpendRelay, stewardJobTools } from '../brains/job-tools.js';
+import { PublishRelay, SpendRelay, stewardJobTools } from '../brains/job-tools.js';
 import type { Database } from '../db/database.js';
 import { Commands } from '../domain/commands.js';
 import { EventLog, type EventLogOptions } from '../domain/event-log.js';
+import { folderOfAgent } from '../domain/publish.js';
 import { livingFromStatuses, logRouting } from '../domain/question-service.js';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import {
@@ -33,6 +34,10 @@ import { Archival, type Timers } from './archival.js';
 import { BudgetWatcher } from './budgets.js';
 import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
 import { JobScheduler } from './job-scheduler.js';
+import { ProviderCatalog } from './provider-catalog.js';
+import { UsageLimits } from './usage-limits.js';
+import { PublishAllowanceStore } from './publish-allowance.js';
+import { stewardChooser } from './steward-choice.js';
 import { StorageMonitor } from './storage-health.js';
 import { StatusStore } from './status-store.js';
 import { StewardProcesses, type StewardProcessesOptions } from './steward-processes.js';
@@ -57,6 +62,9 @@ export const STALL_THRESHOLDS_MS: Record<RuntimeName, number> = {
   'claude-sdk': 5 * 60_000,
   acp: 5 * 60_000,
   pty: 2 * 60_000,
+  // Codex and Antigravity runs go quiet during builds and tests like Claude's (P11-02).
+  codex: 5 * 60_000,
+  agy: 5 * 60_000,
 };
 
 export interface ComposeOptions {
@@ -93,9 +101,14 @@ export interface ComposeOptions {
   /**
    * The job scheduler (P10-04): the timer runs only with an `intervalMs` (tests call
    * `jobs.tick()`; `index.ts` starts it itself after recovery and the Harmonizer). Job-run
-   * Stewards run on `stewardRuntime` (default: the `stewardRuntime` setting, else `claude-sdk`).
+   * Stewards run on the job's provider (`resolveStewardChoice`, P11-03).
    */
-  jobs?: { intervalMs?: number; timers?: Timers; stewardRuntime?: () => RuntimeName };
+  jobs?: { intervalMs?: number; timers?: Timers };
+  /**
+   * Usage limits (P11-07): how often answered waits are checked once `usageLimits.start()` is
+   * called — `index.ts` does after recovery (default 60 s; `0`: no timer, tests call `tick()`).
+   */
+  usageLimits?: { tickMs?: number; timers?: Timers; now?: () => number };
   /**
    * Transcript retention (P8-02): `policy` from the settings (default
    * `DEFAULT_TRANSCRIPT_RETENTION`); the timer runs only with an `intervalMs`, like archival
@@ -122,11 +135,18 @@ export interface ComposeOptions {
    */
   detection?: false | Omit<DetectionOptions, 'tables' | 'commands' | 'onProblem'>;
   /**
-   * The runtime new Stewards run on (P8-07; the `stewardRuntime` setting, read at every spawn):
-   * handed to every brain's tools. Absent or `undefined`: a brain spawns Stewards on its own
-   * runtime.
+   * The providers (P11-03): model lists, checks, and the Settings' default provider and models
+   * every Steward spawn reads. Default: a catalogue over `adapters` with no settings.
    */
-  stewardRuntime?: () => RuntimeName | undefined;
+  catalog?: ProviderCatalog;
+  /**
+   * Development and tests only (`GALACTIC_STEWARD_RUNTIME`): the runtime of every new Steward,
+   * whatever its provider. Absent or `undefined`: the provider's runtime (a brain on the fake
+   * runtime keeps its `claude` Stewards on fake).
+   */
+  stewardRuntimeOverride?: () => RuntimeName | undefined;
+  /** Development only: runtimes the override leaves alone (the dev harness's provider fakes). */
+  stewardRuntimeKeeps?: () => readonly RuntimeName[];
   /**
    * The deliverables (P9-04, P9-06). Agents' declarations: the service is built when a data
    * folder is known (this `dataDir`, else `workspaces.dataDir`); `limits` is read at every
@@ -173,6 +193,8 @@ export interface ComposedRuntime {
   runtime: AgentRuntime;
   /** The `DomainCommands` surface over this log and runtime (P2-01). */
   commands: Commands;
+  /** The providers: model lists, usage, checks (P11-03). */
+  catalog: ProviderCatalog;
   /** Stewards' done reports to their supervisors (P2-11). */
   reports: StewardReports;
   /** Read-only views brains seed their turns from (P2-06). */
@@ -190,6 +212,10 @@ export interface ComposedRuntime {
   transcriptRetention: TranscriptRetention;
   /** The job scheduler (P10-04); its timer runs when composed with an interval or started. */
   jobs: JobScheduler;
+  /** A Steward's usage limit: the one switch-or-wait question and its answer (P11-07). */
+  usageLimits: UsageLimits;
+  /** The one-shot allowances approved publishes arm (P11-06). */
+  publishAllowances: PublishAllowanceStore;
   /** A Steward's processes: list, stop, sweep (P4-14), when composed with `processes`. */
   processes?: StewardProcesses;
   /** Budget notices and the Harmonizer's chat lines about them (P8-01). */
@@ -335,12 +361,24 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   // by a fresh session, P2-16) still holds what is routed to it.
   const living = livingFromStatuses(statuses);
   const questions = logRouting(log, (id) => living(id) || runtime.isReserved(id));
+  const adapters = opts.adapters ?? [new FakeAdapter()];
+  // One resolver for every Steward spawn (P11-03): the task, job, project and Settings decide.
+  const catalog =
+    opts.catalog ?? new ProviderCatalog({ adapters: () => adapters, settings: () => ({}) });
+  const chooseSteward = stewardChooser({
+    defaults: () => catalog.defaults(),
+    ...(opts.stewardRuntimeOverride ? { override: opts.stewardRuntimeOverride } : {}),
+    ...(opts.stewardRuntimeKeeps ? { overrideKeeps: opts.stewardRuntimeKeeps } : {}),
+  });
+  // The one-shot allowances approved publishes arm (P11-06): every gate consults them.
+  const publishAllowances = new PublishAllowanceStore();
   const runtime: AgentRuntime = new AgentRuntime({
     log,
     questions,
-    adapters: opts.adapters ?? [new FakeAdapter()],
+    adapters,
     transcripts,
     statuses,
+    publishAllowances,
     caps: { ...(opts.caps ?? {}), defaults: defaultCaps },
     ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
     ...(opts.now ? { now: opts.now } : {}),
@@ -385,6 +423,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       ? { checkWorkspace: (path: string): string => workspaces!.checkPath(path) }
       : {}),
     isRunning,
+    catalog,
+    chooseSteward,
   });
   const queries = createBrainQueries({
     tables: log.tables,
@@ -469,11 +509,32 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'transcript retention') } : {}),
   });
   if (tr?.intervalMs) transcriptRetention.start(tr.intervalMs);
+  // Built before the scheduler: a job run's limit is asked in the scheduler's queue (P11-07).
+  const usageLimits = new UsageLimits({
+    log,
+    commands,
+    catalog,
+    chooseSteward,
+    resume: (agentId, prompt) => runtime.resumeAfterLimit(agentId, prompt),
+    // A Steward of the task that runs or comes back (interrupted: recovery reopens it).
+    stewardOnTask: (taskId) =>
+      log.tables.agents.all().find((a) => {
+        if (a.role !== 'steward' || a.taskId !== taskId) return false;
+        const state = statuses.get(a.id)?.state;
+        return state !== undefined && (state === 'interrupted' || !ENDED_STATES.has(state));
+      })?.id,
+    notify: (agentId, text) => void runtime.send(agentId, text, { sender: { type: 'system' } }),
+    ...(opts.usageLimits?.tickMs !== undefined ? { tickMs: opts.usageLimits.tickMs } : {}),
+    ...(opts.usageLimits?.timers ? { timers: opts.usageLimits.timers } : {}),
+    ...(opts.usageLimits?.now ? { now: opts.usageLimits.now } : {}),
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
   const jobs = new JobScheduler({
     log,
     commands,
     runtime,
-    stewardRuntime: opts.jobs?.stewardRuntime ?? (() => opts.stewardRuntime?.() ?? 'claude-sdk'),
+    limits: usageLimits,
+    chooseSteward,
     ...(opts.jobs?.timers ? { timers: opts.jobs.timers } : {}),
     onError: (e: unknown) => opts.onError?.(e, 'job scheduler'),
   });
@@ -559,6 +620,16 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
   spendRelay.start();
+  // A task Steward hears its publish answer as one message; an approval arms its allowance (P11-06).
+  const publishRelay = new PublishRelay({
+    log,
+    runtime,
+    allowances: publishAllowances,
+    worktreeOf: (agentId) =>
+      runtime.permissionContext(agentId)?.ctx.cwd ?? folderOfAgent(log, agentId),
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
+  publishRelay.start();
 
   const runners = new Map<Id, BrainRunner>();
   const runnerOptions = (extra: Pick<BrainRunnerOptions, 'coalesceMs' | 'reset'> = {}) => ({
@@ -568,7 +639,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     queries,
     ...(workspaces ? { workspaces } : {}),
     ...(processes ? { processes } : {}),
-    ...(opts.stewardRuntime ? { stewardRuntime: opts.stewardRuntime } : {}),
+    chooseSteward,
+    catalog,
     ...(deliverables ? { deliverables } : {}),
     ...extra,
     ...(opts.onError ? { onError: opts.onError } : {}),
@@ -609,6 +681,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     transcripts,
     runtime,
     commands,
+    catalog,
     reports,
     queries,
     ...(workspaces ? { workspaces } : {}),
@@ -616,6 +689,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     archival,
     transcriptRetention,
     jobs,
+    usageLimits,
+    publishAllowances,
     ...(processes ? { processes } : {}),
     budgets,
     ...(deliverables ? { deliverables } : {}),
@@ -712,8 +787,10 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       detection?.dispose();
       budgets.stop();
       spendRelay.stop();
+      publishRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       jobs.dispose();
+      usageLimits.dispose();
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();
@@ -734,8 +811,10 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       detection?.dispose();
       budgets.stop();
       spendRelay.stop();
+      publishRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       jobs.dispose();
+      usageLimits.dispose();
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();

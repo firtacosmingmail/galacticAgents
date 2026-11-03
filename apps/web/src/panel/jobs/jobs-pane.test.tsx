@@ -278,6 +278,24 @@ describe('the Jobs tab (P10-07)', () => {
     expect(within(pane()).queryByRole('button', { name: 'Show all jobs' })).toBeNull();
   });
 
+  it('a Gemini job with no follow-up provider says it cannot publish; others do not (R22)', async () => {
+    const snap = snapshot() as ServerMessage & { type: 'snapshot' };
+    useAppStore.getState().apply({
+      ...snap,
+      jobs: [
+        { ...replies, provider: 'gemini' },
+        { ...pipeline, provider: 'gemini', followUpProvider: 'chatgpt' },
+      ],
+    });
+    render(
+      <ApiContext.Provider value={{ jobRuns: async () => ({ runs }) } as unknown as Api}>
+        <JobsPane projectId="p-shop" />
+      </ApiContext.Provider>,
+    );
+    expect(screen.getAllByText('Publishes with: nobody — Gemini cannot publish')).toHaveLength(1);
+    expect(screen.getAllByText(/^Gemini · /).length).toBe(2);
+  });
+
   it('passes axe', async () => {
     useAppStore.getState().apply(snapshot());
     const api = { jobRuns: async () => ({ runs }) } as unknown as Api;

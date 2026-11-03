@@ -176,7 +176,7 @@ export class WorkStateDeriver {
       case 'agent.finished':
         return end('finished');
       case 'agent.failed':
-        return end('failed');
+        return end(event.reason === 'limit' ? 'limited' : 'failed');
       case 'agent.stopped':
         return end('stopped');
       case 'agent.interrupted':
@@ -255,7 +255,7 @@ export class WorkStateDeriver {
   /**
    * Open user-held questions of these agents. Job-owned ones (findings, a job's failure, a job's
    * spend) are inbox items that never block work (ledger ruling R12): they leave the project and
-   * the job task as they are.
+   * the job task as they are. A usage-limit question neither (P11-07): its step shows `paused`.
    */
   private userQuestions(agentIds: ReadonlySet<Id>): number {
     return this.log.tables.questions
@@ -265,7 +265,8 @@ export class WorkStateDeriver {
           q.status === 'open' &&
           q.holder.type === 'user' &&
           agentIds.has(q.originAgentId) &&
-          !isJobOwned(q),
+          !isJobOwned(q) &&
+          !q.context.usageLimit,
       ).length;
   }
 

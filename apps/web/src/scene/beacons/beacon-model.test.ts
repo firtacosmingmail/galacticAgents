@@ -94,6 +94,18 @@ describe('beaconList: which questions', () => {
     expect(beaconCard(w, 'q-s1')?.heading).toBe('Spend approval');
   });
 
+  it('a publish (P11-09) ranks with the permissions and its card says "Publish approval"', () => {
+    const w = worldWith(
+      question('q-c1', 'a-st-in', { createdAt: T(1) }),
+      question('q-u1', 'a-st-in', { kind: 'publish', createdAt: T(3) }),
+    );
+    expect(beaconList(w).map((b) => [b.questionId, b.kind])).toEqual([
+      ['q-u1', 'publish'],
+      ['q-c1', 'clarification'],
+    ]);
+    expect(beaconCard(w, 'q-u1')?.heading).toBe('Publish approval');
+  });
+
   it('two questions on one body: two beacons with distinct, stable places', () => {
     const qs = [
       question('q-1', 'a-st-in', { createdAt: T(1) }),

@@ -12,6 +12,7 @@ import {
 } from '@galactic/protocol';
 import { DomainError } from '../../domain/errors.js';
 import type { BrainTool, BrainToolContext } from '../definition.js';
+import { checkChoice, modelInput, providerInput } from '../provider-input.js';
 import { projectOf } from './tools.js';
 
 /**
@@ -117,7 +118,24 @@ const DRAFT_PROPERTIES = {
       'password: those stay in the project’s environment.',
   },
   schedule: SCHEDULE_SCHEMA,
-  provider: { type: 'string', description: 'The AI provider (default claude).' },
+  provider: {
+    enum: ['claude', 'chatgpt', 'gemini'],
+    description: 'The AI provider of its runs (default claude).',
+  },
+  model: {
+    type: 'string',
+    description: 'An exact model the user named; absent: the provider’s default.',
+  },
+  followUpProvider: {
+    enum: ['claude', 'chatgpt', 'gemini'],
+    description:
+      'The provider of the follow-up runs that send, spend or publish what Cosmin approved ' +
+      '(absent: provider). Never gemini: a follow-up may publish.',
+  },
+  followUpModel: {
+    type: 'string',
+    description: 'An exact model for follow-up runs; needs followUpProvider.',
+  },
   unattendedRules: RULES_SCHEMA,
 };
 
@@ -137,6 +155,9 @@ function cardResult(p: Proposal) {
       name: d.name,
       schedule: scheduleText(d.schedule),
       provider: d.provider,
+      ...(d.model ? { model: d.model } : {}),
+      ...(d.followUpProvider ? { followUpProvider: d.followUpProvider } : {}),
+      ...(d.followUpModel ? { followUpModel: d.followUpModel } : {}),
       instructions: d.instructions,
       unattendedRules: d.unattendedRules.map((r) => r.label),
     };
@@ -147,6 +168,48 @@ function cardResult(p: Proposal) {
     ...(card?.draft ? { after: brief(card.draft) } : {}),
     note: 'The card is with Cosmin. End your turn now; his decision arrives as an event.',
   };
+}
+
+/**
+ * The job's runs and follow-up runs checked against the catalogue before the card exists: the
+ * runs by their provider and model as given or as the job has them, a follow-up with
+ * `publishes` (it may post what Cosmin approved).
+ */
+async function checkJobProviders(
+  ctx: BrainToolContext,
+  given: Input,
+  now: { provider: string; model?: string | undefined },
+): Promise<{ model?: string; followUpModel?: string }> {
+  const listed: { model?: string; followUpModel?: string } = {};
+  const provider = providerInput(given, 'provider');
+  const model = modelInput(given, 'model');
+  if (provider || model) {
+    const id = await checkChoice(ctx, {
+      provider: provider ?? (now.provider as Job['provider']),
+      model: model ?? (provider && provider !== now.provider ? undefined : now.model),
+    });
+    // A model the user named is stored by its listed id.
+    if (model && id) listed.model = id;
+  }
+  const followUpProvider = providerInput(given, 'followUpProvider');
+  const followUpModel = modelInput(given, 'followUpModel');
+  if (followUpModel && !followUpProvider) {
+    // The follow-up would run the model on the job's provider, unchecked and maybe unable to publish.
+    throw new DomainError(
+      'invalid',
+      'followUpModel needs followUpProvider: name the provider it belongs to',
+    );
+  }
+  if (followUpProvider) {
+    const id = await checkChoice(
+      ctx,
+      { provider: followUpProvider, model: followUpModel },
+      { publishes: true },
+      'follow-up runs: ',
+    );
+    if (followUpModel && id) listed.followUpModel = id;
+  }
+  return listed;
 }
 
 const rationaleOf = (input: Input) => {
@@ -180,7 +243,11 @@ export const proposeJobTool: BrainTool = {
     const project = projectOf(ctx);
     const areaText = str(input, 'area').trim();
     const known = ctx.queries.areas(project.id).find((a: Area) => a.id === areaText);
-    const provider = optStr(input, 'provider');
+    const listed = await checkJobProviders(ctx, input, { provider: 'claude' });
+    const provider = providerInput(input, 'provider');
+    const model = listed.model ?? modelInput(input, 'model');
+    const followUpProvider = providerInput(input, 'followUpProvider');
+    const followUpModel = listed.followUpModel ?? modelInput(input, 'followUpModel');
     const { value } = await ctx.commands.proposeJob({
       projectId: project.id,
       waykeeperId: ctx.brainId,
@@ -191,6 +258,9 @@ export const proposeJobTool: BrainTool = {
         instructions: str(input, 'instructions'),
         schedule: input['schedule'] as JobDraft['schedule'],
         provider: provider ?? 'claude',
+        ...(model ? { model } : {}),
+        ...(followUpProvider ? { followUpProvider } : {}),
+        ...(followUpModel ? { followUpModel } : {}),
         unattendedRules: (input['unattendedRules'] ?? []) as JobDraft['unattendedRules'],
       },
       ...rationaleOf(input),
@@ -223,12 +293,13 @@ export const proposeJobChangeTool: BrainTool = {
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
       throw new DomainError('invalid', 'changes must be an object of the fields to change');
     }
+    const listed = await checkJobProviders(ctx, changes as Input, job);
     const { value } = await ctx.commands.proposeJob({
       projectId: job.projectId,
       waykeeperId: ctx.brainId,
       action: 'change',
       jobId: job.id,
-      changes: changes as Partial<JobDraft> & { areaId?: Id },
+      changes: { ...(changes as Partial<JobDraft> & { areaId?: Id }), ...listed },
       ...rationaleOf(input),
     });
     return cardResult(value);

@@ -1,4 +1,4 @@
-import type { AgentRole, AgentState } from '@galactic/protocol';
+import type { AgentRole, AgentState, Provider } from '@galactic/protocol';
 import type { SatelliteSpec } from './satellite-model.js';
 import type { SatelliteView } from './machine.js';
 import { hashId, seedFraction } from './machine.js';
@@ -235,9 +235,32 @@ export function luminance(rgb: readonly [number, number, number]): number {
 type LookSpec = Pick<SatelliteSpec, 'role' | 'state'> & { agentId?: string };
 
 /** A satellite's colour (CSS): its state's, or its role's while the state uses the role colour. */
-export function satelliteTint(spec: Pick<SatelliteSpec, 'role' | 'state'>): string {
+export function satelliteTint(
+  spec: Pick<SatelliteSpec, 'role' | 'state'> & { provider?: Provider | undefined },
+): string {
   const color = STATE_LOOK[spec.state].color;
-  return color === ROLE_COLOR ? SATELLITE_LOOK[spec.role].color : color;
+  const base = color === ROLE_COLOR ? SATELLITE_LOOK[spec.role].color : color;
+  const ring = spec.provider ? PROVIDER_RING[spec.provider] : undefined;
+  return ring ? mixHex(base, ring, PROVIDER_RING_MIX) : base;
+}
+
+/**
+ * The provider mark (P11-09): Claude's satellites keep their own colours; ChatGPT's and Gemini's
+ * take a share of their provider colour, so a satellite on another AI reads at a glance.
+ */
+export const PROVIDER_RING: Readonly<Record<Provider, string | undefined>> = {
+  claude: undefined,
+  chatgpt: '#10a37f',
+  gemini: '#4285f4',
+};
+
+/** How much of the provider colour a marked satellite takes. */
+export const PROVIDER_RING_MIX = 0.3;
+
+function mixHex(a: string, b: string, t: number): string {
+  const ch = (hex: string, i: number) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
+  const out = [0, 1, 2].map((i) => Math.round(ch(a, i) * (1 - t) + ch(b, i) * t));
+  return `#${out.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 }
 
 /** The size multiplier of a satellite's state (waiting larger, failed smaller). */

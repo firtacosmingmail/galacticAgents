@@ -9,7 +9,7 @@ import type {
 } from '@galactic/protocol';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
 import { collect } from '../../test/collect.js';
-import { ClaudeSdkAdapter } from './claude-sdk-adapter.js';
+import { ClaudeSdkAdapter, isUsageLimitText } from './claude-sdk-adapter.js';
 import { FakeSdk, type FakeScript, type FakeSdkOptions } from './fake-sdk.js';
 import { jsonSchemaToZodShape } from './json-schema-to-zod.js';
 import type { ZodTypeAny } from 'zod';
@@ -53,6 +53,7 @@ function make(
     env?: Record<string, string | undefined>;
     fake?: Omit<FakeSdkOptions, 'script' | 'spawnChild'>;
     stewardSettingSources?: ('user' | 'project' | 'local')[];
+    model?: string;
   } = {},
 ) {
   const sdk = new FakeSdk({
@@ -70,6 +71,7 @@ function make(
     onError: (error, context) => errors.push({ error, context }),
     ...(opts.env ? { env: opts.env } : {}),
     ...(opts.stewardSettingSources ? { stewardSettingSources: opts.stewardSettingSources } : {}),
+    ...(opts.model ? { model: opts.model } : {}),
   });
   const events = collect<AgentEvent>(adapter.events);
   rigs.push({ adapter, supervisor });
@@ -126,6 +128,23 @@ describe('ClaudeSdkAdapter — message mapping', () => {
     expect(options.resume).toBeUndefined();
     expect(options.hooks?.PreToolUse?.[0]?.hooks).toHaveLength(1);
     expect(options.canUseTool).toBeTypeOf('function');
+  });
+
+  it('runs the model of the spawn over the adapter-wide one (P11-03)', async () => {
+    const { adapter, events, sdk } = make(() => [{ text: 'hi' }], { model: 'opus' });
+    await adapter.spawn(spawnOpts('hello', { model: 'sonnet' }));
+    await events.waitFor(has('agent.idle'));
+    expect(sdk.calls[0]!.options.model).toBe('sonnet');
+    await adapter.spawn(spawnOpts('hello again', { agentId: 'a-2' }));
+    await events.waitFor((items) => items.filter((e) => e.type === 'agent.idle').length === 2);
+    expect(sdk.calls[1]!.options.model).toBe('opus');
+  });
+
+  it('lists the Claude models and may publish (P11-03)', async () => {
+    const { adapter } = make(() => []);
+    expect(adapter.canPublish).toBe(true);
+    expect((await adapter.models()).map((m) => m.id)).toEqual(['opus', 'sonnet', 'haiku']);
+    expect((await adapter.models()).some((m) => m.isDefault)).toBe(false);
   });
 
   it("loads the configured settings for a Steward (the real-Claude checks exclude the user's own)", async () => {
@@ -924,7 +943,8 @@ describe('ClaudeSdkAdapter — mapping gaps (P1-36)', () => {
       { rateLimit: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1_790_000_000 } },
       { text: 'done' },
     ]);
-    await adapter.spawn(spawnOpts('x'));
+    // A brain keeps today's behaviour on a rejected limit; a Steward's session ends (P11-07).
+    await adapter.spawn(spawnOpts('x', { role: 'waykeeper' }));
     await events.waitFor(has('agent.idle'));
     expect(
       events.items
@@ -934,6 +954,100 @@ describe('ClaudeSdkAdapter — mapping gaps (P1-36)', () => {
       'close to the five hour rate limit (92% used)',
       'waiting on the five hour rate limit until 2026-09-21T14:13:20Z',
     ]);
+  });
+
+  it('rejected rate limit ends with reason limit', async () => {
+    const { adapter, events } = make(() => [
+      { text: 'drawing the chart' },
+      { rateLimit: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1_793_000_000 } },
+      { text: 'never seen' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.failed'));
+    await sleep(50);
+    const failed = events.items.filter((e) => e.type === 'agent.failed');
+    expect(failed).toEqual([
+      expect.objectContaining({
+        type: 'agent.failed',
+        agentId: 'a-1',
+        reason: 'limit',
+        error: 'Claude usage limit reached',
+        resetsAt: '2026-10-26T07:33:20.000Z',
+      }),
+    ]);
+    // The one terminal event: nothing follows it (no idle, no stopped).
+    expect(types(events.items).slice(types(events.items).indexOf('agent.failed') + 1)).toEqual([]);
+  });
+
+  it('a rejected plan window with overage allowed keeps the Steward running (I4)', async () => {
+    const { adapter, events } = make(() => [
+      { text: 'drawing the chart' },
+      {
+        rateLimit: {
+          status: 'rejected',
+          rateLimitType: 'five_hour',
+          resetsAt: 1_793_000_000,
+          overageStatus: 'allowed',
+          isUsingOverage: true,
+        },
+      },
+      { text: 'still drawing' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(types(events.items)).not.toContain('agent.failed');
+    expect(
+      events.items.some(
+        (e) => e.type === 'agent.output' && (e as { text: string }).text === 'still drawing',
+      ),
+    ).toBe(true);
+  });
+
+  it('a rejected plan window with overage refused too ends with reason limit (I4)', async () => {
+    const { adapter, events } = make(() => [
+      {
+        rateLimit: {
+          status: 'rejected',
+          rateLimitType: 'five_hour',
+          resetsAt: 1_793_000_000,
+          overageStatus: 'rejected',
+          overageDisabledReason: 'out_of_credits',
+        },
+      },
+      { text: 'never seen' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.failed'));
+    expect(events.items.find((e) => e.type === 'agent.failed')).toMatchObject({
+      reason: 'limit',
+      resetsAt: '2026-10-26T07:33:20.000Z',
+    });
+  });
+
+  it('an error result naming the usage limit ends with reason limit', async () => {
+    const { adapter, events } = make(() => [
+      { resultIsError: 'Claude AI usage limit reached|1793000000' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.failed'));
+    expect(events.items.find((e) => e.type === 'agent.failed')).toMatchObject({
+      reason: 'limit',
+      error: 'Claude usage limit reached',
+      resetsAt: '2026-10-26T07:33:20.000Z',
+    });
+    expect(types(events.items)).not.toContain('agent.idle');
+  });
+
+  it('a context-limit error is not a usage limit', async () => {
+    const { adapter, events } = make(() => [{ resultIsError: 'Context limit reached' }]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(types(events.items)).not.toContain('agent.failed');
+    expect(isUsageLimitText('Context limit reached')).toBe(false);
+    expect(isUsageLimitText('Tool call limit reached')).toBe(false);
+    expect(isUsageLimitText("You've hit your limit · resets 3pm")).toBe(true);
+    expect(isUsageLimitText('5-hour limit reached ∙ resets 3pm')).toBe(true);
+    expect(isUsageLimitText('Weekly limit reached')).toBe(true);
   });
 
   it('an idle stop closes the input: the CLI exits on stdin EOF, no SIGTERM', async () => {

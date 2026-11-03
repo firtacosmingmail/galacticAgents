@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_PERMISSION_POLICY,
+  LIMIT_WAIT,
+  PERMISSION_POLICY_PRESETS,
   type Actor,
   type Event,
   type Id,
@@ -13,6 +15,7 @@ import { brainDefinition, brainHarness, type BrainHarness } from '../brains/test
 import { openDatabase, type Database } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
+import { addPermissionRule } from '../domain/project-rules.js';
 import { tickingClock } from '../test/world.js';
 import type { Timers } from './archival.js';
 import type { CapsConfig } from './caps.js';
@@ -85,6 +88,10 @@ interface BootOptions {
   scenario?: (spawn: SpawnOptions) => FakeScenario;
   timers?: Timers;
   intervalMs?: number;
+  /** Fake adapters registered as the providers' runtimes (no Steward runtime override then). */
+  providers?: FakeAdapter[];
+  /** The fake runtime may carry a publish (P11-06). */
+  canPublish?: boolean;
 }
 
 function boot(o: BootOptions = {}) {
@@ -93,16 +100,17 @@ function boot(o: BootOptions = {}) {
   const errors: string[] = [];
   const adapter = new FakeAdapter({
     speed: 0,
+    ...(o.canPublish ? { canPublish: true } : {}),
     ...(o.sessions ? { sessionStore: o.sessions } : {}),
     scenarioFor: (spawn) => ({ name: 'job', scenario: o.scenario?.(spawn) ?? ECHO }),
   });
   const c = composeRuntime(db, {
-    adapters: [adapter],
+    adapters: [adapter, ...(o.providers ?? [])],
     log: { now: clock },
     flushMs: 10,
     ...(o.caps ? { caps: o.caps } : {}),
+    ...(o.providers ? {} : { stewardRuntimeOverride: () => 'fake' as const }),
     jobs: {
-      stewardRuntime: () => 'fake',
       ...(o.timers ? { timers: o.timers } : {}),
       ...(o.intervalMs ? { intervalMs: o.intervalMs } : {}),
     },
@@ -119,12 +127,16 @@ async function longTermJob(
   project: { permissionPolicy?: typeof DEFAULT_PERMISSION_POLICY } = {},
 ) {
   const p = (
-    await c.commands.createProject({
-      name: 'Shop',
-      workspace: '/w/shop',
-      longTerm: { purpose: 'Run the shop', goals: ['grow'] },
-      ...project,
-    })
+    await c.commands.createProject(
+      {
+        name: 'Shop',
+        workspace: '/w/shop',
+        longTerm: { purpose: 'Run the shop', goals: ['grow'] },
+        ...project,
+      },
+      // A policy set here is the user's own, on this machine (not floored at the default).
+      { origin: 'local' },
+    )
   ).value;
   const wk = c.log.runCommand((ctx) =>
     createAgent(ctx, { role: 'waykeeper', runtime: 'fake', caps: CAPS, projectId: p.id }),
@@ -723,6 +735,409 @@ describe('job scheduler (P10-04)', () => {
     expect(decided?.ruleId).toBeUndefined();
   });
 
+  it('publish follow-up runs on the follow-up provider without unattended rules', async () => {
+    // The call carries the approved text, so the allowance lets it through once (R15).
+    const curl = {
+      kind: 'tool_call',
+      toolName: 'Bash',
+      input: { command: 'curl api.myapp.com -d "status=We launched!"' },
+    } as const;
+    const spawned: SpawnOptions[] = [];
+    const codex = new FakeAdapter({
+      speed: 0,
+      runtime: 'codex',
+      canPublish: true,
+      scenarioFor: (spawn) => {
+        spawned.push(spawn);
+        return { name: 'publish', scenario: { steps: [curl, curl, ...ASKS.steps] } };
+      },
+    });
+    const agy = new FakeAdapter({ speed: 0, runtime: 'agy', canPublish: false });
+    const { c, clock } = boot({ providers: [codex, agy] });
+    const { job } = await longTermJob(c, {
+      provider: 'gemini',
+      unattendedRules: [
+        {
+          scope: 'prefix',
+          tool: 'Bash',
+          match: { kind: 'words', words: ['curl', 'api.myapp.com'] },
+          categories: ['network'],
+          label: 'curl api.myapp.com …',
+        },
+      ],
+    });
+    const base = { platform: 'X', account: '@shop', text: 'We launched!', files: [] };
+    const followUp = {
+      questionId: 'q-publish',
+      kind: 'publish' as const,
+      publish: { ...base, fingerprint: 'a'.repeat(64), jobId: job.id },
+    };
+    // The job's follow-up provider (the job card sets it; written here directly).
+    c.log.runCommand((ctx) =>
+      writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp], followUpProvider: 'chatgpt' }),
+    );
+    setTo(clock, oct(1, 8, 30));
+    await c.jobs.tick();
+    const run = runsOf(c, job.id)[0]!;
+    expect(run).toMatchObject({ purpose: 'follow_up', followUp });
+    expect(stewardsOf(c, job.taskId)[0]?.runtime).toBe('codex');
+    expect(spawned).toHaveLength(1);
+    const stewardId = run.agentId!;
+    // The approved publish lets one network call through; the next one asks: the job's
+    // unattended rule (which would allow every such call) is not applied to a publishing run.
+    await until(
+      () =>
+        c.log.tables.questions
+          .all()
+          .some((q) => q.kind === 'permission' && q.originAgentId === stewardId),
+      'the second call to ask',
+    );
+    const decided = events(c).filter(
+      (e): e is Extract<Event, { type: 'permission.decided' }> =>
+        e.type === 'permission.decided' && e.agentId === stewardId,
+    );
+    expect(decided).toHaveLength(1);
+    expect(decided[0]).toMatchObject({ decision: 'allow' });
+    expect(decided[0]!.ruleId).toBeUndefined();
+  });
+
+  describe('a publishing run asks for every network call (ruling R26)', () => {
+    const TEXT = 'We launched!';
+    const curl = (text: string) =>
+      ({
+        kind: 'tool_call',
+        toolName: 'Bash',
+        input: { command: `curl api.myapp.com -d "status=${text}"` },
+      }) as const;
+
+    /** A publish follow-up of a job whose Steward makes `calls`, then asks a clarification. */
+    async function publishRun(
+      calls: ReturnType<typeof curl>[],
+      o: { policy?: typeof DEFAULT_PERMISSION_POLICY; projectRule?: boolean } = {},
+    ) {
+      const codex = new FakeAdapter({
+        speed: 0,
+        runtime: 'codex',
+        canPublish: true,
+        scenarioFor: () => ({ name: 'publish', scenario: { steps: [...calls, ...ASKS.steps] } }),
+      });
+      const { c, clock } = boot({ providers: [codex] });
+      const { job, project } = await longTermJob(
+        c,
+        { provider: 'chatgpt' },
+        o.policy ? { permissionPolicy: o.policy } : {},
+      );
+      if (o.projectRule) {
+        // An earlier "Allow similar" on the network for `curl api.myapp.com …`.
+        c.log.runCommand((ctx) =>
+          addPermissionRule(
+            ctx,
+            project.id,
+            {
+              scope: 'prefix',
+              tool: 'Bash',
+              match: { kind: 'words', words: ['curl', 'api.myapp.com'] },
+              categories: ['network'],
+              label: 'curl api.myapp.com …',
+              preview: 'curl api.myapp.com …',
+            },
+            { by: USER, origin: 'local' },
+          ),
+        );
+      }
+      const base = { platform: 'X', account: '@shop', text: TEXT, files: [] };
+      const followUp = {
+        questionId: 'q-publish',
+        kind: 'publish' as const,
+        publish: { ...base, fingerprint: 'a'.repeat(64), jobId: job.id },
+      };
+      c.log.runCommand((ctx) =>
+        writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp], followUpProvider: 'chatgpt' }),
+      );
+      setTo(clock, oct(1, 8, 30));
+      await c.jobs.tick();
+      const stewardId = runsOf(c, job.id)[0]!.agentId!;
+      await until(
+        () =>
+          c.log.tables.questions
+            .all()
+            .some((q) => q.kind === 'permission' && q.originAgentId === stewardId),
+        'a network call to ask',
+      );
+      const decided = events(c).filter(
+        (e): e is Extract<Event, { type: 'permission.decided' }> =>
+          e.type === 'permission.decided' && e.agentId === stewardId,
+      );
+      return { decided };
+    }
+
+    it('in a trusted project a network call carrying other content asks', async () => {
+      const { decided } = await publishRun([curl('Something else')], {
+        policy: PERMISSION_POLICY_PRESETS.trusted,
+      });
+      expect(decided).toEqual([]);
+    });
+
+    it('in a trusted project the approved call is allowed once, the next one asks', async () => {
+      const { decided } = await publishRun([curl(TEXT), curl(TEXT)], {
+        policy: PERMISSION_POLICY_PRESETS.trusted,
+      });
+      expect(decided).toHaveLength(1);
+      expect(decided[0]).toMatchObject({ decision: 'allow' });
+      expect(decided[0]!.ruleId).toBeUndefined();
+    });
+
+    it("the project's Allow-similar network rule is ignored", async () => {
+      const { decided } = await publishRun([curl('Something else')], { projectRule: true });
+      expect(decided).toEqual([]);
+    });
+  });
+
+  it('an interrupted publish follow-up is never run again on its approval: it asks again (R13)', async () => {
+    const db = openDatabase(':memory:');
+    const sessions = new Map<string, number>();
+    const clock = tickingClock(oct(1, 8).getTime());
+    const first = boot({ db, clock, sessions, canPublish: true, scenario: () => ASKS });
+    const { job } = await longTermJob(first.c);
+    const base = { platform: 'X', account: '@shop', text: 'We launched!', files: [] };
+    const publish = { ...base, fingerprint: 'a'.repeat(64), jobId: job.id };
+    const followUp = { questionId: 'q-publish', kind: 'publish' as const, publish };
+    first.c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp] }));
+    setTo(clock, oct(1, 8, 30));
+    await first.c.jobs.tick();
+    const cut = runsOf(first.c, job.id)[0]!;
+    expect(cut).toMatchObject({ purpose: 'follow_up', followUp });
+    await until(
+      () => first.c.statuses.get(cut.agentId!)?.state === 'waiting_for_input',
+      'the question',
+    );
+    lives.splice(lives.indexOf(first.c), 1); // kill -9
+
+    setTo(clock, oct(1, 8, 40));
+    const second = boot({ db, clock, sessions, canPublish: true });
+    await second.c.recover();
+    const report = await second.c.jobs.tick();
+    expect(report.interrupted).toEqual([cut.id]);
+    // No second run on the old approval: the queue is empty and a fresh card asks.
+    expect(runsOf(second.c, job.id)).toHaveLength(1);
+    expect(jobNow(second.c, job.id).followUps).toEqual([]);
+    const again = second.c.log.tables.questions
+      .all()
+      .filter((q) => q.kind === 'publish' && q.status === 'open');
+    expect(again).toHaveLength(1);
+    expect(again[0]!.context.publish).toEqual(publish);
+    expect(again[0]!.context.text).toBe(
+      'Publish to X (@shop): the earlier attempt was interrupted and may already have posted. Publish again?',
+    );
+    expect(again[0]).toMatchObject({ holder: USER, meta: { jobOwned: true } });
+    setTo(clock, oct(1, 8, 41));
+    expect((await second.c.jobs.tick()).started).toEqual([]);
+    // Approving it queues a new follow-up, which runs.
+    await second.c.commands.answerQuestion({
+      questionId: again[0]!.id,
+      answer: 'Approve',
+      by: USER,
+    });
+    expect(jobNow(second.c, job.id).followUps).toEqual([
+      { questionId: again[0]!.id, kind: 'publish', publish },
+    ]);
+    lives.push(first.c);
+  });
+
+  it('a publish follow-up that meets a cap race before any spawn goes back on the queue, no re-ask', async () => {
+    const { c, clock } = boot({
+      canPublish: true,
+      caps: { maxConcurrentAgents: 1 },
+      scenario: (spawn) => (spawn.prompt === 'blocker' ? ASKS : ECHO),
+    });
+    const { job } = await longTermJob(c);
+    const base = { platform: 'X', account: '@shop', text: 'We launched!', files: [] };
+    const followUp = {
+      questionId: 'q-publish',
+      kind: 'publish' as const,
+      publish: { ...base, fingerprint: 'a'.repeat(64), jobId: job.id },
+    };
+    c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp] }));
+    const blocker = await c.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'blocker',
+      cwd: '/w/other',
+    });
+    if (!blocker.ok) throw new Error(blocker.reason);
+    const caps = c.runtime.caps;
+    const real = caps.canSpawn.bind(caps);
+    let checks = 0;
+    caps.canSpawn = (check) => (++checks === 1 ? { ok: true } : real(check));
+    setTo(clock, oct(1, 8, 30));
+    const raced = await c.jobs.tick();
+    caps.canSpawn = real;
+    const run = runsOf(c, job.id)[0]!;
+    expect(raced).toMatchObject({ started: [run.id], interrupted: [run.id] });
+    expect(stewardsOf(c, job.taskId)).toEqual([]);
+    expect(jobNow(c, job.id).followUps).toEqual([followUp]);
+    expect(c.log.tables.questions.all().filter((q) => q.kind === 'publish')).toEqual([]);
+  });
+
+  it('a limited run does not pause the job', async () => {
+    const resetsAt = oct(1, 14).toISOString();
+    let spawns = 0;
+    const { c, clock } = boot({
+      // The first run hits the subscription's limit; later runs go through.
+      scenario: () =>
+        spawns++ === 0
+          ? {
+              steps: [
+                { kind: 'fail', error: 'Claude usage limit reached', reason: 'limit', resetsAt },
+              ],
+            }
+          : ECHO,
+    });
+    const { job } = await longTermJob(c);
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    await until(ended(c, job.id), 'the limited run');
+    await until(() => jobNow(c, job.id).limitQuestionId !== undefined, 'the limit question');
+    const [run] = runsOf(c, job.id);
+    expect(run).toMatchObject({ outcome: 'limited' });
+    const limitedJob = jobNow(c, job.id);
+    expect(limitedJob.state).toBe('active');
+    expect(limitedJob.pausedReason).toBeUndefined();
+    expect(limitedJob.lastRun).toMatchObject({ outcome: 'limited' });
+    expect(c.log.tables.questions.all().filter((q) => q.context.jobFailure)).toEqual([]);
+    const question = c.log.tables.questions.get(limitedJob.limitQuestionId!)!;
+    expect(question).toMatchObject({
+      status: 'open',
+      holder: { type: 'user' },
+      meta: { toUser: true, jobOwned: true },
+      context: {
+        usageLimit: { provider: 'claude', jobId: job.id, runId: run!.id, resetsAt, switchTo: [] },
+        options: [LIMIT_WAIT],
+      },
+    });
+
+    // No new run while the question is open, even when the next one is due.
+    setTo(clock, oct(2, 9));
+    expect((await c.jobs.tick()).started).toEqual([]);
+    expect(runsOf(c, job.id)).toHaveLength(1);
+
+    // Waiting: the reset is already past, so the wait is over at once and the job due now.
+    await c.commands.answerQuestion({ questionId: question.id, answer: LIMIT_WAIT, by: USER });
+    await c.usageLimits.settled();
+    expect(jobNow(c, job.id).limitQuestionId).toBeUndefined();
+    expect(jobNow(c, job.id).nextRunAt! <= c.log.clock()).toBe(true);
+    const report = await c.jobs.tick();
+    expect(report.started).toHaveLength(1);
+    await until(() => runsOf(c, job.id).at(-1)?.outcome === 'quiet', 'the run after the wait');
+    expect(jobNow(c, job.id).state).toBe('active');
+  });
+
+  it('a switched job run uses the chosen model once; the job keeps its provider', async () => {
+    let spawns = 0;
+    const limitedFirst = () =>
+      spawns++ === 0
+        ? {
+            name: 'limited',
+            scenario: {
+              steps: [
+                {
+                  kind: 'fail' as const,
+                  error: 'Gemini usage limit reached',
+                  reason: 'limit' as const,
+                },
+              ],
+            },
+          }
+        : { name: 'echo', scenario: ECHO };
+    const agy = new FakeAdapter({
+      speed: 0,
+      runtime: 'agy',
+      models: [
+        {
+          id: 'gemini-3-flash',
+          label: 'Gemini 3 Flash',
+          family: 'gemini',
+          isDefault: false,
+          capabilities: ['text'],
+        },
+      ],
+      scenarioFor: limitedFirst,
+    });
+    const codex = new FakeAdapter({
+      speed: 0,
+      runtime: 'codex',
+      models: [
+        {
+          id: 'gpt-5.6',
+          label: 'GPT-5.6',
+          family: 'gpt',
+          isDefault: false,
+          capabilities: ['text'],
+        },
+      ],
+      scenarioFor: limitedFirst,
+    });
+    const { c, clock } = boot({ providers: [agy, codex] });
+    const { job } = await longTermJob(c, { provider: 'gemini' });
+    // The job's exact model (the job card sets it; written here directly).
+    c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { model: 'gemini-3-flash' }));
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    await until(() => jobNow(c, job.id).limitQuestionId !== undefined, 'the limit question');
+    const question = c.log.tables.questions.get(jobNow(c, job.id).limitQuestionId!)!;
+    expect(question.context.options).toEqual(['Switch to ChatGPT · GPT-5.6', LIMIT_WAIT]);
+
+    await c.commands.answerQuestion({
+      questionId: question.id,
+      answer: 'Switch to ChatGPT · GPT-5.6',
+      by: USER,
+    });
+    const report = await c.jobs.tick();
+    expect(report.started).toHaveLength(1);
+    const switched = c.log.tables.agents.get(runsOf(c, job.id).at(-1)!.agentId!)!;
+    expect(switched.runtime).toBe('codex');
+    expect(switched.meta).toMatchObject({ model: 'gpt-5.6' });
+    expect(jobNow(c, job.id)).toMatchObject({ provider: 'gemini', model: 'gemini-3-flash' });
+    expect(jobNow(c, job.id).limitQuestionId).toBeUndefined();
+    await until(ended(c, job.id), 'the switched run');
+
+    // The next run is the job's own provider again.
+    setTo(clock, oct(2, 9));
+    await c.jobs.tick();
+    const next = c.log.tables.agents.get(runsOf(c, job.id).at(-1)!.agentId!)!;
+    expect(next.runtime).toBe('agy');
+    expect(next.meta).toMatchObject({ model: 'gemini-3-flash' });
+  });
+
+  it('publish follow-up refused on Gemini', async () => {
+    const agy = new FakeAdapter({ speed: 0, runtime: 'agy', canPublish: false });
+    const { c, clock } = boot({ providers: [agy] });
+    const { job } = await longTermJob(c, { provider: 'gemini' });
+    const base = { platform: 'X', account: '@shop', text: 'We launched!', files: [] };
+    const followUp = {
+      questionId: 'q-publish',
+      kind: 'publish' as const,
+      publish: { ...base, fingerprint: 'a'.repeat(64), jobId: job.id },
+    };
+    c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp] }));
+    setTo(clock, oct(1, 8, 30));
+    const report = await c.jobs.tick();
+    const run = runsOf(c, job.id)[0]!;
+    expect(report).toMatchObject({ started: [run.id], ended: [run.id] });
+    expect(run).toMatchObject({ outcome: 'failed', purpose: 'follow_up' });
+    expect(stewardsOf(c, job.taskId)).toEqual([]);
+    const paused = jobNow(c, job.id);
+    expect(paused.state).toBe('paused');
+    expect(paused.pausedReason).toBe('Gemini cannot publish');
+    const failures = c.log.tables.questions
+      .all()
+      .filter((q) => q.context.jobFailure?.jobId === job.id);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]!.context.jobFailure!.reason).toBe('Gemini cannot publish');
+    // The approved publish waits on the job for the retry, on a provider that can publish.
+    expect(paused.followUps).toEqual([followUp]);
+  });
+
   it('dispose() stops the timer', async () => {
     const fake = fakeTimers();
     const { c } = boot({ timers: fake.timers, intervalMs: 1000 });
@@ -739,7 +1154,7 @@ describe("a run's end wakes no one (P10-04)", () => {
   it("the Steward's final turn ends the run quiet with its last text; the Waykeeper hears nothing", async () => {
     const clock = tickingClock(oct(1, 8).getTime());
     const h = brainHarness({
-      compose: { log: { now: clock }, jobs: { stewardRuntime: () => 'fake' } },
+      compose: { log: { now: clock }, stewardRuntimeOverride: () => 'fake' },
     });
     harnesses.push(h);
     const hq = await h.startHarmonizer();

@@ -7,6 +7,7 @@ import {
   glyphKey,
   glyphSpec,
   BEACON_COLOR,
+  PUBLISH_BEACON_COLOR,
   SPEND_BEACON_COLOR,
   HALO_MAX_PX,
   rowOffsetPx,
@@ -182,6 +183,13 @@ describe('glyph sprites (drawn at runtime)', () => {
     expect(calls).toContain('text:$');
     expect(calls).not.toContain('text:?');
     expect(fills[0]).toBe(SPEND_BEACON_COLOR);
+  });
+
+  it('a publish draws the "↗" glyph', () => {
+    const { ctx, calls } = recorder();
+    drawGlyph(ctx, glyphSpec('publish'));
+    expect(glyphSpec('publish')).toMatchObject({ symbol: '↗', color: PUBLISH_BEACON_COLOR });
+    expect(calls).toContain('text:↗');
   });
 
   it('the pillar fills every column', () => {

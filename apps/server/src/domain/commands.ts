@@ -62,7 +62,9 @@ import {
   type JobRun,
   type OpenFindingInput,
   type ReportJobRunInput,
+  type RequestPublishInput,
   type RequestSpendInput,
+  type SetProjectProviderInput,
   type SetJobStateInput,
   type SetLongTermInput,
   type ProposeJobInput,
@@ -70,6 +72,8 @@ import {
   type UpdateJobInput,
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
+import type { ProviderCatalog } from '../runtime/provider-catalog.js';
+import { providerOf, type ChooseSteward } from '../runtime/steward-choice.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
 import { assignBody, freeBody, moveHost, sweepMarkers } from './bodies.js';
 import { agentEffect, agentsOf } from './cascade.js';
@@ -93,6 +97,7 @@ import type { CommandContext, EventLog } from './event-log.js';
 import { createJob, setJobState, updateJob } from './jobs.js';
 import { attachJobRunAgent, endJobRun, startJobRun } from './job-runs.js';
 import { openFinding, reportJobRun, requestSpend } from './findings.js';
+import { folderOfAgent, readFileInFolder, requestPublish, type PublishDeps } from './publish.js';
 import {
   archiveProject,
   closeProject,
@@ -101,6 +106,7 @@ import {
   reopenProject,
   setLongTerm,
   updateProject,
+  setProjectProvider,
 } from './projects.js';
 import {
   globalDefaultPolicy,
@@ -217,6 +223,21 @@ export interface CommandsOptions {
    * user's edit and the approval are refused for a workspace decision 27 forbids.
    */
   checkWorkspace?: (path: string) => string;
+  /**
+   * The providers (P11-03): a Steward on a provider's runtime is checked before it is spawned —
+   * the provider set up and logged in, its model one the CLI lists. Absent: not checked (tests).
+   */
+  catalog?: Pick<ProviderCatalog, 'check'>;
+  /**
+   * The Steward resolver (P11-03): a Steward spawned without a model gets the one its task,
+   * project and the Settings name, when it runs on that provider's runtime.
+   */
+  chooseSteward?: ChooseSteward;
+  /**
+   * How a publish request's files are read (P11-06): default the file system, from the asker's
+   * folder — its live session's working directory, else its task's worktree or project workspace.
+   */
+  publish?: Partial<PublishDeps>;
 }
 
 /**
@@ -250,6 +271,9 @@ export class Commands implements DomainCommands {
   private readonly choose: ChooseOptions;
   private readonly autoApproveRemote: boolean;
   private readonly proposalOptions: ProposalOptions;
+  private readonly catalog: CommandsOptions['catalog'];
+  private readonly chooseSteward: CommandsOptions['chooseSteward'];
+  private readonly publishDeps: PublishDeps;
   /**
    * Spawns under way, by slot (`harmonizer`, `waykeeper:<project>`, `steward:<task>`): a slot is
    * taken synchronously, before the spawn's session reports, so two concurrent spawns can never
@@ -277,6 +301,15 @@ export class Commands implements DomainCommands {
     this.questions = opts.questions ?? logRouting(opts.log);
     this.choose = opts.isRunning ? { isRunning: opts.isRunning } : {};
     this.autoApproveRemote = opts.autoApproveRemote ?? false;
+    this.catalog = opts.catalog;
+    this.chooseSteward = opts.chooseSteward;
+    this.publishDeps = {
+      readFile: opts.publish?.readFile ?? ((root, path) => readFileInFolder(root, path)),
+      worktreeOf:
+        opts.publish?.worktreeOf ??
+        ((agentId) =>
+          this.agents?.permissionContext?.(agentId)?.ctx.cwd ?? folderOfAgent(this.log, agentId)),
+    };
     this.proposalOptions = {
       ...this.choose,
       // A promotion moved in the approval hands its agents over to living supervisors (P2-12).
@@ -457,6 +490,41 @@ export class Commands implements DomainCommands {
   // -- agents ----------------------------------------------------------------------------------
 
   /**
+   * The model of a Steward being spawned (P11-03): the one asked for, else the one the resolver
+   * gives its task (task, project, Settings) when it runs on that provider's runtime. A Steward on
+   * a provider's runtime is then checked against the catalogue: a provider that is not set up or
+   * logged in, or a model its CLI does not list, refuses the spawn with the reason and its fix.
+   */
+  private async stewardModel(
+    input: SpawnAgentInput,
+    task: Task | undefined,
+    project: Project | undefined,
+  ): Promise<string | undefined> {
+    let model = input.model;
+    if (model === undefined && task && this.chooseSteward) {
+      const choice = this.chooseSteward({ task, ...(project ? { project } : {}) });
+      if (choice.runtime === input.runtime) model = choice.model;
+    }
+    const provider = providerOf(input.runtime);
+    if (provider && this.catalog) {
+      // The step's needs are checked again here (final review I3): a task planned on another
+      // default (the project's later set to Gemini) never puts a publishing or image step on a
+      // provider that cannot do it.
+      const checked = await this.catalog.check(
+        { provider, ...(model ? { model } : {}) },
+        {
+          ...(task?.makesImages ? { images: true } : {}),
+          ...(task?.publishes ? { publishes: true } : {}),
+        },
+        input.bare ? { bare: true } : {},
+      );
+      if (!checked.ok) throw new DomainError('conflict', checked.reason);
+      model = checked.choice.model;
+    }
+    return model;
+  }
+
+  /**
    * Spawns an agent where the hierarchy puts it (decision 24, P2-20): the one Harmonizer on Earth,
    * refused while another one runs; every other agent under the supervisor the hierarchy
    * prescribes (`checkPlacement`). A Steward in its task's worktree
@@ -468,6 +536,13 @@ export class Commands implements DomainCommands {
    */
   async spawnAgent(input: SpawnAgentInput): Promise<CommandResult<Agent>> {
     const { tables } = this.log;
+    // The Harmonizer and the Waykeepers always run on Claude Code (P11-03, decision 146).
+    if (input.role !== 'steward' && (input.runtime === 'codex' || input.runtime === 'agy')) {
+      throw new DomainError(
+        'invalid',
+        `a ${input.role} cannot run on ${input.runtime}: brains run on Claude Code`,
+      );
+    }
     const task = input.taskId
       ? must(tables.tasks.get(input.taskId), 'task', input.taskId)
       : undefined;
@@ -490,6 +565,8 @@ export class Commands implements DomainCommands {
     const cwd = task?.worktreePath ?? project?.workspace ?? input.cwd;
     if (!cwd)
       throw new DomainError('invalid', 'an agent outside a project needs a working directory');
+    const model =
+      input.role === 'steward' ? await this.stewardModel(input, task, project) : input.model;
     // An asteroid Steward in a related project's workspace works under that project's table too,
     // never looser than the global default (SPEC §3.5, decision 22): per category the strictest.
     const borrowed = !project && task ? relatedPolicy(tables, task, cwd) : undefined;
@@ -591,6 +668,7 @@ export class Commands implements DomainCommands {
         ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
         ...(input.caps ? { caps: input.caps } : {}),
         ...(input.bare ? { bare: true } : {}),
+        ...(model ? { model } : {}),
         ...(input.tools ? { tools: input.tools } : {}),
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
       });
@@ -1417,6 +1495,16 @@ export class Commands implements DomainCommands {
   /** A `spend` approval, held by the user whatever the asker's supervisors (P10-05). */
   requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>> {
     return this.run((ctx) => requestSpend(ctx, input, this.questions));
+  }
+  /** A `publish` approval of that exact content, held by the user alone (P11-06, decision 147). */
+  requestPublish(input: RequestPublishInput): Promise<CommandResult<{ questionId: Id }>> {
+    return this.run((ctx) => ({
+      questionId: requestPublish(ctx, input, this.questions, this.publishDeps).id,
+    }));
+  }
+  /** A project's default AI provider for new Stewards; `null` clears it (P11-03). */
+  setProjectProvider(input: SetProjectProviderInput): Promise<CommandResult<Project>> {
+    return this.run((ctx) => setProjectProvider(ctx, input));
   }
   /** The audit of an open on the Mac (decision 127); the opener (P9-03/P9-07) calls it. */
   recordDeliverableOpened(deliverableId: Id, action: OpenAction, by: Actor) {

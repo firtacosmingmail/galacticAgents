@@ -68,7 +68,7 @@ const lookupOf = (world: WorldState): NotificationLookup => ({
  * interruptions, then the rest.
  */
 export const notificationImportance = (n: PanelNotification): number =>
-  n.kind === 'permission' || n.questionKind === 'spend'
+  n.kind === 'permission' || n.questionKind === 'spend' || n.questionKind === 'publish'
     ? 0
     : n.kind === 'question'
       ? 1

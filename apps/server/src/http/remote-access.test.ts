@@ -5,6 +5,7 @@ import { SettingsService } from '../config/settings.js';
 import type { ServerConfig } from '../config/config.js';
 import { openDatabase } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
+import { createTask } from '../domain/tasks.js';
 import type { PeerCheck } from './peer-guard.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
@@ -416,6 +417,61 @@ describe('a spend approval from a remote client follows the permission rule (P10
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ error: 'agent_peer' });
     expect(composed!.log.tables.questions.get(q.id)?.status).toBe('open');
+  });
+});
+
+describe('a publish approval from a remote client follows the spend rule (P11-06)', () => {
+  /** A `publish` question asked by a publishing task's Steward row (no session waits on it). */
+  const askPublish = async () => {
+    const project = (
+      await composed!.commands.createProject({ name: `P${Math.random()}`, workspace: '/w/pub' })
+    ).value;
+    const agent = composed!.log.runCommand((ctx) => {
+      const task = createTask(ctx, {
+        projectId: project.id,
+        description: 'Post it',
+        publishes: true,
+      });
+      return createAgent(ctx, {
+        role: 'steward',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+        taskId: task.id,
+      });
+    }).value;
+    const { value } = await composed!.commands.requestPublish({
+      originAgentId: agent.id,
+      platform: 'X',
+      account: '@shop',
+      text: 'We launched!',
+    });
+    return value.questionId;
+  };
+  const answer = (id: string, headers: Record<string, string>, text = 'Approve') =>
+    inject('POST', `/api/questions/${id}/answer`, headers, { answer: text });
+
+  it('the phone may approve or refuse it, exactly when it may answer a spend (decision 90)', async () => {
+    await start(WITH_IDENTITY);
+    for (const headers of [IDENTITY, { ...SERVE, ...BEARER }, BEARER]) {
+      for (const text of ['Approve', 'Refuse']) {
+        const id = await askPublish();
+        const res = await answer(id, headers, text);
+        expect(res.statusCode).toBe(200);
+        expect(composed!.log.tables.questions.get(id)).toMatchObject({
+          status: 'answered',
+          answer: text,
+        });
+      }
+    }
+  });
+
+  it("an agent's or a run's process cannot answer it (the permission speed bump)", async () => {
+    await start({}, { answersPeer: async () => ({ refused: 'from an agent' }) });
+    const id = await askPublish();
+    const res = await answer(id, BEARER);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'agent_peer' });
+    expect(composed!.log.tables.questions.get(id)?.status).toBe('open');
   });
 });
 

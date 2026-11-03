@@ -31,8 +31,8 @@ import { COMMAND_SOURCE } from '../domain/questions.js';
  *
  * Never in the table: `agent.output` and `agent.tool_call` (transcript traffic), the brain's own
  * `agent.*` lifecycle, and permission questions (decision 7: the policy or the user resolves them,
- * never an LLM, so they do not enter any brain's mailbox). Likewise `spend` approvals (decision
- * 145: the user's alone) and job-owned questions — findings, failure notices, job spends (P10-05):
+ * never an LLM, so they do not enter any brain's mailbox). Likewise `spend` and `publish`
+ * approvals (decisions 145, 147: the user's alone) and job-owned questions — findings, failure notices, job spends (P10-05):
  * they belong to a job, not to the agents above its run. The one exception is a finding's
  * "Implement it", which reaches the project's Waykeeper as a system message (`fromFinding`).
  */
@@ -96,7 +96,7 @@ const who = (actor: Actor, scope: WakeScope): string =>
  * none is woken by it.
  */
 function concerns(q: Question | undefined, scope: WakeScope): q is Question {
-  // Never a permission or a spend (decisions 7, 145), never a job-owned question (P10-05).
+  // Never a permission, a spend or a publish (decisions 7, 145, 147), never a job-owned question.
   if (!q || q.kind !== 'clarification' || isJobOwned(q)) return false;
   if (isBrain(q.holder, scope)) return true;
   return q.meta?.['toUser'] !== true && scope.supervises(q.originAgentId);
@@ -108,7 +108,7 @@ function concerns(q: Question | undefined, scope: WakeScope): q is Question {
  * waits for the answer like any holder.
  */
 function heldBefore(holders: readonly Id[] | undefined, scope: WakeScope, q: Question | undefined) {
-  // Decisions 7 and 145: a permission or a spend is never a brain's; nor a job-owned question.
+  // Decisions 7, 145, 147: a permission, spend or publish is never a brain's; nor a job-owned one.
   if (q !== undefined && (q.kind !== 'clarification' || isJobOwned(q))) return false;
   // Its own question only when it asked through a tool: one its session is blocked on is answered
   // through the adapter, and a mailbox line would deliver it twice.
@@ -382,7 +382,11 @@ export const WAKE_RULES: WakeRules = {
     },
   },
   'agent.finished': ended((e) => `finished${e.result ? `: ${quote(e.result)}` : ''}`),
-  'agent.failed': ended((e) => `failed (${e.reason}): ${quote(e.error)}`),
+  'agent.failed': ended((e) =>
+    e.reason === 'limit'
+      ? `stopped at its usage limit (${quote(e.error)}): its task is paused and the user is asked to switch model or wait; do not spawn another Steward for it`
+      : `failed (${e.reason}): ${quote(e.error)}`,
+  ),
   'agent.stalled': ended((e) => `has been silent for ${Math.round(e.silentForMs / 1000)} s`),
   'budget.set': {
     wakes: (e, s) => runsBudget(e.target, s) || restartable(e, s),
