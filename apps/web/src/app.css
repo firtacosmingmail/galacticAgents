@@ -285,6 +285,17 @@ button.danger {
 .publish-files {
   overflow-wrap: anywhere;
 }
+.publish-thumb {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  max-height: 240px;
+  object-fit: contain;
+}
+.pill.kind-publish {
+  background: var(--publish);
+  color: #1a0b02;
+}
 .publish-edit textarea {
   width: 100%;
   box-sizing: border-box;

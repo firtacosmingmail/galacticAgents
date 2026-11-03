@@ -1,18 +1,63 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PUBLISH_ACTIONS, type Question, type SetAnswer } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
+import { ApiError } from '../../console/api.js';
+import { useApi } from '../../console/hierarchy/shared.js';
 import { AgentRef } from './links.js';
 
 /**
  * The publish card's parts (P11-09; SPEC decision 90's rules as `spend`): a `publish` question asks
  * the user to let a Steward post under their name — the platform, the account, the text in a box
- * the user may edit, and the files. Answered `Approve` (the text in the box rides as the answer's
- * `detail.text`; a blank one the server refuses unless files exist, and the card shows why) or `Refuse`; never
+ * the user may edit, and the files. Answered `Approve` (an edited text rides as the answer's
+ * `detail.text` (untouched, nothing is sent: it goes out as asked); a blank one the server refuses unless files exist, and the card shows why) or `Refuse`; never
  * decided by a rule or a brain. `QuestionCard` gives it its shell (the ×, the offline queue).
  *
- * The files are listed by name: the only file route serves a deliverable by its id, and a path in a
- * worktree is not one, so no image bytes are fetched for a question.
+ * Each file is listed by name, and an image shows as a thumbnail fetched (with the token) from the
+ * question's own read-only route (ruling R24), which serves only the listed, unchanged files.
  */
+
+const IMAGE_NAME = /\.(png|jpe?g|gif|webp)$/i;
+
+/** A listed image's thumbnail; a changed or unreadable file says so instead. */
+function PublishThumb({
+  questionId,
+  index,
+  path,
+}: {
+  questionId: string;
+  index: number;
+  path: string;
+}) {
+  const api = useApi();
+  const [src, setSrc] = useState<string | undefined>();
+  const [problem, setProblem] = useState<string | undefined>();
+  useEffect(() => {
+    let url: string | undefined;
+    let live = true;
+    api
+      .publishFile(questionId, index)
+      .then((file) => {
+        if (!live) return;
+        url = URL.createObjectURL(new Blob([file.bytes], { type: file.contentType }));
+        setSrc(url);
+      })
+      .catch((e: unknown) => {
+        if (live) {
+          setProblem(
+            e instanceof ApiError && e.status === 409
+              ? 'changed since the request: refuse or ask again'
+              : 'no preview',
+          );
+        }
+      });
+    return () => {
+      live = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [api, questionId, index]);
+  if (src) return <img className="publish-thumb" src={src} alt={path} />;
+  return problem ? <span className="muted"> ({problem})</span> : null;
+}
 
 /** The `↗` badge, platform and account, the text, the files and who asks. */
 export function PublishDetails({ question: q }: { question: Question }) {
@@ -36,13 +81,17 @@ export function PublishDetails({ question: q }: { question: Question }) {
       {publish.files.length > 0 && (
         <div className="publish-files">
           <p className="muted">
-            {publish.files.length === 1 ? '1 file' : `${publish.files.length} files`} (names only;
-            the content is in the workspace)
+            {publish.files.length === 1 ? '1 file' : `${publish.files.length} files`}
           </p>
           <ul className="items" aria-label="files to publish">
-            {publish.files.map((f) => (
+            {publish.files.map((f, i) => (
               <li key={f.path}>
                 <code>{f.path}</code>
+                {IMAGE_NAME.test(f.path) && (
+                  <div>
+                    <PublishThumb questionId={q.id} index={i} path={f.path} />
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -83,7 +132,9 @@ export function PublishActions({
       className="publish-edit"
       onSubmit={(e) => {
         e.preventDefault();
-        onAnswer(approve, { choices: [approve], text });
+        // Only an edited text is sent: untouched, the post goes out exactly as asked.
+        if (text === original) onAnswer(approve);
+        else onAnswer(approve, { choices: [approve], text });
       }}
     >
       <label>

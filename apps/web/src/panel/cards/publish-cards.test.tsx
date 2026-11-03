@@ -60,7 +60,11 @@ const limit = question('q-limit', 'clarification', {
   },
 });
 
-let api: { answer: ReturnType<typeof vi.fn>; decide: ReturnType<typeof vi.fn> };
+let api: {
+  answer: ReturnType<typeof vi.fn>;
+  decide: ReturnType<typeof vi.fn>;
+  publishFile: ReturnType<typeof vi.fn>;
+};
 
 function world(extra: { tasks?: Task[]; agents?: Agent[] } = {}) {
   useAppStore.getState().apply({
@@ -85,7 +89,14 @@ beforeEach(() => {
   api = {
     answer: vi.fn(async () => ({ ok: true })),
     decide: vi.fn(async () => ({ ok: true })),
+    publishFile: vi.fn(async () => ({
+      bytes: new ArrayBuffer(4),
+      contentType: 'image/png',
+      truncated: false,
+    })),
   };
+  URL.createObjectURL = vi.fn(() => 'blob:thumb');
+  URL.revokeObjectURL = vi.fn();
   world();
 });
 afterEach(() => {
@@ -105,6 +116,10 @@ describe('the publish card', () => {
       'We launched today.',
     );
     within(card).getByText('out/launch.png');
+    const img = await within(card).findByRole('img', { name: 'out/launch.png' });
+    expect(img.getAttribute('src')).toBe('blob:thumb');
+    expect(img.classList.contains('publish-thumb')).toBe(true);
+    expect(api.publishFile).toHaveBeenCalledWith('q-pub', 0);
     within(card).getByText(`from task “${fx.task.description}”`);
     expect(blocking(await axeFindings(card))).toEqual([]);
   });
@@ -121,6 +136,19 @@ describe('the publish card', () => {
     });
   });
 
+  it('approving an untouched text sends no text (it goes out as asked)', async () => {
+    show(<QuestionCard question={publishAs('q-pub-plain')} />);
+    const card = screen.getByRole('article');
+    await act(async () => fireEvent.click(within(card).getByRole('button', { name: 'Approve' })));
+    expect(api.answer).toHaveBeenCalledWith('q-pub-plain', 'Approve', 3, expect.any(String));
+  });
+
+  it('a changed file shows a notice instead of a picture', async () => {
+    api.publishFile.mockRejectedValueOnce(new ApiError(409, '409', 'changed'));
+    show(<QuestionCard question={publishAs('q-pub-409')} />);
+    await within(screen.getByRole('article')).findByText(/changed since the request/);
+  });
+
   it('refuse is a danger button and sends no text', async () => {
     show(<QuestionCard question={publishAs('q-pub-refuse')} />);
     const refuse = within(screen.getByRole('article')).getByRole('button', { name: 'Refuse' });
@@ -135,6 +163,7 @@ describe('the publish card', () => {
     );
     show(<QuestionCard question={publishAs('q-pub-err')} />);
     const card = screen.getByRole('article');
+    fireEvent.change(within(card).getByLabelText('text to post'), { target: { value: '' } });
     await act(async () => fireEvent.click(within(card).getByRole('button', { name: 'Approve' })));
     within(card).getByText(/the text is empty/);
   });
@@ -168,9 +197,7 @@ describe('the publish card', () => {
   it('keeps its actions inside the card at phone width (320 px): the box fills, never overflows', () => {
     const css = readFileSync(resolve(__dirname, '../../app.css'), 'utf8');
     expect(css).toMatch(/\.publish-edit textarea\s*{[^}]*width:\s*100%/);
-    expect(css).toMatch(
-      /\.publish-text,[\s\S]*overflow-wrap|\.publish-files\s*{[^}]*overflow-wrap/,
-    );
+    expect(css).toMatch(/\.publish-thumb\s*{[^}]*max-width:\s*100%/);
     show(<QuestionCard question={publish} />);
     const card = screen.getByRole('article');
     within(card).getByRole('button', { name: 'Approve' });

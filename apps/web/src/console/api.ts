@@ -306,6 +306,22 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         truncated: res.headers.get('x-truncated') === '1',
       };
     },
+    /**
+     * A listed image of a publish approval (P11-09, ruling R24), with the bearer token: refused
+     * (404) unless it is one of that question's files, and 409 once its content changed.
+     */
+    publishFile: async (questionId: string, index: number): Promise<DeliverableContent> => {
+      const res = await fetchImpl(
+        `/api/questions/${encodeURIComponent(questionId)}/publish-files/${index}`,
+        { headers: { authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) throw new ApiError(res.status, `${res.status}`);
+      return {
+        bytes: await res.arrayBuffer(),
+        contentType: res.headers.get('content-type') ?? '',
+        truncated: false,
+      };
+    },
     /** A one-time download link (`/files/<ticket>`, 60 s, decision 126). */
     downloadDeliverable: (id: string) =>
       call<DownloadTicketResponse>('POST', `/api/deliverables/${encodeURIComponent(id)}/download`),
