@@ -636,7 +636,10 @@ export class ClaudeSdkAdapter implements AgentAdapter {
       case 'rate_limit_event': {
         const info = (message as SdkRateLimitEvent).rate_limit_info;
         if (info?.resetsAt !== undefined) session.limitResetsAt = info.resetsAt;
-        if (info?.status === 'rejected' && session.endsOnLimit) {
+        // Only a refusal with no extra usage to fall back on (final review I4): with overage
+        // allowed or in use the request goes ahead, and a real refusal still ends the turn
+        // with a usage-limit error result, which the result path below catches.
+        if (info && isRefusedLimit(info) && session.endsOnLimit) {
           this.endOnLimit(session, info.resetsAt);
           return;
         }
@@ -1207,10 +1210,22 @@ function interruptedBeforeAnswer(): SdkPermissionResult {
 export const CLAUDE_LIMIT_ERROR = 'Claude usage limit reached';
 
 /**
+ * Whether a `rate_limit_event` says the request was refused outright (final review I4): the plan's
+ * window is `rejected` and no extra usage carries it — overage neither in use nor `allowed` /
+ * `allowed_warning`. With extra usage enabled the window may be rejected while the request goes
+ * ahead on overage: that is not a usage limit, and the Steward keeps working.
+ */
+export function isRefusedLimit(info: SdkRateLimitEvent['rate_limit_info']): boolean {
+  if (info.status !== 'rejected') return false;
+  if (info.isUsingOverage === true || info.overageInUse === true) return false;
+  return info.overageStatus !== 'allowed' && info.overageStatus !== 'allowed_warning';
+}
+
+/**
  * An error result in the subscription limit's words: "Claude AI usage limit reached|<unix s>",
  * "You've hit your limit · resets 3pm", "5-hour limit reached", "Weekly limit reached" — never
- * another limit ("Context limit reached", a tool-call limit). The primary signal is the
- * `rate_limit_event` with `status: 'rejected'`.
+ * another limit ("Context limit reached", a tool-call limit). The primary signal is a
+ * `rate_limit_event` refusing the request (`isRefusedLimit`).
  */
 export function isUsageLimitText(text: string): boolean {
   return /usage limit|hit your (?:usage )?limit|\b(?:\d+-hour|weekly|opus|sonnet|session) limit reached/i.test(
@@ -1233,7 +1248,11 @@ function rateLimitSummary(m: SdkRateLimitEvent): string | undefined {
     info.resetsAt !== undefined
       ? ` until ${new Date(info.resetsAt * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')}`
       : '';
-  if (info.status === 'rejected') return `waiting on the ${which}rate limit${until}`;
+  if (info.status === 'rejected') {
+    return isRefusedLimit(info)
+      ? `waiting on the ${which}rate limit${until}`
+      : `past the ${which}rate limit${until}: working on extra usage`;
+  }
   const used =
     info.utilization !== undefined ? ` (${Math.round(info.utilization * 100)}% used)` : '';
   return `close to the ${which}rate limit${used}`;

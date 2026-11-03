@@ -979,6 +979,51 @@ describe('ClaudeSdkAdapter — mapping gaps (P1-36)', () => {
     expect(types(events.items).slice(types(events.items).indexOf('agent.failed') + 1)).toEqual([]);
   });
 
+  it('a rejected plan window with overage allowed keeps the Steward running (I4)', async () => {
+    const { adapter, events } = make(() => [
+      { text: 'drawing the chart' },
+      {
+        rateLimit: {
+          status: 'rejected',
+          rateLimitType: 'five_hour',
+          resetsAt: 1_793_000_000,
+          overageStatus: 'allowed',
+          isUsingOverage: true,
+        },
+      },
+      { text: 'still drawing' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.idle'));
+    expect(types(events.items)).not.toContain('agent.failed');
+    expect(
+      events.items.some(
+        (e) => e.type === 'agent.output' && (e as { text: string }).text === 'still drawing',
+      ),
+    ).toBe(true);
+  });
+
+  it('a rejected plan window with overage refused too ends with reason limit (I4)', async () => {
+    const { adapter, events } = make(() => [
+      {
+        rateLimit: {
+          status: 'rejected',
+          rateLimitType: 'five_hour',
+          resetsAt: 1_793_000_000,
+          overageStatus: 'rejected',
+          overageDisabledReason: 'out_of_credits',
+        },
+      },
+      { text: 'never seen' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.failed'));
+    expect(events.items.find((e) => e.type === 'agent.failed')).toMatchObject({
+      reason: 'limit',
+      resetsAt: '2026-10-26T07:33:20.000Z',
+    });
+  });
+
   it('an error result naming the usage limit ends with reason limit', async () => {
     const { adapter, events } = make(() => [
       { resultIsError: 'Claude AI usage limit reached|1793000000' },
