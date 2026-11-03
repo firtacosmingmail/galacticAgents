@@ -81,6 +81,12 @@ export interface StewardChooserOptions {
    * whatever its provider — usually `fake`.
    */
   override?: () => AgentRuntime | undefined;
+  /**
+   * Runtimes the override never replaces (P11-10, the dev harness): fakes registered as `codex`
+   * and `agy` stand in for ChatGPT's and Gemini's own runtimes, so a Steward on one of them keeps
+   * it while every other Steward still goes to the override.
+   */
+  overrideKeeps?: () => readonly AgentRuntime[];
 }
 
 export type ChooseSteward = (
@@ -105,7 +111,9 @@ export function stewardChooser(opts: StewardChooserOptions = {}): ChooseSteward 
       defaultModel: (p) => settings.providers?.[p]?.model,
     });
     const override = opts.override?.();
-    if (override) return { ...choice, runtime: override };
+    if (override && !opts.overrideKeeps?.().includes(choice.runtime)) {
+      return { ...choice, runtime: override };
+    }
     if (supervisorRuntime === 'fake' && choice.provider === 'claude') {
       return { ...choice, runtime: 'fake' };
     }

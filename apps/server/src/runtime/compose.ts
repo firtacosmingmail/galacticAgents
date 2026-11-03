@@ -108,7 +108,7 @@ export interface ComposeOptions {
    * Usage limits (P11-07): how often answered waits are checked once `usageLimits.start()` is
    * called — `index.ts` does after recovery (default 60 s; `0`: no timer, tests call `tick()`).
    */
-  usageLimits?: { tickMs?: number; timers?: Timers };
+  usageLimits?: { tickMs?: number; timers?: Timers; now?: () => number };
   /**
    * Transcript retention (P8-02): `policy` from the settings (default
    * `DEFAULT_TRANSCRIPT_RETENTION`); the timer runs only with an `intervalMs`, like archival
@@ -145,6 +145,8 @@ export interface ComposeOptions {
    * runtime keeps its `claude` Stewards on fake).
    */
   stewardRuntimeOverride?: () => RuntimeName | undefined;
+  /** Development only: runtimes the override leaves alone (the dev harness's provider fakes). */
+  stewardRuntimeKeeps?: () => readonly RuntimeName[];
   /**
    * The deliverables (P9-04, P9-06). Agents' declarations: the service is built when a data
    * folder is known (this `dataDir`, else `workspaces.dataDir`); `limits` is read at every
@@ -366,6 +368,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   const chooseSteward = stewardChooser({
     defaults: () => catalog.defaults(),
     ...(opts.stewardRuntimeOverride ? { override: opts.stewardRuntimeOverride } : {}),
+    ...(opts.stewardRuntimeKeeps ? { overrideKeeps: opts.stewardRuntimeKeeps } : {}),
   });
   // The one-shot allowances approved publishes arm (P11-06): every gate consults them.
   const publishAllowances = new PublishAllowanceStore();
@@ -523,6 +526,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     notify: (agentId, text) => void runtime.send(agentId, text, { sender: { type: 'system' } }),
     ...(opts.usageLimits?.tickMs !== undefined ? { tickMs: opts.usageLimits.tickMs } : {}),
     ...(opts.usageLimits?.timers ? { timers: opts.usageLimits.timers } : {}),
+    ...(opts.usageLimits?.now ? { now: opts.usageLimits.now } : {}),
     ...(opts.onError ? { onError: opts.onError } : {}),
   });
   const jobs = new JobScheduler({

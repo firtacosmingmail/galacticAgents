@@ -7,9 +7,9 @@ caps, the permission policy, the event log, the status store and the transcript 
 adapter never imports from `domain/` or `runtime/` except the process supervisor and
 `lib/event-queue.ts`, and nothing outside `adapters/` imports a runtime SDK (CLAUDE.md).
 
-Five adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI
-target), `claude-sdk/` (the real one for Claude Code), `codex/` (OpenAI's Codex CLI over
-`codex app-server`, P11-04), `acp/` (any Agent Client Protocol agent, P8-07) and `pty/` (any
+Six adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI
+target; in development mode also standing in for `codex` and `agy`, P11-10), `claude-sdk/` (the real one for Claude Code), `codex/` (OpenAI's Codex CLI over
+`codex app-server`, P11-04), `agy/` (Google's Antigravity CLI behind a fail-closed hook, P11-05), `acp/` (any Agent Client Protocol agent, P8-07) and `pty/` (any
 command-line agent under a pseudo-terminal, P8-08). Read `fake/fake-adapter.ts` first: every rule below is visible there in forty lines per
 concern.
 

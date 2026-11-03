@@ -230,6 +230,41 @@ export interface HarnessJobTickResponse {
   ended: Id[];
 }
 
+/**
+ * `POST /dev/harness/tasks/:id/steward-script` (P11-10): the next Steward spawned for the task — on
+ * the fake runtime, or on a fake standing in for `codex` or `agy` (development mode registers
+ * those, so a task on ChatGPT or Gemini runs without either CLI) — follows this script in its one
+ * turn: `publish` asks `request_publish` and waits for the answer (`idle`); `limit` makes it stop
+ * at its subscription's usage limit, which resets `resetsInMs` from now on the harness clock
+ * (`/dev/harness/usage-limits/advance` moves that clock). Without either it echoes its prompt.
+ */
+export const HarnessStewardScriptBody = z.object({
+  publish: z
+    .object({
+      platform: z.string().trim().min(1).max(100),
+      account: z.string().trim().min(1).max(100),
+      text: z.string().trim().min(1).max(4000),
+      files: z.array(z.string().min(1).max(500)).max(10).optional(),
+    })
+    .optional(),
+  limit: z.object({ resetsInMs: z.number().int().positive() }).optional(),
+});
+export type HarnessStewardScriptBody = z.input<typeof HarnessStewardScriptBody>;
+
+/**
+ * `POST /dev/harness/usage-limits/advance` (P11-10): the clock the usage-limit waits are checked
+ * against moves `ms` forward, then one check runs — an answered `Wait until it resets` whose
+ * reset time has come is retried on it.
+ */
+export const HarnessAdvanceBody = z.object({ ms: z.number().int().positive() });
+export type HarnessAdvanceBody = z.input<typeof HarnessAdvanceBody>;
+
+export interface HarnessAdvanceResponse {
+  seq: number;
+  /** The harness clock after the move (ISO time). */
+  now: string;
+}
+
 /** What a harness action did: the last event's `seq` (0 when nothing was logged). */
 export interface HarnessActionResponse {
   seq: number;

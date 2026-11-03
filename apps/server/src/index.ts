@@ -35,6 +35,13 @@ import { composeRuntime } from './runtime/compose.js';
 import { ProviderCatalog } from './runtime/provider-catalog.js';
 import { harnessBrains } from './runtime/harness-brains.js';
 import { HarnessJobScripts, harnessJobs } from './runtime/harness-jobs.js';
+import {
+  DEV_PROVIDER_RUNTIMES,
+  HarnessClock,
+  devProviderFakes,
+  harnessStewards,
+  replaceAdapters,
+} from './runtime/harness-stewards.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { runIdOfKey } from './runtime/process-attribution.js';
@@ -125,6 +132,8 @@ for (const take of launches.taken) {
 // The fake one's sessions report a few slash commands, so the composer's list can be tried (P8-13).
 // In development mode a job run's Steward may follow a test's script (P10-08, `/dev/harness/jobs`).
 const jobScripts = config.dev ? new HarnessJobScripts() : undefined;
+// Development mode also has the clock the usage-limit waits are checked against (P11-10).
+const harnessClock = config.dev ? new HarnessClock() : undefined;
 const fake = new FakeAdapter({
   commands: DEV_FAKE_COMMANDS,
   // The fake runtime stands in for Claude Code in development: it may carry a publish (P11-06).
@@ -219,6 +228,15 @@ const adapters: AgentAdapter[] = [
       ]
     : []),
 ];
+// Development mode (P11-10, ruling R4): fakes stand in for the Codex and Antigravity runtimes, so
+// a task on ChatGPT or Gemini runs a scripted Steward whether or not either CLI is installed.
+if (config.dev && jobScripts) {
+  replaceAdapters(
+    adapters,
+    devProviderFakes((opts) => jobScripts.scenarioFor(opts)),
+    (m) => console.log(m),
+  );
+}
 if (
   config.stewardRuntimeOverride &&
   !adapters.some((a) => a.runtime === config.stewardRuntimeOverride)
@@ -246,6 +264,8 @@ const composed = composeRuntime(db, {
   ...(config.stewardRuntimeOverride
     ? { stewardRuntimeOverride: () => config.stewardRuntimeOverride }
     : {}),
+  // ...except on the dev harness's fakes for the Codex and Antigravity runtimes (P11-10).
+  ...(config.dev ? { stewardRuntimeKeeps: () => DEV_PROVIDER_RUNTIMES } : {}),
   // Brain tools create worktrees and merge through this service (P2-05, P2-10).
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
@@ -272,6 +292,8 @@ const composed = composeRuntime(db, {
   },
   // Managed runs (P9-08): through the same supervisor; the limits are read at every start.
   runs: { supervisor, settings: () => runSettings(config) },
+  // Development: a test moves the clock a wait for a usage limit's reset is checked against.
+  ...(harnessClock ? { usageLimits: { now: harnessClock.now } } : {}),
 });
 const { log, statuses, transcripts } = composed;
 jobScripts?.attach(log.tables);
@@ -513,6 +535,16 @@ const app = buildApp({
             scheduler: composed.jobs,
             scripts: jobScripts,
             commands: composed.commands,
+          }),
+        }
+      : {}),
+    ...(jobScripts && harnessClock
+      ? {
+          stewards: harnessStewards({
+            log,
+            scripts: jobScripts,
+            clock: harnessClock,
+            limits: composed.usageLimits,
           }),
         }
       : {}),

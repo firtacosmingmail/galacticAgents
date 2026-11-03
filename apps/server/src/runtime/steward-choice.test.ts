@@ -104,4 +104,23 @@ describe('stewardChooser (P11-03)', () => {
       runtime: 'codex',
     });
   });
+
+  it('the dev override leaves the runtimes it is told to keep', () => {
+    const choose = stewardChooser({
+      override: () => 'fake',
+      overrideKeeps: () => ['codex', 'agy'],
+    });
+    expect(choose({ task: { provider: 'chatgpt' } })).toEqual({
+      provider: 'chatgpt',
+      runtime: 'codex',
+    });
+    expect(choose({ task: { provider: 'gemini' } })).toEqual({
+      provider: 'gemini',
+      runtime: 'agy',
+    });
+    expect(choose({ task: { provider: 'claude' } })).toEqual({
+      provider: 'claude',
+      runtime: 'fake',
+    });
+  });
 });
