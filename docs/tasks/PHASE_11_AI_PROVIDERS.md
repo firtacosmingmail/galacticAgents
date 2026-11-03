@@ -1,7 +1,7 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-10 · **Task status:** P11-10 in progress; P11-09 done (2026-11-03); P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
-**Phase status:** in progress (9/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
+**Current task:** — · **Task status:** all ten tasks done; P11-10 done (2026-11-03); P11-09, P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
+**Phase status:** done (2026-11-03) (10/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan), waiting for the merge into `phase-11`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -98,12 +98,19 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Acceptance:** fixed actions per card, edited text sent on Approve, usage windows shown, axe clean, phone width without horizontal scroll.
 
 ### P11-10 — End-to-end and phase exit
-- **Status:** in progress · **Depends on:** P11-09 · **Parallel with:** —
+- **Status:** done (2026-11-03) · **Depends on:** P11-09 · **Parallel with:** —
 - Plan Task 12: dev-harness fake `codex`/`agy` Stewards, `e2e/tests/14-ai-providers.spec.ts`, docs, exit criteria.
 - **Acceptance:** the e2e flow passes; the full gates are green.
+- **Done:** dev-harness fakes for `codex` and `agy` (ruling R4), a Steward script route and a usage-limit clock route, `e2e/tests/14-ai-providers.spec.ts` (plan chips, the Gemini satellite mark, an edited publish approval the Steward hears, one limit card without ChatGPT, a wait retried when the clock passes the reset, both cards at 390 and 320 px), the docs pass and `docs/tasks/notes/P11-review.md`.
 
 ## Exit criteria
 
 - Every task done; the full gates (`pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`, `pnpm e2e`) green on the batch branch.
 - The plan's Review Focus items (limit wait across a restart, edited publish text, file changed after approval, loose model names, logged-out provider) each covered by a test.
 - SPEC, TECHNOLOGY and IMPLEMENTATION_PLAN consistent with what was built.
+
+### Exit criteria — verified (2026-11-03)
+
+- **Every task done; the full gates green on the batch branch.** P11-01 – P11-10 are `done`. `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check` and `pnpm test` exit 0 (protocol 190, server 2363 passed and 13 skipped, web 2025, desktop 79 tests); `pnpm e2e` 30/30 passed (specs 01–14, one run, no retries).
+- **The plan's Review Focus items each covered by a test.** Limit wait across a restart: `usage-limits.test.ts` "limit wait survives a restart" (and "wait retries at the reset time"). Edited publish text: `domain/publish.test.ts` "edited publish text is what the follow-up carries", and `e2e/tests/14-ai-providers.spec.ts` (the Steward hears the edited text). File changed after approval: `runtime/publish-allowance.test.ts` "allowance refused when a file changed". Loose model names: `runtime/provider-catalog.test.ts` "model names match loosely or refuse with the list". Logged-out provider: `runtime/provider-catalog.test.ts` "spawn on a logged-out provider fails with the fix".
+- **SPEC, TECHNOLOGY and IMPLEMENTATION_PLAN consistent with what was built.** Decisions 108 (amended), 109, 120, 146–148 read against TECHNOLOGY §3.5–3.8, the adapters README and the code; two §8 questions added (Codex images, hours-long Codex approvals); Google's consumer terms was already there; TECHNOLOGY §8's dev-harness paragraph and the plan's Phase 11 exit criteria describe P11-10; `docs/tasks/notes/P11-review.md` records the review findings, what stays open and rulings R1–R24.
