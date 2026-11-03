@@ -101,7 +101,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Status:** done (2026-11-03) · **Depends on:** P11-09 · **Parallel with:** —
 - Plan Task 12: dev-harness fake `codex`/`agy` Stewards, `e2e/tests/14-ai-providers.spec.ts`, docs, exit criteria.
 - **Acceptance:** the e2e flow passes; the full gates are green.
-- **Done:** dev-harness fakes for `codex` and `agy` (ruling R4), a Steward script route and a usage-limit clock route, `e2e/tests/14-ai-providers.spec.ts` (plan chips, the Gemini satellite mark, an edited publish approval the Steward hears, one limit card without ChatGPT, a wait retried when the clock passes the reset, both cards at 390 and 320 px), the docs pass and `docs/tasks/notes/P11-review.md`.
+- **Done:** dev-harness fakes for `codex` and `agy` (ruling R4; since the final review behind `GALACTIC_FAKE_PROVIDERS`, R25; final-review fixes C1, I1–I5 and the agy second `ask_user` in `docs/tasks/notes/P11-review.md`), a Steward script route and a usage-limit clock route, `e2e/tests/14-ai-providers.spec.ts` (plan chips, the Gemini satellite mark, an edited publish approval the Steward hears, one limit card without ChatGPT, a wait retried when the clock passes the reset, both cards at 390 and 320 px), the docs pass and `docs/tasks/notes/P11-review.md`.
 
 ## Exit criteria
 

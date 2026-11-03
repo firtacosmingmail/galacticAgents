@@ -42,7 +42,8 @@ The batch's final review is the controller's, after P11-10.
 
 ## Added in P11-10
 
-- The development harness registers fakes for the `codex` and `agy` runtimes (R4), scripts a
+- The development harness registers fakes for the `codex` and `agy` runtimes (R4; since the final
+  review only with `GALACTIC_FAKE_PROVIDERS=1`, R25), scripts a
   Steward's publish request or usage limit, and moves the usage-limit clock; the e2e spec
   `14-ai-providers.spec.ts` drives a plan with Gemini and ChatGPT tasks, an edited publish approval
   and a limit waited out, and the publish and limit cards at 390 and 320 px.
@@ -55,18 +56,12 @@ The batch's final review is the controller's, after P11-10.
 
 ## Left open (minor, deferred)
 
-- **Publish files by symlink (P11-09 review, to triage first).** The request-time `hashedFile`
-  (`domain/publish.ts`) checks a path by its text and follows symlinks, so a Steward could register
-  a file outside its folder through a symlink; `publish-files.ts` has a parent-folder swap race.
-  The approval's fingerprint still binds what is published, and the card shows what was
-  registered, but the folder rule is weaker than it reads.
 - An ended job run's Steward folder ignores `meta.cwd` in the publish-files route (404/409); no
   HTTP happy-path test for that route.
-- A second `ask_user` in the same agy run overwrites the first's deferred answer (a stale inbox
-  card); an answer arriving while paused with no process waits until resume.
+- An agy answer arriving while paused with no process waits until resume.
 - Commands Codex runs without asking (`cat`) bypass the tool-call cap; a `CODEX_HOME` pointing at
-  the managed home would link `auth.json` to itself; token refresh over the auth symlink is
-  unobserved (R9).
+  the managed home would link `auth.json` to itself; a real token refresh over the auth symlink is
+  still unobserved (R27 handles it without deleting anything).
 - Usage limits: an `updateTask` throw in the switch path is not routed through the refusal; an
   open limit question lingers after its task closes; a free-text answer is refused rather than
   explained; a change card moving a job to Gemini without a follow-up provider fails only at run
@@ -77,6 +72,30 @@ The batch's final review is the controller's, after P11-10.
   instrument `agy.usage`.
 - Real CLI runs were skipped or partial where quota or a login was missing (the Codex plan was
   Free; one agy image run costs about 18 % of the weekly Gemini bucket): see the P11-01 notes.
+
+## Final whole-branch review (2026-11-03)
+
+Reviewer verdict: ready with fixes. All fixed in one wave on `p11-1-ai-providers`:
+
+- **C1** `pnpm remote` (`galactic start --dev`) ran fake ChatGPT/Gemini Stewards: the codex/agy
+  fakes (and `stewardRuntimeKeeps`) now need `GALACTIC_FAKE_PROVIDERS=1` on top of `GALACTIC_DEV`,
+  set only by `e2e/support/server.ts` (R25); `installProviderFakes` and the config are tested with
+  `GALACTIC_DEV` alone keeping the real adapters.
+- **I1** publishing runs obeyed "Allow similar" rules and the trusted preset's `network: allow`:
+  a publishing run now gets no rules at all and is decided under `publishingPolicy` (network and
+  unclassified ask where the table allows; a deny stays) — R26, SPEC decision 147 amended.
+- **I2** publish files were hashed through symlinks: `readFileInFolder` (real root, no symlink
+  in any component, regular file, `O_NOFOLLOW`, re-checked on the descriptor) serves the request,
+  the allowance's re-hash and the image route.
+- **I3** a spawn now re-checks the task's `publishes`/`makesImages` against the resolved provider
+  (`catalog.check(choice, {images, publishes})`), refusing with the catalogue's reason.
+- **I4** a Claude `rate_limit_event` `rejected` ends a Steward only when no extra usage carries the
+  request (`isRefusedLimit`: overage not in use and not allowed); otherwise a progress line.
+- **I5** a regular `auth.json` in the managed Codex home is renamed over the user's login file,
+  unread, then relinked (R27, replacing R9's delete); a failed rename refuses the start.
+- **M1** (promoted) a second agy `ask_user` while one waits is refused (`ASK_WAITING_NOTE`).
+- Still minor and deferred: M2 (`.codex` among agent-configuration segments), M3–M7 as the review
+  lists them.
 
 ## Controller's rulings (ledger)
 
@@ -107,3 +126,6 @@ its cost if wrong.
 - Ruling R22 (I5): a Gemini job with no followUpProvider stays allowed (many jobs never publish); its card must say plainly that publishing is not possible ("Publishes with: nobody — Gemini cannot publish"), shown by the job card in Task 11; the run-time refusal (decision 147) stays — cost if wrong: Cosmin may prefer refusing such cards.
 - Ruling R23: PreflightResponse.ok (and the first-run wizard's "needs attention") depends only on claude-sdk (the brains' runtime); a missing or logged-out Codex/Antigravity shows its problem on its own row only — why: optional providers must not nag a user who never set them up — cost if wrong: a less prominent warning. To be applied in the Task 10 fix round.
 - Ruling R24: the publish card must show the images (spec: "images shown") — add an authenticated route serving only files listed in that publish question's context, by index, from the asker's worktree (realpath inside it, no symlinks), refusing when the file's sha256 no longer matches the approved fingerprint; the card shows thumbnails — cost if wrong: one new read-only route to maintain. Applied in the Task 11 fix round.
+- Ruling R25 (final review C1, replaces R4's gating): the codex/agy fake replacement is gated by its own flag GALACTIC_FAKE_PROVIDERS=1, set only by the e2e server, never by --dev/`pnpm remote`/`pnpm dev` — cost if wrong: dev runs need the flag to use fakes.
+- Ruling R26 (final review I1, refines R8/decision 138 for publishing): a publishing run (publish follow-up or Steward of a `publishes` task) gets no permission rules at all (no Allow-similar, no unattended), and its network calls always ask unless the publish allowance matches, whatever the policy preset — cost if wrong: extra permission cards in trusted projects' publishing steps. (Implemented also for `unclassified: allow`, which the trusted preset sets, and keeping a `deny` a deny.)
+- Ruling R27 (final review I5, replaces R9): if Codex replaces the managed auth.json link with a regular file, rename that file atomically over the user's own auth.json (never opened or read), then relink; logged — cost if wrong: the user's login file is overwritten by Codex's own newer file.
