@@ -19,6 +19,7 @@ import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import type { AgentAdapter } from '@galactic/protocol';
 import { AcpAdapter, resolveCommand } from './adapters/acp/index.js';
 import { CodexAdapter } from './adapters/codex/index.js';
+import { AgyAdapter, HookBridge } from './adapters/agy/index.js';
 import { PtyAdapter } from './adapters/pty/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
@@ -119,6 +120,8 @@ for (const take of launches.taken) {
 // ACP one for any ACP agent when `acp.command` is configured (P8-07), the PTY one for a
 // command-line agent when `pty.command` is (P8-08; node-pty loads at its first spawn).
 // The Codex one (P11-04) when `codex.command` is configured or `codex` is on the PATH.
+// The Antigravity one (P11-05) when `agy.command` is configured or `agy` is on the PATH; its hook
+// and tool server reach this server's `/api/agy-hook` routes over loopback.
 // The fake one's sessions report a few slash commands, so the composer's list can be tried (P8-13).
 // In development mode a job run's Steward may follow a test's script (P10-08, `/dev/harness/jobs`).
 const jobScripts = config.dev ? new HarnessJobScripts() : undefined;
@@ -126,6 +129,10 @@ const fake = new FakeAdapter({
   commands: DEV_FAKE_COMMANDS,
   ...(jobScripts ? { scenarioFor: (opts) => jobScripts.scenarioFor(opts) } : {}),
 });
+// The port the server listens on (known after `listen()`; recovery may start an agy turn before:
+// the configured port then, and the hook waits a little for the server to come up).
+let boundPort: number | undefined;
+const agyBridge = new HookBridge();
 const adapters: AgentAdapter[] = [
   fake,
   new ClaudeSdkAdapter({
@@ -144,6 +151,19 @@ const adapters: AgentAdapter[] = [
           command: config.codex?.command ?? 'codex',
           // Mission Control's own Codex home (ruling R7): none of ~/.codex/config.toml reaches it.
           home: join(config.dataDir, 'codex-home'),
+          onError,
+        }),
+      ]
+    : []),
+  ...(config.agy?.command || resolveCommand('agy', process.env['PATH'] ?? '')
+    ? [
+        new AgyAdapter({
+          supervisor,
+          command: config.agy?.command ?? 'agy',
+          hookUrl: () => `http://127.0.0.1:${boundPort ?? config.port}/api/agy-hook`,
+          bridge: agyBridge,
+          // The hook and tool-server scripts, and the original bytes of ~/.gemini's files.
+          stateDir: join(config.dataDir, 'agy'),
           onError,
         }),
       ]
@@ -402,7 +422,6 @@ const restartHarmonizer = harmonizerRestarter(composed, {
 });
 const webDir = process.env['GALACTIC_WEB_DIR'];
 // Phone access (P9-16): the status every client reads, the Mac's start / stop.
-let boundPort: number | undefined;
 const gatewayRef: { clients?: () => { connected: number; lastSeenAt?: string } } = {};
 const remote = new RemoteService({
   dataDir: config.dataDir,
@@ -439,6 +458,7 @@ const app = buildApp({
   log,
   statuses,
   transcripts,
+  agyBridge,
   runtime: composed.runtime,
   commands: composed.commands,
   ...(composed.processes ? { processes: composed.processes } : {}),

@@ -1,7 +1,7 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-05 · **Task status:** P11-05 in progress; P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
-**Phase status:** in progress (4/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
+**Current task:** P11-06 · **Task status:** P11-06 todo; P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
+**Phase status:** in progress (5/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -73,7 +73,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Acceptance:** safe settings sent on `thread/start`; every approval request goes through the gate and is never answered `acceptForSession`; server tools served through `item/tool/call`; a usage-limit error ends the session with `reason: limit` and the reset time; the conformance suite passes; the real-CLI test passes or records why it was skipped.
 
 ### P11-05 — The Antigravity adapter and hook bridge
-- **Status:** in progress · **Depends on:** P11-03 · **Parallel with:** P11-04
+- **Status:** done (2026-11-03) · **Depends on:** P11-03 · **Parallel with:** P11-04
 - Plan Task 6: `agy-adapter.ts`, fail-closed hook bridge and hook process, tool server, image copy, preflight, limits, fake agent, conformance tests; follows the P11-01 Ruling.
 - **Acceptance:** unreachable or crashing bridge answers `deny`; `--dangerously-skip-permissions` never passed; a generated image lands in the worktree byte-equal; a quota error ends the session with `reason: limit`; `canPublish` is false.
 

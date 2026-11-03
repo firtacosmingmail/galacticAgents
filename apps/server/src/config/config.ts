@@ -160,6 +160,11 @@ export const ConfigFile = z.object({
    */
   codex: z.object({ command: z.string().min(1).optional() }).optional(),
   /**
+   * The Antigravity CLI the `agy` runtime runs Stewards with (P11-05; TECHNOLOGY §3.7). Absent:
+   * `agy` on the PATH, when there is one (no `agy` runtime otherwise).
+   */
+  agy: z.object({ command: z.string().min(1).optional() }).optional(),
+  /**
    * The ACP agent the `acp` runtime starts for every session (P8-07; TECHNOLOGY §3.2), e.g.
    * `{"command": "claude-agent-acp"}`, `{"command": "gemini", "args": ["--acp"]}` or
    * `{"command": "codex-acp"}`; also `GALACTIC_ACP_COMMAND` (a command line split on spaces, or
@@ -333,6 +338,8 @@ export interface ServerConfig {
   };
   /** The Codex CLI (P11-04); absent = `codex` on the PATH, if any. */
   codex?: { command?: string | undefined };
+  /** The Antigravity CLI (P11-05); absent = `agy` on the PATH, if any. */
+  agy?: { command?: string | undefined };
   /** The ACP agent command (P8-07); absent = no `acp` runtime registered. */
   acp?: {
     command: string;
@@ -628,6 +635,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
           }
         : {}),
       ...(file.codex ? { codex: { ...file.codex } } : {}),
+      ...(file.agy ? { agy: { ...file.agy } } : {}),
       ...(acp ? { acp } : {}),
       ...(pty ? { pty } : {}),
     },

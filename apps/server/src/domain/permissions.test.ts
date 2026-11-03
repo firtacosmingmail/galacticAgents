@@ -590,6 +590,10 @@ describe('P1-30 — review R3 bypasses', () => {
       ['Write', { file_path: '.git/hooks/pre-commit', content: '' }, 'ask'],
       ['Write', { file_path: '.git/config', content: '' }, 'ask'],
       ['Write', { file_path: '.husky/pre-commit', content: '' }, 'ask'],
+      // agy's workspace hooks and MCP servers, and its home configuration (P11-05).
+      ['Write', { file_path: '.agents/hooks.json', content: '{}' }, 'ask'],
+      ['Write', { file_path: '~/.gemini/config/mcp_config.json', content: '{}' }, 'ask'],
+      bash('echo "{}" > .agents/mcp_config.json', 'ask'),
       ['NotebookEdit', { notebook_path: '.claude/x.ipynb' }, 'ask'],
       bash('echo x > .git/hooks/pre-commit', 'ask'),
       bash('echo "{}" >.mcp.json', 'ask'),

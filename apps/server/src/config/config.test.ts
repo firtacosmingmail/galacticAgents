@@ -58,6 +58,19 @@ describe('loadConfig', () => {
     expect(loadConfig({ GALACTIC_HOME: home }).config.codex).toBeUndefined();
   });
 
+  it('reads the Antigravity CLI command (P11-05)', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef', agy: { command: '/opt/agy' } }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.agy).toEqual({ command: '/opt/agy' });
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef' }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.agy).toBeUndefined();
+  });
+
   it('upgrades a stored stewardRuntime to the default provider (P11-03)', () => {
     const load = (stored: Record<string, unknown>) => {
       writeFileSync(

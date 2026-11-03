@@ -203,6 +203,10 @@ describe('the deliverables folder is never deleted from (decision 122)', () => {
  * touches a deliverables folder. A deletion added anywhere fails here until it is reviewed.
  */
 const ALLOWED_DELETIONS: Record<string, { count: number; why: string }> = {
+  'adapters/agy/global-entries.ts': {
+    count: 2,
+    why: "Mission Control's own record of ~/.gemini's original bytes, and a ~/.gemini/config file it created itself (only when unchanged since its write and absent before)",
+  },
   'adapters/codex/home.ts': {
     count: 1,
     why: "the managed Codex home's auth.json link (or the file Codex left in its place), relinked",

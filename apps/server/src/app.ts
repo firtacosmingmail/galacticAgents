@@ -34,6 +34,8 @@ import { SERVER_VERSION } from './version.js';
 import { sendStorageRefusal } from './http/storage-refusal.js';
 import type { StorageMonitor } from './runtime/storage-health.js';
 import { registerRemoteRoutes } from './http/remote-routes.js';
+import { registerAgyHookRoutes } from './http/agy-hook-routes.js';
+import type { HookBridge } from './adapters/agy/hook-bridge.js';
 import type { RemoteService } from './remote/service.js';
 
 export interface AppOptions {
@@ -90,6 +92,8 @@ export interface AppOptions {
   /** Phone access (P9-16): enables `GET /api/remote/status`, `POST /api/remote/start|stop`. */
   /** `peer`: the agent speed bump on start / stop, as on the runs routes; `index.ts` passes it. */
   remote?: { service: Pick<RemoteService, 'status' | 'start' | 'stop'>; peer?: PeerCheck };
+  /** The Antigravity hook bridge (P11-05): enables `POST /api/agy-hook[/tools|/call]`. */
+  agyBridge?: HookBridge;
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -269,6 +273,11 @@ export function buildApp(opts: AppOptions): App {
 
   if (opts.remote) {
     registerRemoteRoutes(fastify, config, opts.remote);
+  }
+
+  // The agy Stewards' hook and tool server (P11-05): loopback only, keyed by a session secret.
+  if (opts.agyBridge) {
+    registerAgyHookRoutes(fastify, { bridge: opts.agyBridge });
   }
 
   if (opts.push) {

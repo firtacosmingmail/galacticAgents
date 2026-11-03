@@ -289,6 +289,92 @@ Its first prompt picks a scenario (`happy`, `asks`, `asks-set`, `permission`, `l
 `codex/codex.conformance.test.ts` in CI; `codex/codex-real.conformance.test.ts` runs with
 `GALACTIC_REAL_CODEX=1`, local-only.
 
+## The Antigravity adapter (`agy/`, P11-05; TECHNOLOGY §3.7)
+
+Stewards of the `gemini` provider, on Google's Antigravity CLI (`agy`) with the user's Google
+login, driven headless: `agy -p <prompt> --output-format stream-json --disable-slash-commands
+--print-timeout 0s [--model m] [--conversation id]`, never `--dangerously-skip-permissions`.
+Shapes are P11-01's (`docs/tasks/notes/P11-01-provider-spikes.md`, agy 1–8, the transcripts in
+`agy/fixtures/`); its Ruling puts agy in full-tool mode. Registered when `agy.command` is in
+`config.json` or `agy` is on the `PATH`. Stewards only (a brain or a `bare` spawn is refused);
+`canPublish: false` (no publishing step on agy in this phase).
+
+- **One process per turn** (`ProcessSupervisor.adopt()`; agy has no in-band control channel):
+  the first turn's `init` gives the conversation id (`sessionRef` = `agy:<id>`), later turns and
+  `resumeSession` continue it with `--conversation`. The process exiting ends the turn
+  (`agent.idle`). `interrupt()` = SIGINT to the group (SIGKILL after `graceMs`), pause =
+  SIGSTOP/SIGCONT (an idle session has no process: pause only holds its messages), stop = the
+  supervisor's graceful stop. Environment: the allow-list + `HOME`, `GALACTIC_AGY_SECRET` (a
+  random per-session secret) and `GALACTIC_AGY_URL` (the bridge), which agy passes to its hook
+  and MCP processes. agy has no system-prompt flag: the Steward's `systemPrompt` and
+  `ASK_USER_NOTE` lead the first prompt.
+- **The managed global entries** (`global-entries.ts`): `--settings` cannot carry hooks or MCP
+  servers and a workspace `.agents/` file is agent-writable, so the adapter adds one entry keyed
+  `galactic` and tagged `"galactic": true` to `~/.gemini/config/hooks.json` (PreToolUse, matcher
+  `*`, `timeout: 86400`, the hook script) and to `~/.gemini/config/mcp_config.json` (the tool
+  server script), at the first spawn, and removes only those on `dispose()`. The scripts are
+  copied to the adapter's `stateDir` (production `<data dir>/agy`) first. Writes are atomic;
+  every other entry stays; when a file is unchanged since Mission Control's write, removal puts
+  back its exact original bytes (or deletes a file that was absent) — the originals are kept in
+  `<stateDir>/global-entries.json`. A file that is not JSON, or a `galactic` key without the tag,
+  is never touched: the spawn is refused (the preflight says why). Both scripts pass through
+  when `GALACTIC_AGY_SECRET` is absent, so the user's own `agy` runs see no hook decision
+  (`allow`) and no tools.
+- **The hook bridge** (`hook-bridge.ts`, `galactic-agy-hook.mjs`, `http/agy-hook-routes.ts`):
+  the hook POSTs agy's payload to `POST /api/agy-hook` (loopback only, never through a proxy;
+  `x-galactic-hook: <secret>`; a long poll, the hook having no timeout of its own) and prints the
+  decision: the bridge's `allow` as agy's `auto_approve` (a plain `allow` still lets agy's
+  headless permission check refuse, P11-01 agy 2), `deny` with its reason. **Fail closed**: an
+  unknown secret, a non-200 answer, Mission Control unreachable (after waiting up to 15 s for a
+  server that is still starting), output that is not a decision → `{"decision":"deny"}`; agy
+  itself denies when the hook times out, crashes or prints garbage (P11-01 agy 3). The hook
+  never answers `ask` or `force_ask`.
+
+| agy tool (hook name)                                    | Hook / gate                                                                                                                          |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `run_command {CommandLine, Cwd?}`                       | `Bash {command}` (`cd '<dir>' &&` when `Cwd` is elsewhere) through the gate                                                          |
+| `read_file`/`view_file {Path}`                          | `Read {file_path}`, or `WebFetch {url}` for a URL; a `galactic` tool's descriptor or agy's built-in skills: allowed without the gate |
+| `write_file`/`write_to_file`, `edit_file`/`replace_…`   | `Write`/`Edit {file_path}`; a path under `.agents/` or `.gemini/` is denied without asking                                           |
+| `list_dir`, `find_by_name`, `grep_search`               | `LS`, `Glob`, `Grep` with the path                                                                                                   |
+| `search_web`, `read_url_content`                        | `WebSearch`, `WebFetch` (the `network` category)                                                                                     |
+| `generate_image`                                        | `agy:generate_image` (the table's `unclassified` entry: an image costs a large share of the weekly quota)                            |
+| `call_mcp_tool {ServerName: galactic, ToolName}`        | a server tool by its bare name (allowed as a server tool); `ask_user` without the gate; any other server: deny                       |
+| `invoke_subagent`, `send_message`, `wait`, `finish`, …  | allowed, reported as `agent.tool_call` (a subagent's own calls reach the hook too)                                                   |
+| browser tools, `ask_question`/`ask_permission`, unknown | deny (the question tools' reason points to `ask_user`)                                                                               |
+| gate `allow` / `deny` / `ask`                           | `auto_approve` + `agent.tool_call` / `deny` + a transcript line / `agent.needs_input(permission)` until answered                     |
+
+- **The tool server** (`tool-server.ts`, `galactic-agy-tools.mjs`): a stdio MCP server that
+  forwards `tools/list` and `tools/call` to `POST /api/agy-hook/tools|call` with the secret. It
+  lists the session's server tools and `ask_user {question, options?}` (ruling R6: agy's own
+  question tools cannot ask anyone headless); a call runs only after the hook let a
+  `call_mcp_tool` of that tool through (one pass per allowed call). `ask_user` becomes
+  `agent.needs_input(clarification)` and its answer is the result.
+- **Images** (`images.ts`): the image files new in
+  `~/.gemini/antigravity-cli/brain/<conversationId>/` since the turn's `init` are copied into
+  `<cwd>/generated-images/` (never overwriting) before the turn's end is reported.
+- **Limits** (`limits.ts`): exit 3 with an `AGY_ERROR` in the quota's words (or a final `result`
+  with `status: ERROR` and such an error) → `agy -p /usage --output-format json` →
+  `agent.failed{reason: 'limit', error: 'Gemini usage limit reached', resetsAt}` (an exhausted
+  bucket's reset, else the model group's), the one terminal event.
+- **Refusals at spawn**: a worktree (or a folder above it) holding `.agents/hooks.json` or
+  `.agents/mcp_config.json` — it could approve calls or start servers before the hook sees them.
+
+`preflight()` runs `agy --version` (outside `KNOWN_AGY_VERSIONS = '>=1.4.12 <1.5'`: a warning)
+and `agy -p /usage --output-format json` (no turn; "Authentication required" or a failure:
+`not_logged_in`, "Run agy in Terminal and sign in with your Google account"), plus the global
+entries' check; `models()` parses `agy models` (`gemini-*`: `['text', 'image']`, else `['text']`;
+the family from the id's prefix); `usage()` reads `/usage` (one window per bucket, "Gemini Models ·
+weekly"). No credentials are read; no cost (a subscription).
+
+The fake CLI (`node agy/fake-agy.mjs …`) reads its hooks and MCP server from
+`$HOME/.gemini/config` like agy, runs the hooks (fail closed) and the real tool server, and keeps
+conversations under `$HOME`. Its first prompt picks a scenario (`happy`, `asks`, `permission`,
+`long`, `echo`, `stalls`, `tool`, `image`, `limit`, `limit-result`, `write-config`, `browser`);
+later prompts are echoed. Environment: `FAKE_AGY_RECORD`, `FAKE_AGY_VERSION`,
+`FAKE_AGY_LOGGED_OUT=1`, `FAKE_AGY_USAGE_EXHAUSTED=1`. It drives `agy/agy.conformance.test.ts` in
+CI; `agy/agy-real.conformance.test.ts` runs with `GALACTIC_REAL_AGY=1`, local-only (it adds and
+removes the entries in the real `~/.gemini/config`).
+
 ## The PTY adapter (`pty/`, P8-08; TECHNOLOGY §3.3)
 
 Any command-line agent with no machine protocol, run under a pseudo-terminal (`node-pty` 1.1.0,

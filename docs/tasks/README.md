@@ -18,7 +18,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | in progress (branch `phase-8`, merged into `main` 2026-10-07) | 23/23 | — (ongoing backlog) |
 | 9 — Deliverables | `PHASE_9_DELIVERABLES.md` | done (2026-10-12) | 17/17 | — |
 | 10 — Long-term projects, area moons and recurring jobs | `PHASE_10_LONG_TERM_PROJECTS.md` | done (2026-10-27; branch `p10-1-long-term-projects`, waiting for the merge into `phase-10`) | 8/8 | — |
-| 11 — More AI providers (Codex, Antigravity) | `PHASE_11_AI_PROVIDERS.md` | in progress (branch `p11-1-ai-providers`) | 4/10 | P11-05 (in progress) |
+| 11 — More AI providers (Codex, Antigravity) | `PHASE_11_AI_PROVIDERS.md` | in progress (branch `p11-1-ai-providers`) | 5/10 | P11-06 (todo) |
 
 Phases run in order 0 → 1 → 2 → 2.5 → 3 → 4 → 5 → 6 → 7 → 9 → 10; Phase 8 tasks are picked whenever their dependencies are met. Phase 7 depends on Phase 5, not on Phase 6. Phase 9 (deliverables) needs Phase 5 and the Phase 8 tasks P8-02, P8-03, P8-06 and P8-11; it does not wait for P7-06.
 
