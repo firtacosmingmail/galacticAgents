@@ -33,6 +33,7 @@ const spec = (
   archetype: undefined,
   landed: false,
   supervisorId: undefined,
+  provider: undefined,
 });
 
 /** Bodies at fixed places (a fake anchor registry). */

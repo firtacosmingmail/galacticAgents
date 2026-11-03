@@ -123,7 +123,8 @@ export function questionBody(
  * clarifications; each oldest first.
  */
 function inboxOrder(a: Question, b: Question): number {
-  const rank = (q: Question) => (q.kind === 'permission' || q.kind === 'spend' ? 0 : 1);
+  const rank = (q: Question) =>
+    q.kind === 'permission' || q.kind === 'spend' || q.kind === 'publish' ? 0 : 1;
   return rank(a) - rank(b) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 }
 

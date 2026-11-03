@@ -36,14 +36,18 @@ const byCreated = <T extends { createdAt: string; id: string }>(a: T, b: T) =>
   a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 
 /**
- * Within "waiting", permission questions and spend approvals come first (a Steward is stopped on a
+ * Within "waiting", permission questions, spend and publish approvals come first (a Steward is stopped on a
  * tool call, or on real money: P10-07, decision 145), then clarifications, then cards; each
  * oldest first.
  */
 function waitingRank(item: InboxItem): number {
   if (item.kind === 'proposal') return 2;
   if (item.kind === 'questionSet') return 1; // clarifications only
-  return item.question.kind === 'permission' || item.question.kind === 'spend' ? 0 : 1;
+  return item.question.kind === 'permission' ||
+    item.question.kind === 'spend' ||
+    item.question.kind === 'publish'
+    ? 0
+    : 1;
 }
 
 /** What orders an item among its rank: its (first) question or its card. */

@@ -12,6 +12,7 @@ import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy
 import { OfflineDecisionNote, useStreamDown } from './QueuedAnswer.js';
 import { useClientRules } from '../deliverables/use-deliverables.js';
 import { AgentRef } from './links.js';
+import { choiceText, jobPublishesWith } from '../providers.js';
 import { RejectForm } from './ProposalCard.js';
 
 /**
@@ -84,8 +85,12 @@ export function jobChanges(world: JobWorld, job: ProposalJob): [string, string, 
   const was = scheduleText(before.schedule);
   const will = scheduleText(after.schedule);
   if (was !== will) changes.push(['schedule', was, will]);
-  if (before.provider !== after.provider)
-    changes.push(['provider', before.provider, after.provider]);
+  const wasAi = choiceText(before.provider, before.model)!;
+  const willAi = choiceText(after.provider, after.model)!;
+  if (wasAi !== willAi) changes.push(['provider', wasAi, willAi]);
+  const wasFollow = choiceText(before.followUpProvider, before.followUpModel) ?? 'same as the job';
+  const willFollow = choiceText(after.followUpProvider, after.followUpModel) ?? 'same as the job';
+  if (wasFollow !== willFollow) changes.push(['follow-up provider', wasFollow, willFollow]);
   if (before.instructions !== after.instructions) {
     changes.push(['instructions', 'as they were', 'rewritten (below)']);
   }
@@ -161,7 +166,15 @@ export function JobCard({ proposal: p, job }: { proposal: Proposal; job: Proposa
           </div>
           <div>
             <dt>provider</dt>
-            <dd>{shown.provider}</dd>
+            <dd>{choiceText(shown.provider, shown.model)}</dd>
+          </div>
+          <div>
+            <dt>follow-up provider</dt>
+            <dd>{choiceText(shown.followUpProvider, shown.followUpModel) ?? 'same as the job'}</dd>
+          </div>
+          <div>
+            <dt>publishes with</dt>
+            <dd>{jobPublishesWith(shown).text}</dd>
           </div>
           <div className="wide">
             <dt>instructions</dt>

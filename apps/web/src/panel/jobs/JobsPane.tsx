@@ -3,6 +3,7 @@ import type { Id, Job, JobRun } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { useApi } from '../../console/hierarchy/shared.js';
 import { revealInbox, revealQuestion } from '../inbox-reveal.js';
+import { choiceText, jobPublishesWith } from '../providers.js';
 import { jobsModel, providerText, runLine, useJobsFilter, type JobRow } from './jobs-model.js';
 import './jobs.css';
 
@@ -172,10 +173,13 @@ function JobItem({ row, now }: { row: JobRow; now: Date }) {
       {row.lastLine && <p className={`jobs-line jobs-last tone-${row.tone}`}>{row.lastLine}</p>}
       <p className="jobs-line jobs-meta muted">
         <span>
-          {providerText(job.provider)} · {nextText(row)}
+          {choiceText(job.provider, job.model) ?? providerText(job.provider)} · {nextText(row)}
         </span>
         <InboxLink ids={otherWaiting(row)} />
       </p>
+      {!jobPublishesWith(job).ok && (
+        <p className="jobs-line muted">Publishes with: {jobPublishesWith(job).text}</p>
+      )}
       <div id={runsId}>{open && <JobRuns job={job} now={now} />}</div>
     </li>
   );

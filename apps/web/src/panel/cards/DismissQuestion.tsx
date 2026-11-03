@@ -30,13 +30,17 @@ export function DismissQuestion({
       ? `Dismiss the permission request (deny it): ${text}`
       : q.kind === 'spend'
         ? `Dismiss the spend approval (refuse it): ${text}`
-        : `Dismiss the question, no reply: ${text}`;
+        : q.kind === 'publish'
+          ? `Dismiss the publish approval (refuse it): ${text}`
+          : `Dismiss the question, no reply: ${text}`;
   const hint =
     q.kind === 'permission'
       ? 'Dismiss (deny)'
       : q.kind === 'spend'
         ? 'Dismiss (refuse): no approval, nothing is spent'
-        : 'Dismiss: the agent is told you will not answer';
+        : q.kind === 'publish'
+          ? 'Dismiss (refuse): nothing is posted'
+          : 'Dismiss: the agent is told you will not answer';
   const dismiss = async () => {
     let stale: string | undefined;
     await run(async () => {

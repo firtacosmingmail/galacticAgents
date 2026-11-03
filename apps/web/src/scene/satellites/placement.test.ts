@@ -31,6 +31,7 @@ const spec = (agentId: string, bodyId: string, landed = false): SatelliteSpec =>
   archetype: undefined,
   landed,
   supervisorId: undefined,
+  provider: undefined,
 });
 
 const anchors: AnchorLookup = (bodyId, out) => {

@@ -11,6 +11,8 @@ import { DismissQuestion, withdrawnLabel } from './DismissQuestion.js';
 import { AllowSimilar, useOffersSimilar } from './AllowSimilar.js';
 import { FindingActions, FindingDetails } from './FindingCard.js';
 import { SpendActions, SpendDetails } from './SpendCard.js';
+import { PublishActions, PublishDetails } from './PublishCard.js';
+import { UsageLimitActions, UsageLimitDetails } from './UsageLimitCard.js';
 
 /**
  * Question cards (P2-18, extracted for the panel in P25-06; SPEC §2.6): one open question with its
@@ -23,7 +25,9 @@ import { SpendActions, SpendDetails } from './SpendCard.js';
  * the ones a supervisor answered from context are read-only, with an Override that tells that
  * supervisor (decisions 12, 48). Every open card has a × that dismisses it (P9-14, decision 135).
  * A job's finding shows its fixed actions (and a reply's editable draft), a `spend` approval its
- * amount with Approve / Refuse only (P10-07; `FindingCard`, `SpendCard`).
+ * amount with Approve / Refuse only (P10-07; `FindingCard`, `SpendCard`). A `publish` approval shows
+ * the post with an editable text and Approve / Refuse (P11-09; `PublishCard`), and a usage-limit
+ * clarification its fixed options as buttons (`UsageLimitCard`).
  *
  * The cards read nothing but the store: the same question renders the same everywhere (the
  * inbox, a chat thread, the Steward view), and an answer anywhere updates all of them when the
@@ -119,6 +123,8 @@ export function QuestionCard({
   const article = useRef<HTMLElement>(null);
   const permission = q.kind === 'permission';
   const spend = q.kind === 'spend';
+  const publish = q.kind === 'publish';
+  const usageLimit = q.context.usageLimit !== undefined;
   const finding = q.context.finding;
   const call = q.context.toolCall;
   const userHeld = q.holder.type === 'user';
@@ -150,13 +156,19 @@ export function QuestionCard({
       data-question-id={q.id}
     >
       <header>
-        <span className={`pill kind-${q.kind}`}>{finding ? 'finding' : q.kind}</span>
+        <span className={`pill kind-${q.kind}`}>
+          {finding ? 'finding' : usageLimit ? 'usage limit' : q.kind}
+        </span>
         <span className="muted">held by {actorLabel(q.holder, world)}</span>
         {/* Dismiss (P9-14): not while an answer to it waits in the offline queue. */}
         {!(queued && isPending(queued)) && <DismissQuestion question={q} onStale={stale} />}
       </header>
       {spend ? (
         <SpendDetails question={q} />
+      ) : publish ? (
+        <PublishDetails question={q} />
+      ) : usageLimit ? (
+        <UsageLimitDetails question={q} />
       ) : finding ? (
         <FindingDetails question={q} finding={finding} />
       ) : (
@@ -194,6 +206,10 @@ export function QuestionCard({
         />
       ) : spend ? (
         <SpendActions busy={busy} onAnswer={(a) => void answer(a)} />
+      ) : publish ? (
+        <PublishActions question={q} busy={busy} onAnswer={(a, d) => void answer(a, d)} />
+      ) : usageLimit ? (
+        <UsageLimitActions question={q} busy={busy} onAnswer={(a) => void answer(a)} />
       ) : finding ? (
         <FindingActions
           finding={finding}

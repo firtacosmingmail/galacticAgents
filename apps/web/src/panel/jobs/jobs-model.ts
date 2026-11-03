@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import {
+  PROVIDER_LABEL,
+  Provider,
   isJobOwned,
   scheduleText,
   type Area,
@@ -150,8 +152,10 @@ function jobIdOfQuestion(q: Question): Id | undefined {
   return q.context.finding?.jobId ?? q.context.jobFailure?.jobId ?? q.context.spend?.jobId;
 }
 
-/** "Claude" from "claude". */
+/** "Claude" from "claude", "ChatGPT" from "chatgpt" (P11-09: the protocol's labels). */
 export function providerText(provider: string): string {
+  const known = Provider.safeParse(provider);
+  if (known.success) return PROVIDER_LABEL[known.data];
   return provider ? provider[0]!.toUpperCase() + provider.slice(1) : provider;
 }
 

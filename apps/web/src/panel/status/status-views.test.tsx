@@ -269,6 +269,24 @@ describe('the status views', () => {
     expect(within(facts).getByText('$0.4200')).toBeTruthy();
     expect(within(facts).getByText('0 permission, 1 clarification')).toBeTruthy();
   });
+
+  it('shows the model the running Steward is on (P11-09)', () => {
+    const world = useAppStore.getState().world;
+    const agent = world.agents['a-steward-1']!;
+    useAppStore.setState({
+      world: {
+        ...world,
+        agents: {
+          ...world.agents,
+          'a-steward-1': { ...agent, runtime: 'codex', meta: { model: 'gpt-5.6-terra' } },
+        },
+      },
+    });
+    show(<TaskStatusFacts agentId="a-steward-1" />);
+    const facts = document.querySelector<HTMLElement>('dl[aria-label="task status"]')!;
+    expect(within(facts).getByText('model')).toBeTruthy();
+    expect(within(facts).getByText('ChatGPT · gpt-5.6-terra')).toBeTruthy();
+  });
 });
 
 describe('the dock’s Chat | Status switch', () => {

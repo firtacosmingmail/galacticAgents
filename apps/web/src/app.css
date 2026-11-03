@@ -2,6 +2,9 @@
   /* Real-money approvals (P10-07, decision 145): their own colour, apart from permissions. */
   --spend: #2f9e6b;
   --spend-bg: #0f1d17;
+  /* Publish approvals (P11-09): a post under the user's name, its own colour. */
+  --publish: #c2571a;
+  --publish-bg: #24140b;
   color-scheme: dark;
   font-family: system-ui, sans-serif;
   background: #0b0e17;
@@ -259,6 +262,48 @@ button.danger {
 .spend-amount {
   font-size: 1.15rem;
   margin: 4px 0;
+}
+.question-publish {
+  border-color: var(--publish);
+  background: var(--publish-bg);
+}
+.publish-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 999px;
+  background: var(--publish);
+  color: #1a0b02;
+  font-weight: 700;
+}
+.publish-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.publish-files {
+  overflow-wrap: anywhere;
+}
+.publish-edit textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.provider-chip {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid #3b4260;
+  border-radius: 999px;
+  font-size: 0.8em;
+  overflow-wrap: anywhere;
+}
+.provider-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--publish-bg);
+  border: 1px solid var(--publish);
+  font-size: 0.8em;
 }
 .job-instructions {
   white-space: pre-wrap;
