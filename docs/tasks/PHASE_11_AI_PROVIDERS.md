@@ -1,7 +1,7 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-04, P11-05 · **Task status:** P11-04 in progress, P11-05 todo; P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
-**Phase status:** in progress (3/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
+**Current task:** P11-05 · **Task status:** P11-05 todo; P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
+**Phase status:** in progress (4/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -68,7 +68,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Acceptance:** loose model names match one listed model or are refused with the list; a spawn on a logged-out provider fails with the fix and does not crash the Waykeeper.
 
 ### P11-04 — The Codex adapter
-- **Status:** in progress · **Depends on:** P11-03 · **Parallel with:** P11-05
+- **Status:** done (2026-11-03) · **Depends on:** P11-03 · **Parallel with:** P11-05
 - Plan Task 5: `codex-adapter.ts`, JSON-RPC layer, mapping, preflight, limits, fake agent replaying the fixtures, conformance tests.
 - **Acceptance:** safe settings sent on `thread/start`; every approval request goes through the gate and is never answered `acceptForSession`; server tools served through `item/tool/call`; a usage-limit error ends the session with `reason: limit` and the reset time; the conformance suite passes; the real-CLI test passes or records why it was skipped.
 

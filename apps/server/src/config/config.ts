@@ -155,6 +155,11 @@ export const ConfigFile = z.object({
     })
     .optional(),
   /**
+   * The Codex CLI the `codex` runtime runs Stewards with (P11-04; TECHNOLOGY §3.6). Absent: `codex`
+   * on the PATH, when there is one (no `codex` runtime otherwise).
+   */
+  codex: z.object({ command: z.string().min(1).optional() }).optional(),
+  /**
    * The ACP agent the `acp` runtime starts for every session (P8-07; TECHNOLOGY §3.2), e.g.
    * `{"command": "claude-agent-acp"}`, `{"command": "gemini", "args": ["--acp"]}` or
    * `{"command": "codex-acp"}`; also `GALACTIC_ACP_COMMAND` (a command line split on spaces, or
@@ -326,6 +331,8 @@ export interface ServerConfig {
       output?: { [K in keyof RunOutputRetention]?: RunOutputRetention[K] | undefined } | undefined;
     };
   };
+  /** The Codex CLI (P11-04); absent = `codex` on the PATH, if any. */
+  codex?: { command?: string | undefined };
   /** The ACP agent command (P8-07); absent = no `acp` runtime registered. */
   acp?: {
     command: string;
@@ -620,6 +627,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
             },
           }
         : {}),
+      ...(file.codex ? { codex: { ...file.codex } } : {}),
       ...(acp ? { acp } : {}),
       ...(pty ? { pty } : {}),
     },

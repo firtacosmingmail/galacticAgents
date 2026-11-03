@@ -7,9 +7,10 @@ caps, the permission policy, the event log, the status store and the transcript 
 adapter never imports from `domain/` or `runtime/` except the process supervisor and
 `lib/event-queue.ts`, and nothing outside `adapters/` imports a runtime SDK (CLAUDE.md).
 
-Four adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI
-target), `claude-sdk/` (the real one for Claude Code), `acp/` (any Agent Client Protocol agent,
-P8-07) and `pty/` (any command-line agent under a pseudo-terminal, P8-08). Read `fake/fake-adapter.ts` first: every rule below is visible there in forty lines per
+Five adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI
+target), `claude-sdk/` (the real one for Claude Code), `codex/` (OpenAI's Codex CLI over
+`codex app-server`, P11-04), `acp/` (any Agent Client Protocol agent, P8-07) and `pty/` (any
+command-line agent under a pseudo-terminal, P8-08). Read `fake/fake-adapter.ts` first: every rule below is visible there in forty lines per
 concern.
 
 ## The interface
@@ -223,6 +224,65 @@ its first prompt (`happy`, `asks`, `permission`, `long`, `echo`, `stalls`, `unas
 `rewrites`, `failsUnasked`, `startsThenAsks`, `form`, `error`, `refusal`, `dies`) and echoes later
 prompts; `--mode` gives it session modes (`default`, `plan`, `acceptEdits`, `bypassPermissions`),
 `--config-modes` offers them as a `mode` config option.
+
+## The Codex adapter (`codex/`, P11-04; TECHNOLOGY §3.6)
+
+Stewards of the `chatgpt` provider, on the Codex CLI with the user's ChatGPT login, over
+`codex app-server` (JSON-RPC 2.0, one JSON object per line on stdio; `rpc.ts`). Message shapes are
+P11-01's (`docs/tasks/notes/P11-01-provider-spikes.md`, the transcripts in `codex/fixtures/`).
+Registered when `codex.command` is in `config.json` or `codex` is on the `PATH`. Stewards only (a
+brain or a `bare` spawn is refused); `canPublish: true`.
+
+- **Process**: one `codex app-server` per session through `ProcessSupervisor.adopt()`, with
+  `APP_SERVER_ARGS` (`--disable` plugins, apps, image_generation, browser_use, computer_use and
+  hooks; `-c web_search="disabled"`); environment = allow-list + `CODEX_HOME`. `initialize`
+  (`experimentalApi: true`) → `thread/start` with `SAFE_THREAD_CONFIG` (`approvalPolicy:
+"untrusted"`, `approvalsReviewer: "user"`, sandbox `workspace-write`, network off, web search,
+  MCP servers, apps/plugins, image generation off), the model, the Steward's `systemPrompt` as
+  `developerInstructions`, the server's tools as `dynamicTools` → `turn/start` (repeats the
+  policy, `sandboxPolicy.networkAccess: false` and the model).
+
+| app-server                                   | Adapter                                                                                                                                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `item/commandExecution/requestApproval`      | `Bash {command}` (the script unwrapped from `/bin/zsh -lc '…'`; `cd '<dir>' &&` when it runs elsewhere) through the gate                                                                   |
+| `item/fileChange/requestApproval`            | `Edit {file_path}` per path of the `fileChange` item started before it (a deletion: `rm -- '<path>'`); first check reserves, every path must be allowed; one question for the whole change |
+| `item/permissions/requestApproval`           | `codex:permissions` (the `unclassified` entry decides); granted for the turn only, refused as `{permissions: {}}`                                                                          |
+| gate `allow` / `deny` / `ask`                | `accept` + `agent.tool_call` / `decline` + a transcript line / `agent.needs_input(permission)`, answered when `answer()` comes (no timeout); withdrawn by an interrupt or stop: `cancel`   |
+| `mcpServer/elicitation/request`              | `decline`, always (MCP is off)                                                                                                                                                             |
+| `item/tool/call`                             | a server tool by its bare name: gate (allowed as a server tool), handler, `{contentItems: [{type: inputText, text: <JSON>}], success}`; unknown tool or handler error → `success: false`   |
+| `item/tool/requestUserInput`                 | `agent.needs_input(clarification)` per question (several: one question set); answers by question id. Codex offers it in plan mode only, so a Steward usually asks in its reply instead     |
+| `item/started` `mcpToolCall`                 | `agent.tool_call` `mcp__<server>__<tool>` for the log and the cap — run by Codex without asking (below), never reported as approved                                                        |
+| `item/completed`                             | one `agent.output` per item: message (`text`), reasoning summary (`thinking`), command output / files changed / MCP result (`tool`); deltas ignored                                        |
+| `turn/plan/updated`                          | `agent.progress`                                                                                                                                                                           |
+| `turn/completed`                             | `agent.idle` (a failed turn's error first as a line); `turn/interrupt` is `interrupt()`                                                                                                    |
+| `error` `codexErrorInfo: usageLimitExceeded` | `account/rateLimits/read` → `agent.failed{reason: 'limit', error: 'ChatGPT usage limit reached', resetsAt}`, the one terminal event                                                        |
+| `thread/resume`                              | `resumeSession("codex:<threadId>")` in a new process, same settings                                                                                                                        |
+| —                                            | pause/resume: SIGSTOP/SIGCONT on the process group; no cost (a subscription)                                                                                                               |
+
+Never `acceptForSession`, never an execpolicy or network amendment. `preflight()` runs `codex
+--version` (a version outside `KNOWN_CODEX_VERSIONS = '>=0.166 <0.200'` is a warning) and `codex
+login status` (logged out: `not_logged_in`, "Run codex login in Terminal"; an API key:
+`not_subscription`); `models()` (`model/list`) and `usage()` (`account/rateLimits/read` +
+`account/read`) each run a short-lived app-server outside the supervisor. `~/.codex/auth.json` is
+never read.
+
+**Residual risk (Ruling R5).** Codex runs an MCP tool marked `readOnlyHint` with no approval
+request under `untrusted`, and a thread's `mcp_servers: {}` does not remove servers the user's
+`~/.codex/config.toml` declares. Here that is `node_repl` (tool `js`), which the ChatGPT desktop app
+writes into that file. Every override tried in P11-04 (`enabled=false`, `enabled_tools=[]`,
+`disabled_tools`, another `command`, `-c mcp_servers={}`, `--disable code_mode_host`, a dead
+`--code-mode-host`) left the model able to run `js` unasked. It runs inside the network-off sandbox
+without `require` (P11-01 probe), so it is accepted: reported as `agent.tool_call`, never approved;
+the version warning flags a Codex upgrade that might change it.
+
+The fake CLI (`node codex/fake-codex-agent.mjs [--state dir] [--record file] <subcommand>`)
+answers `--version` (`FAKE_CODEX_VERSION`), `login status` (`FAKE_CODEX_LOGGED_OUT=1`,
+`FAKE_CODEX_LOGIN_TEXT`) and `app-server`; `--record` writes its argv and every client message.
+Its first prompt picks a scenario (`happy`, `asks`, `asks-set`, `permission`, `long`, `echo`,
+`stalls`, `tool`, `elicit`, `limit`, `error`, `file`, `perms`, `unasked`, `dies`, or
+`replay-<fixture>` to replay a P11-01 transcript); later prompts are echoed. It drives
+`codex/codex.conformance.test.ts` in CI; `codex/codex-real.conformance.test.ts` runs with
+`GALACTIC_REAL_CODEX=1`, local-only.
 
 ## The PTY adapter (`pty/`, P8-08; TECHNOLOGY §3.3)
 

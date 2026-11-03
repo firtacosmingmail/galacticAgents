@@ -45,6 +45,19 @@ describe('loadConfig', () => {
     );
   });
 
+  it('reads the Codex CLI command (P11-04)', () => {
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef', codex: { command: '/opt/codex' } }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.codex).toEqual({ command: '/opt/codex' });
+    writeFileSync(
+      join(home, 'config.json'),
+      JSON.stringify({ token: 'file-token-0123456789abcdef' }),
+    );
+    expect(loadConfig({ GALACTIC_HOME: home }).config.codex).toBeUndefined();
+  });
+
   it('upgrades a stored stewardRuntime to the default provider (P11-03)', () => {
     const load = (stored: Record<string, unknown>) => {
       writeFileSync(

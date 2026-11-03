@@ -17,7 +17,8 @@ import { harmonizerRestarter } from './brains/harmonizer/restart.js';
 import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import type { AgentAdapter } from '@galactic/protocol';
-import { AcpAdapter } from './adapters/acp/index.js';
+import { AcpAdapter, resolveCommand } from './adapters/acp/index.js';
+import { CodexAdapter } from './adapters/codex/index.js';
 import { PtyAdapter } from './adapters/pty/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
@@ -117,6 +118,7 @@ for (const take of launches.taken) {
 // Adapters: the fake one always (dev mode without Claude), the real one for Claude Code, and the
 // ACP one for any ACP agent when `acp.command` is configured (P8-07), the PTY one for a
 // command-line agent when `pty.command` is (P8-08; node-pty loads at its first spawn).
+// The Codex one (P11-04) when `codex.command` is configured or `codex` is on the PATH.
 // The fake one's sessions report a few slash commands, so the composer's list can be tried (P8-13).
 // In development mode a job run's Steward may follow a test's script (P10-08, `/dev/harness/jobs`).
 const jobScripts = config.dev ? new HarnessJobScripts() : undefined;
@@ -135,6 +137,9 @@ const adapters: AgentAdapter[] = [
       : {}),
     onError,
   }),
+  ...(config.codex?.command || resolveCommand('codex', process.env['PATH'] ?? '')
+    ? [new CodexAdapter({ supervisor, command: config.codex?.command ?? 'codex', onError })]
+    : []),
   ...(config.acp
     ? [
         new AcpAdapter({
