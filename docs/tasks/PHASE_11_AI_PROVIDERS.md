@@ -1,6 +1,6 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-09 · **Task status:** P11-09 todo; P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
+**Current task:** P11-09 · **Task status:** P11-09 in progress (Tasks 10–11); P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
 **Phase status:** in progress (8/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -93,7 +93,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Acceptance:** an unavailable provider or model is refused with the list before any card is made.
 
 ### P11-09 — Web: Settings, cards, chips
-- **Status:** todo · **Depends on:** P11-08 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P11-08 · **Parallel with:** —
 - Plan Tasks 10–11: Settings providers section, `PublishCard`, `UsageLimitCard`, provider chips, satellite mark.
 - **Acceptance:** fixed actions per card, edited text sent on Approve, usage windows shown, axe clean, phone width without horizontal scroll.
 
