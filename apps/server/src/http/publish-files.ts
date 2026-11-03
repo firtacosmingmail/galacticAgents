@@ -1,15 +1,6 @@
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  realpathSync,
-} from 'node:fs';
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { extname } from 'node:path';
 import type { Question } from '@galactic/protocol';
-import { sha256 } from '../domain/publish.js';
+import { readFileInFolder, sha256, UnsafePublishFile } from '../domain/publish.js';
 
 /**
  * The image of a publish approval (P11-09, ruling R24): `GET /api/questions/:id/publish-files/:index`
@@ -36,17 +27,6 @@ export type PublishFileResult =
 
 const notFound: PublishFileResult = { status: 404, error: 'not_found' };
 
-/** Whether any folder from `root` down to `abs` (or `abs` itself) is a symbolic link. */
-function hasSymlink(root: string, abs: string): boolean {
-  const rel = relative(root, abs);
-  let cur = root;
-  for (const part of rel.split(sep)) {
-    cur = resolve(cur, part);
-    if (lstatSync(cur).isSymbolicLink()) return true;
-  }
-  return false;
-}
-
 export function readPublishFile(
   question: Question | undefined,
   indexText: string,
@@ -59,28 +39,16 @@ export function readPublishFile(
   if (!file) return notFound;
   const contentType = PUBLISH_IMAGE_TYPES[extname(file.path).toLowerCase()];
   if (!contentType) return notFound;
+  // The same safe read as the request's hashes (`readFileInFolder`, final review I2).
+  let bytes: Buffer;
   try {
-    const base = realpathSync(resolve(root));
-    const abs = resolve(base, file.path);
-    const rel = relative(base, abs);
-    if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-      return notFound;
+    bytes = readFileInFolder(root, file.path, PUBLISH_IMAGE_MAX_BYTES).bytes;
+  } catch (error) {
+    if (error instanceof UnsafePublishFile && error.message === 'too_large') {
+      return { status: 413, error: 'too_large' };
     }
-    if (hasSymlink(base, abs)) return notFound;
-    const stat = lstatSync(abs);
-    if (!stat.isFile()) return notFound;
-    if (stat.size > PUBLISH_IMAGE_MAX_BYTES) return { status: 413, error: 'too_large' };
-    const fd = openSync(abs, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    let bytes: Buffer;
-    try {
-      if (!fstatSync(fd).isFile()) return notFound;
-      bytes = readFileSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    if (sha256(bytes) !== file.sha256) return { status: 409, error: 'changed' };
-    return { status: 200, contentType, bytes };
-  } catch {
     return notFound;
   }
+  if (sha256(bytes) !== file.sha256) return { status: 409, error: 'changed' };
+  return { status: 200, contentType, bytes };
 }

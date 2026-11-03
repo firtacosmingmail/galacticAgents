@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import {
   AgentEvent,
@@ -98,7 +97,7 @@ import type { CommandContext, EventLog } from './event-log.js';
 import { createJob, setJobState, updateJob } from './jobs.js';
 import { attachJobRunAgent, endJobRun, startJobRun } from './job-runs.js';
 import { openFinding, reportJobRun, requestSpend } from './findings.js';
-import { folderOfAgent, requestPublish, type PublishDeps } from './publish.js';
+import { folderOfAgent, readFileInFolder, requestPublish, type PublishDeps } from './publish.js';
 import {
   archiveProject,
   closeProject,
@@ -305,7 +304,7 @@ export class Commands implements DomainCommands {
     this.catalog = opts.catalog;
     this.chooseSteward = opts.chooseSteward;
     this.publishDeps = {
-      readFile: opts.publish?.readFile ?? ((abs) => readFileSync(abs)),
+      readFile: opts.publish?.readFile ?? ((root, path) => readFileInFolder(root, path)),
       worktreeOf:
         opts.publish?.worktreeOf ??
         ((agentId) =>

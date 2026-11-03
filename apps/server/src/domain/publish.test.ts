@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -205,6 +205,33 @@ describe('requestPublish', () => {
     const s = setup();
     const steward = s.taskSteward({ publishes: true });
     for (const path of ['../secret.txt', '/etc/hosts', 'missing.png']) {
+      const e = await s.refusal(
+        s.commands.requestPublish({
+          originAgentId: steward.id,
+          platform: 'Instagram',
+          account: '@myshop',
+          text: 'Hi',
+          files: [path],
+        }),
+      );
+      expect(e.message).toBe(`${path} is not in the task's folder`);
+    }
+    expect(s.tables.questions.all()).toEqual([]);
+  });
+
+  it('refuses a symlink, a symlinked folder on the way and a non-file (I2)', async () => {
+    const s = setup();
+    const steward = s.taskSteward({ publishes: true });
+    const outside = mkdtempSync(join(tmpdir(), 'galactic-outside-'));
+    folders.push(outside);
+    writeFileSync(join(outside, 'id_ed25519'), 'secret key');
+    writeFileSync(join(outside, 'img.png'), 'png bytes');
+    // A link to a file outside the folder, a folder that links outside, a link inside the folder.
+    symlinkSync(join(outside, 'id_ed25519'), join(s.workspace, 'img.png'));
+    symlinkSync(outside, join(s.workspace, 'shots'));
+    symlinkSync(join(s.workspace, 'post.png'), join(s.workspace, 'again.png'));
+    mkdirSync(join(s.workspace, 'folder'));
+    for (const path of ['img.png', 'shots/img.png', 'again.png', 'folder']) {
       const e = await s.refusal(
         s.commands.requestPublish({
           originAgentId: steward.id,

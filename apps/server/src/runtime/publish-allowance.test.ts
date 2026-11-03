@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -100,6 +100,18 @@ describe('PublishAllowanceStore', () => {
     writeFileSync(join(s.worktree, 'post.png'), 'png bytes');
     expect(s.store.check('a-1', CURL, ['network'])).toBe('none');
     expect(s.gate.check(CURL).decision).toBe('ask');
+  });
+
+  it('allowance refused when a file became a symlink, even to the same bytes (I2)', () => {
+    const s = setup();
+    const outside = mkdtempSync(join(tmpdir(), 'galactic-outside-'));
+    folders.push(outside);
+    writeFileSync(join(outside, 'post.png'), 'png bytes');
+    s.store.arm('a-1', s.publish, s.worktree);
+    unlinkSync(join(s.worktree, 'post.png'));
+    symlinkSync(join(outside, 'post.png'), join(s.worktree, 'post.png'));
+    expect(s.store.check('a-1', CURL, ['network'])).toBe('none');
+    expect(s.store.isArmed('a-1')).toBe(false);
   });
 
   it('expires after 30 minutes', () => {

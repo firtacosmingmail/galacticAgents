@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { isAbsolute, relative, resolve } from 'node:path';
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   PROVIDER_LABEL,
   PUBLISH_ACTIONS,
@@ -50,10 +59,69 @@ export function sha256(data: string | Buffer): string {
   return createHash('sha256').update(data).digest('hex');
 }
 
+/** Whether any component from `root` down to `abs` (`abs` itself included) is a symbolic link. */
+function hasSymlink(root: string, abs: string): boolean {
+  let cur = root;
+  for (const part of relative(root, abs).split(sep)) {
+    cur = resolve(cur, part);
+    if (lstatSync(cur).isSymbolicLink()) return true;
+  }
+  return false;
+}
+
+/** Why `readFileInFolder` refused: outside the folder, a link, not a regular file, unreadable. */
+export class UnsafePublishFile extends Error {}
+
+/**
+ * The bytes of `path` inside `root`, read the safe way (final review I2): the path resolves inside
+ * the real `root`, no component on the way (the file included) is a symbolic link, the file is a
+ * regular file, and it is opened with `O_NOFOLLOW` and checked again on the open descriptor — so
+ * what is hashed is the file the card shows, never a link's target outside the folder. `maxBytes`
+ * refuses a larger file before reading it (`size` on the error). Throws `UnsafePublishFile`.
+ * Used for the request's hashes, the allowance's re-hash and the card's image route alike.
+ */
+export function readFileInFolder(
+  root: string,
+  path: string,
+  maxBytes?: number,
+): { rel: string; bytes: Buffer } {
+  let base: string;
+  let abs: string;
+  let rel: string;
+  try {
+    base = realpathSync(resolve(root));
+    // An absolute path is taken relative to the folder as given (it may itself be a link, as
+    // macOS's /var is): its real path is `base`.
+    abs = resolve(base, isAbsolute(path) ? relative(resolve(root), path) : path);
+    rel = relative(base, abs);
+  } catch {
+    throw new UnsafePublishFile('unreadable');
+  }
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new UnsafePublishFile('outside');
+  }
+  try {
+    if (hasSymlink(base, abs)) throw new UnsafePublishFile('link');
+    const stat = lstatSync(abs);
+    if (!stat.isFile()) throw new UnsafePublishFile('not_file');
+    if (maxBytes !== undefined && stat.size > maxBytes) throw new UnsafePublishFile('too_large');
+    const fd = openSync(abs, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      if (!fstatSync(fd).isFile()) throw new UnsafePublishFile('not_file');
+      return { rel, bytes: readFileSync(fd) };
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    if (error instanceof UnsafePublishFile) throw error;
+    throw new UnsafePublishFile('unreadable');
+  }
+}
+
 /** What `requestPublish` reads from the machine. */
 export interface PublishDeps {
-  /** A file's bytes; throws when it cannot be read. */
-  readFile: (abs: string) => Buffer;
+  /** A file's bytes inside the folder, the safe way (`readFileInFolder`); throws when refused. */
+  readFile: (root: string, path: string) => { rel: string; bytes: Buffer };
   /** The folder the asker works in: its task's worktree, else its project's workspace. */
   worktreeOf: (agentId: Id) => string;
 }
@@ -74,30 +142,25 @@ export function folderOfAgent(ctx: Reader, agentId: Id): string {
   throw new DomainError('invalid', `agent ${agentId} has no working folder to publish from`);
 }
 
-/** The file's path inside `root` and its hash; refused outside `root` or when it cannot be read. */
+/** The file's path inside `root` and its hash; refused outside `root`, through a link or unread. */
 function hashedFile(path: unknown, root: string, readFile: PublishDeps['readFile']): PublishFile {
   if (typeof path !== 'string' || path.trim() === '') {
     throw new DomainError('invalid', 'a file to publish is a path in the task’s folder');
   }
-  const abs = resolve(root, path);
-  const rel = relative(resolve(root), abs);
-  if (rel === '' || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) {
-    throw new DomainError('invalid', `${path} is not in the task's folder`);
-  }
-  let bytes: Buffer;
   try {
-    bytes = readFile(abs);
+    const { rel, bytes } = readFile(root, path);
+    return { path: rel, sha256: sha256(bytes) };
   } catch {
     throw new DomainError('invalid', `${path} is not in the task's folder`);
   }
-  return { path: rel, sha256: sha256(bytes) };
 }
 
 /**
  * A `publish` question (SPEC decision 147), held by the user whatever the asker's supervisors and
  * answered `Approve` / `Refuse` only. Refused: an asker that is not a Steward; a task Steward on
  * Gemini or on a task that is not a publishing step; a blank platform or account; nothing to
- * publish (no text, no file); more than 10 files; a file outside the asker's folder or unreadable;
+ * publish (no text, no file); more than 10 files; a file outside the asker's folder, reached
+ * through a symbolic link, not a regular file or unreadable;
  * a run the asker is not the Steward of; a stopped job.
  */
 export function requestPublish(

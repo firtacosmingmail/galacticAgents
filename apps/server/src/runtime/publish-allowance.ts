@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type {
   Id,
@@ -7,7 +6,7 @@ import type {
   PublishContext,
   ToolCall,
 } from '@galactic/protocol';
-import { sha256 } from '../domain/publish.js';
+import { readFileInFolder, sha256 } from '../domain/publish.js';
 
 /**
  * The one-shot allowance an approved publish arms (P11-06, plan Task 7; SPEC decision 147). A
@@ -47,19 +46,19 @@ interface Armed {
 }
 
 export interface PublishAllowanceOptions {
-  /** A file's bytes (tests); default the file system. */
-  readFile?: (abs: string) => Buffer;
+  /** A file's bytes inside the folder (tests); default `readFileInFolder`, the safe read. */
+  readFile?: (root: string, path: string) => Buffer;
   /** Milliseconds now (tests); default `Date.now`. */
   now?: () => number;
 }
 
 export class PublishAllowanceStore {
   private readonly armed = new Map<Id, Armed>();
-  private readonly readFile: (abs: string) => Buffer;
+  private readonly readFile: (root: string, path: string) => Buffer;
   private readonly now: () => number;
 
   constructor(opts: PublishAllowanceOptions = {}) {
-    this.readFile = opts.readFile ?? ((abs) => readFileSync(abs));
+    this.readFile = opts.readFile ?? ((root, path) => readFileInFolder(root, path).bytes);
     this.now = opts.now ?? Date.now;
   }
 
@@ -103,7 +102,8 @@ export class PublishAllowanceStore {
   private filesMatch(entry: Armed): boolean {
     return entry.publish.files.every((f) => {
       try {
-        return sha256(this.readFile(resolve(entry.worktree, f.path))) === f.sha256;
+        // The same safe read as the request's (I2): a file now reached through a link fails.
+        return sha256(this.readFile(entry.worktree, f.path)) === f.sha256;
       } catch {
         return false;
       }
