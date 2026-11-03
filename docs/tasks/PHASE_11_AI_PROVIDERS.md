@@ -1,6 +1,6 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-07 · **Task status:** P11-07 todo; P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
+**Current task:** P11-07 · **Task status:** P11-07 in progress; P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
 **Phase status:** in progress (6/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -83,7 +83,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Acceptance:** the edited text is what the follow-up run publishes; the allowance is refused when a file changed after approval; no brain, rule or remote auto-approve can decide a publish.
 
 ### P11-07 — Usage limits
-- **Status:** todo · **Depends on:** P11-06 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P11-06 · **Parallel with:** —
 - Plan Task 8: the limit question (`Switch to <label>` / `Wait until it resets`), persisted wait, jobs.
 - **Acceptance:** a restart while waiting still retries at the reset time; nothing switches without the user.
 
