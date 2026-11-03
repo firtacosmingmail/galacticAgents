@@ -1,11 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { Id, PermissionAction, PublishContext, ToolCall } from '@galactic/protocol';
+import type {
+  Id,
+  PermissionAction,
+  PermissionPolicy,
+  PublishContext,
+  ToolCall,
+} from '@galactic/protocol';
 import { sha256 } from '../domain/publish.js';
 
 /**
  * The one-shot allowance an approved publish arms (P11-06, plan Task 7; SPEC decision 147). A
- * publishing run works without a job's unattended rules, so every outward call asks; the user's
+ * publishing run works without any permission rules (no "Allow similar", no unattended ones) and
+ * with the network asking whatever the preset (`publishingPolicy`, ruling R26), so every outward
+ * call asks; the user's
  * "Approve" on the publish card lets that agent's next call the policy table asks about for the
  * network, carrying the approved text (or, with no text, naming an approved file — ruling R15),
  * through once — as long as every approved file still has the hash that was approved (a
@@ -13,6 +21,21 @@ import { sha256 } from '../domain/publish.js';
  * allowance lasts 30 minutes and ends with its agent. The gate consults it (`allowOnce`) only
  * where the table says `ask`, so it never turns a deny into an allow.
  */
+
+/**
+ * The table a publishing run is decided under (ruling R26): the project's, with the network and
+ * calls the engine cannot classify asking where the table allows them — so under any preset, the
+ * `trusted` one included, an outward call goes out only through the publish allowance or the
+ * user's answer. A deny stays a deny (the allowance never widens one).
+ */
+export function publishingPolicy(policy: PermissionPolicy): PermissionPolicy {
+  const network = policy.rules.network;
+  return {
+    ...policy,
+    rules: { ...policy.rules, network: network === 'deny' ? 'deny' : 'ask' },
+    ...(policy.unclassified === 'allow' ? { unclassified: 'ask' } : {}),
+  };
+}
 
 /** How long an armed allowance waits for its call. */
 export const PUBLISH_ALLOWANCE_TTL_MS = 30 * 60_000;

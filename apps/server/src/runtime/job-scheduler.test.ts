@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_PERMISSION_POLICY,
   LIMIT_WAIT,
+  PERMISSION_POLICY_PRESETS,
   type Actor,
   type Event,
   type Id,
@@ -14,6 +15,7 @@ import { brainDefinition, brainHarness, type BrainHarness } from '../brains/test
 import { openDatabase, type Database } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
+import { addPermissionRule } from '../domain/project-rules.js';
 import { tickingClock } from '../test/world.js';
 import type { Timers } from './archival.js';
 import type { CapsConfig } from './caps.js';
@@ -125,12 +127,16 @@ async function longTermJob(
   project: { permissionPolicy?: typeof DEFAULT_PERMISSION_POLICY } = {},
 ) {
   const p = (
-    await c.commands.createProject({
-      name: 'Shop',
-      workspace: '/w/shop',
-      longTerm: { purpose: 'Run the shop', goals: ['grow'] },
-      ...project,
-    })
+    await c.commands.createProject(
+      {
+        name: 'Shop',
+        workspace: '/w/shop',
+        longTerm: { purpose: 'Run the shop', goals: ['grow'] },
+        ...project,
+      },
+      // A policy set here is the user's own, on this machine (not floored at the default).
+      { origin: 'local' },
+    )
   ).value;
   const wk = c.log.runCommand((ctx) =>
     createAgent(ctx, { role: 'waykeeper', runtime: 'fake', caps: CAPS, projectId: p.id }),
@@ -793,6 +799,97 @@ describe('job scheduler (P10-04)', () => {
     expect(decided).toHaveLength(1);
     expect(decided[0]).toMatchObject({ decision: 'allow' });
     expect(decided[0]!.ruleId).toBeUndefined();
+  });
+
+  describe('a publishing run asks for every network call (ruling R26)', () => {
+    const TEXT = 'We launched!';
+    const curl = (text: string) =>
+      ({
+        kind: 'tool_call',
+        toolName: 'Bash',
+        input: { command: `curl api.myapp.com -d "status=${text}"` },
+      }) as const;
+
+    /** A publish follow-up of a job whose Steward makes `calls`, then asks a clarification. */
+    async function publishRun(
+      calls: ReturnType<typeof curl>[],
+      o: { policy?: typeof DEFAULT_PERMISSION_POLICY; projectRule?: boolean } = {},
+    ) {
+      const codex = new FakeAdapter({
+        speed: 0,
+        runtime: 'codex',
+        canPublish: true,
+        scenarioFor: () => ({ name: 'publish', scenario: { steps: [...calls, ...ASKS.steps] } }),
+      });
+      const { c, clock } = boot({ providers: [codex] });
+      const { job, project } = await longTermJob(
+        c,
+        { provider: 'chatgpt' },
+        o.policy ? { permissionPolicy: o.policy } : {},
+      );
+      if (o.projectRule) {
+        // An earlier "Allow similar" on the network for `curl api.myapp.com …`.
+        c.log.runCommand((ctx) =>
+          addPermissionRule(
+            ctx,
+            project.id,
+            {
+              scope: 'prefix',
+              tool: 'Bash',
+              match: { kind: 'words', words: ['curl', 'api.myapp.com'] },
+              categories: ['network'],
+              label: 'curl api.myapp.com …',
+            },
+            { by: USER, origin: 'local' },
+          ),
+        );
+      }
+      const base = { platform: 'X', account: '@shop', text: TEXT, files: [] };
+      const followUp = {
+        questionId: 'q-publish',
+        kind: 'publish' as const,
+        publish: { ...base, fingerprint: 'a'.repeat(64), jobId: job.id },
+      };
+      c.log.runCommand((ctx) =>
+        writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp], followUpProvider: 'chatgpt' }),
+      );
+      setTo(clock, oct(1, 8, 30));
+      await c.jobs.tick();
+      const stewardId = runsOf(c, job.id)[0]!.agentId!;
+      await until(
+        () =>
+          c.log.tables.questions
+            .all()
+            .some((q) => q.kind === 'permission' && q.originAgentId === stewardId),
+        'a network call to ask',
+      );
+      const decided = events(c).filter(
+        (e): e is Extract<Event, { type: 'permission.decided' }> =>
+          e.type === 'permission.decided' && e.agentId === stewardId,
+      );
+      return { decided };
+    }
+
+    it('in a trusted project a network call carrying other content asks', async () => {
+      const { decided } = await publishRun([curl('Something else')], {
+        policy: PERMISSION_POLICY_PRESETS.trusted,
+      });
+      expect(decided).toEqual([]);
+    });
+
+    it('in a trusted project the approved call is allowed once, the next one asks', async () => {
+      const { decided } = await publishRun([curl(TEXT), curl(TEXT)], {
+        policy: PERMISSION_POLICY_PRESETS.trusted,
+      });
+      expect(decided).toHaveLength(1);
+      expect(decided[0]).toMatchObject({ decision: 'allow' });
+      expect(decided[0]!.ruleId).toBeUndefined();
+    });
+
+    it("the project's Allow-similar network rule is ignored", async () => {
+      const { decided } = await publishRun([curl('Something else')], { projectRule: true });
+      expect(decided).toEqual([]);
+    });
   });
 
   it('an interrupted publish follow-up is never run again on its approval: it asks again (R13)', async () => {

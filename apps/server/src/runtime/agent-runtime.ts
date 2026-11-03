@@ -61,7 +61,7 @@ import {
   type SpawnCheck,
 } from './caps.js';
 import { aliasesOf, createPermissionGate, type RuntimeGate } from './permission-gate.js';
-import type { PublishAllowanceStore } from './publish-allowance.js';
+import { publishingPolicy, type PublishAllowanceStore } from './publish-allowance.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
 import { providerOf } from './steward-choice.js';
@@ -1838,11 +1838,12 @@ export class AgentRuntime {
    * a rule added or removed applies to the next tool call. None outside a project.
    */
   private rulesOf(agentId: Id, req: SpawnRequest): readonly PermissionRule[] {
+    // A publishing run asks for every outward call (P11-06, decision 147, ruling R26): no rules at
+    // all — neither the project's "Allow similar" ones nor a job's unattended ones.
+    if (this.isPublishingRun(agentId, req)) return [];
     const projectId = this.projectIdOf(agentId, req);
     const rules =
       (projectId ? this.opts.log.tables.projects.get(projectId)?.permissionRules : undefined) ?? [];
-    // A publishing run asks for every outward call (P11-06, decision 147): no unattended rules.
-    if (this.isPublishingRun(agentId, req)) return rules;
     const job = this.jobOfRun(agentId, req);
     if (!job || !projectId || job.unattendedRules.length === 0) return rules;
     // A job's run Steward also works under the job's unattended rules (P10-04, decision 144):
@@ -1905,8 +1906,10 @@ export class AgentRuntime {
     const projectId = this.projectIdOf(agentId, req);
     const project = projectId ? tables.projects.get(projectId) : undefined;
     // No table of its own: the global default as it is now (P25-01: the settings may change it).
-    if (project) return project.permissionPolicy ?? globalDefaultPolicy();
-    return req.permissionPolicy ?? globalDefaultPolicy();
+    const policy = project
+      ? (project.permissionPolicy ?? globalDefaultPolicy())
+      : (req.permissionPolicy ?? globalDefaultPolicy());
+    return this.isPublishingRun(agentId, req) ? publishingPolicy(policy) : policy;
   }
 
   /**

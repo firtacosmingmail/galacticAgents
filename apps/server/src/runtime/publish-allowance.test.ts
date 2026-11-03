@@ -5,13 +5,18 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_PERMISSION_POLICY,
   publishFingerprint,
+  PERMISSION_POLICY_PRESETS,
   type PublishContext,
   type ToolCall,
 } from '@galactic/protocol';
 import { sha256 } from '../domain/publish.js';
 import { CapsEnforcer } from './caps.js';
 import { createPermissionGate } from './permission-gate.js';
-import { PUBLISH_ALLOWANCE_TTL_MS, PublishAllowanceStore } from './publish-allowance.js';
+import {
+  PUBLISH_ALLOWANCE_TTL_MS,
+  PublishAllowanceStore,
+  publishingPolicy,
+} from './publish-allowance.js';
 
 /**
  * P11-06 (plan Task 7) — the one-shot allowance an approved publish arms: the run's next call the
@@ -198,5 +203,17 @@ describe('PublishAllowanceStore', () => {
     expect(s.gate.check(CURL).decision).toBe('deny');
     // Still armed: a denial does not use it up.
     expect(s.store.check('a-1', CURL, ['network'])).toBe('allow');
+  });
+});
+
+describe('publishingPolicy (ruling R26)', () => {
+  it('makes the network and unclassified calls ask under the trusted preset; a deny stays', () => {
+    const trusted = publishingPolicy(PERMISSION_POLICY_PRESETS.trusted);
+    expect(trusted.rules.network).toBe('ask');
+    expect(trusted.unclassified).toBe('ask');
+    expect(trusted.rules.edit_workspace).toBe('allow');
+    const denied = publishingPolicy({ rules: { network: 'deny' } });
+    expect(denied.rules.network).toBe('deny');
+    expect(publishingPolicy({ rules: {} }).rules.network).toBe('ask');
   });
 });
