@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Project } from '@galactic/protocol';
+import { createAgent } from '../../domain/agents.js';
+import { createTask } from '../../domain/tasks.js';
 import { brainHarness, type BrainHarness, type ToolOutcome } from '../testing/index.js';
 import { providerFakes } from '../testing/provider-fakes.js';
 import { waykeeperDefinition, WAYKEEPER_SYSTEM_PROMPT } from './index.js';
@@ -8,6 +10,8 @@ import { waykeeperDefinition, WAYKEEPER_SYSTEM_PROMPT } from './index.js';
  * P11-08: a Waykeeper's plan carries each task's provider, model and flags, checked against the
  * provider catalogue before the card exists; a refusal creates nothing.
  */
+
+const USER = { type: 'user' } as const;
 
 let h: BrainHarness;
 let fakes: ReturnType<typeof providerFakes>;
@@ -201,5 +205,53 @@ describe('the Waykeeper prompt (P11-08)', () => {
     expect(WAYKEEPER_SYSTEM_PROMPT).toContain(
       'The approved request may carry a provider note. Give each task the provider and model it names (provider alone means its default model), mark image-making tasks makesImages and publishing tasks publishes, and leave the rest to the project default. A publishing task never goes to Gemini.',
     );
+  });
+});
+
+describe('a spawn re-checks the step against its provider (final review I3)', () => {
+  /** A project with a Waykeeper row and one task flagged as given. */
+  async function flagged(flags: { publishes?: boolean; makesImages?: boolean }) {
+    const p = await project();
+    const wk = h.log.runCommand((ctx) =>
+      createAgent(ctx, {
+        role: 'waykeeper',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 60_000, maxToolCalls: 10 },
+        projectId: p.id,
+      }),
+    ).value;
+    const task = h.log.runCommand((ctx) =>
+      createTask(ctx, { projectId: p.id, description: 'Step', ...flags }),
+    ).value;
+    return { p, wk, task };
+  }
+
+  it('a publishing step is refused on Gemini when the project default changed after planning', async () => {
+    const { p, wk, task } = await flagged({ publishes: true });
+    // Planned on the default of the time; the default later becomes Gemini.
+    await h.commands.setProjectProvider({ projectId: p.id, provider: 'gemini', by: USER });
+    await expect(
+      h.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'agy',
+        taskId: task.id,
+        supervisorId: wk.id,
+        prompt: 'Post it',
+      }),
+    ).rejects.toThrow(/cannot publish/);
+    expect(h.log.tables.agents.all().filter((a) => a.role === 'steward')).toEqual([]);
+  });
+
+  it('an image step is refused on a text-only provider', async () => {
+    const { wk, task } = await flagged({ makesImages: true });
+    await expect(
+      h.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'codex',
+        taskId: task.id,
+        supervisorId: wk.id,
+        prompt: 'Make the images',
+      }),
+    ).rejects.toThrow(/cannot make images/);
   });
 });

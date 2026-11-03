@@ -507,9 +507,15 @@ export class Commands implements DomainCommands {
     }
     const provider = providerOf(input.runtime);
     if (provider && this.catalog) {
+      // The step's needs are checked again here (final review I3): a task planned on another
+      // default (the project's later set to Gemini) never puts a publishing or image step on a
+      // provider that cannot do it.
       const checked = await this.catalog.check(
         { provider, ...(model ? { model } : {}) },
-        {},
+        {
+          ...(task?.makesImages ? { images: true } : {}),
+          ...(task?.publishes ? { publishes: true } : {}),
+        },
         input.bare ? { bare: true } : {},
       );
       if (!checked.ok) throw new DomainError('conflict', checked.reason);
