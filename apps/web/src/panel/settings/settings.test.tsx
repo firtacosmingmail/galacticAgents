@@ -549,7 +549,7 @@ describe('settings page (P25-08)', () => {
     expect(server.patches.at(-1)).toEqual({ budgets: { warnAtPercent: 65 } });
   });
 
-  it('chooses which brains get the user’s MCP servers: Waykeepers by default (decision 142)', async () => {
+  it('chooses which brains get the user’s MCP servers: Waykeepers by default (decision 149)', async () => {
     await open('/settings', done());
     const section = await screen.findByRole('region', { name: 'Brains’ MCP servers' });
     const radios = within(section).getAllByRole('radio') as HTMLInputElement[];
