@@ -52,7 +52,7 @@ const settings = (): SettingsResponse => ({
 
 const resetsAt = new Date(Date.now() + 125 * 60_000).toISOString();
 const preflight: PreflightResponse = {
-  ok: false,
+  ok: true,
   checkedAt: '2026-10-03T10:01:00.000Z',
   runtimes: [
     {
@@ -165,6 +165,9 @@ describe('the AI providers on the settings page (P11-09)', () => {
   it('lists each provider with its login state and limits', async () => {
     await open();
     const check = await screen.findByRole('region', { name: 'Runtime check' });
+    // A provider that is not set up shows its problem on its own row, not as an overall alarm.
+    await within(check).findByText('ready');
+    expect(within(check).queryByText('needs attention')).toBeNull();
     const codex = await within(check).findByRole('group', { name: 'runtime codex' });
     expect(within(codex).getByText(/Codex \(ChatGPT\) — ready/)).toBeTruthy();
     expect(within(codex).getByText('plus')).toBeTruthy();
