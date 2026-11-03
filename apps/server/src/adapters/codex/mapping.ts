@@ -114,13 +114,19 @@ export function fileChangesCall(changes: FileChange[]): ToolCall {
 }
 
 /**
- * `item/permissions/requestApproval` (the agent asks for more file-system or network access) →
- * a name the policy engine does not know, so the table's `unclassified` entry decides it.
+ * `item/permissions/requestApproval` (the agent asks for more file-system or network access):
+ * network access alone → `codex:network`, which the policy engine places in the `network`
+ * category; anything else → `codex:permissions`, a name it does not know, so the table's
+ * `unclassified` entry decides it.
  */
 export function permissionsCall(params: unknown): ToolCall {
   const p = asRecord(params);
+  const wanted = asRecord(p['permissions']);
+  const network = asRecord(wanted['network'])['enabled'] === true;
+  const fileSystem = wanted['fileSystem'] !== null && wanted['fileSystem'] !== undefined;
   return {
-    toolName: 'codex:permissions',
+    // Network access alone is the table's `network` category; anything else stays unclassified.
+    toolName: network && !fileSystem ? 'codex:network' : 'codex:permissions',
     input: {
       permissions: p['permissions'] ?? null,
       ...(str(p['reason']) ? { reason: p['reason'] } : {}),

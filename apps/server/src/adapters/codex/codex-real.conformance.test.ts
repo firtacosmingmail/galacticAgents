@@ -24,6 +24,8 @@ if (!enabled) {
   });
 } else {
   const cwd = mkdtempSync(join(tmpdir(), 'galactic-codex-real-'));
+  // A managed Codex home like production's (ruling R7), linked to the user's own login.
+  const home = join(mkdtempSync(join(tmpdir(), 'galactic-codex-real-home-')), 'codex-home');
   writeFileSync(join(cwd, 'README.md'), '# conformance\n\nA scratch workspace.\n');
 
   describeAdapterConformance({
@@ -35,6 +37,7 @@ if (!enabled) {
       const adapter = new CodexAdapter({
         supervisor,
         command: process.env['GALACTIC_REAL_CODEX_COMMAND'] ?? 'codex',
+        home,
         graceMs: 20_000,
       });
       return {
@@ -48,7 +51,7 @@ if (!enabled) {
     },
     prompts: {
       finish: 'Run the shell command `cat README.md`, then reply with exactly: done',
-      ask: 'Before doing anything, ask me with your request_user_input tool which option I prefer: first option or second option. Then reply with exactly the option I chose.',
+      ask: 'Before doing anything, ask me which option I prefer: first option or second option. Then reply with exactly the option I chose.',
       permission: `Run the shell command \`rm -r ${join(cwd, 'scratch-dir')}\` (it may not exist, that is fine), then reply with exactly: cleaned`,
       long: 'Run the shell command `for i in 1 2 3 4 5 6 7 8 9 10; do echo step $i; sleep 3; done`, then reply with exactly: finished',
       echo: 'Reply with exactly: ready',

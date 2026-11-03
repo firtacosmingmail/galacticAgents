@@ -256,8 +256,11 @@ export const EDIT_TOOLS: ReadonlySet<string> = new Set([
   'MultiEdit',
   'NotebookEdit',
 ]);
-/** Tools that reach the network by definition. */
-const NETWORK_TOOLS = new Set(['WebFetch', 'WebSearch']);
+/**
+ * Tools that reach the network by definition. `codex:network` is a Codex Steward asking for
+ * network access in its sandbox (`item/permissions/requestApproval`, P11-04).
+ */
+const NETWORK_TOOLS = new Set(['WebFetch', 'WebSearch', 'codex:network']);
 /** Tools with no effect outside the agent's own bookkeeping. */
 const HARMLESS_TOOLS = new Set([
   'TodoWrite',

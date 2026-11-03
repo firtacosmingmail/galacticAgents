@@ -59,7 +59,7 @@ if (argv[0] !== 'app-server') {
   process.stderr.write(`fake codex: unknown subcommand ${argv.join(' ')}\n`);
   process.exit(2);
 }
-record({ argv: argv.slice() });
+record({ argv: argv.slice(), codexHome: process.env.CODEX_HOME ?? null });
 
 // --- JSON-RPC -------------------------------------------------------------------------------
 
@@ -466,8 +466,53 @@ const SCENARIOS = {
     });
     await message(ctx, 'done');
   },
-  /** One clarification question through `request_user_input`. */
+  /**
+   * One clarification question through the adapter's `ask_user` dynamic tool (ruling R6): the
+   * way a real Codex Steward asks outside plan mode. Fails when the thread was not given it.
+   */
   asks: async (ctx) => {
+    if (!ctx.state.tools.includes('ask_user')) throw new Error('ask_user is not registered');
+    await message(ctx, 'I need to know one thing first.');
+    const callId = uid('exec');
+    const args = {
+      question: 'Which option do you prefer?',
+      options: ['first option', 'second option'],
+    };
+    item(ctx, 'item/started', {
+      type: 'dynamicToolCall',
+      id: callId,
+      namespace: null,
+      tool: 'ask_user',
+      arguments: args,
+      status: 'inProgress',
+    });
+    const reply = await serverRequest(
+      'item/tool/call',
+      {
+        threadId: ctx.threadId,
+        turnId: ctx.turnId,
+        callId,
+        namespace: null,
+        tool: 'ask_user',
+        arguments: args,
+      },
+      ctx.signal,
+    );
+    item(ctx, 'item/completed', {
+      type: 'dynamicToolCall',
+      id: callId,
+      namespace: null,
+      tool: 'ask_user',
+      arguments: args,
+      status: 'completed',
+      contentItems: reply?.contentItems ?? null,
+      success: reply?.success ?? null,
+    });
+    const answer = reply?.success ? reply.contentItems?.[0]?.text : undefined;
+    await message(ctx, answer ? `You chose: ${answer}` : 'No answer; carrying on.');
+  },
+  /** One clarification question through `request_user_input` (Codex's plan mode only). */
+  'asks-input': async (ctx) => {
     await message(ctx, 'I need to know one thing first.');
     const reply = await askUser(ctx, [
       {
@@ -617,6 +662,22 @@ const SCENARIOS = {
     };
     notify('error', { error, willRetry: false, threadId: ctx.threadId, turnId: ctx.turnId });
     return { failed: error };
+  },
+  /** The usage limit, then the process dies before the adapter can read the reset time. */
+  'limit-dies': async (ctx) => {
+    const params = {
+      error: {
+        message: "You've hit your usage limit.",
+        codexErrorInfo: 'usageLimitExceeded',
+        additionalDetails: null,
+      },
+      willRetry: false,
+      threadId: ctx.threadId,
+      turnId: ctx.turnId,
+    };
+    // Gone as soon as the line is out: the adapter's rate-limit read finds no process.
+    process.stdout.write(`${JSON.stringify({ method: 'error', params })}\n`, () => process.exit(1));
+    await new Promise(() => {});
   },
   /** A non-limit error that fails the turn. */
   error: async (ctx) => {

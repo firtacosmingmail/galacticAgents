@@ -1,4 +1,13 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,9 +19,12 @@ import type {
   ToolDefinition,
 } from '@galactic/protocol';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
-import { APP_SERVER_ARGS, CodexAdapter } from './codex-adapter.js';
+import { PERMISSION_POLICY_PRESETS } from '@galactic/protocol';
+import { evaluate } from '../../domain/permissions.js';
+import { APP_SERVER_ARGS, ASK_USER_NOTE, ASK_USER_SPEC, CodexAdapter } from './codex-adapter.js';
+import { MANAGED_CONFIG_TOML } from './home.js';
 import { FAKE_CODEX_AGENT } from './fake-agent.js';
-import { commandCall, unwrapShell } from './mapping.js';
+import { commandCall, permissionsCall, unwrapShell } from './mapping.js';
 import { isUsageLimit, limitResetsAt } from './limits.js';
 import { KNOWN_CODEX_VERSIONS } from './preflight.js';
 
@@ -49,7 +61,10 @@ afterEach(async () => {
   }
 });
 
-function rig(env: Record<string, string> = {}): Rig {
+function rig(
+  env: Record<string, string> = {},
+  extra: { home?: string; authSource?: string } = {},
+): Rig {
   const recordFile = join(mkdtempSync(join(tmpdir(), 'galactic-codex-record-')), 'record.jsonl');
   const supervisor = new ProcessSupervisor({ defaults: { graceMs: 2_000, termMs: 1_000 } });
   const adapter = new CodexAdapter({
@@ -59,6 +74,7 @@ function rig(env: Record<string, string> = {}): Rig {
     env,
     graceMs: 2_000,
     startTimeoutMs: 10_000,
+    ...extra,
   });
   const events: AgentEvent[] = [];
   void (async () => {
@@ -97,6 +113,7 @@ function spawnOpts(
 
 interface Recorded {
   argv?: string[];
+  codexHome?: string | null;
   in?: { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown };
 }
 const recorded = (r: Rig): Recorded[] =>
@@ -162,6 +179,8 @@ describe('CodexAdapter', () => {
       plugins: false,
       image_generation: false,
     });
+    expect(start['dynamicTools']).toEqual([ASK_USER_SPEC]);
+    expect(start['developerInstructions']).toBe(ASK_USER_NOTE);
     const turn = sent(r, 'turn/start')[0]!;
     expect(turn['approvalPolicy']).toBe('untrusted');
     expect(turn['sandboxPolicy']).toMatchObject({ type: 'workspaceWrite', networkAccess: false });
@@ -249,6 +268,7 @@ describe('CodexAdapter', () => {
         description: 'Ask the user to approve publishing text.',
         inputSchema: tool.inputSchema,
       },
+      ASK_USER_SPEC,
     ]);
     expect(r.checks).toContainEqual({ toolName: 'request_publish', input: { text: 'hello' } });
     expect(replies(r)).toContainEqual({
@@ -447,11 +467,11 @@ describe('CodexAdapter', () => {
     expect(texts(r3).join('\n')).toContain('patched');
   });
 
-  it('a permissions request is judged as codex:permissions and granted for the turn only', async () => {
+  it('a network permissions request is judged as network and granted for the turn only', async () => {
     const r = rig();
     await r.adapter.spawn(spawnOpts(r, 'scenario:perms'));
     await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
-    expect(r.checks[0]).toMatchObject({ toolName: 'codex:permissions' });
+    expect(r.checks[0]).toMatchObject({ toolName: 'codex:network' });
     expect(replies(r)).toContainEqual({
       permissions: { network: { enabled: true } },
       scope: 'turn',
@@ -464,9 +484,43 @@ describe('CodexAdapter', () => {
     expect(replies(r2)).toContainEqual({ permissions: {}, scope: 'turn' });
   });
 
-  it('a clarification goes to the user and its answer back to the agent', async () => {
+  it('ask_user: a clarification question, its answer the tool result, no gate', async () => {
+    const r = rig();
+    await r.adapter.spawn({ ...spawnOpts(r, 'scenario:asks'), systemPrompt: 'You are a Steward.' });
+    expect(sent(r, 'thread/start')[0]!['developerInstructions']).toBe(
+      `You are a Steward.\n\n${ASK_USER_NOTE}`,
+    );
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+    const q = of(r, 'agent.needs_input')[0]!;
+    expect(q.kind).toBe('clarification');
+    expect(q.question).toEqual({
+      text: 'Which option do you prefer?',
+      options: ['first option', 'second option'],
+    });
+    await r.adapter.answer(q.questionId, 'second option');
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    expect(replies(r)).toEqual([
+      { contentItems: [{ type: 'inputText', text: 'second option' }], success: true },
+    ]);
+    expect(r.checks).toEqual([]);
+    expect(of(r, 'agent.tool_call')).toHaveLength(0);
+    expect(texts(r).join('\n')).toContain('You chose: second option');
+  });
+
+  it('ask_user dismissed tells the agent; withdrawn answers no answer', async () => {
     const r = rig();
     await r.adapter.spawn(spawnOpts(r, 'scenario:asks'));
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+    await r.adapter.dismiss(of(r, 'agent.needs_input')[0]!.questionId, 'dismissed by the user');
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    expect(String((replies(r)[0]!['contentItems'] as { text: string }[])[0]!.text)).toContain(
+      'dismissed by the user',
+    );
+  });
+
+  it('a request_user_input clarification goes to the user and its answer back', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:asks-input'));
     await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
     const q = of(r, 'agent.needs_input')[0]!;
     expect(q.kind).toBe('clarification');
@@ -551,6 +605,84 @@ describe('CodexAdapter', () => {
     await expect(
       r2.adapter.resumeSession('codex:no-such-thread', spawnOpts(r2, 'x')),
     ).rejects.toThrow(/thread\/resume failed/);
+  });
+
+  it("network access alone is the table's network category; more stays unclassified", () => {
+    const ctx = { workspace: cwd, cwd };
+    const network = permissionsCall({
+      permissions: { network: { enabled: true }, fileSystem: null },
+    });
+    const more = permissionsCall({
+      permissions: { network: { enabled: true }, fileSystem: { read: null, write: ['/etc'] } },
+    });
+    expect(network.toolName).toBe('codex:network');
+    expect(more.toolName).toBe('codex:permissions');
+    const decide = (preset: keyof typeof PERMISSION_POLICY_PRESETS, call = network) =>
+      evaluate(PERMISSION_POLICY_PRESETS[preset], call, ctx);
+    expect(decide('trusted')).toMatchObject({ decision: 'allow', dominant: 'network' });
+    expect(decide('trusting')).toMatchObject({ decision: 'allow', dominant: 'network' });
+    expect(decide('cautious')).toMatchObject({ decision: 'ask', dominant: 'network' });
+    expect(decide('trusting', more).decision).toBe('ask'); // unclassified
+  });
+
+  it('the app-server dying while the reset is read still ends with reason limit', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:limit-dies'));
+    await waitFor(() => terminals(r).length === 1, 'terminal');
+    await new Promise((res) => setTimeout(res, 100));
+    expect(terminals(r)).toHaveLength(1);
+    expect(terminals(r)[0]).toMatchObject({
+      type: 'agent.failed',
+      reason: 'limit',
+      error: 'ChatGPT usage limit reached',
+    });
+    expect(terminals(r)[0]).not.toHaveProperty('resetsAt');
+  });
+
+  it('runs Codex in a managed home: config written, auth.json a symlink never read', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'galactic-codex-home-'));
+    const home = join(base, 'codex-home');
+    const authSource = join(base, 'user-codex', 'auth.json');
+    const r = rig({}, { home, authSource });
+    // No login file yet: logged out, and the link already points where it will be.
+    const pre = await r.adapter.preflight();
+    expect(pre.ok).toBe(false);
+    expect(pre.problems).toContainEqual(
+      expect.objectContaining({ code: 'not_logged_in', fix: 'Run codex login in Terminal' }),
+    );
+    expect(readFileSync(join(home, 'config.toml'), 'utf8')).toBe(MANAGED_CONFIG_TOML);
+    expect(MANAGED_CONFIG_TOML).not.toContain('mcp_servers');
+    expect(lstatSync(join(home, 'auth.json')).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(home, 'auth.json'))).toBe(authSource);
+
+    mkdirSync(join(base, 'user-codex'));
+    writeFileSync(authSource, '{}');
+    expect((await r.adapter.preflight()).ok).toBe(true);
+    // Codex replaced the link with a file: removed unread and linked again at the next start.
+    rmSync(join(home, 'auth.json'));
+    writeFileSync(join(home, 'auth.json'), 'a copy');
+    await r.adapter.spawn(spawnOpts(r, 'scenario:echo'));
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    expect(readlinkSync(join(home, 'auth.json'))).toBe(authSource);
+    expect(recorded(r)[0]!.codexHome).toBe(home);
+  });
+
+  it('a resumed thread keeps its dynamic tools: ask_user asks again after a restart', async () => {
+    const r = rig();
+    const opts = spawnOpts(r, 'scenario:asks');
+    const handle = await r.adapter.spawn(opts);
+    await waitFor(() => of(r, 'agent.needs_input').length === 1, 'question');
+    await r.adapter.stop(handle.sessionId);
+    const r2 = rig();
+    await r2.adapter.resumeSession(handle.sessionRef!, {
+      ...spawnOpts(r2, 'carry on'),
+      agentId: opts.agentId,
+    });
+    expect(sent(r2, 'thread/resume')[0]).not.toHaveProperty('dynamicTools');
+    await waitFor(() => of(r2, 'agent.needs_input').length === 1, 'question after resume');
+    await r2.adapter.answer(of(r2, 'agent.needs_input')[0]!.questionId, 'first option');
+    await waitFor(() => of(r2, 'agent.idle').length === 1, 'idle after resume');
+    expect(texts(r2).join('\n')).toContain('You chose: first option');
   });
 
   describe('replays the P11-01 transcripts', () => {

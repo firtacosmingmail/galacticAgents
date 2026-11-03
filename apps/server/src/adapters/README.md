@@ -235,22 +235,29 @@ brain or a `bare` spawn is refused); `canPublish: true`.
 
 - **Process**: one `codex app-server` per session through `ProcessSupervisor.adopt()`, with
   `APP_SERVER_ARGS` (`--disable` plugins, apps, image_generation, browser_use, computer_use and
-  hooks; `-c web_search="disabled"`); environment = allow-list + `CODEX_HOME`. `initialize`
+  hooks; `-c web_search="disabled"`); environment = allow-list + `CODEX_HOME` = Mission
+  Control's own Codex home (`home` option; production `<data dir>/codex-home`, ruling R7: its
+  `config.toml` written by Mission Control, no `mcp_servers`; its `auth.json` a symlink to the
+  user's login file, never read — a regular file in its place is removed unread and relinked;
+  preflight says `not_logged_in` when the login file is absent). `initialize`
   (`experimentalApi: true`) → `thread/start` with `SAFE_THREAD_CONFIG` (`approvalPolicy:
 "untrusted"`, `approvalsReviewer: "user"`, sandbox `workspace-write`, network off, web search,
-  MCP servers, apps/plugins, image generation off), the model, the Steward's `systemPrompt` as
-  `developerInstructions`, the server's tools as `dynamicTools` → `turn/start` (repeats the
+  MCP servers, apps/plugins, image generation off), the model, the Steward's `systemPrompt` +
+  `ASK_USER_NOTE` as `developerInstructions`, the server's tools + `ask_user` as `dynamicTools`
+  (kept with the thread: `thread/resume` carries none, a resumed thread still has them) →
+  `turn/start` (repeats the
   policy, `sandboxPolicy.networkAccess: false` and the model).
 
 | app-server                                   | Adapter                                                                                                                                                                                    |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `item/commandExecution/requestApproval`      | `Bash {command}` (the script unwrapped from `/bin/zsh -lc '…'`; `cd '<dir>' &&` when it runs elsewhere) through the gate                                                                   |
 | `item/fileChange/requestApproval`            | `Edit {file_path}` per path of the `fileChange` item started before it (a deletion: `rm -- '<path>'`); first check reserves, every path must be allowed; one question for the whole change |
-| `item/permissions/requestApproval`           | `codex:permissions` (the `unclassified` entry decides); granted for the turn only, refused as `{permissions: {}}`                                                                          |
+| `item/permissions/requestApproval`           | network alone: `codex:network` (the `network` category); anything else: `codex:permissions` (the `unclassified` entry); granted for the turn only, refused as `{permissions: {}}`          |
 | gate `allow` / `deny` / `ask`                | `accept` + `agent.tool_call` / `decline` + a transcript line / `agent.needs_input(permission)`, answered when `answer()` comes (no timeout); withdrawn by an interrupt or stop: `cancel`   |
 | `mcpServer/elicitation/request`              | `decline`, always (MCP is off)                                                                                                                                                             |
 | `item/tool/call`                             | a server tool by its bare name: gate (allowed as a server tool), handler, `{contentItems: [{type: inputText, text: <JSON>}], success}`; unknown tool or handler error → `success: false`   |
-| `item/tool/requestUserInput`                 | `agent.needs_input(clarification)` per question (several: one question set); answers by question id. Codex offers it in plan mode only, so a Steward usually asks in its reply instead     |
+| `item/tool/call` `ask_user`                  | the adapter's own question tool (ruling R6): `agent.needs_input(clarification)` with `{text: question, options?}`, no gate, no `agent.tool_call`; the answer is the result                 |
+| `item/tool/requestUserInput`                 | `agent.needs_input(clarification)` per question (several: one question set); answers by question id (Codex sends it in plan mode only)                                                     |
 | `item/started` `mcpToolCall`                 | `agent.tool_call` `mcp__<server>__<tool>` for the log and the cap — run by Codex without asking (below), never reported as approved                                                        |
 | `item/completed`                             | one `agent.output` per item: message (`text`), reasoning summary (`thinking`), command output / files changed / MCP result (`tool`); deltas ignored                                        |
 | `turn/plan/updated`                          | `agent.progress`                                                                                                                                                                           |
@@ -266,20 +273,18 @@ login status` (logged out: `not_logged_in`, "Run codex login in Terminal"; an AP
 `account/read`) each run a short-lived app-server outside the supervisor. `~/.codex/auth.json` is
 never read.
 
-**Residual risk (Ruling R5).** Codex runs an MCP tool marked `readOnlyHint` with no approval
-request under `untrusted`, and a thread's `mcp_servers: {}` does not remove servers the user's
-`~/.codex/config.toml` declares. Here that is `node_repl` (tool `js`), which the ChatGPT desktop app
-writes into that file. Every override tried in P11-04 (`enabled=false`, `enabled_tools=[]`,
-`disabled_tools`, another `command`, `-c mcp_servers={}`, `--disable code_mode_host`, a dead
-`--code-mode-host`) left the model able to run `js` unasked. It runs inside the network-off sandbox
-without `require` (P11-01 probe), so it is accepted: reported as `agent.tool_call`, never approved;
-the version warning flags a Codex upgrade that might change it.
+**`node_repl` and the user's MCP servers (rulings R5, R7).** Codex runs an MCP tool marked
+`readOnlyHint` with no approval request under `untrusted`, and no thread `config` or `-c` override
+removes a server the user's `~/.codex/config.toml` declares (here `node_repl`, tool `js`, written
+by the ChatGPT desktop app). The managed Codex home is the fix: run with it, the server list is
+empty and the model has no `js`. Any `mcpToolCall` is still reported as `agent.tool_call`, never
+as approved.
 
 The fake CLI (`node codex/fake-codex-agent.mjs [--state dir] [--record file] <subcommand>`)
 answers `--version` (`FAKE_CODEX_VERSION`), `login status` (`FAKE_CODEX_LOGGED_OUT=1`,
 `FAKE_CODEX_LOGIN_TEXT`) and `app-server`; `--record` writes its argv and every client message.
 Its first prompt picks a scenario (`happy`, `asks`, `asks-set`, `permission`, `long`, `echo`,
-`stalls`, `tool`, `elicit`, `limit`, `error`, `file`, `perms`, `unasked`, `dies`, or
+`stalls`, `tool`, `elicit`, `asks-input`, `limit`, `limit-dies`, `error`, `file`, `perms`, `unasked`, `dies`, or
 `replay-<fixture>` to replay a P11-01 transcript); later prompts are echoed. It drives
 `codex/codex.conformance.test.ts` in CI; `codex/codex-real.conformance.test.ts` runs with
 `GALACTIC_REAL_CODEX=1`, local-only.

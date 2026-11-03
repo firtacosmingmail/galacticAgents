@@ -45,6 +45,8 @@ export interface CodexPreflightOptions {
   args?: string[];
   env: Record<string, string>;
   exec?: CodexExec;
+  /** The user's `auth.json` the managed Codex home links to is absent (ruling R7): logged out. */
+  authMissing?: boolean;
 }
 
 export async function codexPreflight(opts: CodexPreflightOptions): Promise<RuntimePreflight> {
@@ -81,6 +83,22 @@ export async function codexPreflight(opts: CodexPreflightOptions): Promise<Runti
     });
   }
 
+  if (opts.authMissing) {
+    problems.push({
+      code: 'not_logged_in',
+      severity: 'error',
+      message: 'Codex is not logged in (no ~/.codex/auth.json)',
+      fix: 'Run codex login in Terminal',
+    });
+    return {
+      ...base,
+      ok: false,
+      installed: true,
+      ...(version ? { version } : {}),
+      loggedIn: false,
+      problems,
+    };
+  }
   const login = await exec(opts.command, [...pre, 'login', 'status'], opts.env);
   const said = `${login.stdout}\n${login.stderr}`;
   let loggedIn = login.code === 0 && !/not logged in/i.test(said);

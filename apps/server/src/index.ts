@@ -138,7 +138,15 @@ const adapters: AgentAdapter[] = [
     onError,
   }),
   ...(config.codex?.command || resolveCommand('codex', process.env['PATH'] ?? '')
-    ? [new CodexAdapter({ supervisor, command: config.codex?.command ?? 'codex', onError })]
+    ? [
+        new CodexAdapter({
+          supervisor,
+          command: config.codex?.command ?? 'codex',
+          // Mission Control's own Codex home (ruling R7): none of ~/.codex/config.toml reaches it.
+          home: join(config.dataDir, 'codex-home'),
+          onError,
+        }),
+      ]
     : []),
   ...(config.acp
     ? [

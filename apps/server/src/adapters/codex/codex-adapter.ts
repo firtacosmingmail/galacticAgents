@@ -42,6 +42,7 @@ import {
   userQuestions,
   type UserQuestion,
 } from './mapping.js';
+import { defaultAuthSource, prepareCodexHome, type PreparedHome } from './home.js';
 import { codexPreflight } from './preflight.js';
 import {
   initializeParams,
@@ -143,6 +144,36 @@ export const SANDBOX_POLICY: Readonly<Record<string, unknown>> = {
 /** Variables Codex reads beyond the supervisor's allow-list (its home, never a credential). */
 export const CODEX_PASS_ENV: readonly string[] = ['CODEX_HOME'];
 
+/**
+ * The adapter's own dynamic tool on every thread (P11-04, ruling R6): Codex offers its
+ * `request_user_input` only in plan mode, so a Steward asks the user through this one — a
+ * `agent.needs_input(clarification)` that blocks until answered; the answer is the tool's result.
+ */
+export const ASK_USER_TOOL = 'ask_user';
+export const ASK_USER_SPEC = {
+  type: 'function',
+  name: ASK_USER_TOOL,
+  description:
+    'Ask the user one question and wait for the answer (the answer text is the result). Use it ' +
+    'whenever you need the user to decide or tell you something before you go on; offer `options` ' +
+    'when the answer is one of a few choices.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      question: { type: 'string', description: 'The question, in plain words.' },
+      options: { type: 'array', items: { type: 'string' }, description: 'Choices, if any.' },
+    },
+    required: ['question'],
+    additionalProperties: false,
+  },
+} as const;
+
+/** What the thread's developer instructions add about `ask_user` (after the Steward's prompt). */
+export const ASK_USER_NOTE =
+  'When you need the user to decide or tell you something, call the `ask_user` tool with your ' +
+  'question (and `options` when there are a few choices) and wait for its answer. Do not end ' +
+  'your turn with a question in your reply: nobody reads it as one.';
+
 export interface CodexAdapterOptions {
   supervisor: ProcessSupervisor;
   /** The Codex CLI (default `codex`, found on the PATH). */
@@ -158,6 +189,14 @@ export interface CodexAdapterOptions {
   /** Longest tool-result excerpt kept in the transcript. */
   maxToolResultChars?: number;
   onError?: (error: unknown, context: string) => void;
+  /**
+   * The Codex home Mission Control owns (ruling R7; production: `<data dir>/codex-home`): every
+   * Codex process runs with `CODEX_HOME` set to it, a `config.toml` Mission Control writes and an
+   * `auth.json` symlink to `authSource`. Absent: the user's own Codex home (tests of the fake CLI).
+   */
+  home?: string;
+  /** The user's login file the managed home links to (default `defaultAuthSource()`). */
+  authSource?: string;
 }
 
 const SYSTEM: Actor = { type: 'system' };
@@ -261,8 +300,48 @@ export class CodexAdapter implements AgentAdapter {
 
   // --- provider ------------------------------------------------------------------
 
-  preflight(): Promise<RuntimePreflight> {
-    return codexPreflight({ command: this.command, args: this.args, env: this.fullEnv() });
+  async preflight(): Promise<RuntimePreflight> {
+    let home: PreparedHome | undefined;
+    try {
+      home = this.prepareHome();
+    } catch (error) {
+      return {
+        runtime: 'codex',
+        provider: 'chatgpt',
+        ok: false,
+        installed: true,
+        problems: [
+          {
+            code: 'check_failed',
+            severity: 'error',
+            message: `GalacticAgents could not prepare its Codex home: ${(error as Error).message}`,
+            fix: `Check that ${this.opts.home} can be written`,
+          },
+        ],
+      };
+    }
+    return codexPreflight({
+      command: this.command,
+      args: this.args,
+      env: this.fullEnv(),
+      ...(home && !home.authPresent ? { authMissing: true } : {}),
+    });
+  }
+
+  /**
+   * Creates or refreshes the managed Codex home (ruling R7) before any Codex process starts;
+   * `undefined` without one. Throws when it cannot be written.
+   */
+  private prepareHome(): PreparedHome | undefined {
+    if (!this.opts.home) return undefined;
+    const prepared = prepareCodexHome(this.opts.home, this.opts.authSource ?? defaultAuthSource());
+    if (prepared.replacedLink) {
+      this.onError(
+        new Error('the managed Codex home held a regular auth.json (not the link): linked again'),
+        'codex home',
+      );
+    }
+    return prepared;
   }
 
   /** `model/list`: the visible models, text only. Never throws (`[]`). */
@@ -303,6 +382,7 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   private queryOptions() {
+    this.prepareHome();
     return {
       command: this.command,
       args: this.args,
@@ -318,6 +398,7 @@ export class CodexAdapter implements AgentAdapter {
     for (const key of CODEX_PASS_ENV) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
+    if (this.opts.home) env['CODEX_HOME'] = this.opts.home;
     return { ...env, ...(this.opts.env ?? {}) };
   }
 
@@ -358,6 +439,7 @@ export class CodexAdapter implements AgentAdapter {
     this.sessions.set(session.sessionId, session);
     this.byAgent.set(opts.agentId, session);
     try {
+      this.prepareHome();
       const peer = this.connect(session);
       await this.during(
         session,
@@ -385,17 +467,18 @@ export class CodexAdapter implements AgentAdapter {
           session,
           peer.request('thread/start', {
             ...settings,
-            ...(opts.systemPrompt ? { developerInstructions: opts.systemPrompt } : {}),
-            ...(tools.size > 0
-              ? {
-                  dynamicTools: [...tools.values()].map((t) => ({
-                    type: 'function',
-                    name: t.name,
-                    description: t.description,
-                    inputSchema: t.inputSchema,
-                  })),
-                }
-              : {}),
+            developerInstructions: [opts.systemPrompt, ASK_USER_NOTE].filter(Boolean).join('\n\n'),
+            // Kept with the thread: `thread/resume` has no `dynamicTools` (it ignores the field)
+            // and a resumed thread still calls them (checked against Codex 0.166, P11-04).
+            dynamicTools: [
+              ...[...tools.values()].map((t) => ({
+                type: 'function',
+                name: t.name,
+                description: t.description,
+                inputSchema: t.inputSchema,
+              })),
+              ...(tools.has(ASK_USER_TOOL) ? [] : [ASK_USER_SPEC]),
+            ],
           }),
           'thread/start',
         );
@@ -506,6 +589,11 @@ export class CodexAdapter implements AgentAdapter {
         });
         return;
       case 'crashed':
+        if (session.limit) {
+          // The process went away while the limit's reset was being read: still the limit.
+          this.limitEnded(session);
+          return;
+        }
         this.terminal(session, {
           type: 'agent.failed',
           agentId: session.agentId,
@@ -517,7 +605,9 @@ export class CodexAdapter implements AgentAdapter {
         this.terminal(session, this.stoppedEvent(session, outcome.by ?? SYSTEM));
         return;
       case 'exited':
-        if (session.stopping || session.failure) {
+        if (session.limit && !session.failure) {
+          this.limitEnded(session);
+        } else if (session.stopping || session.failure) {
           this.terminal(session, this.stoppedEvent(session, SYSTEM));
         } else {
           this.terminal(session, {
@@ -704,6 +794,16 @@ export class CodexAdapter implements AgentAdapter {
     this.fail(session, { error: LIMIT_ERROR, reason: 'limit', ...(resetsAt ? { resetsAt } : {}) });
   }
 
+  /** The session ends on its usage limit without a fresh reset time (the process is gone). */
+  private limitEnded(session: Session): void {
+    if (!session.failure) {
+      const resetsAt = limitResetsAt(session.lastRateLimits);
+      session.failure = { error: LIMIT_ERROR, reason: 'limit', ...(resetsAt ? { resetsAt } : {}) };
+      this.output(session, 'text', LIMIT_ERROR);
+    }
+    this.terminal(session, this.stoppedEvent(session, SYSTEM));
+  }
+
   /**
    * An MCP tool call Codex ran without asking (the `node_repl` server's `js`, Ruling R5): reported
    * for the log and the tool-call cap, never as something the gate or the user approved.
@@ -885,6 +985,10 @@ export class CodexAdapter implements AgentAdapter {
       success,
     });
     const name = typeof params['tool'] === 'string' ? params['tool'] : '';
+    const noNamespace = params['namespace'] === null || params['namespace'] === undefined;
+    if (name === ASK_USER_TOOL && noNamespace && !session.tools.has(name)) {
+      return this.askUserTool(session, params['arguments']);
+    }
     const tool = session.tools.get(name);
     if (!tool || (params['namespace'] !== null && params['namespace'] !== undefined)) {
       return reply(`unknown tool: ${name}`, false);
@@ -899,6 +1003,33 @@ export class CodexAdapter implements AgentAdapter {
     } catch (error) {
       return reply((error as Error).message || String(error), false);
     }
+  }
+
+  /**
+   * The adapter's `ask_user` tool (ruling R6): a clarification question, not an action — no gate,
+   * no `agent.tool_call`. The answer (or what a dismissal tells the agent) is the result.
+   */
+  private async askUserTool(
+    session: Session,
+    raw: unknown,
+  ): Promise<{ contentItems: { type: 'inputText'; text: string }[]; success: boolean }> {
+    const reply = (text: string, success: boolean) => ({
+      contentItems: [{ type: 'inputText' as const, text }],
+      success,
+    });
+    const args = asRecord(raw);
+    const text = typeof args['question'] === 'string' ? args['question'].trim() : '';
+    if (!text) return reply('ask_user needs a question', false);
+    const options = (Array.isArray(args['options']) ? args['options'] : [])
+      .filter((o): o is string => typeof o === 'string' && o.trim().length > 0)
+      .slice(0, 8);
+    const answer = await this.ask(session, 'clarification', {
+      text,
+      ...(options.length > 0 ? { options } : {}),
+    });
+    if (answer === undefined) return reply('The question was withdrawn: no answer.', false);
+    if (isDismissed(answer)) return reply(dismissedClarification(answer.dismissed), true);
+    return reply(answer, true);
   }
 
   /**

@@ -203,6 +203,10 @@ describe('the deliverables folder is never deleted from (decision 122)', () => {
  * touches a deliverables folder. A deletion added anywhere fails here until it is reviewed.
  */
 const ALLOWED_DELETIONS: Record<string, { count: number; why: string }> = {
+  'adapters/codex/home.ts': {
+    count: 1,
+    why: "the managed Codex home's auth.json link (or the file Codex left in its place), relinked",
+  },
   'adapters/pty/pty-adapter.ts': {
     count: 2,
     why: "a PTY session's own files under <cwd>/.galactic/pty (rmdir only when empty)",
