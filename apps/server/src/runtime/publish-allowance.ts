@@ -47,9 +47,10 @@ export class PublishAllowanceStore {
 
   /**
    * `allow` exactly once: for the first call the table asks about whose every category is
-   * `network` and that carries the approved content (ruling R15: its input holds the approved
-   * text — verbatim, JSON-escaped or URL-encoded — or, for a publish with no text, one of the
-   * approved files' paths), while the allowance is armed and fresh and every file still matches
+   * `network` and that carries the approved content (ruling R15, `carriesContent`: a string
+   * value of its input holds the approved text of at least 12 characters — verbatim, JSON-escaped
+   * or URL-encoded — or, with no or a shorter text, names an approved file as a whole path
+   * token), while the allowance is armed and fresh and every file still matches
    * its approved hash. A mismatch (or a file gone) disarms it; any other call leaves it armed and
    * asks as usual. `none` otherwise.
    */
@@ -87,8 +88,11 @@ export class PublishAllowanceStore {
   }
 }
 
-/** Every string inside a tool call's input (recursively), plus the serialized input. */
-function stringsOf(input: unknown): string[] {
+/** The shortest approved text matched in a call: a shorter one is a substring of almost anything. */
+export const MIN_MATCHED_TEXT = 12;
+
+/** Every string value inside a tool call's input, recursively — never its keys or serialization. */
+function stringValues(input: unknown): string[] {
   const out: string[] = [];
   const walk = (v: unknown, depth: number): void => {
     if (depth > 20) return;
@@ -99,11 +103,6 @@ function stringsOf(input: unknown): string[] {
     }
   };
   walk(input, 0);
-  try {
-    out.push(JSON.stringify(input) ?? '');
-  } catch {
-    // An input that does not serialise is judged by its strings alone.
-  }
   return out;
 }
 
@@ -113,15 +112,27 @@ function textForms(text: string): string[] {
   return [...new Set([text, JSON.stringify(text).slice(1, -1), uri, uri.replace(/%20/g, '+')])];
 }
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** `path` as a whole token of `value`: bounded by start/end, whitespace, quotes, `=` or `@`. */
+function hasPathToken(value: string, path: string): boolean {
+  if (path === '') return false;
+  return new RegExp(`(?:^|[\\s"'=@])${escapeRegExp(path)}(?:$|[\\s"'])`).test(value);
+}
+
 /**
- * Whether the call carries the approved content (ruling R15): the approved text in one of its
- * forms, or — for a publish with no text — one of the approved files (its path, as given or
- * resolved in the worktree).
+ * Whether the call carries the approved content (rulings R15, round 2), judged on the input's
+ * string values only: the approved text in one of its forms when it is at least
+ * `MIN_MATCHED_TEXT` characters; else (no text, or a short one) one of the approved files named
+ * as a whole path token, worktree-relative or absolute. Anything else asks as usual.
  */
 function carriesContent(call: ToolCall, entry: Armed): boolean {
-  const haystacks = stringsOf(call.input);
-  const has = (needle: string) => needle !== '' && haystacks.some((h) => h.includes(needle));
+  const values = stringValues(call.input);
   const { text, files } = entry.publish;
-  if (text.trim() !== '') return textForms(text).some(has);
-  return files.some((f) => has(f.path) || has(resolve(entry.worktree, f.path)));
+  if (text.trim().length >= MIN_MATCHED_TEXT) {
+    return textForms(text).some((form) => values.some((v) => v.includes(form)));
+  }
+  return files.some((f) =>
+    [f.path, resolve(entry.worktree, f.path)].some((p) => values.some((v) => hasPathToken(v, p))),
+  );
 }

@@ -845,6 +845,41 @@ describe('job scheduler (P10-04)', () => {
     lives.push(first.c);
   });
 
+  it('a publish follow-up that meets a cap race before any spawn goes back on the queue, no re-ask', async () => {
+    const { c, clock } = boot({
+      canPublish: true,
+      caps: { maxConcurrentAgents: 1 },
+      scenario: (spawn) => (spawn.prompt === 'blocker' ? ASKS : ECHO),
+    });
+    const { job } = await longTermJob(c);
+    const base = { platform: 'X', account: '@shop', text: 'We launched!', files: [] };
+    const followUp = {
+      questionId: 'q-publish',
+      kind: 'publish' as const,
+      publish: { ...base, fingerprint: 'a'.repeat(64), jobId: job.id },
+    };
+    c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { followUps: [followUp] }));
+    const blocker = await c.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'blocker',
+      cwd: '/w/other',
+    });
+    if (!blocker.ok) throw new Error(blocker.reason);
+    const caps = c.runtime.caps;
+    const real = caps.canSpawn.bind(caps);
+    let checks = 0;
+    caps.canSpawn = (check) => (++checks === 1 ? { ok: true } : real(check));
+    setTo(clock, oct(1, 8, 30));
+    const raced = await c.jobs.tick();
+    caps.canSpawn = real;
+    const run = runsOf(c, job.id)[0]!;
+    expect(raced).toMatchObject({ started: [run.id], interrupted: [run.id] });
+    expect(stewardsOf(c, job.taskId)).toEqual([]);
+    expect(jobNow(c, job.id).followUps).toEqual([followUp]);
+    expect(c.log.tables.questions.all().filter((q) => q.kind === 'publish')).toEqual([]);
+  });
+
   it('publish follow-up refused on Gemini', async () => {
     const agy = new FakeAdapter({ speed: 0, runtime: 'agy', canPublish: false });
     const { c, clock } = boot({ providers: [agy] });

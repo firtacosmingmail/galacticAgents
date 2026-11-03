@@ -370,7 +370,8 @@ export class JobScheduler {
     } catch (error) {
       const reason = (error as Error).message;
       if (CAP_REFUSAL.test(reason)) {
-        if (this.interrupt(run.id)) report.interrupted.push(run.id);
+        // Nothing was spawned: even a publish goes back on the queue as it is (no re-ask).
+        if (this.interrupt(run.id, { spawned: false })) report.interrupted.push(run.id);
       } else {
         this.fail(run.id, reason);
         report.ended.push(run.id);
@@ -600,11 +601,15 @@ export class JobScheduler {
    * Records the run `interrupted`. A missed run (a restart, a cap race, a stop by the system)
    * makes its job due again at once — a follow-up run leaves the schedule alone — and a follow-up
    * it carried goes back on the job's queue and a retry note back on the job, so the next run does
-   * them — except a publish, which may already have gone out: a fresh publish question asks
-   * again instead (ruling R13). A run the user stopped (`byUser`, ruling R9) keeps the job's
+   * them — except a publish whose Steward was spawned, which may already have gone out: a fresh
+   * publish question asks again instead (ruling R13; a cap refusal before any spawn, `spawned:
+   * false`, re-queues it as it is). A run the user stopped (`byUser`, ruling R9) keeps the job's
    * schedule and is not done again. Returns whether the run was still going.
    */
-  private interrupt(runId: Id, { byUser = false }: { byUser?: boolean } = {}): boolean {
+  private interrupt(
+    runId: Id,
+    { byUser = false, spawned = true }: { byUser?: boolean; spawned?: boolean } = {},
+  ): boolean {
     const run = this.opts.log.tables.jobRuns.get(runId);
     if (!run || run.outcome !== 'running') return false;
     this.opts.log.runCommand((ctx) => {
@@ -613,7 +618,7 @@ export class JobScheduler {
       if (job.state === 'stopped' || byUser) return;
       const changes: JobChanges = {};
       const followUp = run.followUp;
-      if (followUp?.kind === 'publish') {
+      if (followUp?.kind === 'publish' && spawned) {
         // Never re-run on the old approval: it may already have posted (ruling R13).
         reaskInterruptedPublish(ctx, followUp, run.agentId);
       } else if (followUp && !job.followUps.some((f) => f.questionId === followUp.questionId)) {

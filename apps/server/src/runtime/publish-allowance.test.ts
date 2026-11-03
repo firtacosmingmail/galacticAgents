@@ -143,6 +143,52 @@ describe('PublishAllowanceStore', () => {
     expect(s.gate.check(upload).decision).toBe('ask');
   });
 
+  it('a short text (under 12 characters) never matches: the call asks (R15, round 2)', () => {
+    const s = setup(DEFAULT_PERMISSION_POLICY, 'Hi!');
+    s.store.arm('a-1', s.publish, s.worktree);
+    const call: ToolCall = {
+      toolName: 'Bash',
+      input: { command: 'curl -X POST https://api.x.com -d "status=Hi!"' },
+    };
+    expect(s.store.check('a-1', call, ['network'])).toBe('none');
+    // A short text with files: an approved file named as a path token lets the call through.
+    const upload: ToolCall = {
+      toolName: 'Bash',
+      input: { command: 'curl -F "status=Hi!" -F media=@post.png https://upload.x.com' },
+    };
+    expect(s.store.check('a-1', upload, ['network'])).toBe('allow');
+  });
+
+  it('the text counts only inside string values, never keys or the serialized input', () => {
+    const text = 'command and url';
+    const s = setup(DEFAULT_PERMISSION_POLICY, text);
+    s.store.arm('a-1', s.publish, s.worktree);
+    const keyed: ToolCall = {
+      toolName: 'WebFetch',
+      input: { 'command and url': 'https://api.x.com', url: 'https://api.x.com' },
+    };
+    expect(s.store.check('a-1', keyed, ['network'])).toBe('none');
+    expect(s.store.isArmed('a-1')).toBe(true);
+  });
+
+  it('a files-only publish matches a path token, not a bare substring', () => {
+    const s = setup(DEFAULT_PERMISSION_POLICY, '');
+    s.store.arm('a-1', s.publish, s.worktree);
+    for (const command of [
+      'curl https://cdn.x.com/post.png',
+      'curl -F media=@repost.png https://upload.x.com',
+      'curl -F media=@post.png.bak https://upload.x.com',
+    ]) {
+      expect(s.store.check('a-1', { toolName: 'Bash', input: { command } }, ['network'])).toBe(
+        'none',
+      );
+    }
+    const absolute = `curl -F "media=@${join(s.worktree, 'post.png')}" https://upload.x.com`;
+    expect(
+      s.store.check('a-1', { toolName: 'Bash', input: { command: absolute } }, ['network']),
+    ).toBe('allow');
+  });
+
   it('never turns a deny into allow', () => {
     const s = setup({
       ...DEFAULT_PERMISSION_POLICY,
