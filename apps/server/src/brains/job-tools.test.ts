@@ -70,7 +70,7 @@ function boot(scenario: (spawn: SpawnOptions) => FakeScenario = () => ECHO) {
     adapters: [adapter],
     log: { now: clock },
     flushMs: 10,
-    jobs: { stewardRuntime: () => 'fake' },
+    stewardRuntimeOverride: () => 'fake',
     onError: (e, ctx) => errors.push(`${ctx}: ${(e as Error).message}`),
   });
   lives.push(c);

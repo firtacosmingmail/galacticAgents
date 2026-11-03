@@ -4,7 +4,6 @@ import {
   nextOccurrence,
   type Actor,
   type Agent,
-  type AgentRuntime as AgentRuntimeName,
   type EventEnvelope,
   type Id,
   type Job,
@@ -22,6 +21,7 @@ import { jobOf, writeJob } from '../domain/jobs.js';
 import { FINISHED_WORK } from '../domain/states.js';
 import type { AgentRuntime, TurnEnd } from './agent-runtime.js';
 import type { Timers } from './archival.js';
+import { stewardChooser, type ChooseSteward } from './steward-choice.js';
 import { stewardDeclares } from './tool-runtimes.js';
 
 export { JOB_TICK_MS };
@@ -63,8 +63,11 @@ export interface JobSchedulerOptions {
   log: EventLog;
   commands: Commands;
   runtime: AgentRuntime;
-  /** The runtime job-run Stewards run on (jobs run on the Steward runtime until project 2). */
-  stewardRuntime: () => AgentRuntimeName;
+  /**
+   * The provider, runtime and model of a job-run Steward (P11-03): a follow-up's own provider
+   * first, then the job's (`resolveStewardChoice`). Default: the resolver without Settings.
+   */
+  chooseSteward?: ChooseSteward;
   /** Default: the log's clock. */
   now?: () => Date;
   timers?: Timers;
@@ -325,14 +328,20 @@ export class JobScheduler {
     }
     const project = tables.projects.get(job.projectId);
     const area = tables.areas.get(job.areaId);
-    const stewardRuntime = this.opts.stewardRuntime();
+    const choice = (this.opts.chooseSteward ?? stewardChooser())({
+      job,
+      ...(followUp ? { followUp: true } : {}),
+      ...(project ? { project } : {}),
+      supervisorRuntime: supervisor.runtime,
+    });
     let agent: Agent;
     try {
       if (!project || !area) throw new Error(`job ${job.name} has no project or area any more`);
       agent = (
         await commands.spawnAgent({
           role: 'steward',
-          runtime: stewardRuntime,
+          runtime: choice.runtime,
+          ...(choice.model ? { model: choice.model } : {}),
           taskId: job.taskId,
           projectId: job.projectId,
           supervisorId: supervisor.id,
@@ -344,7 +353,7 @@ export class JobScheduler {
             memory: jobMemory(log, job.id),
             ...(followUp ? { followUp } : {}),
             ...(run.note ? { note: run.note } : {}),
-            declares: stewardDeclares(stewardRuntime),
+            declares: stewardDeclares(choice.runtime),
           }),
         })
       ).value;

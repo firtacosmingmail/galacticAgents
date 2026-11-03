@@ -33,6 +33,8 @@ import { Archival, type Timers } from './archival.js';
 import { BudgetWatcher } from './budgets.js';
 import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
 import { JobScheduler } from './job-scheduler.js';
+import { ProviderCatalog } from './provider-catalog.js';
+import { stewardChooser } from './steward-choice.js';
 import { StorageMonitor } from './storage-health.js';
 import { StatusStore } from './status-store.js';
 import { StewardProcesses, type StewardProcessesOptions } from './steward-processes.js';
@@ -96,9 +98,9 @@ export interface ComposeOptions {
   /**
    * The job scheduler (P10-04): the timer runs only with an `intervalMs` (tests call
    * `jobs.tick()`; `index.ts` starts it itself after recovery and the Harmonizer). Job-run
-   * Stewards run on `stewardRuntime` (default: the `stewardRuntime` setting, else `claude-sdk`).
+   * Stewards run on the job's provider (`resolveStewardChoice`, P11-03).
    */
-  jobs?: { intervalMs?: number; timers?: Timers; stewardRuntime?: () => RuntimeName };
+  jobs?: { intervalMs?: number; timers?: Timers };
   /**
    * Transcript retention (P8-02): `policy` from the settings (default
    * `DEFAULT_TRANSCRIPT_RETENTION`); the timer runs only with an `intervalMs`, like archival
@@ -125,11 +127,16 @@ export interface ComposeOptions {
    */
   detection?: false | Omit<DetectionOptions, 'tables' | 'commands' | 'onProblem'>;
   /**
-   * The runtime new Stewards run on (P8-07; the `stewardRuntime` setting, read at every spawn):
-   * handed to every brain's tools. Absent or `undefined`: a brain spawns Stewards on its own
-   * runtime.
+   * The providers (P11-03): model lists, checks, and the Settings' default provider and models
+   * every Steward spawn reads. Default: a catalogue over `adapters` with no settings.
    */
-  stewardRuntime?: () => RuntimeName | undefined;
+  catalog?: ProviderCatalog;
+  /**
+   * Development and tests only (`GALACTIC_STEWARD_RUNTIME`): the runtime of every new Steward,
+   * whatever its provider. Absent or `undefined`: the provider's runtime (a brain on the fake
+   * runtime keeps its `claude` Stewards on fake).
+   */
+  stewardRuntimeOverride?: () => RuntimeName | undefined;
   /**
    * The deliverables (P9-04, P9-06). Agents' declarations: the service is built when a data
    * folder is known (this `dataDir`, else `workspaces.dataDir`); `limits` is read at every
@@ -176,6 +183,8 @@ export interface ComposedRuntime {
   runtime: AgentRuntime;
   /** The `DomainCommands` surface over this log and runtime (P2-01). */
   commands: Commands;
+  /** The providers: model lists, usage, checks (P11-03). */
+  catalog: ProviderCatalog;
   /** Stewards' done reports to their supervisors (P2-11). */
   reports: StewardReports;
   /** Read-only views brains seed their turns from (P2-06). */
@@ -338,10 +347,18 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   // by a fresh session, P2-16) still holds what is routed to it.
   const living = livingFromStatuses(statuses);
   const questions = logRouting(log, (id) => living(id) || runtime.isReserved(id));
+  const adapters = opts.adapters ?? [new FakeAdapter()];
+  // One resolver for every Steward spawn (P11-03): the task, job, project and Settings decide.
+  const catalog =
+    opts.catalog ?? new ProviderCatalog({ adapters: () => adapters, settings: () => ({}) });
+  const chooseSteward = stewardChooser({
+    defaults: () => catalog.defaults(),
+    ...(opts.stewardRuntimeOverride ? { override: opts.stewardRuntimeOverride } : {}),
+  });
   const runtime: AgentRuntime = new AgentRuntime({
     log,
     questions,
-    adapters: opts.adapters ?? [new FakeAdapter()],
+    adapters,
     transcripts,
     statuses,
     caps: { ...(opts.caps ?? {}), defaults: defaultCaps },
@@ -388,6 +405,8 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       ? { checkWorkspace: (path: string): string => workspaces!.checkPath(path) }
       : {}),
     isRunning,
+    catalog,
+    chooseSteward,
   });
   const queries = createBrainQueries({
     tables: log.tables,
@@ -476,7 +495,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     log,
     commands,
     runtime,
-    stewardRuntime: opts.jobs?.stewardRuntime ?? (() => opts.stewardRuntime?.() ?? 'claude-sdk'),
+    chooseSteward,
     ...(opts.jobs?.timers ? { timers: opts.jobs.timers } : {}),
     onError: (e: unknown) => opts.onError?.(e, 'job scheduler'),
   });
@@ -571,7 +590,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     queries,
     ...(workspaces ? { workspaces } : {}),
     ...(processes ? { processes } : {}),
-    ...(opts.stewardRuntime ? { stewardRuntime: opts.stewardRuntime } : {}),
+    chooseSteward,
     ...(deliverables ? { deliverables } : {}),
     ...extra,
     ...(opts.onError ? { onError: opts.onError } : {}),
@@ -612,6 +631,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     transcripts,
     runtime,
     commands,
+    catalog,
     reports,
     queries,
     ...(workspaces ? { workspaces } : {}),

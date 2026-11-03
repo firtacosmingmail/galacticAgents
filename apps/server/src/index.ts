@@ -30,6 +30,7 @@ import { createPush } from './push/index.js';
 import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
 import { JOB_TICK_MS } from './domain/job-runs.js';
 import { composeRuntime } from './runtime/compose.js';
+import { ProviderCatalog } from './runtime/provider-catalog.js';
 import { harnessBrains } from './runtime/harness-brains.js';
 import { HarnessJobScripts, harnessJobs } from './runtime/harness-jobs.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
@@ -183,39 +184,39 @@ const adapters: AgentAdapter[] = [
       ]
     : []),
 ];
-if (config.stewardRuntime && !adapters.some((a) => a.runtime === config.stewardRuntime)) {
+if (
+  config.stewardRuntimeOverride &&
+  !adapters.some((a) => a.runtime === config.stewardRuntimeOverride)
+) {
   console.warn(
-    `[config] stewardRuntime is ${config.stewardRuntime}, which is not set up here: ` +
-      `new Stewards run on their brain's runtime`,
+    `[config] GALACTIC_STEWARD_RUNTIME is ${config.stewardRuntimeOverride}, which is not set up ` +
+      `here: new Stewards run on their provider's runtime`,
   );
-  delete config.stewardRuntime;
-} else if (config.stewardRuntime === 'fake' && !config.dev) {
-  // The fake adapter is always registered (the ops console's dev tools), but real work never runs
-  // on it outside dev mode (`loadConfig` already drops it; this guards a config built elsewhere).
-  console.warn(
-    `[config] stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
-      `new Stewards run on their brain's runtime`,
-  );
-  delete config.stewardRuntime;
+  delete config.stewardRuntimeOverride;
 }
+// The providers (P11-03): model lists and checks over the adapters; the Settings' default provider
+// and models are read from the config at every Steward spawn, so the settings apply live.
+const catalog = new ProviderCatalog({
+  adapters: () => adapters,
+  settings: () => ({
+    ...(config.defaultProvider ? { defaultProvider: config.defaultProvider } : {}),
+    ...(config.providers ? { providers: config.providers } : {}),
+  }),
+});
 const composed = composeRuntime(db, {
   adapters,
-  // The runtime new Stewards run on (P8-07): read at every spawn, so the settings apply live.
-  stewardRuntime: () => config.stewardRuntime,
+  // Which provider and model a new Steward runs on (P11-03): one resolver over these Settings.
+  catalog,
+  // Development only: every new Steward on this runtime (`GALACTIC_STEWARD_RUNTIME`).
+  ...(config.stewardRuntimeOverride
+    ? { stewardRuntimeOverride: () => config.stewardRuntimeOverride }
+    : {}),
   // Brain tools create worktrees and merge through this service (P2-05, P2-10).
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
   autoApproveRemote: config.autoApproveRemote,
   // Spawn caps (decision 18, P2-17): concurrency, Stewards per Waykeeper, spawns per hour.
   caps: config.caps,
-  // Job runs (P10-04): on the Steward runtime, else the Harmonizer's; the timer starts below,
-  // after recovery and the Harmonizer.
-  jobs: {
-    stewardRuntime: () =>
-      config.stewardRuntime ??
-      harmonizerRuntime(process.env['GALACTIC_HARMONIZER']) ??
-      (config.dev ? 'fake' : 'claude-sdk'),
-  },
   // Finished work past decision 4's retention period is archived hourly (P2-13).
   archival: { retentionMs: config.retentionMs, intervalMs: ARCHIVAL_INTERVAL_MS },
   // Transcript chunks past the transcript retention policy are removed hourly (P8-02).

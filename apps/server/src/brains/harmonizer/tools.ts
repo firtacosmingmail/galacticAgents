@@ -14,6 +14,7 @@ import type {
   WorkBodyKind,
 } from '@galactic/protocol';
 import { DomainError, must } from '../../domain/errors.js';
+import { stewardChooser } from '../../runtime/steward-choice.js';
 import { stewardDeclares } from '../../runtime/tool-runtimes.js';
 import { slugify, workspaceMeta } from '../../workspace/workspaces.js';
 import type { BrainQueries, BrainTool, BrainToolContext } from '../definition.js';
@@ -961,11 +962,16 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         throw new DomainError('invalid', `cannot create ${workspace}: ${(error as Error).message}`);
       }
       const instructions = str(input, 'instructions', true);
-      // The `stewardRuntime` setting (P8-07), else the Harmonizer's own runtime.
-      const runtime = ctx.stewardRuntime?.() ?? runtimeOf(ctx);
+      // The task's provider, else the Settings' (P11-03): one resolver for every Steward.
+      const choice = (ctx.chooseSteward ?? stewardChooser())({
+        task,
+        supervisorRuntime: runtimeOf(ctx),
+      });
+      const { runtime } = choice;
       const { value } = await ctx.commands.spawnAgent({
         role: 'steward',
         runtime,
+        ...(choice.model ? { model: choice.model } : {}),
         taskId,
         supervisorId: ctx.brainId,
         cwd: workspace,

@@ -14,6 +14,7 @@ import type {
   SpawnOptions,
   StopOptions,
   ToolCall,
+  ModelInfo,
 } from '@galactic/protocol';
 import { normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
@@ -86,7 +87,7 @@ export interface ClaudeSdkAdapterOptions {
   supervisor: ProcessSupervisor;
   /** Injected in tests (`FakeSdk`); the real SDK is loaded lazily otherwise. */
   sdk?: SdkSurface | (() => Promise<SdkSurface>);
-  /** Model for every spawn; the CLI's default when absent. */
+  /** Model of a spawn that names none (`SpawnOptions.model` wins); the CLI's default when absent. */
   model?: string;
   /**
    * Which Claude Code settings a Steward session loads (decision 17: a normal session with the
@@ -249,12 +250,24 @@ class Session {
   }
 }
 
+/**
+ * The Claude models a Steward may name (P11-03): Claude Code takes these aliases for its current
+ * models. None is the default: Claude Code's own default applies when no model is named.
+ */
+export const CLAUDE_MODELS: readonly ModelInfo[] = [
+  { id: 'opus', label: 'Opus', family: 'claude', capabilities: ['text'], isDefault: false },
+  { id: 'sonnet', label: 'Sonnet', family: 'claude', capabilities: ['text'], isDefault: false },
+  { id: 'haiku', label: 'Haiku', family: 'claude', capabilities: ['text'], isDefault: false },
+];
+
 const SYSTEM: Actor = { type: 'system' };
 /** How many ended sessions are remembered for "session … has stopped" errors. */
 const ENDED_MEMORY = 256;
 
 export class ClaudeSdkAdapter implements AgentAdapter {
   readonly runtime = 'claude-sdk' as const;
+  /** A Claude Steward's actions pass the gate before they run, so it may publish (P11-03). */
+  readonly canPublish = true;
   readonly events = new EventQueue<AgentEvent>();
   private readonly sessions = new Map<string, Session>();
   private readonly byAgent = new Map<Id, Session>();
@@ -287,6 +300,11 @@ export class ClaudeSdkAdapter implements AgentAdapter {
 
   async spawn(opts: SpawnOptions): Promise<SpawnHandle> {
     return this.open(opts, undefined);
+  }
+
+  /** The static Claude list (P11-03): the CLI has no command that lists models. */
+  models(): Promise<ModelInfo[]> {
+    return Promise.resolve(CLAUDE_MODELS.map((m) => ({ ...m, capabilities: [...m.capabilities] })));
   }
 
   /** Installed, logged in, versions (P25-01): `claude --version` and `claude auth status`. */
@@ -335,7 +353,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     const options: SdkQueryOptions = {
       cwd: opts.cwd,
       ...(resume ? { resume } : { sessionId: session.sessionId }),
-      ...(this.opts.model ? { model: this.opts.model } : {}),
+      ...((opts.model ?? this.opts.model) ? { model: opts.model ?? this.opts.model } : {}),
       permissionMode: 'default',
       includePartialMessages: false,
       persistSession: true,

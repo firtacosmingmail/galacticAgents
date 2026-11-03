@@ -53,6 +53,7 @@ function make(
     env?: Record<string, string | undefined>;
     fake?: Omit<FakeSdkOptions, 'script' | 'spawnChild'>;
     stewardSettingSources?: ('user' | 'project' | 'local')[];
+    model?: string;
   } = {},
 ) {
   const sdk = new FakeSdk({
@@ -70,6 +71,7 @@ function make(
     onError: (error, context) => errors.push({ error, context }),
     ...(opts.env ? { env: opts.env } : {}),
     ...(opts.stewardSettingSources ? { stewardSettingSources: opts.stewardSettingSources } : {}),
+    ...(opts.model ? { model: opts.model } : {}),
   });
   const events = collect<AgentEvent>(adapter.events);
   rigs.push({ adapter, supervisor });
@@ -126,6 +128,23 @@ describe('ClaudeSdkAdapter — message mapping', () => {
     expect(options.resume).toBeUndefined();
     expect(options.hooks?.PreToolUse?.[0]?.hooks).toHaveLength(1);
     expect(options.canUseTool).toBeTypeOf('function');
+  });
+
+  it('runs the model of the spawn over the adapter-wide one (P11-03)', async () => {
+    const { adapter, events, sdk } = make(() => [{ text: 'hi' }], { model: 'opus' });
+    await adapter.spawn(spawnOpts('hello', { model: 'sonnet' }));
+    await events.waitFor(has('agent.idle'));
+    expect(sdk.calls[0]!.options.model).toBe('sonnet');
+    await adapter.spawn(spawnOpts('hello again', { agentId: 'a-2' }));
+    await events.waitFor((items) => items.filter((e) => e.type === 'agent.idle').length === 2);
+    expect(sdk.calls[1]!.options.model).toBe('opus');
+  });
+
+  it('lists the Claude models and may publish (P11-03)', async () => {
+    const { adapter } = make(() => []);
+    expect(adapter.canPublish).toBe(true);
+    expect((await adapter.models()).map((m) => m.id)).toEqual(['opus', 'sonnet', 'haiku']);
+    expect((await adapter.models()).some((m) => m.isDefault)).toBe(false);
   });
 
   it("loads the configured settings for a Steward (the real-Claude checks exclude the user's own)", async () => {

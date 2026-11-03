@@ -62,6 +62,7 @@ import {
 import { aliasesOf, createPermissionGate, type RuntimeGate } from './permission-gate.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
+import { providerOf } from './steward-choice.js';
 import { TOOL_RUNTIMES } from './tool-runtimes.js';
 import type { TranscriptPipeline } from './transcripts.js';
 
@@ -105,6 +106,11 @@ export interface SpawnRequest {
   tools?: ToolDefinition[];
   systemPrompt?: string;
   bare?: boolean;
+  /**
+   * The exact model to run (P11-03); absent: the runtime's default. Kept in `meta.model`, with
+   * the runtime's provider in `meta.provider`, so a resumed session runs the same model.
+   */
+  model?: string;
   /** A fixed agent id (tests, resume); default: generated. */
   agentId?: Id;
   /**
@@ -537,6 +543,7 @@ export class AgentRuntime {
     const gate = this.caps.canSpawn(this.spawnCheck(req.role, req.supervisorId));
     if (!gate.ok) return { ok: false, reason: gate.reason };
 
+    const provider = providerOf(req.runtime);
     const agent = this.opts.log.runCommand((ctx) =>
       createAgent(ctx, {
         role: req.role,
@@ -550,6 +557,8 @@ export class AgentRuntime {
         meta: {
           cwd: req.cwd,
           prompt: req.prompt,
+          ...(req.model ? { model: req.model } : {}),
+          ...(provider ? { provider } : {}),
           ...(req.workspace ? { workspace: req.workspace } : {}),
           ...(req.permissionPolicy ? { permissionPolicy: req.permissionPolicy } : {}),
           ...(req.bare ? { bare: true } : {}),
@@ -707,6 +716,7 @@ export class AgentRuntime {
         ...(tools ? { tools } : {}),
         ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}),
         ...(req.bare ? { bare: true } : {}),
+        ...(req.model ? { model: req.model } : {}),
       });
     } catch (error) {
       const message = (error as Error).message;
@@ -1478,6 +1488,7 @@ export class AgentRuntime {
       workspace?: string;
       permissionPolicy?: PermissionPolicy;
       bare?: boolean;
+      model?: unknown;
     };
     if (!meta.cwd) return { ok: false, reason: 'agent has no saved working directory' };
     const base = {
@@ -1485,6 +1496,8 @@ export class AgentRuntime {
       ...(meta.workspace ? { workspace: meta.workspace } : {}),
       ...(meta.permissionPolicy ? { permissionPolicy: meta.permissionPolicy } : {}),
       ...(meta.bare ? { bare: true } : {}),
+      // The model it was spawned with (P11-03): a resumed or restarted session runs it again.
+      ...(typeof meta.model === 'string' && meta.model ? { model: meta.model } : {}),
       ...(opts.tools ? { tools: opts.tools } : {}),
       ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
     };

@@ -5,7 +5,10 @@ import type {
   Actor,
   AgentAdapter,
   AgentEvent,
+  AgentRuntime,
   Id,
+  ModelInfo,
+  ProviderUsage,
   PermissionAction,
   PermissionGate,
   RuntimePreflight,
@@ -87,6 +90,16 @@ export interface FakeAdapterOptions {
    * out), or per spawn. A scenario's own `commands` win. Default: none.
    */
   commands?: readonly unknown[] | ((opts: SpawnOptions) => readonly unknown[] | undefined);
+  /**
+   * Tests and dev only (P11-03): the runtime this adapter registers as (default `fake`) — a fake
+   * standing in for `claude-sdk`, `codex` or `agy` — with what that provider's adapter reports:
+   * `canPublish`, its model list, its usage and its runtime check (default: ready).
+   */
+  runtime?: AgentRuntime;
+  canPublish?: boolean;
+  models?: readonly ModelInfo[];
+  usage?: ProviderUsage;
+  preflight?: () => Promise<RuntimePreflight>;
 }
 
 type Ended = 'finished' | 'failed' | 'stopped';
@@ -149,7 +162,8 @@ class FakeSession {
 const SYSTEM: Actor = { type: 'system' };
 
 export class FakeAdapter implements AgentAdapter {
-  readonly runtime = 'fake' as const;
+  readonly runtime: AgentRuntime;
+  readonly canPublish?: boolean;
   readonly events = new EventQueue<AgentEvent>();
   private readonly sessions = new Map<string, FakeSession>();
   private readonly byQuestion = new Map<Id, FakeSession>();
@@ -162,9 +176,13 @@ export class FakeAdapter implements AgentAdapter {
   private readonly picked = new Map<string, FakeScenario>();
   private readonly resumeFails: FakeAdapterOptions['resumeFails'];
   private readonly commandsFor: FakeAdapterOptions['commands'];
+  private readonly opts: FakeAdapterOptions;
   private disposed = false;
 
   constructor(opts: FakeAdapterOptions = {}) {
+    this.opts = opts;
+    this.runtime = opts.runtime ?? 'fake';
+    if (opts.canPublish !== undefined) this.canPublish = opts.canPublish;
     this.scenarios = opts.scenarios ?? SCENARIOS;
     this.speed = opts.speed ?? 1;
     this.sessionStore = opts.sessionStore ?? new Map();
@@ -373,9 +391,20 @@ export class FakeAdapter implements AgentAdapter {
     this.emit({ type: 'agent.failed', agentId, error, reason: 'crash' });
   }
 
-  /** Always ready: nothing to install or log in to (P25-01). */
+  /** Always ready: nothing to install or log in to (P25-01); unless a test says otherwise. */
   preflight(): Promise<RuntimePreflight> {
-    return Promise.resolve({ runtime: 'fake', ok: true, installed: true, problems: [] });
+    if (this.opts.preflight) return this.opts.preflight();
+    return Promise.resolve({ runtime: this.runtime, ok: true, installed: true, problems: [] });
+  }
+
+  /** The models given to it (P11-03); none by default. */
+  models(): Promise<ModelInfo[]> {
+    return Promise.resolve([...(this.opts.models ?? [])]);
+  }
+
+  /** The usage given to it (P11-03); none by default. */
+  usage(): Promise<ProviderUsage | undefined> {
+    return Promise.resolve(this.opts.usage);
   }
 
   async dispose(): Promise<void> {

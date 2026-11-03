@@ -12,6 +12,7 @@ import {
   type TaskPriority,
 } from '@galactic/protocol';
 import { DomainError } from '../../domain/errors.js';
+import { stewardChooser } from '../../runtime/steward-choice.js';
 import { stewardDeclares } from '../../runtime/tool-runtimes.js';
 import {
   stewardsSerialised,
@@ -114,11 +115,15 @@ const liveStewards = (ctx: BrainToolContext, filter: (a: Agent) => boolean = () 
     .filter(({ agent, status }) => agent.role === 'steward' && filter(agent) && isLive(status));
 
 /**
- * The runtime of a Steward this Waykeeper spawns: the `stewardRuntime` setting (P8-07), else the
- * Waykeeper's own.
+ * The provider, runtime and model of the Steward this Waykeeper spawns for `task` (P11-03): the
+ * task's, else the project's, else the Settings' (`resolveStewardChoice`).
  */
-const stewardRuntimeOf = (ctx: BrainToolContext) =>
-  ctx.stewardRuntime?.() ?? ctx.queries.agent(ctx.brainId)?.runtime ?? 'claude-sdk';
+const stewardChoiceOf = (ctx: BrainToolContext, task: Task, project: Project) =>
+  (ctx.chooseSteward ?? stewardChooser())({
+    task,
+    project,
+    supervisorRuntime: ctx.queries.agent(ctx.brainId)?.runtime,
+  });
 
 const brief = (t: Task) => ({ taskId: t.id, description: t.description, state: t.state });
 
@@ -294,16 +299,18 @@ export const spawnStewardTool: BrainTool = {
     const hadBranch = task.branch !== undefined;
     const where = await placeSteward(ctx, task);
     const project = projectOf(ctx);
+    const choice = stewardChoiceOf(ctx, task, project);
     let value: Agent;
     try {
       ({ value } = await ctx.commands.spawnAgent({
         role: 'steward',
-        runtime: stewardRuntimeOf(ctx),
+        runtime: choice.runtime,
+        ...(choice.model ? { model: choice.model } : {}),
         taskId: task.id,
         supervisorId: ctx.brainId,
         prompt: stewardPrompt(task, project, where, instructions, {
           related: ctx.queries.projectTasks(project.id),
-          declares: stewardDeclares(stewardRuntimeOf(ctx)),
+          declares: stewardDeclares(choice.runtime),
         }),
       }));
     } catch (error) {
@@ -561,6 +568,7 @@ async function sendBack(
   // and the instructions its first Steward was given.
   const instructions = task.meta?.['stewardInstructions'];
   const project = projectOf(ctx);
+  const choice = stewardChoiceOf(ctx, task, project);
   const brief = stewardPrompt(
     task,
     project,
@@ -573,12 +581,13 @@ async function sendBack(
     {
       related: ctx.queries.projectTasks(project.id),
       lead: text,
-      declares: stewardDeclares(stewardRuntimeOf(ctx)),
+      declares: stewardDeclares(choice.runtime),
     },
   );
   const { value } = await ctx.commands.spawnAgent({
     role: 'steward',
-    runtime: stewardRuntimeOf(ctx),
+    runtime: choice.runtime,
+    ...(choice.model ? { model: choice.model } : {}),
     taskId: task.id,
     supervisorId: ctx.brainId,
     prompt: brief,

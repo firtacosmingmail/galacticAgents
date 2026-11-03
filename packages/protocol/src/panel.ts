@@ -335,7 +335,7 @@ export const Settings = z.object({
   budgets: SettingsBudgets.optional(),
   /**
    * @deprecated The runtime new Stewards run on (P8-07). Replaced by `defaultProvider` (P11-02);
-   * the server stops reading it in P11-04 and the field is removed in P11-10.
+   * the server stops reading it in P11-03 and the field is removed in P11-10.
    */
   stewardRuntime: AgentRuntime.optional(),
   /** The AI provider new Stewards use when nothing names one (P11-02); absent: `claude`. */

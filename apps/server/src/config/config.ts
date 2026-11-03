@@ -12,6 +12,7 @@ import {
   DeclarationLimits,
   IdeSetting,
   PermissionPolicy,
+  Provider,
   RunOutputRetention,
   RunSettings,
   QualityTier,
@@ -122,10 +123,17 @@ export const ConfigFile = z.object({
     .extend({ reserveMiB: z.number().int().nonnegative().optional() })
     .optional(),
   /**
-   * The runtime new Stewards run on (P8-07; also `GALACTIC_STEWARD_RUNTIME`); absent = the
-   * spawning brain's own runtime. Settable from the panel.
+   * @deprecated Read only to upgrade it (P11-03): `claude-sdk`, `codex` and `agy` become
+   * `defaultProvider` `claude`, `chatgpt` and `gemini`; any other runtime is dropped with a
+   * warning. The settings service removes the key at its next write.
    */
   stewardRuntime: AgentRuntime.optional(),
+  /** The AI provider new Stewards use when nothing names one (P11-03); absent = `claude`. */
+  defaultProvider: Provider.optional(),
+  /** Per provider (P11-03): the default model of its Stewards; absent = the CLI's own default. */
+  providers: z
+    .partialRecord(Provider, z.object({ model: z.string().min(1).max(100).optional() }))
+    .optional(),
   /**
    * The deliverables settings (Phase 9): `ide` is the IDE Open in IDE uses (P9-03, decision 127),
    * `auto` (default: the first installed of WebStorm, IntelliJ IDEA, Cursor, VS Code, Zed) or a
@@ -296,8 +304,15 @@ export interface ServerConfig {
   budgets?: { warnAtPercent: number };
   /** Backups (P8-03): the rotation and the free space a backup leaves; absent = the defaults. */
   backups?: Partial<BackupSchedule> & { reserveBytes?: number };
-  /** The runtime new Stewards run on (P8-07); absent = the spawning brain's own. */
-  stewardRuntime?: AgentRuntime;
+  /**
+   * Development and tests only (`GALACTIC_STEWARD_RUNTIME`, P11-03): the runtime of every new
+   * Steward whatever its provider, usually `fake`. Absent: the provider's runtime.
+   */
+  stewardRuntimeOverride?: AgentRuntime;
+  /** The AI provider new Stewards use when nothing names one (P11-03); absent = `claude`. */
+  defaultProvider?: Provider;
+  /** Per provider (P11-03): the default model of its Stewards. */
+  providers?: Partial<Record<Provider, { model?: string | undefined }>>;
   /**
    * The deliverables settings (Phase 9): the IDE (P9-03; absent = `auto`) and the agents'
    * declaration limits (P9-04; absent keys = `DEFAULT_DECLARATION_LIMITS`).
@@ -493,21 +508,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       `Invalid budget warning threshold (1–100 %): ${warnEnv ?? file.budgets?.warnAtPercent}`,
     );
   }
+  const dev = env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true';
+  // The Steward runtime is no longer a setting (P11-03): a stored one becomes the default provider.
+  let defaultProvider = file.defaultProvider;
+  if (file.stewardRuntime !== undefined) {
+    const upgraded = UPGRADED_PROVIDER[file.stewardRuntime];
+    if (upgraded) defaultProvider ??= upgraded;
+    else {
+      warnings.push(
+        `stewardRuntime "${file.stewardRuntime}" is no longer a setting; Stewards use the project's provider`,
+      );
+    }
+  }
   const runtimeEnv = env['GALACTIC_STEWARD_RUNTIME'];
-  let stewardRuntime = file.stewardRuntime;
+  let stewardRuntimeOverride: AgentRuntime | undefined;
   if (runtimeEnv !== undefined) {
     const parsed = AgentRuntime.safeParse(runtimeEnv.trim());
     if (!parsed.success) throw new Error(`Invalid Steward runtime: ${runtimeEnv}`);
-    stewardRuntime = parsed.data;
+    stewardRuntimeOverride = parsed.data;
   }
-  const dev = env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true';
-  if (stewardRuntime === 'fake' && !dev) {
+  if (stewardRuntimeOverride === 'fake' && !dev) {
     // The scripted fake adapter is for development and tests only (P8 wave 3 review).
     warnings.push(
-      `stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
-        `new Stewards run on their brain's runtime.`,
+      `GALACTIC_STEWARD_RUNTIME is fake, which is for development only (GALACTIC_DEV): ` +
+        `new Stewards run on their provider's runtime.`,
     );
-    stewardRuntime = undefined;
+    stewardRuntimeOverride = undefined;
   }
   const acpEnv = parseAcpCommand(env['GALACTIC_ACP_COMMAND']);
   const acp =
@@ -571,7 +597,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       budgets: { warnAtPercent },
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
       ...backupsOf(file.backups, env['GALACTIC_BACKUPS']),
-      ...(stewardRuntime ? { stewardRuntime } : {}),
+      ...(stewardRuntimeOverride ? { stewardRuntimeOverride } : {}),
+      ...(defaultProvider ? { defaultProvider } : {}),
+      ...(file.providers ? { providers: providersOf(file.providers) } : {}),
       ...(file.deliverables?.ide || file.deliverables?.declarations || file.deliverables?.runs
         ? {
             deliverables: {
@@ -598,6 +626,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     tokenGenerated,
     warnings,
   };
+}
+
+/** What a stored `stewardRuntime` becomes (P11-03); the others are dropped with a warning. */
+const UPGRADED_PROVIDER: Partial<Record<AgentRuntime, Provider>> = {
+  'claude-sdk': 'claude',
+  codex: 'chatgpt',
+  agy: 'gemini',
+};
+
+/** The providers' settings as stored, without empty entries. */
+function providersOf(
+  stored: Partial<Record<Provider, { model?: string | undefined }>>,
+): Partial<Record<Provider, { model?: string }>> {
+  const out: Partial<Record<Provider, { model?: string }>> = {};
+  for (const [provider, entry] of Object.entries(stored) as [Provider, { model?: string }][]) {
+    if (entry?.model) out[provider] = { model: entry.model };
+  }
+  return out;
 }
 
 /** The backups setting (P8-03): the file's values, the environment's on/off over them. */

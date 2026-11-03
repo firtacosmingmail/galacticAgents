@@ -45,7 +45,7 @@ function boot(caps?: CapsConfig) {
     log: { now: tickingClock(new Date(2026, 9, 1, 8).getTime()) },
     flushMs: 10,
     ...(caps ? { caps } : {}),
-    jobs: { stewardRuntime: () => 'fake' },
+    stewardRuntimeOverride: () => 'fake',
   });
   lives.push(c);
   scripts.attach(c.log.tables);

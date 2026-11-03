@@ -86,6 +86,11 @@ export function createTask(ctx: CommandContext, input: CreateTaskInput): Task {
     createdAt: ctx.now,
     updatedAt: ctx.now,
     ...(input.projectId ? { projectId: input.projectId } : {}),
+    // Its provider, model and flags (P11-02): what its Steward runs on (P11-03's resolver).
+    ...(input.provider ? { provider: input.provider } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.publishes ? { publishes: true } : {}),
+    ...(input.makesImages ? { makesImages: true } : {}),
     ...(input.meta ? { meta: input.meta } : {}),
   };
   ctx.tables.tasks.insert(task);

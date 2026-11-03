@@ -494,6 +494,71 @@ describe('AgentRuntime — status store wiring (P1-05)', () => {
   });
 });
 
+describe('AgentRuntime — models (P11-03)', () => {
+  it('resume keeps the spawn model', async () => {
+    const sessionStore = new Map<string, number>();
+    const first = make();
+    const adapter1 = new FakeAdapter({ speed: 0, sessionStore });
+    const opened: (string | undefined)[] = [];
+    const spawnFake = adapter1.spawn.bind(adapter1);
+    adapter1.spawn = (opts) => {
+      opened.push(opts.model);
+      return spawnFake(opts);
+    };
+    const runtime1 = new AgentRuntime({
+      log: first.log,
+      adapters: [adapter1],
+      transcripts: first.transcripts,
+      statuses: first.statuses,
+    });
+    const spawned = await runtime1.spawn(req('scenario:asks', { model: 'm1' }));
+    if (!spawned.ok) throw new Error(spawned.reason);
+    expect(opened).toEqual(['m1']);
+    expect(spawned.agent.meta).toMatchObject({ model: 'm1' });
+    await first.waitFor(() => first.status(spawned.agent.id)?.state === 'waiting_for_input');
+    await runtime1.shutdown();
+    await adapter1.dispose();
+
+    const adapter2 = new FakeAdapter({ speed: 0, sessionStore });
+    const resumed: (string | undefined)[] = [];
+    const resumeFake = adapter2.resumeSession.bind(adapter2);
+    adapter2.resumeSession = (ref, opts) => {
+      resumed.push(opts.model);
+      return resumeFake(ref, opts);
+    };
+    const runtime2 = new AgentRuntime({
+      log: first.log,
+      adapters: [adapter2],
+      transcripts: first.transcripts,
+      statuses: first.statuses,
+    });
+    const report = await runtime2.recover();
+    expect(report.resumed).toEqual([spawned.agent.id]);
+    expect(resumed).toEqual(['m1']);
+    await runtime2.dispose();
+    await runtime1.dispose();
+  });
+
+  it('records the provider of a Steward on a provider runtime', async () => {
+    const rig = make();
+    const agent = await spawnOk(rig, req('scenario:echo'));
+    expect(agent.meta?.['provider']).toBeUndefined();
+    const claude = new FakeAdapter({ speed: 0, runtime: 'claude-sdk' });
+    const runtime = new AgentRuntime({
+      log: rig.log,
+      adapters: [claude],
+      transcripts: rig.transcripts,
+      statuses: rig.statuses,
+    });
+    const result = await runtime.spawn(req('scenario:echo', { runtime: 'claude-sdk' }));
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.agent.meta).toMatchObject({ provider: 'claude' });
+    expect(result.agent.meta?.['model']).toBeUndefined();
+    await runtime.dispose();
+    await claude.dispose();
+  });
+});
+
 describe('AgentRuntime — phase review follow-ups (P1-32 … P1-34)', () => {
   const slowEcho: FakeScenario = {
     steps: [],

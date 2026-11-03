@@ -12,17 +12,16 @@ beforeEach(() => {
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 describe('loadConfig', () => {
-  it('reads the Steward runtime and the ACP agent command (P8-07)', () => {
+  it('reads the ACP agent command and the dev Steward runtime override (P8-07, P11-03)', () => {
     writeFileSync(
       join(home, 'config.json'),
       JSON.stringify({
         token: 'file-token-0123456789abcdef',
-        stewardRuntime: 'acp',
         acp: { command: 'gemini', args: ['--acp'], passEnv: ['GEMINI_API_KEY'] },
       }),
     );
     const fromFile = loadConfig({ GALACTIC_HOME: home }).config;
-    expect(fromFile.stewardRuntime).toBe('acp');
+    expect(fromFile.stewardRuntimeOverride).toBeUndefined();
     expect(fromFile.acp).toEqual({
       command: 'gemini',
       args: ['--acp'],
@@ -34,7 +33,7 @@ describe('loadConfig', () => {
       GALACTIC_STEWARD_RUNTIME: 'claude-sdk',
       GALACTIC_ACP_COMMAND: ' codex-acp  --verbose ',
     }).config;
-    expect(fromEnv.stewardRuntime).toBe('claude-sdk');
+    expect(fromEnv.stewardRuntimeOverride).toBe('claude-sdk');
     expect(fromEnv.envOverrides).toContain('stewardRuntime');
     expect(fromEnv.acp).toEqual({
       command: 'codex-acp',
@@ -44,6 +43,40 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ GALACTIC_HOME: home, GALACTIC_STEWARD_RUNTIME: 'cursor' })).toThrow(
       /Steward runtime/,
     );
+  });
+
+  it('upgrades a stored stewardRuntime to the default provider (P11-03)', () => {
+    const load = (stored: Record<string, unknown>) => {
+      writeFileSync(
+        join(home, 'config.json'),
+        JSON.stringify({ token: 'file-token-0123456789abcdef', ...stored }),
+      );
+      return loadConfig({ GALACTIC_HOME: home });
+    };
+    for (const [runtime, provider] of [
+      ['claude-sdk', 'claude'],
+      ['codex', 'chatgpt'],
+      ['agy', 'gemini'],
+    ] as const) {
+      const { config, warnings } = load({ stewardRuntime: runtime });
+      expect(config.defaultProvider).toBe(provider);
+      expect(config).not.toHaveProperty('stewardRuntime');
+      expect(warnings.some((w) => w.includes('stewardRuntime'))).toBe(false);
+    }
+    for (const runtime of ['acp', 'pty', 'fake']) {
+      const { config, warnings } = load({ stewardRuntime: runtime });
+      expect(config.defaultProvider).toBeUndefined();
+      expect(warnings).toContain(
+        `stewardRuntime "${runtime}" is no longer a setting; Stewards use the project's provider`,
+      );
+    }
+    // A default provider already stored wins over the old key.
+    expect(
+      load({ stewardRuntime: 'codex', defaultProvider: 'gemini' }).config.defaultProvider,
+    ).toBe('gemini');
+    expect(
+      load({ providers: { gemini: { model: 'gemini-3.8-flash-high' } } }).config.providers,
+    ).toEqual({ gemini: { model: 'gemini-3.8-flash-high' } });
   });
 
   it('reads acp.mode and allowPermissiveMode; refuses GALACTIC_* in passEnv; a JSON command', () => {
@@ -143,20 +176,17 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ GALACTIC_HOME: home })).toThrow(/clarificationPatterns/);
   });
 
-  it('drops a fake Steward runtime outside dev mode, with a warning (P8 wave 3 review)', () => {
-    writeFileSync(
-      join(home, 'config.json'),
-      JSON.stringify({ token: 'file-token-0123456789abcdef', stewardRuntime: 'fake' }),
-    );
-    const fromFile = loadConfig({ GALACTIC_HOME: home });
-    expect(fromFile.config.stewardRuntime).toBeUndefined();
-    expect(fromFile.warnings).toContainEqual(expect.stringMatching(/stewardRuntime is fake/));
+  it('drops a fake Steward runtime override outside dev mode, with a warning (P8 wave 3 review)', () => {
     const fromEnv = loadConfig({ GALACTIC_HOME: home, GALACTIC_STEWARD_RUNTIME: 'fake' });
-    expect(fromEnv.config.stewardRuntime).toBeUndefined();
+    expect(fromEnv.config.stewardRuntimeOverride).toBeUndefined();
     expect(fromEnv.warnings).toContainEqual(expect.stringMatching(/development only/));
-    const dev = loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '1' });
-    expect(dev.config.stewardRuntime).toBe('fake');
-    expect(dev.warnings.some((w) => w.includes('stewardRuntime'))).toBe(false);
+    const dev = loadConfig({
+      GALACTIC_HOME: home,
+      GALACTIC_DEV: '1',
+      GALACTIC_STEWARD_RUNTIME: 'fake',
+    });
+    expect(dev.config.stewardRuntimeOverride).toBe('fake');
+    expect(dev.warnings.some((w) => w.includes('GALACTIC_STEWARD_RUNTIME'))).toBe(false);
   });
 
   it('generates a token on first start, persists it with mode 0600 and reuses it afterwards', () => {

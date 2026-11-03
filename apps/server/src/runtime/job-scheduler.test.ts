@@ -101,8 +101,8 @@ function boot(o: BootOptions = {}) {
     log: { now: clock },
     flushMs: 10,
     ...(o.caps ? { caps: o.caps } : {}),
+    stewardRuntimeOverride: () => 'fake',
     jobs: {
-      stewardRuntime: () => 'fake',
       ...(o.timers ? { timers: o.timers } : {}),
       ...(o.intervalMs ? { intervalMs: o.intervalMs } : {}),
     },
@@ -739,7 +739,7 @@ describe("a run's end wakes no one (P10-04)", () => {
   it("the Steward's final turn ends the run quiet with its last text; the Waykeeper hears nothing", async () => {
     const clock = tickingClock(oct(1, 8).getTime());
     const h = brainHarness({
-      compose: { log: { now: clock }, jobs: { stewardRuntime: () => 'fake' } },
+      compose: { log: { now: clock }, stewardRuntimeOverride: () => 'fake' },
     });
     harnesses.push(h);
     const hq = await h.startHarmonizer();
