@@ -943,7 +943,8 @@ describe('ClaudeSdkAdapter — mapping gaps (P1-36)', () => {
       { rateLimit: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1_790_000_000 } },
       { text: 'done' },
     ]);
-    await adapter.spawn(spawnOpts('x'));
+    // A brain keeps today's behaviour on a rejected limit; a Steward's session ends (P11-07).
+    await adapter.spawn(spawnOpts('x', { role: 'waykeeper' }));
     await events.waitFor(has('agent.idle'));
     expect(
       events.items
@@ -953,6 +954,43 @@ describe('ClaudeSdkAdapter — mapping gaps (P1-36)', () => {
       'close to the five hour rate limit (92% used)',
       'waiting on the five hour rate limit until 2026-09-21T14:13:20Z',
     ]);
+  });
+
+  it('rejected rate limit ends with reason limit', async () => {
+    const { adapter, events } = make(() => [
+      { text: 'drawing the chart' },
+      { rateLimit: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1_793_000_000 } },
+      { text: 'never seen' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.failed'));
+    await sleep(50);
+    const failed = events.items.filter((e) => e.type === 'agent.failed');
+    expect(failed).toEqual([
+      expect.objectContaining({
+        type: 'agent.failed',
+        agentId: 'a-1',
+        reason: 'limit',
+        error: 'Claude usage limit reached',
+        resetsAt: '2026-10-26T07:33:20.000Z',
+      }),
+    ]);
+    // The one terminal event: nothing follows it (no idle, no stopped).
+    expect(types(events.items).slice(types(events.items).indexOf('agent.failed') + 1)).toEqual([]);
+  });
+
+  it('an error result naming the usage limit ends with reason limit', async () => {
+    const { adapter, events } = make(() => [
+      { resultIsError: 'Claude AI usage limit reached|1793000000' },
+    ]);
+    await adapter.spawn(spawnOpts('x'));
+    await events.waitFor(has('agent.failed'));
+    expect(events.items.find((e) => e.type === 'agent.failed')).toMatchObject({
+      reason: 'limit',
+      error: 'Claude usage limit reached',
+      resetsAt: '2026-10-26T07:33:20.000Z',
+    });
+    expect(types(events.items)).not.toContain('agent.idle');
   });
 
   it('an idle stop closes the input: the CLI exits on stdin EOF, no SIGTERM', async () => {

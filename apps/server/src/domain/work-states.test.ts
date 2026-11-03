@@ -107,6 +107,7 @@ describe('task state derivation', () => {
       'failed',
       'stopped',
       'interrupted',
+      'limited',
     ];
     for (const current of WorkState.options) {
       for (const phase of phases) {
@@ -119,6 +120,21 @@ describe('task state derivation', () => {
         }
       }
     }
+  });
+
+  it('a limited Steward leaves its task paused', () => {
+    // P11-07: a usage limit pauses the step; it is not a failure.
+    expect(deriveTaskState(facts({ agents: [ag('limited', 5)] }))).toBe('paused');
+    expect(deriveTaskState(facts({ agents: [ag('finished', 2), ag('limited', 5)] }))).toBe(
+      'paused',
+    );
+    // A Steward that took the step over decides once it runs or ends.
+    expect(deriveTaskState(facts({ agents: [ag('limited', 5), ag('running')] }))).toBe(
+      'in_progress',
+    );
+    expect(deriveTaskState(facts({ agents: [ag('limited', 5), ag('finished', 9)] }))).toBe(
+      'awaiting_closure',
+    );
   });
 
   it('names the deciding rule', () => {

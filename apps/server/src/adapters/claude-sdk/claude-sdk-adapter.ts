@@ -209,6 +209,8 @@ class Session {
   }
   lastCost: Cost | undefined;
   lastResult: string | undefined;
+  /** The reset time (unix seconds) the last `rate_limit_event` reported. */
+  limitResetsAt: number | undefined;
   /**
    * The open turn put text in the transcript (the model's words, a local command's output):
    * a successful result's text is then not repeated (P8-13 review S4).
@@ -234,6 +236,8 @@ class Session {
     readonly gate: PermissionGate,
     /** Opened with `resume` (the CLI must report this same session id). */
     readonly resumed: boolean,
+    /** A Steward's session ends on its subscription's usage limit (P11-07); a brain's does not. */
+    readonly endsOnLimit: boolean = false,
   ) {}
 
   turnEnd(): Promise<void> {
@@ -325,7 +329,13 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     }
     const sdk = await this.sdk();
     const sessionId = resume ?? randomUUID();
-    const session = new Session(sessionId, opts.agentId, opts.gate, resume !== undefined);
+    const session = new Session(
+      sessionId,
+      opts.agentId,
+      opts.gate,
+      resume !== undefined,
+      opts.role === 'steward',
+    );
     this.ended.delete(sessionId);
     this.sessions.set(sessionId, session);
     this.byAgent.set(opts.agentId, session);
@@ -624,6 +634,12 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         return;
       }
       case 'rate_limit_event': {
+        const info = (message as SdkRateLimitEvent).rate_limit_info;
+        if (info?.resetsAt !== undefined) session.limitResetsAt = info.resetsAt;
+        if (info?.status === 'rejected' && session.endsOnLimit) {
+          this.endOnLimit(session, info.resetsAt);
+          return;
+        }
         const summary = rateLimitSummary(message as SdkRateLimitEvent);
         // Only inside a turn: a progress event marks the agent working.
         if (summary && session.turnOpen)
@@ -646,6 +662,10 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         } else if (!session.interrupting && !session.stopping) {
           const what = m.subtype === 'success' ? 'an error' : m.subtype;
           const detail = m.errors?.length ? m.errors.join('; ') : (m.result ?? '');
+          if (session.endsOnLimit && isUsageLimitText(detail)) {
+            this.endOnLimit(session, limitResetOf(detail) ?? session.limitResetsAt);
+            return;
+          }
           this.emit(session, {
             type: 'agent.output',
             agentId,
@@ -1091,6 +1111,28 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     this.events.push(event);
   }
 
+  /**
+   * A Steward's subscription limit (P11-07; TECHNOLOGY §3.5): the session's one terminal event is
+   * `agent.failed{reason: 'limit', resetsAt}`, then the CLI is stopped — the runtime asks the user
+   * to switch or wait, and a wait resumes this session.
+   */
+  private endOnLimit(session: Session, resetsAt: number | undefined): void {
+    if (session.terminal || session.stopping) return;
+    this.terminal(session, {
+      type: 'agent.failed',
+      agentId: session.agentId,
+      error: CLAUDE_LIMIT_ERROR,
+      reason: 'limit',
+      ...(resetsAt !== undefined ? { resetsAt: new Date(resetsAt * 1000).toISOString() } : {}),
+      ...(session.lastCost ? { cost: session.lastCost } : {}),
+    });
+    session.stopping = true;
+    if (!session.process) return;
+    void this.opts.supervisor
+      .stop(session.agentId, { graceMs: this.opts.graceMs ?? 10_000, by: SYSTEM })
+      .catch((error: unknown) => this.onError(error, `stop ${session.agentId}`));
+  }
+
   private terminal(
     session: Session,
     event: Extract<AgentEvent, { type: 'agent.finished' | 'agent.failed' | 'agent.stopped' }>,
@@ -1159,6 +1201,23 @@ function interruptedBeforeAnswer(): SdkPermissionResult {
     message: 'The turn was interrupted before the user answered.',
     interrupt: true,
   };
+}
+
+/** The error of a Steward stopped by its usage limit (P11-07). */
+export const CLAUDE_LIMIT_ERROR = 'Claude usage limit reached';
+
+/**
+ * An error result in the subscription limit's words: "Claude AI usage limit reached|<unix s>",
+ * "You've hit your limit · resets 3pm", "5-hour limit reached".
+ */
+export function isUsageLimitText(text: string): boolean {
+  return /usage limit|hit your limit|limit reached/i.test(text);
+}
+
+/** The reset time an error result carries after a `|` ("…limit reached|1793000000"). */
+function limitResetOf(text: string): number | undefined {
+  const m = /\|(\d{9,11})\b/.exec(text);
+  return m ? Number(m[1]) : undefined;
 }
 
 /** A readable progress line for a subscription rate-limit event; none while all is well. */

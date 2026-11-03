@@ -627,6 +627,7 @@ export class FakeAdapter implements AgentAdapter {
           agentId,
           error: step.error,
           reason: step.reason,
+          ...(step.resetsAt ? { resetsAt: step.resetsAt } : {}),
           ...(step.cost ? { cost: step.cost } : {}),
         });
         return 'ended';

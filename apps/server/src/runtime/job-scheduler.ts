@@ -1,10 +1,12 @@
 import {
+  LIMIT_WAIT,
   PROVIDER_LABEL,
   isJobTask,
   jobIdOfTask,
   nextOccurrence,
   type Actor,
   type Agent,
+  type Event,
   type EventEnvelope,
   type Id,
   type Job,
@@ -15,12 +17,13 @@ import {
 } from '@galactic/protocol';
 import { jobRunPrompt } from '../brains/job-prompt.js';
 import type { Commands } from '../domain/commands.js';
-import type { EventLog } from '../domain/event-log.js';
+import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { RETRY_NOTE } from '../domain/findings.js';
 import { JOB_TICK_MS, endJobRun, jobMemory, runPurpose, startJobRun } from '../domain/job-runs.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
 import { reaskInterruptedPublish } from '../domain/publish.js';
 import { FINISHED_WORK } from '../domain/states.js';
+import { storedSwitchOf } from '../domain/usage-limits.js';
 import type { AgentRuntime, TurnEnd } from './agent-runtime.js';
 import type { Timers } from './archival.js';
 import { stewardChooser, type ChooseSteward } from './steward-choice.js';
@@ -51,6 +54,13 @@ export { JOB_TICK_MS };
  * Steward reported (`run.meta.report`, written by `report_run`) or `quiet` with its last text, and
  * the Steward is stopped; a failed Steward fails its run. Job-run Stewards report to no one and
  * wake no one (`steward-reports.ts`, `wake.ts`).
+ *
+ * A Steward stopped by its provider's usage limit (P11-07, decision 148) ends its run `limited`:
+ * the job stays active, nothing pauses, no failure question — `limits.askForRun` opens the one
+ * usage-limit question and sets `job.limitQuestionId`, in the same queue, so no run starts in
+ * between. While that question is open (or answered "wait" and not yet retried) the job starts no
+ * run; answered "switch", its next run alone uses the chosen model (`meta.switchTo`), and starting
+ * it clears `limitQuestionId`.
  */
 
 /** What one tick did: run ids, except `waited` (job ids: no run row was written). */
@@ -61,10 +71,18 @@ export interface JobTickReport {
   ended: Id[];
 }
 
+/** Where a run's usage limit becomes its question (`UsageLimits`, P11-07). */
+export interface RunLimits {
+  /** Opens the job's usage-limit question and sets `job.limitQuestionId`. */
+  askForRun(failed: Extract<Event, { type: 'agent.failed' }>, run: JobRun): Promise<void>;
+}
+
 export interface JobSchedulerOptions {
   log: EventLog;
   commands: Commands;
   runtime: AgentRuntime;
+  /** The usage-limit questions (P11-07); absent: a limited run asks nothing (tests). */
+  limits?: RunLimits;
   /**
    * The provider, runtime and model of a job-run Steward (P11-03): a follow-up's own provider
    * first, then the job's (`resolveStewardChoice`). Default: the resolver without Settings.
@@ -264,6 +282,10 @@ export class JobScheduler {
     const { tables } = log;
     const job = tables.jobs.get(jobId);
     if (!job || job.state !== 'active') return;
+    // A usage limit waits for the user's answer, and a "wait" for its reset (P11-07).
+    const limit = job.limitQuestionId ? tables.questions.get(job.limitQuestionId) : undefined;
+    if (limit && (limit.status === 'open' || limit.answer === LIMIT_WAIT)) return;
+    const switchTo = limit?.status === 'answered' ? storedSwitchOf(limit) : undefined;
     const now = this.now();
     const followUp = job.followUps[0];
     const due = followUp ? now : this.dueOf(job);
@@ -307,18 +329,19 @@ export class JobScheduler {
         ...(followUp ? { followUp } : {}),
         ...(note !== undefined && !followUp ? { note } : {}),
       });
+      const current = jobOf(ctx, job.id);
+      const changes: JobChanges = {};
+      // The limit question is used up: its switch applies to this run only (P11-07).
+      if (current.limitQuestionId) changes.limitQuestionId = null;
       if (purpose !== 'follow_up') {
         // The next occurrence after now: several missed ones make one run (plan constraints).
-        const current = jobOf(ctx, job.id);
-        const changes: JobChanges = {
-          nextRunAt: nextOccurrence(current.schedule, now).toISOString(),
-        };
+        changes.nextRunAt = nextOccurrence(current.schedule, now).toISOString();
         if (note !== undefined) {
           const { [RETRY_NOTE]: _used, ...rest } = current.meta ?? {};
           changes.meta = rest;
         }
-        writeJob(ctx, current, changes);
       }
+      if (Object.keys(changes).length > 0) writeJob(ctx, current, changes);
       return started;
     }).value;
     report.started.push(run.id);
@@ -331,8 +354,11 @@ export class JobScheduler {
     const project = tables.projects.get(job.projectId);
     const area = tables.areas.get(job.areaId);
     const choice = (this.opts.chooseSteward ?? stewardChooser())({
-      job,
-      ...(followUp ? { followUp: true } : {}),
+      // A switch after a usage limit: this run on the chosen model, the job's own unchanged.
+      job: switchTo
+        ? { provider: switchTo.provider, ...(switchTo.model ? { model: switchTo.model } : {}) }
+        : job,
+      ...(followUp && !switchTo ? { followUp: true } : {}),
       ...(project ? { project } : {}),
       supervisorRuntime: supervisor.runtime,
     });
@@ -460,6 +486,12 @@ export class JobScheduler {
           async () => {
             const run = this.runOf(agentId);
             if (!run) return;
+            if (reason === 'limit') {
+              // Not a failure: the run ends `limited` and the user is asked (P11-07).
+              this.limited(run.id);
+              await this.opts.limits?.askForRun(event, run);
+              return;
+            }
             const unanswered =
               reason === 'cap' ? this.unansweredPermission(agentId, seq) : undefined;
             this.fail(
@@ -520,10 +552,13 @@ export class JobScheduler {
         return;
       }
       case 'question.answered': {
-        // A failure answer made the job active and due: run it now (only while the timer runs).
+        // A failure answer made the job active and due, and so did a usage limit's switch
+        // (P11-07): run it now (only while the timer runs).
         if (this.handle === undefined) return;
-        const jobId = this.opts.log.tables.questions.get(event.questionId)?.context.jobFailure
-          ?.jobId;
+        const q = this.opts.log.tables.questions.get(event.questionId);
+        const jobId =
+          q?.context.jobFailure?.jobId ??
+          (q && storedSwitchOf(q) ? q.context.usageLimit?.jobId : undefined);
         if (jobId) void this.retryNow(jobId);
         return;
       }
@@ -614,21 +649,44 @@ export class JobScheduler {
     if (!run || run.outcome !== 'running') return false;
     this.opts.log.runCommand((ctx) => {
       endJobRun(ctx, { runId, outcome: 'interrupted', ...(byUser ? { keepSchedule: true } : {}) });
-      const job = jobOf(ctx, run.jobId);
-      if (job.state === 'stopped' || byUser) return;
-      const changes: JobChanges = {};
-      const followUp = run.followUp;
-      if (followUp?.kind === 'publish' && spawned) {
-        // Never re-run on the old approval: it may already have posted (ruling R13).
-        reaskInterruptedPublish(ctx, followUp, run.agentId);
-      } else if (followUp && !job.followUps.some((f) => f.questionId === followUp.questionId)) {
-        changes.followUps = [followUp, ...job.followUps];
-      }
-      if (run.note && job.meta?.[RETRY_NOTE] === undefined) {
-        changes.meta = { ...(job.meta ?? {}), [RETRY_NOTE]: run.note };
-      }
-      writeJob(ctx, job, changes);
+      if (!byUser) this.carryOver(ctx, run, spawned);
     });
     return true;
+  }
+
+  /**
+   * Records the run `limited` (P11-07): its job stays active and is not due again — the limit
+   * question decides when the next run starts — and what the run carried goes back on the job,
+   * as for an interrupted run.
+   */
+  private limited(runId: Id): void {
+    const run = this.opts.log.tables.jobRuns.get(runId);
+    if (!run || run.outcome !== 'running') return;
+    this.opts.log.runCommand((ctx) => {
+      endJobRun(ctx, { runId, outcome: 'limited' });
+      this.carryOver(ctx, run, true);
+    });
+  }
+
+  /**
+   * A run cut short gives back what it carried: its follow-up to the front of the job's queue —
+   * except a publish whose Steward was spawned, which may already have gone out, so a fresh
+   * publish question asks again (ruling R13) — and its retry note to the job.
+   */
+  private carryOver(ctx: CommandContext, run: JobRun, spawned: boolean): void {
+    const job = jobOf(ctx, run.jobId);
+    if (job.state === 'stopped') return;
+    const changes: JobChanges = {};
+    const followUp = run.followUp;
+    if (followUp?.kind === 'publish' && spawned) {
+      // Never re-run on the old approval: it may already have posted (ruling R13).
+      reaskInterruptedPublish(ctx, followUp, run.agentId);
+    } else if (followUp && !job.followUps.some((f) => f.questionId === followUp.questionId)) {
+      changes.followUps = [followUp, ...job.followUps];
+    }
+    if (run.note && job.meta?.[RETRY_NOTE] === undefined) {
+      changes.meta = { ...(job.meta ?? {}), [RETRY_NOTE]: run.note };
+    }
+    writeJob(ctx, job, changes);
   }
 }

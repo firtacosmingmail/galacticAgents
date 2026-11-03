@@ -35,6 +35,7 @@ import { BudgetWatcher } from './budgets.js';
 import { DEFAULT_CAPS, type CapsConfig } from './caps.js';
 import { JobScheduler } from './job-scheduler.js';
 import { ProviderCatalog } from './provider-catalog.js';
+import { UsageLimits } from './usage-limits.js';
 import { PublishAllowanceStore } from './publish-allowance.js';
 import { stewardChooser } from './steward-choice.js';
 import { StorageMonitor } from './storage-health.js';
@@ -103,6 +104,11 @@ export interface ComposeOptions {
    * Stewards run on the job's provider (`resolveStewardChoice`, P11-03).
    */
   jobs?: { intervalMs?: number; timers?: Timers };
+  /**
+   * Usage limits (P11-07): how often answered waits are checked (default 60 s; `0`: no timer,
+   * tests call `usageLimits.tick()`).
+   */
+  usageLimits?: { tickMs?: number; timers?: Timers };
   /**
    * Transcript retention (P8-02): `policy` from the settings (default
    * `DEFAULT_TRANSCRIPT_RETENTION`); the timer runs only with an `intervalMs`, like archival
@@ -204,6 +210,8 @@ export interface ComposedRuntime {
   transcriptRetention: TranscriptRetention;
   /** The job scheduler (P10-04); its timer runs when composed with an interval or started. */
   jobs: JobScheduler;
+  /** A Steward's usage limit: the one switch-or-wait question and its answer (P11-07). */
+  usageLimits: UsageLimits;
   /** The one-shot allowances approved publishes arm (P11-06). */
   publishAllowances: PublishAllowanceStore;
   /** A Steward's processes: list, stop, sweep (P4-14), when composed with `processes`. */
@@ -498,10 +506,22 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     ...(opts.onError ? { onError: (e: unknown) => opts.onError!(e, 'transcript retention') } : {}),
   });
   if (tr?.intervalMs) transcriptRetention.start(tr.intervalMs);
+  // Built before the scheduler: a job run's limit is asked in the scheduler's queue (P11-07).
+  const usageLimits = new UsageLimits({
+    log,
+    commands,
+    catalog,
+    chooseSteward,
+    resume: (agentId, prompt) => runtime.resumeAfterLimit(agentId, prompt),
+    ...(opts.usageLimits?.tickMs !== undefined ? { tickMs: opts.usageLimits.tickMs } : {}),
+    ...(opts.usageLimits?.timers ? { timers: opts.usageLimits.timers } : {}),
+    ...(opts.onError ? { onError: opts.onError } : {}),
+  });
   const jobs = new JobScheduler({
     log,
     commands,
     runtime,
+    limits: usageLimits,
     chooseSteward,
     ...(opts.jobs?.timers ? { timers: opts.jobs.timers } : {}),
     onError: (e: unknown) => opts.onError?.(e, 'job scheduler'),
@@ -656,6 +676,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     archival,
     transcriptRetention,
     jobs,
+    usageLimits,
     publishAllowances,
     ...(processes ? { processes } : {}),
     budgets,
@@ -756,6 +777,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       publishRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       jobs.dispose();
+      usageLimits.dispose();
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();
@@ -779,6 +801,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       publishRelay.stop();
       for (const disarm of disarmHarmonizer.splice(0)) disarm();
       jobs.dispose();
+      usageLimits.dispose();
       archival.stop();
       transcriptRetention.stop();
       reports.dispose();

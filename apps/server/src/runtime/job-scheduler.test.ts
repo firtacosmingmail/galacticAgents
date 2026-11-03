@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_PERMISSION_POLICY,
+  LIMIT_WAIT,
   type Actor,
   type Event,
   type Id,
@@ -878,6 +879,136 @@ describe('job scheduler (P10-04)', () => {
     expect(stewardsOf(c, job.taskId)).toEqual([]);
     expect(jobNow(c, job.id).followUps).toEqual([followUp]);
     expect(c.log.tables.questions.all().filter((q) => q.kind === 'publish')).toEqual([]);
+  });
+
+  it('a limited run does not pause the job', async () => {
+    const resetsAt = oct(1, 14).toISOString();
+    let spawns = 0;
+    const { c, clock } = boot({
+      // The first run hits the subscription's limit; later runs go through.
+      scenario: () =>
+        spawns++ === 0
+          ? {
+              steps: [
+                { kind: 'fail', error: 'Claude usage limit reached', reason: 'limit', resetsAt },
+              ],
+            }
+          : ECHO,
+    });
+    const { job } = await longTermJob(c);
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    await until(ended(c, job.id), 'the limited run');
+    await until(() => jobNow(c, job.id).limitQuestionId !== undefined, 'the limit question');
+    const [run] = runsOf(c, job.id);
+    expect(run).toMatchObject({ outcome: 'limited' });
+    const limitedJob = jobNow(c, job.id);
+    expect(limitedJob.state).toBe('active');
+    expect(limitedJob.pausedReason).toBeUndefined();
+    expect(limitedJob.lastRun).toMatchObject({ outcome: 'limited' });
+    expect(c.log.tables.questions.all().filter((q) => q.context.jobFailure)).toEqual([]);
+    const question = c.log.tables.questions.get(limitedJob.limitQuestionId!)!;
+    expect(question).toMatchObject({
+      status: 'open',
+      holder: { type: 'user' },
+      meta: { toUser: true, jobOwned: true },
+      context: {
+        usageLimit: { provider: 'claude', jobId: job.id, runId: run!.id, resetsAt, switchTo: [] },
+        options: [LIMIT_WAIT],
+      },
+    });
+
+    // No new run while the question is open, even when the next one is due.
+    setTo(clock, oct(2, 9));
+    expect((await c.jobs.tick()).started).toEqual([]);
+    expect(runsOf(c, job.id)).toHaveLength(1);
+
+    // Waiting: the reset is already past, so the wait is over at once and the job due now.
+    await c.commands.answerQuestion({ questionId: question.id, answer: LIMIT_WAIT, by: USER });
+    await c.usageLimits.settled();
+    expect(jobNow(c, job.id).limitQuestionId).toBeUndefined();
+    expect(jobNow(c, job.id).nextRunAt! <= c.log.clock()).toBe(true);
+    const report = await c.jobs.tick();
+    expect(report.started).toHaveLength(1);
+    await until(() => runsOf(c, job.id).at(-1)?.outcome === 'quiet', 'the run after the wait');
+    expect(jobNow(c, job.id).state).toBe('active');
+  });
+
+  it('a switched job run uses the chosen model once; the job keeps its provider', async () => {
+    let spawns = 0;
+    const limitedFirst = () =>
+      spawns++ === 0
+        ? {
+            name: 'limited',
+            scenario: {
+              steps: [
+                {
+                  kind: 'fail' as const,
+                  error: 'Gemini usage limit reached',
+                  reason: 'limit' as const,
+                },
+              ],
+            },
+          }
+        : { name: 'echo', scenario: ECHO };
+    const agy = new FakeAdapter({
+      speed: 0,
+      runtime: 'agy',
+      models: [
+        {
+          id: 'gemini-3-flash',
+          label: 'Gemini 3 Flash',
+          family: 'gemini',
+          isDefault: false,
+          capabilities: ['text'],
+        },
+      ],
+      scenarioFor: limitedFirst,
+    });
+    const codex = new FakeAdapter({
+      speed: 0,
+      runtime: 'codex',
+      models: [
+        {
+          id: 'gpt-5.6',
+          label: 'GPT-5.6',
+          family: 'gpt',
+          isDefault: false,
+          capabilities: ['text'],
+        },
+      ],
+      scenarioFor: limitedFirst,
+    });
+    const { c, clock } = boot({ providers: [agy, codex] });
+    const { job } = await longTermJob(c, { provider: 'gemini' });
+    // The job's exact model (the job card sets it; written here directly).
+    c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { model: 'gemini-3-flash' }));
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    await until(() => jobNow(c, job.id).limitQuestionId !== undefined, 'the limit question');
+    const question = c.log.tables.questions.get(jobNow(c, job.id).limitQuestionId!)!;
+    expect(question.context.options).toEqual(['Switch to ChatGPT · GPT-5.6', LIMIT_WAIT]);
+
+    await c.commands.answerQuestion({
+      questionId: question.id,
+      answer: 'Switch to ChatGPT · GPT-5.6',
+      by: USER,
+    });
+    const report = await c.jobs.tick();
+    expect(report.started).toHaveLength(1);
+    const switched = c.log.tables.agents.get(runsOf(c, job.id).at(-1)!.agentId!)!;
+    expect(switched.runtime).toBe('codex');
+    expect(switched.meta).toMatchObject({ model: 'gpt-5.6' });
+    expect(jobNow(c, job.id)).toMatchObject({ provider: 'gemini', model: 'gemini-3-flash' });
+    expect(jobNow(c, job.id).limitQuestionId).toBeUndefined();
+    await until(ended(c, job.id), 'the switched run');
+
+    // The next run is the job's own provider again.
+    setTo(clock, oct(2, 9));
+    await c.jobs.tick();
+    const next = c.log.tables.agents.get(runsOf(c, job.id).at(-1)!.agentId!)!;
+    expect(next.runtime).toBe('agy');
+    expect(next.meta).toMatchObject({ model: 'gemini-3-flash' });
   });
 
   it('publish follow-up refused on Gemini', async () => {

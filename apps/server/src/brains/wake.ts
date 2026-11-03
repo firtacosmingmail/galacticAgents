@@ -382,7 +382,11 @@ export const WAKE_RULES: WakeRules = {
     },
   },
   'agent.finished': ended((e) => `finished${e.result ? `: ${quote(e.result)}` : ''}`),
-  'agent.failed': ended((e) => `failed (${e.reason}): ${quote(e.error)}`),
+  'agent.failed': ended((e) =>
+    e.reason === 'limit'
+      ? `stopped at its usage limit (${quote(e.error)}): its task is paused and the user is asked to switch model or wait; do not spawn another Steward for it`
+      : `failed (${e.reason}): ${quote(e.error)}`,
+  ),
   'agent.stalled': ended((e) => `has been silent for ${Math.round(e.silentForMs / 1000)} s`),
   'budget.set': {
     wakes: (e, s) => runsBudget(e.target, s) || restartable(e, s),

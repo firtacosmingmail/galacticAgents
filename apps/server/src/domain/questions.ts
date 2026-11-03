@@ -13,6 +13,7 @@ import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { applyJobAnswer } from './findings.js';
 import { approvedPublish } from './publish.js';
+import { applyLimitAnswer, checkLimitAnswer } from './usage-limits.js';
 
 /**
  * Question commands (P1-23, P2-01; SPEC §2.6, TECHNOLOGY §5.3). The server owns questions: an
@@ -267,6 +268,8 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
   });
   // A finding, failure notice, job spend or job publish: its action in this same transaction.
   applyJobAnswer(ctx, question, { isLiving: input.isLiving });
+  // A usage limit's choice is recorded with the answer (P11-07), so a restart still carries it out.
+  applyLimitAnswer(ctx, question);
   return question;
 }
 
@@ -335,8 +338,9 @@ export function checkAnswer(current: Question, input: AnswerInput): void {
 /**
  * The checks of an answer to a question with fixed actions (P10-05): a `spend` (and a `publish`,
  * P11-06) is answered by the user alone — never an agent, a supervisor or the system — with exactly `Approve` or `Refuse`
- * (free text is no approval); a finding with one of its actions. A failure question takes any
- * text: anything but "Stop the job" retries, the text passed on as a note.
+ * (free text is no approval); a finding with one of its actions; a usage limit (P11-07) by the
+ * user alone with one of its options. A failure question takes any text: anything but "Stop the
+ * job" retries, the text passed on as a note.
  */
 function checkFixedAnswer(question: Question, answer: string, by: Actor): void {
   if (question.kind === 'spend' || question.kind === 'publish') {
@@ -356,6 +360,7 @@ function checkFixedAnswer(question: Question, answer: string, by: Actor): void {
     }
     return;
   }
+  checkLimitAnswer(question, answer, by);
   const finding = question.context.finding;
   if (finding && !(FINDING_ACTIONS[finding.kind] as readonly string[]).includes(answer)) {
     throw new DomainError(

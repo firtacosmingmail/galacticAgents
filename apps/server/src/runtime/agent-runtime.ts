@@ -240,6 +240,8 @@ export interface ReopenOptions {
    * logged.
    */
   onFallback?: (fresh: Promise<SpawnResult>) => void;
+  /** A Steward stopped by its usage limit (`resumeAfterLimit`): `failed`, not `interrupted`. */
+  afterLimit?: boolean;
 }
 
 /** A reopen's outcome: `resumed` from the session ref, or a `fresh` session on the same row. */
@@ -1399,6 +1401,26 @@ export class AgentRuntime {
   }
 
   /**
+   * Reopens a Steward its provider's usage limit stopped (P11-07, decision 148), from its saved
+   * session, with `prompt` as its first message — the user chose to wait and the limit reset.
+   * Refused unless its last end was `agent.failed{reason: 'limit'}` and its runtime can resume
+   * that session; the caller then starts a new Steward instead.
+   */
+  async resumeAfterLimit(agentId: Id, prompt: string): Promise<ReopenResult> {
+    const agent = this.opts.log.tables.agents.get(agentId);
+    if (!agent || agent.role !== 'steward') return { ok: false, reason: `no Steward ${agentId}` };
+    const [failed] = this.opts.log.latestOf('agent.failed', agentId, 1);
+    const limited = failed?.event.type === 'agent.failed' && failed.event.reason === 'limit';
+    if (!limited || this.opts.statuses.get(agentId)?.state !== 'failed') {
+      return { ok: false, reason: `agent ${agentId} was not stopped by a usage limit` };
+    }
+    if (!agent.sessionRef || !this.adapters.get(agent.runtime)?.resumeSession) {
+      return { ok: false, reason: `runtime ${agent.runtime} cannot resume its session` };
+    }
+    return this.reopenOne(agentId, undefined, { prompt, afterLimit: true });
+  }
+
+  /**
    * `restart` (the user's action, never startup recovery): an agent whose runtime cannot resume
    * sessions (PTY, P8-08; TECHNOLOGY §3.3) starts again afresh from its first prompt, in the same
    * working directory — the "restart" its interrupted state offers. Startup leaves it interrupted.
@@ -1425,11 +1447,14 @@ export class AgentRuntime {
   }
 
   /** Why `agentId` cannot be reopened now, or `undefined`. */
-  private refuseReopen(agentId: Id): { ok: false; reason: string } | undefined {
+  private refuseReopen(
+    agentId: Id,
+    expected: 'interrupted' | 'failed' = 'interrupted',
+  ): { ok: false; reason: string } | undefined {
     if (this.live.has(agentId)) return { ok: false, reason: `agent ${agentId} is running` };
     const state = this.opts.statuses.get(agentId)?.state;
-    if (state !== 'interrupted') {
-      return { ok: false, reason: `agent ${agentId} is ${state ?? 'unknown'}, not interrupted` };
+    if (state !== expected) {
+      return { ok: false, reason: `agent ${agentId} is ${state ?? 'unknown'}, not ${expected}` };
     }
     const agent = this.opts.log.tables.agents.get(agentId);
     if (!agent) return { ok: false, reason: `no agent ${agentId}` };
@@ -1512,7 +1537,7 @@ export class AgentRuntime {
     known: AgentHistory | undefined,
     opts: ReopenOptions,
   ): Promise<ReopenResult> {
-    const refused = this.refuseReopen(agentId);
+    const refused = this.refuseReopen(agentId, opts.afterLimit ? 'failed' : 'interrupted');
     if (refused) return refused;
     const agent = this.opts.log.tables.agents.get(agentId)!;
     const meta = (agent.meta ?? {}) as {
