@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   AgentEvent,
@@ -582,7 +584,10 @@ describe('ClaudeSdkAdapter — brains, bare, tools', () => {
     const options = wk.sdk.calls[0]!.options;
     expect(options.settingSources).toEqual(['user']);
     expect(options.strictMcpConfig).toBeUndefined();
-    expect(options.settings).toEqual({ disableAllHooks: true });
+    expect(options.settings).toMatchObject({ disableAllHooks: true });
+    expect((options.settings as { claudeMdExcludes: string[] }).claudeMdExcludes).toContain(
+      join(process.env['CLAUDE_CONFIG_DIR'] ?? join(homedir(), '.claude'), 'CLAUDE.md'),
+    );
     expect(options.skills).toEqual([]);
     expect(options.systemPrompt).toBe('You are the Waykeeper.');
     // Only the host's own tools are pre-allowed; the connector's call went to the gate and asks.
@@ -620,7 +625,14 @@ describe('ClaudeSdkAdapter — brains, bare, tools', () => {
       settingSources: ['user', 'project', 'local'],
     });
     const isolated = { settingSources: [], strictMcpConfig: true };
-    const userMcp = { settingSources: ['user'], settings: { disableAllHooks: true }, skills: [] };
+    const userMcp = {
+      settingSources: ['user'],
+      settings: {
+        disableAllHooks: true,
+        claudeMdExcludes: ['/cfg/CLAUDE.md', '/cfg/rules/**'],
+      },
+      skills: [],
+    };
     expect(sessionSettings('harmonizer')).toEqual(isolated);
     expect(sessionSettings('waykeeper')).toEqual(isolated);
     for (const [mode, harmonizer, waykeeper] of [
@@ -628,8 +640,9 @@ describe('ClaudeSdkAdapter — brains, bare, tools', () => {
       ['waykeepers', isolated, userMcp],
       ['all', userMcp, userMcp],
     ] as const) {
-      expect(sessionSettings('harmonizer', { brainUserMcp: mode })).toEqual(harmonizer);
-      expect(sessionSettings('waykeeper', { brainUserMcp: mode })).toEqual(waykeeper);
+      const o = { brainUserMcp: mode, claudeConfigDir: '/cfg' };
+      expect(sessionSettings('harmonizer', o)).toEqual(harmonizer);
+      expect(sessionSettings('waykeeper', o)).toEqual(waykeeper);
     }
     // A brain never gets the repository's own settings, whatever the mode.
     for (const mode of ['none', 'waykeepers', 'all'] as const)
