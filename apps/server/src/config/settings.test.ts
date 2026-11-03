@@ -159,6 +159,23 @@ describe('SettingsService (P25-01)', () => {
     );
   });
 
+  it("brains' MCP servers: default waykeepers, saved locally only, applied at the next start", () => {
+    const { env, settings, file } = setup();
+    expect(settings.current().brainUserMcp).toBe('waykeepers');
+    expect(settings.response().restartRequired).toEqual([]);
+    expect(refusal(() => settings.update({ brainUserMcp: 'all' }, {}))?.code).toBe(
+      'remote_settings',
+    );
+    const res = settings.update({ brainUserMcp: 'all' }, local);
+    expect(res.settings.brainUserMcp).toBe('all');
+    expect(res.restartRequired).toEqual(['brainUserMcp']); // the adapter reads it at start
+    expect(file()['brainUserMcp']).toBe('all');
+    expect(loadConfig(env).config.brainUserMcp).toBe('all'); // the restart keeps it
+    expect(settings.update({ brainUserMcp: 'waykeepers' }, local).restartRequired).toEqual([]);
+    writeFileSync(file.length >= 0 ? loadConfig(env).config.configPath : '', JSON.stringify({ ...file(), brainUserMcp: 'everyone' }));
+    expect(() => loadConfig(env)).toThrow();
+  });
+
   it('reports a hand-edited first-run marker as a timestamp, still done (P25-08)', () => {
     const { config, settings } = setup();
     config.setupCompletedAt = '2026-10-01';
