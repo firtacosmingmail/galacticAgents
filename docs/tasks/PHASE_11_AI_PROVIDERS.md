@@ -1,7 +1,7 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-02 · **Task status:** P11-02 in progress (protocol done, migration 0017 remains); P11-01 done (2026-11-02)
-**Phase status:** in progress (1/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
+**Current task:** P11-03 · **Task status:** P11-03 todo; P11-01 and P11-02 done (2026-11-02)
+**Phase status:** in progress (2/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -58,7 +58,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Acceptance:** `docs/tasks/notes/P11-01-provider-spikes.md` answers every question in the brief, each with its evidence or a recorded reason it was impossible; fixtures under `apps/server/src/adapters/{codex,agy}/fixtures/` contain no account ids, emails or tokens; `scripts/spikes/agy-hook-probe.mjs` re-runs the hook probes; the Ruling line is present.
 
 ### P11-02 — Protocol and storage
-- **Status:** in progress (plan Task 2 done; Task 3 remains) · **Depends on:** P11-01 · **Parallel with:** —
+- **Status:** done (2026-11-02) · **Depends on:** P11-01 · **Parallel with:** —
 - Plan Tasks 2–3: `providers.ts` (providers, models, usage, limits), `AgentRuntime` `codex`/`agy`, `QuestionKind` `publish`, limit fields, events, `Settings.providers`; migration 0017 and table mappers.
 - **Acceptance:** every new type and event round-trips; `stewardRuntime` stays deprecated but present; migration 0017 rebuilds `questions` and `job_runs` with the widened CHECKs and a fresh and an upgraded database agree.
 
