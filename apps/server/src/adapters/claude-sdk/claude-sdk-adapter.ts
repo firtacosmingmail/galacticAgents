@@ -137,8 +137,10 @@ export type SessionSettings = Pick<
  * How a session of `role` loads Claude Code's own configuration (pure; TECHNOLOGY §3.1).
  *
  * - **Steward**: a normal Claude Code session in its worktree (decision 17): `stewardSources`
- *   (default user + project + local), so the repository's `CLAUDE.md`, `AGENTS.md`, `.claude/`
- *   settings, skills, agents, commands, hooks and `.mcp.json` load, and with `user` the user's
+ *   (default user + project + local), so the repository's `CLAUDE.md` (or its `AGENTS.md` when it
+ *   has no `CLAUDE.md`: the CLI's default `claude-md-or-agents-md`), `.claude/` settings, skills,
+ *   agents, commands, rules, hooks and `.mcp.json` load (not `.agents/skills`: the CLI does not
+ *   read it), and with `user` the user's
  *   plugins, MCP servers and claude.ai connectors. Never strict.
  * - **Brain without user MCP**: isolated, `settingSources: []` and strict: only the host's
  *   in-process `galactic` server (when it has tools).
@@ -171,7 +173,11 @@ export function sessionSettings(
     settings: {
       disableAllHooks: true,
       // The user's own instructions are for the user's sessions, not for a brain.
-      claudeMdExcludes: [join(configDir, 'CLAUDE.md'), join(configDir, 'rules', '**')],
+      claudeMdExcludes: [
+        join(configDir, 'CLAUDE.md'),
+        join(configDir, 'AGENTS.md'),
+        join(configDir, 'rules', '**'),
+      ],
     },
     skills: [],
   };

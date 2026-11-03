@@ -629,7 +629,7 @@ describe('ClaudeSdkAdapter — brains, bare, tools', () => {
       settingSources: ['user'],
       settings: {
         disableAllHooks: true,
-        claudeMdExcludes: ['/cfg/CLAUDE.md', '/cfg/rules/**'],
+        claudeMdExcludes: ['/cfg/CLAUDE.md', '/cfg/AGENTS.md', '/cfg/rules/**'],
       },
       skills: [],
     };
