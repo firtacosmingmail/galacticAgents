@@ -105,7 +105,7 @@ export interface BrainRunnerOptions {
   /** Handed to the brain's tools as `ctx.chooseSteward` (P11-03). */
   chooseSteward?: ChooseSteward;
   /** Handed to the brain's tools as `ctx.catalog` (P11-08). */
-  catalog?: Pick<ProviderCatalog, 'check'>;
+  catalog?: Pick<ProviderCatalog, 'check' | 'defaults'>;
   /** Handed to the brain's tools as `ctx.deliverables` (P9-04). */
   deliverables?: DeliverableService;
   onError?: (error: unknown, context: string) => void;
@@ -395,6 +395,7 @@ export class BrainRunner {
       return await this.definition.startNotes({
         ...(brainId ? { brainId } : {}),
         role: this.definition.role,
+        ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
         resumed,
         commands: this.opts.commands,
         queries: this.opts.queries,

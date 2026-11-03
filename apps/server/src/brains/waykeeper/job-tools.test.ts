@@ -562,6 +562,36 @@ describe('job cards carry providers and models (P11-08)', () => {
     expect(h.log.tables.proposals.all()).toHaveLength(0);
   });
 
+  it.each([[{ provider: 'gemini', followUpModel: 'opus' }], [{ followUpModel: 'opus' }]])(
+    'a follow-up model without a follow-up provider is refused (%j)',
+    async (extra) => {
+      const project = await longTermProject();
+      const { out } = await waykeeperCalling(project, 'propose_job', {
+        area: 'Feedback',
+        ...DRAFT,
+        ...extra,
+      });
+      expect(out.result).toMatchObject({ ok: false, error: 'invalid' });
+      expect((out.result as { message?: string }).message).toContain(
+        'followUpModel needs followUpProvider',
+      );
+      expect(h.log.tables.proposals.all()).toHaveLength(0);
+    },
+  );
+
+  it('a change card refuses a follow-up model without a follow-up provider', async () => {
+    const project = await longTermProject();
+    const job = await existingJob(project, { followUpProvider: 'chatgpt' });
+    const { out } = await waykeeperCalling(project, 'propose_job_change', {
+      jobId: job.id,
+      changes: { followUpModel: 'gpt-6-luna' },
+    });
+    expect((out.result as { message?: string }).message).toContain(
+      'followUpModel needs followUpProvider',
+    );
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+  });
+
   it('a job model the provider does not list is refused before any card', async () => {
     const project = await longTermProject();
     const { out } = await waykeeperCalling(project, 'propose_job', {

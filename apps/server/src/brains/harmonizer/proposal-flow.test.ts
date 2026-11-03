@@ -491,6 +491,149 @@ describe('the Harmonizer carries providers (P11-08)', () => {
     await h.done();
     expect(heard).toHaveLength(1);
     expect(heard[0]).toContain(note);
+    // In the first prompt of the session, the turn that plans (not a message after it).
+    const wk = h.brains.find((b) => b.turns.some((t) => t.prompt.includes(note)))!;
+    expect(wk.turns[0]!.prompt).toContain(note);
+    expect(wk.turns.filter((t) => t.prompt.includes(note))).toHaveLength(1);
+  });
+
+  it('a standalone task takes provider and model, not a providerNote, and its task keeps them', async () => {
+    const { h, definition } = setup();
+    const outs: { ok: boolean; message?: string }[] = [];
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('note', async (t) => {
+            outs.push(
+              await t.try('propose', {
+                type: 'standalone_task',
+                requestText: 'x',
+                name: 'Fix',
+                rationale: 'r',
+                providerNote: 'use gemini',
+              }),
+            );
+            outs.push(
+              await t.try('propose', {
+                type: 'standalone_task',
+                requestText: 'x',
+                name: 'Fix',
+                rationale: 'r',
+                provider: 'chatgpt',
+                model: 'gpt-9',
+              }),
+            );
+            outs.push(
+              await t.try('propose', {
+                type: 'new_project',
+                requestText: 'x',
+                name: 'P',
+                kind: 'planet',
+                rationale: 'r',
+                provider: 'chatgpt',
+              }),
+            );
+          })
+          .once('ok', async (t) => {
+            await t.call('propose', {
+              type: 'standalone_task',
+              requestText: 'Fix it with GPT',
+              name: 'Fix',
+              rationale: 'r',
+              provider: 'chatgpt',
+              model: 'GPT 5.6 terra',
+            });
+          })
+          .once(approvedLine, async (t) => {
+            const proposalId = approvedLine.exec(t.prompt)![1]!;
+            await t.call('create_task', { proposalId });
+          }),
+    });
+    hq.tell('note');
+    await h.settle();
+    expect(outs.map((o) => o.ok)).toEqual([false, false, false]);
+    expect(outs[0]!.message).toContain('not a providerNote');
+    expect(outs[1]!.message).toContain('ChatGPT has no model "gpt-9"');
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+    hq.tell('ok');
+    await h.settle();
+    const [card] = h.log.tables.proposals.all();
+    await h.commands.decideProposal(card!.id, { decision: 'approve' }, USER);
+    await h.done();
+    expect(h.log.tables.tasks.all()[0]).toMatchObject({
+      provider: 'chatgpt',
+      model: 'gpt-5.6-terra',
+    });
+  });
+
+  it('a conversion card refuses a providerNote', async () => {
+    const { h, root, definition } = setup();
+    const app = (await h.commands.createProject({ name: 'App', workspace: join(root, 'app') }))
+      .value;
+    let out: { ok: boolean; message?: string } | undefined;
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s.once('convert', async (t) => {
+          out = await t.try('propose_long_term', {
+            projectId: app.id,
+            purpose: 'p',
+            goals: ['g'],
+            providerNote: 'gemini',
+          });
+        }),
+    });
+    hq.tell('convert');
+    await h.settle();
+    expect(out).toMatchObject({ ok: false });
+    expect(out!.message).toContain('no providerNote');
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+  });
+
+  it('a project task card’s note goes once to the project’s Waykeeper, with its task', async () => {
+    const { h, root, definition } = setup();
+    const app = (await h.commands.createProject({ name: 'App', workspace: join(root, 'app') }))
+      .value;
+    const heard: string[] = [];
+    const hq = await h.startHarmonizer({
+      definition,
+      script: (s) =>
+        s
+          .once('add', async (t) => {
+            await t.call('propose', {
+              type: 'project_task',
+              requestText: 'Add images, Gemini makes them',
+              name: 'Images',
+              rationale: 'r',
+              projectId: app.id,
+              providerNote: 'Gemini makes the images',
+            });
+          })
+          .on(approvedLine, async (t) => {
+            const proposalId = approvedLine.exec(t.prompt)![1]!;
+            await t.call('create_task', { proposalId });
+            await t.call('create_task', { proposalId });
+          }),
+    });
+    await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: app.id, supervisorId: hq.agentId },
+      {
+        script: (s) =>
+          s.on(/Provider note on the approved request/, (t) => void heard.push(t.prompt)),
+      },
+    );
+    hq.tell('add');
+    await h.settle();
+    await h.commands.decideProposal(
+      h.log.tables.proposals.all()[0]!.id,
+      { decision: 'approve' },
+      USER,
+    );
+    await h.done();
+    expect(heard).toHaveLength(1);
+    expect(heard[0]).toContain('Gemini makes the images');
   });
 
   it('a provider note over 500 characters is refused before any card', async () => {
@@ -574,7 +717,7 @@ describe('the Harmonizer carries providers (P11-08)', () => {
     expect(h.log.tables.projects.get(app.id)?.defaultProvider).toBeUndefined();
   });
 
-  it('relay_to_waykeeper adds the approved request’s provider note', async () => {
+  it('relay_to_waykeeper never repeats the creation note', async () => {
     const { h, root, definition } = setup();
     const app = (
       await h.commands.createProject({
@@ -610,7 +753,7 @@ describe('the Harmonizer carries providers (P11-08)', () => {
     );
     hq.tell('recurring');
     await h.done();
-    expect(heard[0]).toContain('Provider note on the approved request: Gemini for the images');
+    expect(heard[0]).not.toContain('Gemini for the images');
   });
 });
 

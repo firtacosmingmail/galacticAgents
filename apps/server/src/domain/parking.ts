@@ -14,6 +14,7 @@ import {
   type Proposal,
   type ProposalParking,
   type ProposedBody,
+  type Provider,
 } from '@galactic/protocol';
 import type { Tables } from '../db/tables.js';
 import {
@@ -55,6 +56,9 @@ export interface CardRequest {
   projectId?: Id;
   toProjectId?: Id;
   target?: { kind: 'task' | 'project'; id: Id };
+  /** A standalone task's AI (P11-08). */
+  provider?: Provider;
+  model?: string;
 }
 
 const TYPES = new Set(['new_project', 'standalone_task', 'project_task', 'promotion']);

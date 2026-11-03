@@ -178,12 +178,7 @@ function cardResult(p: Proposal) {
 async function checkJobProviders(
   ctx: BrainToolContext,
   given: Input,
-  now: {
-    provider: string;
-    model?: string | undefined;
-    followUpProvider?: string | undefined;
-    followUpModel?: string | undefined;
-  },
+  now: { provider: string; model?: string | undefined },
 ): Promise<{ model?: string; followUpModel?: string }> {
   const listed: { model?: string; followUpModel?: string } = {};
   const provider = providerInput(given, 'provider');
@@ -198,16 +193,17 @@ async function checkJobProviders(
   }
   const followUpProvider = providerInput(given, 'followUpProvider');
   const followUpModel = modelInput(given, 'followUpModel');
-  if (followUpProvider || followUpModel) {
-    const fallback = (now.followUpProvider ?? now.provider) as Job['provider'];
+  if (followUpModel && !followUpProvider) {
+    // The follow-up would run the model on the job's provider, unchecked and maybe unable to publish.
+    throw new DomainError(
+      'invalid',
+      'followUpModel needs followUpProvider: name the provider it belongs to',
+    );
+  }
+  if (followUpProvider) {
     const id = await checkChoice(
       ctx,
-      {
-        provider: followUpProvider ?? fallback,
-        model:
-          followUpModel ??
-          (followUpProvider && followUpProvider !== fallback ? undefined : now.followUpModel),
-      },
+      { provider: followUpProvider, model: followUpModel },
       { publishes: true },
       'follow-up runs: ',
     );

@@ -164,12 +164,27 @@ async function providerOfTask(
   const model = modelInput(task, 'model');
   const makesImages = task['makesImages'] === true;
   const publishes = task['publishes'] === true;
-  const listed = await checkChoice(
-    ctx,
-    { provider: provider ?? (model === undefined ? project.defaultProvider : undefined), model },
-    { images: makesImages, publishes },
-    where,
-  );
+  const need = { images: makesImages, publishes };
+  let listed: string | undefined;
+  if (!provider && model === undefined && !project.defaultProvider && (makesImages || publishes)) {
+    // Nothing names a provider: the step runs on the Settings' default, else Claude.
+    const effective = ctx.catalog?.defaults().defaultProvider ?? 'claude';
+    try {
+      await checkChoice(ctx, { provider: effective }, need, where);
+    } catch (error) {
+      throw new DomainError(
+        'invalid',
+        `${(error as Error).message}; name a provider for this task (provider)`,
+      );
+    }
+  } else {
+    listed = await checkChoice(
+      ctx,
+      { provider: provider ?? (model === undefined ? project.defaultProvider : undefined), model },
+      need,
+      where,
+    );
+  }
   return {
     ...(provider ? { provider } : {}),
     ...(listed ? { model: listed } : {}),

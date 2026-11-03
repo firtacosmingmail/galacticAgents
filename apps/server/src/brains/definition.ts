@@ -109,7 +109,7 @@ export interface BrainToolContext {
    * The provider catalogue (P11-08): `check_model` and every plan or job card check a provider
    * choice against it before the card exists. Absent: no check.
    */
-  catalog?: Pick<ProviderCatalog, 'check'>;
+  catalog?: Pick<ProviderCatalog, 'check' | 'defaults'>;
   /**
    * Agents' declarations (P9-04): the deliverable tools declare, remove and list through it.
    * Present when the server was composed with a data folder; absent, those tools refuse.
@@ -154,6 +154,8 @@ export interface BrainStartContext {
   /** Absent for a brain being spawned for the first time (its id is not known yet). */
   brainId?: Id;
   role: AgentRole;
+  /** The brain's project (a Waykeeper's). */
+  projectId?: Id;
   /** The brain comes back after a restart (or the panel's resume), not a first spawn. */
   resumed: boolean;
   commands: DomainCommands;

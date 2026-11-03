@@ -1,6 +1,6 @@
-import { Provider, type ModelChoice } from '@galactic/protocol';
+import { Provider, type ModelChoice, type Project } from '@galactic/protocol';
 import { DomainError } from '../domain/errors.js';
-import type { BrainToolContext } from './definition.js';
+import type { BrainQueries, BrainToolContext } from './definition.js';
 
 /**
  * A brain's provider and model inputs (P11-08): read from a tool call and checked against the
@@ -56,4 +56,11 @@ export async function checkChoice(
   const result = await ctx.catalog.check(wanted, need);
   if (!result.ok) throw new DomainError('invalid', `${where}${result.reason}`);
   return result.choice.model;
+}
+
+/** The provider note on the approved card that made the project, for its Waykeeper. */
+export function projectProviderNote(queries: BrainQueries, project: Project): string | undefined {
+  const id = project.meta?.['proposalId'];
+  const note = typeof id === 'string' ? queries.proposal(id)?.meta?.['providerNote'] : undefined;
+  return typeof note === 'string' && note !== '' ? note : undefined;
 }

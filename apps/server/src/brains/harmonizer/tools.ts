@@ -33,7 +33,15 @@ import { stewardPrompt as stewardTemplate } from '../steward-prompt.js';
 /** What a work request asks for, kept on its proposal as `meta.request`. */
 export type HarmonizerRequest =
   | { type: 'new_project'; name: string; parentProjectId?: Id }
-  | { type: 'standalone_task'; name: string; description: string; relatedProjectId?: Id }
+  | {
+      type: 'standalone_task';
+      name: string;
+      description: string;
+      relatedProjectId?: Id;
+      /** The AI the task's Steward runs on (P11-08), as the catalogue listed it. */
+      provider?: Provider;
+      model?: string;
+    }
   | { type: 'project_task'; name: string; description: string; projectId: Id }
   | {
       type: 'promotion';
@@ -63,13 +71,6 @@ function providerNoteOf(input: Record<string, unknown>): string | undefined {
 const PROVIDER_NOTE_PROPERTY = S.str(
   `What the user said about which AI does what, in their words (at most ${MAX_PROVIDER_NOTE} characters); the Waykeeper gives each task its provider and model from it. Check each named model with check_model first.`,
 );
-
-/** The provider note on the approved card that made the project, for its Waykeeper. */
-function projectProviderNote(queries: BrainQueries, project: Project): string | undefined {
-  const id = project.meta?.['proposalId'];
-  const note = typeof id === 'string' ? queries.proposal(id)?.meta?.['providerNote'] : undefined;
-  return typeof note === 'string' && note !== '' ? note : undefined;
-}
 
 export const REQUEST_TYPES = ['new_project', 'standalone_task', 'project_task'] as const;
 
@@ -408,6 +409,11 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         relatedProjectId: S.str('standalone_task only: the project whose workspace it uses.'),
         description: S.str('Tasks only: the task description (default: the request).'),
         providerNote: PROVIDER_NOTE_PROPERTY,
+        provider: S.enum(
+          Provider.options,
+          'standalone_task only: the AI its Steward runs on, when the user named one (check_model first).',
+        ),
+        model: S.str('standalone_task only: an exact model of that provider; needs provider.'),
         longTerm: S.obj(
           {
             purpose: S.str('What the project is for, in a sentence or two (1–2000 characters).'),
@@ -433,6 +439,22 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       const description = str(input, 'description', true) ?? requestText;
       const longTerm = longTermOf(input['longTerm']);
       const providerNote = providerNoteOf(input);
+      const provider = providerInput(input, 'provider');
+      const model = modelInput(input, 'model');
+      if (providerNote && type === 'standalone_task') {
+        throw new DomainError(
+          'invalid',
+          'a standalone task takes provider and model, not a providerNote',
+        );
+      }
+      if ((provider || model) && type !== 'standalone_task') {
+        throw new DomainError(
+          'invalid',
+          'provider and model are for a standalone_task; a project’s steps get theirs from its Waykeeper (providerNote)',
+        );
+      }
+      const listedModel =
+        type === 'standalone_task' ? await checkChoice(ctx, { provider, model }) : undefined;
       if (longTerm && (type !== 'new_project' || input['kind'] !== 'planet')) {
         throw new DomainError('invalid', 'a long-term project is a new_project of kind planet');
       }
@@ -476,6 +498,8 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
             name,
             description,
             ...(relatedProjectId ? { relatedProjectId } : {}),
+            ...(provider ? { provider } : {}),
+            ...(listedModel ? { model: listedModel } : {}),
           };
           break;
         }
@@ -536,7 +560,6 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         },
         requestText: S.str('The user’s request, verbatim.'),
         rationale: S.str('Why, in a sentence.'),
-        providerNote: PROVIDER_NOTE_PROPERTY,
       },
       ['projectId', 'purpose', 'goals'],
     ),
@@ -545,7 +568,12 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       const input = asInput(raw);
       const project = openProject(ctx.queries, str(input, 'projectId'));
       const longTerm = longTermOf({ purpose: input['purpose'], goals: input['goals'] })!;
-      const providerNote = providerNoteOf(input);
+      if (input['providerNote'] !== undefined) {
+        throw new DomainError(
+          'invalid',
+          'a conversion card carries no providerNote: the project already has its Waykeeper',
+        );
+      }
       const body = must(ctx.queries.body(project.bodyId), 'body', project.bodyId);
       const kind = bodyKind(ctx.queries, project);
       // The server puts the card on the planet the approval moves the project to.
@@ -555,10 +583,7 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         proposedBody: { kind, bodyId: body.id, name: body.name },
         workspace: project.workspace,
         rationale: str(input, 'rationale', true) ?? '',
-        meta: {
-          longTerm: { projectId: project.id, ...longTerm },
-          ...(providerNote ? { providerNote } : {}),
-        },
+        meta: { longTerm: { projectId: project.id, ...longTerm } },
       });
       const to = value.proposedBody;
       return {
@@ -599,14 +624,7 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           `project ${project.id} has no running Waykeeper: spawn_waykeeper ${project.id} first`,
         );
       }
-      const note = projectProviderNote(ctx.queries, project);
-      const text = str(input, 'text');
-      const { messageId } = ctx.send(
-        waykeeper.id,
-        note && !text.includes(note)
-          ? `${text}\n\nProvider note on the approved request: ${note}`
-          : text,
-      );
+      const { messageId } = ctx.send(waykeeper.id, str(input, 'text'));
       return { waykeeperId: waykeeper.id, messageId };
     },
   };
@@ -822,6 +840,10 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
               ? { relatedProjectId: request.relatedProjectId }
               : {}),
           },
+          ...(request.type === 'standalone_task' && request.provider
+            ? { provider: request.provider }
+            : {}),
+          ...(request.type === 'standalone_task' && request.model ? { model: request.model } : {}),
           ...extra,
         });
         task = value;
@@ -843,6 +865,21 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
                 isLiving(ctx.queries, a.id),
             )
         : undefined;
+      // What the user said about which AI does what goes to the project's Waykeeper once, with
+      // its task (a project's own note went with its spawn).
+      const note = request.type === 'project_task' ? proposal.meta?.['providerNote'] : undefined;
+      if (
+        waykeeper &&
+        typeof note === 'string' &&
+        note !== '' &&
+        task.meta?.['providerNoteSent'] !== true
+      ) {
+        ctx.send(
+          waykeeper.id,
+          `Provider note on the approved request for task ${task.id}: ${note}`,
+        );
+        await ctx.commands.updateTask(task.id, { meta: { ...task.meta, providerNoteSent: true } });
+      }
       return {
         taskId: task.id,
         bodyId: task.bodyId,
@@ -1019,9 +1056,6 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         supervisorId,
         runtime: runtimeOf(ctx),
       });
-      // What the user said about which AI does what reaches the Waykeeper before it plans.
-      const note = projectProviderNote(ctx.queries, project);
-      if (note) ctx.send(agentId, `Provider note on the approved request: ${note}`);
       return { agentId, projectId, supervisorId };
     },
   };

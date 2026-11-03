@@ -130,6 +130,28 @@ describe('plan_tasks carries providers (P11-08)', () => {
     expect(JSON.stringify(out.result)).toContain('cannot publish');
   });
 
+  it('a flagged task with no provider anywhere is checked on Claude and told to name one', async () => {
+    const out = await planning(await project(), 'plan_tasks', {
+      summary: 'x',
+      tasks: [{ description: 'Make images', makesImages: true }],
+    });
+    expect(out.result).toMatchObject({ ok: false });
+    const message = (out.result as { message?: string }).message;
+    expect(message).toContain('cannot make images');
+    expect(message).toContain('name a provider for this task');
+    expect(h.log.tables.tasks.all()).toHaveLength(0);
+  });
+
+  it('a flagged task with no provider uses the Settings default for the check', async () => {
+    h.composed.catalog.defaults = () => ({ defaultProvider: 'gemini' });
+    const out = await planning(await project(), 'plan_tasks', {
+      summary: 'x',
+      tasks: [{ description: 'Post it', publishes: true }],
+    });
+    expect((out.result as { message?: string }).message).toContain('Gemini');
+    expect((out.result as { message?: string }).message).toContain('name a provider for this task');
+  });
+
   it('create_task carries the provider after the plan was approved', async () => {
     const p = await project();
     let later: ToolOutcome | undefined;

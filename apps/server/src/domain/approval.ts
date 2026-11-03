@@ -114,6 +114,10 @@ export function carryOut(
           ? { relatedProjectId: request.relatedProjectId }
           : {}),
       },
+      ...(request.type === 'standalone_task' && request.provider
+        ? { provider: request.provider }
+        : {}),
+      ...(request.type === 'standalone_task' && request.model ? { model: request.model } : {}),
     });
     return { kind: 'task', task };
   }
