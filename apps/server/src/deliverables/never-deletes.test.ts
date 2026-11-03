@@ -209,7 +209,7 @@ const ALLOWED_DELETIONS: Record<string, { count: number; why: string }> = {
   },
   'adapters/codex/home.ts': {
     count: 1,
-    why: "the managed Codex home's auth.json link (or the file Codex left in its place), relinked",
+    why: "the managed Codex home's auth.json link when it points elsewhere, relinked (a regular file Codex left there is renamed over the user's auth.json, never deleted: ruling R27)",
   },
   'adapters/pty/pty-adapter.ts': {
     count: 2,

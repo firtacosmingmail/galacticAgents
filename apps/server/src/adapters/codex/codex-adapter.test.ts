@@ -658,12 +658,14 @@ describe('CodexAdapter', () => {
     mkdirSync(join(base, 'user-codex'));
     writeFileSync(authSource, '{}');
     expect((await r.adapter.preflight()).ok).toBe(true);
-    // Codex replaced the link with a file: removed unread and linked again at the next start.
+    // Codex replaced the link with a file: moved over the user's file, unread, and linked again
+    // at the next start (ruling R27).
     rmSync(join(home, 'auth.json'));
     writeFileSync(join(home, 'auth.json'), 'a copy');
     await r.adapter.spawn(spawnOpts(r, 'scenario:echo'));
     await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
     expect(readlinkSync(join(home, 'auth.json'))).toBe(authSource);
+    expect(readFileSync(authSource, 'utf8')).toBe('a copy');
     expect(recorded(r)[0]!.codexHome).toBe(home);
   });
 

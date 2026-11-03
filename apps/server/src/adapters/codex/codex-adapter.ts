@@ -337,7 +337,9 @@ export class CodexAdapter implements AgentAdapter {
     const prepared = prepareCodexHome(this.opts.home, this.opts.authSource ?? defaultAuthSource());
     if (prepared.replacedLink) {
       this.onError(
-        new Error('the managed Codex home held a regular auth.json (not the link): linked again'),
+        new Error(
+          'the managed Codex home held a regular auth.json (Codex refreshed the login): moved over your own auth.json, unread, and linked again',
+        ),
         'codex home',
       );
     }

@@ -238,7 +238,10 @@ brain or a `bare` spawn is refused); `canPublish: true`.
   hooks; `-c web_search="disabled"`); environment = allow-list + `CODEX_HOME` = Mission
   Control's own Codex home (`home` option; production `<data dir>/codex-home`, ruling R7: its
   `config.toml` written by Mission Control, no `mcp_servers`; its `auth.json` a symlink to the
-  user's login file, never read — a regular file in its place is removed unread and relinked;
+  user's login file, never read — a regular file in its place (a login Codex refreshed by
+  write-and-rename) is renamed over the user's own `auth.json`, unread, and relinked (ruling R27,
+  replacing R9's delete: that file may hold the only valid rotated refresh token; a failed rename
+  refuses the start and deletes nothing; not yet observed with a real refresh);
   preflight says `not_logged_in` when the login file is absent). `initialize`
   (`experimentalApi: true`) → `thread/start` with `SAFE_THREAD_CONFIG` (`approvalPolicy:
 "untrusted"`, `approvalsReviewer: "user"`, sandbox `workspace-write`, network off, web search,
