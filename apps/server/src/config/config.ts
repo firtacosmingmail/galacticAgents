@@ -268,6 +268,12 @@ export interface ServerConfig {
   tailscaleIdentityLogins?: string[];
   /** `GALACTIC_DEV=1`: enables the `/dev/*` routes (`pnpm dev` sets it; `galactic start --dev` opts in). */
   dev: boolean;
+  /**
+   * `GALACTIC_FAKE_PROVIDERS=1` with `GALACTIC_DEV` (ruling R25): scripted fakes replace the Codex
+   * and Antigravity adapters. Only the e2e server sets it; `--dev`, `pnpm dev` and `pnpm remote`
+   * never do, so ChatGPT and Gemini Stewards are real there.
+   */
+  fakeProviders: boolean;
   /** `~/.galactic` (or `$GALACTIC_HOME`): config, database, logs. */
   dataDir: string;
   configPath: string;
@@ -523,6 +529,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     );
   }
   const dev = env['GALACTIC_DEV'] === '1' || env['GALACTIC_DEV'] === 'true';
+  const fakeProvidersEnv =
+    env['GALACTIC_FAKE_PROVIDERS'] === '1' || env['GALACTIC_FAKE_PROVIDERS'] === 'true';
+  if (fakeProvidersEnv && !dev) {
+    warnings.push(
+      `GALACTIC_FAKE_PROVIDERS is for the development harness only (GALACTIC_DEV): ` +
+        `the real Codex and Antigravity adapters are used.`,
+    );
+  }
+  const fakeProviders = fakeProvidersEnv && dev;
   // The Steward runtime is no longer a setting (P11-03): a stored one becomes the default provider.
   let defaultProvider = file.defaultProvider;
   if (file.stewardRuntime !== undefined) {
@@ -578,6 +593,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       ...(remoteHost ? { remoteHost } : {}),
       ...(tailscaleIdentityLogins ? { tailscaleIdentityLogins } : {}),
       dev,
+      fakeProviders,
       dataDir,
       configPath,
       dbPath,

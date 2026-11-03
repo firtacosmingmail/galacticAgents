@@ -161,6 +161,22 @@ export function devProviderFakes(scenarioFor: FakeAdapterOptions['scenarioFor'])
  * Puts `fakes` in `adapters`, each in the place of the adapter of its runtime (the real Codex or
  * Antigravity one), or at the end when there is none; one log line per replacement.
  */
+/**
+ * Installs `devProviderFakes` in place of the Codex and Antigravity adapters when, and only when,
+ * the fake-providers flag is on (ruling R25: the e2e server alone sets it). Development mode by
+ * itself (`--dev`, `pnpm dev`, `pnpm remote`) keeps the real adapters. Returns whether it did.
+ */
+export function installProviderFakes(
+  config: { dev: boolean; fakeProviders: boolean },
+  adapters: AgentAdapter[],
+  scenarioFor: FakeAdapterOptions['scenarioFor'],
+  log: (message: string) => void,
+): boolean {
+  if (!config.dev || !config.fakeProviders) return false;
+  replaceAdapters(adapters, devProviderFakes(scenarioFor), log);
+  return true;
+}
+
 export function replaceAdapters(
   adapters: AgentAdapter[],
   fakes: AgentAdapter[],

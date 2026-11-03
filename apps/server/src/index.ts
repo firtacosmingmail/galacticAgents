@@ -38,9 +38,8 @@ import { HarnessJobScripts, harnessJobs } from './runtime/harness-jobs.js';
 import {
   DEV_PROVIDER_RUNTIMES,
   HarnessClock,
-  devProviderFakes,
   harnessStewards,
-  replaceAdapters,
+  installProviderFakes,
 } from './runtime/harness-stewards.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
@@ -228,15 +227,15 @@ const adapters: AgentAdapter[] = [
       ]
     : []),
 ];
-// Development mode (P11-10, ruling R4): fakes stand in for the Codex and Antigravity runtimes, so
-// a task on ChatGPT or Gemini runs a scripted Steward whether or not either CLI is installed.
-if (config.dev && jobScripts) {
-  replaceAdapters(
-    adapters,
-    devProviderFakes((opts) => jobScripts.scenarioFor(opts)),
-    (m) => console.log(m),
-  );
-}
+// The e2e harness only (P11-10, ruling R25: `GALACTIC_FAKE_PROVIDERS` with `GALACTIC_DEV`): fakes
+// stand in for the Codex and Antigravity runtimes, so a task on ChatGPT or Gemini runs a scripted
+// Steward. Development mode alone (`--dev`, `pnpm dev`, `pnpm remote`) keeps the real adapters.
+const providerFakes = installProviderFakes(
+  config,
+  adapters,
+  jobScripts ? (opts) => jobScripts.scenarioFor(opts) : undefined,
+  (m) => console.log(m),
+);
 if (
   config.stewardRuntimeOverride &&
   !adapters.some((a) => a.runtime === config.stewardRuntimeOverride)
@@ -265,7 +264,7 @@ const composed = composeRuntime(db, {
     ? { stewardRuntimeOverride: () => config.stewardRuntimeOverride }
     : {}),
   // ...except on the dev harness's fakes for the Codex and Antigravity runtimes (P11-10).
-  ...(config.dev ? { stewardRuntimeKeeps: () => DEV_PROVIDER_RUNTIMES } : {}),
+  ...(providerFakes ? { stewardRuntimeKeeps: () => DEV_PROVIDER_RUNTIMES } : {}),
   // Brain tools create worktrees and merge through this service (P2-05, P2-10).
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,

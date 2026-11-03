@@ -5,13 +5,14 @@ import {
   DEV_PROVIDER_RUNTIMES,
   devProviderFakes,
   HarnessClock,
+  installProviderFakes,
   replaceAdapters,
   stewardScript,
 } from './harness-stewards.js';
 
 /**
  * The dev harness's provider hooks (P11-10): the clock a test moves, the Steward scripts, and the
- * fakes that replace the Codex and Antigravity adapters (ruling R4).
+ * fakes that replace the Codex and Antigravity adapters (rulings R4, R25).
  */
 
 describe('the harness clock', () => {
@@ -68,5 +69,25 @@ describe('the dev provider fakes', () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain('replaces the codex runtime');
     expect(lines[1]).toContain('registers as the agy runtime');
+  });
+
+  it('are installed only with the fake-providers flag: development mode alone keeps the real ones', () => {
+    const real = { runtime: 'codex' } as AgentAdapter;
+    const adapters = [real];
+    const lines: string[] = [];
+    expect(
+      installProviderFakes({ dev: true, fakeProviders: false }, adapters, undefined, (m) =>
+        lines.push(m),
+      ),
+    ).toBe(false);
+    expect(adapters).toEqual([real]);
+    expect(lines).toEqual([]);
+    expect(
+      installProviderFakes({ dev: true, fakeProviders: true }, adapters, undefined, (m) =>
+        lines.push(m),
+      ),
+    ).toBe(true);
+    expect(adapters.map((a) => a.runtime)).toEqual(['codex', 'agy']);
+    expect(adapters[0]).not.toBe(real);
   });
 });

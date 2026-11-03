@@ -352,6 +352,19 @@ describe('loadConfig', () => {
     expect(loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '0' }).config.dev).toBe(false);
   });
 
+  it('stands fakes in for Codex and Antigravity only with GALACTIC_FAKE_PROVIDERS (ruling R25)', () => {
+    // --dev, `pnpm dev` and `pnpm remote` set GALACTIC_DEV alone: the real adapters stay.
+    expect(loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '1' }).config.fakeProviders).toBe(false);
+    expect(
+      loadConfig({ GALACTIC_HOME: home, GALACTIC_DEV: '1', GALACTIC_FAKE_PROVIDERS: '1' }).config
+        .fakeProviders,
+    ).toBe(true);
+    // Outside development mode the flag is ignored, with a warning.
+    const loaded = loadConfig({ GALACTIC_HOME: home, GALACTIC_FAKE_PROVIDERS: '1' });
+    expect(loaded.config.fakeProviders).toBe(false);
+    expect(loaded.warnings.join('\n')).toContain('GALACTIC_FAKE_PROVIDERS');
+  });
+
   it('never lets a remote client loosen the policy unless configured (P2-04)', () => {
     expect(loadConfig({ GALACTIC_HOME: home }).config.autoApproveRemote).toBe(false);
     expect(
