@@ -105,6 +105,7 @@ export class ProviderCatalog {
   async check(
     choice: ModelChoice,
     need: { images?: boolean; publishes?: boolean } = {},
+    opts: { bare?: boolean } = {},
   ): Promise<CatalogCheck> {
     const { provider } = choice;
     const name = PROVIDER_LABEL[provider];
@@ -115,7 +116,7 @@ export class ProviderCatalog {
         reason: `${name} is not set up on this Mac: no ${PROVIDER_RUNTIME[provider]} runtime is registered`,
       };
     }
-    const problem = await this.problem(provider);
+    const problem = await this.problem(provider, opts.bare ?? false);
     if (problem) return { ok: false, reason: `${name} is not set up on this Mac: ${problem}` };
 
     const models = await this.models(provider);
@@ -158,8 +159,13 @@ export class ProviderCatalog {
     return this.opts.adapters().find((a) => a.runtime === PROVIDER_RUNTIME[provider]);
   }
 
-  /** What stops the provider's runtime check, with its fixes; `undefined` when it passes. */
-  private async problem(provider: Provider): Promise<string | undefined> {
+  /**
+   * What definitely stops the provider here, with its fixes; `undefined` otherwise. Only
+   * `not_installed` and `not_logged_in` block (a `bare` spawn does not use the subscription
+   * login, so only `not_installed`): an uncertain result — an unreadable login, a check that
+   * failed or timed out, a warning — lets the spawn go ahead, as the Harmonizer's does.
+   */
+  private async problem(provider: Provider, bare: boolean): Promise<string | undefined> {
     const result = await this.cached(this.checks, provider, this.preflightTtlMs, async () => {
       try {
         return await this.adapterOf(provider)?.preflight?.();
@@ -179,9 +185,9 @@ export class ProviderCatalog {
       }
     });
     if (!result || result.ok) return undefined;
-    const errors = result.problems.filter((p) => p.severity === 'error');
-    const shown = errors.length > 0 ? errors : result.problems;
-    if (shown.length === 0) return 'its runtime check failed';
+    const blocking = new Set(bare ? ['not_installed'] : ['not_installed', 'not_logged_in']);
+    const shown = result.problems.filter((p) => p.severity === 'error' && blocking.has(p.code));
+    if (shown.length === 0) return undefined;
     return shown.map((p) => (p.fix ? `${p.message} (${p.fix})` : p.message)).join('; ');
   }
 

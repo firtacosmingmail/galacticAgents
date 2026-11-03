@@ -269,6 +269,56 @@ describe('ProviderCatalog (P11-03)', () => {
       ).rejects.toThrow('ChatGPT has no model "gpt-9"');
     });
 
+    it('an uncertain runtime check does not block; a bare spawn skips the login', async () => {
+      const uncertain = (code: 'auth_unreadable' | 'check_failed'): RuntimePreflight => ({
+        runtime: 'claude-sdk',
+        ok: false,
+        installed: true,
+        problems: [{ code, severity: 'error', message: `Claude ${code}` }],
+      });
+      for (const code of ['auth_unreadable', 'check_failed'] as const) {
+        const claude = fake({
+          runtime: 'claude-sdk',
+          preflight: () => Promise.resolve(uncertain(code)),
+        });
+        const catalog = new ProviderCatalog({ adapters: () => [claude], settings: () => ({}) });
+        expect(await catalog.check({ provider: 'claude' })).toMatchObject({ ok: true });
+      }
+      const loggedOut = new ProviderCatalog({
+        adapters: () => [fake({ runtime: 'codex', preflight: () => Promise.resolve(LOGGED_OUT) })],
+        settings: () => ({}),
+      });
+      expect(await loggedOut.check({ provider: 'chatgpt' })).toMatchObject({ ok: false });
+      expect(await loggedOut.check({ provider: 'chatgpt' }, {}, { bare: true })).toMatchObject({
+        ok: true,
+      });
+
+      // …and the Steward spawns through spawnAgent.
+      const claude = fake({
+        runtime: 'claude-sdk',
+        preflight: () => Promise.resolve(uncertain('auth_unreadable')),
+      });
+      h = brainHarness({
+        adapters: [claude],
+        compose: {
+          catalog: new ProviderCatalog({ adapters: () => [claude], settings: () => ({}) }),
+        },
+      });
+      const project = (await h.commands.createProject({ name: 'CSV', workspace: '/w/csv' })).value;
+      const { waykeeper } = await projectHierarchy(h.commands, project.id);
+      const task = (await h.commands.createTask({ description: 'a', projectId: project.id })).value;
+      const steward = (
+        await h.commands.spawnAgent({
+          role: 'steward',
+          runtime: 'claude-sdk',
+          taskId: task.id,
+          supervisorId: waykeeper.id,
+          prompt: 'scenario:echo',
+        })
+      ).value;
+      expect(steward.runtime).toBe('claude-sdk');
+    });
+
     it('a brain never runs on Codex or Antigravity', async () => {
       const codex = fake({ runtime: 'codex' });
       h = brainHarness({ adapters: [codex] });

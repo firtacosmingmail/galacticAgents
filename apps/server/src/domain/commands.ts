@@ -493,7 +493,11 @@ export class Commands implements DomainCommands {
     }
     const provider = providerOf(input.runtime);
     if (provider && this.catalog) {
-      const checked = await this.catalog.check({ provider, ...(model ? { model } : {}) });
+      const checked = await this.catalog.check(
+        { provider, ...(model ? { model } : {}) },
+        {},
+        input.bare ? { bare: true } : {},
+      );
       if (!checked.ok) throw new DomainError('conflict', checked.reason);
       model = checked.choice.model;
     }
