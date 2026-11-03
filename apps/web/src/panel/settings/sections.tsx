@@ -554,7 +554,11 @@ function StewardSourcesEditor({ id, draft, setDraft, disabled }: EditorProps<boo
 }
 
 const BRAIN_MCP: { value: BrainUserMcp; label: string; hint: string }[] = [
-  { value: 'none', label: 'None', hint: 'the Harmonizer and Waykeepers use only GalacticAgents’ tools' },
+  {
+    value: 'none',
+    label: 'None',
+    hint: 'the Harmonizer and Waykeepers use only GalacticAgents’ tools',
+  },
   {
     value: 'waykeepers',
     label: 'Waykeepers',
@@ -746,7 +750,11 @@ export type AnySectionSpec = SectionSpec<any>;
  * The settings page's sections after the wizard's (P8-01): set later, when a budget is in use,
  * so they are not first-run steps.
  */
-export const LATER_SECTIONS: readonly AnySectionSpec[] = [BUDGETS, STEWARD_RUNTIME, BRAIN_MCP_SECTION];
+export const LATER_SECTIONS: readonly AnySectionSpec[] = [
+  BUDGETS,
+  STEWARD_RUNTIME,
+  BRAIN_MCP_SECTION,
+];
 
 /** Every section, in the order the page and the wizard show them. */
 export const SECTIONS: readonly AnySectionSpec[] = [
