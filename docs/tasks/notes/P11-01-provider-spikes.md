@@ -147,6 +147,12 @@ Hook-visible names differ from the `init` tool list. Observed to reach the hook 
 
 **Addendum (P11-05, 2026-11-03), from the adapter's real runs (agy 1.4.12, `GALACTIC_REAL_AGY=1`):** agy accepts the managed `hooks.json` group with the extra `"galactic": true` tag and the tagged `mcp_config.json` server entry; the hook and the stdio MCP server both inherit the turn's environment (`GALACTIC_AGY_SECRET`, `GALACTIC_AGY_URL`), so the tool server finds its session; `--print-timeout 0s` and `--disable-slash-commands` are accepted; a SIGINT ends a print-mode turn and `--conversation <id>` continues the conversation afterwards; the model reads `~/.gemini/antigravity-cli/mcp/galactic/<tool>.json` and then calls `call_mcp_tool`, so `ask_user` reached the inbox as a clarification and its answer came back as the tool result. One generated image landed in the parent conversation's brain directory and was copied into the worktree byte-equal (Gemini weekly bucket 81 % → 55 % over both runs). After a hook `deny` the model may go looking for why (reads of `~/.gemini`, `ls ..`, a web search), each of which the gate then asks about. Both real runs left `~/.gemini/config` byte-identical (sha1 of every file compared before and after; `hooks.json` absent again).
 
+**Addendum 2 (P11-05 fix round 1, 2026-11-03, probes in `agy/agy-real.probes.test.ts`):**
+- **MCP deadline.** agy gives up on an MCP `tools/call` after **3 minutes**: an unanswered `ask_user` came back to the model as "timed out after 3 minutes (`context deadline exceeded`)", 180 s after the question. The adapter now defers longer questions to the next run, and that was verified.
+- **Several hooks.** A user PreToolUse group answering `auto_approve` to every call, placed before or after Mission Control's group, did not override Mission Control's `deny`: `touch marker.txt` did not run in either order.
+- **Gemini quota.** Bucket at 55 % before these probes.
+- **`~/.gemini/config`** was byte-identical after every probe (sha1 compared).
+
 ## What each later task takes from here
 
 - Task 5: sections Codex 1–8, including the command-line `--disable` flags, the `fileChange` path lookup and the unguarded sandboxed `node_repl`.

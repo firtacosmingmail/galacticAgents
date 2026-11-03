@@ -1,4 +1,13 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  realpathSync,
+  statSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
@@ -87,10 +96,20 @@ function parse(file: string, text: string | null): Json {
 }
 
 function writeAtomic(file: string, text: string): void {
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = join(dirname(file), `.${randomUUID()}.galactic.tmp`);
-  writeFileSync(tmp, text, { mode: 0o644 });
-  renameSync(tmp, file);
+  // Through a symlink (a dotfile manager's link stays a link) and with the file's own mode.
+  let target = file;
+  let mode = 0o644;
+  try {
+    target = realpathSync(file);
+    mode = statSync(target).mode & 0o777;
+  } catch {
+    /* a new file */
+  }
+  mkdirSync(dirname(target), { recursive: true });
+  const tmp = join(dirname(target), `.${randomUUID()}.galactic.tmp`);
+  writeFileSync(tmp, text, { mode });
+  chmodSync(tmp, mode);
+  renameSync(tmp, target);
 }
 
 function readState(stateFile: string): State {

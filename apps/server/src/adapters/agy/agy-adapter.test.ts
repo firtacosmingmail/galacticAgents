@@ -1,9 +1,13 @@
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import type { AddressInfo } from 'node:net';
@@ -22,9 +26,15 @@ import { registerAgyHookRoutes } from '../../http/agy-hook-routes.js';
 import { ProcessSupervisor } from '../../runtime/supervisor.js';
 import { AgyAdapter } from './agy-adapter.js';
 import { FAKE_AGY } from './fake-agent.js';
-import { globalEntriesInstalled, hooksFile, mcpConfigFile } from './global-entries.js';
+import {
+  globalEntriesInstalled,
+  hooksFile,
+  installGlobalEntries,
+  mcpConfigFile,
+  removeGlobalEntries,
+} from './global-entries.js';
 import { HookBridge } from './hook-bridge.js';
-import { brainDir } from './images.js';
+import { brainDir, copyNewImages } from './images.js';
 import { isQuotaError, limitResetsAt, usageFrom } from './limits.js';
 import { mapAgyCall } from './mapping.js';
 import { parseModels } from './preflight.js';
@@ -64,7 +74,11 @@ afterEach(async () => {
   }
 });
 
-async function rig(env: Record<string, string> = {}, prepareHome?: (home: string) => void) {
+async function rig(
+  env: Record<string, string> = {},
+  prepareHome?: (home: string) => void,
+  extra: { askHoldMs?: number } = {},
+) {
   const home = mkdtempSync(join(tmpdir(), 'galactic-agy-home-'));
   prepareHome?.(home);
   const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-agy-cwd-')));
@@ -88,6 +102,7 @@ async function rig(env: Record<string, string> = {}, prepareHome?: (home: string
     env: { FAKE_AGY_RECORD: recordFile, ...env },
     graceMs: 2_000,
     startTimeoutMs: 10_000,
+    ...extra,
   });
   const events: AgentEvent[] = [];
   void (async () => {
@@ -338,6 +353,38 @@ describe('AgyAdapter', () => {
     expect(of(r, opts.agentId, 'agent.tool_call')).toHaveLength(0);
   });
 
+  it('an ask_user answer slower than the MCP deadline still reaches the agent, as its next run', async () => {
+    const r = await rig({}, undefined, { askHoldMs: 200 });
+    const opts = spawnOpts(r, 'scenario:asks');
+    await r.adapter.spawn(opts);
+    await waitFor(() => of(r, opts.agentId, 'agent.needs_input').length === 1, 'question');
+    const q = of(r, opts.agentId, 'agent.needs_input')[0]!;
+    // The MCP call returned, the agy run ended; the question and the turn stay open.
+    await waitFor(() => text(r, opts.agentId).includes('has not answered yet'), 'deferred note');
+    await new Promise((res) => setTimeout(res, 300));
+    expect(idles(r, opts.agentId)).toBe(0);
+    expect(turns(r)).toHaveLength(1);
+    await r.adapter.answer(q.questionId, 'first option');
+    await waitFor(() => idles(r, opts.agentId) === 1, 'idle');
+    expect(turns(r)).toHaveLength(2);
+    expect(text(r, opts.agentId)).toContain(
+      'echo: The user answered your question ("Which option do you prefer?"): first option',
+    );
+  });
+
+  it('a deferred question withdrawn by an interrupt ends the turn idle', async () => {
+    const r = await rig({}, undefined, { askHoldMs: 200 });
+    const opts = spawnOpts(r, 'scenario:asks');
+    const handle = await r.adapter.spawn(opts);
+    await waitFor(() => text(r, opts.agentId).includes('has not answered yet'), 'deferred note');
+    await new Promise((res) => setTimeout(res, 200));
+    await r.adapter.interrupt(handle.sessionId);
+    await waitFor(() => idles(r, opts.agentId) === 1, 'idle');
+    const q = of(r, opts.agentId, 'agent.needs_input')[0]!;
+    await expect(r.adapter.answer(q.questionId, 'late')).rejects.toThrow();
+    expect(turns(r)).toHaveLength(1);
+  });
+
   it("writes to agy's configuration and browser tools are denied without asking", async () => {
     const r = await rig();
     const a = spawnOpts(r, 'scenario:write-config');
@@ -381,6 +428,52 @@ describe('AgyAdapter', () => {
     });
     await expect(r.adapter.spawn(spawnOpts(r, 'scenario:echo'))).rejects.toThrow(/did not add/);
     expect(readFileSync(hooksFile(r.home), 'utf8')).toBe('{"galactic": {"enabled": true}}');
+  });
+
+  it('a workspace agy config that appears between turns ends the session before the next turn', async () => {
+    const r = await rig();
+    const opts = spawnOpts(r, 'scenario:echo');
+    const handle = await r.adapter.spawn(opts);
+    await waitFor(() => idles(r, opts.agentId) === 1, 'idle');
+    mkdirSync(join(r.cwd, '.agents'));
+    writeFileSync(join(r.cwd, '.agents', 'mcp_config.json'), '{}');
+    await r.adapter.send(handle.sessionId, 'please reply with the word delta');
+    await waitFor(() => of(r, opts.agentId, 'agent.failed').length === 1, 'agent.failed');
+    expect(of(r, opts.agentId, 'agent.failed')[0]).toMatchObject({ reason: 'runtime' });
+    expect(of(r, opts.agentId, 'agent.failed')[0]!.error).toContain('.agents');
+    expect(turns(r)).toHaveLength(1);
+  });
+
+  it('a symlinked workspace agy config is refused too', async () => {
+    const r = await rig();
+    const elsewhere = mkdtempSync(join(tmpdir(), 'galactic-agy-elsewhere-'));
+    mkdirSync(join(r.cwd, '.agents'));
+    symlinkSync(join(elsewhere, 'missing.json'), join(r.cwd, '.agents', 'hooks.json'));
+    await expect(r.adapter.spawn(spawnOpts(r, 'scenario:echo'))).rejects.toThrow(/\.agents/);
+  });
+
+  it('a pass is bound to the exact call: a different call of the same tool never runs', async () => {
+    const r = await rig();
+    const ran: unknown[] = [];
+    const tools: ToolDefinition[] = [
+      {
+        name: 'request_publish',
+        description: 'd',
+        inputSchema: { type: 'object' },
+        handler: async (input) => {
+          ran.push(input);
+          return 'ran';
+        },
+      },
+    ];
+    const opts = spawnOpts(r, 'scenario:tool-swap', allowAll, { tools });
+    await r.adapter.spawn(opts);
+    await waitFor(() => idles(r, opts.agentId) === 1, 'idle');
+    // The same arguments in another key order run; different ones do not.
+    expect(ran).toEqual([{ text: 'hello', b: 2 }]);
+    expect(text(r, opts.agentId)).toContain(
+      "swapped: the call to request_publish did not pass Mission Control's permission hook",
+    );
   });
 
   it('a workspace with its own agy hooks or MCP servers is refused', async () => {
@@ -456,6 +549,79 @@ describe('AgyAdapter', () => {
   });
 });
 
+describe('agy images and global entries on symlinks', () => {
+  const png = (dir: string, name: string, body = 'x') => writeFileSync(join(dir, name), body);
+
+  it('never follows a symlink in the brain folder or for generated-images/', async () => {
+    const brain = mkdtempSync(join(tmpdir(), 'galactic-agy-brain-'));
+    const secret = join(mkdtempSync(join(tmpdir(), 'galactic-agy-secret-')), 'secret.png');
+    writeFileSync(secret, 'private bytes');
+    symlinkSync(secret, join(brain, 'leak.png'));
+    png(brain, 'ok.png', 'image');
+    const work = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-agy-work-')));
+    expect(await copyNewImages(brain, new Map(), work)).toEqual(['ok.png']);
+    expect(existsSync(join(work, 'generated-images', 'leak.png'))).toBe(false);
+    // A generated-images link planted in the worktree: nothing is written through it.
+    const work2 = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-agy-work-')));
+    const outside = mkdtempSync(join(tmpdir(), 'galactic-agy-outside-'));
+    symlinkSync(outside, join(work2, 'generated-images'));
+    expect(await copyNewImages(brain, new Map(), work2)).toEqual([]);
+    expect(readdirSync(outside)).toEqual([]);
+    // A link with an image's name already in the folder is never written through.
+    const work3 = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-agy-work-')));
+    mkdirSync(join(work3, 'generated-images'));
+    const victim = join(outside, 'victim.txt');
+    writeFileSync(victim, 'keep');
+    symlinkSync(victim, join(work3, 'generated-images', 'ok.png'));
+    expect(await copyNewImages(brain, new Map(), work3)).toEqual([]);
+    expect(readFileSync(victim, 'utf8')).toBe('keep');
+  });
+
+  it('writes the global files through a symlink and keeps their mode', () => {
+    const home = mkdtempSync(join(tmpdir(), 'galactic-agy-linkhome-'));
+    const dotfiles = mkdtempSync(join(tmpdir(), 'galactic-agy-dotfiles-'));
+    mkdirSync(join(home, '.gemini', 'config'), { recursive: true });
+    const real = join(dotfiles, 'hooks.json');
+    writeFileSync(real, '{"mine": {"enabled": true}}\n', { mode: 0o600 });
+    symlinkSync(real, hooksFile(home));
+    const stateFile = join(mkdtempSync(join(tmpdir(), 'galactic-agy-st-')), 'state.json');
+    installGlobalEntries({
+      home,
+      stateFile,
+      hookCommand: 'hook',
+      hookTimeoutS: 1,
+      toolCommand: 'node',
+      toolArgs: [],
+    });
+    expect(lstatSync(hooksFile(home)).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, 'utf8')).galactic.galactic).toBe(true);
+    expect(statSync(real).mode & 0o777).toBe(0o600);
+    removeGlobalEntries({ home, stateFile });
+    expect(lstatSync(hooksFile(home)).isSymbolicLink()).toBe(true);
+    expect(readFileSync(real, 'utf8')).toBe('{"mine": {"enabled": true}}\n');
+    expect(statSync(real).mode & 0o777).toBe(0o600);
+  });
+
+  it('a user edit between install and dispose: only the tagged entry is removed', () => {
+    const home = mkdtempSync(join(tmpdir(), 'galactic-agy-edit-'));
+    const stateFile = join(home, 'state.json');
+    const opts = {
+      home,
+      stateFile,
+      hookCommand: 'h',
+      hookTimeoutS: 1,
+      toolCommand: 'n',
+      toolArgs: [],
+    };
+    installGlobalEntries(opts);
+    const hooks = JSON.parse(readFileSync(hooksFile(home), 'utf8'));
+    hooks.later = { enabled: true };
+    writeFileSync(hooksFile(home), JSON.stringify(hooks));
+    removeGlobalEntries(opts);
+    expect(JSON.parse(readFileSync(hooksFile(home), 'utf8'))).toEqual({ later: { enabled: true } });
+  });
+});
+
 describe('agy mapping and parsing', () => {
   const ctx = {
     cwd: '/tmp/work',
@@ -504,6 +670,73 @@ describe('agy mapping and parsing', () => {
       mapAgyCall(
         { toolName: 'read_file', input: { Path: '/Users/example/.gemini/config/hooks.json' } },
         ctx,
+      ).kind,
+    ).toBe('gate');
+  });
+
+  it('fails closed when the argument it needs is missing (never a worktree-scoped call)', () => {
+    for (const toolName of [
+      'read_file',
+      'view_file',
+      'write_file',
+      'edit_file',
+      'list_dir',
+      'find_by_name',
+      'grep_search',
+      'run_command',
+      'search_web',
+      'read_url_content',
+    ]) {
+      expect(
+        mapAgyCall({ toolName, input: { Unexpected: '/Users/example/.ssh' } }, ctx),
+      ).toMatchObject({
+        kind: 'deny',
+      });
+    }
+    expect(mapAgyCall({ toolName: 'run_command', input: { CommandLine: '  ' } }, ctx).kind).toBe(
+      'deny',
+    );
+    expect(mapAgyCall({ toolName: 'grep_search', input: { Query: 'secret' } }, ctx).kind).toBe(
+      'deny',
+    );
+  });
+
+  it('judges every location a call names', () => {
+    expect(
+      mapAgyCall(
+        {
+          toolName: 'grep_search',
+          input: { SearchPath: 'src', Path: '/Users/example/.ssh', Query: 'x' },
+        },
+        ctx,
+      ),
+    ).toEqual({
+      kind: 'gate',
+      call: {
+        toolName: 'Grep',
+        input: { path: 'src', paths: ['src', '/Users/example/.ssh'], pattern: 'x' },
+      },
+    });
+    expect(mapAgyCall({ toolName: 'list_dir', input: { DirectoryPath: '/etc' } }, ctx)).toEqual({
+      kind: 'gate',
+      call: { toolName: 'LS', input: { path: '/etc' } },
+    });
+  });
+
+  it("a write through a symlink into agy's configuration is denied", () => {
+    const work = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-agy-map-')));
+    mkdirSync(join(work, '.agents'));
+    symlinkSync(join(work, '.agents'), join(work, 'innocent'));
+    expect(
+      mapAgyCall(
+        { toolName: 'write_file', input: { Path: 'innocent/hooks.json', Content: '{}' } },
+        { ...ctx, cwd: work },
+      ).kind,
+    ).toBe('deny');
+    expect(
+      mapAgyCall(
+        { toolName: 'write_file', input: { Path: 'plain/file.txt', Content: '' } },
+        { ...ctx, cwd: work },
       ).kind,
     ).toBe('gate');
   });

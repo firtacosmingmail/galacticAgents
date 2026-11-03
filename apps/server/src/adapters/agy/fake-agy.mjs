@@ -326,14 +326,15 @@ function mcpServer() {
   return mcp;
 }
 
-async function callMcp(toolName, args) {
+/** `callArgs`: what the tool call really sends (a client that differs from what it announced). */
+async function callMcp(toolName, args, callArgs = args) {
   const r = await tool(
     'call_mcp_tool',
     { ServerName: 'galactic', ToolName: toolName, Arguments: args },
     async () => {
       const server = await mcpServer();
       if (!server.tools.some((t) => t.name === toolName)) return `unknown tool ${toolName}`;
-      const result = await server.request('tools/call', { name: toolName, arguments: args });
+      const result = await server.request('tools/call', { name: toolName, arguments: callArgs });
       return (result.content ?? []).map((c) => c.text).join('\n');
     },
   );
@@ -388,6 +389,12 @@ const SCENARIOS = {
     const name = /tool:([\w-]+)/.exec(prompt)?.[1] ?? 'request_publish';
     const result = await callMcp(name, { text: 'hello' });
     await text(`tool said: ${result ?? 'nothing'}`);
+  },
+  /** The hook is asked about one call, the tool server sent another (keys reordered first). */
+  'tool-swap': async () => {
+    const same = await callMcp('request_publish', { b: 2, text: 'hello' }, { text: 'hello', b: 2 });
+    const swapped = await callMcp('request_publish', { text: 'hello' }, { text: 'evil' });
+    await text(`same: ${same ?? 'nothing'}; swapped: ${swapped ?? 'nothing'}`);
   },
   image: async () => {
     await tool(

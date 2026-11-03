@@ -359,6 +359,17 @@ Shapes are P11-01's (`docs/tasks/notes/P11-01-provider-spikes.md`, agy 1–8, th
 - **Refusals at spawn**: a worktree (or a folder above it) holding `.agents/hooks.json` or
   `.agents/mcp_config.json` — it could approve calls or start servers before the hook sees them.
 
+- **Fix round 1 (P11-05 review):**
+  - A call whose expected argument is missing is denied, never judged as if it named the worktree. Examples: a read or search with none of the known path keys, a `run_command` without `CommandLine`, a web search without a query. Every path key a call names goes to the gate (`paths`).
+  - Writes into `.agents/`/`.gemini/` are judged on the real path too, so a link into one is denied.
+  - The workspace `.agents/` check runs before **every** turn. Each turn is a new agy process that reloads those files, so a file that appears mid-session ends the session with `agent.failed{reason: 'runtime'}`. A symlink there counts too.
+  - A tool-server pass is bound to the exact call (tool and canonical arguments).
+  - The image copy follows no symlink at either end.
+  - The global files are written through a symlink and keep their mode.
+- **agy's MCP deadline (ruling R12).** agy gives up on an MCP `tools/call` after **3 minutes** (`context deadline exceeded`, measured in a real probe). So `ask_user` holds its call for at most 150 s (`askHoldMs`). After that it returns "The user has not answered yet… end your turn now"; the question stays open, and so does the turn (no `agent.idle`). The answer, or a dismissal's text, becomes the prompt of a new agy run in the same conversation. An interrupt or a stop withdraws it. This was verified with the real CLI.
+- **Several PreToolUse hooks.** A real probe placed a user hook group answering `auto_approve` to everything both before and after Mission Control's. Mission Control's `deny` won both times and the command did not run, so a user's own hooks cannot approve what the gate refused.
+- **Probes.** `agy/agy-real.probes.test.ts` (`GALACTIC_REAL_AGY_PROBES=1`) re-runs the hook-combination, MCP-deadline and deferred-question probes. The real conformance target skips the policy-deny case (ruling R11): after a deny, Gemini explores outside the workspace and each read rightly asks.
+
 `preflight()` runs `agy --version` (outside `KNOWN_AGY_VERSIONS = '>=1.4.12 <1.5'`: a warning)
 and `agy -p /usage --output-format json` (no turn; "Authentication required" or a failure:
 `not_logged_in`, "Run agy in Terminal and sign in with your Google account"), plus the global

@@ -1,6 +1,7 @@
-import { copyFile, mkdir, readdir, stat } from 'node:fs/promises';
-import { readdirSync, statSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { constants } from 'node:fs';
+import { copyFile, lstat, mkdir, readdir, realpath } from 'node:fs/promises';
+import { lstatSync, readdirSync } from 'node:fs';
+import { extname, isAbsolute, join, relative } from 'node:path';
 
 /**
  * Generated images (P11-05; P11-01 notes, agy 5): agy's image generator saves into the parent
@@ -34,7 +35,7 @@ export function snapshotImages(dir: string): Map<string, number> {
   for (const name of names) {
     if (!isImage(name)) continue;
     try {
-      const s = statSync(join(dir, name));
+      const s = lstatSync(join(dir, name));
       if (s.isFile()) out.set(name, s.mtimeMs);
     } catch {
       /* gone meanwhile */
@@ -45,7 +46,10 @@ export function snapshotImages(dir: string): Map<string, number> {
 
 /**
  * Copies the image files of `dir` that are new or changed since `before` into
- * `<cwd>/generated-images/`; returns the names copied. Never throws.
+ * `<cwd>/generated-images/`; returns the names copied. Never throws, and never follows a symlink:
+ * a source entry must be a regular file (`lstat`), the target folder must be a real folder (not a
+ * link) whose real path lies inside the worktree's, and an existing target name — a link
+ * included — is never written.
  */
 export async function copyNewImages(
   dir: string,
@@ -60,18 +64,35 @@ export async function copyNewImages(
   }
   const target = join(cwd, IMAGE_FOLDER);
   const copied: string[] = [];
+  let ready = false;
   for (const name of names.sort()) {
     if (!isImage(name)) continue;
     try {
-      const s = await stat(join(dir, name));
+      const s = await lstat(join(dir, name));
       if (!s.isFile() || before.get(name) === s.mtimeMs) continue;
-      await mkdir(target, { recursive: true });
-      // COPYFILE_EXCL: an image already in the worktree is never overwritten.
-      await copyFile(join(dir, name), join(target, name), 1);
+      if (!ready) {
+        if (!(await safeTarget(target, cwd))) return copied;
+        ready = true;
+      }
+      // COPYFILE_EXCL: a name already in the folder (a file or a link) is never written.
+      await copyFile(join(dir, name), join(target, name), constants.COPYFILE_EXCL);
       copied.push(name);
     } catch {
       /* an existing file, or one that went away: skipped */
     }
   }
   return copied;
+}
+
+/** Creates `generated-images/` if needed; false when it is a link or leaves the worktree. */
+async function safeTarget(target: string, cwd: string): Promise<boolean> {
+  try {
+    const s = await lstat(target);
+    if (s.isSymbolicLink() || !s.isDirectory()) return false;
+  } catch {
+    await mkdir(target);
+  }
+  const [real, root] = await Promise.all([realpath(target), realpath(cwd)]);
+  const rel = relative(root, real);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }

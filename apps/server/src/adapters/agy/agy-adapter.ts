@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -130,12 +130,24 @@ export interface AgyAdapterOptions {
   graceMs?: number;
   /** How long a spawn waits for agy's `init` (default 60 s). */
   startTimeoutMs?: number;
+  /**
+   * How long an `ask_user` MCP call waits for the answer before returning and letting the
+   * question outlive the agy run (default 150 s: agy cuts an MCP call off after 3 minutes).
+   */
+  askHoldMs?: number;
   /** Longest tool-output excerpt kept in the transcript. */
   maxToolResultChars?: number;
   onError?: (error: unknown, context: string) => void;
 }
 
 const SYSTEM: Actor = { type: 'system' };
+/** agy's MCP `tools/call` deadline is 3 minutes (P11-05 probe): `ask_user` holds less. */
+export const ASK_HOLD_MS = 150_000;
+const DEFERRED = Symbol('deferred');
+/** What `ask_user` returns when the user has not answered within the hold. */
+export const DEFERRED_NOTE =
+  'The user has not answered yet. Their answer will reach you as your next message: end your ' +
+  'turn now, without guessing the answer or asking again.';
 const ENDED_MEMORY = 256;
 const SESSION_REF = /^agy:([\w-]{1,128})$/;
 const ALLOW = /^(allow|yes|y|ok|approve|approved)$/i;
@@ -188,6 +200,13 @@ class Session {
   lastResult: string | undefined;
   killTimer: NodeJS.Timeout | undefined;
   stopDone: Promise<void> | undefined;
+  /**
+   * An `ask_user` question still unanswered when its MCP call had to return (agy cuts a tool call
+   * off after 3 minutes): it stays open past the agy process, and its answer starts the next run.
+   */
+  deferred:
+    { id: Id; question: string; answer: Promise<string | Dismissed | undefined> } | undefined;
+  readonly unpauseWaiters: (() => void)[] = [];
   readonly ready: Promise<void>;
   markReady!: () => void;
   private turnWaiters: (() => void)[] = [];
@@ -203,8 +222,19 @@ class Session {
     this.ready = new Promise((r) => (this.markReady = r));
   }
 
-  settlePending(): void {
-    for (const q of [...this.pending.values()]) q.resolve(undefined);
+  /** Withdraws every pending question (but `keep`, a deferred `ask_user` that outlives the turn). */
+  settlePending(keep?: Id): void {
+    for (const q of [...this.pending.values()]) if (q.id !== keep) q.resolve(undefined);
+  }
+
+  /** Resolves once the session is not paused (at once when it is not). */
+  untilUnpaused(): Promise<void> {
+    if (!this.paused) return Promise.resolve();
+    return new Promise((r) => this.unpauseWaiters.push(r));
+  }
+
+  wakeUnpaused(): void {
+    for (const w of this.unpauseWaiters.splice(0)) w();
   }
 
   turnEnd(): Promise<void> {
@@ -233,6 +263,7 @@ export class AgyAdapter implements AgentAdapter {
   private readonly home: string;
   private readonly stateDir: string;
   private readonly graceMs: number;
+  private readonly askHoldMs: number;
   private readonly maxToolResultChars: number;
   private installed = false;
   private disposed = false;
@@ -243,6 +274,7 @@ export class AgyAdapter implements AgentAdapter {
     this.home = opts.home ?? homedir();
     this.stateDir = opts.stateDir ?? join(tmpdir(), 'galactic-agy');
     this.graceMs = opts.graceMs ?? 10_000;
+    this.askHoldMs = opts.askHoldMs ?? ASK_HOLD_MS;
     this.onError = opts.onError ?? (() => {});
     this.maxToolResultChars = opts.maxToolResultChars ?? 2_000;
   }
@@ -366,7 +398,7 @@ export class AgyAdapter implements AgentAdapter {
       createToolServer({
         tools,
         askUser: (args) => this.askUserTool(session, args),
-        allowed: (name) => takePass(session, name),
+        allowed: (name, args) => takePass(session, name, args),
       }),
     );
     const prompt =
@@ -412,6 +444,19 @@ export class AgyAdapter implements AgentAdapter {
 
   /** Starts one turn's process; resolves on its `init`, rejects when it ends before one. */
   private startTurn(session: Session, text: string): Promise<void> {
+    // Every turn is a new agy process that loads the workspace's `.agents/` files again: one that
+    // appeared since the last turn (an approved write, a merged branch) ends the session.
+    try {
+      refuseWorkspaceConfig(session.cwd);
+    } catch (error) {
+      if (!session.starting) {
+        const message = (error as Error).message;
+        session.failure = { error: message, reason: 'runtime' };
+        this.output(session, 'text', message);
+        this.terminal(session, this.stoppedEvent(session, SYSTEM));
+      }
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
     session.turnOpen = true;
     session.lastText = '';
     session.stderr = '';
@@ -493,7 +538,10 @@ export class AgyAdapter implements AgentAdapter {
 
   private onInit(session: Session, msg: Record<string, unknown>): void {
     const id = msg['conversation_id'] ?? asRecord(msg['init'])['conversation_id'];
-    if (!session.conversationId && typeof id === 'string' && id) session.conversationId = id;
+    // The id becomes the session ref and a folder name: only the shape a resume accepts.
+    if (!session.conversationId && typeof id === 'string' && SESSION_REF.test(`agy:${id}`)) {
+      session.conversationId = id;
+    }
     if (session.conversationId) {
       session.images = snapshotImages(brainDir(this.home, session.conversationId));
     }
@@ -636,11 +684,33 @@ export class AgyAdapter implements AgentAdapter {
     return what;
   }
 
-  /** The turn's process ended: copy the new images, then report the turn's end. */
+  /**
+   * The turn's process ended: copy the new images, then report the turn's end — unless an
+   * `ask_user` question is still open (deferred): then the turn stays open, the question with it,
+   * and its answer is the prompt of a new agy run in the same conversation (P11-05, ruling R12).
+   */
   private async endTurn(session: Session): Promise<void> {
-    session.settlePending();
+    const deferred =
+      session.deferred && !session.interrupting && !session.stopping ? session.deferred : undefined;
+    session.deferred = undefined;
+    session.settlePending(deferred?.id);
     if (session.lastText) session.lastResult = session.lastText;
     await this.copyImages(session);
+    if (deferred && !session.terminal) {
+      const answer = await deferred.answer; // `undefined`: withdrawn by an interrupt or a stop
+      if (answer !== undefined && !session.terminal && !session.stopping && !session.interrupting) {
+        await session.untilUnpaused();
+        if (!session.terminal && !session.stopping && !session.interrupting) {
+          const prompt = isDismissed(answer)
+            ? dismissedClarification(answer.dismissed)
+            : `The user answered your question ("${deferred.question}"): ${answer}`;
+          this.startTurn(session, prompt).catch((error: unknown) =>
+            this.onError(error, `agy turn ${session.agentId}`),
+          );
+          return;
+        }
+      }
+    }
     session.interrupting = false;
     session.closeTurn();
     if (!session.stopping && !session.terminal && !session.limit && !session.failure) {
@@ -711,12 +781,12 @@ export class AgyAdapter implements AgentAdapter {
         if (verdict.report) this.toolCall(session, verdict.report, toolUseId);
         return { decision: 'allow' };
       case 'ask_user':
-        givePass(session, ASK_USER_TOOL);
+        givePass(session, ASK_USER_TOOL, asRecord(call.input)['Arguments']);
         return { decision: 'allow' };
       case 'gate': {
         const d = await this.gateDecide(session, verdict.call, toolUseId);
         if (d === 'allow') {
-          if (verdict.mcpTool) givePass(session, verdict.mcpTool);
+          if (verdict.mcpTool) givePass(session, verdict.mcpTool, verdict.call.input);
           return { decision: 'allow' };
         }
         return { decision: 'deny', reason: d === 'withdrawn' ? 'the turn is ending' : d.deny };
@@ -789,10 +859,23 @@ export class AgyAdapter implements AgentAdapter {
     const options = (Array.isArray(args['options']) ? args['options'] : [])
       .filter((o): o is string => typeof o === 'string' && o.trim().length > 0)
       .slice(0, 8);
-    const answer = await this.ask(session, 'clarification', {
+    const { id, answer: pending } = this.openQuestion(session, 'clarification', {
       text,
       ...(options.length > 0 ? { options } : {}),
     });
+    // agy gives up on an MCP call after 3 minutes (measured, P11-05): wait less, then let the
+    // question outlive the call — the answer comes back as the Steward's next message.
+    let timer: NodeJS.Timeout | undefined;
+    const held = await Promise.race([
+      pending,
+      new Promise<typeof DEFERRED>((r) => (timer = setTimeout(() => r(DEFERRED), this.askHoldMs))),
+    ]);
+    clearTimeout(timer);
+    if (held === DEFERRED) {
+      session.deferred = { id: id!, question: text, answer: pending };
+      return mcpText(DEFERRED_NOTE);
+    }
+    const answer = held;
     if (answer === undefined) return mcpText('The question was withdrawn: no answer.', true);
     if (isDismissed(answer)) return mcpText(dismissedClarification(answer.dismissed));
     return mcpText(answer);
@@ -803,11 +886,20 @@ export class AgyAdapter implements AgentAdapter {
     kind: 'clarification' | 'permission',
     question: QuestionBody,
   ): Promise<string | Dismissed | undefined> {
+    return this.openQuestion(session, kind, question).answer;
+  }
+
+  /** Opens a question; `id` is absent when the session is ending (the answer is then `undefined`). */
+  private openQuestion(
+    session: Session,
+    kind: 'clarification' | 'permission',
+    question: QuestionBody,
+  ): { id: Id | undefined; answer: Promise<string | Dismissed | undefined> } {
     if (session.terminal || session.stopping || session.interrupting || session.limit) {
-      return Promise.resolve(undefined);
+      return { id: undefined, answer: Promise.resolve(undefined) };
     }
     const id = `q-${randomUUID()}`;
-    return new Promise((resolve) => {
+    const answer = new Promise<string | Dismissed | undefined>((resolve) => {
       const done = (answer: string | Dismissed | undefined) => {
         session.pending.delete(id);
         this.byQuestion.delete(id);
@@ -823,6 +915,7 @@ export class AgyAdapter implements AgentAdapter {
         question,
       });
     });
+    return { id, answer };
   }
 
   // --- control -------------------------------------------------------------------
@@ -893,6 +986,7 @@ export class AgyAdapter implements AgentAdapter {
 
   private thaw(session: Session): void {
     session.paused = false;
+    session.wakeUnpaused();
     if (session.process && session.process.state !== 'exited') session.process.signal('SIGCONT');
     this.emit(session, { type: 'agent.resumed', agentId: session.agentId, by: SYSTEM });
   }
@@ -996,6 +1090,7 @@ export class AgyAdapter implements AgentAdapter {
           ? 'failed'
           : 'stopped';
     session.settlePending();
+    session.wakeUnpaused();
     session.closeTurn();
     clearTimeout(session.killTimer);
     this.opts.bridge.unregister(session.secret);
@@ -1020,15 +1115,37 @@ export class AgyAdapter implements AgentAdapter {
   }
 }
 
-function givePass(session: Session, name: string): void {
-  session.passes.set(name, (session.passes.get(name) ?? 0) + 1);
+/**
+ * A pass is bound to one exact call — the tool and a canonical form of its arguments — so a
+ * pass the gate gave one call cannot run a different call of the same tool.
+ */
+function passKey(name: string, args: unknown): string {
+  return `${name}\u0000${canonicalJson(args ?? {})}`;
 }
 
-function takePass(session: Session, name: string): boolean {
-  const n = session.passes.get(name) ?? 0;
+/** JSON with object keys sorted at every level. */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+function givePass(session: Session, name: string, args: unknown): void {
+  const key = passKey(name, args);
+  session.passes.set(key, (session.passes.get(key) ?? 0) + 1);
+}
+
+function takePass(session: Session, name: string, args: unknown): boolean {
+  const key = passKey(name, args);
+  const n = session.passes.get(key) ?? 0;
   if (n <= 0) return false;
-  if (n === 1) session.passes.delete(name);
-  else session.passes.set(name, n - 1);
+  if (n === 1) session.passes.delete(key);
+  else session.passes.set(key, n - 1);
   return true;
 }
 
@@ -1046,6 +1163,15 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+function lstatExists(p: string): boolean {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * A workspace that would load hooks or MCP servers of its own into agy (`.agents/hooks.json`,
  * `.agents/mcp_config.json` in the worktree or above it): such a file could approve tool calls or
@@ -1056,7 +1182,8 @@ function refuseWorkspaceConfig(cwd: string): void {
   for (;;) {
     for (const file of ['hooks.json', 'mcp_config.json']) {
       const p = join(dir, '.agents', file);
-      if (existsSync(p)) {
+      // lstat: a symlink counts, even a dangling one (agy may follow it, or it may be filled).
+      if (lstatExists(p)) {
         throw new Error(
           `${p} would load its own hooks or MCP servers into agy: GalacticAgents does not run Gemini Stewards there (remove or rename it)`,
         );

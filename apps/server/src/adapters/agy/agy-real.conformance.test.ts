@@ -138,6 +138,12 @@ if (!enabled) {
       resumable: true,
       toolCalls: true,
       jobEnd: 'idle',
+      // Ruling R11: after a hook deny the real model goes looking for why (reads of ~/.gemini,
+      // `ls ..`, a web search), and the gate rightly asks about each — the denied call never runs.
+      skip: {
+        policyDeny:
+          'after a deny Gemini explores outside the workspace and each read correctly asks (ruling R11)',
+      },
       stallThresholdMs: 5 * 60_000,
       timeoutMs: 180_000,
     });

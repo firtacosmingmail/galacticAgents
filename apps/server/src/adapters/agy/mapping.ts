@@ -1,4 +1,5 @@
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ToolCall } from '@galactic/protocol';
 import { ASK_USER_TOOL, TOOL_SERVER_NAME } from './tool-server.js';
 
@@ -59,17 +60,40 @@ const WRITE_TOOLS = new Set(['write_file', 'write_to_file']);
 const EDIT_TOOLS = new Set(['edit_file', 'replace_file_content', 'multi_replace_file_content']);
 /** Input keys that name a file, in the order agy's tools use them. */
 const PATH_KEYS = ['Path', 'AbsolutePath', 'TargetFile', 'File', 'FilePath', 'file_path', 'path'];
+/** Input keys that name a directory to list or search. */
+const DIR_KEYS = ['DirectoryPath', 'SearchDirectory', 'SearchPath', 'Directory', ...PATH_KEYS];
 
 const asRecord = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
 
-function pathOf(args: Record<string, unknown>): string | undefined {
-  for (const key of PATH_KEYS) {
+/**
+ * Every location the call names under `keys` (distinct, in key order). All of them go to the gate
+ * (`paths`), so a second path key the tool really uses cannot hide behind the first.
+ */
+function pathsOf(args: Record<string, unknown>, keys: readonly string[] = PATH_KEYS): string[] {
+  const out: string[] = [];
+  for (const key of keys) {
     const v = str(args[key]);
-    if (v) return v;
+    if (v && !out.includes(v)) out.push(v);
   }
-  return undefined;
+  return out;
+}
+
+/** The gate input for the locations of a call: the first as `file_path`/`path`, all as `paths`. */
+function located(field: 'file_path' | 'path', paths: string[]): Record<string, unknown> {
+  return { [field]: paths[0], ...(paths.length > 1 ? { paths } : {}) };
+}
+
+/**
+ * Fail closed on an argument the mapping cannot find (an unobserved or renamed key): the call is
+ * refused, never judged as if it named the worktree.
+ */
+function missing(name: string, what: string): AgyVerdict {
+  return {
+    kind: 'deny',
+    reason: `${name} names no ${what} GalacticAgents can check, so it is refused`,
+  };
 }
 
 /** `~/x` and relative paths made absolute (relative to the Steward's worktree). */
@@ -78,12 +102,39 @@ function absolute(p: string, ctx: MappingContext): string {
   return isAbsolute(home) ? resolve(home) : resolve(ctx.cwd, home);
 }
 
-/** A path under agy's own configuration: `.agents/` (workspace) or `.gemini/` (home). */
-function isAgyConfig(p: string, ctx: MappingContext): boolean {
-  const segments = absolute(p, ctx)
-    .split(sep)
-    .map((s) => s.normalize('NFC').toLowerCase());
-  return segments.includes('.agents') || segments.includes('.gemini');
+/**
+ * `p` with symlinks resolved: the real path of its longest existing ancestor, plus the rest
+ * (a file that does not exist yet is judged by where its folder really is).
+ */
+export function realLocation(p: string): string {
+  let head = p;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(head), ...rest.reverse());
+    } catch {
+      const up = dirname(head);
+      if (up === head) return p;
+      rest.push(basename(head));
+      head = up;
+    }
+  }
+}
+
+const AGY_CONFIG_DIRS = (s: string) => s === '.agents' || s === '.gemini';
+
+/**
+ * A path under agy's own configuration: `.agents/` (workspace) or `.gemini/` (home), as written
+ * or once symlinks are resolved (a link in the worktree pointing into one counts).
+ */
+export function isAgyConfig(p: string, ctx: MappingContext): boolean {
+  const lexical = absolute(p, ctx);
+  return [lexical, realLocation(lexical)].some((candidate) =>
+    candidate
+      .split(sep)
+      .map((s) => s.normalize('NFC').toLowerCase())
+      .some(AGY_CONFIG_DIRS),
+  );
 }
 
 function within(dir: string, p: string): boolean {
@@ -92,8 +143,9 @@ function within(dir: string, p: string): boolean {
 }
 
 /** A shell line run from `cwd`: prefixed with `cd` when that is not the worktree. */
-function commandCall(args: Record<string, unknown>, ctx: MappingContext): ToolCall {
-  const line = str(args['CommandLine']) ?? str(args['command']) ?? '';
+function commandCall(args: Record<string, unknown>, ctx: MappingContext): ToolCall | undefined {
+  const line = str(args['CommandLine']) ?? str(args['command']);
+  if (line === undefined || !line.trim()) return undefined;
   const cwd = str(args['Cwd']) ?? str(args['cwd']);
   const command =
     cwd && resolve(absolute(cwd, ctx)) !== resolve(ctx.cwd)
@@ -138,73 +190,73 @@ export function mapAgyCall(call: ToolCall, ctx: MappingContext): AgyVerdict {
   }
 
   if (READ_TOOLS.has(name)) {
-    const p = pathOf(args);
-    if (p && isUrl(p)) return { kind: 'gate', call: { toolName: 'WebFetch', input: { url: p } } };
-    if (p) {
-      const cli = join(ctx.home, '.gemini', 'antigravity-cli');
-      const target = absolute(p, ctx);
-      // Mission Control's tool descriptors, and agy's own built-in skills (read-only docs it
-      // ships and its model reads to learn how to work): reading them is not an action.
-      if (
-        within(join(cli, 'mcp', TOOL_SERVER_NAME), target) ||
-        within(join(cli, 'builtin'), target)
-      ) {
-        return { kind: 'allow' };
-      }
+    const paths = pathsOf(args);
+    if (paths.length === 0) return missing(name, 'file');
+    const urls = paths.filter(isUrl);
+    if (urls.length > 0) {
+      if (urls.length !== paths.length) return missing(name, 'single location');
+      return { kind: 'gate', call: { toolName: 'WebFetch', input: { url: urls[0] } } };
     }
-    return { kind: 'gate', call: { toolName: 'Read', input: p ? { file_path: p } : {} } };
+    const cli = join(ctx.home, '.gemini', 'antigravity-cli');
+    // Mission Control's tool descriptors, and agy's own built-in skills (read-only docs it ships
+    // and its model reads to learn how to work): reading them is not an action.
+    const harmless = (p: string) => {
+      const target = realLocation(absolute(p, ctx));
+      return (
+        within(realLocation(join(cli, 'mcp', TOOL_SERVER_NAME)), target) ||
+        within(realLocation(join(cli, 'builtin')), target)
+      );
+    };
+    if (paths.every(harmless)) return { kind: 'allow' };
+    return { kind: 'gate', call: { toolName: 'Read', input: located('file_path', paths) } };
   }
   if (WRITE_TOOLS.has(name) || EDIT_TOOLS.has(name)) {
-    const p = pathOf(args);
-    if (p && isAgyConfig(p, ctx)) {
-      return { kind: 'deny', reason: `${p} is agy's configuration: Stewards may not change it` };
+    const paths = pathsOf(args);
+    if (paths.length === 0) return missing(name, 'file');
+    const config = paths.find((p) => isAgyConfig(p, ctx));
+    if (config) {
+      return {
+        kind: 'deny',
+        reason: `${config} is agy's configuration: Stewards may not change it`,
+      };
     }
     const toolName = WRITE_TOOLS.has(name) ? 'Write' : 'Edit';
-    return { kind: 'gate', call: { toolName, input: p ? { file_path: p } : {} } };
+    return { kind: 'gate', call: { toolName, input: located('file_path', paths) } };
   }
 
   switch (name) {
-    case 'run_command':
-      return { kind: 'gate', call: commandCall(args, ctx) };
+    case 'run_command': {
+      const call = commandCall(args, ctx);
+      return call ? { kind: 'gate', call } : missing(name, 'command');
+    }
     case 'list_dir': {
-      const p = str(args['DirectoryPath']) ?? pathOf(args);
-      return { kind: 'gate', call: { toolName: 'LS', input: p ? { path: p } : {} } };
+      const paths = pathsOf(args, DIR_KEYS);
+      if (paths.length === 0) return missing(name, 'folder');
+      return { kind: 'gate', call: { toolName: 'LS', input: located('path', paths) } };
     }
-    case 'find_by_name': {
-      const p = str(args['SearchDirectory']) ?? pathOf(args);
-      const pattern = str(args['Pattern']);
-      return {
-        kind: 'gate',
-        call: {
-          toolName: 'Glob',
-          input: { ...(p ? { path: p } : {}), ...(pattern ? { pattern } : {}) },
-        },
-      };
-    }
+    case 'find_by_name':
     case 'grep_search': {
-      const p = str(args['SearchPath']) ?? pathOf(args);
-      const pattern = str(args['Query']);
+      const paths = pathsOf(args, DIR_KEYS);
+      if (paths.length === 0) return missing(name, 'folder');
+      const pattern = str(args['Pattern']) ?? str(args['Query']);
       return {
         kind: 'gate',
         call: {
-          toolName: 'Grep',
-          input: { ...(p ? { path: p } : {}), ...(pattern ? { pattern } : {}) },
+          toolName: name === 'find_by_name' ? 'Glob' : 'Grep',
+          input: { ...located('path', paths), ...(pattern ? { pattern } : {}) },
         },
       };
     }
-    case 'search_web':
-      return {
-        kind: 'gate',
-        call: {
-          toolName: 'WebSearch',
-          input: { query: str(args['query']) ?? str(args['Query']) ?? '' },
-        },
-      };
-    case 'read_url_content':
-      return {
-        kind: 'gate',
-        call: { toolName: 'WebFetch', input: { url: str(args['Url']) ?? str(args['url']) ?? '' } },
-      };
+    case 'search_web': {
+      const query = str(args['query']) ?? str(args['Query']);
+      if (!query) return missing(name, 'query');
+      return { kind: 'gate', call: { toolName: 'WebSearch', input: { query } } };
+    }
+    case 'read_url_content': {
+      const url = str(args['Url']) ?? str(args['url']);
+      if (!url) return missing(name, 'URL');
+      return { kind: 'gate', call: { toolName: 'WebFetch', input: { url } } };
+    }
     case 'generate_image':
       // An image costs a large share of the weekly quota: the table's unclassified entry decides.
       return { kind: 'gate', call: { toolName: 'agy:generate_image', input: args } };

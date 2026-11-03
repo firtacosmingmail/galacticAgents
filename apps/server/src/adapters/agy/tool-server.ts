@@ -11,7 +11,8 @@ import { mcpText, type HookTools, type McpCallResult, type McpToolSpec } from '.
  *
  * A call reaches agy's PreToolUse hook first (`call_mcp_tool {ServerName: "galactic", ToolName,
  * Arguments}`), where the session's gate judges it; only a call the hook let through may run
- * here (`allowed` consumes one pass per tool name), so nothing runs that the gate never saw.
+ * here (`allowed` consumes the pass of that exact call — tool and arguments), so nothing runs that
+ * the gate never saw.
  */
 
 /** The MCP server name of the managed entry (`call_mcp_tool`'s `ServerName`). */
@@ -51,8 +52,11 @@ export interface ToolServerOptions {
   tools: ReadonlyMap<string, ToolDefinition>;
   /** The user's answer to `ask_user` (or what a dismissal tells the agent). */
   askUser(args: unknown): Promise<McpCallResult>;
-  /** Consumes the hook's pass for one call of `name`; false when the hook never let one through. */
-  allowed(name: string): boolean;
+  /**
+   * Consumes the hook's pass for this exact call (`name` and `args`); false when the hook never
+   * let such a call through.
+   */
+  allowed(name: string, args: unknown): boolean;
 }
 
 export function createToolServer(opts: ToolServerOptions): HookTools {
@@ -69,7 +73,7 @@ export function createToolServer(opts: ToolServerOptions): HookTools {
     async call(name: string, args: unknown): Promise<McpCallResult> {
       const tool = opts.tools.get(name);
       if (!tool && name !== ASK_USER_TOOL) return mcpText(`unknown tool: ${name}`, true);
-      if (!opts.allowed(name)) {
+      if (!opts.allowed(name, args ?? {})) {
         return mcpText(`the call to ${name} did not pass Mission Control's permission hook`, true);
       }
       if (!tool) return opts.askUser(args);
