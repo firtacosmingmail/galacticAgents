@@ -25,7 +25,7 @@ import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
 import { originOf } from '../domain/question-service.js';
 import { openQuestion } from '../domain/questions.js';
-import { setTaskState } from '../domain/states.js';
+import { FINISHED_WORK, setTaskState } from '../domain/states.js';
 import { updateTask } from '../domain/tasks.js';
 import {
   LIMIT_META,
@@ -52,7 +52,8 @@ import { stewardDeclares } from './tool-runtimes.js';
  *     available provider, each passing `ProviderCatalog.check` for the step's `makesImages` and
  *     `publishes`, none out of limit, none of the provider that hit its limit (except
  *     Antigravity's other-family models with room, ruling R17), at most 12 — and the options `Switch to <label>` per model, then `Wait until it
- *     resets`. A second limit on the same task or job while one is open opens nothing.
+ *     resets`. A second limit on the same task or job while one is open opens nothing, and
+ *     neither does a limit whose task finished or whose job stopped while the catalogue answered.
  *   - **Switch**: a task gets `task.updated{provider, model}` and a new Steward on the task under
  *     the stopped Steward's supervisor, its prompt the task's Steward prompt led by a handover; a
  *     job's retry of the limited run alone uses the chosen model — the next ordinary run, or the
@@ -303,6 +304,10 @@ export class UsageLimits implements RunLimits {
       // Asked meanwhile (the catalogue took a while): still one question.
       const current = job ? jobOf(ctx, job.id) : undefined;
       if (this.openFor(task.id, current?.limitQuestionId)) return;
+      // Its task finished or its job stopped meanwhile: nothing to ask (M1). Not opened, rather
+      // than opened and withdrawn, as the guard above: the user never saw it.
+      const now = ctx.tables.tasks.get(task.id);
+      if (!now || FINISHED_WORK.has(now.state) || current?.state === 'stopped') return;
       const question = openQuestion(ctx, {
         id: `q-${randomUUID()}`,
         kind: 'clarification',
@@ -316,9 +321,7 @@ export class UsageLimits implements RunLimits {
         },
         meta: { toUser: true, jobOwned: job !== undefined },
       });
-      if (current && current.state !== 'stopped') {
-        writeJob(ctx, current, { limitQuestionId: question.id });
-      }
+      if (current) writeJob(ctx, current, { limitQuestionId: question.id });
     });
   }
 
