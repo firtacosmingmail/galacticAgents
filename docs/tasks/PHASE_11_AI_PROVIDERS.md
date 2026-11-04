@@ -1,7 +1,7 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-11, P11-12, P11-13, P11-14, P11-15 · **Task status:** follow-up batch `p11-2-fixes` in progress (P11-11 – P11-15, added 2026-11-04); P11-10 done (2026-11-03); P11-09, P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
-**Phase status:** in progress (10/15 done) — `p11-1-ai-providers` merged into `phase-11` (2026-11-04, with `main` and the brains' MCP work); follow-up fixes on batch branch `p11-2-fixes`
+**Current task:** P11-12, P11-13, P11-14, P11-15 · **Task status:** follow-up batch `p11-2-fixes` in progress (P11-11 – P11-15, added 2026-11-04; P11-11 done); P11-10 done (2026-11-03); P11-09, P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
+**Phase status:** in progress (11/15 done) — `p11-1-ai-providers` merged into `phase-11` (2026-11-04, with `main` and the brains' MCP work); follow-up fixes on batch branch `p11-2-fixes`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -104,8 +104,8 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Done:** dev-harness fakes for `codex` and `agy` (ruling R4; since the final review behind `GALACTIC_FAKE_PROVIDERS`, R25; final-review fixes C1, I1–I5 and the agy second `ask_user` in `docs/tasks/notes/P11-review.md`), a Steward script route and a usage-limit clock route, `e2e/tests/14-ai-providers.spec.ts` (plan chips, the Gemini satellite mark, an edited publish approval the Steward hears, one limit card without ChatGPT, a wait retried when the clock passes the reset, both cards at 390 and 320 px), the docs pass and `docs/tasks/notes/P11-review.md`.
 
 ### P11-11 — Tests that run git in a sandbox (added 2026-11-04)
-- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-12 – P11-15
-- Tests point `GIT_CONFIG_GLOBAL` at `/dev/null`, so git has no email and looks up the host name for the reflog's identity; where name lookups are blocked (a sandbox) every `git branch`/`worktree add` hangs and about 40 server tests time out. The git runner passes the identity variables (`EMAIL`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`) through, and the server's test setup sets a test identity when none is set.
+- **Status:** done (2026-11-04) · **Depends on:** — · **Parallel with:** P11-12 – P11-15
+- Tests point `GIT_CONFIG_GLOBAL` at `/dev/null`, so git has no email and looks up the host name for the reflog's identity; where name lookups are blocked (a sandbox) every `git branch`/`worktree add` hangs and about 40 server tests time out. The git runner passes `EMAIL` (git's last-resort email, below any `user.email`) through, and the server's test setup sets it when unset. `GIT_AUTHOR_*`/`GIT_COMMITTER_*` stay out: they would override Mission Control's own commit identity.
 - **Acceptance:** the server suite passes with name lookups blocked; the runner's environment stays an allowlist.
 
 ### P11-12 — Publishing runs: no unasked network, no misleading rule (added 2026-11-04)

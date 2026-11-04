@@ -8,5 +8,6 @@ export default defineConfig({
     // adapter's children): a few seconds each, so a busy machine pushed them past Vitest's 5 s
     // default. A hang still fails, just later.
     testTimeout: 20_000,
+    setupFiles: ['./src/test/git-identity.setup.ts'],
   },
 });
