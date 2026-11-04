@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** P8-23 done
-**Phase status:** in progress (23/23 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
+**Current task:** P8-24 · **Task status:** P8-24 in progress
+**Phase status:** in progress (23/24 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -158,6 +158,11 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - Cosmin's report: "It asked me for storage access and I refused them. It crashed after that. Display an error if that is the problem." The repository lives under `~/Documents`, a folder macOS guards per app; refusing the prompt makes the app's Node side die reading the project's `package.json` ("operation not permitted"), and the window only said "The shell's helper stopped". The shell now checks it can read the project before starting its helper, and reads the helper's log when it stops: a refusal shows its own message — what happened, where to allow it (System Settings → Privacy & Security → Files and Folders → GalacticAgents → Documents Folder) and to open the app again — in the window and the menu bar.
 - **Acceptance:** Rust unit tests for the message and the log check; the window and the menu show the message after a refusal; DESKTOP.md documents it.
 - **Done:** `apps/desktop/src-tauri/src/access.rs` (`check_readable` before the helper starts — the read that also asks macOS the first time; `failure_from_log` when the helper stops; `refused_message`), wired in `main.rs` (`log_path`); shown with the existing `show_failure` (window, menu status line, "!" in the menu bar). Tests: 5 Rust unit tests in `access.rs`, added to `pnpm --filter @galactic/desktop test:rust`; checked by running the built shell against a folder it cannot read at all (review fix: the refusal check now runs before the "not built" check, which a refused folder also fails) and one whose `package.json` cannot be read; the helper's log must show the refusal and the project's path (as given or its real path) on one line. `docs/DESKTOP.md` lifecycle bullet (incl. `tccutil reset`).
+
+### P8-24 — Rename projects and tasks from the side bar (added 2026-11-04)
+- **Status:** in progress · **Depends on:** P4-12 · **Parallel with:** all
+- Cosmin's request: "I want to be able to rename the projects and the tasks from in the side bar." A project's name was editable only from the controls strip and the console; a task had no name at all — the side bar showed its description, the Steward's whole brief (often 1–3 k characters). The row's "⋯" actions get **Rename**: an inline field, Enter saves, Escape cancels. A project renames its `name`; a task gets a display **title** (`meta.title`, no migration) shown wherever the task is named, its description untouched; an empty title goes back to the description. A rename alone wakes no agent.
+- **Acceptance:** protocol and domain tests for the task title (set, trim, clear, length, refusal on a project); the wake rule skips a title-only edit; web tests for the label and the rename field (save, cancel, clear); SPEC decision 150.
 
 ## Exit criteria
 
