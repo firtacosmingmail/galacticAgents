@@ -570,4 +570,25 @@ describe('usage limits (P11-07)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('a task closed while the catalogue answers gets no limit question (M1)', async () => {
+    const { c } = boot();
+    // The catalogue holds its answer until the task is closed.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let asked = false;
+    // `usage` is asked only by the limit question (spawns ask `models` and `check`).
+    const usage = c.catalog.usage.bind(c.catalog);
+    c.catalog.usage = async (p) => {
+      asked = true;
+      await held;
+      return usage(p);
+    };
+    const { task } = await stepTask(c, TEXT_ON_GEMINI);
+    await until(() => asked, 'the catalogue asked');
+    await c.commands.closeTask(task.id, USER);
+    release();
+    await c.usageLimits.settled();
+    expect(limitQuestions(c, task.id).filter((q) => q.status === 'open')).toEqual([]);
+  });
 });

@@ -1187,6 +1187,41 @@ describe('job scheduler (P10-04)', () => {
       ).rejects.toThrow();
     });
 
+    it('a job stopped while the catalogue answers gets no limit question (M1)', async () => {
+      const agy = new FakeAdapter({
+        speed: 0,
+        runtime: 'agy',
+        scenarioFor: () => ({ name: 'limited', scenario: LIMIT }),
+      });
+      const { c, clock } = boot({ providers: [agy] });
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      let asked = false;
+      // `usage` is asked only by the limit question (spawns ask `models` and `check`).
+      const usage = c.catalog.usage.bind(c.catalog);
+      c.catalog.usage = async (p) => {
+        asked = true;
+        await held;
+        return usage(p);
+      };
+      const { job } = await longTermJob(c, { provider: 'gemini' });
+      setTo(clock, oct(1, 9));
+      await c.jobs.tick();
+      await until(() => asked, 'the catalogue asked');
+      await c.commands.setJobState({ jobId: job.id, state: 'stopped', by: USER });
+      release();
+      // The limit is asked in the scheduler's queue: a tick queued after it waits for it.
+      await c.jobs.tick();
+      await c.usageLimits.settled();
+      expect(runsOf(c, job.id)).toMatchObject([{ outcome: 'limited' }]);
+      expect(
+        c.log.tables.questions
+          .all()
+          .filter((q) => q.status === 'open' && q.context.usageLimit?.jobId === job.id),
+      ).toEqual([]);
+      expect(jobNow(c, job.id).limitQuestionId).toBeUndefined();
+    });
+
     it('Wait on a limited publish follow-up leaves the ordinary schedule alone (M3)', async () => {
       let spawns = 0;
       const { c, clock } = boot({
