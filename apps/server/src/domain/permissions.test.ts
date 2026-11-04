@@ -594,6 +594,9 @@ describe('P1-30 — review R3 bypasses', () => {
       ['Write', { file_path: '.agents/hooks.json', content: '{}' }, 'ask'],
       ['Write', { file_path: '~/.gemini/config/mcp_config.json', content: '{}' }, 'ask'],
       bash('echo "{}" > .agents/mcp_config.json', 'ask'),
+      // Codex reads a project's `.codex/config.toml` for trusted projects (P11-14, M2).
+      ['Write', { file_path: '.codex/config.toml', content: '' }, 'ask'],
+      bash('echo x > .codex/config.toml', 'ask'),
       ['NotebookEdit', { notebook_path: '.claude/x.ipynb' }, 'ask'],
       bash('echo x > .git/hooks/pre-commit', 'ask'),
       bash('echo "{}" >.mcp.json', 'ask'),

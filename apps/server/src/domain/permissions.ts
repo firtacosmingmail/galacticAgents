@@ -1586,7 +1586,7 @@ function within(root: string, target: string): boolean {
 /**
  * Whether `p` names agent or git configuration that runs outside the gate on a later spawn or
  * git command: anything under `.claude/`, `.git/` or `.husky/`, agy's `.agents/` (workspace hooks
- * and MCP servers) and `.gemini/` (P11-05), or a `.mcp.json` / `.claude.json`. Measured from the agent's cwd when `p` is under it (its worktree), else from
+ * and MCP servers) and `.gemini/` (P11-05), Codex's `.codex/` (a trusted project's `config.toml`, P11-14), or a `.mcp.json` / `.claude.json`. Measured from the agent's cwd when `p` is under it (its worktree), else from
  * the workspace root when under it, so a workspace that itself lives under such a directory is not
  * flagged wholesale; anywhere else, on the whole path.
  */
@@ -1604,7 +1604,12 @@ export function isAgentConfigPath(p: string, ctx: PolicyContext): boolean {
   return (
     segments.some(
       (s) =>
-        s === '.claude' || s === '.git' || s === '.husky' || s === '.agents' || s === '.gemini',
+        s === '.claude' ||
+        s === '.git' ||
+        s === '.husky' ||
+        s === '.agents' ||
+        s === '.gemini' ||
+        s === '.codex',
     ) ||
     last === '.mcp.json' ||
     last === '.claude.json'
