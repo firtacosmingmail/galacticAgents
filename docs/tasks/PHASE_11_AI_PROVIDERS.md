@@ -1,7 +1,7 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** P11-12, P11-13, P11-14, P11-15 · **Task status:** follow-up batch `p11-2-fixes` in progress (P11-11 – P11-15, added 2026-11-04; P11-11 done); P11-10 done (2026-11-03); P11-09, P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
-**Phase status:** in progress (11/15 done) — `p11-1-ai-providers` merged into `phase-11` (2026-11-04, with `main` and the brains' MCP work); follow-up fixes on batch branch `p11-2-fixes`
+**Current task:** — · **Task status:** all fifteen tasks done; the follow-up batch P11-11 – P11-15 done (2026-11-04); P11-10 – P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
+**Phase status:** done (2026-11-04) (15/15 done) — `p11-1-ai-providers` and the follow-up batch `p11-2-fixes` merged into `phase-11`, which also holds `phase-10`, `main` and the brains' MCP work
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -109,25 +109,25 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Acceptance:** the server suite passes with name lookups blocked; the runner's environment stays an allowlist.
 
 ### P11-12 — Publishing runs: no unasked network, no misleading rule (added 2026-11-04)
-- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11, P11-13 – P11-15
+- **Status:** done (2026-11-04) · **Depends on:** — · **Parallel with:** P11-11, P11-13 – P11-15
 - From the final re-review and the deferred minors in `docs/tasks/notes/P11-review.md`: `run_workspace` asks in a publishing run (a worktree script can reach the network); a publishing run's permission card does not offer "Allow similar" (R26 ignores the rule); the publish-files route finds an ended job run's Steward folder through `meta.cwd`, with an HTTP happy-path test.
 - **Acceptance:** each has a test; SPEC decision 147 and TECHNOLOGY say what a publishing run asks.
 - **Done:** `publishingPolicy` turns `run_workspace` to `ask` (a deny stays; the allowance matches network calls only); a publishing run's question carries `context.origin.publishingRun`, the web card offers no "Allow similar" and the server refuses its preview and rule; `folderOfAgent` prefers `meta.cwd`, with an HTTP happy-path test of the publish-files route. SPEC 147 and TECHNOLOGY §3.8 amended.
 
 ### P11-13 — Usage limits: the deferred cases (added 2026-11-04)
-- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11, P11-12, P11-14, P11-15
+- **Status:** done (2026-11-04) · **Depends on:** — · **Parallel with:** P11-11, P11-12, P11-14, P11-15
 - An open limit question is withdrawn when its task closes (or its job run ends otherwise); an `updateTask` throw in the switch path is refused like any other; a free-text answer is answered with the choices; "Wait" on a limited follow-up does not start the next ordinary run early (M3); a switch is kept for the run it was chosen for (M4); a restart test on a fresh composition over the same database (M6).
 - **Acceptance:** each has a test.
 - **Done:** limit questions withdrawn on a finished task (`setTaskState`) or a stopped job (`setJobState`); a refused `updateTask` fails the task as R18; other text refused with "Answer with one of: …"; a limited follow-up's Wait and switch leave the schedule alone and the switch goes to that follow-up's own retry (`switchAppliesTo`, by `usageLimit.runId` and `reaskOf`); a restart test over the same database file. Tests in `runtime/usage-limits.test.ts` and `runtime/job-scheduler.test.ts`; SPEC 148 and TECHNOLOGY §3.5 updated.
 
 ### P11-14 — Providers and adapters: the deferred cases (added 2026-11-04)
-- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11 – P11-13, P11-15
+- **Status:** done (2026-11-04) · **Depends on:** — · **Parallel with:** P11-11 – P11-13, P11-15
 - `.codex` among the agent-configuration segments (M2); a loose model name matching two models refuses as ambiguous (M5); a `CODEX_HOME` whose `auth.json` source resolves inside the managed home refuses instead of linking to itself; a user `auth.json` that is a symlink gets Codex's file renamed over its target, not over the link; commands Codex runs without asking count toward the tool-call cap; an agy answer that arrives while the Steward is paused with no process is delivered on resume without hanging an interrupt.
 - **Acceptance:** each has a test.
 - **Done:** `.codex` is agent configuration (`permissions.test.ts`); an ambiguous loose model name refuses with the candidates, an id beating a label (`provider-catalog.test.ts`); the Codex home refuses a login file that resolves inside it and renames over a symlinked login file's target (`home.test.ts`, `codex-adapter.test.ts`); unasked `commandExecution`/`fileChange` items are reported as `agent.tool_call` once (`codex-adapter.test.ts`); an agy answer arriving while paused with no process is queued for the resume, an interrupt or a message never waits on it (`agy-adapter.test.ts`). SPEC 146 and §3.6 list, TECHNOLOGY §3.5–3.7 updated.
 
 ### P11-15 — Web: provider marks and publish styles (added 2026-11-04)
-- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11 – P11-14
+- **Status:** done (2026-11-04) · **Depends on:** — · **Parallel with:** P11-11 – P11-14
 - The satellite of a ChatGPT or Gemini Steward carries a ring in the provider's colour (not a tint); `.pill.kind-publish` has its own style; the publish tokens have light and dark values.
 - **Acceptance:** tests for the ring and the styles; the e2e satellite-mark check still passes.
 - **Done:** satellites keep a Claude Steward's colour and carry a thin torus in the provider's colour (both render paths); `.pnl .pill.kind-publish` keeps its colour in the light theme; publish and spend tokens (with `-ink`) have light values. The e2e check (`data-satellite-providers`) is unchanged. TECHNOLOGY §3.5 says so.
@@ -137,6 +137,10 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - Every task done; the full gates (`pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`, `pnpm e2e`) green on the batch branch.
 - The plan's Review Focus items (limit wait across a restart, edited publish text, file changed after approval, loose model names, logged-out provider) each covered by a test.
 - SPEC, TECHNOLOGY and IMPLEMENTATION_PLAN consistent with what was built.
+
+### Follow-up batch — verified (2026-11-04)
+
+- P11-11 – P11-15 done on `p11-2-fixes`; a fresh review found one Important (an agy answer lost on a runtime interrupt) and two Minor issues (a limit question opened after its job stopped; a dangling Codex login link chain followed one hop), all fixed with tests. Full gates green: protocol 190, desktop 79, server 2415 passed and 13 skipped, web 2034; `pnpm e2e` 30/30. What stays open is in `docs/tasks/notes/P11-review.md` ("Left open").
 
 ### Exit criteria — verified (2026-11-03)
 

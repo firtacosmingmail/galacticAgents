@@ -133,3 +133,17 @@ its cost if wrong.
 - Ruling R25 (final review C1, replaces R4's gating): the codex/agy fake replacement is gated by its own flag GALACTIC_FAKE_PROVIDERS=1, set only by the e2e server, never by --dev/`pnpm remote`/`pnpm dev` — cost if wrong: dev runs need the flag to use fakes.
 - Ruling R26 (final review I1, refines R8/decision 138 for publishing): a publishing run (publish follow-up or Steward of a `publishes` task) gets no permission rules at all (no Allow-similar, no unattended), and its network calls always ask unless the publish allowance matches, whatever the policy preset — cost if wrong: extra permission cards in trusted projects' publishing steps. (Implemented also for `unclassified: allow`, which the trusted preset sets, and keeping a `deny` a deny.)
 - Ruling R27 (final review I5, replaces R9): if Codex replaces the managed auth.json link with a regular file, rename that file atomically over the user's own auth.json (never opened or read), then relink; logged — cost if wrong: the user's login file is overwritten by Codex's own newer file.
+
+## Follow-up batch review (2026-11-04, `p11-2-fixes`)
+
+A fresh reviewer read P11-11 – P11-15 against `phase-11`: no Critical, one Important, two Minor;
+nothing weakens a publish or permission check and no credential is read. All three fixed with tests:
+
+- **I1** an agy answer queued while paused was lost when the runtime resumed then interrupted (its
+  real path): the run started from the held answer keeps its prompt until agy's `init`, and an
+  interrupt before then puts it back, so the next message carries the answer first
+  (`runtime/agy-runtime.test.ts`). A plain interrupt with no message keeps the answer held.
+- **M1** a limit question could open after its job stopped or its task finished while the catalogue
+  answered: the opening transaction now skips it.
+- **M2** a dangling chain of login links was followed one hop: `resolvedAuth` follows it to the end
+  (at most 40 links, a loop refused), and the self-link guard and the rename use the end.
