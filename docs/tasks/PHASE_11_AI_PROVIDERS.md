@@ -122,6 +122,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11 – P11-13, P11-15
 - `.codex` among the agent-configuration segments (M2); a loose model name matching two models refuses as ambiguous (M5); a `CODEX_HOME` whose `auth.json` source resolves inside the managed home refuses instead of linking to itself; a user `auth.json` that is a symlink gets Codex's file renamed over its target, not over the link; commands Codex runs without asking count toward the tool-call cap; an agy answer that arrives while the Steward is paused with no process is delivered on resume without hanging an interrupt.
 - **Acceptance:** each has a test.
+- **Done:** `.codex` is agent configuration (`permissions.test.ts`); an ambiguous loose model name refuses with the candidates, an id beating a label (`provider-catalog.test.ts`); the Codex home refuses a login file that resolves inside it and renames over a symlinked login file's target (`home.test.ts`, `codex-adapter.test.ts`); unasked `commandExecution`/`fileChange` items are reported as `agent.tool_call` once (`codex-adapter.test.ts`); an agy answer arriving while paused with no process is queued for the resume, an interrupt or a message never waits on it (`agy-adapter.test.ts`). SPEC 146 and §3.6 list, TECHNOLOGY §3.5–3.7 updated.
 
 ### P11-15 — Web: provider marks and publish styles (added 2026-11-04)
 - **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11 – P11-14
