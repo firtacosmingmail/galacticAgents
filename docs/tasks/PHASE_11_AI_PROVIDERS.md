@@ -1,7 +1,7 @@
 # Phase 11 — More AI providers (Codex and Antigravity Stewards)
 
-**Current task:** — · **Task status:** all ten tasks done; P11-10 done (2026-11-03); P11-09, P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
-**Phase status:** done (2026-11-03) (10/10 done) — on batch branch `p11-1-ai-providers`, cut from `phase-11` (phase-10 plus the providers spec and plan), waiting for the merge into `phase-11`
+**Current task:** P11-11, P11-12, P11-13, P11-14, P11-15 · **Task status:** follow-up batch `p11-2-fixes` in progress (P11-11 – P11-15, added 2026-11-04); P11-10 done (2026-11-03); P11-09, P11-08, P11-07, P11-06, P11-05, P11-04 and P11-03 done (2026-11-03); P11-01 and P11-02 done (2026-11-02)
+**Phase status:** in progress (10/15 done) — `p11-1-ai-providers` merged into `phase-11` (2026-11-04, with `main` and the brains' MCP work); follow-up fixes on batch branch `p11-2-fixes`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -102,6 +102,31 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - Plan Task 12: dev-harness fake `codex`/`agy` Stewards, `e2e/tests/14-ai-providers.spec.ts`, docs, exit criteria.
 - **Acceptance:** the e2e flow passes; the full gates are green.
 - **Done:** dev-harness fakes for `codex` and `agy` (ruling R4; since the final review behind `GALACTIC_FAKE_PROVIDERS`, R25; final-review fixes C1, I1–I5 and the agy second `ask_user` in `docs/tasks/notes/P11-review.md`), a Steward script route and a usage-limit clock route, `e2e/tests/14-ai-providers.spec.ts` (plan chips, the Gemini satellite mark, an edited publish approval the Steward hears, one limit card without ChatGPT, a wait retried when the clock passes the reset, both cards at 390 and 320 px), the docs pass and `docs/tasks/notes/P11-review.md`.
+
+### P11-11 — Tests that run git in a sandbox (added 2026-11-04)
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-12 – P11-15
+- Tests point `GIT_CONFIG_GLOBAL` at `/dev/null`, so git has no email and looks up the host name for the reflog's identity; where name lookups are blocked (a sandbox) every `git branch`/`worktree add` hangs and about 40 server tests time out. The git runner passes the identity variables (`EMAIL`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`) through, and the server's test setup sets a test identity when none is set.
+- **Acceptance:** the server suite passes with name lookups blocked; the runner's environment stays an allowlist.
+
+### P11-12 — Publishing runs: no unasked network, no misleading rule (added 2026-11-04)
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11, P11-13 – P11-15
+- From the final re-review and the deferred minors in `docs/tasks/notes/P11-review.md`: `run_workspace` asks in a publishing run (a worktree script can reach the network); a publishing run's permission card does not offer "Allow similar" (R26 ignores the rule); the publish-files route finds an ended job run's Steward folder through `meta.cwd`, with an HTTP happy-path test.
+- **Acceptance:** each has a test; SPEC decision 147 and TECHNOLOGY say what a publishing run asks.
+
+### P11-13 — Usage limits: the deferred cases (added 2026-11-04)
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11, P11-12, P11-14, P11-15
+- An open limit question is withdrawn when its task closes (or its job run ends otherwise); an `updateTask` throw in the switch path is refused like any other; a free-text answer is answered with the choices; "Wait" on a limited follow-up does not start the next ordinary run early (M3); a switch is kept for the run it was chosen for (M4); a restart test on a fresh composition over the same database (M6).
+- **Acceptance:** each has a test.
+
+### P11-14 — Providers and adapters: the deferred cases (added 2026-11-04)
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11 – P11-13, P11-15
+- `.codex` among the agent-configuration segments (M2); a loose model name matching two models refuses as ambiguous (M5); a `CODEX_HOME` whose `auth.json` source resolves inside the managed home refuses instead of linking to itself; a user `auth.json` that is a symlink gets Codex's file renamed over its target, not over the link; commands Codex runs without asking count toward the tool-call cap; an agy answer that arrives while the Steward is paused with no process is delivered on resume without hanging an interrupt.
+- **Acceptance:** each has a test.
+
+### P11-15 — Web: provider marks and publish styles (added 2026-11-04)
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11 – P11-14
+- The satellite of a ChatGPT or Gemini Steward carries a ring in the provider's colour (not a tint); `.pill.kind-publish` has its own style; the publish tokens have light and dark values.
+- **Acceptance:** tests for the ring and the styles; the e2e satellite-mark check still passes.
 
 ## Exit criteria
 
