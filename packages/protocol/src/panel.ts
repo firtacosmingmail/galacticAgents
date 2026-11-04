@@ -311,6 +311,15 @@ export const SettingsDeliverables = z.object({
 });
 export type SettingsDeliverables = z.infer<typeof SettingsDeliverables>;
 
+/**
+ * Which brains load the user's MCP servers (claude.ai connectors, enabled plugins' servers,
+ * `~/.claude.json` user servers): `none`, `waykeepers` (default) or `all` (the Harmonizer too).
+ * The user's hooks, skills and the repository's settings stay out of brains either way; every
+ * call to such a server goes through the permission table (TECHNOLOGY §3.1).
+ */
+export const BrainUserMcp = z.enum(['none', 'waykeepers', 'all']);
+export type BrainUserMcp = z.infer<typeof BrainUserMcp>;
+
 /** The settings the panel shows and edits (SPEC §4.6), persisted in `config.json`. */
 export const Settings = z.object({
   /** Where new project folders go (SPEC §3.5): an absolute path or `~/…`. */
@@ -323,9 +332,15 @@ export const Settings = z.object({
   qualityTier: QualityTier,
   /**
    * Whether Stewards load the user's own Claude Code settings (`~/.claude`) besides the
-   * repository's (SPEC §8 open question; default keep). Brains never do.
+   * repository's (SPEC §8 open question; default keep). Brains never load the user's settings
+   * as a whole; `brainUserMcp` gives them the user's MCP servers alone.
    */
   stewardsLoadUserSettings: z.boolean(),
+  /**
+   * Which brains get the user's MCP servers (`BrainUserMcp`). Optional so a page reading an older
+   * server still parses; this server always sends it.
+   */
+  brainUserMcp: BrainUserMcp.optional(),
   /**
    * Transcript retention (P8-02). Optional so a page reading an older server still parses (the
    * settings page then leaves the section out); this server always sends it.
@@ -353,6 +368,7 @@ export const SettingName = z.enum([
   'caps',
   'qualityTier',
   'stewardsLoadUserSettings',
+  'brainUserMcp',
   'transcriptRetention',
   'budgets',
   'defaultProvider',
@@ -374,6 +390,7 @@ export const SettingsPatch = z
     caps: SettingsCaps.partial().strict().optional(),
     qualityTier: QualityTier.optional(),
     stewardsLoadUserSettings: z.boolean().optional(),
+    brainUserMcp: BrainUserMcp.optional(),
     /** Transcript retention (P8-02), merged key by key; local requests only (decision 51, 90). */
     transcriptRetention: TranscriptRetention.partial().strict().optional(),
     budgets: SettingsBudgets.partial().strict().optional(),

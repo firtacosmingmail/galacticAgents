@@ -20,6 +20,7 @@ import {
   Timestamp,
   type RunSettings,
   type AgentRuntime,
+  type BrainUserMcp,
   type DeclarationLimits,
   type PermissionPolicy,
   type Provider,
@@ -60,6 +61,7 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `deliverables.runs` | live: the next run's start (`maxConcurrent`), the run's own output cap at its next write, retention's next run (P9-08, decision 130) |
  * | `projectsRoot` | at the next start (the workspace service and the Harmonizer's cwd hold it) |
  * | `stewardsLoadUserSettings` | at the next start (the Claude adapter's spawn options) |
+ * | `brainUserMcp` | at the next start (the Claude adapter's spawn options) |
  *
  * `stewardRuntime` is no longer a setting (P11-03, removed from the protocol in P11-09): the next
  * write removes the key from the file after `loadConfig` upgraded it to `defaultProvider`.
@@ -79,9 +81,11 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  */
 
 export const DEFAULT_QUALITY_TIER = 'high' as const;
+/** Which brains get the user's MCP servers when `config.json` does not say (Cosmin, 2026-11-03). */
+export const DEFAULT_BRAIN_USER_MCP: BrainUserMcp = 'waykeepers';
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The settings a running process cannot change (see the table above). */
-const RESTART = ['projectsRoot', 'stewardsLoadUserSettings'] as const;
+const RESTART = ['projectsRoot', 'stewardsLoadUserSettings', 'brainUserMcp'] as const;
 
 export class SettingsError extends Error {
   constructor(
@@ -144,7 +148,10 @@ function asTimestamp(value: string): string {
 export class SettingsService {
   private readonly config: ServerConfig;
   /** What the running process uses for the settings that need a restart. */
-  private readonly running: Pick<Settings, 'projectsRoot' | 'stewardsLoadUserSettings'>;
+  private readonly running: Pick<
+    Settings,
+    'projectsRoot' | 'stewardsLoadUserSettings' | 'brainUserMcp'
+  >;
   private saved: Settings;
 
   constructor(private readonly opts: SettingsServiceOptions) {
@@ -153,6 +160,7 @@ export class SettingsService {
     this.running = {
       projectsRoot: this.saved.projectsRoot,
       stewardsLoadUserSettings: this.saved.stewardsLoadUserSettings,
+      brainUserMcp: this.saved.brainUserMcp,
     };
   }
 
@@ -244,6 +252,7 @@ export class SettingsService {
     if (patch.qualityTier !== undefined) next.qualityTier = patch.qualityTier;
     if (patch.stewardsLoadUserSettings !== undefined)
       next.stewardsLoadUserSettings = patch.stewardsLoadUserSettings;
+    if (patch.brainUserMcp !== undefined) next.brainUserMcp = patch.brainUserMcp;
     if (patch.budgets?.warnAtPercent !== undefined) {
       next.budgets = { ...next.budgets, warnAtPercent: patch.budgets.warnAtPercent };
     }
@@ -357,6 +366,7 @@ export class SettingsService {
       },
       qualityTier: c.qualityTier ?? DEFAULT_QUALITY_TIER,
       stewardsLoadUserSettings: c.stewardsLoadUserSettings ?? true,
+      brainUserMcp: c.brainUserMcp ?? DEFAULT_BRAIN_USER_MCP,
       transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
       budgets: { warnAtPercent: c.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT },
       ...(c.defaultProvider ? { defaultProvider: c.defaultProvider } : {}),
@@ -391,6 +401,7 @@ export class SettingsService {
     if (patch.qualityTier !== undefined) raw['qualityTier'] = next.qualityTier;
     if (patch.stewardsLoadUserSettings !== undefined)
       raw['stewardsLoadUserSettings'] = next.stewardsLoadUserSettings;
+    if (patch.brainUserMcp !== undefined) raw['brainUserMcp'] = next.brainUserMcp;
     if (patch.budgets?.warnAtPercent !== undefined) {
       raw['budgets'] = { ...((raw['budgets'] as object | undefined) ?? {}), ...next.budgets };
     }

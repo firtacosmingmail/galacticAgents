@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type {
   Actor,
   AgentAdapter,
@@ -96,6 +98,13 @@ export interface ClaudeSdkAdapterOptions {
    * for the permission gate they are testing. Brains always load none.
    */
   stewardSettingSources?: ('user' | 'project' | 'local')[];
+  /**
+   * Which brains get the user's MCP servers (`brainUserMcp` setting): the claude.ai connectors
+   * (Atlassian, Linear, Slack …), the servers of the user's enabled plugins and the user-scope
+   * servers of `~/.claude.json`. `none` (default here; the server passes the setting, whose
+   * default is `waykeepers`) keeps every brain isolated. See `brainSessionSettings`.
+   */
+  brainUserMcp?: BrainUserMcp;
   /** Extra environment for the CLI, e.g. `ANTHROPIC_API_KEY` for `bare` spawns. */
   env?: Record<string, string | undefined>;
   /** Variables copied from the server's environment on top of the supervisor's allow-list. */
@@ -114,6 +123,65 @@ export interface ClaudeSdkAdapterOptions {
   onError?: (error: unknown, context: string) => void;
   /** The runtime check (P25-01); default `claudePreflight()` (runs `claude`). Tests inject one. */
   preflight?: () => Promise<RuntimePreflight>;
+}
+
+/** Which brains load the user's MCP servers (the `brainUserMcp` setting). */
+export type BrainUserMcp = 'none' | 'waykeepers' | 'all';
+
+/** The isolation-related query options of one session (`buildOptions`). */
+export type SessionSettings = Pick<
+  SdkQueryOptions,
+  'settingSources' | 'strictMcpConfig' | 'settings' | 'skills'
+>;
+
+/**
+ * How a session of `role` loads Claude Code's own configuration (pure; TECHNOLOGY §3.1).
+ *
+ * - **Steward**: a normal Claude Code session in its worktree (decision 17): `stewardSources`
+ *   (default user + project + local), so the repository's `CLAUDE.md` (or its `AGENTS.md` when it
+ *   has no `CLAUDE.md`: the CLI's default `claude-md-or-agents-md`), `.claude/` settings, skills,
+ *   agents, commands, rules, hooks and `.mcp.json` load (not `.agents/skills`: the CLI does not
+ *   read it), and with `user` the user's
+ *   plugins, MCP servers and claude.ai connectors. Never strict.
+ * - **Brain without user MCP**: isolated, `settingSources: []` and strict: only the host's
+ *   in-process `galactic` server (when it has tools).
+ * - **Brain with user MCP** (`brainUserMcp`): the `user` source only, the CLI's one way to reach
+ *   the claude.ai connectors and the enabled plugins' servers. The rest of what that source
+ *   brings is held back: no user `CLAUDE.md` or rules (`claudeMdExcludes`), no hooks (`disableAllHooks`: the user's hooks would run commands and
+ *   inject context into a brain; the adapter's own `PreToolUse` callback is not a settings hook
+ *   and still runs), no skills listed (`skills: []`), and no project source (no repository
+ *   `CLAUDE.md`, settings or `.mcp.json`). Not strict, so the configured servers load beside
+ *   `galactic`. Every call to them still goes through the gate (an unknown tool asks), and a
+ *   `galactic` server of theirs is told apart by provenance (`source !== 'sdk'`).
+ */
+export function sessionSettings(
+  role: SpawnOptions['role'],
+  opts: {
+    brainUserMcp?: BrainUserMcp;
+    stewardSources?: ('user' | 'project' | 'local')[];
+    /** The CLI's config folder (`CLAUDE_CONFIG_DIR`, default `~/.claude`). */
+    claudeConfigDir?: string;
+  } = {},
+): SessionSettings {
+  if (role === 'steward')
+    return { settingSources: opts.stewardSources ?? ['user', 'project', 'local'] };
+  const mode = opts.brainUserMcp ?? 'none';
+  const userMcp = mode === 'all' || (mode === 'waykeepers' && role === 'waykeeper');
+  if (!userMcp) return { settingSources: [], strictMcpConfig: true };
+  const configDir = opts.claudeConfigDir ?? join(homedir(), '.claude');
+  return {
+    settingSources: ['user'],
+    settings: {
+      disableAllHooks: true,
+      // The user's own instructions are for the user's sessions, not for a brain.
+      claudeMdExcludes: [
+        join(configDir, 'CLAUDE.md'),
+        join(configDir, 'AGENTS.md'),
+        join(configDir, 'rules', '**'),
+      ],
+    },
+    skills: [],
+  };
 }
 
 /** Credentials and routing the CLI needs that the supervisor's allow-list does not carry. */
@@ -368,10 +436,17 @@ export class ClaudeSdkAdapter implements AgentAdapter {
       includePartialMessages: false,
       persistSession: true,
       abortController: session.abort,
-      // Brains carry their own instructions and tools; Stewards get the repository's context.
-      settingSources: isBrain
-        ? []
-        : (this.opts.stewardSettingSources ?? ['user', 'project', 'local']),
+      // Brains carry their own instructions and tools (with the user's MCP servers when the
+      // setting says so); Stewards get the repository's context.
+      ...sessionSettings(opts.role, {
+        ...(this.opts.brainUserMcp ? { brainUserMcp: this.opts.brainUserMcp } : {}),
+        ...(this.opts.stewardSettingSources
+          ? { stewardSources: this.opts.stewardSettingSources }
+          : {}),
+        ...(process.env['CLAUDE_CONFIG_DIR']
+          ? { claudeConfigDir: process.env['CLAUDE_CONFIG_DIR'] }
+          : {}),
+      }),
       ...(opts.systemPrompt
         ? {
             systemPrompt: isBrain
@@ -403,9 +478,9 @@ export class ClaudeSdkAdapter implements AgentAdapter {
         ),
       });
       options.mcpServers = { galactic: server };
-      // A brain has no use for any other server: none is loaded, so no configured server can
-      // even share the name (a Steward keeps the repository's own, told apart by provenance).
-      if (isBrain) options.strictMcpConfig = true;
+      // Only the host's tools are pre-allowed. Any other server's (a Steward's repository or user
+      // servers, a brain's user servers under `brainUserMcp`) goes through the gate on every call,
+      // and a same-named `galactic` of theirs is told apart by provenance.
       options.allowedTools = opts.tools.map((t) => `mcp__galactic__${t.name}`);
     }
     return options;

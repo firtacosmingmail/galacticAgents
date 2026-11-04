@@ -6,6 +6,7 @@ import { z } from 'zod';
 import {
   AgentRuntime,
   BackupSchedule,
+  BrainUserMcp,
   DEFAULT_BUDGET_WARN_PERCENT,
   DEFAULT_TRANSCRIPT_RETENTION,
   IDENTITY_TOKEN,
@@ -107,6 +108,11 @@ export const ConfigFile = z.object({
    * repository's (SPEC §8 open question). Default `true` (keep loading them).
    */
   stewardsLoadUserSettings: z.boolean().optional(),
+  /**
+   * Which brains load the user's MCP servers (`none` | `waykeepers` | `all`; TECHNOLOGY §3.1).
+   * Default `waykeepers`.
+   */
+  brainUserMcp: BrainUserMcp.optional(),
   /** Dollar budgets (P8-01): the warning threshold in percent of a budget (default 80). */
   budgets: SettingsBudgets.partial().optional(),
   /**
@@ -309,6 +315,8 @@ export interface ServerConfig {
   qualityTier?: QualityTier;
   /** Whether Stewards load `~/.claude` too (P25-01; SPEC §8); absent = `true`. */
   stewardsLoadUserSettings?: boolean;
+  /** Which brains get the user's MCP servers; absent = `waykeepers` (`DEFAULT_BRAIN_USER_MCP`). */
+  brainUserMcp?: BrainUserMcp;
   /** Settings an environment variable decided at startup (P25-01): read-only in the panel. */
   envOverrides?: SettingName[];
   /** When the panel's first-run setup was done (P25-08); absent = the wizard shows. */
@@ -622,6 +630,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
       ...(file.stewardsLoadUserSettings !== undefined
         ? { stewardsLoadUserSettings: file.stewardsLoadUserSettings }
         : {}),
+      ...(file.brainUserMcp ? { brainUserMcp: file.brainUserMcp } : {}),
       envOverrides,
       budgets: { warnAtPercent },
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
