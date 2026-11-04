@@ -15,7 +15,7 @@ import {
 } from './director.js';
 import { TIMING } from './machine.js';
 import { BASE_SHELL, ORBIT_TWEEN, SHELL_STEP } from './orbits.js';
-import { BEAM, SATELLITE_LOOK, STATE_LOOK, WAITING_AMBER } from './look.js';
+import { BEAM, PROVIDER_RING, SATELLITE_LOOK, STATE_LOOK, WAITING_AMBER } from './look.js';
 import type { SatelliteSpec } from './satellite-model.js';
 import { allSatellites, getSatellite, onSatellitesChanged, publishSatellites } from './registry.js';
 
@@ -194,6 +194,25 @@ describe('the satellite list over time', () => {
     expect(getSatellite('a-1')?.position).toEqual(d.frames[0]?.position);
     expect(allSatellites()).toHaveLength(1);
     off();
+  });
+
+  it('carries the provider ring of a ChatGPT or Gemini satellite, none for Claude (P11-15)', () => {
+    const d = director();
+    d.setSpecs(
+      [
+        { ...spec('a-1', 'b-mars'), provider: 'claude' },
+        { ...spec('a-2', 'b-mars'), provider: 'chatgpt' },
+        { ...spec('a-3', 'b-mars'), provider: 'gemini' },
+      ],
+      0,
+    );
+    d.update(1, world);
+    const ring = (id: string) => d.frames.find((f) => f.agentId === id)?.ring;
+    expect(ring('a-1')).toBeUndefined();
+    expect(ring('a-2')).toBe(PROVIDER_RING.chatgpt);
+    expect(ring('a-3')).toBe(PROVIDER_RING.gemini);
+    // The base colour is a Claude Steward's.
+    expect(new Set(d.frames.map((f) => f.tint)).size).toBe(1);
   });
 
   it('snaps instead of flying or landing when the scene swaps worlds (a replay opens or exits)', () => {

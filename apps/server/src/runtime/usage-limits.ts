@@ -25,9 +25,14 @@ import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
 import { originOf } from '../domain/question-service.js';
 import { openQuestion } from '../domain/questions.js';
-import { setTaskState } from '../domain/states.js';
+import { FINISHED_WORK, setTaskState } from '../domain/states.js';
 import { updateTask } from '../domain/tasks.js';
-import { LIMIT_META, LIMIT_RETRY_MS, storedSwitchOf } from '../domain/usage-limits.js';
+import {
+  LIMIT_META,
+  LIMIT_RETRY_MS,
+  limitedFollowUpOf,
+  storedSwitchOf,
+} from '../domain/usage-limits.js';
 import type { Timers } from './archival.js';
 import type { RunLimits } from './job-scheduler.js';
 import type { ProviderCatalog } from './provider-catalog.js';
@@ -47,13 +52,18 @@ import { stewardDeclares } from './tool-runtimes.js';
  *     available provider, each passing `ProviderCatalog.check` for the step's `makesImages` and
  *     `publishes`, none out of limit, none of the provider that hit its limit (except
  *     Antigravity's other-family models with room, ruling R17), at most 12 — and the options `Switch to <label>` per model, then `Wait until it
- *     resets`. A second limit on the same task or job while one is open opens nothing.
+ *     resets`. A second limit on the same task or job while one is open opens nothing, and
+ *     neither does a limit whose task finished or whose job stopped while the catalogue answered.
  *   - **Switch**: a task gets `task.updated{provider, model}` and a new Steward on the task under
  *     the stopped Steward's supervisor, its prompt the task's Steward prompt led by a handover; a
- *     job's next run alone uses the chosen model (the job scheduler reads `meta.switchTo`).
+ *     job's retry of the limited run alone uses the chosen model — the next ordinary run, or the
+ *     run of the same follow-up (the job scheduler reads `meta.switchTo`, `switchAppliesTo`).
  *   - **Wait**: at `meta.retryAt` (the reset, else an hour after the answer) `tick()` resumes the
  *     stopped session where its runtime can (`resume`), else starts a Steward as for a switch on
- *     the same model; a job's `limitQuestionId` is cleared and the job is due now.
+ *     the same model; a job's `limitQuestionId` is cleared and, for a limited ordinary run, the
+ *     job is due now (a limited follow-up runs again from the job's queue; the schedule stays).
+ *   - **Withdrawn**: an open question is cancelled when its task finishes or its job stops
+ *     (`withdrawLimitQuestions`, `setJobState`); a late answer is refused.
  *
  * Every choice and its progress live on the question row (`domain/usage-limits.ts`), so `tick()`
  * — once `start()`ed after recovery, then every `tickMs` — carries out what a restart
@@ -294,6 +304,10 @@ export class UsageLimits implements RunLimits {
       // Asked meanwhile (the catalogue took a while): still one question.
       const current = job ? jobOf(ctx, job.id) : undefined;
       if (this.openFor(task.id, current?.limitQuestionId)) return;
+      // Its task finished or its job stopped meanwhile: nothing to ask (M1). Not opened, rather
+      // than opened and withdrawn, as the guard above: the user never saw it.
+      const now = ctx.tables.tasks.get(task.id);
+      if (!now || FINISHED_WORK.has(now.state) || current?.state === 'stopped') return;
       const question = openQuestion(ctx, {
         id: `q-${randomUUID()}`,
         kind: 'clarification',
@@ -307,9 +321,7 @@ export class UsageLimits implements RunLimits {
         },
         meta: { toUser: true, jobOwned: job !== undefined },
       });
-      if (current && current.state !== 'stopped') {
-        writeJob(ctx, current, { limitQuestionId: question.id });
-      }
+      if (current) writeJob(ctx, current, { limitQuestionId: question.id });
     });
   }
 
@@ -388,9 +400,12 @@ export class UsageLimits implements RunLimits {
         this.mark(ctx.tables.questions.get(questionId) ?? q, LIMIT_META.retriedAt, ctx.now, ctx);
         const job = ctx.tables.jobs.get(jobId);
         if (!job || job.limitQuestionId !== questionId) return;
+        // A limited follow-up is retried from the job's queue (or its re-asked publish, R13):
+        // the ordinary runs keep their schedule (M3). A limited ordinary run is due now.
+        const followUp = limitedFollowUpOf(ctx.tables, q);
         writeJob(ctx, job, {
           limitQuestionId: null,
-          ...(job.state === 'active' ? { nextRunAt: ctx.now } : {}),
+          ...(job.state === 'active' && !followUp ? { nextRunAt: ctx.now } : {}),
         });
       });
       return;
@@ -436,10 +451,16 @@ export class UsageLimits implements RunLimits {
       return;
     }
     if (switched) {
-      await this.opts.commands.updateTask(task.id, {
-        provider: choice.provider,
-        model: choice.model ?? null,
-      });
+      try {
+        await this.opts.commands.updateTask(task.id, {
+          provider: choice.provider,
+          model: choice.model ?? null,
+        });
+      } catch (error) {
+        // Refused like a refused spawn (ruling R18): not tried again, the task fails with why.
+        this.refused(q.id, doneKey, task.id, previous.supervisorId, (error as Error).message);
+        return;
+      }
     }
     const project = task.projectId ? tables.projects.get(task.projectId) : undefined;
     const supervisor = previous.supervisorId ? tables.agents.get(previous.supervisorId) : undefined;

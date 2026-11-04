@@ -484,8 +484,8 @@ export function planJobUpdate(
 
 /**
  * Pauses, stops or resumes a job. Stopping clears its next run, drops its queued follow-ups and
- * cancels its open failure question; resuming a paused job makes it due now (a stopped one at its
- * schedule's next occurrence). The same state is a no-op.
+ * cancels its open failure question and its open usage-limit question; resuming a paused job
+ * makes it due now (a stopped one at its schedule's next occurrence). The same state is a no-op.
  */
 export function setJobState(ctx: CommandContext, input: SetJobStateInput): Job {
   const current = jobOf(ctx, input.jobId);
@@ -511,6 +511,12 @@ export function setJobState(ctx: CommandContext, input: SetJobStateInput): Job {
       if (input.reason) changes.pausedReason = input.reason;
       else if (current.pausedReason !== undefined) changes.pausedReason = null;
       dropFailureQuestion();
+      // Its usage-limit question is moot (P11-13): withdrawn if open, a pending wait or switch
+      // dropped. A paused job keeps it.
+      if (current.limitQuestionId) {
+        cancelQuestion(ctx, current.limitQuestionId, 'the job was stopped');
+        changes.limitQuestionId = null;
+      }
       break;
     case 'paused':
       if (input.reason) changes.pausedReason = input.reason;

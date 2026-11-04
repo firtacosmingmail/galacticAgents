@@ -57,7 +57,7 @@ export interface SatelliteSpec {
   landed: boolean;
   /** The agent's supervisor (a Steward's Waykeeper): P4-03's transport shuttles fly to it. */
   supervisorId: Id | undefined;
-  /** The AI provider the agent runs on (P11-09): a ring tint marks the non-Claude ones. */
+  /** The AI provider the agent runs on (P11-09): a ring in its colour marks the non-Claude ones (P11-15). */
   provider: Provider | undefined;
 }
 

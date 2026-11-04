@@ -2,6 +2,7 @@ import type { Actor, Id, WorkState } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { endProjectRules } from './project-rules.js';
+import { withdrawLimitQuestions } from './usage-limits.js';
 
 /**
  * Task and project state transitions (SPEC §4.4, P2-01). The happy path is
@@ -99,6 +100,14 @@ export const FINISHED_WORK: ReadonlySet<WorkState> = new Set<WorkState>([
   'moved',
 ]);
 
+/** Why a finished task's usage-limit question was withdrawn. */
+const TASK_ENDED: Partial<Record<WorkState, string>> = {
+  completed: 'the task was closed',
+  archived: 'the task was archived',
+  failed: 'the task failed',
+  moved: 'the task was moved',
+};
+
 export function canTransition(from: WorkState, to: WorkState): boolean {
   return TRANSITIONS[from].includes(to);
 }
@@ -134,5 +143,8 @@ export function setTaskState(ctx: CommandContext, taskId: Id, to: WorkState, by?
   checkTransition('task', taskId, current.state, to);
   const task = ctx.tables.tasks.upsert({ ...current, state: to, updatedAt: ctx.now });
   ctx.emit({ type: 'task.state_changed', taskId, from: current.state, to, ...(by ? { by } : {}) });
+  // A finished task's usage-limit question is moot: withdrawn (P11-13). A paused one keeps it.
+  if (FINISHED_WORK.has(to))
+    withdrawLimitQuestions(ctx, { taskId }, TASK_ENDED[to] ?? 'the task ended');
   return task;
 }

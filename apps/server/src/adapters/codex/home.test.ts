@@ -78,6 +78,78 @@ describe('prepareCodexHome', () => {
     expect(readFileSync(authSource, 'utf8')).toBe('old token');
   });
 
+  it('a user auth.json that is a symlink: Codex’s file goes over its target, the link stays', () => {
+    const dotfiles = join(base, 'dotfiles');
+    mkdirSync(dotfiles);
+    const target = join(dotfiles, 'codex-auth.json');
+    writeFileSync(target, 'old token');
+    symlinkSync(target, authSource);
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'auth.json'), 'rotated token');
+    expect(prepareCodexHome(home, authSource)).toEqual({ authPresent: true, replacedLink: true });
+    expect(lstatSync(authSource).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(authSource)).toBe(target);
+    expect(readFileSync(target, 'utf8')).toBe('rotated token');
+    expect(readlinkSync(join(home, 'auth.json'))).toBe(authSource);
+  });
+
+  it('refuses when the login file resolves inside the managed home (CODEX_HOME = the managed home)', () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'auth.json'), 'rotated token');
+    expect(() => prepareCodexHome(home, join(home, 'auth.json'))).toThrow(
+      /inside the managed Codex home/,
+    );
+    // Nothing moved or linked: the file is still there, not a link to itself.
+    expect(lstatSync(join(home, 'auth.json')).isFile()).toBe(true);
+    expect(readFileSync(join(home, 'auth.json'), 'utf8')).toBe('rotated token');
+  });
+
+  it('refuses when the login file is a link into the managed home', () => {
+    mkdirSync(home, { recursive: true });
+    symlinkSync(join(home, 'auth.json'), authSource);
+    expect(() => prepareCodexHome(home, authSource)).toThrow(/inside the managed Codex home/);
+    expect(lstatSync(authSource).isSymbolicLink()).toBe(true);
+  });
+
+  it('a dangling link chain into the managed home is refused, whatever its length (review M2)', () => {
+    mkdirSync(home, { recursive: true });
+    const hop = join(base, 'hop.json');
+    symlinkSync(join(home, 'auth.json'), hop); // dangling: the managed file is absent
+    symlinkSync(hop, authSource);
+    expect(() => prepareCodexHome(home, authSource)).toThrow(/inside the managed Codex home/);
+    expect(lstatSync(authSource).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(hop)).toBe(join(home, 'auth.json'));
+  });
+
+  it('a dangling link chain: Codex’s file goes to the end of the chain, every link kept', () => {
+    const dotfiles = join(base, 'dotfiles');
+    mkdirSync(dotfiles);
+    const hop = join(dotfiles, 'hop.json');
+    const end = join(dotfiles, 'codex-auth.json'); // not there yet
+    symlinkSync(end, hop);
+    symlinkSync(hop, authSource);
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'auth.json'), 'rotated token');
+    expect(prepareCodexHome(home, authSource).replacedLink).toBe(true);
+    expect(readlinkSync(authSource)).toBe(hop);
+    expect(readlinkSync(hop)).toBe(end);
+    expect(readFileSync(end, 'utf8')).toBe('rotated token');
+    expect(readlinkSync(join(home, 'auth.json'))).toBe(authSource);
+  });
+
+  it('a link loop is refused and nothing is moved', () => {
+    const a = join(base, 'a.json');
+    const b = join(base, 'b.json');
+    symlinkSync(b, a);
+    symlinkSync(a, b);
+    symlinkSync(a, authSource);
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'auth.json'), 'rotated token');
+    expect(() => prepareCodexHome(home, authSource)).toThrow(/link/);
+    expect(readFileSync(join(home, 'auth.json'), 'utf8')).toBe('rotated token');
+    expect(readlinkSync(a)).toBe(b);
+  });
+
   it('refuses to start when the file cannot be moved back, and deletes nothing', () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'auth.json'), 'rotated token');

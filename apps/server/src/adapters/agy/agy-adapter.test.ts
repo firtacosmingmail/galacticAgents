@@ -402,6 +402,55 @@ describe('AgyAdapter', () => {
     expect(turns(r)).toHaveLength(1);
   });
 
+  it('an answer that arrives while paused with no process is the first message on resume; an interrupt does not wait', async () => {
+    const r = await rig({}, undefined, { askHoldMs: 200 });
+    const opts = spawnOpts(r, 'scenario:asks');
+    const handle = await r.adapter.spawn(opts);
+    await waitFor(() => text(r, opts.agentId).includes('has not answered yet'), 'deferred note');
+    await new Promise((res) => setTimeout(res, 300)); // the agy run has ended: no process
+    const q = of(r, opts.agentId, 'agent.needs_input')[0]!;
+    await r.adapter.pause(handle.sessionId);
+    await r.adapter.answer(q.questionId, 'first option');
+    // The interrupt returns at once and drops nothing: no process to signal, no turn to cut.
+    await r.adapter.interrupt(handle.sessionId);
+    await new Promise((res) => setTimeout(res, 200));
+    expect(turns(r)).toHaveLength(1);
+    expect(idles(r, opts.agentId)).toBe(0);
+    await r.adapter.resume(handle.sessionId);
+    await waitFor(() => idles(r, opts.agentId) === 1, 'idle');
+    expect(turns(r)).toHaveLength(2);
+    expect(text(r, opts.agentId)).toContain(
+      'echo: The user answered your question ("Which option do you prefer?"): first option',
+    );
+  });
+
+  it('a message sent with interrupt while a paused answer waits does not hang; it carries the answer', async () => {
+    const r = await rig({}, undefined, { askHoldMs: 200 });
+    const opts = spawnOpts(r, 'scenario:asks');
+    const handle = await r.adapter.spawn(opts);
+    await waitFor(() => text(r, opts.agentId).includes('has not answered yet'), 'deferred note');
+    await new Promise((res) => setTimeout(res, 300));
+    const q = of(r, opts.agentId, 'agent.needs_input')[0]!;
+    await r.adapter.pause(handle.sessionId);
+    await r.adapter.answer(q.questionId, 'first option');
+    await new Promise((res) => setTimeout(res, 50));
+    const sent = r.adapter.send(handle.sessionId, 'carry on', { interrupt: true });
+    await expect(
+      Promise.race([
+        sent.then(() => 'sent'),
+        new Promise((res) => setTimeout(() => res('hung'), 1_000)),
+      ]),
+    ).resolves.toBe('sent');
+    await r.adapter.resume(handle.sessionId);
+    await waitFor(() => idles(r, opts.agentId) === 1, 'idle');
+    expect(turns(r)).toHaveLength(2);
+    const said = text(r, opts.agentId);
+    expect(said).toContain(
+      'The user answered your question ("Which option do you prefer?"): first option',
+    );
+    expect(said).toContain('carry on');
+  });
+
   it("writes to agy's configuration and browser tools are denied without asking", async () => {
     const r = await rig();
     const a = spawnOpts(r, 'scenario:write-config');

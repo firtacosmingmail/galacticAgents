@@ -23,7 +23,7 @@ import { JOB_TICK_MS, endJobRun, jobMemory, runPurpose, startJobRun } from '../d
 import { jobOf, writeJob } from '../domain/jobs.js';
 import { reaskInterruptedPublish } from '../domain/publish.js';
 import { FINISHED_WORK } from '../domain/states.js';
-import { storedSwitchOf } from '../domain/usage-limits.js';
+import { storedSwitchOf, switchAppliesTo } from '../domain/usage-limits.js';
 import type { AgentRuntime, TurnEnd } from './agent-runtime.js';
 import type { Timers } from './archival.js';
 import { stewardChooser, type ChooseSteward } from './steward-choice.js';
@@ -59,8 +59,9 @@ export { JOB_TICK_MS };
  * the job stays active, nothing pauses, no failure question — `limits.askForRun` opens the one
  * usage-limit question and sets `job.limitQuestionId`, in the same queue, so no run starts in
  * between. While that question is open (or answered "wait" and not yet retried) the job starts no
- * run; answered "switch", its next run alone uses the chosen model (`meta.switchTo`), and starting
- * it clears `limitQuestionId`.
+ * run; answered "switch", the retry of the limited run alone uses the chosen model
+ * (`meta.switchTo`, `switchAppliesTo`: the next ordinary run, or the run of the same follow-up or
+ * its re-asked publish), and starting it clears `limitQuestionId`; other runs keep the job's own.
  */
 
 /** What one tick did: run ids, except `waited` (job ids: no run row was written). */
@@ -285,9 +286,12 @@ export class JobScheduler {
     // A usage limit waits for the user's answer, and a "wait" for its reset (P11-07).
     const limit = job.limitQuestionId ? tables.questions.get(job.limitQuestionId) : undefined;
     if (limit && (limit.status === 'open' || limit.answer === LIMIT_WAIT)) return;
-    const switchTo = limit?.status === 'answered' ? storedSwitchOf(limit) : undefined;
+    const answered = limit?.status === 'answered' ? storedSwitchOf(limit) : undefined;
     const now = this.now();
     const followUp = job.followUps[0];
+    // The switch is for the retry of the limited run alone (M4): another run keeps the job's own.
+    const switchTo =
+      answered && limit && switchAppliesTo(tables, limit, followUp) ? answered : undefined;
     const due = followUp ? now : this.dueOf(job);
     if (!due || due.getTime() > now.getTime()) return;
     // A finished project (closed, cancelled, archived) runs nothing; a paused one waits, like a
@@ -331,8 +335,9 @@ export class JobScheduler {
       });
       const current = jobOf(ctx, job.id);
       const changes: JobChanges = {};
-      // The limit question is used up: its switch applies to this run only (P11-07).
-      if (current.limitQuestionId) changes.limitQuestionId = null;
+      // The limit question is used up: its switch applies to this run only (P11-07). A switch
+      // chosen for another run (a limited follow-up not back yet) waits for that run (M4).
+      if (current.limitQuestionId && (switchTo || !answered)) changes.limitQuestionId = null;
       if (purpose !== 'follow_up') {
         // The next occurrence after now: several missed ones make one run (plan constraints).
         changes.nextRunAt = nextOccurrence(current.schedule, now).toISOString();

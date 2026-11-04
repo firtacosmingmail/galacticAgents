@@ -56,20 +56,24 @@ The batch's final review is the controller's, after P11-10.
 
 ## Left open (minor, deferred)
 
-- An ended job run's Steward folder ignores `meta.cwd` in the publish-files route (404/409); no
-  HTTP happy-path test for that route.
-- An agy answer arriving while paused with no process waits until resume.
-- Commands Codex runs without asking (`cat`) bypass the tool-call cap; a `CODEX_HOME` pointing at
-  the managed home would link `auth.json` to itself; a real token refresh over the auth symlink is
-  still unobserved (R27 handles it without deleting anything).
-- Usage limits: an `updateTask` throw in the switch path is not routed through the refusal; an
-  open limit question lingers after its task closes; a free-text answer is refused rather than
-  explained; a change card moving a job to Gemini without a follow-up provider fails only at run
-  time (R22's card text says so).
-- Web: no `.pill.kind-publish` style; publish tokens have no light/dark split (as `spend`); the
-  satellite mark is a 30 % tint blend, not a ring; the 320 px unit test is a CSS proxy (the e2e
-  spec now measures real cards at 390 and 320 px); the not-ready preflight test does not
-  instrument `agy.usage`.
+Updated 2026-11-04 after the follow-up batch `p11-2-fixes` (P11-11 – P11-15), which fixed: the
+publish-files route for ended job runs (with an HTTP happy-path test), `run_workspace` asking in
+publishing runs and no "Allow similar" on their cards, the agy answer held while paused, unasked
+Codex commands counting toward the cap, the `CODEX_HOME` self-link guard, a symlinked user
+`auth.json`, `.codex` as agent configuration (M2), ambiguous loose model names (M5), the usage-limit
+cases (`updateTask` throw, the lingering question, free-text answers, M3, M4, M6), the publish pill
+and tokens and the provider ring. What stays open:
+
+- A real Codex token refresh over the auth symlink is still unobserved (R27 handles it without
+  deleting anything); it needs a live login to watch.
+- A change card moving a job to Gemini without a follow-up provider fails only at run time (R22:
+  its card text says so; Cosmin may prefer refusing such cards).
+- A message sent to a paused agy Steward with no held answer starts a process at once (unchanged
+  behaviour).
+- Web: the 320 px unit test is a CSS proxy (the e2e spec measures real cards at 390 and 320 px);
+  the not-ready preflight test does not instrument `agy.usage`; `spend` has no pill style of its
+  own.
+- M7 (the allowance matches by containment) stays accepted under R15 and SPEC decision 147.
 - Real CLI runs were skipped or partial where quota or a login was missing (the Codex plan was
   Free; one agy image run costs about 18 % of the weekly Gemini bucket): see the P11-01 notes.
 
@@ -129,3 +133,17 @@ its cost if wrong.
 - Ruling R25 (final review C1, replaces R4's gating): the codex/agy fake replacement is gated by its own flag GALACTIC_FAKE_PROVIDERS=1, set only by the e2e server, never by --dev/`pnpm remote`/`pnpm dev` — cost if wrong: dev runs need the flag to use fakes.
 - Ruling R26 (final review I1, refines R8/decision 138 for publishing): a publishing run (publish follow-up or Steward of a `publishes` task) gets no permission rules at all (no Allow-similar, no unattended), and its network calls always ask unless the publish allowance matches, whatever the policy preset — cost if wrong: extra permission cards in trusted projects' publishing steps. (Implemented also for `unclassified: allow`, which the trusted preset sets, and keeping a `deny` a deny.)
 - Ruling R27 (final review I5, replaces R9): if Codex replaces the managed auth.json link with a regular file, rename that file atomically over the user's own auth.json (never opened or read), then relink; logged — cost if wrong: the user's login file is overwritten by Codex's own newer file.
+
+## Follow-up batch review (2026-11-04, `p11-2-fixes`)
+
+A fresh reviewer read P11-11 – P11-15 against `phase-11`: no Critical, one Important, two Minor;
+nothing weakens a publish or permission check and no credential is read. All three fixed with tests:
+
+- **I1** an agy answer queued while paused was lost when the runtime resumed then interrupted (its
+  real path): the run started from the held answer keeps its prompt until agy's `init`, and an
+  interrupt before then puts it back, so the next message carries the answer first
+  (`runtime/agy-runtime.test.ts`). A plain interrupt with no message keeps the answer held.
+- **M1** a limit question could open after its job stopped or its task finished while the catalogue
+  answered: the opening transaction now skips it.
+- **M2** a dangling chain of login links was followed one hop: `resolvedAuth` follows it to the end
+  (at most 40 links, a loop refused), and the self-link guard and the rename use the end.

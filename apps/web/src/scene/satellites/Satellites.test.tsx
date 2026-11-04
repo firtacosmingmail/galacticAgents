@@ -124,6 +124,19 @@ describe('Satellites (P4-02)', () => {
     ]);
   });
 
+  it('rings a ChatGPT or Gemini Steward’s satellite, not a Claude one’s (P11-15)', () => {
+    seedWorld(['a-steward-1', 'a-steward-2']);
+    const w = useAppStore.getState().world;
+    w.agents['a-steward-2'] = { ...steward('a-steward-2'), runtime: 'codex', taskId: 't-other' };
+    useAppStore.setState({ world: { ...w } });
+    const { container } = render(<Satellites quality={QUALITY_TIERS.high} />);
+    const names = [...container.querySelectorAll('mesh')].map((m) => m.getAttribute('name'));
+    expect(names.filter((n) => n?.startsWith('satellite-ring:'))).toEqual([
+      'satellite-ring:a-steward-2',
+    ]);
+    for (const run of r3f.frames) run(r3f.state); // no anchors: hidden, no crash
+  });
+
   it('only the HQ: no ordinary satellite meshes', () => {
     const w = emptyWorld();
     w.agents[fx.harmonizer.id] = fx.harmonizer;
