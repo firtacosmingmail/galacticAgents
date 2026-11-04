@@ -99,7 +99,9 @@ export class ProviderCatalog {
 
   /**
    * Whether `choice` can run here, for work that `need`s images or publishes. A named model is
-   * matched loosely (`normalizeModelName`) against each listed model's id and label; an empty list
+   * matched loosely (`normalizeModelName`) against each listed model's id and label — an id match
+   * (exact, then loose) before a label match, and a name that matches several models in the
+   * deciding group is refused as ambiguous (P11-14, M5); an empty list
    * (a CLI that cannot list) accepts the name as given.
    */
   async check(
@@ -124,9 +126,20 @@ export class ProviderCatalog {
     let model: string | undefined;
     if (choice.model !== undefined) {
       const wanted = normalizeModelName(choice.model);
-      info = models.find(
-        (m) => normalizeModelName(m.id) === wanted || normalizeModelName(m.label) === wanted,
-      );
+      // An id beats a label (exact, then loose); two models in the deciding group are ambiguous.
+      const groups = [
+        models.filter((m) => m.id === choice.model),
+        models.filter((m) => normalizeModelName(m.id) === wanted),
+        models.filter((m) => normalizeModelName(m.label) === wanted),
+      ];
+      const matches = groups.find((g) => g.length > 0) ?? [];
+      if (matches.length > 1) {
+        return {
+          ok: false,
+          reason: `"${choice.model}" matches several ${name} models: ${matches.map((m) => m.id).join(', ')}`,
+        };
+      }
+      info = matches[0];
       if (!info && models.length > 0) {
         return {
           ok: false,

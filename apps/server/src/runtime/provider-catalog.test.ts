@@ -49,11 +49,11 @@ afterEach(async () => {
 });
 
 /** The three providers' adapters as fakes: Claude's static list, Codex and Antigravity. */
-function catalogOf(extra: { codexPreflight?: RuntimePreflight } = {}) {
+function catalogOf(extra: { codexPreflight?: RuntimePreflight; codexModels?: ModelInfo[] } = {}) {
   const claude = fake({ runtime: 'claude-sdk', models: CLAUDE_MODELS, canPublish: true });
   const codex = fake({
     runtime: 'codex',
-    models: CHATGPT_MODELS,
+    models: extra.codexModels ?? CHATGPT_MODELS,
     canPublish: true,
     ...(extra.codexPreflight ? { preflight: () => Promise.resolve(extra.codexPreflight!) } : {}),
   });
@@ -89,6 +89,29 @@ describe('ProviderCatalog (P11-03)', () => {
       ok: true,
       choice: { provider: 'chatgpt' },
       label: 'ChatGPT',
+    });
+  });
+
+  it('a loose name matching several models refuses as ambiguous; an exact id wins (M5)', async () => {
+    const catalog = catalogOf({
+      codexModels: [
+        text('gpt-a', 'Twin', 'gpt'),
+        text('gpt-b', 'Twin', 'gpt'),
+        text('gpt-c', 'gpt-a', 'gpt'),
+      ],
+    });
+    expect(await catalog.check({ provider: 'chatgpt', model: 'twin' })).toEqual({
+      ok: false,
+      reason: '"twin" matches several ChatGPT models: gpt-a, gpt-b',
+    });
+    // `gpt-a` is one model's id and another's label: the id wins.
+    expect(await catalog.check({ provider: 'chatgpt', model: 'gpt-a' })).toMatchObject({
+      ok: true,
+      choice: { provider: 'chatgpt', model: 'gpt-a' },
+    });
+    expect(await catalog.check({ provider: 'chatgpt', model: 'GPT A' })).toMatchObject({
+      ok: true,
+      choice: { provider: 'chatgpt', model: 'gpt-a' },
     });
   });
 
