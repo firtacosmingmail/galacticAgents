@@ -1,4 +1,4 @@
-import { formatUsd } from '@galactic/protocol';
+import { formatUsd, isLongTerm } from '@galactic/protocol';
 import type { ControlAction, ControlTarget, Id, Project, Question } from '@galactic/protocol';
 import { closureRequestOf } from '../../domain/closure.js';
 import { DomainError, must } from '../../domain/errors.js';
@@ -51,6 +51,10 @@ export const askClosureTool: BrainTool = {
     const project = must(ctx.queries.project(projectId), 'project', projectId);
     if (FINISHED.has(project.state)) {
       throw new DomainError('invalid_transition', `project ${projectId} is ${project.state}`);
+    }
+    // A long-term project never starts the "anything else?" flow (P10-02): the user closes it.
+    if (isLongTerm(project)) {
+      throw new DomainError('invalid', 'long-term projects are closed by the user only');
     }
     const request = closureRequestOf(project);
     const open = request?.questionId ? ctx.queries.question(request.questionId) : undefined;
@@ -326,7 +330,8 @@ export const CLOSURE_TOOLS: readonly BrainTool[] = [
 export async function closureNotes(ctx: BrainStartContext): Promise<string[]> {
   const lines: string[] = [];
   for (const project of ctx.queries.projects()) {
-    if (FINISHED.has(project.state)) continue;
+    // A long-term project is never relayed for closure (P10-02), whatever was recorded.
+    if (FINISHED.has(project.state) || isLongTerm(project)) continue;
     const request = closureRequestOf(project);
     if (!request) continue;
     const q = request.questionId ? ctx.queries.question(request.questionId) : undefined;

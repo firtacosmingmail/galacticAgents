@@ -120,3 +120,40 @@ describe('outlineBody (what the composer outlines)', () => {
     expect(outlineBody(world, { kind: 'steward', id: 'a-gone' })).toBeUndefined();
   });
 });
+
+describe('an area moon (P10-07, decision 143)', () => {
+  const areaWorld = () => {
+    const w = pickingWorld();
+    w.bodies['b-callisto'] = {
+      id: 'b-callisto',
+      kind: 'moon',
+      parentId: 'b-jupiter',
+      name: 'Callisto',
+      host: { kind: 'areas', id: 'p-big' },
+    };
+    return w;
+  };
+
+  it("selects the project's Waykeeper and asks for its Jobs filtered to the moon", () => {
+    expect(bodyAction(areaWorld(), 'b-callisto')).toEqual({
+      kind: 'select',
+      bodyId: 'b-callisto',
+      name: 'Callisto',
+      selection: { kind: 'waykeeper', id: 'a-wk-old' },
+      jobsOf: 'b-callisto',
+    });
+  });
+
+  it('a project body asks for no jobs view', () => {
+    expect(bodyAction(areaWorld(), 'b-jupiter')).not.toHaveProperty('jobsOf');
+  });
+
+  it('with no Waykeeper yet, says so', () => {
+    const w = areaWorld();
+    w.agents = {};
+    expect(bodyAction(w, 'b-callisto')).toMatchObject({
+      kind: 'info',
+      detail: 'Big project · in progress · no agent yet',
+    });
+  });
+});

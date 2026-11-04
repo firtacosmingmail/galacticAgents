@@ -9,6 +9,7 @@ import {
   markDescription,
   markText,
   independentMoons,
+  areaMoons,
   labelPriority,
   PRIORITY,
   shortTitle,
@@ -353,5 +354,82 @@ describe('the deliverables mark (P9-11, decision 133)', () => {
 
   it('no deliverables in the world (a replay, an older server): no marks', () => {
     expect(bodyLabels(labelWorld()).some((l) => l.mark)).toBe(false);
+  });
+});
+
+/**
+ * P10-07 (decision 143): an area moon of Jupiter's long-term project — Callisto hosts the areas
+ * Sales and Feedback (two areas share it), with three jobs between them; Ganymede hosts one area.
+ */
+function areaWorld(): LabelWorld {
+  const w = labelWorld();
+  const moon = (id: string, name: string): Body => ({
+    id,
+    kind: 'moon',
+    parentId: 'b-jupiter',
+    name,
+    host: { kind: 'areas', id: 'p-big' },
+  });
+  const area = (id: string, name: string, bodyId: string) => ({
+    ...fx.area,
+    id,
+    name,
+    projectId: 'p-big',
+    bodyId,
+  });
+  const job = (id: string, areaId: string) => ({ ...fx.job, id, areaId, projectId: 'p-big' });
+  return {
+    ...w,
+    bodies: {
+      ...w.bodies,
+      'b-callisto': moon('b-callisto', 'Callisto'),
+      'b-ganymede': moon('b-ganymede', 'Ganymede'),
+    },
+    areas: {
+      'ar-s': area('ar-s', 'Sales', 'b-callisto'),
+      'ar-f': area('ar-f', 'Feedback', 'b-callisto'),
+      'ar-o': area('ar-o', 'Ops', 'b-ganymede'),
+    },
+    jobs: { 'j-1': job('j-1', 'ar-f'), 'j-2': job('j-2', 'ar-f'), 'j-3': job('j-3', 'ar-s') },
+  };
+}
+
+describe('area moons (P10-07, decision 143)', () => {
+  it("names its areas, reads as part of the project, and counts the areas' jobs", () => {
+    const label = bodyLabel(areaWorld(), 'b-callisto')!;
+    expect(label).toMatchObject({
+      kind: 'project',
+      title: 'Feedback, Sales',
+      fullTitle: 'Feedback, Sales · 3 jobs',
+      moon: 'area',
+      partOf: 'Big project',
+      areas: 2,
+      state: 'in_progress',
+    });
+    expect(label.mark).toBeUndefined(); // the project's deliverables mark stays on its planet
+  });
+
+  it('one area: no area count; one job reads singular', () => {
+    const world = areaWorld();
+    world.jobs = { 'j-9': { ...fx.job, id: 'j-9', areaId: 'ar-o', projectId: 'p-big' } };
+    const label = bodyLabel(world, 'b-ganymede')!;
+    expect(label).toMatchObject({ title: 'Ops', fullTitle: 'Ops · 1 job', moon: 'area' });
+    expect(label.areas).toBeUndefined();
+  });
+
+  it('a world without areas (a replay, an older server) falls back to the project name', () => {
+    const { areas: _a, jobs: _j, ...world } = areaWorld();
+    expect(bodyLabel(world, 'b-callisto')).toMatchObject({
+      title: 'Big project',
+      fullTitle: 'Big project',
+      moon: 'area',
+    });
+  });
+
+  it('area moons get their own ring; they are never "own project" moons', () => {
+    const world = areaWorld();
+    expect(areaMoons(world)).toEqual(['b-callisto', 'b-ganymede']);
+    expect(independentMoons(world)).toEqual(['b-io']);
+    expect(areaMoons(labelWorld())).toEqual([]);
   });
 });

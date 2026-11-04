@@ -1,4 +1,5 @@
 import {
+  BIG_PLANET_MIN_MOONS,
   asteroidSpec,
   isCatalogued,
   isRetiredBody,
@@ -83,16 +84,59 @@ export function freeMoons(ctx: Reader, planetId?: Id): Body[] {
   );
 }
 
+/** The catalogued, unreserved moons of `planet`, free or not (the moons its areas could use). */
+function catalogueMoonsOf(ctx: Reader, planet: Body): number {
+  return ctx.tables.bodies
+    .all()
+    .filter(
+      (b) => b.kind === 'moon' && b.parentId === planet.id && isCatalogued(b) && !isReserved(b),
+    ).length;
+}
+
+/**
+ * A big planet (P10-02; SPEC decision 142): a catalogued planet with at least
+ * `BIG_PLANET_MIN_MOONS` catalogued, unreserved moons — Jupiter, Saturn and Uranus. Counted from
+ * the catalogue, never from names.
+ */
+export function isBigPlanet(ctx: Reader, body: Body): boolean {
+  return (
+    body.kind === 'planet' &&
+    isCatalogued(body) &&
+    !isReserved(body) &&
+    catalogueMoonsOf(ctx, body) >= BIG_PLANET_MIN_MOONS
+  );
+}
+
+/** Whether a planet has a catalogued moon at all (a long-term project's areas need one). */
+export function hasMoons(ctx: Reader, body: Body): boolean {
+  return body.kind === 'planet' && catalogueMoonsOf(ctx, body) > 0;
+}
+
+/** The free big planets, in catalogue order. */
+export function freeBigPlanets(ctx: Reader): Body[] {
+  return freePlanets(ctx).filter((p) => isBigPlanet(ctx, p));
+}
+
+/**
+ * A long-term project's planet (P10-02): the first free big planet, else the first free planet
+ * with a moon (its areas share moons), never a moonless one (Mercury, Venus).
+ */
+export function longTermPlanet(ctx: Reader): Body | undefined {
+  const planets = freePlanets(ctx);
+  return planets.find((p) => isBigPlanet(ctx, p)) ?? planets.find((p) => hasMoons(ctx, p));
+}
+
 /** Who holds a body: its host's name and state, or the marker it shows. */
 export function occupancyOf(ctx: Reader, body: Body): BodyOccupancy {
   const out: BodyOccupancy = { bodyId: body.id, bodyName: body.name };
   if (body.movedTo) out.movedTo = body.movedTo;
   if (!body.host) return out;
   out.host = body.host;
+  // An area moon (P10-03) names its long-term project.
   const row: Project | Task | undefined =
-    body.host.kind === 'project'
-      ? ctx.tables.projects.get(body.host.id)
-      : ctx.tables.tasks.get(body.host.id);
+    body.host.kind === 'task'
+      ? ctx.tables.tasks.get(body.host.id)
+      : ctx.tables.projects.get(body.host.id);
   if (row) {
     out.occupant = 'name' in row ? row.name : row.description;
     out.state = row.state;
@@ -141,6 +185,8 @@ function hasWaykeeper(ctx: Reader, planet: Body, opts: ChooseOptions): boolean {
 /**
  * Picks the body for a new project by decision 10, changing nothing:
  * - a planet: the first free planet, or "no free planet" listing the occupied ones;
+ * - a long-term project's planet (P10-02): `longTermPlanet`, or "no planet with moons" listing the
+ *   occupied planets;
  * - a sub-project's moon: a free moon of its parent project's planet, or "no free moon" (it then
  *   stays a task on the planet, SPEC §3.2);
  * - an independent project's moon: a free moon of a planet without a Waykeeper, else any free
@@ -151,6 +197,12 @@ export function chooseBody(
   request: BodyRequest,
   opts: ChooseOptions = {},
 ): BodyChoice {
+  if (request.kind === 'planet' && request.longTerm) {
+    const body = longTermPlanet(ctx);
+    return body
+      ? { ok: true, body }
+      : { ok: false, reason: 'no_planet_with_moons', occupied: occupiedPlanets(ctx) };
+  }
   if (request.kind === 'planet') {
     // Room to grow: a planet with a free moon can later take a sub-project (SPEC §3.2).
     const planets = freePlanets(ctx);
@@ -202,7 +254,11 @@ export function describeRefusal(choice: Exclude<BodyChoice, { ok: true }>): stri
         : `${o.bodyName}: moved to ${o.movedTo?.bodyId ?? '?'}`,
     )
     .join('; ');
-  const what = choice.reason === 'no_free_planet' ? 'no free planet' : 'no free moon';
+  const what = {
+    no_free_planet: 'no free planet',
+    no_planet_with_moons: 'no free planet with moons',
+    no_free_moon: 'no free moon',
+  }[choice.reason];
   return list ? `${what} — occupied: ${list}` : what;
 }
 

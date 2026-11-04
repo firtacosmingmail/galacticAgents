@@ -4,6 +4,7 @@ import {
   brainSlashCommands,
   excerpt,
   isHarnessMeta,
+  jobIdOfTask,
   slashCommandIs,
   type Actor,
   type Agent,
@@ -14,10 +15,12 @@ import {
   type AgentRuntime as RuntimeName,
   type Event,
   type Id,
+  type Job,
   type SetAnswer,
   type PermissionAction,
   type PermissionPolicy,
   type PermissionRule,
+  type PublishContext,
   type RequestOrigin,
   type ReplyQuote,
   type SlashCommand,
@@ -39,6 +42,7 @@ import {
 import {
   endAgentQuestions,
   holdersNow,
+  isPublishingRun,
   rerouteHeldBy,
   livingFromStatuses,
   logRouting,
@@ -46,6 +50,7 @@ import {
   type QuestionRouting,
 } from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
+import { unattendedPermissionRules } from '../domain/jobs.js';
 import { globalDefaultPolicy, type PolicyContext } from '../domain/permissions.js';
 import { userFoldersOf } from '../deliverables/folder.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
@@ -57,8 +62,10 @@ import {
   type SpawnCheck,
 } from './caps.js';
 import { aliasesOf, createPermissionGate, type RuntimeGate } from './permission-gate.js';
+import { publishingPolicy, type PublishAllowanceStore } from './publish-allowance.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
+import { providerOf } from './steward-choice.js';
 import { TOOL_RUNTIMES } from './tool-runtimes.js';
 import type { TranscriptPipeline } from './transcripts.js';
 
@@ -102,6 +109,11 @@ export interface SpawnRequest {
   tools?: ToolDefinition[];
   systemPrompt?: string;
   bare?: boolean;
+  /**
+   * The exact model to run (P11-03); absent: the runtime's default. Kept in `meta.model`, with
+   * the runtime's provider in `meta.provider`, so a resumed session runs the same model.
+   */
+  model?: string;
   /** A fixed agent id (tests, resume); default: generated. */
   agentId?: Id;
   /**
@@ -122,6 +134,12 @@ export interface AgentRuntimeOptions {
   caps?: CapsConfig;
   /** Delivered messages kept per inbox for inspection; the log has the full history. */
   inboxHistory?: number;
+  /**
+   * The one-shot allowances approved publishes arm (P11-06): every gate consults it where its
+   * table asks; a publish follow-up run's Steward is armed at its start, any agent disarmed at
+   * its end. Absent: no allowance.
+   */
+  publishAllowances?: PublishAllowanceStore;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
   /** Question routing (P2-03); default: the log, with liveness from `statuses`. */
@@ -183,6 +201,9 @@ function isPermanentStorageFailure(error: unknown): boolean {
   );
 }
 
+/** `permission.decided.reason` of the one call an approved publish let through (P11-06). */
+const APPROVED_PUBLISH = 'allowed once: the publish Cosmin approved';
+
 const TERMINAL = new Set<AgentEvent['type']>(['agent.finished', 'agent.failed', 'agent.stopped']);
 type Terminal = 'agent.finished' | 'agent.failed' | 'agent.stopped' | 'agent.interrupted';
 
@@ -220,6 +241,8 @@ export interface ReopenOptions {
    * logged.
    */
   onFallback?: (fresh: Promise<SpawnResult>) => void;
+  /** A Steward stopped by its usage limit (`resumeAfterLimit`): `failed`, not `interrupted`. */
+  afterLimit?: boolean;
 }
 
 /** A reopen's outcome: `resumed` from the session ref, or a `fresh` session on the same row. */
@@ -534,6 +557,7 @@ export class AgentRuntime {
     const gate = this.caps.canSpawn(this.spawnCheck(req.role, req.supervisorId));
     if (!gate.ok) return { ok: false, reason: gate.reason };
 
+    const provider = providerOf(req.runtime);
     const agent = this.opts.log.runCommand((ctx) =>
       createAgent(ctx, {
         role: req.role,
@@ -547,6 +571,8 @@ export class AgentRuntime {
         meta: {
           cwd: req.cwd,
           prompt: req.prompt,
+          ...(req.model ? { model: req.model } : {}),
+          ...(provider ? { provider } : {}),
           ...(req.workspace ? { workspace: req.workspace } : {}),
           ...(req.permissionPolicy ? { permissionPolicy: req.permissionPolicy } : {}),
           ...(req.bare ? { bare: true } : {}),
@@ -619,6 +645,10 @@ export class AgentRuntime {
   ): Promise<SpawnResult> {
     const caps = agent.caps;
     const tools = this.toolsOf(agent, req);
+    const allowances = this.opts.publishAllowances;
+    // A follow-up run that publishes what the user approved: its one call is let through (P11-06).
+    const approved = this.publishFollowUpOf(agent.id, req);
+    if (allowances && approved) allowances.arm(agent.id, approved, req.cwd);
     // Registered before the adapter runs: whatever it emits before the handle comes back is
     // buffered and routed after `agent.spawned`, and counts against the caps from the start.
     // The project's table as of each check (P2-04): a changed policy applies to the next call.
@@ -634,6 +664,24 @@ export class AgentRuntime {
       rules: () => this.rulesOf(agent.id, req),
       onRuleAllow: (call, ruleId, action) =>
         this.permissionDecided(live, { toolCall: call, decision: 'allow', action, ruleId }),
+      ...(allowances
+        ? {
+            allowOnce: (call, verdict, categories) =>
+              allowances.check(
+                agent.id,
+                call,
+                categories ??
+                  (verdict.decision === 'ask' && verdict.action ? [verdict.action] : []),
+              ) === 'allow',
+            onAllowOnce: (call, action) =>
+              this.permissionDecided(live, {
+                toolCall: call,
+                decision: 'allow',
+                action,
+                reason: APPROVED_PUBLISH,
+              }),
+          }
+        : {}),
       ...(tools ? { serverTools: tools.map((t) => t.name) } : {}),
       onDeny: (call, verdict, action) =>
         this.permissionDecided(live, {
@@ -704,6 +752,7 @@ export class AgentRuntime {
         ...(tools ? { tools } : {}),
         ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}),
         ...(req.bare ? { bare: true } : {}),
+        ...(req.model ? { model: req.model } : {}),
       });
     } catch (error) {
       const message = (error as Error).message;
@@ -1158,13 +1207,11 @@ export class AgentRuntime {
     for (const live of deepestFirst) {
       if (live.terminal) continue;
       const agentId = live.agent.id;
+      // A job run's Steward ends stopped (P10-04): it is never resumed, the job runs again.
+      const stopBy = live.stopRequested ?? (this.isJobRunSteward(agentId) ? SYSTEM : undefined);
       if (live.capStop) this.failForCap(live);
-      else if (live.stopRequested) {
-        this.recordEnd(
-          live,
-          { type: 'agent.stopped', agentId, by: live.stopRequested },
-          'agent.stopped',
-        );
+      else if (stopBy) {
+        this.recordEnd(live, { type: 'agent.stopped', agentId, by: stopBy }, 'agent.stopped');
       } else {
         const pending = live.inbox.pending().map((m) => m.id);
         this.recordEnd(
@@ -1217,7 +1264,10 @@ export class AgentRuntime {
       if (this.live.has(agent.id) || isHarnessMeta(agent.meta)) continue;
       const history = histories.get(agent.id);
       if (!history?.neverStarted()) continue;
-      const stoppedBy = history.stopRequested;
+      // A job run's Steward is never started again (P10-04): the scheduler records the run
+      // interrupted and runs the job once more.
+      const stoppedBy =
+        history.stopRequested ?? (this.isJobRunSteward(agent.id) ? SYSTEM : undefined);
       this.command(({ emit }) =>
         emit(
           stoppedBy
@@ -1241,7 +1291,8 @@ export class AgentRuntime {
       const fake = isHarnessMeta(this.opts.log.tables.agents.get(record.agentId)?.meta);
       const stoppedBy: Actor | undefined = fake
         ? { type: 'system' }
-        : histories.get(record.agentId)?.stopRequested;
+        : (histories.get(record.agentId)?.stopRequested ??
+          (this.isJobRunSteward(record.agentId) ? SYSTEM : undefined));
       this.command((ctx) => {
         ctx.emit(
           stoppedBy
@@ -1273,9 +1324,11 @@ export class AgentRuntime {
     const passedOver = new Set(harmonizers.slice(1).map((a) => a.id));
     // Supervisors before their Stewards (P2-16, P2-03): a resumed Steward re-asks its questions,
     // and they must find its Waykeeper (or the Harmonizer) running, not climb to the user.
+    // A job run's Steward left interrupted is not resumed, nor reported (P10-04): its run is
+    // recorded interrupted and the job runs again from the scheduler.
     const interrupted = this.opts.statuses
       .all()
-      .filter((r) => r.state === 'interrupted')
+      .filter((r) => r.state === 'interrupted' && !this.isJobRunSteward(r.agentId))
       .sort((a, b) => this.depth(a.agentId) - this.depth(b.agentId));
     // On their way back (P2-16): a brain resumed before its Stewards must not replace them.
     for (const r of interrupted) if (!passedOver.has(r.agentId)) this.reserved.add(r.agentId);
@@ -1349,6 +1402,26 @@ export class AgentRuntime {
   }
 
   /**
+   * Reopens a Steward its provider's usage limit stopped (P11-07, decision 148), from its saved
+   * session, with `prompt` as its first message — the user chose to wait and the limit reset.
+   * Refused unless its last end was `agent.failed{reason: 'limit'}` and its runtime can resume
+   * that session; the caller then starts a new Steward instead.
+   */
+  async resumeAfterLimit(agentId: Id, prompt: string): Promise<ReopenResult> {
+    const agent = this.opts.log.tables.agents.get(agentId);
+    if (!agent || agent.role !== 'steward') return { ok: false, reason: `no Steward ${agentId}` };
+    const [failed] = this.opts.log.latestOf('agent.failed', agentId, 1);
+    const limited = failed?.event.type === 'agent.failed' && failed.event.reason === 'limit';
+    if (!limited || this.opts.statuses.get(agentId)?.state !== 'failed') {
+      return { ok: false, reason: `agent ${agentId} was not stopped by a usage limit` };
+    }
+    if (!agent.sessionRef || !this.adapters.get(agent.runtime)?.resumeSession) {
+      return { ok: false, reason: `runtime ${agent.runtime} cannot resume its session` };
+    }
+    return this.reopenOne(agentId, undefined, { prompt, afterLimit: true });
+  }
+
+  /**
    * `restart` (the user's action, never startup recovery): an agent whose runtime cannot resume
    * sessions (PTY, P8-08; TECHNOLOGY §3.3) starts again afresh from its first prompt, in the same
    * working directory — the "restart" its interrupted state offers. Startup leaves it interrupted.
@@ -1375,14 +1448,23 @@ export class AgentRuntime {
   }
 
   /** Why `agentId` cannot be reopened now, or `undefined`. */
-  private refuseReopen(agentId: Id): { ok: false; reason: string } | undefined {
+  private refuseReopen(
+    agentId: Id,
+    expected: 'interrupted' | 'failed' = 'interrupted',
+  ): { ok: false; reason: string } | undefined {
     if (this.live.has(agentId)) return { ok: false, reason: `agent ${agentId} is running` };
     const state = this.opts.statuses.get(agentId)?.state;
-    if (state !== 'interrupted') {
-      return { ok: false, reason: `agent ${agentId} is ${state ?? 'unknown'}, not interrupted` };
+    if (state !== expected) {
+      return { ok: false, reason: `agent ${agentId} is ${state ?? 'unknown'}, not ${expected}` };
     }
     const agent = this.opts.log.tables.agents.get(agentId);
     if (!agent) return { ok: false, reason: `no agent ${agentId}` };
+    if (this.isJobRunSteward(agentId)) {
+      return {
+        ok: false,
+        reason: `agent ${agentId} ran a job: it is not resumed, the job runs again on its schedule`,
+      };
+    }
     const running = (same: (other: Agent) => boolean) =>
       [...this.live.values()].find(
         (l) => l.agent.id !== agentId && l.agent.role === agent.role && same(l.agent),
@@ -1456,7 +1538,7 @@ export class AgentRuntime {
     known: AgentHistory | undefined,
     opts: ReopenOptions,
   ): Promise<ReopenResult> {
-    const refused = this.refuseReopen(agentId);
+    const refused = this.refuseReopen(agentId, opts.afterLimit ? 'failed' : 'interrupted');
     if (refused) return refused;
     const agent = this.opts.log.tables.agents.get(agentId)!;
     const meta = (agent.meta ?? {}) as {
@@ -1465,6 +1547,7 @@ export class AgentRuntime {
       workspace?: string;
       permissionPolicy?: PermissionPolicy;
       bare?: boolean;
+      model?: unknown;
     };
     if (!meta.cwd) return { ok: false, reason: 'agent has no saved working directory' };
     const base = {
@@ -1472,6 +1555,8 @@ export class AgentRuntime {
       ...(meta.workspace ? { workspace: meta.workspace } : {}),
       ...(meta.permissionPolicy ? { permissionPolicy: meta.permissionPolicy } : {}),
       ...(meta.bare ? { bare: true } : {}),
+      // The model it was spawned with (P11-03): a resumed or restarted session runs it again.
+      ...(typeof meta.model === 'string' && meta.model ? { model: meta.model } : {}),
       ...(opts.tools ? { tools: opts.tools } : {}),
       ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
     };
@@ -1754,10 +1839,59 @@ export class AgentRuntime {
    * a rule added or removed applies to the next tool call. None outside a project.
    */
   private rulesOf(agentId: Id, req: SpawnRequest): readonly PermissionRule[] {
+    // A publishing run asks for every outward call (P11-06, decision 147, ruling R26): no rules at
+    // all — neither the project's "Allow similar" ones nor a job's unattended ones.
+    if (this.isPublishingRun(agentId, req)) return [];
     const projectId = this.projectIdOf(agentId, req);
-    return (
-      (projectId ? this.opts.log.tables.projects.get(projectId)?.permissionRules : undefined) ?? []
-    );
+    const rules =
+      (projectId ? this.opts.log.tables.projects.get(projectId)?.permissionRules : undefined) ?? [];
+    const job = this.jobOfRun(agentId, req);
+    if (!job || !projectId || job.unattendedRules.length === 0) return rules;
+    // A job's run Steward also works under the job's unattended rules (P10-04, decision 144):
+    // rule-shaped, so the gate never lets one override a deny or allow a push.
+    return [...rules, ...unattendedPermissionRules(job, projectId)];
+  }
+
+  /**
+   * The approved publish a job's follow-up run carries out (P11-06), when this Steward is that
+   * run's: its job's running run is a `publish` follow-up.
+   */
+  private publishFollowUpOf(agentId: Id, req?: SpawnRequest): PublishContext | undefined {
+    const job = this.jobOfRun(agentId, req);
+    const run = job?.runningRunId ? this.opts.log.tables.jobRuns.get(job.runningRunId) : undefined;
+    return run?.followUp?.kind === 'publish' ? run.followUp.publish : undefined;
+  }
+
+  /**
+   * A publishing run (P11-06): a job's follow-up run that publishes, or the Steward of a task
+   * that is a publishing step (`task.publishes`).
+   */
+  private isPublishingRun(agentId: Id, req?: SpawnRequest): boolean {
+    const { tables } = this.opts.log;
+    const agent = tables.agents.get(agentId);
+    const role = agent?.role ?? req?.role;
+    if (!role) return false;
+    return isPublishingRun(tables, { role, taskId: agent?.taskId ?? req?.taskId });
+  }
+
+  /** The job whose run this Steward is (its task is the job's hidden task), if any. */
+  private jobOfRun(agentId: Id, req?: SpawnRequest): Job | undefined {
+    const { tables } = this.opts.log;
+    const agent = tables.agents.get(agentId);
+    if ((agent?.role ?? req?.role) !== 'steward') return undefined;
+    const taskId = agent?.taskId ?? req?.taskId;
+    const task = taskId ? tables.tasks.get(taskId) : undefined;
+    const jobId = task ? jobIdOfTask(task) : undefined;
+    return jobId ? tables.jobs.get(jobId) : undefined;
+  }
+
+  /** A job run's Steward (P10-04): never resumed after a restart; the scheduler runs the job again. */
+  isJobRunSteward(agentId: Id): boolean {
+    const { tables } = this.opts.log;
+    const agent = tables.agents.get(agentId);
+    if (agent?.role !== 'steward' || !agent.taskId) return false;
+    const task = tables.tasks.get(agent.taskId);
+    return task !== undefined && jobIdOfTask(task) !== undefined;
   }
 
   /**
@@ -1770,8 +1904,10 @@ export class AgentRuntime {
     const projectId = this.projectIdOf(agentId, req);
     const project = projectId ? tables.projects.get(projectId) : undefined;
     // No table of its own: the global default as it is now (P25-01: the settings may change it).
-    if (project) return project.permissionPolicy ?? globalDefaultPolicy();
-    return req.permissionPolicy ?? globalDefaultPolicy();
+    const policy = project
+      ? (project.permissionPolicy ?? globalDefaultPolicy())
+      : (req.permissionPolicy ?? globalDefaultPolicy());
+    return this.isPublishingRun(agentId, req) ? publishingPolicy(policy) : policy;
   }
 
   /**
@@ -1789,7 +1925,7 @@ export class AgentRuntime {
   ): boolean {
     const call = raw.question.toolCall;
     if (!call) return false;
-    const { verdict, action, ruleId } = live.gate.decide(call);
+    const { verdict, action, ruleId, allowedOnce } = live.gate.decide(call);
     if (verdict.decision === 'ask') {
       // The card shows the category the policy asks about when the adapter did not name one.
       const asked = verdict.action ?? action;
@@ -1803,6 +1939,7 @@ export class AgentRuntime {
         decision: verdict.decision,
         action,
         ...(verdict.decision === 'deny' ? { reason: verdict.reason } : {}),
+        ...(allowedOnce ? { reason: APPROVED_PUBLISH } : {}),
         ...(ruleId ? { ruleId } : {}),
       },
       event.questionId,
@@ -2349,6 +2486,7 @@ export class AgentRuntime {
     for (const q of live.questions) this.byQuestion.delete(q);
     live.questions.clear();
     this.caps.release(live.agent.id);
+    this.opts.publishAllowances?.disarm(live.agent.id);
     // The log and the status store keep the history; the runtime forgets the session.
     this.live.delete(live.agent.id);
     this.folderCandidates.delete(live.agent.id);

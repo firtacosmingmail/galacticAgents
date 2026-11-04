@@ -174,3 +174,18 @@ describe('beam tint', () => {
     expect(linearRgb('#808080')[0]).toBeCloseTo(0.2159, 3);
   });
 });
+
+describe('the provider mark (P11-09, P11-15)', () => {
+  it('keeps the base colour whatever the provider, and rings ChatGPT and Gemini', async () => {
+    const { satelliteTint, providerRing, PROVIDER_RING } = await import('./look.js');
+    const base = satelliteTint({ role: 'steward', state: 'working' });
+    for (const provider of ['claude', 'chatgpt', 'gemini'] as const) {
+      expect(satelliteTint({ role: 'steward', state: 'working', provider })).toBe(base);
+    }
+    expect(providerRing(undefined)).toBeUndefined();
+    expect(providerRing('claude')).toBeUndefined();
+    expect(providerRing('chatgpt')).toBe(PROVIDER_RING.chatgpt);
+    expect(providerRing('gemini')).toBe(PROVIDER_RING.gemini);
+    expect(providerRing('chatgpt')).not.toBe(providerRing('gemini'));
+  });
+});

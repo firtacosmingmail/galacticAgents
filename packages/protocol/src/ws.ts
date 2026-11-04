@@ -15,6 +15,7 @@ import { RequestOrigin } from './enums.js';
 import { AgentSpend } from './budget.js';
 import { StorageHealth } from './storage.js';
 import { Deliverable, RunOutputChunk } from './deliverables.js';
+import { Area, Job } from './long-term.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
@@ -119,6 +120,13 @@ export const SnapshotMessage = z.object({
    * older servers: none.
    */
   deliverables: z.array(Deliverable).optional(),
+  /**
+   * Every area and job of the long-term projects at `seq` (P10-01): the client keeps folding them
+   * from the stream. Optional for the previous build's parser (TECHNOLOGY §6.3 rule 5); absent from
+   * older servers: none.
+   */
+  areas: z.array(Area).optional(),
+  jobs: z.array(Job).optional(),
   /**
    * Whether the database takes writes (P8-09): runtime state, never an event (a full disk could
    * not log it). Absent from older servers: taken as `ok`.

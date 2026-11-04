@@ -27,7 +27,10 @@ function classify(
   | 'control'
   | 'budget'
   | 'deliverable'
-  | 'run' {
+  | 'run'
+  | 'area'
+  | 'job'
+  | 'job_run' {
   switch (e.type) {
     case 'agent.created':
     case 'agent.updated':
@@ -110,6 +113,15 @@ function classify(
     case 'run.ports':
     case 'run.ended':
       return 'run';
+    case 'area.created':
+    case 'area.updated':
+      return 'area';
+    case 'job.created':
+    case 'job.updated':
+      return 'job';
+    case 'job_run.started':
+    case 'job_run.ended':
+      return 'job_run';
     default:
       return assertNever(e);
   }
@@ -194,6 +206,38 @@ describe('event schemas', () => {
   it('flags transcript traffic', () => {
     expect(isTranscriptEvent(events['agent.output'])).toBe(true);
     expect(isTranscriptEvent(events['agent.idle'])).toBe(false);
+  });
+});
+
+describe('area.*, job.* and job_run.* (P10-01)', () => {
+  it('round-trips each new event', () => {
+    for (const type of [
+      'area.created',
+      'area.updated',
+      'job.created',
+      'job.updated',
+      'job_run.started',
+      'job_run.ended',
+    ] as const) {
+      expect(Event.parse(events[type]), type).toEqual(events[type]);
+    }
+  });
+
+  it('a run never ends as running, and job/area updates change something', () => {
+    expect(Event.safeParse({ ...events['job_run.ended'], outcome: 'running' }).success).toBe(false);
+    expect(Event.safeParse({ type: 'job.updated', jobId: 'j-1', changes: {} }).success).toBe(false);
+    expect(Event.safeParse({ type: 'area.updated', areaId: 'ar-1', changes: {} }).success).toBe(
+      false,
+    );
+  });
+
+  it('accepts null only on the clearable job fields', () => {
+    const job = (changes: unknown) =>
+      Event.safeParse({ type: 'job.updated', jobId: 'j-1', changes }).success;
+    expect(job({ nextRunAt: null, runningRunId: null, pausedReason: null })).toBe(true);
+    expect(job({ failureQuestionId: null })).toBe(true);
+    expect(job({ name: null })).toBe(false);
+    expect(job({ state: null })).toBe(false);
   });
 });
 

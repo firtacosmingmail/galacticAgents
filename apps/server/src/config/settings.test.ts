@@ -49,6 +49,9 @@ function setup() {
   return { home, dataDir, env, config, settings, file };
 }
 const local = { origin: 'local' as const };
+/** The environment that loads `config` again (its data folder). */
+const setupEnv = (config: { dataDir: string }) =>
+  ({ GALACTIC_HOME: config.dataDir }) as NodeJS.ProcessEnv;
 const refusal = (fn: () => unknown) => {
   try {
     fn();
@@ -247,51 +250,88 @@ describe('transcript retention settings (P8-02)', () => {
     expect(file()).toEqual(before);
   });
 
-  it('sets the runtime of new Stewards live, to a registered runtime only (P8-07)', () => {
+  it('sets the default provider live, to a registered provider only (P11-03)', () => {
     const home = temp('galactic-home-');
     const { config } = loadConfig({ GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv);
     const settings = new SettingsService({
       config,
       home,
-      runtimes: () => ['fake', 'claude-sdk', 'acp'],
+      runtimes: () => ['fake', 'claude-sdk', 'codex'],
     });
     const file = () =>
       JSON.parse(readFileSync(config.configPath, 'utf8')) as Record<string, unknown>;
-    expect(settings.current().stewardRuntime).toBeUndefined();
-    expect(settings.update({ stewardRuntime: 'acp' }, local).settings.stewardRuntime).toBe('acp');
-    expect(config.stewardRuntime).toBe('acp'); // live: the brains read the config at each spawn
-    expect(file()['stewardRuntime']).toBe('acp');
+    expect(settings.current().defaultProvider).toBeUndefined();
+    expect(settings.update({ defaultProvider: 'chatgpt' }, local).settings.defaultProvider).toBe(
+      'chatgpt',
+    );
+    expect(config.defaultProvider).toBe('chatgpt'); // live: read at every Steward spawn
+    expect(file()['defaultProvider']).toBe('chatgpt');
     expect(settings.response().restartRequired).toEqual([]);
-    expect(refusal(() => settings.update({ stewardRuntime: 'pty' }, local))).toMatchObject({
+    expect(refusal(() => settings.update({ defaultProvider: 'gemini' }, local))).toMatchObject({
       code: 'invalid',
-      message: expect.stringMatching(/no pty runtime is set up/),
+      message: expect.stringMatching(/Gemini is not set up on this server/),
     });
     expect(
-      refusal(() => settings.update({ stewardRuntime: 'fake' }, { origin: 'remote' })),
+      refusal(() => settings.update({ defaultProvider: 'claude' }, { origin: 'remote' })),
     ).toMatchObject({ code: 'remote_settings' });
     expect(
-      settings.update({ stewardRuntime: null }, local).settings.stewardRuntime,
+      settings.update({ defaultProvider: null }, local).settings.defaultProvider,
     ).toBeUndefined();
-    expect(config.stewardRuntime).toBeUndefined();
-    expect(file()).not.toHaveProperty('stewardRuntime');
+    expect(config.defaultProvider).toBeUndefined();
+    expect(file()).not.toHaveProperty('defaultProvider');
   });
 
-  it('refuses the fake runtime outside dev mode, even though it is registered (P8 wave 3 review)', () => {
-    const home = temp('galactic-home-');
-    const { config } = loadConfig({ GALACTIC_HOME: join(home, '.galactic') } as NodeJS.ProcessEnv);
-    expect(config.dev).toBe(false);
-    const runtimes = () => ['fake', 'claude-sdk', 'acp'] as const;
-    const prod = new SettingsService({ config, home, runtimes });
-    expect(refusal(() => prod.update({ stewardRuntime: 'fake' }, local))).toMatchObject({
-      code: 'invalid',
-      message: expect.stringMatching(/fake runtime is for development only/),
+  it('a providers.gemini.model patch persists and null clears it (P11-03)', () => {
+    const { config, settings, file } = setup();
+    const set = settings.update(
+      {
+        providers: { gemini: { model: 'gemini-3.8-flash-high' }, chatgpt: { model: 'gpt-6-luna' } },
+      },
+      local,
+    );
+    expect(set.settings.providers).toEqual({
+      gemini: { model: 'gemini-3.8-flash-high' },
+      chatgpt: { model: 'gpt-6-luna' },
     });
-    expect(config.stewardRuntime).toBeUndefined();
-    // Dev mode (or a test that says so) may run new Stewards on the fake adapter.
-    const dev = new SettingsService({ config: { ...config, dev: true }, home, runtimes });
-    expect(dev.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
-    const allowed = new SettingsService({ config, home, runtimes, allowFakeRuntime: true });
-    expect(allowed.update({ stewardRuntime: 'fake' }, local).settings.stewardRuntime).toBe('fake');
+    expect(config.providers?.gemini?.model).toBe('gemini-3.8-flash-high');
+    expect(file()['providers']).toEqual({
+      gemini: { model: 'gemini-3.8-flash-high' },
+      chatgpt: { model: 'gpt-6-luna' },
+    });
+    // Merged provider by provider; `null` clears one model and keeps the others.
+    const cleared = settings.update({ providers: { gemini: { model: null } } }, local);
+    expect(cleared.settings.providers).toEqual({ chatgpt: { model: 'gpt-6-luna' } });
+    expect(config.providers).toEqual({ chatgpt: { model: 'gpt-6-luna' } });
+    expect(file()['providers']).toEqual({ chatgpt: { model: 'gpt-6-luna' } });
+    // The next start reads them back.
+    expect(
+      new SettingsService({ config: loadConfig(setupEnv(config)).config }).current().providers,
+    ).toEqual({ chatgpt: { model: 'gpt-6-luna' } });
+  });
+
+  it('upgrades a stored stewardRuntime and drops the key at the next write (P11-03)', () => {
+    const home = temp('galactic-home-');
+    const dataDir = join(home, '.galactic');
+    const env = { GALACTIC_HOME: dataDir } as NodeJS.ProcessEnv;
+    loadConfig(env); // writes the token
+    const path = join(dataDir, 'config.json');
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    writeFileSync(path, JSON.stringify({ ...raw, stewardRuntime: 'codex' }));
+    const loaded = loadConfig(env);
+    expect(loaded.config.defaultProvider).toBe('chatgpt');
+    expect(loaded.config).not.toHaveProperty('stewardRuntime');
+    const settings = new SettingsService({ config: loaded.config, home });
+    expect(settings.current().defaultProvider).toBe('chatgpt');
+    expect(settings.current()).not.toHaveProperty('stewardRuntime');
+    // The protocol no longer knows the key: a patch of it fails validation (P11-09).
+    expect(SettingsPatch.safeParse({ stewardRuntime: 'acp' }).success).toBe(false);
+    const after = settings.update({ qualityTier: 'mobile' }, local);
+    expect(after.settings.defaultProvider).toBe('chatgpt');
+    // The next write drops the old key and keeps what it became.
+    const file = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    expect(file).not.toHaveProperty('stewardRuntime');
+    expect(file['defaultProvider']).toBe('chatgpt');
+    expect(file['qualityTier']).toBe('mobile');
   });
 });
 

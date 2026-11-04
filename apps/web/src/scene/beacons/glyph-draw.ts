@@ -4,10 +4,11 @@ import { BEACON_COLOR, BEACON_INK, type GlyphSpec } from './beacon-look.js';
  * The beacon's sprites, drawn at runtime on a 2D canvas (no image assets). No three.js: the
  * renderer wraps the canvases in textures.
  *
- * - The glyph (`drawGlyph`, square): an amber diamond with a dark padlock (permission) or an amber
- *   disc with a dark "?" (clarification), a dark rim so it reads over a bright planet, and a "+n"
- *   badge in the top-right corner (dark disc, amber rim and figure) on the last beacon of a full
- *   row, for the questions on that body past it (P4-13).
+ * - The glyph (`drawGlyph`, square): an amber diamond with a dark padlock (permission), an amber
+ *   disc with a dark "?" (clarification) or a green disc with a dark "$" (spend, P10-07); a dark
+ *   rim so it reads over a bright planet, and a "+n" badge in the top-right corner (dark disc,
+ *   amber rim and figure) on the last beacon of a full row, for the questions on that body past
+ *   it (P4-13).
  * - The pillar (`drawPillar`, tall and thin): amber light, soft at the sides, brightest at the top
  *   (under the glyph) and fading towards the body.
  */
@@ -55,7 +56,7 @@ export function drawGlyph(ctx: Ctx, spec: GlyphSpec, size = GLYPH_TEXTURE_PX): v
   } else {
     ctx.arc(c, c, r * 0.86, 0, Math.PI * 2);
   }
-  ctx.fillStyle = BEACON_COLOR;
+  ctx.fillStyle = spec.color;
   ctx.fill();
   ctx.lineJoin = 'round';
   ctx.lineWidth = size * 0.035;
@@ -78,7 +79,7 @@ export function drawGlyph(ctx: Ctx, spec: GlyphSpec, size = GLYPH_TEXTURE_PX): v
     ctx.font = `bold ${Math.round(size * 0.42)}px system-ui, -apple-system, 'Segoe UI', sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('?', c, c + size * 0.03);
+    ctx.fillText(spec.symbol, c, c + size * 0.03);
   }
 
   if (spec.badge) {

@@ -1,10 +1,12 @@
 import {
   PERMISSION_POLICY_PRESETS,
+  proposalLongTermOf,
   proposalPromotion,
   proposalTrust,
   type Body,
   type Project,
   type Proposal,
+  type Actor,
   type Task,
 } from '@galactic/protocol';
 import type { ChooseOptions } from './catalogue.js';
@@ -12,7 +14,7 @@ import type { CommandContext } from './event-log.js';
 import type { HandOverOptions } from './handover.js';
 import type { PolicyWrite } from './permissions.js';
 import { requestOf } from './parking.js';
-import { createProject } from './projects.js';
+import { createProject, setLongTerm } from './projects.js';
 import { createPromotedProject, moveProject } from './promotion.js';
 import { createTask } from './tasks.js';
 
@@ -47,6 +49,7 @@ export type CarriedOut =
   | { kind: 'project'; project: Project }
   | { kind: 'task'; task: Task }
   | { kind: 'moved'; project: Project }
+  | { kind: 'converted'; project: Project }
   | { kind: 'nothing' };
 
 /**
@@ -56,6 +59,8 @@ export type CarriedOut =
  * the body is the approval's and nothing can take it before the flow runs: a task's new project
  * is created on it (`createPromotedProject`), a project target moves to it (`moveProject`); the
  * rest — the Waykeeper, the task's move, the Stewards — is `brains/promotion.ts`'s (P2-12).
+ * A long-term card (`meta.longTerm`, P10-02) makes its new project long-term, or — naming a
+ * `projectId` — converts that project (`setLongTerm`, which may move it).
  */
 export function carryOut(
   ctx: CommandContext,
@@ -63,7 +68,18 @@ export function carryOut(
   body: Body | undefined,
   workspace: string,
   opts: ProposalOptions = {},
+  by: Actor = { type: 'system' },
 ): CarriedOut {
+  const longTerm = proposalLongTermOf(p);
+  if (longTerm?.projectId) {
+    const project = setLongTerm(ctx, {
+      projectId: longTerm.projectId,
+      purpose: longTerm.purpose,
+      goals: longTerm.goals,
+      by,
+    });
+    return { kind: 'converted', project };
+  }
   const promotion = proposalPromotion(p);
   if (promotion) {
     if (!body || promotion.toProjectId) return { kind: 'nothing' };
@@ -98,6 +114,10 @@ export function carryOut(
           ? { relatedProjectId: request.relatedProjectId }
           : {}),
       },
+      ...(request.type === 'standalone_task' && request.provider
+        ? { provider: request.provider }
+        : {}),
+      ...(request.type === 'standalone_task' && request.model ? { model: request.model } : {}),
     });
     return { kind: 'task', task };
   }
@@ -116,6 +136,9 @@ export function carryOut(
       ...(trust !== 'default' ? { permissionPolicy: PERMISSION_POLICY_PRESETS[trust] } : {}),
       // The user's consent on the card (decision 27): `Workspaces.prepareProject` reads it.
       meta: { proposalId, ...(p.meta?.['initGit'] === true ? { initGit: true } : {}) },
+      ...(longTerm && request.type === 'new_project'
+        ? { longTerm: { purpose: longTerm.purpose, goals: longTerm.goals } }
+        : {}),
     },
     opts,
     opts.policyWrite ?? {},

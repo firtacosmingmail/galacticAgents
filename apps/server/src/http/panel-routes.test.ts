@@ -689,6 +689,72 @@ describe('GET /api/preflight (P25-01)', () => {
   });
 });
 
+describe('GET /api/preflight lists models and limits (P11-09)', () => {
+  it('adds the provider, its models and its usage to a ready runtime', async () => {
+    const codex = new FakeAdapter({
+      runtime: 'codex',
+      models: [
+        {
+          id: 'gpt-5.6-terra',
+          label: 'GPT-5.6 Terra',
+          isDefault: true,
+          capabilities: ['text'],
+          family: 'gpt',
+        },
+      ],
+      usage: { plan: 'plus', windows: [{ label: '5 hours', remainingFraction: 0.42 }] },
+    });
+    const composed = composeRuntime(openDatabase(':memory:'), {
+      adapters: [new FakeAdapter(), codex],
+    });
+    const t = await startTestApp({ log: composed.log, runtime: composed.runtime });
+    cleanups.push(
+      () => t.stop(),
+      () => composed.dispose(),
+    );
+    const res = PreflightResponse.parse((await get(t, '/api/preflight')).body);
+    const row = res.runtimes.find((r) => r.runtime === 'codex')!;
+    expect(row.provider).toBe('chatgpt');
+    expect(row.models?.map((m) => m.id)).toEqual(['gpt-5.6-terra']);
+    expect(row.usage?.windows[0]?.remainingFraction).toBe(0.42);
+  });
+});
+
+describe('GET /api/preflight with a provider not set up (P11-09, R23)', () => {
+  it('stays ok, and never lists models or usage of a runtime that is not ready', async () => {
+    const calls: string[] = [];
+    const down = (runtime: 'codex' | 'agy') =>
+      new FakeAdapter({
+        runtime,
+        preflight: () =>
+          Promise.resolve({
+            runtime,
+            ok: false,
+            installed: true,
+            loggedIn: false,
+            problems: [{ code: 'not_logged_in', severity: 'error', message: 'log in' }],
+          }),
+      });
+    const codex = down('codex');
+    const agy = down('agy');
+    codex.models = () => (calls.push('codex.models'), Promise.resolve([]));
+    agy.models = () => (calls.push('agy.models'), Promise.resolve([]));
+    codex.usage = () => (calls.push('codex.usage'), Promise.resolve(undefined));
+    const composed = composeRuntime(openDatabase(':memory:'), {
+      adapters: [new FakeAdapter(), codex, agy],
+    });
+    const t = await startTestApp({ log: composed.log, runtime: composed.runtime });
+    cleanups.push(
+      () => t.stop(),
+      () => composed.dispose(),
+    );
+    const res = PreflightResponse.parse((await get(t, '/api/preflight')).body);
+    expect(res.ok).toBe(true);
+    expect(res.runtimes.find((r) => r.runtime === 'codex')?.ok).toBe(false);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('GET /api/agents/:id/conversation leaves out turn prompts (P25-03)', () => {
   it('a brain turn prompt (`message.sent.turn`) is not a conversation line', async () => {
     const { t, log, message, output } = await historyApp();

@@ -1,4 +1,10 @@
-import type { EventEnvelope, Id, WorkState } from '@galactic/protocol';
+import {
+  isJobOwned,
+  isJobTask,
+  type EventEnvelope,
+  type Id,
+  type WorkState,
+} from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 import { canTransition, setProjectState, setTaskState } from '../domain/states.js';
 import {
@@ -170,7 +176,7 @@ export class WorkStateDeriver {
       case 'agent.finished':
         return end('finished');
       case 'agent.failed':
-        return end('failed');
+        return end(event.reason === 'limit' ? 'limited' : 'failed');
       case 'agent.stopped':
         return end('stopped');
       case 'agent.interrupted':
@@ -246,11 +252,21 @@ export class WorkStateDeriver {
     return { agents, started, ids };
   }
 
+  /**
+   * Open user-held questions of these agents. Job-owned ones (findings, a job's failure, a job's
+   * spend) are inbox items that never block work (ledger ruling R12): they leave the project and
+   * the job task as they are. A usage-limit question neither (P11-07): its step shows `paused`.
+   */
   private userQuestions(agentIds: ReadonlySet<Id>): number {
     return this.log.tables.questions
       .all()
       .filter(
-        (q) => q.status === 'open' && q.holder.type === 'user' && agentIds.has(q.originAgentId),
+        (q) =>
+          q.status === 'open' &&
+          q.holder.type === 'user' &&
+          agentIds.has(q.originAgentId) &&
+          !isJobOwned(q) &&
+          !q.context.usageLimit,
       ).length;
   }
 
@@ -272,6 +288,7 @@ export class WorkStateDeriver {
       held: this.isHeld('task', taskId, started),
       userQuestions: this.userQuestions(ids),
       agents,
+      ...(isJobTask(task) ? { job: true } : {}),
     };
     this.write('task', taskId, task.state, deriveTaskState(facts));
   }

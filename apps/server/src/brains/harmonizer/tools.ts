@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import { isDemoBody, isRetiredBody, proposalParking } from '@galactic/protocol';
+import { isDemoBody, isRetiredBody, proposalParking, Provider } from '@galactic/protocol';
 import type {
   AgentRuntime,
   Body,
@@ -14,9 +14,11 @@ import type {
   WorkBodyKind,
 } from '@galactic/protocol';
 import { DomainError, must } from '../../domain/errors.js';
+import { stewardChooser } from '../../runtime/steward-choice.js';
 import { stewardDeclares } from '../../runtime/tool-runtimes.js';
 import { slugify, workspaceMeta } from '../../workspace/workspaces.js';
 import type { BrainQueries, BrainTool, BrainToolContext } from '../definition.js';
+import { checkChoice, modelInput, providerInput } from '../provider-input.js';
 import { asInput, isLiving, oneOf, S, str, strings } from './input.js';
 import { findRelated, words } from './related.js';
 import { stewardPrompt as stewardTemplate } from '../steward-prompt.js';
@@ -31,7 +33,15 @@ import { stewardPrompt as stewardTemplate } from '../steward-prompt.js';
 /** What a work request asks for, kept on its proposal as `meta.request`. */
 export type HarmonizerRequest =
   | { type: 'new_project'; name: string; parentProjectId?: Id }
-  | { type: 'standalone_task'; name: string; description: string; relatedProjectId?: Id }
+  | {
+      type: 'standalone_task';
+      name: string;
+      description: string;
+      relatedProjectId?: Id;
+      /** The AI the task's Steward runs on (P11-08), as the catalogue listed it. */
+      provider?: Provider;
+      model?: string;
+    }
   | { type: 'project_task'; name: string; description: string; projectId: Id }
   | {
       type: 'promotion';
@@ -41,6 +51,26 @@ export type HarmonizerRequest =
       /** A standalone task joining an existing project's body (P2-12 does the move). */
       toProjectId?: Id;
     };
+
+/** The longest provider note on a card. */
+export const MAX_PROVIDER_NOTE = 500;
+
+/**
+ * What the user said about which AI does what (`providerNote`, P11-08): kept on the card's
+ * `meta.providerNote`, shown to the user, and passed on to the Waykeeper that plans the project.
+ */
+function providerNoteOf(input: Record<string, unknown>): string | undefined {
+  const note = str(input, 'providerNote', true)?.trim();
+  if (!note) return undefined;
+  if (note.length > MAX_PROVIDER_NOTE) {
+    throw new DomainError('invalid', `providerNote is at most ${MAX_PROVIDER_NOTE} characters`);
+  }
+  return note;
+}
+
+const PROVIDER_NOTE_PROPERTY = S.str(
+  `What the user said about which AI does what, in their words (at most ${MAX_PROVIDER_NOTE} characters); the Waykeeper gives each task its provider and model from it. Check each named model with check_model first.`,
+);
 
 export const REQUEST_TYPES = ['new_project', 'standalone_task', 'project_task'] as const;
 
@@ -186,7 +216,7 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     ctx: BrainToolContext,
     kind: WorkBodyKind,
     name: string,
-    opts: { bodyId?: Id; parentProjectId?: Id },
+    opts: { bodyId?: Id; parentProjectId?: Id; longTerm?: boolean },
   ): Promise<{ proposedBody: ProposedBody; choice?: BodyChoice }> => {
     if (kind === 'asteroid') return { proposedBody: { kind, name } };
     if (opts.bodyId) {
@@ -208,7 +238,9 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     }
     const request: BodyRequest =
       kind === 'planet'
-        ? { kind }
+        ? opts.longTerm
+          ? { kind, longTerm: true }
+          : { kind }
         : { kind, ...(opts.parentProjectId ? { parentProjectId: opts.parentProjectId } : {}) };
     const choice = await ctx.commands.chooseBody(request);
     if (!choice.ok) return { proposedBody: { kind, name }, choice };
@@ -261,6 +293,10 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         projectId: S.str('For project_task: the project the work belongs to.'),
         parentProjectId: S.str('For a sub-project moon: the planet project.'),
         relatedProjectId: S.str('For an asteroid: the project whose workspace it uses.'),
+        longTerm: {
+          type: 'boolean',
+          description: 'For a planet: a long-term project (it needs a planet with moons).',
+        },
       },
       ['request'],
     ),
@@ -309,6 +345,7 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       if (parentProjectId) must(ctx.queries.project(parentProjectId), 'project', parentProjectId);
       const { proposedBody, choice } = await proposedBodyFor(ctx, kind, suggestedName, {
         ...(parentProjectId ? { parentProjectId } : {}),
+        ...(kind === 'planet' && input['longTerm'] === true ? { longTerm: true } : {}),
       });
       return {
         ...base,
@@ -350,8 +387,10 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     name: 'propose',
     description:
       'Creates the one proposal card of a work request (decision 3): a new project (planet or ' +
-      'moon), a standalone task (asteroid), or a task added to an existing project. Ends your ' +
-      'turn; the user’s decision arrives as a later event. Never for a conversational request.',
+      'moon), a standalone task (asteroid), or a task added to an existing project. A project ' +
+      'looked after over months is a planet with longTerm {purpose, goals}: it goes to a planet ' +
+      'with moons. Ends your turn; the user’s decision arrives as a later event. Never for a ' +
+      'conversational request.',
     inputSchema: S.obj(
       {
         type: S.enum(REQUEST_TYPES, 'What the card asks for.'),
@@ -369,6 +408,24 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         projectId: S.str('project_task only: the project the task joins.'),
         relatedProjectId: S.str('standalone_task only: the project whose workspace it uses.'),
         description: S.str('Tasks only: the task description (default: the request).'),
+        providerNote: PROVIDER_NOTE_PROPERTY,
+        provider: S.enum(
+          Provider.options,
+          'standalone_task only: the AI its Steward runs on, when the user named one (check_model first).',
+        ),
+        model: S.str('standalone_task only: an exact model of that provider; needs provider.'),
+        longTerm: S.obj(
+          {
+            purpose: S.str('What the project is for, in a sentence or two (1–2000 characters).'),
+            goals: {
+              type: 'array',
+              maxItems: 10,
+              items: { type: 'string' },
+              description: 'Up to 10 short goals (each 1–300 characters).',
+            },
+          },
+          ['purpose', 'goals'],
+        ),
       },
       ['type', 'requestText', 'name', 'rationale'],
     ),
@@ -380,6 +437,27 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
       const name = str(input, 'name');
       const rationale = str(input, 'rationale');
       const description = str(input, 'description', true) ?? requestText;
+      const longTerm = longTermOf(input['longTerm']);
+      const providerNote = providerNoteOf(input);
+      const provider = providerInput(input, 'provider');
+      const model = modelInput(input, 'model');
+      if (providerNote && type === 'standalone_task') {
+        throw new DomainError(
+          'invalid',
+          'a standalone task takes provider and model, not a providerNote',
+        );
+      }
+      if ((provider || model) && type !== 'standalone_task') {
+        throw new DomainError(
+          'invalid',
+          'provider and model are for a standalone_task; a project’s steps get theirs from its Waykeeper (providerNote)',
+        );
+      }
+      const listedModel =
+        type === 'standalone_task' ? await checkChoice(ctx, { provider, model }) : undefined;
+      if (longTerm && (type !== 'new_project' || input['kind'] !== 'planet')) {
+        throw new DomainError('invalid', 'a long-term project is a new_project of kind planet');
+      }
       let kind: WorkBodyKind;
       let workspace: string;
       let request: HarmonizerRequest;
@@ -397,6 +475,7 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           ({ proposedBody, choice } = await proposedBodyFor(ctx, kind, name, {
             ...(bodyId ? { bodyId } : {}),
             ...(parentProjectId ? { parentProjectId } : {}),
+            ...(longTerm ? { longTerm: true } : {}),
           }));
           workspace = checkPath(str(input, 'workspace', true) ?? suggest(ctx.queries, root, name));
           request = { type, name, ...(parentProjectId ? { parentProjectId } : {}) };
@@ -419,6 +498,8 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
             name,
             description,
             ...(relatedProjectId ? { relatedProjectId } : {}),
+            ...(provider ? { provider } : {}),
+            ...(listedModel ? { model: listedModel } : {}),
           };
           break;
         }
@@ -441,18 +522,110 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
           request,
           // P2-09 parks the card from this when no planet or moon is free (decision 16).
           ...(choice && !choice.ok ? { bodyChoice: choice } : {}),
+          ...(longTerm ? { longTerm } : {}),
+          ...(providerNote ? { providerNote } : {}),
         },
       });
       return {
         proposalId: value.id,
         kind: value.kind,
+        ...(providerNote ? { providerNote } : {}),
         proposedBody: value.proposedBody,
         workspace: value.workspace,
+        ...(longTerm ? { longTerm: true } : {}),
         // P2-09: no room → the server parked the card (decision 16); tell the user why.
         state: value.state,
         ...(proposalParking(value) ? { parked: proposalParking(value) } : {}),
         ...(choice ? { body: describeChoice(choice) } : {}),
       };
+    },
+  };
+
+  const proposeLongTerm: BrainTool = {
+    name: 'propose_long_term',
+    description:
+      'Makes an existing project long-term (or gives a long-term one a new purpose and goals) ' +
+      'through ONE card: on approval it moves to a big planet if it is not on one (its ' +
+      'satellites fly) and never closes by itself. Refused for a sub-project, finished work, or ' +
+      'when no planet with moons is free for a project that must move. Ends your turn.',
+    inputSchema: S.obj(
+      {
+        projectId: S.str('The project.'),
+        purpose: S.str('What the project is for, in a sentence or two (1–2000 characters).'),
+        goals: {
+          type: 'array',
+          maxItems: 10,
+          items: { type: 'string' },
+          description: 'Up to 10 short goals (each 1–300 characters).',
+        },
+        requestText: S.str('The user’s request, verbatim.'),
+        rationale: S.str('Why, in a sentence.'),
+      },
+      ['projectId', 'purpose', 'goals'],
+    ),
+    endsTurn: true,
+    async handler(raw, ctx) {
+      const input = asInput(raw);
+      const project = openProject(ctx.queries, str(input, 'projectId'));
+      const longTerm = longTermOf({ purpose: input['purpose'], goals: input['goals'] })!;
+      if (input['providerNote'] !== undefined) {
+        throw new DomainError(
+          'invalid',
+          'a conversion card carries no providerNote: the project already has its Waykeeper',
+        );
+      }
+      const body = must(ctx.queries.body(project.bodyId), 'body', project.bodyId);
+      const kind = bodyKind(ctx.queries, project);
+      // The server puts the card on the planet the approval moves the project to.
+      const { value } = await ctx.commands.createProposal({
+        requestText: str(input, 'requestText', true) ?? `Make ${project.name} long-term`,
+        kind,
+        proposedBody: { kind, bodyId: body.id, name: body.name },
+        workspace: project.workspace,
+        rationale: str(input, 'rationale', true) ?? '',
+        meta: { longTerm: { projectId: project.id, ...longTerm } },
+      });
+      const to = value.proposedBody;
+      return {
+        proposalId: value.id,
+        state: value.state,
+        ...(to.bodyId && to.bodyId !== project.bodyId
+          ? { movesTo: { bodyId: to.bodyId, name: to.name } }
+          : { staysOn: { bodyId: body.id, name: body.name } }),
+      };
+    },
+  };
+
+  const relayToWaykeeper: BrainTool = {
+    name: 'relay_to_waykeeper',
+    description:
+      'Passes a request on to the running Waykeeper of a project as a message (a recurring job ' +
+      'Cosmin wants on a long-term project, say): it starts the Waykeeper’s next turn, and the ' +
+      'Waykeeper asks what is missing and proposes the card itself.',
+    inputSchema: S.obj(
+      {
+        projectId: S.str('The project.'),
+        text: S.str('The request, in the user’s words, with what you already know.'),
+      },
+      ['projectId', 'text'],
+    ),
+    async handler(raw, ctx) {
+      const input = asInput(raw);
+      const project = openProject(ctx.queries, str(input, 'projectId'));
+      const waykeeper = ctx.queries
+        .agents()
+        .find(
+          (a) =>
+            a.role === 'waykeeper' && a.projectId === project.id && isLiving(ctx.queries, a.id),
+        );
+      if (!waykeeper) {
+        throw new DomainError(
+          'invalid_transition',
+          `project ${project.id} has no running Waykeeper: spawn_waykeeper ${project.id} first`,
+        );
+      }
+      const { messageId } = ctx.send(waykeeper.id, str(input, 'text'));
+      return { waykeeperId: waykeeper.id, messageId };
     },
   };
 
@@ -667,6 +840,10 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
               ? { relatedProjectId: request.relatedProjectId }
               : {}),
           },
+          ...(request.type === 'standalone_task' && request.provider
+            ? { provider: request.provider }
+            : {}),
+          ...(request.type === 'standalone_task' && request.model ? { model: request.model } : {}),
           ...extra,
         });
         task = value;
@@ -688,6 +865,21 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
                 isLiving(ctx.queries, a.id),
             )
         : undefined;
+      // What the user said about which AI does what goes to the project's Waykeeper once, with
+      // its task (a project's own note went with its spawn).
+      const note = request.type === 'project_task' ? proposal.meta?.['providerNote'] : undefined;
+      if (
+        waykeeper &&
+        typeof note === 'string' &&
+        note !== '' &&
+        task.meta?.['providerNoteSent'] !== true
+      ) {
+        ctx.send(
+          waykeeper.id,
+          `Provider note on the approved request for task ${task.id}: ${note}`,
+        );
+        await ctx.commands.updateTask(task.id, { meta: { ...task.meta, providerNoteSent: true } });
+      }
       return {
         taskId: task.id,
         bodyId: task.bodyId,
@@ -736,6 +928,81 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
   };
 
   // -- agents ------------------------------------------------------------------------------------
+
+  const checkModel: BrainTool = {
+    name: 'check_model',
+    description:
+      'Checks one AI the user named against what this Mac can run: the provider (claude, ' +
+      'chatgpt, gemini) and, if they named one, the exact model, for work that makes images ' +
+      '(images) or publishes (publishes). Returns {ok: true, provider, model, label} or ' +
+      '{ok: false, reason}: tell the user the reason at once. A loose model name ("opus", ' +
+      '"gpt 5.6") resolves to the one listed model it means.',
+    inputSchema: S.obj(
+      {
+        provider: S.enum(Provider.options, 'The provider.'),
+        model: S.str('An exact or loose model name; absent: the provider’s default.'),
+        images: { type: 'boolean', description: 'The work makes images.' },
+        publishes: { type: 'boolean', description: 'The work publishes. Never Gemini.' },
+      },
+      ['provider'],
+    ),
+    async handler(raw, ctx) {
+      const input = asInput(raw);
+      const provider = providerInput(input, 'provider');
+      if (!provider)
+        throw new DomainError('invalid', 'provider must be one of claude, chatgpt, gemini');
+      const model = modelInput(input, 'model');
+      if (!ctx.catalog) throw new DomainError('invalid', 'no provider catalogue on this server');
+      const result = await ctx.catalog.check(
+        { provider, ...(model ? { model } : {}) },
+        {
+          ...(input['images'] === true ? { images: true } : {}),
+          ...(input['publishes'] === true ? { publishes: true } : {}),
+        },
+      );
+      return result.ok
+        ? {
+            ok: true,
+            provider: result.choice.provider,
+            model: result.choice.model ?? null,
+            label: result.label,
+          }
+        : { ok: false, reason: result.reason };
+    },
+  };
+
+  const setProjectProvider: BrainTool = {
+    name: 'set_project_provider',
+    description:
+      'Sets (provider) or clears (null) the default AI provider of a project: its new Stewards ' +
+      'run on it unless a task names another. Running Stewards keep theirs. Only when the user ' +
+      'asked ("use ChatGPT for this project"); a provider that is not set up is refused.',
+    inputSchema: S.obj(
+      {
+        projectId: S.str('The project.'),
+        provider: {
+          enum: [...Provider.options, null],
+          description: 'The provider, or null to clear.',
+        },
+      },
+      ['projectId', 'provider'],
+    ),
+    async handler(raw, ctx) {
+      const input = asInput(raw);
+      const project = openProject(ctx.queries, str(input, 'projectId'));
+      const provider = providerInput(input, 'provider') ?? null;
+      if (input['provider'] === undefined) {
+        throw new DomainError('invalid', 'provider must be a provider or null');
+      }
+      await checkChoice(ctx, { provider: provider ?? undefined });
+      const { value } = await ctx.commands.setProjectProvider({
+        projectId: project.id,
+        provider,
+        by: ctx.actor,
+      });
+      return { projectId: value.id, defaultProvider: value.defaultProvider ?? null };
+    },
+  };
 
   const spawnWaykeeper: BrainTool = {
     name: 'spawn_waykeeper',
@@ -851,11 +1118,16 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         throw new DomainError('invalid', `cannot create ${workspace}: ${(error as Error).message}`);
       }
       const instructions = str(input, 'instructions', true);
-      // The `stewardRuntime` setting (P8-07), else the Harmonizer's own runtime.
-      const runtime = ctx.stewardRuntime?.() ?? runtimeOf(ctx);
+      // The task's provider, else the Settings' (P11-03): one resolver for every Steward.
+      const choice = (ctx.chooseSteward ?? stewardChooser())({
+        task,
+        supervisorRuntime: runtimeOf(ctx),
+      });
+      const { runtime } = choice;
       const { value } = await ctx.commands.spawnAgent({
         role: 'steward',
         runtime,
+        ...(choice.model ? { model: choice.model } : {}),
         taskId,
         supervisorId: ctx.brainId,
         cwd: workspace,
@@ -924,11 +1196,22 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     spawnWaykeeper,
     spawnSteward,
     proposePromotion,
+    proposeLongTerm,
+    relayToWaykeeper,
+    checkModel,
+    setProjectProvider,
     closeTask,
     askUser,
     freePlanets,
     freeMoons,
   ];
+}
+
+/** A card's `longTerm {purpose, goals}` as the model gave it (the server checks the limits). */
+function longTermOf(raw: unknown): { purpose: string; goals: string[] } | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const input = asInput(raw);
+  return { purpose: str(input, 'purpose'), goals: strings(input, 'goals') ?? [] };
 }
 
 function bodyKind(queries: BrainQueries, project: Project): WorkBodyKind {
@@ -961,6 +1244,9 @@ function rationaleFor(kind: 'planet' | 'moon', choice: BodyChoice | undefined, p
     return parent
       ? `a sub-project on ${choice.body.name}, a moon of its parent's planet`
       : `a ${kind} project on ${choice.body.name}, the catalogue's first choice`;
+  }
+  if (choice.reason === 'no_planet_with_moons') {
+    return 'no planet with moons is free for a long-term project: offer closing a completed project on one early; the card is parked until one frees';
   }
   return choice.reason === 'no_free_planet'
     ? 'no planet is free: offer a moon or asteroids, or closing a completed project early; the card is parked'

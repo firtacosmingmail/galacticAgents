@@ -1,4 +1,4 @@
-import type { AgentRole, AgentState } from '@galactic/protocol';
+import type { AgentRole, AgentState, Provider } from '@galactic/protocol';
 import type { SatelliteSpec } from './satellite-model.js';
 import type { SatelliteView } from './machine.js';
 import { hashId, seedFraction } from './machine.js';
@@ -234,10 +234,31 @@ export function luminance(rgb: readonly [number, number, number]): number {
 
 type LookSpec = Pick<SatelliteSpec, 'role' | 'state'> & { agentId?: string };
 
-/** A satellite's colour (CSS): its state's, or its role's while the state uses the role colour. */
-export function satelliteTint(spec: Pick<SatelliteSpec, 'role' | 'state'>): string {
+/**
+ * A satellite's colour (CSS): its state's, or its role's while the state uses the role colour.
+ * The provider never changes it (P11-15): a non-Claude satellite carries a ring instead.
+ */
+export function satelliteTint(
+  spec: Pick<SatelliteSpec, 'role' | 'state'> & { provider?: Provider | undefined },
+): string {
   const color = STATE_LOOK[spec.state].color;
   return color === ROLE_COLOR ? SATELLITE_LOOK[spec.role].color : color;
+}
+
+/**
+ * The provider mark (P11-09, P11-15): Claude's satellites carry none; ChatGPT's and Gemini's a
+ * thin ring in their provider's colour (`satellite-mesh.ts` `ringGeometry`), so a satellite on
+ * another AI reads at a glance while its own colour still tells its role and state.
+ */
+export const PROVIDER_RING: Readonly<Record<Provider, string | undefined>> = {
+  claude: undefined,
+  chatgpt: '#10a37f',
+  gemini: '#4285f4',
+};
+
+/** The ring colour (CSS) of a satellite on `provider`, or `undefined` for none. */
+export function providerRing(provider: Provider | undefined): string | undefined {
+  return provider ? PROVIDER_RING[provider] : undefined;
 }
 
 /** The size multiplier of a satellite's state (waiting larger, failed smaller). */

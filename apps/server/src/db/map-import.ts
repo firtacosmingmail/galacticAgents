@@ -82,8 +82,9 @@ export interface ImportReport {
 }
 
 /**
- * The row kinds the import checks and writes. `deliverables` (P9-01) is optional in an export: one
- * from a build before Phase 9 has none and nothing is checked for them.
+ * The row kinds the import checks and writes. `deliverables` (P9-01), `areas` and `jobs` (P10-01)
+ * are optional in an export: one from a build before their phase has none and nothing is checked
+ * for them. The jobs' run history (`job_runs`) is never exported (`map-export.ts`).
  */
 const ROW_KINDS = [
   'bodies',
@@ -93,6 +94,8 @@ const ROW_KINDS = [
   'questions',
   'proposals',
   'deliverables',
+  'areas',
+  'jobs',
 ] as const;
 
 /** Whether the database holds nothing worth keeping: no events, work, agents or transcripts. */
@@ -112,6 +115,8 @@ export function isEmptyDatabase(db: Database): boolean {
     'questions',
     'proposals',
     'deliverables',
+    'areas',
+    'jobs',
     'transcript_chunks',
   ].every((table) => count(table) === 0);
 }
@@ -145,6 +150,8 @@ export function foldRows(seed: readonly Body[], events: readonly ExportedEvent[]
     questions: Object.values(world.questions),
     proposals: Object.values(world.proposals),
     deliverables: Object.values(world.deliverables),
+    areas: Object.values(world.areas ?? {}),
+    jobs: Object.values(world.jobs ?? {}),
   };
 }
 
@@ -211,6 +218,8 @@ function writeRows(t: Tables, rows: ExportedRows, order: ExportedRows): void {
   for (const d of sorted(rows.deliverables ?? [], order.deliverables ?? [])) {
     t.deliverables.insert(d);
   }
+  for (const a of sorted(rows.areas ?? [], order.areas ?? [])) t.areas.insert(a);
+  for (const j of sorted(rows.jobs ?? [], order.jobs ?? [])) t.jobs.insert(j);
 }
 
 /** Refuses an export whose schema this build does not have (a newer build, or another branch). */
@@ -345,7 +354,6 @@ export async function importMap(
         );
       }
       writeRows(t, rows, data.rows);
-      const deliverables = rows.deliverables ?? [];
       let chunks = 0;
       if (data.transcripts) {
         const chunk = db.prepare(
@@ -374,7 +382,7 @@ export async function importMap(
         drift,
         rebuilt: drift.length === 0 ? ('replayed' as const) : ('rows' as const),
         chunks,
-        deliverables,
+        rows,
       };
     })();
 
@@ -402,10 +410,7 @@ export async function importMap(
       seq: data.events.at(-1)?.seq ?? 0,
       logId: log.logId,
       rows: Object.fromEntries(
-        ROW_KINDS.map((k) => [
-          k,
-          (k === 'deliverables' ? outcome.deliverables : data.rows[k]).length,
-        ]),
+        ROW_KINDS.map((k) => [k, (outcome.rows[k] ?? []).length]),
       ) as ImportReport['rows'],
       transcriptChunks: outcome.chunks,
       rebuilt: outcome.rebuilt,

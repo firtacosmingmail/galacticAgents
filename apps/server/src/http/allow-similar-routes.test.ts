@@ -154,11 +154,17 @@ async function spawn(
   p: Project,
   role: 'steward' | 'waykeeper',
   scenario: keyof typeof SCENARIOS,
+  opts: { publishes?: boolean } = {},
 ): Promise<Id> {
   const taskId =
     role === 'steward'
-      ? (await composed.commands.createTask({ projectId: p.id, description: `t ${scenario}` }))
-          .value.id
+      ? (
+          await composed.commands.createTask({
+            projectId: p.id,
+            description: `t ${scenario}`,
+            ...(opts.publishes ? { publishes: true } : {}),
+          })
+        ).value.id
       : undefined;
   const result = await composed.runtime.spawn({
     role,
@@ -754,5 +760,40 @@ describe('rules end with their project (P9-17)', () => {
       [closed.id, 'the project was closed', 'system'],
       [archived.id, 'the project was archived', 'system'],
     ]);
+  });
+});
+
+describe('a publishing run offers no "Allow similar" (P11-12)', () => {
+  it('marks its permission request, and the preview and the rule are refused', async () => {
+    await setup();
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'installs', { publishes: true });
+    await waitFor(() => pending(steward) !== undefined, 'first request');
+    const q1 = pending(steward)!;
+    const question = composed.log.tables.questions.get(q1)!;
+    expect(question.context.origin?.publishingRun).toBe(true);
+
+    const preview = await call('POST', `/api/questions/${q1}/similar-preview`, {});
+    expect(preview.status).toBe(200);
+    expect(preview.body).toMatchObject({ allowed: false, options: [] });
+    expect(preview.body['refused']).toMatch(/publishing/);
+
+    const made = await call('POST', `/api/questions/${q1}/allow-similar`, {
+      scope: 'category',
+      digest: 'x',
+      version: question.version,
+    });
+    expect(made.status).toBe(400);
+    expect(project(app.id).permissionRules ?? []).toEqual([]);
+    expect(composed.log.tables.questions.get(q1)?.status).toBe('open');
+  });
+
+  it('leaves an ordinary Steward’s request unmarked', async () => {
+    await setup();
+    const app = await newProject('app');
+    const steward = await spawn(app, 'steward', 'installs');
+    await waitFor(() => pending(steward) !== undefined, 'first request');
+    const question = composed.log.tables.questions.get(pending(steward)!)!;
+    expect(question.context.origin?.publishingRun).toBeUndefined();
   });
 });

@@ -9,6 +9,9 @@ import {
   beamMatrix,
   bodyColor,
   bodyMatrix,
+  ringColor,
+  ringGeometry,
+  ringMatrix,
   satelliteGeometry,
 } from './satellite-mesh.js';
 import { instanceCapacity, writeInstanced } from './Satellites.js';
@@ -118,6 +121,29 @@ describe('frame → matrices', () => {
   });
 });
 
+describe('the provider ring (P11-15)', () => {
+  it('is a thin loop around the satellite, wider than its panels', () => {
+    const ring = ringGeometry();
+    const body = satelliteGeometry();
+    ring.computeBoundingBox();
+    body.computeBoundingBox();
+    const r = ring.boundingBox!;
+    const b = body.boundingBox!;
+    // Around the dish axis (y): wide in x and z, thin in y.
+    expect(r.max.x).toBeGreaterThan(b.max.x);
+    expect(r.max.z).toBeGreaterThan(b.max.z);
+    expect(r.max.y - r.min.y).toBeLessThan(0.15);
+    // Plain geometry: the colour is the material's or the instance's.
+    expect(ring.getAttribute('color')).toBeUndefined();
+  });
+
+  it('follows the satellite, and is in the provider colour', () => {
+    const f = frame({ ring: '#10a37f' });
+    expect(ringMatrix(f, new Matrix4()).equals(bodyMatrix(f, new Matrix4()))).toBe(true);
+    expect(ringColor(f, new Color()).getHexString()).toBe('10a37f');
+  });
+});
+
 describe('instanced capacity', () => {
   it('grows in steps of 16 so the buffers are not rebuilt per agent', () => {
     expect(instanceCapacity(1)).toBe(16);
@@ -131,8 +157,29 @@ describe('instanced path (writeInstanced)', () => {
   const meshes = () => {
     const bodies = new InstancedMesh(satelliteGeometry(), new MeshBasicMaterial(), 16);
     const beams = new InstancedMesh(beamGeometry(), new MeshBasicMaterial(), 16);
-    return { bodies, beams };
+    const rings = new InstancedMesh(ringGeometry(), new MeshBasicMaterial(), 16);
+    return { bodies, beams, rings };
   };
+
+  it('draws a ring only around the visible satellites that carry one (P11-15)', () => {
+    const t = meshes();
+    writeInstanced([frame({ agentId: 'a-1' })], t, true);
+    expect([t.rings.count, t.rings.visible]).toEqual([0, false]);
+    const frames = [
+      frame({ agentId: 'a-1' }),
+      frame({ agentId: 'a-2', ring: '#10a37f' }),
+      frame({ agentId: 'a-3', ring: '#4285f4', visible: false }),
+      frame({ agentId: 'a-4', ring: '#4285f4' }),
+    ];
+    writeInstanced(frames, t, true);
+    expect(t.bodies.count).toBe(4);
+    expect([t.rings.count, t.rings.visible]).toEqual([2, true]);
+    const c = new Color();
+    t.rings.getColorAt(0, c);
+    expect(c.getHexString()).toBe('10a37f');
+    t.rings.getColorAt(1, c);
+    expect(c.getHexString()).toBe('4285f4');
+  });
 
   it('draws no beam instance (and no beam draw call) while nothing scans', () => {
     const t = meshes();

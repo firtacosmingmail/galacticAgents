@@ -2,10 +2,12 @@ import type {
   Actor,
   Agent,
   AgentRole,
-  AgentRuntime,
+  Area,
   Body,
   DomainCommands,
   Id,
+  Job,
+  JobRun,
   Project,
   Proposal,
   Question,
@@ -14,6 +16,8 @@ import type {
   Task,
 } from '@galactic/protocol';
 import type { DeliverableService } from '../deliverables/service.js';
+import type { ProviderCatalog } from '../runtime/provider-catalog.js';
+import type { ChooseSteward } from '../runtime/steward-choice.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import type { Workspaces } from '../workspace/workspaces.js';
 import type { WakeRules } from './wake.js';
@@ -35,7 +39,7 @@ export interface BrainQueries {
   project(projectId: Id): Project | undefined;
   /** Any task, by id (P2-10). */
   task(taskId: Id): Task | undefined;
-  /** The tasks of a project, in creation order. */
+  /** The tasks of a project, in creation order; recurring jobs' hidden tasks are left out. */
   projectTasks(projectId: Id): Task[];
   /** Open clarification questions the brain holds or one of its agents asked. */
   openQuestions(brainId: Id): Question[];
@@ -51,6 +55,13 @@ export interface BrainQueries {
   question(questionId: Id): Question | undefined;
   /** Every open question, of any kind and holder. */
   allOpenQuestions(): Question[];
+  // Long-term projects (P10-06): the Waykeeper's jobs and their history.
+  /** The project's recurring jobs, in creation order. */
+  jobs(projectId: Id): Job[];
+  /** The project's areas, in creation order. */
+  areas(projectId: Id): Area[];
+  /** A job's runs, newest first: `limit` of them (1–200). */
+  jobRuns(jobId: Id, limit: number): JobRun[];
 }
 
 /** What a tool handler gets besides its input. */
@@ -90,10 +101,15 @@ export interface BrainToolContext {
    */
   processes?: StewardProcessControl;
   /**
-   * The runtime new Stewards run on, as the settings say now (P8-07: `stewardRuntime`);
-   * `undefined` (or absent) = the brain's own runtime. Read at every Steward spawn.
+   * Which provider, runtime and model a new Steward runs on (P11-03, `resolveStewardChoice` over
+   * the live Settings). Absent: the resolver without Settings. Called at every Steward spawn.
    */
-  stewardRuntime?: () => AgentRuntime | undefined;
+  chooseSteward?: ChooseSteward;
+  /**
+   * The provider catalogue (P11-08): `check_model` and every plan or job card check a provider
+   * choice against it before the card exists. Absent: no check.
+   */
+  catalog?: Pick<ProviderCatalog, 'check' | 'defaults'>;
   /**
    * Agents' declarations (P9-04): the deliverable tools declare, remove and list through it.
    * Present when the server was composed with a data folder; absent, those tools refuse.
@@ -138,6 +154,8 @@ export interface BrainStartContext {
   /** Absent for a brain being spawned for the first time (its id is not known yet). */
   brainId?: Id;
   role: AgentRole;
+  /** The brain's project (a Waykeeper's). */
+  projectId?: Id;
   /** The brain comes back after a restart (or the panel's resume), not a first spawn. */
   resumed: boolean;
   commands: DomainCommands;

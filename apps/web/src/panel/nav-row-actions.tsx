@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
 import {
+  isJobTask,
   taskTitle,
   WORK_NAME_MAX,
   type Id,
@@ -216,7 +217,8 @@ const DONE: ReadonlySet<WorkState> = new Set<WorkState>([
  */
 export function openTasksNote(world: Pick<WorldState, 'tasks'>, project: Project) {
   const open = Object.values(world.tasks).filter(
-    (t) => t.projectId === project.id && !DONE.has(t.state),
+    // A recurring job's hidden task (P10-03) never finishes and never holds an archive up.
+    (t) => t.projectId === project.id && !DONE.has(t.state) && !isJobTask(t),
   ).length;
   if (open === 0 || project.state === 'archived') return undefined;
   const tasks = open === 1 ? '1 unfinished task' : `${open} unfinished tasks`;

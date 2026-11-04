@@ -62,8 +62,19 @@ const lookupOf = (world: WorldState): NotificationLookup => ({
   deliverables: (target) => countDeliverables(Object.values(world.deliverables ?? {}), target),
 });
 
-const importance = (n: PanelNotification) =>
-  n.kind === 'permission' ? 0 : n.kind === 'question' ? 1 : n.kind === 'interrupted' ? 2 : 3;
+/**
+ * The backfill's order: permissions and spend approvals first (P10-07: a spend is a `question`
+ * notification with `questionKind: 'spend'`, ranked like a permission), then questions, then
+ * interruptions, then the rest.
+ */
+export const notificationImportance = (n: PanelNotification): number =>
+  n.kind === 'permission' || n.questionKind === 'spend' || n.questionKind === 'publish'
+    ? 0
+    : n.kind === 'question'
+      ? 1
+      : n.kind === 'interrupted'
+        ? 2
+        : 3;
 
 /**
  * The notifications on screen, held until they close: a Notification nobody references may be
@@ -213,7 +224,7 @@ export function createNotifier(opts: NotifierOptions): Notifier {
       const show = shouldShow(n.kind);
       if (claim(n.id) && show) toShow.push(n);
     }
-    toShow.sort((a, b) => importance(a) - importance(b) || b.seq - a.seq);
+    toShow.sort((a, b) => notificationImportance(a) - notificationImportance(b) || b.seq - a.seq);
     for (const n of toShow.slice(0, BACKFILL_MAX_SHOWN)) showNotification(n);
     const rest = toShow.length - BACKFILL_MAX_SHOWN;
     if (rest > 0) {

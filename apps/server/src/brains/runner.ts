@@ -13,6 +13,8 @@ import type { DeliverableService } from '../deliverables/service.js';
 import type { EventLog } from '../domain/event-log.js';
 import { originOfMessages } from '../domain/permissions.js';
 import type { ReopenOptions, ReopenResult, SpawnResult } from '../runtime/agent-runtime.js';
+import type { ProviderCatalog } from '../runtime/provider-catalog.js';
+import type { ChooseSteward } from '../runtime/steward-choice.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import type { Workspaces } from '../workspace/workspaces.js';
 import {
@@ -100,8 +102,10 @@ export interface BrainRunnerOptions {
   workspaces?: Workspaces;
   /** Handed to the brain's tools as `ctx.processes` (P4-14). */
   processes?: StewardProcessControl;
-  /** Handed to the brain's tools as `ctx.stewardRuntime` (P8-07). */
-  stewardRuntime?: () => RuntimeName | undefined;
+  /** Handed to the brain's tools as `ctx.chooseSteward` (P11-03). */
+  chooseSteward?: ChooseSteward;
+  /** Handed to the brain's tools as `ctx.catalog` (P11-08). */
+  catalog?: Pick<ProviderCatalog, 'check' | 'defaults'>;
   /** Handed to the brain's tools as `ctx.deliverables` (P9-04). */
   deliverables?: DeliverableService;
   onError?: (error: unknown, context: string) => void;
@@ -391,6 +395,7 @@ export class BrainRunner {
       return await this.definition.startNotes({
         ...(brainId ? { brainId } : {}),
         role: this.definition.role,
+        ...(this.placement.projectId ? { projectId: this.placement.projectId } : {}),
         resumed,
         commands: this.opts.commands,
         queries: this.opts.queries,
@@ -773,7 +778,8 @@ export class BrainRunner {
       }),
       ...(this.opts.workspaces ? { workspaces: this.opts.workspaces } : {}),
       ...(this.opts.processes ? { processes: this.opts.processes } : {}),
-      ...(this.opts.stewardRuntime ? { stewardRuntime: this.opts.stewardRuntime } : {}),
+      ...(this.opts.chooseSteward ? { chooseSteward: this.opts.chooseSteward } : {}),
+      ...(this.opts.catalog ? { catalog: this.opts.catalog } : {}),
       ...(this.opts.deliverables ? { deliverables: this.opts.deliverables } : {}),
     };
   }

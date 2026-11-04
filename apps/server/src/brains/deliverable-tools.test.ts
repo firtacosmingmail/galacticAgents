@@ -225,11 +225,14 @@ describe.skipIf(!POSIX)('agents declare deliverables (P9-04)', () => {
     await h.until(() => wk.calls('report_status').length > 0, LONG);
     await h.done(LONG);
 
-    // The Steward's spawn carried the two server tools; nothing else changed for its other tools.
+    // The Steward's spawn carried the server tools (its deliverables', request_spend since
+    // P10-05, request_publish since P11-06); nothing else changed for its other tools.
     const stewardSpawn = spawns.find((o) => o.role === 'steward')!;
     expect(stewardSpawn.tools?.map((t) => t.name)).toEqual([
       'declare_deliverable',
       'list_deliverables',
+      'request_spend',
+      'request_publish',
     ]);
     expect(seen['push']).toMatchObject({ status: 'denied' });
 
@@ -320,7 +323,10 @@ describe('Stewards on runtimes without server tools (P9-04)', () => {
       }
       expect(seen.map((o) => [o.role, o.tools?.map((t) => t.name) ?? null])).toEqual([
         ['steward', null],
-        ['steward', ['declare_deliverable', 'list_deliverables']],
+        [
+          'steward',
+          ['declare_deliverable', 'list_deliverables', 'request_spend', 'request_publish'],
+        ],
       ]);
     } finally {
       await composed.dispose();

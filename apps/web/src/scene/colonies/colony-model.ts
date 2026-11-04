@@ -65,7 +65,8 @@ export const COLONY = {
 /** Whether a body is colonised: its host (project or standalone task) is `completed`. */
 export function isColonised(world: ColonyWorld, body: Body): boolean {
   const host = body.host;
-  if (!host) return false;
+  // An area moon (P10-01) belongs to a long-term project, which is never colonised in place.
+  if (!host || host.kind === 'areas') return false;
   const state =
     host.kind === 'project' ? world.projects[host.id]?.state : world.tasks[host.id]?.state;
   return state === 'completed';
@@ -76,7 +77,7 @@ export function colonyList(world: ColonyWorld): ColonySpec[] {
   const out: ColonySpec[] = [];
   for (const id of Object.keys(world.bodies).sort()) {
     const body = world.bodies[id];
-    if (!body?.host || !isColonised(world, body)) continue;
+    if (!body?.host || body.host.kind === 'areas' || !isColonised(world, body)) continue;
     out.push({ bodyId: id, host: body.host.kind, seed: hashId(id) });
   }
   return out;

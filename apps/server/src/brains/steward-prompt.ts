@@ -14,7 +14,11 @@ import type { Id, Project, Task, WorkState } from '@galactic/protocol';
  *   - **never ask permission in prose**: the permission gate decides every tool call (decision 31);
  *   - **declare deliverables** (P9-04, decision 120): what the user will want to open, with
  *     `declare_deliverable` on a runtime that serves the server's tools, else as a "Deliverables:"
- *     list in the "Done:" report (`deliverables/report-block.ts` reads it for the supervisor).
+ *     list in the "Done:" report (`deliverables/report-block.ts` reads it for the supervisor);
+ *   - **never spend unasked** (P10-05, decision 145): `request_spend` and end the turn, or (no
+ *     server tools) never spend and report "Not done: needs approval to spend …";
+ *   - **never publish unasked** (P11-06, decision 147): `request_publish` with the exact content
+ *     and end the turn, or (no server tools) never publish.
  *
  * Pure text: no SDK, no database. Callers pass what they read from the queries.
  */
@@ -72,6 +76,8 @@ export function stewardEtiquette(
         ]
       : []),
     ...deliverableEtiquette(brief.declares ?? true),
+    ...spendEtiquette(brief.declares ?? true),
+    ...publishEtiquette(brief.declares ?? true),
     `- Report when you stop. End your turn with a final message that is your report to ${boss}: begin it with "Done:" when the task is complete (what you changed, how you checked it — tests, build — and anything left over or risky), or "Not done:" with what stops you. That last message is delivered as your report; ${boss} decides whether the task is closed or gives you more to do. Every end of your turn counts as a report, so do not stop half-way unless you are blocked.`,
   ];
 }
@@ -86,6 +92,34 @@ export function deliverableEtiquette(declares: boolean): string[] {
       ]
     : [
         `- Deliverables. You cannot declare deliverables yourself, so list ${what} in your "Done:" report under a line "Deliverables:", one per line, exactly: "- <kind> | <path, command or address> | <title>", where kind is file, image, folder, app, command or url and a path is relative to your working directory. Example: "- image | screenshots/home.png | Home page screenshot". ${'Your supervisor declares them.'}`,
+      ];
+}
+
+/**
+ * The line about real money (P10-05, decision 145): ask first with `request_spend` on a runtime
+ * that serves the server's tools, else never spend and say so in the report.
+ */
+export function spendEtiquette(canAsk: boolean): string[] {
+  return canAsk
+    ? [
+        '- Money. Before anything that spends real money, call `request_spend` and end your turn; never spend without an approval.',
+      ]
+    : [
+        "- Money. You cannot ask for a spending approval, so never spend money; report 'Not done: needs approval to spend …' with the amount and what for.",
+      ];
+}
+
+/**
+ * The line about publishing (P11-06, decision 147): ask first with `request_publish` — the exact
+ * content — on a runtime that serves the server's tools, else never publish and say so.
+ */
+export function publishEtiquette(canAsk: boolean): string[] {
+  return canAsk
+    ? [
+        '- Publishing. Before anything goes out in Cosmin’s name (a post, a reply, a review answer, a message, an upload), call `request_publish` with the platform, the account, the exact text and the files, and end your turn; publish only after he approves, exactly what he approved. A publish request is refused unless your task is a publishing step.',
+      ]
+    : [
+        "- Publishing. You cannot ask for a publish approval, so never publish anything (no posts, replies or uploads); report 'Not done: needs approval to publish …' with what and where.",
       ];
 }
 

@@ -10,7 +10,8 @@ import { PULSE } from '../satellites/look.js';
  * - a thin amber **light pillar** rising from the top of the body (screen up, whatever the camera's
  *   angle — a world-vertical pillar would vanish in a top-down view);
  * - on top of it, the **glyph**: an amber diamond with a padlock for a permission, an amber disc
- *   with "?" for a clarification (one beacon per question, P4-13), and a "+n" badge on the last
+ *   with "?" for a clarification, a green disc with "$" for a spend approval (P10-07; one
+ *   beacon per question, P4-13), and a "+n" badge on the last
  *   beacon of a full row (`MAX_BEACONS_PER_BODY`) for the questions past it;
  * - several beacons on one body stand side by side in a **row** centred above it, `spacingPx`
  *   apart (their click targets do not overlap), their pillars fanning out from the body's top;
@@ -25,6 +26,13 @@ import { PULSE } from '../satellites/look.js';
  * uses it but the "blocked on you" label pill).
  */
 export const BEACON_COLOR = '#ffb547';
+/**
+ * A spend approval's glyph (P10-07, decision 145): the inbox's spend green (`--spend`), so a
+ * request to spend real money never reads as an ordinary question in the scene either.
+ */
+export const SPEND_BEACON_COLOR = '#2f9e6b';
+/** A publish approval's glyph (P11-09): the inbox's `--publish` orange, symbol `↗`. */
+export const PUBLISH_BEACON_COLOR = '#c2571a';
 /** The glyph's dark ink (the panel's `--pnl-beacon-ink`). */
 export const BEACON_INK = '#1d1300';
 
@@ -156,7 +164,9 @@ export function beaconPulse(
 export interface GlyphSpec {
   kind: QuestionKind;
   shape: 'diamond' | 'disc';
-  symbol: 'lock' | '?';
+  symbol: 'lock' | '?' | '$' | '↗';
+  /** The shape's fill: the beacon amber, or the spend green. */
+  color: string;
   /** `undefined` for no questions past it; "+1" … "+99". */
   badge: string | undefined;
 }
@@ -166,7 +176,14 @@ export function glyphSpec(kind: QuestionKind, more = 0): GlyphSpec {
   return {
     kind,
     shape: kind === 'permission' ? 'diamond' : 'disc',
-    symbol: kind === 'permission' ? 'lock' : '?',
+    symbol:
+      kind === 'permission' ? 'lock' : kind === 'spend' ? '$' : kind === 'publish' ? '↗' : '?',
+    color:
+      kind === 'spend'
+        ? SPEND_BEACON_COLOR
+        : kind === 'publish'
+          ? PUBLISH_BEACON_COLOR
+          : BEACON_COLOR,
     badge: more <= 0 ? undefined : `+${Math.min(more, 99)}`,
   };
 }

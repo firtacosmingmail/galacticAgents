@@ -370,3 +370,11 @@
   color: #e5484d;
   font-weight: 600;
 }
+.set-usage {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.set-provider-model select {
+  max-width: 100%;
+}

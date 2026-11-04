@@ -8,3 +8,9 @@ const sources = new Set(readdirSync('src/db/migrations'));
 for (const file of readdirSync('dist/db/migrations')) {
   if (!sources.has(file)) rmSync(`dist/db/migrations/${file}`, { recursive: true, force: true });
 }
+// The scripts the Antigravity CLI runs for Mission Control (P11-05): its hook and tool server,
+// copied from here into the data directory at the first Gemini Steward.
+mkdirSync('dist/adapters/agy', { recursive: true });
+for (const script of ['galactic-agy-hook.mjs', 'galactic-agy-tools.mjs']) {
+  cpSync(`src/adapters/agy/${script}`, `dist/adapters/agy/${script}`);
+}

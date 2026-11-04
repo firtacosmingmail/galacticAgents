@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Id } from './primitives.js';
 import { QuestionKind } from './enums.js';
 import { isRetiredBody, type Body, type Project } from './domain.js';
+import { LONG_TERM_LIMITS } from './long-term-questions.js';
 
 /**
  * The scene harness (P4-06): development-only routes under `/dev/harness/*` (registered only with
@@ -173,6 +174,95 @@ export type HarnessBrainToolBody = z.input<typeof HarnessBrainToolBody>;
 /** The tool's own result (a refusal is `{ error, message }`, as the model would read it). */
 export interface HarnessBrainToolResponse {
   result: unknown;
+}
+
+/**
+ * `GET /dev/harness/brains/harmonizer` (P10-08): the running Harmonizer, so a test can make it
+ * call its tools (`/dev/harness/brains/:id/tool`) without first starting a project.
+ */
+export interface HarnessHarmonizerResponse {
+  seq: number;
+  harmonizerId: Id;
+}
+
+/**
+ * `POST /dev/harness/jobs/:id/run` (P10-08): the job's next run starts now, through the job
+ * scheduler, its Steward on the fake runtime following this script in its one turn — each finding
+ * through `report_finding`, the spend through `request_spend`, then `report_run` (`findings` when
+ * it reported any, else `quiet`) — and the run ends as a real one does. Without a script the
+ * Steward echoes its prompt and the run ends `quiet`.
+ */
+export const HarnessJobRunBody = z.object({
+  findings: z
+    .array(
+      z.object({
+        kind: z.enum(['suggestion', 'reply']),
+        title: z.string().trim().min(1).max(200),
+        text: z.string().trim().min(1).max(2000),
+        draft: z.string().trim().min(1).max(4000).optional(),
+      }),
+    )
+    .max(LONG_TERM_LIMITS.maxFindingsPerRun)
+    .default([]),
+  spend: z
+    .object({
+      amount: z.number().positive(),
+      currency: z.string().length(3).optional(),
+      purpose: z.string().trim().min(1).max(500),
+    })
+    .optional(),
+  summary: z.string().trim().min(1).max(LONG_TERM_LIMITS.maxRunSummary).optional(),
+});
+export type HarnessJobRunBody = z.input<typeof HarnessJobRunBody>;
+
+/** The run the harness started (its Steward attached once the spawn went through). */
+export interface HarnessJobRunResponse {
+  seq: number;
+  runId: Id;
+}
+
+/** `POST /dev/harness/jobs/tick` (P10-08): one scheduler tick now; run ids (`waited`: job ids). */
+export interface HarnessJobTickResponse {
+  seq: number;
+  started: Id[];
+  waited: Id[];
+  interrupted: Id[];
+  ended: Id[];
+}
+
+/**
+ * `POST /dev/harness/tasks/:id/steward-script` (P11-10): the next Steward spawned for the task — on
+ * the fake runtime, or on a fake standing in for `codex` or `agy` (development mode registers
+ * those, so a task on ChatGPT or Gemini runs without either CLI) — follows this script in its one
+ * turn: `publish` asks `request_publish` and waits for the answer (`idle`); `limit` makes it stop
+ * at its subscription's usage limit, which resets `resetsInMs` from now on the harness clock
+ * (`/dev/harness/usage-limits/advance` moves that clock). Without either it echoes its prompt.
+ */
+export const HarnessStewardScriptBody = z.object({
+  publish: z
+    .object({
+      platform: z.string().trim().min(1).max(100),
+      account: z.string().trim().min(1).max(100),
+      text: z.string().trim().min(1).max(4000),
+      files: z.array(z.string().min(1).max(500)).max(10).optional(),
+    })
+    .optional(),
+  limit: z.object({ resetsInMs: z.number().int().positive() }).optional(),
+});
+export type HarnessStewardScriptBody = z.input<typeof HarnessStewardScriptBody>;
+
+/**
+ * `POST /dev/harness/usage-limits/advance` (P11-10): the clock the usage-limit waits are checked
+ * against moves `ms` forward, then one check runs — an answered `Wait until it resets` whose
+ * reset time has come is retried on it.
+ */
+export const HarnessAdvanceBody = z.object({ ms: z.number().int().positive() });
+export type HarnessAdvanceBody = z.input<typeof HarnessAdvanceBody>;
+
+export interface HarnessAdvanceResponse {
+  seq: number;
+  /** The harness clock after the move (ISO time). */
+  now: string;
 }
 
 /** What a harness action did: the last event's `seq` (0 when nothing was logged). */

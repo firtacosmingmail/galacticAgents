@@ -101,7 +101,7 @@ const optId = (raw: Record<string, unknown>, key: string): string | undefined =>
 };
 
 /** Runs a handler and returns a refusal as `{error, message}`, as the brains' runner does. */
-async function guarded(fn: () => Promise<unknown>): Promise<unknown> {
+export async function guarded(fn: () => Promise<unknown>): Promise<unknown> {
   try {
     return await fn();
   } catch (error) {

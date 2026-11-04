@@ -28,9 +28,9 @@ import { NavLink } from '../Navigation.js';
  * that open a project or task in the inspector.
  */
 
-/** What the inspector shows: one project or task. */
+/** What the inspector shows: one project or task (an area moon's host opens its project). */
 export interface WorkTarget {
-  kind: HostKind;
+  kind: Exclude<HostKind, 'areas'>;
   id: Id;
 }
 
@@ -103,7 +103,8 @@ export function WorkLink({ target, name }: { target: WorkTarget; name: string })
 }
 
 export function WorkRefLink({ to: r }: { to: HistoryWorkRef }) {
-  return <WorkLink target={{ kind: r.kind, id: r.id }} name={r.name} />;
+  const kind = r.kind === 'areas' ? 'project' : r.kind; // an area moon's host is its project
+  return <WorkLink target={{ kind, id: r.id }} name={r.name} />;
 }
 
 /** The controls a history row offers: reopen, pin / unpin and archive now, as the state allows. */

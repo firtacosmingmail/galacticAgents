@@ -17,7 +17,22 @@ import { execFile } from 'node:child_process';
  * their repo and stay active (a `git lfs` checkout needs its smudge filter).
  */
 
-const GIT_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'XDG_CONFIG_HOME', 'SSH_AUTH_SOCK'];
+/**
+ * The variables git may see. `EMAIL` (P11-11) is git's last-resort email, used only when no
+ * `user.email` is configured; without it git looks up the host name, which hangs where name
+ * lookups are blocked. The `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables stay out: they would
+ * override the identity Mission Control sets for its own commits.
+ */
+const GIT_ENV = [
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'TMPDIR',
+  'XDG_CONFIG_HOME',
+  'SSH_AUTH_SOCK',
+  'EMAIL',
+];
 
 export const SAFE_GIT_CONFIG: readonly string[] = [
   '-c',

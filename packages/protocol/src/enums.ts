@@ -11,8 +11,12 @@ export type WorkBodyKind = z.infer<typeof WorkBodyKind>;
 export const BodyKind = z.enum(['star', ...WorkBodyKind.options]);
 export type BodyKind = z.infer<typeof BodyKind>;
 
-/** What a body hosts: a project (planet/moon) or a standalone task (asteroid). */
-export const HostKind = z.enum(['project', 'task']);
+/**
+ * What a body hosts: a project (planet/moon), a standalone task (asteroid), or the business areas
+ * of a long-term project (`areas`, P10-01; SPEC decision 143): a moon of the project's planet that
+ * one or more of its areas live on, `id` the project's.
+ */
+export const HostKind = z.enum(['project', 'task', 'areas']);
 export type HostKind = z.infer<typeof HostKind>;
 
 /** The three agent roles (SPEC §2). */
@@ -20,7 +24,7 @@ export const AgentRole = z.enum(['harmonizer', 'waykeeper', 'steward']);
 export type AgentRole = z.infer<typeof AgentRole>;
 
 /** Runtimes behind the AgentAdapter interface (TECHNOLOGY §3). Only claude-sdk and fake exist in v1. */
-export const AgentRuntime = z.enum(['claude-sdk', 'fake', 'acp', 'pty']);
+export const AgentRuntime = z.enum(['claude-sdk', 'fake', 'acp', 'pty', 'codex', 'agy']);
 export type AgentRuntime = z.infer<typeof AgentRuntime>;
 
 /** Agent process states (TECHNOLOGY §4). */
@@ -67,8 +71,12 @@ export const WorkState = z.enum([
 ]);
 export type WorkState = z.infer<typeof WorkState>;
 
-/** Question kinds (SPEC §2.6, decision 7 and 12). */
-export const QuestionKind = z.enum(['clarification', 'permission']);
+/**
+ * Question kinds (SPEC §2.6, decision 7 and 12). `spend` (P10-01; SPEC decision 145): an approval
+ * to spend real money — always held and answered by the user, never by an agent, a supervisor, the
+ * project policy or an "Allow similar" rule.
+ */
+export const QuestionKind = z.enum(['clarification', 'permission', 'spend', 'publish']);
 export type QuestionKind = z.infer<typeof QuestionKind>;
 
 export const QuestionStatus = z.enum(['open', 'answered', 'cancelled']);

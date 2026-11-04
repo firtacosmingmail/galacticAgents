@@ -1,6 +1,6 @@
 import { taskLabel } from '@galactic/protocol';
 import { useRef, useState } from 'react';
-import type { Id, Question } from '@galactic/protocol';
+import type { Id, Question, SetAnswer } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import type { WorldState } from '../../state/reduce.js';
 import { ApiError } from '../../console/api.js';
@@ -10,6 +10,10 @@ import { submitAnswer } from '../../client/answer-queue.js';
 import { AnswerNoticeFor, isPending, QueuedAnswerBox, useQueuedAnswer } from './QueuedAnswer.js';
 import { DismissQuestion, withdrawnLabel } from './DismissQuestion.js';
 import { AllowSimilar, useOffersSimilar } from './AllowSimilar.js';
+import { FindingActions, FindingDetails } from './FindingCard.js';
+import { SpendActions, SpendDetails } from './SpendCard.js';
+import { PublishActions, PublishDetails } from './PublishCard.js';
+import { UsageLimitActions, UsageLimitDetails } from './UsageLimitCard.js';
 
 /**
  * Question cards (P2-18, extracted for the panel in P25-06; SPEC §2.6): one open question with its
@@ -21,6 +25,10 @@ import { AllowSimilar, useOffersSimilar } from './AllowSimilar.js';
  * supervisor holds can still be answered by the user (answering anywhere resolves everywhere);
  * the ones a supervisor answered from context are read-only, with an Override that tells that
  * supervisor (decisions 12, 48). Every open card has a × that dismisses it (P9-14, decision 135).
+ * A job's finding shows its fixed actions (and a reply's editable draft), a `spend` approval its
+ * amount with Approve / Refuse only (P10-07; `FindingCard`, `SpendCard`). A `publish` approval shows
+ * the post with an editable text and Approve / Refuse (P11-09; `PublishCard`), and a usage-limit
+ * clarification its fixed options as buttons (`UsageLimitCard`).
  *
  * The cards read nothing but the store: the same question renders the same everywhere (the
  * inbox, a chat thread, the Steward view), and an answer anywhere updates all of them when the
@@ -115,17 +123,21 @@ export function QuestionCard({
   const queued = useQueuedAnswer(q.id);
   const article = useRef<HTMLElement>(null);
   const permission = q.kind === 'permission';
+  const spend = q.kind === 'spend';
+  const publish = q.kind === 'publish';
+  const usageLimit = q.context.usageLimit !== undefined;
+  const finding = q.context.finding;
   const call = q.context.toolCall;
   const userHeld = q.holder.type === 'user';
   const similar = useOffersSimilar(q, world);
   const stale = (id: Id, message: string) =>
     onStale ? onStale(id, message) : setOwnStale(message);
-  const answer = async (text: string) => {
+  const answer = async (text: string, detail?: SetAnswer) => {
     let stale: string | undefined;
     const ok = await run(async () => {
       try {
         // Sent now, or queued while offline and sent on reconnect (P7-05).
-        await submitAnswer(api, q, text);
+        await submitAnswer(api, q, text, detail);
       } catch (e) {
         if (e instanceof ApiError && e.code === 'stale') stale = e.message;
         throw e;
@@ -145,13 +157,27 @@ export function QuestionCard({
       data-question-id={q.id}
     >
       <header>
-        <span className={`pill kind-${q.kind}`}>{q.kind}</span>
+        <span className={`pill kind-${q.kind}`}>
+          {finding ? 'finding' : usageLimit ? 'usage limit' : q.kind}
+        </span>
         <span className="muted">held by {actorLabel(q.holder, world)}</span>
         {/* Dismiss (P9-14): not while an answer to it waits in the offline queue. */}
         {!(queued && isPending(queued)) && <DismissQuestion question={q} onStale={stale} />}
       </header>
-      <p>{q.context.text}</p>
-      <OriginContext question={q} />
+      {spend ? (
+        <SpendDetails question={q} />
+      ) : publish ? (
+        <PublishDetails question={q} />
+      ) : usageLimit ? (
+        <UsageLimitDetails question={q} />
+      ) : finding ? (
+        <FindingDetails question={q} finding={finding} />
+      ) : (
+        <>
+          <p>{q.context.text}</p>
+          <OriginContext question={q} />
+        </>
+      )}
       {permission && call && (
         <p className="tool-call">
           {q.context.permissionAction ? (
@@ -173,9 +199,23 @@ export function QuestionCard({
           // The controls come back: the focus goes to the first of them, not to the page.
           onCancelled={() =>
             requestAnimationFrame(() =>
-              article.current?.querySelector<HTMLElement>('.controls button, form input')?.focus(),
+              article.current
+                ?.querySelector<HTMLElement>('.controls button, form input, form textarea')
+                ?.focus(),
             )
           }
+        />
+      ) : spend ? (
+        <SpendActions busy={busy} onAnswer={(a) => void answer(a)} />
+      ) : publish ? (
+        <PublishActions question={q} busy={busy} onAnswer={(a, d) => void answer(a, d)} />
+      ) : usageLimit ? (
+        <UsageLimitActions question={q} busy={busy} onAnswer={(a) => void answer(a)} />
+      ) : finding ? (
+        <FindingActions
+          finding={finding}
+          busy={busy}
+          onAnswer={(a, detail) => void answer(a, detail)}
         />
       ) : permission ? (
         <div className="controls">

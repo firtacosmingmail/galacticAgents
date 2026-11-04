@@ -15,13 +15,22 @@ import type { WorkState } from '@galactic/protocol';
  * wait blocks on the user is the question's holder, not the agent's state).
  */
 export type AgentPhase =
-  'running' | 'idle' | 'paused' | 'finished' | 'failed' | 'stopped' | 'interrupted';
+  | 'running'
+  | 'idle'
+  | 'paused'
+  | 'finished'
+  | 'failed'
+  | 'stopped'
+  | 'interrupted'
+  /** Ended by its provider's usage limit (`agent.failed{reason: 'limit'}`, P11-07). */
+  | 'limited';
 
 export const ENDED_PHASES: ReadonlySet<AgentPhase> = new Set<AgentPhase>([
   'finished',
   'failed',
   'stopped',
   'interrupted',
+  'limited',
 ]);
 
 export interface AgentFact {
@@ -44,6 +53,8 @@ export interface WorkFacts {
   agents: readonly AgentFact[];
   /** A project only: the states of its tasks. */
   tasks?: readonly WorkState[];
+  /** A task only: it is a recurring job's hidden task (`JOB_TASK_RULES`, P10-03). */
+  job?: boolean;
 }
 
 export type Derived = WorkState | 'keep';
@@ -78,6 +89,9 @@ function latestEnded(f: WorkFacts): Derived {
       return 'awaiting_closure';
     case 'failed':
       return 'failed';
+    // A usage limit pauses the step until the user switches or it resets (decision 148).
+    case 'limited':
+      return 'paused';
     case 'interrupted':
       return 'interrupted';
     default:
@@ -108,6 +122,21 @@ export const TASK_RULES: readonly Rule[] = [
   // A Steward that ended its turn reported back; its supervisor decides whether it is done (§2.7).
   { name: 'idle agent', when: (f) => any(f, 'idle'), then: 'awaiting_closure' },
   { name: 'latest ended agent', when: () => true, then: latestEnded },
+];
+
+/**
+ * A job's hidden task (P10-03; SPEC decision 144) never finishes: `in_progress` while a run's
+ * Steward is live, `approved` (idle, waiting for its next run) otherwise — never `completed`,
+ * `failed` or `awaiting_closure` from its Stewards, and a run's questions (job-owned, they outlive
+ * the run) never block it. Nothing in the product moves it elsewhere: closing, cancelling or
+ * archiving the project stops its jobs and leaves the task as it is (`endProjectAreas`), so a
+ * reopened project's jobs run on it again. `sticky` only keeps a finished state an explicit
+ * `setTaskState` might write.
+ */
+export const JOB_TASK_RULES: readonly Rule[] = [
+  sticky,
+  { name: 'running job run', when: (f) => any(f, 'running'), then: 'in_progress' },
+  { name: 'job between runs', when: () => true, then: 'approved' },
 ];
 
 const TASK_DONE: ReadonlySet<WorkState> = new Set<WorkState>(['completed', 'archived', 'moved']);
@@ -156,5 +185,6 @@ export function derive(
   return { state: facts.current, rule: 'none' };
 }
 
-export const deriveTaskState = (facts: WorkFacts) => derive(TASK_RULES, facts).state;
+export const deriveTaskState = (facts: WorkFacts) =>
+  derive(facts.job ? JOB_TASK_RULES : TASK_RULES, facts).state;
 export const deriveProjectState = (facts: WorkFacts) => derive(PROJECT_RULES, facts).state;

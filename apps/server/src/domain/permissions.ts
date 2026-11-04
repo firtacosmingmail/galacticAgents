@@ -256,8 +256,11 @@ export const EDIT_TOOLS: ReadonlySet<string> = new Set([
   'MultiEdit',
   'NotebookEdit',
 ]);
-/** Tools that reach the network by definition. */
-const NETWORK_TOOLS = new Set(['WebFetch', 'WebSearch']);
+/**
+ * Tools that reach the network by definition. `codex:network` is a Codex Steward asking for
+ * network access in its sandbox (`item/permissions/requestApproval`, P11-04).
+ */
+const NETWORK_TOOLS = new Set(['WebFetch', 'WebSearch', 'codex:network']);
 /** Tools with no effect outside the agent's own bookkeeping. */
 const HARMLESS_TOOLS = new Set([
   'TodoWrite',
@@ -1582,8 +1585,8 @@ function within(root: string, target: string): boolean {
 
 /**
  * Whether `p` names agent or git configuration that runs outside the gate on a later spawn or
- * git command: anything under `.claude/`, `.git/` or `.husky/`, or a `.mcp.json` /
- * `.claude.json`. Measured from the agent's cwd when `p` is under it (its worktree), else from
+ * git command: anything under `.claude/`, `.git/` or `.husky/`, agy's `.agents/` (workspace hooks
+ * and MCP servers) and `.gemini/` (P11-05), Codex's `.codex/` (a trusted project's `config.toml`, P11-14), or a `.mcp.json` / `.claude.json`. Measured from the agent's cwd when `p` is under it (its worktree), else from
  * the workspace root when under it, so a workspace that itself lives under such a directory is not
  * flagged wholesale; anywhere else, on the whole path.
  */
@@ -1599,7 +1602,15 @@ export function isAgentConfigPath(p: string, ctx: PolicyContext): boolean {
     .map((s) => s.normalize('NFC').toLowerCase());
   const last = segments[segments.length - 1];
   return (
-    segments.some((s) => s === '.claude' || s === '.git' || s === '.husky') ||
+    segments.some(
+      (s) =>
+        s === '.claude' ||
+        s === '.git' ||
+        s === '.husky' ||
+        s === '.agents' ||
+        s === '.gemini' ||
+        s === '.codex',
+    ) ||
     last === '.mcp.json' ||
     last === '.claude.json'
   );

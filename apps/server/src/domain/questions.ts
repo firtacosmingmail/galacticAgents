@@ -1,3 +1,4 @@
+import { FINDING_ACTIONS, PUBLISH_ACTIONS, SPEND_ACTIONS, isJobOwned } from '@galactic/protocol';
 import type {
   Actor,
   Id,
@@ -10,6 +11,9 @@ import type {
 } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import { applyJobAnswer } from './findings.js';
+import { approvedPublish } from './publish.js';
+import { applyLimitAnswer, checkLimitAnswer } from './usage-limits.js';
 
 /**
  * Question commands (P1-23, P2-01; SPEC §2.6, TECHNOLOGY §5.3). The server owns questions: an
@@ -132,11 +136,21 @@ function mustOpen(ctx: CommandContext, questionId: Id): Question {
   return current;
 }
 
-/** A permission question is the policy's or the user's, never an agent's (decision 7, 12). */
+/**
+ * A permission question is the policy's or the user's, never an agent's (decision 7, 12); a
+ * `spend` or `publish` approval is the user's alone (decisions 145, 147): no agent ever holds it,
+ * so no supervisor can answer or relay it.
+ */
 function checkHolder(ctx: CommandContext, question: Question, holder: Actor): void {
   if (holder.type === 'agent') {
     if (question.kind === 'permission') {
       throw new DomainError('invalid', `permission question ${question.id} is held by the user`);
+    }
+    if (question.kind === 'spend' || question.kind === 'publish') {
+      throw new DomainError(
+        'invalid',
+        `${question.kind} question ${question.id} is held by the user: the user answers ${question.kind} approvals`,
+      );
     }
     must(ctx.tables.agents.get(holder.id ?? ''), 'agent', holder.id ?? '(no id)');
   }
@@ -188,6 +202,8 @@ export interface AnswerInput {
   repliedIn?: Id;
   /** A question-set row's structured answer (P8-19): on the event and as `meta.answerDetail`. */
   detail?: SetAnswer;
+  /** Whether an agent still runs: a job-owned answer's action prefers living agents (P10-05). */
+  isLiving?: (agentId: Id) => boolean;
 }
 
 /** `meta.answerId`: the idempotency key of the answer that closed the question (P7-05). */
@@ -219,9 +235,12 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
   // A retry of an answer already recorded under its key: nothing to do (P7-05).
   if (isRecordedAnswer(current, input.answerId)) return current;
   checkAnswer(current, input);
+  // A publish approved with an edited text: the approved request, with its own fingerprint.
+  const publish = approvedPublish(current, input.answer, input.detail);
   const question = withMetaSansDraft(
     {
       ...current,
+      ...(publish ? { context: { ...current.context, publish } } : {}),
       status: 'answered',
       answer: input.answer,
       answeredBy: input.answeredBy,
@@ -245,7 +264,12 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
     ...(input.answerId ? { answerId: input.answerId } : {}),
     ...(input.repliedIn ? { repliedIn: input.repliedIn } : {}),
     ...(input.detail ? { detail: input.detail } : {}),
+    ...(publish ? { publish } : {}),
   });
+  // A finding, failure notice, job spend or job publish: its action in this same transaction.
+  applyJobAnswer(ctx, question, { isLiving: input.isLiving });
+  // A usage limit's choice is recorded with the answer (P11-07), so a restart still carries it out.
+  applyLimitAnswer(ctx, question);
   return question;
 }
 
@@ -294,6 +318,7 @@ export function checkAnswer(current: Question, input: AnswerInput): void {
       `question ${current.id} changed since version ${input.version} (now held by ${describeActor(current.holder)})`,
     );
   }
+  checkFixedAnswer(current, input.answer, input.answeredBy);
   if (input.answeredBy.type === 'agent') {
     if (current.kind === 'permission') {
       throw new DomainError(
@@ -307,6 +332,41 @@ export function checkAnswer(current: Question, input: AnswerInput): void {
         `question ${current.id} is held by ${describeActor(current.holder)}, not ${describeActor(input.answeredBy)}`,
       );
     }
+  }
+}
+
+/**
+ * The checks of an answer to a question with fixed actions (P10-05): a `spend` (and a `publish`,
+ * P11-06) is answered by the user alone — never an agent, a supervisor or the system — with exactly `Approve` or `Refuse`
+ * (free text is no approval); a finding with one of its actions; a usage limit (P11-07) by the
+ * user alone with one of its options. A failure question takes any text: anything but "Stop the
+ * job" retries, the text passed on as a note.
+ */
+function checkFixedAnswer(question: Question, answer: string, by: Actor): void {
+  if (question.kind === 'spend' || question.kind === 'publish') {
+    const kind = question.kind;
+    const actions: readonly string[] = kind === 'spend' ? SPEND_ACTIONS : PUBLISH_ACTIONS;
+    if (by.type !== 'user') {
+      throw new DomainError(
+        'invalid',
+        `${kind} question ${question.id} is answered by the user only: the user answers ${kind} approvals`,
+      );
+    }
+    if (!actions.includes(answer)) {
+      throw new DomainError(
+        'invalid',
+        `a ${kind} is answered ${actions.join(' or ')}, not "${answer}"`,
+      );
+    }
+    return;
+  }
+  checkLimitAnswer(question, answer, by);
+  const finding = question.context.finding;
+  if (finding && !(FINDING_ACTIONS[finding.kind] as readonly string[]).includes(answer)) {
+    throw new DomainError(
+      'invalid',
+      `answer finding ${question.id} with one of: ${FINDING_ACTIONS[finding.kind].join(', ')}`,
+    );
   }
 }
 
@@ -341,6 +401,12 @@ export function escalateQuestion(
   isLiving?: (agentId: Id) => boolean,
 ): Question {
   const current = mustOpen(ctx, questionId);
+  if (current.kind === 'spend' || current.kind === 'publish') {
+    throw new DomainError(
+      'invalid',
+      `${current.kind} question ${questionId} is held by the user: the user answers ${current.kind} approvals`,
+    );
+  }
   const from = current.holder;
   if (from.type !== 'agent') {
     throw new DomainError('invalid_transition', `question ${questionId} is already with the user`);
@@ -462,7 +528,11 @@ export interface Dismissal {
   stillWaiting?: boolean | undefined;
 }
 
-/** Cancels every open question of an agent (it ended or was interrupted). */
+/**
+ * Cancels every open question of an agent (it ended or was interrupted). A job-owned question (a
+ * finding, a failure notice, a job's spend: `isJobOwned`, P10-04) belongs to its job, not to the
+ * run's Steward, and stays open.
+ */
 export function cancelQuestionsOf(
   ctx: CommandContext,
   agentId: Id,
@@ -471,7 +541,7 @@ export function cancelQuestionsOf(
   keep?: (q: Question) => boolean,
 ): Id[] {
   return openQuestionsOf(ctx, agentId)
-    .filter((q) => !keep?.(q))
+    .filter((q) => !isJobOwned(q) && !keep?.(q))
     .map((q) => cancelQuestion(ctx, q.id, reason, holdersOf?.(q.id))?.id)
     .filter((id): id is Id => id !== undefined);
 }

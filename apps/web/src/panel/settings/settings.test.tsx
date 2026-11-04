@@ -104,20 +104,10 @@ function fakeServer(initial: SettingsResponse) {
   /** Holds the settings read until it resolves (to a reply other than the settings, if given). */
   let readGate: Promise<Refusal | void> | undefined;
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
-  /** What `GET /api/runtimes` lists: the runtimes with an adapter on this server. */
-  let runtimes: string[] = ['fake', 'claude-sdk', 'acp'];
   /** What `GET /api/ide` answers (P9-03); absent: an older server's `{}`. */
   let ide: IdeResponse | undefined;
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/ide') return json(ide ?? {});
-    if (url === '/api/runtimes') {
-      return json({
-        runtimes: runtimes.map((name) => ({ name, resumable: true })),
-        policies: ['default'],
-        caps: initial.settings.caps,
-        maxConcurrentAgents: 4,
-      });
-    }
     if (url === '/api/settings' && (init?.method ?? 'GET') === 'GET') {
       const instead = readGate ? await readGate : undefined;
       return instead ? json(instead.body, instead.status) : json(state.response);
@@ -156,7 +146,6 @@ function fakeServer(initial: SettingsResponse) {
     setPreflights: (list: PreflightResponse[]) => (preflights = list),
     setRefuse: (fn: typeof refuse) => (refuse = fn),
     setReadGate: (gate: Promise<Refusal | void>) => (readGate = gate),
-    setRuntimes: (list: string[]) => (runtimes = list),
     setIde: (reply: IdeResponse) => (ide = reply),
   };
 }
@@ -558,52 +547,6 @@ describe('settings page (P25-08)', () => {
     await click(within(section).getByRole('radio', { name: /Waykeepers and the Harmonizer/ }));
     await click(within(section).getByRole('button', { name: /^Save/ }));
     expect(server.patches.at(-1)).toEqual({ brainUserMcp: 'all' });
-  });
-
-  it('sets the runtime of new Stewards, and back to the brain’s own (P8-07)', async () => {
-    await open('/settings', done());
-    const section = await screen.findByRole('region', { name: 'Steward runtime' });
-    const same = within(section).getByRole('radio', {
-      name: /Same as its brain/,
-    }) as HTMLInputElement;
-    expect(same.checked).toBe(true);
-    // The runtimes the server lists, never the dev-only fake one.
-    await within(section).findByRole('radio', { name: /ACP agent/ });
-    expect(
-      within(section)
-        .getAllByRole('radio')
-        .map((r) => (r as HTMLInputElement).value),
-    ).toEqual(['', 'claude-sdk', 'acp']);
-    expect(within(section).getByText(/most careful one/)).toBeTruthy();
-    expect(within(section).getByText(/isolated settings.*acp.userSettings/)).toBeTruthy();
-    await click(within(section).getByRole('radio', { name: /ACP agent/ }));
-    await click(within(section).getByRole('button', { name: /^Save/ }));
-    expect(server.patches.at(-1)).toEqual({ stewardRuntime: 'acp' });
-    await click(within(section).getByRole('radio', { name: /Same as its brain/ }));
-    await click(within(section).getByRole('button', { name: /^Save/ }));
-    expect(server.patches.at(-1)).toEqual({ stewardRuntime: null });
-  });
-
-  it('offers only the runtimes set up on the server, and keeps a value set outside the panel (P8-07)', async () => {
-    const outside = done();
-    outside.settings.stewardRuntime = 'fake';
-    await open('/settings', outside, undefined, (s) => s.setRuntimes(['fake', 'claude-sdk']));
-    const section = await screen.findByRole('region', { name: 'Steward runtime' });
-    await within(section).findByRole('radio', { name: /Claude Code/ });
-    expect(within(section).queryByRole('radio', { name: /ACP agent/ })).toBeNull();
-    const current = within(section).getByRole('radio', {
-      name: /set outside the panel/,
-    }) as HTMLInputElement;
-    expect(current.value).toBe('fake');
-    expect(current.checked).toBe(true);
-    // Choosing another runtime keeps the saved value on offer until the save.
-    await click(within(section).getByRole('radio', { name: /Claude Code/ }));
-    expect(within(section).getByRole('radio', { name: /set outside the panel/ })).toBeTruthy();
-    await click(within(section).getByRole('button', { name: /^Save/ }));
-    expect(server.patches.at(-1)).toEqual({ stewardRuntime: 'claude-sdk' });
-    await waitFor(() =>
-      expect(within(section).queryByRole('radio', { name: /set outside the panel/ })).toBeNull(),
-    );
   });
 
   it('resets the default table to the §3.6 table', async () => {

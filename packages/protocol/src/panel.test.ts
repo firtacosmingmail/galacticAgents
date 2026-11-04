@@ -15,6 +15,8 @@ import {
   SettingsPatch,
   TranscriptQuery,
   notificationOf,
+  spendAmountText,
+  spendNotificationBody,
 } from './panel.js';
 import { DEFAULT_PERMISSION_POLICY, type Question } from './domain.js';
 import { countDeliverables } from './deliverables.js';
@@ -103,10 +105,23 @@ describe('settings schemas (P25-01)', () => {
     });
   });
 
-  it('takes the Steward runtime as a runtime name, `null` to clear it (P8-07)', () => {
-    expect(Settings.parse({ ...valid, stewardRuntime: 'acp' }).stewardRuntime).toBe('acp');
-    expect(SettingsPatch.parse({ stewardRuntime: null })).toEqual({ stewardRuntime: null });
-    expect(SettingsPatch.safeParse({ stewardRuntime: 'cursor' }).success).toBe(false);
+  it('has no Steward runtime any more, and takes per-provider settings (P11-09)', () => {
+    expect(Settings.parse({ ...valid, stewardRuntime: 'acp' })).not.toHaveProperty(
+      'stewardRuntime',
+    );
+    expect(SettingsPatch.safeParse({ stewardRuntime: null }).success).toBe(false);
+    expect(SettingsPatch.safeParse({ stewardRuntime: 'acp' }).success).toBe(false);
+    // Per-provider settings are a partial map (P11-02).
+    expect(SettingsPatch.parse({ providers: { chatgpt: { model: 'gpt-5.6-terra' } } })).toEqual({
+      providers: { chatgpt: { model: 'gpt-5.6-terra' } },
+    });
+    expect(SettingsPatch.parse({ providers: { gemini: { model: null } } })).toEqual({
+      providers: { gemini: { model: null } },
+    });
+    expect(SettingsPatch.safeParse({ providers: { cursor: { model: 'x' } } }).success).toBe(false);
+    expect(Settings.safeParse({ ...valid, providers: { claude: { model: 'opus' } } }).success).toBe(
+      true,
+    );
   });
 
   it('takes the IDE as auto or a bundle id, never a path or an option (P9-03)', () => {
@@ -175,6 +190,69 @@ describe('notificationOf (P25-01; SPEC §4.5)', () => {
       { question: () => ({ kind: 'clarification', context: { text: 'Escalated?' } }) },
     );
     expect(escalated).toMatchObject({ id: 'question:q3', body: 'Escalated?' });
+  });
+
+  it('a publish approval is notified like a permission with its own title', () => {
+    const publish = question({
+      id: 'q-p',
+      kind: 'publish',
+      context: { text: 'Publish the post?' },
+    });
+    const n = notificationOf(env(10, { type: 'question.opened', question: publish }));
+    expect(n).toMatchObject({
+      id: 'question:q-p',
+      kind: 'permission',
+      questionKind: 'publish',
+      title: 'Publish approval needed',
+    });
+  });
+
+  it('a spend (P10-07, decision 145) has its own title and names the amount and purpose', () => {
+    const spend = question({
+      id: 'q-s',
+      kind: 'spend',
+      context: {
+        text: 'May I boost the post?',
+        spend: { amount: 1250, currency: 'USD', purpose: 'Boost the newsletter post' },
+      },
+    });
+    const n = notificationOf(env(11, { type: 'question.opened', question: spend }));
+    expect(n).toMatchObject({
+      id: 'question:q-s',
+      // Gated and ranked like a permission (ruling R7): the permission switch, push kind, rank.
+      kind: 'permission',
+      questionKind: 'spend',
+      title: 'Spend approval needed',
+      body: `${spendAmountText(1250, 'USD')} — Boost the newsletter post`,
+    });
+    // Escalated or reassigned later: the lookup's question gives the same text.
+    const later = notificationOf(
+      env(12, {
+        type: 'question.reassigned',
+        questionId: 'q-s',
+        from: { type: 'agent', id: 'w1' },
+        to: { type: 'user' },
+        reason: 'r',
+        version: 1,
+      }),
+      { question: () => spend },
+    );
+    expect(later).toMatchObject({ title: 'Spend approval needed', body: n!.body });
+    // No spend context (an older row): the question text.
+    const bare = notificationOf(
+      env(13, { type: 'question.opened', question: { ...spend, context: { text: 'Pay?' } } }),
+    );
+    expect(bare).toMatchObject({ title: 'Spend approval needed', body: 'Pay?' });
+  });
+
+  it('formats a spend amount as currency, falling back to "<amount> <currency>"', () => {
+    expect(spendAmountText(1250, 'USD')).toBe(
+      new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(1250),
+    );
+    expect(spendAmountText(12, 'X$1')).toBe('12 X$1');
+    expect(spendNotificationBody({ amount: 5, currency: 'X$1', purpose: 'A domain name' })).toBe(
+      '5 X$1 — A domain name',
+    );
   });
 
   it('notifies finished and failed work, with names from the lookup', () => {

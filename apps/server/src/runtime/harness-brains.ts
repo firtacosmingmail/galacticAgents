@@ -4,6 +4,7 @@ import type {
   Agent,
   HarnessBrainWaykeeperBody,
   HarnessBrainWaykeeperResponse,
+  HarnessHarmonizerResponse,
   Id,
 } from '@galactic/protocol';
 import type { Commands } from '../domain/commands.js';
@@ -21,6 +22,8 @@ import type { EventLog } from '../domain/event-log.js';
  * Only brains on the fake runtime are driven: a real Claude brain decides its own tool calls.
  */
 export interface HarnessBrains {
+  /** The running Harmonizer (P10-08), for a test that drives it from the first card. */
+  harmonizer(): HarnessHarmonizerResponse;
   startWaykeeper(input: HarnessBrainWaykeeperBody): Promise<HarnessBrainWaykeeperResponse>;
   callTool(agentId: Id, name: string, input: unknown): Promise<unknown>;
 }
@@ -44,10 +47,18 @@ export interface HarnessBrainsOptions {
 }
 
 export function harnessBrains(opts: HarnessBrainsOptions): HarnessBrains {
+  const runningHarmonizer = (): Agent => {
+    const hq = opts.liveAgents().find((a) => a.role === 'harmonizer');
+    if (!hq) throw new DomainError('conflict', 'no Harmonizer is running');
+    return hq;
+  };
   return {
+    harmonizer() {
+      return { seq: opts.log.currentSeq(), harmonizerId: runningHarmonizer().id };
+    },
+
     async startWaykeeper(input) {
-      const hq = opts.liveAgents().find((a) => a.role === 'harmonizer');
-      if (!hq) throw new DomainError('conflict', 'no Harmonizer is running');
+      const hq = runningHarmonizer();
       const name = input.name ?? 'Harness brain project';
       const { value: project } = await opts.commands.createProject(
         {

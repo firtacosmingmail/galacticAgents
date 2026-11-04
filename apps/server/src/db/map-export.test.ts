@@ -299,6 +299,40 @@ async function buildMap(dbPath: string): Promise<void> {
   await commands.archiveProject(demo.id, USER);
   await commands.reopenProject(demo.id, USER);
 
+  // A long-term project with areas and jobs (P10-03): one edited and moved, one paused.
+  const shop = (
+    await commands.createProject({
+      name: 'Shop',
+      workspace: '/w/shop',
+      bodyId: 'b-saturn',
+      longTerm: { purpose: 'Run the shop', goals: ['grow'] },
+    })
+  ).value;
+  const draft = {
+    name: 'Read reviews',
+    instructions: 'Read the new reviews.',
+    schedule: { kind: 'daily' as const, at: '09:00' },
+    provider: 'claude' as const,
+    unattendedRules: [],
+  };
+  const reviews = (
+    await commands.createJob({ projectId: shop.id, area: { name: 'Feedback' }, draft, by: USER })
+  ).value;
+  const ledger = (
+    await commands.createJob({
+      projectId: shop.id,
+      area: { name: 'Finance' },
+      draft: { ...draft, name: 'Check the ledger' },
+      by: USER,
+    })
+  ).value;
+  await commands.updateJob({
+    jobId: reviews.job.id,
+    changes: { schedule: { kind: 'weekdays', at: '08:15' }, areaId: ledger.area.id },
+    by: USER,
+  });
+  await commands.setJobState({ jobId: ledger.job.id, state: 'paused', by: USER, reason: 'hold' });
+
   await commands.stopAgent(asteroidSteward.id, USER);
   await commands.stopAgent(waykeeper.id, USER);
   await until(() => statuses.get(waykeeper.id)?.state === 'stopped');
@@ -424,6 +458,11 @@ describe('map export and import (P8-03)', () => {
         expect.objectContaining({ meta: { pid: 4243, edited: true } }),
       ]),
     );
+    // Areas and jobs (P10-03): the rows as they were, the hidden tasks with them.
+    expect(before.snapshot.areas).toHaveLength(2);
+    expect(before.snapshot.jobs?.map((j) => j.state).sort()).toEqual(['active', 'paused']);
+    expect(after.snapshot.areas).toEqual(before.snapshot.areas);
+    expect(after.snapshot.jobs).toEqual(before.snapshot.jobs);
     expect(after.statuses).toEqual(before.statuses);
     expect(after.history).toEqual(before.history);
     // Without the transcripts, the chats keep their messages and lose the agents' replies.

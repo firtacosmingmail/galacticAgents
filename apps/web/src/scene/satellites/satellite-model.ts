@@ -2,6 +2,7 @@ import {
   ENDED_STATES,
   type Agent,
   type AgentRole,
+  type Provider,
   type AgentState,
   type Id,
   type WorkState,
@@ -10,6 +11,7 @@ import type { WorldState } from '../../state/reduce.js';
 import { HEADQUARTERS_BODY_ID } from '../picking/body-action.js';
 import type { ActivityArchetype } from './machine.js';
 import { deriveArchetype } from './archetype.js';
+import { agentProvider } from '../../panel/providers.js';
 
 /**
  * Which satellites the scene draws (P4-01; SPEC §4.1, decisions 9, 53). No three.js.
@@ -55,6 +57,8 @@ export interface SatelliteSpec {
   landed: boolean;
   /** The agent's supervisor (a Steward's Waykeeper): P4-03's transport shuttles fly to it. */
   supervisorId: Id | undefined;
+  /** The AI provider the agent runs on (P11-09): a ring in its colour marks the non-Claude ones (P11-15). */
+  provider: Provider | undefined;
 }
 
 export type SatelliteWorld = Pick<WorldState, 'agents' | 'statuses' | 'tasks' | 'projects'>;
@@ -284,6 +288,7 @@ export function satelliteList(
       archetype: landed || !status ? undefined : deriveArchetype(agent.role, status), // P4-03
       landed,
       supervisorId: agent.supervisorId,
+      provider: agentProvider(agent),
     });
   }
   let dropped: Set<Id> | undefined;
@@ -311,7 +316,8 @@ export function sameSatellites(a: readonly SatelliteSpec[], b: readonly Satellit
       s.activity === t.activity &&
       s.archetype === t.archetype &&
       s.landed === t.landed &&
-      s.supervisorId === t.supervisorId
+      s.supervisorId === t.supervisorId &&
+      s.provider === t.provider
     );
   });
 }

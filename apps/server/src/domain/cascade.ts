@@ -1,5 +1,6 @@
 import {
   isHarnessMeta,
+  isJobTask,
   type Actor,
   type Agent,
   type ControlTarget,
@@ -11,6 +12,7 @@ import {
 import type { Tables } from '../db/tables.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
+import { endProjectAreas } from './jobs.js';
 import { archiveProject } from './projects.js';
 import { endProjectRules } from './project-rules.js';
 import { FINISHED_WORK, checkTransition, setProjectState, setTaskState } from './states.js';
@@ -183,6 +185,8 @@ export function applyControlState(
         );
       }
       for (const task of tasks) {
+        // A job's hidden task never finishes (decision 144): the jobs stop below instead.
+        if (isJobTask(task)) continue;
         if (!FINISHED_WORK.has(task.state) && task.state !== 'proposed') {
           setTaskState(ctx, task.id, 'failed', by);
         }
@@ -192,6 +196,8 @@ export function applyControlState(
         setProjectState(ctx, project.id, 'failed', by);
         // A cancelled project's "Allow similar" rules end with it (P9-17, decision 138).
         endProjectRules(ctx, project.id, 'cancelled');
+        // A cancelled long-term project's jobs stop and its area moons are freed, as on close.
+        endProjectAreas(ctx, project.id, by, 'the project was cancelled');
       }
       return;
     }

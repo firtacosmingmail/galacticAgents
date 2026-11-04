@@ -15,10 +15,10 @@ import { fileURLToPath } from 'node:url';
 /**
  * The real Mission Control server for the smoke tests (P8-05): the production build
  * (`apps/server/dist`, serving `apps/web/dist`), in development mode for the scene harness's fake
- * agents (`/dev/harness/*`, decision 79), the Harmonizer on the fake adapter, a fresh data
+ * agents (`/dev/harness/*`, decision 79), the Harmonizer and new Stewards on the fake adapter, a fresh data
  * directory and projects root under the system's temp directory, and a free port the OS picks
  * (`GALACTIC_PORT=0`, never 4321 or 5173). No real Claude: nothing here can start one — the
- * Harmonizer is `fake` and the harness's agents have no process.
+ * Harmonizer and the Steward runtime are `fake` and the harness's agents have no process.
  *
  * The token is the one the server generates on its first start and writes to the temp
  * `config.json` (read back here). The config is seeded with the first-run setup done (so the
@@ -75,12 +75,23 @@ export async function startServer(): Promise<E2eServer> {
     GALACTIC_PORT: '0',
     GALACTIC_DEV: '1',
     GALACTIC_HARMONIZER: 'fake',
+    // Stewards too (P10-08), belt and braces: a recurring job's runs are Stewards the scheduler
+    // spawns on the Steward runtime, which already falls back to the Harmonizer's (fake) runtime;
+    // this keeps every new Steward on the fake runtime whatever that fallback becomes — except one
+    // on ChatGPT or Gemini, which runs on the fake adapters GALACTIC_FAKE_PROVIDERS registers as
+    // `codex` and `agy` (P11-10), so no real CLI is ever started.
+    GALACTIC_STEWARD_RUNTIME: 'fake',
+    // The e2e server alone sets this (ruling R25): `--dev` and `pnpm remote` keep the real CLIs.
+    GALACTIC_FAKE_PROVIDERS: '1',
     GALACTIC_WEB_DIR: WEB_DIR,
     GALACTIC_LOG: 'silent',
     // A name that resolves to this machine only inside the remote test's own browser (P9-12): the
     // page it loads counts as a remote client's (`Host` not loopback), like the phone's.
     GALACTIC_ALLOWED_HOSTS: REMOTE_HOST,
   });
+  // HOME is the temp root, so git has no email and would look up the host name for its reflog,
+  // which hangs where name lookups are blocked (P11-11); EMAIL is its last resort.
+  env.EMAIL ??= 'e2e@galactic.invalid';
 
   const logPath = join(root, 'server.log');
   const log = createWriteStream(logPath);

@@ -2,6 +2,14 @@ import { z } from 'zod';
 import { Id, Meta, Timestamp } from './primitives.js';
 import { QuestionSetRef } from './question-set.js';
 import {
+  FindingContext,
+  JobFailureContext,
+  LONG_TERM_LIMITS,
+  PublishContext,
+  SpendContext,
+} from './long-term-questions.js';
+import { Provider, UsageLimitContext } from './providers.js';
+import {
   ActorType,
   AgentRole,
   AgentRuntime,
@@ -194,6 +202,20 @@ export const Project = z.object({
    * cost together. Absent: no budget. Set through `setBudget` (logged as `budget.set`).
    */
   budgetUsd: BudgetUsd.optional(),
+  /**
+   * A long-term project (P10-01; SPEC decision 142): it never starts the "anything else?" flow and
+   * only the user closes it; it lives on a planet with moons, whose moons host its areas.
+   */
+  longTerm: z.boolean().optional(),
+  /** The project's AI provider for new Stewards (P11-02); absent: the global default. */
+  defaultProvider: Provider.optional(),
+  /** A long-term project's purpose, in the user's words (1–2000 characters). */
+  purpose: z.string().min(1).max(LONG_TERM_LIMITS.maxPurpose).optional(),
+  /** A long-term project's goals (at most 10, each 1–300 characters). */
+  goals: z
+    .array(z.string().min(1).max(LONG_TERM_LIMITS.maxGoal))
+    .max(LONG_TERM_LIMITS.maxGoals)
+    .optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -214,6 +236,14 @@ export const Task = z.object({
   pinned: z.boolean().optional(),
   /** The task's dollar budget (P8-01): its Stewards' reported cost together. Absent: none. */
   budgetUsd: BudgetUsd.optional(),
+  /** The AI provider the task's Steward runs on (P11-02); absent: the project's or global default. */
+  provider: Provider.optional(),
+  /** The exact model asked for; absent: the provider's default model. */
+  model: z.string().optional(),
+  /** The task includes a publishing step (P11-02). */
+  publishes: z.boolean().optional(),
+  /** The task makes images (P11-02). */
+  makesImages: z.boolean().optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -253,6 +283,7 @@ export const Agent = z.object({
   caps: AgentCaps,
   createdAt: Timestamp,
   updatedAt: Timestamp,
+  /** Documented keys: `model?: string`, `provider?: Provider` (P11-02). */
   meta: Meta.optional(),
 });
 export type Agent = z.infer<typeof Agent>;
@@ -495,6 +526,11 @@ export const QuestionOrigin = z.object({
   projectId: Id.optional(),
   bodyId: Id.optional(),
   recent: z.array(QuestionRecentEvent),
+  /**
+   * The asker is in a publishing run (P11-12; SPEC decision 147): its permission requests make
+   * no "Allow similar" rule (the run ignores rules, ruling R26), so the card does not offer one.
+   */
+  publishingRun: z.literal(true).optional(),
 });
 export type QuestionOrigin = z.infer<typeof QuestionOrigin>;
 
@@ -508,6 +544,16 @@ export const QuestionContext = z.object({
   multiSelect: z.boolean().optional(),
   /** Present when the question is one row of a question set (P8-19, SPEC decision 141). */
   set: QuestionSetRef.optional(),
+  /** A job run's finding (P10-01): the question is job-owned (`isJobOwned`). */
+  finding: FindingContext.optional(),
+  /** A paused job's failure notice (P10-01): job-owned. */
+  jobFailure: JobFailureContext.optional(),
+  /** What a `spend` question asks to spend (P10-01); job-owned when it names a job. */
+  spend: SpendContext.optional(),
+  /** What a `publish` question asks to publish (P11-02); job-owned when it names a job. */
+  publish: PublishContext.optional(),
+  /** A usage-limit question (P11-02): who hit the limit and what it could switch to. */
+  usageLimit: UsageLimitContext.optional(),
   /** Set by the server on `question.opened`; adapters leave it out. */
   origin: QuestionOrigin.optional(),
 });

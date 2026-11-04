@@ -4,6 +4,9 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { SettingsService } from '../config/settings.js';
 import type { ServerConfig } from '../config/config.js';
 import { openDatabase } from '../db/database.js';
+import { createAgent } from '../domain/agents.js';
+import { createTask } from '../domain/tasks.js';
+import type { PeerCheck } from './peer-guard.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import type { StewardProcessControl } from '../runtime/steward-processes.js';
 import { connectWs, startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
@@ -49,13 +52,17 @@ const processes: StewardProcessControl = {
  * A server configured for remote access as `docs/REMOTE_ACCESS.md` says: the exact Serve name, no
  * wildcard, and identity headers only when a test opts in.
  */
-async function start(overrides: Partial<ServerConfig> = {}) {
+async function start(
+  overrides: Partial<ServerConfig> = {},
+  peers: { answersPeer?: PeerCheck } = {},
+) {
   stops.length = 0;
   restarts.mockClear();
   logged = '';
   composed = composeRuntime(openDatabase(':memory:'), {
     adapters: [new FakeAdapter({ speed: 1 })],
     flushMs: 10,
+    ...(overrides.autoApproveRemote ? { autoApproveRemote: true } : {}),
   });
   const config = testConfig({
     allowedHosts: ['localhost', '127.0.0.1', '[::1]', TS_HOST],
@@ -71,6 +78,7 @@ async function start(overrides: Partial<ServerConfig> = {}) {
     commands: composed.commands,
     processes,
     restartHarmonizer: restarts,
+    ...(peers.answersPeer ? { answersPeer: peers.answersPeer } : {}),
     settings: new SettingsService({
       config,
       caps: composed.runtime.caps,
@@ -364,6 +372,106 @@ describe("a remote client's permission requests are never auto-approved (P7-02 a
       'the rm -rf ran',
     );
     expect(composed!.log.tables.questions.all().filter((q) => q.originAgentId === id)).toEqual([]);
+  });
+});
+
+describe('a spend approval from a remote client follows the permission rule (P10-05)', () => {
+  /** A `spend` question asked by an agent row (no session waits on it). */
+  const askSpend = async () => {
+    const agent = composed!.log.runCommand((ctx) =>
+      createAgent(ctx, {
+        role: 'harmonizer',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+      }),
+    ).value;
+    const { value } = await composed!.commands.requestSpend({
+      originAgentId: agent.id,
+      amount: 20,
+      purpose: 'One week of ads',
+    });
+    return value;
+  };
+  const answer = (id: string, headers: Record<string, string>, text = 'Approve') =>
+    inject('POST', `/api/questions/${id}/answer`, headers, { answer: text });
+
+  it('the phone may approve or refuse it, as it answers permission questions (decision 90)', async () => {
+    await start(WITH_IDENTITY);
+    for (const headers of [IDENTITY, { ...SERVE, ...BEARER }, BEARER]) {
+      for (const text of ['Approve', 'Refuse']) {
+        const q = await askSpend();
+        const res = await answer(q.id, headers, text);
+        expect(res.statusCode).toBe(200);
+        expect(composed!.log.tables.questions.get(q.id)).toMatchObject({
+          status: 'answered',
+          answer: text,
+        });
+      }
+    }
+  });
+
+  it("an agent's or a run's process cannot answer it (the permission speed bump)", async () => {
+    await start({}, { answersPeer: async () => ({ refused: 'from an agent' }) });
+    const q = await askSpend();
+    const res = await answer(q.id, BEARER);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'agent_peer' });
+    expect(composed!.log.tables.questions.get(q.id)?.status).toBe('open');
+  });
+});
+
+describe('a publish approval from a remote client follows the spend rule (P11-06)', () => {
+  /** A `publish` question asked by a publishing task's Steward row (no session waits on it). */
+  const askPublish = async () => {
+    const project = (
+      await composed!.commands.createProject({ name: `P${Math.random()}`, workspace: '/w/pub' })
+    ).value;
+    const agent = composed!.log.runCommand((ctx) => {
+      const task = createTask(ctx, {
+        projectId: project.id,
+        description: 'Post it',
+        publishes: true,
+      });
+      return createAgent(ctx, {
+        role: 'steward',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+        taskId: task.id,
+      });
+    }).value;
+    const { value } = await composed!.commands.requestPublish({
+      originAgentId: agent.id,
+      platform: 'X',
+      account: '@shop',
+      text: 'We launched!',
+    });
+    return value.questionId;
+  };
+  const answer = (id: string, headers: Record<string, string>, text = 'Approve') =>
+    inject('POST', `/api/questions/${id}/answer`, headers, { answer: text });
+
+  it('the phone may approve or refuse it, exactly when it may answer a spend (decision 90)', async () => {
+    await start(WITH_IDENTITY);
+    for (const headers of [IDENTITY, { ...SERVE, ...BEARER }, BEARER]) {
+      for (const text of ['Approve', 'Refuse']) {
+        const id = await askPublish();
+        const res = await answer(id, headers, text);
+        expect(res.statusCode).toBe(200);
+        expect(composed!.log.tables.questions.get(id)).toMatchObject({
+          status: 'answered',
+          answer: text,
+        });
+      }
+    }
+  });
+
+  it("an agent's or a run's process cannot answer it (the permission speed bump)", async () => {
+    await start({}, { answersPeer: async () => ({ refused: 'from an agent' }) });
+    const id = await askPublish();
+    const res = await answer(id, BEARER);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'agent_peer' });
+    expect(composed!.log.tables.questions.get(id)?.status).toBe('open');
   });
 });
 

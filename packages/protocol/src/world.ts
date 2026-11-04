@@ -4,6 +4,7 @@ import type { Deliverable, RunSummary } from './deliverables.js';
 import type { Agent, Body, Project, Proposal, Question, StatusRecord, Task } from './domain.js';
 import { foldProposalMeta, type ProposalMetaChanges } from './domain.js';
 import { applyChanges, type EventEnvelope } from './events.js';
+import type { Area, Job } from './long-term.js';
 import type { Id, Meta } from './primitives.js';
 import { summarize, type SystemSummary } from './summary.js';
 import type { Snapshot } from './ws.js';
@@ -34,6 +35,12 @@ export interface WorldState {
    * `run.*` (`lastRun`). The snapshot's `deliverables` (absent from older servers: none).
    */
   deliverables: Record<Id, Deliverable>;
+  /**
+   * The long-term projects' areas and jobs (P10-01). The snapshot's `areas` / `jobs` (absent
+   * from older servers: none); `job_run.*` fold to nothing (run history is REST).
+   */
+  areas: Record<Id, Area>;
+  jobs: Record<Id, Job>;
 }
 
 export const emptyWorld = (): WorldState => ({
@@ -47,6 +54,8 @@ export const emptyWorld = (): WorldState => ({
   statuses: {},
   spend: {},
   deliverables: {},
+  areas: {},
+  jobs: {},
 });
 
 const byId = <T extends { id: Id }>(items: T[]): Record<Id, T> =>
@@ -64,6 +73,8 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
     statuses: Object.fromEntries(snapshot.statuses.map((s) => [s.agentId, s])),
     spend: Object.fromEntries((snapshot.spend ?? []).map((s) => [s.agentId, s])),
     deliverables: byId(snapshot.deliverables ?? []),
+    areas: byId(snapshot.areas ?? []),
+    jobs: byId(snapshot.jobs ?? []),
   };
 }
 
@@ -221,9 +232,12 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
     case 'question.answered': {
       // The answer's idempotency key goes on the row as the server keeps it (P7-05).
       const prior = next.questions[event.questionId]?.meta;
+      const context = next.questions[event.questionId]?.context;
       return {
         ...next,
         questions: patch(next.questions, event.questionId, {
+          // A publish approved with edited text carries the approved request (P11-06).
+          ...(event.publish && context ? { context: { ...context, publish: event.publish } } : {}),
           status: 'answered',
           answer: event.answer,
           answeredBy: event.answeredBy,
@@ -471,6 +485,26 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
         ...(event.signal !== undefined ? { signal: event.signal } : {}),
         ...(event.reason !== undefined ? { reason: event.reason } : {}),
       }));
+
+    // Areas and jobs (P10-01). A world built before them (a fixture, a replay base) may lack the
+    // records. A run's effect on its job arrives as `job.updated` in the same command.
+    case 'area.created':
+      return { ...next, areas: { ...(next.areas ?? {}), [event.area.id]: event.area } };
+    case 'area.updated':
+      return {
+        ...next,
+        areas: patch(next.areas ?? {}, event.areaId, { ...event.changes, updatedAt: at }),
+      };
+    case 'job.created':
+      return { ...next, jobs: { ...(next.jobs ?? {}), [event.job.id]: event.job } };
+    case 'job.updated':
+      return {
+        ...next,
+        jobs: patch(next.jobs ?? {}, event.jobId, { ...event.changes, updatedAt: at }),
+      };
+    case 'job_run.started':
+    case 'job_run.ended':
+      return next; // run history is REST (`GET /api/jobs/:id/runs`)
   }
 }
 

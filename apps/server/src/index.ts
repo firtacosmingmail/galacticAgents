@@ -22,7 +22,9 @@ import { harmonizerRestarter } from './brains/harmonizer/restart.js';
 import { PromotionFlow } from './brains/promotion.js';
 import { waykeeperDefinition } from './brains/waykeeper/index.js';
 import type { AgentAdapter } from '@galactic/protocol';
-import { AcpAdapter } from './adapters/acp/index.js';
+import { AcpAdapter, resolveCommand } from './adapters/acp/index.js';
+import { CodexAdapter } from './adapters/codex/index.js';
+import { AgyAdapter, HookBridge } from './adapters/agy/index.js';
 import { PtyAdapter } from './adapters/pty/index.js';
 import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
@@ -33,8 +35,17 @@ import { openDatabase } from './db/database.js';
 import { CONVERSION_RETRY_ENV, startupConversion } from './db/vacuum.js';
 import { createPush } from './push/index.js';
 import { ARCHIVAL_INTERVAL_MS } from './runtime/archival.js';
+import { JOB_TICK_MS } from './domain/job-runs.js';
 import { composeRuntime } from './runtime/compose.js';
+import { ProviderCatalog } from './runtime/provider-catalog.js';
 import { harnessBrains } from './runtime/harness-brains.js';
+import { HarnessJobScripts, harnessJobs } from './runtime/harness-jobs.js';
+import {
+  DEV_PROVIDER_RUNTIMES,
+  HarnessClock,
+  harnessStewards,
+  installProviderFakes,
+} from './runtime/harness-stewards.js';
 import { TRANSCRIPT_RETENTION_INTERVAL_MS } from './runtime/transcript-retention.js';
 import { SqliteProcessStore } from './runtime/process-store.js';
 import { runIdOfKey } from './runtime/process-attribution.js';
@@ -119,8 +130,24 @@ for (const take of launches.taken) {
 // Adapters: the fake one always (dev mode without Claude), the real one for Claude Code, and the
 // ACP one for any ACP agent when `acp.command` is configured (P8-07), the PTY one for a
 // command-line agent when `pty.command` is (P8-08; node-pty loads at its first spawn).
+// The Codex one (P11-04) when `codex.command` is configured or `codex` is on the PATH.
+// The Antigravity one (P11-05) when `agy.command` is configured or `agy` is on the PATH; its hook
+// and tool server reach this server's `/api/agy-hook` routes over loopback.
 // The fake one's sessions report a few slash commands, so the composer's list can be tried (P8-13).
-const fake = new FakeAdapter({ commands: DEV_FAKE_COMMANDS });
+// In development mode a job run's Steward may follow a test's script (P10-08, `/dev/harness/jobs`).
+const jobScripts = config.dev ? new HarnessJobScripts() : undefined;
+// Development mode also has the clock the usage-limit waits are checked against (P11-10).
+const harnessClock = config.dev ? new HarnessClock() : undefined;
+const fake = new FakeAdapter({
+  commands: DEV_FAKE_COMMANDS,
+  // The fake runtime stands in for Claude Code in development: it may carry a publish (P11-06).
+  canPublish: true,
+  ...(jobScripts ? { scenarioFor: (opts) => jobScripts.scenarioFor(opts) } : {}),
+});
+// The port the server listens on (known after `listen()`; recovery may start an agy turn before:
+// the configured port then, and the hook waits a little for the server to come up).
+let boundPort: number | undefined;
+const agyBridge = new HookBridge();
 const adapters: AgentAdapter[] = [
   fake,
   new ClaudeSdkAdapter({
@@ -135,6 +162,30 @@ const adapters: AgentAdapter[] = [
     brainUserMcp: config.brainUserMcp ?? DEFAULT_BRAIN_USER_MCP,
     onError,
   }),
+  ...(config.codex?.command || resolveCommand('codex', process.env['PATH'] ?? '')
+    ? [
+        new CodexAdapter({
+          supervisor,
+          command: config.codex?.command ?? 'codex',
+          // Mission Control's own Codex home (ruling R7): none of ~/.codex/config.toml reaches it.
+          home: join(config.dataDir, 'codex-home'),
+          onError,
+        }),
+      ]
+    : []),
+  ...(config.agy?.command || resolveCommand('agy', process.env['PATH'] ?? '')
+    ? [
+        new AgyAdapter({
+          supervisor,
+          command: config.agy?.command ?? 'agy',
+          hookUrl: () => `http://127.0.0.1:${boundPort ?? config.port}/api/agy-hook`,
+          bridge: agyBridge,
+          // The hook and tool-server scripts, and the original bytes of ~/.gemini's files.
+          stateDir: join(config.dataDir, 'agy'),
+          onError,
+        }),
+      ]
+    : []),
   ...(config.acp
     ? [
         new AcpAdapter({
@@ -184,25 +235,44 @@ const adapters: AgentAdapter[] = [
       ]
     : []),
 ];
-if (config.stewardRuntime && !adapters.some((a) => a.runtime === config.stewardRuntime)) {
+// The e2e harness only (P11-10, ruling R25: `GALACTIC_FAKE_PROVIDERS` with `GALACTIC_DEV`): fakes
+// stand in for the Codex and Antigravity runtimes, so a task on ChatGPT or Gemini runs a scripted
+// Steward. Development mode alone (`--dev`, `pnpm dev`, `pnpm remote`) keeps the real adapters.
+const providerFakes = installProviderFakes(
+  config,
+  adapters,
+  jobScripts ? (opts) => jobScripts.scenarioFor(opts) : undefined,
+  (m) => console.log(m),
+);
+if (
+  config.stewardRuntimeOverride &&
+  !adapters.some((a) => a.runtime === config.stewardRuntimeOverride)
+) {
   console.warn(
-    `[config] stewardRuntime is ${config.stewardRuntime}, which is not set up here: ` +
-      `new Stewards run on their brain's runtime`,
+    `[config] GALACTIC_STEWARD_RUNTIME is ${config.stewardRuntimeOverride}, which is not set up ` +
+      `here: new Stewards run on their provider's runtime`,
   );
-  delete config.stewardRuntime;
-} else if (config.stewardRuntime === 'fake' && !config.dev) {
-  // The fake adapter is always registered (the ops console's dev tools), but real work never runs
-  // on it outside dev mode (`loadConfig` already drops it; this guards a config built elsewhere).
-  console.warn(
-    `[config] stewardRuntime is fake, which is for development only (GALACTIC_DEV): ` +
-      `new Stewards run on their brain's runtime`,
-  );
-  delete config.stewardRuntime;
+  delete config.stewardRuntimeOverride;
 }
+// The providers (P11-03): model lists and checks over the adapters; the Settings' default provider
+// and models are read from the config at every Steward spawn, so the settings apply live.
+const catalog = new ProviderCatalog({
+  adapters: () => adapters,
+  settings: () => ({
+    ...(config.defaultProvider ? { defaultProvider: config.defaultProvider } : {}),
+    ...(config.providers ? { providers: config.providers } : {}),
+  }),
+});
 const composed = composeRuntime(db, {
   adapters,
-  // The runtime new Stewards run on (P8-07): read at every spawn, so the settings apply live.
-  stewardRuntime: () => config.stewardRuntime,
+  // Which provider and model a new Steward runs on (P11-03): one resolver over these Settings.
+  catalog,
+  // Development only: every new Steward on this runtime (`GALACTIC_STEWARD_RUNTIME`).
+  ...(config.stewardRuntimeOverride
+    ? { stewardRuntimeOverride: () => config.stewardRuntimeOverride }
+    : {}),
+  // ...except on the dev harness's fakes for the Codex and Antigravity runtimes (P11-10).
+  ...(providerFakes ? { stewardRuntimeKeeps: () => DEV_PROVIDER_RUNTIMES } : {}),
   // Brain tools create worktrees and merge through this service (P2-05, P2-10).
   workspaces: { projectsRoot: config.projectsRoot, dataDir: config.dataDir },
   onError,
@@ -229,8 +299,11 @@ const composed = composeRuntime(db, {
   },
   // Managed runs (P9-08): through the same supervisor; the limits are read at every start.
   runs: { supervisor, settings: () => runSettings(config) },
+  // Development: a test moves the clock a wait for a usage limit's reset is checked against.
+  ...(harnessClock ? { usageLimits: { now: harnessClock.now } } : {}),
 });
 const { log, statuses, transcripts } = composed;
+jobScripts?.attach(log.tables);
 // Web Push (P7-04): follows the log from here on, so questions asked while agents resume are sent.
 const push = createPush(db, config, {
   log: { info: (m) => console.log(m), warn: (m) => console.warn(m) },
@@ -281,6 +354,7 @@ function shutdown(code: number): void {
   deadline.unref();
   // The promotion flow stops with the runtime: no card is carried out while agents are stopping.
   promotions?.stop();
+  composed.jobs.stop();
   push.service.stop();
   backups.stop();
   // A backup being taken finishes (or fails) before the process exits, so no half copy is left.
@@ -379,7 +453,6 @@ const restartHarmonizer = harmonizerRestarter(composed, {
 });
 const webDir = process.env['GALACTIC_WEB_DIR'];
 // Phone access (P9-16): the status every client reads, the Mac's start / stop.
-let boundPort: number | undefined;
 const gatewayRef: { clients?: () => { connected: number; lastSeenAt?: string } } = {};
 const remote = new RemoteService({
   dataDir: config.dataDir,
@@ -416,6 +489,7 @@ const app = buildApp({
   log,
   statuses,
   transcripts,
+  agyBridge,
   runtime: composed.runtime,
   commands: composed.commands,
   ...(composed.processes ? { processes: composed.processes } : {}),
@@ -460,6 +534,27 @@ const app = buildApp({
       startWaykeeper,
       runnerOf: (id) => composed.runnerOf(id),
     }),
+    // A job's run now, its Steward following a test's script, and a scheduler tick (P10-08).
+    ...(jobScripts
+      ? {
+          jobs: harnessJobs({
+            log,
+            scheduler: composed.jobs,
+            scripts: jobScripts,
+            commands: composed.commands,
+          }),
+        }
+      : {}),
+    ...(jobScripts && harnessClock
+      ? {
+          stewards: harnessStewards({
+            log,
+            scripts: jobScripts,
+            clock: harnessClock,
+            limits: composed.usageLimits,
+          }),
+        }
+      : {}),
     ...(composed.deliverables
       ? {
           deliverables: {
@@ -544,4 +639,10 @@ if (!shuttingDown) {
     startWaykeeper,
     onError,
   }).start();
+  // Recurring jobs (P10-04): after recovery (a run cut short by the restart is recorded
+  // interrupted, its Steward not resumed) and the Harmonizer; the first tick catches up at once.
+  composed.jobs.start(JOB_TICK_MS);
+  // Usage limits (P11-07): after recovery too, so a wait whose reset passed while Mission Control
+  // was down restarts its Steward after the supervisors are back and the interrupted ones known.
+  composed.usageLimits.start();
 }

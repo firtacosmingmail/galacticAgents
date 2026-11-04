@@ -7,9 +7,10 @@ caps, the permission policy, the event log, the status store and the transcript 
 adapter never imports from `domain/` or `runtime/` except the process supervisor and
 `lib/event-queue.ts`, and nothing outside `adapters/` imports a runtime SDK (CLAUDE.md).
 
-Four adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI
-target), `claude-sdk/` (the real one for Claude Code), `acp/` (any Agent Client Protocol agent,
-P8-07) and `pty/` (any command-line agent under a pseudo-terminal, P8-08). Read `fake/fake-adapter.ts` first: every rule below is visible there in forty lines per
+Six adapters exist: `fake/` (scripted scenarios, the reference implementation and the CI
+target; in development mode also standing in for `codex` and `agy`, P11-10), `claude-sdk/` (the real one for Claude Code), `codex/` (OpenAI's Codex CLI over
+`codex app-server`, P11-04), `agy/` (Google's Antigravity CLI behind a fail-closed hook, P11-05), `acp/` (any Agent Client Protocol agent, P8-07) and `pty/` (any
+command-line agent under a pseudo-terminal, P8-08). Read `fake/fake-adapter.ts` first: every rule below is visible there in forty lines per
 concern.
 
 ## The interface
@@ -223,6 +224,170 @@ its first prompt (`happy`, `asks`, `permission`, `long`, `echo`, `stalls`, `unas
 `rewrites`, `failsUnasked`, `startsThenAsks`, `form`, `error`, `refusal`, `dies`) and echoes later
 prompts; `--mode` gives it session modes (`default`, `plan`, `acceptEdits`, `bypassPermissions`),
 `--config-modes` offers them as a `mode` config option.
+
+## The Codex adapter (`codex/`, P11-04; TECHNOLOGY §3.6)
+
+Stewards of the `chatgpt` provider, on the Codex CLI with the user's ChatGPT login, over
+`codex app-server` (JSON-RPC 2.0, one JSON object per line on stdio; `rpc.ts`). Message shapes are
+P11-01's (`docs/tasks/notes/P11-01-provider-spikes.md`, the transcripts in `codex/fixtures/`).
+Registered when `codex.command` is in `config.json` or `codex` is on the `PATH`. Stewards only (a
+brain or a `bare` spawn is refused); `canPublish: true`.
+
+- **Process**: one `codex app-server` per session through `ProcessSupervisor.adopt()`, with
+  `APP_SERVER_ARGS` (`--disable` plugins, apps, image_generation, browser_use, computer_use and
+  hooks; `-c web_search="disabled"`); environment = allow-list + `CODEX_HOME` = Mission
+  Control's own Codex home (`home` option; production `<data dir>/codex-home`, ruling R7: its
+  `config.toml` written by Mission Control, no `mcp_servers`; its `auth.json` a symlink to the
+  user's login file, never read — a regular file in its place (a login Codex refreshed by
+  write-and-rename) is renamed over the user's own `auth.json`, unread, and relinked (ruling R27,
+  replacing R9's delete: that file may hold the only valid rotated refresh token; a failed rename
+  refuses the start and deletes nothing; not yet observed with a real refresh);
+  preflight says `not_logged_in` when the login file is absent). `initialize`
+  (`experimentalApi: true`) → `thread/start` with `SAFE_THREAD_CONFIG` (`approvalPolicy:
+"untrusted"`, `approvalsReviewer: "user"`, sandbox `workspace-write`, network off, web search,
+  MCP servers, apps/plugins, image generation off), the model, the Steward's `systemPrompt` +
+  `ASK_USER_NOTE` as `developerInstructions`, the server's tools + `ask_user` as `dynamicTools`
+  (kept with the thread: `thread/resume` carries none, a resumed thread still has them) →
+  `turn/start` (repeats the
+  policy, `sandboxPolicy.networkAccess: false` and the model).
+
+| app-server                                   | Adapter                                                                                                                                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `item/commandExecution/requestApproval`      | `Bash {command}` (the script unwrapped from `/bin/zsh -lc '…'`; `cd '<dir>' &&` when it runs elsewhere) through the gate                                                                   |
+| `item/fileChange/requestApproval`            | `Edit {file_path}` per path of the `fileChange` item started before it (a deletion: `rm -- '<path>'`); first check reserves, every path must be allowed; one question for the whole change |
+| `item/permissions/requestApproval`           | network alone: `codex:network` (the `network` category); anything else: `codex:permissions` (the `unclassified` entry); granted for the turn only, refused as `{permissions: {}}`          |
+| gate `allow` / `deny` / `ask`                | `accept` + `agent.tool_call` / `decline` + a transcript line / `agent.needs_input(permission)`, answered when `answer()` comes (no timeout); withdrawn by an interrupt or stop: `cancel`   |
+| `mcpServer/elicitation/request`              | `decline`, always (MCP is off)                                                                                                                                                             |
+| `item/tool/call`                             | a server tool by its bare name: gate (allowed as a server tool), handler, `{contentItems: [{type: inputText, text: <JSON>}], success}`; unknown tool or handler error → `success: false`   |
+| `item/tool/call` `ask_user`                  | the adapter's own question tool (ruling R6): `agent.needs_input(clarification)` with `{text: question, options?}`, no gate, no `agent.tool_call`; the answer is the result                 |
+| `item/tool/requestUserInput`                 | `agent.needs_input(clarification)` per question (several: one question set); answers by question id (Codex sends it in plan mode only)                                                     |
+| `item/started` `mcpToolCall`                 | `agent.tool_call` `mcp__<server>__<tool>` for the log and the cap — run by Codex without asking (below), never reported as approved                                                        |
+| `item/completed`                             | one `agent.output` per item: message (`text`), reasoning summary (`thinking`), command output / files changed / MCP result (`tool`); deltas ignored                                        |
+| `turn/plan/updated`                          | `agent.progress`                                                                                                                                                                           |
+| `turn/completed`                             | `agent.idle` (a failed turn's error first as a line); `turn/interrupt` is `interrupt()`                                                                                                    |
+| `error` `codexErrorInfo: usageLimitExceeded` | `account/rateLimits/read` → `agent.failed{reason: 'limit', error: 'ChatGPT usage limit reached', resetsAt}`, the one terminal event                                                        |
+| `thread/resume`                              | `resumeSession("codex:<threadId>")` in a new process, same settings                                                                                                                        |
+| —                                            | pause/resume: SIGSTOP/SIGCONT on the process group; no cost (a subscription)                                                                                                               |
+
+Never `acceptForSession`, never an execpolicy or network amendment. `preflight()` runs `codex
+--version` (a version outside `KNOWN_CODEX_VERSIONS = '>=0.166 <0.200'` is a warning) and `codex
+login status` (logged out: `not_logged_in`, "Run codex login in Terminal"; an API key:
+`not_subscription`); `models()` (`model/list`) and `usage()` (`account/rateLimits/read` +
+`account/read`) each run a short-lived app-server outside the supervisor. `~/.codex/auth.json` is
+never read.
+
+**`node_repl` and the user's MCP servers (rulings R5, R7).** Codex runs an MCP tool marked
+`readOnlyHint` with no approval request under `untrusted`, and no thread `config` or `-c` override
+removes a server the user's `~/.codex/config.toml` declares (here `node_repl`, tool `js`, written
+by the ChatGPT desktop app). The managed Codex home is the fix: run with it, the server list is
+empty and the model has no `js`. Any `mcpToolCall` is still reported as `agent.tool_call`, never
+as approved.
+
+The fake CLI (`node codex/fake-codex-agent.mjs [--state dir] [--record file] <subcommand>`)
+answers `--version` (`FAKE_CODEX_VERSION`), `login status` (`FAKE_CODEX_LOGGED_OUT=1`,
+`FAKE_CODEX_LOGIN_TEXT`) and `app-server`; `--record` writes its argv and every client message.
+Its first prompt picks a scenario (`happy`, `asks`, `asks-set`, `permission`, `long`, `echo`,
+`stalls`, `tool`, `elicit`, `asks-input`, `limit`, `limit-dies`, `error`, `file`, `perms`, `unasked`, `dies`, or
+`replay-<fixture>` to replay a P11-01 transcript); later prompts are echoed. It drives
+`codex/codex.conformance.test.ts` in CI; `codex/codex-real.conformance.test.ts` runs with
+`GALACTIC_REAL_CODEX=1`, local-only.
+
+## The Antigravity adapter (`agy/`, P11-05; TECHNOLOGY §3.7)
+
+Stewards of the `gemini` provider, on Google's Antigravity CLI (`agy`) with the user's Google
+login, driven headless: `agy -p <prompt> --output-format stream-json --disable-slash-commands
+--print-timeout 0s [--model m] [--conversation id]`, never `--dangerously-skip-permissions`.
+Shapes are P11-01's (`docs/tasks/notes/P11-01-provider-spikes.md`, agy 1–8, the transcripts in
+`agy/fixtures/`); its Ruling puts agy in full-tool mode. Registered when `agy.command` is in
+`config.json` or `agy` is on the `PATH`. Stewards only (a brain or a `bare` spawn is refused);
+`canPublish: false` (no publishing step on agy in this phase).
+
+- **One process per turn** (`ProcessSupervisor.adopt()`; agy has no in-band control channel):
+  the first turn's `init` gives the conversation id (`sessionRef` = `agy:<id>`), later turns and
+  `resumeSession` continue it with `--conversation`. The process exiting ends the turn
+  (`agent.idle`). `interrupt()` = SIGINT to the group (SIGKILL after `graceMs`), pause =
+  SIGSTOP/SIGCONT (an idle session has no process: pause only holds its messages), stop = the
+  supervisor's graceful stop. Environment: the allow-list + `HOME`, `GALACTIC_AGY_SECRET` (a
+  random per-session secret) and `GALACTIC_AGY_URL` (the bridge), which agy passes to its hook
+  and MCP processes. agy has no system-prompt flag: the Steward's `systemPrompt` and
+  `ASK_USER_NOTE` lead the first prompt.
+- **The managed global entries** (`global-entries.ts`): `--settings` cannot carry hooks or MCP
+  servers and a workspace `.agents/` file is agent-writable, so the adapter adds one entry keyed
+  `galactic` and tagged `"galactic": true` to `~/.gemini/config/hooks.json` (PreToolUse, matcher
+  `*`, `timeout: 86400`, the hook script) and to `~/.gemini/config/mcp_config.json` (the tool
+  server script), at the first spawn, and removes only those on `dispose()`. The scripts are
+  copied to the adapter's `stateDir` (production `<data dir>/agy`) first. Writes are atomic;
+  every other entry stays; when a file is unchanged since Mission Control's write, removal puts
+  back its exact original bytes (or deletes a file that was absent) — the originals are kept in
+  `<stateDir>/global-entries.json`. A file that is not JSON, or a `galactic` key without the tag,
+  is never touched: the spawn is refused (the preflight says why). Both scripts pass through
+  when `GALACTIC_AGY_SECRET` is absent, so the user's own `agy` runs see no hook decision
+  (`allow`) and no tools.
+- **The hook bridge** (`hook-bridge.ts`, `galactic-agy-hook.mjs`, `http/agy-hook-routes.ts`):
+  the hook POSTs agy's payload to `POST /api/agy-hook` (loopback only, never through a proxy;
+  `x-galactic-hook: <secret>`; a long poll, the hook having no timeout of its own) and prints the
+  decision: the bridge's `allow` as agy's `auto_approve` (a plain `allow` still lets agy's
+  headless permission check refuse, P11-01 agy 2), `deny` with its reason. **Fail closed**: an
+  unknown secret, a non-200 answer, Mission Control unreachable (after waiting up to 15 s for a
+  server that is still starting), output that is not a decision → `{"decision":"deny"}`; agy
+  itself denies when the hook times out, crashes or prints garbage (P11-01 agy 3). The hook
+  never answers `ask` or `force_ask`.
+
+| agy tool (hook name)                                    | Hook / gate                                                                                                                          |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `run_command {CommandLine, Cwd?}`                       | `Bash {command}` (`cd '<dir>' &&` when `Cwd` is elsewhere) through the gate                                                          |
+| `read_file`/`view_file {Path}`                          | `Read {file_path}`, or `WebFetch {url}` for a URL; a `galactic` tool's descriptor or agy's built-in skills: allowed without the gate |
+| `write_file`/`write_to_file`, `edit_file`/`replace_…`   | `Write`/`Edit {file_path}`; a path under `.agents/` or `.gemini/` is denied without asking                                           |
+| `list_dir`, `find_by_name`, `grep_search`               | `LS`, `Glob`, `Grep` with the path                                                                                                   |
+| `search_web`, `read_url_content`                        | `WebSearch`, `WebFetch` (the `network` category)                                                                                     |
+| `generate_image`                                        | `agy:generate_image` (the table's `unclassified` entry: an image costs a large share of the weekly quota)                            |
+| `call_mcp_tool {ServerName: galactic, ToolName}`        | a server tool by its bare name (allowed as a server tool); `ask_user` without the gate; any other server: deny                       |
+| `invoke_subagent`, `send_message`, `wait`, `finish`, …  | allowed, reported as `agent.tool_call` (a subagent's own calls reach the hook too)                                                   |
+| browser tools, `ask_question`/`ask_permission`, unknown | deny (the question tools' reason points to `ask_user`)                                                                               |
+| gate `allow` / `deny` / `ask`                           | `auto_approve` + `agent.tool_call` / `deny` + a transcript line / `agent.needs_input(permission)` until answered                     |
+
+- **The tool server** (`tool-server.ts`, `galactic-agy-tools.mjs`): a stdio MCP server that
+  forwards `tools/list` and `tools/call` to `POST /api/agy-hook/tools|call` with the secret. It
+  lists the session's server tools and `ask_user {question, options?}` (ruling R6: agy's own
+  question tools cannot ask anyone headless); a call runs only after the hook let a
+  `call_mcp_tool` of that tool through (one pass per allowed call). `ask_user` becomes
+  `agent.needs_input(clarification)` and its answer is the result.
+- **Images** (`images.ts`): the image files new in
+  `~/.gemini/antigravity-cli/brain/<conversationId>/` since the turn's `init` are copied into
+  `<cwd>/generated-images/` (never overwriting) before the turn's end is reported.
+- **Limits** (`limits.ts`): exit 3 with an `AGY_ERROR` in the quota's words (or a final `result`
+  with `status: ERROR` and such an error) → `agy -p /usage --output-format json` →
+  `agent.failed{reason: 'limit', error: 'Gemini usage limit reached', resetsAt}` (an exhausted
+  bucket's reset, else the model group's), the one terminal event.
+- **Refusals at spawn**: a worktree (or a folder above it) holding `.agents/hooks.json` or
+  `.agents/mcp_config.json` — it could approve calls or start servers before the hook sees them.
+
+- **Fix round 1 (P11-05 review):**
+  - A call whose expected argument is missing is denied, never judged as if it named the worktree. Examples: a read or search with none of the known path keys, a `run_command` without `CommandLine`, a web search without a query. Every path key a call names goes to the gate (`paths`).
+  - Writes into `.agents/`/`.gemini/` are judged on the real path too, so a link into one is denied.
+  - The workspace `.agents/` check runs before **every** turn. Each turn is a new agy process that reloads those files, so a file that appears mid-session ends the session with `agent.failed{reason: 'runtime'}`. A symlink there counts too.
+  - A tool-server pass is bound to the exact call (tool and canonical arguments).
+  - The image copy follows no symlink at either end.
+  - The global files are written through a symlink and keep their mode.
+- **agy's MCP deadline (ruling R12).** agy gives up on an MCP `tools/call` after **3 minutes** (`context deadline exceeded`, measured in a real probe). So `ask_user` holds its call for at most 150 s (`askHoldMs`). After that it returns "The user has not answered yet… end your turn now"; the question stays open, and so does the turn (no `agent.idle`). The answer, or a dismissal's text, becomes the prompt of a new agy run in the same conversation. An interrupt or a stop withdraws it. This was verified with the real CLI. A second `ask_user` while one holds or waits is refused ("A question is already waiting…"), never replacing the first.
+- **Several PreToolUse hooks.** A real probe placed a user hook group answering `auto_approve` to everything both before and after Mission Control's. Mission Control's `deny` won both times and the command did not run, so a user's own hooks cannot approve what the gate refused.
+- **Probes.** `agy/agy-real.probes.test.ts` (`GALACTIC_REAL_AGY_PROBES=1`) re-runs the hook-combination, MCP-deadline and deferred-question probes. The real conformance target skips the policy-deny case (ruling R11): after a deny, Gemini explores outside the workspace and each read rightly asks.
+
+`preflight()` runs `agy --version` (outside `KNOWN_AGY_VERSIONS = '>=1.4.12 <1.5'`: a warning)
+and `agy -p /usage --output-format json` (no turn; "Authentication required" or a failure:
+`not_logged_in`, "Run agy in Terminal and sign in with your Google account"), plus the global
+entries' check; `models()` parses `agy models` (`gemini-*`: `['text', 'image']`, else `['text']`;
+the family from the id's prefix); `usage()` reads `/usage` (one window per bucket, "Gemini Models ·
+weekly"). No credentials are read; no cost (a subscription).
+
+The fake CLI (`node agy/fake-agy.mjs …`) reads its hooks and MCP server from
+`$HOME/.gemini/config` like agy, runs the hooks (fail closed) and the real tool server, and keeps
+conversations under `$HOME`. Its first prompt picks a scenario (`happy`, `asks`, `permission`,
+`long`, `echo`, `stalls`, `tool`, `image`, `limit`, `limit-result`, `write-config`, `browser`);
+later prompts are echoed. Environment: `FAKE_AGY_RECORD`, `FAKE_AGY_VERSION`,
+`FAKE_AGY_LOGGED_OUT=1`, `FAKE_AGY_USAGE_EXHAUSTED=1`. It drives `agy/agy.conformance.test.ts` in
+CI; `agy/agy-real.conformance.test.ts` runs with `GALACTIC_REAL_AGY=1`, local-only (it adds and
+removes the entries in the real `~/.gemini/config`).
 
 ## The PTY adapter (`pty/`, P8-08; TECHNOLOGY §3.3)
 

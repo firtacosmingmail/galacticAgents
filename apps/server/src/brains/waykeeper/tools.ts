@@ -1,4 +1,6 @@
 import {
+  isJobTask,
+  isLongTerm,
   proposalPlan,
   type Agent,
   type Id,
@@ -10,6 +12,7 @@ import {
   type TaskPriority,
 } from '@galactic/protocol';
 import { DomainError } from '../../domain/errors.js';
+import { stewardChooser } from '../../runtime/steward-choice.js';
 import { stewardDeclares } from '../../runtime/tool-runtimes.js';
 import {
   stewardsSerialised,
@@ -17,6 +20,7 @@ import {
   type MergeConflict,
 } from '../../workspace/workspaces.js';
 import { isLive, refuseSetRow } from '../common-tools.js';
+import { checkChoice, modelInput, providerInput } from '../provider-input.js';
 import type { BrainTool, BrainToolContext } from '../definition.js';
 import {
   EXTERNAL_CONFLICT_OPTIONS,
@@ -88,6 +92,12 @@ export function taskOf(ctx: BrainToolContext, taskId: Id): Task {
   if (task.projectId !== project.id) {
     throw new DomainError('invalid', `task ${taskId} is not a task of your project ${project.id}`);
   }
+  if (isJobTask(task)) {
+    throw new DomainError(
+      'invalid',
+      `task ${taskId} belongs to a recurring job: Mission Control runs it on its schedule`,
+    );
+  }
   return task;
 }
 
@@ -106,17 +116,82 @@ const liveStewards = (ctx: BrainToolContext, filter: (a: Agent) => boolean = () 
     .filter(({ agent, status }) => agent.role === 'steward' && filter(agent) && isLive(status));
 
 /**
- * The runtime of a Steward this Waykeeper spawns: the `stewardRuntime` setting (P8-07), else the
- * Waykeeper's own.
+ * The provider, runtime and model of the Steward this Waykeeper spawns for `task` (P11-03): the
+ * task's, else the project's, else the Settings' (`resolveStewardChoice`).
  */
-const stewardRuntimeOf = (ctx: BrainToolContext) =>
-  ctx.stewardRuntime?.() ?? ctx.queries.agent(ctx.brainId)?.runtime ?? 'claude-sdk';
+const stewardChoiceOf = (ctx: BrainToolContext, task: Task, project: Project) =>
+  (ctx.chooseSteward ?? stewardChooser())({
+    task,
+    project,
+    supervisorRuntime: ctx.queries.agent(ctx.brainId)?.runtime,
+  });
 
 const brief = (t: Task) => ({ taskId: t.id, description: t.description, state: t.state });
 
 /** The project's plan cards, oldest first. */
 const plansOf = (ctx: BrainToolContext, projectId: Id) =>
   ctx.queries.proposals().filter((p) => proposalPlan(p)?.projectId === projectId);
+
+/** The provider, model and flags a task of a plan names (P11-08); each name is typed. */
+const PROVIDER_PROPERTIES = {
+  provider: {
+    enum: ['claude', 'chatgpt', 'gemini'],
+    description: 'The AI provider of its Steward; absent: the project default.',
+  },
+  model: {
+    type: 'string',
+    description: 'An exact model the user named; absent: the provider’s default. Needs provider.',
+  },
+  makesImages: { type: 'boolean', description: 'The task makes images.' },
+  publishes: {
+    type: 'boolean',
+    description: 'The task publishes (posts, uploads, deploys). Never on Gemini.',
+  },
+};
+
+/**
+ * The provider fields of one task as the model gave them, checked against the catalogue before
+ * anything is created: a refusal (an unknown model, a Gemini step that publishes, an image task
+ * on a text model) names the task and says why.
+ */
+async function providerOfTask(
+  ctx: BrainToolContext,
+  task: Input,
+  project: Project,
+  where: string,
+): Promise<Pick<PlanTaskInput, 'provider' | 'model' | 'makesImages' | 'publishes'>> {
+  const provider = providerInput(task, 'provider');
+  const model = modelInput(task, 'model');
+  const makesImages = task['makesImages'] === true;
+  const publishes = task['publishes'] === true;
+  const need = { images: makesImages, publishes };
+  let listed: string | undefined;
+  if (!provider && model === undefined && !project.defaultProvider && (makesImages || publishes)) {
+    // Nothing names a provider: the step runs on the Settings' default, else Claude.
+    const effective = ctx.catalog?.defaults().defaultProvider ?? 'claude';
+    try {
+      await checkChoice(ctx, { provider: effective }, need, where);
+    } catch (error) {
+      throw new DomainError(
+        'invalid',
+        `${(error as Error).message}; name a provider for this task (provider)`,
+      );
+    }
+  } else {
+    listed = await checkChoice(
+      ctx,
+      { provider: provider ?? (model === undefined ? project.defaultProvider : undefined), model },
+      need,
+      where,
+    );
+  }
+  return {
+    ...(provider ? { provider } : {}),
+    ...(listed ? { model: listed } : {}),
+    ...(makesImages ? { makesImages: true } : {}),
+    ...(publishes ? { publishes: true } : {}),
+  };
+}
 
 // -- plan_tasks ------------------------------------------------------------------------------------
 
@@ -142,6 +217,7 @@ export const planTasksTool: BrainTool = {
               items: { type: 'integer', minimum: 0 },
               description: 'Positions (0-based) of earlier tasks of this plan it must wait for.',
             },
+            ...PROVIDER_PROPERTIES,
           },
           ['description'],
         ),
@@ -157,21 +233,23 @@ export const planTasksTool: BrainTool = {
     if (!Array.isArray(tasks) || tasks.length === 0) {
       throw new DomainError('invalid', 'tasks must be a non-empty list');
     }
-    const planned: PlanTaskInput[] = tasks.map((t, i) => {
+    const planned: PlanTaskInput[] = [];
+    for (const [i, t] of tasks.entries()) {
       const task = asInput(t);
       const blockedBy = task['blockedBy'];
       if (blockedBy !== undefined && !Array.isArray(blockedBy)) {
         throw new DomainError('invalid', `tasks[${i}].blockedBy must be a list of positions`);
       }
       const priority = optPriority(task);
-      return {
+      planned.push({
         description: str(task, 'description'),
         ...(priority ? { priority } : {}),
         ...(Array.isArray(blockedBy) && blockedBy.length > 0
           ? { blockedBy: blockedBy as number[] }
           : {}),
-      };
-    });
+        ...(await providerOfTask(ctx, task, project, `task ${i + 1} of the plan: `)),
+      });
+    }
     const rationale = optStr(input, 'rationale');
     const { value } = await ctx.commands.proposePlan({
       projectId: project.id,
@@ -204,6 +282,7 @@ export const createTaskTool: BrainTool = {
         items: { type: 'string' },
         description: 'Task ids it waits for.',
       },
+      ...PROVIDER_PROPERTIES,
     },
     ['description'],
   ),
@@ -230,10 +309,12 @@ export const createTaskTool: BrainTool = {
     }
     for (const id of (blockedBy ?? []) as Id[]) taskOf(ctx, id);
     const priority = optPriority(input);
+    const providers = await providerOfTask(ctx, input, project, '');
     const { value } = await ctx.commands.createTask({
       description: str(input, 'description'),
       projectId: project.id,
       ...(priority ? { priority } : {}),
+      ...providers,
       ...(Array.isArray(blockedBy) && blockedBy.length > 0 ? { blockedBy: blockedBy as Id[] } : {}),
     });
     return { ...brief(value), blockedBy: value.blockedBy };
@@ -286,16 +367,18 @@ export const spawnStewardTool: BrainTool = {
     const hadBranch = task.branch !== undefined;
     const where = await placeSteward(ctx, task);
     const project = projectOf(ctx);
+    const choice = stewardChoiceOf(ctx, task, project);
     let value: Agent;
     try {
       ({ value } = await ctx.commands.spawnAgent({
         role: 'steward',
-        runtime: stewardRuntimeOf(ctx),
+        runtime: choice.runtime,
+        ...(choice.model ? { model: choice.model } : {}),
         taskId: task.id,
         supervisorId: ctx.brainId,
         prompt: stewardPrompt(task, project, where, instructions, {
           related: ctx.queries.projectTasks(project.id),
-          declares: stewardDeclares(stewardRuntimeOf(ctx)),
+          declares: stewardDeclares(choice.runtime),
         }),
       }));
     } catch (error) {
@@ -553,6 +636,7 @@ async function sendBack(
   // and the instructions its first Steward was given.
   const instructions = task.meta?.['stewardInstructions'];
   const project = projectOf(ctx);
+  const choice = stewardChoiceOf(ctx, task, project);
   const brief = stewardPrompt(
     task,
     project,
@@ -565,12 +649,13 @@ async function sendBack(
     {
       related: ctx.queries.projectTasks(project.id),
       lead: text,
-      declares: stewardDeclares(stewardRuntimeOf(ctx)),
+      declares: stewardDeclares(choice.runtime),
     },
   );
   const { value } = await ctx.commands.spawnAgent({
     role: 'steward',
-    runtime: stewardRuntimeOf(ctx),
+    runtime: choice.runtime,
+    ...(choice.model ? { model: choice.model } : {}),
     taskId: task.id,
     supervisorId: ctx.brainId,
     prompt: brief,
@@ -640,12 +725,14 @@ export const closeTaskTool: BrainTool = {
     // A conflict question nobody needs to answer any more is withdrawn (closed unmerged).
     const withdrawn = await withdrawConflictQuestion(ctx, task, 'the task was closed');
     if (task.meta?.['mergeConflict']) await saveMergeMeta(ctx, task.id, null);
-    const open = ctx.queries.projectTasks(projectOf(ctx).id).filter((t) => !TASK_DONE.has(t.state));
+    const project = projectOf(ctx);
+    const open = ctx.queries.projectTasks(project.id).filter((t) => !TASK_DONE.has(t.state));
     return {
       ...brief(value),
       ...(withdrawn ? { withdrawnQuestion: withdrawn } : {}),
       openTasks: open.map(brief),
-      ...(open.length === 0
+      // A long-term project stays open (P10-02): no closure hint, only the user closes it.
+      ...(open.length === 0 && !isLongTerm(project)
         ? {
             allTasksClosed: true,
             next: 'Every task is closed: call request_project_closure when nothing is left to do.',
@@ -680,8 +767,8 @@ export const escalateTool: BrainTool = {
     if (questionId) {
       const q = ctx.queries.question(questionId);
       if (q) refuseSetRow(q);
-      if (q?.kind === 'permission') {
-        throw new DomainError('invalid', `${questionId} is a permission question; it is not yours`);
+      if (q?.kind === 'permission' || q?.kind === 'spend' || q?.kind === 'publish') {
+        throw new DomainError('invalid', `${questionId} is a ${q.kind} question; it is not yours`);
       }
       const { value } = await ctx.commands.escalateQuestion(questionId, ctx.actor);
       return { questionId, holder: value.holder };
@@ -773,13 +860,17 @@ export const requestProjectClosureTool: BrainTool = {
   description:
     'Tells the Harmonizer that every task of the project is closed, with a summary of what was ' +
     "delivered; it asks the user whether anything else is needed. Closing is the user's " +
-    'decision; stay available until then. Ends your turn.',
+    'decision; stay available until then. Never for a long-term project, which only the user ' +
+    'closes. Ends your turn.',
   inputSchema: obj({ summary: { type: 'string' } }, ['summary']),
   endsTurn: true,
   handler: async (raw, ctx) => {
     const input = asInput(raw);
     const summary = str(input, 'summary');
     const project = projectOf(ctx);
+    if (isLongTerm(project)) {
+      throw new DomainError('invalid', 'long-term projects are closed by the user only');
+    }
     const tasks = ctx.queries.projectTasks(project.id);
     const open = tasks.filter((t) => !TASK_DONE.has(t.state));
     if (tasks.every((t) => t.state !== 'completed') || open.length > 0) {

@@ -33,11 +33,13 @@ export function LabelLayer() {
   const projects = useAppStore((s) => sceneWorld(s).projects);
   const tasks = useAppStore((s) => sceneWorld(s).tasks);
   const deliverables = useAppStore((s) => sceneWorld(s).deliverables);
+  const areas = useAppStore((s) => sceneWorld(s).areas);
+  const jobs = useAppStore((s) => sceneWorld(s).jobs);
   const selected = useAppStore((s) => selectionBody(sceneWorld(s), s.selection));
   const hovered = usePickingStore((s) => s.hover?.bodyId);
   const labels = useMemo(
-    () => bodyLabels({ bodies, projects, tasks, deliverables }, selected),
-    [bodies, projects, tasks, deliverables, selected],
+    () => bodyLabels({ bodies, projects, tasks, deliverables, areas, jobs }, selected),
+    [bodies, projects, tasks, deliverables, areas, jobs, selected],
   );
   return (
     <div className="scene-labels" aria-hidden="true">
@@ -64,7 +66,7 @@ const classes = (label: BodyLabel, hovered: boolean) =>
 export function SceneLabel({ label, hovered = false }: { label: BodyLabel; hovered?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const markRef = useRef<HTMLSpanElement>(null);
-  const { bodyId, title, stateText, moon, partOf, priority, selected, mark } = label;
+  const { bodyId, title, stateText, moon, partOf, areas, priority, selected, mark } = label;
   const shownMark = mark ? markText(mark) : undefined;
   useLayoutEffect(() => {
     const el = ref.current;
@@ -91,7 +93,7 @@ export function SceneLabel({ label, hovered = false }: { label: BodyLabel; hover
           }
         : undefined,
     });
-  }, [bodyId, title, stateText, moon, partOf, priority, selected, shownMark]);
+  }, [bodyId, title, stateText, moon, partOf, areas, priority, selected, shownMark]);
 
   return (
     <div ref={ref} className={classes(label, hovered)} data-body={bodyId}>
@@ -110,6 +112,7 @@ export function SceneLabel({ label, hovered = false }: { label: BodyLabel; hover
         )}
       </span>
       {label.moon === 'independent' && <span className="scene-label-own">own project</span>}
+      {areas !== undefined && <span className="scene-label-areas">{areas} areas</span>}
       {label.partOf !== undefined && (
         <span className="scene-label-part">↳ part of {label.partOf}</span>
       )}

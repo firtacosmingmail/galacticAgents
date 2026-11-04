@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
 import { SetAnswer } from './question-set.js';
+import { Provider } from './providers.js';
 import { ReplyQuote } from './reply.js';
 import {
   AgentRole,
@@ -40,6 +41,7 @@ import {
   Port,
   RunOutcome,
 } from './deliverables.js';
+import { Area, FollowUp, Job, JobRun, JobRunOutcome, PublishContext } from './long-term.js';
 
 // ---------------------------------------------------------------------------
 // agent.* — emitted by adapters, normalised (TECHNOLOGY §3.4)
@@ -152,7 +154,9 @@ export const AgentFailed = z.object({
   type: z.literal('agent.failed'),
   ...agentBase,
   error: z.string(),
-  reason: z.enum(['cap', 'crash', 'runtime', 'unknown']),
+  reason: z.enum(['cap', 'crash', 'runtime', 'limit', 'unknown']),
+  /** For `reason: 'limit'`: when the subscription's limit resets (P11-02). */
+  resetsAt: z.string().datetime().optional(),
   cost: Cost.optional(),
 });
 
@@ -259,6 +263,11 @@ export const MessageSent = z.object({
    * `question.answered`).
    */
   replyTo: ReplyQuote.optional(),
+  /**
+   * The finding question whose "Implement it" answer this system message carries to the
+   * project's Waykeeper (P10-05, SPEC decision 144): the one system message that wakes a brain.
+   */
+  fromFinding: Id.optional(),
 });
 
 /**
@@ -307,6 +316,11 @@ export const QuestionAnswered = z.object({
   repliedIn: Id.optional(),
   /** The structured answer of a question-set row (P8-19); folded into `meta.answerDetail`. */
   detail: SetAnswer.optional(),
+  /**
+   * A publish approved with edited text (P11-06): the request as approved — the edited text and
+   * its recomputed fingerprint — folded into the row as `context.publish`.
+   */
+  publish: PublishContext.optional(),
 });
 /**
  * The user saved or cleared an unsent draft answer on an open question-set row (P8-19). Folded
@@ -522,6 +536,7 @@ export const ProjectChanges = Project.omit({
     parentProjectId: Id.nullable(),
     permissionPolicy: PermissionPolicy.nullable(),
     budgetUsd: BudgetUsd.nullable(),
+    defaultProvider: Provider.nullable(),
   })
   .partial();
 export type ProjectChanges = z.infer<typeof ProjectChanges>;
@@ -531,6 +546,8 @@ export const TaskChanges = Task.omit({ id: true, createdAt: true, updatedAt: tru
     worktreePath: z.string().nullable(),
     branch: z.string().nullable(),
     budgetUsd: BudgetUsd.nullable(),
+    provider: Provider.nullable(),
+    model: z.string().nullable(),
   })
   .partial();
 export type TaskChanges = z.infer<typeof TaskChanges>;
@@ -541,8 +558,15 @@ export const CLEARABLE_PROJECT_FIELDS = [
   'parentProjectId',
   'permissionPolicy',
   'budgetUsd',
+  'defaultProvider',
 ] as const;
-export const CLEARABLE_TASK_FIELDS = ['worktreePath', 'branch', 'budgetUsd'] as const;
+export const CLEARABLE_TASK_FIELDS = [
+  'worktreePath',
+  'branch',
+  'budgetUsd',
+  'provider',
+  'model',
+] as const;
 
 /**
  * Folds `changes` into `current` (P2-20): `undefined` leaves a field unchanged, `null` removes it,
@@ -750,6 +774,88 @@ export const RunEnded = z.object({
   by: Actor.optional(),
 });
 
+// ---------------------------------------------------------------------------
+// area.*, job.* and job_run.* (Phase 10; SPEC decisions 143, 144)
+// ---------------------------------------------------------------------------
+
+/** What `area.updated` may change: its name or its moon. */
+export const AreaChanges = Area.pick({ name: true, bodyId: true, meta: true }).partial();
+export type AreaChanges = z.infer<typeof AreaChanges>;
+
+/**
+ * What `job.updated` may change; an absent key is unchanged, `null` clears a field of
+ * `CLEARABLE_JOB_FIELDS`. The defaulted fields are re-declared without their default so that a
+ * change never fills in a field it did not carry.
+ */
+export const JobChanges = Job.omit({
+  id: true,
+  projectId: true,
+  taskId: true,
+  createdAt: true,
+  updatedAt: true,
+})
+  .extend({
+    provider: Provider,
+    followUps: z.array(FollowUp),
+    model: z.string().nullable(),
+    followUpProvider: Provider.nullable(),
+    followUpModel: z.string().nullable(),
+    limitQuestionId: Id.nullable(),
+    pausedReason: z.string().nullable(),
+    failureQuestionId: Id.nullable(),
+    nextRunAt: Timestamp.nullable(),
+    runningRunId: Id.nullable(),
+  })
+  .partial();
+export type JobChanges = z.infer<typeof JobChanges>;
+
+/** The job fields an explicit `null` clears. */
+export const CLEARABLE_JOB_FIELDS = [
+  'pausedReason',
+  'failureQuestionId',
+  'nextRunAt',
+  'runningRunId',
+  'model',
+  'followUpProvider',
+  'followUpModel',
+  'limitQuestionId',
+] as const;
+
+const changesSomething = { message: 'an update changes something' };
+
+/** An area was made on a moon of its project's planet: the whole row. */
+export const AreaCreated = z.object({ type: z.literal('area.created'), area: Area });
+export const AreaUpdated = z.object({
+  type: z.literal('area.updated'),
+  areaId: Id,
+  changes: AreaChanges.refine((c) => Object.keys(c).length > 0, changesSomething),
+});
+
+/** A job was made (its area and hidden task in the same command): the whole row. */
+export const JobCreated = z.object({ type: z.literal('job.created'), job: Job });
+/** A job changed: edited, paused, stopped, or its `lastRun` / `runningRunId` / follow-ups moved. */
+export const JobUpdated = z.object({
+  type: z.literal('job.updated'),
+  jobId: Id,
+  changes: JobChanges.refine((c) => Object.keys(c).length > 0, changesSomething),
+});
+
+/**
+ * A job run started: the run as it starts. Folds to nothing (run history is REST); the job's
+ * `runningRunId` changes through a `job.updated` in the same command.
+ */
+export const JobRunStarted = z.object({ type: z.literal('job_run.started'), run: JobRun });
+/** A job run ended. Folds to nothing; the job's `lastRun` changes through `job.updated`. */
+export const JobRunEnded = z.object({
+  type: z.literal('job_run.ended'),
+  runId: Id,
+  jobId: Id,
+  outcome: JobRunOutcome.exclude(['running']),
+  endedAt: Timestamp,
+  summary: z.string().optional(),
+  numbers: z.record(z.string(), z.number()).optional(),
+});
+
 /** Every event that can appear in the `events` log and on the WebSocket stream. */
 export const Event = z.discriminatedUnion('type', [
   AgentCreated,
@@ -819,6 +925,12 @@ export const Event = z.discriminatedUnion('type', [
   RunStarted,
   RunPorts,
   RunEnded,
+  AreaCreated,
+  AreaUpdated,
+  JobCreated,
+  JobUpdated,
+  JobRunStarted,
+  JobRunEnded,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event['type'];

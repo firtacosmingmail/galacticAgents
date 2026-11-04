@@ -252,6 +252,23 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
     expect(screen.getByRole('button', { name: 'Allow' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Allow similar/ })).toBeNull();
   });
+
+  it('is not offered for a publishing run’s request, which makes no rule (P11-12)', () => {
+    world();
+    const publishing: Question = {
+      ...install,
+      context: {
+        ...install.context,
+        origin: { role: 'steward', taskId: fx.task.id, recent: [], publishingRun: true },
+      },
+    };
+    show(<QuestionCard question={publishing} />);
+    expect(screen.getByRole('button', { name: 'Allow' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Refuse' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Allow similar/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /always/i })).toBeNull();
+    expect(api.similarPreview).not.toHaveBeenCalled();
+  });
 });
 
 describe('the project’s rules (P9-17)', () => {

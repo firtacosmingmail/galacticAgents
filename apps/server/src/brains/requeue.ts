@@ -119,7 +119,13 @@ export function requeue(
         if (event.agent.id === brainId && cut === 0) cut = seq;
         break;
       case 'message.sent':
-        if (event.agentId === brainId && event.sender.type === 'system') {
+        // The runner's turn prompts are the system's messages to the brain — except a finding's
+        // "Implement it" (P10-05), a system message the brain is woken by like a user's line.
+        if (
+          event.agentId === brainId &&
+          event.sender.type === 'system' &&
+          event.fromFinding === undefined
+        ) {
           turnMessages.set(event.messageId, seq);
         }
         break;

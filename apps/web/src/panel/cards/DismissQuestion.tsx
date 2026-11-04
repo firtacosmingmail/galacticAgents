@@ -8,7 +8,8 @@ import { useStreamDown } from './QueuedAnswer.js';
 /**
  * The × on a question card (P9-14, SPEC decision 135): the user withdraws a question without
  * answering it. A clarification's agent is told "the user dismissed this question" and carries
- * on; a permission request is denied, never allowed. No confirmation: nothing is lost (the agent
+ * on; a permission request is denied, never allowed, and so is a spend approval (P10-07: its ×
+ * reads as a refusal, never as "no reply"). No confirmation: nothing is lost (the agent
  * may ask again) and a dismissed permission is a refusal, the safe side. Sent with the question's
  * `version`, so a question answered or moved meanwhile is refused as stale and the card says who
  * was first. Never queued: offline the button is disabled and says why.
@@ -23,11 +24,23 @@ export function DismissQuestion({
   const api = useApi();
   const offline = useStreamDown();
   const { run, error, busy, clear } = useAction();
-  const permission = q.kind === 'permission';
   const text = q.context.text.length > 80 ? `${q.context.text.slice(0, 79)}…` : q.context.text;
-  const label = permission
-    ? `Dismiss the permission request (deny it): ${text}`
-    : `Dismiss the question, no reply: ${text}`;
+  const label =
+    q.kind === 'permission'
+      ? `Dismiss the permission request (deny it): ${text}`
+      : q.kind === 'spend'
+        ? `Dismiss the spend approval (refuse it): ${text}`
+        : q.kind === 'publish'
+          ? `Dismiss the publish approval (refuse it): ${text}`
+          : `Dismiss the question, no reply: ${text}`;
+  const hint =
+    q.kind === 'permission'
+      ? 'Dismiss (deny)'
+      : q.kind === 'spend'
+        ? 'Dismiss (refuse): no approval, nothing is spent'
+        : q.kind === 'publish'
+          ? 'Dismiss (refuse): nothing is posted'
+          : 'Dismiss: the agent is told you will not answer';
   const dismiss = async () => {
     let stale: string | undefined;
     await run(async () => {
@@ -50,13 +63,7 @@ export function DismissQuestion({
         type="button"
         className="secondary card-dismiss"
         aria-label={label}
-        title={
-          offline
-            ? 'Dismissing needs the connection'
-            : permission
-              ? 'Dismiss (deny)'
-              : 'Dismiss: the agent is told you will not answer'
-        }
+        title={offline ? 'Dismissing needs the connection' : hint}
         disabled={busy || offline}
         onClick={() => void dismiss()}
       >
