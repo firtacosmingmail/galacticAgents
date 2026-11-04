@@ -127,11 +127,15 @@ export interface PublishDeps {
 }
 
 /**
- * The folder an agent works in, from the rows: its task's worktree, else its project's workspace
- * (a job run's Steward: the project's workspace). Throws when it has neither.
+ * The folder an agent works in, from the rows: the folder it was spawned in (`meta.cwd`, kept for
+ * a resume — so an ended job run's Steward is read where it ran: P11-12), else its task's
+ * worktree, else its project's workspace (a job run's Steward: the project's workspace). Throws
+ * when it has none.
  */
 export function folderOfAgent(ctx: Reader, agentId: Id): string {
   const agent = must(ctx.tables.agents.get(agentId), 'agent', agentId);
+  const cwd = agent.meta?.['cwd'];
+  if (typeof cwd === 'string' && cwd !== '') return cwd;
   const task = agent.taskId ? ctx.tables.tasks.get(agent.taskId) : undefined;
   if (task?.worktreePath) return task.worktreePath;
   const projectId = task?.projectId ?? agent.projectId;
