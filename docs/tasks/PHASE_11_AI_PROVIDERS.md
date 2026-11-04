@@ -117,6 +117,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11, P11-12, P11-14, P11-15
 - An open limit question is withdrawn when its task closes (or its job run ends otherwise); an `updateTask` throw in the switch path is refused like any other; a free-text answer is answered with the choices; "Wait" on a limited follow-up does not start the next ordinary run early (M3); a switch is kept for the run it was chosen for (M4); a restart test on a fresh composition over the same database (M6).
 - **Acceptance:** each has a test.
+- **Done:** limit questions withdrawn on a finished task (`setTaskState`) or a stopped job (`setJobState`); a refused `updateTask` fails the task as R18; other text refused with "Answer with one of: …"; a limited follow-up's Wait and switch leave the schedule alone and the switch goes to that follow-up's own retry (`switchAppliesTo`, by `usageLimit.runId` and `reaskOf`); a restart test over the same database file. Tests in `runtime/usage-limits.test.ts` and `runtime/job-scheduler.test.ts`; SPEC 148 and TECHNOLOGY §3.5 updated.
 
 ### P11-14 — Providers and adapters: the deferred cases (added 2026-11-04)
 - **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11 – P11-13, P11-15
