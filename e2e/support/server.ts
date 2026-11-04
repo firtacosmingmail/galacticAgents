@@ -89,6 +89,9 @@ export async function startServer(): Promise<E2eServer> {
     // page it loads counts as a remote client's (`Host` not loopback), like the phone's.
     GALACTIC_ALLOWED_HOSTS: REMOTE_HOST,
   });
+  // HOME is the temp root, so git has no email and would look up the host name for its reflog,
+  // which hangs where name lookups are blocked (P11-11); EMAIL is its last resort.
+  env.EMAIL ??= 'e2e@galactic.invalid';
 
   const logPath = join(root, 'server.log');
   const log = createWriteStream(logPath);
