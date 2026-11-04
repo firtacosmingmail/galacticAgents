@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-24 · **Task status:** P8-24 in progress
-**Phase status:** in progress (23/24 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
+**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** P8-24 done
+**Phase status:** in progress (24/24 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -160,9 +160,10 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Done:** `apps/desktop/src-tauri/src/access.rs` (`check_readable` before the helper starts — the read that also asks macOS the first time; `failure_from_log` when the helper stops; `refused_message`), wired in `main.rs` (`log_path`); shown with the existing `show_failure` (window, menu status line, "!" in the menu bar). Tests: 5 Rust unit tests in `access.rs`, added to `pnpm --filter @galactic/desktop test:rust`; checked by running the built shell against a folder it cannot read at all (review fix: the refusal check now runs before the "not built" check, which a refused folder also fails) and one whose `package.json` cannot be read; the helper's log must show the refusal and the project's path (as given or its real path) on one line. `docs/DESKTOP.md` lifecycle bullet (incl. `tccutil reset`).
 
 ### P8-24 — Rename projects and tasks from the side bar (added 2026-11-04)
-- **Status:** in progress · **Depends on:** P4-12 · **Parallel with:** all
-- Cosmin's request: "I want to be able to rename the projects and the tasks from in the side bar." A project's name was editable only from the controls strip and the console; a task had no name at all — the side bar showed its description, the Steward's whole brief (often 1–3 k characters). The row's "⋯" actions get **Rename**: an inline field, Enter saves, Escape cancels. A project renames its `name`; a task gets a display **title** (`meta.title`, no migration) shown wherever the task is named, its description untouched; an empty title goes back to the description. A rename alone wakes no agent.
+- **Status:** done (2026-11-04) · **Depends on:** P4-12 · **Parallel with:** all
+- Cosmin's request: "I want to be able to rename the projects and the tasks from in the side bar." A project's name was editable only from the controls strip and the console; a task had no name at all — the side bar showed its description, the Steward's whole brief (often 1–3 k characters). The row's "⋯" actions get **Rename**: an inline field, Enter saves, Escape cancels. A project renames its `name`; a task gets a display **title** (`meta.title`, no migration) shown wherever the task is named, its description untouched; an empty title goes back to the description. A task's title alone wakes no agent (a project's name still tells its Waykeeper, as before).
 - **Acceptance:** protocol and domain tests for the task title (set, trim, clear, length, refusal on a project); the wake rule skips a title-only edit; web tests for the label and the rename field (save, cancel, clear); SPEC decision 150.
+- **Done:** protocol `WORK_NAME_MAX`, `taskTitle`, `taskLabel` (`domain.ts`) and `title` on the control edit body (`rest.ts`, the project `name` now trimmed and capped); `domain/control.ts` merges the title into `meta`; `brains/wake.ts` skips a title-only edit; `RenameField` in `panel/nav-row-actions.tsx` (+ `.pnl-row-rename` in `panel.css`); every view that names a task uses `taskLabel` (navigation, cards, status, history, deliverables, scene labels and hover cards, consoles). Tests: `control.test.ts` (2), `wake.test.ts` (1), protocol `rest.test.ts` and `domain.test.ts` (1 each), `inbox-closed.test.tsx` (3). Gates: build, typecheck, lint, format green; `pnpm test` green except the git-backed server suites (worktrees, merges, copies, drills), which time out in this environment on unchanged `main` too and so does the web console's end-to-end `exit-run.test.tsx` (checked with the change stashed: `workspace/workspaces.test.ts` fails the same 10 of 23, `exit-run.test.tsx` its 1); the rest of the web suite passes (152 files, 1913 tests).
 
 ## Exit criteria
 
