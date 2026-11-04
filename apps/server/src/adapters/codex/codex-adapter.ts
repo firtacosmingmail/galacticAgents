@@ -76,7 +76,9 @@ import {
  * permissions is `codex:permissions` (the table's `unclassified` entry decides), granted for the
  * turn only. MCP elicitations are declined (MCP is off). The `node_repl` MCP tool `js` runs
  * without any approval under `untrusted` and cannot be switched off (P11-04, Ruling R5): it is
- * reported as an `agent.tool_call` for the log, never as approved.
+ * reported as an `agent.tool_call` for the log, never as approved; so is a command or file change
+ * that finishes without an approval request (P11-14: none in 0.166, which asks for every one), so
+ * the tool-call cap counts everything Codex runs.
  *
  * **The server's tools** (`SpawnOptions.tools`) are Codex dynamic tools (`thread/start
  * dynamicTools`, experimental API): a call arrives as `item/tool/call`, is checked by the gate
@@ -242,6 +244,8 @@ class Session {
   readonly items = new Map<string, unknown>();
   /** Tool uses reported as `agent.tool_call` (once each). */
   readonly reported = new Set<string>();
+  /** Items an approval request put through the gate (whatever it decided). */
+  readonly gated = new Set<string>();
   /** The last rate-limit snapshot Codex pushed (`account/rateLimits/updated`). */
   lastRateLimits: unknown;
   lastText = '';
@@ -273,6 +277,7 @@ class Session {
     this.interruptWanted = false;
     this.items.clear();
     this.reported.clear();
+    this.gated.clear();
     for (const w of this.turnWaiters.splice(0)) w();
   }
 }
@@ -736,6 +741,7 @@ export class CodexAdapter implements AgentAdapter {
       }
       case 'item/completed': {
         const item = params['item'];
+        this.unaskedAction(session, asRecord(item));
         for (const line of itemOutput(item, this.maxToolResultChars)) {
           if (line.kind === 'text') session.lastText = line.text;
           this.output(session, line.kind, line.text);
@@ -827,6 +833,29 @@ export class CodexAdapter implements AgentAdapter {
     });
   }
 
+  /**
+   * A command or file change that finished without an approval request (P11-14): Codex 0.166
+   * asks for each one under `untrusted`, but a later version (or a command Codex trusts) may not.
+   * It is reported once, for the log and the tool-call cap — never as something the gate or the
+   * user approved. A declined item never ran; an item the gate saw was reported (or refused) there.
+   */
+  private unaskedAction(session: Session, item: Record<string, unknown>): void {
+    const type = item['type'];
+    if (type !== 'commandExecution' && type !== 'fileChange') return;
+    const id = typeof item['id'] === 'string' ? item['id'] : undefined;
+    if (id === undefined || session.reported.has(id) || session.gated.has(id)) return;
+    if (item['status'] === 'declined') return;
+    let call: ToolCall;
+    if (type === 'commandExecution') {
+      call = commandCall(item, session.cwd);
+    } else {
+      const changes = fileChanges(item);
+      call =
+        changes.length > 0 ? fileChangesCall(changes) : { toolName: 'codex:fileChange', input: {} };
+    }
+    this.toolCall(session, call, id);
+  }
+
   // --- server requests -----------------------------------------------------------
 
   private async serverRequest(
@@ -898,6 +927,7 @@ export class CodexAdapter implements AgentAdapter {
     toolUseId: string | undefined,
     verdict: GateVerdict = this.check(session, call, true),
   ): Promise<Decision> {
+    if (toolUseId !== undefined) session.gated.add(toolUseId);
     if (session.terminal || session.stopping || session.interrupting || session.limit) {
       return 'withdrawn';
     }
