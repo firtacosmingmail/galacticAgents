@@ -16,6 +16,7 @@ import {
   type Task,
   type WorkState,
   wallClockLimit,
+  taskLabel,
 } from '@galactic/protocol';
 import type { WorldState } from '../../state/reduce.js';
 import { HARMONIZER, type Selection } from '../../state/selection.js';
@@ -389,7 +390,7 @@ export function systemStatus(
     if (!current(task.state)) continue;
     const own = agentsFor(world, { taskId: task.id });
     const ids = new Set(own.map((a) => a.id));
-    const item = workAttention(world, 'task', task, task.description, own, ids);
+    const item = workAttention(world, 'task', task, taskLabel(task), own, ids);
     if (!item) continue;
     const folded =
       item.tone === 'blocked' && task.projectId ? blockedProjects.get(task.projectId) : undefined;
@@ -647,7 +648,7 @@ export function projectStatus(
       world,
       'task',
       row.task,
-      row.task.description,
+      taskLabel(row.task),
       own,
       new Set(own.map((a) => a.id)),
     );
@@ -657,7 +658,7 @@ export function projectStatus(
         key: `task:${row.task.id}:blocked`,
         kind: 'task',
         id: row.task.id,
-        label: row.task.description,
+        label: taskLabel(row.task),
         tone: 'blocked',
         detail: `${plural(row.questions.forUser, 'question')} for you`,
         selection: row.selection,

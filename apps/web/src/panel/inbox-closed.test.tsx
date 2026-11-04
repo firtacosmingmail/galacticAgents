@@ -411,3 +411,94 @@ describe('work actions on a navigation row (P4-12)', () => {
     expect(document.activeElement).toBe(more);
   });
 });
+
+describe('renaming from a navigation row (P8-24)', () => {
+  const openRow = (kind: 'project' | 'task', name: string) => {
+    if (kind === 'task') {
+      // The demo task is nested in its project, which starts folded.
+      const project = within(row('project', 'Demo project 1')!);
+      fireEvent.click(project.getByRole('button', { name: 'Show the work in Demo project 1' }));
+    }
+    const r = within(row(kind, name)!);
+    fireEvent.click(r.getByRole('button', { name: `Actions for ${name}` }));
+    fireEvent.click(r.getByRole('button', { name: 'Rename' }));
+    return r;
+  };
+
+  it('renames a project: Enter saves the trimmed name', async () => {
+    await open('/');
+    const r = openRow('project', 'Demo project 1');
+    const field = r.getByRole('textbox', { name: 'project name' }) as HTMLInputElement;
+    expect(field.value).toBe('Demo project 1');
+    expect(document.activeElement).toBe(field);
+    fireEvent.change(field, { target: { value: '  Demo, renamed ' } });
+    fireEvent.submit(field.form!);
+    await vi.waitFor(() =>
+      expect(controls).toEqual([
+        {
+          target: { kind: 'project', id: 'p-demo' },
+          action: { action: 'edit', changes: { name: 'Demo, renamed' } },
+        },
+      ]),
+    );
+    await vi.waitFor(() => expect(r.queryByRole('textbox', { name: 'project name' })).toBeNull());
+  });
+
+  it('gives a task a title, leaving its description; Escape keeps the name', async () => {
+    await open('/');
+    let r = openRow('task', 'Demo task');
+    const field = r.getByRole('textbox', { name: 'task title' }) as HTMLInputElement;
+    expect(field.value).toBe('');
+    expect(r.getByText(/the task's description stays as it is/)).toBeTruthy();
+    // Escape closes the field, not the row's actions.
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(r.queryByRole('textbox', { name: 'task title' })).toBeNull();
+    expect(r.getByRole('group', { name: 'actions for Demo task' })).toBeTruthy();
+    expect(controls).toEqual([]);
+
+    fireEvent.click(r.getByRole('button', { name: 'Rename' }));
+    const again = r.getByRole('textbox', { name: 'task title' }) as HTMLInputElement;
+    fireEvent.change(again, { target: { value: 'Demo' } });
+    fireEvent.submit(again.form!);
+    await vi.waitFor(() =>
+      expect(controls).toEqual([
+        {
+          target: { kind: 'task', id: 't-demo' },
+          action: { action: 'edit', changes: { title: 'Demo' } },
+        },
+      ]),
+    );
+
+    // Once titled, the row (and the field) use the title; emptying it clears it.
+    cleanup();
+    controls = [];
+    await open('/', {
+      ...snapshot,
+      tasks: snapshot.tasks.map((t) => (t.id === 't-demo' ? { ...t, meta: { title: 'Demo' } } : t)),
+    });
+    r = openRow('task', 'Demo');
+    const titled = r.getByRole('textbox', { name: 'task title' }) as HTMLInputElement;
+    expect(titled.value).toBe('Demo');
+    fireEvent.change(titled, { target: { value: ' ' } });
+    fireEvent.submit(titled.form!);
+    await vi.waitFor(() =>
+      expect(controls).toEqual([
+        {
+          target: { kind: 'task', id: 't-demo' },
+          action: { action: 'edit', changes: { title: null } },
+        },
+      ]),
+    );
+  });
+
+  it('shows the server’s refusal and keeps the field open', async () => {
+    await open('/');
+    const r = openRow('project', 'Demo project 1');
+    refuse = 'a name is at most 120 characters';
+    const field = r.getByRole('textbox', { name: 'project name' });
+    fireEvent.change(field, { target: { value: 'Other' } });
+    fireEvent.submit((field as HTMLInputElement).form!);
+    expect(await r.findByText('a name is at most 120 characters')).toBeTruthy();
+    expect(r.getByRole('textbox', { name: 'project name' })).toBeTruthy();
+  });
+});

@@ -6,6 +6,7 @@ import {
   type Deliverable,
   type Host,
   type WorkState,
+  taskLabel,
 } from '@galactic/protocol';
 import type { WorldState } from '../../state/reduce.js';
 import { bodyName } from '../picking/body-action.js';
@@ -190,9 +191,7 @@ export function moonRole(world: LabelWorld, body: Body): MoonRole | undefined {
 }
 
 function workName(world: LabelWorld, host: Host): string | undefined {
-  return host.kind === 'project'
-    ? world.projects[host.id]?.name
-    : world.tasks[host.id]?.description;
+  return host.kind === 'project' ? world.projects[host.id]?.name : labelOf(world.tasks[host.id]);
 }
 
 function workState(world: LabelWorld, host: Host): WorkState | undefined {
@@ -277,3 +276,7 @@ export function independentMoons(world: LabelWorld): string[] {
     .map((b) => b.id)
     .sort();
 }
+
+/** A task's name (P8-24), or `undefined` when the task is not loaded. */
+const labelOf = (task: Parameters<typeof taskLabel>[0] | undefined) =>
+  task ? taskLabel(task) : undefined;

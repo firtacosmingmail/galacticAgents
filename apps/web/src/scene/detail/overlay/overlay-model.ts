@@ -1,3 +1,4 @@
+import { taskLabel } from '@galactic/protocol';
 import type { Id, QualityTier, Task, WorkState } from '@galactic/protocol';
 import type { WorldState } from '../../../state/reduce.js';
 import type { Selection } from '../../../state/selection.js';
@@ -275,15 +276,15 @@ export function selectedTaskOf(
 }
 
 /** The hover label's text: "Task · <description> · <state>". */
-export function taskHoverText(task: Pick<Task, 'description' | 'state'>): string {
-  const flat = task.description.replace(/\s+/g, ' ').trim();
+export function taskHoverText(task: Pick<Task, 'description' | 'state' | 'meta'>): string {
+  const flat = taskLabel(task).replace(/\s+/g, ' ').trim();
   const name = flat.length <= 48 ? flat : `${flat.slice(0, 47).trimEnd()}…`;
   return `${name} · ${stateText(task.state)}`;
 }
 
 /** The info card of a task with no Steward yet: what `activateTask` shows. */
-export function taskInfoDetail(task: Pick<Task, 'description' | 'state'>): string {
-  return `${task.description} · ${stateText(task.state)} · no Steward yet`;
+export function taskInfoDetail(task: Pick<Task, 'description' | 'state' | 'meta'>): string {
+  return `${taskLabel(task)} · ${stateText(task.state)} · no Steward yet`;
 }
 
 /** A moon of the shown planet that hosts a project, and how it relates to the planet's work. */

@@ -1,4 +1,4 @@
-import { ENDED_STATES, type Agent, type Id, type WorkState } from '@galactic/protocol';
+import { ENDED_STATES, type Agent, type Id, type WorkState, taskLabel } from '@galactic/protocol';
 import type { WorldState } from '../state/reduce.js';
 import type { Selection } from '../state/selection.js';
 import { agentsFor } from '../console/hierarchy/shared.js';
@@ -140,7 +140,7 @@ export function buildNav(world: WorldState, opts: NavOptions = {}): NavModel {
       key: `task:${task.id}`,
       kind: 'task',
       id: task.id,
-      label: task.description,
+      label: taskLabel(task),
       state: task.state,
       blocked: task.state === 'blocked_on_user',
       closed: CLOSED.has(task.state),

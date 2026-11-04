@@ -1074,6 +1074,23 @@ a.pnl-link:hover {
 .pnl-row-replay {
   margin: 6px 0 0;
 }
+/* P8-24: rename a project or a task from its row */
+.pnl-row-rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 2px 0 6px;
+}
+.pnl-row-rename input {
+  flex: 1 1 12em;
+  min-width: 0;
+  font: inherit;
+}
+.pnl-row-rename .pnl-row-note,
+.pnl-row-rename .error {
+  flex-basis: 100%;
+}
 .pnl-row-actions .agc-confirm {
   display: flex;
   flex-wrap: wrap;

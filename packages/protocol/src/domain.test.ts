@@ -10,6 +10,8 @@ import {
   Project,
   Proposal,
   proposalTrust,
+  taskLabel,
+  taskTitle,
   Question,
   StatusRecord,
   Task,
@@ -151,5 +153,16 @@ describe('trust levels (P2-22, decision 49)', () => {
     expect(
       StatusRecord.safeParse({ ...fx.status, caps: { ...caps, wallClockMs: { used: 1 } } }).success,
     ).toBe(false);
+  });
+});
+
+describe('taskTitle / taskLabel (P8-24)', () => {
+  it('names a task by its title in meta, else by its description', () => {
+    const task = { description: 'A long brief', meta: undefined };
+    expect(taskTitle(task)).toBeUndefined();
+    expect(taskLabel(task)).toBe('A long brief');
+    expect(taskLabel({ ...task, meta: { title: 'Short' } })).toBe('Short');
+    expect(taskLabel({ ...task, meta: { title: '  ' } })).toBe('A long brief');
+    expect(taskLabel({ ...task, meta: { title: 3 } })).toBe('A long brief');
   });
 });

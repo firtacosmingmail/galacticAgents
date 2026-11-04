@@ -3,10 +3,12 @@ import type {
   ControlAction,
   ControlTarget,
   Event,
+  Id,
   PermissionPolicy,
+  TaskEdit,
   TaskPriority,
 } from '@galactic/protocol';
-import { TaskPriority as TaskPrioritySchema } from '@galactic/protocol';
+import { TaskPriority as TaskPrioritySchema, WORK_NAME_MAX } from '@galactic/protocol';
 import { applyControlState, type ControlStateOptions } from './cascade.js';
 import { setBudget } from './budgets.js';
 import { DomainError, must } from './errors.js';
@@ -93,7 +95,14 @@ export function recordControl(
   switch (action.action) {
     case 'edit':
       if (projectChanges) updateProject(ctx, target.id, projectChanges, opts.write);
-      else updateTask(ctx, target.id, taskChanges!);
+      else {
+        const { title, ...rest } = taskChanges!;
+        updateTask(
+          ctx,
+          target.id,
+          title === undefined ? rest : withTitle(ctx, target.id, rest, title),
+        );
+      }
       if (budget !== undefined) {
         setBudget(
           ctx,
@@ -144,19 +153,51 @@ function withoutBudget(changes: Record<string, unknown>): Record<string, unknown
   return rest;
 }
 
-/** What the panel may edit (SPEC §4.3): a task's description and priority, a project's name. */
-function taskEdit(changes: Record<string, unknown>): {
+interface TaskEditChanges {
   description?: string;
   priority?: TaskPriority;
-} {
-  const out: { description?: string; priority?: TaskPriority } = {};
+  /** The display title (P8-24); `null` returns the task to its description. */
+  title?: string | null;
+}
+
+/**
+ * What the panel may edit (SPEC §4.3): a task's description, priority and title (P8-24, decision
+ * 150: trimmed, at most `WORK_NAME_MAX` characters; blank or `null` clears it).
+ */
+function taskEdit(changes: Record<string, unknown>): TaskEditChanges {
+  const out: TaskEditChanges = {};
   for (const [key, value] of Object.entries(changes)) {
     if (key === 'description' && typeof value === 'string') out.description = value;
     else if (key === 'priority' && TaskPrioritySchema.safeParse(value).success) {
       out.priority = value as TaskPriority;
+    } else if (key === 'title' && (value === null || typeof value === 'string')) {
+      out.title = workName(value, 'title') ?? null;
     } else throw new DomainError('invalid', `a task's ${key} cannot be edited that way`);
   }
   return out;
+}
+
+/** A rename (P8-24): trimmed, `undefined` when blank, refused beyond `WORK_NAME_MAX`. */
+function workName(value: string | null, what: string): string | undefined {
+  const name = value?.trim();
+  if (!name) return undefined;
+  if (name.length > WORK_NAME_MAX) {
+    throw new DomainError('invalid', `a ${what} is at most ${WORK_NAME_MAX} characters`);
+  }
+  return name;
+}
+
+/** The task's changes with its `meta.title` set or removed; the rest of `meta` is kept. */
+function withTitle(
+  ctx: CommandContext,
+  taskId: Id,
+  changes: Omit<TaskEditChanges, 'title'>,
+  title: string | null,
+): TaskEdit {
+  const current = ctx.tables.tasks.get(taskId)!.meta ?? {};
+  if ((current['title'] ?? null) === title) return changes;
+  const { title: _old, ...meta } = current;
+  return { ...changes, meta: title === null ? meta : { ...meta, title } };
 }
 
 /**
@@ -169,8 +210,9 @@ function projectEdit(
 ): { name?: string; permissionPolicy?: PermissionPolicy | null } {
   const out: { name?: string; permissionPolicy?: PermissionPolicy | null } = {};
   for (const [key, value] of Object.entries(changes)) {
-    if (key === 'name' && typeof value === 'string' && value.trim()) out.name = value;
-    else if (key === 'permissionPolicy') {
+    if (key === 'name' && typeof value === 'string' && value.trim()) {
+      out.name = workName(value, 'name')!;
+    } else if (key === 'permissionPolicy') {
       out.permissionPolicy = value === null ? null : parsePolicy(value, write);
     } else throw new DomainError('invalid', `a project's ${key} cannot be edited that way`);
   }

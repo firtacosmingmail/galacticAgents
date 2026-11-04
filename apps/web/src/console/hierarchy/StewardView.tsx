@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { ENDED_STATES, type ControlBody, type Id } from '@galactic/protocol';
+import { ENDED_STATES, type ControlBody, type Id, taskLabel } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { QuestionCard } from './QuestionInbox.js';
 import { QuestionSetCard } from '../../panel/cards/index.js';
@@ -58,7 +58,7 @@ export function StewardView({ agentId }: { agentId: Id }) {
           <div className="wide">
             <dt>task</dt>
             <dd>
-              {task.description} <StatePill state={task.state} />
+              {taskLabel(task)} <StatePill state={task.state} />
               {task.branch ? <code className="muted"> {task.branch}</code> : null}
             </dd>
           </div>

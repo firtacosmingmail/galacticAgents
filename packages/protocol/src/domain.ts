@@ -220,6 +220,23 @@ export const Task = z.object({
 });
 export type Task = z.infer<typeof Task>;
 
+/** The longest project name or task title the panel's rename takes (P8-24). */
+export const WORK_NAME_MAX = 120;
+
+/**
+ * A task's display title (P8-24, decision 150): what the user named it, kept in `meta.title` so
+ * the description — the Steward's brief — stays as it was. Absent until the user renames it.
+ */
+export function taskTitle(task: Pick<Task, 'meta'>): string | undefined {
+  const title = task.meta?.['title'];
+  return typeof title === 'string' && title.trim() ? title : undefined;
+}
+
+/** What names a task wherever it is listed: its title, else its description. */
+export function taskLabel(task: Pick<Task, 'meta' | 'description'>): string {
+  return taskTitle(task) ?? task.description;
+}
+
 export const Agent = z.object({
   id: Id,
   role: AgentRole,

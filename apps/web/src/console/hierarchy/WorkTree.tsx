@@ -9,6 +9,7 @@ import {
   type Project,
   type Task,
   type WorkState,
+  taskLabel,
 } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { summaryOf } from '../../state/reduce.js';
@@ -159,10 +160,10 @@ function TaskNode({ task, onSelectAgent }: { task: Task; onSelectAgent: (agentId
   const world = useAppStore((s) => s.world);
   const body = task.projectId ? undefined : world.bodies[task.bodyId];
   return (
-    <li className="node task" aria-label={`task ${task.description}`}>
+    <li className="node task" aria-label={`task ${taskLabel(task)}`}>
       <div className="node-head">
         <StatePill state={task.state} />
-        <span>{task.description}</span>
+        <span>{taskLabel(task)}</span>
         <span className="muted">
           {task.priority !== 'normal' ? `${task.priority} · ` : ''}
           {body ? `asteroid ${body.name}` : ''}
@@ -213,7 +214,7 @@ export function Controls({
   const [editing, setEditing] = useState(false);
   const act = (action: ControlBody['action']) => run(() => api.control({ target, action }));
   const finished = FINISHED.has(item.state);
-  const label = target.kind === 'task' ? (item as Task).description : (item as Project).name;
+  const label = target.kind === 'task' ? taskLabel(item as Task) : (item as Project).name;
   return (
     <div className="controls" aria-label={`controls of ${label}`}>
       {item.state === 'paused' ? (

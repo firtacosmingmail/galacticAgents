@@ -5,6 +5,7 @@ import {
   type BudgetUsage,
   type Id,
   type SettingsCaps,
+  taskLabel,
 } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { HARMONIZER } from '../../state/selection.js';
@@ -457,10 +458,10 @@ export function ProjectStatusView({ projectId }: { projectId: Id }) {
                     to={{ route: 'panel', selection: row.selection }}
                     className="sts-task-name"
                   >
-                    {row.task.description}
+                    {taskLabel(row.task)}
                   </NavLink>
                 ) : (
-                  <span className="sts-task-name">{row.task.description}</span>
+                  <span className="sts-task-name">{taskLabel(row.task)}</span>
                 )}
                 <span className="sts-task-meta muted">
                   {row.steward ? (

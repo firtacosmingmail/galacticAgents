@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
-import { PROTOCOL_VERSION, type DemoClearResponse } from '@galactic/protocol';
+import { PROTOCOL_VERSION, type DemoClearResponse, taskLabel } from '@galactic/protocol';
 import { describeDemoClear } from './console/demo-clear.js';
 import { useAppStore } from './state/store.js';
 import {
@@ -302,7 +302,7 @@ function World() {
         ))}
         {Object.values(world.tasks).map((t) => (
           <li key={t.id}>
-            <strong>task</strong> {t.description} <em>{t.state}</em>
+            <strong>task</strong> {taskLabel(t)} <em>{t.state}</em>
           </li>
         ))}
         {Object.values(world.questions)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { openQuestionsLabel, questionItems } from './question-count.js';
-import { wallClockLimit, type Agent } from '@galactic/protocol';
+import { wallClockLimit, type Agent, taskLabel } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { HARMONIZER } from '../state/selection.js';
 import { agentLabel, StatePill } from '../console/hierarchy/shared.js';
@@ -73,7 +73,7 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
   const name = agent ? agentLabel(agent, world) : work ? workTitle(work) : '—';
   const workName = work
     ? work.kind === 'task'
-      ? work.item.description
+      ? taskLabel(work.item)
       : work.item.name
     : undefined;
 

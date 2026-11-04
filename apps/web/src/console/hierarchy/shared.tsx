@@ -1,3 +1,4 @@
+import { taskLabel } from '@galactic/protocol';
 import { createContext, useContext, useState } from 'react';
 import type { Actor, Agent, Id, Project, Task } from '@galactic/protocol';
 import type { WorldState } from '../../state/reduce.js';
@@ -68,7 +69,7 @@ export function agentLabel(
     }
     case 'steward': {
       const task: Task | undefined = agent.taskId ? world.tasks[agent.taskId] : undefined;
-      return `Steward · ${task ? short(task.description) : agent.id}`;
+      return `Steward · ${task ? short(taskLabel(task)) : agent.id}`;
     }
   }
 }

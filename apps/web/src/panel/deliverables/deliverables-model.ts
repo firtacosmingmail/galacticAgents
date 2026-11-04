@@ -5,6 +5,7 @@ import {
   type DeliverableListItem,
   type Id,
   type RunSummary,
+  taskLabel,
 } from '@galactic/protocol';
 import type { WorldState } from '../../state/reduce.js';
 import { actorLabel } from '../../console/hierarchy/shared.js';
@@ -122,7 +123,7 @@ export function groupForProject(
   const tasks = [...byTask.entries()]
     .map(([taskId, list]) => ({
       taskId,
-      label: world.tasks[taskId]?.description ?? taskId,
+      label: labelOf(world.tasks[taskId]) ?? taskId,
       rows: [...list].sort(newestFirst),
       at: stamp(taskId, list),
     }))
@@ -524,3 +525,7 @@ export function safeLink(url: string | undefined | null): string | undefined {
     return undefined;
   }
 }
+
+/** A task's name (P8-24), or `undefined` when the task is not loaded. */
+const labelOf = (task: Parameters<typeof taskLabel>[0] | undefined) =>
+  task ? taskLabel(task) : undefined;

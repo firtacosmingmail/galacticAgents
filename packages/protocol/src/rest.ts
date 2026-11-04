@@ -14,6 +14,7 @@ import {
   PermissionRule,
   PermissionRuleScope,
   TrustLevel,
+  WORK_NAME_MAX,
 } from './domain.js';
 import { ControlTarget } from './events.js';
 import { Id, Timestamp } from './primitives.js';
@@ -304,9 +305,10 @@ export type RuntimesInfo = z.infer<typeof RuntimesInfo>;
 
 /**
  * A panel action (decision 11b, P2-14), as `DomainCommands.control` takes it. Edit carries the
- * fields the panel may change: a task's description and priority, a project's name and its
- * permission policy (`null` returns it to the global default; a remote client's choice is floored
- * at the global default, P2-21).
+ * fields the panel may change: a task's description, priority and title (P8-24: its display name;
+ * `null` or blank returns it to the description), a project's name and its permission policy
+ * (`null` returns it to the global default; a remote client's choice is floored at the global
+ * default, P2-21).
  */
 export const ControlActionBody = z.discriminatedUnion('action', [
   z.object({ action: z.literal('stop') }),
@@ -319,7 +321,8 @@ export const ControlActionBody = z.discriminatedUnion('action', [
       .object({
         description: z.string().min(1).optional(),
         priority: TaskPriority.optional(),
-        name: z.string().min(1).optional(),
+        name: z.string().trim().min(1).max(WORK_NAME_MAX).optional(),
+        title: z.string().max(WORK_NAME_MAX).nullable().optional(),
         permissionPolicy: PermissionPolicy.nullable().optional(),
         /** The project's or task's dollar budget (P8-01); `null` removes it. */
         budgetUsd: BudgetUsd.nullable().optional(),

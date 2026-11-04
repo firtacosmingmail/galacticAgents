@@ -1,3 +1,4 @@
+import { taskLabel } from '@galactic/protocol';
 import { createContext, useContext, useId, useState, type ReactNode } from 'react';
 import type {
   Actor,
@@ -56,7 +57,7 @@ export function trailName(
   const t = entry.target;
   return (
     entry.name ??
-    (t.kind === 'task' ? world.tasks[t.id]?.description : world.projects[t.id]?.name) ??
+    (t.kind === 'task' ? labelOf(world.tasks[t.id]) : world.projects[t.id]?.name) ??
     '…'
   );
 }
@@ -81,7 +82,7 @@ export function liveWork(
 }
 
 export const workName = (work: CardWork) =>
-  work.kind === 'task' ? work.item.description : work.item.name;
+  work.kind === 'task' ? taskLabel(work.item) : work.item.name;
 
 /**
  * A link that opens a project or task in the inspector: a button (it navigates inside the page),
@@ -360,3 +361,6 @@ export function When({ at }: { at: string }) {
 /** "you", "Harmonizer", "the system": who made a state change, when the log says. */
 export const byLabel = (by: Actor | undefined, world: WorldState) =>
   by ? actorLabel(by, world) : undefined;
+
+/** A task's name (P8-24), or `undefined` when the task is not loaded. */
+const labelOf = (task: Task | undefined) => (task ? taskLabel(task) : undefined);

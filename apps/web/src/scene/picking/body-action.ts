@@ -1,3 +1,4 @@
+import { taskLabel } from '@galactic/protocol';
 import type { Id, WorkState } from '@galactic/protocol';
 import type { WorldState } from '../../state/reduce.js';
 import { HARMONIZER, type Selection } from '../../state/selection.js';
@@ -63,7 +64,7 @@ export function bodyAction(world: World, bodyId: string): BodyAction {
     if (agent)
       return { kind: 'select', bodyId, name, selection: { kind: 'steward', id: agent.id } };
     return info(
-      task ? `${task.description} · ${stateText(task.state)} · no agent yet` : 'task not loaded',
+      task ? `${taskLabel(task)} · ${stateText(task.state)} · no agent yet` : 'task not loaded',
     );
   }
   if (body.movedTo) return info(`moved to ${bodyName(world, body.movedTo.bodyId)}`);
