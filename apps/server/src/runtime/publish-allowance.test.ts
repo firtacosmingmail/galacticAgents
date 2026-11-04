@@ -228,4 +228,24 @@ describe('publishingPolicy (ruling R26)', () => {
     expect(denied.rules.network).toBe('deny');
     expect(publishingPolicy({ rules: {} }).rules.network).toBe('ask');
   });
+
+  it('makes running a workspace command ask too, since a script can reach the network (P11-12)', () => {
+    expect(PERMISSION_POLICY_PRESETS.trusted.rules.run_workspace).toBe('allow');
+    expect(publishingPolicy(PERMISSION_POLICY_PRESETS.trusted).rules.run_workspace).toBe('ask');
+    expect(publishingPolicy(DEFAULT_PERMISSION_POLICY).rules.run_workspace).toBe('ask');
+    expect(publishingPolicy({ rules: { run_workspace: 'deny' } }).rules.run_workspace).toBe('deny');
+  });
+
+  it('never lets the publish allowance pass a workspace command (P11-12)', () => {
+    const s = setup(publishingPolicy(PERMISSION_POLICY_PRESETS.trusted));
+    s.store.arm('a-1', s.publish, s.worktree);
+    const script: ToolCall = {
+      toolName: 'Bash',
+      input: { command: `node post.js "${s.publish.text}"` },
+    };
+    expect(s.gate.check(script).decision).toBe('ask');
+    // The approved network call itself still goes through once.
+    expect(s.gate.check(CURL).decision).toBe('allow');
+    expect(s.gate.check(CURL).decision).toBe('ask');
+  });
 });

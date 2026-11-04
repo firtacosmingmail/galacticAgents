@@ -22,16 +22,23 @@ import { readFileInFolder, sha256 } from '../domain/publish.js';
  */
 
 /**
- * The table a publishing run is decided under (ruling R26): the project's, with the network and
- * calls the engine cannot classify asking where the table allows them — so under any preset, the
- * `trusted` one included, an outward call goes out only through the publish allowance or the
- * user's answer. A deny stays a deny (the allowance never widens one).
+ * The table a publishing run is decided under (ruling R26): the project's, with the network,
+ * running a command in the workspace (a script there can reach the network: P11-12) and calls the
+ * engine cannot classify asking where the table allows them — so under any preset, the `trusted`
+ * one included, an outward call goes out only through the publish allowance or the user's answer.
+ * The allowance matches network calls only, so a workspace command always takes a card. A deny
+ * stays a deny (the allowance never widens one).
  */
 export function publishingPolicy(policy: PermissionPolicy): PermissionPolicy {
-  const network = policy.rules.network;
+  const asks = (value: PermissionPolicy['rules'][PermissionAction]) =>
+    value === 'deny' ? 'deny' : 'ask';
   return {
     ...policy,
-    rules: { ...policy.rules, network: network === 'deny' ? 'deny' : 'ask' },
+    rules: {
+      ...policy.rules,
+      network: asks(policy.rules.network),
+      run_workspace: asks(policy.rules.run_workspace),
+    },
     ...(policy.unclassified === 'allow' ? { unclassified: 'ask' } : {}),
   };
 }

@@ -13,7 +13,7 @@ import { SCENE_SATELLITES, satelliteList } from './satellites/satellite-model.js
  * - `data-satellites`: the agent ids of the satellites drawn (the director's published list,
  *   `satellites/registry.ts`, the HQ station included), sorted;
  * - `data-satellite-providers` (P11-10): `agentId:provider` of each satellite on a provider other than
- *   Claude, as the satellites' own list carries it (the ring tint, `look.ts`), sorted;
+ *   Claude, as the satellites' own list carries it (the provider ring, `look.ts`), sorted;
  * - `data-camera`: `flying`, the focused body's id, `system` (resting at the system's framing) or
  *   `free` (the user moved it).
  *

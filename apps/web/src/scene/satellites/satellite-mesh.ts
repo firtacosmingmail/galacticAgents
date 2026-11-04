@@ -4,6 +4,7 @@ import {
   ConeGeometry,
   Float32BufferAttribute,
   Quaternion,
+  TorusGeometry,
   Vector3,
   type BufferGeometry,
   type Matrix4,
@@ -65,6 +66,21 @@ export function beamGeometry(): BufferGeometry {
   return cone;
 }
 
+/** The ring's radius and tube, in satellite spans. */
+export const RING = { radius: 0.62, tube: 0.035 } as const;
+
+/**
+ * The provider ring (P11-15): a thin loop around the satellite, in the plane of its panels and
+ * across its dish axis (y), a little wider than the panels. No vertex colours: the colour is the
+ * material's (one mesh per satellite) or the instance's (`ringColor`).
+ */
+export function ringGeometry(): BufferGeometry {
+  const ring = new TorusGeometry(RING.radius, RING.tube, 6, 48);
+  ring.rotateX(Math.PI / 2);
+  ring.computeBoundingSphere();
+  return ring;
+}
+
 const DOWN = new Vector3(0, -1, 0);
 const UP = new Vector3(0, 1, 0);
 const X = new Vector3(1, 0, 0);
@@ -123,4 +139,20 @@ export function beamColor(f: SatelliteFrame, bloom: boolean, out: Color): Color 
   const gain = (bloom ? BEAM.bloomGain : BEAM.plainGain) * f.beam;
   const c = f.beamTint;
   return out.setRGB(c[0] * gain, c[1] * gain, c[2] * gain);
+}
+
+/** The ring's matrix: the satellite's own (it turns and scales with it). */
+export function ringMatrix(f: SatelliteFrame, out: Matrix4): Matrix4 {
+  return bodyMatrix(f, out);
+}
+
+/** The ring's colour: its provider's (`f.ring`), steady (a mark, not a state); black for none. */
+export function ringColor(f: SatelliteFrame, out: Color): Color {
+  if (!f.ring) return out.setRGB(0, 0, 0);
+  let base = tintCache.get(f.ring);
+  if (!base) {
+    base = new Color(f.ring);
+    tintCache.set(f.ring, base);
+  }
+  return out.copy(base);
 }

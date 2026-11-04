@@ -509,6 +509,11 @@ export const QuestionOrigin = z.object({
   projectId: Id.optional(),
   bodyId: Id.optional(),
   recent: z.array(QuestionRecentEvent),
+  /**
+   * The asker is in a publishing run (P11-12; SPEC decision 147): its permission requests make
+   * no "Allow similar" rule (the run ignores rules, ruling R26), so the card does not offer one.
+   */
+  publishingRun: z.literal(true).optional(),
 });
 export type QuestionOrigin = z.infer<typeof QuestionOrigin>;
 

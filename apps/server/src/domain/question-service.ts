@@ -2,6 +2,7 @@ import type { Statement } from 'better-sqlite3';
 import type {
   Actor,
   AgentEvent,
+  AgentRole,
   AgentState,
   Event,
   EventEnvelope,
@@ -12,7 +13,7 @@ import type {
   QuestionOrigin,
   QuestionRecentEvent,
 } from '@galactic/protocol';
-import { QUESTION_SET_LIMITS, QuestionSetRef, isJobOwned } from '@galactic/protocol';
+import { QUESTION_SET_LIMITS, QuestionSetRef, isJobOwned, jobIdOfTask } from '@galactic/protocol';
 import { must } from './errors.js';
 import type { CommandContext, EventLog } from './event-log.js';
 import {
@@ -169,7 +170,27 @@ export function originOf(
     ...(projectId ? { projectId } : {}),
     ...(bodyId ? { bodyId } : {}),
     recent: routing.recentEvents(originAgentId, RECENT_EVENTS).map(recentEvent),
+    ...(isPublishingRun(ctx.tables, agent) ? { publishingRun: true as const } : {}),
   };
+}
+
+/**
+ * A publishing run (P11-06, SPEC decision 147): a Steward of a task that is a publishing step
+ * (`task.publishes`), or of a job whose running run is a `publish` follow-up. Such a run works
+ * without permission rules (ruling R26) and its cards offer none (P11-12).
+ */
+export function isPublishingRun(
+  tables: Pick<CommandContext['tables'], 'tasks' | 'jobs' | 'jobRuns'>,
+  agent: { role: AgentRole; taskId?: Id | undefined },
+): boolean {
+  if (agent.role !== 'steward' || !agent.taskId) return false;
+  const task = tables.tasks.get(agent.taskId);
+  if (!task) return false;
+  if (task.publishes) return true;
+  const jobId = jobIdOfTask(task);
+  const job = jobId ? tables.jobs.get(jobId) : undefined;
+  const run = job?.runningRunId ? tables.jobRuns.get(job.runningRunId) : undefined;
+  return run?.followUp?.kind === 'publish';
 }
 
 function recentEvent({ seq, at, event }: EventEnvelope): QuestionRecentEvent {

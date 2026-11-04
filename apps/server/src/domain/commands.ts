@@ -135,6 +135,7 @@ import {
   endAgentQuestions,
   holderFor,
   holdersNow,
+  isPublishingRun,
   logRouting,
   openFromNeedsInput,
   openRouted,
@@ -1201,6 +1202,17 @@ export class Commands implements DomainCommands {
     }
     const call = question.context.toolCall;
     if (!call) return { refused: 'the request names no tool call', options: [] };
+    // A publishing run works without rules (ruling R26): a rule made from its card would mislead.
+    const asker = this.log.tables.agents.get(question.originAgentId);
+    if (
+      question.context.origin?.publishingRun ||
+      (asker && isPublishingRun(this.log.tables, asker))
+    ) {
+      return {
+        refused: 'a publishing run asks for every outward call: allow it once',
+        options: [],
+      };
+    }
     const { projectId, policy, ctx } = this.permissionContextOf(question);
     const project = projectId ? this.log.tables.projects.get(projectId) : undefined;
     if (!project) {

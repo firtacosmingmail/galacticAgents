@@ -205,6 +205,73 @@ describe('the publish card', () => {
   });
 });
 
+describe('the publish and spend styles (P11-15)', () => {
+  const css = () => readFileSync(resolve(__dirname, '../../app.css'), 'utf8');
+  /** The custom properties set in the first block whose selector matches `selector`. */
+  const tokens = (text: string): Record<string, string> =>
+    Object.fromEntries(
+      [...text.matchAll(/(--[\w-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1]!, m[2]!]),
+    );
+  const block = (text: string, start: RegExp): string => {
+    const at = text.search(start);
+    expect(at).toBeGreaterThanOrEqual(0);
+    let depth = 0;
+    for (let i = text.indexOf('{', at); i < text.length; i++) {
+      if (text[i] === '{') depth++;
+      if (text[i] === '}' && --depth === 0) return text.slice(at, i + 1);
+    }
+    throw new Error('unclosed block');
+  };
+  const luminance = (hex: string) => {
+    const [r, g, b] = [0, 2, 4].map((i) => {
+      const c = parseInt(hex.slice(1 + i, 3 + i), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  };
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  };
+  const KEYS = [
+    '--publish',
+    '--publish-bg',
+    '--publish-ink',
+    '--spend',
+    '--spend-bg',
+    '--spend-ink',
+  ];
+
+  it('gives the publish and spend tokens a dark and a light value, ink readable on each', () => {
+    const text = css();
+    const dark = tokens(block(text, /:root\s*{/));
+    const light = tokens(block(text, /@media \(prefers-color-scheme: light\)\s*{\s*\.pnl\s*{/));
+    for (const key of KEYS) {
+      expect(dark[key], `dark ${key}`).toBeDefined();
+      expect(light[key], `light ${key}`).toBeDefined();
+      expect(light[key]).not.toBe(dark[key]);
+    }
+    for (const theme of [dark, light]) {
+      for (const kind of ['publish', 'spend']) {
+        // The badge's and the pill's ink on their fill (WCAG AA for small text).
+        expect(contrast(theme[`--${kind}-ink`]!, theme[`--${kind}`]!)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('styles the publish pill itself, over the light theme’s plain pill', () => {
+    const text = css();
+    const rule = block(text, /\.pnl \.pill\.kind-publish\s*{/);
+    expect(rule).toMatch(/background:\s*var\(--publish\)/);
+    expect(rule).toMatch(/color:\s*var\(--publish-ink\)/);
+    expect(rule).toMatch(/border:[^;]*var\(--publish\)/);
+    show(<QuestionCard question={publish} />);
+    expect(within(screen.getByRole('article')).getByText('publish').className).toBe(
+      'pill kind-publish',
+    );
+  });
+});
+
 describe('the usage-limit card', () => {
   it('offers each option as a button and no free text', async () => {
     show(<QuestionCard question={limit} />);
