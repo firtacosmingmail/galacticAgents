@@ -129,7 +129,7 @@ export function prepareCodexHome(dir: string, authSource: string): PreparedHome 
  * real path. Only paths are resolved — the file is never read.
  */
 function resolvedAuth(authSource: string): string {
-  let isLink = false;
+  let isLink: boolean;
   try {
     isLink = lstatSync(authSource).isSymbolicLink();
   } catch {
