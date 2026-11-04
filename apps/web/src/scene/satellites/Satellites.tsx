@@ -35,6 +35,9 @@ import {
   beamMatrix,
   bodyColor,
   bodyMatrix,
+  ringColor,
+  ringGeometry,
+  ringMatrix,
   satelliteGeometry,
 } from './satellite-mesh.js';
 import {
@@ -47,6 +50,7 @@ import { getSatellite, onSatellitesChanged, satelliteIds } from './registry.js';
 import { HqStation, HqTargets, writeHq } from './hq/HqStation.js';
 import { applyHqPose, ordinarySatellites } from './hq/hq-model.js';
 import { useHeldArchetypes } from './activity/use-held-archetypes.js';
+import { providerRing } from './look.js';
 
 /**
  * The satellites (P4-01; SPEC §4.1, TECHNOLOGY §2.1): one per live Waykeeper and Steward, orbiting
@@ -66,6 +70,10 @@ beam mesh holds only the scanning satellites' beams and is hidden when none scan
  * every frame carries its state's tint and pulse (`look.ts`), copied here into the material or
  * instance colour (no extra draw call). The HQ is the Harmonizer's frame drawn with its own model
  * (`hq/HqStation.tsx`, outside the instancing), written in this same frame loop.
+ *
+ * P11-15: a satellite on ChatGPT or Gemini carries a thin ring in its provider's colour
+ * (`ringGeometry`): a third mesh for that satellite only, or a third instanced mesh holding just
+ * the visible rings (hidden, so no draw call, while none is drawn).
  *
  * Under `prefers-reduced-motion` the satellites stand still on their orbits and never scan; the
  * frame loop is then on demand, so a change of satellites, of anchors or of the scale asks for one
@@ -127,7 +135,14 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
   const instanced = instancedPath(others.length, quality.satellites);
   const bloom = quality.bloom !== null;
 
-  const shapes = useMemo(() => ({ body: satelliteGeometry(), beam: beamGeometry() }), []);
+  const shapes = useMemo(
+    () => ({ body: satelliteGeometry(), beam: beamGeometry(), ring: ringGeometry() }),
+    [],
+  );
+  const rings = useMemo(
+    () => new Map(list.map((s) => [s.agentId, providerRing(s.provider)] as const)),
+    [list],
+  );
   useEffect(() => () => Object.values(shapes).forEach((g) => g.dispose()), [shapes]);
 
   const [targets] = useState(() => new RenderTargets());
@@ -168,7 +183,13 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
       ) : (
         <group name="satellites">
           {others.map((id) => (
-            <SatelliteMeshes key={id} agentId={id} shapes={shapes} targets={targets} />
+            <SatelliteMeshes
+              key={id}
+              agentId={id}
+              ring={rings.get(id)}
+              shapes={shapes}
+              targets={targets}
+            />
           ))}
         </group>
       )}
@@ -179,6 +200,8 @@ export function Satellites({ quality }: { quality: SceneQuality }) {
 interface MeshPair {
   body: Mesh | null;
   beam: Mesh | null;
+  /** The provider ring (P11-15), for a satellite on ChatGPT or Gemini only. */
+  ring?: Mesh | null;
 }
 
 /** Where the frame loop writes: the per-satellite meshes, or the two instanced meshes. */
@@ -186,12 +209,19 @@ export class RenderTargets {
   readonly meshes = new Map<Id, MeshPair>();
   bodies: InstancedMesh | null = null;
   beams: InstancedMesh | null = null;
-  setInstanced(bodies: InstancedMesh | null, beams: InstancedMesh | null): () => void {
+  rings: InstancedMesh | null = null;
+  setInstanced(
+    bodies: InstancedMesh | null,
+    beams: InstancedMesh | null,
+    rings: InstancedMesh | null = null,
+  ): () => void {
     this.bodies = bodies;
     this.beams = beams;
+    this.rings = rings;
     return () => {
       if (this.bodies === bodies) this.bodies = null;
       if (this.beams === beams) this.beams = null;
+      if (this.rings === rings) this.rings = null;
     };
   }
   register(agentId: Id, pair: MeshPair): () => void {
@@ -237,6 +267,7 @@ const lookupAnchor: AnchorLookup = (bodyId: Id, out: Vec3Tuple) => {
 interface Shapes {
   body: BufferGeometry;
   beam: BufferGeometry;
+  ring: BufferGeometry;
 }
 
 function writeMeshes(
@@ -247,9 +278,17 @@ function writeMeshes(
   for (const f of frames) {
     const pair = targets.meshes.get(f.agentId);
     if (!pair) continue;
-    const { body, beam } = pair;
+    const { body, beam, ring } = pair;
     // P6-04: a claimed frame is drawn by a view's own model (a Steward robot or drone).
     const shown = f.visible && !f.claimed;
+    if (ring) {
+      ring.visible = shown && f.ring !== undefined;
+      if (ring.visible) {
+        ringMatrix(f, ring.matrix);
+        ring.matrixWorldNeedsUpdate = true;
+        (ring.material as MeshBasicMaterial).color.copy(ringColor(f, color));
+      }
+    }
     if (body) {
       body.visible = shown;
       if (shown) {
@@ -276,14 +315,16 @@ function writeMeshes(
  */
 export function writeInstanced(
   frames: readonly SatelliteFrame[],
-  targets: Pick<RenderTargets, 'bodies' | 'beams'>,
+  targets: Pick<RenderTargets, 'bodies' | 'beams'> & Partial<Pick<RenderTargets, 'rings'>>,
   bloom: boolean,
 ): void {
   const { bodies, beams } = targets;
+  const rings = targets.rings ?? null;
   if (!bodies || !beams) return;
   const capacity = bodies.instanceMatrix.count;
   let n = 0;
   let m = 0;
+  let r = 0;
   for (const f of frames) {
     if (n >= capacity) break;
     if (f.role === 'harmonizer') continue; // the HQ station has its own meshes
@@ -291,6 +332,11 @@ export function writeInstanced(
     bodies.setMatrixAt(n, bodyMatrix(f, matrix));
     bodies.setColorAt(n, bodyColor(f, color));
     n++;
+    if (rings && f.visible && f.ring !== undefined) {
+      rings.setMatrixAt(r, ringMatrix(f, matrix));
+      rings.setColorAt(r, ringColor(f, color));
+      r++;
+    }
     if (!f.visible || f.beam <= 0) continue;
     beams.setMatrixAt(m, beamMatrix(f, matrix));
     beams.setColorAt(m, beamColor(f, bloom, color));
@@ -303,26 +349,54 @@ export function writeInstanced(
   beams.instanceMatrix.needsUpdate = true;
   if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true;
   if (beams.instanceColor) beams.instanceColor.needsUpdate = true;
+  if (rings) {
+    rings.count = r;
+    rings.visible = r > 0;
+    rings.instanceMatrix.needsUpdate = true;
+    if (rings.instanceColor) rings.instanceColor.needsUpdate = true;
+  }
 }
 
 /** One satellite and its beam (the per-satellite path); matrices are written by the parent. */
 function SatelliteMeshes({
   agentId,
+  ring: ringColour,
   shapes,
   targets,
 }: {
   agentId: Id;
+  /** Its provider ring's colour (P11-15), or `undefined` for none (a Claude satellite). */
+  ring: string | undefined;
   shapes: Shapes;
   targets: RenderTargets;
 }) {
   const body = useRef<Mesh>(null);
   const beam = useRef<Mesh>(null);
+  const ring = useRef<Mesh>(null);
+  const ringed = ringColour !== undefined;
   useLayoutEffect(
-    () => targets.register(agentId, { body: body.current, beam: beam.current }),
-    [agentId, targets],
+    () =>
+      targets.register(agentId, {
+        body: body.current,
+        beam: beam.current,
+        ...(ringed ? { ring: ring.current } : {}),
+      }),
+    [agentId, targets, ringed],
   );
   return (
     <>
+      {ringed && (
+        <mesh
+          ref={ring}
+          name={`satellite-ring:${agentId}`}
+          geometry={shapes.ring}
+          matrixAutoUpdate={false}
+          visible={false}
+          layers={DECOR_LAYER}
+        >
+          <meshBasicMaterial toneMapped />
+        </mesh>
+      )}
       <mesh
         ref={body}
         name={`satellite:${agentId}`}
@@ -379,6 +453,7 @@ function InstancedSatellites({
         depthWrite: false,
         toneMapped: false,
       }),
+      ring: new MeshBasicMaterial(),
     }),
     [],
   );
@@ -386,15 +461,17 @@ function InstancedSatellites({
   // Instance colours from the start (the material compiles with them), zero matrices until drawn.
   const bodies = useRef<InstancedMesh>(null);
   const beams = useRef<InstancedMesh>(null);
+  const rings = useRef<InstancedMesh>(null);
   useLayoutEffect(() => {
-    for (const mesh of [bodies.current, beams.current]) {
+    for (const mesh of [bodies.current, beams.current, rings.current]) {
       if (!mesh) continue;
       mesh.instanceColor = new InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
       const zero = new Matrix4().makeScale(0, 0, 0);
       for (let i = 0; i < capacity; i++) mesh.setMatrixAt(i, zero);
       mesh.count = 0;
     }
-    return targets.setInstanced(bodies.current, beams.current);
+    if (rings.current) rings.current.visible = false;
+    return targets.setInstanced(bodies.current, beams.current, rings.current);
   }, [capacity, targets]);
   return (
     <group name="satellites-instanced">
@@ -407,6 +484,12 @@ function InstancedSatellites({
       <instancedMesh
         ref={beams}
         args={[shapes.beam, materials.beam, capacity]}
+        frustumCulled={false}
+        layers={DECOR_LAYER}
+      />
+      <instancedMesh
+        ref={rings}
+        args={[shapes.ring, materials.ring, capacity]}
         frustumCulled={false}
         layers={DECOR_LAYER}
       />

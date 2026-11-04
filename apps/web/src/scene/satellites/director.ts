@@ -29,6 +29,7 @@ import {
   satelliteBrightness,
   satelliteOrbitRate,
   satelliteScale,
+  providerRing,
   satelliteTint,
 } from './look.js';
 import type { SatelliteSpec } from './satellite-model.js';
@@ -97,6 +98,8 @@ export interface SatelliteFrame {
   brightness: number;
   /** The beam's colour, linear RGB before its gain (`beamTint`). */
   beamTint: readonly [number, number, number];
+  /** The provider ring's colour (CSS), for a satellite on ChatGPT or Gemini (P11-15). */
+  ring?: string | undefined;
   /**
    * P6-04: a view draws its own model at this frame (`placement.ts`: the detail view's Steward
    * robots and drones); the renderer draws neither the satellite nor its beam.
@@ -361,6 +364,7 @@ export class SatelliteDirector {
           tint: satelliteTint(spec),
           brightness: 1,
           beamTint: beamTint(spec),
+          ring: providerRing(spec.provider),
         },
         clock: now,
         clockAt: now,
@@ -473,6 +477,7 @@ export class SatelliteDirector {
       f.tint = satelliteTint(e.spec);
       f.brightness = satelliteBrightness(e.spec, view, now, reduced);
       f.beamTint = beamTint(e.spec);
+      f.ring = providerRing(e.spec.provider);
       f.presence = this.presenceAt(e, now);
       const radius = anchors(e.actor.bodyId, scratchCentre);
       if (radius === undefined) {

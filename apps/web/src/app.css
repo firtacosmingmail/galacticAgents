@@ -2,13 +2,27 @@
   /* Real-money approvals (P10-07, decision 145): their own colour, apart from permissions. */
   --spend: #2f9e6b;
   --spend-bg: #0f1d17;
-  /* Publish approvals (P11-09): a post under the user's name, its own colour. */
-  --publish: #c2571a;
+  --spend-ink: #04110b;
+  /* Publish approvals (P11-09): a post under the user's name, its own colour (ink 4.8:1). */
+  --publish: #cc5f1f;
   --publish-bg: #24140b;
+  --publish-ink: #1a0b02;
   color-scheme: dark;
   font-family: system-ui, sans-serif;
   background: #0b0e17;
   color: #e6e9f2;
+}
+/* The panel's light theme (P11-15, as `panel.css` splits its own tokens): the same kinds, darker
+   fills with white ink (spend 5.3:1, publish 6.2:1) and pale card backgrounds. */
+@media (prefers-color-scheme: light) {
+  .pnl {
+    --spend: #1d7a4f;
+    --spend-bg: #e9f6ef;
+    --spend-ink: #ffffff;
+    --publish: #a3440f;
+    --publish-bg: #fdf0e6;
+    --publish-ink: #ffffff;
+  }
 }
 body {
   margin: 0;
@@ -256,7 +270,7 @@ button.danger {
   height: 1.5em;
   border-radius: 999px;
   background: var(--spend);
-  color: #04110b;
+  color: var(--spend-ink);
   font-weight: 700;
 }
 .spend-amount {
@@ -275,7 +289,7 @@ button.danger {
   height: 1.5em;
   border-radius: 999px;
   background: var(--publish);
-  color: #1a0b02;
+  color: var(--publish-ink);
   font-weight: 700;
 }
 .publish-text {
@@ -292,9 +306,13 @@ button.danger {
   max-height: 240px;
   object-fit: contain;
 }
-.pill.kind-publish {
+/* The publish pill (P11-15): its own colour in both themes, over the light theme's plain pill
+   (`.pnl .pill` in `panel.css`). */
+.pill.kind-publish,
+.pnl .pill.kind-publish {
   background: var(--publish);
-  color: #1a0b02;
+  color: var(--publish-ink);
+  border: 1px solid var(--publish);
 }
 .publish-edit textarea {
   width: 100%;
