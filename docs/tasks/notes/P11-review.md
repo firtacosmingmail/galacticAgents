@@ -62,10 +62,9 @@ The batch's final review is the controller's, after P11-10.
 - Commands Codex runs without asking (`cat`) bypass the tool-call cap; a `CODEX_HOME` pointing at
   the managed home would link `auth.json` to itself; a real token refresh over the auth symlink is
   still unobserved (R27 handles it without deleting anything).
-- Usage limits: an `updateTask` throw in the switch path is not routed through the refusal; an
-  open limit question lingers after its task closes; a free-text answer is refused rather than
-  explained; a change card moving a job to Gemini without a follow-up provider fails only at run
-  time (R22's card text says so).
+- Usage limits: a change card moving a job to Gemini without a follow-up provider fails only at
+  run time (R22's card text says so). (The `updateTask` throw, the lingering question, the
+  free-text answer, M3, M4 and M6 are fixed in P11-13.)
 - Web: no `.pill.kind-publish` style; publish tokens have no light/dark split (as `spend`); the
   satellite mark is a 30 % tint blend, not a ring; the 320 px unit test is a CSS proxy (the e2e
   spec now measures real cards at 390 and 320 px); the not-ready preflight test does not

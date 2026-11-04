@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   LIMIT_WAIT,
@@ -13,6 +16,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import type { FakeScenario } from '../adapters/fake/scenario.js';
 import { openDatabase } from '../db/database.js';
 import { createAgent } from '../domain/agents.js';
+import { DomainError } from '../domain/errors.js';
 import { tickingClock } from '../test/world.js';
 import type { CapsConfig } from './caps.js';
 import { composeRuntime, type ComposedRuntime } from './compose.js';
@@ -76,9 +80,16 @@ afterEach(async () => {
 });
 
 function boot(
-  opts: { resetsAt?: string | null; agyUsage?: ProviderUsage; caps?: CapsConfig } = {},
+  opts: {
+    resetsAt?: string | null;
+    agyUsage?: ProviderUsage;
+    caps?: CapsConfig;
+    /** A database file (a restart: a second composition over the same file). */
+    file?: string;
+    clock?: ReturnType<typeof tickingClock>;
+  } = {},
 ) {
-  const clock = tickingClock(START);
+  const clock = opts.clock ?? tickingClock(START);
   const resetsAt = opts.resetsAt === null ? undefined : (opts.resetsAt ?? RESETS);
   // A first spawn hits the limit; a Steward given the handover carries on.
   const scenarioFor = (spawn: { prompt: string }) =>
@@ -94,7 +105,7 @@ function boot(
       canPublish: runtime !== 'agy',
       ...(usage ? { usage } : {}),
     });
-  const c = composeRuntime(openDatabase(':memory:'), {
+  const c = composeRuntime(openDatabase(opts.file ?? ':memory:'), {
     adapters: [
       new FakeAdapter({ speed: 0 }),
       provider('claude-sdk', CLAUDE_MODELS),
@@ -383,7 +394,7 @@ describe('usage limits (P11-07)', () => {
     const { wk, question } = await limitedTask(c);
     await expect(
       c.commands.answerQuestion({ questionId: question.id, answer: 'Switch to Mars', by: USER }),
-    ).rejects.toThrow(/answer the usage limit/);
+    ).rejects.toThrow(/^Answer with one of: /);
     await expect(
       c.commands.answerQuestion({
         questionId: question.id,
@@ -452,5 +463,111 @@ describe('usage limits (P11-07)', () => {
     clock.advance(3 * 60_000);
     await c.usageLimits.tick();
     await until(() => spawnsOf(c, steward.id) === 2, 'the retried Steward');
+  });
+
+  it('an open limit question is withdrawn when its task closes; a late answer is refused', async () => {
+    const { c } = boot();
+    const { task, question } = await limitedTask(c, TEXT_ON_GEMINI);
+    await c.commands.closeTask(task.id, USER);
+    expect(c.log.tables.questions.get(question.id)?.status).toBe('cancelled');
+    const cancelled = c.log
+      .eventsSince(0, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter((e) => e.type === 'question.cancelled' && e.questionId === question.id);
+    expect(cancelled).toEqual([expect.objectContaining({ reason: 'the task was closed' })]);
+    await expect(
+      c.commands.answerQuestion({
+        questionId: question.id,
+        answer: 'Switch to ChatGPT · GPT-5.6',
+        by: USER,
+      }),
+    ).rejects.toThrow(/withdrawn|cancelled|not open/);
+    await c.usageLimits.tick();
+    expect(stewardsOf(c, task.id)).toHaveLength(1);
+  });
+
+  it('a paused task keeps its limit question; a failed one withdraws it', async () => {
+    const { c } = boot();
+    const { task, question } = await limitedTask(c, TEXT_ON_GEMINI);
+    await until(() => c.log.tables.tasks.get(task.id)?.state === 'paused', 'the task paused');
+    expect(c.log.tables.questions.get(question.id)?.status).toBe('open');
+    await c.commands.setTaskState(task.id, 'failed');
+    expect(c.log.tables.questions.get(question.id)?.status).toBe('cancelled');
+  });
+
+  it('a refused task update in the switch path fails the task, once', async () => {
+    const { c } = boot();
+    const { task, question } = await limitedTask(c, TEXT_ON_GEMINI);
+    c.commands.updateTask = () =>
+      Promise.reject(new DomainError('invalid', 'the task cannot change provider now'));
+    await c.commands.answerQuestion({
+      questionId: question.id,
+      answer: 'Switch to ChatGPT · GPT-5.6',
+      by: USER,
+    });
+    await c.usageLimits.settled();
+    const failed = c.log.tables.tasks.get(task.id)!;
+    expect(failed.state).toBe('failed');
+    expect(failed.meta?.['limitRestartFailed']).toBe(
+      'could not restart after the usage limit: the task cannot change provider now',
+    );
+    expect(c.log.tables.questions.get(question.id)?.meta?.['switchedAt']).toBeDefined();
+    await c.usageLimits.tick();
+    expect(stewardsOf(c, task.id)).toHaveLength(1);
+  });
+
+  it('a free-text answer is refused with the choices; the question stays open', async () => {
+    const { c } = boot();
+    const { question } = await limitedTask(c, TEXT_ON_GEMINI);
+    await expect(
+      c.commands.answerQuestion({
+        questionId: question.id,
+        answer: 'use the cheaper one',
+        by: USER,
+      }),
+    ).rejects.toThrow(
+      `Answer with one of: ${question.context.options!.join(', ')} — not "use the cheaper one"`,
+    );
+    expect(question.context.options).toContain(LIMIT_WAIT);
+    expect(c.log.tables.questions.get(question.id)?.status).toBe('open');
+  });
+
+  it('a waiting limit is retried after the reset by a fresh composition over the same database', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'galactic-limits-restart-'));
+    try {
+      const file = join(dir, 'galactic.db');
+      const clock = tickingClock(START);
+      const first = boot({ file, clock });
+      const { task, steward, question } = await limitedTask(first.c, TEXT_ON_GEMINI);
+      await first.c.commands.answerQuestion({
+        questionId: question.id,
+        answer: LIMIT_WAIT,
+        by: USER,
+      });
+      await first.c.shutdown();
+      lives.splice(lives.indexOf(first.c), 1);
+      await first.c.dispose().catch(() => {});
+
+      // A new server on the same file, the reset passed while it was down.
+      clock.advance(Date.parse(RESETS) - START + 60_000);
+      const second = boot({ file, clock });
+      expect(second.c.log.tables.questions.get(question.id)?.meta).toMatchObject({
+        retryAt: RESETS,
+      });
+      await second.c.recover();
+      second.c.usageLimits.start();
+      await second.c.usageLimits.settled();
+      await until(
+        () => spawnsOf(second.c, steward.id) === 2 || stewardsOf(second.c, task.id).length === 2,
+        'the retried Steward',
+      );
+      await second.c.usageLimits.tick();
+      await second.c.usageLimits.settled();
+      expect(second.c.log.tables.questions.get(question.id)?.meta?.['retriedAt']).toBeDefined();
+      expect(spawnsOf(second.c, steward.id) + stewardsOf(second.c, task.id).length).toBe(3);
+    } finally {
+      for (const c of lives.splice(0)) await c.dispose().catch(() => {});
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

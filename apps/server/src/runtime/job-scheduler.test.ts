@@ -1138,6 +1138,156 @@ describe('job scheduler (P10-04)', () => {
     expect(paused.followUps).toEqual([followUp]);
   });
 
+  describe('usage limits: the deferred cases (P11-13)', () => {
+    const RESETS_AT = oct(1, 14).toISOString();
+    const LIMIT: FakeScenario = {
+      steps: [{ kind: 'fail', error: 'usage limit reached', reason: 'limit', resetsAt: RESETS_AT }],
+    };
+    const PUBLISH_BASE = { platform: 'X', account: '@shop', text: 'We launched!', files: [] };
+
+    /** Queues an approved publish follow-up and runs it (limited); returns the limit question. */
+    async function limitedPublish(c: ComposedRuntime, clock: Clock, jobId: Id) {
+      const followUp = {
+        questionId: 'q-publish',
+        kind: 'publish' as const,
+        publish: { ...PUBLISH_BASE, fingerprint: 'a'.repeat(64), jobId },
+      };
+      c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, jobId), { followUps: [followUp] }));
+      setTo(clock, oct(1, 10, 30));
+      await c.jobs.tick();
+      await until(() => jobNow(c, jobId).limitQuestionId !== undefined, 'the limit question');
+      const question = c.log.tables.questions.get(jobNow(c, jobId).limitQuestionId!)!;
+      // The run may have posted: its publish is asked again (ruling R13).
+      const reasked = c.log.tables.questions
+        .all()
+        .filter((q) => q.kind === 'publish' && q.meta?.['reaskOf'] === 'q-publish');
+      expect(reasked).toHaveLength(1);
+      return { question, reasked: reasked[0]! };
+    }
+
+    it('stopping a job withdraws its open limit question; pausing keeps it', async () => {
+      const { c, clock } = boot({ scenario: () => LIMIT });
+      const { job } = await longTermJob(c);
+      setTo(clock, oct(1, 9));
+      await c.jobs.tick();
+      await until(() => jobNow(c, job.id).limitQuestionId !== undefined, 'the limit question');
+      const questionId = jobNow(c, job.id).limitQuestionId!;
+      await c.commands.setJobState({ jobId: job.id, state: 'paused', by: USER });
+      expect(c.log.tables.questions.get(questionId)?.status).toBe('open');
+      expect(jobNow(c, job.id).limitQuestionId).toBe(questionId);
+
+      await c.commands.setJobState({ jobId: job.id, state: 'stopped', by: USER });
+      expect(c.log.tables.questions.get(questionId)?.status).toBe('cancelled');
+      expect(jobNow(c, job.id).limitQuestionId).toBeUndefined();
+      expect(
+        events(c).filter((e) => e.type === 'question.cancelled' && e.questionId === questionId),
+      ).toEqual([expect.objectContaining({ reason: 'the job was stopped' })]);
+      await expect(
+        c.commands.answerQuestion({ questionId, answer: LIMIT_WAIT, by: USER }),
+      ).rejects.toThrow();
+    });
+
+    it('Wait on a limited publish follow-up leaves the ordinary schedule alone (M3)', async () => {
+      let spawns = 0;
+      const { c, clock } = boot({
+        clock: tickingClock(oct(1, 10).getTime()),
+        canPublish: true,
+        scenario: () => (spawns++ === 0 ? LIMIT : ECHO),
+      });
+      const { job } = await longTermJob(c);
+      expect(jobNow(c, job.id).nextRunAt).toBe(oct(2, 9).toISOString());
+      const { question, reasked } = await limitedPublish(c, clock, job.id);
+      await c.commands.answerQuestion({ questionId: question.id, answer: LIMIT_WAIT, by: USER });
+      expect(jobNow(c, job.id).nextRunAt).toBe(oct(2, 9).toISOString());
+
+      // Past the reset: the wait is over, the ordinary run is still tomorrow's.
+      setTo(clock, oct(1, 14, 1));
+      await c.usageLimits.tick();
+      expect(jobNow(c, job.id).limitQuestionId).toBeUndefined();
+      expect(jobNow(c, job.id).nextRunAt).toBe(oct(2, 9).toISOString());
+      expect((await c.jobs.tick()).started).toEqual([]);
+
+      // The re-asked publish approved: the follow-up runs, the schedule stays.
+      await c.commands.answerQuestion({ questionId: reasked.id, answer: 'Approve', by: USER });
+      expect((await c.jobs.tick()).started).toHaveLength(1);
+      expect(runsOf(c, job.id).at(-1)).toMatchObject({ purpose: 'follow_up' });
+      expect(jobNow(c, job.id).nextRunAt).toBe(oct(2, 9).toISOString());
+    });
+
+    it('a switch on a limited publish follow-up goes to its re-asked publish, not the next ordinary run (M4)', async () => {
+      const textModel = (id: string, label: string, family: 'claude' | 'gpt' | 'gemini') => ({
+        id,
+        label,
+        family,
+        isDefault: false,
+        capabilities: ['text' as const],
+      });
+      const codex = new FakeAdapter({
+        speed: 0,
+        runtime: 'codex',
+        canPublish: true,
+        models: [textModel('gpt-5.6', 'GPT-5.6', 'gpt')],
+        scenarioFor: () => ({ name: 'limited', scenario: LIMIT }),
+      });
+      const claude = new FakeAdapter({
+        speed: 0,
+        runtime: 'claude-sdk',
+        canPublish: true,
+        models: [textModel('sonnet', 'Sonnet', 'claude')],
+        scenarioFor: () => ({ name: 'echo', scenario: ECHO }),
+      });
+      const agy = new FakeAdapter({
+        speed: 0,
+        runtime: 'agy',
+        canPublish: false,
+        models: [textModel('gemini-3-flash', 'Gemini 3 Flash', 'gemini')],
+        scenarioFor: () => ({ name: 'echo', scenario: ECHO }),
+      });
+      const { c, clock } = boot({
+        clock: tickingClock(oct(1, 10).getTime()),
+        providers: [codex, claude, agy],
+        // The Waykeeper row runs on `fake`, so its Claude Stewards do too (the dev rule).
+        canPublish: true,
+      });
+      const { job } = await longTermJob(c, { provider: 'gemini' });
+      c.log.runCommand((ctx) => writeJob(ctx, jobOf(ctx, job.id), { followUpProvider: 'chatgpt' }));
+      const { question, reasked } = await limitedPublish(c, clock, job.id);
+      expect(c.log.tables.agents.get(runsOf(c, job.id)[0]!.agentId!)?.runtime).toBe('codex');
+      // Computed for a publishing step: Claude, never Gemini (it cannot publish).
+      expect(question.context.options).toEqual(['Switch to Claude · Sonnet', LIMIT_WAIT]);
+      await c.commands.answerQuestion({
+        questionId: question.id,
+        answer: 'Switch to Claude · Sonnet',
+        by: USER,
+      });
+      // No ordinary run is made due by the switch.
+      expect(jobNow(c, job.id).nextRunAt).toBe(oct(2, 9).toISOString());
+      setTo(clock, oct(1, 10, 40));
+      expect((await c.jobs.tick()).started).toEqual([]);
+
+      // An ordinary run that comes first keeps the job's own provider, and the switch waits.
+      setTo(clock, oct(2, 9));
+      await c.jobs.tick();
+      const ordinary = runsOf(c, job.id).at(-1)!;
+      expect(ordinary.purpose).not.toBe('follow_up');
+      expect(c.log.tables.agents.get(ordinary.agentId!)?.runtime).toBe('agy');
+      expect(jobNow(c, job.id).limitQuestionId).toBe(question.id);
+      await until(ended(c, job.id), 'the ordinary run');
+
+      // The re-asked publish approved: its run is the one the switch was for.
+      await c.commands.answerQuestion({ questionId: reasked.id, answer: 'Approve', by: USER });
+      setTo(clock, oct(2, 9, 30));
+      await c.jobs.tick();
+      const retried = runsOf(c, job.id).at(-1)!;
+      expect(retried).toMatchObject({ purpose: 'follow_up' });
+      // Claude's Sonnet (on `fake`, the dev rule for a fake Waykeeper), not the job's ChatGPT.
+      expect(c.log.tables.agents.get(retried.agentId!)).toMatchObject({ runtime: 'fake' });
+      expect(c.log.tables.agents.get(retried.agentId!)?.meta).toMatchObject({ model: 'sonnet' });
+      expect(jobNow(c, job.id).limitQuestionId).toBeUndefined();
+      expect(jobNow(c, job.id)).toMatchObject({ provider: 'gemini', followUpProvider: 'chatgpt' });
+    });
+  });
+
   it('dispose() stops the timer', async () => {
     const fake = fakeTimers();
     const { c } = boot({ timers: fake.timers, intervalMs: 1000 });
