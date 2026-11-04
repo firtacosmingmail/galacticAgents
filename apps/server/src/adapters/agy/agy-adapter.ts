@@ -210,9 +210,14 @@ class Session {
    */
   deferred:
     { id: Id; question: string; answer: Promise<string | Dismissed | undefined> } | undefined;
+  /**
+   * A deferred answer that arrived while the session was paused with no process (P11-14): the
+   * turn is closed (no idle: the Steward is not done), and this is its next run's prompt, started
+   * on resume. An interrupt has nothing to cut; a message sent meanwhile joins it.
+   */
+  queued: string | undefined;
   /** An `ask_user` call is holding for its answer right now (one question at a time). */
   asking = false;
-  readonly unpauseWaiters: (() => void)[] = [];
   readonly ready: Promise<void>;
   markReady!: () => void;
   private turnWaiters: (() => void)[] = [];
@@ -231,16 +236,6 @@ class Session {
   /** Withdraws every pending question (but `keep`, a deferred `ask_user` that outlives the turn). */
   settlePending(keep?: Id): void {
     for (const q of [...this.pending.values()]) if (q.id !== keep) q.resolve(undefined);
-  }
-
-  /** Resolves once the session is not paused (at once when it is not). */
-  untilUnpaused(): Promise<void> {
-    if (!this.paused) return Promise.resolve();
-    return new Promise((r) => this.unpauseWaiters.push(r));
-  }
-
-  wakeUnpaused(): void {
-    for (const w of this.unpauseWaiters.splice(0)) w();
   }
 
   turnEnd(): Promise<void> {
@@ -705,16 +700,20 @@ export class AgyAdapter implements AgentAdapter {
     if (deferred && !session.terminal) {
       const answer = await deferred.answer; // `undefined`: withdrawn by an interrupt or a stop
       if (answer !== undefined && !session.terminal && !session.stopping && !session.interrupting) {
-        await session.untilUnpaused();
-        if (!session.terminal && !session.stopping && !session.interrupting) {
-          const prompt = isDismissed(answer)
-            ? dismissedClarification(answer.dismissed)
-            : `The user answered your question ("${deferred.question}"): ${answer}`;
-          this.startTurn(session, prompt).catch((error: unknown) =>
-            this.onError(error, `agy turn ${session.agentId}`),
-          );
+        const prompt = isDismissed(answer)
+          ? dismissedClarification(answer.dismissed)
+          : `The user answered your question ("${deferred.question}"): ${answer}`;
+        if (session.paused) {
+          // No process to freeze and nothing to interrupt: the answer waits for the resume, the
+          // turn is closed meanwhile so an interrupt or a message never waits on it (P11-14).
+          session.queued = prompt;
+          session.closeTurn();
           return;
         }
+        this.startTurn(session, prompt).catch((error: unknown) =>
+          this.onError(error, `agy turn ${session.agentId}`),
+        );
+        return;
       }
     }
     session.interrupting = false;
@@ -951,8 +950,16 @@ export class AgyAdapter implements AgentAdapter {
       await session.turnEnd();
     }
     if (session.terminal) throw new Error(`session ${sessionId} has ${session.terminal}`);
+    let prompt = message;
+    if (session.queued !== undefined) {
+      // A paused answer waits for the resume: the message joins it, delivered after it.
+      prompt = `${session.queued}\n\n${message}`;
+      session.queued = prompt;
+      if (session.paused) return;
+      session.queued = undefined;
+    }
     // The turn's start is reported through its events; a process that ends at once ends the turn.
-    this.startTurn(session, message).catch((error: unknown) =>
+    this.startTurn(session, prompt).catch((error: unknown) =>
       this.onError(error, `agy turn ${session.agentId}`),
     );
   }
@@ -1003,9 +1010,15 @@ export class AgyAdapter implements AgentAdapter {
 
   private thaw(session: Session): void {
     session.paused = false;
-    session.wakeUnpaused();
     if (session.process && session.process.state !== 'exited') session.process.signal('SIGCONT');
     this.emit(session, { type: 'agent.resumed', agentId: session.agentId, by: SYSTEM });
+    const queued = session.queued;
+    if (queued !== undefined && !session.turnOpen && !session.stopping && !session.terminal) {
+      session.queued = undefined;
+      this.startTurn(session, queued).catch((error: unknown) =>
+        this.onError(error, `agy turn ${session.agentId}`),
+      );
+    }
   }
 
   /** The supervisor's graceful stop, step 1: thaw, interrupt the turn's process. */
@@ -1107,7 +1120,6 @@ export class AgyAdapter implements AgentAdapter {
           ? 'failed'
           : 'stopped';
     session.settlePending();
-    session.wakeUnpaused();
     session.closeTurn();
     clearTimeout(session.killTimer);
     this.opts.bridge.unregister(session.secret);
