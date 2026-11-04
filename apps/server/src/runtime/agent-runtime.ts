@@ -42,6 +42,7 @@ import {
 import {
   endAgentQuestions,
   holdersNow,
+  isPublishingRun,
   rerouteHeldBy,
   livingFromStatuses,
   logRouting,
@@ -1868,12 +1869,9 @@ export class AgentRuntime {
   private isPublishingRun(agentId: Id, req?: SpawnRequest): boolean {
     const { tables } = this.opts.log;
     const agent = tables.agents.get(agentId);
-    if ((agent?.role ?? req?.role) !== 'steward') return false;
-    const taskId = agent?.taskId ?? req?.taskId;
-    if (taskId && tables.tasks.get(taskId)?.publishes) return true;
-    const job = this.jobOfRun(agentId, req);
-    const run = job?.runningRunId ? tables.jobRuns.get(job.runningRunId) : undefined;
-    return run?.followUp?.kind === 'publish';
+    const role = agent?.role ?? req?.role;
+    if (!role) return false;
+    return isPublishingRun(tables, { role, taskId: agent?.taskId ?? req?.taskId });
   }
 
   /** The job whose run this Steward is (its task is the job's hidden task), if any. */

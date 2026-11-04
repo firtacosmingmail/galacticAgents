@@ -18,7 +18,7 @@ import { useClientRules } from '../deliverables/use-deliverables.js';
  * folder, this whole category — each with the server's preview of exactly what it will match
  * (`POST …/similar-preview`); "Allow and remember" answers the request "allow" and stores the
  * rule on the project in one command. Never for a push, never for the Harmonizer's or an
- * asteroid's requests (no project), and only on a client that may write settings: the Mac's own
+ * asteroid's requests (no project), never for a publishing run's (P11-12: it takes no rules), and only on a client that may write settings: the Mac's own
  * page, or any client when the server sets `autoApproveRemote` (decisions 37, 90). The menu bar
  * keeps Allow once and Deny only (decision 136).
  */
@@ -31,6 +31,8 @@ export function similarProject(
   if (q.kind !== 'permission' || q.status !== 'open') return undefined;
   // A push always asks (decision 49); a request without a tool call has nothing to match.
   if (q.context.permissionAction === 'push' || !q.context.toolCall) return undefined;
+  // A publishing run works without rules (P11-12, ruling R26): a rule would only mislead.
+  if (q.context.origin?.publishingRun) return undefined;
   const agent = world.agents[q.originAgentId];
   const taskId = agent?.taskId ?? q.context.origin?.taskId;
   const projectId =
