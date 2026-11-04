@@ -669,6 +669,25 @@ describe('CodexAdapter', () => {
     expect(recorded(r)[0]!.codexHome).toBe(home);
   });
 
+  it('refuses to start when the login file resolves inside the managed home (no self-link)', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'galactic-codex-home-'));
+    const home = join(base, 'codex-home');
+    const r = rig({}, { home, authSource: join(home, 'auth.json') });
+    const pre = await r.adapter.preflight();
+    expect(pre.ok).toBe(false);
+    expect(pre.problems).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringMatching(/inside the managed Codex home/),
+        fix: expect.stringMatching(/CODEX_HOME/),
+      }),
+    );
+    await expect(r.adapter.spawn(spawnOpts(r, 'scenario:echo'))).rejects.toThrow(
+      /inside the managed Codex home/,
+    );
+    expect(existsSync(join(home, 'auth.json'))).toBe(false);
+    expect(recorded(r)).toHaveLength(0);
+  });
+
   it('a resumed thread keeps its dynamic tools: ask_user asks again after a restart', async () => {
     const r = rig();
     const opts = spawnOpts(r, 'scenario:asks');

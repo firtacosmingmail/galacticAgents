@@ -42,7 +42,7 @@ import {
   userQuestions,
   type UserQuestion,
 } from './mapping.js';
-import { defaultAuthSource, prepareCodexHome, type PreparedHome } from './home.js';
+import { defaultAuthSource, prepareCodexHome, SELF_LINK, type PreparedHome } from './home.js';
 import { codexPreflight } from './preflight.js';
 import {
   initializeParams,
@@ -315,7 +315,9 @@ export class CodexAdapter implements AgentAdapter {
             code: 'check_failed',
             severity: 'error',
             message: `GalacticAgents could not prepare its Codex home: ${(error as Error).message}`,
-            fix: `Check that ${this.opts.home} can be written`,
+            fix: SELF_LINK.test((error as Error).message)
+              ? 'Point CODEX_HOME at your own Codex folder (not GalacticAgents’ Codex home)'
+              : `Check that ${this.opts.home} can be written`,
           },
         ],
       };
