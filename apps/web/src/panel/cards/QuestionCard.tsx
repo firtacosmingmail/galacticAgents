@@ -1,3 +1,4 @@
+import { taskLabel } from '@galactic/protocol';
 import { useRef, useState } from 'react';
 import type { Id, Question } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
@@ -76,7 +77,7 @@ export function OriginContext({ question }: { question: Question }) {
   return (
     <div className="origin muted">
       from <AgentRef agentId={question.originAgentId} />
-      {task ? ` · task "${task.description}"` : ''}
+      {task ? ` · task "${taskLabel(task)}"` : ''}
       {project ? ` · project ${project.name}` : ''}
       {body ? ` · on ${body.name}` : ''}
       {origin && origin.recent.length > 0 && (

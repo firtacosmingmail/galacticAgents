@@ -266,7 +266,7 @@ function NavRow({
           aria-expanded={acting}
           aria-controls={acting ? actionsId : undefined}
           aria-label={`Actions for ${item.label}`}
-          title={`Close, cancel, archive… this ${item.kind}`}
+          title={`Rename, close, cancel, archive… this ${item.kind}`}
           onClick={() => setActing((a) => !a)}
         >
           <span aria-hidden="true">⋯</span>

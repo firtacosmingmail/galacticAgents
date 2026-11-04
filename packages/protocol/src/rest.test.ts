@@ -79,6 +79,23 @@ describe('REST body schemas (P1-38)', () => {
 });
 
 describe('ControlBody (P2-14)', () => {
+  it('takes a task title or a project name up to 120 characters; null clears the title (P8-24)', () => {
+    const edit = (changes: Record<string, unknown>) =>
+      ControlBody.safeParse({
+        target: { kind: 'task', id: 't-1' },
+        action: { action: 'edit', changes },
+      });
+    expect(edit({ title: 'Short' }).success).toBe(true);
+    expect(edit({ title: null }).success).toBe(true);
+    expect(edit({ title: 'x'.repeat(121) }).success).toBe(false);
+    const named = edit({ name: '  CSV  ' });
+    expect(named.success && named.data.action).toEqual({
+      action: 'edit',
+      changes: { name: 'CSV' },
+    });
+    expect(edit({ name: '   ' }).success).toBe(false);
+  });
+
   it('takes every panel action and refuses edits of other fields', () => {
     const target = { kind: 'task', id: 't-1' } as const;
     for (const action of ['stop', 'cancel', 'pause', 'resume', 'close', 'archive', 'reopen']) {

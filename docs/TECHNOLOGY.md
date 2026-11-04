@@ -366,6 +366,8 @@ Enforced by the process supervisor, not by prompts, from Phase 1: per-agent wall
 
 `domain/cascade.ts`: a panel or Harmonizer control on a task or project records `control.*` and sets the state with `by` (SPEC decision 28) in one command, then the `Commands` surface pauses, resumes or stops the item's live agents through the runtime, each logging its own `control.*{agent}`; a refusal by some agents rejects with `conflict` and the rest stands. Exposed as `POST /api/control {target, action}` (bearer-guarded, zod-validated: 400 / 404 / 409) and as `DomainCommands.control`. `retentionDue(tables)` lists finished, unpinned projects for P2-13's archival job.
 
+
+**Renaming (P8-24, SPEC decision 150; `domain/control.ts`, `brains/wake.ts`, `apps/web/src/panel/nav-row-actions.tsx`).** `POST /api/control` `edit` takes `title` on a task (`string`, ≤ `WORK_NAME_MAX` = 120; blank or `null` clears it) next to a project's `name` (trimmed, 1–120). The title lives in `task.meta.title` — no column, no migration: `control.ts` merges it into the row's `meta` and `updateTask` emits `task.updated{changes:{meta}}` with the whole merged `meta` (the patch rule replaces `meta` as one field), and clearing an absent title records only `control.edit`. `taskTitle(task)` / `taskLabel(task)` in `packages/protocol/src/domain.ts` are the one rule every client view uses to name a task (title, else description). The wake table skips a `control.edit` whose only change is `title`; any other change (a project's `name` included) wakes as before. The Harmonizer's `control_work` edit schema stays strict and does not take a title.
 ---
 
 ## 6. Persistence, event log and API protocol

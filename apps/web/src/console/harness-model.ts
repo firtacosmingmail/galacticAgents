@@ -7,6 +7,7 @@ import {
   type HarnessState,
   type Id,
   type Question,
+  taskLabel,
 } from '@galactic/protocol';
 import type { WorldState } from '../state/reduce.js';
 
@@ -50,7 +51,7 @@ export function harnessRows(
         label:
           agent.role === 'waykeeper'
             ? `Waykeeper · ${project?.name ?? agent.projectId ?? '?'}`
-            : `Steward · ${task?.description ?? agent.taskId ?? '?'}`,
+            : `Steward · ${labelOf(task) ?? agent.taskId ?? '?'}`,
         bodyName: world.bodies[bodyId]?.name,
       };
     });
@@ -179,3 +180,7 @@ export const EXIT_CRITERIA: readonly { id: string; criterion: string; steps: rea
       ],
     },
   ];
+
+/** A task's name (P8-24), or `undefined` when the task is not loaded. */
+const labelOf = (task: Parameters<typeof taskLabel>[0] | undefined) =>
+  task ? taskLabel(task) : undefined;

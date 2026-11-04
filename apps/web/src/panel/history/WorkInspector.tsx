@@ -1,3 +1,4 @@
+import { taskLabel } from '@galactic/protocol';
 import { useEffect, useRef, useState } from 'react';
 import type { HistoryWorkDetail } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
@@ -170,7 +171,7 @@ export function WorkInspector({
                   return (
                     <li key={t.id}>
                       <StatePill state={live.state} />{' '}
-                      <WorkLink target={{ kind: 'task', id: t.id }} name={live.description} />
+                      <WorkLink target={{ kind: 'task', id: t.id }} name={taskLabel(live)} />
                     </li>
                   );
                 })}

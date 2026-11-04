@@ -252,6 +252,22 @@ describe('WAKE_RULES', () => {
       'user stopped you',
     );
   });
+
+  it('does not wake on a task title alone; a project name still wakes (P8-24)', () => {
+    const s = scope();
+    const edit = fixtures['control.edit'];
+    expect(wakeLine(edit, s)).toBe('user edited task t-1');
+    expect(wakeLine({ ...edit, changes: { title: 'Session middleware' } }, s)).toBeUndefined();
+    expect(wakeLine({ ...edit, changes: { title: null } }, s)).toBeUndefined();
+    const project = { kind: 'project', id: 'p-1' } as const;
+    expect(wakeLine({ ...edit, target: project, changes: { name: 'CSV v2' } }, s)).toBe(
+      'user edited project p-1',
+    );
+    // A rename together with a real change still wakes.
+    expect(wakeLine({ ...edit, changes: { title: 'x', priority: 'urgent' } }, s)).toBe(
+      'user edited task t-1',
+    );
+  });
 });
 
 describe('control wake-ups through concernedSupervisors (P2-14 seam)', () => {

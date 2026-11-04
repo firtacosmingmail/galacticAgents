@@ -114,6 +114,14 @@ const control = <T extends EventType & `control.${string}`>(verb: string): WakeR
   },
 });
 
+/**
+ * An edit that only sets a task's title (P8-24, decision 150): the user's label for the side bar,
+ * which no agent works from. A project's name still wakes its Waykeeper: it names the project to
+ * the user.
+ */
+const titleOnly = (changes: Record<string, unknown>) =>
+  Object.keys(changes).length > 0 && Object.keys(changes).every((k) => k === 'title');
+
 type EndedType = 'agent.finished' | 'agent.failed' | 'agent.stalled';
 const ended = <T extends EndedType>(text: (e: EventOfType<T>) => string): WakeRule<T> => ({
   wakes: (e, s) => s.supervises((e as EventOfType<EndedType>).agentId),
@@ -346,7 +354,10 @@ export const WAKE_RULES: WakeRules = {
   'control.cancel': control('cancelled'),
   'control.pause': control('paused'),
   'control.resume': control('resumed'),
-  'control.edit': control('edited'),
+  'control.edit': {
+    ...control<'control.edit'>('edited'),
+    wakes: (e, s) => !titleOnly(e.changes) && control<'control.edit'>('edited').wakes(e, s),
+  },
   'control.close': control('closed'),
   'control.archive': control('archived'),
   'control.pin': control('pinned or unpinned'),
