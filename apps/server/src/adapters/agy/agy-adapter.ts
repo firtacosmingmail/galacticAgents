@@ -216,6 +216,13 @@ class Session {
    * on resume. An interrupt has nothing to cut; a message sent meanwhile joins it.
    */
   queued: string | undefined;
+  /**
+   * The prompt of a run started from `queued`, until that run's `init` (review I1): the runtime
+   * resumes a paused agent before interrupting it, so the resume starts the answer's run and the
+   * interrupt lands on it at once. An interrupt before `init` puts the prompt back in `queued`,
+   * and the next message carries it first.
+   */
+  queuedRun: string | undefined;
   /** An `ask_user` call is holding for its answer right now (one question at a time). */
   asking = false;
   readonly ready: Promise<void>;
@@ -547,6 +554,7 @@ export class AgyAdapter implements AgentAdapter {
       session.images = snapshotImages(brainDir(this.home, session.conversationId));
     }
     session.starting = false;
+    session.queuedRun = undefined; // agy has the prompt
     session.markReady();
     const waiter = session.initWaiter;
     session.initWaiter = undefined;
@@ -691,6 +699,7 @@ export class AgyAdapter implements AgentAdapter {
    * and its answer is the prompt of a new agy run in the same conversation (P11-05, ruling R12).
    */
   private async endTurn(session: Session): Promise<void> {
+    session.queuedRun = undefined;
     const deferred =
       session.deferred && !session.interrupting && !session.stopping ? session.deferred : undefined;
     session.deferred = undefined;
@@ -957,8 +966,18 @@ export class AgyAdapter implements AgentAdapter {
       session.queued = prompt;
       if (session.paused) return;
       session.queued = undefined;
+      this.runQueued(session, prompt);
+      return;
     }
     // The turn's start is reported through its events; a process that ends at once ends the turn.
+    this.startTurn(session, prompt).catch((error: unknown) =>
+      this.onError(error, `agy turn ${session.agentId}`),
+    );
+  }
+
+  /** Starts the run of a queued answer, kept until its `init` so an interrupt cannot lose it. */
+  private runQueued(session: Session, prompt: string): void {
+    session.queuedRun = prompt;
     this.startTurn(session, prompt).catch((error: unknown) =>
       this.onError(error, `agy turn ${session.agentId}`),
     );
@@ -981,6 +1000,11 @@ export class AgyAdapter implements AgentAdapter {
     const session = this.live(sessionId);
     if (!session || session.terminal || !session.turnOpen) return;
     session.interrupting = true;
+    if (session.queuedRun !== undefined) {
+      // The queued answer's run has not started yet: the answer waits for the next message.
+      session.queued = session.queuedRun;
+      session.queuedRun = undefined;
+    }
     const proc = session.process;
     if (proc && proc.state !== 'exited') {
       if (session.paused) this.thaw(session); // a frozen process cannot end its turn
@@ -1015,9 +1039,7 @@ export class AgyAdapter implements AgentAdapter {
     const queued = session.queued;
     if (queued !== undefined && !session.turnOpen && !session.stopping && !session.terminal) {
       session.queued = undefined;
-      this.startTurn(session, queued).catch((error: unknown) =>
-        this.onError(error, `agy turn ${session.agentId}`),
-      );
+      this.runQueued(session, queued);
     }
   }
 
