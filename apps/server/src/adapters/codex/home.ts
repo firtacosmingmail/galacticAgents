@@ -82,14 +82,7 @@ export interface PreparedHome {
  */
 export function prepareCodexHome(dir: string, authSource: string): PreparedHome {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const target = resolvedAuth(authSource);
-  const realDir = realpathSync(dir);
-  if (target === realDir || target.startsWith(realDir + sep)) {
-    throw new Error(
-      `the Codex login file ${authSource} resolves inside the managed Codex home ${dir} ` +
-        '(is CODEX_HOME set to it?): point CODEX_HOME at your own Codex folder, then start again',
-    );
-  }
+  const target = resolvedAuth(authSource, dir);
   writeFileSync(join(dir, 'config.toml'), MANAGED_CONFIG_TOML, { mode: 0o600 });
   const link = join(dir, 'auth.json');
   let replacedLink = false;
@@ -123,27 +116,41 @@ export function prepareCodexHome(dir: string, authSource: string): PreparedHome 
   return { authPresent: existsSync(authSource), replacedLink };
 }
 
+/** How many links `resolvedAuth` follows before it refuses (Linux's own limit is 40). */
+const MAX_LINK_HOPS = 40;
+
 /**
- * Where the user's login file really is, without opening it: a symlink's resolved target (its
- * link chain followed; a dangling one by its last link's text), else the file in its folder's
- * real path. Only paths are resolved — the file is never read.
+ * Where the user's login file really is, without opening it: its link chain followed to the end
+ * one `readlink` at a time (a dangling chain too, review M2), each step in its folder's real
+ * path. Throws when any step lies inside the managed home `dir` (the home would link to itself)
+ * or when the chain does not end within `MAX_LINK_HOPS` (a loop). Only paths are resolved — the
+ * file is never opened or read.
  */
-function resolvedAuth(authSource: string): string {
-  let isLink: boolean;
-  try {
-    isLink = lstatSync(authSource).isSymbolicLink();
-  } catch {
-    isLink = false;
-  }
-  if (isLink) {
-    try {
-      return realpathSync(authSource);
-    } catch {
-      // Dangling or a loop: follow the link's own text one step, in its folder's real path.
-      return realFile(resolve(dirname(authSource), readlinkSync(authSource)));
+function resolvedAuth(authSource: string, dir: string): string {
+  const realDir = realpathSync(dir);
+  let path = realFile(authSource);
+  for (let hop = 0; ; hop++) {
+    if (path === realDir || path.startsWith(realDir + sep)) {
+      throw new Error(
+        `the Codex login file ${authSource} resolves inside the managed Codex home ${dir} ` +
+          '(is CODEX_HOME set to it?): point CODEX_HOME at your own Codex folder, then start again',
+      );
     }
+    let isLink: boolean;
+    try {
+      isLink = lstatSync(path).isSymbolicLink();
+    } catch {
+      isLink = false; // missing: the end of the chain
+    }
+    if (!isLink) return path;
+    if (hop >= MAX_LINK_HOPS) {
+      throw new Error(
+        `the Codex login file ${authSource} is a chain of more than ${MAX_LINK_HOPS} links ` +
+          '(a loop?): point it at a real file, then start again',
+      );
+    }
+    path = realFile(resolve(dirname(path), readlinkSync(path)));
   }
-  return realFile(authSource);
 }
 
 /** `file` with its folder's real path (as given when the folder does not exist). */
