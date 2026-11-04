@@ -56,19 +56,24 @@ The batch's final review is the controller's, after P11-10.
 
 ## Left open (minor, deferred)
 
-- An ended job run's Steward folder ignores `meta.cwd` in the publish-files route (404/409); no
-  HTTP happy-path test for that route.
-- An agy answer arriving while paused with no process waits until resume.
-- Commands Codex runs without asking (`cat`) bypass the tool-call cap; a `CODEX_HOME` pointing at
-  the managed home would link `auth.json` to itself; a real token refresh over the auth symlink is
-  still unobserved (R27 handles it without deleting anything).
-- Usage limits: a change card moving a job to Gemini without a follow-up provider fails only at
-  run time (R22's card text says so). (The `updateTask` throw, the lingering question, the
-  free-text answer, M3, M4 and M6 are fixed in P11-13.)
-- Web: no `.pill.kind-publish` style; publish tokens have no light/dark split (as `spend`); the
-  satellite mark is a 30 % tint blend, not a ring; the 320 px unit test is a CSS proxy (the e2e
-  spec now measures real cards at 390 and 320 px); the not-ready preflight test does not
-  instrument `agy.usage`.
+Updated 2026-11-04 after the follow-up batch `p11-2-fixes` (P11-11 – P11-15), which fixed: the
+publish-files route for ended job runs (with an HTTP happy-path test), `run_workspace` asking in
+publishing runs and no "Allow similar" on their cards, the agy answer held while paused, unasked
+Codex commands counting toward the cap, the `CODEX_HOME` self-link guard, a symlinked user
+`auth.json`, `.codex` as agent configuration (M2), ambiguous loose model names (M5), the usage-limit
+cases (`updateTask` throw, the lingering question, free-text answers, M3, M4, M6), the publish pill
+and tokens and the provider ring. What stays open:
+
+- A real Codex token refresh over the auth symlink is still unobserved (R27 handles it without
+  deleting anything); it needs a live login to watch.
+- A change card moving a job to Gemini without a follow-up provider fails only at run time (R22:
+  its card text says so; Cosmin may prefer refusing such cards).
+- A message sent to a paused agy Steward with no held answer starts a process at once (unchanged
+  behaviour).
+- Web: the 320 px unit test is a CSS proxy (the e2e spec measures real cards at 390 and 320 px);
+  the not-ready preflight test does not instrument `agy.usage`; `spend` has no pill style of its
+  own.
+- M7 (the allowance matches by containment) stays accepted under R15 and SPEC decision 147.
 - Real CLI runs were skipped or partial where quota or a login was missing (the Codex plan was
   Free; one agy image run costs about 18 % of the weekly Gemini bucket): see the P11-01 notes.
 
