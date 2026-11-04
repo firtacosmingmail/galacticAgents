@@ -78,6 +78,39 @@ describe('prepareCodexHome', () => {
     expect(readFileSync(authSource, 'utf8')).toBe('old token');
   });
 
+  it('a user auth.json that is a symlink: Codex’s file goes over its target, the link stays', () => {
+    const dotfiles = join(base, 'dotfiles');
+    mkdirSync(dotfiles);
+    const target = join(dotfiles, 'codex-auth.json');
+    writeFileSync(target, 'old token');
+    symlinkSync(target, authSource);
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'auth.json'), 'rotated token');
+    expect(prepareCodexHome(home, authSource)).toEqual({ authPresent: true, replacedLink: true });
+    expect(lstatSync(authSource).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(authSource)).toBe(target);
+    expect(readFileSync(target, 'utf8')).toBe('rotated token');
+    expect(readlinkSync(join(home, 'auth.json'))).toBe(authSource);
+  });
+
+  it('refuses when the login file resolves inside the managed home (CODEX_HOME = the managed home)', () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'auth.json'), 'rotated token');
+    expect(() => prepareCodexHome(home, join(home, 'auth.json'))).toThrow(
+      /inside the managed Codex home/,
+    );
+    // Nothing moved or linked: the file is still there, not a link to itself.
+    expect(lstatSync(join(home, 'auth.json')).isFile()).toBe(true);
+    expect(readFileSync(join(home, 'auth.json'), 'utf8')).toBe('rotated token');
+  });
+
+  it('refuses when the login file is a link into the managed home', () => {
+    mkdirSync(home, { recursive: true });
+    symlinkSync(join(home, 'auth.json'), authSource);
+    expect(() => prepareCodexHome(home, authSource)).toThrow(/inside the managed Codex home/);
+    expect(lstatSync(authSource).isSymbolicLink()).toBe(true);
+  });
+
   it('refuses to start when the file cannot be moved back, and deletes nothing', () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'auth.json'), 'rotated token');

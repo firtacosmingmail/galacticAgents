@@ -764,6 +764,40 @@ const SCENARIOS = {
     });
     await message(ctx, 'computed');
   },
+  /**
+   * A command and a file change run without any approval request (P11-14): Codex 0.166 asks for
+   * every one under `untrusted`, but a later version (or a trusted command list) may not.
+   */
+  'unasked-exec': async (ctx) => {
+    const id = uid('exec');
+    const base = {
+      type: 'commandExecution',
+      id,
+      command: "/bin/zsh -lc 'cat README.md'",
+      cwd: ctx.state.cwd,
+      commandActions: [{ type: 'read', command: 'cat README.md' }],
+    };
+    item(ctx, 'item/started', {
+      ...base,
+      status: 'inProgress',
+      aggregatedOutput: null,
+      exitCode: null,
+    });
+    await sleep(10, ctx.signal);
+    item(ctx, 'item/completed', {
+      ...base,
+      status: 'completed',
+      aggregatedOutput: '# readme',
+      exitCode: 0,
+    });
+    const fid = uid('patch');
+    const changes = [
+      { path: join(ctx.state.cwd, 'notes.md'), kind: { type: 'add' }, diff: 'hi\n' },
+    ];
+    item(ctx, 'item/started', { type: 'fileChange', id: fid, changes, status: 'inProgress' });
+    item(ctx, 'item/completed', { type: 'fileChange', id: fid, changes, status: 'completed' });
+    await message(ctx, 'read and noted');
+  },
   /** The process dies mid-turn. */
   dies: async (ctx) => {
     await message(ctx, 'about to die');

@@ -545,6 +545,31 @@ describe('CodexAdapter', () => {
     expect(texts(r).join('\n')).toContain('tool result (node_repl.js): 2');
   });
 
+  it('commands and file changes Codex runs without asking count as tool calls (the cap applies)', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:unasked-exec'));
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    expect(r.checks).toEqual([]);
+    expect(of(r, 'agent.tool_call')).toEqual([
+      expect.objectContaining({ toolName: 'Bash', input: { command: 'cat README.md' } }),
+      expect.objectContaining({ toolName: 'Edit' }),
+    ]);
+    expect(texts(r).join('\n')).toContain('tool result (Bash: cat README.md) (exit 0): # readme');
+  });
+
+  it('an asked command is counted once; a refused one not at all', async () => {
+    const r = rig();
+    await r.adapter.spawn(spawnOpts(r, 'scenario:permission'));
+    await waitFor(() => of(r, 'agent.idle').length === 1, 'idle');
+    expect(of(r, 'agent.tool_call')).toHaveLength(1);
+    const r2 = rig();
+    await r2.adapter.spawn(
+      spawnOpts(r2, 'scenario:permission', () => ({ decision: 'deny', reason: 'no' })),
+    );
+    await waitFor(() => of(r2, 'agent.idle').length === 1, 'idle');
+    expect(of(r2, 'agent.tool_call')).toHaveLength(0);
+  });
+
   it('joins a streamed message into one block; a failed turn is a line and idle', async () => {
     const r = rig();
     await r.adapter.spawn(spawnOpts(r, 'scenario:happy'));
@@ -667,6 +692,25 @@ describe('CodexAdapter', () => {
     expect(readlinkSync(join(home, 'auth.json'))).toBe(authSource);
     expect(readFileSync(authSource, 'utf8')).toBe('a copy');
     expect(recorded(r)[0]!.codexHome).toBe(home);
+  });
+
+  it('refuses to start when the login file resolves inside the managed home (no self-link)', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'galactic-codex-home-'));
+    const home = join(base, 'codex-home');
+    const r = rig({}, { home, authSource: join(home, 'auth.json') });
+    const pre = await r.adapter.preflight();
+    expect(pre.ok).toBe(false);
+    expect(pre.problems).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringMatching(/inside the managed Codex home/),
+        fix: expect.stringMatching(/CODEX_HOME/),
+      }),
+    );
+    await expect(r.adapter.spawn(spawnOpts(r, 'scenario:echo'))).rejects.toThrow(
+      /inside the managed Codex home/,
+    );
+    expect(existsSync(join(home, 'auth.json'))).toBe(false);
+    expect(recorded(r)).toHaveLength(0);
   });
 
   it('a resumed thread keeps its dynamic tools: ask_user asks again after a restart', async () => {
