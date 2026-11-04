@@ -112,6 +112,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11, P11-13 – P11-15
 - From the final re-review and the deferred minors in `docs/tasks/notes/P11-review.md`: `run_workspace` asks in a publishing run (a worktree script can reach the network); a publishing run's permission card does not offer "Allow similar" (R26 ignores the rule); the publish-files route finds an ended job run's Steward folder through `meta.cwd`, with an HTTP happy-path test.
 - **Acceptance:** each has a test; SPEC decision 147 and TECHNOLOGY say what a publishing run asks.
+- **Done:** `publishingPolicy` turns `run_workspace` to `ask` (a deny stays; the allowance matches network calls only); a publishing run's question carries `context.origin.publishingRun`, the web card offers no "Allow similar" and the server refuses its preview and rule; `folderOfAgent` prefers `meta.cwd`, with an HTTP happy-path test of the publish-files route. SPEC 147 and TECHNOLOGY §3.8 amended.
 
 ### P11-13 — Usage limits: the deferred cases (added 2026-11-04)
 - **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11, P11-12, P11-14, P11-15
@@ -127,6 +128,7 @@ All ten run in one batch branch, `p11-1-ai-providers`, in this order.
 - **Status:** in progress · **Depends on:** — · **Parallel with:** P11-11 – P11-14
 - The satellite of a ChatGPT or Gemini Steward carries a ring in the provider's colour (not a tint); `.pill.kind-publish` has its own style; the publish tokens have light and dark values.
 - **Acceptance:** tests for the ring and the styles; the e2e satellite-mark check still passes.
+- **Done:** satellites keep a Claude Steward's colour and carry a thin torus in the provider's colour (both render paths); `.pnl .pill.kind-publish` keeps its colour in the light theme; publish and spend tokens (with `-ink`) have light values. The e2e check (`data-satellite-providers`) is unchanged. TECHNOLOGY §3.5 says so.
 
 ## Exit criteria
 
