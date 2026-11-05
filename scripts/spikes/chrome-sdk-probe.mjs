@@ -1,44 +1,31 @@
 // P12-01 spike: does Claude in Chrome work in an Agent SDK session started with
 // extraArgs { chrome: null }, and do its tool calls reach canUseTool?
 //
-// Safety (binding): serves its own page on 127.0.0.1, runs in a temp directory, and its
-// canUseTool DENIES Bash/Write/Edit and any tool input that mentions a host other than
-// localhost/127.0.0.1. It never touches GitHub or any logged-in site.
+// Usage (any cwd; paths are resolved relative to this file):
+//   node scripts/spikes/chrome-sdk-probe.mjs [--hook-ask] [--second] [--allow-tabs-context]
+//   --hook-ask            a PreToolUse hook answers `ask` for the Chrome tools (the route the
+//                         adapter's gate uses), to see whether calls still reach canUseTool
+//   --second              run two sessions at once
+//   --allow-tabs-context  let the model call tabs_context_mcp (it lists the user's tabs); off by default
 //
-// Run:  node scripts/spikes/chrome-sdk-probe.mjs [--second]   (--second also starts a 2nd session)
+// Safety (binding): serves its own page on 127.0.0.1, runs in a temp directory, and its
+// canUseTool is the allowlist in chrome-probe-guard.mjs (self-test: node --test
+// scripts/spikes/chrome-probe-guard.test.mjs): only a few Chrome tools, only on the tab the probe
+// created, only localhost/127.0.0.1 URLs. It never touches GitHub or any logged-in site.
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { guard, createGuardState, recordToolResult } from './chrome-probe-guard.mjs';
 
-const require = createRequire(resolve(process.cwd(), 'apps/server/package.json'));
+const require = createRequire(
+  fileURLToPath(new URL('../../apps/server/package.json', import.meta.url)),
+);
 const sdkPath = require.resolve('@anthropic-ai/claude-agent-sdk');
-const { query } = await import(sdkPath);
+const { query } = await import(pathToFileURL(sdkPath).href);
 
-const LOCAL = new Set(['localhost', '127.0.0.1']);
-const DENY_TOOLS = new Set(['Bash', 'Write', 'Edit', 'NotebookEdit', 'WebFetch', 'WebSearch']);
-
-function strings(v, out = []) {
-  if (typeof v === 'string') out.push(v);
-  else if (Array.isArray(v)) v.forEach((x) => strings(x, out));
-  else if (v && typeof v === 'object') Object.values(v).forEach((x) => strings(x, out));
-  return out;
-}
-function foreignHost(input) {
-  for (const s of strings(input)) {
-    for (const m of s.matchAll(/\b(?:[a-z][a-z0-9+.-]*:\/\/|www\.)([^\s/:?#'")]+)/gi)) {
-      if (!LOCAL.has(m[1].toLowerCase())) return m[1];
-    }
-    // bare domain-like strings, e.g. "github.com"
-    for (const m of s.matchAll(
-      /\b([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|co))\b/gi,
-    )) {
-      return m[1];
-    }
-  }
-  return undefined;
-}
 const shape = (v) =>
   v && typeof v === 'object'
     ? Object.fromEntries(
@@ -62,6 +49,10 @@ console.log(`[probe] serving http://127.0.0.1:${port}  cwd=${cwd}`);
 
 async function session(label) {
   const seen = [];
+  const state = createGuardState({
+    allowTabsContext: process.argv.includes('--allow-tabs-context'),
+  });
+  const toolNames = new Map();
   const prompt = `Using your browser tools, open http://localhost:${port} in a NEW tab and take a screenshot. Then say what the page heading says. Do not visit any other site.`;
   const q = query({
     prompt,
@@ -94,9 +85,8 @@ async function session(label) {
           }
         : {}),
       canUseTool: async (toolName, input) => {
-        const bad = DENY_TOOLS.has(toolName)
-          ? `tool ${toolName} not allowed in the probe`
-          : foreignHost(input);
+        const { allow, reason } = guard(toolName, input, state);
+        const bad = allow ? undefined : reason;
         const verdict = bad ? 'DENY' : 'ALLOW';
         console.log(
           `[${label}] canUseTool ${verdict} ${toolName} input=${JSON.stringify(shape(input))}${bad ? ` reason=${bad}` : ''}`,
@@ -114,14 +104,20 @@ async function session(label) {
       if (m.type === 'system' && m.subtype === 'init') {
         const chrome = (m.tools ?? []).filter((t) => /chrome/i.test(t));
         console.log(`[${label}] ALL chrome tools: ${chrome.join(' ')}`);
-        console.log(
-          `[${label}] init tools(total ${m.tools?.length}); chrome-ish: ${JSON.stringify(chrome)}`,
-        );
         console.log(`[${label}] mcp_servers: ${JSON.stringify(m.mcp_servers ?? null)}`);
       } else if (m.type === 'assistant') {
         for (const b of m.message.content)
-          if (b.type === 'tool_use') console.log(`[${label}] tool_use ${b.name}`);
-          else if (b.type === 'text') console.log(`[${label}] text: ${b.text.slice(0, 200)}`);
+          if (b.type === 'tool_use') {
+            toolNames.set(b.id, b.name);
+            console.log(`[${label}] tool_use ${b.name}`);
+          } else if (b.type === 'text') console.log(`[${label}] text: ${b.text.slice(0, 200)}`);
+      } else if (m.type === 'user' && Array.isArray(m.message?.content)) {
+        // learn the probe's own tab id from the tabs_create_mcp result
+        for (const b of m.message.content)
+          if (b.type === 'tool_result') {
+            const text = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
+            recordToolResult(state, toolNames.get(b.tool_use_id) ?? '', text);
+          }
       } else if (m.type === 'result') {
         console.log(
           `[${label}] result ${m.subtype} is_error=${m.is_error} ${String(m.result ?? m.errors ?? '').slice(0, 300)}`,

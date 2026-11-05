@@ -1,11 +1,18 @@
 # P12-01 — Chrome spike notes
 
-Date: 2026-11-05. Probe: `scripts/spikes/chrome-sdk-probe.mjs` (flags `--hook-ask`, `--second`).
+Date: 2026-11-05. Probe: `scripts/spikes/chrome-sdk-probe.mjs` (flags `--hook-ask`, `--second`, `--allow-tabs-context`), guard in `chrome-probe-guard.mjs`.
 Environment: Claude Code CLI 2.1.318, `@anthropic-ai/claude-agent-sdk` 0.3.285 (apps/server), Google Chrome with the Claude in Chrome extension installed and connected, subscription login.
 
 ## Safety of the probe
 
-The probe serves its own page on `127.0.0.1:<random port>`, runs in a temp directory outside the repo, and its `canUseTool` denies Bash/Write/Edit/NotebookEdit/WebFetch/WebSearch and any tool input mentioning a host other than `localhost`/`127.0.0.1`. It never touched GitHub or any logged-in site. No call was denied in the runs below (the model stayed on the local page).
+The probe serves its own page on `127.0.0.1:<random port>` and runs in a temp directory outside the repo. It never touched GitHub or any logged-in site.
+
+Its guard changed after review:
+
+- **During the recorded runs (below)** `canUseTool` was a denylist: it denied Bash/Write/Edit/NotebookEdit/WebFetch/WebSearch and any input where a regex found a non-local host. It was too weak (userinfo and protocol-relative URLs slipped through, other `mcp__` servers were not denied, and nothing bound calls to the probe's own tab). The recorded runs relied on the model obeying "do not visit any other site", plus that denylist.
+- **Now** `scripts/spikes/chrome-probe-guard.mjs` is an allowlist: only a few `mcp__claude-in-chrome__` tools (plus `ToolSearch` and `Skill`, which the CLI calls before the first Chrome call), only on the tab id returned by `tabs_create_mcp`, and only URLs whose parsed hostname is exactly `localhost` or `127.0.0.1` (userinfo and bare foreign hosts denied). `tabs_context_mcp`, `switch_browser` and `select_browser` are denied by default; `--allow-tabs-context` turns on the first, because the recorded runs show the model calls it first and it may be needed before `tabs_create_mcp`. The guard was verified offline only (`node --test scripts/spikes/chrome-probe-guard.test.mjs`, 13 cases); the tightened probe was not re-run against Chrome. The tab id is parsed from the `tabs_create_mcp` result text, whose format is unverified; if it does not parse, tab calls are denied and the probe fails closed.
+
+"No call was denied" in the recorded runs was observed from the probe's own stdout: every `canUseTool` line it printed said `ALLOW` and none said `DENY` (`grep -c "canUseTool DENY"` gave 0 for all three runs).
 
 ## 1. Does `extraArgs: { chrome: null }` work under the Agent SDK?
 
