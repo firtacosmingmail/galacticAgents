@@ -1,7 +1,7 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-08 · **Task status:** P12-01 to P12-07 done (2026-11-05)
-**Phase status:** in progress (7/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
+**Current task:** P12-09 · **Task status:** P12-01 to P12-08 done (2026-11-05)
+**Phase status:** in progress (8/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -99,7 +99,7 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 - **Acceptance:** an approval can be taken once, only for its task and only by the origin Waykeeper; an agent cannot answer a launch question.
 
 ### P12-08 — Waykeeper tool, prompt and final check
-- **Status:** todo · **Depends on:** P12-07 · **Parallel with:** —
+- **Status:** done (2026-11-05) · **Depends on:** P12-07 · **Parallel with:** —
 - Plan Task 8: `spawn_steward` with `launchFlags` (opens the card, returns waiting) and `launchApprovalId` (spawns); prompt additions; the finished-Steward check reminder.
 - **Acceptance:** a reused approval is refused; a second live `chrome` Steward is a conflict; without launch fields the tool behaves as before.
 

@@ -334,6 +334,43 @@ describe('WAKE_RULES', () => {
     expect(wakeLine({ ...fixtures['agent.finished'], agentId: 'a-other' }, s)).toBeUndefined();
   });
 
+  it('wakes the Waykeeper that asked on the answer to its launch card (P12-08)', () => {
+    const q = {
+      ...d.question,
+      kind: 'launch',
+      originAgentId: BRAIN,
+      holder: { type: 'user' },
+      meta: { source: 'command' },
+    } as unknown as Question;
+    const e = { ...fixtures['question.answered'], questionId: q.id, answer: 'Approve and start' };
+    expect(wakeLine(e, scope({ question: () => q }))).toMatch(/answered .*Approve and start/);
+    expect(
+      wakeLine(e, scope({ question: () => ({ ...q, originAgentId: 'a-other' }) })),
+    ).toBeUndefined();
+  });
+
+  it('tells the check of a flagged Steward when it finishes (P12-08)', () => {
+    const launch = {
+      flags: ['chrome'],
+      expectedUse: 'Screenshot localhost:5173',
+      check: 'the PR shows two screenshots',
+      approvalId: 'q-1',
+      precedents: [],
+    };
+    const s = scope({
+      supervises: () => true,
+      agent: (id) => (id === 'a-steward-1' ? { meta: { launch } } : undefined),
+    });
+    const line = wakeLine(fixtures['agent.finished'], s)!;
+    expect(line).toMatch(
+      /ran with --chrome; verify: the PR shows two screenshots, then report the result to the user/,
+    );
+    // A normal Steward's line is unchanged.
+    expect(wakeLine(fixtures['agent.finished'], scope({ supervises: () => true }))).not.toMatch(
+      /verify:/,
+    );
+  });
+
   it("never wakes on a job run Steward's end, stall or system stop (P10-04)", () => {
     const s = scope({
       supervises: (id) => id === 'a-steward-1',
