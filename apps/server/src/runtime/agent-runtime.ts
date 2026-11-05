@@ -27,7 +27,6 @@ import {
   type SpawnHandle,
   type SpawnOptions,
   type AgentLaunch,
-  LAUNCH_FLAGS,
   type LaunchFlag,
   launchOf,
   unsupportedFlags,
@@ -106,9 +105,15 @@ function launchRefusal(req: SpawnRequest): string | undefined {
   if (flags.length === 0 || !req.launch) {
     return 'launch flags travel with their approved launch record';
   }
+  // Spawn uses `launchFlags`, resume reads `launch.flags`: they must be the same set.
+  const spawned = new Set<string>(flags);
+  const stored = new Set<string>(req.launch.flags);
+  if (spawned.size !== stored.size || [...spawned].some((f) => !stored.has(f))) {
+    return 'launch flags and the approved launch record must name the same flags';
+  }
   const unsupported = unsupportedFlags(flags, req.runtime);
   if (unsupported.length > 0) {
-    return `${unsupported.map((f) => LAUNCH_FLAGS[f].cli).join(', ')} is not supported on ${req.runtime}`;
+    return `${unsupported.join(', ')} is not supported on ${req.runtime}`;
   }
   return undefined;
 }

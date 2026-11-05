@@ -731,6 +731,7 @@ describe('AgentRuntime — launch flags (P12)', () => {
       ok: false,
       reason: expect.stringMatching(/chrome.*not supported/),
     });
+    expect(rig.log.tables.agents.all()).toHaveLength(0);
   });
 
   it('never gives a brain launch flags', async () => {
@@ -744,6 +745,7 @@ describe('AgentRuntime — launch flags (P12)', () => {
       }),
     );
     expect(result).toMatchObject({ ok: false, reason: expect.stringMatching(/brains never/) });
+    expect(rig.log.tables.agents.all()).toHaveLength(0);
   });
 
   it('refuses flags without their launch record, and the reverse', async () => {
@@ -756,6 +758,22 @@ describe('AgentRuntime — launch flags (P12)', () => {
       req('scenario:happy', { runtime: 'claude-sdk', launch }),
     );
     expect(launchOnly.ok).toBe(false);
+    expect(rig.log.tables.agents.all()).toHaveLength(0);
+  });
+
+  it('refuses flags that differ from the stored launch, in any order', async () => {
+    const rig = make({ adapterRuntime: 'claude-sdk' });
+    const other = { ...launch, flags: ['chrome', 'other'] } as unknown as AgentLaunch;
+    const result = await rig.runtime.spawn(
+      req('scenario:happy', { runtime: 'claude-sdk', launchFlags: ['chrome'], launch: other }),
+    );
+    expect(result).toMatchObject({ ok: false, reason: expect.stringMatching(/same flags/) });
+    expect(rig.log.tables.agents.all()).toHaveLength(0);
+    const same = { ...launch, flags: ['chrome', 'chrome'] } as AgentLaunch;
+    const ok = await rig.runtime.spawn(
+      req('scenario:happy', { runtime: 'claude-sdk', launchFlags: ['chrome'], launch: same }),
+    );
+    expect(ok.ok).toBe(true);
   });
 
   it('keeps the launch record in meta and resumes with its flags after a restart', async () => {
