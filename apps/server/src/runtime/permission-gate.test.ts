@@ -363,16 +363,81 @@ describe('createPermissionGate launch flags (P12-04)', () => {
     });
   });
 
-  it('follows the policy when the Steward has no flags', () => {
+  it('denies a flag tool to an agent not started with the flag, whatever the policy says', () => {
+    const denied: string[] = [];
+    const trusting = {
+      rules: Object.fromEntries(
+        Object.keys(DEFAULT_PERMISSION_POLICY.rules).map((a) => [a, 'allow']),
+      ),
+    };
     const gate = createPermissionGate({
       ...base,
-      policy: denyNetwork,
+      policy: trusting,
       caps: caps(),
       launchFlags: () => [],
+      onDeny: (_c, v) => denied.push(v.reason),
     });
     const decision = gate.decide(navigate);
-    expect(decision.verdict).toMatchObject({ decision: 'ask' });
+    expect(decision.verdict).toEqual({
+      decision: 'deny',
+      reason: 'uses --chrome tools but this agent was not started with --chrome',
+    });
     expect(decision.launchFlag).toBeUndefined();
+    expect(gate.check(navigate)).toMatchObject({ decision: 'deny' });
+    expect(denied).toEqual(['uses --chrome tools but this agent was not started with --chrome']);
+    // Ordinary tools still follow the table.
+    expect(gate.check(read)).toMatchObject({ decision: 'allow' });
+  });
+
+  it('denies a flag tool when the agent row is gone or no flags are wired (fail closed)', () => {
+    const noFlags = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+    });
+    expect(noFlags.check(navigate)).toMatchObject({ decision: 'deny' });
+    const throwing = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+      launchFlags: () => {
+        throw new Error('no row');
+      },
+    });
+    expect(throwing.check(navigate)).toMatchObject({ decision: 'deny' });
+  });
+
+  it('denies a flag tool to an unflagged agent even when listed as a server tool or a rule matches', () => {
+    const rule = {
+      id: 'r-1',
+      action: 'network',
+      kind: 'tool',
+      toolName: navigate.toolName,
+    } as unknown as PermissionRule;
+    const gate = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+      launchFlags: () => [],
+      serverTools: [navigate.toolName],
+      rules: () => [rule],
+      allowOnce: () => true,
+    });
+    expect(gate.check(navigate)).toMatchObject({ decision: 'deny' });
+  });
+
+  it('asks for a flag tool of a flagged agent even when listed as a server tool', () => {
+    const gate = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+      launchFlags: () => ['chrome'],
+      serverTools: [navigate.toolName],
+    });
+    expect(gate.decide(navigate)).toMatchObject({
+      verdict: { decision: 'ask' },
+      launchFlag: 'chrome',
+    });
   });
 
   it('still applies the tool-call cap to a flag call', () => {

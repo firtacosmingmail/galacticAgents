@@ -3,7 +3,7 @@ import {
   type GateCheckOptions,
   type GateVerdict,
   type Id,
-  type LaunchFlag,
+  LaunchFlag,
   flagOfTool,
   PermissionAction,
   type PermissionGate,
@@ -63,7 +63,9 @@ export interface GateOptions {
    * The launch flags this agent was started with (P12-04), read on every check. A call to one of a
    * flag's tools (`flagOfTool`) asks — after the tool-call cap, before everything else: the policy
    * table, "Allow similar" rules and `allowOnce` are not consulted — so the runtime's scope watch
-   * sees every such call (without an ask, some never reach the runtime's permission path).
+   * sees every such call (without an ask, some never reach the runtime's permission path). A call
+   * to a catalogued flag's tools by an agent not started with that flag — no flags, no row, no
+   * function — is denied at the same point (fail closed: Chrome may be on in the user's settings).
    */
   launchFlags?: () => readonly LaunchFlag[];
   /**
@@ -163,14 +165,24 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
       if (!reserved.ok)
         return { verdict: { decision: 'deny', reason: reserved.reason }, cap: true };
     }
-    const launchFlag = flagOfTool(opts.launchFlags?.() ?? [], call.toolName);
-    if (launchFlag) {
+    // A catalogued flag's tool (P12): only an agent started with that flag may use it — asked so
+    // the scope watch sees it; any other agent is refused, whatever the table or a rule says.
+    const owner = flagOfTool(LaunchFlag.options, call.toolName);
+    if (owner) {
+      if (!(opts.launchFlags?.() ?? []).includes(owner)) {
+        return {
+          verdict: {
+            decision: 'deny',
+            reason: `uses --${owner} tools but this agent was not started with --${owner}`,
+          },
+        };
+      }
       return {
         verdict: {
           decision: 'ask',
-          reasons: [`uses --${launchFlag}: checked against the Steward's approvals`],
+          reasons: [`uses --${owner}: checked against the Steward's approvals`],
         },
-        launchFlag,
+        launchFlag: owner,
       };
     }
     if (isServerTool(call)) return { verdict: { decision: 'allow' } };

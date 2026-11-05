@@ -18,7 +18,7 @@ import type {
   ToolCall,
   ModelInfo,
 } from '@galactic/protocol';
-import { LAUNCH_FLAGS, normalizeSlashCommands } from '@galactic/protocol';
+import { LaunchFlag, normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import {
   dismissedClarification,
@@ -336,6 +336,15 @@ const SYSTEM: Actor = { type: 'system' };
 /** How many ended sessions are remembered for "session … has stopped" errors. */
 const ENDED_MEMORY = 256;
 
+/**
+ * How each catalogued launch flag (P12) reaches the Claude CLI through `extraArgs`: `on` for a
+ * session started with it, `off` for every other session. Adapter-local: the CLI spelling is this
+ * runtime's business, not the protocol's.
+ */
+const SDK_FLAG_ARG: Record<LaunchFlag, { on: string; off: string }> = {
+  chrome: { on: 'chrome', off: 'no-chrome' },
+};
+
 export class ClaudeSdkAdapter implements AgentAdapter {
   readonly runtime = 'claude-sdk' as const;
   /** A Claude Steward's actions pass the gate before they run, so it may publish (P11-03). */
@@ -428,11 +437,17 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     resume: string | undefined,
   ): SdkQueryOptions {
     const isBrain = opts.role !== 'steward';
-    // CLI flags the SDK passes through as `--<key>`: `bare`, and the catalogued launch flags (P12).
+    // CLI flags the SDK passes through as `--<key>`: `bare`, and each catalogued launch flag (P12)
+    // — on when approved, explicitly off otherwise (brains included), so a setting that turns the
+    // feature on by default never hands its tools to an agent the user did not approve it for.
+    const launched = new Set(opts.launchFlags ?? []);
     const flagArgs: Record<string, null> = {
       ...(opts.bare ? { bare: null } : {}),
       ...Object.fromEntries(
-        (opts.launchFlags ?? []).map((flag) => [LAUNCH_FLAGS[flag].cli.replace(/^--/, ''), null]),
+        LaunchFlag.options.map((flag) => [
+          launched.has(flag) ? SDK_FLAG_ARG[flag].on : SDK_FLAG_ARG[flag].off,
+          null,
+        ]),
       ),
     };
     const extraArgs = Object.keys(flagArgs).length > 0 ? flagArgs : undefined;
