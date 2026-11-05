@@ -201,6 +201,12 @@ export const answerQuestionTool: BrainTool = {
         `${questionId} is a publish approval: the user answers publish approvals (decision 147)`,
       );
     }
+    if (question.kind === 'launch') {
+      throw new DomainError(
+        'invalid',
+        `${questionId} is a launch approval: the user answers launch approvals`,
+      );
+    }
     if (question.context.usageLimit) {
       throw new DomainError(
         'invalid',

@@ -16,7 +16,7 @@ import type {
   Task,
   TrustLevel,
 } from './domain.js';
-import type { AgentLaunch, LaunchFlag } from './launch-flags.js';
+import type { AgentLaunch, LaunchContext, LaunchFlag, LaunchRequest } from './launch-flags.js';
 import type { Provider } from './providers.js';
 import type {
   AgentRole,
@@ -530,6 +530,16 @@ export interface RequestPublishInput {
   runId?: Id;
 }
 
+/** A `launch` question (P12-07): a Waykeeper asks to start a Steward with flags. */
+export interface RequestLaunchInput {
+  originAgentId: Id;
+  taskId: Id;
+  request: LaunchRequest;
+  instructions: string;
+  cwd: string;
+  runtime: AgentRuntime;
+}
+
 /** Sets (`null`: clears) a project's default AI provider (P11-02). */
 export interface SetProjectProviderInput {
   projectId: Id;
@@ -708,6 +718,14 @@ export interface DomainCommands {
   reportJobRun(input: ReportJobRunInput): Promise<CommandResult<JobRun>>;
   requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>>;
   requestPublish(input: RequestPublishInput): Promise<CommandResult<{ questionId: Id }>>;
+  /** A `launch` approval held by the user alone (P12-07). */
+  requestLaunch(input: RequestLaunchInput): Promise<CommandResult<{ questionId: Id }>>;
+  /** Takes an approved launch once, for its task, as the Waykeeper that asked (P12-07). */
+  takeLaunchApproval(input: {
+    questionId: Id;
+    taskId: Id;
+    by: Actor;
+  }): Promise<CommandResult<LaunchContext>>;
   setProjectProvider(input: SetProjectProviderInput): Promise<CommandResult<Project>>;
 
   // panel actions (SPEC decision 11b)

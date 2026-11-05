@@ -1,5 +1,6 @@
 import {
   FINDING_ACTIONS,
+  LAUNCH_ACTIONS,
   OFF_SCRIPT_ACTIONS,
   PUBLISH_ACTIONS,
   SPEND_ACTIONS,
@@ -362,6 +363,22 @@ function checkFixedAnswer(question: Question, answer: string, by: Actor): void {
       throw new DomainError(
         'invalid',
         `a ${kind} is answered ${actions.join(' or ')}, not "${answer}"`,
+      );
+    }
+    return;
+  }
+  if (question.kind === 'launch') {
+    // A launch approval (P12-07): the user's alone, with exactly one of its three actions.
+    if (by.type !== 'user') {
+      throw new DomainError(
+        'invalid',
+        `launch question ${question.id} is answered by the user only: the user answers launch approvals`,
+      );
+    }
+    if (!(LAUNCH_ACTIONS as readonly string[]).includes(answer)) {
+      throw new DomainError(
+        'invalid',
+        `a launch is answered ${LAUNCH_ACTIONS.join(', ')}, not "${answer}"`,
       );
     }
     return;
