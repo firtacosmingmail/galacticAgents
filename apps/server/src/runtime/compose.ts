@@ -9,6 +9,7 @@ import {
   type Id,
   type RunSettings,
   DEFAULT_RUN_SETTINGS,
+  type ScopeJudge,
 } from '@galactic/protocol';
 import { RunOutput } from '../deliverables/run-output.js';
 import { RunService, type RunServiceOptions, type RunSupervisor } from '../deliverables/runs.js';
@@ -68,6 +69,8 @@ export const STALL_THRESHOLDS_MS: Record<RuntimeName, number> = {
 };
 
 export interface ComposeOptions {
+  /** The launch-flag scope judge (P12-05), handed to the runtime. */
+  scopeJudge?: ScopeJudge;
   /** Adapters to register; default: the fake adapter only (dev mode without Claude). */
   adapters?: AgentAdapter[];
   log?: EventLogOptions;
@@ -379,6 +382,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     transcripts,
     statuses,
     publishAllowances,
+    ...(opts.scopeJudge ? { scopeJudge: opts.scopeJudge } : {}),
     caps: { ...(opts.caps ?? {}), defaults: defaultCaps },
     ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
     ...(opts.now ? { now: opts.now } : {}),

@@ -32,6 +32,7 @@ import {
   unsupportedFlags,
   type ToolCall,
   type ToolDefinition,
+  type ScopeJudge,
 } from '@galactic/protocol';
 import { isStorageFailure } from '../db/database.js';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
@@ -169,6 +170,8 @@ export interface AgentRuntimeOptions {
    * its end. Absent: no allowance.
    */
   publishAllowances?: PublishAllowanceStore;
+  /** Decides whether a launch flag's tool call fits what the user approved (P12-05; used by the scope watch). */
+  scopeJudge?: ScopeJudge;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
   /** Question routing (P2-03); default: the log, with liveness from `statuses`. */

@@ -1,7 +1,7 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-05 · **Task status:** P12-01 to P12-04 done (2026-11-05)
-**Phase status:** in progress (4/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
+**Current task:** P12-06 · **Task status:** P12-01 to P12-05 done (2026-11-05)
+**Phase status:** in progress (5/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -84,7 +84,7 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 - **Acceptance:** a flag call asks even when the policy denies network; non-flag calls follow the policy; no rule is consulted for a flag call.
 
 ### P12-05 — Scope judge
-- **Status:** todo · **Depends on:** P12-04 · **Parallel with:** —
+- **Status:** done (2026-11-05) · **Depends on:** P12-04 · **Parallel with:** —
 - Plan Task 5: one-shot SDK scope judge (no tools, one turn) and a scripted fake, wired as `scopeJudge`.
 - **Acceptance:** malformed reply, error or abort is `off_script`; the prompt carries `expectedUse`, precedents and the call; the judge gets no tools.
 
