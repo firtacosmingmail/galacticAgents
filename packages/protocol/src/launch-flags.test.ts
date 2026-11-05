@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { QuestionKind } from './enums.js';
 import {
+  AgentLaunch,
   LAUNCH_FLAGS,
   LaunchFlag,
+  LaunchRequest,
   flagOfTool,
   launchCommand,
   launchOf,
@@ -16,6 +18,17 @@ describe('launch flag catalogue', () => {
     expect(flagOfTool(['chrome'], `${PREFIX}navigate`)).toBe('chrome');
     expect(flagOfTool(['chrome'], 'Bash')).toBeUndefined();
     expect(flagOfTool([], `${PREFIX}navigate`)).toBeUndefined();
+  });
+
+  it('refuses a flag named twice', () => {
+    const request = { reason: 'r', expectedUse: 'e', check: 'c' };
+    expect(LaunchRequest.safeParse({ ...request, flags: ['chrome', 'chrome'] }).success).toBe(
+      false,
+    );
+    expect(LaunchRequest.safeParse({ ...request, flags: ['chrome'] }).success).toBe(true);
+    const launch = { expectedUse: 'e', check: 'c', approvalId: 'q-1', precedents: [] };
+    expect(AgentLaunch.safeParse({ ...launch, flags: ['chrome', 'chrome'] }).success).toBe(false);
+    expect(AgentLaunch.safeParse({ ...launch, flags: ['chrome'] }).success).toBe(true);
   });
 
   it('builds the launch command', () => {

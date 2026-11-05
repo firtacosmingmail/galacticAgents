@@ -52,9 +52,13 @@ export function unsupportedFlags(
   return flags.filter((flag) => !LAUNCH_FLAGS[flag].runtimes.includes(runtime));
 }
 
+/** Each flag at most once. */
+const uniqueFlags = (flags: readonly LaunchFlag[]) => new Set(flags).size === flags.length;
+const UNIQUE = { message: 'a flag is named more than once' };
+
 /** A Waykeeper's request to start a Steward with flags. */
 export const LaunchRequest = z.object({
-  flags: z.array(LaunchFlag).min(1).max(4),
+  flags: z.array(LaunchFlag).min(1).max(4).refine(uniqueFlags, UNIQUE),
   reason: z.string().min(1).max(2000),
   expectedUse: z.string().min(1).max(2000),
   check: z.string().min(1).max(2000),
@@ -85,7 +89,7 @@ export const OFF_SCRIPT_ACTIONS = ['Approve and continue', 'Stop the Steward'] a
 
 /** A Steward's approved launch, kept in `agent.meta.launch`. */
 export const AgentLaunch = z.object({
-  flags: z.array(LaunchFlag).min(1),
+  flags: z.array(LaunchFlag).min(1).refine(uniqueFlags, UNIQUE),
   expectedUse: z.string(),
   check: z.string(),
   approvalId: Id,
