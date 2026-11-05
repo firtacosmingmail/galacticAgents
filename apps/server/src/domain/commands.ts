@@ -1202,6 +1202,13 @@ export class Commands implements DomainCommands {
     if (question.kind !== 'permission') {
       return { refused: 'only a permission request can allow similar actions', options: [] };
     }
+    // An off-script flag call (P12-06) is approved once or the Steward is stopped: never a rule.
+    if (question.context.offScript) {
+      return {
+        refused: 'an off-script launch-flag call is approved once or the Steward stopped',
+        options: [],
+      };
+    }
     const call = question.context.toolCall;
     if (!call) return { refused: 'the request names no tool call', options: [] };
     // A publishing run works without rules (ruling R26): a rule made from its card would mislead.

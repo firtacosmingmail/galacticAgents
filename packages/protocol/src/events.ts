@@ -58,13 +58,20 @@ export const AgentCreated = z.object({ type: z.literal('agent.created'), agent: 
 
 /**
  * The agent row's placement changed (P2-01): a new supervisor (an orphaned Steward re-parented),
- * a new body (a promoted task's satellite flies), a task or project handed over. Emitted by the
- * domain command, never by an adapter.
+ * a new body (a promoted task's satellite flies), a task or project handed over; or its `meta`
+ * (P12-06: a precedent added to a flagged Steward's `meta.launch`, the whole new `meta`).
+ * Emitted by the domain command, never by an adapter.
  */
 export const AgentUpdated = z.object({
   type: z.literal('agent.updated'),
   agentId: Id,
-  changes: Agent.pick({ supervisorId: true, bodyId: true, taskId: true, projectId: true })
+  changes: Agent.pick({
+    supervisorId: true,
+    bodyId: true,
+    taskId: true,
+    projectId: true,
+    meta: true,
+  })
     .partial()
     .refine((c) => Object.keys(c).length > 0, { message: 'an update changes something' }),
 });

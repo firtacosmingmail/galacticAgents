@@ -7,6 +7,7 @@ import type {
   AgentRuntime,
   Id,
 } from '@galactic/protocol';
+import { launchOf } from '@galactic/protocol';
 import { EARTH_ID, createAsteroid, type Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
@@ -210,4 +211,24 @@ export function recordSpawned(
     ...(extra.foldedUpTo !== undefined ? { foldedUpTo: extra.foldedUpTo } : {}),
   });
   return current;
+}
+
+/** The precedents a flagged Steward keeps (P12-06): the newest, so the judge's prompt stays small. */
+export const MAX_LAUNCH_PRECEDENTS = 50;
+
+/**
+ * The user approved an off-script call of a flagged Steward (P12-06): its one-line description
+ * joins `meta.launch.precedents`, which the scope judge sees from the next call on. Runs in the
+ * command that records the answer; `agent.updated{meta}` carries the whole new `meta`. A row
+ * without a launch record is refused.
+ */
+export function addLaunchPrecedent(ctx: CommandContext, agentId: Id, precedent: string): Agent {
+  const current = must(ctx.tables.agents.get(agentId), 'agent', agentId);
+  const launch = launchOf(current);
+  if (!launch) throw new DomainError('invalid', `agent ${agentId} has no launch flags`);
+  const precedents = [...launch.precedents, precedent].slice(-MAX_LAUNCH_PRECEDENTS);
+  const meta = { ...current.meta, launch: { ...launch, precedents } };
+  const agent = ctx.tables.agents.upsert({ ...current, meta, updatedAt: ctx.now });
+  ctx.emit({ type: 'agent.updated', agentId, changes: { meta } });
+  return agent;
 }

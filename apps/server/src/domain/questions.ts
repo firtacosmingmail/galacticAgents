@@ -1,4 +1,10 @@
-import { FINDING_ACTIONS, PUBLISH_ACTIONS, SPEND_ACTIONS, isJobOwned } from '@galactic/protocol';
+import {
+  FINDING_ACTIONS,
+  OFF_SCRIPT_ACTIONS,
+  PUBLISH_ACTIONS,
+  SPEND_ACTIONS,
+  isJobOwned,
+} from '@galactic/protocol';
 import type {
   Actor,
   Id,
@@ -356,6 +362,23 @@ function checkFixedAnswer(question: Question, answer: string, by: Actor): void {
       throw new DomainError(
         'invalid',
         `a ${kind} is answered ${actions.join(' or ')}, not "${answer}"`,
+      );
+    }
+    return;
+  }
+  if (question.context.offScript) {
+    // An off-script flag call (P12-06): the user's alone, with one of its two actions — never an
+    // agent's, a supervisor's or the system's, and free text is no approval.
+    if (by.type !== 'user') {
+      throw new DomainError(
+        'invalid',
+        `off-script question ${question.id} is answered by the user only`,
+      );
+    }
+    if (!(OFF_SCRIPT_ACTIONS as readonly string[]).includes(answer)) {
+      throw new DomainError(
+        'invalid',
+        `an off-script call is answered ${OFF_SCRIPT_ACTIONS.join(' or ')}, not "${answer}"`,
       );
     }
     return;
