@@ -413,15 +413,23 @@ export const spawnStewardTool: BrainTool = {
       );
     }
     if (approvalId !== undefined) {
-      // One Chrome at a time. Checked before the approval is taken, so a conflict burns nothing.
+      // One Chrome at a time, across every project: there is one browser. Checked before the
+      // approval is taken, so a conflict burns nothing.
       const wanted = ctx.queries.question(approvalId)?.context.launch?.flags ?? [];
       const using = wanted.includes('chrome')
-        ? liveStewards(ctx, (a) => launchOf(a)?.flags.includes('chrome') ?? false)
+        ? ctx.queries
+            .agents()
+            .filter(
+              (a) =>
+                a.role === 'steward' &&
+                (launchOf(a)?.flags.includes('chrome') ?? false) &&
+                isLive(ctx.queries.status(a.id)),
+            )
         : [];
       if (using.length > 0) {
         throw new DomainError(
           'conflict',
-          `another Steward is using Chrome (${using[0]!.agent.id}); start this one when it finishes`,
+          `another Steward is using Chrome (${using[0]!.id}); start this one when it finishes`,
         );
       }
     }

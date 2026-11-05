@@ -245,4 +245,70 @@ describe('spawn_steward with launch flags (P12-08)', () => {
     });
     expect(h.log.tables.questions.get(qB.id)!.meta?.['launchUsed']).not.toBe(true);
   });
+
+  it("a live chrome Steward of another project's Waykeeper is a conflict too (one browser)", async () => {
+    let started: unknown;
+    const { wk, a } = await setup((s, ids) =>
+      s
+        .once('go', async (t) => {
+          await t.call('spawn_steward', {
+            taskId: ids.a,
+            instructions: 'scenario:hold',
+            launchFlags: FLAGS,
+          });
+        })
+        .once(/answered/, async (t) => {
+          started = await t.try('spawn_steward', {
+            taskId: ids.a,
+            launchApprovalId: launchQuestions()[0]!.id,
+          });
+        }),
+    );
+    // Another project, its own Waykeeper and a live chrome Steward on one of its tasks.
+    const other = (
+      await h.commands.createProject({ name: 'Blog', workspace: join(tmp, 'home', 'Blog') })
+    ).value;
+    const otherWk = (
+      await h.commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'claude-sdk',
+        prompt: 'scenario:hold',
+        projectId: other.id,
+        supervisorId: h.log.tables.agents.get(wk.agentId)!.supervisorId!,
+      })
+    ).value;
+    const otherTask = (await h.commands.createTask({ description: 'blog', projectId: other.id }))
+      .value;
+    const busy = (
+      await h.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'claude-sdk',
+        prompt: 'scenario:hold',
+        taskId: otherTask.id,
+        supervisorId: otherWk.id,
+        launchFlags: ['chrome'],
+        launch: {
+          flags: ['chrome'],
+          expectedUse: 'x',
+          check: 'y',
+          approvalId: 'q-elsewhere',
+          precedents: [],
+        },
+      })
+    ).value;
+    wk.tell('go');
+    await h.until(() => launchQuestions().length === 1);
+    await h.settle();
+    await answerLaunch(APPROVE);
+    await h.settle();
+    expect(started).toMatchObject({
+      ok: false,
+      error: 'conflict',
+      message: expect.stringContaining(busy.id),
+    });
+    expect(h.queries.supervisedAgents(wk.agentId).filter((x) => x.agent.taskId === a)).toEqual([]);
+    expect(h.log.tables.questions.get(launchQuestions()[0]!.id)!.meta?.['launchUsed']).not.toBe(
+      true,
+    );
+  });
 });
