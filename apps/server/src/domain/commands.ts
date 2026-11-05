@@ -669,6 +669,8 @@ export class Commands implements DomainCommands {
         ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
         ...(input.caps ? { caps: input.caps } : {}),
         ...(input.bare ? { bare: true } : {}),
+        ...(input.launchFlags ? { launchFlags: input.launchFlags } : {}),
+        ...(input.launch ? { launch: input.launch } : {}),
         ...(model ? { model } : {}),
         ...(input.tools ? { tools: input.tools } : {}),
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),

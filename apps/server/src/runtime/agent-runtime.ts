@@ -26,6 +26,11 @@ import {
   type SlashCommand,
   type SpawnHandle,
   type SpawnOptions,
+  type AgentLaunch,
+  LAUNCH_FLAGS,
+  type LaunchFlag,
+  launchOf,
+  unsupportedFlags,
   type ToolCall,
   type ToolDefinition,
 } from '@galactic/protocol';
@@ -93,6 +98,21 @@ import type { TranscriptPipeline } from './transcripts.js';
  * created by `domain/agents.ts`; Phase 2's `spawnAgent` command composes the same functions.
  */
 
+/** Why a request's launch flags are refused (P12), or undefined when they are fine. */
+function launchRefusal(req: SpawnRequest): string | undefined {
+  const flags = req.launchFlags ?? [];
+  if (flags.length === 0 && !req.launch) return undefined;
+  if (req.role !== 'steward') return `a ${req.role} never gets launch flags: brains never do`;
+  if (flags.length === 0 || !req.launch) {
+    return 'launch flags travel with their approved launch record';
+  }
+  const unsupported = unsupportedFlags(flags, req.runtime);
+  if (unsupported.length > 0) {
+    return `${unsupported.map((f) => LAUNCH_FLAGS[f].cli).join(', ')} is not supported on ${req.runtime}`;
+  }
+  return undefined;
+}
+
 export interface SpawnRequest {
   role: AgentRole;
   runtime: RuntimeName;
@@ -109,6 +129,10 @@ export interface SpawnRequest {
   tools?: ToolDefinition[];
   systemPrompt?: string;
   bare?: boolean;
+  /** Approved launch flags (P12): a Steward only; they travel with `launch`. */
+  launchFlags?: LaunchFlag[];
+  /** The approved launch record, kept in `meta.launch` so a resumed Steward keeps its flags. */
+  launch?: AgentLaunch;
   /**
    * The exact model to run (P11-03); absent: the runtime's default. Kept in `meta.model`, with
    * the runtime's provider in `meta.provider`, so a resumed session runs the same model.
@@ -552,6 +576,8 @@ export class AgentRuntime {
    */
   async spawn(req: SpawnRequest): Promise<SpawnResult> {
     if (this.disposed) throw new Error('runtime disposed');
+    const refused = launchRefusal(req);
+    if (refused) return { ok: false, reason: refused };
     const adapter = this.adapters.get(req.runtime);
     if (!adapter) return { ok: false, reason: `no adapter for runtime ${req.runtime}` };
     const gate = this.caps.canSpawn(this.spawnCheck(req.role, req.supervisorId));
@@ -576,6 +602,7 @@ export class AgentRuntime {
           ...(req.workspace ? { workspace: req.workspace } : {}),
           ...(req.permissionPolicy ? { permissionPolicy: req.permissionPolicy } : {}),
           ...(req.bare ? { bare: true } : {}),
+          ...(req.launch ? { launch: req.launch } : {}),
           ...(req.freeForm ? { freeForm: true } : {}),
         },
       }),
@@ -752,6 +779,7 @@ export class AgentRuntime {
         ...(tools ? { tools } : {}),
         ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}),
         ...(req.bare ? { bare: true } : {}),
+        ...(req.launchFlags?.length ? { launchFlags: req.launchFlags } : {}),
         ...(req.model ? { model: req.model } : {}),
       });
     } catch (error) {
@@ -1550,11 +1578,14 @@ export class AgentRuntime {
       model?: unknown;
     };
     if (!meta.cwd) return { ok: false, reason: 'agent has no saved working directory' };
+    // The flags the Steward was approved for (P12): always from its row, never from the caller.
+    const launchFlags = launchOf(agent)?.flags;
     const base = {
       cwd: meta.cwd,
       ...(meta.workspace ? { workspace: meta.workspace } : {}),
       ...(meta.permissionPolicy ? { permissionPolicy: meta.permissionPolicy } : {}),
       ...(meta.bare ? { bare: true } : {}),
+      ...(launchFlags ? { launchFlags } : {}),
       // The model it was spawned with (P11-03): a resumed or restarted session runs it again.
       ...(typeof meta.model === 'string' && meta.model ? { model: meta.model } : {}),
       ...(opts.tools ? { tools: opts.tools } : {}),

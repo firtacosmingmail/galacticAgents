@@ -1,7 +1,7 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-03 · **Task status:** P12-01 and P12-02 done (2026-11-05)
-**Phase status:** in progress (2/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
+**Current task:** P12-04 · **Task status:** P12-01, P12-02 and P12-03 done (2026-11-05)
+**Phase status:** in progress (3/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -74,7 +74,7 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 - **Acceptance:** every new type round-trips; `dangerously-skip-permissions` is not a `LaunchFlag`; typecheck is green with `launch` treated like `spend`.
 
 ### P12-03 — Spawning with flags
-- **Status:** todo · **Depends on:** P12-02 · **Parallel with:** —
+- **Status:** done (2026-11-05) · **Depends on:** P12-02 · **Parallel with:** —
 - Plan Task 3: the Claude adapter maps flags to `extraArgs`; the runtime refuses unsupported runtimes and brains, stores `meta.launch`, and resume keeps the flags.
 - **Acceptance:** `extraArgs` is `{ chrome: null }` (merged with `bare`); a codex Steward or a Waykeeper with flags is refused; a recovered agent resumes with its flags.
 

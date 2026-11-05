@@ -18,7 +18,7 @@ import type {
   ToolCall,
   ModelInfo,
 } from '@galactic/protocol';
-import { normalizeSlashCommands } from '@galactic/protocol';
+import { LAUNCH_FLAGS, normalizeSlashCommands } from '@galactic/protocol';
 import { EventQueue } from '../../lib/event-queue.js';
 import {
   dismissedClarification,
@@ -428,6 +428,14 @@ export class ClaudeSdkAdapter implements AgentAdapter {
     resume: string | undefined,
   ): SdkQueryOptions {
     const isBrain = opts.role !== 'steward';
+    // CLI flags the SDK passes through as `--<key>`: `bare`, and the catalogued launch flags (P12).
+    const flagArgs: Record<string, null> = {
+      ...(opts.bare ? { bare: null } : {}),
+      ...Object.fromEntries(
+        (opts.launchFlags ?? []).map((flag) => [LAUNCH_FLAGS[flag].cli.replace(/^--/, ''), null]),
+      ),
+    };
+    const extraArgs = Object.keys(flagArgs).length > 0 ? flagArgs : undefined;
     const options: SdkQueryOptions = {
       cwd: opts.cwd,
       ...(resume ? { resume } : { sessionId: session.sessionId }),
@@ -454,7 +462,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
               : { type: 'preset', preset: 'claude_code', append: opts.systemPrompt },
           }
         : {}),
-      ...(opts.bare ? { extraArgs: { bare: null } } : {}),
+      ...(extraArgs ? { extraArgs } : {}),
       env: this.env(),
       // No SDK `stderr` callback: the supervisor captures the CLI's stderr (`onStderr`), so
       // every line is reported once.
