@@ -36,6 +36,18 @@ its own `systemPrompt` and `tools`), `caps` (informational — the runtime enfor
 **permission gate** (below). `bare` is an opt-in that skips repository context and the
 subscription login; refuse it when the runtime cannot honour it.
 
+`launchFlags` (P12, SPEC decision 151, TECHNOLOGY §3.9) are catalogued launch flags
+(`LAUNCH_FLAGS` in `packages/protocol/src/launch-flags.ts`; today only `chrome`) the user
+approved for this Steward. The runtime has already checked them — a Steward only, the flag lists
+this runtime, an approved `launch` record names the same set — so an adapter only applies them:
+the Claude adapter passes each as a CLI flag through `extraArgs` (`chrome` → `{ chrome: null }`,
+merged with `bare`'s `{ bare: null }`); the fake adapter records them (`launchFlagsOf`); an
+adapter whose runtime the catalogue does not list never receives any. A resumed session gets the
+same flags. How a flag reaches a runtime is known only here: nothing outside `adapters/` builds
+`extraArgs`. The flag's tools still go through the gate like any call: the gate answers `ask` for
+them and the runtime's scope watch decides, so a hook-based adapter must turn that `ask` into a
+`canUseTool` round-trip (the Claude adapter's `PreToolUse` hook does), never into an allow.
+
 ## Event mapping
 
 Emit the normalised events of `packages/protocol/src/events.ts`:
