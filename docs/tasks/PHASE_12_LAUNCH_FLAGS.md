@@ -1,7 +1,7 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-01 · **Task status:** P12-01 in progress
-**Phase status:** in progress (0/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
+**Current task:** P12-02 · **Task status:** P12-01 done (2026-11-05)
+**Phase status:** in progress (1/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -63,9 +63,10 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 ## Tasks
 
 ### P12-01 — Phase file and Chrome spike
-- **Status:** in progress · **Depends on:** — · **Parallel with:** —
+- **Status:** done (2026-11-05) · **Depends on:** — · **Parallel with:** —
 - Plan Task 1: this file; `scripts/spikes/chrome-sdk-probe.mjs`; a real run of the Agent SDK with `extraArgs: { chrome: null }`.
 - **Acceptance:** `docs/tasks/notes/P12-01-chrome-spike.md` gives the exact Chrome tool names and prefix, whether calls reach `canUseTool`, the two-session behaviour and the screenshot-to-PR path (marked "not exercised" where it was), and ends with a `Ruling: go` or `stop` line.
+- **Done:** Ruling `go`: Chrome tools are `mcp__claude-in-chrome__*` (22 tools), reach `canUseTool` after a `PreToolUse` `ask` (not always without it), two sessions run at once on the shared browser.
 
 ### P12-02 — Protocol
 - **Status:** todo · **Depends on:** P12-01 · **Parallel with:** —
