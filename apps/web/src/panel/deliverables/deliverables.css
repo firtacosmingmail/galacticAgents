@@ -260,16 +260,35 @@
   padding-left: 6px;
 }
 .dlv-code {
-  margin: 0;
+  /* code and its line numbers scroll as one (P8-25) */
+  display: flex;
   max-height: 60vh;
   overflow: auto;
-  padding: 8px;
   border-radius: 4px;
   background: var(--pnl-surface);
   font-family: var(--pnl-mono);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.5;
   tab-size: 2;
+}
+.dlv-code pre {
+  flex: 1 0 auto;
+  margin: 0;
+  padding: 8px 12px 8px 10px;
+  font: inherit;
+  white-space: pre;
+}
+.dlv-gutter {
+  position: sticky;
+  left: 0;
+  flex: none;
+  padding: 8px 8px 8px 10px;
+  border-right: 1px solid var(--pnl-line);
+  background: var(--pnl-surface);
+  color: var(--pnl-muted);
+  text-align: right;
+  white-space: pre;
+  user-select: none;
 }
 .dlv-image {
   max-height: 60vh;
@@ -286,25 +305,200 @@
   margin: 0 auto;
 }
 .dlv-markdown {
+  /* a reading layout (P8-25): a measure, a heading scale, tables, quotes, task lists */
   max-height: 60vh;
   overflow: auto;
-  padding: 4px 8px;
+  padding: 8px 16px 16px;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.65;
   overflow-wrap: anywhere;
+}
+.dlv-markdown > * {
+  max-width: 72ch;
+}
+.dlv-markdown > :first-child {
+  margin-top: 4px;
+}
+.dlv-markdown h1,
+.dlv-markdown h2,
+.dlv-markdown h3,
+.dlv-markdown h4,
+.dlv-markdown h5,
+.dlv-markdown h6 {
+  margin: 1.4em 0 0.5em;
+  line-height: 1.25;
+  font-weight: 650;
+}
+.dlv-markdown h1 {
+  font-size: 1.7em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--pnl-line);
+}
+.dlv-markdown h2 {
+  font-size: 1.35em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--pnl-line);
+}
+.dlv-markdown h3 {
+  font-size: 1.15em;
+}
+.dlv-markdown h4,
+.dlv-markdown h5,
+.dlv-markdown h6 {
+  font-size: 1em;
+}
+.dlv-markdown h6 {
+  color: var(--pnl-muted);
+}
+.dlv-markdown p,
+.dlv-markdown ul,
+.dlv-markdown ol,
+.dlv-markdown blockquote,
+.dlv-markdown table,
+.dlv-markdown pre {
+  margin: 0 0 1em;
+}
+.dlv-markdown ul,
+.dlv-markdown ol {
+  padding-left: 1.6em;
+}
+.dlv-markdown li + li,
+.dlv-markdown li > ul,
+.dlv-markdown li > ol {
+  margin-top: 0.25em;
+}
+.dlv-markdown li > ul,
+.dlv-markdown li > ol {
+  margin-bottom: 0;
+}
+.dlv-markdown .contains-task-list {
+  list-style: none;
+  padding-left: 0.4em;
+}
+.dlv-markdown .task-list-item input {
+  margin: 0 0.5em 0 0;
+  vertical-align: -0.1em;
 }
 .dlv-markdown a {
   color: var(--pnl-here);
+  text-underline-offset: 2px;
+}
+.dlv-markdown blockquote {
+  padding: 0.1em 1em;
+  border-left: 3px solid var(--pnl-line);
+  color: var(--pnl-muted);
+}
+.dlv-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+.dlv-markdown hr {
+  height: 1px;
+  margin: 1.6em 0;
+  border: 0;
+  background: var(--pnl-line);
+}
+.dlv-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.dlv-markdown th,
+.dlv-markdown td {
+  padding: 5px 12px;
+  border: 1px solid var(--pnl-line);
+  text-align: left;
+  vertical-align: top;
+}
+.dlv-markdown th {
+  background: var(--pnl-raised);
+  font-weight: 600;
+}
+.dlv-markdown tr:nth-child(2n) td {
+  background: var(--pnl-surface);
+}
+.dlv-markdown img {
+  max-width: 100%;
 }
 .dlv-markdown pre {
-  padding: 8px;
-  border-radius: 4px;
+  max-width: none;
+  padding: 10px 12px;
+  border-radius: 6px;
   background: var(--pnl-surface);
   overflow: auto;
+  line-height: 1.5;
 }
 .dlv-markdown code {
   font-family: var(--pnl-mono);
-  font-size: 12px;
+  font-size: 12.5px;
+}
+.dlv-markdown :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--pnl-surface);
+}
+.dlv-markdown del {
+  color: var(--pnl-muted);
+}
+
+/* an HTML deliverable rendered as a static page (P8-25, decision 151): pages expect white paper */
+.dlv-html {
+  display: block;
+  width: 100%;
+  height: 60vh;
+  border: 1px solid var(--pnl-line);
+  border-radius: 4px;
+  background: #fff;
+  color-scheme: light;
+}
+
+/* the large reader (P8-25): the viewer over the page, most of the screen */
+.dlv-reader {
+  width: min(1100px, calc(100vw - 32px));
+  height: calc(100vh - 48px);
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--pnl-line);
+  border-radius: 10px;
+  background: var(--pnl-bg);
+  color: var(--pnl-ink);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.45);
+}
+.dlv-reader::backdrop {
+  background: rgb(0 0 0 / 0.55);
+}
+.dlv-reader .dlv-viewer {
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 0;
+}
+.dlv-reader .dlv-viewer-title {
+  font-size: 15px;
+}
+.dlv-reader .dlv-code,
+.dlv-reader .dlv-markdown,
+.dlv-reader .dlv-image,
+.dlv-reader .dlv-html {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  height: auto;
+}
+.dlv-reader .dlv-markdown {
+  padding: 12px 32px 32px;
+  font-size: 15px;
+}
+.dlv-reader .dlv-markdown > * {
+  margin-left: auto;
+  margin-right: auto;
+}
+.dlv-reader .dlv-code {
+  font-size: 13px;
 }
 .dlv-md-img {
   color: var(--pnl-muted);

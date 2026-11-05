@@ -571,7 +571,7 @@ describe('the phone and the desktop app (decisions 131, 134)', () => {
   });
 });
 
-describe('the viewer: nothing it shows runs (decisions 125, 126)', () => {
+describe('the viewer: nothing it shows runs (decisions 125, 126, 151)', () => {
   const content = (body: string, contentType: string, headers: Record<string, string> = {}) =>
     new Response(body, { status: 200, headers: { 'content-type': contentType, ...headers } });
 
@@ -607,8 +607,10 @@ describe('the viewer: nothing it shows runs (decisions 125, 126)', () => {
     expect(document.activeElement?.textContent).toBe('View');
   });
 
-  it('shows an HTML file as its source, never rendered', async () => {
-    const html = '<!doctype html><h1 id="x">Hi</h1><script>alert(1)</script>';
+  it('renders an HTML file as a static page in a sandboxed frame; a Source switch (decision 151)', async () => {
+    const html =
+      '<!doctype html><h1 id="x">Hi</h1><script>window.__pwned = 4</script>' +
+      '<meta http-equiv="refresh" content="0;url=https://tracker.example/">';
     const v = await view(
       item({
         id: 'd-html',
@@ -617,9 +619,150 @@ describe('the viewer: nothing it shows runs (decisions 125, 126)', () => {
       }),
       content(html, 'text/plain; charset=utf-8'),
     );
-    await vi.waitFor(() => expect(v.querySelector('code')?.textContent).toBe(html));
+    const frame = await vi.waitFor(() => {
+      const f = v.querySelector('iframe');
+      expect(f).toBeTruthy();
+      return f!;
+    });
+    // No scripts, an opaque origin: only a link may open a new tab.
+    expect(frame.getAttribute('sandbox')).toBe('allow-popups allow-popups-to-escape-sandbox');
+    expect(frame.getAttribute('title')).toBe('rendered index.html');
+    const doc = frame.getAttribute('srcdoc')!;
+    expect(doc).toContain(
+      `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:">`,
+    );
+    expect(doc).toContain('<h1 id="x">Hi</h1>');
+    expect(doc).not.toContain('http-equiv="refresh"');
+    // Nothing of the page lands in the panel's own document.
     expect(document.querySelector('h1#x')).toBeNull();
     expect(document.querySelectorAll('script')).toHaveLength(0);
+    expect((window as { __pwned?: number }).__pwned).toBeUndefined();
+    await click(within(v).getByRole('button', { name: 'Source' }));
+    expect(v.querySelector('iframe')).toBeNull();
+    expect(v.querySelector('pre code')!.textContent).toBe(html);
+  });
+
+  it('formats JSON for reading, keeps its values as written; Source and invalid JSON as written', async () => {
+    const json = '{"id":12345678901234567890,"tags":["a","b"],"empty":{}}';
+    const v = await view(
+      item({
+        id: 'd-json',
+        title: 'data.json',
+        location: { storage: 'in_place', path: `${WS}/data.json` },
+      }),
+      content(json, 'text/plain'),
+    );
+    await vi.waitFor(() => expect(v.querySelector('code.hljs')).toBeTruthy());
+    expect(v.querySelector('pre code')!.textContent).toBe(
+      '{\n  "id": 12345678901234567890,\n  "tags": [\n    "a",\n    "b"\n  ],\n  "empty": {}\n}',
+    );
+    // Line numbers: one per line of what is shown, out of the accessible text.
+    const gutter = v.querySelector('.dlv-gutter')!;
+    expect(gutter.getAttribute('aria-hidden')).toBe('true');
+    expect(gutter.textContent).toBe('1\n2\n3\n4\n5\n6\n7\n8');
+    await click(within(v).getByRole('button', { name: 'Source' }));
+    expect(v.querySelector('pre code')!.textContent).toBe(json);
+    await click(within(v).getByRole('button', { name: 'Formatted' }));
+    expect(within(v).getByRole('group', { name: 'formatted or source' })).toBeTruthy();
+  });
+
+  it('shows JSON that does not parse as written, and says so', async () => {
+    const bad = '{"a": 1,}';
+    const v = await view(
+      item({
+        id: 'd-bad',
+        title: 'bad.json',
+        location: { storage: 'in_place', path: `${WS}/bad.json` },
+      }),
+      content(bad, 'text/plain'),
+    );
+    await vi.waitFor(() =>
+      expect(v.textContent).toContain('This is not valid JSON, so it is shown as written.'),
+    );
+    expect(v.querySelector('pre code')!.textContent).toBe(bad);
+  });
+
+  it('formats XML for reading', async () => {
+    const v = await view(
+      item({
+        id: 'd-xml',
+        title: 'pom.xml',
+        location: { storage: 'in_place', path: `${WS}/pom.xml` },
+      }),
+      content('<project><name>demo</name><deps><dep/></deps></project>', 'text/plain'),
+    );
+    await vi.waitFor(() =>
+      expect(v.querySelector('pre code')!.textContent).toBe(
+        '<project>\n  <name>demo</name>\n  <deps>\n    <dep/>\n  </deps>\n</project>',
+      ),
+    );
+  });
+
+  it('renders GitHub Markdown: tables, task lists, strikethrough, highlighted code blocks', async () => {
+    const md = [
+      '| Step | Done |',
+      '| --- | --- |',
+      '| build | yes |',
+      '',
+      '- [x] tests',
+      '- [ ] docs',
+      '',
+      '~~old~~',
+      '',
+      '```ts',
+      'const a: number = 1;',
+      '```',
+    ].join('\n');
+    const v = await view(
+      item({
+        id: 'd-gfm',
+        title: 'PLAN.md',
+        location: { storage: 'in_place', path: `${WS}/PLAN.md` },
+      }),
+      content(md, 'text/plain'),
+    );
+    await vi.waitFor(() => expect(v.querySelector('.dlv-markdown table')).toBeTruthy());
+    expect([...v.querySelectorAll('.dlv-markdown th')].map((th) => th.textContent)).toEqual([
+      'Step',
+      'Done',
+    ]);
+    const boxes = [...v.querySelectorAll<HTMLInputElement>('.dlv-markdown input[type=checkbox]')];
+    expect(boxes.map((b) => [b.checked, b.disabled])).toEqual([
+      [true, true],
+      [false, true],
+    ]);
+    expect(v.querySelector('.dlv-markdown del')?.textContent).toBe('old');
+    const code = v.querySelector('.dlv-markdown pre code.hljs')!;
+    expect(code.className).toContain('language-ts');
+    expect(code.textContent).toBe('const a: number = 1;');
+    expect(code.querySelector('.hljs-keyword')).toBeTruthy();
+  });
+
+  it('expands into a large reader and comes back with Escape, then Escape closes', async () => {
+    const v = await view(
+      item({
+        id: 'd-read',
+        title: 'README.md',
+        location: { storage: 'in_place', path: `${WS}/README.md` },
+      }),
+      content('# Read me', 'text/plain'),
+    );
+    await vi.waitFor(() => expect(v.querySelector('.dlv-markdown h1')).toBeTruthy());
+    await click(within(v).getByRole('button', { name: 'Expand' }));
+    const reader = screen.getByRole('dialog', { name: 'reader: README.md' });
+    expect(within(reader).getByTestId('deliverable-viewer')).toBeTruthy();
+    expect(reader.querySelector('.dlv-markdown h1')?.textContent).toBe('Read me');
+    expect(document.activeElement?.textContent).toBe('README.md');
+    await act(async () => {
+      fireEvent.keyDown(within(reader).getByTestId('deliverable-viewer'), { key: 'Escape' });
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const back = screen.getByTestId('deliverable-viewer');
+    expect(within(back).getByRole('button', { name: 'Expand' })).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(back, { key: 'Escape' });
+    });
+    expect(screen.queryByTestId('deliverable-viewer')).toBeNull();
   });
 
   it('renders Markdown without raw HTML, javascript: links or images; a Source switch', async () => {
