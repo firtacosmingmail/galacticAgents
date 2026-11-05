@@ -10,6 +10,7 @@ import {
   type TranscriptChunk,
   wallClockLimit,
 } from '@galactic/protocol';
+import { LaunchActions, OffScriptActions } from '../panel/cards/LaunchCard.js';
 import { useAppStore } from '../state/store.js';
 import { createApi, type Api } from './api.js';
 
@@ -349,6 +350,8 @@ function QuestionCard({
 }) {
   const [value, setValue] = useState('');
   const permission = question.kind === 'permission';
+  const launch = question.kind === 'launch';
+  const offScript = permission && question.context.offScript !== undefined;
   const call = question.context.toolCall;
   const set = question.context.set;
   if (set) {
@@ -373,7 +376,11 @@ function QuestionCard({
           </code>
         </p>
       )}
-      {permission ? (
+      {launch ? (
+        <LaunchActions busy={false} onAnswer={onAnswer} />
+      ) : offScript ? (
+        <OffScriptActions busy={false} onAnswer={onAnswer} />
+      ) : permission ? (
         <div className="controls">
           <button onClick={() => onAnswer('allow')}>Allow</button>
           <button onClick={() => onAnswer('no')} className="danger">

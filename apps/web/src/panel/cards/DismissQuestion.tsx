@@ -25,8 +25,9 @@ export function DismissQuestion({
   const offline = useStreamDown();
   const { run, error, busy, clear } = useAction();
   const text = q.context.text.length > 80 ? `${q.context.text.slice(0, 79)}…` : q.context.text;
-  const label =
-    q.kind === 'permission'
+  const label = q.context.offScript
+    ? `Dismiss the off-script request (deny this call; the Steward keeps running): ${text}`
+    : q.kind === 'permission'
       ? `Dismiss the permission request (deny it): ${text}`
       : q.kind === 'spend'
         ? `Dismiss the spend approval (refuse it): ${text}`
@@ -35,8 +36,9 @@ export function DismissQuestion({
           : q.kind === 'launch'
             ? `Dismiss the launch approval (deny it): ${text}`
             : `Dismiss the question, no reply: ${text}`;
-  const hint =
-    q.kind === 'permission'
+  const hint = q.context.offScript
+    ? 'Dismiss (deny this call): the Steward is not stopped'
+    : q.kind === 'permission'
       ? 'Dismiss (deny)'
       : q.kind === 'spend'
         ? 'Dismiss (refuse): no approval, nothing is spent'

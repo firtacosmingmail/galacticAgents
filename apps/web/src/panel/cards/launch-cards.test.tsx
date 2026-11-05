@@ -154,6 +154,18 @@ describe('the off-script card', () => {
   it('its × denies the call', () => {
     show(<QuestionCard question={offScript} />);
     const x = within(screen.getByRole('article')).getByRole('button', { name: /^Dismiss / });
-    expect(x.getAttribute('aria-label')).toMatch(/^Dismiss the permission request \(deny it\)/);
+    expect(x.getAttribute('aria-label')).toMatch(
+      /^Dismiss the off-script request \(deny this call/,
+    );
+  });
+
+  it('its × sends the dismiss request with the question version', async () => {
+    show(<QuestionCard question={offScript} />);
+    await act(async () =>
+      fireEvent.click(
+        within(screen.getByRole('article')).getByRole('button', { name: /^Dismiss / }),
+      ),
+    );
+    expect(api.dismiss).toHaveBeenCalledWith('q-off', 4);
   });
 });
