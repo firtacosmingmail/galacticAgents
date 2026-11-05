@@ -340,6 +340,17 @@ export const QuestionDrafted = z.object({
   by: Actor,
 });
 /**
+ * A launch approval was taken to start its Steward (P12-07): folded into the question row as
+ * `meta.launchUsed`, so a replay of the log keeps the approval single-use. Wakes no one and does
+ * not bump `version`.
+ */
+export const LaunchApprovalTaken = z.object({
+  type: z.literal('question.launch_used'),
+  questionId: Id,
+  taskId: Id,
+  agentId: Id,
+});
+/**
  * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an
  * interrupt withdrew it (the agent went idle without an answer). A resumed agent re-asks under a
  * new id.
@@ -888,6 +899,7 @@ export const Event = z.discriminatedUnion('type', [
   QuestionEscalated,
   QuestionAnswered,
   QuestionDrafted,
+  LaunchApprovalTaken,
   QuestionReassigned,
   QuestionCancelled,
   PermissionDecided,

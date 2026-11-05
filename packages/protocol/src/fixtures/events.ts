@@ -118,6 +118,12 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     draft: { choices: ['yes'], text: 'maybe' },
     by: user,
   },
+  'question.launch_used': {
+    type: 'question.launch_used',
+    questionId: 'q-1',
+    taskId: 't-1',
+    agentId: 'a-waykeeper-1',
+  },
   'question.cancelled': {
     type: 'question.cancelled',
     questionId: 'q-1',

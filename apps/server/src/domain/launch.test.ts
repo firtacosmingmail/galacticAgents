@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   LAUNCH_ACTIONS,
+  applyEvent,
+  applySnapshot,
+  type Snapshot,
+  type EventEnvelope,
   type Actor,
   type LaunchRequest,
   type RequestLaunchInput,
@@ -156,5 +160,37 @@ describe('takeLaunchApproval', () => {
     const id = await s.asked();
     await s.answer(id, label);
     expect((await refusal(s.take(id))).code).toBe('invalid_transition');
+  });
+});
+
+describe('launch approval robustness', () => {
+  it('refuses a take after the user dismissed the question', async () => {
+    const s = setup();
+    const id = await s.asked();
+    await s.commands.dismissQuestion({ questionId: id, by: USER });
+    await refusal(s.take(id));
+  });
+
+  it('refuses an agent answering a launch question through answerQuestion', async () => {
+    const s = setup();
+    const id = await s.asked();
+    const e = await refusal(s.answer(id, 'Approve and start', { type: 'agent', id: s.wk.id }));
+    expect(e.code).toBe('invalid');
+    expect(s.tables.questions.get(id)?.status).toBe('open');
+  });
+
+  it('logs the use, and a replay of the log keeps the approval used', async () => {
+    const s = setup();
+    const start: Snapshot = { ...s.log.snapshot(), statuses: [] };
+    const recorded: EventEnvelope[] = [];
+    s.log.subscribe((e) => recorded.push(e));
+    const id = await s.asked();
+    await s.answer(id, 'Approve and start');
+    await s.take(id);
+    expect(recorded.map((e) => e.event.type)).toContain('question.launch_used');
+    let folded = applySnapshot(start);
+    for (const env of recorded) folded = applyEvent(folded, env);
+    expect(folded.questions[id]?.meta?.['launchUsed']).toBe(true);
+    expect(folded.questions[id]).toEqual(s.tables.questions.get(id));
   });
 });

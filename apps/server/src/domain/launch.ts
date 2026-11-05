@@ -137,5 +137,11 @@ export function takeLaunchApproval(
     );
   }
   ctx.tables.questions.upsert({ ...q, meta: { ...q.meta, launchUsed: true } });
+  ctx.emit({
+    type: 'question.launch_used',
+    questionId: q.id,
+    taskId: launch.taskId,
+    agentId: q.originAgentId,
+  });
   return launch;
 }
