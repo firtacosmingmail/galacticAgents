@@ -1,6 +1,6 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-10 · **Task status:** P12-01 to P12-09 done (2026-11-05)
+**Current task:** P12-10 · **Task status:** P12-01 to P12-09 done (2026-11-05); P12-10 in progress
 **Phase status:** in progress (9/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -109,6 +109,6 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 - **Acceptance:** fixed button labels send exactly those answers; a flagged Steward shows the badge, a normal one does not.
 
 ### P12-10 — End-to-end, docs and phase exit
-- **Status:** todo · **Depends on:** P12-09 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P12-09 · **Parallel with:** —
 - Plan Task 10: `launch-flags.flow.test.ts`; SPEC decision 151, §2.6 and decision 147 notes; TECHNOLOGY subsection; plan line; adapters README; phase exit.
 - **Acceptance:** the flow test passes in the specified order; the full gates are green; SPEC, TECHNOLOGY and the plan agree.
