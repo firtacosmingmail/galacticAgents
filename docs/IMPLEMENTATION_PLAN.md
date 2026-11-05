@@ -224,7 +224,7 @@ Spec: `docs/superpowers/specs/2026-10-31-more-ai-providers-design.md`; plan: `do
 Spec: `docs/superpowers/specs/2026-11-05-steward-launch-flags-design.md`; plan: `docs/superpowers/plans/2026-11-05-steward-launch-flags.md`; tasks P12-01 – P12-10 in `docs/tasks/PHASE_12_LAUNCH_FLAGS.md`.
 
 1. Spike: Claude in Chrome under the Agent SDK with `extraArgs: { chrome: null }` — tool names, `canUseTool` coverage, two sessions (P12-01; Ruling go).
-2. Protocol (catalogue, launch and off-script contexts, `ScopeJudge`), spawning and resuming with flags, the gate sending a flag's tools to the scope watch (P12-02 – P12-04).
+2. Protocol (catalogue, launch and off-script contexts, `ScopeJudge`), spawning and resuming with flags, the gate sending a flag's tools to the scope watch and refusing them to every agent not started with the flag (every other Claude session runs with `--no-chrome`) (P12-02 – P12-04; tightened in the P12-10 review).
 3. The one-shot scope judge (isolated, no tools, fail closed) and the runtime scope watch (20 s timeout, precedents in `meta.launch`) (P12-05, P12-06).
 4. The launch approval (migration 0018, `question.launch_used`), the Waykeeper's `spawn_steward` and final check, the web cards and badge (P12-07 – P12-09).
 5. End to end, docs and phase exit (P12-10).

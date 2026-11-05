@@ -40,12 +40,14 @@ subscription login; refuse it when the runtime cannot honour it.
 (`LAUNCH_FLAGS` in `packages/protocol/src/launch-flags.ts`; today only `chrome`) the user
 approved for this Steward. The runtime has already checked them — a Steward only, the flag lists
 this runtime, an approved `launch` record names the same set — so an adapter only applies them:
-the Claude adapter passes each as a CLI flag through `extraArgs` (`chrome` → `{ chrome: null }`,
-merged with `bare`'s `{ bare: null }`); the fake adapter records them (`launchFlagsOf`); an
+the Claude adapter passes each as a CLI flag through `extraArgs` via its own `SDK_FLAG_ARG` table
+(`chrome` → `{ chrome: null }`, merged with `bare`'s `{ bare: null }`) and turns every catalogued
+flag a session was not started with off (`{ 'no-chrome': null }` — brains included), so a
+user setting cannot hand a flag's tools to an unapproved session; the fake adapter records them (`launchFlagsOf`); an
 adapter whose runtime the catalogue does not list never receives any. A resumed session gets the
 same flags. How a flag reaches a runtime is known only here: nothing outside `adapters/` builds
 `extraArgs`. The flag's tools still go through the gate like any call: the gate answers `ask` for
-them and the runtime's scope watch decides, so a hook-based adapter must turn that `ask` into a
+them (and `deny` to an agent not started with the flag) and the runtime's scope watch decides, so a hook-based adapter must turn that `ask` into a
 `canUseTool` round-trip (the Claude adapter's `PreToolUse` hook does), never into an allow.
 
 ## Event mapping
