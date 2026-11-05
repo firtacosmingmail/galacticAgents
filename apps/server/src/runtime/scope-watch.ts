@@ -57,6 +57,8 @@ const offScript = (reason: string): ScopeVerdict => ({ verdict: 'off_script', re
  */
 export class ScopeWatch {
   private readonly running = new Map<Id, Set<AbortController>>();
+  /** Checks `cancel` withdrew — told apart from a timeout, which also aborts the controller. */
+  private readonly cancelled = new WeakSet<AbortController>();
   private readonly timeoutMs: number;
 
   constructor(private readonly deps: { judge: ScopeJudge | undefined; timeoutMs?: number }) {
@@ -85,16 +87,20 @@ export class ScopeWatch {
       }
     }
     // Cancelled (the agent ended, or its call was withdrawn), or the agent is stopping meanwhile.
-    if (!verdict || !call.active()) return;
+    // A verdict that settled just before `cancel` (the call withdrawn, the agent idle or ended)
+    // does nothing: the agent is no longer waiting on this call.
+    if (!verdict || this.cancelled.has(controller) || !call.active()) return;
+    // The judge read the (redacted) call; its reason may still quote a secret.
+    const reason = redactSecrets(verdict.reason);
     if (verdict.verdict === 'consistent') {
-      call.consistent(verdict.reason);
+      call.consistent(reason);
       return;
     }
     call.offScript({
       flag: call.flag,
       expectedUse: call.launch?.expectedUse ?? '',
       precedents: [...(call.launch?.precedents ?? [])],
-      judgeReason: verdict.reason,
+      judgeReason: reason,
     });
   }
 
@@ -103,8 +109,10 @@ export class ScopeWatch {
     const set = this.running.get(agentId);
     if (!set) return;
     this.running.delete(agentId);
-    for (const controller of set)
+    for (const controller of set) {
+      this.cancelled.add(controller);
       controller.abort(new Error('the agent ended or its call was withdrawn'));
+    }
   }
 
   /** The verdict, or `undefined` when the check was cancelled. */

@@ -180,6 +180,52 @@ describe('ScopeWatch', () => {
     expect(inactive.consistent).not.toHaveBeenCalled();
   });
 
+  it('a verdict that settled just before cancel does nothing (the call was withdrawn)', async () => {
+    for (const verdict of [
+      { verdict: 'consistent', reason: 'fine' },
+      { verdict: 'off_script', reason: 'late' },
+    ] as const) {
+      let settle!: (v: ScopeVerdict) => void;
+      const watch = new ScopeWatch({
+        judge: { judge: () => new Promise<ScopeVerdict>((r) => (settle = r)) },
+      });
+      const { c, consistent, offScript } = call();
+      const done = watch.handle(c);
+      settle(verdict);
+      // The judge's verdict is in; the watch has not acted on it yet when the agent goes idle.
+      await Promise.resolve();
+      watch.cancel('a-1');
+      await done;
+      expect(consistent).not.toHaveBeenCalled();
+      expect(offScript).not.toHaveBeenCalled();
+      expect(watch.inFlight).toBe(0);
+    }
+  });
+
+  it('redacts secrets from the judge reason before it reaches the callbacks', async () => {
+    const secret = 'ghp_' + 'y'.repeat(36);
+    for (const verdict of ['consistent', 'off_script'] as const) {
+      const watch = new ScopeWatch({
+        judge: createFakeScopeJudge(() => ({ verdict, reason: `it typed ${secret}` })),
+      });
+      const { c, consistent, offScript } = call();
+      await watch.handle(c);
+      const seen = JSON.stringify([consistent.mock.calls, offScript.mock.calls]);
+      expect(seen).toContain('it typed');
+      expect(seen).not.toContain(secret);
+    }
+  });
+
+  it('a timeout still counts as off-script (not as a cancel)', async () => {
+    const watch = new ScopeWatch({
+      judge: { judge: () => new Promise<ScopeVerdict>(() => {}) },
+      timeoutMs: 5,
+    });
+    const { c, offScript } = call();
+    await watch.handle(c);
+    expect(offScript).toHaveBeenCalledTimes(1);
+  });
+
   it('a precedent is the tool name and a one-line, redacted, capped summary', () => {
     expect(precedentOf({ toolName: CHROME, input: { action: 'screenshot' } })).toBe(
       `${CHROME} {"action":"screenshot"}`,
@@ -505,6 +551,77 @@ describe('scope watch in the runtime (P12-06)', () => {
     expect(h.answers).toEqual([]);
     expect(h.open()).toHaveLength(1);
     expect(h.open()[0]!.holder.type).toBe('user');
+  });
+
+  it('a verdict that settled just before the call was withdrawn (interrupt → idle) does nothing', async () => {
+    for (const verdict of [
+      { verdict: 'consistent', reason: 'fine' },
+      { verdict: 'off_script', reason: 'late' },
+    ] as const) {
+      let settle!: (v: ScopeVerdict) => void;
+      let judged = false;
+      const h = await flagged({
+        prompt: 'scenario:chrome',
+        judge: {
+          judge: () => {
+            judged = true;
+            return new Promise<ScopeVerdict>((r) => (settle = r));
+          },
+        },
+      });
+      await until(() => judged);
+      // The verdict lands in the same tick the runtime handles the withdrawn call's idle: the
+      // runtime's cancel runs after the judge resolved but before the watch acts on it.
+      const watch = (h.runtime as unknown as { scopeWatch: ScopeWatch }).scopeWatch;
+      const cancel = watch.cancel.bind(watch);
+      watch.cancel = (agentId) => {
+        settle(verdict);
+        queueMicrotask(() => cancel(agentId));
+      };
+      await h.runtime.interrupt(h.steward.id);
+      await until(() => h.state() === 'idle');
+      await new Promise((r) => setTimeout(r, 30));
+      expect(h.ofType('question.opened')).toEqual([]);
+      expect(h.answers).toEqual([]);
+      expect(h.ofType('permission.decided').filter((d) => d.agentId === h.steward.id)).toEqual([]);
+      expect(h.state()).toBe('idle');
+    }
+  });
+
+  it('stopping the Steward while the judge is pending: the late verdict does nothing', async () => {
+    for (const verdict of [
+      { verdict: 'consistent', reason: 'fine' },
+      { verdict: 'off_script', reason: 'late' },
+    ] as const) {
+      let settle!: (v: ScopeVerdict) => void;
+      let judged = false;
+      const h = await flagged({
+        prompt: 'scenario:chrome',
+        judge: {
+          judge: () => {
+            judged = true;
+            return new Promise<ScopeVerdict>((r) => (settle = r));
+          },
+        },
+      });
+      await until(() => judged);
+      const stopping = h.runtime.stop(h.steward.id, USER);
+      settle(verdict);
+      await stopping;
+      await until(() => h.state() === 'stopped');
+      await new Promise((r) => setTimeout(r, 30));
+      expect(h.ofType('question.opened')).toEqual([]);
+      expect(h.answers).toEqual([]);
+      expect(h.ofType('permission.decided').filter((d) => d.agentId === h.steward.id)).toEqual([]);
+    }
+  });
+
+  it('a secret in the judge reason never reaches the log', async () => {
+    const secret = 'ghp_' + 'z'.repeat(36);
+    const h = await flagged({ prompt: 'scenario:chrome', judge: offScriptJudge(`saw ${secret}`) });
+    await until(() => h.open().length === 1);
+    expect(h.open()[0]!.context.offScript?.judgeReason).toContain('saw');
+    expect(JSON.stringify(h.log.eventsSince(0, Number.MAX_SAFE_INTEGER))).not.toContain(secret);
   });
 
   it('resume keeps launch flags and precedents', async () => {
