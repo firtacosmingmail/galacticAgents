@@ -1,7 +1,7 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-06 · **Task status:** P12-01 to P12-05 done (2026-11-05); P12-06 in progress
-**Phase status:** in progress (5/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
+**Current task:** P12-07 · **Task status:** P12-01 to P12-06 done (2026-11-05)
+**Phase status:** in progress (6/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -89,7 +89,7 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 - **Acceptance:** malformed reply, error or abort is `off_script`; the prompt carries `expectedUse`, precedents and the call; the judge gets no tools.
 
 ### P12-06 — Runtime scope watch
-- **Status:** in progress · **Depends on:** P12-05 · **Parallel with:** —
+- **Status:** done (2026-11-05) · **Depends on:** P12-05 · **Parallel with:** —
 - Plan Task 6: `ScopeWatch` holds a flag call until the verdict; off-script opens a user-held permission question with `offScript` context; approve adds a precedent, stop denies and stops.
 - **Acceptance:** a judge that never settles gives an off-script question after 20 s; the judge and log see redacted input; dismissal denies without stopping; a restart keeps flags and precedents.
 
