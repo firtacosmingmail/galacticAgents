@@ -151,6 +151,8 @@ export function holderFor(
   if (kind === 'spend') return { type: 'user' };
   // Decision 147: what goes out in Cosmin's name is his explicit approval, of that exact content.
   if (kind === 'publish') return { type: 'user' };
+  // P12: a launch approval (or an off-script flag call) is the user's alone, like `spend`.
+  if (kind === 'launch') return { type: 'user' };
   return livingAbove(ctx, originAgentId, routing.isLiving);
 }
 

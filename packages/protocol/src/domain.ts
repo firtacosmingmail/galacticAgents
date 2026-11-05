@@ -8,6 +8,7 @@ import {
   PublishContext,
   SpendContext,
 } from './long-term-questions.js';
+import { LaunchContext, OffScriptContext } from './launch-flags.js';
 import { Provider, UsageLimitContext } from './providers.js';
 import {
   ActorType,
@@ -554,6 +555,10 @@ export const QuestionContext = z.object({
   publish: PublishContext.optional(),
   /** A usage-limit question (P11-02): who hit the limit and what it could switch to. */
   usageLimit: UsageLimitContext.optional(),
+  /** What a `launch` question asks to start a Steward with (P12-02); user-held only. */
+  launch: LaunchContext.optional(),
+  /** A flag call the scope judge found off-script (P12-02); user-held only. */
+  offScript: OffScriptContext.optional(),
   /** Set by the server on `question.opened`; adapters leave it out. */
   origin: QuestionOrigin.optional(),
 });

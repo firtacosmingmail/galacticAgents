@@ -1,7 +1,7 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-02 · **Task status:** P12-01 done (2026-11-05)
-**Phase status:** in progress (1/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
+**Current task:** P12-03 · **Task status:** P12-01 and P12-02 done (2026-11-05)
+**Phase status:** in progress (2/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -69,7 +69,7 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 - **Done:** Ruling `go`: Chrome tools are `mcp__claude-in-chrome__*` (22 tools), reach `canUseTool` after a `PreToolUse` `ask` (not always without it), two sessions run at once on the shared browser.
 
 ### P12-02 — Protocol
-- **Status:** todo · **Depends on:** P12-01 · **Parallel with:** —
+- **Status:** done (2026-11-05) · **Depends on:** P12-01 · **Parallel with:** —
 - Plan Task 2: `launch-flags.ts` (catalogue, `flagOfTool`, `launchCommand`, contexts, `AgentLaunch`, `ScopeJudge`), `QuestionKind` `launch`, `SpawnOptions.launchFlags`, `SpawnAgentInput` fields.
 - **Acceptance:** every new type round-trips; `dangerously-skip-permissions` is not a `LaunchFlag`; typecheck is green with `launch` treated like `spend`.
 

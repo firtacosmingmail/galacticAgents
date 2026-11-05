@@ -582,7 +582,7 @@ export function registerAgentRoutes(
       const questionId = (req.params as { id: string }).id;
       const kind = log.tables.questions.get(questionId)?.kind;
       if (
-        (kind === 'permission' || kind === 'spend' || kind === 'publish') &&
+        (kind === 'permission' || kind === 'spend' || kind === 'publish' || kind === 'launch') &&
         !(await notFromAnAgent(opts.answersPeer, 'answer', req, reply))
       ) {
         return reply;

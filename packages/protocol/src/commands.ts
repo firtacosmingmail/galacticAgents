@@ -16,6 +16,7 @@ import type {
   Task,
   TrustLevel,
 } from './domain.js';
+import type { AgentLaunch, LaunchFlag } from './launch-flags.js';
 import type { Provider } from './providers.js';
 import type {
   AgentRole,
@@ -102,6 +103,10 @@ export interface SpawnAgentInput {
   bare?: boolean;
   /** The exact model to run (P11-02); absent: the runtime's default. */
   model?: string;
+  /** Approved launch flags (P12): a Steward only. */
+  launchFlags?: LaunchFlag[];
+  /** The approved launch record the server keeps in `meta.launch` (P12). */
+  launch?: AgentLaunch;
   /** Brains: their tools and system prompt (TECHNOLOGY §5.1). */
   tools?: ToolDefinition[];
   systemPrompt?: string;

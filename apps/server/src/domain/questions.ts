@@ -146,7 +146,7 @@ function checkHolder(ctx: CommandContext, question: Question, holder: Actor): vo
     if (question.kind === 'permission') {
       throw new DomainError('invalid', `permission question ${question.id} is held by the user`);
     }
-    if (question.kind === 'spend' || question.kind === 'publish') {
+    if (question.kind === 'spend' || question.kind === 'publish' || question.kind === 'launch') {
       throw new DomainError(
         'invalid',
         `${question.kind} question ${question.id} is held by the user: the user answers ${question.kind} approvals`,
@@ -401,7 +401,7 @@ export function escalateQuestion(
   isLiving?: (agentId: Id) => boolean,
 ): Question {
   const current = mustOpen(ctx, questionId);
-  if (current.kind === 'spend' || current.kind === 'publish') {
+  if (current.kind === 'spend' || current.kind === 'publish' || current.kind === 'launch') {
     throw new DomainError(
       'invalid',
       `${current.kind} question ${questionId} is held by the user: the user answers ${current.kind} approvals`,
