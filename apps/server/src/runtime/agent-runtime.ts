@@ -1089,19 +1089,22 @@ export class AgentRuntime {
     const approved = offScript && answer === OFF_SCRIPT_ACTIONS[0];
     const forAgent = offScript ? (approved ? 'allow' : 'deny: stopped by the user') : answer;
     const toolCall = current.context.toolCall;
-    // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
-    // an answer in the log that the agent never saw.
-    live.answering.add(questionId);
+    // "Stop the Steward" stops it whatever happens below: even when the adapter refuses the
+    // answer (the call withdrawn meanwhile) or the record is refused, the user asked for a stop.
     try {
-      await live.adapter.answer(questionId, forAgent);
-    } finally {
-      live.answering.delete(questionId);
-    }
-    live.questions.delete(questionId);
-    this.byQuestion.delete(questionId);
-    // Not `command()`: a refused record (the question was cancelled meanwhile) reaches the caller.
-    // The agent has the answer: a write the storage refuses is held and written later (P8-04).
-    try {
+      // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
+      // an answer in the log that the agent never saw.
+      live.answering.add(questionId);
+      try {
+        await live.adapter.answer(questionId, forAgent);
+      } finally {
+        live.answering.delete(questionId);
+      }
+      live.questions.delete(questionId);
+      this.byQuestion.delete(questionId);
+      // Not `command()`: a refused record (the question was cancelled meanwhile) reaches the
+      // caller. The agent has the answer: a write the storage refuses is held and written later
+      // (P8-04).
       this.recordOrHold((ctx) => {
         const answered = answerQuestion(ctx, {
           questionId,
@@ -1121,7 +1124,8 @@ export class AgentRuntime {
         return answered;
       });
     } finally {
-      // "Stop the Steward": the call is denied above, then the Steward stops.
+      // "Stop the Steward": the call is denied above (when the adapter still had it), then the
+      // Steward stops.
       if (offScript && !approved) void this.stop(agentId, by);
     }
   }

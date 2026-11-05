@@ -469,6 +469,20 @@ describe('scope watch in the runtime (P12-06)', () => {
     });
   });
 
+  it('Stop the Steward still stops when the adapter refuses the answer', async () => {
+    const h = await flagged({ prompt: 'scenario:chrome', judge: offScriptJudge() });
+    await until(() => h.open().length === 1);
+    const q = h.open()[0]!;
+    h.sdk.answer = () => Promise.reject(new Error('the session lost the question'));
+    await expect(
+      h.commands.answerQuestion({ questionId: q.id, answer: 'Stop the Steward', by: USER }),
+    ).rejects.toThrow();
+    await until(() => h.state() === 'stopped');
+    expect(h.ofType('control.stop').find((e) => e.target.id === h.steward.id)).toMatchObject({
+      by: USER,
+    });
+  });
+
   it('dismissing the off-script card denies without stopping', async () => {
     const h = await flagged({ prompt: 'scenario:chrome', judge: offScriptJudge() });
     await until(() => h.open().length === 1);
