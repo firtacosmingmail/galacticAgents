@@ -692,6 +692,11 @@ export class AgentRuntime {
       userFolders: () => this.userFoldersOf(agent.id, req),
       cwd: req.cwd,
       caps: this.caps,
+      // The Steward's launch flags (P12-04), read from its row on every check.
+      launchFlags: () => {
+        const row = this.opts.log.tables.agents.get(agent.id);
+        return (row ? launchOf(row)?.flags : undefined) ?? [];
+      },
       // The project's "Allow similar" rules (P9-17), read on every check like its table.
       rules: () => this.rulesOf(agent.id, req),
       onRuleAllow: (call, ruleId, action) =>

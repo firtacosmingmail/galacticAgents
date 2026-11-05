@@ -3,6 +3,8 @@ import {
   type GateCheckOptions,
   type GateVerdict,
   type Id,
+  type LaunchFlag,
+  flagOfTool,
   PermissionAction,
   type PermissionGate,
   PermissionPolicy,
@@ -57,6 +59,13 @@ export interface GateOptions {
    */
   userFolders?: () => readonly string[];
   caps: CapsEnforcer;
+  /**
+   * The launch flags this agent was started with (P12-04), read on every check. A call to one of a
+   * flag's tools (`flagOfTool`) asks — after the tool-call cap, before everything else: the policy
+   * table, "Allow similar" rules and `allowOnce` are not consulted — so the runtime's scope watch
+   * sees every such call (without an ask, some never reach the runtime's permission path).
+   */
+  launchFlags?: () => readonly LaunchFlag[];
   /**
    * The project's "Allow similar" rules (P9-17, decision 138), read on every check like the
    * policy: a call the table asks about that one of them matches is allowed — never one the table
@@ -153,6 +162,16 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
       const reserved = opts.caps.reserveToolCall(opts.agentId);
       if (!reserved.ok)
         return { verdict: { decision: 'deny', reason: reserved.reason }, cap: true };
+    }
+    const launchFlag = flagOfTool(opts.launchFlags?.() ?? [], call.toolName);
+    if (launchFlag) {
+      return {
+        verdict: {
+          decision: 'ask',
+          reasons: [`uses --${launchFlag}: checked against the Steward's approvals`],
+        },
+        launchFlag,
+      };
     }
     if (isServerTool(call)) return { verdict: { decision: 'allow' } };
     const workspace = workspaceNow();
@@ -265,6 +284,8 @@ export interface Decision {
   ruleId?: Id;
   /** The one call an approved publish let through (P11-06). */
   allowedOnce?: true;
+  /** The launch flag whose tool this call is (P12-04): the runtime's scope watch decides it. */
+  launchFlag?: LaunchFlag;
 }
 
 /**

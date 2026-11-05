@@ -336,3 +336,78 @@ describe('"Allow similar" rules in the gate (P9-17)', () => {
     expect(broken.check(install)).toMatchObject({ decision: 'ask' });
   });
 });
+
+describe('createPermissionGate launch flags (P12-04)', () => {
+  const denyNetwork = {
+    rules: { ...DEFAULT_PERMISSION_POLICY.rules, network: 'deny' as const },
+  };
+  const navigate = {
+    toolName: 'mcp__claude-in-chrome__navigate',
+    input: { url: 'https://github.com' },
+  };
+
+  it('asks for a flag tool even when the policy denies the network, and names the flag', () => {
+    const gate = createPermissionGate({
+      ...base,
+      policy: denyNetwork,
+      caps: caps(),
+      launchFlags: () => ['chrome'],
+    });
+    expect(gate.check(navigate)).toMatchObject({ decision: 'ask' });
+    expect(gate.decide(navigate)).toMatchObject({
+      verdict: { decision: 'ask' },
+      launchFlag: 'chrome',
+    });
+    expect(gate.check({ toolName: 'Bash', input: { command: 'curl https://x' } })).toMatchObject({
+      decision: 'deny',
+    });
+  });
+
+  it('follows the policy when the Steward has no flags', () => {
+    const gate = createPermissionGate({
+      ...base,
+      policy: denyNetwork,
+      caps: caps(),
+      launchFlags: () => [],
+    });
+    const decision = gate.decide(navigate);
+    expect(decision.verdict).toMatchObject({ decision: 'ask' });
+    expect(decision.launchFlag).toBeUndefined();
+  });
+
+  it('still applies the tool-call cap to a flag call', () => {
+    const gate = createPermissionGate({
+      ...base,
+      policy: denyNetwork,
+      caps: caps(0),
+      launchFlags: () => ['chrome'],
+    });
+    expect(gate.check(navigate)).toMatchObject({ decision: 'deny' });
+  });
+
+  it('does not consult rules or allowOnce for a flag call', () => {
+    let onceAsked = 0;
+    const allowed: string[] = [];
+    const rule = {
+      id: 'r-1',
+      action: 'network',
+      kind: 'tool',
+      toolName: navigate.toolName,
+    } as unknown as PermissionRule;
+    const gate = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+      launchFlags: () => ['chrome'],
+      rules: () => [rule],
+      allowOnce: () => {
+        onceAsked++;
+        return true;
+      },
+      onRuleAllow: (_c, id) => allowed.push(id),
+    });
+    expect(gate.check(navigate)).toMatchObject({ decision: 'ask' });
+    expect(onceAsked).toBe(0);
+    expect(allowed).toEqual([]);
+  });
+});

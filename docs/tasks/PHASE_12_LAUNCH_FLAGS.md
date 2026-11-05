@@ -1,7 +1,7 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-04 · **Task status:** P12-01, P12-02 and P12-03 done (2026-11-05)
-**Phase status:** in progress (3/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
+**Current task:** P12-05 · **Task status:** P12-01 to P12-04 done (2026-11-05)
+**Phase status:** in progress (4/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -79,7 +79,7 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 - **Acceptance:** `extraArgs` is `{ chrome: null }` (merged with `bare`); a codex Steward or a Waykeeper with flags is refused; a recovered agent resumes with its flags.
 
 ### P12-04 — Gate routes flag tools to the watch
-- **Status:** todo · **Depends on:** P12-03 · **Parallel with:** —
+- **Status:** done (2026-11-05) · **Depends on:** P12-03 · **Parallel with:** —
 - Plan Task 4: `GateOptions.launchFlags`; a flag tool call returns `ask` with `launchFlag`, skipping the policy table and rules but not the call cap.
 - **Acceptance:** a flag call asks even when the policy denies network; non-flag calls follow the policy; no rule is consulted for a flag call.
 
