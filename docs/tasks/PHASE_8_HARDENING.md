@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-25 · **Task status:** P8-25 in progress
-**Phase status:** in progress (24/25 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
+**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** P8-25 done
+**Phase status:** in progress (25/25 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -166,10 +166,11 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Done:** protocol `WORK_NAME_MAX`, `taskTitle`, `taskLabel` (`domain.ts`) and `title` on the control edit body (`rest.ts`, the project `name` now trimmed and capped); `domain/control.ts` merges the title into `meta`; `brains/wake.ts` skips a title-only edit; `RenameField` in `panel/nav-row-actions.tsx` (+ `.pnl-row-rename` in `panel.css`); every view that names a task uses `taskLabel` (navigation, cards, status, history, deliverables, scene labels and hover cards, consoles). Tests: `control.test.ts` (2), `wake.test.ts` (1), protocol `rest.test.ts` and `domain.test.ts` (1 each), `inbox-closed.test.tsx` (3). Gates: build, typecheck, lint, format green; `pnpm test` green except the git-backed server suites (worktrees, merges, copies, drills), which time out in this environment on unchanged `main` too and so does the web console's end-to-end `exit-run.test.tsx` (checked with the change stashed: `workspace/workspaces.test.ts` fails the same 10 of 23, `exit-run.test.tsx` its 1); the rest of the web suite passes (152 files, 1913 tests).
 
 ### P8-25 — A reader for Markdown, code, JSON, XML and HTML deliverables (added 2026-11-05)
-- **Status:** in progress · **Depends on:** P9-09 · **Parallel with:** all
+- **Status:** done (2026-11-05) · **Depends on:** P9-09 · **Parallel with:** all
 - Cosmin's request: "I want to be able to parse and display the markdown files beautifully. Same with files that contain code, or xml or json. For HTML files I want to be able to see them parsed like in a browser window or see their code." His choices (2026-11-05): HTML rendered as a **static page** (no scripts, nothing from the network) with a Rendered/Source switch; the panel preview plus an **Expand** button for a large reader; JSON and XML **pretty-printed** with a Formatted/Source switch and line numbers.
 - Markdown with GitHub's extensions (tables, task lists, strikethrough, autolinks), its code blocks highlighted, and typography for headings, lists, tables, quotes and rules; code with line numbers; JSON re-indented without parsing its values (a big number stays as written), XML re-indented from an inert parse; invalid JSON or XML shows its source and says so. HTML in a sandboxed frame (no `allow-scripts`, no `allow-same-origin`) whose document carries a CSP that loads nothing from the network, its `meta refresh` removed, its links opening a new tab.
 - **Acceptance:** unit tests for the JSON and XML formatters and the HTML frame document; viewer tests for each mode, the switches and the reader; SPEC decision 151 (amending 126); TECHNOLOGY §9.5/§9.6.
+- **Done:** `apps/web/src/panel/deliverables/reader-model.ts` (`readerKindOf`, `readerViews`, `formatJson`, `formatXml`, `htmlFrameDocument`, `HTML_FRAME_CSP`, `HTML_FRAME_SANDBOX`); `DeliverableViewer.tsx` (the views and their switch, `TextView`, `HtmlFrame`, `ReaderDialog`, a line-number gutter in `CodeView`, `remark-gfm` and `MarkdownCode`); reading styles in `deliverables.css`; dependency `remark-gfm@4.0.1`. Tests: `reader-model.test.ts` (9), `deliverables.test.tsx` (the HTML test rewritten for decision 151, five new: JSON, invalid JSON, XML, GitHub Markdown, the reader). Gates: build, typecheck, lint, format, test all green (web 2051 tests).
 
 ## Exit criteria
 
