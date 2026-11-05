@@ -10,7 +10,12 @@ import {
   type TranscriptChunk,
   wallClockLimit,
 } from '@galactic/protocol';
-import { LaunchActions, OffScriptActions } from '../panel/cards/LaunchCard.js';
+import {
+  LaunchActions,
+  LaunchDetails,
+  OffScriptActions,
+  OffScriptDetails,
+} from '../panel/cards/LaunchCard.js';
 import { useAppStore } from '../state/store.js';
 import { createApi, type Api } from './api.js';
 
@@ -367,8 +372,11 @@ function QuestionCard({
   return (
     <div className={`question question-${question.kind}`}>
       <strong>{permission ? 'Permission request' : 'Question'}</strong>
-      <p>{question.context.text}</p>
-      {permission && call && (
+      {/* What the user approves, next to the buttons (P12): the same bodies as the panel's cards. */}
+      {offScript ? null : <p>{question.context.text}</p>}
+      {launch && question.context.launch && <LaunchDetails question={question} />}
+      {offScript && <OffScriptDetails question={question} />}
+      {permission && !offScript && call && (
         <p className="muted">
           {question.context.permissionAction ? `${question.context.permissionAction}: ` : ''}
           <code>
