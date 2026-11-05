@@ -72,6 +72,24 @@ describe('trayMenu', () => {
     expect(menu.permissionCount).toBe(0);
   });
 
+  it('never offers Allow once for an off-script request or a launch approval (P12-09, decision 136)', () => {
+    const off = permission('q-off', { url: 'https://x.example' });
+    off.context = {
+      ...off.context,
+      offScript: { flag: 'chrome', expectedUse: 'u', precedents: [], judgeReason: 'r' },
+    };
+    const launch: Question = {
+      ...question,
+      id: 'q-launch',
+      kind: 'launch',
+      holder: { type: 'user' },
+    };
+    const menu = trayMenu(world([off, launch]));
+    expect(menu.permissions).toEqual([]);
+    expect(menu.permissionCount).toBe(0);
+    expect(menu.questions.map((q) => q.id).sort()).toEqual(['q-launch', 'q-off']);
+  });
+
   it('caps each section and counts the rest', () => {
     const many = Array.from({ length: 13 }, (_, i) =>
       permission(`q-${String(i).padStart(2, '0')}`, { command: `echo ${i}` }),

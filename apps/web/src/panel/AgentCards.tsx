@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { openQuestionsLabel, questionItems } from './question-count.js';
-import { wallClockLimit, type Agent, taskLabel } from '@galactic/protocol';
+import { LAUNCH_FLAGS, launchOf, wallClockLimit, type Agent, taskLabel } from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { HARMONIZER } from '../state/selection.js';
 import { agentLabel, StatePill } from '../console/hierarchy/shared.js';
@@ -86,6 +86,7 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
   const wallLimit = status ? wallClockLimit(status.caps.wallClockMs) : undefined;
   // A question set counts once (P8-22).
   const questions = openQuestionsLabel(questionItems(openQuestions));
+  const launch = agent ? launchOf(agent) : undefined;
 
   return (
     <article className={`agc${blocked ? ' is-blocked' : ''}`} aria-label={`card of ${name}`}>
@@ -93,6 +94,11 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
         <StatePill state={status?.state} />
         {blocked && <Beacon>blocked on you</Beacon>}
         {questions && <span className="agc-qbadge">{questions}</span>}
+        {launch && (
+          <span className="agc-flag" title={launch.expectedUse}>
+            {launch.flags.map((f) => LAUNCH_FLAGS[f].cli).join(' ')}
+          </span>
+        )}
         {to ? (
           <NavLink to={{ route: 'panel', selection: to }} className="agc-name">
             <span className="pnl-nav-name">{name}</span>

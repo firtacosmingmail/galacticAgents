@@ -32,7 +32,9 @@ export function DismissQuestion({
         ? `Dismiss the spend approval (refuse it): ${text}`
         : q.kind === 'publish'
           ? `Dismiss the publish approval (refuse it): ${text}`
-          : `Dismiss the question, no reply: ${text}`;
+          : q.kind === 'launch'
+            ? `Dismiss the launch approval (deny it): ${text}`
+            : `Dismiss the question, no reply: ${text}`;
   const hint =
     q.kind === 'permission'
       ? 'Dismiss (deny)'
@@ -40,7 +42,9 @@ export function DismissQuestion({
         ? 'Dismiss (refuse): no approval, nothing is spent'
         : q.kind === 'publish'
           ? 'Dismiss (refuse): nothing is posted'
-          : 'Dismiss: the agent is told you will not answer';
+          : q.kind === 'launch'
+            ? 'Dismiss (deny): no Steward is started, the Waykeeper is told'
+            : 'Dismiss: the agent is told you will not answer';
   const dismiss = async () => {
     let stale: string | undefined;
     await run(async () => {
