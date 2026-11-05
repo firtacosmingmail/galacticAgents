@@ -1,6 +1,6 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-09 · **Task status:** P12-01 to P12-08 done (2026-11-05)
+**Current task:** P12-09 · **Task status:** P12-01 to P12-08 done (2026-11-05); P12-09 in progress
 **Phase status:** in progress (8/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -104,7 +104,7 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 - **Acceptance:** a reused approval is refused; a second live `chrome` Steward is a conflict; without launch fields the tool behaves as before.
 
 ### P12-09 — Web cards and badge
-- **Status:** todo · **Depends on:** P12-08 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P12-08 · **Parallel with:** —
 - Plan Task 9: `LaunchCard`, the off-script card body (no "Allow similar"), beacons, the `--chrome` badge, any quick-answer surface excludes these questions.
 - **Acceptance:** fixed button labels send exactly those answers; a flagged Steward shows the badge, a normal one does not.
 
