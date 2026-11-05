@@ -197,6 +197,43 @@ describe('spawn_steward with launch flags (P12-08)', () => {
     expect(reuse[0]).toMatchObject({ ok: false });
   });
 
+  it('a provider that cannot carry the flags, chosen after the approval, is refused and keeps the approval', async () => {
+    let started: unknown;
+    const { wk } = await setup((s, ids) =>
+      s
+        .once('go', async (t) => {
+          await t.call('spawn_steward', {
+            taskId: ids.a,
+            instructions: 'scenario:hold',
+            launchFlags: FLAGS,
+          });
+        })
+        .once(/answered/, async (t) => {
+          started = await t.try('spawn_steward', {
+            taskId: ids.a,
+            launchApprovalId: launchQuestions()[0]!.id,
+          });
+        }),
+    );
+    wk.tell('go');
+    await h.until(() => launchQuestions().length === 1);
+    await h.settle();
+    // The project moves to ChatGPT (codex) between the approval and its use.
+    const project = h.log.tables.projects.all().find((p) => p.name === 'Shop')!;
+    await h.commands.setProjectProvider({
+      projectId: project.id,
+      provider: 'chatgpt',
+      by: { type: 'user' },
+    });
+    await answerLaunch(APPROVE);
+    await h.settle();
+    expect(started).toMatchObject({ ok: false, message: expect.stringMatching(/chrome/) });
+    expect(h.log.tables.questions.get(launchQuestions()[0]!.id)!.meta?.['launchUsed']).not.toBe(
+      true,
+    );
+    expect(h.log.tables.agents.all().filter((a) => a.role === 'steward')).toEqual([]);
+  });
+
   it('a second chrome Steward while one is live is a conflict and keeps the approval', async () => {
     let second: unknown;
     const { wk } = await setup((s, ids) =>

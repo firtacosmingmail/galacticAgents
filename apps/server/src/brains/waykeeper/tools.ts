@@ -5,6 +5,7 @@ import {
   isLongTerm,
   launchOf,
   proposalPlan,
+  unsupportedFlags,
   type Agent,
   type AgentLaunch,
   type Id,
@@ -413,9 +414,20 @@ export const spawnStewardTool: BrainTool = {
       );
     }
     if (approvalId !== undefined) {
+      const wanted = ctx.queries.question(approvalId)?.context.launch?.flags ?? [];
+      // The provider may have changed since the card was approved: a runtime that cannot carry
+      // the flags is refused before the approval is taken, so it is not burned.
+      const runtime = stewardChoiceOf(ctx, task, projectOf(ctx)).runtime;
+      const unsupported = unsupportedFlags(wanted, runtime);
+      if (unsupported.length > 0) {
+        throw new DomainError(
+          'invalid',
+          `the Steward would run on ${runtime}, which cannot carry ${unsupported.join(', ')}; ` +
+            'change the provider back, or ask again without the flag',
+        );
+      }
       // One Chrome at a time, across every project: there is one browser. Checked before the
       // approval is taken, so a conflict burns nothing.
-      const wanted = ctx.queries.question(approvalId)?.context.launch?.flags ?? [];
       const using = wanted.includes('chrome')
         ? ctx.queries
             .agents()
