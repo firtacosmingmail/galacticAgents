@@ -695,3 +695,44 @@ button.danger {
 .permission-rules code {
   overflow-wrap: anywhere;
 }
+
+/* The launch and off-script cards (P12-09). */
+.launch-fields {
+  margin: 0;
+}
+.launch-fields dd {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.launch-field-label {
+  font-weight: 600;
+  margin: 8px 0 2px;
+}
+.launch-command {
+  font-family: ui-monospace, monospace;
+}
+.off-script-input {
+  max-height: 12em;
+  overflow: auto;
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agc-flag {
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--publish);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, monospace;
+}
+.question-launch {
+  border-color: var(--publish);
+  background: var(--publish-bg);
+}
+.pill.kind-launch,
+.pnl .pill.kind-launch {
+  background: var(--publish);
+  color: var(--publish-ink);
+  border: 1px solid var(--publish);
+}

@@ -31,7 +31,7 @@ export const BEACON_COLOR = '#ffb547';
  * request to spend real money never reads as an ordinary question in the scene either.
  */
 export const SPEND_BEACON_COLOR = '#2f9e6b';
-/** A publish approval's glyph (P11-09): the inbox's `--publish` orange, symbol `↗`. */
+/** A publish approval's glyph (P11-09; a launch approval's too, P12-09): the inbox's `--publish` orange, symbol `↗`. */
 export const PUBLISH_BEACON_COLOR = '#c2571a';
 /** The glyph's dark ink (the panel's `--pnl-beacon-ink`). */
 export const BEACON_INK = '#1d1300';
@@ -177,11 +177,17 @@ export function glyphSpec(kind: QuestionKind, more = 0): GlyphSpec {
     kind,
     shape: kind === 'permission' ? 'diamond' : 'disc',
     symbol:
-      kind === 'permission' ? 'lock' : kind === 'spend' ? '$' : kind === 'publish' ? '↗' : '?',
+      kind === 'permission'
+        ? 'lock'
+        : kind === 'spend'
+          ? '$'
+          : kind === 'publish' || kind === 'launch'
+            ? '↗'
+            : '?',
     color:
       kind === 'spend'
         ? SPEND_BEACON_COLOR
-        : kind === 'publish'
+        : kind === 'publish' || kind === 'launch'
           ? PUBLISH_BEACON_COLOR
           : BEACON_COLOR,
     badge: more <= 0 ? undefined : `+${Math.min(more, 99)}`,

@@ -13,6 +13,7 @@ import { AllowSimilar, useOffersSimilar } from './AllowSimilar.js';
 import { FindingActions, FindingDetails } from './FindingCard.js';
 import { SpendActions, SpendDetails } from './SpendCard.js';
 import { PublishActions, PublishDetails } from './PublishCard.js';
+import { LaunchActions, LaunchDetails, OffScriptActions, OffScriptDetails } from './LaunchCard.js';
 import { UsageLimitActions, UsageLimitDetails } from './UsageLimitCard.js';
 
 /**
@@ -28,7 +29,8 @@ import { UsageLimitActions, UsageLimitDetails } from './UsageLimitCard.js';
  * A job's finding shows its fixed actions (and a reply's editable draft), a `spend` approval its
  * amount with Approve / Refuse only (P10-07; `FindingCard`, `SpendCard`). A `publish` approval shows
  * the post with an editable text and Approve / Refuse (P11-09; `PublishCard`), and a usage-limit
- * clarification its fixed options as buttons (`UsageLimitCard`).
+ * clarification its fixed options as buttons (`UsageLimitCard`). A `launch` approval and an
+ * off-script permission question show fixed buttons only (P12-09; `LaunchCard`).
  *
  * The cards read nothing but the store: the same question renders the same everywhere (the
  * inbox, a chat thread, the Steward view), and an answer anywhere updates all of them when the
@@ -125,6 +127,8 @@ export function QuestionCard({
   const permission = q.kind === 'permission';
   const spend = q.kind === 'spend';
   const publish = q.kind === 'publish';
+  const launch = q.kind === 'launch';
+  const offScript = permission && q.context.offScript !== undefined;
   const usageLimit = q.context.usageLimit !== undefined;
   const finding = q.context.finding;
   const call = q.context.toolCall;
@@ -158,7 +162,7 @@ export function QuestionCard({
     >
       <header>
         <span className={`pill kind-${q.kind}`}>
-          {finding ? 'finding' : usageLimit ? 'usage limit' : q.kind}
+          {finding ? 'finding' : usageLimit ? 'usage limit' : offScript ? 'off script' : q.kind}
         </span>
         <span className="muted">held by {actorLabel(q.holder, world)}</span>
         {/* Dismiss (P9-14): not while an answer to it waits in the offline queue. */}
@@ -168,6 +172,10 @@ export function QuestionCard({
         <SpendDetails question={q} />
       ) : publish ? (
         <PublishDetails question={q} />
+      ) : launch ? (
+        <LaunchDetails question={q} />
+      ) : offScript ? (
+        <OffScriptDetails question={q} />
       ) : usageLimit ? (
         <UsageLimitDetails question={q} />
       ) : finding ? (
@@ -178,7 +186,7 @@ export function QuestionCard({
           <OriginContext question={q} />
         </>
       )}
-      {permission && call && (
+      {permission && !offScript && call && (
         <p className="tool-call">
           {q.context.permissionAction ? (
             <strong>{q.context.permissionAction.replace(/_/g, ' ')}: </strong>
@@ -209,6 +217,10 @@ export function QuestionCard({
         <SpendActions busy={busy} onAnswer={(a) => void answer(a)} />
       ) : publish ? (
         <PublishActions question={q} busy={busy} onAnswer={(a, d) => void answer(a, d)} />
+      ) : launch ? (
+        <LaunchActions busy={busy} onAnswer={(a) => void answer(a)} />
+      ) : offScript ? (
+        <OffScriptActions busy={busy} onAnswer={(a) => void answer(a)} />
       ) : usageLimit ? (
         <UsageLimitActions question={q} busy={busy} onAnswer={(a) => void answer(a)} />
       ) : finding ? (

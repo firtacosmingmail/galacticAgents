@@ -45,7 +45,8 @@ function waitingRank(item: InboxItem): number {
   if (item.kind === 'questionSet') return 1; // clarifications only
   return item.question.kind === 'permission' ||
     item.question.kind === 'spend' ||
-    item.question.kind === 'publish'
+    item.question.kind === 'publish' ||
+    item.question.kind === 'launch'
     ? 0
     : 1;
 }

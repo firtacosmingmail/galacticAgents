@@ -58,13 +58,20 @@ export const AgentCreated = z.object({ type: z.literal('agent.created'), agent: 
 
 /**
  * The agent row's placement changed (P2-01): a new supervisor (an orphaned Steward re-parented),
- * a new body (a promoted task's satellite flies), a task or project handed over. Emitted by the
- * domain command, never by an adapter.
+ * a new body (a promoted task's satellite flies), a task or project handed over; or its `meta`
+ * (P12-06: a precedent added to a flagged Steward's `meta.launch`, the whole new `meta`).
+ * Emitted by the domain command, never by an adapter.
  */
 export const AgentUpdated = z.object({
   type: z.literal('agent.updated'),
   agentId: Id,
-  changes: Agent.pick({ supervisorId: true, bodyId: true, taskId: true, projectId: true })
+  changes: Agent.pick({
+    supervisorId: true,
+    bodyId: true,
+    taskId: true,
+    projectId: true,
+    meta: true,
+  })
     .partial()
     .refine((c) => Object.keys(c).length > 0, { message: 'an update changes something' }),
 });
@@ -331,6 +338,17 @@ export const QuestionDrafted = z.object({
   questionId: Id,
   draft: SetAnswer.nullable(),
   by: Actor,
+});
+/**
+ * A launch approval was taken to start its Steward (P12-07): folded into the question row as
+ * `meta.launchUsed`, so a replay of the log keeps the approval single-use. Wakes no one and does
+ * not bump `version`.
+ */
+export const LaunchApprovalTaken = z.object({
+  type: z.literal('question.launch_used'),
+  questionId: Id,
+  taskId: Id,
+  agentId: Id,
 });
 /**
  * The question can no longer be answered (P1-34): its agent ended or was interrupted, or an
@@ -881,6 +899,7 @@ export const Event = z.discriminatedUnion('type', [
   QuestionEscalated,
   QuestionAnswered,
   QuestionDrafted,
+  LaunchApprovalTaken,
   QuestionReassigned,
   QuestionCancelled,
   PermissionDecided,

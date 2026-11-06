@@ -10,6 +10,12 @@ import {
   type TranscriptChunk,
   wallClockLimit,
 } from '@galactic/protocol';
+import {
+  LaunchActions,
+  LaunchDetails,
+  OffScriptActions,
+  OffScriptDetails,
+} from '../panel/cards/LaunchCard.js';
 import { useAppStore } from '../state/store.js';
 import { createApi, type Api } from './api.js';
 
@@ -349,6 +355,8 @@ function QuestionCard({
 }) {
   const [value, setValue] = useState('');
   const permission = question.kind === 'permission';
+  const launch = question.kind === 'launch';
+  const offScript = permission && question.context.offScript !== undefined;
   const call = question.context.toolCall;
   const set = question.context.set;
   if (set) {
@@ -364,8 +372,11 @@ function QuestionCard({
   return (
     <div className={`question question-${question.kind}`}>
       <strong>{permission ? 'Permission request' : 'Question'}</strong>
-      <p>{question.context.text}</p>
-      {permission && call && (
+      {/* What the user approves, next to the buttons (P12): the same bodies as the panel's cards. */}
+      {offScript ? null : <p>{question.context.text}</p>}
+      {launch && question.context.launch && <LaunchDetails question={question} />}
+      {offScript && <OffScriptDetails question={question} />}
+      {permission && !offScript && call && (
         <p className="muted">
           {question.context.permissionAction ? `${question.context.permissionAction}: ` : ''}
           <code>
@@ -373,7 +384,11 @@ function QuestionCard({
           </code>
         </p>
       )}
-      {permission ? (
+      {launch ? (
+        <LaunchActions busy={false} onAnswer={onAnswer} />
+      ) : offScript ? (
+        <OffScriptActions busy={false} onAnswer={onAnswer} />
+      ) : permission ? (
         <div className="controls">
           <button onClick={() => onAnswer('allow')}>Allow</button>
           <button onClick={() => onAnswer('no')} className="danger">

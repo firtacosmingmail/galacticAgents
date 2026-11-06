@@ -1,6 +1,6 @@
 # GalacticAgents — Implementation Plan
 
-**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3; Phase 9 — deliverables, decisions 118–134 — added 2026-10-07; Phase 10 — long-term projects and recurring jobs, decisions 142–145 — added 2026-10-27) · **Date:** 2026-09-30
+**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3; Phase 9 — deliverables, decisions 118–134 — added 2026-10-07; Phase 10 — long-term projects and recurring jobs, decisions 142–145 — added 2026-10-27; Phase 12 — Steward launch flags, decision 151 — added 2026-11-05) · **Date:** 2026-09-30
 
 Companion to `SPEC.md` (what) and `TECHNOLOGY.md` (with what). The plan is ordered so that **the agent runtime is proven before the 3D scene is built**: the space interface is the product's soul, but if agents cannot be spawned, observed and answered reliably, the scene has nothing true to show. Following decision 19, a **minimal usable side panel (Phase 2.5)** now comes before the scene, so the product is usable daily long before it is beautiful.
 
@@ -214,6 +214,22 @@ Spec: `docs/superpowers/specs/2026-10-31-more-ai-providers-design.md`; plan: `do
 6. In development mode the Codex and Antigravity runtimes are fakes (ruling R4), so a Steward on ChatGPT or Gemini, a publish approval and a usage limit with its wait can be driven end to end without either CLI (P11-10).
 
 **Exit criteria:** every task done; the end-to-end test `e2e/tests/14-ai-providers.spec.ts` passes on the dev harness — a plan with an image task on Gemini and a publishing task on ChatGPT showing both chips, the Gemini Steward's satellite carrying its mark, a publish card approved with edited text that the Steward hears, one limit card without ChatGPT among its options, "Wait until it resets" retried when the harness clock passes the reset, and the publish and limit cards usable at 390 and 320 px; full gates green; the plan's Review Focus items each covered by a test; SPEC and TECHNOLOGY consistent (`docs/tasks/notes/P11-review.md` lists the review findings and the controller's rulings).
+
+---
+
+## Phase 12 — Steward launch flags (`--chrome` first) (≈ 1 week)
+
+**Goal:** a Waykeeper can ask to start a Steward with a catalogued launch flag (first `--chrome`, so a Steward can drive Cosmin's Chrome to screenshot a page and attach it to a PR); Cosmin approves the exact command and reason on its own card; every use of the flag's tools is checked live against his approvals for that Steward, and the first off-script use waits for him (SPEC decision 151; TECHNOLOGY §3.9).
+
+Spec: `docs/superpowers/specs/2026-11-05-steward-launch-flags-design.md`; plan: `docs/superpowers/plans/2026-11-05-steward-launch-flags.md`; tasks P12-01 – P12-10 in `docs/tasks/PHASE_12_LAUNCH_FLAGS.md`.
+
+1. Spike: Claude in Chrome under the Agent SDK with `extraArgs: { chrome: null }` — tool names, `canUseTool` coverage, two sessions (P12-01; Ruling go).
+2. Protocol (catalogue, launch and off-script contexts, `ScopeJudge`), spawning and resuming with flags, the gate sending a flag's tools to the scope watch and refusing them to every agent not started with the flag (every other Claude session runs with `--no-chrome`) (P12-02 – P12-04; tightened in the P12-10 review).
+3. The one-shot scope judge (isolated, no tools, fail closed) and the runtime scope watch (20 s timeout, precedents in `meta.launch`) (P12-05, P12-06).
+4. The launch approval (migration 0018, `question.launch_used`), the Waykeeper's `spawn_steward` and final check, the web cards and badge (P12-07 – P12-09).
+5. End to end, docs and phase exit (P12-10).
+
+**Exit criteria:** every task done; `runtime/launch-flags.flow.test.ts` passes (ask, approve, spawn with `--chrome`, a consistent call, an off-script call approved into a precedent, the precedent reused, an off-script call stopped — in that order in the event log); the full gates are green; and one local real run — a real Waykeeper and Steward screenshot a local page and attach it to a PR in a scratch repository — is recorded in `docs/tasks/notes/P12-10-real-run.md`, run only with Cosmin's go-ahead.
 
 ---
 

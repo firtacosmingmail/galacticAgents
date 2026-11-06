@@ -696,10 +696,34 @@ describe('ClaudeSdkAdapter — brains, bare, tools', () => {
     });
     await withKey.adapter.spawn(spawnOpts('x', { bare: true }));
     await withKey.events.waitFor(has('agent.idle'));
-    expect(withKey.sdk.calls[0]!.options.extraArgs).toEqual({ bare: null });
+    expect(withKey.sdk.calls[0]!.options.extraArgs).toEqual({ bare: null, 'no-chrome': null });
     expect(withKey.sdk.calls[0]!.options.env?.['ANTHROPIC_API_KEY']).toBe(
       'sk-ant-test-0000000000000000000000',
     );
+  });
+
+  it('passes catalogued launch flags as extraArgs, merged with bare; every other session gets --no-chrome', async () => {
+    const plain = make(() => [{ text: 'x' }]);
+    await plain.adapter.spawn(spawnOpts('x'));
+    await plain.events.waitFor(has('agent.idle'));
+    expect(plain.sdk.calls[0]!.options.extraArgs).toEqual({ 'no-chrome': null });
+
+    const brain = make(() => [{ text: 'x' }]);
+    await brain.adapter.spawn(spawnOpts('x', { role: 'waykeeper' }));
+    await brain.events.waitFor(has('agent.idle'));
+    expect(brain.sdk.calls[0]!.options.extraArgs).toEqual({ 'no-chrome': null });
+
+    const chrome = make(() => [{ text: 'x' }]);
+    await chrome.adapter.spawn(spawnOpts('x', { launchFlags: ['chrome'] }));
+    await chrome.events.waitFor(has('agent.idle'));
+    expect(chrome.sdk.calls[0]!.options.extraArgs).toEqual({ chrome: null });
+
+    const both = make(() => [{ text: 'x' }], {
+      env: { ANTHROPIC_API_KEY: 'sk-ant-test-0000000000000000000000' },
+    });
+    await both.adapter.spawn(spawnOpts('x', { bare: true, launchFlags: ['chrome'] }));
+    await both.events.waitFor(has('agent.idle'));
+    expect(both.sdk.calls[0]!.options.extraArgs).toEqual({ bare: null, chrome: null });
   });
 
   it('converts JSON Schema tool inputs to a zod shape the SDK accepts', () => {

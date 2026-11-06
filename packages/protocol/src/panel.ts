@@ -624,6 +624,7 @@ const QUESTION_TITLES: Record<QuestionKind, string> = {
   clarification: 'A question for you',
   spend: 'Spend approval needed',
   publish: 'Publish approval needed',
+  launch: 'Launch approval needed',
 };
 
 /**
@@ -675,7 +676,7 @@ export function notificationOf(
         // A spend is gated and ranked like a permission (decision 145, ruling R7): the same
         // notification switch and push kind; `questionKind` still tells them apart.
         kind:
-          kind === 'permission' || kind === 'spend' || kind === 'publish'
+          kind === 'permission' || kind === 'spend' || kind === 'publish' || kind === 'launch'
             ? 'permission'
             : 'question',
         title: QUESTION_TITLES[kind],

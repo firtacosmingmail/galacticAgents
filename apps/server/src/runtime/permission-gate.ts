@@ -3,6 +3,8 @@ import {
   type GateCheckOptions,
   type GateVerdict,
   type Id,
+  LaunchFlag,
+  flagOfTool,
   PermissionAction,
   type PermissionGate,
   PermissionPolicy,
@@ -57,6 +59,15 @@ export interface GateOptions {
    */
   userFolders?: () => readonly string[];
   caps: CapsEnforcer;
+  /**
+   * The launch flags this agent was started with (P12-04), read on every check. A call to one of a
+   * flag's tools (`flagOfTool`) asks — after the tool-call cap, before everything else: the policy
+   * table, "Allow similar" rules and `allowOnce` are not consulted — so the runtime's scope watch
+   * sees every such call (without an ask, some never reach the runtime's permission path). A call
+   * to a catalogued flag's tools by an agent not started with that flag — no flags, no row, no
+   * function — is denied at the same point (fail closed: Chrome may be on in the user's settings).
+   */
+  launchFlags?: () => readonly LaunchFlag[];
   /**
    * The project's "Allow similar" rules (P9-17, decision 138), read on every check like the
    * policy: a call the table asks about that one of them matches is allowed — never one the table
@@ -153,6 +164,26 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
       const reserved = opts.caps.reserveToolCall(opts.agentId);
       if (!reserved.ok)
         return { verdict: { decision: 'deny', reason: reserved.reason }, cap: true };
+    }
+    // A catalogued flag's tool (P12): only an agent started with that flag may use it — asked so
+    // the scope watch sees it; any other agent is refused, whatever the table or a rule says.
+    const owner = flagOfTool(LaunchFlag.options, call.toolName);
+    if (owner) {
+      if (!(opts.launchFlags?.() ?? []).includes(owner)) {
+        return {
+          verdict: {
+            decision: 'deny',
+            reason: `uses --${owner} tools but this agent was not started with --${owner}`,
+          },
+        };
+      }
+      return {
+        verdict: {
+          decision: 'ask',
+          reasons: [`uses --${owner}: checked against the Steward's approvals`],
+        },
+        launchFlag: owner,
+      };
     }
     if (isServerTool(call)) return { verdict: { decision: 'allow' } };
     const workspace = workspaceNow();
@@ -265,6 +296,8 @@ export interface Decision {
   ruleId?: Id;
   /** The one call an approved publish let through (P11-06). */
   allowedOnce?: true;
+  /** The launch flag whose tool this call is (P12-04): the runtime's scope watch decides it. */
+  launchFlag?: LaunchFlag;
 }
 
 /**

@@ -63,6 +63,8 @@ import {
   type OpenFindingInput,
   type ReportJobRunInput,
   type RequestPublishInput,
+  type RequestLaunchInput,
+  type LaunchContext,
   type RequestSpendInput,
   type SetProjectProviderInput,
   type SetJobStateInput,
@@ -97,6 +99,7 @@ import type { CommandContext, EventLog } from './event-log.js';
 import { createJob, setJobState, updateJob } from './jobs.js';
 import { attachJobRunAgent, endJobRun, startJobRun } from './job-runs.js';
 import { openFinding, reportJobRun, requestSpend } from './findings.js';
+import { requestLaunch, takeLaunchApproval } from './launch.js';
 import { folderOfAgent, readFileInFolder, requestPublish, type PublishDeps } from './publish.js';
 import {
   archiveProject,
@@ -669,6 +672,8 @@ export class Commands implements DomainCommands {
         ...(input.supervisorId ? { supervisorId: input.supervisorId } : {}),
         ...(input.caps ? { caps: input.caps } : {}),
         ...(input.bare ? { bare: true } : {}),
+        ...(input.launchFlags ? { launchFlags: input.launchFlags } : {}),
+        ...(input.launch ? { launch: input.launch } : {}),
         ...(model ? { model } : {}),
         ...(input.tools ? { tools: input.tools } : {}),
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
@@ -1200,6 +1205,13 @@ export class Commands implements DomainCommands {
     if (question.kind !== 'permission') {
       return { refused: 'only a permission request can allow similar actions', options: [] };
     }
+    // An off-script flag call (P12-06) is approved once or the Steward is stopped: never a rule.
+    if (question.context.offScript) {
+      return {
+        refused: 'an off-script launch-flag call is approved once or the Steward stopped',
+        options: [],
+      };
+    }
     const call = question.context.toolCall;
     if (!call) return { refused: 'the request names no tool call', options: [] };
     // A publishing run works without rules (ruling R26): a rule made from its card would mislead.
@@ -1513,6 +1525,18 @@ export class Commands implements DomainCommands {
     return this.run((ctx) => ({
       questionId: requestPublish(ctx, input, this.questions, this.publishDeps).id,
     }));
+  }
+  /** A `launch` approval, held by the user alone (P12-07). */
+  requestLaunch(input: RequestLaunchInput): Promise<CommandResult<{ questionId: Id }>> {
+    return this.run((ctx) => ({ questionId: requestLaunch(ctx, input, this.questions).id }));
+  }
+  /** An approved launch, taken once by the Waykeeper that asked (P12-07). */
+  takeLaunchApproval(input: {
+    questionId: Id;
+    taskId: Id;
+    by: Actor;
+  }): Promise<CommandResult<LaunchContext>> {
+    return this.run((ctx) => takeLaunchApproval(ctx, input));
   }
   /** A project's default AI provider for new Stewards; `null` clears it (P11-03). */
   setProjectProvider(input: SetProjectProviderInput): Promise<CommandResult<Project>> {

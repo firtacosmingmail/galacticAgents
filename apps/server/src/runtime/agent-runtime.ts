@@ -26,12 +26,18 @@ import {
   type SlashCommand,
   type SpawnHandle,
   type SpawnOptions,
+  type AgentLaunch,
+  type LaunchFlag,
+  launchOf,
+  unsupportedFlags,
   type ToolCall,
   type ToolDefinition,
+  type ScopeJudge,
+  OFF_SCRIPT_ACTIONS,
 } from '@galactic/protocol';
 import { isStorageFailure } from '../db/database.js';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
-import { createAgent, recordSpawned } from '../domain/agents.js';
+import { addLaunchPrecedent, createAgent, recordSpawned } from '../domain/agents.js';
 import {
   answerQuestion,
   cancelQuestion,
@@ -63,6 +69,7 @@ import {
 } from './caps.js';
 import { aliasesOf, createPermissionGate, type RuntimeGate } from './permission-gate.js';
 import { publishingPolicy, type PublishAllowanceStore } from './publish-allowance.js';
+import { precedentOf, ScopeWatch } from './scope-watch.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
 import { providerOf } from './steward-choice.js';
@@ -93,6 +100,27 @@ import type { TranscriptPipeline } from './transcripts.js';
  * created by `domain/agents.ts`; Phase 2's `spawnAgent` command composes the same functions.
  */
 
+/** Why a request's launch flags are refused (P12), or undefined when they are fine. */
+function launchRefusal(req: SpawnRequest): string | undefined {
+  const flags = req.launchFlags ?? [];
+  if (flags.length === 0 && !req.launch) return undefined;
+  if (req.role !== 'steward') return `a ${req.role} never gets launch flags: brains never do`;
+  if (flags.length === 0 || !req.launch) {
+    return 'launch flags travel with their approved launch record';
+  }
+  // Spawn uses `launchFlags`, resume reads `launch.flags`: they must be the same set.
+  const spawned = new Set<string>(flags);
+  const stored = new Set<string>(req.launch.flags);
+  if (spawned.size !== stored.size || [...spawned].some((f) => !stored.has(f))) {
+    return 'launch flags and the approved launch record must name the same flags';
+  }
+  const unsupported = unsupportedFlags(flags, req.runtime);
+  if (unsupported.length > 0) {
+    return `${unsupported.join(', ')} is not supported on ${req.runtime}`;
+  }
+  return undefined;
+}
+
 export interface SpawnRequest {
   role: AgentRole;
   runtime: RuntimeName;
@@ -109,6 +137,10 @@ export interface SpawnRequest {
   tools?: ToolDefinition[];
   systemPrompt?: string;
   bare?: boolean;
+  /** Approved launch flags (P12): a Steward only; they travel with `launch`. */
+  launchFlags?: LaunchFlag[];
+  /** The approved launch record, kept in `meta.launch` so a resumed Steward keeps its flags. */
+  launch?: AgentLaunch;
   /**
    * The exact model to run (P11-03); absent: the runtime's default. Kept in `meta.model`, with
    * the runtime's provider in `meta.provider`, so a resumed session runs the same model.
@@ -140,6 +172,8 @@ export interface AgentRuntimeOptions {
    * its end. Absent: no allowance.
    */
   publishAllowances?: PublishAllowanceStore;
+  /** Decides whether a launch flag's tool call fits what the user approved (P12-05; used by the scope watch). */
+  scopeJudge?: ScopeJudge;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
   /** Question routing (P2-03); default: the log, with liveness from `statuses`. */
@@ -426,6 +460,8 @@ export class AgentRuntime {
   private readonly pumps: Promise<void>[] = [];
   readonly caps: CapsEnforcer;
   private readonly questions: QuestionRouting;
+  /** Judges a flagged Steward's flag-tool calls against its approvals (P12-06). */
+  private readonly scopeWatch: ScopeWatch;
   private disposed = false;
   private readonly turnListeners = new Set<(turn: TurnEnd) => void>();
   private brainResumer: BrainResumer | undefined;
@@ -458,6 +494,8 @@ export class AgentRuntime {
     this.now = opts.now ?? (() => new Date().toISOString());
     this.onError = opts.onError ?? (() => {});
     this.questions = opts.questions ?? logRouting(opts.log, livingFromStatuses(opts.statuses));
+    // No judge configured: every flag call is off-script (fail closed).
+    this.scopeWatch = new ScopeWatch({ judge: opts.scopeJudge });
     // Nothing commits ahead of the agent events held for a full disk (P8-04 review).
     this.unhook = opts.log.addBeforeCommand(() => this.beforeCommand());
     const { maxConcurrentAgents, defaults, ...spawn } = opts.caps ?? {};
@@ -552,6 +590,8 @@ export class AgentRuntime {
    */
   async spawn(req: SpawnRequest): Promise<SpawnResult> {
     if (this.disposed) throw new Error('runtime disposed');
+    const refused = launchRefusal(req);
+    if (refused) return { ok: false, reason: refused };
     const adapter = this.adapters.get(req.runtime);
     if (!adapter) return { ok: false, reason: `no adapter for runtime ${req.runtime}` };
     const gate = this.caps.canSpawn(this.spawnCheck(req.role, req.supervisorId));
@@ -576,6 +616,7 @@ export class AgentRuntime {
           ...(req.workspace ? { workspace: req.workspace } : {}),
           ...(req.permissionPolicy ? { permissionPolicy: req.permissionPolicy } : {}),
           ...(req.bare ? { bare: true } : {}),
+          ...(req.launch ? { launch: req.launch } : {}),
           ...(req.freeForm ? { freeForm: true } : {}),
         },
       }),
@@ -660,6 +701,11 @@ export class AgentRuntime {
       userFolders: () => this.userFoldersOf(agent.id, req),
       cwd: req.cwd,
       caps: this.caps,
+      // The Steward's launch flags (P12-04), read from its row on every check.
+      launchFlags: () => {
+        const row = this.opts.log.tables.agents.get(agent.id);
+        return (row ? launchOf(row)?.flags : undefined) ?? [];
+      },
       // The project's "Allow similar" rules (P9-17), read on every check like its table.
       rules: () => this.rulesOf(agent.id, req),
       onRuleAllow: (call, ruleId, action) =>
@@ -752,6 +798,7 @@ export class AgentRuntime {
         ...(tools ? { tools } : {}),
         ...(req.systemPrompt ? { systemPrompt: req.systemPrompt } : {}),
         ...(req.bare ? { bare: true } : {}),
+        ...(req.launchFlags?.length ? { launchFlags: req.launchFlags } : {}),
         ...(req.model ? { model: req.model } : {}),
       });
     } catch (error) {
@@ -1036,30 +1083,51 @@ export class AgentRuntime {
     // The user's answer is refused whole while the disk is full (SPEC decision 99): checked
     // before the agent has it, since afterwards the record can only be held.
     this.ensureWritable(by);
-    // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
-    // an answer in the log that the agent never saw.
-    live.answering.add(questionId);
+    // An off-script flag call (P12-06): the user's action becomes the permission answer the
+    // adapter understands; an approval adds the call to the Steward's precedents.
+    const offScript = current.context.offScript !== undefined;
+    const approved = offScript && answer === OFF_SCRIPT_ACTIONS[0];
+    const forAgent = offScript ? (approved ? 'allow' : 'deny: stopped by the user') : answer;
+    const toolCall = current.context.toolCall;
+    // "Stop the Steward" stops it whatever happens below: even when the adapter refuses the
+    // answer (the call withdrawn meanwhile) or the record is refused, the user asked for a stop.
     try {
-      await live.adapter.answer(questionId, answer);
+      // The adapter first: a question it no longer knows (re-asked after a resume) must not leave
+      // an answer in the log that the agent never saw.
+      live.answering.add(questionId);
+      try {
+        await live.adapter.answer(questionId, forAgent);
+      } finally {
+        live.answering.delete(questionId);
+      }
+      live.questions.delete(questionId);
+      this.byQuestion.delete(questionId);
+      // Not `command()`: a refused record (the question was cancelled meanwhile) reaches the
+      // caller. The agent has the answer: a write the storage refuses is held and written later
+      // (P8-04).
+      this.recordOrHold((ctx) => {
+        const answered = answerQuestion(ctx, {
+          questionId,
+          answer,
+          answeredBy: by,
+          holders: holdersNow(ctx, questionId, this.questions),
+          delivered: true,
+          ...(answerId !== undefined ? { answerId } : {}),
+          ...(repliedIn !== undefined ? { repliedIn } : {}),
+          ...(detail !== undefined ? { detail } : {}),
+        });
+        // The precedent with the answer, in one transaction.
+        const row = ctx.tables.agents.get(agentId);
+        if (approved && toolCall && row && launchOf(row)) {
+          addLaunchPrecedent(ctx, agentId, precedentOf(toolCall));
+        }
+        return answered;
+      });
     } finally {
-      live.answering.delete(questionId);
+      // "Stop the Steward": the call is denied above (when the adapter still had it), then the
+      // Steward stops.
+      if (offScript && !approved) void this.stop(agentId, by);
     }
-    live.questions.delete(questionId);
-    this.byQuestion.delete(questionId);
-    // Not `command()`: a refused record (the question was cancelled meanwhile) reaches the caller.
-    // The agent has the answer: a write the storage refuses is held and written later (P8-04).
-    this.recordOrHold((ctx) =>
-      answerQuestion(ctx, {
-        questionId,
-        answer,
-        answeredBy: by,
-        holders: holdersNow(ctx, questionId, this.questions),
-        delivered: true,
-        ...(answerId !== undefined ? { answerId } : {}),
-        ...(repliedIn !== undefined ? { repliedIn } : {}),
-        ...(detail !== undefined ? { detail } : {}),
-      }),
-    );
   }
 
   /**
@@ -1550,11 +1618,14 @@ export class AgentRuntime {
       model?: unknown;
     };
     if (!meta.cwd) return { ok: false, reason: 'agent has no saved working directory' };
+    // The flags the Steward was approved for (P12): always from its row, never from the caller.
+    const launchFlags = launchOf(agent)?.flags;
     const base = {
       cwd: meta.cwd,
       ...(meta.workspace ? { workspace: meta.workspace } : {}),
       ...(meta.permissionPolicy ? { permissionPolicy: meta.permissionPolicy } : {}),
       ...(meta.bare ? { bare: true } : {}),
+      ...(launchFlags ? { launchFlags } : {}),
       // The model it was spawned with (P11-03): a resumed or restarted session runs it again.
       ...(typeof meta.model === 'string' && meta.model ? { model: meta.model } : {}),
       ...(opts.tools ? { tools: opts.tools } : {}),
@@ -1925,7 +1996,12 @@ export class AgentRuntime {
   ): boolean {
     const call = raw.question.toolCall;
     if (!call) return false;
-    const { verdict, action, ruleId, allowedOnce } = live.gate.decide(call);
+    const { verdict, action, ruleId, allowedOnce, launchFlag } = live.gate.decide(call);
+    if (launchFlag) {
+      // A launch flag's tool (P12-06): the scope watch decides, never the policy or a rule.
+      this.watchScope(live, call, event, launchFlag);
+      return true;
+    }
     if (verdict.decision === 'ask') {
       // The card shows the category the policy asks about when the adapter did not name one.
       const asked = verdict.action ?? action;
@@ -1953,6 +2029,72 @@ export class AgentRuntime {
     return true;
   }
 
+  /**
+   * A flagged Steward's flag-tool call (P12-06; design §5.4–5.6): the call stays blocked in the
+   * adapter while the scope judge looks at it (redacted) against the approved use and the
+   * precedents. `consistent` is allowed in the supervisor's name; `off_script` — or no judge, an
+   * error, a timeout — opens the `agent.needs_input` and a user-held permission question with
+   * `context.offScript` in one transaction. The agent is never paused; a verdict for an agent that
+   * ended, is stopping or had its call withdrawn does nothing.
+   */
+  private watchScope(
+    live: Live,
+    call: ToolCall,
+    event: Extract<AgentEvent, { type: 'agent.needs_input' }>,
+    flag: LaunchFlag,
+  ): void {
+    const agentId = live.agent.id;
+    live.idle = false;
+    if (!live.paused) live.inbox.working();
+    const row = this.opts.log.tables.agents.get(agentId);
+    void this.scopeWatch
+      .handle({
+        agentId,
+        flag,
+        toolCall: call,
+        launch: row ? launchOf(row) : undefined,
+        active: () =>
+          !live.terminal &&
+          !live.stopRequested &&
+          !live.capStop &&
+          !this.disposed &&
+          this.live.get(agentId) === live,
+        consistent: (reason) => {
+          const supervisorId = this.opts.log.tables.agents.get(agentId)?.supervisorId;
+          this.permissionDecided(
+            live,
+            {
+              toolCall: event.question.toolCall ?? call,
+              decision: 'allow',
+              action: undefined,
+              reason: `consistent with the Steward's approvals: ${reason}`,
+              ...(supervisorId ? { decidedBy: { type: 'agent', id: supervisorId } } : {}),
+            },
+            event.questionId,
+          );
+          void live.adapter
+            .answer(event.questionId, 'allow')
+            .catch((error: unknown) => this.onError(error, `scope answer ${event.questionId}`));
+        },
+        offScript: (context) => {
+          const asked = {
+            ...event,
+            question: {
+              ...event.question,
+              offScript: context,
+              options: [...OFF_SCRIPT_ACTIONS],
+            },
+          };
+          this.command((ctx) => {
+            ctx.emit(asked);
+            openFromNeedsInput(ctx, asked, this.questions);
+          });
+          this.asked(live, asked);
+        },
+      })
+      .catch((error: unknown) => this.onError(error, `scope watch ${agentId}`));
+  }
+
   /** Logs a decision the policy made without the user (P2-04), with the tool input redacted. */
   private permissionDecided(
     live: Live,
@@ -1963,6 +2105,8 @@ export class AgentRuntime {
       reason?: string;
       /** The "Allow similar" rule that allowed it (P9-17). */
       ruleId?: Id;
+      /** Who decided (default: the system's policy); the scope watch names the supervisor. */
+      decidedBy?: Actor;
     },
     questionId?: Id,
   ): void {
@@ -1978,7 +2122,7 @@ export class AgentRuntime {
       decision: d.decision,
       ...(d.action ? { action: d.action } : {}),
       ...(d.reason ? { reason: redactSecrets(d.reason) } : {}),
-      decidedBy: SYSTEM,
+      decidedBy: d.decidedBy ?? SYSTEM,
       ...(d.ruleId ? { ruleId: d.ruleId } : {}),
     };
     if (!live.handle) live.decisions.push(event);
@@ -2297,6 +2441,8 @@ export class AgentRuntime {
     this.caps.onEvent(event);
     switch (event.type) {
       case 'agent.idle': {
+        // A blocked flag call only ends its turn when withdrawn (an interrupt): no verdict for it.
+        this.scopeWatch.cancel(live.agent.id);
         live.idle = true;
         live.probation = undefined; // the resumed session took its first turn: it is resumed
         const turn = live.turn;
@@ -2306,10 +2452,7 @@ export class AgentRuntime {
         return;
       }
       case 'agent.needs_input':
-        live.questions.add(event.questionId);
-        this.byQuestion.set(event.questionId, event.agentId);
-        live.idle = false;
-        live.inbox.working();
+        this.asked(live, event);
         return;
       case 'agent.tool_call':
       case 'agent.progress':
@@ -2324,6 +2467,14 @@ export class AgentRuntime {
       default:
         return;
     }
+  }
+
+  /** A question the agent asked is open: it waits on it (and is not idle). */
+  private asked(live: Live, event: Extract<AgentEvent, { type: 'agent.needs_input' }>): void {
+    live.questions.add(event.questionId);
+    this.byQuestion.set(event.questionId, event.agentId);
+    live.idle = false;
+    live.inbox.working();
   }
 
   /** The one terminal event: the adapter's verdict, or `failed(cap)` when a cap stop is under way. */
@@ -2482,6 +2633,8 @@ export class AgentRuntime {
   private end(live: Live, terminal: Terminal): void {
     if (live.terminal) return;
     live.terminal = terminal;
+    // A scope check under way for an agent that ended does nothing more (P12-06).
+    this.scopeWatch.cancel(live.agent.id);
     live.inbox.ended();
     for (const q of live.questions) this.byQuestion.delete(q);
     live.questions.clear();

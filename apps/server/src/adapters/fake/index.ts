@@ -11,3 +11,4 @@ export {
   type FakeToolResult,
   type FakeTurnIO,
 } from './scenario.js';
+export { createFakeScopeJudge, failClosedFakeScopeJudge } from './fake-scope-judge.js';

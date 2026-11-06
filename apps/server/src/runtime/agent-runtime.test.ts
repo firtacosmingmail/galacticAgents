@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Agent, Event, EventEnvelope, StatusRecord } from '@galactic/protocol';
+import type {
+  Agent,
+  AgentLaunch,
+  AgentRuntime as RuntimeName,
+  Event,
+  EventEnvelope,
+  StatusRecord,
+} from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { SCENARIOS, type FakeScenario } from '../adapters/fake/scenario.js';
 import { openDatabase, type Database } from '../db/database.js';
@@ -32,6 +39,7 @@ function make(
     stallMs?: number;
     inboxHistory?: number;
     scenarios?: Record<string, FakeScenario>;
+    adapterRuntime?: RuntimeName;
     onError?: (error: unknown, context: string) => void;
   } = {},
 ): Rig {
@@ -49,6 +57,7 @@ function make(
   const transcripts = new TranscriptPipeline(db, { flushMs: 10 });
   const adapter = new FakeAdapter({
     speed: opts.speed ?? 0,
+    ...(opts.adapterRuntime ? { runtime: opts.adapterRuntime } : {}),
     scenarios: { ...SCENARIOS, ...(opts.scenarios ?? {}) },
   });
   const runtime = new AgentRuntime({
@@ -701,5 +710,84 @@ describe('AgentRuntime — phase review follow-ups (P1-32 … P1-34)', () => {
       reason: 'resume failed: session gone',
     });
     expect(rig.status(agent.id)?.state).toBe('interrupted');
+  });
+});
+
+describe('AgentRuntime — launch flags (P12)', () => {
+  const launch: AgentLaunch = {
+    flags: ['chrome'],
+    expectedUse: 'screenshots for the PR',
+    check: 'the screenshot is attached',
+    approvalId: 'q-1',
+    precedents: [],
+  };
+
+  it('refuses a flag the runtime cannot carry', async () => {
+    const rig = make();
+    const result = await rig.runtime.spawn(
+      req('scenario:happy', { runtime: 'codex', launchFlags: ['chrome'], launch }),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/chrome.*not supported/),
+    });
+    expect(rig.log.tables.agents.all()).toHaveLength(0);
+  });
+
+  it('never gives a brain launch flags', async () => {
+    const rig = make({ adapterRuntime: 'claude-sdk' });
+    const result = await rig.runtime.spawn(
+      req('scenario:happy', {
+        role: 'waykeeper',
+        runtime: 'claude-sdk',
+        launchFlags: ['chrome'],
+        launch,
+      }),
+    );
+    expect(result).toMatchObject({ ok: false, reason: expect.stringMatching(/brains never/) });
+    expect(rig.log.tables.agents.all()).toHaveLength(0);
+  });
+
+  it('refuses flags without their launch record, and the reverse', async () => {
+    const rig = make({ adapterRuntime: 'claude-sdk' });
+    const flagsOnly = await rig.runtime.spawn(
+      req('scenario:happy', { runtime: 'claude-sdk', launchFlags: ['chrome'] }),
+    );
+    expect(flagsOnly.ok).toBe(false);
+    const launchOnly = await rig.runtime.spawn(
+      req('scenario:happy', { runtime: 'claude-sdk', launch }),
+    );
+    expect(launchOnly.ok).toBe(false);
+    expect(rig.log.tables.agents.all()).toHaveLength(0);
+  });
+
+  it('refuses flags that differ from the stored launch, in any order', async () => {
+    const rig = make({ adapterRuntime: 'claude-sdk' });
+    const other = { ...launch, flags: ['chrome', 'other'] } as unknown as AgentLaunch;
+    const result = await rig.runtime.spawn(
+      req('scenario:happy', { runtime: 'claude-sdk', launchFlags: ['chrome'], launch: other }),
+    );
+    expect(result).toMatchObject({ ok: false, reason: expect.stringMatching(/same flags/) });
+    expect(rig.log.tables.agents.all()).toHaveLength(0);
+    const same = { ...launch, flags: ['chrome', 'chrome'] } as AgentLaunch;
+    const ok = await rig.runtime.spawn(
+      req('scenario:happy', { runtime: 'claude-sdk', launchFlags: ['chrome'], launch: same }),
+    );
+    expect(ok.ok).toBe(true);
+  });
+
+  it('keeps the launch record in meta and resumes with its flags after a restart', async () => {
+    const rig = make({ adapterRuntime: 'claude-sdk' });
+    const agent = await spawnOk(
+      rig,
+      req('scenario:asks', { runtime: 'claude-sdk', launchFlags: ['chrome'], launch }),
+    );
+    expect(rig.log.tables.agents.get(agent.id)?.meta?.['launch']).toEqual(launch);
+    expect(rig.adapter.launchFlagsOf(agent.id)).toEqual(['chrome']);
+    await rig.waitFor(() => rig.status(agent.id)?.state === 'waiting_for_input');
+    await rig.runtime.shutdown();
+    const result = await rig.runtime.recoverAgent(agent.id);
+    expect(result.ok).toBe(true);
+    expect(rig.adapter.launchFlagsOf(agent.id)).toEqual(['chrome']);
   });
 });
