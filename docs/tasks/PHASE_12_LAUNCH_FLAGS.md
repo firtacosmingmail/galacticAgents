@@ -1,7 +1,7 @@
 # Phase 12 — Steward launch flags (`--chrome` first)
 
-**Current task:** P12-10 · **Task status:** P12-01 to P12-09 done (2026-11-05); P12-10 in progress — real run pending Cosmin's approval
-**Phase status:** in progress (9/10 done) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
+**Current task:** — · **Task status:** P12-01 to P12-09 done (2026-11-05); P12-10 done (2026-11-06)
+**Phase status:** done (2026-11-06; 10/10) — branch `agent-launch-flags`; batch branch `p12-1-launch-flags`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -109,7 +109,7 @@ All ten run in order in batch branch(es) `p12-<n>-<slug>`.
 - **Acceptance:** fixed button labels send exactly those answers; a flagged Steward shows the badge, a normal one does not.
 
 ### P12-10 — End-to-end, docs and phase exit
-- **Status:** in progress · **Depends on:** P12-09 · **Parallel with:** —
+- **Status:** done (2026-11-06; real run passed — Cosmin, `docs/tasks/notes/P12-10-real-run.md`) · **Depends on:** P12-09 · **Parallel with:** —
 - Plan Task 10: `launch-flags.flow.test.ts`; SPEC decision 152, §2.6 and decision 147 notes; TECHNOLOGY subsection; plan line; adapters README; phase exit.
 - **Acceptance:** the flow test passes in the specified order; the full gates are green; SPEC, TECHNOLOGY and the plan agree.
 - **Progress (2026-11-05):** flow test, docs (SPEC decision 152, §2.6, §3.6, decision 147 note; TECHNOLOGY §3.9; plan Phase 12; adapters README) and gates done; the review fix "one `chrome` Steward across every project" landed with a test. **Real run pending Cosmin's approval** — it drives his Chrome and posts to a GitHub PR; the procedure is in `docs/tasks/notes/P12-10-real-run.md` (not yet run). The phase is not marked done until it is.

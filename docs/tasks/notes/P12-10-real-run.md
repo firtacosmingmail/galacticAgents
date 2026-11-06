@@ -1,6 +1,6 @@
 # P12-10 — Local real run (Steward launch flags)
 
-**Status: not yet run — awaiting Cosmin.** The run drives Cosmin's own Chrome and posts a
+**Status: run by Cosmin on 2026-11-06 — passed.** Originally held for his go-ahead. The run drives Cosmin's own Chrome and posts a
 screenshot to a GitHub PR, which is outward-facing, so it waits for his go-ahead (SDD ruling,
 2026-11-05). Everything below is the procedure; fill in **Result** when it has been run.
 
@@ -75,3 +75,7 @@ the judge's model calls do not show up as agents.
 ## Result
 
 Not yet run — awaiting Cosmin.
+
+## Result
+
+2026-11-06: Cosmin ran the feature locally (build of `agent-launch-flags` on port 4322, separate `GALACTIC_HOME`) with the Claude in Chrome extension connected, and reported: "the feature works". The Harmonizer and the other Claude sessions started with `--no-chrome` without error, so the SDK's bundled CLI accepts the option.
