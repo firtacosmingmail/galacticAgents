@@ -36,7 +36,7 @@ its own `systemPrompt` and `tools`), `caps` (informational — the runtime enfor
 **permission gate** (below). `bare` is an opt-in that skips repository context and the
 subscription login; refuse it when the runtime cannot honour it.
 
-`launchFlags` (P12, SPEC decision 151, TECHNOLOGY §3.9) are catalogued launch flags
+`launchFlags` (P12, SPEC decision 152, TECHNOLOGY §3.9) are catalogued launch flags
 (`LAUNCH_FLAGS` in `packages/protocol/src/launch-flags.ts`; today only `chrome`) the user
 approved for this Steward. The runtime has already checked them — a Steward only, the flag lists
 this runtime, an approved `launch` record names the same set — so an adapter only applies them:

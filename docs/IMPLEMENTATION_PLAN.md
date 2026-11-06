@@ -1,6 +1,6 @@
 # GalacticAgents — Implementation Plan
 
-**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3; Phase 9 — deliverables, decisions 118–134 — added 2026-10-07; Phase 10 — long-term projects and recurring jobs, decisions 142–145 — added 2026-10-27; Phase 12 — Steward launch flags, decision 151 — added 2026-11-05) · **Date:** 2026-09-30
+**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3; Phase 9 — deliverables, decisions 118–134 — added 2026-10-07; Phase 10 — long-term projects and recurring jobs, decisions 142–145 — added 2026-10-27; Phase 12 — Steward launch flags, decision 152 — added 2026-11-05) · **Date:** 2026-09-30
 
 Companion to `SPEC.md` (what) and `TECHNOLOGY.md` (with what). The plan is ordered so that **the agent runtime is proven before the 3D scene is built**: the space interface is the product's soul, but if agents cannot be spawned, observed and answered reliably, the scene has nothing true to show. Following decision 19, a **minimal usable side panel (Phase 2.5)** now comes before the scene, so the product is usable daily long before it is beautiful.
 
@@ -219,7 +219,7 @@ Spec: `docs/superpowers/specs/2026-10-31-more-ai-providers-design.md`; plan: `do
 
 ## Phase 12 — Steward launch flags (`--chrome` first) (≈ 1 week)
 
-**Goal:** a Waykeeper can ask to start a Steward with a catalogued launch flag (first `--chrome`, so a Steward can drive Cosmin's Chrome to screenshot a page and attach it to a PR); Cosmin approves the exact command and reason on its own card; every use of the flag's tools is checked live against his approvals for that Steward, and the first off-script use waits for him (SPEC decision 151; TECHNOLOGY §3.9).
+**Goal:** a Waykeeper can ask to start a Steward with a catalogued launch flag (first `--chrome`, so a Steward can drive Cosmin's Chrome to screenshot a page and attach it to a PR); Cosmin approves the exact command and reason on its own card; every use of the flag's tools is checked live against his approvals for that Steward, and the first off-script use waits for him (SPEC decision 152; TECHNOLOGY §3.9).
 
 Spec: `docs/superpowers/specs/2026-11-05-steward-launch-flags-design.md`; plan: `docs/superpowers/plans/2026-11-05-steward-launch-flags.md`; tasks P12-01 – P12-10 in `docs/tasks/PHASE_12_LAUNCH_FLAGS.md`.
 

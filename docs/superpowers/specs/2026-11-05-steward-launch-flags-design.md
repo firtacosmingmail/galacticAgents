@@ -209,7 +209,7 @@ handled like other questions a restart cancels: the Steward is told and asks aga
 - One event per mutation, same transaction (the event log rule).
 - Tests use the fake SDK and the scripted fake LLM; the real `--chrome` run is a local-only,
   tagged test.
-- Docs: a new SPEC §7 decision (151) for the product behaviour, a TECHNOLOGY section for the
+- Docs: a new SPEC §7 decision (152; 151 was taken by P8-25) for the product behaviour, a TECHNOLOGY section for the
   catalogue, gate and scope check, and a task set in a phase file (the builder picks which phase
   or opens a new one).
 

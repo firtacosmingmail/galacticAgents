@@ -278,9 +278,9 @@ Prompt additions, kept short:
 **Files:**
 - Create: `apps/server/src/runtime/launch-flags.flow.test.ts`
 - Modify: `docs/SPEC.md`:
-  - §7 decision **151** "Steward launch flags": Cosmin's words, the catalogue, the launch card, the live watch and precedents, and the final check.
+  - §7 decision **152** "Steward launch flags": Cosmin's words, the catalogue, the launch card, the live watch and precedents, and the final check.
   - §2.6: one sentence naming the exception, that the Waykeeper may allow a flag's tool call consistent with the Steward's approvals.
-  - Decision 147: a note that publishing through a flag's tools follows decision 151.
+  - Decision 147: a note that publishing through a flag's tools follows decision 152.
 - Modify: `docs/TECHNOLOGY.md` (a new subsection in the adapter/permissions area: catalogue, `extraArgs`, gate `launchFlags`, `ScopeWatch`, `ScopeJudge`, the 20 s fail-closed timeout, `meta.launch`)
 - Modify: `docs/IMPLEMENTATION_PLAN.md` (the Phase 12 line)
 - Modify: `apps/server/src/adapters/README.md` (`launchFlags` in the spawn options)
