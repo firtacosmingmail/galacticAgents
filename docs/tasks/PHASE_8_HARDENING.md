@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** P8-25 done
-**Phase status:** in progress (25/25 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
+**Current task:** P8-26 · **Task status:** P8-26 in progress
+**Phase status:** in progress (25/26 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -171,6 +171,11 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - Markdown with GitHub's extensions (tables, task lists, strikethrough, autolinks), its code blocks highlighted, and typography for headings, lists, tables, quotes and rules; code with line numbers; JSON re-indented without parsing its values (a big number stays as written), XML re-indented from an inert parse; invalid JSON or XML shows its source and says so. HTML in a sandboxed frame (no `allow-scripts`, no `allow-same-origin`) whose document carries a CSP that loads nothing from the network, its `meta refresh` removed, its links opening a new tab.
 - **Acceptance:** unit tests for the JSON and XML formatters and the HTML frame document; viewer tests for each mode, the switches and the reader; SPEC decision 151 (amending 126); TECHNOLOGY §9.5/§9.6.
 - **Done:** `apps/web/src/panel/deliverables/reader-model.ts` (`readerKindOf`, `readerViews`, `formatJson`, `formatXml`, `htmlFrameDocument`, `HTML_FRAME_CSP`, `HTML_FRAME_SANDBOX`); `DeliverableViewer.tsx` (the views and their switch, `TextView`, `HtmlFrame`, `ReaderDialog`, a line-number gutter in `CodeView`, `remark-gfm` and `MarkdownCode`); reading styles in `deliverables.css`; dependency `remark-gfm@4.0.1`. Tests: `reader-model.test.ts` (9), `deliverables.test.tsx` (the HTML test rewritten for decision 151, five new: JSON, invalid JSON, XML, GitHub Markdown, the reader). Gates: build, typecheck, lint, format, test all green (web 2051 tests).
+
+### P8-26 — A configurable app name for the installed app (added 2026-11-07)
+- **Status:** in progress · **Depends on:** P7-01 · **Parallel with:** all
+- Cosmin's request: "I want the title of the web app to be configurable. In settings I want to be able to set a new title to the web app. This way, when I install the app on the phone it will have a different name." Most important: the label under the icon on the phone's home screen. His approval (2026-11-07) of the description: an **App name** field on the settings page, saved in `config.json`, empty = the default "Galactic"; the server fills it into the manifest (`name`, `short_name`) and the page (`<title>`, `apple-mobile-web-app-title`) when it serves them, so no rebuild is needed; the browser tab follows; the panel header and the menu bar stay; written from this Mac only (decision 51). An installed app keeps its old label until reinstalled (iPhone) or until Chrome refreshes it (Android).
+- **Acceptance:** protocol `appName` in `Settings`/`SettingsPatch` (`null` clears); the settings service persists and applies it live; server tests for the page and the manifest with and without a name (escaped in HTML); a settings page test; SPEC decision 153; TECHNOLOGY note.
 
 ## Exit criteria
 

@@ -15,7 +15,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 5 — Panel polish and scene integration | `PHASE_5_PANEL_POLISH.md` | done (2026-10-04) | 7/7 | — |
 | 6 — Planet zoom and structure | `PHASE_6_PLANET_ZOOM.md` | done (2026-10-05) | 7/7 | — |
 | 7 — Remote and mobile access | `PHASE_7_REMOTE_MOBILE.md` | done (2026-10-12) | 7/7 | — |
-| 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | in progress (branch `phase-8`, merged into `main` 2026-10-07) | 25/25 | — (ongoing backlog) |
+| 8 — Hardening (ongoing) | `PHASE_8_HARDENING.md` | in progress (branch `phase-8`, merged into `main` 2026-10-07) | 25/26 | P8-26 |
 | 9 — Deliverables | `PHASE_9_DELIVERABLES.md` | done (2026-10-12) | 17/17 | — |
 | 10 — Long-term projects, area moons and recurring jobs | `PHASE_10_LONG_TERM_PROJECTS.md` | done (2026-10-27; merged into `phase-10`, then into `phase-11`, merged into `main` 2026-11-04) | 8/8 | — |
 | 11 — More AI providers (Codex, Antigravity) | `PHASE_11_AI_PROVIDERS.md` | done (2026-11-04; `p11-1-ai-providers` and `p11-2-fixes` merged into `phase-11`, merged into `main` 2026-11-04) | 15/15 | — |
