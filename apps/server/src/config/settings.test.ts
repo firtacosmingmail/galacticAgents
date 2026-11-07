@@ -187,6 +187,25 @@ describe('SettingsService (P25-01)', () => {
     expect(() => loadConfig(env)).toThrow();
   });
 
+  it('the app name: default absent, saved locally only, applied live, null clears (P8-26)', () => {
+    const { env, config, settings, file } = setup();
+    expect(settings.current().appName).toBeUndefined();
+    expect(refusal(() => settings.update({ appName: 'Cosmin' }, {}))?.code).toBe('remote_settings');
+    const res = settings.update(SettingsPatch.parse({ appName: '  Mission  ' }), local);
+    expect(res.settings.appName).toBe('Mission'); // trimmed by the protocol
+    expect(res.restartRequired).toEqual([]);
+    expect(config.appName).toBe('Mission'); // the next page load reads it
+    expect(file()['appName']).toBe('Mission');
+    expect(loadConfig(env).config.appName).toBe('Mission'); // the restart keeps it
+    const cleared = settings.update({ appName: null }, local);
+    expect(cleared.settings.appName).toBeUndefined();
+    expect(config.appName).toBeUndefined();
+    expect('appName' in file()).toBe(false);
+    for (const bad of ['', '   ', 'a'.repeat(31), 'two\nlines']) {
+      expect(SettingsPatch.safeParse({ appName: bad }).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it('reports a hand-edited first-run marker as a timestamp, still done (P25-08)', () => {
     const { config, settings } = setup();
     config.setupCompletedAt = '2026-10-01';

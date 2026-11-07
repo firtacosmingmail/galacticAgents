@@ -1,4 +1,6 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import fastifyStatic from '@fastify/static';
 import { PROTOCOL_VERSION, type HealthResponse } from '@galactic/protocol';
 import type { ServerConfig } from './config/config.js';
@@ -13,6 +15,7 @@ import { createSessionHandler } from './ws/session.js';
 import { registerDevRoutes, type DevRoutesOptions } from './http/dev-routes.js';
 import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-routes.js';
 import { registerPanelRoutes } from './http/panel-routes.js';
+import { customAppName, manifestWithAppName, pageWithAppName } from './http/app-name.js';
 import { registerBackupRoutes } from './http/backup-routes.js';
 import { registerJobRoutes } from './http/job-routes.js';
 import { registerDeliverableRoutes } from './http/deliverable-routes.js';
@@ -180,6 +183,35 @@ export function buildApp(opts: AppOptions): App {
       }
       return payload;
     });
+    // The installed app's name (P8-26, decision 153): written into the page and the manifest as
+    // they are served, read from the config at every request so a rename applies at the next load.
+    // Without a name (or when the build's file cannot be read) the build's file is sent as is.
+    const sendRenamed = async (
+      reply: FastifyReply,
+      file: 'index.html' | 'manifest.webmanifest',
+    ): Promise<FastifyReply> => {
+      const name = customAppName(config.appName);
+      if (name) {
+        try {
+          const text = await readFile(join(webDir, file), 'utf8');
+          return reply
+            .header('cache-control', 'no-cache')
+            .type(file === 'index.html' ? 'text/html; charset=utf-8' : 'application/manifest+json')
+            .send(
+              file === 'index.html' ? pageWithAppName(text, name) : manifestWithAppName(text, name),
+            );
+        } catch {
+          // Missing or unreadable: the static file answer (a 404 when missing).
+        }
+      }
+      return reply.sendFile(file);
+    };
+    for (const path of ['/', '/index.html']) {
+      fastify.get(path, (_req, reply) => sendRenamed(reply, 'index.html'));
+    }
+    fastify.get('/manifest.webmanifest', (_req, reply) =>
+      sendRenamed(reply, 'manifest.webmanifest'),
+    );
     fastify.setNotFoundHandler((req, reply) => {
       // Single-page app: unknown GET paths load the page; API-shaped paths stay 404, and so do
       // missing build files (P7-01: the service worker must never keep the page as a script).
@@ -191,7 +223,7 @@ export function buildApp(opts: AppOptions): App {
         !req.url.startsWith('/files/') &&
         !isWebFile(req.url)
       ) {
-        return reply.sendFile('index.html');
+        return sendRenamed(reply, 'index.html');
       }
       return reply.code(404).send({ error: 'not_found' });
     });

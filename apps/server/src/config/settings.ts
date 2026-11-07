@@ -53,6 +53,7 @@ import { ConfigFile, expandHome, type ServerConfig } from './config.js';
  * | `transcriptRetention` | live: the next transcript compaction (hourly; P8-02) |
  * | `caps` | live: the next spawn and the next agent's caps; running agents keep theirs |
  * | `qualityTier` | live (stored for the renderer, Phase 3) |
+ * | `appName` | live: the next load of the page or the manifest (P8-26); `null` = the default |
  * | `budgets` | live: every budgeted project and task is judged against the new threshold (P8-01) |
  * | `defaultProvider` | live: the next Steward spawned without a provider of its own (P11-03); only a registered provider |
  * | `providers` | live: the next Steward of that provider spawned without a model (P11-03); merged provider by provider, `model: null` clears |
@@ -250,6 +251,8 @@ export class SettingsService {
       };
     }
     if (patch.qualityTier !== undefined) next.qualityTier = patch.qualityTier;
+    if (patch.appName === null) delete next.appName;
+    else if (patch.appName !== undefined) next.appName = patch.appName;
     if (patch.stewardsLoadUserSettings !== undefined)
       next.stewardsLoadUserSettings = patch.stewardsLoadUserSettings;
     if (patch.brainUserMcp !== undefined) next.brainUserMcp = patch.brainUserMcp;
@@ -365,6 +368,7 @@ export class SettingsService {
         maxToolCalls: c.caps.defaults?.maxToolCalls ?? this.opts.caps?.defaults.maxToolCalls ?? 500,
       },
       qualityTier: c.qualityTier ?? DEFAULT_QUALITY_TIER,
+      ...(c.appName ? { appName: c.appName } : {}),
       stewardsLoadUserSettings: c.stewardsLoadUserSettings ?? true,
       brainUserMcp: c.brainUserMcp ?? DEFAULT_BRAIN_USER_MCP,
       transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
@@ -399,6 +403,8 @@ export class SettingsService {
     if (patch.caps) raw['caps'] = { ...((raw['caps'] as object | undefined) ?? {}), ...next.caps };
     if (patch.transcriptRetention) raw['transcriptRetention'] = next.transcriptRetention;
     if (patch.qualityTier !== undefined) raw['qualityTier'] = next.qualityTier;
+    if (patch.appName === null) delete raw['appName'];
+    else if (patch.appName !== undefined) raw['appName'] = next.appName;
     if (patch.stewardsLoadUserSettings !== undefined)
       raw['stewardsLoadUserSettings'] = next.stewardsLoadUserSettings;
     if (patch.brainUserMcp !== undefined) raw['brainUserMcp'] = next.brainUserMcp;
@@ -478,6 +484,11 @@ export class SettingsService {
         this.opts.transcriptRetention.policy = { ...next.transcriptRetention };
     }
     if (patch.qualityTier !== undefined) this.config.qualityTier = next.qualityTier;
+    // Read at every load of the page and the manifest (`http/app-name.ts`).
+    if (patch.appName !== undefined) {
+      if (next.appName) this.config.appName = next.appName;
+      else delete this.config.appName;
+    }
     if (patch.budgets?.warnAtPercent !== undefined && next.budgets) {
       this.config.budgets = { warnAtPercent: next.budgets.warnAtPercent };
       if (this.opts.budgets) this.opts.budgets.warnAtPercent = next.budgets.warnAtPercent;

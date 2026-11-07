@@ -1,4 +1,5 @@
 import { useId, useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { DEFAULT_APP_NAME } from '@galactic/protocol';
 import type {
   BrainUserMcp,
   PermissionDecision,
@@ -26,6 +27,7 @@ import {
   specDefault,
   transcriptRetentionDraft,
   validateProjectsRoot,
+  validateAppName,
   validateRetention,
   withPolicyValue,
   type CapsDraft,
@@ -235,6 +237,22 @@ function ProjectsRootEditor({ id, draft, setDraft, disabled }: EditorProps<strin
         disabled={disabled}
         spellCheck={false}
         placeholder="~/GalacticProjects"
+        onChange={(e) => setDraft(e.target.value)}
+      />
+    </div>
+  );
+}
+
+function AppNameEditor({ id, draft, setDraft, disabled }: EditorProps<string>) {
+  return (
+    <div className="set-field">
+      <label htmlFor={id}>App name</label>
+      <input
+        id={id}
+        className="set-input"
+        value={draft}
+        disabled={disabled}
+        placeholder={DEFAULT_APP_NAME}
         onChange={(e) => setDraft(e.target.value)}
       />
     </div>
@@ -628,6 +646,20 @@ export const BUDGETS: SectionSpec<string> = {
   Editor: BudgetWarnEditor,
 };
 
+/**
+ * The installed app's name (P8-26, decision 153): the label under its icon on a phone's home
+ * screen and the browser tab's title. On the settings page only; empty = the default.
+ */
+export const APP_NAME: SectionSpec<string> = {
+  field: 'appName',
+  title: 'App name',
+  intro: `The name under the app’s icon when you add Mission Control to a phone’s home screen, and the browser tab’s title. Leave it empty for “${DEFAULT_APP_NAME}”. A phone keeps the name it was installed with: on an iPhone, remove the app from the home screen and add it again; Android picks the new name up on its own after a while. Changed only on this Mac.`,
+  fromSettings: (s) => s.appName ?? '',
+  validate: validateAppName,
+  toPatch: (d) => ({ appName: d.trim() === '' ? null : d.trim() }),
+  Editor: AppNameEditor,
+};
+
 /** A section of any draft type (the list below mixes them; each is used with its own). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnySectionSpec = SectionSpec<any>;
@@ -636,7 +668,12 @@ export type AnySectionSpec = SectionSpec<any>;
  * The settings page's sections after the wizard's (P8-01): set later, when a budget is in use,
  * so they are not first-run steps.
  */
-export const LATER_SECTIONS: readonly AnySectionSpec[] = [PROVIDERS, BUDGETS, BRAIN_MCP_SECTION];
+export const LATER_SECTIONS: readonly AnySectionSpec[] = [
+  PROVIDERS,
+  BUDGETS,
+  BRAIN_MCP_SECTION,
+  APP_NAME,
+];
 
 /** Every section, in the order the page and the wizard show them. */
 export const SECTIONS: readonly AnySectionSpec[] = [

@@ -17,6 +17,7 @@ import {
   RunOutputRetention,
   RunSettings,
   QualityTier,
+  AppName,
   SettingsBudgets,
   SettingsCaps,
   TranscriptRetention,
@@ -103,6 +104,8 @@ export const ConfigFile = z.object({
   defaultPermissionPolicy: PermissionPolicy.optional(),
   /** The renderer's quality tier (SPEC §4.6; used from Phase 3). Default `high`. */
   qualityTier: QualityTier.optional(),
+  /** The installed app's name (P8-26, decision 153); absent = `DEFAULT_APP_NAME`. */
+  appName: AppName.optional(),
   /**
    * Whether Stewards load the user's own Claude Code settings (`~/.claude`) besides the
    * repository's (SPEC §8 open question). Default `true` (keep loading them).
@@ -313,6 +316,8 @@ export interface ServerConfig {
   defaultPermissionPolicy?: PermissionPolicy;
   /** The renderer's quality tier (P25-01); absent = `high`. */
   qualityTier?: QualityTier;
+  /** The installed app's name (P8-26); absent = `DEFAULT_APP_NAME`. Read at every page load. */
+  appName?: string;
   /** Whether Stewards load `~/.claude` too (P25-01; SPEC §8); absent = `true`. */
   stewardsLoadUserSettings?: boolean;
   /** Which brains get the user's MCP servers; absent = `waykeepers` (`DEFAULT_BRAIN_USER_MCP`). */
@@ -627,6 +632,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
         ? { defaultPermissionPolicy: file.defaultPermissionPolicy }
         : {}),
       ...(file.qualityTier ? { qualityTier: file.qualityTier } : {}),
+      ...(file.appName ? { appName: file.appName } : {}),
       ...(file.stewardsLoadUserSettings !== undefined
         ? { stewardsLoadUserSettings: file.stewardsLoadUserSettings }
         : {}),
