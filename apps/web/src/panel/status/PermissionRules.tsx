@@ -19,6 +19,16 @@ const SCOPE: Record<PermissionRuleScope, string> = {
   site: 'site',
 };
 
+const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
+/** A file-tool folder rule says which kind of access its tool gives. */
+function fileToolAccess(tool: string): string {
+  if (READ_TOOLS.has(tool)) return ' · reading';
+  if (WRITE_TOOLS.has(tool)) return ' · writing';
+  return ' · by file tools';
+}
+
 function when(at: string): string {
   const d = new Date(at);
   return Number.isNaN(d.getTime()) ? at : d.toLocaleString();
@@ -45,7 +55,7 @@ export function PermissionRules({ project }: { project: Project }) {
                 {r.scope === 'folder' && r.match.kind === 'folder'
                   ? r.match.access === 'any'
                     ? ' · reading and writing'
-                    : ' · by file tools'
+                    : fileToolAccess(r.tool)
                   : ''}
               </span>
               <code>{r.label}</code>

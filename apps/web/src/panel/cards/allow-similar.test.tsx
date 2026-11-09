@@ -226,6 +226,22 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
     expect(api.allowSimilar).not.toHaveBeenCalled();
   });
 
+  it('puts a space between the kind and the label of a row that is not offered', async () => {
+    world();
+    api.similarPreview.mockResolvedValueOnce({
+      ...PREVIEW,
+      options: [
+        { key: 'site:x', kind: 'site', available: false, label: 'example.org', reason: 'no host' },
+      ],
+    });
+    show(<QuestionCard question={install} />);
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: /^Allow similar for/ })),
+    );
+    const chooser = await screen.findByRole('group', { name: /Allow from now on/ });
+    expect(chooser.textContent).toContain('Site example.org Not offered: no host.');
+  });
+
   it('says why when the server refuses every scope, and hands a stale refusal to the card', async () => {
     world();
     api.similarPreview.mockResolvedValueOnce({
@@ -326,6 +342,31 @@ describe('the project’s rules (P9-17)', () => {
     const list = screen.getByRole('list', { name: 'allowed similar actions' });
     expect(list.textContent).toMatch(/sitegithub\.com/);
     expect(list.textContent).toMatch(/folder · reading and writing\/tmp\/pr83\//);
+  });
+
+  it('labels a file-tool folder rule by what its tool does', () => {
+    const rule = (id: string, tool: string): PermissionRule => ({
+      ...RULE,
+      id,
+      scope: 'folder',
+      tool,
+      match: { kind: 'folder', folder: '/tmp/x' },
+      label: `/tmp/x/ ${tool}`,
+    });
+    show(
+      <PermissionRules
+        project={{
+          ...fx.project,
+          permissionRules: [rule('r-a', 'Read'), rule('r-b', 'Edit'), rule('r-c', 'Other')],
+        }}
+      />,
+    );
+    const items = screen
+      .getByRole('list', { name: 'allowed similar actions' })
+      .querySelectorAll('li');
+    expect(items[0]?.textContent).toMatch(/^folder · reading/);
+    expect(items[1]?.textContent).toMatch(/^folder · writing/);
+    expect(items[2]?.textContent).toMatch(/^folder · by file tools/);
   });
 
   it('lists the rules with Remove on the Mac, read-only on the phone', async () => {

@@ -54,7 +54,6 @@ export function useOffersSimilar(q: Question, world: WorldState): Project | unde
   return project;
 }
 
-// P14-04 kept this one-choice chooser compiling against the per-reason rows; P14-05 rewrites it.
 const KIND_WORDS: Record<SimilarOption['kind'], string> = {
   folder: 'Access to',
   site: 'Site',
@@ -307,7 +306,12 @@ export function AllowSimilar({
               {unavailable.map((o) => (
                 <p key={o.key} className="allow-similar-option is-off muted">
                   <strong>{KIND_WORDS[o.kind]}</strong>
-                  {o.label ? <code>{o.label}</code> : null}
+                  {o.label ? (
+                    <>
+                      {' '}
+                      <code>{o.label}</code>
+                    </>
+                  ) : null}
                   {` Not offered: ${o.reason ?? 'unavailable'}.`}
                 </p>
               ))}
