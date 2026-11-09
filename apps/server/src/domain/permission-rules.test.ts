@@ -862,8 +862,8 @@ describe('coverage: every asked reason must be covered (P14-03)', () => {
       'cat /tmp/pr83/a.txt',
       'cd -P /tmp/pr83; ls',
       'pushd /tmp/pr83; ls',
-      // A prefix assignment sets the program's environment only (ruling F-2a).
-      'FOO=1 cat /tmp/pr83/a.txt',
+      // An inert prefix assignment sets the program's environment only (F-2a, P14-08).
+      'LANG=C cat /tmp/pr83/a.txt',
     ]) {
       expect(allowed([folder], bash(command)), command).toBe(true);
     }
@@ -1571,8 +1571,10 @@ describe('final review fixes (P14-07)', () => {
       expect(c.allowed).toBe(true);
     });
 
-    it('a prefix assignment on another command keeps the line folder-safe', () => {
-      expect(cover([pr83], bash('FOO=1 cat /tmp/pr83/a')).allowed).toBe(true);
+    it('an inert prefix assignment on another command keeps the line folder-safe', () => {
+      expect(cover([pr83], bash('LANG=C cat /tmp/pr83/a')).allowed).toBe(true);
+      // Any other variable may run or load something (P14-08): never folder-covered.
+      expect(cover([pr83], bash('FOO=1 cat /tmp/pr83/a')).allowed).toBe(false);
       expect(cover([pr83], bash('cd /tmp/pr83 && LC_ALL=C sort a')).allowed).toBe(true);
     });
 
@@ -1599,7 +1601,8 @@ describe('final review fixes (P14-07)', () => {
     it("an assignment's value is a path: a folder never covers a value outside it", () => {
       const c = cover([pr83], bash('cd /tmp/pr83 && GIT_WORK_TREE=/etc git checkout .'));
       expect(c.allowed).toBe(false);
-      expect(cover([pr83], bash('GIT_DIR=/tmp/pr83/repo git log')).allowed).toBe(true);
+      expect(cover([pr83], bash('LC_ALL=/etc cat /tmp/pr83/a')).allowed).toBe(false);
+      expect(cover([pr83], bash('LC_ALL=/tmp/pr83/x cat /tmp/pr83/a')).allowed).toBe(true);
     });
 
     it('a line folder rules never cover gets no folder row: its outside parts say why', () => {
@@ -1611,6 +1614,45 @@ describe('final review fixes (P14-07)', () => {
           reason: expect.stringMatching(/folder rules never cover it/) as unknown as string,
         },
       ]);
+    });
+  });
+
+  describe('P14-08: residual holes', () => {
+    const site = forged('r-site-gh', {
+      scope: 'site',
+      tool: '*',
+      match: { kind: 'host', host: 'github.com' },
+      categories: ['network'],
+    });
+
+    it('only inert prefix assignments keep a line folder-coverable', () => {
+      for (const command of [
+        "cd /tmp/pr83 && GIT_EXTERNAL_DIFF='cd;rm -rf Library' git diff",
+        "cd /tmp/pr83 && GIT_PAGER='sh -c x' git log",
+        "cd /tmp/pr83 && GIT_SSH_COMMAND='sh -c x' git fetch",
+        "cd /tmp/pr83 && EDITOR='sh -c x' git commit",
+        "cd /tmp/pr83 && LESSOPEN='|sh -c x' less a",
+        'cd /tmp/pr83 && LD_PRELOAD=x.so git diff',
+        'cd /tmp/pr83 && DYLD_INSERT_LIBRARIES=x.dylib git diff',
+        'cd /tmp/pr83 && XDG_CONFIG_HOME=cfg git diff',
+        'cd /tmp/pr83 && GIT_CONFIG_GLOBAL=cfg git diff',
+        "cd /tmp/pr83 && PS4='$(sh -c x)' git diff",
+        'cd /tmp/pr83 && TERM=x git diff',
+        'cd /tmp/pr83 && LANG=C GIT_PAGER=x git diff',
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+      }
+      for (const command of [
+        'cd /tmp/pr83 && LANG=C git diff',
+        'cd /tmp/pr83 && LC_ALL=C TZ=UTC NO_COLOR=1 CI=1 FORCE_COLOR=0 git diff',
+        'cd /tmp/pr83 && GITHUB_TOKEN=x git diff',
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(true);
+      }
+      expect(cover([site], bash('GH_TOKEN=x gh pr view 1')).allowed).toBe(true);
+      expect(cover([pr83, site], bash('cd /tmp/pr83 && GH_TOKEN=x gh pr view 1')).allowed).toBe(
+        true,
+      );
     });
   });
 

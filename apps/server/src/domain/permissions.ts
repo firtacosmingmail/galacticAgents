@@ -1537,15 +1537,20 @@ const PLAIN_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 export type PrefixAssignmentOk = (name: string, program: string) => boolean;
 
 /**
- * Folder rules (ruling F-2a): a prefix assignment sets the program's environment only — unless
- * the program changes the directory, or the variable is one that steers where paths lead or what
- * the shell runs (compared upper-cased: zsh's `path` is tied to `PATH`, fail closed).
+ * Prefix assignments that cannot make a program run other code or read other configuration
+ * (P14-08): a token, the locale, the time zone, colour switches, `CI`. An allow-list: a variable
+ * not named here (`GIT_EXTERNAL_DIFF`, `GIT_PAGER`, `EDITOR`, `LD_PRELOAD`, `XDG_CONFIG_HOME`,
+ * `PS4`, … and `TERM`, which picks a terminfo entry) may run or load something.
+ */
+const INERT_PREFIX = /^(?:GH_TOKEN|GITHUB_TOKEN|LANG|LC_[A-Z]+|TZ|NO_COLOR|FORCE_COLOR|CI)$/;
+
+/**
+ * Folder rules (ruling F-2a, P14-08): a prefix assignment of an inert variable (`INERT_PREFIX`,
+ * case-sensitive) sets the program's environment only — unless the program changes the directory.
+ * Any other prefix assignment counts as a change of state: the line is never folder-covered.
  */
 export const FOLDER_PREFIX_OK: PrefixAssignmentOk = (name, program) =>
-  !['cd', 'pushd', 'chdir', 'popd'].includes(program.toLowerCase()) &&
-  !['CDPATH', 'HOME', 'PWD', 'OLDPWD', 'ZDOTDIR', 'ENV', 'BASH_ENV', 'PATH'].includes(
-    name.toUpperCase(),
-  );
+  !['cd', 'pushd', 'chdir', 'popd'].includes(program.toLowerCase()) && INERT_PREFIX.test(name);
 
 /** Visible hosts (ruling F-2b): gh's token does not route, so `GH_TOKEN=… gh …` keeps its host. */
 export const HOSTS_PREFIX_OK: PrefixAssignmentOk = (name, program) =>
