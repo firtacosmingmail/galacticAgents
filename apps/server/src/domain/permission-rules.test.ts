@@ -756,6 +756,31 @@ describe('coverage: every asked reason must be covered (P14-03)', () => {
     expect(allowed([folder], bash('cd /tmp/pr83; git log origin/dev..HEAD'))).toBe(true);
   });
 
+  it('a quoted or escaped `..` never slips past the folder refusal (review R-i)', () => {
+    for (const command of [
+      'cat /tmp/pr83/out/.\\./etc/passwd',
+      "cat /tmp/pr83/out/.''./etc/passwd",
+      'cat /tmp/pr83/out/.\\\n./etc/passwd',
+      'cd /tmp/pr83/out/.\\.; echo x > etc/cron.d/x',
+      'cp /tmp/pr83/a /tmp/pr83/out/.\\./etc/sudoers.d/x',
+      'cd /tmp/pr83/out/.\\./home/u; echo x >> .bashrc',
+      'cat /tmp/pr83/out/".."/etc/passwd',
+      'echo x > /tmp/pr83/out/.\\./etc/x',
+    ]) {
+      expect(allowed([folder], bash(command)), command).toBe(false);
+    }
+  });
+
+  it('a line that names CDPATH gets no folder coverage (review R-j)', () => {
+    for (const command of [
+      'cd /tmp/pr83; CDPATH=/etc cd x; cat passwd',
+      'export CDPATH=/etc; cd /tmp/pr83; cd x; cat passwd',
+      'cd /tmp/pr83; CD\\\nPATH=/etc cd x; cat passwd',
+    ]) {
+      expect(allowed([folder], bash(command)), command).toBe(false);
+    }
+  });
+
   it('a folder rule from a command covers file tools of both groups under it', () => {
     expect(allowed([folder], read('/tmp/pr83/a.md'))).toBe(true);
     expect(allowed([folder], write('/tmp/pr83/a.md'))).toBe(true);
@@ -828,6 +853,9 @@ describe('coverage: every asked reason must be covered (P14-03)', () => {
       categories: ['network'],
     });
     expect(allowed([install], bash('npm install zod'))).toBe(true);
+    // A harmless redirection does not stop a prefix (as P9-17 allowed).
+    expect(allowed([install], bash('npm install zod 2>/dev/null'))).toBe(true);
+    expect(allowed([install], bash('npm install zod 2>&1'))).toBe(true);
     expect(allowed([install], bash('curl https://x.io; npm install zod'))).toBe(false);
     expect(allowed([install], bash('npm install zod > out.txt'))).toBe(false);
     expect(allowed([install], bash('npm install zod <<EOF\nx\nEOF'))).toBe(false);

@@ -674,9 +674,28 @@ function coverableFolder(folder: string, ctx: PolicyContext): boolean {
  */
 const DOT_DOT_SEGMENT = /(?:^|[^.\w-])\.\.(?:$|[^.\w-])/;
 
+/**
+ * Whether folder rules must cover nothing in this command line (P14-03 review, rulings R-i, R-j):
+ * a `..` path component in the raw text or in any word or redirect target after quote removal
+ * (`.\.`, `.''.`, `".."` lex to `..`), or `CDPATH` anywhere (`cd x` may then go elsewhere). An
+ * inherited CDPATH from Mission Control's own environment is an accepted limit: agents get an
+ * allow-listed environment.
+ */
+function folderUnsafeLine(command: string): boolean {
+  const joined = command.replace(/\\\n/g, '');
+  if (DOT_DOT_SEGMENT.test(command) || DOT_DOT_SEGMENT.test(joined)) return true;
+  if (/CDPATH/.test(joined)) return true;
+  const lexed = lexCommand(command.trim());
+  return lexed.commands.some(
+    (c) =>
+      c.words.some((w) => DOT_DOT_SEGMENT.test(w) || /CDPATH/.test(w)) ||
+      c.redirects.some((r) => DOT_DOT_SEGMENT.test(r.target)),
+  );
+}
+
 /** Whether the command's `segment` (classifyCommand's index) starts with `words`, cleanly. */
 function segmentStartsWith(command: string, f: Finding, words: readonly string[]): boolean {
-  if (f.segment === undefined || f.words === undefined || f.redirects !== false) return false;
+  if (f.segment === undefined || f.words === undefined) return false;
   const simple = lexCommand(command.trim()).commands[f.segment];
   if (!simple || simple.heredoc || !simple.redirects.every(harmlessRedirect)) return false;
   if (simple.words.length !== f.words.length || simple.words.some((w, i) => w !== f.words![i])) {
@@ -691,6 +710,8 @@ interface CoverageInput {
   realPath: RealPath;
   /** The Bash command (trimmed), or `undefined` for another tool. */
   command: string | undefined;
+  /** `folderUnsafeLine(command)`, computed once. */
+  folderUnsafe: () => boolean;
   subject: () => Subject;
 }
 
@@ -704,7 +725,7 @@ function folderCovers(folder: string, f: Finding, k: CoverageInput): boolean {
   const { ctx } = k.input;
   if (!coverableFolder(folder, ctx)) return false;
   if (k.command !== undefined) {
-    if (f.path === undefined || DOT_DOT_SEGMENT.test(k.command)) return false;
+    if (f.path === undefined || k.folderUnsafe()) return false;
     const real = physicalPath(f.path, ctx, k.realPath);
     if (real === undefined || !within(folder, real)) return false;
     // Lexically ordinary but guarded once symlinks are followed (review B1): never.
@@ -807,10 +828,14 @@ export function coverage(
   const realPath = input.realPath ?? systemRealPath;
   const raw = isRecord(call.input) ? call.input['command'] : undefined;
   let subject: Subject | undefined;
+  let unsafe: boolean | undefined;
+  const command =
+    call.toolName === 'Bash' ? (typeof raw === 'string' ? raw.trim() : '') : undefined;
   const k: CoverageInput = {
     input,
     realPath,
-    command: call.toolName === 'Bash' ? (typeof raw === 'string' ? raw.trim() : '') : undefined,
+    command,
+    folderUnsafe: () => (unsafe ??= command === undefined || folderUnsafeLine(command)),
     subject: () => (subject ??= subjectOf(call, input.ctx, realPath)),
   };
   const whole = live.find((r) => coversWholeCall(r, asking, k));
