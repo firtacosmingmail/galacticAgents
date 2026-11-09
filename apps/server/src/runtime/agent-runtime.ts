@@ -34,6 +34,7 @@ import {
   type ToolDefinition,
   type RequestJudge,
   type ScopeJudge,
+  type WaykeeperForward,
   OFF_SCRIPT_ACTIONS,
 } from '@galactic/protocol';
 import { isStorageFailure } from '../db/database.js';
@@ -58,7 +59,12 @@ import {
 } from '../domain/question-service.js';
 import { DomainError } from '../domain/errors.js';
 import { unattendedPermissionRules } from '../domain/jobs.js';
-import { globalDefaultPolicy, type PolicyContext } from '../domain/permissions.js';
+import {
+  classifyToolCall,
+  globalDefaultPolicy,
+  type PolicyContext,
+} from '../domain/permissions.js';
+import { RULES_END_IN } from '../domain/project-rules.js';
 import { userFoldersOf } from '../deliverables/folder.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import {
@@ -68,13 +74,20 @@ import {
   type CapsConfig,
   type SpawnCheck,
 } from './caps.js';
-import { aliasesOf, createPermissionGate, type RuntimeGate } from './permission-gate.js';
+import { ApprovalWatch, type ApprovalFacts } from './approval-watch.js';
+import {
+  aliasesOf,
+  createPermissionGate,
+  misplacedCwd,
+  type RuntimeGate,
+} from './permission-gate.js';
 import { publishingPolicy, type PublishAllowanceStore } from './publish-allowance.js';
 import { precedentOf, ScopeWatch } from './scope-watch.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
 import type { StatusStore } from './status-store.js';
 import { providerOf } from './steward-choice.js';
 import { TOOL_RUNTIMES } from './tool-runtimes.js';
+import { userWordsFor } from './user-words.js';
 import type { TranscriptPipeline } from './transcripts.js';
 
 /**
@@ -175,7 +188,10 @@ export interface AgentRuntimeOptions {
   publishAllowances?: PublishAllowanceStore;
   /** Decides whether a launch flag's tool call fits what the user approved (P12-05; used by the scope watch). */
   scopeJudge?: ScopeJudge;
-  /** Decides whether a Steward's permission request fits its task, for the Waykeeper (P13-03; not used yet). */
+  /**
+   * Decides whether a Steward's permission request fits its task, for the Waykeeper (P13-03; used
+   * by the approval watch, P13-04). Absent: every request the watch holds is forwarded.
+   */
   requestJudge?: RequestJudge;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
@@ -372,6 +388,11 @@ interface Live {
    * already cut to its allowlist; `undefined` until the first read of this session ends.
    */
   commands?: SlashCommand[] | undefined;
+  /**
+   * The last `MAX_RECENT_ACTIONS` calls the gate, a rule or the Waykeeper allowed (P13-04), one
+   * redacted line each (`precedentOf`): what the request judge reads as "the Steward's actions".
+   */
+  recentActions: string[];
 }
 
 /** What a resumed session falls back to if it ends before its first turn did (P2-16). */
@@ -435,6 +456,10 @@ class AgentHistory {
 }
 /** How many ended agent ids are remembered so a straggling event is told apart from a stranger. */
 const ENDED_MEMORY = 1_000;
+/** Recent allowed actions kept per agent for the request judge (P13-04). */
+const MAX_RECENT_ACTIONS = 50;
+/** The longest task title the request judge is given (the description's first line). */
+const MAX_TASK_TITLE = 120;
 
 /** How much of a quote a reply's delivered text repeats (P8-17). */
 const QUOTE_IN_TEXT = 1_000;
@@ -465,6 +490,8 @@ export class AgentRuntime {
   private readonly questions: QuestionRouting;
   /** Judges a flagged Steward's flag-tool calls against its approvals (P12-06). */
   private readonly scopeWatch: ScopeWatch;
+  /** Judges a Steward's `ask` requests for its Waykeeper, where the project allows it (P13-04). */
+  private readonly approvalWatch: ApprovalWatch;
   private disposed = false;
   private readonly turnListeners = new Set<(turn: TurnEnd) => void>();
   private brainResumer: BrainResumer | undefined;
@@ -499,6 +526,11 @@ export class AgentRuntime {
     this.questions = opts.questions ?? logRouting(opts.log, livingFromStatuses(opts.statuses));
     // No judge configured: every flag call is off-script (fail closed).
     this.scopeWatch = new ScopeWatch({ judge: opts.scopeJudge });
+    // No judge configured: every request it holds is forwarded to the user (fail closed).
+    this.approvalWatch = new ApprovalWatch({
+      judge: opts.requestJudge,
+      onError: (error) => this.onError(error, 'approval watch'),
+    });
     // Nothing commits ahead of the agent events held for a full disk (P8-04 review).
     this.unhook = opts.log.addBeforeCommand(() => this.beforeCommand());
     const { maxConcurrentAgents, defaults, ...spawn } = opts.caps ?? {};
@@ -713,6 +745,8 @@ export class AgentRuntime {
       rules: () => this.rulesOf(agent.id, req),
       onRuleAllow: (call, ruleId, action) =>
         this.permissionDecided(live, { toolCall: call, decision: 'allow', action, ruleId }),
+      // What the request judge reads as the Steward's recent actions (P13-04).
+      onAllow: (call) => this.noteAllowed(live, call),
       ...(allowances
         ? {
             allowOnce: (call, verdict, categories) =>
@@ -781,6 +815,7 @@ export class AgentRuntime {
       resumedTurn: how.resumed ?? false,
       probation: how.probation,
       activity: false,
+      recentActions: [],
     };
     this.live.set(agent.id, live);
     this.lookUpFolderCandidate(agent.id, req);
@@ -2009,7 +2044,8 @@ export class AgentRuntime {
       // The card shows the category the policy asks about when the adapter did not name one.
       const asked = verdict.action ?? action;
       if (!event.question.permissionAction && asked) event.question.permissionAction = asked;
-      return false;
+      // A Steward of a project whose Waykeeper approves (P13-04): judged before any question.
+      return this.watchApproval(live, call, event, asked);
     }
     this.permissionDecided(
       live,
@@ -2023,6 +2059,7 @@ export class AgentRuntime {
       },
       event.questionId,
     );
+    if (verdict.decision === 'allow') this.noteAllowed(live, call);
     live.idle = false;
     if (!live.paused) live.inbox.working();
     const answer = verdict.decision === 'allow' ? 'allow' : `deny: ${verdict.reason}`;
@@ -2056,12 +2093,7 @@ export class AgentRuntime {
         flag,
         toolCall: call,
         launch: row ? launchOf(row) : undefined,
-        active: () =>
-          !live.terminal &&
-          !live.stopRequested &&
-          !live.capStop &&
-          !this.disposed &&
-          this.live.get(agentId) === live,
+        active: () => this.watching(live),
         consistent: (reason) => {
           const supervisorId = this.opts.log.tables.agents.get(agentId)?.supervisorId;
           this.permissionDecided(
@@ -2075,6 +2107,7 @@ export class AgentRuntime {
             },
             event.questionId,
           );
+          this.noteAllowed(live, call);
           void live.adapter
             .answer(event.questionId, 'allow')
             .catch((error: unknown) => this.onError(error, `scope answer ${event.questionId}`));
@@ -2098,6 +2131,160 @@ export class AgentRuntime {
       .catch((error: unknown) => this.onError(error, `scope watch ${agentId}`));
   }
 
+  /** Whether a held call's verdict may still act: the agent lives here and is not stopping. */
+  private watching(live: Live): boolean {
+    return (
+      !live.terminal &&
+      !live.stopRequested &&
+      !live.capStop &&
+      !this.disposed &&
+      this.live.get(live.agent.id) === live
+    );
+  }
+
+  /** Keeps an allowed call among the agent's recent actions (P13-04), the newest 50. */
+  private noteAllowed(live: Live, call: ToolCall): void {
+    try {
+      live.recentActions.push(precedentOf(call));
+      if (live.recentActions.length > MAX_RECENT_ACTIONS) {
+        live.recentActions.splice(0, live.recentActions.length - MAX_RECENT_ACTIONS);
+      }
+    } catch {
+      // Context for the judge only: a call that cannot be summarised is left out.
+    }
+  }
+
+  /** Whether the project's Waykeeper approves its Stewards' requests now (P13-04). */
+  private approvalsOn(projectId: Id): boolean {
+    const project = this.opts.log.tables.projects.get(projectId);
+    return (
+      project?.waykeeperApprovals === true &&
+      !RULES_END_IN.has(project.state) &&
+      project.state !== 'failed'
+    );
+  }
+
+  /**
+   * The Steward's Waykeeper on `projectId`: its supervisor when that is the project's Waykeeper,
+   * else the project's latest Waykeeper row; `undefined` when the project has none.
+   */
+  private waykeeperOfProject(projectId: Id, supervisorId: Id | undefined): Id | undefined {
+    const { agents } = this.opts.log.tables;
+    const supervisor = supervisorId ? agents.get(supervisorId) : undefined;
+    if (supervisor?.role === 'waykeeper' && supervisor.projectId === projectId) {
+      return supervisor.id;
+    }
+    return agents
+      .all()
+      .filter((a) => a.role === 'waykeeper' && a.projectId === projectId)
+      .reduce<Agent | undefined>(
+        (best, a) => (!best || a.createdAt >= best.createdAt ? a : best),
+        undefined,
+      )?.id;
+  }
+
+  /**
+   * A Steward's `ask` on a project whose Waykeeper approves (P13-04; design
+   * 2026-11-09-waykeeper-approvals §5.2): the call stays blocked in the adapter while the
+   * approval watch judges it. An approval answers the adapter and is logged as
+   * `permission.decided{allow}` in the Waykeeper's name; a forward opens the `agent.needs_input`
+   * and the user-held permission question with `context.waykeeper` in one transaction. Returns
+   * `false` — the caller opens the plain question — for anything else: another role, an asteroid
+   * Steward, a project with the switch off or no Waykeeper, a publishing run (decision 147), a
+   * worktree the gate cannot place.
+   */
+  private watchApproval(
+    live: Live,
+    call: ToolCall,
+    event: Extract<AgentEvent, { type: 'agent.needs_input' }>,
+    asked: PermissionAction | undefined,
+  ): boolean {
+    const { tables } = this.opts.log;
+    const agentId = live.agent.id;
+    const agent = tables.agents.get(agentId);
+    if (agent?.role !== 'steward' || !agent.taskId) return false;
+    const taskId = agent.taskId;
+    const projectId = tables.tasks.get(taskId)?.projectId;
+    if (!projectId || !this.approvalsOn(projectId)) return false;
+    if (this.isPublishingRun(agentId, live.spec)) return false;
+    const waykeeperId = this.waykeeperOfProject(projectId, agent.supervisorId);
+    if (!waykeeperId) return false;
+    const workspace = this.workspaceOf(agentId, live.spec);
+    const cwd = live.spec.cwd;
+    if (misplacedCwd(workspace, cwd)) return false;
+    const userFolders = this.userFoldersOf(agentId, live.spec);
+    const ctx: PolicyContext = {
+      workspace,
+      cwd,
+      aliases: aliasesOf(workspace, cwd),
+      ...(userFolders.length > 0 ? { userFolders } : {}),
+    };
+    let categories: PermissionAction[];
+    try {
+      categories = classifyToolCall(call, ctx).actions;
+    } catch {
+      categories = asked ? [asked] : [];
+    }
+    live.idle = false;
+    if (!live.paused) live.inbox.working();
+    void this.approvalWatch.handle({
+      agentId,
+      projectId,
+      toolCall: call,
+      categories,
+      ctx,
+      facts: () => this.approvalFacts(live, projectId, taskId),
+      active: () => this.watching(live),
+      switchOn: () => this.approvalsOn(projectId),
+      approve: (d) => {
+        this.permissionDecided(
+          live,
+          {
+            toolCall: event.question.toolCall ?? call,
+            decision: 'allow',
+            action: asked,
+            reason: d.reason,
+            decidedBy: { type: 'agent', id: waykeeperId },
+            ...(d.standingApprovalId !== undefined
+              ? { standingApprovalId: d.standingApprovalId }
+              : {}),
+            ...(d.quote !== undefined ? { quote: d.quote } : {}),
+          },
+          event.questionId,
+        );
+        this.noteAllowed(live, call);
+        void live.adapter
+          .answer(event.questionId, 'allow')
+          .catch((error: unknown) => this.onError(error, `approval answer ${event.questionId}`));
+      },
+      forward: (context: WaykeeperForward) => {
+        const forwarded = { ...event, question: { ...event.question, waykeeper: context } };
+        this.command((ctx) => {
+          ctx.emit(forwarded);
+          openFromNeedsInput(ctx, forwarded, this.questions);
+        });
+        this.asked(live, forwarded);
+      },
+    });
+    return true;
+  }
+
+  /** What the request judge is told besides the call (P13-04), read when the request arrives. */
+  private approvalFacts(live: Live, projectId: Id, taskId: Id): ApprovalFacts | undefined {
+    const { tables } = this.opts.log;
+    const task = tables.tasks.get(taskId);
+    const project = tables.projects.get(projectId);
+    if (!task || !project) return undefined;
+    const firstLine = task.description.trim().split('\n')[0] ?? '';
+    return {
+      task: { title: firstLine.slice(0, MAX_TASK_TITLE), description: task.description },
+      userWords: userWordsFor(this.opts.log, taskId),
+      recentActions: [...live.recentActions],
+      standingApprovals: [...(project.standingApprovals ?? [])],
+      recordedApprovals: [...(project.recordedApprovals ?? [])],
+    };
+  }
+
   /** Logs a decision the policy made without the user (P2-04), with the tool input redacted. */
   private permissionDecided(
     live: Live,
@@ -2110,6 +2297,10 @@ export class AgentRuntime {
       ruleId?: Id;
       /** Who decided (default: the system's policy); the scope watch names the supervisor. */
       decidedBy?: Actor;
+      /** The standing approval the Waykeeper relied on (P13-04). */
+      standingApprovalId?: Id;
+      /** The user's words that granted a push or an upload (P13-04). */
+      quote?: string;
     },
     questionId?: Id,
   ): void {
@@ -2127,6 +2318,8 @@ export class AgentRuntime {
       ...(d.reason ? { reason: redactSecrets(d.reason) } : {}),
       decidedBy: d.decidedBy ?? SYSTEM,
       ...(d.ruleId ? { ruleId: d.ruleId } : {}),
+      ...(d.standingApprovalId ? { standingApprovalId: d.standingApprovalId } : {}),
+      ...(d.quote ? { quote: redactSecrets(d.quote) } : {}),
     };
     if (!live.handle) live.decisions.push(event);
     else this.record(event);
@@ -2391,6 +2584,11 @@ export class AgentRuntime {
       return;
     }
     let event = redactEvent(raw);
+    if (event.type === 'agent.needs_input' && event.question.waykeeper !== undefined) {
+      // Only the approval watch writes a Waykeeper forward (P13-04): never the agent itself.
+      const { waykeeper: _forged, ...question } = event.question;
+      event = { ...event, question };
+    }
     if (
       event.type === 'agent.finished' &&
       live.agent.role === 'steward' &&
@@ -2446,6 +2644,7 @@ export class AgentRuntime {
       case 'agent.idle': {
         // A blocked flag call only ends its turn when withdrawn (an interrupt): no verdict for it.
         this.scopeWatch.cancel(live.agent.id);
+        this.approvalWatch.cancel(live.agent.id);
         live.idle = true;
         live.probation = undefined; // the resumed session took its first turn: it is resumed
         const turn = live.turn;
@@ -2636,8 +2835,9 @@ export class AgentRuntime {
   private end(live: Live, terminal: Terminal): void {
     if (live.terminal) return;
     live.terminal = terminal;
-    // A scope check under way for an agent that ended does nothing more (P12-06).
+    // A scope check under way for an agent that ended does nothing more (P12-06, P13-04).
     this.scopeWatch.cancel(live.agent.id);
+    this.approvalWatch.cancel(live.agent.id);
     live.inbox.ended();
     for (const q of live.questions) this.byQuestion.delete(q);
     live.questions.clear();

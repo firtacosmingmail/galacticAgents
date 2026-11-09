@@ -279,6 +279,30 @@ describe('createPermissionGate — live policy and refusals (P2-04)', () => {
     expect(told).toBe(0);
     expect(gate.check(read)).toEqual({ decision: 'allow' }); // the one call is still available
   });
+
+  it('tells onAllow about every call check() allows, never decide(), and survives a throw (P13-04)', () => {
+    const allowed: unknown[] = [];
+    const gate = createPermissionGate({
+      ...base,
+      policy: { rules: { read_workspace: 'allow', push: 'ask', destructive: 'deny' } },
+      caps: caps(),
+      onAllow: (call) => allowed.push(call),
+    });
+    expect(gate.check(read)).toEqual({ decision: 'allow' });
+    expect(gate.check(push)).toMatchObject({ decision: 'ask' });
+    expect(gate.check(rm)).toMatchObject({ decision: 'deny' });
+    gate.decide(read);
+    expect(allowed).toEqual([read]);
+    const throwing = createPermissionGate({
+      ...base,
+      policy: { rules: { read_workspace: 'allow' } },
+      caps: caps(),
+      onAllow: () => {
+        throw new Error('boom');
+      },
+    });
+    expect(throwing.check(read)).toEqual({ decision: 'allow' });
+  });
 });
 
 describe('"Allow similar" rules in the gate (P9-17)', () => {

@@ -95,6 +95,12 @@ export interface GateOptions {
    */
   onRuleAllow?: (call: ToolCall, ruleId: Id, action: PermissionAction | undefined) => void;
   /**
+   * Told about every call `check()` allows, whatever the reason (P13-04: the Steward's recent
+   * actions the request judge sees). Not told about `decide()`. Must not throw (a throw is
+   * swallowed).
+   */
+  onAllow?: (call: ToolCall) => void;
+  /**
    * The server's own tools handed to a brain (`SpawnOptions.tools`, P2-06): their handlers run in
    * the server against `DomainCommands`, which refuses what the brain may not do, so the policy
    * table (about files, shells and the network) has nothing to say about them. Allowed after the
@@ -277,6 +283,13 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
           // Logging an allowance never turns it into something else.
         }
       }
+      if (verdict.decision === 'allow' && opts.onAllow) {
+        try {
+          opts.onAllow(call);
+        } catch {
+          // Told only; a throw must not turn an allowed call into a refusal.
+        }
+      }
       return verdict;
     },
     decide(call: ToolCall): Decision {
@@ -313,7 +326,7 @@ export interface RuntimeGate extends PermissionGate {
  * Why `cwd` cannot be judged against `workspace`, or `undefined` when it can: the cwd must
  * resolve inside the workspace (lexically), and the workspace must not be the file-system root.
  */
-function misplacedCwd(workspace: string, cwd: string): string | undefined {
+export function misplacedCwd(workspace: string, cwd: string): string | undefined {
   if (!isAbsolute(workspace)) return `workspace ${workspace} is not an absolute path`;
   const root = resolve(workspace);
   if (resolve(root, '..') === root) return `workspace ${workspace} is the file-system root`;
