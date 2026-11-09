@@ -1,8 +1,10 @@
-import type {
-  CommandPart,
-  RequestJudge,
-  RequestJudgeInput,
-  RequestVerdict,
+import {
+  needsUserQuote,
+  quoteFound,
+  type CommandPart,
+  type RequestJudge,
+  type RequestJudgeInput,
+  type RequestVerdict,
 } from '@galactic/protocol';
 import { redactSecrets } from '../../runtime/redact.js';
 import { dataFence, parseJsonObject, runOneShot } from './one-shot-judge.js';
@@ -148,7 +150,7 @@ function parseVerdict(text: string, input: RequestJudgeInput): RequestVerdict | 
 }
 
 /**
- * The rules the runtime also applies before calling the judge (design 5.4a), enforced again on
+ * The rules the runtime decides before calling the judge (design 5.4a), checked here once more on
  * the answer so a model slip cannot approve them: an unreadable, outside-the-worktree or guarded
  * part, and a push without a quote that appears in the user's own words.
  */
@@ -174,15 +176,14 @@ function hardRuleViolation(
       failingPart: bad,
     };
   }
-  const isPush =
-    input.request.categories.includes('push') || parts.some((p) => p.categories.includes('push'));
-  if (isPush) {
-    const quote = v.quote?.trim();
-    if (!quote || !input.userWords.some((w) => w.includes(quote))) {
+  const needsQuote =
+    input.request.categories.includes('push') || parts.some((p) => needsUserQuote(p));
+  if (needsQuote) {
+    if (!v.quote || !quoteFound(v.quote, input.userWords)) {
       return {
         ...v,
         verdict: 'forward',
-        reason: "a push needs a quote of the user's own words asking for it",
+        reason: "a push or upload needs a quote of the user's own words asking for it",
       };
     }
   }

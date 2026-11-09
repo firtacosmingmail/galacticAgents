@@ -113,3 +113,28 @@ export interface RequestVerdict {
 export interface RequestJudge {
   judge(input: RequestJudgeInput, signal: AbortSignal): Promise<RequestVerdict>;
 }
+
+/** The shortest quote of the user's words that grants a push or an upload. */
+export const QUOTE_MIN_LENGTH = 15;
+
+const normaliseWords = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * Whether `quote` appears verbatim in one of the user's own `words`, whitespace runs collapsed and
+ * both sides trimmed, and is at least `QUOTE_MIN_LENGTH` characters (design 5.4a, 6).
+ */
+export function quoteFound(quote: string, words: readonly string[]): boolean {
+  const q = normaliseWords(quote);
+  return q.length >= QUOTE_MIN_LENGTH && words.some((w) => normaliseWords(w).includes(q));
+}
+
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|heic)\b/i;
+
+/** A part only the user's own words can grant: a push, or an upload of a screenshot or image. */
+export function needsUserQuote(part: CommandPart): boolean {
+  if (part.categories.includes('push')) return true;
+  return (
+    part.categories.includes('network') &&
+    (IMAGE_FILE.test(part.text) || /screenshot/i.test(part.text))
+  );
+}

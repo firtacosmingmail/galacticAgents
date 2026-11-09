@@ -253,9 +253,23 @@ describe('SDK request judge: hard rules in code', () => {
       },
     };
     expect((await setup(json(approve)).judge.judge(push, signal())).verdict).toBe('forward');
-    const bad = setup(json({ ...approve, quote: 'push it please' }));
+    const short = setup(json({ ...approve, quote: 'review PR 42' }));
+    expect((await short.judge.judge(push, signal())).verdict).toBe('forward');
+    const bad = setup(json({ ...approve, quote: 'push it please, thank you' }));
     expect((await bad.judge.judge(push, signal())).verdict).toBe('forward');
-    const good = setup(json({ ...approve, quote: 'review PR 42' }));
+    const good = setup(json({ ...approve, quote: 'review PR 42 of this repo' }));
     expect((await good.judge.judge(push, signal())).verdict).toBe('approve');
+  });
+
+  it('needs a quote for an image upload too', async () => {
+    const upload = {
+      ...input,
+      request: {
+        ...input.request,
+        categories: ['network' as const],
+        parts: [{ text: 'gh api x -F file=@shot.png', categories: ['network' as const] }],
+      },
+    };
+    expect((await setup(json(approve)).judge.judge(upload, signal())).verdict).toBe('forward');
   });
 });

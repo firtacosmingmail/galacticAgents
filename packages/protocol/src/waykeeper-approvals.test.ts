@@ -4,6 +4,8 @@ import { project } from './fixtures/domain.js';
 import {
   CommandPart,
   MAX_RECORDED_APPROVALS,
+  needsUserQuote,
+  quoteFound,
   RecordedApproval,
   SIMILAR_APPROVALS_THRESHOLD,
   StandingApproval,
@@ -69,5 +71,33 @@ describe('Waykeeper approvals protocol', () => {
     expect(parsed.standingApprovals).toHaveLength(1);
     expect(parsed.recordedApprovals).toHaveLength(1);
     expect(Project.safeParse({ ...project, waykeeperApprovals: false }).success).toBe(false);
+  });
+});
+
+describe('quoteFound', () => {
+  const words = ['Please  review\nthe PR and push it to origin.'];
+  it('refuses 14 characters and accepts 15', () => {
+    expect(quoteFound('Please review ', ['Please review the PR'])).toBe(false);
+    expect('Please review t'.length).toBe(15);
+    expect(quoteFound('Please review t', ['Please review the PR'])).toBe(true);
+  });
+  it('ignores whitespace differences', () => {
+    expect(quoteFound('review the PR and  push it', words)).toBe(true);
+  });
+  it('refuses a quote that is absent', () => {
+    expect(quoteFound('delete everything now please', words)).toBe(false);
+  });
+});
+
+describe('needsUserQuote', () => {
+  it('needs a quote for a push, an image upload or a screenshot', () => {
+    expect(needsUserQuote({ text: 'git push', categories: ['push'] })).toBe(true);
+    expect(needsUserQuote({ text: 'gh api x -F file=@shot.PNG', categories: ['network'] })).toBe(
+      true,
+    );
+    expect(needsUserQuote({ text: 'curl -F f=@Screenshot-1', categories: ['network'] })).toBe(true);
+  });
+  it('does not for a plain read', () => {
+    expect(needsUserQuote({ text: 'gh pr view 1', categories: ['network'] })).toBe(false);
   });
 });
