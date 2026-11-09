@@ -320,6 +320,23 @@ export type SettingsDeliverables = z.infer<typeof SettingsDeliverables>;
 export const BrainUserMcp = z.enum(['none', 'waykeepers', 'all']);
 export type BrainUserMcp = z.infer<typeof BrainUserMcp>;
 
+/** The installed app's name when none is set (P8-26, decision 153): the label under its icon. */
+export const DEFAULT_APP_NAME = 'Galactic';
+/** The longest app name: a home screen shows about a dozen characters under an icon anyway. */
+export const APP_NAME_MAX = 30;
+
+/**
+ * The installed app's name (P8-26, decision 153): what the phone shows under the app's icon, and
+ * the browser tab's title. Trimmed; one line of printable text.
+ */
+export const AppName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(APP_NAME_MAX)
+  .regex(/^[^\p{Cc}]+$/u, 'the app name must be one line of text');
+export type AppName = z.infer<typeof AppName>;
+
 /** The settings the panel shows and edits (SPEC §4.6), persisted in `config.json`. */
 export const Settings = z.object({
   /** Where new project folders go (SPEC §3.5): an absolute path or `~/…`. */
@@ -357,6 +374,8 @@ export const Settings = z.object({
    * so a page reading an older server still parses; this server always sends it.
    */
   deliverables: SettingsDeliverables.optional(),
+  /** The installed app's name (P8-26, decision 153); absent: `DEFAULT_APP_NAME`. */
+  appName: AppName.optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -374,6 +393,7 @@ export const SettingName = z.enum([
   'defaultProvider',
   'providers',
   'deliverables',
+  'appName',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
 
@@ -429,6 +449,11 @@ export const SettingsPatch = z
      * and the policy (decision 51).
      */
     setupCompleted: z.literal(true).optional(),
+    /**
+     * The installed app's name (P8-26, decision 153); `null` returns to `DEFAULT_APP_NAME`. Local
+     * requests only unless `autoApproveRemote` (decision 51).
+     */
+    appName: AppName.nullable().optional(),
   })
   .strict();
 export type SettingsPatch = z.infer<typeof SettingsPatch>;
