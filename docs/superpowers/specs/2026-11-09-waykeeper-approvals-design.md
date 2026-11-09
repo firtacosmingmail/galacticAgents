@@ -189,9 +189,13 @@ before the judge is called (no model involved), so these always reach Cosmin:
   and the command's parts with the failing one marked; plus the §5.5 button when it applies.
 - **The project:** the switch, the standing approvals (removable), and a count of Waykeeper
   approvals with a link to the list.
-- The menu bar and the phone show forwarded cards as permission cards (Allow once / Deny), without
-  the standing-approval button (decision 136: never "always" from the menu bar; decision 90 for the
-  phone).
+- **The phone shows the same cards as the Mac** (Cosmin, 2026-11-09: "I want the same cards on phone
+  as well"): the Waykeeper's reason, the command's parts, and the standing-approval button. Pressing
+  it from the phone adds the standing approval like on the Mac. This is an explicit exception to the
+  rule that a remote client cannot set up auto-approvals (decisions 31, 37, 90), limited to this
+  button; the new SPEC decision records it. Turning the switch itself on stays Mac-only (§5.1).
+- The menu bar shows forwarded cards as permission cards (Allow once / Deny), without the
+  standing-approval button (decision 136: never "always" from the menu bar).
 
 ### 5.7 Events and storage
 
@@ -207,7 +211,7 @@ before the judge is called (no model involved), so these always reach Cosmin:
 A new SPEC decision amends decisions 7 and 31: on a project where Cosmin turned the switch on, a
 Steward's `ask` may be approved by a model judging on the Waykeeper's behalf, logged, and fails
 closed to Cosmin. The table's `allow`/`deny`, push, money, publishing and launch flags are
-unchanged.
+unchanged. It also lets the phone add a standing approval from a forwarded card (§5.6).
 
 ## 6. Pushes (Cosmin, 2026-11-09)
 
