@@ -2012,8 +2012,11 @@ function guardedTargets(
   const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
   if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
     for (const w of command.words.slice(h + 1)) {
-      const values = w.startsWith('-') ? optionValues(w) : [];
-      candidates.push(...(values.length > 0 ? values.map((v) => v.value) : [w]));
+      // Each comma part too (`-Wl,-o,.git/hooks/x`): fail closed for any program.
+      for (const part of w.includes(',') ? [w, ...w.split(',')] : [w]) {
+        const values = part.startsWith('-') ? optionValues(part) : [];
+        candidates.push(...(values.length > 0 ? values.map((v) => v.value) : [part]));
+      }
       if (ASSIGNMENT_WORD.test(w)) candidates.push(...assignedPaths(w));
     }
   }
@@ -2078,9 +2081,15 @@ const NON_CLUSTERING = new Set([
   'swiftc',
   'rustc',
 ]);
-/** The compilers' long single-dash options with a glued path (`-isystem/usr/x`). */
+/**
+ * The compilers' multi-letter single-dash options with a glued path (`-isystem/usr/x`, `-MF/x`,
+ * `-dumpdir/x`: P14-08 review N-2). Longer names first. Options with `=` (`-specs=`,
+ * `-fprofile-use=`, `--output=`) and one-letter ones (`-o`, `-B`) are read by `optionValues`.
+ */
 const COMPILER_PATH_OPTION =
-  /^-(?:isystem|iquote|idirafter|imacros|include|iprefix|iwithprefix|iwithprefixbefore|isysroot|iframework|imultilib)(.+)$/;
+  /^-(?:isystem|iquote|idirafter|imacros|include|iprefix|iwithprefixbefore|iwithprefix|isysroot|iframework|imultilib|MF|MJ|dumpdir|dumpbase-ext|dumpbase)(.+)$/;
+/** An option that hands its comma-separated parts to the linker, assembler or preprocessor. */
+const PASS_THROUGH_OPTION = /^-W[alp],/;
 
 function pathsOf(command: SimpleCommand): CommandPaths {
   const out: CommandPaths = { paths: [], unresolvable: [], clustered: [] };
@@ -2092,6 +2101,8 @@ function pathsOf(command: SimpleCommand): CommandPaths {
   for (const w of command.words) {
     const long = clusters ? undefined : COMPILER_PATH_OPTION.exec(w)?.[1];
     if (long !== undefined) add(long, false);
+    // `-Wl,-o,/x`: each part is a word of its own (P14-08 review N-2).
+    if (PASS_THROUGH_OPTION.test(w)) for (const part of w.split(',').slice(1)) add(part, false);
     add(w, false);
     // An assignment's value may name a path (`GIT_WORK_TREE=/x git …`, `make DESTDIR=/x`, `dd
     // of=/x`), a list of them (`PYTHONPATH=a:/x`) too (P14-07).

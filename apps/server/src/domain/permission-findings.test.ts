@@ -805,6 +805,7 @@ describe('residual holes, review round 2 (P14-08)', () => {
   const call = (cmd: string): ToolCall => ({ toolName: 'Bash', input: { command: cmd } });
   const decision = (cmd: string, policy: PermissionPolicy = { rules: {} }) =>
     evaluate(policy, call(cmd), ctx).decision;
+  const outside = (cmd: string) => findings(cmd).filter((f) => f.action === 'outside_workspace');
 
   it('N-1: env -S / --split-string in any form makes the line unreadable', () => {
     for (const cmd of [
@@ -835,5 +836,41 @@ describe('residual holes, review round 2 (P14-08)', () => {
     }
     // An -S after env's program belongs to the program.
     expect(classifyCommand('env LANG=C git log -S foo', ctx).unclassified).toBeUndefined();
+  });
+
+  it("N-2: a compiler's glued multi-letter path options and -Wl parts are paths", () => {
+    for (const [cmd, path] of [
+      ['clang -MD -MF/etc/x -c a.c', '/etc/x'],
+      ['gcc -MD -MF/home/u/Documents/report.docx -c a.c', '/home/u/Documents/report.docx'],
+      ['clang -MD -MF~/Documents/x -c a.c', '/home/u/Documents/x'],
+      ['clang -MD -MF.. -c a.c', '/'],
+      ['clang -MJ/etc/x -c a.c', '/etc/x'],
+      ['gcc -save-temps -dumpdir/etc/ a.c', '/etc'],
+      ['gcc -dumpbase/etc/x a.c', '/etc/x'],
+      ['gcc -dumpbase-ext/etc/x a.c', '/etc/x'],
+      ['gcc -specs=/etc/x a.c', '/etc/x'],
+      ['gcc -B/etc/x a.c', '/etc/x'],
+      ['gcc --output=/etc/x a.c', '/etc/x'],
+      ['gcc -fprofile-generate=/etc/x a.c', '/etc/x'],
+      ['gcc -fprofile-use=/etc/x a.c', '/etc/x'],
+      ['gcc -Wl,-o,/etc/x a.c', '/etc/x'],
+      ['gcc -Wl,-o/etc/x a.c', '/etc/x'],
+      ['gcc -Xlinker -o/etc/x a.c', '/etc/x'],
+      ['gcc -Xlinker /etc/x a.c', '/etc/x'],
+    ] as const) {
+      expect(findings(cmd), cmd).toContainEqual(
+        expect.objectContaining({ action: 'outside_workspace', path }),
+      );
+      expect(decision(cmd), cmd).not.toBe('allow');
+    }
+    expect(classifyCommand('gcc -Wl,-o,.git/hooks/pre-commit a.c', ctx).guarded).toBe(true);
+    for (const cmd of [
+      'gcc -Iinclude/foo a.c',
+      'gcc -MD -MFbuild/a.d -c a.c',
+      'gcc -Wl,-rpath,lib a.c',
+    ]) {
+      expect(outside(cmd), cmd).toEqual([]);
+      expect(decision(cmd), cmd).toBe('allow');
+    }
   });
 });
