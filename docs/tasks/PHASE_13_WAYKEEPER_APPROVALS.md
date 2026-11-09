@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-07 · **Task status:** P13-06 done (2026-11-09)
-**Phase status:** in progress (6/7) — branch `agent-waykeeper-approvals`
+**Current task:** P13-07 · **Task status:** P13-07 blocked (waiting for Cosmin's real run); docs and gates done (2026-11-09)
+**Phase status:** in progress (6/7; P13-07 blocked on the real run) — branch `agent-waykeeper-approvals`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -61,5 +61,6 @@ All seven run in order.
 - Plan Task 6.
 
 ### P13-07 — Docs and real run
-- **Status:** todo · **Depends on:** P13-06 · **Parallel with:** —
+- **Status:** blocked (waiting for Cosmin's real run) · **Depends on:** P13-06 · **Parallel with:** —
 - Plan Task 7.
+- Done: SPEC decision 154, TECHNOLOGY §3.10, IMPLEMENTATION_PLAN Phase 13, the design and plan wording fixes (a stopping Steward drops the held call; `StandingApprovalResult`), the task board, the full gates, and the manual procedure `docs/tasks/notes/P13-07-real-run.md`. Open: Cosmin runs that procedure on a scratch repository and records the result there; only then is the task `done (<date>)` and the phase exit verified.
