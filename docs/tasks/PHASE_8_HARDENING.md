@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** P8-27 · **Task status:** P8-27 in progress
-**Phase status:** in progress (26/27 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
+**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** P8-27 done
+**Phase status:** in progress (27/27 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -179,9 +179,10 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - **Done:** protocol `AppName`, `DEFAULT_APP_NAME`, `APP_NAME_MAX`, `Settings.appName`, `SettingsPatch.appName` (nullable), `SettingName` `appName`; `config.ts` reads it; `SettingsService` saves, applies (`config.appName`) and clears it, local only; `http/app-name.ts` (`pageWithAppName`, `manifestWithAppName`, `customAppName`) and routes for `/`, `/index.html`, the fallback and the manifest in `app.ts`; the **App name** section on the settings page (`sections.tsx` `APP_NAME`, `validateAppName`). Tests: `app-name.test.ts` (3), `app-static.test.ts` (2), `settings.test.ts` (1), web `settings.test.tsx` (1). SPEC decision 153 (+ §4.6), TECHNOLOGY §2.4 note. Gates: build, typecheck, lint, format, test all green (protocol 192, desktop 79, server 2424 / 13 skipped, web 2052). Not tried on a phone yet.
 
 ### P8-27 — Row actions float over the row (added 2026-11-09)
-- **Status:** in progress · **Depends on:** P4-12 · **Parallel with:** all
+- **Status:** done (2026-11-09) · **Depends on:** P4-12 · **Parallel with:** all
 - Cosmin's request: "The options for the asteroids and projects in the left side I want them to be opened on top of the name, not below." His choice (2026-11-09): **float** — the "⋯" actions open as a panel over the row, covering its name, instead of pushing the rows below down. The "⋯" stays visible and closes it; so do Escape and a click outside.
 - **Acceptance:** the actions group is positioned over its row (CSS) and the rows below do not move; a click outside the row closes it, a click inside does not; tests for both.
+- **Done:** `panel.css` (`.pnl-row` positioned, `.pnl-row-actions` absolute over the row, leaving the "⋯" uncovered, with a shadow); `Navigation.tsx` `NavRow` closes the actions on a `pointerdown` outside the row's line and its actions. Test: `inbox-closed.test.tsx` (1). Gates: build, typecheck, lint, format, test all green (web 2053). Not checked by eye yet.
 
 ## Exit criteria
 
