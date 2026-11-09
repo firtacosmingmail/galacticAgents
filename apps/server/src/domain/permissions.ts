@@ -737,6 +737,14 @@ class ShellLexer {
       } else if (c === ';') {
         flushCommand(false);
         i++;
+      } else if (c === '(' && word !== null && !/^\s*\)/.test(src.slice(i + 1))) {
+        // zsh reads `word(…)` as glob qualifiers or modifiers (`a(:s/x/y/)` rewrites the path,
+        // `a(e:'…':)` runs code): never readable (P14-03 review, ruling R-l). `name()` is a
+        // function definition, read elsewhere.
+        const close = src.indexOf(')', i + 1);
+        return this.fail(
+          `zsh glob qualifier or modifier: ${word}${src.slice(i, close < 0 ? src.length : close + 1)}`,
+        );
       } else if (c === '(') {
         flushCommand(false);
         depth++;
@@ -759,6 +767,11 @@ class ShellLexer {
       ) {
         flushCommand(false);
         i++;
+      } else if (c === '=' && word === null && next !== undefined && /[\w./~-]/.test(next)) {
+        // zsh expands an unquoted `=cmd` to the command's path (`=node`): never readable (R-l).
+        let end = i + 1;
+        while (end < src.length && !/[\s;&|<>()]/.test(src[end]!)) end++;
+        return this.fail(`zsh =command expansion: ${src.slice(i, end)}`);
       } else {
         append(c);
         i++;
@@ -1446,10 +1459,21 @@ const SHELL_BUILTINS = new Set([
   'foreach',
   'zstyle',
   'zparseopts',
+  'disable',
+  'unhash',
+  'vared',
+  'sched',
+  'zle',
+  'limit',
+  'unlimit',
+  // zsh's precommand modifier `- cmd` (runs cmd as a login command).
+  '-',
 ]);
 /** Builtins that cannot change what a later command's network destination is. */
 const STATE_SAFE_BUILTINS = new Set([
   'cd',
+  'chdir',
+  'print',
   'pushd',
   'popd',
   'echo',
@@ -1481,7 +1505,10 @@ function changesShellState(simple: SimpleCommand): boolean {
   const program = words[0];
   if (program === undefined) return false;
   if (STATE_SAFE_BUILTINS.has(program)) {
-    return program === 'printf' && words.some((w) => w.startsWith('-v'));
+    if (program === 'printf') return words.some((w) => w.startsWith('-v'));
+    // zsh's print: `-v` assigns, `-z` pushes onto the editing buffer, `-s` onto the history.
+    if (program === 'print') return words.slice(1).some((w) => /^-[A-Za-z]*[vzs]/.test(w));
+    return false;
   }
   return ASSIGNMENT_WORD.test(program) || EXPANDABLE.test(program) || SHELL_BUILTINS.has(program);
 }
@@ -1598,16 +1625,22 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
 
     const h = commandHead(simple.words);
     const name = simple.words[h]?.toLowerCase();
-    if (name === 'cd' || name === 'pushd') {
-      const target = simple.words.slice(h + 1).find((w) => w === '-' || !w.startsWith('-'));
+    // zsh's `chdir` is `cd` (P14-03 review, ruling R-l).
+    if (name === 'cd' || name === 'pushd' || name === 'chdir') {
+      const args = simple.words.slice(h + 1).filter((w) => w !== '--');
+      const operands = args.filter((w) => w === '-' || !/^-[A-Za-z]+$/.test(w));
+      const target = operands[0];
       let cdResolved = true;
-      if (target === undefined || target === '' || target === '~') {
+      // zsh's `cd old new` (replace in the cwd) and the stack (`-`, `+N`, `-N`): unknown.
+      const unknown =
+        operands.length > 1 || (target !== undefined && /^(?:-|[+-]\d+)$/.test(target));
+      if (!unknown && (target === undefined || target === '' || target === '~')) {
         cwd = ctx.home ?? homedir();
-      } else if (target === '-' || unresolvable.length > 0 || /[$`]/.test(target)) {
+      } else if (unknown || unresolvable.length > 0 || /[$`]/.test(target ?? '')) {
         cdResolved = false;
         note('outside_workspace', `cd ${target}: cannot tell where it leads`, seg());
       } else {
-        cwd = resolvePath(target, ctx, cwd);
+        cwd = resolvePath(target ?? '', ctx, cwd);
       }
       if (!isInsideWorkspace(cwd, ctx)) {
         note(

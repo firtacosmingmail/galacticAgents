@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolCall } from '@galactic/protocol';
-import { classifyCommand, classifyToolCall } from './permissions.js';
+import { classifyCommand, classifyToolCall, evaluate } from './permissions.js';
 
 const ctx = { workspace: '/w', cwd: '/w', home: '/home/u' };
 
@@ -330,5 +330,102 @@ describe('fix round 5: arithmetic assignments, groups after reserved words (R-g,
       expect(outside(cmd), cmd).toContainEqual([expect.any(Number), '/home/u']);
       expect(classifyCommand(cmd, ctx).actions, cmd).toContain('outside_workspace');
     }
+  });
+});
+
+describe('zsh escapes (P14-03 review, ruling R-l)', () => {
+  const TABLE = {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      outside_workspace: 'ask',
+      network: 'ask',
+      destructive: 'ask',
+      push: 'ask',
+    },
+    unclassified: 'ask',
+  } as const;
+  const verdictOf = (command: string) =>
+    evaluate(TABLE, { toolName: 'Bash', input: { command } }, ctx);
+
+  it('chdir is cd', () => {
+    const c = classifyCommand('chdir /etc', ctx);
+    expect(c.findings).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/etc' }),
+    );
+    // Later relative paths resolve from where chdir went.
+    expect(classifyCommand('chdir /etc; cat ../x', ctx).findings).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/x' }),
+    );
+  });
+
+  it("zsh's cd old new and the directory stack cannot be told", () => {
+    for (const cmd of ['cd /tmp/pr83; cd pr83 etc', 'chdir w x', 'cd +1', 'pushd -2']) {
+      expect(classifyCommand(cmd, ctx).reasons.join('\n'), cmd).toMatch(
+        /cannot tell where it leads/,
+      );
+    }
+  });
+
+  it('a glob qualifier or modifier makes the call unreadable', () => {
+    for (const cmd of [
+      'cat /tmp/pr83/passwd(:s/tmp\\/pr83/etc/)',
+      'cp /tmp/pr83/evil /tmp/pr83/a(:s#/tmp/pr83/a#/home/u/.zshrc#)',
+      "cat a(e:'rm -rf /etc':)",
+      'cat a(:h:h)',
+      'ls *(.)',
+    ]) {
+      const v = verdictOf(cmd);
+      expect(v.unclassified, cmd).toBe(true);
+      expect(v.decision, cmd).not.toBe('allow');
+      expect(v.reasons.join('\n'), cmd).toMatch(/zsh glob qualifier or modifier/);
+    }
+    for (const cmd of [
+      'echo "a(b)"',
+      "git log --format='%h (%s)'",
+      'echo $(pwd)',
+      '(cd src && ls)',
+      'f() { :; }; f',
+      'diff <(ls a) <(ls b)',
+    ]) {
+      expect(verdictOf(cmd).reasons.join('\n'), cmd).not.toMatch(/zsh glob qualifier/);
+    }
+  });
+
+  it('a word starting with = makes the call unreadable', () => {
+    for (const cmd of ['cp /tmp/pr83/evil =node', 'cat a.txt > =git', '=ls']) {
+      const v = verdictOf(cmd);
+      expect(v.unclassified, cmd).toBe(true);
+      expect(v.decision, cmd).not.toBe('allow');
+      expect(v.reasons.join('\n'), cmd).toMatch(/zsh =command expansion/);
+    }
+    for (const cmd of ["echo '=x'", 'ls --color=auto', 'test a==b', 'echo "=x"', 'echo \\=x']) {
+      expect(verdictOf(cmd).unclassified, cmd).toBeUndefined();
+    }
+  });
+
+  it("zsh's state-changing builtins hide hosts", () => {
+    for (const cmd of [
+      'disable curl; curl https://ok.com',
+      'unhash -f; curl https://ok.com',
+      'vared x; curl https://ok.com',
+      'sched +1 x; curl https://ok.com',
+      'zle -N x; curl https://ok.com',
+      'limit x; curl https://ok.com',
+      'unlimit; curl https://ok.com',
+      'print -v http_proxy evil.com; curl https://ok.com',
+      'print -z x; curl https://ok.com',
+      'print -s x; curl https://ok.com',
+      '- curl https://ok.com',
+    ]) {
+      const n = classifyCommand(cmd, ctx).findings.filter((f) => f.action === 'network');
+      expect(n.length, cmd).toBeGreaterThan(0);
+      for (const f of n) expect(f.hosts, cmd).toBeUndefined();
+    }
+    const plain = classifyCommand('print hi; curl https://ok.com', ctx).findings.find(
+      (f) => f.action === 'network',
+    );
+    expect(plain?.hosts).toEqual(['ok.com']);
   });
 });

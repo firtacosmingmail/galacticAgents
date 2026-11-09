@@ -688,7 +688,8 @@ const STACK_ARGUMENT = /^(?:-|[+-]\d+)$/;
  * arithmetic: `lineChangesShellState`), `cdpath`/`CDPATH` or cdable variables named anywhere, and
  * the directory stack (`popd`, `dirs`, `cd -`, `pushd +1`, zsh's two-argument `cd old new`). An
  * inherited CDPATH from Mission Control's own environment is an accepted limit: agents get an
- * allow-listed environment.
+ * allow-listed environment. So is the user's own zsh configuration (`~/.zshenv` setting `cdpath`,
+ * `autocd`, `cdablevars`, …), which the engine cannot see.
  */
 function folderUnsafeLine(command: string): boolean {
   const joined = command.replace(/\\\n/g, '');
@@ -704,7 +705,7 @@ function folderUnsafeLine(command: string): boolean {
     if (c.words.some((w) => w === 'popd' || w === 'dirs')) return true;
     const h = commandHead(c.words);
     const name = c.words[h];
-    if (name !== 'cd' && name !== 'pushd') return false;
+    if (name !== 'cd' && name !== 'pushd' && name !== 'chdir') return false;
     const args = c.words.slice(h + 1).filter((w) => !/^-[A-Za-z]+$/.test(w) && w !== '--');
     return args.length > 1 || args.some((a) => STACK_ARGUMENT.test(a));
   });

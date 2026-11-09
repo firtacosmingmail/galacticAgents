@@ -817,6 +817,18 @@ describe('coverage: every asked reason must be covered (P14-03)', () => {
     }
   });
 
+  it('zsh chdir, glob qualifiers and =command never pass a folder rule (review R-l)', () => {
+    for (const command of [
+      'cd /tmp/pr83; chdir out; cat passwd',
+      'cd /tmp/pr83; chdir pr83 etc; echo x > cron.d/x',
+      'cat /tmp/pr83/passwd(:s/tmp\\/pr83/etc/)',
+      'cp /tmp/pr83/evil /tmp/pr83/a(:s#/tmp/pr83/a#/home/u/.zshrc#)',
+      'cp /tmp/pr83/evil =node',
+    ]) {
+      expect(allowed([folder], bash(command)), command).toBe(false);
+    }
+  });
+
   it('a folder rule from a command covers file tools of both groups under it', () => {
     expect(allowed([folder], read('/tmp/pr83/a.md'))).toBe(true);
     expect(allowed([folder], write('/tmp/pr83/a.md'))).toBe(true);
