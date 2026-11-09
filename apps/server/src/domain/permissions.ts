@@ -969,13 +969,20 @@ const WRAPPER_VALUE_OPTS: Record<string, RegExp> = {
   env: /^-[uCS]$/,
 };
 
+/**
+ * An assignment word: `NAME=`, zsh's and bash's `NAME+=`, `NAME[...]=`, `NAME[...]+=`. In front of
+ * a command each of them sets the command's environment (P14-08 review C-1: `GIT_DIR+=x git …`
+ * is `GIT_DIR=x` when the variable is unset).
+ */
+export const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
+
 /** Index of the command's real name in `words`, past assignments and wrappers. */
 export function commandHead(words: string[]): number {
   let k = 0;
   while (k < words.length) {
     const w = words[k]!;
     // Assignments and reserved words that put the next word in command position (R-h).
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || (COMMAND_POSITION_WORDS.has(w) && w !== 'time')) {
+    if (ASSIGNMENT_WORD.test(w) || (COMMAND_POSITION_WORDS.has(w) && w !== 'time')) {
       k++;
       continue;
     }
@@ -988,7 +995,8 @@ export function commandHead(words: string[]): number {
         k += WRAPPER_VALUE_OPTS[name]?.test(opt) ? 2 : 1;
       } else if (name === 'timeout' && /^\d/.test(opt)) {
         k++;
-      } else if (name === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(opt)) {
+      } else if (name === 'env' && opt.includes('=')) {
+        // env sets any `x=y` it is given, whatever the name (`env 'A B=1' cmd`).
         k++;
       } else break;
     }
@@ -1532,8 +1540,12 @@ const STATE_SAFE_BUILTINS = new Set([
   ':',
   'printf',
 ]);
-/** `NAME=value`: a plain assignment word (no `+=`, no subscript). */
-const PLAIN_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** `NAME=value` or `NAME+=value`: a prefix assignment (no subscript). */
+const PREFIX_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
+/** The variable an assignment word sets. */
+function assignedName(word: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_]*/.exec(word)?.[0] ?? '';
+}
 /**
  * Which prefix assignments (`NAME=value` before `program` in the same simple command) a caller
  * does not count as a change of shell state (P14-07, ruling F-2).
@@ -1556,12 +1568,30 @@ const INERT_PREFIX = /^(?:GH_TOKEN|GITHUB_TOKEN|LANG|LC_[A-Z]+|TZ|NO_COLOR|FORCE
 export const FOLDER_PREFIX_OK: PrefixAssignmentOk = (name, program) =>
   !['cd', 'pushd', 'chdir', 'popd'].includes(program.toLowerCase()) && INERT_PREFIX.test(name);
 
+/**
+ * Whether a simple command sets a variable that is not inert (`INERT_PREFIX`) other than by a
+ * leading prefix assignment (P14-08 review I-1): an assignment word in its wrapper chain (`sudo
+ * X=1 cmd`, `nice env X=1 cmd`, `timeout 5 env X+=1 cmd`), or any `x=y` word after an `env` word
+ * anywhere (fail closed: env sets whatever it is given). Leading assignments are judged by
+ * `changesShellState` with `FOLDER_PREFIX_OK`.
+ */
+export function wrapperSetsEnv(words: readonly string[]): boolean {
+  const h = commandHead([...words]);
+  let lead = 0;
+  while (lead < words.length && ASSIGNMENT_WORD.test(words[lead]!)) lead++;
+  const envAt = words.findIndex((w) => baseName(w) === 'env');
+  return words.some((w, i) => {
+    if (i < lead) return false;
+    const inChain = i < h && ASSIGNMENT_WORD.test(w);
+    const afterEnv = envAt >= 0 && i > envAt && !w.startsWith('-') && w.includes('=');
+    return (inChain || afterEnv) && !INERT_PREFIX.test(w.slice(0, w.search(/\+?=/)));
+  });
+}
+
 /** Visible hosts (ruling F-2b): gh's token does not route, so `GH_TOKEN=… gh …` keeps its host. */
 export const HOSTS_PREFIX_OK: PrefixAssignmentOk = (name, program) =>
   (name === 'GH_TOKEN' || name === 'GITHUB_TOKEN') && program === 'gh';
 
-/** `NAME=`, `NAME+=`, `NAME[...]=` (an assignment word). */
-const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
 /** A word the shell could expand into another word (a builtin's name, for one). */
 const EXPANDABLE = /[$`{}*?[\]~\\]/;
 /** `${NAME:=…}`, `${NAME=…}` and friends assign while they expand. */
@@ -1580,12 +1610,12 @@ function changesShellState(simple: SimpleCommand, prefixOk?: PrefixAssignmentOk)
   // Prefix assignments (`NAME=value program …`) the caller accepts are not a change of state:
   // they set the program's environment only. Standalone ones (no program after them) still are.
   let k = 0;
-  while (prefixOk && k < words.length && PLAIN_ASSIGNMENT.test(words[k]!)) k++;
+  while (prefixOk && k < words.length && PREFIX_ASSIGNMENT.test(words[k]!)) k++;
   const after = words[k];
   const accepted =
     k > 0 &&
     after !== undefined &&
-    words.slice(0, k).every((w) => prefixOk!(w.slice(0, w.indexOf('=')), after));
+    words.slice(0, k).every((w) => prefixOk!(assignedName(w), after));
   const program = words[accepted ? k : 0];
   if (program === undefined) return false;
   if (STATE_SAFE_BUILTINS.has(program)) {
@@ -1873,14 +1903,14 @@ function guardedTargets(
   // A leading assignment's value is a place the program may write, whatever it is
   // (`GIT_DIR=.git/hooks git status`, `GIT_TRACE=.git/hooks/x git log`: P14-08).
   for (const w of command.words.slice(0, h)) {
-    if (PLAIN_ASSIGNMENT.test(w)) candidates.push(...assignedPaths(w));
+    if (ASSIGNMENT_WORD.test(w)) candidates.push(...assignedPaths(w));
   }
   const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
   if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
     for (const w of command.words.slice(h + 1)) {
       const values = w.startsWith('-') ? optionValues(w) : [];
       candidates.push(...(values.length > 0 ? values.map((v) => v.value) : [w]));
-      if (PLAIN_ASSIGNMENT.test(w)) candidates.push(...assignedPaths(w));
+      if (ASSIGNMENT_WORD.test(w)) candidates.push(...assignedPaths(w));
     }
   }
   const out: { path: string; reason: string }[] = [];
@@ -1930,7 +1960,7 @@ function pathsOf(command: SimpleCommand): CommandPaths {
     add(w, false);
     // An assignment's value may name a path (`GIT_WORK_TREE=/x git …`, `make DESTDIR=/x`, `dd
     // of=/x`), a list of them (`PYTHONPATH=a:/x`) too (P14-07).
-    if (PLAIN_ASSIGNMENT.test(w)) for (const part of assignedPaths(w)) add(part, false);
+    if (ASSIGNMENT_WORD.test(w)) for (const part of assignedPaths(w)) add(part, false);
   }
   // A file curl reads and sends is a read target, wherever it is (P9-17 review S2).
   for (const f of curlUploads(command.words)) add(f, true);
@@ -1997,7 +2027,7 @@ export function curlUploads(words: readonly string[]): string[] {
  * (`PYTHONPATH=a:/x`) — a URL kept whole (`registry=https://…` names no path).
  */
 function assignedPaths(word: string): string[] {
-  const value = word.slice(word.indexOf('=') + 1);
+  const value = word.slice(ASSIGNMENT_WORD.exec(word)?.[0].length ?? word.indexOf('=') + 1);
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return [value];
   return value.split(':').filter((p) => p !== '');
 }

@@ -1655,6 +1655,28 @@ describe('final review fixes (P14-07)', () => {
       );
     });
 
+    it('C-1: a NAME+= prefix is checked against the allow-list like NAME=', () => {
+      expect(cover([pr83], bash('cd /tmp/pr83 && GIT_PAGER+=x git diff')).allowed).toBe(false);
+      expect(cover([pr83], bash('cd /tmp/pr83 && LANG+=C git diff')).allowed).toBe(true);
+    });
+
+    it('I-1: env NAME=… behind any wrapper is checked against the allow-list', () => {
+      for (const command of [
+        "cd /tmp/pr83 && nice env GIT_EXTERNAL_DIFF='cd;rm -rf Library' git diff",
+        "cd /tmp/pr83 && timeout 5 env GIT_PAGER='sh -c x' git log",
+        "cd /tmp/pr83 && nohup env EDITOR='sh -c x' git commit",
+        'cd /tmp/pr83 && caffeinate env LD_PRELOAD=x.so git diff',
+        'cd /tmp/pr83 && stdbuf -o0 env GIT_PAGER=x git diff',
+        'cd /tmp/pr83 && xargs -a f env GIT_PAGER=x git diff',
+        'nice env GIT_EXTERNAL_DIFF=x git -C /tmp/pr83 diff',
+        'cd /tmp/pr83 && nice env GIT_PAGER+=x git diff',
+        'cd /tmp/pr83 && nice env LANG=C GIT_PAGER=x git diff',
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+      }
+      expect(cover([pr83], bash('cd /tmp/pr83 && nice env LANG=C git diff')).allowed).toBe(true);
+    });
+
     it('noglob, nocorrect, -, builtin and command do not hide a cd outside', () => {
       for (const command of [
         'noglob cd /tmp/pr83 && rm -rf *',

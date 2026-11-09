@@ -14,6 +14,8 @@ import {
 } from '@galactic/protocol';
 import {
   classifyCommand,
+  ASSIGNMENT_WORD,
+  wrapperSetsEnv,
   commandHead,
   cwdOf,
   decide,
@@ -346,7 +348,7 @@ export function proposePrefix(command: string): string[] | undefined {
   const w = c.words;
   if (w.length === 0 || commandHead(w) !== 0) return undefined;
   const name = w[0]!;
-  if (/[$`]/.test(name) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(name)) return undefined;
+  if (/[$`]/.test(name) || ASSIGNMENT_WORD.test(name)) return undefined;
   const next = w[1];
   const words = next !== undefined && SUBCOMMAND.test(next) ? [name, next] : [name];
   return prefixRefusal(words) ? undefined : words;
@@ -1000,6 +1002,7 @@ function folderUnsafeLine(command: string): boolean {
   const lexed = lexCommand(command.trim());
   if (lineChangesShellState(command, lexed, FOLDER_PREFIX_OK)) return true;
   return lexed.commands.some((c) => {
+    if (wrapperSetsEnv(c.words)) return true;
     const texts = [...c.words, ...c.redirects.map((r) => r.target)];
     if (texts.some((t) => /[{}]/.test(t) || /cdpath|cdable_?vars/i.test(t))) return true;
     const alternatives = texts.flatMap((t) => expandBraces(t) ?? [t]);

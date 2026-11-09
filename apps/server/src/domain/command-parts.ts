@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import type { CommandPart, ToolCall } from '@galactic/protocol';
 import { redactSecrets, redactValue } from '../runtime/redact.js';
 import {
+  ASSIGNMENT_WORD,
   INTERPRETER,
   MAX_NESTING,
   SHELLS,
@@ -284,7 +285,7 @@ class Splitter {
 }
 
 function isAssignment(word: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
+  return ASSIGNMENT_WORD.test(word);
 }
 
 /** `xargs` options that take a separate value (besides the replace-string ones). */
@@ -422,7 +423,7 @@ function quoteWord(w: string): string {
   const bare = w.split(SUBSTITUTION).join('');
   if (bare === '' || SAFE_WORD.test(bare)) return w;
   // `X=a b` as `X='a b'`: still an assignment when lexed again.
-  const assignment = /^([A-Za-z_][A-Za-z0-9_]*=)([\s\S]*)$/.exec(w);
+  const assignment = /^([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=)([\s\S]*)$/.exec(w);
   if (assignment) return assignment[1]! + quoteWord(assignment[2]!);
   if (!/['"\\`]/.test(w) && w.includes('$') && !/\$\((?!\))/.test(w)) return `"${w}"`;
   if (!w.includes("'")) return `'${w}'`;

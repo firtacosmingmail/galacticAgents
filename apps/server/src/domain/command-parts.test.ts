@@ -293,6 +293,9 @@ describe('commandParts: bypasses closed in review (fix round 1)', () => {
       `GIT_DIR=/etc bash -c 'git status'`,
       `env 'X=a b' bash -c ls`,
       'PYTHONSTARTUP=x.py python3 -m http',
+      // zsh's `NAME+=value` is an assignment too (P14-08 review C-1).
+      'BASH_ENV+=./evil.sh bash -c ls',
+      `PAGER+='rm -rf ~' bash -c 'git log'`,
     ]) {
       const parts = commandParts(command, ctx);
       expect(parts.length, command).toBe(2);
@@ -300,6 +303,7 @@ describe('commandParts: bypasses closed in review (fix round 1)', () => {
     }
     expect(texts(`PAGER='rm -rf ~' bash -c 'git log'`)[0]).toBe(`PAGER='rm -rf ~'`);
     expect(texts(`env 'X=a b' bash -c ls`)[0]).toBe(`env X='a b'`);
+    expect(texts(`X+='a b' bash -c ls`)[0]).toBe(`X+='a b'`);
   });
 
   it('makes a shell run by xargs unreadable when it takes its code from the input', () => {

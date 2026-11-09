@@ -3,6 +3,7 @@ import type { ToolCall } from '@galactic/protocol';
 import { classifyCommand, classifyToolCall, evaluate } from './permissions.js';
 
 const ctx = { workspace: '/w', cwd: '/w', home: '/home/u' };
+const findings = (cmd: string) => classifyCommand(cmd, ctx).findings;
 
 describe('structured findings', () => {
   it('cd outside the workspace reports the resolved path', () => {
@@ -587,7 +588,6 @@ describe('zsh expansions the lexer cannot model (P14-03 review, ruling R-m)', ()
 });
 
 describe('final review fixes (P14-07)', () => {
-  const findings = (cmd: string) => classifyCommand(cmd, ctx).findings;
   const netHosts = (cmd: string, part: RegExp) =>
     findings(cmd).find((f) => f.action === 'network' && part.test(f.part))?.hosts;
 
@@ -699,4 +699,31 @@ describe('residual holes (P14-08)', () => {
   });
 });
 
-const findings = (cmd: string) => classifyCommand(cmd, ctx).findings;
+describe('residual holes, review round 1 (P14-08)', () => {
+  const decision = (cmd: string) =>
+    evaluate({ rules: {} }, { toolName: 'Bash', input: { command: cmd } }, ctx).decision;
+  const outside = (cmd: string) => findings(cmd).filter((f) => f.action === 'outside_workspace');
+
+  it('C-1: a NAME+=value prefix is an assignment: its value is a path and guarded', () => {
+    for (const [cmd, path] of [
+      ['GIT_WORK_TREE+=/home/u git checkout-index -a -f', '/home/u'],
+      ['GIT_WORK_TREE+=/etc git checkout-index -a -f', '/etc'],
+    ] as const) {
+      expect(findings(cmd), cmd).toContainEqual(
+        expect.objectContaining({ action: 'outside_workspace', path }),
+      );
+      expect(decision(cmd), cmd).toBe('ask');
+    }
+    for (const cmd of [
+      'GIT_WORK_TREE+=.git/hooks git checkout-index -a -f',
+      'GIT_DIR+=.git/hooks git status',
+      'GIT_INDEX_FILE+=.git/config git add .',
+      'env GIT_DIR+=.git/hooks git status',
+    ]) {
+      expect(classifyCommand(cmd, ctx).guarded, cmd).toBe(true);
+      expect(decision(cmd), cmd).toBe('ask');
+    }
+    // The command behind it is still found.
+    expect(classifyCommand('X+=1 rm -rf build', ctx).actions).toContain('destructive');
+  });
+});

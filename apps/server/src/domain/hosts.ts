@@ -18,7 +18,8 @@
  * following the current directory's git remote.
  */
 
-const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** `NAME=`, `NAME+=`, `NAME[...]=` (P14-08 review C-1: `+=` assigns too). */
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
 const GH_TOKEN_ASSIGNMENT = /^(?:GH_TOKEN|GITHUB_TOKEN)=/;
 
 export interface HostsOptions {
