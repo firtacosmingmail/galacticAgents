@@ -2,6 +2,8 @@ import {
   DEFAULT_PERMISSION_POLICY,
   DEFAULT_TRANSCRIPT_RETENTION,
   Settings,
+  APP_NAME_MAX,
+  AppName,
   SettingsCaps,
   TranscriptRetention,
   type PermissionAction,
@@ -98,6 +100,14 @@ export function validateProjectsRoot(value: string): string | undefined {
 }
 
 /** A retention period as typed, in days. */
+/** The app name as typed (P8-26): empty returns to the default; otherwise one short line. */
+export function validateAppName(value: string): string | undefined {
+  if (value.trim() === '') return undefined;
+  if (value.trim().length > APP_NAME_MAX) return `Keep it to ${APP_NAME_MAX} characters.`;
+  if (!AppName.safeParse(value).success) return 'Use one line of text.';
+  return undefined;
+}
+
 export function validateRetention(value: string): string | undefined {
   const n = Number(value);
   if (value.trim() === '' || !Number.isFinite(n)) return 'Enter a number of days.';

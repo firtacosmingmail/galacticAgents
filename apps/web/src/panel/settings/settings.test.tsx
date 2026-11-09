@@ -549,6 +549,22 @@ describe('settings page (P25-08)', () => {
     expect(server.patches.at(-1)).toEqual({ brainUserMcp: 'all' });
   });
 
+  it('names the installed app; empty returns to the default (P8-26)', async () => {
+    await open('/settings', done());
+    const section = await screen.findByRole('region', { name: 'App name' });
+    const input = within(section).getByLabelText('App name') as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(input.placeholder).toBe('Galactic');
+    type(input, 'x'.repeat(31));
+    expect(within(section).getByRole('alert').textContent).toMatch(/30 characters/);
+    type(input, '  Ops Desk ');
+    await click(within(section).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ appName: 'Ops Desk' });
+    type(within(section).getByLabelText('App name'), '');
+    await click(within(section).getByRole('button', { name: /^Save/ }));
+    expect(server.patches.at(-1)).toEqual({ appName: null });
+  });
+
   it('resets the default table to the §3.6 table', async () => {
     const custom = done();
     custom.settings.defaultPermissionPolicy.rules.network = 'allow';

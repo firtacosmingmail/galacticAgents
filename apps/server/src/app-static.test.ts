@@ -10,9 +10,16 @@ let webDir: string;
 
 beforeEach(async () => {
   webDir = mkdtempSync(join(tmpdir(), 'galactic-web-'));
-  writeFileSync(join(webDir, 'index.html'), '<!doctype html><title>panel</title>');
+  writeFileSync(
+    join(webDir, 'index.html'),
+    '<!doctype html><title>panel</title>' +
+      '<meta name="apple-mobile-web-app-title" content="Galactic" />',
+  );
   writeFileSync(join(webDir, 'sw.js'), 'self.addEventListener("fetch", () => {});');
-  writeFileSync(join(webDir, 'manifest.webmanifest'), '{"name":"GalacticAgents"}');
+  writeFileSync(
+    join(webDir, 'manifest.webmanifest'),
+    '{"name":"GalacticAgents","short_name":"Galactic","start_url":"/"}',
+  );
   mkdirSync(join(webDir, 'assets'));
   writeFileSync(join(webDir, 'assets', 'index-abc123.js'), 'console.log(1);');
   mkdirSync(join(webDir, 'icons'));
@@ -105,5 +112,47 @@ describe("the page's Content-Security-Policy (wave-3 review B1)", () => {
     }
     const asset = await fetch(`${t.baseUrl}/assets/index-abc123.js`);
     expect(asset.headers.get('content-security-policy')).toBeNull();
+  });
+});
+
+// The installed app's name (P8-26, decision 153): written into the page and the manifest as they
+// are served; without one the build's files go out unchanged.
+describe('the app name', () => {
+  it('leaves the page and the manifest as built when no name is set', async () => {
+    const page = await (await fetch(`${t.baseUrl}/`)).text();
+    expect(page).toContain('<title>panel</title>');
+    expect(page).toContain('content="Galactic"');
+    const manifest = (await (await fetch(`${t.baseUrl}/manifest.webmanifest`)).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(manifest).toEqual({ name: 'GalacticAgents', short_name: 'Galactic', start_url: '/' });
+  });
+
+  it('names the page and the manifest after the setting, at the next load', async () => {
+    t.config.appName = 'Ops <Desk> & "Co"';
+    for (const path of ['/', '/index.html', '/steward/a-2']) {
+      const res = await fetch(`${t.baseUrl}${path}`);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get('cache-control'), path).toBe('no-cache');
+      expect(res.headers.get('content-type'), path).toMatch(/^text\/html/);
+      expect(res.headers.get('content-security-policy'), path).toBeTruthy();
+      const page = await res.text();
+      expect(page, path).toContain('<title>Ops &lt;Desk&gt; &amp; &quot;Co&quot;</title>');
+      expect(page, path).toContain(
+        '<meta name="apple-mobile-web-app-title" content="Ops &lt;Desk&gt; &amp; &quot;Co&quot;" />',
+      );
+    }
+    const res = await fetch(`${t.baseUrl}/manifest.webmanifest`);
+    expect(res.headers.get('cache-control')).toBe('no-cache');
+    expect(res.headers.get('content-type')).toMatch(/^application\/manifest\+json/);
+    expect(await res.json()).toEqual({
+      name: 'Ops <Desk> & "Co"',
+      short_name: 'Ops <Desk> & "Co"',
+      start_url: '/',
+    });
+
+    delete t.config.appName; // cleared: the build's files again
+    expect(await (await fetch(`${t.baseUrl}/`)).text()).toContain('<title>panel</title>');
   });
 });
