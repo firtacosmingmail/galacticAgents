@@ -1495,12 +1495,14 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   let cwd = cwdOf(ctx);
   // Variables set anywhere in the line (export, an assignment segment, ...) can redirect any
   // command's network destination: no host is then visible (ruling R-d).
-  // The lexer drops the parentheses of a function definition, so that one is read from the text.
+  // The lexer drops the parentheses of a function definition, so that one is read from the text —
+  // joined as bash joins it first: a backslash-newline is removed before words are split (`(\⏎(`).
+  const joined = trimmed.replace(/\\\n/g, '');
   const lineSetsEnv =
     lexed.commands.some((c) => changesShellState(c)) ||
-    /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(trimmed) ||
+    /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(joined) ||
     // Arithmetic assigns too (`(( X = 1 ))`, `$(( X = 1 ))`, `$[X=1]`); read from the text as well.
-    /\(\(|\$\[/.test(trimmed);
+    /\(\(|\$\[/.test(joined);
 
   for (const [segment, simple] of lexed.commands.entries()) {
     const here: PolicyContext = { ...ctx, cwd };

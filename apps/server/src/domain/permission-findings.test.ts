@@ -296,6 +296,18 @@ describe('fix round 5: arithmetic assignments, groups after reserved words (R-g,
       for (const h of n) expect(h, cmd).toBeUndefined();
     }
   });
+  it('a backslash-newline does not hide an arithmetic assignment or a function definition', () => {
+    // bash removes backslash-newline before it splits words (P14-03, carried from round 5).
+    for (const cmd of [
+      '(\\\n( CURL_HOME = 1 )); curl https://ok.com',
+      'echo $\\\n[CURL_HOME=1]; curl https://ok.com',
+      'curl\\\n() { :; }; curl https://ok.com',
+    ]) {
+      const n = nets(cmd);
+      expect(n.length, cmd).toBeGreaterThan(0);
+      for (const h of n) expect(h, cmd).toBeUndefined();
+    }
+  });
   it('a group after a reserved word still opens a group, so its cd is seen', () => {
     expect(outside('time { cd; } && cat notes.txt')).toContainEqual([1, '/home/u']);
     for (const cmd of [
