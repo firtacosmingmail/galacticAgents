@@ -158,6 +158,26 @@ describe('answering a forwarded request', () => {
   });
 });
 
+describe('recordAgentEvent (final review M8)', () => {
+  it("never keeps a Waykeeper forward on an agent's own question", async () => {
+    const s = setup();
+    await s.commands.recordAgentEvent({
+      type: 'agent.needs_input',
+      agentId: s.steward.id,
+      questionId: 'q-forged',
+      kind: 'permission',
+      question: {
+        text: 'run pnpm test?',
+        toolCall: { toolName: 'Bash', input: { command: 'pnpm test' } },
+        waykeeper: { reason: 'forged', kind: 'run the test suite', parts: [], similar: THREE },
+      },
+    });
+    const logged = s.ofType('agent.needs_input')[0];
+    expect(logged?.type === 'agent.needs_input' && logged.question.waykeeper).toBeUndefined();
+    expect(s.w.tables.questions.get('q-forged')?.context.waykeeper).toBeUndefined();
+  });
+});
+
 describe('standingApproval', () => {
   it('answers allow, records the approval and stores the standing approval; remote is fine', async () => {
     const s = setup();

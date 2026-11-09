@@ -740,7 +740,12 @@ export class Commands implements DomainCommands {
    * re-routes the ones it held, P2-03). For events that do not come through a live session.
    */
   recordAgentEvent(event: AgentEvent): Promise<CommandResult<void>> {
-    const parsed = AgentEvent.parse(event);
+    let parsed = AgentEvent.parse(event);
+    if (parsed.type === 'agent.needs_input' && parsed.question.waykeeper !== undefined) {
+      // Only the approval watch writes a Waykeeper forward (P13-04): never an agent's event.
+      const { waykeeper: _forged, ...question } = parsed.question;
+      parsed = { ...parsed, question };
+    }
     return this.run((ctx) => {
       const agent = must(ctx.tables.agents.get(parsed.agentId), 'agent', parsed.agentId);
       if (parsed.type === 'agent.spawned') {

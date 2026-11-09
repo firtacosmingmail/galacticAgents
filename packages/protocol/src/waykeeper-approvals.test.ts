@@ -6,6 +6,7 @@ import {
   isJudgedKind,
   MAX_RECORDED_APPROVALS,
   needsUserQuote,
+  QUOTE_MIN_LENGTH,
   quoteFound,
   RecordedApproval,
   SIMILAR_APPROVALS_THRESHOLD,
@@ -81,6 +82,16 @@ describe('quoteFound', () => {
     expect(quoteFound('Please review ', ['Please review the PR'])).toBe(false);
     expect('Please review t'.length).toBe(15);
     expect(quoteFound('Please review t', ['Please review the PR'])).toBe(true);
+  });
+  it('pins the boundary: exactly 14 characters refused, exactly 15 accepted (final review M7)', () => {
+    const said = ['please push the release branch now'];
+    const fourteen = 'please push th';
+    const fifteen = 'please push the';
+    expect(fourteen).toHaveLength(14);
+    expect(fifteen).toHaveLength(15);
+    expect(QUOTE_MIN_LENGTH).toBe(15);
+    expect(quoteFound(fourteen, said)).toBe(false);
+    expect(quoteFound(fifteen, said)).toBe(true);
   });
   it('ignores whitespace differences', () => {
     expect(quoteFound('review the PR and  push it', words)).toBe(true);

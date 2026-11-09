@@ -10,8 +10,10 @@ import { ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js'
 /**
  * A permission card the Waykeeper forwarded (P13-06, design §5.6): why it sent it, the command's
  * parts (each on its own line, the failing one marked) and, after three or more similar earlier
- * approvals, "let the Waykeeper approve these". The block and the button are the same on the Mac,
- * the phone and the legacy console (Cosmin, 2026-11-09); the menu bar never offers the button.
+ * approvals, what a standing approval would cover (the kind and the similar requests) and "let
+ * the Waykeeper approve these". The block and the button are the same on the Mac and the phone
+ * (Cosmin, 2026-11-09). The legacy console shows the block only, without the button; the menu bar
+ * never offers the button.
  */
 
 export const forwardedHeading = (reason: string) => `The Waykeeper sent this to you: ${reason}`;
