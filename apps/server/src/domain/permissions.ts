@@ -398,13 +398,17 @@ function classifyPaths(
     // Guarded wherever the path is — inside the workspace or not (P9-17 review B1).
     const guard = edit ? guardedWriteReason(p, ctx) : undefined;
     if (guard) {
-      note(`${tool} ${p}`, `${tool} on ${p}: ${guard}`, resolvePath(p, ctx, cwdOf(ctx)));
+      note(
+        `${tool} ${p}`,
+        `${tool} on ${p}: ${guard}`,
+        unalias(resolvePath(p, ctx, cwdOf(ctx)), ctx),
+      );
       guarded = true;
     } else if (!isInsideWorkspace(p, ctx)) {
       note(
         `${tool} ${p}`,
         `${tool} on ${p}: outside the workspace`,
-        resolvePath(p, ctx, cwdOf(ctx)),
+        unalias(resolvePath(p, ctx, cwdOf(ctx)), ctx),
       );
     }
   }
@@ -1324,8 +1328,13 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
 
   // `cd` changes where the later segments resolve relative paths from.
   let cwd = cwdOf(ctx);
-  // A `GH_HOST` assignment or export anywhere in the line sends every `gh` to another host.
-  const ghHostSet = lexed.commands.some((c) => c.words.some((w) => /^GH_HOST(?:=|$)/.test(w)));
+  // Variables set anywhere in the line (export, an assignment segment, ...) can redirect any
+  // command's network destination: no host is then visible (ruling R-d).
+  const lineSetsEnv = lexed.commands.some((c) =>
+    /^(?:export|env|set|declare|typeset|readonly|local)$|^[A-Za-z_][A-Za-z0-9_]*=/.test(
+      c.words[0] ?? '',
+    ),
+  );
 
   for (const [segment, simple] of lexed.commands.entries()) {
     const here: PolicyContext = { ...ctx, cwd };
@@ -1334,7 +1343,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     const redirectsToFile = simple.redirects.some((r) => WRITE_REDIRECTS.has(r.op));
     // The resolved place a path token reaches from this segment's cwd; none for a glob.
     const placeOf = (token: string): Partial<Finding> =>
-      /[*?[]/.test(token) ? {} : { path: resolvePath(token, here, cwd) };
+      /[*?[]/.test(token) ? {} : { path: unalias(resolvePath(token, here, cwd), here) };
     const seg = (extra: Partial<Finding> = {}): Partial<Finding> => ({
       part: shown,
       segment,
@@ -1357,7 +1366,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     for (const rule of ALL_RULES) {
       if (rule.pattern.test(scanned)) {
         const hosts =
-          rule.action === 'network' ? hostsOfCommand(simple.words, { ghHostSet }) : undefined;
+          rule.action === 'network' ? hostsOfCommand(simple.words, { lineSetsEnv }) : undefined;
         note(rule.action, `${rule.reason}: ${shown}`, seg(hosts ? { hosts } : {}));
       }
     }
@@ -1394,7 +1403,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
         note(
           'outside_workspace',
           `${shown}: leaves the workspace`,
-          seg(cdResolved ? { path: cwd } : {}),
+          seg(cdResolved ? { path: unalias(cwd, ctx) } : {}),
         );
       }
     }

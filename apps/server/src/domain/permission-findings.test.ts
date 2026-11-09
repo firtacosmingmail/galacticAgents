@@ -115,3 +115,32 @@ describe('structured findings', () => {
     for (const f of c.findings) if (f.reason) expect(c.reasons).toContain(f.reason);
   });
 });
+
+describe('finding paths use the same spelling as the inside check', () => {
+  const aliased = { ...ctx, aliases: [{ from: '/tmp/real', to: '/private/tmp/real' }] };
+  it('unaliases command and file-tool paths', () => {
+    const c = classifyCommand('cat /tmp/real/x', aliased);
+    expect(c.findings.find((f) => f.action === 'outside_workspace')?.path).toBe(
+      '/private/tmp/real/x',
+    );
+    const r = classifyToolCall(
+      { toolName: 'Read', input: { file_path: '/tmp/real/y' } } satisfies ToolCall,
+      aliased,
+    );
+    expect(r.findings[0]?.path).toBe('/private/tmp/real/y');
+  });
+  it('brace alternatives resolve each', () => {
+    const f = classifyCommand('cat /tmp/pr83/{a,../../../etc/passwd}', ctx).findings;
+    expect(f.map((x) => x.path)).toContain('/etc/passwd');
+  });
+  it('any env-setting segment hides every host', () => {
+    for (const cmd of [
+      'export CURL_HOME=/w; curl https://ok.com',
+      'HTTPS_PROXY=http://evil.com curl https://ok.com',
+      'gh api https://evil.com/x',
+    ]) {
+      const n = classifyCommand(cmd, ctx).findings.find((f) => f.action === 'network');
+      expect(n?.hosts).toBeUndefined();
+    }
+  });
+});
