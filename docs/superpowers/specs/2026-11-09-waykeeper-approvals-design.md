@@ -93,10 +93,10 @@ on the path that today turns an `ask` verdict into a permission question (decisi
 3. Verdict **approve**: the call runs; logged as `permission.decided{allow}` with
    `decidedBy` = the Steward's Waykeeper, the judge's reason, and (if one was used) the standing
    approval it relied on.
-4. Verdict **forward**, an error, a timeout (20 s, as `SCOPE_JUDGE_TIMEOUT_MS`), a malformed answer,
-   or the agent stopping meanwhile: the permission question opens as today, held by Cosmin, with a
-   `context.waykeeper` block: the reason it was forwarded and the failing part of the command, if
-   any. A withdrawn call (interrupt, stop) is dropped, as the scope watch does.
+4. Verdict **forward**, an error, a timeout (20 s, as `SCOPE_JUDGE_TIMEOUT_MS`) or a malformed
+   answer: the permission question opens as today, held by Cosmin, with a `context.waykeeper`
+   block: the reason it was forwarded and the failing part of the command, if any. A withdrawn
+   call (an interrupt, or the agent stopping meanwhile) is **dropped**, as the scope watch does.
 
 This reuses the launch-flags scope watch's shape (held call, timeout, fail closed, cancel race,
 redaction) — the builder should share code with `ScopeWatch` / `createSdkScopeJudge` rather than

@@ -1,6 +1,6 @@
 # GalacticAgents — Implementation Plan
 
-**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3; Phase 9 — deliverables, decisions 118–134 — added 2026-10-07; Phase 10 — long-term projects and recurring jobs, decisions 142–145 — added 2026-10-27; Phase 12 — Steward launch flags, decision 152 — added 2026-11-05) · **Date:** 2026-09-30
+**Status:** Proposal v0.3 (aligned with SPEC.md decisions 1–20 and TECHNOLOGY.md v0.3; Phase 9 — deliverables, decisions 118–134 — added 2026-10-07; Phase 10 — long-term projects and recurring jobs, decisions 142–145 — added 2026-10-27; Phase 12 — Steward launch flags, decision 152 — added 2026-11-05; Phase 13 — Waykeeper approvals, decision 154 — added 2026-11-09) · **Date:** 2026-09-30
 
 Companion to `SPEC.md` (what) and `TECHNOLOGY.md` (with what). The plan is ordered so that **the agent runtime is proven before the 3D scene is built**: the space interface is the product's soul, but if agents cannot be spawned, observed and answered reliably, the scene has nothing true to show. Following decision 19, a **minimal usable side panel (Phase 2.5)** now comes before the scene, so the product is usable daily long before it is beautiful.
 
@@ -230,6 +230,24 @@ Spec: `docs/superpowers/specs/2026-11-05-steward-launch-flags-design.md`; plan: 
 5. End to end, docs and phase exit (P12-10).
 
 **Exit criteria:** every task done; `runtime/launch-flags.flow.test.ts` passes (ask, approve, spawn with `--chrome`, a consistent call, an off-script call approved into a precedent, the precedent reused, an off-script call stopped — in that order in the event log); the full gates are green; and one local real run — a real Waykeeper and Steward screenshot a local page and attach it to a PR in a scratch repository — is recorded in `docs/tasks/notes/P12-10-real-run.md`, run only with Cosmin's go-ahead.
+
+---
+
+## Phase 13 — Waykeeper approvals (≈ 1 week)
+
+**Goal:** on a project where Cosmin turned the switch on, a Steward's permission request that the table would ask about is judged in its Waykeeper's name and approved without a card only when it fits the task; anything doubtful or harmful-looking, and every failure, comes to him with the reason; three similar approvals of his can become a project-wide standing approval (SPEC decision 154; TECHNOLOGY §3.10).
+
+Spec: `docs/superpowers/specs/2026-11-09-waykeeper-approvals-design.md`; plan: `docs/superpowers/plans/2026-11-09-waykeeper-approvals.md`; tasks P13-01 – P13-07 in `docs/tasks/PHASE_13_WAYKEEPER_APPROVALS.md`.
+
+1. Protocol shapes, migration 0019, the four events and the domain commands (P13-01).
+2. The judge-only command splitter that fails closed on what it cannot read, with `guarded` and `outsideCwd` marks (P13-02).
+3. The one-shot request judge (isolated, no tools, fail closed) and its fake (P13-03).
+4. The approval watch in the runtime: hard rules before the judge, the push and upload quote check after it, the 20 s timeout, forward or drop (P13-04).
+5. Answers, standing approvals and the three routes, with the phone exception (P13-05).
+6. The panel (Mac and phone) and the menu bar: switch, forwarded cards, standing approvals, the count and the list (P13-06).
+7. Docs, task board and the real run (P13-07).
+
+**Exit criteria:** every task done; `runtime/waykeeper-approvals.flow.test.ts` passes; the full gates are green; and one local real run — a real Waykeeper and Steward on a scratch project with the switch on: a review task approved without cards, a `gh pr comment` nobody asked for forwarded, three similar approvals turning into the standing-approval button pressed from the phone — recorded in `docs/tasks/notes/P13-07-real-run.md`, run only with Cosmin's go-ahead (it acts on a real repository). The phase is not marked done before that run.
 
 ---
 

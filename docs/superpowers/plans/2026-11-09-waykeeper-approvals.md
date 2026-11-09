@@ -15,7 +15,7 @@
 - Switch default **off**; set by the user only; turning it **on** is local-only unless `autoApproveRemote` (decisions 37, 51, 90); turning it off is allowed from anywhere.
 - Only Stewards of a project whose Waykeeper exists; never the Waykeeper's, the Harmonizer's or asteroid Stewards' own requests.
 - Only gate verdict `ask`, after rules and `allowOnce`; `deny` stays deny; launch-flag tool calls stay with `ScopeWatch`; spend, publish, launch, off-script cards untouched.
-- Judge timeout: `SCOPE_JUDGE_TIMEOUT_MS` (20 000 ms). Error, timeout, malformed verdict, agent stopping → forward. Withdrawn call → dropped.
+- Judge timeout: `SCOPE_JUDGE_TIMEOUT_MS` (20 000 ms). Error, timeout, malformed verdict → forward. Withdrawn call (an interrupt, the agent stopping) → dropped.
 - Never approved, decided before the judge: a guarded write (`Classification.guarded`); a `destructive` part touching a path outside the Steward's `cwd`.
 - A push (`push` category) or image/screenshot upload is approved only with a quote from **Cosmin's own words** that the server finds verbatim (whitespace-normalised, ≥ 15 characters); a standing approval never covers a push.
 - "3 similar approvals" threshold: `SIMILAR_APPROVALS_THRESHOLD = 3`.
@@ -170,7 +170,7 @@
 - Consumes: Task 1 domain functions.
 - Produces:
   - When the user answers `allow` a permission question whose `context.waykeeper` is set, `recordApproval(…, {kind: context.waykeeper.kind, summary: precedentOf(toolCall), agentId: originAgentId, questionId, at})` runs in the same transaction as `question.answered` (in both the no-session and the session branch, as `allowSimilar` does).
-  - `DomainCommands.standingApproval(input: {questionId: Id; by: Actor; origin?: RequestOrigin; version?: number; answerId?: string}): Promise<CommandResult<StandingApproval>>` — user only; refused unless `context.waykeeper.similar` has ≥ 3 records; never for a request with a `push` category; answers `allow` (recording it too) and adds the standing approval `{kind, examples: similar summaries + this one}`; **remote origin allowed** (decision 154).
+  - `DomainCommands.standingApproval(input: {questionId: Id; by: Actor; origin?: RequestOrigin; version?: number; answerId?: string}): Promise<CommandResult<StandingApprovalResult>>` (`StandingApprovalResult {approval?, notStored?}`: when the store fails after the answer went out, the answer stands and `notStored` says so) — user only; refused unless `context.waykeeper.similar` has ≥ 3 records; never for a request with a `push` category; answers `allow` (recording it too) and adds the standing approval `{kind, examples: similar summaries + this one}`; **remote origin allowed** (decision 154).
   - `DomainCommands.setWaykeeperApprovals(input: {projectId: Id; on: boolean; by: Actor; origin?: RequestOrigin})` — user only; `on: true` refused (`remote_control`) for a remote/unknown origin unless `autoApproveRemote`.
   - `DomainCommands.removeStandingApproval(input: {projectId; approvalId; by; origin?})` — user only, allowed from anywhere.
   - Routes: `POST /api/questions/:id/standing-approval` `{version?, answerId?}`; `PUT /api/projects/:id/waykeeper-approvals` `{on: boolean}`; `DELETE /api/projects/:id/standing-approvals/:approvalId`. Origin taken as `allowSimilar`'s route takes it.
