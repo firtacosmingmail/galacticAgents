@@ -1051,12 +1051,22 @@ a.pnl-link:hover {
     opacity: 1;
   }
 }
+/* P8-27: the actions float over the row, covering its name; the "⋯" stays visible to close them,
+   and the rows below do not move */
+.pnl-row {
+  position: relative;
+}
 .pnl-row-actions {
-  margin: 2px 0 8px 22px;
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  left: 22px;
+  right: 28px;
   padding: 4px 8px 6px;
   border: 1px solid var(--pnl-line);
   border-radius: 6px;
   background: var(--pnl-raised);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.28);
   font-size: 12px;
 }
 .pnl-row-actions .agc-actions-title {
