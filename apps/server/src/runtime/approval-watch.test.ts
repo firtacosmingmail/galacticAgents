@@ -438,6 +438,64 @@ describe('ApprovalWatch', () => {
     });
   });
 
+  describe('opaque parts (final review M4, M5)', () => {
+    it('a standing approval never covers an opaque part: forwarded', async () => {
+      const { judge, seen } = scripted(approve({ standingApprovalId: 'sa-1' }));
+      const { c, approve: approved, forward } = call('gh pr view 12 && node tools/report.js');
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(seen).toHaveLength(1);
+      expect(approved).not.toHaveBeenCalled();
+      expect(forward).toHaveBeenCalledTimes(1);
+      expect(forward.mock.calls[0]![0]).toMatchObject({
+        reason: expect.stringMatching(/standing approval never covers code it cannot read/),
+        failingPart: 1,
+      });
+    });
+
+    it('an opaque part approved without a standing approval is still approved', async () => {
+      const { judge } = scripted(approve());
+      const { c, approve: approved } = call('node tools/report.js');
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(approved).toHaveBeenCalledTimes(1);
+    });
+
+    it('a push hidden in inline code forwards without the judge', async () => {
+      const { judge, seen } = scripted(approve());
+      const { c, approve: approved, forward } = call(`python -c "subprocess.run(['git','push'])"`);
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(seen).toEqual([]);
+      expect(approved).not.toHaveBeenCalled();
+      expect(forward).toHaveBeenCalledTimes(1);
+      expect(forward.mock.calls[0]![0]).toMatchObject({
+        reason: expect.stringMatching(/^Never approved by the Waykeeper: .*push/),
+        failingPart: 0,
+      });
+    });
+
+    it('a push named by a script file it runs forwards without the judge', async () => {
+      const { judge, seen } = scripted(approve());
+      const { c, forward } = call('ls && ./scripts/git-push-all.sh');
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(seen).toEqual([]);
+      expect(forward.mock.calls[0]![0]).toMatchObject({ failingPart: 1 });
+    });
+  });
+
+  it("caps the judge's reason at 300 characters (final review M6)", async () => {
+    const long = 'x'.repeat(400);
+    const { judge } = scripted(approve({ reason: long }));
+    const { c, approve: approved } = call('gh pr view 12');
+    await new ApprovalWatch({ judge }).handle(c);
+    const reason = approved.mock.calls[0]![0].reason;
+    expect(reason).toHaveLength(300);
+    expect(reason.endsWith('…')).toBe(true);
+
+    const fwd = scripted(forwardVerdict({ reason: long }));
+    const second = call('gh pr view 12');
+    await new ApprovalWatch({ judge: fwd.judge }).handle(second.c);
+    expect(second.forward.mock.calls[0]![0].reason).toHaveLength(300);
+  });
+
   describe('placeholder kinds never make a standing approval (final review I4)', () => {
     it('records of a placeholder kind are left out of similar', async () => {
       const mixed: RecordedApproval[] = [

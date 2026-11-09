@@ -15,13 +15,15 @@ import {
   type WaykeeperForward,
 } from '@galactic/protocol';
 import { partsOfCall } from '../domain/command-parts.js';
-import { classifyToolCall, type PolicyContext } from '../domain/permissions.js';
+import { classifyToolCall, mentionsPush, type PolicyContext } from '../domain/permissions.js';
 import { HeldJudgeCalls } from './held-judge.js';
 import { redactSecrets, redactValue } from './redact.js';
 import { SCOPE_JUDGE_TIMEOUT_MS } from './scope-watch.js';
 
 /** The longest kind kept on a forward (`RecordedApproval.kind` takes at most 200). */
 const MAX_KIND_CHARS = 200;
+/** The longest judge reason kept (events, the activity line, the transcript, the card). */
+export const MAX_REASON_CHARS = 300;
 
 /** What the judge is told about the task and the project, read when the request arrives. */
 export interface ApprovalFacts {
@@ -75,6 +77,13 @@ function hardRule(part: CommandPart): string | undefined {
     return 'it deletes a target that a command substitution decides';
   }
   if (part.opaque === 'unreadable') return 'it cannot be read';
+  // A push the gate's raw-text detector sees in code the splitter cannot read (final review M5).
+  if (
+    (part.opaque === 'inline_code' || part.opaque === 'script_file') &&
+    mentionsPush(part.text).length > 0
+  ) {
+    return 'it runs code that may push, which only the user can allow';
+  }
   return undefined;
 }
 
@@ -86,11 +95,13 @@ function hardRule(part: CommandPart): string | undefined {
  *
  * The judge is not trusted. The hard rules are decided here, before it is called and without it:
  * a guarded write (by a part or by the whole call), a delete outside the worktree, a delete whose
- * target a substitution decides, and an unreadable part are always forwarded. After it, an
- * approval is kept only if every push or upload part is granted by a quote the server finds in
- * the user's own words, any standing approval it names exists on the project (and never covers a
- * push or upload), and the switch is still on. Every failure — no judge, an error, a timeout, a
- * malformed answer — forwards. Never throws into the runtime.
+ * target a substitution decides, an unreadable part, and inline code or a script file whose raw
+ * text mentions a push (`mentionsPush`) are always forwarded. After it, an approval is kept only
+ * if every push or upload part is granted by a quote the server finds in the user's own words,
+ * any standing approval it names exists on the project (and never covers a push, an upload or an
+ * opaque part), and the switch is still on. The judge's reason is cut to `MAX_REASON_CHARS`.
+ * Every failure — no judge, an error, a timeout, a malformed answer, a throw anywhere before a
+ * callback — forwards. Never throws into the runtime.
  */
 export class ApprovalWatch {
   private readonly calls: HeldJudgeCalls;
@@ -274,6 +285,16 @@ export class ApprovalWatch {
         );
       }
     }
+    // A standing approval never covers code the splitter cannot read (final review M4).
+    const opaquePart = parts.findIndex((p) => p.opaque !== undefined);
+    if (verdict.standingApprovalId !== undefined && opaquePart >= 0) {
+      return forward(
+        `A standing approval never covers code it cannot read. The judge said: ${verdict.reason}`,
+        kind,
+        opaquePart,
+        similar,
+      );
+    }
     // Read again: a standing approval removed while the judge ran no longer covers anything.
     if (
       verdict.standingApprovalId !== undefined &&
@@ -336,9 +357,11 @@ function validVerdict(answer: unknown, partCount: number): RequestVerdict | unde
     return undefined;
   }
   if (v.quote !== undefined && typeof v.quote !== 'string') return undefined;
+  const reason =
+    v.reason.length <= MAX_REASON_CHARS ? v.reason : `${v.reason.slice(0, MAX_REASON_CHARS - 1)}…`;
   return {
     verdict: v.verdict,
-    reason: v.reason,
+    reason,
     kind: typeof v.kind === 'string' ? v.kind.trim() : '',
     similarTo:
       (v.similarTo as unknown[] | undefined)?.map((i) => (typeof i === 'number' ? i : -1)) ?? [],
