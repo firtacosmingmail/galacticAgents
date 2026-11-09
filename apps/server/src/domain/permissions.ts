@@ -1324,12 +1324,17 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
 
   // `cd` changes where the later segments resolve relative paths from.
   let cwd = cwdOf(ctx);
+  // A `GH_HOST` assignment or export anywhere in the line sends every `gh` to another host.
+  const ghHostSet = lexed.commands.some((c) => c.words.some((w) => /^GH_HOST(?:=|$)/.test(w)));
 
   for (const [segment, simple] of lexed.commands.entries()) {
     const here: PolicyContext = { ...ctx, cwd };
     const text = simple.words.join(' ');
     const shown = text || simple.redirects.map((r) => `${r.op}${r.target}`).join(' ');
     const redirectsToFile = simple.redirects.some((r) => WRITE_REDIRECTS.has(r.op));
+    // The resolved place a path token reaches from this segment's cwd; none for a glob.
+    const placeOf = (token: string): Partial<Finding> =>
+      /[*?[]/.test(token) ? {} : { path: resolvePath(token, here, cwd) };
     const seg = (extra: Partial<Finding> = {}): Partial<Finding> => ({
       part: shown,
       segment,
@@ -1351,14 +1356,15 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     const scanned = [text, ...simple.redirects.map((r) => r.target)].join(' ');
     for (const rule of ALL_RULES) {
       if (rule.pattern.test(scanned)) {
-        const hosts = rule.action === 'network' ? hostsOfCommand(simple.words) : undefined;
+        const hosts =
+          rule.action === 'network' ? hostsOfCommand(simple.words, { ghHostSet }) : undefined;
         note(rule.action, `${rule.reason}: ${shown}`, seg(hosts ? { hosts } : {}));
       }
     }
     const { paths, unresolvable } = pathsOf(simple);
     for (const p of paths) {
       if (!isInsideWorkspace(p, here)) {
-        note('outside_workspace', `${p}: outside the workspace`, seg({ path: p }));
+        note('outside_workspace', `${p}: outside the workspace`, seg(placeOf(p)));
       }
     }
     for (const p of unresolvable) {
@@ -1368,7 +1374,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     for (const f of curlUploads(simple.words)) reasons.push(`curl reads and sends the file ${f}`);
     for (const g of guardedTargets(simple, here)) {
       guarded = true;
-      note('outside_workspace', `${g.path}: ${g.reason}`, seg({ path: g.path }));
+      note('outside_workspace', `${g.path}: ${g.reason}`, seg(placeOf(g.path)));
     }
 
     const h = commandHead(simple.words);
