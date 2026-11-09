@@ -376,7 +376,8 @@ describe('isInsideWorkspace', () => {
 describe('command parsing', () => {
   it('splits on shell operators', () => {
     // Substitutions are commands of their own, lexed before the command that holds them.
-    expect(splitCommand('a && b || c; d | e\nf $(g) `h` (i) { j; } \\k & l')).toEqual([
+    // (`(i)` after arguments is no subshell: zsh reads it as a glob group, bash as an error.)
+    expect(splitCommand('a && b || c; d | e\nf $(g) `h`; (i) { j; } \\k & l')).toEqual([
       'a',
       'b',
       'c',

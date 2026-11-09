@@ -612,6 +612,10 @@ class ShellLexer {
     let pendingOp: string | null = null;
     let depth = 0;
     let i = start;
+    // Where an unquoted `)` operator ended, and where an unquoted `{` or `,` was last appended as
+    // a plain word character: zsh reads a `(` or an `=` right after them as glob syntax (R-m).
+    let closedAt = -1;
+    let braceOrCommaAt = -1;
 
     const append = (text: string) => {
       word = (word ?? '') + text;
@@ -745,6 +749,21 @@ class ShellLexer {
         return this.fail(
           `zsh glob qualifier or modifier: ${word}${src.slice(i, close < 0 ? src.length : close + 1)}`,
         );
+      } else if (
+        c === '(' &&
+        (i === closedAt ||
+          (!/^\s*\)/.test(src.slice(i + 1)) &&
+            (pendingOp !== null ||
+              cmd.redirects.length > 0 ||
+              cmd.words.some((w) => !COMMAND_POSITION_WORDS.has(w)))))
+      ) {
+        // Outside command position zsh reads `(…)` as a glob group (`cat (a|b)`) and a `(` right
+        // after a `)` as glob qualifiers (`(*)(e:'…':)` runs code): never readable (P14-03
+        // review, ruling R-m). `name ()` stays a function definition, read elsewhere.
+        const close = src.indexOf(')', i + 1);
+        return this.fail(
+          `zsh glob group or qualifier: ${src.slice(i, close < 0 ? src.length : close + 1)}`,
+        );
       } else if (c === '(') {
         flushCommand(false);
         depth++;
@@ -752,6 +771,7 @@ class ShellLexer {
       } else if (c === ')') {
         flushCommand(false);
         i++;
+        closedAt = i;
         if (depth === 0 && nested) return i;
         if (depth > 0) depth--;
       } else if (
@@ -767,14 +787,21 @@ class ShellLexer {
       ) {
         flushCommand(false);
         i++;
-      } else if (c === '=' && word === null && next !== undefined && /[\w./~-]/.test(next)) {
-        // zsh expands an unquoted `=cmd` to the command's path (`=node`): never readable (R-l).
+      } else if (
+        c === '=' &&
+        (((word === null || word === '') && !(word === null && isWordEnd(next))) ||
+          i === braceOrCommaAt)
+      ) {
+        // zsh expands an unquoted `=cmd` to the command's path (`=node`, `=\ls`, `''=ls`, and
+        // in brace alternatives `{=ls,x}`): never readable (R-l, R-m). A lone `=` names no
+        // command and stays as it is (`test a = b`).
         let end = i + 1;
         while (end < src.length && !/[\s;&|<>()]/.test(src[end]!)) end++;
         return this.fail(`zsh =command expansion: ${src.slice(i, end)}`);
       } else {
         append(c);
         i++;
+        if (c === '{' || c === ',') braceOrCommaAt = i;
       }
     }
     flushCommand(false);
@@ -1506,8 +1533,8 @@ function changesShellState(simple: SimpleCommand): boolean {
   if (program === undefined) return false;
   if (STATE_SAFE_BUILTINS.has(program)) {
     if (program === 'printf') return words.some((w) => w.startsWith('-v'));
-    // zsh's print: `-v` assigns, `-z` pushes onto the editing buffer, `-s` onto the history.
-    if (program === 'print') return words.slice(1).some((w) => /^-[A-Za-z]*[vzs]/.test(w));
+    // zsh's print: `-v` assigns, `-z` pushes onto the editing buffer, `-s`/`-S` onto the history.
+    if (program === 'print') return words.slice(1).some((w) => /^-[A-Za-z]*[vzsS]/.test(w));
     return false;
   }
   return ASSIGNMENT_WORD.test(program) || EXPANDABLE.test(program) || SHELL_BUILTINS.has(program);
