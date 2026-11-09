@@ -102,7 +102,9 @@ export class HistoryEvents {
       const events: EventEnvelope[] = [];
       let filled: number | undefined;
       for (const row of rows) {
-        if (REPLAY_SKIPPED_EVENT_TYPES.has(row.type as EventType)) continue;
+        if (query.type !== undefined) {
+          if (row.type !== query.type) continue;
+        } else if (REPLAY_SKIPPED_EVENT_TYPES.has(row.type as EventType)) continue;
         const time = Date.parse(row.at);
         if (from !== undefined && time < from) continue;
         if (to !== undefined && time > to) continue;
