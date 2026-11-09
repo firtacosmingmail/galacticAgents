@@ -297,4 +297,17 @@ describe('commandParts: bypasses closed in review (fix round 1)', () => {
     expect(commandParts('rm -rf "$DIR"/x', ctx)[0]!.outsideCwd).toBe(true);
     expect(commandParts('cat ../t2/x', ctx)[0]!.outsideCwd).toBeUndefined();
   });
+
+  it('a cd the splitter cannot place fails closed for every later delete (final review I3)', () => {
+    const last = (command: string) => commandParts(command, ctx).at(-1)!;
+    expect(last('cd "$HOME" && rm -rf x').outsideCwd).toBe(true);
+    expect(last('cd - && rm -rf x').outsideCwd).toBe(true);
+    expect(last('cd ~bob && rm -rf x').outsideCwd).toBe(true);
+    expect(last('pushd `pwd`/.. && rm -rf x').outsideCwd).toBe(true);
+    expect(last('cd "$HOME" && ls && rm -rf x').outsideCwd).toBe(true);
+    // Not a delete: nothing to flag.
+    expect(last('cd "$HOME" && ls').outsideCwd).toBeUndefined();
+    // A cd the splitter places inside the worktree changes nothing.
+    expect(last('cd sub && rm -rf x').outsideCwd).toBeUndefined();
+  });
 });

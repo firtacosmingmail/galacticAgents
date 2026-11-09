@@ -100,6 +100,12 @@ class Splitter {
    * like it moves the cwd for what follows; `outside` judges paths from all of them.
    */
   private readonly seen = new Set<string>();
+  /**
+   * Set by a `cd`/`pushd` the splitter cannot place (`cd "$HOME"`, `` cd `x` ``, `cd ~bob`,
+   * `cd -`): from then on the cwd is unknown and every destructive part is `outsideCwd` (fail
+   * closed). Never cleared — not by a later `cd`, nor at the end of a nested body, as `seen`.
+   */
+  private unknownCwd = false;
 
   constructor(private readonly ctx: PolicyContext) {
     this.cwd = cwdOf(ctx);
@@ -237,6 +243,8 @@ class Splitter {
       } else if (target !== '-' && !/[$`]/.test(target) && !/^~[^/]/.test(target)) {
         this.cwd = resolvePath(target, this.ctx, this.cwd);
         this.seen.add(this.cwd);
+      } else {
+        this.unknownCwd = true;
       }
     }
     return part;
@@ -246,7 +254,7 @@ class Splitter {
   part(text: string, opaque?: CommandPart['opaque']): CommandPart {
     const c = classifyCommand(text, { ...this.ctx, cwd: this.cwd });
     const marked = opaque ?? (c.unclassified ? 'unreadable' : undefined);
-    const outside = c.actions.includes('destructive') && this.outside(text);
+    const outside = c.actions.includes('destructive') && (this.unknownCwd || this.outside(text));
     return {
       text,
       categories: c.actions,
