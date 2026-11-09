@@ -45,11 +45,21 @@ const PREVIEW: SimilarPreviewResponse = {
   projectId: fx.project.id,
   projectName: fx.project.name,
   allowed: true,
-  call: 'npm install zod',
-  asking: ['npm install zod'],
-  notRememberable: [],
+  call: 'cd /tmp/pr83; npm install zod; git push',
+  asking: ['cd /tmp/pr83', 'npm install zod'],
+  notRememberable: [{ part: 'git push', reason: 'a push always asks' }],
   callDigest: 'c-1',
   options: [
+    {
+      key: 'folder:/tmp/pr83',
+      kind: 'folder',
+      available: true,
+      label: '/tmp/pr83/',
+      preview: 'Reading and writing anywhere under /tmp/pr83/ …',
+      digest: 'd-folder',
+      covers: ['cd /tmp/pr83'],
+      widen: [{ label: '/tmp/', preview: 'Anywhere under /tmp/ …', digest: 'd-folder-wide' }],
+    },
     {
       key: 'site:registry.npmjs.org',
       kind: 'site',
@@ -57,6 +67,7 @@ const PREVIEW: SimilarPreviewResponse = {
       label: 'registry.npmjs.org',
       preview: 'Any address on registry.npmjs.org or its subdomains …',
       digest: 'd-site',
+      covers: ['npm install zod'],
     },
     {
       key: 'prefix',
@@ -145,25 +156,38 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
       name: /Allow from now on in Auth refactor/,
     });
     expect(opener.getAttribute('aria-expanded')).toBe('true');
-    const site = within(chooser).getByRole('radio', { name: /This site/ }) as HTMLInputElement;
-    const prefix = within(chooser).getByRole('radio', {
-      name: /command prefix/,
-    }) as HTMLInputElement;
-    const category = within(chooser).getByRole('radio', {
-      name: /whole category/,
-    }) as HTMLInputElement;
-    expect(site.checked).toBe(true); // the first offered row
-    expect(category.disabled).toBe(true);
+    // the call that asked, with the asking parts marked (and the part that cannot be a rule)
+    const marks = [...chooser.querySelectorAll('mark')].map((m) => m.textContent);
+    expect(marks).toEqual(['cd /tmp/pr83', 'npm install zod', 'git push']);
+    // one unticked checkbox per offered row; unavailable and not-rememberable ones are text only
+    const boxes = within(chooser).getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(3);
+    expect(boxes.every((b) => !b.checked)).toBe(true);
+    expect(within(chooser).queryByRole('radio')).toBeNull();
     expect(chooser.textContent).toMatch(/Not offered: not today/);
+    expect(chooser.textContent).toMatch(/a push always asks/);
     expect(chooser.textContent).toMatch(/starts with `npm install`/);
-    expect(chooser.textContent).toMatch(/npm install …/);
+    expect(chooser.textContent).toMatch(/covers: cd \/tmp\/pr83/);
+    const go = within(chooser).getByRole('button', {
+      name: 'Allow and remember ticked',
+    }) as HTMLButtonElement;
+    expect(go.disabled).toBe(true);
     expect(blocking(await axeFindings(card))).toEqual([]);
 
-    fireEvent.click(prefix);
-    await act(async () =>
-      fireEvent.click(within(chooser).getByRole('button', { name: 'Allow and remember' })),
+    // a folder row widens: the select chooses the level whose digest is sent
+    const widen = within(chooser).getByRole('combobox', { name: /How wide/ });
+    fireEvent.change(widen, { target: { value: '1' } });
+    expect(chooser.textContent).toMatch(/Anywhere under \/tmp\//);
+    fireEvent.click(boxes[0]!);
+    fireEvent.click(boxes[2]!);
+    expect(go.disabled).toBe(false);
+    await act(async () => fireEvent.click(go));
+    expect(api.allowSimilar).toHaveBeenCalledWith(
+      'q-install',
+      ['d-folder-wide', 'd-prefix'],
+      'c-1',
+      2,
     );
-    expect(api.allowSimilar).toHaveBeenCalledWith('q-install', ['d-prefix'], 'c-1', 2);
     expect(api.answer).not.toHaveBeenCalled();
     expect(screen.queryByRole('group', { name: /Allow from now on/ })).toBeNull();
   });
@@ -179,8 +203,9 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
       fireEvent.click(screen.getByRole('button', { name: /^Allow similar for/ })),
     );
     const chooser = await screen.findByRole('group', { name: /Allow from now on/ });
+    fireEvent.click(within(chooser).getAllByRole('checkbox')[1]!);
     await act(async () =>
-      fireEvent.click(within(chooser).getByRole('button', { name: 'Allow and remember' })),
+      fireEvent.click(within(chooser).getByRole('button', { name: 'Allow and remember ticked' })),
     );
     expect(api.allowSimilar).toHaveBeenCalledWith('q-install', ['d-site'], 'c-1', 2);
     expect(chooser.textContent).toMatch(/allowed once; the rules were not stored/);
@@ -216,8 +241,11 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
     const chooser = await screen.findByRole('group', { name: /Allow from now on/ });
     expect(chooser.textContent).toMatch(/Not offered: a push always asks/);
     expect(
-      (within(chooser).getByRole('button', { name: 'Allow and remember' }) as HTMLButtonElement)
-        .disabled,
+      (
+        within(chooser).getByRole('button', {
+          name: 'Allow and remember ticked',
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
 
     cleanup();
@@ -229,8 +257,9 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
       fireEvent.click(screen.getByRole('button', { name: /^Allow similar for/ })),
     );
     const c2 = await screen.findByRole('group', { name: /Allow from now on/ });
+    fireEvent.click(within(c2).getAllByRole('checkbox')[0]!);
     await act(async () =>
-      fireEvent.click(within(c2).getByRole('button', { name: 'Allow and remember' })),
+      fireEvent.click(within(c2).getByRole('button', { name: 'Allow and remember ticked' })),
     );
     expect(onStale).toHaveBeenCalledWith('q-install', 'already answered');
   });
@@ -278,6 +307,27 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
 });
 
 describe('the project’s rules (P9-17)', () => {
+  it('labels a site rule and a folder rule', () => {
+    const site: PermissionRule = {
+      ...RULE,
+      id: 'r-2',
+      scope: 'site',
+      match: { kind: 'host', host: 'github.com' },
+      label: 'github.com',
+    };
+    const folder: PermissionRule = {
+      ...RULE,
+      id: 'r-3',
+      scope: 'folder',
+      match: { kind: 'folder', folder: '/tmp/pr83', access: 'any' },
+      label: '/tmp/pr83/',
+    };
+    show(<PermissionRules project={{ ...fx.project, permissionRules: [site, folder] }} />);
+    const list = screen.getByRole('list', { name: 'allowed similar actions' });
+    expect(list.textContent).toMatch(/sitegithub\.com/);
+    expect(list.textContent).toMatch(/folder · reading and writing\/tmp\/pr83\//);
+  });
+
   it('lists the rules with Remove on the Mac, read-only on the phone', async () => {
     const project: Project = { ...fx.project, permissionRules: [RULE] };
     show(<PermissionRules project={project} />);

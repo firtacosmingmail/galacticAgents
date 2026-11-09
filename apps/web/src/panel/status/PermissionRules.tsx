@@ -40,7 +40,14 @@ export function PermissionRules({ project }: { project: Project }) {
         <ul className="permission-rules" aria-label="allowed similar actions">
           {rules.map((r) => (
             <li key={r.id}>
-              <span className="pill">{SCOPE[r.scope]}</span>
+              <span className="pill">
+                {SCOPE[r.scope]}
+                {r.scope === 'folder' && r.match.kind === 'folder'
+                  ? r.match.access === 'any'
+                    ? ' · reading and writing'
+                    : ' · by file tools'
+                  : ''}
+              </span>
               <code>{r.label}</code>
               <span className="muted">
                 {r.tool !== '*' ? `${r.tool} · ` : ''}added {when(r.createdAt)}

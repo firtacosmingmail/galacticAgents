@@ -14,10 +14,11 @@ import { useClientRules } from '../deliverables/use-deliverables.js';
 /**
  * "Allow similar" on a permission card (P9-17, SPEC decision 138): next to "Allow once", for a
  * request whose agent belongs to a project (a Waykeeper, or a Steward of one of its tasks), a
- * button opens a small chooser with the three scopes — exactly this, this command prefix or
- * folder, this whole category — each with the server's preview of exactly what it will match
- * (`POST …/similar-preview`); "Allow and remember" answers the request "allow" and stores the
- * rule on the project in one command. Never for a push, never for the Harmonizer's or an
+ * button opens a small chooser (`POST …/similar-preview`): the call that asked with the parts
+ * that triggered the question marked, then one tickable row per reason (P14) — a folder, a site,
+ * a command prefix, a category — each with the server's preview of exactly what it will cover and
+ * a widen choice on a folder; "Allow and remember ticked" answers the request "allow" and stores
+ * one rule per ticked row on the project in one command. Never for a push, never for the Harmonizer's or an
  * asteroid's requests (no project), never for a publishing run's (P11-12: it takes no rules), and only on a client that may write settings: the Mac's own
  * page, or any client when the server sets `autoApproveRemote` (decisions 37, 90). The menu bar
  * keeps Allow once and Deny only (decision 136).
@@ -55,16 +56,70 @@ export function useOffersSimilar(q: Question, world: WorldState): Project | unde
 
 // P14-04 kept this one-choice chooser compiling against the per-reason rows; P14-05 rewrites it.
 const KIND_WORDS: Record<SimilarOption['kind'], string> = {
-  folder: 'This folder',
-  site: 'This site',
-  prefix: 'This command prefix',
-  category: 'This whole category',
+  folder: 'Access to',
+  site: 'Site',
+  prefix: 'Command prefix',
+  category: 'Whole category',
 };
 
 type Preview =
   | { status: 'loading' }
   | { status: 'error'; error: string }
   | { status: 'ready'; data: SimilarPreviewResponse };
+
+/** One choice of a row: the row's own (narrowest), then each wider one. */
+interface Level {
+  label?: string | undefined;
+  preview?: string | undefined;
+  digest?: string | undefined;
+}
+
+function levelsOf(o: SimilarOption): Level[] {
+  return [{ label: o.label, preview: o.preview, digest: o.digest }, ...(o.widen ?? [])];
+}
+
+/** `call` split into plain and marked pieces; every occurrence of every part is marked. */
+export function markedParts(
+  call: string,
+  parts: { text: string; refused: boolean }[],
+): { text: string; marked: boolean; refused: boolean }[] {
+  const flags: (boolean | undefined)[] = new Array(call.length).fill(undefined);
+  for (const { text, refused } of parts) {
+    if (!text) continue;
+    for (let at = call.indexOf(text); at >= 0; at = call.indexOf(text, at + 1)) {
+      for (let i = at; i < at + text.length; i++) flags[i] = (flags[i] ?? true) && refused;
+    }
+  }
+  const out: { text: string; marked: boolean; refused: boolean }[] = [];
+  for (let i = 0; i < call.length; i++) {
+    const marked = flags[i] !== undefined;
+    const refused = flags[i] === true;
+    const last = out[out.length - 1];
+    if (last && last.marked === marked && last.refused === refused) last.text += call[i];
+    else out.push({ text: call[i]!, marked, refused });
+  }
+  return out;
+}
+
+function CallText({ data }: { data: SimilarPreviewResponse }) {
+  const pieces = markedParts(data.call, [
+    ...data.asking.map((text) => ({ text, refused: false })),
+    ...data.notRememberable.map((n) => ({ text: n.part, refused: true })),
+  ]);
+  return (
+    <pre className="allow-similar-call">
+      {pieces.map((p, i) =>
+        p.marked ? (
+          <mark key={i} className={p.refused ? 'is-off' : undefined}>
+            {p.text}
+          </mark>
+        ) : (
+          p.text
+        ),
+      )}
+    </pre>
+  );
+}
 
 export function AllowSimilar({
   question: q,
@@ -80,7 +135,8 @@ export function AllowSimilar({
   const api = useApi();
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<Preview>({ status: 'loading' });
-  const [scope, setScope] = useState<string | undefined>();
+  const [ticked, setTicked] = useState<Record<string, boolean>>({});
+  const [level, setLevel] = useState<Record<string, number>>({});
   const { run, error, busy, clear } = useAction();
   const chooserId = useId();
   const opener = useRef<HTMLButtonElement>(null);
@@ -92,8 +148,9 @@ export function AllowSimilar({
     api.similarPreview(q.id).then(
       (data) => {
         if (!live) return;
+        setTicked({});
+        setLevel({});
         setPreview({ status: 'ready', data });
-        setScope(data.options.find((o) => o.available)?.key);
       },
       (e: unknown) => live && setPreview({ status: 'error', error: (e as Error).message }),
     );
@@ -102,7 +159,6 @@ export function AllowSimilar({
     };
   }, [api, open, q.id, q.version]);
 
-  // The chooser takes the focus when its options arrive; closing gives it back to the opener.
   useEffect(() => {
     if (open && preview.status === 'ready') {
       box.current?.querySelector<HTMLElement>('input:not([disabled]), button')?.focus();
@@ -114,21 +170,28 @@ export function AllowSimilar({
     clear();
     requestAnimationFrame(() => opener.current?.focus());
   };
+
+  const digests: string[] =
+    preview.status === 'ready'
+      ? preview.data.options.flatMap((o) => {
+          if (!o.available || !ticked[o.key]) return [];
+          const d = levelsOf(o)[level[o.key] ?? 0]?.digest;
+          return d ? [d] : [];
+        })
+      : [];
+
   const allow = async () => {
-    if (!scope || preview.status !== 'ready') return;
-    const digest = preview.data.options.find((o) => o.key === scope)?.digest;
-    if (!digest) return;
+    if (digests.length === 0 || preview.status !== 'ready') return;
     const { callDigest } = preview.data;
     let stale: string | undefined;
     const ok = await run(async () => {
       let result;
       try {
-        result = await api.allowSimilar(q.id, [digest], callDigest, q.version);
+        result = await api.allowSimilar(q.id, digests, callDigest, q.version);
       } catch (e) {
         if (e instanceof ApiError && e.code === 'stale') stale = e.message;
         throw e;
       }
-      // Allowed once, but the rule could not be stored after it (review S6): say so.
       if (result.ruleNotStored) throw new Error(result.ruleNotStored);
     });
     if (ok) setOpen(false);
@@ -138,6 +201,10 @@ export function AllowSimilar({
       onStale(q.id, stale);
     }
   };
+
+  const data = preview.status === 'ready' ? preview.data : undefined;
+  const offered = data?.options.filter((o) => o.available) ?? [];
+  const unavailable = data?.options.filter((o) => !o.available) ?? [];
 
   return (
     <>
@@ -173,40 +240,78 @@ export function AllowSimilar({
           </legend>
           {preview.status === 'loading' && <p className="muted">Reading what it would match…</p>}
           {preview.status === 'error' && <ErrorLine error={preview.error} />}
-          {preview.status === 'ready' && preview.data.refused && (
-            <p className="muted">Not offered: {preview.data.refused}.</p>
-          )}
-          {preview.status === 'ready' && !preview.data.refused && (
+          {data?.refused && <p className="muted">Not offered: {data.refused}.</p>}
+          {data && !data.refused && (
             <>
-              {preview.data.options.map((o) => (
-                <label
-                  key={o.key}
-                  className={`allow-similar-option${o.available ? '' : ' is-off'}`}
-                >
-                  <input
-                    type="radio"
-                    name={`${chooserId}-scope`}
-                    value={o.key}
-                    checked={scope === o.key}
-                    disabled={!o.available || busy}
-                    onChange={() => setScope(o.key)}
-                  />
-                  <span>
-                    <strong>{KIND_WORDS[o.kind]}</strong>
-                    {o.label ? (
-                      <>
-                        {': '}
-                        <code>{o.label}</code>
-                      </>
-                    ) : null}
-                    <br />
-                    <span className="muted">
-                      {o.available ? o.preview : `Not offered: ${o.reason ?? 'unavailable'}.`}
-                    </span>
-                  </span>
-                </label>
+              {data.call && <CallText data={data} />}
+              {data.notRememberable.length > 0 && (
+                <ul className="allow-similar-notes muted" aria-label="allowed once only">
+                  {data.notRememberable.map((n, i) => (
+                    <li key={i}>
+                      <code>{n.part}</code>: not offered as a rule, {n.reason}.
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {offered.map((o) => {
+                const levels = levelsOf(o);
+                const at = Math.min(level[o.key] ?? 0, levels.length - 1);
+                const shown = levels[at]!;
+                return (
+                  <div key={o.key} className="allow-similar-row">
+                    <label className="allow-similar-option">
+                      <input
+                        type="checkbox"
+                        checked={!!ticked[o.key]}
+                        disabled={busy}
+                        onChange={(e) => setTicked({ ...ticked, [o.key]: e.target.checked })}
+                      />
+                      <span>
+                        <strong>{KIND_WORDS[o.kind]}</strong>
+                        {shown.label ? (
+                          <>
+                            {' '}
+                            <code>{shown.label}</code>
+                          </>
+                        ) : null}
+                        <br />
+                        <span className="muted">{shown.preview}</span>
+                        {o.covers && o.covers.length > 0 && (
+                          <>
+                            <br />
+                            <span className="muted">
+                              covers: <code>{o.covers.join(', ')}</code>
+                            </span>
+                          </>
+                        )}
+                      </span>
+                    </label>
+                    {levels.length > 1 && (
+                      <select
+                        className="allow-similar-widen"
+                        aria-label={`How wide: ${o.label ?? o.key}`}
+                        value={at}
+                        disabled={busy}
+                        onChange={(e) => setLevel({ ...level, [o.key]: Number(e.target.value) })}
+                      >
+                        {levels.map((l, i) => (
+                          <option key={i} value={i}>
+                            {l.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                );
+              })}
+              {unavailable.map((o) => (
+                <p key={o.key} className="allow-similar-option is-off muted">
+                  <strong>{KIND_WORDS[o.kind]}</strong>
+                  {o.label ? <code>{o.label}</code> : null}
+                  {` Not offered: ${o.reason ?? 'unavailable'}.`}
+                </p>
               ))}
-              {!preview.data.allowed && (
+              {!data.allowed && (
                 <p className="muted">
                   Only the Mac (or a phone when remote auto-approval is on) can make a rule.
                 </p>
@@ -216,16 +321,10 @@ export function AllowSimilar({
           <div className="controls">
             <button
               type="button"
-              disabled={
-                busy ||
-                preview.status !== 'ready' ||
-                !!preview.data.refused ||
-                !preview.data.allowed ||
-                !scope
-              }
+              disabled={busy || !data || !!data.refused || !data.allowed || digests.length === 0}
               onClick={() => void allow()}
             >
-              Allow and remember
+              Allow and remember ticked
             </button>
             <button type="button" className="secondary" onClick={close}>
               Cancel
