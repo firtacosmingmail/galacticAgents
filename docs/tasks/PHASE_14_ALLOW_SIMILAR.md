@@ -78,6 +78,7 @@ P14-01…08 run in order.
 - Review round 1 (2026-11-09): `NAME+=` is an assignment everywhere `NAME=` is; `env NAME=…` behind any wrapper must be inert; a glued `..` is a path; `env -C`/`--chdir` is judged like a `cd`; a path only a clustered option reading gives cannot be placed (asks, no folder row), and non-clustering compilers (`gcc -Iinclude/x`) no longer ask.
 - Review round 2 (2026-11-09): `env -S`/`--split-string` makes a line unreadable; compilers' glued `-MF`/`-MJ`/`-dumpdir`/`-dumpbase` values and `-Wl,` parts are paths; a glob that may match a guarded name (`.gi?`, `.g*`, `[.]git`) is guarded.
 - Review round 3 (2026-11-09): a command's own `env` may carry only known options (else unreadable, never throws); a bracket class may match any guarded name; a line that changes glob options is unreadable; rustc's `link-arg` values are read.
+- Review round 4 (2026-11-09): a bracket expression in a guarded glob matches exactly one character (an unterminated one anything), so a quoted bracket in code or a pattern is ordinary again.
 
 ## Exit criteria (verified 2026-11-09)
 
