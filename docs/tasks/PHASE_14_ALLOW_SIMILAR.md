@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** P14-04 · **Task status:** P14-04 in progress
-**Phase status:** in progress (3/6) — branch `agent-allow-similar-reasons`
+**Current task:** P14-05 · **Task status:** P14-04 done (2026-11-09)
+**Phase status:** in progress (4/6) — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -50,7 +50,7 @@ P14-01…06 run in order.
 - **Acceptance:** the plan's Task 3 tests pass: a call passes only when every reason is covered; partial coverage asks about the rest.
 
 ### P14-04 — Drafting rows and answering with ticks
-- **Status:** in progress · **Depends on:** P14-03 · **Parallel with:** —
+- **Status:** done (2026-11-09) · **Depends on:** P14-03 · **Parallel with:** —
 - Plan Task 4.
 - **Acceptance:** the plan's Task 4 tests pass: one row per reason, allow once and store the ticked rules, `ruleIds` on the event.
 
