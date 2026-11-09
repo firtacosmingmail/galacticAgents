@@ -79,6 +79,7 @@ P14-01…08 run in order.
 - Review round 2 (2026-11-09): `env -S`/`--split-string` makes a line unreadable; compilers' glued `-MF`/`-MJ`/`-dumpdir`/`-dumpbase` values and `-Wl,` parts are paths; a glob that may match a guarded name (`.gi?`, `.g*`, `[.]git`) is guarded.
 - Review round 3 (2026-11-09): a command's own `env` may carry only known options (else unreadable, never throws); a bracket class may match any guarded name; a line that changes glob options is unreadable; rustc's `link-arg` values are read.
 - Review round 4 (2026-11-09): a bracket expression in a guarded glob matches exactly one character (an unterminated one anything), so a quoted bracket in code or a pattern is ordinary again.
+- Review round 5 (2026-11-09): coarse fail-closed rules — a `[`/`]` left over or a broken `[:` class makes a guarded-glob segment match anything; any `env` word followed by `-S`, a lone `-` or an unknown option is unreadable (`rg env -S src` too); a builtin given `options` as a word, a shell with `-c` among its options, and `trap` with code are unreadable.
 
 ## Exit criteria (verified 2026-11-09)
 
