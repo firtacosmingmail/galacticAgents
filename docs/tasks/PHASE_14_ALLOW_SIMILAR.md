@@ -75,6 +75,7 @@ P14-01…08 run in order.
 - **Status:** done (2026-11-09) · **Depends on:** P14-07 · **Parallel with:** —
 - Four holes left after P14-07: a prefix assignment keeps folder coverage only on an allow-list of inert variables (`GH_TOKEN`, `GITHUB_TOKEN`, `LANG`, `LC_*`, `TZ`, `NO_COLOR`, `CI`, `FORCE_COLOR`), so `GIT_EXTERNAL_DIFF=… git diff` in a folder asks; a leading assignment's value is a guarded-write candidate (`GIT_DIR=.git/hooks git status`); a short option with a value glued after clustered letters (`-ro/etc/x`, `-o$HOME/.zshrc`) yields a path; the precommand modifiers `noglob`, `nocorrect` and `-` are skipped to find a command's name (`noglob cd /tmp/x && rm -rf *` runs outside).
 - **Acceptance:** the brief's tests pass (every listed prefix assignment asks under a folder rule, `LANG=C` and `GH_TOKEN=` stay covered; the four `GIT_*` paths are guarded; the four glued options are not allowed; `noglob cd` taints the later segments); SPEC 138 and TECHNOLOGY updated; the full gates are green.
+- Review round 1 (2026-11-09): `NAME+=` is an assignment everywhere `NAME=` is; `env NAME=…` behind any wrapper must be inert; a glued `..` is a path; `env -C`/`--chdir` is judged like a `cd`; a path only a clustered option reading gives cannot be placed (asks, no folder row), and non-clustering compilers (`gcc -Iinclude/x`) no longer ask.
 
 ## Exit criteria (verified 2026-11-09)
 
