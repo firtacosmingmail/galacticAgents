@@ -40,13 +40,22 @@ export function setWaykeeperApprovals(
   ctx.emit({ type: 'waykeeper_approvals.set', projectId, on, by });
 }
 
-/** Records an approval on the project, keeping the newest `MAX_RECORDED_APPROVALS`. */
+/**
+ * Records an approval on the project, keeping the newest `MAX_RECORDED_APPROVALS`. Refused for a
+ * project that ended: its records are gone and stay gone.
+ */
 export function recordApproval(
   ctx: CommandContext,
   projectId: Id,
   approval: RecordedApproval,
 ): void {
   const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
+  if (RULES_END_IN.has(project.state)) {
+    throw new DomainError(
+      'invalid',
+      `project ${projectId} is ${project.state}: it records no approvals`,
+    );
+  }
   const recorded = [...(project.recordedApprovals ?? []), approval].slice(-MAX_RECORDED_APPROVALS);
   ctx.tables.projects.upsert({ ...project, recordedApprovals: recorded });
   ctx.emit({ type: 'approval.recorded', projectId, approval });

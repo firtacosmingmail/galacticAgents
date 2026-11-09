@@ -142,11 +142,17 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
         ...next,
         projects: patch(next.projects, event.projectId, { ...event.changes, updatedAt: at }),
       };
-    case 'project.state_changed':
+    case 'project.state_changed': {
+      const projects = patch(next.projects, event.projectId, { state: event.to, updatedAt: at });
+      // Closing or archiving ends the recorded approvals, as on the server (`endStandingApprovals`).
       return {
         ...next,
-        projects: patch(next.projects, event.projectId, { state: event.to, updatedAt: at }),
+        projects:
+          event.to === 'completed' || event.to === 'archived'
+            ? withoutRecorded(projects, event.projectId)
+            : projects,
       };
+    }
 
     case 'task.created':
       return { ...next, tasks: { ...next.tasks, [event.task.id]: event.task } };
@@ -454,8 +460,13 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
       };
     }
 
-    case 'control.stop':
     case 'control.cancel':
+      // A cancelled project turns `failed` like a failed Waykeeper's does, but only a cancel ends
+      // its recorded approvals (`cascade.ts` calls `endStandingApprovals(…, 'cancelled')`).
+      return event.target.kind === 'project'
+        ? { ...next, projects: withoutRecorded(next.projects, event.target.id) }
+        : next;
+    case 'control.stop':
     case 'control.pause':
     case 'control.resume':
     case 'control.edit':
@@ -594,4 +605,12 @@ export function summaryOf(world: WorldState): SystemSummary {
     tasks: Object.values(world.tasks),
     projects: Object.values(world.projects),
   });
+}
+
+/** The projects with `recordedApprovals` dropped from one (absent project: unchanged). */
+function withoutRecorded(projects: Record<Id, Project>, id: Id): Record<Id, Project> {
+  const project = projects[id];
+  if (!project?.recordedApprovals) return projects;
+  const { recordedApprovals: _old, ...rest } = project;
+  return { ...projects, [id]: rest };
 }

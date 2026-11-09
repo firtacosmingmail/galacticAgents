@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { RecordedApproval } from '@galactic/protocol';
+import {
+  applyEvent,
+  applySnapshot,
+  type EventEnvelope,
+  type RecordedApproval,
+  type Snapshot,
+} from '@galactic/protocol';
+import { recordControl } from './control.js';
 import { world } from '../test/world.js';
 import { DomainError } from './errors.js';
 import { createProject, closeProject } from './projects.js';
@@ -141,5 +148,64 @@ describe('endStandingApprovals', () => {
     expect(types).toContain('standing_approval.removed');
     expect(get().standingApprovals).toBeUndefined();
     expect(get().recordedApprovals).toBeUndefined();
+  });
+});
+
+describe('recordApproval on a project that ended', () => {
+  it('is refused', () => {
+    const { run, project } = setup();
+    run((ctx) => setProjectState(ctx, project.id, 'completed'));
+    expect(() => run((ctx) => recordApproval(ctx, project.id, rec(1)))).toThrow(DomainError);
+  });
+});
+
+describe('folding the log matches the rows when a project ends with records', () => {
+  /** Folds every committed event over the empty snapshot and compares with the live rows. */
+  function check(end: (w: ReturnType<typeof setup>) => void) {
+    const w = setup();
+    const start: Snapshot = { ...w.log.snapshot(), statuses: [] };
+    const recorded: EventEnvelope[] = [];
+    w.log.subscribe((e) => recorded.push(e));
+    w.run((ctx) => addStandingApproval(ctx, w.project.id, draft, MADE));
+    w.run((ctx) => recordApproval(ctx, w.project.id, rec(1)));
+    expect(w.get().recordedApprovals).toHaveLength(1);
+    end(w);
+    let world = applySnapshot(start);
+    for (const e of recorded) world = applyEvent(world, e);
+    expect(world.projects[w.project.id]).toEqual(w.get());
+    expect(world.projects[w.project.id]!.recordedApprovals).toBeUndefined();
+    expect(w.get().recordedApprovals).toBeUndefined();
+  }
+
+  it('closed', () => {
+    check((w) => w.run((ctx) => closeProject(ctx, w.project.id, USER)));
+  });
+
+  it('archived', () => {
+    check((w) => {
+      w.run((ctx) => setProjectState(ctx, w.project.id, 'completed'));
+      w.run((ctx) => setProjectState(ctx, w.project.id, 'archived'));
+    });
+  });
+
+  it('cancelled', () => {
+    check((w) =>
+      w.run((ctx) =>
+        recordControl(ctx, { kind: 'project', id: w.project.id }, { action: 'cancel' }, USER),
+      ),
+    );
+  });
+
+  it('a project that merely failed keeps its records, in the row and in the fold', () => {
+    const w = setup();
+    const start: Snapshot = { ...w.log.snapshot(), statuses: [] };
+    const recorded: EventEnvelope[] = [];
+    w.log.subscribe((e) => recorded.push(e));
+    w.run((ctx) => recordApproval(ctx, w.project.id, rec(1)));
+    w.run((ctx) => setProjectState(ctx, w.project.id, 'failed'));
+    let world = applySnapshot(start);
+    for (const e of recorded) world = applyEvent(world, e);
+    expect(world.projects[w.project.id]).toEqual(w.get());
+    expect(w.get().recordedApprovals).toHaveLength(1);
   });
 });

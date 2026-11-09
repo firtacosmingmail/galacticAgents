@@ -211,4 +211,27 @@ describe('applyEvent: Waykeeper approvals (P13)', () => {
     expect(list[0]!.summary).toBe('s1');
     expect(list[99]!.summary).toBe('s100');
   });
+
+  it('drops recorded approvals when the project is closed, archived or cancelled, not on failure', () => {
+    const withRecord = () => applyEvent(base(), env(2, ev['approval.recorded']));
+    const to = (state: 'completed' | 'archived' | 'failed') =>
+      env(3, { type: 'project.state_changed', projectId: 'p-1', from: 'in_progress', to: state });
+    expect(project(withRecord()).recordedApprovals).toHaveLength(1);
+    for (const state of ['completed', 'archived'] as const) {
+      expect(project(applyEvent(withRecord(), to(state))).recordedApprovals).toBeUndefined();
+    }
+    expect(project(applyEvent(withRecord(), to('failed'))).recordedApprovals).toHaveLength(1);
+    const cancel = env(3, {
+      type: 'control.cancel',
+      target: { kind: 'project', id: 'p-1' },
+      by: { type: 'user' },
+    });
+    expect(project(applyEvent(withRecord(), cancel)).recordedApprovals).toBeUndefined();
+    const taskCancel = env(3, {
+      type: 'control.cancel',
+      target: { kind: 'task', id: 't-1' },
+      by: { type: 'user' },
+    });
+    expect(project(applyEvent(withRecord(), taskCancel)).recordedApprovals).toHaveLength(1);
+  });
 });
