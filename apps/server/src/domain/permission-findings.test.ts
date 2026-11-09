@@ -585,3 +585,64 @@ describe('zsh expansions the lexer cannot model (P14-03 review, ruling R-m)', ()
     for (const f of n) expect(f.hosts).toBeUndefined();
   });
 });
+
+describe('final review fixes (P14-07)', () => {
+  const findings = (cmd: string) => classifyCommand(cmd, ctx).findings;
+  const netHosts = (cmd: string, part: RegExp) =>
+    findings(cmd).find((f) => f.action === 'network' && part.test(f.part))?.hosts;
+
+  it('F-2: GH_TOKEN or GITHUB_TOKEN on gh keeps its site; any other assignment hides it', () => {
+    expect(
+      netHosts('GH_TOKEN=$(gh auth token --user u) gh pr view 83 --json body', /pr view/),
+    ).toEqual(['github.com']);
+    expect(netHosts('GITHUB_TOKEN=x gh pr view 83', /pr view/)).toEqual(['github.com']);
+    expect(netHosts('GH_TOKEN=x gh auth token', /auth token/)).toEqual(['github.com']);
+    expect(netHosts('HTTPS_PROXY=x gh pr view 1', /pr view/)).toBeUndefined();
+    expect(netHosts('GH_HOST=evil.com gh pr view 1', /pr view/)).toBeUndefined();
+    expect(netHosts('GH_TOKEN=x HTTPS_PROXY=y gh pr view 1', /pr view/)).toBeUndefined();
+    expect(netHosts('GH_TOKEN=x curl https://ok.com', /curl/)).toBeUndefined();
+    expect(netHosts('GH_TOKEN=x; gh pr view 1', /pr view/)).toBeUndefined();
+    expect(netHosts('export GH_TOKEN=x; gh pr view 1', /pr view/)).toBeUndefined();
+  });
+
+  it("F-2: an assignment's value is a path", () => {
+    expect(findings('GIT_WORK_TREE=/etc git checkout .')).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/etc' }),
+    );
+    expect(findings('PYTHONPATH=src:/opt/lib python3 x.py')).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/opt/lib' }),
+    );
+    // A URL value names no path.
+    expect(
+      findings('npm config set registry=https://registry.npmjs.org').some(
+        (f) => f.action === 'outside_workspace',
+      ),
+    ).toBe(false);
+  });
+
+  it('M5: a path glued to a short option, or after --opt=, is a path', () => {
+    for (const [cmd, path] of [
+      ['sort -o/etc/x a', '/etc/x'],
+      ['gcc -o/etc/x a.c', '/etc/x'],
+      ['cp a -t/etc', '/etc'],
+      ['cp a -t../../etc', '/etc'],
+      ['cp a --target-directory=/etc', '/etc'],
+    ] as const) {
+      expect(findings(cmd), cmd).toContainEqual(
+        expect.objectContaining({ action: 'outside_workspace', path }),
+      );
+      expect(
+        evaluate({ rules: {} }, { toolName: 'Bash', input: { command: cmd } }, ctx).decision,
+        cmd,
+      ).not.toBe('allow');
+    }
+    const launch = classifyCommand('cp x -t~/Library/LaunchAgents', ctx);
+    expect(launch.guarded).toBe(true);
+    expect(launch.findings).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', guarded: true }),
+    );
+    // A plain option is not a path; nor is a glued value that does not start like one.
+    expect(findings('sort -n a').some((f) => f.action === 'outside_workspace')).toBe(false);
+    expect(findings('grep -iabc a').some((f) => f.action === 'outside_workspace')).toBe(false);
+  });
+});

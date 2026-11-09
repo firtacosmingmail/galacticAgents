@@ -10,12 +10,16 @@
  * globs, `~`): any word of curl/wget/gh holding a shell-special character or whitespace is not
  * understood (ruling R-e; quoting is not visible here, so quoted values are rejected too).
  *
+ * `GH_TOKEN=…`/`GITHUB_TOKEN=…` in front of `gh` keeps gh's host (ruling F-2b): a credential
+ * does not route.
+ *
  * Accepted limits: an inherited environment (HTTPS_PROXY and the like set before Mission Control
  * started), `~/.curlrc` and `~/.wgetrc`, `curl -L` and wget redirects to other hosts, and gh
  * following the current directory's git remote.
  */
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const GH_TOKEN_ASSIGNMENT = /^(?:GH_TOKEN|GITHUB_TOKEN)=/;
 
 export interface HostsOptions {
   /**
@@ -207,10 +211,16 @@ function ghHosts(args: readonly string[]): string[] | undefined {
  * are not all visible, it sends data out, or the environment may redirect it.
  */
 export function hostsOfCommand(
-  words: readonly string[],
+  all: readonly string[],
   options: HostsOptions = {},
 ): string[] | undefined {
-  if (options.lineSetsEnv || options.hasRedirect || words.length === 0) return undefined;
+  if (options.lineSetsEnv || options.hasRedirect || all.length === 0) return undefined;
+  // gh's token in front of gh (`GH_TOKEN=$(gh auth token) gh pr view 83`): a credential does not
+  // route, so gh keeps its host (P14-07, ruling F-2b). Any other assignment hides it.
+  let k = 0;
+  while (k < all.length && GH_TOKEN_ASSIGNMENT.test(all[k]!)) k++;
+  const words = k > 0 && all[k] === 'gh' ? all.slice(k) : all;
+  if (words.length === 0) return undefined;
   if (ENV_ASSIGNMENT.test(words[0]!) || words.some((w) => SHELL_SPECIAL.test(w))) {
     return undefined;
   }

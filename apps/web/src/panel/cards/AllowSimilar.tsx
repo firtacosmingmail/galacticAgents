@@ -18,7 +18,7 @@ import { useClientRules } from '../deliverables/use-deliverables.js';
  * that triggered the question marked, then one tickable row per reason (P14) — a folder, a site,
  * a command prefix, a category — each with the server's preview of exactly what it will cover and
  * a widen choice on a folder; "Allow and remember ticked" answers the request "allow" and stores
- * one rule per ticked row on the project in one command. Never for a push, never for the Harmonizer's or an
+ * one rule per ticked row on the project in one command. A push call gets rows for its other reasons only (the server decides); never for the Harmonizer's or an
  * asteroid's requests (no project), never for a publishing run's (P11-12: it takes no rules), and only on a client that may write settings: the Mac's own
  * page, or any client when the server sets `autoApproveRemote` (decisions 37, 90). The menu bar
  * keeps Allow once and Deny only (decision 136).
@@ -30,8 +30,10 @@ export function similarProject(
   world: Pick<WorldState, 'agents' | 'tasks' | 'projects'>,
 ): Project | undefined {
   if (q.kind !== 'permission' || q.status !== 'open') return undefined;
-  // A push always asks (decision 49); a request without a tool call has nothing to match.
-  if (q.context.permissionAction === 'push' || !q.context.toolCall) return undefined;
+  // A request without a tool call has nothing to match. A push call is offered too: the push
+  // itself always asks (decision 49), but the server's preview may hold rows for its other
+  // reasons, and says why when it holds none (P14-07).
+  if (!q.context.toolCall) return undefined;
   // A publishing run works without rules (P11-12, ruling R26): a rule would only mislead.
   if (q.context.origin?.publishingRun) return undefined;
   const agent = world.agents[q.originAgentId];

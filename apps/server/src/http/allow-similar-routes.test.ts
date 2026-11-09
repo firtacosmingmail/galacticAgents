@@ -43,7 +43,7 @@ const SCENARIOS: Record<string, FakeScenario> = {
       {
         kind: 'permission',
         toolName: 'Bash',
-        input: { command: 'cat /etc/hosts' },
+        input: { command: 'cat /tmp/ga-p14-hosts' },
         permissionAction: 'outside_workspace',
       },
       { kind: 'idle' },
@@ -262,13 +262,16 @@ describe('"Allow similar" (P9-17)', () => {
     expect(composed.log.tables.questions.get(q3)?.context.toolCall?.input).toEqual({
       command: 'npm install x; rm -rf ~',
     });
-    // The compound line reaches the home folder (`~`): no folder that broad, no prefix for two
-    // commands; the category for its other reasons (review B2).
+    // The compound line reaches the home folder (`~`): no folder that broad; its install is
+    // covered by the rule already, and `rm -rf ~` runs outside the workspace, so no prefix or
+    // category covers its delete either (review B2, ruling F-1): allowed once only.
     const p3 = await call('POST', `/api/questions/${q3}/similar-preview`, {});
     expect(p3.body['options']).toMatchObject([
       { kind: 'folder', available: false },
-      { key: 'prefix', available: false },
-      { key: 'category', available: true },
+      { key: 'category', available: false },
+    ]);
+    expect(p3.body['notRememberable']).toMatchObject([
+      { part: 'rm -rf ~', reason: expect.stringMatching(/runs outside the workspace/) },
     ]);
     const forgedPrefix = await call('POST', `/api/questions/${q3}/allow-similar`, {
       digests: [(await ticked(q1, ['prefix'])).digests[0]],
@@ -491,20 +494,21 @@ describe('"Allow similar" after the review (P9-17)', () => {
     const steward = await spawn(app, 'steward', 'outside');
     await waitFor(() => pending(steward) !== undefined, 'request');
     const q = pending(steward)!;
-    const etc = realpathSync('/etc');
+    // `/tmp` is `/private/tmp` on macOS: the real folder is stored, the call's spelling shown.
+    const tmp = realpathSync('/tmp');
     const preview = await call('POST', `/api/questions/${q}/similar-preview`, {});
     expect(preview.body['options']).toMatchObject([
-      { key: `folder:${etc}`, available: true, label: '/etc/…', covers: ['cat /etc/hosts'] },
+      { key: `folder:${tmp}`, available: true, label: '/tmp/…', covers: ['cat /tmp/ga-p14-hosts'] },
       { key: 'category', available: false },
     ]);
     const made = await call('POST', `/api/questions/${q}/allow-similar`, {
-      ...(await ticked(q, [`folder:${etc}`])),
+      ...(await ticked(q, [`folder:${tmp}`])),
     });
     expect(made.status).toBe(200);
     expect(made.body['rules']).toMatchObject([
       {
         scope: 'folder',
-        match: { kind: 'folder', folder: etc, access: 'any' },
+        match: { kind: 'folder', folder: tmp, access: 'any' },
         categories: ['outside_workspace'],
       },
     ]);

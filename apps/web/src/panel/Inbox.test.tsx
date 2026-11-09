@@ -338,7 +338,8 @@ describe('panel inbox (P25-06)', () => {
     expect(within(el).getByText('push:')).toBeTruthy();
     expect(within(el).getByText(/Bash .*git push origin task\/t-1/)).toBeTruthy();
     expect(within(el).queryByLabelText('answer')).toBeNull();
-    await click(within(el).getByRole('button', { name: 'Allow' }));
+    // A push call is offered "Allow similar" too (P14-07): the server's rows decide.
+    await click(within(el).getByRole('button', { name: 'Allow once' }));
     await click(within(el).getByRole('button', { name: 'Refuse' }));
     await flush();
     expect(posts('/api/questions/q-2/answer').map((c) => c.body)).toEqual([

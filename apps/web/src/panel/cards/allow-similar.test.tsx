@@ -280,17 +280,44 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
     expect(onStale).toHaveBeenCalledWith('q-install', 'already answered');
   });
 
-  it('is not offered for a push, a request outside any project, or on the phone', () => {
+  it('a push call: the chooser opens, and the server’s rows for its other reasons show (P14-07)', async () => {
     world();
-    const push = {
+    const push: Question = {
       ...install,
-      context: { ...fx.permissionQuestion.context },
+      context: {
+        text: 'May I run Bash? push: curl https://a.dev; git push',
+        toolCall: { toolName: 'Bash', input: { command: 'curl https://a.dev; git push' } },
+        permissionAction: 'push',
+      },
     };
+    api.similarPreview.mockResolvedValueOnce({
+      ...PREVIEW,
+      questionId: push.id,
+      call: 'curl https://a.dev; git push',
+      asking: ['curl https://a.dev', 'git push'],
+      notRememberable: [{ part: 'git push', reason: 'a push always asks' }],
+      options: [
+        {
+          key: 'site:a.dev',
+          kind: 'site',
+          available: true,
+          label: 'a.dev',
+          preview: 'Any address on a.dev …',
+          digest: 'd-site',
+          covers: ['curl https://a.dev'],
+        },
+      ],
+    });
     show(<QuestionCard question={push} />);
-    expect(screen.getByRole('button', { name: 'Allow' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /^Allow similar/ })).toBeNull();
-    cleanup();
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: /^Allow similar for/ })),
+    );
+    const chooser = await screen.findByRole('group', { name: /Allow from now on/ });
+    expect(within(chooser).getAllByRole('checkbox')).toHaveLength(1);
+    expect(chooser.textContent).toMatch(/a push always asks/);
+  });
 
+  it('is not offered for a request outside any project, or on the phone', () => {
     // An asteroid's Steward: its task has no project.
     const asteroidSteward: Agent = { ...fx.agent, id: 'a-ast', taskId: fx.asteroidTask.id };
     world(fx.project, [fx.agent, asteroidSteward]);

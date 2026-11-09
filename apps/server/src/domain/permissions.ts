@@ -1528,6 +1528,29 @@ const STATE_SAFE_BUILTINS = new Set([
   ':',
   'printf',
 ]);
+/** `NAME=value`: a plain assignment word (no `+=`, no subscript). */
+const PLAIN_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/**
+ * Which prefix assignments (`NAME=value` before `program` in the same simple command) a caller
+ * does not count as a change of shell state (P14-07, ruling F-2).
+ */
+export type PrefixAssignmentOk = (name: string, program: string) => boolean;
+
+/**
+ * Folder rules (ruling F-2a): a prefix assignment sets the program's environment only — unless
+ * the program changes the directory, or the variable is one that steers where paths lead or what
+ * the shell runs (compared upper-cased: zsh's `path` is tied to `PATH`, fail closed).
+ */
+export const FOLDER_PREFIX_OK: PrefixAssignmentOk = (name, program) =>
+  !['cd', 'pushd', 'chdir', 'popd'].includes(program.toLowerCase()) &&
+  !['CDPATH', 'HOME', 'PWD', 'OLDPWD', 'ZDOTDIR', 'ENV', 'BASH_ENV', 'PATH'].includes(
+    name.toUpperCase(),
+  );
+
+/** Visible hosts (ruling F-2b): gh's token does not route, so `GH_TOKEN=… gh …` keeps its host. */
+export const HOSTS_PREFIX_OK: PrefixAssignmentOk = (name, program) =>
+  (name === 'GH_TOKEN' || name === 'GITHUB_TOKEN') && program === 'gh';
+
 /** `NAME=`, `NAME+=`, `NAME[...]=` (an assignment word). */
 const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
 /** A word the shell could expand into another word (a builtin's name, for one). */
@@ -1541,11 +1564,20 @@ const ASSIGNING_EXPANSION = /\$\{[^}]*=/;
  * R-g): false only with no assignment word, no assigning expansion, and a program word that is
  * an external program or one of the safe builtins (`printf` only without `-v…`).
  */
-function changesShellState(simple: SimpleCommand): boolean {
+function changesShellState(simple: SimpleCommand, prefixOk?: PrefixAssignmentOk): boolean {
   const { words } = simple;
   const texts = [...words, ...simple.redirects.map((r) => r.target), simple.heredocBody ?? ''];
   if (texts.some((w) => ASSIGNING_EXPANSION.test(w))) return true;
-  const program = words[0];
+  // Prefix assignments (`NAME=value program …`) the caller accepts are not a change of state:
+  // they set the program's environment only. Standalone ones (no program after them) still are.
+  let k = 0;
+  while (prefixOk && k < words.length && PLAIN_ASSIGNMENT.test(words[k]!)) k++;
+  const after = words[k];
+  const accepted =
+    k > 0 &&
+    after !== undefined &&
+    words.slice(0, k).every((w) => prefixOk!(w.slice(0, w.indexOf('=')), after));
+  const program = words[accepted ? k : 0];
   if (program === undefined) return false;
   if (STATE_SAFE_BUILTINS.has(program)) {
     if (program === 'printf') return words.some((w) => w.startsWith('-v'));
@@ -1566,10 +1598,11 @@ function changesShellState(simple: SimpleCommand): boolean {
 export function lineChangesShellState(
   command: string,
   lexed: ReturnType<typeof lexCommand> = lexCommand(command.trim()),
+  prefixOk?: PrefixAssignmentOk,
 ): boolean {
   const joined = command.trim().replace(/\\\n/g, '');
   return (
-    lexed.commands.some((c) => changesShellState(c)) ||
+    lexed.commands.some((c) => changesShellState(c, prefixOk)) ||
     /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(joined) ||
     /\(\(|\$\[/.test(joined)
   );
@@ -1612,7 +1645,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   let cwd = cwdOf(ctx);
   // Variables set anywhere in the line (export, an assignment segment, ...) can redirect any
   // command's network destination: no host is then visible (ruling R-d).
-  const lineSetsEnv = lineChangesShellState(trimmed, lexed);
+  const lineSetsEnv = lineChangesShellState(trimmed, lexed, HOSTS_PREFIX_OK);
 
   for (const [segment, simple] of lexed.commands.entries()) {
     const here: PolicyContext = { ...ctx, cwd };
@@ -1831,8 +1864,8 @@ function guardedTargets(
   const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
   if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
     for (const w of command.words.slice(h + 1)) {
-      const eq = w.indexOf('=');
-      candidates.push(eq > 0 && w.startsWith('-') ? w.slice(eq + 1) : w);
+      candidates.push(optionValue(w));
+      if (PLAIN_ASSIGNMENT.test(w)) candidates.push(...assignedPaths(w));
     }
   }
   const out: { path: string; reason: string }[] = [];
@@ -1878,7 +1911,12 @@ function pathsOf(command: SimpleCommand): CommandPaths {
   const add = (word: string, isTarget: boolean) => {
     for (const alt of expandBraces(word) ?? [word]) pathToken(alt, isTarget, out, word);
   };
-  for (const w of command.words) add(w, false);
+  for (const w of command.words) {
+    add(w, false);
+    // An assignment's value may name a path (`GIT_WORK_TREE=/x git …`, `make DESTDIR=/x`, `dd
+    // of=/x`), a list of them (`PYTHONPATH=a:/x`) too (P14-07).
+    if (PLAIN_ASSIGNMENT.test(w)) for (const part of assignedPaths(w)) add(part, false);
+  }
   // A file curl reads and sends is a read target, wherever it is (P9-17 review S2).
   for (const f of curlUploads(command.words)) add(f, true);
   for (const r of command.redirects) {
@@ -1939,11 +1977,32 @@ export function curlUploads(words: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * What an assignment word's value may name as paths: the value, each `:`-separated part of it
+ * (`PYTHONPATH=a:/x`) — a URL kept whole (`registry=https://…` names no path).
+ */
+function assignedPaths(word: string): string[] {
+  const value = word.slice(word.indexOf('=') + 1);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return [value];
+  return value.split(':').filter((p) => p !== '');
+}
+
+/**
+ * The value an option word carries, or the word itself: `--opt=<value>` (any `-…=`), and a short
+ * option with a path glued to it (`-o/etc/x`, `-t~/x`, `-t../x`: P14-07, M5). A glued value that
+ * does not start like a path (`-n5`, `-iabc`) stays an option.
+ */
+function optionValue(word: string): string {
+  const eq = word.indexOf('=');
+  if (eq > 0 && word.startsWith('-')) return word.slice(eq + 1);
+  const glued = /^-[A-Za-z](.+)$/.exec(word)?.[1];
+  return glued !== undefined && /^(?:\/|~|\.\.?\/)/.test(glued) ? glued : word;
+}
+
 function pathToken(raw: string, isTarget: boolean, out: CommandPaths, shown: string): void {
   let token = raw;
   if (!isTarget) {
-    const eq = token.indexOf('=');
-    if (eq > 0 && token.startsWith('-')) token = token.slice(eq + 1);
+    token = optionValue(token);
     if (token.startsWith('-')) return;
   }
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token)) return; // URLs are the network rules' business

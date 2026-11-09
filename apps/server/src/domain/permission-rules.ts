@@ -22,6 +22,7 @@ import {
   evaluate,
   expandBraces,
   expandHome,
+  FOLDER_PREFIX_OK,
   GLOB_FIELDS,
   globLocations,
   guardedWriteReason,
@@ -55,7 +56,9 @@ import {
  *
  * An outside-the-workspace reason (P9-17 review B2) is covered only by an exact rule, a file
  * tool's folder rule (reading and writing apart) or a folder rule made from a command (P14): a
- * command prefix or the whole category would cover the whole computer, so neither ever covers one.
+ * command prefix or the whole category would cover the whole computer, so neither ever covers one —
+ * nor any reason of a command that runs outside the workspace (P14-07, ruling F-1: a folder plus
+ * the destructive category never add up to `rm -rf /tmp/x`).
  */
 
 /**
@@ -503,9 +506,13 @@ const NOT_REMEMBERABLE = {
   nowhere: 'the engine cannot tell where it points',
   noSite: 'no visible site, and no command prefix or category covers it',
   other: 'no rule can be offered for it',
+  runsOutside:
+    'it runs outside the workspace: a command prefix or a category never covers it there',
+  folderUnsafe:
+    'this line changes shell state, or uses braces, `..` or the directory stack: folder rules never cover it',
 } as const;
 
-const TOO_BROAD = 'too broad (the root or the home folder)';
+const TOO_BROAD = 'too broad (the root, the home folder or a system folder)';
 
 /** The `cd`-like commands whose finding's path is the folder they enter. */
 const ENTERS = new Set(['cd', 'pushd', 'chdir']);
@@ -636,7 +643,10 @@ export function similarOptions(
   }
   const covered = coverage(input.rules ?? [], { ...input, realPath }, verdict);
   if (covered.allowed) return { refused: "the project's rules cover this call now", ...nothing };
-  const uncovered = covered.uncovered;
+  // The reasons no rule covers, judged one by one even when the call as a whole is never covered
+  // (a push, a guarded write, an unreadable part): no row repeats a rule the project has (M4).
+  const uncovered = uncoveredFindings(input.rules ?? [], { ...input, realPath }, verdict);
+  const runsOutside = runsOutsideOf(verdict, call.toolName === 'Bash');
   const tool = call.toolName;
   const notRememberable: { part: string; reason: string }[] = [];
   const opaque = opaqueParts(verdict, shownCall);
@@ -668,7 +678,8 @@ export function similarOptions(
   // merged into a drafted folder above it.
   const home = ctx.home ?? homedir();
   const realHome = physicalPath(home, ctx, realPath) ?? home;
-  const tooBroad = (f: string) => !coverableFolder(f, ctx) || within(f, realHome);
+  const tooBroad = (f: string) =>
+    !coverableFolder(f, ctx) || within(f, realHome) || systemFolder(f);
   const othersHome = (f: string) => {
     const root = homeRootOf(f);
     return root !== undefined && root !== resolve(home) && root !== realHome;
@@ -692,6 +703,12 @@ export function similarOptions(
       while (lexical !== undefined && !within(lexical, f)) lexical = dirname(lexical);
     }
     for (const f of outside) if (folder !== undefined) folderOf.set(f, place(folder, lexical));
+  } else if (subject.kind === 'command' && folderUnsafeLine(subject.command)) {
+    // A line folder rules never cover (ruling F-2c): no folder row, its outside parts say why.
+    for (const f of outside) {
+      inRow.add(f);
+      notRememberable.push({ part: f.part || shownCall, reason: NOT_REMEMBERABLE.folderUnsafe });
+    }
   } else if (subject.kind === 'command') {
     for (const f of outside) {
       const real = f.path !== undefined ? physicalPath(f.path, ctx, realPath) : undefined;
@@ -767,8 +784,11 @@ export function similarOptions(
     });
   }
 
-  // The command's prefix, for its reasons that are neither outside nor on a visible site.
-  const other = open.filter((f) => f.action !== 'outside_workspace' && !visible.includes(f));
+  // The command's prefix, for its reasons that are neither outside nor on a visible site, nor in
+  // a command that runs outside the workspace (ruling F-1).
+  const other = open.filter(
+    (f) => f.action !== 'outside_workspace' && !visible.includes(f) && !runsOutside(f),
+  );
   const order = (fs: readonly Finding[]) =>
     PermissionAction.options.filter((a) => fs.some((f) => f.action === a));
   if (subject.kind === 'command' && other.length > 0) {
@@ -806,8 +826,8 @@ export function similarOptions(
     }
   }
 
-  // The whole category, for every reason that is not outside the workspace.
-  const inside = open.filter((f) => f.action !== 'outside_workspace');
+  // The whole category, for every reason that is not outside the workspace (nor runs there).
+  const inside = open.filter((f) => f.action !== 'outside_workspace' && !runsOutside(f));
   const categories = order(inside);
   if (categories.length > 0) {
     inside.forEach((f) => inRow.add(f));
@@ -847,9 +867,11 @@ export function similarOptions(
       reason:
         f.action === 'outside_workspace'
           ? NOT_REMEMBERABLE.nowhere
-          : f.action === 'network'
-            ? NOT_REMEMBERABLE.noSite
-            : NOT_REMEMBERABLE.other,
+          : runsOutside(f)
+            ? NOT_REMEMBERABLE.runsOutside
+            : f.action === 'network'
+              ? NOT_REMEMBERABLE.noSite
+              : NOT_REMEMBERABLE.other,
     });
   }
   const seen = new Set<string>();
@@ -911,6 +933,37 @@ function matchesScope(
   }
 }
 
+/**
+ * Folders of the system no folder rule made since P14 names, nor widens to (P14-07, M2): compared
+ * case-folded (APFS). `/tmp` itself is not one; `/private` (which holds `/etc` and `/var`) is.
+ */
+const SYSTEM_FOLDERS = new Set(
+  [
+    '/private',
+    '/private/var',
+    '/private/etc',
+    '/var',
+    '/etc',
+    '/usr',
+    '/opt',
+    '/bin',
+    '/sbin',
+    '/dev',
+    '/Library',
+    '/System',
+    '/Applications',
+    '/Volumes',
+    '/Users',
+    '/home',
+    '/root',
+  ].map((f) => f.toLowerCase()),
+);
+
+/** Whether `folder` is one of the system's top folders (`SYSTEM_FOLDERS`). */
+function systemFolder(folder: string): boolean {
+  return SYSTEM_FOLDERS.has(resolve(folder).normalize('NFC').toLowerCase());
+}
+
 /** Whether `folder` is a folder a rule may cover: never the root, the home folder or above it. */
 function coverableFolder(folder: string, ctx: PolicyContext): boolean {
   if (!isAbsolute(folder)) return false;
@@ -945,7 +998,7 @@ function folderUnsafeLine(command: string): boolean {
   if (DOT_DOT_SEGMENT.test(command) || DOT_DOT_SEGMENT.test(joined)) return true;
   if (/cdpath|cdable_?vars/i.test(joined)) return true;
   const lexed = lexCommand(command.trim());
-  if (lineChangesShellState(command, lexed)) return true;
+  if (lineChangesShellState(command, lexed, FOLDER_PREFIX_OK)) return true;
   return lexed.commands.some((c) => {
     const texts = [...c.words, ...c.redirects.map((r) => r.target)];
     if (texts.some((t) => /[{}]/.test(t) || /cdpath|cdable_?vars/i.test(t))) return true;
@@ -958,6 +1011,32 @@ function folderUnsafeLine(command: string): boolean {
     const args = c.words.slice(h + 1).filter((w) => !/^-[A-Za-z]+$/.test(w) && w !== '--');
     return args.length > 1 || args.some((a) => STACK_ARGUMENT.test(a));
   });
+}
+
+/**
+ * Which findings belong to a command that runs outside the workspace (ruling F-1): a prefix or a
+ * category rule covers none of them, so a folder rule plus the destructive category never add up
+ * to `rm -rf /tmp/x`. For a command line: every finding of a simple command that has an
+ * outside-the-workspace finding, and of every simple command after a `cd`/`pushd`/`chdir` that
+ * has one (it runs there); a finding of no simple command whenever the line has one. For another
+ * tool: every finding of a call that has one.
+ */
+function runsOutsideOf(c: Classification, bash: boolean): (f: Finding) => boolean {
+  const outside = c.findings.filter((f) => f.action === 'outside_workspace');
+  if (outside.length === 0) return () => false;
+  if (!bash || outside.some((f) => f.segment === undefined)) return () => true;
+  const segments = new Set(outside.map((f) => f.segment!));
+  const entered = outside
+    .filter((f) => {
+      const name = f.words?.[commandHead(f.words)]?.toLowerCase();
+      return name !== undefined && ENTERS.has(name);
+    })
+    .map((f) => f.segment!);
+  const firstCd = entered.length > 0 ? Math.min(...entered) : undefined;
+  return (f) =>
+    f.segment === undefined ||
+    segments.has(f.segment) ||
+    (firstCd !== undefined && f.segment > firstCd);
 }
 
 /** Whether the command's `segment` (classifyCommand's index) starts with `words`, cleanly. */
@@ -979,6 +1058,8 @@ interface CoverageInput {
   command: string | undefined;
   /** `folderUnsafeLine(command)`, computed once. */
   folderUnsafe: () => boolean;
+  /** Whether a finding belongs to a command that runs outside the workspace (`runsOutsideOf`). */
+  runsOutside: (f: Finding) => boolean;
   subject: () => Subject;
 }
 
@@ -990,7 +1071,7 @@ interface CoverageInput {
  */
 function folderCovers(folder: string, f: Finding, k: CoverageInput): boolean {
   const { ctx } = k.input;
-  if (!coverableFolder(folder, ctx)) return false;
+  if (!coverableFolder(folder, ctx) || systemFolder(folder)) return false;
   if (k.command !== undefined) {
     if (f.path === undefined || k.folderUnsafe()) return false;
     const real = physicalPath(f.path, ctx, k.realPath);
@@ -1035,6 +1116,7 @@ function coversFinding(rule: PermissionRule, f: Finding, k: CoverageInput): bool
       );
     case 'words': {
       if (rule.scope !== 'prefix' || outside || k.command === undefined) return false;
+      if (k.runsOutside(f)) return false;
       if (rule.tool !== k.input.call.toolName || !rule.categories.includes(f.action)) return false;
       if (prefixRefusal(match.words) !== undefined) return false;
       // A finding of one simple command; or the line's own (running in the workspace): all of it.
@@ -1043,7 +1125,12 @@ function coversFinding(rule: PermissionRule, f: Finding, k: CoverageInput): bool
         : commandMatchesPrefix(k.command, match.words);
     }
     case 'categories':
-      return rule.scope === 'category' && !outside && rule.categories.includes(f.action);
+      return (
+        rule.scope === 'category' &&
+        !outside &&
+        !k.runsOutside(f) &&
+        rule.categories.includes(f.action)
+      );
     case 'text':
       return false;
   }
@@ -1060,6 +1147,10 @@ function coversWholeCall(rule: PermissionRule, asking: Asking, k: CoverageInput)
   if (rule.scope !== 'exact' && !legacyFolder) return false;
   if (rule.match.kind === 'folder' && !coverableFolder(rule.match.folder, k.input.ctx))
     return false;
+  // A file tool's folder rule made since P14 never names a system folder (M2); a legacy one does.
+  if (rule.scope === 'folder' && rule.match.kind === 'folder' && systemFolder(rule.match.folder)) {
+    return false;
+  }
   if (asking.unclassified && !(rule.scope === 'exact' && rule.unclassified)) return false;
   if (!asking.categories.every((c) => rule.categories.includes(c))) return false;
   return matchesScope(rule, k.input.call, k.subject(), k.input.ctx);
@@ -1073,6 +1164,44 @@ export interface Coverage {
   ruleIds: Id[];
   /** Asked findings no rule covers (empty when `allowed`). */
   uncovered: Finding[];
+}
+
+/** What the per-finding checks share for one call. */
+function coverageInputOf(input: RuleInput, c: Classification): CoverageInput {
+  const call = input.call;
+  const realPath = input.realPath ?? systemRealPath;
+  const raw = isRecord(call.input) ? call.input['command'] : undefined;
+  let subject: Subject | undefined;
+  let unsafe: boolean | undefined;
+  const command =
+    call.toolName === 'Bash' ? (typeof raw === 'string' ? raw.trim() : '') : undefined;
+  return {
+    input,
+    realPath,
+    command,
+    folderUnsafe: () => (unsafe ??= command === undefined || folderUnsafeLine(command)),
+    runsOutside: runsOutsideOf(c, command !== undefined),
+    subject: () => (subject ??= subjectOf(call, input.ctx, realPath)),
+  };
+}
+
+/**
+ * The asked findings of a call no rule covers one by one, ignoring what refuses the call as a
+ * whole (a push, a guarded write, an unreadable part): what the chooser drafts rows for (M4). A
+ * push or a guarded finding is never counted as covered.
+ */
+function uncoveredFindings(
+  rules: readonly PermissionRule[],
+  input: RuleInput,
+  c: Classification,
+): Finding[] {
+  const asking = askingOf(input.policy, c);
+  const asked = c.findings.filter((f) => asking.categories.includes(f.action));
+  const live = rules.filter((r) => !r.categories.includes('push'));
+  const k = coverageInputOf(input, c);
+  return asked.filter(
+    (f) => f.action === 'push' || f.guarded === true || !live.some((r) => coversFinding(r, f, k)),
+  );
 }
 
 /**
@@ -1095,20 +1224,7 @@ export function coverage(
   if (rules.length === 0 || c.alwaysAllow || neverByRule(c)) return none;
   if (asked.some((f) => f.action === 'push')) return none;
   const live = rules.filter((r) => !r.categories.includes('push'));
-  const call = input.call;
-  const realPath = input.realPath ?? systemRealPath;
-  const raw = isRecord(call.input) ? call.input['command'] : undefined;
-  let subject: Subject | undefined;
-  let unsafe: boolean | undefined;
-  const command =
-    call.toolName === 'Bash' ? (typeof raw === 'string' ? raw.trim() : '') : undefined;
-  const k: CoverageInput = {
-    input,
-    realPath,
-    command,
-    folderUnsafe: () => (unsafe ??= command === undefined || folderUnsafeLine(command)),
-    subject: () => (subject ??= subjectOf(call, input.ctx, realPath)),
-  };
+  const k = coverageInputOf(input, c);
   const whole = live.find((r) => coversWholeCall(r, asking, k));
   if (whole) return { allowed: true, ruleIds: [whole.id], uncovered: [] };
   if (asking.unclassified) return none;
@@ -1148,12 +1264,10 @@ export function unattendedRuleRefusal(
   if (categories.includes('push')) return 'a job never pushes unattended: drop the push rule';
   if (categories.length === 0) return 'a rule needs at least one category';
   const outside = categories.includes('outside_workspace');
-  const pairs: Record<PermissionRuleScope, readonly PermissionRuleMatch['kind'][]> = {
+  const pairs: Partial<Record<PermissionRuleScope, readonly PermissionRuleMatch['kind'][]>> = {
     exact: ['text'],
     prefix: ['words', 'folder'],
     category: ['categories'],
-    folder: ['folder'],
-    site: ['host'],
   };
   // The card's per-reason kinds (P14) are not offered to a job: a folder or site scope, a host,
   // or a folder made from a command (`access`).
@@ -1162,7 +1276,7 @@ export function unattendedRuleRefusal(
   if (scope === 'folder' || (match.kind === 'folder' && match.access !== undefined)) {
     return 'folder rules are for the permission card only';
   }
-  if (!pairs[scope].includes(match.kind)) {
+  if (!pairs[scope]?.includes(match.kind)) {
     return `a ${scope} rule never matches ${match.kind === 'categories' ? 'whole categories' : `a ${match.kind}`}`;
   }
   switch (match.kind) {

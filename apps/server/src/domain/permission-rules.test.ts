@@ -558,18 +558,19 @@ describe('outside the workspace: a folder only (P9-17 review B2, P14)', () => {
       ['cat /tmp/x', ['folder:/tmp', true]],
       ['git -C / status', ['folder:/', false]],
       ['cp a /tmp/b', ['folder:/tmp', true]],
-      ['ls ../../..', ['folder:/', false]],
+      // A `..` makes the line one folder rules never cover: no folder row (ruling F-2c).
+      ['ls ../../..', undefined],
     ] as const) {
       const found = similarOptions({ call: bash(command), ctx, policy: DEFAULT, realPath: REAL });
       expect(found.refused, command).toBeUndefined();
       expect(
         found.rows.map((r) => [r.key, r.available]),
         command,
-      ).toEqual([folder, ['category', false]]);
+      ).toEqual([...(folder ? [folder] : []), ['category', false]]);
     }
   });
 
-  it('offers the folder for a file tool, never the category', () => {
+  it('offers the folder for a file tool, never the category (never a system folder: M2)', () => {
     const found = similarOptions({
       call: read('/etc/hosts'),
       ctx,
@@ -577,7 +578,12 @@ describe('outside the workspace: a folder only (P9-17 review B2, P14)', () => {
       realPath: REAL,
     });
     expect(found.rows.map((r) => [r.key, r.available])).toEqual([
-      ['folder:/etc', true],
+      ['folder:/etc', false],
+      ['category', false],
+    ]);
+    const data = similarOptions({ call: read('/data/x'), ctx, policy: DEFAULT, realPath: REAL });
+    expect(data.rows.map((r) => [r.key, r.available])).toEqual([
+      ['folder:/data', true],
       ['category', false],
     ]);
   });
@@ -838,7 +844,8 @@ describe('coverage: every asked reason must be covered (P14-03)', () => {
       'cd /tmp/pr83; setopt auto_cd; cat passwd',
       'cd /tmp/pr83; emulate sh; cat x',
       'cd /tmp/pr83; x=CD; export ${x}PATH=/etc; cd x; cat passwd',
-      'FOO=1 cat /tmp/pr83/a.txt',
+      'FOO=1; cat /tmp/pr83/a.txt',
+      'CDPATH=/etc cat /tmp/pr83/a.txt',
       // zsh's two-argument cd, the directory stack.
       'cd /tmp/pr83; cd pr83 etc; cat passwd',
       'cd /etc; cd /tmp/pr83; pushd +1; cat passwd',
@@ -855,6 +862,8 @@ describe('coverage: every asked reason must be covered (P14-03)', () => {
       'cat /tmp/pr83/a.txt',
       'cd -P /tmp/pr83; ls',
       'pushd /tmp/pr83; ls',
+      // A prefix assignment sets the program's environment only (ruling F-2a).
+      'FOO=1 cat /tmp/pr83/a.txt',
     ]) {
       expect(allowed([folder], bash(command)), command).toBe(true);
     }
@@ -1159,15 +1168,18 @@ describe('one tickable row per reason (P14-04)', () => {
   });
 
   it('an assignment in the line hides the site: the category row covers the network instead', () => {
-    const found = options('cd /tmp/pr83; GH_TOKEN=$(gh auth token) gh pr view 83');
+    // gh's own token keeps its site (ruling F-2b); any other assignment hides it.
+    const found = options('HTTPS_PROXY=x gh pr view 83');
     expect(found.rows.map((r) => [r.key, r.available])).toEqual([
-      ['folder:/tmp/pr83', true],
       ['prefix', false],
       ['category', true],
     ]);
-    expect(available(found, 'category').covers).toEqual([
-      'gh auth token',
-      'GH_TOKEN=$() gh pr view 83',
+    expect(available(found, 'category').covers).toEqual(['HTTPS_PROXY=x gh pr view 83']);
+    const token = options('cd /tmp/pr83; GH_TOKEN=$(gh auth token) gh pr view 83');
+    expect(token.rows.map((r) => [r.key, r.available])).toEqual([
+      ['folder:/tmp/pr83', true],
+      ['site:github.com', true],
+      ['category', false],
     ]);
   });
 
@@ -1197,7 +1209,7 @@ describe('one tickable row per reason (P14-04)', () => {
     expect(options('ls /').rows[0]).toMatchObject({
       key: 'folder:/',
       available: false,
-      reason: expect.stringMatching(/too broad \(the root or the home folder\)/),
+      reason: expect.stringMatching(/too broad \(the root, the home folder or a system folder\)/),
     });
     expect(options('cat ~/todo.txt').rows[0]).toMatchObject({
       key: `folder:${HOME}`,
@@ -1271,7 +1283,8 @@ describe('one tickable row per reason (P14-04)', () => {
   it("the project's rules: a covered reason gets no row and is not asked about", () => {
     const folder = available(options('cd /tmp/pr83; gh pr view 83'), 'folder:/tmp/pr83');
     const found = options('cd /tmp/pr83; gh pr view 83', [stored(folder.draft, 'r-folder')]);
-    expect(found.rows.map((r) => r.key)).toEqual(['site:github.com', 'category']);
+    // gh runs in /tmp/pr83 (after the cd): no category for it there (ruling F-1), only its site.
+    expect(found.rows.map((r) => r.key)).toEqual(['site:github.com']);
     expect(found.asking).toEqual(['gh pr view 83']);
   });
 
@@ -1375,5 +1388,287 @@ describe('one tickable row per reason (P14-04)', () => {
         categories: ['outside_workspace'],
       }),
     ).toBeUndefined();
+  });
+});
+
+describe('final review fixes (P14-07)', () => {
+  const W = '/w';
+  const wctx: PolicyContext = { workspace: W, cwd: W, home: HOME };
+  const ASKS: PermissionPolicy = {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      outside_workspace: 'ask',
+      network: 'ask',
+      destructive: 'ask',
+      push: 'ask',
+    },
+  };
+  /** Folders that exist (`p/` resolves for them only) and files. */
+  const DIRS = [
+    W,
+    '/tmp',
+    '/tmp/pr83',
+    '/private',
+    '/private/tmp',
+    '/private/tmp/pr83',
+    '/etc',
+    '/opt',
+    '/opt/a',
+    '/opt/a/b',
+    '/srv',
+    '/srv/a',
+    '/srv/a/b',
+    '/home',
+    HOME,
+  ];
+  const FS: RealPath = (p) => {
+    const q = p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p;
+    if (p.endsWith('/')) return DIRS.includes(q) ? q : undefined;
+    return DIRS.some((d) => q === d || q.startsWith(`${d}/`)) ? q : undefined;
+  };
+  const verdictOf = (call: ToolCall) => evaluate(ASKS, call, wctx);
+  const cover = (rules: PermissionRule[], call: ToolCall) => {
+    const v = verdictOf(call);
+    expect(v.decision, JSON.stringify(call)).toBe('ask');
+    return coverage(rules, { call, ctx: wctx, policy: ASKS, realPath: FS }, v);
+  };
+  const uncoveredOf = (c: Coverage) => c.uncovered.map((f) => `${f.action}: ${f.part}`);
+  const options = (call: ToolCall, rules: PermissionRule[] = []) =>
+    similarOptions({ call, ctx: wctx, policy: ASKS, realPath: FS, rules });
+  const keys = (found: ReturnType<typeof similarOptions>) =>
+    found.rows.map((r) => `${r.key}${r.available ? '' : ' (x)'}`);
+  const stored = (draft: RuleDraft, id: string): PermissionRule => {
+    const { preview: _preview, ...rest } = draft;
+    return {
+      ...rest,
+      id,
+      projectId: 'p-1',
+      createdBy: { type: 'user' },
+      createdAt: '2026-11-09T10:00:00.000Z',
+      origin: 'local',
+    };
+  };
+  const row = (found: ReturnType<typeof similarOptions>, key: string) => {
+    const r = found.rows.find((x) => x.key === key);
+    if (!r?.available) throw new Error(`${key} not offered: ${JSON.stringify(found.rows)}`);
+    return r;
+  };
+  const folder = (f: string) =>
+    forged(`r-folder-${f}`, {
+      scope: 'folder',
+      tool: 'Bash',
+      match: { kind: 'folder', folder: f, access: 'any' },
+      categories: ['outside_workspace'],
+    });
+  const pr83 = folder('/tmp/pr83');
+  const destructive = forged('r-destructive', {
+    scope: 'category',
+    tool: '*',
+    match: { kind: 'categories' },
+    categories: ['destructive'],
+  });
+  const network = forged('r-network', {
+    scope: 'category',
+    tool: '*',
+    match: { kind: 'categories' },
+    categories: ['network'],
+  });
+  const npmInstall = forged('r-npm-install', {
+    scope: 'prefix',
+    tool: 'Bash',
+    match: { kind: 'words', words: ['npm', 'install'] },
+    categories: ['network'],
+  });
+  const rmPrefix = forged('r-rm', {
+    scope: 'prefix',
+    tool: 'Bash',
+    match: { kind: 'words', words: ['rm'] },
+    categories: ['destructive'],
+  });
+
+  describe('F-1: a prefix or category never covers a command that runs outside', () => {
+    it('a folder and the destructive category do not add up to a delete outside', () => {
+      const c = cover([pr83, destructive, rmPrefix], bash('rm -rf /tmp/pr83'));
+      expect(c.allowed).toBe(false);
+      expect(uncoveredOf(c)).toEqual(['destructive: rm -rf /tmp/pr83']);
+      expect(cover([pr83, destructive], bash('rm -rf /tmp/pr83/x')).allowed).toBe(false);
+    });
+
+    it('every segment after a cd outside runs outside', () => {
+      const c = cover([pr83, npmInstall, network], bash('cd /tmp/pr83 && npm install'));
+      expect(c.allowed).toBe(false);
+      expect(uncoveredOf(c)).toEqual(['network: npm install']);
+      const del = cover([pr83, destructive], bash('cd /tmp/pr83; rm -rf build'));
+      expect(uncoveredOf(del)).toEqual(['destructive: rm -rf build']);
+      // A site still covers its host there: the site names where it goes.
+      const gh = forged('r-site', {
+        scope: 'site',
+        tool: '*',
+        match: { kind: 'host', host: 'github.com' },
+        categories: ['network'],
+      });
+      expect(cover([pr83, gh], bash('cd /tmp/pr83 && gh pr view 83')).allowed).toBe(true);
+    });
+
+    it('inside the workspace the category and the prefix still cover', () => {
+      expect(cover([destructive], bash('rm -rf build/')).allowed).toBe(true);
+      expect(cover([rmPrefix], bash('rm -rf build/')).allowed).toBe(true);
+      expect(cover([npmInstall], bash('npm install')).allowed).toBe(true);
+      // A segment before the cd is not outside.
+      expect(uncoveredOf(cover([pr83, npmInstall], bash('npm install && cd /tmp/pr83')))).toEqual(
+        [],
+      );
+    });
+
+    it('a non-Bash call with an outside finding: no category covers any of it', () => {
+      const call: ToolCall = { toolName: 'WebFetch', input: { url: 'https://x.io/' } };
+      const c = coverage(
+        [network, pr83],
+        { call, ctx: wctx, policy: ASKS, realPath: FS },
+        {
+          actions: ['network', 'outside_workspace'],
+          reasons: ['a', 'b'],
+          findings: [
+            { action: 'network', part: 'x', reason: 'a' },
+            { action: 'outside_workspace', part: 'y', reason: 'b', path: '/tmp/pr83/a' },
+          ],
+        },
+      );
+      expect(c.uncovered.map((f) => f.action)).toContain('network');
+      expect(c.allowed).toBe(false);
+    });
+
+    it('the chooser offers no prefix or category for a part that runs outside', () => {
+      const del = options(bash('rm -rf /tmp/pr83'));
+      expect(keys(del)).toEqual(['folder:/tmp/pr83', 'category (x)']);
+      expect(del.notRememberable).toEqual([
+        {
+          part: 'rm -rf /tmp/pr83',
+          reason: expect.stringMatching(/outside the workspace/) as unknown as string,
+        },
+      ]);
+      const npm = options(bash('cd /tmp/pr83 && npm install'));
+      expect(keys(npm)).toEqual(['folder:/tmp/pr83', 'category (x)']);
+      expect(npm.notRememberable.map((n) => n.part)).toEqual(['npm install']);
+    });
+  });
+
+  describe('F-2: prefix assignments, gh tokens, folder-unsafe lines', () => {
+    const LINE =
+      'cd /tmp/pr83; git log --oneline origin/dev..HEAD; GH_TOKEN=$(gh auth token) gh pr view 83 --json body';
+
+    it("the spec's line gets a folder row and a site row, and both together allow it", () => {
+      const found = options(bash(LINE));
+      expect(found.refused).toBeUndefined();
+      const f = row(found, 'folder:/tmp/pr83');
+      const s = row(found, 'site:github.com');
+      expect(s.covers).toEqual(['gh auth token', 'GH_TOKEN=$() gh pr view 83 --json body']);
+      const rules = [stored(f.draft, 'r-f'), stored(s.draft, 'r-s')];
+      const c = cover(rules, bash(LINE));
+      expect(uncoveredOf(c)).toEqual([]);
+      expect(c.allowed).toBe(true);
+    });
+
+    it('a prefix assignment on another command keeps the line folder-safe', () => {
+      expect(cover([pr83], bash('FOO=1 cat /tmp/pr83/a')).allowed).toBe(true);
+      expect(cover([pr83], bash('cd /tmp/pr83 && LC_ALL=C sort a')).allowed).toBe(true);
+    });
+
+    it('standalone assignments, export, cd and the directory variables still refuse', () => {
+      for (const command of [
+        'FOO=1; cat /tmp/pr83/a',
+        'export FOO=1; cat /tmp/pr83/a',
+        'set -e; cd /tmp/pr83; ls',
+        'FOO=1 cd /tmp/pr83',
+        'CDPATH=/etc cat /tmp/pr83/a',
+        'HOME=/etc cat /tmp/pr83/a',
+        'PWD=/etc cat /tmp/pr83/a',
+        'OLDPWD=/etc cat /tmp/pr83/a',
+        'ZDOTDIR=/etc cat /tmp/pr83/a',
+        'ENV=/etc/x cat /tmp/pr83/a',
+        'BASH_ENV=/etc/x cat /tmp/pr83/a',
+        'PATH=/tmp/pr83 cat /tmp/pr83/a',
+        'path=/tmp/pr83 cat /tmp/pr83/a',
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+      }
+    });
+
+    it("an assignment's value is a path: a folder never covers a value outside it", () => {
+      const c = cover([pr83], bash('cd /tmp/pr83 && GIT_WORK_TREE=/etc git checkout .'));
+      expect(c.allowed).toBe(false);
+      expect(cover([pr83], bash('GIT_DIR=/tmp/pr83/repo git log')).allowed).toBe(true);
+    });
+
+    it('a line folder rules never cover gets no folder row: its outside parts say why', () => {
+      const found = options(bash('set -e; cd /tmp/pr83; ls'));
+      expect(keys(found)).toEqual(['category (x)']);
+      expect(found.notRememberable).toEqual([
+        {
+          part: 'cd /tmp/pr83',
+          reason: expect.stringMatching(/folder rules never cover it/) as unknown as string,
+        },
+      ]);
+    });
+  });
+
+  describe('M2: widen never offers a system folder', () => {
+    it('/private/tmp/pr83 widens to /private/tmp, never /private', () => {
+      const found = options(bash('cd /private/tmp/pr83'));
+      const f = row(found, 'folder:/private/tmp/pr83');
+      expect(f.widen?.map((d) => d.match)).toEqual([
+        { kind: 'folder', folder: '/private/tmp', access: 'any' },
+      ]);
+    });
+
+    it('stops one level below the root, and refuses the system folders themselves', () => {
+      const opt = row(options(bash('cd /opt/a/b')), 'folder:/opt/a/b');
+      expect(opt.widen?.map((d) => d.label)).toEqual(['/opt/a/…']);
+      const srv = row(options(bash('cd /srv/a/b')), 'folder:/srv/a/b');
+      expect(srv.widen?.map((d) => d.label)).toEqual(['/srv/a/…', '/srv/…']);
+      for (const [command, key] of [
+        ['cat /etc/hosts', 'folder:/etc'],
+        ['cd /private', 'folder:/private'],
+        ['cd /opt', 'folder:/opt'],
+      ]) {
+        const found = options(bash(command!));
+        expect(
+          found.rows.find((r) => r.key === key),
+          command,
+        ).toMatchObject({
+          available: false,
+          reason: expect.stringMatching(/too broad/) as unknown as string,
+        });
+      }
+      expect(row(options(bash('cd /tmp')), 'folder:/tmp').widen).toBeUndefined();
+    });
+
+    it('a stored folder rule on a system folder covers nothing', () => {
+      expect(cover([folder('/etc')], bash('cat /etc/hosts')).allowed).toBe(false);
+      expect(cover([folder('/private')], bash('cat /private/tmp/x')).allowed).toBe(false);
+      expect(cover([folder('/tmp')], bash('cat /tmp/x')).allowed).toBe(true);
+    });
+  });
+
+  describe('M4: drafting skips reasons existing rules already cover', () => {
+    const site = forged('r-site', {
+      scope: 'site',
+      tool: '*',
+      match: { kind: 'host', host: 'github.com' },
+      categories: ['network'],
+    });
+
+    it('a push call: the site already covered gets no second row', () => {
+      const found = options(bash('curl https://github.com/x; git push'), [site]);
+      expect(keys(found)).not.toContain('site:github.com');
+      expect(found.asking).toEqual(['git push']);
+    });
+
+    it('a guarded call: the folder already covered gets no second row', () => {
+      const found = options(bash('cat /tmp/pr83/a > .git/config'), [pr83]);
+      expect(keys(found).some((k) => k.startsWith('folder:/tmp/pr83'))).toBe(false);
+    });
   });
 });

@@ -84,7 +84,7 @@ describe('list mode: the panel without the scene (P5-04)', () => {
     await openApp('/');
     const waiting = within(inbox()).getByRole('region', { name: 'Waiting for you' });
     const permission = within(waiting).getByRole('article', { name: /^permission question/ });
-    await click(within(permission).getByRole('button', { name: 'Allow' }));
+    await click(within(permission).getByRole('button', { name: 'Allow once' }));
     expect(posts('/api/questions/q-2/answer')).toHaveLength(1);
     const proposal = within(waiting).getByRole('article', { name: /^proposal / });
     await click(within(proposal).getByRole('button', { name: 'Approve' }));
