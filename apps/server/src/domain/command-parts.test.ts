@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { CommandPart } from '@galactic/protocol';
 import { commandParts, partsOfCall } from './command-parts.js';
 import { lexCommand, type PolicyContext } from './permissions.js';
 
@@ -12,14 +13,17 @@ const texts = (command: string) => commandParts(command, ctx).map((p) => p.text)
 
 describe('commandParts', () => {
   it('splits a chain and a pipeline into their commands', () => {
-    const parts = commandParts('gh pr view 12 | jq . && rm -rf ../other', {
-      ...ctx,
-      cwd: ctx.workspace,
-    });
+    const parts = commandParts('gh pr view 12 | jq . && rm -rf ../other', ctx);
     expect(parts.map((p) => p.text)).toEqual(['gh pr view 12', 'jq .', 'rm -rf ../other']);
-    expect(parts[2]!.categories).toEqual(
+    // From the worktree, `../other` is still inside the workspace: the gate gives no
+    // `outside_workspace`, but the delete leaves the Steward's worktree.
+    expect(parts[2]!.categories).toEqual(['destructive']);
+    expect(parts[2]!.outsideCwd).toBe(true);
+    const fromRoot = commandParts('rm -rf ../other', { ...ctx, cwd: ctx.workspace });
+    expect(fromRoot[0]!.categories).toEqual(
       expect.arrayContaining(['destructive', 'outside_workspace']),
     );
+    expect(fromRoot[0]!.outsideCwd).toBe(true);
     expect(parts[0]!.categories).toEqual(['network']);
     expect(parts.some((p) => p.opaque)).toBe(false);
   });
@@ -209,5 +213,88 @@ describe('partsOfCall', () => {
     );
     expect(parts[0]!.categories).toEqual(['outside_workspace']);
     expect(parts[0]!.guarded).toBe(true);
+  });
+});
+
+describe('commandParts: bypasses closed in review (fix round 1)', () => {
+  const destructiveOutside = (p: CommandPart) =>
+    p.categories.includes('outside_workspace') || p.outsideCwd === true;
+
+  it('does not let a cd inside sh -c leak into the parts after it', () => {
+    const parts = commandParts(`sh -c 'cd a/b/c/d' && rm -rf ../../../x`, ctx);
+    expect(parts[1]!.text).toBe('rm -rf ../../../x');
+    expect(parts[1]!.categories).toContain('outside_workspace');
+  });
+
+  it('does not let a cd inside a shell heredoc leak into the parts after it', () => {
+    const parts = commandParts("bash <<'A'\ncd a/b/c\nA\nrm -rf ../../../q", ctx);
+    expect(parts.at(-1)!.text).toBe('rm -rf ../../../q');
+    expect(parts.at(-1)!.categories).toContain('outside_workspace');
+  });
+
+  it('does not let a cd back into the worktree inside bash -c hide an outer cd', () => {
+    const parts = commandParts(
+      `cd /tmp && bash -c 'cd /work/proj/.worktrees/t1'; rm -rf ../../x`,
+      ctx,
+    );
+    expect(parts.at(-1)!.categories).toContain('outside_workspace');
+    expect(parts.at(-1)!.outsideCwd).toBe(true);
+  });
+
+  it('makes the body unreadable when sh -c has positional arguments', () => {
+    const one = commandParts(`sh -c 'rm -rf "$1"' _ /`, ctx);
+    expect(one.every((p) => p.opaque === 'unreadable')).toBe(true);
+    const many = commandParts(`bash -c 'rm -rf "$@"' _ /etc ~/.zshrc`, ctx);
+    expect(many.every((p) => p.opaque === 'unreadable' && p.guarded === true)).toBe(true);
+    expect(many.some(destructiveOutside)).toBe(true);
+  });
+
+  it('makes a shell or interpreter behind an assignment unreadable, the wrapper kept', () => {
+    for (const command of [
+      'BASH_ENV=./evil.sh bash -c ls',
+      `PAGER='rm -rf ~' bash -c 'git log'`,
+      `GIT_DIR=/etc bash -c 'git status'`,
+      `env 'X=a b' bash -c ls`,
+      'PYTHONSTARTUP=x.py python3 -m http',
+    ]) {
+      const parts = commandParts(command, ctx);
+      expect(parts.length, command).toBe(2);
+      expect(parts[1]!.opaque, command).toBe('unreadable');
+    }
+    expect(texts(`PAGER='rm -rf ~' bash -c 'git log'`)[0]).toBe(`PAGER='rm -rf ~'`);
+    expect(texts(`env 'X=a b' bash -c ls`)[0]).toBe(`env X='a b'`);
+  });
+
+  it('makes a shell run by xargs unreadable when it takes its code from the input', () => {
+    for (const command of [
+      `ls | xargs -I{} sh -c '{}'`,
+      `ls | xargs -I % bash -c 'echo %'`,
+      `ls | xargs -i sh -c 'x {}'`,
+      `ls | xargs -J @ sh -c @`,
+      'ls | xargs sh',
+      'ls | xargs -n1 bash',
+      'ls | xargs bash -c',
+      'ls | xargs python3',
+    ]) {
+      const parts = commandParts(command, ctx);
+      expect(parts.at(-1)!.opaque, command).toBe('unreadable');
+    }
+    // A fixed body that does not use the replace-string is still split.
+    expect(texts(`ls | xargs -I{} sh -c 'echo hi'`)).toEqual(['ls', 'echo hi']);
+  });
+
+  it('flags a delete after a cd in a substitution or subshell, which the lexer flattens', () => {
+    expect(commandParts('$(cd a/b/c) ; rm -rf ../../../w', ctx).at(-1)!.outsideCwd).toBe(true);
+    expect(commandParts('(cd a/b/c); rm -rf ../../../w', ctx).at(-1)!.outsideCwd).toBe(true);
+  });
+
+  it('flags a delete outside the worktree, and not one inside it', () => {
+    expect(commandParts('rm -rf build/tmp', ctx)[0]!.outsideCwd).toBeUndefined();
+    expect(commandParts('rm -rf ./a/../b', ctx)[0]!.outsideCwd).toBeUndefined();
+    expect(commandParts('rm -rf /work/proj/.worktrees/t1/x', ctx)[0]!.outsideCwd).toBeUndefined();
+    expect(commandParts('rm -rf ../t2/src', ctx)[0]!.outsideCwd).toBe(true);
+    expect(commandParts('cd .. && rm -rf t2', ctx)[1]!.outsideCwd).toBe(true);
+    expect(commandParts('rm -rf "$DIR"/x', ctx)[0]!.outsideCwd).toBe(true);
+    expect(commandParts('cat ../t2/x', ctx)[0]!.outsideCwd).toBeUndefined();
   });
 });

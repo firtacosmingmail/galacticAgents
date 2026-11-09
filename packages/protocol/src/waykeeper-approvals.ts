@@ -25,6 +25,12 @@ export const CommandPart = z.object({
   categories: z.array(PermissionAction),
   opaque: z.enum(['inline_code', 'script_file', 'unreadable']).optional(),
   guarded: z.literal(true).optional(),
+  /**
+   * A destructive part whose target path resolves outside the Steward's worktree (`ctx.cwd`), or
+   * that runs from outside it, or whose target cannot be placed (design §5.4a: a delete outside
+   * the worktree is never approvable by the judge).
+   */
+  outsideCwd: z.literal(true).optional(),
 });
 export type CommandPart = z.infer<typeof CommandPart>;
 

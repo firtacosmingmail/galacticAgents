@@ -9,7 +9,9 @@ import {
   classifyToolCall,
   commandHead,
   cwdOf,
+  isInsideWorkspace,
   lexCommand,
+  pathsInCommand,
   resolvePath,
   type PolicyContext,
   type SimpleCommand,
@@ -79,13 +81,7 @@ export function partsOfCall(call: ToolCall, ctx: PolicyContext): CommandPart[] {
 
 function unreadablePart(text: string, ctx: PolicyContext): CommandPart {
   try {
-    const c = classifyCommand(text, ctx);
-    return {
-      text,
-      categories: c.actions,
-      opaque: 'unreadable',
-      ...(c.guarded ? { guarded: true as const } : {}),
-    };
+    return new Splitter(ctx).part(text, 'unreadable');
   } catch {
     return { text, categories: [], opaque: 'unreadable' };
   }
@@ -99,9 +95,15 @@ const HEREDOC_OPS = new Set(['<<', '<<-', '<<<']);
 class Splitter {
   /** Where relative paths resolve from; a `cd` moves it for the parts after it, as in the gate. */
   private cwd: string;
+  /**
+   * Every cwd the line has been at. The lexer flattens `$(…)` and `( … )`, so a `cd` there looks
+   * like it moves the cwd for what follows; `outside` judges paths from all of them.
+   */
+  private readonly seen = new Set<string>();
 
   constructor(private readonly ctx: PolicyContext) {
     this.cwd = cwdOf(ctx);
+    this.seen.add(this.cwd);
   }
 
   split(src: string, depth: number): CommandPart[] {
@@ -122,18 +124,29 @@ class Splitter {
     if (h > 0) {
       // A wrapper (`sudo`, `env X=1`, `timeout 30`, `xargs -0`) in front of a command the
       // splitter looks into, or `xargs`'s target: the target is split on its own, and the
-      // wrapper is a part only when it adds something (`sudo`).
+      // wrapper is a part when it adds something (`sudo`) or sets a variable.
       const prefix = words.slice(0, h);
-      if (prefix.some((w) => baseName(w) === 'xargs') || lookedInto(words[h]!)) {
+      const xargsAt = prefix.findIndex((w) => baseName(w) === 'xargs');
+      if (xargsAt >= 0 || lookedInto(words[h]!)) {
         const out: CommandPart[] = [];
+        const assigns = prefix.some(isAssignment);
         const wrapper = this.part(prefix.map(quoteWord).join(' '));
         const plain =
           wrapper.categories.length === 1 &&
           wrapper.categories[0] === 'run_workspace' &&
           !wrapper.opaque &&
           !wrapper.guarded;
-        if (!plain) out.push(wrapper);
-        out.push(...this.simple({ ...command, words: words.slice(h) }, depth));
+        if (!plain || assigns) out.push(wrapper);
+        const target: SimpleCommand = { ...command, words: words.slice(h) };
+        const runsCode = SHELLS.test(name) || INTERPRETER.test(name);
+        // A variable can change what a shell or interpreter runs (`BASH_ENV`, `PAGER`,
+        // `PYTHONSTARTUP`); `xargs` can hand one its code (`-I{} sh -c '{}'`, `xargs bash`).
+        if (
+          runsCode &&
+          (assigns || (xargsAt >= 0 && xargsFeedsCode(prefix.slice(xargsAt), target.words)))
+        ) {
+          out.push(this.part(commandText(target), 'unreadable'));
+        } else out.push(...this.simple(target, depth));
         return out;
       }
     }
@@ -158,15 +171,44 @@ class Splitter {
       redirects.length > 0 ? [this.part(redirects.map(redirectText).join(' '))] : [];
     if (script.kind === 'c') {
       if (script.body === undefined) return [this.part(commandText(command), 'unreadable')];
-      return [...this.split(script.body, depth + 1), ...redirectPart()];
+      const body = this.nested(script.body, depth);
+      if (!script.positional) return [...body, ...redirectPart()];
+      // `sh -c 'rm -rf "$1"' _ /`: the body runs on arguments the parts cannot show. Every part
+      // is unreadable and carries what the gate sees in the whole command.
+      const whole = this.part(commandText(command), 'unreadable');
+      return [
+        ...body.map((p) => {
+          const categories = [...new Set([...p.categories, ...whole.categories])];
+          const outside =
+            p.outsideCwd || (categories.includes('destructive') && this.outside(whole.text));
+          return {
+            text: p.text,
+            categories,
+            opaque: 'unreadable' as const,
+            ...(p.guarded || whole.guarded ? { guarded: true as const } : {}),
+            ...(outside ? { outsideCwd: true as const } : {}),
+          };
+        }),
+        ...redirectPart(),
+      ];
     }
     if (script.kind === 'file') return [this.part(commandText(command), 'script_file')];
     const body = stdinCode(command);
-    if (body !== undefined) return [...this.split(body, depth + 1), ...redirectPart()];
+    if (body !== undefined) return [...this.nested(body, depth), ...redirectPart()];
     if (command.redirects.some((r) => r.op === '<')) {
       return [this.part(commandText(command), 'script_file')];
     }
     return [this.plain(command)];
+  }
+
+  /** A body a shell runs: split one level deeper; a `cd` in it does not move the cwd outside. */
+  private nested(body: string, depth: number): CommandPart[] {
+    const saved = this.cwd;
+    try {
+      return this.split(body, depth + 1);
+    } finally {
+      this.cwd = saved;
+    }
   }
 
   /** Another interpreter: inline code and heredoc input are `inline_code`, a script file opaque. */
@@ -191,24 +233,84 @@ class Splitter {
       const target = command.words.slice(h + 1).find((w) => w === '-' || !w.startsWith('-'));
       if (target === undefined || target === '' || target === '~') {
         this.cwd = this.ctx.home ?? homedir();
+        this.seen.add(this.cwd);
       } else if (target !== '-' && !/[$`]/.test(target) && !/^~[^/]/.test(target)) {
         this.cwd = resolvePath(target, this.ctx, this.cwd);
+        this.seen.add(this.cwd);
       }
     }
     return part;
   }
 
   /** `text` classified by the gate from the current cwd; anything it cannot read is unreadable. */
-  private part(text: string, opaque?: CommandPart['opaque']): CommandPart {
+  part(text: string, opaque?: CommandPart['opaque']): CommandPart {
     const c = classifyCommand(text, { ...this.ctx, cwd: this.cwd });
     const marked = opaque ?? (c.unclassified ? 'unreadable' : undefined);
+    const outside = c.actions.includes('destructive') && this.outside(text);
     return {
       text,
       categories: c.actions,
       ...(marked ? { opaque: marked } : {}),
       ...(c.guarded ? { guarded: true as const } : {}),
+      ...(outside ? { outsideCwd: true as const } : {}),
     };
   }
+
+  /**
+   * Whether `text` reaches outside the Steward's worktree (`ctx.cwd`; design §5.4a): it runs from
+   * a cwd outside it, names a path outside it, or names a path that cannot be placed — judged
+   * from every cwd the line has been at (`seen`), so it may flag a delete one time too many. The gate's
+   * own path reading (`pathsInCommand`, `isInsideWorkspace`) with the worktree as the root.
+   */
+  outside(text: string): boolean {
+    const root = cwdOf(this.ctx);
+    const { paths, unresolvable } = pathsInCommand(text);
+    if (unresolvable.length > 0) return true;
+    return [...this.seen, this.cwd].some((cwd) => {
+      const worktree: PolicyContext = { ...this.ctx, workspace: root, cwd };
+      return (
+        !isInsideWorkspace(cwd, worktree) || paths.some((p) => !isInsideWorkspace(p, worktree))
+      );
+    });
+  }
+}
+
+function isAssignment(word: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
+}
+
+/** `xargs` options that take a separate value (besides the replace-string ones). */
+const XARGS_VALUE_OPTS = /^-[dEsLnPa]$/;
+
+/**
+ * Whether `xargs` (its words from `xargs` on) hands the shell or interpreter `target` its code:
+ * the target's arguments use the replace-string (`-I R`, `-J R`, `-i[R]`, `--replace[=R]`; `{}`
+ * by default), or the target reads its code from what `xargs` appends (`xargs sh`, `xargs bash
+ * -c`, `xargs python3`).
+ */
+function xargsFeedsCode(xargs: string[], target: string[]): boolean {
+  let replace: string | undefined;
+  for (let k = 1; k < xargs.length; k++) {
+    const a = xargs[k]!;
+    if (a === '-I' || a === '-J') replace = xargs[++k];
+    else if (/^-[IJ]./.test(a)) replace = a.slice(2);
+    else if (a === '-i' || a === '--replace') replace = '{}';
+    else if (/^-i./.test(a)) replace = a.slice(2);
+    else if (a.startsWith('--replace=')) replace = a.slice('--replace='.length) || '{}';
+    else if (XARGS_VALUE_OPTS.test(a)) k++;
+  }
+  const args = target.slice(1);
+  if (replace && args.some((w) => w.includes(replace))) return true;
+  const name = baseName(target[0] ?? '');
+  if (SHELLS.test(name)) {
+    const script = shellScript(args);
+    return script.kind === 'stdin' || (script.kind === 'c' && script.body === undefined);
+  }
+  if (args.some((a) => inlineFlag(name, a)) || (name === 'deno' && args[0] === 'eval')) {
+    return false;
+  }
+  const script = interpreterScript(name, args);
+  return script === undefined || script === '-';
 }
 
 /** Whether the splitter looks into a command named `word` (or marks it opaque). */
@@ -223,7 +325,10 @@ function lookedInto(word: string): boolean {
   );
 }
 
-type ShellScript = { kind: 'c'; body: string | undefined } | { kind: 'file' } | { kind: 'stdin' };
+type ShellScript =
+  | { kind: 'c'; body: string | undefined; positional: boolean }
+  | { kind: 'file' }
+  | { kind: 'stdin' };
 
 /** What a shell runs, from its arguments: a `-c` body, a script file, or its stdin. */
 function shellScript(args: string[]): ShellScript {
@@ -249,7 +354,7 @@ function shellScript(args: string[]): ShellScript {
     break;
   }
   const first = args[k];
-  if (c) return { kind: 'c', body: first };
+  if (c) return { kind: 'c', body: first, positional: args.length > k + 1 };
   if (first !== undefined && first !== '-' && !s) return { kind: 'file' };
   return { kind: 'stdin' };
 }
@@ -308,6 +413,9 @@ function quoteWord(w: string): string {
   if (w === '') return "''";
   const bare = w.split(SUBSTITUTION).join('');
   if (bare === '' || SAFE_WORD.test(bare)) return w;
+  // `X=a b` as `X='a b'`: still an assignment when lexed again.
+  const assignment = /^([A-Za-z_][A-Za-z0-9_]*=)([\s\S]*)$/.exec(w);
+  if (assignment) return assignment[1]! + quoteWord(assignment[2]!);
   if (!/['"\\`]/.test(w) && w.includes('$') && !/\$\((?!\))/.test(w)) return `"${w}"`;
   if (!w.includes("'")) return `'${w}'`;
   return `"${w.replace(/[\\"`$]/g, '\\$&')}"`;
