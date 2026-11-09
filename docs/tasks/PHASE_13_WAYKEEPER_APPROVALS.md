@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-01 · **Task status:** P13-01 in progress
-**Phase status:** in progress (0/7) — branch `agent-waykeeper-approvals`
+**Current task:** P13-02 · **Task status:** P13-01 done (2026-11-09)
+**Phase status:** in progress (1/7) — branch `agent-waykeeper-approvals`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -36,7 +36,7 @@ All seven run in order.
 ## Tasks
 
 ### P13-01 — Protocol, storage and domain commands
-- **Status:** in progress · **Depends on:** — · **Parallel with:** —
+- **Status:** done (2026-11-09) · **Depends on:** — · **Parallel with:** —
 - Plan Task 1: `waykeeper-approvals.ts` in the protocol, four events, migration 0019, domain commands, `endStandingApprovals`.
 - **Acceptance:** the plan's Task 1 tests pass; typecheck is green.
 
