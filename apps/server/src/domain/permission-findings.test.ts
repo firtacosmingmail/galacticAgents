@@ -273,3 +273,50 @@ describe('fix round 4: bash lexing and shell-state allowlist (rulings R-f, R-g)'
     }
   });
 });
+
+describe('fix round 5: arithmetic assignments, groups after reserved words (R-g, R-h)', () => {
+  const nets = (cmd: string) =>
+    classifyCommand(cmd, ctx)
+      .findings.filter((f) => f.action === 'network')
+      .map((f) => f.hosts);
+  const outside = (cmd: string) =>
+    classifyCommand(cmd, ctx)
+      .findings.filter((f) => f.action === 'outside_workspace')
+      .map((f) => [f.segment, f.path]);
+  it('an arithmetic assignment anywhere hides every host', () => {
+    for (const cmd of [
+      '(( CURL_HOME = 1 )); curl https://ok.com',
+      '((CURL_HOME=1)); curl https://ok.com',
+      'echo $(( CURL_HOME = 1 )); curl https://ok.com',
+      'echo $[CURL_HOME=1]; curl https://ok.com',
+      'echo $(( https_proxy = 3232235777 )); curl https://ok.com',
+    ]) {
+      const n = nets(cmd);
+      expect(n.length, cmd).toBeGreaterThan(0);
+      for (const h of n) expect(h, cmd).toBeUndefined();
+    }
+  });
+  it('a group after a reserved word still opens a group, so its cd is seen', () => {
+    expect(outside('time { cd; } && cat notes.txt')).toContainEqual([1, '/home/u']);
+    for (const cmd of [
+      'time { cd; }; rm -rf Documents',
+      '! { cd; }; rm -rf Documents',
+      'if true; then { cd; }; fi; rm -rf Documents',
+      'while false; do { cd; }; done; rm -rf Documents',
+    ]) {
+      const c = classifyCommand(cmd, ctx);
+      expect(c.actions, cmd).toContain('outside_workspace');
+      expect(c.actions, cmd).toContain('destructive');
+      expect(c.findings, cmd).toContainEqual(
+        expect.objectContaining({ action: 'outside_workspace', path: '/home/u' }),
+      );
+    }
+    expect(outside('time { pushd ~; }; echo hi > .bashrc')).toContainEqual([2, '/home/u/.bashrc']);
+  });
+  it('the command head skips reserved words, so a cd behind them is seen (R-h)', () => {
+    for (const cmd of ['if true; then cd; fi; cat notes.txt', '! cd; cat notes.txt']) {
+      expect(outside(cmd), cmd).toContainEqual([expect.any(Number), '/home/u']);
+      expect(classifyCommand(cmd, ctx).actions, cmd).toContain('outside_workspace');
+    }
+  });
+});

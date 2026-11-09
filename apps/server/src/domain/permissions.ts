@@ -743,11 +743,12 @@ class ShellLexer {
         if (depth > 0) depth--;
       } else if (
         // `{` and `}` are reserved only in command position, as in bash: before any word or
-        // redirection of the simple command. Elsewhere they are ordinary arguments.
+        // redirection of the simple command, or right after reserved words that put the next
+        // word in command position (`time {`, `then {`). Elsewhere they are ordinary arguments.
         (c === '{' || c === '}') &&
         word === null &&
         pendingOp === null &&
-        cmd.words.length === 0 &&
+        cmd.words.every((w) => COMMAND_POSITION_WORDS.has(w)) &&
         cmd.redirects.length === 0 &&
         isWordEnd(next)
       ) {
@@ -835,6 +836,20 @@ class ShellLexer {
   }
 }
 
+/** Reserved words after which the next word is again in command position. */
+const COMMAND_POSITION_WORDS: ReadonlySet<string> = new Set([
+  'then',
+  'do',
+  'else',
+  'elif',
+  'if',
+  'while',
+  'until',
+  '!',
+  'time',
+  'coproc',
+]);
+
 function newCommand(piped: boolean): SimpleCommand {
   return { words: [], redirects: [], piped, heredoc: false };
 }
@@ -894,7 +909,8 @@ export function commandHead(words: string[]): number {
   let k = 0;
   while (k < words.length) {
     const w = words[k]!;
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
+    // Assignments and reserved words that put the next word in command position (R-h).
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || (COMMAND_POSITION_WORDS.has(w) && w !== 'time')) {
       k++;
       continue;
     }
@@ -1482,7 +1498,9 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   // The lexer drops the parentheses of a function definition, so that one is read from the text.
   const lineSetsEnv =
     lexed.commands.some((c) => changesShellState(c)) ||
-    /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(trimmed);
+    /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(trimmed) ||
+    // Arithmetic assigns too (`(( X = 1 ))`, `$(( X = 1 ))`, `$[X=1]`); read from the text as well.
+    /\(\(|\$\[/.test(trimmed);
 
   for (const [segment, simple] of lexed.commands.entries()) {
     const here: PolicyContext = { ...ctx, cwd };

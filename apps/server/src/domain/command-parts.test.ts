@@ -195,6 +195,21 @@ describe('lexCommand braces and carriage returns (as bash reads them)', () => {
     expect(words('{ echo a; ls; }; pwd')).toEqual([['echo', 'a'], ['ls'], ['pwd']]);
     expect(words('true && { echo b; }')).toEqual([['true'], ['echo', 'b']]);
   });
+  it('a { after a reserved word in command position opens a group', () => {
+    expect(words('time { cd; } && cat notes.txt')).toEqual([
+      ['time'],
+      ['cd'],
+      ['cat', 'notes.txt'],
+    ]);
+    expect(words('! { cd; }')).toEqual([['!'], ['cd']]);
+    expect(words('if true; then { cd; }; fi')).toEqual([['if', 'true'], ['then'], ['cd'], ['fi']]);
+    expect(words('while false; do { cd; }; done')).toEqual([
+      ['while', 'false'],
+      ['do'],
+      ['cd'],
+      ['done'],
+    ]);
+  });
   it('a { after a redirection is a word, as in bash', () => {
     expect(words('>f { echo')).toEqual([['{', 'echo']]);
   });
