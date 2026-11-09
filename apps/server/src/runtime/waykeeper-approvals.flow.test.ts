@@ -86,6 +86,8 @@ async function hierarchy(opts: {
   seen: RequestJudgeInput[];
   /** The agent's own question claims to be a Waykeeper forward. */
   forge?: boolean;
+  /** The transcript refuses the "Approved by" line. */
+  brokenTranscript?: boolean;
 }) {
   const adapter = new FakeAdapter({ speed: 0, scenarios: SCRIPTS });
   if (opts.forge) {
@@ -139,6 +141,13 @@ async function hierarchy(opts: {
   ).value;
   const task = (await commands.createTask({ description: 'review PR 12', projectId: project.id }))
     .value;
+  if (opts.brokenTranscript) {
+    const append = c.transcripts.append.bind(c.transcripts);
+    c.transcripts.append = (agentId, kind, text) => {
+      if (text.startsWith('Approved by')) throw new Error('transcript disk full');
+      append(agentId, kind, text);
+    };
+  }
   const steward = (
     await commands.spawnAgent({
       role: 'steward',
@@ -235,6 +244,17 @@ describe('Waykeeper approvals end to end (P13-04)', () => {
       kind: 'tool',
       text: 'Approved by Waykeeper · Site: a read-only query on the reviewed PR\n',
     });
+  });
+
+  it('a transcript that cannot take the approval line still answers the Steward (final review I2b)', async () => {
+    const h = await hierarchy({ switchOn: true, seen: [], brokenTranscript: true });
+    await until(() => h.ofType('question.opened').length === 1);
+    expect(story(h.events(), h.steward.id)).toEqual([
+      `decided allow by agent: ${VIEW}`,
+      `ran ${VIEW}`,
+      `needs input (forwarded): ${COMMENT}`,
+      'question opened (forwarded)',
+    ]);
   });
 
   it('the user allowing a forwarded card of a live Steward records the approval (P13-05)', async () => {

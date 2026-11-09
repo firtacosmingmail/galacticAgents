@@ -512,6 +512,49 @@ describe('ApprovalWatch', () => {
     await expect(new ApprovalWatch({ judge }).handle(c)).resolves.toBeUndefined();
   });
 
+  describe('a throw before any callback forwards once (final review I2a)', () => {
+    /** A call whose input cannot be read: splitting and classifying it throws. */
+    const unreadable = () => ({
+      toolName: 'Write',
+      get input(): unknown {
+        throw new Error('input gone');
+      },
+    });
+
+    it('a throwing classify forwards exactly once, "the request could not be judged"', async () => {
+      const { judge, seen } = scripted(approve());
+      const errors: unknown[] = [];
+      const { c, approve: approved, forward } = call('', { toolCall: unreadable() });
+      await new ApprovalWatch({ judge, onError: (e) => errors.push(e) }).handle(c);
+      expect(seen).toEqual([]);
+      expect(approved).not.toHaveBeenCalled();
+      expect(forward).toHaveBeenCalledTimes(1);
+      expect(forward.mock.calls[0]![0]).toMatchObject({
+        reason: 'the request could not be judged',
+        kind: 'not judged: Write',
+        parts: [],
+      });
+      expect(errors).toHaveLength(1);
+    });
+
+    it('nothing is forwarded for an agent no longer active', async () => {
+      const { judge } = scripted(approve());
+      const { c, forward } = call('', { toolCall: unreadable(), active: () => false });
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(forward).not.toHaveBeenCalled();
+    });
+
+    it('a forward that throws is not forwarded a second time', async () => {
+      const { judge } = scripted(forwardVerdict());
+      const forward = vi.fn<(context: WaykeeperForward) => void>(() => {
+        throw new Error('db down');
+      });
+      const { c } = call('gh pr comment 3 -b hi', { forward });
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(forward).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('the judge sees the input and the parts redacted; the forward shows them redacted', async () => {
     const TOKEN = 'ghp_' + 'x'.repeat(36);
     const { judge, seen } = scripted(forwardVerdict());

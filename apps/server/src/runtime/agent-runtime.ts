@@ -2254,10 +2254,11 @@ export class AgentRuntime {
           },
           event.questionId,
         );
-        this.noteAllowed(live, call);
+        // The Steward waits on this answer: it goes out right after the allow is logged.
         void live.adapter
           .answer(event.questionId, 'allow')
           .catch((error: unknown) => this.onError(error, `approval answer ${event.questionId}`));
+        this.noteAllowed(live, call);
       },
       forward: (context: WaykeeperForward) => {
         const forwarded = { ...event, question: { ...event.question, waykeeper: context } };
@@ -2331,19 +2332,24 @@ export class AgentRuntime {
       event.type === 'permission.decided' &&
       d.decidedBy?.type === 'agent'
     ) {
-      const { tables } = this.opts.log;
-      const approver = d.decidedBy.id ? tables.agents.get(d.decidedBy.id) : undefined;
-      const name = approver
-        ? waykeeperLabel(
-            approver,
-            approver.projectId ? tables.projects.get(approver.projectId)?.name : undefined,
-          )
-        : 'the Waykeeper';
-      this.opts.transcripts.append(
-        live.agent.id,
-        'tool',
-        `${approvalActivity(name, event.reason, event.quote)}\n`,
-      );
+      try {
+        const { tables } = this.opts.log;
+        const approver = d.decidedBy.id ? tables.agents.get(d.decidedBy.id) : undefined;
+        const name = approver
+          ? waykeeperLabel(
+              approver,
+              approver.projectId ? tables.projects.get(approver.projectId)?.name : undefined,
+            )
+          : 'the Waykeeper';
+        this.opts.transcripts.append(
+          live.agent.id,
+          'tool',
+          `${approvalActivity(name, event.reason, event.quote)}\n`,
+        );
+      } catch (error) {
+        // The line is a record only: the decision is logged and the adapter must still be answered.
+        this.onError(error, `approval transcript ${live.agent.id}`);
+      }
     }
   }
 

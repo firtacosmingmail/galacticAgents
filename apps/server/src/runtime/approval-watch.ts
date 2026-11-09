@@ -110,8 +110,44 @@ export class ApprovalWatch {
   }
 
   async handle(call: ApprovalWatchCall): Promise<void> {
+    // Set once a callback starts: a callback that throws is never followed by another.
+    let settled = false;
+    const once: ApprovalWatchCall = {
+      ...call,
+      approve: (d) => {
+        settled = true;
+        call.approve(d);
+      },
+      forward: (context) => {
+        settled = true;
+        call.forward(context);
+      },
+    };
     try {
-      await this.decide(call);
+      await this.decide(once);
+    } catch (error) {
+      this.deps.onError?.(error);
+      // A throw before either callback (splitting, classifying, redacting): the Steward's call
+      // is still blocked in the adapter, so it goes to the user rather than hang (final review I2).
+      if (!settled) this.forwardUnjudged(once);
+    }
+  }
+
+  /** The fallback forward after a throw: no parts, no judge, the tool's name as the kind. */
+  private forwardUnjudged(call: ApprovalWatchCall): void {
+    try {
+      if (!call.active()) return;
+      let toolName = 'the request';
+      try {
+        toolName = call.toolCall.toolName;
+      } catch {
+        // The name stays generic.
+      }
+      call.forward({
+        reason: 'the request could not be judged',
+        kind: `not judged: ${toolName}`.slice(0, MAX_KIND_CHARS),
+        parts: [],
+      });
     } catch (error) {
       this.deps.onError?.(error);
     }
