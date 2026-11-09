@@ -251,7 +251,7 @@ Spec: `docs/superpowers/specs/2026-11-09-waykeeper-approvals-design.md`; plan: `
 
 ---
 
-## Phase 14 — "Allow similar" per reason (≈ 2–3 days)
+## Phase 14 — "Allow similar" per reason (done 2026-11-09)
 
 **Goal:** the permission card's "Allow similar" chooser shows the whole call with the parts that asked marked, one ticked row per reason (a folder, a site, a command prefix, a category) and no "exactly this"; "Allow and remember" allows the call once and stores one rule per ticked row; a later call passes without a card only when every reason it asks for is covered, and otherwise asks about the uncovered reasons alone (SPEC decision 138, amended).
 
@@ -264,10 +264,11 @@ Spec: `docs/superpowers/specs/2026-11-09-allow-similar-per-reason-design.md`; pl
 5. The chooser on the card and the rule list (P14-05).
 6. Docs, task board and gates (P14-06).
 
-**Exit criteria:** every task done; the full gates are green; the card of a `cd /tmp/x; ...` command and of a `curl` to a site each offer the matching row, and a later call to the same folder or site passes without a card.
+**Status:** done (2026-11-09), branch `agent-allow-similar-reasons`; SPEC decision 138 amended, decision 144 noted, decision 155 added; TECHNOLOGY's permission section rewritten.
+
+**Exit criteria (verified 2026-11-09):** every task done; the full gates are green; the card of a `cd /tmp/x; ...` command and of a `curl` to a site each offer the matching row, and a later call to the same folder or site passes without a card.
 
 ---
-
 
 ## High-level corner cases and risks
 

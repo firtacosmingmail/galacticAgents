@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** P14-06 · **Task status:** P14-05 done (2026-11-09)
-**Phase status:** in progress (5/6) — branch `agent-allow-similar-reasons`
+**Current task:** — · **Task status:** P14-06 done (2026-11-09)
+**Phase status:** done (2026-11-09) (6/6) — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -60,6 +60,12 @@ P14-01…06 run in order.
 - **Acceptance:** the plan's Task 5 tests pass: the card shows the call, a tick per row and the widen choices; the rule list shows folder and site rules.
 
 ### P14-06 — Docs, board, gates
-- **Status:** todo · **Depends on:** P14-05 · **Parallel with:** —
+- **Status:** done (2026-11-09) · **Depends on:** P14-05 · **Parallel with:** —
 - Plan Task 6.
 - **Acceptance:** SPEC decision 138 amended, TECHNOLOGY and the plan consistent, the full gates are green.
+
+## Exit criteria (verified 2026-11-09)
+
+- Every task done (6/6).
+- Full gates green: `pnpm build`, `typecheck`, `lint`, `format:check`, `test`.
+- The card of a `cd /tmp/x; …` command offers a folder row and a `curl`/`gh` call a site row; a later call to the same folder or site passes without a card (covered by the P14-03/04 server tests and the P14-05 card tests).
