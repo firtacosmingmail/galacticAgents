@@ -1049,6 +1049,33 @@ function envArgumentsReadable(words: readonly string[], from: number): boolean {
   return true; // no program: env prints the environment
 }
 
+/** Commands that change the shell's options (glob ones among them: GLOB_DOTS, EXTENDED_GLOB). */
+const OPTION_COMMANDS = new Set(['setopt', 'unsetopt', 'emulate', 'shopt']);
+/** `set -o`/`+o` names that leave globbing alone. */
+const SET_SAFE_OPTIONS = new Set(['pipefail', 'errexit', 'nounset', 'xtrace']);
+
+/**
+ * Whether a simple command may change how the shell globs (P14-08 review round 3): `setopt`,
+ * `unsetopt`, `emulate`, `shopt`, an `options[…]`/`options=` assignment, or `set` with anything but
+ * `-e`/`-u`/`-x` (clustered, `+` too) and `-o`/`+o` `pipefail|errexit|nounset|xtrace`. The engine
+ * assumes zsh's default glob options, so such a line is unreadable (fail closed).
+ */
+export function setsGlobOptions(words: readonly string[]): boolean {
+  if (words.some((w) => /^options(?:\[|\+?=)/.test(w))) return true;
+  const h = commandHead([...words]);
+  const name = words[h];
+  if (name === undefined) return false;
+  if (OPTION_COMMANDS.has(baseName(name))) return true;
+  if (name !== 'set') return false;
+  const args = words.slice(h + 1);
+  for (let k = 0; k < args.length; k++) {
+    const letters = /^[-+]([eux]*o?)$/.exec(args[k]!)?.[1];
+    if (letters === undefined || letters === '') return true;
+    if (letters.endsWith('o') && !SET_SAFE_OPTIONS.has(args[++k] ?? '')) return true;
+  }
+  return false;
+}
+
 /** Index of the command's real name in `words`, past assignments and wrappers. */
 export function commandHead(words: string[]): number {
   let k = 0;
@@ -1780,6 +1807,10 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
         opaque = true;
         reasons.push(`${rule.reason}: ${shown}`);
       }
+    }
+    if (setsGlobOptions(simple.words)) {
+      opaque = true;
+      reasons.push(`changes the shell's options, which the engine does not follow: ${shown}`);
     }
     if (envUnreadable(simple.words)) {
       opaque = true;

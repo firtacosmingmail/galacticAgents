@@ -1701,6 +1701,32 @@ describe('final review fixes (P14-07)', () => {
       }
     });
 
+    it('round 3: brackets and glob options never pass a folder rule', () => {
+      // Guarded, like a literal `.git/hooks` write there: never covered, listed as guarded.
+      for (const command of [
+        'cd /tmp/pr83 && cp e .gi[[:alpha:]]/hooks/pre-commit',
+        'cd /tmp/pr83 && cd .gi[[:alpha:]]/hooks && touch pre-commit',
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+        expect(
+          options(bash(command)).notRememberable.map((n) => n.reason),
+          command,
+        ).toContainEqual(expect.stringMatching(/guarded ground/));
+      }
+      // Unreadable: never covered, no folder row.
+      for (const command of [
+        'cd /tmp/pr83 && setopt globdots && cp e ?git/hooks/pre-commit',
+        'cd /tmp/pr83 && setopt extendedglob && cp e .gi^x/hooks/pre-commit',
+        "cd /tmp/pr83 && env - -S'GIT_PAGER=x git diff'",
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+        expect(
+          keys(options(bash(command))).some((k) => k.startsWith('folder:')),
+          command,
+        ).toBe(false);
+      }
+    });
+
     it('noglob, nocorrect, -, builtin and command do not hide a cd outside', () => {
       for (const command of [
         'noglob cd /tmp/pr83 && rm -rf *',

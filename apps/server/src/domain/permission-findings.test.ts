@@ -994,4 +994,42 @@ describe('residual holes, review round 3 (P14-08)', () => {
       expect(decision(cmd), cmd).toBe('ask');
     }
   });
+
+  it('(c) a line that changes glob options is unreadable', () => {
+    for (const cmd of [
+      'setopt globdots; cp e ?git/hooks/pre-commit',
+      'setopt GLOB_DOTS; cp e ?git/hooks/pre-commit',
+      'setopt glob_dots && cp e ?git/hooks/pre-commit',
+      'setopt GlobDots; cp e */hooks/pre-commit',
+      'set -o globdots; cp e ?git/hooks/pre-commit',
+      'set -o GLOB_DOTS; cp e ?git/hooks/pre-commit',
+      'set -4; cp e ?git/hooks/pre-commit',
+      'setopt -4; cp e ?git/hooks/pre-commit',
+      'unsetopt noglobdots; cp e ?git/hooks/pre-commit',
+      'unsetopt NO_GLOB_DOTS; cp e ?git/hooks/pre-commit',
+      'emulate -L zsh -o globdots; cp e ?git/hooks/pre-commit',
+      'setopt globdots; cd ?git/hooks && cp ../../e pre-commit',
+      'shopt -s dotglob; cp e ?git/hooks/pre-commit',
+      'setopt extendedglob; cp e .gi^x/hooks/pre-commit',
+      'setopt extendedglob; cp e .git#/hooks/pre-commit',
+      'setopt extendedglob; cd .gi^x/hooks && cp ../../e pre-commit',
+      'builtin setopt globdots; cp e ?git/hooks/pre-commit',
+      'set -o vi; ls',
+      'set +o noglob; ls',
+      'set -eo globdots; ls',
+      'set -o; ls',
+      'set -- a b; ls',
+    ]) {
+      unreadable(cmd);
+    }
+    for (const cmd of [
+      'set -euo pipefail; npm test',
+      'set -e; set -u; set -x; npm test',
+      'set +e; set +x; npm test',
+      'set -o errexit -o nounset; set +o xtrace; npm test',
+      'set -eux; npm test',
+    ]) {
+      expect(classifyCommand(cmd, ctx).unclassified, cmd).toBeUndefined();
+    }
+  });
 });
