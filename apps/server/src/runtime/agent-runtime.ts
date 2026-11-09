@@ -32,6 +32,7 @@ import {
   unsupportedFlags,
   type ToolCall,
   type ToolDefinition,
+  type RequestJudge,
   type ScopeJudge,
   OFF_SCRIPT_ACTIONS,
 } from '@galactic/protocol';
@@ -174,6 +175,8 @@ export interface AgentRuntimeOptions {
   publishAllowances?: PublishAllowanceStore;
   /** Decides whether a launch flag's tool call fits what the user approved (P12-05; used by the scope watch). */
   scopeJudge?: ScopeJudge;
+  /** Decides whether a Steward's permission request fits its task, for the Waykeeper (P13-03; not used yet). */
+  requestJudge?: RequestJudge;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
   /** Question routing (P2-03); default: the log, with liveness from `statuses`. */
