@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ToolCall } from '@galactic/protocol';
+import type { PermissionPolicy, ToolCall } from '@galactic/protocol';
 import { classifyCommand, classifyToolCall, evaluate } from './permissions.js';
 
 const ctx = { workspace: '/w', cwd: '/w', home: '/home/u' };
@@ -787,5 +787,53 @@ describe('residual holes, review round 1 (P14-08)', () => {
     expect(decision('sort -ro/srv/x a')).not.toBe('allow');
     // Every split still feeds the guarded-write check.
     expect(classifyCommand('install -Dt.git/hooks x', ctx).guarded).toBe(true);
+  });
+});
+
+describe('residual holes, review round 2 (P14-08)', () => {
+  const ALL_ALLOWED: PermissionPolicy = {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      outside_workspace: 'allow',
+      network: 'allow',
+      destructive: 'allow',
+      push: 'allow',
+    },
+  };
+  const call = (cmd: string): ToolCall => ({ toolName: 'Bash', input: { command: cmd } });
+  const decision = (cmd: string, policy: PermissionPolicy = { rules: {} }) =>
+    evaluate(policy, call(cmd), ctx).decision;
+
+  it('N-1: env -S / --split-string in any form makes the line unreadable', () => {
+    for (const cmd of [
+      "env -S'rm -rf /home/u/Library'",
+      "env -S'touch /etc/x'",
+      "env -S 'touch /etc/x'",
+      "env -iS'touch /etc/x'",
+      "env -vS'touch x'",
+      "env -S'cp e .git/hooks/pre-commit'",
+      "env -S 'cp e .git/hooks/pre-commit'",
+      `env -S'sh -c "cat>.git/hooks/pre-commit"'`,
+      "env -S'GIT_DIR=.git/hooks git status'",
+      "env -S'GIT_WORK_TREE=.git/hooks git checkout-index -a -f'",
+      "env -S'-C .git/hooks touch pre-commit'",
+      "env -S'-C/etc touch x'",
+      "env -S'-C .. touch x'",
+      "env -S'-C /tmp/pr83 GIT_PAGER=x git diff'",
+      "env --split-string='touch /etc/x'",
+      "env --split-string 'touch /etc/x'",
+      "env --sp='touch x'",
+      "env -i --split-string='touch x'",
+      "nice env -S'touch x'",
+      "env X=1 -S'touch x'",
+    ]) {
+      expect(classifyCommand(cmd, ctx).unclassified, cmd).toBe(true);
+      expect(decision(cmd), cmd).toBe('ask');
+      expect(decision(cmd, ALL_ALLOWED), cmd).toBe('ask');
+    }
+    // An -S after env's program belongs to the program.
+    expect(classifyCommand('env LANG=C git log -S foo', ctx).unclassified).toBeUndefined();
   });
 });

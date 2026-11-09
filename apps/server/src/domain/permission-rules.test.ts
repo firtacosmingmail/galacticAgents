@@ -1682,6 +1682,25 @@ describe('final review fixes (P14-07)', () => {
       expect(keys(found).some((k) => k.startsWith('folder:'))).toBe(false);
     });
 
+    it('N-1: env -S is never covered by a folder rule and gets no folder row', () => {
+      for (const command of [
+        "cd /tmp/pr83 && env -S 'GIT_PAGER=x git diff'",
+        "cd /tmp/pr83 && env -S'GIT_EXTERNAL_DIFF=x git diff'",
+        "cd /tmp/pr83 && env -iS'GIT_PAGER=x git diff'",
+        "cd /tmp/pr83 && env --split-string='GIT_PAGER=x git diff'",
+        "cd /tmp/pr83 && env -S'LANG=C git diff'",
+        "cd /tmp/pr83 && env -S'git diff'",
+        "cd /tmp/pr83 && env -S 'touch x'",
+        "env -S'-C /tmp/pr83 GIT_PAGER=x git diff'",
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+        expect(
+          keys(options(bash(command))).some((k) => k.startsWith('folder:')),
+          command,
+        ).toBe(false);
+      }
+    });
+
     it('noglob, nocorrect, -, builtin and command do not hide a cd outside', () => {
       for (const command of [
         'noglob cd /tmp/pr83 && rm -rf *',

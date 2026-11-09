@@ -1003,6 +1003,37 @@ function envChdirs(words: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * Whether an `env` word anywhere in the command splits a string into a new command line (P14-08
+ * review N-1): `-S <s>`, `-S<s>`, a cluster reaching `S` (`-iS<s>`), `--split-string[=<s>]` and its
+ * prefixes (`--sp=…`), among env's options and assignments (`env X=1 -S…` too: fail closed). The
+ * packed line, its program, its assignments and its `-C` are never read, so it is unreadable.
+ */
+export function envSplitsString(words: readonly string[]): boolean {
+  for (let i = 0; i < words.length; i++) {
+    if (baseName(words[i]!) !== 'env') continue;
+    for (let k = i + 1; k < words.length; k++) {
+      const w = words[k]!;
+      if (w.startsWith('--')) {
+        const name = w.slice(2).split('=')[0]!;
+        if (name !== '' && 'split-string'.startsWith(name)) return true;
+        if (w === '--chdir' || w === '--unset') k++;
+        continue;
+      }
+      if (w.length > 1 && w.startsWith('-')) {
+        const letters = /^-([A-Za-z0-9]*)/.exec(w)![1]!;
+        // The cluster's letters up to the first one that takes a value (`-iS…`, `-uX`).
+        const m = /^[^uCPS]*([uCPS])?/.exec(letters)!;
+        if (m[1] === 'S') return true;
+        if (m[1] !== undefined && m[0].length === w.length - 1) k++; // its value is the next word
+        continue;
+      }
+      if (!w.includes('=')) break; // env's program: its own options are its own
+    }
+  }
+  return false;
+}
+
 /** Index of the command's real name in `words`, past assignments and wrappers. */
 export function commandHead(words: string[]): number {
   let k = 0;
@@ -1733,6 +1764,10 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
         opaque = true;
         reasons.push(`${rule.reason}: ${shown}`);
       }
+    }
+    if (envSplitsString(simple.words)) {
+      opaque = true;
+      reasons.push(`env -S runs a command line the engine cannot read: ${shown}`);
     }
     const hidden = hiddenProgram(simple);
     if (hidden) {
