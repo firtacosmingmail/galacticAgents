@@ -1,6 +1,6 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** P14-03 · **Task status:** P14-02 done (2026-11-09)
+**Current task:** P14-03 · **Task status:** P14-03 in progress
 **Phase status:** in progress (2/6) — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -45,7 +45,7 @@ P14-01…06 run in order.
 - **Acceptance:** the plan's Task 2 tests pass: the engine reports one finding per reason, with the shown part of the call.
 
 ### P14-03 — Coverage — every asked reason must be covered
-- **Status:** todo · **Depends on:** P14-02 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P14-02 · **Parallel with:** —
 - Plan Task 3.
 - **Acceptance:** the plan's Task 3 tests pass: a call passes only when every reason is covered; partial coverage asks about the rest.
 
