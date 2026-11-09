@@ -646,3 +646,26 @@ describe('final review fixes (P14-07)', () => {
     expect(findings('grep -iabc a').some((f) => f.action === 'outside_workspace')).toBe(false);
   });
 });
+
+describe('residual holes (P14-08)', () => {
+  const decision = (cmd: string) =>
+    evaluate({ rules: {} }, { toolName: 'Bash', input: { command: cmd } }, ctx).decision;
+
+  it("a leading assignment's value is a guarded-write candidate", () => {
+    for (const cmd of [
+      'GIT_WORK_TREE=.git/hooks git checkout-index -a -f',
+      'GIT_INDEX_FILE=.git/hooks/x git add .',
+      'GIT_TRACE=.git/hooks/pre-commit git log',
+      'GIT_DIR=.git/hooks git status',
+      'env GIT_DIR=.git/hooks git status',
+    ]) {
+      const c = classifyCommand(cmd, ctx);
+      expect(c.guarded, cmd).toBe(true);
+      expect(c.findings, cmd).toContainEqual(
+        expect.objectContaining({ action: 'outside_workspace', guarded: true }),
+      );
+      expect(decision(cmd), cmd).toBe('ask');
+    }
+    expect(classifyCommand('LANG=C git log', ctx).guarded).toBeUndefined();
+  });
+});

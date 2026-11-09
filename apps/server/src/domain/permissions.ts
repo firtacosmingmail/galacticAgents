@@ -1866,6 +1866,11 @@ function guardedTargets(
     .filter((r) => WRITE_REDIRECTS.has(r.op))
     .map((r) => r.target);
   const h = commandHead(command.words);
+  // A leading assignment's value is a place the program may write, whatever it is
+  // (`GIT_DIR=.git/hooks git status`, `GIT_TRACE=.git/hooks/x git log`: P14-08).
+  for (const w of command.words.slice(0, h)) {
+    if (PLAIN_ASSIGNMENT.test(w)) candidates.push(...assignedPaths(w));
+  }
   const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
   if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
     for (const w of command.words.slice(h + 1)) {
