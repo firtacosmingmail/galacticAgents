@@ -966,7 +966,8 @@ const WRAPPER_VALUE_OPTS: Record<string, RegExp> = {
   ionice: /^-[cnp]$/,
   timeout: /^-[sk]$/,
   xargs: /^-[IdEsLnPa]$/,
-  env: /^-[uCS]$/,
+  // `-iC dir` (a cluster ending in a value option) and the long forms take the next word too.
+  env: /^(?:-[A-Za-z]*[uCS]|--chdir|--unset|--split-string)$/,
 };
 
 /**
@@ -975,6 +976,32 @@ const WRAPPER_VALUE_OPTS: Record<string, RegExp> = {
  * is `GIT_DIR=x` when the variable is unset).
  */
 export const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
+
+/**
+ * The folders `env` moves its program to, in order (P14-08 review I-3): `-C <dir>`, `-C<dir>`,
+ * a cluster ending in `C` (`-iC <dir>`), `--chdir <dir>`, `--chdir=<dir>` — among the options of
+ * an `env` word in the command's wrapper chain (`nice env -C d cmd` too).
+ */
+function envChdirs(words: readonly string[]): string[] {
+  const h = commandHead([...words]);
+  const out: string[] = [];
+  let inEnv = false;
+  for (let k = 0; k < h; k++) {
+    const w = words[k]!;
+    if (!w.startsWith('-')) {
+      inEnv = baseName(w) === 'env';
+      continue;
+    }
+    if (!inEnv) continue;
+    const long = /^--chdir(?:=(.*))?$/.exec(w);
+    const short = /^-[A-Za-z]*C(.*)$/.exec(w);
+    if (!long && !short) continue;
+    const glued = long ? long[1] : short![1];
+    if (glued !== undefined && glued !== '') out.push(glued);
+    else if (k + 1 < h) out.push(words[++k]!);
+  }
+  return out;
+}
 
 /** Index of the command's real name in `words`, past assignments and wrappers. */
 export function commandHead(words: string[]): number {
@@ -1692,8 +1719,8 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     const shown = text || simple.redirects.map((r) => `${r.op}${r.target}`).join(' ');
     const redirectsToFile = simple.redirects.some((r) => WRITE_REDIRECTS.has(r.op));
     // The resolved place a path token reaches from this segment's cwd; none for a glob.
-    const placeOf = (token: string): Partial<Finding> =>
-      /[*?[]/.test(token) ? {} : { path: unalias(resolvePath(token, here, cwd), here) };
+    const placeOf = (token: string, at: PolicyContext = here): Partial<Finding> =>
+      /[*?[]/.test(token) ? {} : { path: unalias(resolvePath(token, at, at.cwd!), at) };
     const seg = (extra: Partial<Finding> = {}): Partial<Finding> => ({
       part: shown,
       segment,
@@ -1725,15 +1752,50 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
         note(rule.action, `${rule.reason}: ${shown}`, seg(hosts ? { hosts } : {}));
       }
     }
-    const { paths, unresolvable, clustered } = pathsOf(simple);
-    for (const p of paths) {
-      if (!isInsideWorkspace(p, here)) {
-        note('outside_workspace', `${p}: outside the workspace`, seg(placeOf(p)));
+    // `env -C <dir>` runs the program in <dir> (P14-08 review I-3): the folder is judged like a
+    // `cd`'s, and the command's paths from there AND from the shell's cwd (its redirections
+    // open there; fail closed). A folder the engine cannot place is guarded: it always asks.
+    let envCwd: string | undefined;
+    for (const dir of envChdirs(simple.words)) {
+      if (/[$`]/.test(dir) || /^~[^/]/.test(dir)) {
+        guarded = true;
+        note(
+          'outside_workspace',
+          `env -C ${dir}: cannot tell where it leads`,
+          seg({ guarded: true }),
+        );
+        continue;
+      }
+      envCwd = resolvePath(dir, ctx, envCwd ?? cwd);
+      if (!isInsideWorkspace(envCwd, ctx)) {
+        note(
+          'outside_workspace',
+          `env -C ${dir}: runs outside the workspace`,
+          seg({ path: unalias(envCwd, ctx) }),
+        );
+      }
+      const why = guardedWriteReason(envCwd, ctx);
+      if (why) {
+        guarded = true;
+        note(
+          'outside_workspace',
+          `${dir}: ${why}`,
+          seg({ path: unalias(envCwd, ctx), guarded: true }),
+        );
       }
     }
-    for (const c of clustered) {
-      if (!isInsideWorkspace(c.path, here)) {
-        note('outside_workspace', `${c.shown}: cannot tell where it points`, seg());
+    const places: PolicyContext[] = envCwd === undefined ? [here] : [here, { ...ctx, cwd: envCwd }];
+    const { paths, unresolvable, clustered } = pathsOf(simple);
+    for (const at of places) {
+      for (const p of paths) {
+        if (!isInsideWorkspace(p, at)) {
+          note('outside_workspace', `${p}: outside the workspace`, seg(placeOf(p, at)));
+        }
+      }
+      for (const c of clustered) {
+        if (!isInsideWorkspace(c.path, at)) {
+          note('outside_workspace', `${c.shown}: cannot tell where it points`, seg());
+        }
       }
     }
     for (const p of unresolvable) {
@@ -1741,13 +1803,15 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     }
     // The card names every file curl sends, inside the workspace too (`.env`): P9-17 review S2.
     for (const f of curlUploads(simple.words)) reasons.push(`curl reads and sends the file ${f}`);
-    for (const g of guardedTargets(simple, here)) {
-      guarded = true;
-      note(
-        'outside_workspace',
-        `${g.path}: ${g.reason}`,
-        seg({ ...placeOf(g.path), guarded: true }),
-      );
+    for (const at of places) {
+      for (const g of guardedTargets(simple, at)) {
+        guarded = true;
+        note(
+          'outside_workspace',
+          `${g.path}: ${g.reason}`,
+          seg({ ...placeOf(g.path, at), guarded: true }),
+        );
+      }
     }
 
     const h = commandHead(simple.words);

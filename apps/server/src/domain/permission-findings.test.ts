@@ -738,6 +738,34 @@ describe('residual holes, review round 1 (P14-08)', () => {
     }
   });
 
+  it('I-3: env -C / --chdir runs the command in that folder', () => {
+    for (const cmd of [
+      'env -C .git/hooks touch pre-commit',
+      'env -C.git/hooks touch pre-commit',
+      'env --chdir=.git/hooks touch pre-commit',
+      'env --chdir .git/hooks touch pre-commit',
+      'nice env -C .git/hooks touch pre-commit',
+      'env -i -C .git/hooks touch pre-commit',
+    ]) {
+      expect(classifyCommand(cmd, ctx).guarded, cmd).toBe(true);
+      expect(decision(cmd), cmd).toBe('ask');
+    }
+    expect(findings('env -C /tmp/pr83 touch x')).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/tmp/pr83' }),
+    );
+    expect(findings('env -C .. touch x')).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/' }),
+    );
+    expect(outside('env -C $D touch x').length).toBeGreaterThan(0);
+    // A relative path resolves from the new folder.
+    expect(findings('env -C sub cat ../../x')).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/x' }),
+    );
+    // Inside the workspace nothing asks.
+    expect(outside('env -C sub touch x')).toEqual([]);
+    expect(decision('env -C sub touch x')).toBe('allow');
+  });
+
   it('I-4: only the first split is a resolved path; a later one outside is unresolvable', () => {
     for (const cmd of [
       'gcc -Iinclude/foo a.c',
