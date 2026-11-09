@@ -905,3 +905,76 @@ describe('residual holes, review round 2 (P14-08)', () => {
     }
   });
 });
+
+describe('residual holes, review round 3 (P14-08)', () => {
+  const ALL_ALLOWED: PermissionPolicy = {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      outside_workspace: 'allow',
+      network: 'allow',
+      destructive: 'allow',
+      push: 'allow',
+    },
+  };
+  const call = (cmd: string): ToolCall => ({ toolName: 'Bash', input: { command: cmd } });
+  const decision = (cmd: string, policy: PermissionPolicy = { rules: {} }) =>
+    evaluate(policy, call(cmd), ctx).decision;
+  const unreadable = (cmd: string) => {
+    expect(classifyCommand(cmd, ctx).unclassified, cmd).toBe(true);
+    expect(decision(cmd), cmd).toBe('ask');
+    expect(decision(cmd, ALL_ALLOWED), cmd).toBe('ask');
+  };
+
+  it('(a) env as the command: only known options, else the line is unreadable', () => {
+    for (const cmd of [
+      "env - -S'touch /etc/x'",
+      "env -i - -S'touch /etc/x'",
+      "env - - -S'touch /etc/x'",
+      "env -v - -S'touch /etc/x'",
+      "env - X=1 -S'touch /etc/x'",
+      "nice env - -S'touch /etc/x'",
+      "env - -S'cp e .git/hooks/pre-commit'",
+      "env - -S'-C /tmp/pr83 GIT_PAGER=x git diff'",
+      "env -a foo -S'touch /etc/x'",
+      "env --argv0 foo -S'touch /etc/x'",
+      'env -0 touch x',
+      'env -P /usr/bin touch x',
+      'env - touch x',
+      'env --unknown touch x',
+      "env -S'touch x'",
+      "env -iS'touch x'",
+      "env --split-string='touch x'",
+      // A missing operand never throws.
+      'env -C',
+      'env -S',
+      'env --split-string',
+      'env -u',
+      'env --chdir',
+      'nice env -C',
+    ]) {
+      unreadable(cmd);
+    }
+    for (const cmd of [
+      'env LANG=C git log -S foo',
+      'env -i PATH=/usr/bin git status',
+      'env -u X git status',
+      'env -uX git status',
+      'env --unset=X git status',
+      'env --unset X git status',
+      'env -C sub touch x',
+      'env -Csub touch x',
+      'env --chdir=sub touch x',
+      'env --chdir sub touch x',
+      'env -iv -- git status',
+      'env --ignore-environment git status',
+      'nice env -i git status',
+      // env as an argument is not env's options.
+      'rg env -S src',
+      'echo env -S foo',
+    ]) {
+      expect(classifyCommand(cmd, ctx).unclassified, cmd).toBeUndefined();
+    }
+  });
+});
