@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** — · **Task status:** P14-06 done (2026-11-09)
-**Phase status:** done (2026-11-09) (6/6) — branch `agent-allow-similar-reasons`
+**Current task:** P14-07 · **Task status:** P14-07 in progress
+**Phase status:** in progress (6/7) — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -29,8 +29,9 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 4 | P14-04 | Drafting rows and answering with ticks. |
 | 5 | P14-05 | The chooser on the card, the rule list. |
 | 6 | P14-06 | Docs, board, gates. |
+| 7 | P14-07 | Final review fixes. |
 
-P14-01…06 run in order.
+P14-01…07 run in order.
 
 ## Tasks
 
@@ -63,6 +64,11 @@ P14-01…06 run in order.
 - **Status:** done (2026-11-09) · **Depends on:** P14-05 · **Parallel with:** —
 - Plan Task 6.
 - **Acceptance:** SPEC decision 138 amended, TECHNOLOGY and the plan consistent, the full gates are green.
+
+### P14-07 — Final review fixes (added 2026-11-09)
+- **Status:** in progress · **Depends on:** P14-06 · **Parallel with:** —
+- The whole-branch review's findings with the controller's rulings F-1, F-2 and M1–M5: a prefix or category rule covers nothing in a command that runs outside the workspace (a later segment after an outside `cd` included); a prefix assignment no longer makes a line folder-unsafe (except on `cd` and for the directory variables), `GH_TOKEN`/`GITHUB_TOKEN` on `gh` keeps its site, a line folder rules never cover gets no folder row; widen never offers system folders; the card offers the chooser for a push call's other reasons; drafting ignores reasons existing rules already cover; an attached short option's path (`-o/etc/x`) is a path.
+- **Acceptance:** the rulings' tests pass; SPEC 138 and TECHNOLOGY updated; the full gates are green.
 
 ## Exit criteria (verified 2026-11-09)
 
