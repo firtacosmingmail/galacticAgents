@@ -781,6 +781,42 @@ describe('coverage: every asked reason must be covered (P14-03)', () => {
     }
   });
 
+  it('folder rules hold in bash and zsh alike (review R-k)', () => {
+    for (const command of [
+      // Brace expansion builds a `..` the words do not show.
+      'cat /tmp/pr83/out/{.,.}./etc/passwd',
+      'cat /tmp/pr83/{out/.,out/.}./etc/passwd',
+      'cat /tmp/pr83/{a,b}.txt',
+      // zsh's cdpath, cdable variables, shell state of any kind.
+      'cd /tmp/pr83; cdpath=/etc; cd x; cat passwd',
+      'cd /tmp/pr83; cdpath=(/etc); cd x; cat passwd',
+      'cd /tmp/pr83; shopt -s cdable_vars; x=/etc; cd x; cat passwd',
+      'cd /tmp/pr83; setopt cdablevars; x=/etc; cd x; cat passwd',
+      'cd /tmp/pr83; setopt auto_cd; cat passwd',
+      'cd /tmp/pr83; emulate sh; cat x',
+      'cd /tmp/pr83; x=CD; export ${x}PATH=/etc; cd x; cat passwd',
+      'FOO=1 cat /tmp/pr83/a.txt',
+      // zsh's two-argument cd, the directory stack.
+      'cd /tmp/pr83; cd pr83 etc; cat passwd',
+      'cd /etc; cd /tmp/pr83; pushd +1; cat passwd',
+      'cd /etc; cd /tmp/pr83; pushd -1; cat passwd',
+      'cd /etc; pushd /tmp/pr83; popd; cat passwd',
+      'cd /tmp/pr83; dirs; cat x',
+      'cd /tmp/pr83; cd -; cat x',
+    ]) {
+      expect(allowed([folder], bash(command)), command).toBe(false);
+    }
+    for (const command of [
+      'cd /tmp/pr83; git log --oneline origin/dev..HEAD',
+      'cd /tmp/pr83; ls',
+      'cat /tmp/pr83/a.txt',
+      'cd -P /tmp/pr83; ls',
+      'pushd /tmp/pr83; ls',
+    ]) {
+      expect(allowed([folder], bash(command)), command).toBe(true);
+    }
+  });
+
   it('a folder rule from a command covers file tools of both groups under it', () => {
     expect(allowed([folder], read('/tmp/pr83/a.md'))).toBe(true);
     expect(allowed([folder], write('/tmp/pr83/a.md'))).toBe(true);

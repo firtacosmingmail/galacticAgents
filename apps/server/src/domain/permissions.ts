@@ -1428,6 +1428,24 @@ const SHELL_BUILTINS = new Set([
   '}',
   // Not a builtin, but it runs its arguments as a command with a changed environment.
   'env',
+  // zsh (the user's shell may be zsh): builtins and keywords that change options, functions,
+  // variables or what runs (P14-03 review, ruling R-k).
+  'setopt',
+  'unsetopt',
+  'emulate',
+  'zmodload',
+  'autoload',
+  'bindkey',
+  'functions',
+  'unfunction',
+  'integer',
+  'float',
+  'noglob',
+  'nocorrect',
+  'repeat',
+  'foreach',
+  'zstyle',
+  'zparseopts',
 ]);
 /** Builtins that cannot change what a later command's network destination is. */
 const STATE_SAFE_BUILTINS = new Set([
@@ -1468,6 +1486,25 @@ function changesShellState(simple: SimpleCommand): boolean {
   return ASSIGNMENT_WORD.test(program) || EXPANDABLE.test(program) || SHELL_BUILTINS.has(program);
 }
 
+/**
+ * Whether a command line may change the shell's state anywhere (ruling R-g): a simple command
+ * that does (`changesShellState`), a function definition, or arithmetic (`(( X = 1 ))`, `$[X=1]`).
+ * The lexer drops a function definition's parentheses, so those two are read from the text —
+ * joined as bash joins it first: a backslash-newline is removed before words are split (`(\⏎(`).
+ * Shared by visible hosts and by folder rules (P14-03, ruling R-k).
+ */
+export function lineChangesShellState(
+  command: string,
+  lexed: ReturnType<typeof lexCommand> = lexCommand(command.trim()),
+): boolean {
+  const joined = command.trim().replace(/\\\n/g, '');
+  return (
+    lexed.commands.some((c) => changesShellState(c)) ||
+    /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(joined) ||
+    /\(\(|\$\[/.test(joined)
+  );
+}
+
 export function classifyCommand(command: string, ctx: PolicyContext): Classification {
   const actions = new Set<PermissionAction>();
   const reasons: string[] = [];
@@ -1502,14 +1539,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   let cwd = cwdOf(ctx);
   // Variables set anywhere in the line (export, an assignment segment, ...) can redirect any
   // command's network destination: no host is then visible (ruling R-d).
-  // The lexer drops the parentheses of a function definition, so that one is read from the text —
-  // joined as bash joins it first: a backslash-newline is removed before words are split (`(\⏎(`).
-  const joined = trimmed.replace(/\\\n/g, '');
-  const lineSetsEnv =
-    lexed.commands.some((c) => changesShellState(c)) ||
-    /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(joined) ||
-    // Arithmetic assigns too (`(( X = 1 ))`, `$(( X = 1 ))`, `$[X=1]`); read from the text as well.
-    /\(\(|\$\[/.test(joined);
+  const lineSetsEnv = lineChangesShellState(trimmed, lexed);
 
   for (const [segment, simple] of lexed.commands.entries()) {
     const here: PolicyContext = { ...ctx, cwd };

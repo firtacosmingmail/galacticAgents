@@ -19,12 +19,14 @@ import {
   DEFAULT_GLOB_FIELDS,
   EDIT_TOOLS,
   evaluate,
+  expandBraces,
   expandHome,
   GLOB_FIELDS,
   globLocations,
   guardedWriteReason,
   HARMLESS_DEVICES,
   lexCommand,
+  lineChangesShellState,
   PATH_FIELDS,
   READ_TOOLS,
   resolvePolicy,
@@ -674,23 +676,38 @@ function coverableFolder(folder: string, ctx: PolicyContext): boolean {
  */
 const DOT_DOT_SEGMENT = /(?:^|[^.\w-])\.\.(?:$|[^.\w-])/;
 
+/** A `cd`/`pushd` argument that takes a directory from the stack (`-`, `+1`, `-2`). */
+const STACK_ARGUMENT = /^(?:-|[+-]\d+)$/;
+
 /**
- * Whether folder rules must cover nothing in this command line (P14-03 review, rulings R-i, R-j):
- * a `..` path component in the raw text or in any word or redirect target after quote removal
- * (`.\.`, `.''.`, `".."` lex to `..`), or `CDPATH` anywhere (`cd x` may then go elsewhere). An
+ * Whether folder rules must cover nothing in this command line (P14-03 review, rulings R-i, R-j,
+ * R-k). The engine follows `cd` and paths as bash would read them; the user's shell may be zsh, so
+ * anything either shell could read differently refuses: a `..` path component (raw, joined, or in
+ * a word or redirect target after quote removal — `.\.`, `".."`), a brace (`{.,.}.` builds one),
+ * any change of shell state (assignments such as `cdpath=…`, `setopt`, `shopt`, functions,
+ * arithmetic: `lineChangesShellState`), `cdpath`/`CDPATH` or cdable variables named anywhere, and
+ * the directory stack (`popd`, `dirs`, `cd -`, `pushd +1`, zsh's two-argument `cd old new`). An
  * inherited CDPATH from Mission Control's own environment is an accepted limit: agents get an
  * allow-listed environment.
  */
 function folderUnsafeLine(command: string): boolean {
   const joined = command.replace(/\\\n/g, '');
   if (DOT_DOT_SEGMENT.test(command) || DOT_DOT_SEGMENT.test(joined)) return true;
-  if (/CDPATH/.test(joined)) return true;
+  if (/cdpath|cdable_?vars/i.test(joined)) return true;
   const lexed = lexCommand(command.trim());
-  return lexed.commands.some(
-    (c) =>
-      c.words.some((w) => DOT_DOT_SEGMENT.test(w) || /CDPATH/.test(w)) ||
-      c.redirects.some((r) => DOT_DOT_SEGMENT.test(r.target)),
-  );
+  if (lineChangesShellState(command, lexed)) return true;
+  return lexed.commands.some((c) => {
+    const texts = [...c.words, ...c.redirects.map((r) => r.target)];
+    if (texts.some((t) => /[{}]/.test(t) || /cdpath|cdable_?vars/i.test(t))) return true;
+    const alternatives = texts.flatMap((t) => expandBraces(t) ?? [t]);
+    if (alternatives.some((t) => DOT_DOT_SEGMENT.test(t))) return true;
+    if (c.words.some((w) => w === 'popd' || w === 'dirs')) return true;
+    const h = commandHead(c.words);
+    const name = c.words[h];
+    if (name !== 'cd' && name !== 'pushd') return false;
+    const args = c.words.slice(h + 1).filter((w) => !/^-[A-Za-z]+$/.test(w) && w !== '--');
+    return args.length > 1 || args.some((a) => STACK_ARGUMENT.test(a));
+  });
 }
 
 /** Whether the command's `segment` (classifyCommand's index) starts with `words`, cleanly. */
